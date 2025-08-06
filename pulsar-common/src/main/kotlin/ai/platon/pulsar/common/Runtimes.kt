@@ -39,6 +39,7 @@ object Runtimes {
         val command = when {
             SystemUtils.IS_OS_WINDOWS -> "where $executable"
             SystemUtils.IS_OS_LINUX -> "whereis $executable"
+            SystemUtils.IS_OS_MAC -> "whereis $executable"
             // TODO: more OS support
             else -> "whereis $executable"
         }
@@ -55,6 +56,7 @@ object Runtimes {
         val command = when {
             SystemUtils.IS_OS_WINDOWS -> "tasklist /NH"
             SystemUtils.IS_OS_LINUX -> "ps -ef"
+            SystemUtils.IS_OS_MAC -> "ps -ef"
             // TODO: more OS support
             else -> "ps -ef"
         }
@@ -160,7 +162,7 @@ object Runtimes {
             return
         } else if (SystemUtils.IS_OS_WINDOWS) {
             exec("taskkill /F /PID $pid")
-        } else if (SystemUtils.IS_OS_LINUX) {
+        } else if (SystemUtils.IS_OS_LINUX || SystemUtils.IS_OS_MAC) {
             exec("kill -9 $pid")
         } else {
             // TODO: more OS support
@@ -218,7 +220,7 @@ object Runtimes {
         if (SystemUtils.IS_OS_WINDOWS) {
             // TODO: use command line
             Files.deleteIfExists(symbolicLink)
-        } else if (SystemUtils.IS_OS_LINUX) {
+        } else if (SystemUtils.IS_OS_LINUX || SystemUtils.IS_OS_MAC) {
             exec("find -L $symbolicLink -type l -delete")
         } else {
             // TODO: more OS support
