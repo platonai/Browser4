@@ -334,33 +334,191 @@ ${
 8. Include boundary value testing where applicable
 9. Add comments to explain complex test logic
 
-Generate a complete, compilable Kotlin test class that thoroughly tests the provided class.
+## IMPORTANT: 
+Please provide ONLY the Kotlin test code wrapped in a code block like this:
+
+```kotlin
+// Your complete test class code here
+```
+
+Do NOT include any explanations, summaries, or additional text outside the code block. Only return the pure Kotlin test code within the code block.
 """.trimIndent()
     }
 
     /** Clean up and validate the generated test code */
     private fun cleanupGeneratedTestCode(generatedCode: String, classInfo: ClassInfo): String {
-        var cleanCode = generatedCode
-        cleanCode = cleanCode.replace("```kotlin", "").replace("```", "")
+        logger.debug("Raw generated code length: ${generatedCode.length}")
+        
+        var cleanCode = extractKotlinCodeFromResponse(generatedCode)
+        
+        // If no valid Kotlin code found, try to extract from code blocks
+        if (cleanCode.isBlank()) {
+            cleanCode = extractFromCodeBlocks(generatedCode)
+        }
+        
+        // If still no code, return the original but cleaned
+        if (cleanCode.isBlank()) {
+            cleanCode = generatedCode.trim()
+        }
+        
+        // Remove markdown code block markers
+        cleanCode = cleanCode.replace("```kotlin", "").replace("```", "").trim()
+        
+        // Remove common explanation patterns that might leak into code
+        cleanCode = removeExplanationText(cleanCode)
+        
+        // Ensure package declaration exists
         if (!cleanCode.contains("package ${classInfo.packageName}")) {
             cleanCode = "package ${classInfo.packageName}\n\n$cleanCode"
         }
+        
+        // Add required imports if missing
+        cleanCode = ensureRequiredImports(cleanCode)
+        
+        // Validate that we have a proper class declaration
+        val expectedClassName = "${classInfo.name}AITest"
+        if (!cleanCode.contains("class $expectedClassName")) {
+            logger.warn("Generated code does not contain expected class: $expectedClassName")
+        }
+        
+        logger.debug("Cleaned code length: ${cleanCode.length}")
+        return cleanCode
+    }
+    
+    /** Extract Kotlin code from LLM response, filtering out explanatory text */
+    private fun extractKotlinCodeFromResponse(response: String): String {
+        // Look for package declaration as start marker
+        val packageRegex = Regex("""package\s+[\w.]+""")
+        val packageMatch = packageRegex.find(response)
+        
+        if (packageMatch != null) {
+            val startIndex = packageMatch.range.first
+            
+            // Find the end of the Kotlin code by looking for explanation sections
+            val explanationMarkers = listOf(
+                "### Explanation:",
+                "## Explanation:",
+                "Explanation:",
+                "### Summary:",
+                "## Summary:",
+                "Summary:",
+                "Note:",
+                "### Note:",
+                "## Note:"
+            )
+            
+            var endIndex = response.length
+            for (marker in explanationMarkers) {
+                val markerIndex = response.indexOf(marker, startIndex)
+                if (markerIndex > startIndex && markerIndex < endIndex) {
+                    endIndex = markerIndex
+                }
+            }
+            
+            return response.substring(startIndex, endIndex).trim()
+        }
+        
+        return ""
+    }
+    
+    /** Extract code from markdown code blocks */
+    private fun extractFromCodeBlocks(content: String): String {
+        val codeBlockRegex = Regex("""```(?:kotlin)?\s*\n(.*?)\n```""", RegexOption.DOT_MATCHES_ALL)
+        val matches = codeBlockRegex.findAll(content)
+        
+        for (match in matches) {
+            val code = match.groups[1]?.value?.trim() ?: ""
+            // Check if this looks like Kotlin test code
+            if (code.contains("package") && (code.contains("class") || code.contains("fun"))) {
+                return code
+            }
+        }
+        
+        return ""
+    }
+    
+    /** Remove common explanation text patterns that might leak into code */
+    private fun removeExplanationText(code: String): String {
+        val lines = code.split('\n').toMutableList()
+        val cleanLines = mutableListOf<String>()
+        
+        var foundPackage = false
+        
+        for (line in lines) {
+            val trimmedLine = line.trim()
+            
+            // Skip empty lines at the beginning
+            if (!foundPackage && trimmedLine.isEmpty()) {
+                continue
+            }
+            
+            // Check for package declaration
+            if (trimmedLine.startsWith("package ")) {
+                foundPackage = true
+                cleanLines.add(line)
+                continue
+            }
+            
+            // Skip explanation headers and non-code content before package
+            if (!foundPackage && (
+                trimmedLine.startsWith("###") ||
+                trimmedLine.startsWith("##") ||
+                trimmedLine.startsWith("**") ||
+                trimmedLine.startsWith("Explanation:") ||
+                trimmedLine.startsWith("Summary:") ||
+                trimmedLine.startsWith("Note:") ||
+                trimmedLine.contains("test class") && !trimmedLine.startsWith("class") ||
+                trimmedLine.contains("following test") ||
+                trimmedLine.contains("explanation") && !line.contains("//")
+            )) {
+                continue
+            }
+            
+            // If we found package, include all code-like content
+            if (foundPackage) {
+                // Skip obvious explanation sections
+                if (trimmedLine.startsWith("### Explanation:") ||
+                    trimmedLine.startsWith("## Explanation:") ||
+                    trimmedLine.startsWith("Explanation:") ||
+                    trimmedLine.startsWith("### Summary:") ||
+                    trimmedLine.startsWith("## Summary:") ||
+                    trimmedLine == "Explanation:" ||
+                    (trimmedLine.startsWith("1.") && trimmedLine.contains("test")) ||
+                    (trimmedLine.startsWith("2.") && trimmedLine.contains("test")) ||
+                    (trimmedLine.startsWith("3.") && trimmedLine.contains("test")) ||
+                    (trimmedLine.startsWith("4.") && trimmedLine.contains("test"))
+                ) {
+                    break // Stop processing when we hit explanation section
+                }
+                cleanLines.add(line)
+            }
+        }
+        
+        return cleanLines.joinToString("\n").trim()
+    }
+    
+    /** Ensure required imports are present */
+    private fun ensureRequiredImports(code: String): String {
+        var cleanCode = code
         val requiredImports = listOf(
             "import org.junit.jupiter.api.Test",
             "import kotlin.test.*"
         )
+        
         requiredImports.forEach { import ->
             if (!cleanCode.contains(import)) {
                 val packageIndex = cleanCode.indexOf("package")
                 val firstImportIndex = cleanCode.indexOf("import")
-                val insertIndex =
-                    if (firstImportIndex > packageIndex && firstImportIndex != -1) firstImportIndex else cleanCode.indexOf(
-                        '\n',
-                        packageIndex
-                    ) + 1
+                val insertIndex = if (firstImportIndex > packageIndex && firstImportIndex != -1) {
+                    firstImportIndex
+                } else {
+                    val packageLineEnd = cleanCode.indexOf('\n', packageIndex)
+                    if (packageLineEnd != -1) packageLineEnd + 1 else 0
+                }
                 cleanCode = cleanCode.substring(0, insertIndex) + "$import\n" + cleanCode.substring(insertIndex)
             }
         }
+        
         return cleanCode
     }
 
