@@ -24,5 +24,6 @@
 
     <modules>
         <module>pulsar-browser</module>
+        <module>pulsar-auto-coder</module>
     </modules>
 </project>
