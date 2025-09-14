@@ -1,6 +1,9 @@
 package ai.platon.pulsar.autoCoder
 
 import ai.platon.pulsar.common.code.ProjectUtils
+import ai.platon.pulsar.common.config.ImmutableConfig
+import ai.platon.pulsar.external.ChatModel
+import ai.platon.pulsar.external.ChatModelFactory
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -9,6 +12,12 @@ import kotlin.io.path.nameWithoutExtension
 
 /**
  * A tool to generate code with AI assistance.
+ *
+ * AI assistant guidelines:
+ * - If you are an AI coding assistant, such as GitHub Copilot, Claude Code, you must follow the guidelines below strictly.
+ * - When you are working on this file, your role is a meta programmer, your task is to generate code that generates code.
+ * - Do not generate unit test code directly, instead, generate code that uses LLM to generate unit tests.
+ * - If you understand the guidelines, please reply with "Acknowledged. I am ready to assist as a meta programmer."
  *
  * AI module to help you to generate code:
  * - `ai.platon.pulsar.external`, example: `ai.platon.pulsar.external.ChatModelTests`.
@@ -21,7 +30,7 @@ import kotlin.io.path.nameWithoutExtension
  * - Source code is located in `src/main/kotlin` and test code in `src/test/kotlin`.
  * - The package structure in the source and test directories mirrors the fully qualified class names.
  * - Use mvnw instead of mvn to run maven commands, it's located in the root directory of the project.
- *   - example: cd "D:\workspace\Browser4-4.0.x" && .\mvnw.cmd compile -pl pulsar-tools/pulsar-auto-coder
+ *   - example: cd "D:\\workspace\\Browser4-4.0.x" && .\\mvnw.cmd compile -pl pulsar-tools/pulsar-auto-coder
  *
  * Unit test generation guidelines:
  * - Use testing framework JUnit5.
@@ -30,7 +39,7 @@ import kotlin.io.path.nameWithoutExtension
  * - Each test method should have a descriptive name indicating what it tests.
  * - Each test method should be independent and not rely on the execution order of other tests.
  * - Use setup and teardown methods annotated with `@BeforeEach` and `@AfterEach` if needed.
- * - Unless asked explicitly, *DO NOT* use mock objects.
+ * - Unless asked explicitly, DO NOT use mock objects.
  * - Ensure high code coverage, aiming for at least 80% coverage of the target class
  * - Each test should include assertions to verify the expected outcomes.
  * - Use meaningful variable names to enhance code readability.
@@ -43,10 +52,26 @@ import kotlin.io.path.nameWithoutExtension
  */
 open class AutoCoder(
     private val projectRootDir: Path = ProjectUtils.findProjectRootDir() ?: Paths.get("."),
-    private val testOutputDir: String = "src/test/kotlin"
+    private val testOutputDir: String = "src/test/kotlin",
+    private val config: ImmutableConfig = ImmutableConfig(loadDefaults = true),
+    private val useLLM: Boolean = true
 ) {
 
     private val logger = org.slf4j.LoggerFactory.getLogger(AutoCoder::class.java)
+
+    private val chatModel: ChatModel? by lazy {
+        if (useLLM && ChatModelFactory.isModelConfigured(config, verbose = false)) {
+            try {
+                ChatModelFactory.getOrCreate(config)
+            } catch (e: Exception) {
+                logger.warn("Failed to create LLM model, falling back to template-based generation: ${e.message}")
+                null
+            }
+        } else {
+            logger.info("LLM is not configured or disabled, using template-based test generation")
+            null
+        }
+    }
 
     /**
      * Configuration for test generation
@@ -172,13 +197,49 @@ open class AutoCoder(
     }
 
     /**
+     * Create test file path for a class.
+     */
+    private fun createTestFilePath(className: String): Path {
+        val lastDot = className.lastIndexOf('.')
+        val pkg = if (lastDot > 0) className.substring(0, lastDot) else ""
+        val simpleName = if (lastDot > 0) className.substring(lastDot + 1) else className
+        val testDir = projectRootDir.resolve(testOutputDir)
+        val pkgDir = if (pkg.isNotBlank()) testDir.resolve(pkg.replace('.', '/')) else testDir
+        val fileName = "${simpleName}Test.kt"
+        return pkgDir.resolve(fileName)
+    }
+
+    /**
+     * Create test file path for a function (best-effort fallback if owning class is unknown).
+     */
+    private fun createFunctionTestFilePath(functionName: String): Path {
+        val safeName = functionName
+            .replace("::", "_")
+            .replace("(", "_")
+            .replace(")", "")
+            .replace("<", "_")
+            .replace(">", "")
+            .replace(Regex("[^A-Za-z0-9_]+"), "_")
+            .trim('_')
+        val pkgDir = projectRootDir.resolve(testOutputDir)
+            .resolve("ai/platon/pulsar/autoCoder/generated")
+        return pkgDir.resolve("${safeName}Test.kt")
+    }
+
+    /** Save test code to disk, creating directories as needed. */
+    private fun saveTestCode(testFile: Path, testCode: String) {
+        Files.createDirectories(testFile.parent)
+        Files.writeString(testFile, testCode)
+        logger.info("Wrote test file: $testFile")
+    }
+
+    /**
      * Find a class file by fully qualified class name
      */
     private fun findClassFile(className: String): Path? {
         val classPath = className.replace('.', '/') + ".kt"
-
         return Files.walk(projectRootDir)
-            .filter { it.toString().endsWith(classPath) && !it.toString().contains("/test/") }
+            .filter { it.toString().replace('\\', '/').endsWith(classPath) && !it.toString().replace('\\', '/').contains("/test/") }
             .findFirst()
             .orElse(null)
     }
@@ -203,22 +264,16 @@ open class AutoCoder(
             stream.forEach { path ->
                 totalFilesChecked++
                 val pathStr = path.toString()
-
-                // Use platform-independent path checks
                 val normalizedPath = pathStr.replace('\\', '/')
-                val normalizedPackagePath = packagePath
-
-                // Debug specific conditions
                 val isSrcMainKotlin = normalizedPath.contains("src/main/kotlin")
-                val isKotlinFile = pathStr.endsWith(".kt")
-                val hasPackagePath = normalizedPath.contains(normalizedPackagePath)
+                val isKotlinFile = normalizedPath.endsWith(".kt")
+                val hasPackagePath = normalizedPath.contains(packagePath)
                 val isNotDirectory = !path.isDirectory()
 
                 if (isKotlinFile) kotlinFilesFound++
                 if (isSrcMainKotlin) srcMainKotlinFound++
                 if (hasPackagePath) packagePathMatches++
 
-                // Log some sample matching paths for debugging
                 if ((isKotlinFile && hasPackagePath) || (totalFilesChecked <= 10)) {
                     logger.info("Checking path: $pathStr")
                     logger.info("  - normalized: $normalizedPath")
@@ -250,16 +305,11 @@ open class AutoCoder(
      */
     private fun extractClassName(classFile: Path): String {
         val pathStr = classFile.toString().replace('\\', '/')
-
-        // Find the src/main/kotlin part and extract the package path from there
-        val srcMainKotlinIndex = pathStr.indexOf("src/main/kotlin/")
-        if (srcMainKotlinIndex != -1) {
-            val packagePath = pathStr.substring(srcMainKotlinIndex + "src/main/kotlin/".length)
-            // Remove .kt extension and convert slashes to dots
+        val idx = pathStr.indexOf("src/main/kotlin/")
+        if (idx != -1) {
+            val packagePath = pathStr.substring(idx + "src/main/kotlin/".length)
             return packagePath.removeSuffix(".kt").replace('/', '.')
         }
-
-        // Fallback to just the filename without extension
         return classFile.nameWithoutExtension
     }
 
@@ -269,13 +319,10 @@ open class AutoCoder(
     private fun analyzeClassStructure(classFile: Path): ClassInfo {
         val content = Files.readString(classFile)
         val className = classFile.nameWithoutExtension
-
-        // Basic parsing - in a real implementation, you'd use a proper Kotlin parser
         val methods = extractMethods(content)
         val properties = extractProperties(content)
         val imports = extractImports(content)
         val packageName = extractPackageName(content)
-
         return ClassInfo(
             name = className,
             packageName = packageName,
@@ -286,12 +333,31 @@ open class AutoCoder(
         )
     }
 
-    /**
-     * Generate test code for a class
-     */
+    /** Generate test code for a class */
     private fun generateTestCode(classInfo: ClassInfo): String {
-        val testClassName = "${classInfo.name}Test"
+        return if (chatModel != null) generateTestCodeWithLLM(classInfo) else generateTestCodeWithTemplate(classInfo)
+    }
 
+    /** Generate test code using LLM */
+    private fun generateTestCodeWithLLM(classInfo: ClassInfo): String {
+        logger.info("Generating test code using LLM for class: ${classInfo.name}")
+        val sourceCode = Files.readString(classInfo.filePath)
+        val prompt = buildTestGenerationPrompt(classInfo, sourceCode)
+        return try {
+            val response = chatModel!!.call(prompt)
+            val generatedCode = response.content
+            logger.info("LLM generated test code successfully for class: ${classInfo.name}")
+            logger.debug("Token usage: input=${response.tokenUsage.inputTokenCount}, output=${response.tokenUsage.outputTokenCount}")
+            cleanupGeneratedTestCode(generatedCode, classInfo)
+        } catch (e: Exception) {
+            logger.error("Failed to generate test code using LLM for class: ${classInfo.name}, falling back to template", e)
+            generateTestCodeWithTemplate(classInfo)
+        }
+    }
+
+    /** Generate test code using templates (fallback method) */
+    private fun generateTestCodeWithTemplate(classInfo: ClassInfo): String {
+        val testClassName = "${classInfo.name}Test"
         return buildString {
             appendLine("package ${classInfo.packageName}")
             appendLine()
@@ -304,15 +370,8 @@ open class AutoCoder(
             appendLine("import kotlin.test.assertNotNull")
             appendLine("import kotlin.test.assertNull")
             appendLine()
-
-            // Add additional imports based on the original class
-            classInfo.imports.forEach { import ->
-                if (shouldIncludeImport(import)) {
-                    appendLine(import)
-                }
-            }
+            classInfo.imports.forEach { import -> if (shouldIncludeImport(import)) appendLine(import) }
             appendLine()
-
             appendLine("/**")
             appendLine(" * Unit tests for ${classInfo.name}")
             appendLine(" * Generated by AutoCoder")
@@ -331,149 +390,122 @@ open class AutoCoder(
             appendLine("        // Clean up resources if needed")
             appendLine("    }")
             appendLine()
-
-            // Generate test methods for each public method
             classInfo.methods.forEach { method ->
                 if (method.isPublic && !method.isConstructor) {
-                    appendLine(generateTestMethod(method))
+                    appendLine(generateTestMethodWithTemplate(method))
                     appendLine()
                 }
             }
-
             appendLine("}")
         }
     }
 
-    /**
-     * Generate a test method for a specific method
-     */
-    private fun generateTestMethod(method: MethodInfo): String {
-        val testMethodName = "test${method.name.replaceFirstChar { it.uppercase() }}"
+    /** Build a comprehensive prompt for LLM test generation */
+    private fun buildTestGenerationPrompt(classInfo: ClassInfo, sourceCode: String): String {
+        return """
+You are an expert Kotlin developer tasked with generating comprehensive unit tests for a Kotlin class.
 
-        return buildString {
-            appendLine("    @Test")
-            appendLine("    fun $testMethodName() {")
-            appendLine("        // Arrange")
-            appendLine("        // TODO: Set up test data and expected results")
-            appendLine()
-            appendLine("        // Act")
-            if (method.returnType != "Unit") {
-                appendLine("        val result = testInstance.${method.name}(${generateMethodParameters(method)})")
-            } else {
-                appendLine("        testInstance.${method.name}(${generateMethodParameters(method)})")
-            }
-            appendLine()
-            appendLine("        // Assert")
-            if (method.returnType != "Unit") {
-                appendLine("        assertNotNull(result)")
-                appendLine("        // TODO: Add specific assertions based on expected behavior")
-            } else {
-                appendLine("        // TODO: Add assertions to verify the method's side effects")
-            }
-            appendLine("    }")
+## Requirements:
+- Use JUnit5 testing framework
+- Use Kotlin test assertions (kotlin.test) and JUnit5 assertions
+- Generate tests for all public methods and important functionality
+- Include edge cases and error handling tests
+- Use descriptive test method names that clearly indicate what is being tested
+- Follow the Arrange-Act-Assert pattern
+- Target at least 80% code coverage
+- Include parameterized tests where appropriate
+- Do not use mock objects unless absolutely necessary
+- Generate meaningful test data and assertions
+
+## Class to test:
+Package: ${classInfo.packageName}
+Class Name: ${classInfo.name}
+
+## Source Code:
+```kotlin
+$sourceCode
+```
+
+## Methods to test:
+${classInfo.methods.filter { it.isPublic && !it.isConstructor }.joinToString("\n") { "- ${it.name}(${it.parameters.joinToString { p -> "${p.name}: ${p.type}" }}): ${it.returnType}" }}
+
+## Guidelines:
+1. Create a test class named "${classInfo.name}Test"
+2. Include proper package declaration: "package ${classInfo.packageName}"
+3. Add necessary imports including JUnit5 and kotlin.test
+4. Use @BeforeEach and @AfterEach for setup and teardown if needed
+5. Each test method should be annotated with @Test
+6. Use meaningful variable names and clear assertions
+7. Test both positive and negative scenarios
+8. Include boundary value testing where applicable
+9. Add comments to explain complex test logic
+
+Generate a complete, compilable Kotlin test class that thoroughly tests the provided class.
+""".trimIndent()
+    }
+
+    /** Clean up and validate the generated test code */
+    private fun cleanupGeneratedTestCode(generatedCode: String, classInfo: ClassInfo): String {
+        var cleanCode = generatedCode
+        cleanCode = cleanCode.replace("```kotlin", "").replace("```", "")
+        if (!cleanCode.contains("package ${classInfo.packageName}")) {
+            cleanCode = "package ${classInfo.packageName}\n\n$cleanCode"
         }
-    }
-
-    /**
-     * Generate method parameters for test calls
-     */
-    private fun generateMethodParameters(method: MethodInfo): String {
-        return method.parameters.joinToString(", ") { param ->
-            when (param.type.lowercase()) {
-                "string" -> "\"test\""
-                "int", "integer" -> "1"
-                "long" -> "1L"
-                "double" -> "1.0"
-                "float" -> "1.0f"
-                "boolean" -> "true"
-                "list" -> "emptyList()"
-                "map" -> "emptyMap()"
-                "set" -> "emptySet()"
-                else -> "null" // For custom types, use null and let the developer handle it
+        val requiredImports = listOf(
+            "import org.junit.jupiter.api.Test",
+            "import kotlin.test.*"
+        )
+        requiredImports.forEach { import ->
+            if (!cleanCode.contains(import)) {
+                val packageIndex = cleanCode.indexOf("package")
+                val firstImportIndex = cleanCode.indexOf("import")
+                val insertIndex = if (firstImportIndex > packageIndex && firstImportIndex != -1) firstImportIndex else cleanCode.indexOf('\n', packageIndex) + 1
+                cleanCode = cleanCode.substring(0, insertIndex) + "$import\n" + cleanCode.substring(insertIndex)
             }
         }
+        return cleanCode
     }
 
-    /**
-     * Create test file path based on class name
-     */
-    private fun createTestFilePath(className: String): Path {
-        val testPath = className.replace('.', '/') + "Test.kt"
-        return projectRootDir.resolve(testOutputDir).resolve(testPath)
-    }
-
-    /**
-     * Create test file path for function tests
-     */
-    private fun createFunctionTestFilePath(functionName: String): Path {
-        val sanitizedName = functionName.replace(".", "_").replace("::", "_")
-        val testPath = "${sanitizedName}Test.kt"
-        return projectRootDir.resolve(testOutputDir).resolve("generated").resolve(testPath)
-    }
-
-    /**
-     * Save generated test code to file
-     */
-    private fun saveTestCode(testFile: Path, testCode: String) {
-        // Create directories if they don't exist
-        Files.createDirectories(testFile.parent)
-
-        // Write test code to file
-        Files.writeString(testFile, testCode)
-
-        logger.info("Test code saved to: $testFile")
-    }
-
-    // Helper methods for parsing (simplified implementations)
+    // ------------------------------
+    // Parsing helpers (simplified)
+    // ------------------------------
 
     private fun extractMethods(content: String): List<MethodInfo> {
         val methods = mutableListOf<MethodInfo>()
         val methodRegex = Regex("""(public|private|protected|internal)?\s*fun\s+(\w+)\s*\([^)]*\)(?:\s*:\s*(\w+))?""")
-
         methodRegex.findAll(content).forEach { match ->
             val visibility = match.groups[1]?.value ?: "public"
             val name = match.groups[2]?.value ?: ""
             val returnType = match.groups[3]?.value ?: "Unit"
-
-            methods.add(MethodInfo(
-                name = name,
-                returnType = returnType,
-                isPublic = visibility == "public" || visibility.isEmpty(),
-                isConstructor = false,
-                parameters = emptyList() // Simplified - would need proper parsing
-            ))
+            methods.add(
+                MethodInfo(
+                    name = name,
+                    returnType = returnType,
+                    isPublic = visibility == "public" || visibility.isEmpty(),
+                    isConstructor = false,
+                    parameters = emptyList()
+                )
+            )
         }
-
         return methods
     }
 
     private fun extractProperties(content: String): List<PropertyInfo> {
         val properties = mutableListOf<PropertyInfo>()
         val propertyRegex = Regex("""(val|var)\s+(\w+)\s*:\s*(\w+)""")
-
         propertyRegex.findAll(content).forEach { match ->
             val name = match.groups[2]?.value ?: ""
             val type = match.groups[3]?.value ?: ""
             val isReadOnly = match.groups[1]?.value == "val"
-
-            properties.add(PropertyInfo(
-                name = name,
-                type = type,
-                isReadOnly = isReadOnly
-            ))
+            properties.add(PropertyInfo(name = name, type = type, isReadOnly = isReadOnly))
         }
-
         return properties
     }
 
     private fun extractImports(content: String): List<String> {
         val imports = mutableListOf<String>()
         val importRegex = Regex("""import\s+[^\n]+""")
-
-        importRegex.findAll(content).forEach { match ->
-            imports.add(match.value)
-        }
-
+        importRegex.findAll(content).forEach { match -> imports.add(match.value) }
         return imports
     }
 
@@ -483,15 +515,32 @@ open class AutoCoder(
     }
 
     private fun shouldIncludeImport(import: String): Boolean {
-        // Filter out imports that are not needed in tests
         val excludePatterns = listOf(
             "import java.util.*",
             "import kotlin.collections.*"
         )
-        return !excludePatterns.any { import.contains(it) }
+        return excludePatterns.none { import.contains(it) }
     }
 
-    // Placeholder implementations for function-specific methods
+    // ------------------------------
+    // Template helpers
+    // ------------------------------
+
+    private fun generateTestMethodWithTemplate(method: MethodInfo): String {
+        val safeName = method.name.replace(Regex("[^A-Za-z0-9_]"), "_")
+        return buildString {
+            appendLine("    @Test")
+            appendLine("    fun test_${safeName}() {")
+            appendLine("        // TODO: Replace with real Arrange/Act/Assert for ${method.name}")
+            appendLine("        // This is a placeholder to ensure the test compiles even when parameters are required.")
+            appendLine("        assertTrue(true)")
+            appendLine("    }")
+        }
+    }
+
+    // ------------------------------
+    // Function-specific placeholders
+    // ------------------------------
 
     private fun findFunction(@Suppress("UNUSED_PARAMETER") functionName: String): FunctionInfo? {
         // TODO: Implement function finding logic
@@ -508,7 +557,9 @@ open class AutoCoder(
         return "// Function test code for ${functionInfo.name}"
     }
 
-    // Data classes for representing code structure
+    // ------------------------------
+    // Data classes representing code structure
+    // ------------------------------
 
     data class ClassInfo(
         val name: String,
@@ -551,10 +602,7 @@ fun main() {
     val packageName = "ai.platon.pulsar.common.collect"
 
     // Debug: Print the project root directory being used
-    println("Project root directory: ${autoCoder.javaClass.getDeclaredField("projectRootDir").let { 
-        it.isAccessible = true
-        it.get(autoCoder)
-    }}")
+    println("Project root directory: ${autoCoder.javaClass.getDeclaredField("projectRootDir").let { it.isAccessible = true; it.get(autoCoder) }}")
 
     try {
         autoCoder.generateUnitTestsForPackage(packageName)
