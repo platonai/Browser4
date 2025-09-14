@@ -53,94 +53,11 @@ import kotlin.io.path.nameWithoutExtension
 open class AutoCoder(
     private val projectRootDir: Path = ProjectUtils.findProjectRootDir() ?: Paths.get("."),
     private val testOutputDir: String = "src/test/kotlin",
-    private val config: ImmutableConfig = ImmutableConfig(loadDefaults = true),
-    private val useLLM: Boolean = true
+    private val config: ImmutableConfig = ImmutableConfig()
 ) {
-
     private val logger = org.slf4j.LoggerFactory.getLogger(AutoCoder::class.java)
 
-    private val chatModel: ChatModel? by lazy {
-        if (useLLM && ChatModelFactory.isModelConfigured(config, verbose = false)) {
-            try {
-                ChatModelFactory.getOrCreate(config)
-            } catch (e: Exception) {
-                logger.warn("Failed to create LLM model, falling back to template-based generation: ${e.message}")
-                null
-            }
-        } else {
-            logger.info("LLM is not configured or disabled, using template-based test generation")
-            null
-        }
-    }
-
-    /**
-     * Configuration for test generation
-     */
-    data class TestGenerationConfig(
-        val includePrivateMethods: Boolean = false,
-        val generateMockTests: Boolean = false,
-        val targetCoveragePercent: Int = 80,
-        val useParameterizedTests: Boolean = true
-    )
-
-    /**
-     * Generate unit tests for the specified class.
-     *
-     * @param className Fully qualified class name (e.g., "ai.platon.pulsar.common.collect.DataCollectors")
-     * @throws IllegalArgumentException if the class cannot be found
-     */
-    fun generateUnitTests(className: String) {
-        logger.info("Generating unit tests for class: $className")
-
-        // 1. Find the class in the project
-        val classFile = findClassFile(className)
-        if (classFile == null) {
-            logger.error("Class file not found for: $className")
-            throw IllegalArgumentException("Class file not found for: $className")
-        }
-
-        // 2. Analyze the class structure and methods
-        val classInfo = analyzeClassStructure(classFile)
-
-        // 3. Generate unit test code for each method
-        val testCode = generateTestCode(classInfo)
-
-        // 4. Save the generated unit test code to a file
-        val testFile = createTestFilePath(className)
-        saveTestCode(testFile, testCode)
-
-        logger.info("Unit tests generated successfully for: $className")
-        logger.info("Test file created at: $testFile")
-    }
-
-    /**
-     * Generate unit tests for the specified function.
-     *
-     * @param functionName Fully qualified function name or function signature
-     * @throws IllegalArgumentException if the function cannot be found
-     */
-    fun generateUnitTestsForFunction(functionName: String) {
-        logger.info("Generating unit tests for function: $functionName")
-
-        // 1. Find the function in the project
-        val functionInfo = findFunction(functionName)
-        if (functionInfo == null) {
-            logger.error("Function not found: $functionName")
-            throw IllegalArgumentException("Function not found: $functionName")
-        }
-
-        // 2. Analyze the function structure and parameters
-        val analyzedFunction = analyzeFunctionStructure(functionInfo)
-
-        // 3. Generate unit test code for the function
-        val testCode = generateFunctionTestCode(analyzedFunction)
-
-        // 4. Save the generated unit test code to a file
-        val testFile = createFunctionTestFilePath(functionName)
-        saveTestCode(testFile, testCode)
-
-        logger.info("Unit tests generated successfully for function: $functionName")
-    }
+    private val chatModel: ChatModel = ChatModelFactory.getOrCreate(config)
 
     /**
      * Generate unit tests for each class in the specified package.
@@ -209,39 +126,11 @@ open class AutoCoder(
         return pkgDir.resolve(fileName)
     }
 
-    /**
-     * Create test file path for a function (best-effort fallback if owning class is unknown).
-     */
-    private fun createFunctionTestFilePath(functionName: String): Path {
-        val safeName = functionName
-            .replace("::", "_")
-            .replace("(", "_")
-            .replace(")", "")
-            .replace("<", "_")
-            .replace(">", "")
-            .replace(Regex("[^A-Za-z0-9_]+"), "_")
-            .trim('_')
-        val pkgDir = projectRootDir.resolve(testOutputDir)
-            .resolve("ai/platon/pulsar/autoCoder/generated")
-        return pkgDir.resolve("${safeName}Test.kt")
-    }
-
     /** Save test code to disk, creating directories as needed. */
     private fun saveTestCode(testFile: Path, testCode: String) {
         Files.createDirectories(testFile.parent)
         Files.writeString(testFile, testCode)
         logger.info("Wrote test file: $testFile")
-    }
-
-    /**
-     * Find a class file by fully qualified class name
-     */
-    private fun findClassFile(className: String): Path? {
-        val classPath = className.replace('.', '/') + ".kt"
-        return Files.walk(projectRootDir)
-            .filter { it.toString().replace('\\', '/').endsWith(classPath) && !it.toString().replace('\\', '/').contains("/test/") }
-            .findFirst()
-            .orElse(null)
     }
 
     /**
@@ -335,7 +224,7 @@ open class AutoCoder(
 
     /** Generate test code for a class */
     private fun generateTestCode(classInfo: ClassInfo): String {
-        return if (chatModel != null) generateTestCodeWithLLM(classInfo) else generateTestCodeWithTemplate(classInfo)
+        return generateTestCodeWithLLM(classInfo)
     }
 
     /** Generate test code using LLM */
@@ -350,53 +239,11 @@ open class AutoCoder(
             logger.debug("Token usage: input=${response.tokenUsage.inputTokenCount}, output=${response.tokenUsage.outputTokenCount}")
             cleanupGeneratedTestCode(generatedCode, classInfo)
         } catch (e: Exception) {
-            logger.error("Failed to generate test code using LLM for class: ${classInfo.name}, falling back to template", e)
-            generateTestCodeWithTemplate(classInfo)
-        }
-    }
-
-    /** Generate test code using templates (fallback method) */
-    private fun generateTestCodeWithTemplate(classInfo: ClassInfo): String {
-        val testClassName = "${classInfo.name}Test"
-        return buildString {
-            appendLine("package ${classInfo.packageName}")
-            appendLine()
-            appendLine("import org.junit.jupiter.api.Test")
-            appendLine("import org.junit.jupiter.api.BeforeEach")
-            appendLine("import org.junit.jupiter.api.AfterEach")
-            appendLine("import org.junit.jupiter.api.Assertions.*")
-            appendLine("import kotlin.test.assertTrue")
-            appendLine("import kotlin.test.assertFalse")
-            appendLine("import kotlin.test.assertNotNull")
-            appendLine("import kotlin.test.assertNull")
-            appendLine()
-            classInfo.imports.forEach { import -> if (shouldIncludeImport(import)) appendLine(import) }
-            appendLine()
-            appendLine("/**")
-            appendLine(" * Unit tests for ${classInfo.name}")
-            appendLine(" * Generated by AutoCoder")
-            appendLine(" */")
-            appendLine("class $testClassName {")
-            appendLine()
-            appendLine("    private lateinit var testInstance: ${classInfo.name}")
-            appendLine()
-            appendLine("    @BeforeEach")
-            appendLine("    fun setUp() {")
-            appendLine("        testInstance = ${classInfo.name}()")
-            appendLine("    }")
-            appendLine()
-            appendLine("    @AfterEach")
-            appendLine("    fun tearDown() {")
-            appendLine("        // Clean up resources if needed")
-            appendLine("    }")
-            appendLine()
-            classInfo.methods.forEach { method ->
-                if (method.isPublic && !method.isConstructor) {
-                    appendLine(generateTestMethodWithTemplate(method))
-                    appendLine()
-                }
-            }
-            appendLine("}")
+            logger.error(
+                "Failed to generate test code using LLM for class: ${classInfo.name}, falling back to template",
+                e
+            )
+            ""
         }
     }
 
@@ -427,7 +274,10 @@ $sourceCode
 ```
 
 ## Methods to test:
-${classInfo.methods.filter { it.isPublic && !it.isConstructor }.joinToString("\n") { "- ${it.name}(${it.parameters.joinToString { p -> "${p.name}: ${p.type}" }}): ${it.returnType}" }}
+${
+            classInfo.methods.filter { it.isPublic && !it.isConstructor }
+                .joinToString("\n") { "- ${it.name}(${it.parameters.joinToString { p -> "${p.name}: ${p.type}" }}): ${it.returnType}" }
+        }
 
 ## Guidelines:
 1. Create a test class named "${classInfo.name}Test"
@@ -459,7 +309,11 @@ Generate a complete, compilable Kotlin test class that thoroughly tests the prov
             if (!cleanCode.contains(import)) {
                 val packageIndex = cleanCode.indexOf("package")
                 val firstImportIndex = cleanCode.indexOf("import")
-                val insertIndex = if (firstImportIndex > packageIndex && firstImportIndex != -1) firstImportIndex else cleanCode.indexOf('\n', packageIndex) + 1
+                val insertIndex =
+                    if (firstImportIndex > packageIndex && firstImportIndex != -1) firstImportIndex else cleanCode.indexOf(
+                        '\n',
+                        packageIndex
+                    ) + 1
                 cleanCode = cleanCode.substring(0, insertIndex) + "$import\n" + cleanCode.substring(insertIndex)
             }
         }
@@ -472,31 +326,56 @@ Generate a complete, compilable Kotlin test class that thoroughly tests the prov
 
     private fun extractMethods(content: String): List<MethodInfo> {
         val methods = mutableListOf<MethodInfo>()
-        val methodRegex = Regex("""(public|private|protected|internal)?\s*fun\s+(\w+)\s*\([^)]*\)(?:\s*:\s*(\w+))?""")
+        val methodRegex =
+            Regex("""(?m)^\s*(?:@[\w.]+(?:\([^)]*\))?\s*)*(?:(public|private|protected|internal)\s+)?(?:suspend\s+|inline\s+|tailrec\s+|operator\s+|infix\s+|external\s+)?fun\s*(?:<[^>]+>\s*)?(?:[A-Za-z_][A-Za-z0-9_]*\.)?([A-Za-z_][A-ZaZ0-9_]*)\s*\(([^)]*)\)\s*(?::\s*([^=\n\r{]+))?""")
         methodRegex.findAll(content).forEach { match ->
             val visibility = match.groups[1]?.value ?: "public"
             val name = match.groups[2]?.value ?: ""
-            val returnType = match.groups[3]?.value ?: "Unit"
+            val paramStr = match.groups[3]?.value ?: ""
+            val returnType = match.groups[4]?.value?.trim() ?: "Unit"
+            val parameters = parseParameters(paramStr)
             methods.add(
                 MethodInfo(
                     name = name,
                     returnType = returnType,
                     isPublic = visibility == "public" || visibility.isEmpty(),
                     isConstructor = false,
-                    parameters = emptyList()
+                    parameters = parameters
                 )
             )
         }
         return methods
     }
 
+    private fun parseParameters(paramStr: String): List<ParameterInfo> {
+        if (paramStr.trim().isEmpty()) return emptyList()
+
+        return paramStr.split(',').mapNotNull { param ->
+            val trimmed = param.trim()
+            if (trimmed.isEmpty()) return@mapNotNull null
+
+            // Match parameter pattern: name: Type = defaultValue or name: Type
+            val paramRegex = Regex("""^\s*(\w+)\s*:\s*([^=]+?)(?:\s*=\s*.+)?\s*$""")
+            val match = paramRegex.find(trimmed)
+            if (match != null) {
+                val name = match.groups[1]?.value ?: ""
+                val type = match.groups[2]?.value?.trim() ?: ""
+                val hasDefault = trimmed.contains('=')
+                ParameterInfo(name = name, type = type, hasDefault = hasDefault)
+            } else {
+                null
+            }
+        }
+    }
+
     private fun extractProperties(content: String): List<PropertyInfo> {
         val properties = mutableListOf<PropertyInfo>()
-        val propertyRegex = Regex("""(val|var)\s+(\w+)\s*:\s*(\w+)""")
+        val propertyRegex =
+            Regex("""(?m)^\s*(?:@[\w.]+(?:\([^)]*\))?\s*)*(?:(public|private|protected|internal)\s+)?(val|var)\s+(\w+)\s*:\s*([^=\n\r{]+)""")
         propertyRegex.findAll(content).forEach { match ->
-            val name = match.groups[2]?.value ?: ""
-            val type = match.groups[3]?.value ?: ""
-            val isReadOnly = match.groups[1]?.value == "val"
+            val name = match.groups[3]?.value ?: ""
+            val type = match.groups[4]?.value?.trim() ?: ""
+            val isReadOnly = match.groups[2]?.value == "val"
             properties.add(PropertyInfo(name = name, type = type, isReadOnly = isReadOnly))
         }
         return properties
@@ -512,49 +391,6 @@ Generate a complete, compilable Kotlin test class that thoroughly tests the prov
     private fun extractPackageName(content: String): String {
         val packageRegex = Regex("""package\s+([^\n]+)""")
         return packageRegex.find(content)?.groups?.get(1)?.value?.trim() ?: ""
-    }
-
-    private fun shouldIncludeImport(import: String): Boolean {
-        val excludePatterns = listOf(
-            "import java.util.*",
-            "import kotlin.collections.*"
-        )
-        return excludePatterns.none { import.contains(it) }
-    }
-
-    // ------------------------------
-    // Template helpers
-    // ------------------------------
-
-    private fun generateTestMethodWithTemplate(method: MethodInfo): String {
-        val safeName = method.name.replace(Regex("[^A-Za-z0-9_]"), "_")
-        return buildString {
-            appendLine("    @Test")
-            appendLine("    fun test_${safeName}() {")
-            appendLine("        // TODO: Replace with real Arrange/Act/Assert for ${method.name}")
-            appendLine("        // This is a placeholder to ensure the test compiles even when parameters are required.")
-            appendLine("        assertTrue(true)")
-            appendLine("    }")
-        }
-    }
-
-    // ------------------------------
-    // Function-specific placeholders
-    // ------------------------------
-
-    private fun findFunction(@Suppress("UNUSED_PARAMETER") functionName: String): FunctionInfo? {
-        // TODO: Implement function finding logic
-        return null
-    }
-
-    private fun analyzeFunctionStructure(functionInfo: FunctionInfo): FunctionInfo {
-        // TODO: Implement function analysis
-        return functionInfo
-    }
-
-    private fun generateFunctionTestCode(functionInfo: FunctionInfo): String {
-        // TODO: Implement function test generation
-        return "// Function test code for ${functionInfo.name}"
     }
 
     // ------------------------------
@@ -602,7 +438,11 @@ fun main() {
     val packageName = "ai.platon.pulsar.common.collect"
 
     // Debug: Print the project root directory being used
-    println("Project root directory: ${autoCoder.javaClass.getDeclaredField("projectRootDir").let { it.isAccessible = true; it.get(autoCoder) }}")
+    println(
+        "Project root directory: ${
+            autoCoder.javaClass.getDeclaredField("projectRootDir").let { it.isAccessible = true; it.get(autoCoder) }
+        }"
+    )
 
     try {
         autoCoder.generateUnitTestsForPackage(packageName)
