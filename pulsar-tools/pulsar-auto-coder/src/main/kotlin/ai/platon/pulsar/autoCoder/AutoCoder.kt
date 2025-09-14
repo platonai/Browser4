@@ -26,11 +26,19 @@ import kotlin.io.path.nameWithoutExtension
  * - `ai.platon.pulsar.common.code.ProjectUtils`, example: `ai.platon.pulsar.common.code.ProjectUtilsTest`.
  *
  * Project structure assumptions:
- * - The project is a Maven project with standard directory layout.
+ * - The project is a Maven multi-module project with standardized directory structure.
+ * - Each module follows Maven conventions with `src/main/kotlin` and `src/test/kotlin` directories.
  * - Source code is located in `src/main/kotlin` and test code in `src/test/kotlin`.
- * - The package structure in the source and test directories mirrors the fully qualified class names.
- * - Use mvnw instead of mvn to run maven commands, it's located in the root directory of the project.
- *   - example: cd "D:\\workspace\\Browser4-4.0.x" && .\\mvnw.cmd compile -pl pulsar-tools/pulsar-auto-coder
+ * - Package structure mirrors fully qualified class names in both source and test directories.
+ * - **Test class naming convention**: Test classes use the original class name with "AITest" suffix.
+ *   - Class name: `DataCollectors` → Test class name: `DataCollectorsAITest`
+ *   - File name matches class name (e.g., `DataCollectorsAITest.kt`)
+ * - Examples of file locations:
+ *   - Source class: `ai.platon.pulsar.common.collect.DataCollectors` → `src/main/kotlin/ai/platon/pulsar/common/collect/DataCollectors.kt`
+ *   - Test class: `ai.platon.pulsar.common.collect.DataCollectorsAITest` → `src/test/kotlin/ai/platon/pulsar/common/collect/DataCollectorsAITest.kt`
+ * - Build system: Use `mvnw` (Maven wrapper) instead of `mvn` for consistent builds.
+ *   - Maven wrapper location: Project root directory
+ *   - Example command: `cd "D:\\workspace\\Browser4-4.0.x" && .\\mvnw.cmd compile -pl pulsar-tools/pulsar-auto-coder`
  *
  * Unit test generation guidelines:
  * - Use testing framework JUnit5.
@@ -124,10 +132,45 @@ open class AutoCoder(
         val lastDot = className.lastIndexOf('.')
         val pkg = if (lastDot > 0) className.substring(0, lastDot) else ""
         val simpleName = if (lastDot > 0) className.substring(lastDot + 1) else className
-        val testDir = projectRootDir.resolve(testOutputDir)
+
+        // Find the correct module directory based on the package
+        val moduleDir = findModuleDirectoryForPackage(pkg)
+        val testDir = moduleDir.resolve(testOutputDir)
         val pkgDir = if (pkg.isNotBlank()) testDir.resolve(pkg.replace('.', '/')) else testDir
-        val fileName = "${simpleName}Test.kt"
+        val fileName = "${simpleName}AITest.kt"
         return pkgDir.resolve(fileName)
+    }
+
+    /**
+     * Find the module directory that contains the given package.
+     * This method searches for the module that contains the source class.
+     */
+    private fun findModuleDirectoryForPackage(packageName: String): Path {
+        val packagePath = packageName.replace('.', '/')
+
+        // Search for the module that contains this package in src/main/kotlin
+        Files.walk(projectRootDir).use { stream ->
+            val matchingPaths = stream.filter { path ->
+                val pathStr = path.toString().replace('\\', '/')
+                path.isDirectory() &&
+                pathStr.contains("src/main/kotlin/$packagePath") &&
+                pathStr.indexOf("src/main/kotlin/$packagePath") > 0
+            }.toList()
+
+            for (path in matchingPaths) {
+                val pathStr = path.toString().replace('\\', '/')
+                val srcMainKotlinIndex = pathStr.indexOf("src/main/kotlin")
+                if (srcMainKotlinIndex > 0) {
+                    val moduleDir = Paths.get(pathStr.take(srcMainKotlinIndex))
+                    logger.debug("Found module directory for package {}: {}", packageName, moduleDir)
+                    return moduleDir
+                }
+            }
+        }
+
+        // Fallback: if not found, return the project root directory
+        logger.warn("Could not find specific module for package: $packageName, using project root")
+        return projectRootDir
     }
 
     /** Save test code to disk, creating directories as needed. */
@@ -237,7 +280,7 @@ open class AutoCoder(
         val sourceCode = Files.readString(classInfo.filePath)
         val prompt = buildTestGenerationPrompt(classInfo, sourceCode)
         return try {
-            val response = chatModel!!.call(prompt)
+            val response = chatModel.call(prompt)
             val generatedCode = response.content
             logger.info("LLM generated test code successfully for class: ${classInfo.name}")
             logger.debug("Token usage: input=${response.tokenUsage.inputTokenCount}, output=${response.tokenUsage.outputTokenCount}")
@@ -281,7 +324,7 @@ ${
         }
 
 ## Guidelines:
-1. Create a test class named "${classInfo.name}Test"
+1. Create a test class named "${classInfo.name}AITest"
 2. Include proper package declaration: "package ${classInfo.packageName}"
 3. Add necessary imports including JUnit5 and kotlin.test
 4. Use @BeforeEach and @AfterEach for setup and teardown if needed
