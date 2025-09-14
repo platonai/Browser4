@@ -53,7 +53,7 @@ import kotlin.io.path.nameWithoutExtension
 open class AutoCoder(
     private val projectRootDir: Path = ProjectUtils.findProjectRootDir() ?: Paths.get("."),
     private val testOutputDir: String = "src/test/kotlin",
-    private val config: ImmutableConfig = ImmutableConfig()
+    private val config: ImmutableConfig = ImmutableConfig(loadDefaults = true)
 ) {
     private val logger = org.slf4j.LoggerFactory.getLogger(AutoCoder::class.java)
 
@@ -104,6 +104,10 @@ open class AutoCoder(
 
         // 3. Generate unit test code for each method
         val testCode = generateTestCode(classInfo)
+        if (testCode.isBlank()) {
+            logger.warn("No test code generated for class: $className")
+            return
+        }
 
         // 4. Save the generated unit test code to a file
         val testFile = createTestFilePath(className)
@@ -239,10 +243,7 @@ open class AutoCoder(
             logger.debug("Token usage: input=${response.tokenUsage.inputTokenCount}, output=${response.tokenUsage.outputTokenCount}")
             cleanupGeneratedTestCode(generatedCode, classInfo)
         } catch (e: Exception) {
-            logger.error(
-                "Failed to generate test code using LLM for class: ${classInfo.name}, falling back to template",
-                e
-            )
+            logger.error("Failed to generate test code using LLM for class: ${classInfo.name}", e)
             ""
         }
     }

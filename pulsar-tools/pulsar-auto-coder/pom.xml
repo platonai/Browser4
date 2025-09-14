@@ -20,6 +20,10 @@
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-llm</artifactId>
         </dependency>
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-open-ai</artifactId>
+        </dependency>
     </dependencies>
 
     <build>
