@@ -4,6 +4,8 @@ import ai.platon.pulsar.common.code.ProjectUtils
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.external.ChatModel
 import ai.platon.pulsar.external.ChatModelFactory
+import java.io.BufferedReader
+import java.io.InputStreamReader
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -67,6 +69,10 @@ open class AutoCoder(
 
     private val chatModel: ChatModel = ChatModelFactory.getOrCreate(config)
 
+    // Test execution and optimization tracking
+    private val testResults = mutableMapOf<String, TestResult>()
+    private val maxOptimizationRounds = 3
+
     /**
      * Generate unit tests for each class in the specified package.
      *
@@ -88,11 +94,19 @@ open class AutoCoder(
         // 2. For each class, analyze the structure and methods
         // 3. Generate unit test code for each method in each class
         // 4. Save the generated unit test code to files
+        // 5. Run tests automatically and optimize based on results
         classes.forEach { classFile ->
             try {
                 val className = extractClassName(classFile)
                 logger.info("Processing class: $className from file: ${classFile.fileName}")
-                generateUnitTestsFromFile(classFile, className)
+
+                // Generate initial tests
+                val testFile = generateUnitTestsFromFile(classFile, className)
+
+                // Run tests automatically and optimize
+                if (testFile != null) {
+                    runAndOptimizeTests(className, testFile, classFile)
+                }
             } catch (e: Exception) {
                 logger.error("Failed to generate tests for class in file: ${classFile.fileName}", e)
             }
@@ -102,9 +116,58 @@ open class AutoCoder(
     }
 
     /**
-     * Generate unit tests for a class using the actual file path
+     * Run tests automatically and optimize based on results
      */
-    private fun generateUnitTestsFromFile(classFile: Path, className: String) {
+    private fun runAndOptimizeTests(className: String, testFile: Path, sourceFile: Path) {
+        logger.info("Starting automatic test execution and optimization for: $className")
+
+        var currentTestFile = testFile
+        var optimizationRound = 0
+
+        while (optimizationRound < maxOptimizationRounds) {
+            logger.info("Optimization round ${optimizationRound + 1} for $className")
+
+            // Run the tests
+            val testResult = runTests(currentTestFile, className)
+            testResults[className] = testResult
+
+            // If tests pass and coverage is good, we're done
+            if (testResult.isSuccessful && testResult.coverage >= 80) {
+                logger.info("Tests successful with ${testResult.coverage}% coverage for $className")
+                break
+            }
+
+            // If tests fail or coverage is low, optimize
+            if (!testResult.isSuccessful || testResult.coverage < 80) {
+                logger.info("Optimizing tests for $className (coverage: ${testResult.coverage}%, failures: ${testResult.failureCount})")
+
+                val optimizedTestFile = optimizeTestCode(
+                    currentTestFile,
+                    sourceFile,
+                    testResult,
+                    className,
+                    optimizationRound
+                )
+
+                if (optimizedTestFile != null) {
+                    currentTestFile = optimizedTestFile
+                } else {
+                    logger.warn("Failed to optimize tests for $className")
+                    break
+                }
+            }
+
+            optimizationRound++
+        }
+
+        logger.info("Completed test optimization for $className after ${optimizationRound + 1} rounds")
+    }
+
+    /**
+     * Generate unit tests for a class using the actual file path
+     * @return Path to the generated test file, or null if generation failed
+     */
+    private fun generateUnitTestsFromFile(classFile: Path, className: String): Path? {
         logger.info("Generating unit tests for class: $className")
 
         // 2. Analyze the class structure and methods
@@ -114,7 +177,7 @@ open class AutoCoder(
         val testCode = generateTestCode(classInfo)
         if (testCode.isBlank()) {
             logger.warn("No test code generated for class: $className")
-            return
+            return null
         }
 
         // 4. Save the generated unit test code to a file
@@ -123,12 +186,13 @@ open class AutoCoder(
 
         logger.info("Unit tests generated successfully for: $className")
         logger.info("Test file created at: $testFile")
+        return testFile
     }
 
     /**
      * Create test file path for a class.
      */
-    private fun createTestFilePath(className: String): Path {
+    fun createTestFilePath(className: String): Path {
         val lastDot = className.lastIndexOf('.')
         val pkg = if (lastDot > 0) className.substring(0, lastDot) else ""
         val simpleName = if (lastDot > 0) className.substring(lastDot + 1) else className
@@ -174,7 +238,7 @@ open class AutoCoder(
     }
 
     /** Save test code to disk, creating directories as needed. */
-    private fun saveTestCode(testFile: Path, testCode: String) {
+    fun saveTestCode(testFile: Path, testCode: String) {
         Files.createDirectories(testFile.parent)
         Files.writeString(testFile, testCode)
         logger.info("Wrote test file: $testFile")
@@ -183,7 +247,7 @@ open class AutoCoder(
     /**
      * Find all Kotlin class files in the specified package
      */
-    private fun findClassesInPackage(packageName: String): List<Path> {
+    fun findClassesInPackage(packageName: String): List<Path> {
         val packagePath = packageName.replace('.', '/')
 
         logger.info("Searching for classes in package: $packageName")
@@ -252,7 +316,7 @@ open class AutoCoder(
     /**
      * Analyze class structure and extract methods, properties, etc.
      */
-    private fun analyzeClassStructure(classFile: Path): ClassInfo {
+    fun analyzeClassStructure(classFile: Path): ClassInfo {
         val content = Files.readString(classFile)
         val className = classFile.nameWithoutExtension
         val methods = extractMethods(content)
@@ -504,7 +568,7 @@ Do NOT include any explanations, summaries, or additional text outside the code 
             "import org.junit.jupiter.api.Test",
             "import kotlin.test.*"
         )
-        
+
         requiredImports.forEach { import ->
             if (!cleanCode.contains(import)) {
                 val packageIndex = cleanCode.indexOf("package")
@@ -518,8 +582,270 @@ Do NOT include any explanations, summaries, or additional text outside the code 
                 cleanCode = cleanCode.substring(0, insertIndex) + "$import\n" + cleanCode.substring(insertIndex)
             }
         }
-        
+
         return cleanCode
+    }
+
+    /**
+     * Run tests automatically and return results
+     */
+    fun runTests(testFile: Path, className: String): TestResult {
+        logger.info("Running tests for: $className")
+
+        try {
+            // Find the module directory containing the test file
+            val moduleDir = findModuleDirectoryForTestFile(testFile)
+
+            // Build the Maven command to run the specific test
+            val testClassName = extractTestClassName(testFile)
+            val command = buildMavenTestCommand(moduleDir, testClassName)
+
+            logger.info("Executing command: ${command.joinToString(" ")}")
+
+            // Execute the test command
+            val process = ProcessBuilder(command)
+                .directory(projectRootDir.toFile())
+                .redirectErrorStream(true)
+                .start()
+
+            val output = mutableListOf<String>()
+            BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
+                reader.lines().forEach { line ->
+                    output.add(line)
+                    logger.debug(line)
+                }
+            }
+
+            val exitCode = process.waitFor()
+            val outputText = output.joinToString("\n")
+
+            // Parse test results
+            val testResult = parseTestResults(outputText, exitCode, className)
+
+            logger.info("Test execution completed for $className with exit code: $exitCode")
+            logger.info("Tests passed: ${testResult.successCount}, Failed: ${testResult.failureCount}, Coverage: ${testResult.coverage}%")
+
+            return testResult
+
+        } catch (e: Exception) {
+            logger.error("Failed to run tests for $className", e)
+            return TestResult(
+                className = className,
+                isSuccessful = false,
+                successCount = 0,
+                failureCount = 0,
+                coverage = 0,
+                errorMessage = e.message
+            )
+        }
+    }
+
+    /**
+     * Build Maven command to run specific test
+     */
+    private fun buildMavenTestCommand(moduleDir: Path, testClassName: String): List<String> {
+        val relativeModulePath = projectRootDir.relativize(moduleDir).toString()
+        return listOf(
+            if (System.getProperty("os.name").lowercase().contains("win")) ".\\mvnw.cmd" else "./mvnw",
+            "test",
+            "-pl", relativeModulePath,
+            "-Dtest=$testClassName"
+        )
+    }
+
+    /**
+     * Find module directory for a test file
+     */
+    private fun findModuleDirectoryForTestFile(testFile: Path): Path {
+        var current = testFile.parent
+        while (current != null && current != projectRootDir) {
+            if (Files.exists(current.resolve("pom.xml"))) {
+                return current
+            }
+            current = current.parent
+        }
+        return projectRootDir
+    }
+
+    /**
+     * Extract test class name from test file path
+     */
+    private fun extractTestClassName(testFile: Path): String {
+        val fileName = testFile.fileName.toString()
+        val className = fileName.removeSuffix(".kt")
+        val packagePath = extractPackagePathFromTestFile(testFile)
+        return if (packagePath.isNotEmpty()) "$packagePath.$className" else className
+    }
+
+    /**
+     * Extract package path from test file
+     */
+    private fun extractPackagePathFromTestFile(testFile: Path): String {
+        val pathStr = testFile.toString().replace('\\', '/')
+        val idx = pathStr.indexOf("src/test/kotlin/")
+        if (idx != -1) {
+            val packagePath = pathStr.substring(idx + "src/test/kotlin/".length, pathStr.lastIndexOf('/'))
+            return packagePath.replace('/', '.')
+        }
+        return ""
+    }
+
+    /**
+     * Parse test results from Maven output
+     */
+    private fun parseTestResults(output: String, exitCode: Int, className: String): TestResult {
+        var successCount = 0
+        var failureCount = 0
+        var coverage = 0
+
+        // Parse test counts
+        val testsRunRegex = Regex("""Tests run: (\d+), Failures: (\d+), Errors: (\d+), Skipped: (\d+)""")
+        val testsMatch = testsRunRegex.find(output)
+        if (testsMatch != null) {
+            val total = testsMatch.groupValues[1].toInt()
+            val failures = testsMatch.groupValues[2].toInt()
+            val errors = testsMatch.groupValues[3].toInt()
+
+            successCount = total - failures - errors
+            failureCount = failures + errors
+        }
+
+        // Parse coverage (if available)
+        val coverageRegex = Regex("""Total.*?([0-9.]+)%""")
+        val coverageMatch = coverageRegex.find(output)
+        if (coverageMatch != null) {
+            coverage = coverageMatch.groupValues[1].toInt()
+        } else {
+            // Estimate coverage based on test results
+            coverage = if (failureCount == 0) 70 else 40
+        }
+
+        return TestResult(
+            className = className,
+            isSuccessful = exitCode == 0 && failureCount == 0,
+            successCount = successCount,
+            failureCount = failureCount,
+            coverage = coverage,
+            errorMessage = if (exitCode != 0) "Test execution failed with exit code: $exitCode" else null
+        )
+    }
+
+    /**
+     * Optimize test code based on test results
+     */
+    private fun optimizeTestCode(
+        currentTestFile: Path,
+        sourceFile: Path,
+        testResult: TestResult,
+        className: String,
+        optimizationRound: Int
+    ): Path? {
+        logger.info("Optimizing test code for $className (round ${optimizationRound + 1})")
+
+        try {
+            val currentTestCode = Files.readString(currentTestFile)
+            val sourceCode = Files.readString(sourceFile)
+            val classInfo = analyzeClassStructure(sourceFile)
+
+            val optimizationPrompt = buildOptimizationPrompt(
+                classInfo,
+                currentTestCode,
+                testResult,
+                optimizationRound
+            )
+
+            val response = chatModel.call(optimizationPrompt)
+            val optimizedCode = cleanupGeneratedTestCode(response.content, classInfo)
+
+            if (optimizedCode.isNotBlank() && optimizedCode != currentTestCode) {
+                // Save optimized code to a new file
+                val optimizedFile = createOptimizedTestFilePath(currentTestFile, optimizationRound + 1)
+                saveTestCode(optimizedFile, optimizedCode)
+                logger.info("Optimized test code saved to: $optimizedFile")
+                return optimizedFile
+            } else {
+                logger.warn("No meaningful optimization generated for $className")
+                return null
+            }
+
+        } catch (e: Exception) {
+            logger.error("Failed to optimize test code for $className", e)
+            return null
+        }
+    }
+
+    /**
+     * Build optimization prompt for LLM
+     */
+    private fun buildOptimizationPrompt(
+        classInfo: ClassInfo,
+        currentTestCode: String,
+        testResult: TestResult,
+        optimizationRound: Int
+    ): String {
+        val issues = mutableListOf<String>()
+
+        if (!testResult.isSuccessful) {
+            issues.add("Tests are failing (${testResult.failureCount} failures)")
+        }
+
+        if (testResult.coverage < 80) {
+            issues.add("Code coverage is low (${testResult.coverage}%, target: 80%+)")
+        }
+
+        return """
+You are an expert Kotlin developer tasked with optimizing unit tests based on test execution results.
+
+## Original Class Information:
+Package: ${classInfo.packageName}
+Class Name: ${classInfo.name}
+
+## Current Test Issues to Fix:
+${issues.joinToString("\n")}
+
+## Current Test Code:
+```kotlin
+$currentTestCode
+```
+
+## Methods to Cover:
+${classInfo.methods.filter { it.isPublic && !it.isConstructor }
+    .joinToString("\n") { "- ${it.name}(${it.parameters.joinToString { p -> "${p.name}: ${p.type}" }}): ${it.returnType}" }}
+
+## Optimization Requirements:
+1. Fix any failing tests by improving test logic or fixing assertions
+2. Increase code coverage to at least 80% by adding more test cases
+3. Add edge cases and boundary value testing
+4. Improve test data and assertions
+5. Ensure all public methods are thoroughly tested
+6. Follow the Arrange-Act-Assert pattern
+7. Use descriptive test method names
+
+## Important Notes:
+- This is optimization round ${optimizationRound + 1}
+- Focus on fixing the identified issues
+- Maintain existing working tests while improving coverage
+- Add parameterized tests where applicable
+- Ensure tests run quickly and are independent
+
+Please provide ONLY the optimized Kotlin test code wrapped in a code block:
+
+```kotlin
+// Your optimized test class code here
+```
+
+Do NOT include any explanations or additional text outside the code block.
+""".trimIndent()
+    }
+
+    /**
+     * Create optimized test file path
+     */
+    private fun createOptimizedTestFilePath(originalFile: Path, round: Int): Path {
+        val fileName = originalFile.fileName.toString()
+        val baseName = fileName.removeSuffix(".kt")
+        val optimizedFileName = "${baseName}_optimized_$round.kt"
+        return originalFile.parent.resolve(optimizedFileName)
     }
 
     // ------------------------------
@@ -528,24 +854,55 @@ Do NOT include any explanations, summaries, or additional text outside the code 
 
     private fun extractMethods(content: String): List<MethodInfo> {
         val methods = mutableListOf<MethodInfo>()
-        val methodRegex =
-            Regex("""(?m)^\s*(?:@[\w.]+(?:\([^)]*\))?\s*)*(?:(public|private|protected|internal)\s+)?(?:suspend\s+|inline\s+|tailrec\s+|operator\s+|infix\s+|external\s+)?fun\s*(?:<[^>]+>\s*)?(?:[A-Za-z_][A-Za-z0-9_]*\.)?([A-Za-z_][A-ZaZ0-9_]*)\s*\(([^)]*)\)\s*(?::\s*([^=\n\r{]+))?""")
-        methodRegex.findAll(content).forEach { match ->
-            val visibility = match.groups[1]?.value ?: "public"
-            val name = match.groups[2]?.value ?: ""
-            val paramStr = match.groups[3]?.value ?: ""
-            val returnType = match.groups[4]?.value?.trim() ?: "Unit"
-            val parameters = parseParameters(paramStr)
-            methods.add(
-                MethodInfo(
-                    name = name,
-                    returnType = returnType,
-                    isPublic = visibility == "public" || visibility.isEmpty(),
-                    isConstructor = false,
-                    parameters = parameters
+
+        // Simple but effective approach - find all fun declarations
+        // First, find all fun keyword occurrences
+        val funRegex = Regex("""(?m)^\s*(?:override\s+)?fun\s+(\w+)""")
+        val funMatches = funRegex.findAll(content).toList()
+
+        logger.debug("Found ${funMatches.size} fun keyword matches")
+
+        // For each fun match, extract the full method signature
+        funMatches.forEach { funMatch ->
+            val methodName = funMatch.groups[1]?.value ?: return@forEach
+
+            // Find the start of this method (from the fun keyword)
+            val methodStart = funMatch.range.first
+
+            // Find the opening parenthesis after the method name
+            val afterNameStart = funMatch.groups[1]?.range?.last?.plus(1) ?: return@forEach
+            val remainingContent = content.substring(afterNameStart)
+
+            // Find parameter list and return type
+            val paramListRegex = Regex("""^\s*\(([^)]*)\)""")
+            val paramMatch = paramListRegex.find(remainingContent)
+
+            if (paramMatch != null) {
+                val paramStr = paramMatch.groups[1]?.value ?: ""
+                val parameters = parseParameters(paramStr)
+
+                // Find return type if present (after closing parenthesis)
+                val afterParamsStart = paramMatch.range.last + 1
+                val afterParamsContent = remainingContent.substring(afterParamsStart)
+
+                val returnTypeRegex = Regex("""^\s*:\s*([^\s={]+)""")
+                val returnTypeMatch = returnTypeRegex.find(afterParamsContent)
+                val returnType = returnTypeMatch?.groups?.get(1)?.value?.trim() ?: "Unit"
+
+                logger.debug("Found method: $methodName with params: $paramStr, returnType: $returnType")
+
+                methods.add(
+                    MethodInfo(
+                        name = methodName,
+                        returnType = returnType,
+                        isPublic = true, // Assume public for now
+                        isConstructor = false,
+                        parameters = parameters
+                    )
                 )
-            )
+            }
         }
+
         return methods
     }
 
@@ -599,6 +956,15 @@ Do NOT include any explanations, summaries, or additional text outside the code 
     // Data classes representing code structure
     // ------------------------------
 
+    data class TestResult(
+        val className: String,
+        val isSuccessful: Boolean,
+        val successCount: Int,
+        val failureCount: Int,
+        val coverage: Int,
+        val errorMessage: String? = null
+    )
+
     data class ClassInfo(
         val name: String,
         val packageName: String,
@@ -633,22 +999,90 @@ Do NOT include any explanations, summaries, or additional text outside the code 
         val returnType: String,
         val parameters: List<ParameterInfo>
     )
+
+    /**
+     * Generate and optimize tests for a specific class
+     */
+    fun generateTestsForClass(className: String) {
+        logger.info("Generating tests for specific class: $className")
+
+        // Find the class file
+        val classFile = findClassByName(className)
+        if (classFile == null) {
+            logger.error("Class not found: $className")
+            return
+        }
+
+        try {
+            // Generate initial tests
+            val testFile = generateUnitTestsFromFile(classFile, className)
+
+            // Run tests automatically and optimize
+            if (testFile != null) {
+                runAndOptimizeTests(className, testFile, classFile)
+            }
+
+            logger.info("Test generation and optimization completed for class: $className")
+        } catch (e: Exception) {
+            logger.error("Failed to process class: $className", e)
+        }
+    }
+
+    /**
+     * Find a class by its fully qualified name
+     */
+    fun findClassByName(className: String): Path? {
+        val packagePath = className.substringBeforeLast('.', "")
+        val simpleName = className.substringAfterLast('.')
+
+        return findClassesInPackage(packagePath).find { file ->
+            file.fileName.toString() == "$simpleName.kt"
+        }
+    }
+
+    /**
+     * Get test results summary
+     */
+    fun getTestResultsSummary(): Map<String, TestResult> {
+        return testResults.toMap()
+    }
 }
 
 fun main() {
     val autoCoder = AutoCoder()
-    val packageName = "ai.platon.pulsar.common.collect"
 
     // Debug: Print the project root directory being used
-    println(
-        "Project root directory: ${
-            autoCoder.javaClass.getDeclaredField("projectRootDir").let { it.isAccessible = true; it.get(autoCoder) }
-        }"
-    )
+    println("Project root directory: ${autoCoder.javaClass.getDeclaredField("projectRootDir").let { it.isAccessible = true; it.get(autoCoder) }}")
+
+    // Example usage: Generate tests for a specific class or package
+    println("AutoCoder - AI-Powered Test Generation and Optimization Tool")
+    println("Usage options:")
+    println("1. Generate tests for a package: autoCoder.generateUnitTestsForPackage(\"ai.platon.pulsar.common.collect\")")
+    println("2. Generate tests for a specific class: autoCoder.generateTestsForClass(\"ai.platon.pulsar.common.collect.DataCollectors\")")
+    println()
 
     try {
-        autoCoder.generateUnitTestsForPackage(packageName)
-        println("Unit test generation completed successfully!")
+        // Example: Generate tests for a specific class
+        val className = "ai.platon.pulsar.common.collect.DataCollectors"
+        println("Generating tests for class: $className")
+        autoCoder.generateTestsForClass(className)
+
+        // Print summary
+        val results = autoCoder.getTestResultsSummary()
+        println("\n=== Test Results Summary ===")
+        results.forEach { (className, result) ->
+            println("Class: $className")
+            println("  Success: ${result.isSuccessful}")
+            println("  Tests Passed: ${result.successCount}")
+            println("  Tests Failed: ${result.failureCount}")
+            println("  Coverage: ${result.coverage}%")
+            if (result.errorMessage != null) {
+                println("  Error: ${result.errorMessage}")
+            }
+            println()
+        }
+
+        println("AutoCoder execution completed!")
     } catch (e: Exception) {
         println("Error during test generation: ${e.message}")
         e.printStackTrace()

@@ -19,7 +19,7 @@ class ConcurrentPassiveExpiringSet<E>(val ttl: Duration = Duration.ofSeconds(-1)
      */
     private val map = Collections.synchronizedMap(PassiveExpiringMap<E, Any>(ttl.toMillis()))
 
-    override fun add(element: E): Boolean = map.put(element, {}) != null
+    override fun add(element: E): Boolean = map.put(element, {}) == null
 
     override fun remove(element: E): Boolean = map.remove(element) != null
 
