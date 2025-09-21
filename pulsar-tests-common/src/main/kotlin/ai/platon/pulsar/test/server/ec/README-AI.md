@@ -114,49 +114,6 @@ Load once at application start; keep immutable in memory.
 
 Keep error pages lightweight, also with a unique id: `#error-page` and a class `error-code-404` etc.
 
-## Performance & Caching
-- Load JSON once (eager) into immutable data classes.
-- Provide a simple in-memory index: `Map<String, Category>`, `Map<String, Product>`, `Map<String, List<Product>>` for category grouping.
-- No external calls per request.
-
-## Kotlin Implementation Outline
-1. Data classes: `Category`, `Product`, `Catalog` (wrapping categories + products + meta).
-2. Loader: reads JSON via Jackson or kotlinx.serialization at startup (fail fast if invalid).
-3. Service Layer:
-   - `CatalogService` with functions: `allCategories()`, `getCategory(id)`, `getProductsByCategory(id)`, `getProduct(id)`.
-4. Controller / Handler (in `MockSiteApplication.kt`): register HTTP handlers for three primary routes.
-5. Simple template rendering: read base HTML templates once; replace markers like `{{PRODUCT_CARDS}}` and `{{CATEGORY_LINKS}}`.
-6. Utility for HTML escaping (basic) to avoid markup issues.
-
-### Minimal Marker Strategy Example
-In template, reserve placeholders:
-- `<!--CATEGORY_LINKS-->`
-- `<!--PRODUCT_LIST-->`
-- `<!--PRODUCT_DETAIL-->`
-Replace them with generated HTML snippets.
-
-## HTML Snippet Patterns
-### Category Link (Home)
-```
-<li class="category-item" data-category-id="1292115012">
-  <a id="cat-link-1292115012" href="/ec/b?node=1292115012">Electronics</a>
-</li>
-```
-### Product Card (List)
-```
-<article class="product-card" id="product-B08PP5MSVB" data-category-id="1292115012">
-  <a class="product-link" href="/ec/dp/B08PP5MSVB">
-    <img class="product-image" src="/ec/static/img/B08PP5MSVB.jpg" alt="Wireless Noise-Cancelling Headphones" />
-    <h2 class="product-title">Wireless Noise-Cancelling Headphones</h2>
-  </a>
-  <div class="product-meta">
-    <span class="product-price" id="product-price-B08PP5MSVB" data-product-id="B08PP5MSVB">$199.99</span>
-    <span class="product-rating" id="product-rating-B08PP5MSVB" data-rating="4.4">4.4 (312)</span>
-  </div>
-  <div class="product-badges"><span class="badge">Bestseller</span></div>
-</article>
-```
-
 ## Validation / Test Checklist
 Automated or manual tests should assert:
 1. GET `/ec/` returns 200 and contains 20 links with `cat-link-` IDs.
@@ -178,10 +135,6 @@ Automated or manual tests should assert:
 ## Logging
 - On startup: log categories count, product count, seed.
 - On 404/400: concise log line with path + reason.
-
-## Security / Simplicity
-- No user input persistence.
-- Sanitise query parameters (escape output).
 
 ## Done Definition
 - All required routes implemented.
