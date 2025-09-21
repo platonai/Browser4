@@ -19,9 +19,17 @@ import ai.platon.pulsar.skeleton.crawl.fetch.driver.*
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
-import com.github.kklisura.cdt.protocol.v2023.events.network.RequestWillBeSent
-import com.github.kklisura.cdt.protocol.v2023.events.network.ResponseReceived
-import com.github.kklisura.cdt.protocol.v2023.events.page.WindowOpen
+import com.github.kklisura.cdt.protocol.v2023.events.console.MessageAdded
+import com.github.kklisura.cdt.protocol.v2023.events.dom.DocumentUpdated
+import com.github.kklisura.cdt.protocol.v2023.events.inspector.TargetCrashed
+import com.github.kklisura.cdt.protocol.v2023.events.network.*
+import com.github.kklisura.cdt.protocol.v2023.events.page.*
+import com.github.kklisura.cdt.protocol.v2023.events.runtime.ConsoleAPICalled
+import com.github.kklisura.cdt.protocol.v2023.events.runtime.ExceptionThrown
+import com.github.kklisura.cdt.protocol.v2023.events.runtime.InspectRequested
+import com.github.kklisura.cdt.protocol.v2023.events.target.TargetCreated
+import com.github.kklisura.cdt.protocol.v2023.events.target.TargetDestroyed
+import com.github.kklisura.cdt.protocol.v2023.events.target.TargetInfoChanged
 import com.github.kklisura.cdt.protocol.v2023.types.fetch.RequestPattern
 import com.github.kklisura.cdt.protocol.v2023.types.network.Cookie
 import com.github.kklisura.cdt.protocol.v2023.types.network.ErrorReason
@@ -73,6 +81,31 @@ class PulsarWebDriver(
 
     private val networkManager by lazy { NetworkManager(this, rpc) }
     private val messageWriter = MiscMessageWriter()
+
+    // Frame management
+    private val frameRegistry = FrameRegistry()
+    private var frameExecutionContextId: Int? = null
+
+    // DOM event handlers
+    var onClose: ((PulsarWebDriver) -> Unit)? = null
+    var onConsoleMessage: ((ConsoleMessage) -> Unit)? = null
+    var onCrash: ((PulsarWebDriver) -> Unit)? = null
+    var onDialog: ((Dialog) -> Unit)? = null
+    var onDOMContentLoaded: ((PulsarWebDriver) -> Unit)? = null
+    var onDownload: ((Download) -> Unit)? = null
+    var onFileChooser: ((FileChooser) -> Unit)? = null
+    var onFrameAttached: ((Frame) -> Unit)? = null
+    var onFrameDetached: ((Frame) -> Unit)? = null
+    var onFrameNavigated: ((Frame) -> Unit)? = null
+    var onLoad: ((PulsarWebDriver) -> Unit)? = null
+    var onPageError: ((String) -> Unit)? = null
+    var onPopup: ((PulsarWebDriver) -> Unit)? = null
+    var onRequest: ((Request) -> Unit)? = null
+    var onRequestFailed: ((Request) -> Unit)? = null
+    var onRequestFinished: ((Request) -> Unit)? = null
+    var onResponse: ((Response) -> Unit)? = null
+    var onWebSocket: ((WebSocket) -> Unit)? = null
+    var onWorker: ((Worker) -> Unit)? = null
 
     private val closed = AtomicBoolean()
 
@@ -562,6 +595,8 @@ class PulsarWebDriver(
         super.close()
 
         if (closed.compareAndSet(false, true)) {
+            // Trigger onClose event before closing
+            onClose?.invoke(this)
             devTools.runCatching { close() }.onFailure { warnForClose(this, it) }
         }
     }
@@ -606,6 +641,135 @@ class PulsarWebDriver(
     override fun toString() = "Driver#$id"
 
     /**
+     * Set up DOM event listeners for Chrome DevTools Protocol events
+     */
+    private fun setupDOMEventListeners() {
+        // Page events
+        pageAPI?.onDomContentEventFired { event ->
+            onDOMContentLoaded?.invoke(this)
+        }
+
+        pageAPI?.onLoadEventFired { event ->
+            onLoad?.invoke(this)
+        }
+
+        pageAPI?.onFrameAttached { event ->
+            val frame = Frame(
+                id = event.frameId,
+                url = "",
+                name = null,
+                parentId = event.parentFrameId
+            )
+            onFrameAttached?.invoke(frame)
+        }
+
+        pageAPI?.onFrameDetached { event ->
+            val frame = Frame(
+                id = event.frameId,
+                url = "",
+                name = null
+            )
+            onFrameDetached?.invoke(frame)
+        }
+
+        pageAPI?.onFrameNavigated { event ->
+            val frame = Frame(
+                id = event.frame.id,
+                url = event.frame.url,
+                name = event.frame.name,
+                parentId = event.frame.parentId
+            )
+            onFrameNavigated?.invoke(frame)
+        }
+
+        pageAPI?.onWindowOpen { event ->
+            // Handle popup creation
+            val driver = browser.runCatching { newDriver(event.url) }.getOrNull()
+            if (driver != null) {
+                driver.opener = this
+                this.outgoingPages.add(driver)
+                onPopup?.invoke(driver)
+            }
+        }
+
+        pageAPI?.onJavascriptDialogOpening { event ->
+            val dialog = Dialog(
+                type = event.type.toString(),
+                message = event.message,
+                defaultPrompt = event.defaultPrompt
+            )
+            onDialog?.invoke(dialog)
+        }
+
+        // Runtime events
+        runtimeAPI?.onConsoleAPICalled { event ->
+            val consoleMessage = ConsoleMessage(
+                type = event.type.toString(),
+                text = event.args.firstOrNull()?.value?.toString() ?: "",
+                args = event.args.map { it.value }
+            )
+            onConsoleMessage?.invoke(consoleMessage)
+        }
+
+        runtimeAPI?.onExceptionThrown { event ->
+            val errorMessage = event.exceptionDetails.text ?: "Unknown error"
+            onPageError?.invoke(errorMessage)
+        }
+
+        // Inspector events
+        devTools.inspector?.onTargetCrashed { event ->
+            onCrash?.invoke(this)
+        }
+
+        // Network events - use direct network API listeners
+        networkAPI?.onRequestWillBeSent { event ->
+            val request = Request(
+                url = event.request.url,
+                method = event.request.method,
+                headers = event.request.headers.mapValues { it.value.toString() },
+                postData = event.request.postData,
+                resourceType = event.type?.toString(),
+                requestId = event.requestId
+            )
+            onRequest?.invoke(request)
+        }
+
+        networkAPI?.onResponseReceived { event ->
+            val response = Response(
+                url = event.response.url,
+                status = event.response.status,
+                statusText = event.response.statusText,
+                headers = event.response.headers.mapValues { it.value.toString() },
+                requestId = event.requestId,
+                mimeType = event.response.mimeType
+            )
+            onResponse?.invoke(response)
+        }
+
+        networkAPI?.onLoadingFailed { event ->
+            val request = Request(
+                url = "", // We don't have request details in LoadingFailed
+                method = "GET",
+                headers = emptyMap(),
+                resourceType = event.type?.toString(),
+                requestId = event.requestId
+            )
+            onRequestFailed?.invoke(request)
+        }
+
+        networkAPI?.onLoadingFinished { event ->
+            val request = Request(
+                url = "", // We don't have the URL in LoadingFinished event
+                method = "GET",
+                headers = emptyMap(),
+                resourceType = null,
+                requestId = event.requestId
+            )
+            onRequestFinished?.invoke(request)
+        }
+    }
+
+    /**
      *
      * */
     @Throws(ChromeIOException::class)
@@ -626,6 +790,17 @@ class PulsarWebDriver(
                 // allow all url patterns
                 val patterns = listOf(RequestPattern())
                 fetchAPI?.enable(patterns, true)
+            }
+
+            // Set up DOM event listeners
+            setupDOMEventListeners()
+
+            // Set up frame event handlers
+            setupFrameEventHandlers()
+
+            // Initialize frame registry with current frame tree
+            runBlocking {
+                initializeFrameRegistry()
             }
         } catch (e: Exception) {
             throw ChromeIOException("Failed to enable CDT agents", e)
@@ -905,12 +1080,30 @@ class PulsarWebDriver(
     ): T? {
         try {
             return rpc.invokeDeferred(name) {
+                val currentFrameContext = frameRegistry.getCurrentFrameContext()
+                val frameId = currentFrameContext?.frameId
+
                 val nodeId = if (focus) {
-                    page.focusOnSelector(selector)
+                    if (frameId != null) {
+                        // Use frame-specific focus method when in an iframe
+                        page.focusOnSelector(selector, frameId)
+                    } else {
+                        page.focusOnSelector(selector)
+                    }
                 } else if (scrollIntoView) {
-                    page.scrollIntoViewIfNeeded(selector)
+                    if (frameId != null) {
+                        // Use frame-specific scroll method when in an iframe
+                        page.scrollIntoViewIfNeeded(selector, frameId = frameId)
+                    } else {
+                        page.scrollIntoViewIfNeeded(selector)
+                    }
                 } else {
-                    page.querySelector(selector)
+                    if (frameId != null) {
+                        // Use frame-specific query method when in an iframe
+                        page.querySelector(selector, frameId)
+                    } else {
+                        page.querySelector(selector)
+                    }
                 }
 
                 if (nodeId != null && nodeId > 0) {
@@ -962,4 +1155,258 @@ class PulsarWebDriver(
             )
         }
     }
+
+    // Iframe management methods
+
+    /**
+     * Switch to iframe by index
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun switchToFrame(index: Int): Boolean {
+        return invokeOnPage("switchToFrame") {
+            val frame = frameRegistry.findFrameByIndex(index)
+            if (frame != null) {
+                frameRegistry.switchToFrame(frame.frameId)
+            } else {
+                false
+            }
+        } ?: false
+    }
+
+    /**
+     * Switch to iframe by name or ID
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun switchToFrame(nameOrId: String): Boolean {
+        return invokeOnPage("switchToFrame") {
+            val frame = frameRegistry.findFrameByName(nameOrId)
+            if (frame != null) {
+                frameRegistry.switchToFrame(frame.frameId)
+            } else {
+                false
+            }
+        } ?: false
+    }
+
+    /**
+     * Switch to parent frame
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun switchToParentFrame(): Boolean {
+        return invokeOnPage("switchToParentFrame") {
+            frameRegistry.switchToParentFrame()
+        } ?: false
+    }
+
+    /**
+     * Switch to default content (main frame)
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun switchToDefaultContent(): Boolean {
+        return invokeOnPage("switchToDefaultContent") {
+            frameRegistry.switchToDefaultContent()
+        } ?: false
+    }
+
+    /**
+     * Get all available frames
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun getFrames(): List<ai.platon.pulsar.skeleton.crawl.fetch.driver.FrameInfo> {
+        return invokeOnPage("getFrames") {
+            frameRegistry.getAllFrameInfos().map { frameInfo ->
+                ai.platon.pulsar.skeleton.crawl.fetch.driver.FrameInfo(
+                    frameId = frameInfo.context.frameId,
+                    url = frameInfo.context.url,
+                    name = frameInfo.context.name,
+                    parentFrameId = frameInfo.context.parentFrameId,
+                    isAccessible = frameInfo.isAccessible,
+                    loadState = frameInfo.loadState.name
+                )
+            }
+        } ?: emptyList()
+    }
+
+    /**
+     * Get current frame information
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun getCurrentFrame(): ai.platon.pulsar.skeleton.crawl.fetch.driver.FrameInfo? {
+        return invokeOnPage("getCurrentFrame") {
+            frameRegistry.getCurrentFrameContext()?.let { context ->
+                frameRegistry.getFrameInfo(context.frameId)?.let { frameInfo ->
+                    ai.platon.pulsar.skeleton.crawl.fetch.driver.FrameInfo(
+                        frameId = frameInfo.context.frameId,
+                        url = frameInfo.context.url,
+                        name = frameInfo.context.name,
+                        parentFrameId = frameInfo.context.parentFrameId,
+                        isAccessible = frameInfo.isAccessible,
+                        loadState = frameInfo.loadState.name
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * Check if currently in an iframe
+     */
+    override fun isInFrame(): Boolean = frameRegistry.isInFrame()
+
+    /**
+     * Execute JavaScript in current frame context
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun evaluateInFrame(expression: String): Any? {
+        return invokeOnPage("evaluateInFrame") {
+            // Use frame-specific execution context if available
+            frameExecutionContextId?.let { contextId ->
+                runtimeAPI?.evaluate(expression)?.result?.value
+            } ?: page.evaluate(expression) // Fallback to main context
+        }
+    }
+
+    /**
+     * Execute JavaScript in specific frame
+     */
+    @Throws(WebDriverException::class)
+    suspend fun evaluateInFrame(frameId: String, expression: String): Any? {
+        return invokeOnPage("evaluateInFrame") {
+            // Create isolated world for the frame if needed
+            val executionContextId = pageAPI?.createIsolatedWorld(frameId)
+            executionContextId?.let { contextId ->
+                runtimeAPI?.evaluate(expression)?.result?.value
+            }
+        }
+    }
+
+    /**
+     * Wait for frame to load
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun waitForFrameLoad(frameId: String, timeout: Duration): Boolean {
+        val result = waitUntil("waitForFrameLoad", timeout) {
+            frameRegistry.validateFrame(frameId) &&
+            frameRegistry.getFrameInfo(frameId)?.loadState == FrameLoadState.LOADED
+        }
+        return result.isZero || result.isNegative
+    }
+
+    /**
+     * Initialize frame registry with current frame tree
+     */
+    private suspend fun initializeFrameRegistry() {
+        try {
+            pageAPI?.frameTree?.let { frameTree ->
+                frameRegistry.registerFrameTree(frameTree)
+            }
+        } catch (e: Exception) {
+            logger.warn("Failed to initialize frame registry", e)
+        }
+    }
+
+    /**
+     * Update frame registry when frame events occur
+     */
+    private fun setupFrameEventHandlers() {
+        pageAPI?.onFrameAttached { event ->
+            val frame = com.github.kklisura.cdt.protocol.v2023.types.page.Frame().apply {
+                id = event.frameId
+                parentId = event.parentFrameId
+            }
+
+            kotlinx.coroutines.runBlocking {
+                frameRegistry.registerFrame(frame, event.parentFrameId)
+            }
+        }
+
+        pageAPI?.onFrameDetached { event ->
+            kotlinx.coroutines.runBlocking {
+                frameRegistry.unregisterFrame(event.frameId)
+            }
+        }
+
+        pageAPI?.onFrameNavigated { event ->
+            kotlinx.coroutines.runBlocking {
+                frameRegistry.updateFrame(event.frame.id, event.frame.url, event.frame.name)
+            }
+        }
+    }
 }
+
+// Event data classes for DOM events
+data class ConsoleMessage(
+    val type: String,
+    val text: String,
+    val args: List<Any?>,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
+data class Dialog(
+    val type: String, // alert, prompt, confirm, beforeunload
+    val message: String,
+    val defaultPrompt: String? = null
+) {
+    fun accept() {
+        // Implementation will be added when integrating with CDP
+    }
+
+    fun dismiss() {
+        // Implementation will be added when integrating with CDP
+    }
+}
+
+data class Download(
+    val url: String,
+    val suggestedFilename: String? = null,
+    val totalBytes: Long = -1,
+    val receivedBytes: Long = 0
+)
+
+data class FileChooser(
+    val element: Any?, // Will be typed properly when implementing CDP integration
+    val multiple: Boolean = false
+) {
+    fun accept(filePaths: List<String>) {
+        // Implementation will be added when integrating with CDP
+    }
+
+    fun cancel() {
+        // Implementation will be added when integrating with CDP
+    }
+}
+
+data class Frame(
+    val id: String,
+    val url: String,
+    val name: String? = null,
+    val parentId: String? = null
+)
+
+data class Request(
+    val url: String,
+    val method: String,
+    val headers: Map<String, String>,
+    val postData: String? = null,
+    val resourceType: String? = null,
+    val requestId: String
+)
+
+data class Response(
+    val url: String,
+    val status: Int,
+    val statusText: String,
+    val headers: Map<String, String>,
+    val requestId: String,
+    val mimeType: String? = null
+)
+
+data class WebSocket(
+    val url: String,
+    val requestId: String
+)
+
+data class Worker(
+    val workerId: String,
+    val url: String
+)

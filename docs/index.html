@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pulsar QL - X-SQL Documentation</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background-color: #f8f9fa;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+
+        header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 2rem 0;
+            text-align: center;
+        }
+
+        header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 0.5rem;
+        }
+
+        header p {
+            font-size: 1.2rem;
+            opacity: 0.9;
+        }
+
+        nav {
+            background: white;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        nav ul {
+            list-style: none;
+            display: flex;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        nav li {
+            margin: 0;
+        }
+
+        nav a {
+            display: block;
+            padding: 1rem 1.5rem;
+            text-decoration: none;
+            color: #333;
+            font-weight: 500;
+            transition: all 0.3s ease;
+        }
+
+        nav a:hover, nav a.active {
+            background-color: #667eea;
+            color: white;
+        }
+
+        main {
+            padding: 2rem 0;
+        }
+
+        .section {
+            background: white;
+            margin: 2rem 0;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .section h2 {
+            color: #667eea;
+            margin-bottom: 1rem;
+            font-size: 1.8rem;
+        }
+
+        .section h3 {
+            color: #555;
+            margin: 1.5rem 0 1rem 0;
+            font-size: 1.3rem;
+        }
+
+        .function-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1rem;
+            margin: 1rem 0;
+        }
+
+        .function-card {
+            background: #f8f9fa;
+            padding: 1.5rem;
+            border-radius: 6px;
+            border-left: 4px solid #667eea;
+        }
+
+        .function-card h4 {
+            color: #667eea;
+            margin-bottom: 0.5rem;
+        }
+
+        .function-card p {
+            color: #666;
+            font-size: 0.9rem;
+        }
+
+        .sql-example {
+            background: #2d3748;
+            color: #e2e8f0;
+            padding: 1rem;
+            border-radius: 6px;
+            margin: 1rem 0;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.9rem;
+            overflow-x: auto;
+        }
+
+        .highlight {
+            background: linear-gradient(120deg, #a8edea 0%, #fed6e3 100%);
+            padding: 0.2rem 0.4rem;
+            border-radius: 4px;
+            font-family: monospace;
+        }
+
+        .feature-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1rem;
+            margin: 2rem 0;
+        }
+
+        .feature-item {
+            text-align: center;
+            padding: 1.5rem;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .feature-item i {
+            font-size: 2rem;
+            color: #667eea;
+            margin-bottom: 1rem;
+        }
+
+        footer {
+            background: #333;
+            color: white;
+            text-align: center;
+            padding: 2rem 0;
+            margin-top: 3rem;
+        }
+
+        .btn {
+            display: inline-block;
+            padding: 0.75rem 1.5rem;
+            background: #667eea;
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+        }
+
+        .btn:hover {
+            background: #5a67d8;
+            transform: translateY(-2px);
+        }
+
+        @media (max-width: 768px) {
+            header h1 {
+                font-size: 2rem;
+            }
+
+            nav ul {
+                flex-direction: column;
+            }
+
+            .function-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1><i class="fas fa-database"></i> Pulsar QL</h1>
+            <p>Comprehensive X-SQL Documentation for Web Data Extraction</p>
+        </div>
+    </header>
+
+    <nav>
+        <div class="container">
+            <ul>
+                <li><a href="#overview" class="nav-link">Overview</a></li>
+                <li><a href="#functions" class="nav-link">Functions</a></li>
+                <li><a href="#examples" class="nav-link">Examples</a></li>
+                <li><a href="#reference" class="nav-link">Reference</a></li>
+                <li><a href="#guides" class="nav-link">Guides</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <main>
+        <div class="container">
+            <section id="overview" class="section">
+                <h2><i class="fas fa-rocket"></i> Overview</h2>
+                <p><strong>Pulsar QL</strong> is a powerful X-SQL (Extended SQL) implementation that enables web data extraction and processing directly through SQL queries. It provides a comprehensive set of User Defined Functions (UDFs) for web scraping, DOM manipulation, AI-powered content analysis, and data transformation.</p>
+
+                <div class="feature-list">
+                    <div class="feature-item">
+                        <i class="fas fa-globe"></i>
+                        <h3>Web Scraping</h3>
+                        <p>Extract data from web pages using SQL queries with DOM manipulation functions</p>
+                    </div>
+                    <div class="feature-item">
+                        <i class="fas fa-brain"></i>
+                        <h3>AI Integration</h3>
+                        <p>Leverage Large Language Models for intelligent content extraction and analysis</p>
+                    </div>
+                    <div class="feature-item">
+                        <i class="fas fa-cogs"></i>
+                        <h3>Data Transformation</h3>
+                        <p>Process and transform extracted data using built-in utility functions</p>
+                    </div>
+                    <div class="feature-item">
+                        <i class="fas fa-clock"></i>
+                        <h3>DateTime Processing</h3>
+                        <p>Extract and parse temporal information from unstructured text</p>
+                    </div>
+                </div>
+            </section>
+
+            <section id="functions" class="section">
+                <h2><i class="fas fa-code"></i> Function Categories</h2>
+
+                <div class="function-grid">
+                    <div class="function-card">
+                        <h4><i class="fas fa-globe-americas"></i> DOM Functions</h4>
+                        <p>Load, parse, and manipulate HTML/XML documents. Extract text, attributes, and navigate document structure.</p>
+                        <span class="highlight">DOM.load()</span>, <span class="highlight">DOM.select()</span>, <span class="highlight">DOM.text()</span>
+                    </div>
+
+                    <div class="function-card">
+                        <h4><i class="fas fa-brain"></i> LLM Functions</h4>
+                        <p>AI-powered content extraction, classification, and analysis using Large Language Models.</p>
+                        <span class="highlight">LLM.extract()</span>, <span class="highlight">LLM.chat()</span>, <span class="highlight">LLM.classify()</span>
+                    </div>
+
+                    <div class="function-card">
+                        <h4><i class="fas fa-text-width"></i> String Functions</h4>
+                        <p>Comprehensive text processing, validation, and manipulation operations.</p>
+                        <span class="highlight">STR.capitalize()</span>, <span class="highlight">STR.isNumeric()</span>, <span class="highlight">STR.replace()</span>
+                    </div>
+
+                    <div class="function-card">
+                        <h4><i class="fas fa-list"></i> Array Functions</h4>
+                        <p>Array manipulation and utility operations for processing collections.</p>
+                        <span class="highlight">ARRAY.joinToString()</span>, <span class="highlight">ARRAY.firstNotBlank()</span>
+                    </div>
+
+                    <div class="function-card">
+                        <h4><i class="fas fa-clock"></i> DateTime Functions</h4>
+                        <p>Extract and parse temporal information from text content.</p>
+                        <span class="highlight">TIME.firstDateTime()</span>, <span class="highlight">TIME.firstMysqlDateTime()</span>
+                    </div>
+
+                    <div class="function-card">
+                        <h4><i class="fas fa-cog"></i> Admin Functions</h4>
+                        <p>System management, debugging, and utility functions for query operations.</p>
+                        <span class="highlight">ADMIN.echo()</span>, <span class="highlight">ADMIN.sessionCount()</span>, <span class="highlight">ADMIN.print()</span>
+                    </div>
+
+                    <div class="function-card">
+                        <h4><i class="fas fa-info-circle"></i> Metadata Functions</h4>
+                        <p>Access and format web page metadata and information from database cache.</p>
+                        <span class="highlight">META.get()</span>
+                    </div>
+
+                    <div class="function-card">
+                        <h4><i class="fas fa-comments"></i> Chat Functions</h4>
+                        <p>Conversational AI capabilities for natural language processing within queries.</p>
+                        <span class="highlight">DOM.chat()</span>
+                    </div>
+
+                    <div class="function-card">
+                        <h4><i class="fas fa-th"></i> Box Functions</h4>
+                        <p>Box-based DOM element selection for precise content targeting.</p>
+                        <span class="highlight">IN_BOX.all()</span>, <span class="highlight">IN_BOX.first()</span>, <span class="highlight">IN_BOX.firstText()</span>
+                    </div>
+                </div>
+            </section>
+
+            <section id="examples" class="section">
+                <h2><i class="fas fa-lightbulb"></i> Quick Examples</h2>
+
+                <h3>Basic Web Scraping</h3>
+                <div class="sql-example">
+-- Load a web page and extract the title
+SELECT DOM.text(DOM.selectFirst(DOM.load('https://example.com'), 'title'));
+                </div>
+
+                <h3>AI-Powered Extraction</h3>
+                <div class="sql-example">
+-- Extract structured data using AI
+SELECT LLM.extract(
+  DOM.load('https://product.example.com/item123'),
+  'product_name, price, description, availability'
+);
+                </div>
+
+                <h3>String Processing</h3>
+                <div class="sql-example">
+-- Process extracted text
+SELECT STR.capitalize(STR.replace(DOM.text(element), 'old', 'new'))
+FROM (
+  SELECT DOM.selectFirst(DOM.load('https://example.com'), 'h1') as element
+) t;
+                </div>
+
+                <h3>Array Operations</h3>
+                <div class="sql-example">
+-- Join extracted values
+SELECT ARRAY.joinToString(
+  makeArray(re1(text, 'pattern1'), re1(text, 'pattern2')),
+  '|'
+) as combined_values;
+                </div>
+            </section>
+
+            <section id="reference" class="section">
+                <h2><i class="fas fa-book"></i> Function Reference</h2>
+                <p>Access detailed documentation for each function category:</p>
+
+                <div class="function-grid">
+                    <div class="function-card">
+                        <h4><a href="dom-functions.html" class="btn">DOM Functions Reference</a></h4>
+                        <p>Complete reference for document loading, parsing, and manipulation functions.</p>
+                    </div>
+
+                    <div class="function-card">
+                        <h4><a href="llm-functions.html" class="btn">LLM Functions Reference</a></h4>
+                        <p>AI-powered content extraction and analysis functions.</p>
+                    </div>
+
+                    <div class="function-card">
+                        <h4><a href="string-functions.html" class="btn">String Functions Reference</a></h4>
+                        <p>Text processing, validation, and manipulation functions.</p>
+                    </div>
+
+                    <div class="function-card">
+                        <h4><a href="array-functions.html" class="btn">Array Functions Reference</a></h4>
+                        <p>Array manipulation and utility operations.</p>
+                    </div>
+                </div>
+            </section>
+
+            <section id="guides" class="section">
+                <h2><i class="fas fa-graduation-cap"></i> Getting Started</h2>
+
+                <h3>1. Basic Setup</h3>
+                <p>Pulsar QL functions are automatically available in your X-SQL environment. Simply use them directly in your SQL queries.</p>
+
+                <h3>2. Function Namespaces</h3>
+                <p>Functions are organized by namespaces for easy discovery:</p>
+                <ul>
+                    <li><strong>DOM.</strong> - Document manipulation functions</li>
+                    <li><strong>LLM.</strong> - AI and language model functions</li>
+                    <li><strong>STR.</strong> - String processing functions</li>
+                    <li><strong>ARRAY.</strong> - Array manipulation functions</li>
+                    <li><strong>TIME.</strong> - DateTime extraction functions</li>
+                    <li><strong>ADMIN.</strong> - Administrative functions</li>
+                    <li><strong>META.</strong> - Metadata functions</li>
+                    <li><strong>IN_BOX.</strong> - Box-based selection functions</li>
+                </ul>
+
+                <h3>3. Best Practices</h3>
+                <ul>
+                    <li>Use caching when loading web pages repeatedly</li>
+                    <li>Combine functions for complex data extraction pipelines</li>
+                    <li>Leverage AI functions for unstructured content analysis</li>
+                    <li>Process arrays efficiently with built-in array functions</li>
+                    <li>Handle null values gracefully in your queries</li>
+                </ul>
+            </section>
+        </div>
+    </main>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2024 Pulsar AI. All rights reserved. |
+            <a href="https://github.com/platonai/browser4" style="color: #667eea;">GitHub Repository</a> |
+            <a href="#" style="color: #667eea;">Documentation</a>
+            </p>
+        </div>
+    </footer>
+
+    <script>
+        // Smooth scrolling for navigation links
+        document.querySelectorAll('.nav-link').forEach(link => {
+            link.addEventListener('click', function(e) {
+                e.preventDefault();
+                const targetId = this.getAttribute('href');
+                const targetElement = document.querySelector(targetId);
+                if (targetElement) {
+                    targetElement.scrollIntoView({ behavior: 'smooth' });
+
+                    // Update active nav link
+                    document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
+                    this.classList.add('active');
+                }
+            });
+        });
+
+        // Update active nav link on scroll
+        window.addEventListener('scroll', function() {
+            const sections = document.querySelectorAll('section[id]');
+            const navLinks = document.querySelectorAll('.nav-link');
+
+            let current = '';
+            sections.forEach(section => {
+                const sectionTop = section.offsetTop;
+                const sectionHeight = section.clientHeight;
+                if (scrollY >= (sectionTop - 200)) {
+                    current = section.getAttribute('id');
+                }
+            });
+
+            navLinks.forEach(link => {
+                link.classList.remove('active');
+                if (link.getAttribute('href') === '#' + current) {
+                    link.classList.add('active');
+                }
+            });
+        });
+    </script>
+</body>
+</html>

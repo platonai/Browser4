@@ -58,6 +58,11 @@ class PageHandler(
     fun querySelector(selector: String): Int? {
         return querySelectorOrNull(selector)
     }
+
+    @Throws(ChromeDriverException::class)
+    fun querySelector(selector: String, frameId: String): Int? {
+        return querySelectorInFrame(selector, frameId)
+    }
     
     @Throws(ChromeDriverException::class)
     fun querySelectorAll(selector: String): List<Int> {
@@ -156,7 +161,23 @@ class PageHandler(
         
         return nodeId ?: 0
     }
-    
+
+    @Throws(ChromeDriverException::class)
+    fun focusOnSelector(selector: String, frameId: String): Int {
+        // Get the document node for the specific frame
+        val frameDocument = domAPI?.getDocument() ?: return 0
+        val frameRootId = frameDocument.nodeId
+
+        val nodeId = domAPI?.querySelector(frameRootId, selector)
+        if (nodeId == 0) {
+            return 0
+        }
+
+        domAPI?.focus(nodeId, frameRootId, null)
+
+        return nodeId ?: 0
+    }
+
     @Throws(ChromeDriverException::class)
     fun scrollIntoViewIfNeeded(selector: String, rect: Rect? = null): Int? {
         val nodeId = querySelector(selector)
@@ -165,7 +186,18 @@ class PageHandler(
             return null
         }
 
-        return scrollIntoViewIfNeeded(nodeId, selector, rect)
+        return scrollIntoViewIfNeeded(nodeId, rect = rect)
+    }
+
+    @Throws(ChromeDriverException::class)
+    fun scrollIntoViewIfNeeded(selector: String, rect: Rect? = null, frameId: String): Int? {
+        val nodeId = querySelector(selector, frameId)
+        if (nodeId == null || nodeId == 0) {
+            logger.info("No node found for selector: $selector in frame: $frameId")
+            return null
+        }
+
+        return scrollIntoViewIfNeeded(nodeId, rect = rect)
     }
     
     @Throws(ChromeDriverException::class)
@@ -254,6 +286,45 @@ class PageHandler(
         return if (rootId != null && rootId > 0) {
             domAPI?.querySelector(rootId, selector)
         } else null
+    }
+
+    @Throws(ChromeDriverException::class)
+    private fun querySelectorInFrame(selector: String, frameId: String): Int? {
+        // For frame-specific queries, we need to get the document node of the specific frame
+        // This requires using the frame's document node instead of the main document
+        return try {
+            // Get frame tree to find the frame's document
+            val frameTree = devTools.page?.frameTree
+            val frameDocument = findFrameDocument(frameId, frameTree)
+
+            if (frameDocument != null) {
+                domAPI?.querySelector(frameDocument.nodeId, selector)
+            } else {
+                logger.warn("Frame document not found for frameId: $frameId")
+                null
+            }
+        } catch (e: Exception) {
+            logger.warn("Error querying selector in frame $frameId: ${e.message}")
+            null
+        }
+    }
+
+    private fun findFrameDocument(frameId: String, frameTree: com.github.kklisura.cdt.protocol.v2023.types.page.FrameTree?): com.github.kklisura.cdt.protocol.v2023.types.dom.Node? {
+        if (frameTree == null) return null
+
+        // Check if this frame matches
+        if (frameTree.frame.id == frameId) {
+            // Get the document node for this frame
+            return domAPI?.getDocument()
+        }
+
+        // Recursively check child frames
+        frameTree.childFrames?.forEach { childFrame ->
+            val result = findFrameDocument(frameId, childFrame)
+            if (result != null) return result
+        }
+
+        return null
     }
     
     @Throws(ChromeDriverException::class)

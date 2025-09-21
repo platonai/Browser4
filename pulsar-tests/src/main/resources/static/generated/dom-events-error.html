@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DOM Events - Error Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        button {
+            margin: 5px;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            background: #dc3545;
+            color: white;
+            cursor: pointer;
+        }
+        button:hover { background: #c82333; }
+        .synchronous-btn { background: #dc3545; }
+        .async-btn { background: #fd7e14; }
+        .promise-btn { background: #6f42c1; }
+        .syntax-btn { background: #e83e8c; }
+        .reference-btn { background: #20c997; }
+        .type-btn { background: #17a2b8; }
+        .range-btn { background: #6c757d; }
+        #output {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            border: 1px solid #dee2e6;
+            font-family: monospace;
+            white-space: pre-wrap;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .error-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: #fafafa;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>DOM Events - Error Test</h1>
+        <p>This page tests various JavaScript error scenarios and page crash conditions.</p>
+
+        <div class="error-section">
+            <h3>Synchronous Errors</h3>
+            <button onclick="throwGenericError()" class="synchronous-btn">Throw Generic Error</button>
+            <button onclick="throwTypeError()" class="synchronous-btn">Throw TypeError</button>
+            <button onclick="throwReferenceError()" class="synchronous-btn">Throw ReferenceError</button>
+            <button onclick="throwRangeError()" class="synchronous-btn">Throw RangeError</button>
+            <button onclick="throwSyntaxError()" class="synchronous-btn">Throw SyntaxError</button>
+            <button onclick="throwCustomError()" class="synchronous-btn">Throw Custom Error</button>
+        </div>
+
+        <div class="error-section">
+            <h3>Asynchronous Errors</h3>
+            <button onclick="setTimeoutError()" class="async-btn">SetTimeout Error</button>
+            <button onclick="setIntervalError()" class="async-btn">SetInterval Error</button>
+            <button onclick="eventListenerError()" class="async-btn">Event Listener Error</button>
+            <button onclick="immediateError()" class="async-btn">Immediate Function Error</button>
+        </div>
+
+        <div class="error-section">
+            <h3>Promise Errors</h3>
+            <button onclick="promiseRejection()" class="promise-btn">Promise Rejection</button>
+            <button onclick="unhandledPromiseRejection()" class="promise-btn">Unhandled Promise Rejection</button>
+            <button onclick="asyncAwaitError()" class="promise-btn">Async/Await Error</button>
+            <button onclick="promiseChainError()" class="promise-btn">Promise Chain Error</button>
+            <button onclick="multiplePromiseRejections()" class="promise-btn">Multiple Promise Rejections</button>
+        </div>
+
+        <div class="error-section">
+            <h3>DOM and API Errors</h3>
+            <button onclick="domError()" class="reference-btn">DOM Reference Error</button>
+            <button onclick="jsonParseError()" class="syntax-btn">JSON Parse Error</button>
+            <button onclick="urlError()" class="type-btn">URL Constructor Error</button>
+            <button onclick="arrayError()" class="range-btn">Array Index Error</button>
+            <button onclick="recursiveError()" class="synchronous-btn">Maximum Call Stack</button>
+        </div>
+
+        <div class="error-section">
+            <h3>Memory and Performance</h3>
+            <button onclick="memoryLeak()" class="async-btn">Memory Leak</button>
+            <button onclick="infiniteLoop()" class="synchronous-btn">Infinite Loop</button>
+            <button onclick="heavyComputation()" class="async-btn">Heavy Computation</button>
+            <button onclick="largeArrayAllocation()" class="range-btn">Large Array Allocation</button>
+        </div>
+
+        <div class="error-section">
+            <h3>Browser API Errors</h3>
+            <button onclick="storageError()" class="type-btn">LocalStorage Error</button>
+            <button onclick="geolocationError()" class="reference-btn">Geolocation Error</button>
+            <button onclick="notificationError()" class="promise-btn">Notification Error</button>
+            <button onclick="mediaError()" class="async-btn">Media API Error</button>
+        </div>
+
+        <div id="output"></div>
+    </div>
+
+    <script>
+        let errorCount = 0;
+        let memoryLeakArray = [];
+
+        function appendOutput(text, type = 'info') {
+            const output = document.getElementById('output');
+            const timestamp = new Date().toLocaleTimeString();
+            const className = type === 'error' ? 'status-error' : 'status-info';
+            output.innerHTML += `<span class="${className}">${timestamp} - ${text}</span>\n`;
+            output.scrollTop = output.scrollHeight;
+        }
+
+        // Synchronous Error Functions
+        function throwGenericError() {
+            errorCount++;
+            try {
+                throw new Error('Generic test error #' + errorCount);
+            } catch (e) {
+                console.error('Caught generic error:', e.message);
+                appendOutput('Generic error caught: ' + e.message, 'error');
+            }
+        }
+
+        function throwTypeError() {
+            errorCount++;
+            try {
+                const obj = null;
+                obj.someMethod(); // This will throw TypeError
+            } catch (e) {
+                console.error('Caught TypeError:', e.message);
+                appendOutput('TypeError caught: ' + e.message, 'error');
+            }
+        }
+
+        function throwReferenceError() {
+            errorCount++;
+            try {
+                undefinedVariable.someProperty; // This will throw ReferenceError
+            } catch (e) {
+                console.error('Caught ReferenceError:', e.message);
+                appendOutput('ReferenceError caught: ' + e.message, 'error');
+            }
+        }
+
+        function throwRangeError() {
+            errorCount++;
+            try {
+                const array = new Array(-1); // Invalid array length
+            } catch (e) {
+                console.error('Caught RangeError:', e.message);
+                appendOutput('RangeError caught: ' + e.message, 'error');
+            }
+        }
+
+        function throwSyntaxError() {
+            errorCount++;
+            try {
+                // Try to parse invalid JSON
+                JSON.parse('invalid json');
+            } catch (e) {
+                console.error('Caught SyntaxError:', e.message);
+                appendOutput('SyntaxError caught: ' + e.message, 'error');
+            }
+        }
+
+        function throwCustomError() {
+            errorCount++;
+            class CustomError extends Error {
+                constructor(message) {
+                    super(message);
+                    this.name = 'CustomError';
+                    this.code = 'CUSTOM_ERROR_CODE';
+                }
+            }
+
+            try {
+                throw new CustomError('Custom test error with additional data');
+            } catch (e) {
+                console.error('Caught custom error:', e.name, e.message, e.code);
+                appendOutput('Custom error caught: ' + e.name + ' - ' + e.message, 'error');
+            }
+        }
+
+        // Asynchronous Error Functions
+        function setTimeoutError() {
+            setTimeout(() => {
+                try {
+                    throw new Error('SetTimeout error after delay');
+                } catch (e) {
+                    console.error('SetTimeout error:', e.message);
+                    appendOutput('SetTimeout error: ' + e.message, 'error');
+                }
+            }, 1000);
+            appendOutput('SetTimeout error scheduled for 1 second');
+        }
+
+        function setIntervalError() {
+            let count = 0;
+            const interval = setInterval(() => {
+                count++;
+                if (count > 3) {
+                    clearInterval(interval);
+                    return;
+                }
+                try {
+                    throw new Error('SetInterval error #' + count);
+                } catch (e) {
+                    console.error('SetInterval error:', e.message);
+                    appendOutput('SetInterval error #' + count + ': ' + e.message, 'error');
+                }
+            }, 500);
+            appendOutput('SetInterval errors scheduled (3 errors)');
+        }
+
+        function eventListenerError() {
+            const button = document.createElement('button');
+            button.textContent = 'Click me for error';
+            button.style.margin = '5px';
+            button.style.padding = '10px';
+            button.style.background = '#dc3545';
+            button.style.color = 'white';
+            button.style.border = 'none';
+            button.style.borderRadius = '4px';
+            button.style.cursor = 'pointer';
+
+            button.addEventListener('click', () => {
+                try {
+                    throw new Error('Event listener error on button click');
+                } catch (e) {
+                    console.error('Event listener error:', e.message);
+                    appendOutput('Event listener error: ' + e.message, 'error');
+                }
+            });
+
+            document.querySelector('.container').appendChild(button);
+            appendOutput('Button created - click it to trigger event listener error');
+        }
+
+        function immediateError() {
+            // Use setImmediate or MessageChannel for immediate execution
+            if (typeof setImmediate !== 'undefined') {
+                setImmediate(() => {
+                    try {
+                        throw new Error('Immediate function error');
+                    } catch (e) {
+                        console.error('Immediate error:', e.message);
+                        appendOutput('Immediate error: ' + e.message, 'error');
+                    }
+                });
+            } else {
+                // Fallback to MessageChannel
+                const channel = new MessageChannel();
+                channel.port1.onmessage = () => {
+                    try {
+                        throw new Error('MessageChannel immediate error');
+                    } catch (e) {
+                        console.error('MessageChannel error:', e.message);
+                        appendOutput('MessageChannel error: ' + e.message, 'error');
+                    }
+                };
+                channel.port2.postMessage(null);
+            }
+            appendOutput('Immediate error scheduled');
+        }
+
+        // Promise Error Functions
+        function promiseRejection() {
+            Promise.reject(new Error('Explicit promise rejection'))
+                .catch(e => {
+                    console.error('Caught promise rejection:', e.message);
+                    appendOutput('Promise rejection caught: ' + e.message, 'error');
+                });
+            appendOutput('Explicit promise rejection triggered');
+        }
+
+        function unhandledPromiseRejection() {
+            Promise.reject(new Error('Unhandled promise rejection'));
+            appendOutput('Unhandled promise rejection triggered (will be caught by unhandledrejection event)');
+        }
+
+        async function asyncAwaitError() {
+            try {
+                await Promise.reject(new Error('Async/await error'));
+            } catch (e) {
+                console.error('Async/await error caught:', e.message);
+                appendOutput('Async/await error: ' + e.message, 'error');
+            }
+        }
+
+        function promiseChainError() {
+            Promise.resolve()
+                .then(() => {
+                    throw new Error('Promise chain error');
+                })
+                .then(() => {
+                    // This won't execute
+                    appendOutput('This should not appear');
+                })
+                .catch(e => {
+                    console.error('Promise chain error caught:', e.message);
+                    appendOutput('Promise chain error: ' + e.message, 'error');
+                });
+        }
+
+        function multiplePromiseRejections() {
+            Promise.reject(new Error('First unhandled rejection'));
+            Promise.reject(new Error('Second unhandled rejection'));
+            Promise.reject(new Error('Third unhandled rejection'));
+            appendOutput('Multiple promise rejections triggered');
+        }
+
+        // DOM and API Error Functions
+        function domError() {
+            try {
+                const element = document.getElementById('nonexistent-element');
+                element.style.color = 'red'; // This will throw TypeError
+            } catch (e) {
+                console.error('DOM error:', e.message);
+                appendOutput('DOM error: ' + e.message, 'error');
+            }
+        }
+
+        function jsonParseError() {
+            try {
+                JSON.parse('{invalid json}');
+            } catch (e) {
+                console.error('JSON parse error:', e.message);
+                appendOutput('JSON parse error: ' + e.message, 'error');
+            }
+        }
+
+        function urlError() {
+            try {
+                new URL('invalid url');
+            } catch (e) {
+                console.error('URL constructor error:', e.message);
+                appendOutput('URL error: ' + e.message, 'error');
+            }
+        }
+
+        function arrayError() {
+            try {
+                const arr = [1, 2, 3];
+                const value = arr[10].someProperty; // Index out of bounds
+            } catch (e) {
+                console.error('Array error:', e.message);
+                appendOutput('Array error: ' + e.message, 'error');
+            }
+        }
+
+        function recursiveError() {
+            try {
+                function recurse() {
+                    return recurse(); // Infinite recursion
+                }
+                recurse();
+            } catch (e) {
+                console.error('Recursive error:', e.message);
+                appendOutput('Recursive error: ' + e.message, 'error');
+            }
+        }
+
+        // Memory and Performance Functions
+        function memoryLeak() {
+            // Create a memory leak by storing large objects without cleanup
+            const largeArray = new Array(1000000).fill('memory leak data');
+            memoryLeakArray.push(largeArray);
+            appendOutput('Memory leak created (' + largeArray.length + ' items stored)', 'error');
+        }
+
+        function infiniteLoop() {
+            // Use a timeout to prevent actual infinite loop
+            setTimeout(() => {
+                try {
+                    let i = 0;
+                    while (true) { // This would be an infinite loop
+                        i++;
+                        if (i > 1000000) break; // Safety break
+                    }
+                    appendOutput('Infinite loop simulation completed', 'info');
+                } catch (e) {
+                    appendOutput('Infinite loop error: ' + e.message, 'error');
+                }
+            }, 0);
+            appendOutput('Infinite loop simulation started');
+        }
+
+        function heavyComputation() {
+            setTimeout(() => {
+                try {
+                    // Simulate heavy computation
+                    let result = 0;
+                    for (let i = 0; i < 10000000; i++) {
+                        result += Math.sqrt(i);
+                    }
+                    appendOutput('Heavy computation completed: ' + result.toFixed(2), 'info');
+                } catch (e) {
+                    appendOutput('Heavy computation error: ' + e.message, 'error');
+                }
+            }, 0);
+            appendOutput('Heavy computation started');
+        }
+
+        function largeArrayAllocation() {
+            try {
+                const hugeArray = new Array(100000000); // Try to allocate huge array
+                appendOutput('Large array allocated: ' + hugeArray.length + ' elements', 'info');
+            } catch (e) {
+                appendOutput('Large array allocation error: ' + e.message, 'error');
+            }
+        }
+
+        // Browser API Error Functions
+        function storageError() {
+            try {
+                // Try to exceed localStorage quota
+                const largeData = 'x'.repeat(10000000); // 10MB of data
+                localStorage.setItem('test-large-data', largeData);
+                appendOutput('LocalStorage large data stored', 'info');
+            } catch (e) {
+                console.error('Storage error:', e.message);
+                appendOutput('Storage error: ' + e.message, 'error');
+            }
+        }
+
+        function geolocationError() {
+            if ('geolocation' in navigator) {
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        appendOutput('Geolocation success (unexpected)', 'info');
+                    },
+                    (error) => {
+                        console.error('Geolocation error:', error.message);
+                        appendOutput('Geolocation error: ' + error.message, 'error');
+                    },
+                    {
+                        timeout: 1, // Very short timeout to force error
+                        maximumAge: 0
+                    }
+                );
+                appendOutput('Geolocation request started');
+            } else {
+                appendOutput('Geolocation not supported', 'error');
+            }
+        }
+
+        function notificationError() {
+            if ('Notification' in window) {
+                Notification.requestPermission().then(permission => {
+                    if (permission === 'granted') {
+                        try {
+                            // Try to create notification with invalid parameters
+                            new Notification('Test', {
+                                body: 'Test notification',
+                                icon: 'invalid-icon-url-12345.png'
+                            });
+                            appendOutput('Notification created', 'info');
+                        } catch (e) {
+                            console.error('Notification error:', e.message);
+                            appendOutput('Notification error: ' + e.message, 'error');
+                        }
+                    } else {
+                        appendOutput('Notification permission denied', 'error');
+                    }
+                });
+            } else {
+                appendOutput('Notifications not supported', 'error');
+            }
+        }
+
+        function mediaError() {
+            if (navigator.mediaDevices) {
+                navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+                    .then(stream => {
+                        appendOutput('Media access granted (unexpected)', 'info');
+                        stream.getTracks().forEach(track => track.stop());
+                    })
+                    .catch(error => {
+                        console.error('Media error:', error.message);
+                        appendOutput('Media error: ' + error.message, 'error');
+                    });
+                appendOutput('Media access requested');
+            } else {
+                appendOutput('Media devices not supported', 'error');
+            }
+        }
+
+        // Global error handlers
+        window.addEventListener('error', function(event) {
+            console.error('Global error handler:', event.message, event.filename, event.lineno);
+            appendOutput('Global error: ' + event.message + ' at ' + event.filename + ':' + event.lineno, 'error');
+        });
+
+        window.addEventListener('unhandledrejection', function(event) {
+            console.error('Unhandled promise rejection:', event.reason);
+            appendOutput('Unhandled promise rejection: ' + event.reason, 'error');
+            event.preventDefault();
+        });
+
+        // Log initial message
+        console.log('DOM Events Error Test Page Loaded');
+        appendOutput('Page loaded - ready for error testing', 'info');
+    </script>
+</body>
+</html>

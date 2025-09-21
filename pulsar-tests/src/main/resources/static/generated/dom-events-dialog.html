@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DOM Events Dialog Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        button {
+            margin: 5px;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            background: #007bff;
+            color: white;
+            cursor: pointer;
+        }
+        button:hover { background: #0056b3; }
+        .alert-btn { background: #ffc107; color: black; }
+        .alert-btn:hover { background: #e0a800; }
+        .confirm-btn { background: #17a2b8; }
+        .confirm-btn:hover { background: #138496; }
+        .prompt-btn { background: #6f42c1; }
+        .prompt-btn:hover { background: #5a32a3; }
+        #output {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            border: 1px solid #dee2e6;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>DOM Events Dialog Test</h1>
+        <p>This page generates dialog events to test dialog event handlers.</p>
+
+        <h3>Dialog Tests</h3>
+        <button onclick="showAlert()" class="alert-btn">Show Alert</button>
+        <button onclick="showConfirm()" class="confirm-btn">Show Confirm</button>
+        <button onclick="showPrompt()" class="prompt-btn">Show Prompt</button>
+
+        <div id="output"></div>
+    </div>
+
+    <script>
+        function showAlert() {
+            alert('This is an alert dialog!');
+            appendOutput('Alert dialog shown');
+        }
+
+        function showConfirm() {
+            const result = confirm('This is a confirm dialog!');
+            appendOutput('Confirm dialog result: ' + result);
+        }
+
+        function showPrompt() {
+            const result = prompt('This is a prompt dialog!', 'default value');
+            appendOutput('Prompt dialog result: ' + result);
+        }
+
+        function appendOutput(text) {
+            const output = document.getElementById('output');
+            output.textContent += new Date().toLocaleTimeString() + ' - ' + text + '\n';
+            output.scrollTop = output.scrollHeight;
+        }
+
+        // Auto-trigger dialogs on page load for testing
+        window.onload = function() {
+            setTimeout(function() {
+                showAlert();
+                setTimeout(function() {
+                    showConfirm();
+                }, 1000);
+            }, 1000);
+        };
+    </script>
+</body>
+</html>

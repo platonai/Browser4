@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DOM Events - Popup Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        button {
+            margin: 5px;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            background: #007bff;
+            color: white;
+            cursor: pointer;
+        }
+        button:hover { background: #0056b3; }
+        .popup-btn { background: #28a745; }
+        .popup-btn:hover { background: #218838; }
+        .worker-btn { background: #6f42c1; }
+        .worker-btn:hover { background: #5a32a3; }
+        .download-btn { background: #fd7e14; }
+        .download-btn:hover { background: #e96b0e; }
+        #output {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            border: 1px solid #dee2e6;
+            font-family: monospace;
+            white-space: pre-wrap;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>DOM Events - Popup Test</h1>
+        <p>This page tests popup windows, Web Workers, and download events.</p>
+
+        <h3>Popup Windows</h3>
+        <button onclick="openPopup()" class="popup-btn">Open Popup Window</button>
+        <button onclick="openPopupWithFeatures()" class="popup-btn">Open Popup with Features</button>
+        <button onclick="openMultiplePopups()" class="popup-btn">Open Multiple Popups</button>
+        <button onclick="openPopupWithDelay()" class="popup-btn">Open Popup with Delay</button>
+        <button onclick="closeAllPopups()">Close All Popups</button>
+
+        <h3>Web Workers</h3>
+        <button onclick="createWorker()" class="worker-btn">Create Web Worker</button>
+        <button onclick="createSharedWorker()" class="worker-btn">Create Shared Worker</button>
+        <button onclick="createWorkerFromString()" class="worker-btn">Create Worker from String</button>
+        <button onclick="terminateWorkers()">Terminate All Workers</button>
+
+        <h3>Downloads</h3>
+        <button onclick="triggerDownload()" class="download-btn">Trigger Download</button>
+        <button onclick="triggerDownloadWithName()" class="download-btn">Download with Filename</button>
+        <button onclick="triggerDataDownload()" class="download-btn">Download Data URI</button>
+        <button onclick="triggerBlobDownload()" class="download-btn">Download Blob</button>
+
+        <h3>File Operations</h3>
+        <input type="file" id="fileInput" onchange="handleFileSelect(event)" multiple>
+        <button onclick="document.getElementById('fileInput').click()">Select Files</button>
+        <button onclick="createFileInput()">Create File Input</button>
+
+        <div id="output"></div>
+    </div>
+
+    <script>
+        let popups = [];
+        let workers = [];
+
+        function openPopup() {
+            const popup = window.open('/generated/interactive-1.html', '_blank', 'width=600,height=400');
+            if (popup) {
+                popups.push(popup);
+                appendOutput('Popup opened: ' + popup.name + ' (window #' + popups.length + ')');
+            } else {
+                appendOutput('Popup blocked by browser');
+            }
+        }
+
+        function openPopupWithFeatures() {
+            const features = 'width=800,height=600,left=100,top=100,resizable=yes,scrollbars=yes';
+            const popup = window.open('/generated/interactive-2.html', 'featuredPopup', features);
+            if (popup) {
+                popups.push(popup);
+                appendOutput('Popup with features opened');
+            } else {
+                appendOutput('Popup blocked by browser');
+            }
+        }
+
+        function openMultiplePopups() {
+            const urls = [
+                '/generated/interactive-1.html',
+                '/generated/interactive-2.html',
+                '/generated/interactive-3.html'
+            ];
+
+            urls.forEach((url, index) => {
+                setTimeout(() => {
+                    const popup = window.open(url, 'popup' + index, 'width=500,height=300');
+                    if (popup) {
+                        popups.push(popup);
+                        appendOutput('Popup ' + (index + 1) + ' opened');
+                    }
+                }, index * 500); // Stagger the openings
+            });
+        }
+
+        function openPopupWithDelay() {
+            appendOutput('Popup will open in 2 seconds...');
+            setTimeout(() => {
+                const popup = window.open('/generated/interactive-4.html', 'delayedPopup', 'width=600,height=400');
+                if (popup) {
+                    popups.push(popup);
+                    appendOutput('Delayed popup opened');
+                } else {
+                    appendOutput('Delayed popup blocked');
+                }
+            }, 2000);
+        }
+
+        function closeAllPopups() {
+            let closedCount = 0;
+            popups.forEach(popup => {
+                if (popup && !popup.closed) {
+                    popup.close();
+                    closedCount++;
+                }
+            });
+            popups = [];
+            appendOutput('Closed ' + closedCount + ' popup(s)');
+        }
+
+        function createWorker() {
+            // Create a worker from inline code
+            const workerCode = `
+                self.onmessage = function(e) {
+                    const data = e.data;
+                    const result = data.number * 2;
+                    self.postMessage({result: result, id: data.id});
+                };
+            `;
+
+            const blob = new Blob([workerCode], { type: 'application/javascript' });
+            const worker = new Worker(URL.createObjectURL(blob));
+
+            worker.onmessage = function(e) {
+                appendOutput('Worker message received: ' + JSON.stringify(e.data));
+            };
+
+            worker.onerror = function(error) {
+                appendOutput('Worker error: ' + error.message);
+            };
+
+            workers.push(worker);
+
+            // Test the worker
+            worker.postMessage({number: 21, id: 'test1'});
+            appendOutput('Web Worker created and message sent');
+        }
+
+        function createSharedWorker() {
+            try {
+                // Note: SharedWorker may not be supported in all browsers
+                const sharedWorkerCode = `
+                    onconnect = function(e) {
+                        const port = e.ports[0];
+                        port.onmessage = function(e) {
+                            port.postMessage('Shared: ' + e.data);
+                        };
+                    };
+                `;
+
+                const blob = new Blob([sharedWorkerCode], { type: 'application/javascript' });
+                const sharedWorker = new SharedWorker(URL.createObjectURL(blob));
+
+                sharedWorker.port.onmessage = function(e) {
+                    appendOutput('SharedWorker message: ' + e.data);
+                };
+
+                sharedWorker.port.postMessage('Hello from main thread');
+                appendOutput('Shared Worker created and message sent');
+            } catch (error) {
+                appendOutput('SharedWorker not supported: ' + error.message);
+            }
+        }
+
+        function createWorkerFromString() {
+            const workerCode = `
+                // This worker performs some calculations
+                function fibonacci(n) {
+                    if (n <= 1) return n;
+                    return fibonacci(n - 1) + fibonacci(n - 2);
+                }
+
+                self.onmessage = function(e) {
+                    const n = e.data;
+                    const result = fibonacci(n);
+                    self.postMessage({fibonacci: result, input: n});
+                };
+            `;
+
+            const blob = new Blob([workerCode], { type: 'application/javascript' });
+            const worker = new Worker(URL.createObjectURL(blob));
+
+            worker.onmessage = function(e) {
+                appendOutput('Worker calculation result: fibonacci(' + e.data.input + ') = ' + e.data.fibonacci);
+            };
+
+            workers.push(worker);
+
+            // Test with a small number
+            worker.postMessage(10);
+            appendOutput('Calculation Worker created and fibonacci(10) requested');
+        }
+
+        function terminateWorkers() {
+            let terminatedCount = 0;
+            workers.forEach(worker => {
+                if (worker) {
+                    worker.terminate();
+                    terminatedCount++;
+                }
+            });
+            workers = [];
+            appendOutput('Terminated ' + terminatedCount + ' worker(s)');
+        }
+
+        function triggerDownload() {
+            // Create a text file and trigger download
+            const content = 'This is a test file for DOM events download testing.\nCreated at: ' + new Date().toISOString();
+            const blob = new Blob([content], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'test-download-' + Date.now() + '.txt';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+
+            appendOutput('Download triggered: ' + a.download);
+        }
+
+        function triggerDownloadWithName() {
+            const content = 'Custom filename test content';
+            const blob = new Blob([content], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'custom-filename-dom-events-test.txt';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+
+            appendOutput('Download with custom filename triggered: ' + a.download);
+        }
+
+        function triggerDataDownload() {
+            const data = 'data:text/plain;charset=utf-8,' + encodeURIComponent('Data URI download test content');
+
+            const a = document.createElement('a');
+            a.href = data;
+            a.download = 'data-uri-download-test.txt';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+
+            appendOutput('Data URI download triggered');
+        }
+
+        function triggerBlobDownload() {
+            const content = 'Blob download test content\nLine 2\nLine 3';
+            const blob = new Blob([content], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'blob-download-test.txt';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+
+            appendOutput('Blob download triggered');
+        }
+
+        function handleFileSelect(event) {
+            const files = event.target.files;
+            appendOutput('File input changed: ' + files.length + ' file(s) selected');
+
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                appendOutput('File ' + (i + 1) + ': ' + file.name + ' (' + file.size + ' bytes)');
+            }
+        }
+
+        function createFileInput() {
+            const fileInput = document.createElement('input');
+            fileInput.type = 'file';
+            fileInput.multiple = true;
+            fileInput.accept = '.txt,.html,.js,.css';
+            fileInput.onchange = function(e) {
+                handleFileSelect(e);
+            };
+
+            const container = document.createElement('div');
+            container.style.margin = '10px 0';
+            container.appendChild(fileInput);
+
+            const label = document.createElement('label');
+            label.textContent = 'Dynamic file input created: ';
+            label.appendChild(container);
+
+            document.querySelector('.container').appendChild(label);
+            appendOutput('Dynamic file input created');
+        }
+
+        function appendOutput(text) {
+            const output = document.getElementById('output');
+            output.textContent += new Date().toLocaleTimeString() + ' - ' + text + '\n';
+            output.scrollTop = output.scrollHeight;
+        }
+
+        // Log initial message
+        console.log('DOM Events Popup Test Page Loaded');
+        appendOutput('Page loaded - ready for popup/worker testing');
+
+        // Clean up on page unload
+        window.addEventListener('beforeunload', function() {
+            closeAllPopups();
+            terminateWorkers();
+        });
+    </script>
+</body>
+</html>

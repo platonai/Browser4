@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DOM Events - Forms Testing</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .form-section { margin: 20px 0; padding: 15px; border: 1px solid #ccc; }
+        .result { margin: 10px 0; padding: 10px; background: #f5f5f5; }
+        .error { color: red; }
+        .success { color: green; }
+        input, select, textarea, button { margin: 5px; padding: 8px; }
+    </style>
+</head>
+<body>
+    <h1>DOM Events - Forms Testing</h1>
+
+    <div class="form-section">
+        <h2>Form Submission Events</h2>
+        <form id="testForm">
+            <input type="text" id="username" name="username" placeholder="Username" required>
+            <input type="email" id="email" name="email" placeholder="Email" required>
+            <button type="submit">Submit Form</button>
+        </form>
+        <div id="formResult" class="result"></div>
+    </div>
+
+    <div class="form-section">
+        <h2>Input Field Events</h2>
+        <input type="text" id="inputField" placeholder="Type here...">
+        <div id="inputResult" class="result"></div>
+    </div>
+
+    <div class="form-section">
+        <h2>Change Events</h2>
+        <select id="selectField">
+            <option value="">Select an option</option>
+            <option value="option1">Option 1</option>
+            <option value="option2">Option 2</option>
+            <option value="option3">Option 3</option>
+        </select>
+        <div id="selectResult" class="result"></div>
+    </div>
+
+    <div class="form-section">
+        <h2>Checkbox and Radio Events</h2>
+        <label>
+            <input type="checkbox" id="checkbox1"> Checkbox 1
+        </label>
+        <label>
+            <input type="checkbox" id="checkbox2"> Checkbox 2
+        </label>
+        <br>
+        <label>
+            <input type="radio" name="radioGroup" value="radio1"> Radio 1
+        </label>
+        <label>
+            <input type="radio" name="radioGroup" value="radio2"> Radio 2
+        </label>
+        <div id="checkboxResult" class="result"></div>
+    </div>
+
+    <div class="form-section">
+        <h2>Focus and Blur Events</h2>
+        <input type="text" id="focusField" placeholder="Focus/blur test">
+        <div id="focusResult" class="result"></div>
+    </div>
+
+    <div class="form-section">
+        <h2>Real-time Validation</h2>
+        <input type="text" id="validationField" placeholder="Type numbers only">
+        <div id="validationResult" class="result"></div>
+    </div>
+
+    <script>
+        // Form submission events
+        const testForm = document.getElementById('testForm');
+        const formResult = document.getElementById('formResult');
+
+        testForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            formResult.innerHTML = '<span class="success">Form submitted successfully!</span>';
+            console.log('Form submitted');
+        });
+
+        // Input field events
+        const inputField = document.getElementById('inputField');
+        const inputResult = document.getElementById('inputResult');
+
+        inputField.addEventListener('input', function() {
+            inputResult.innerHTML = `Input event: "${this.value}" (length: ${this.value.length})`;
+        });
+
+        inputField.addEventListener('change', function() {
+            inputResult.innerHTML += '<br><span class="success">Change event fired!</span>';
+        });
+
+        // Select change events
+        const selectField = document.getElementById('selectField');
+        const selectResult = document.getElementById('selectResult');
+
+        selectField.addEventListener('change', function() {
+            selectResult.innerHTML = `Selected: ${this.value}`;
+            console.log('Select changed to:', this.value);
+        });
+
+        // Checkbox and radio events
+        const checkboxResult = document.getElementById('checkboxResult');
+
+        document.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
+            checkbox.addEventListener('change', function() {
+                checkboxResult.innerHTML = `Checkbox "${this.id}" is now ${this.checked ? 'checked' : 'unchecked'}`;
+            });
+        });
+
+        document.querySelectorAll('input[type="radio"]').forEach(radio => {
+            radio.addEventListener('change', function() {
+                checkboxResult.innerHTML = `Radio "${this.value}" is now selected`;
+            });
+        });
+
+        // Focus and blur events
+        const focusField = document.getElementById('focusField');
+        const focusResult = document.getElementById('focusResult');
+
+        focusField.addEventListener('focus', function() {
+            focusResult.innerHTML = '<span class="success">Field focused!</span>';
+            this.style.backgroundColor = '#e8f5e8';
+        });
+
+        focusField.addEventListener('blur', function() {
+            focusResult.innerHTML += '<br><span class="error">Field lost focus!</span>';
+            this.style.backgroundColor = '';
+        });
+
+        // Real-time validation
+        const validationField = document.getElementById('validationField');
+        const validationResult = document.getElementById('validationResult');
+
+        validationField.addEventListener('input', function() {
+            const value = this.value;
+            const isValid = /^\d*$/.test(value); // Only numbers allowed
+
+            if (isValid) {
+                validationResult.innerHTML = '<span class="success">Valid input!</span>';
+                this.style.borderColor = 'green';
+            } else {
+                validationResult.innerHTML = '<span class="error">Only numbers allowed!</span>';
+                this.style.borderColor = 'red';
+            }
+        });
+
+        // Trigger some initial events for testing
+        setTimeout(() => {
+            console.log('DOM Events Forms page loaded');
+
+            // Simulate user interactions
+            inputField.value = 'Test input';
+            inputField.dispatchEvent(new Event('input'));
+
+            selectField.value = 'option2';
+            selectField.dispatchEvent(new Event('change'));
+
+            document.getElementById('checkbox1').checked = true;
+            document.getElementById('checkbox1').dispatchEvent(new Event('change'));
+        }, 1000);
+    </script>
+</body>
+</html>

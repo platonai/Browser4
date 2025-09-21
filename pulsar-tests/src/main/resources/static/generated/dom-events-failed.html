@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DOM Events Failed Requests Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        button {
+            margin: 5px;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            background: #dc3545;
+            color: white;
+            cursor: pointer;
+        }
+        button:hover { background: #c82333; }
+        .xhr-btn { background: #dc3545; }
+        .fetch-btn { background: #fd7e14; }
+        .img-btn { background: #6f42c1; }
+        .css-btn { background: #e83e8c; }
+        .js-btn { background: #20c997; }
+        #output {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            border: 1px solid #dee2e6;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>DOM Events Failed Requests Test</h1>
+        <p>This page generates failed network requests to test request failed event handlers.</p>
+
+        <h3>Failed Request Tests</h3>
+        <button onclick="makeFailedXHR()" class="xhr-btn">Failed XHR Request</button>
+        <button onclick="makeFailedFetch()" class="fetch-btn">Failed Fetch Request</button>
+        <button onclick="loadFailedImage()" class="img-btn">Failed Image Load</button>
+        <button onclick="loadFailedCSS()" class="css-btn">Failed CSS</button>
+        <button onclick="loadFailedJS()" class="js-btn">Failed JS</button>
+
+        <div id="output"></div>
+    </div>
+
+    <script>
+        function makeFailedXHR() {
+            const xhr = new XMLHttpRequest();
+            xhr.open('GET', '/nonexistent-page-12345.html', true);
+            xhr.onreadystatechange = function() {
+                if (xhr.readyState === 4) {
+                    if (xhr.status >= 400) {
+                        appendOutput('XHR failed with status: ' + xhr.status);
+                    }
+                }
+            };
+            xhr.onerror = function() {
+                appendOutput('XHR network error occurred');
+            };
+            xhr.send();
+            appendOutput('Failed XHR request sent');
+        }
+
+        function makeFailedFetch() {
+            fetch('/another-nonexistent-page-67890.html')
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('HTTP error! status: ' + response.status);
+                    }
+                    return response.text();
+                })
+                .then(data => appendOutput('Unexpected success'))
+                .catch(error => appendOutput('Fetch failed: ' + error.message));
+            appendOutput('Failed fetch request sent');
+        }
+
+        function loadFailedImage() {
+            const img = new Image();
+            img.onerror = function() {
+                appendOutput('Failed image load detected');
+            };
+            img.src = '/nonexistent-image-12345.jpg';
+            appendOutput('Failed image load initiated');
+        }
+
+        function loadFailedCSS() {
+            const link = document.createElement('link');
+            link.rel = 'stylesheet';
+            link.href = '/nonexistent-style-12345.css';
+            link.onerror = function() {
+                appendOutput('Failed CSS load detected');
+            };
+            document.head.appendChild(link);
+            appendOutput('Failed CSS load initiated');
+        }
+
+        function loadFailedJS() {
+            const script = document.createElement('script');
+            script.src = '/nonexistent-script-12345.js';
+            script.onerror = function() {
+                appendOutput('Failed JS load detected');
+            };
+            document.head.appendChild(script);
+            appendOutput('Failed JS load initiated');
+        }
+
+        function appendOutput(text) {
+            const output = document.getElementById('output');
+            output.textContent += new Date().toLocaleTimeString() + ' - ' + text + '\n';
+            output.scrollTop = output.scrollHeight;
+        }
+
+        // Auto-trigger some failed requests on page load for testing
+        window.onload = function() {
+            setTimeout(function() {
+                makeFailedXHR();
+            }, 1000);
+        };
+    </script>
+</body>
+</html>

@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DOM Events - Mouse Testing</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; user-select: none; }
+        .test-area {
+            margin: 20px 0;
+            padding: 20px;
+            border: 2px solid #ccc;
+            background: #f9f9f9;
+            position: relative;
+            min-height: 100px;
+        }
+        .clickable {
+            background: #4CAF50;
+            color: white;
+            padding: 15px 30px;
+            border: none;
+            cursor: pointer;
+            margin: 10px;
+            border-radius: 5px;
+            transition: all 0.3s ease;
+        }
+        .clickable:hover {
+            background: #45a049;
+            transform: scale(1.05);
+        }
+        .clickable:active {
+            background: #3d8b40;
+            transform: scale(0.95);
+        }
+        .hover-target {
+            background: #2196F3;
+            color: white;
+            padding: 20px;
+            margin: 10px;
+            border-radius: 5px;
+            display: inline-block;
+            transition: all 0.3s ease;
+        }
+        .hover-target:hover {
+            background: #1976D2;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+        .drag-area {
+            border: 2px dashed #999;
+            padding: 40px;
+            margin: 20px 0;
+            text-align: center;
+            background: #fff;
+            min-height: 100px;
+        }
+        .draggable {
+            background: #FF9800;
+            color: white;
+            padding: 20px;
+            margin: 10px;
+            cursor: move;
+            border-radius: 5px;
+            display: inline-block;
+        }
+        .drop-zone {
+            border: 2px dashed #4CAF50;
+            padding: 40px;
+            margin: 20px 0;
+            text-align: center;
+            background: #e8f5e8;
+            min-height: 100px;
+        }
+        .drop-zone.drag-over {
+            background: #c8e6c9;
+            border-color: #2E7D32;
+        }
+        .result {
+            margin: 10px 0;
+            padding: 10px;
+            background: #f5f5f5;
+            border-left: 4px solid #333;
+        }
+        .event-log {
+            max-height: 200px;
+            overflow-y: auto;
+            background: #000;
+            color: #0f0;
+            padding: 10px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .coordinates {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.8);
+            color: white;
+            padding: 10px;
+            border-radius: 5px;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <h1>DOM Events - Mouse Testing</h1>
+
+    <div class="coordinates" id="coordinates">Mouse: (0, 0)</div>
+
+    <div class="test-area">
+        <h2>Click Events</h2>
+        <button class="clickable" id="clickBtn">Click Me!</button>
+        <button class="clickable" id="dblClickBtn">Double Click Me!</button>
+        <button class="clickable" id="rightClickBtn">Right Click Me!</button>
+        <div id="clickResult" class="result"></div>
+    </div>
+
+    <div class="test-area">
+        <h2>Hover Events</h2>
+        <div class="hover-target" id="hoverTarget">Hover over me!</div>
+        <div id="hoverResult" class="result"></div>
+    </div>
+
+    <div class="test-area">
+        <h2>Mouse Move Events</h2>
+        <div id="moveArea" style="height: 200px; background: linear-gradient(45deg, #f0f0f0, #e0e0e0); border: 1px solid #ccc; position: relative;">
+            <p style="text-align: center; padding-top: 80px;">Move your mouse over this area</p>
+        </div>
+        <div id="moveResult" class="result"></div>
+    </div>
+
+    <div class="test-area">
+        <h2>Drag and Drop Events</h2>
+        <div class="drag-area">
+            <div class="draggable" id="draggable" draggable="true">Drag me!</div>
+        </div>
+        <div class="drop-zone" id="dropZone">
+            <p>Drop here!</p>
+        </div>
+        <div id="dragResult" class="result"></div>
+    </div>
+
+    <div class="test-area">
+        <h2>Event Log</h2>
+        <div id="eventLog" class="event-log"></div>
+    </div>
+
+    <script>
+        // Event logging utility
+        function logEvent(type, details) {
+            const eventLog = document.getElementById('eventLog');
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = `[${timestamp}] ${type}: ${details}`;
+            eventLog.innerHTML += logEntry + '\n';
+            eventLog.scrollTop = eventLog.scrollHeight;
+            console.log(logEntry);
+        }
+
+        // Mouse coordinates tracking
+        document.addEventListener('mousemove', function(e) {
+            document.getElementById('coordinates').textContent = `Mouse: (${e.clientX}, ${e.clientY})`;
+        });
+
+        // Click events
+        const clickBtn = document.getElementById('clickBtn');
+        const dblClickBtn = document.getElementById('dblClickBtn');
+        const rightClickBtn = document.getElementById('rightClickBtn');
+        const clickResult = document.getElementById('clickResult');
+
+        clickBtn.addEventListener('click', function(e) {
+            const msg = `Single click at (${e.clientX}, ${e.clientY})`;
+            clickResult.innerHTML = `<span style="color: green;">${msg}</span>`;
+            logEvent('click', msg);
+        });
+
+        dblClickBtn.addEventListener('dblclick', function(e) {
+            const msg = `Double click at (${e.clientX}, ${e.clientY})`;
+            clickResult.innerHTML = `<span style="color: blue;">${msg}</span>`;
+            logEvent('dblclick', msg);
+        });
+
+        rightClickBtn.addEventListener('contextmenu', function(e) {
+            e.preventDefault();
+            const msg = `Right click at (${e.clientX}, ${e.clientY})`;
+            clickResult.innerHTML = `<span style="color: orange;">${msg}</span>`;
+            logEvent('contextmenu', msg);
+        });
+
+        // Hover events
+        const hoverTarget = document.getElementById('hoverTarget');
+        const hoverResult = document.getElementById('hoverResult');
+
+        hoverTarget.addEventListener('mouseenter', function(e) {
+            const msg = 'Mouse entered element';
+            hoverResult.innerHTML = `<span style="color: green;">${msg}</span>`;
+            logEvent('mouseenter', msg);
+        });
+
+        hoverTarget.addEventListener('mouseleave', function(e) {
+            const msg = 'Mouse left element';
+            hoverResult.innerHTML += `<br><span style="color: red;">${msg}</span>`;
+            logEvent('mouseleave', msg);
+        });
+
+        hoverTarget.addEventListener('mouseover', function(e) {
+            logEvent('mouseover', `Mouse over element (relatedTarget: ${e.relatedTarget?.tagName || 'none'})`);
+        });
+
+        hoverTarget.addEventListener('mouseout', function(e) {
+            logEvent('mouseout', `Mouse out of element (relatedTarget: ${e.relatedTarget?.tagName || 'none'})`);
+        });
+
+        // Mouse move events
+        const moveArea = document.getElementById('moveArea');
+        const moveResult = document.getElementById('moveResult');
+        let moveCount = 0;
+
+        moveArea.addEventListener('mousemove', function(e) {
+            moveCount++;
+            if (moveCount % 10 === 0) { // Log every 10th move event to avoid spam
+                const msg = `Mouse move #${moveCount} at (${e.offsetX}, ${e.offsetY})`;
+                moveResult.innerHTML = msg;
+                logEvent('mousemove', msg);
+            }
+        });
+
+        moveArea.addEventListener('mousedown', function(e) {
+            const msg = `Mouse down at (${e.offsetX}, ${e.offsetY}) - button: ${e.button}`;
+            moveResult.innerHTML = `<span style="color: red;">${msg}</span>`;
+            logEvent('mousedown', msg);
+        });
+
+        moveArea.addEventListener('mouseup', function(e) {
+            const msg = `Mouse up at (${e.offsetX}, ${e.offsetY}) - button: ${e.button}`;
+            moveResult.innerHTML = `<span style="color: green;">${msg}</span>`;
+            logEvent('mouseup', msg);
+        });
+
+        // Drag and drop events
+        const draggable = document.getElementById('draggable');
+        const dropZone = document.getElementById('dropZone');
+        const dragResult = document.getElementById('dragResult');
+
+        draggable.addEventListener('dragstart', function(e) {
+            e.dataTransfer.setData('text/plain', 'dragged-element');
+            const msg = 'Drag started';
+            dragResult.innerHTML = `<span style="color: blue;">${msg}</span>`;
+            logEvent('dragstart', msg);
+        });
+
+        draggable.addEventListener('dragend', function(e) {
+            const msg = 'Drag ended';
+            dragResult.innerHTML += `<br><span style="color: purple;">${msg}</span>`;
+            logEvent('dragend', msg);
+        });
+
+        dropZone.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            if (moveCount % 5 === 0) { // Log every 5th dragover to avoid spam
+                logEvent('dragover', 'Drag over drop zone');
+            }
+        });
+
+        dropZone.addEventListener('dragenter', function(e) {
+            e.preventDefault();
+            this.classList.add('drag-over');
+            const msg = 'Drag entered drop zone';
+            logEvent('dragenter', msg);
+        });
+
+        dropZone.addEventListener('dragleave', function(e) {
+            this.classList.remove('drag-over');
+            const msg = 'Drag left drop zone';
+            logEvent('dragleave', msg);
+        });
+
+        dropZone.addEventListener('drop', function(e) {
+            e.preventDefault();
+            this.classList.remove('drag-over');
+            const msg = 'Element dropped successfully!';
+            dragResult.innerHTML += `<br><span style="color: green; font-weight: bold;">${msg}</span>`;
+            logEvent('drop', msg);
+
+            // Move the draggable element to the drop zone
+            this.appendChild(draggable);
+        });
+
+        // Prevent default drag behavior on the draggable element
+        draggable.addEventListener('dragover', function(e) {
+            e.preventDefault();
+        });
+
+        // Trigger some initial events for testing
+        setTimeout(() => {
+            console.log('DOM Events Mouse page loaded');
+            logEvent('page', 'DOM Events Mouse page loaded');
+
+            // Simulate a click event
+            clickBtn.click();
+        }, 1000);
+
+        // Additional mouse events on document
+        document.addEventListener('click', function(e) {
+            logEvent('document.click', `Document clicked at (${e.clientX}, ${e.clientY})`);
+        });
+
+        document.addEventListener('contextmenu', function(e) {
+            // Only log if not on our test right-click button
+            if (!e.target.closest('#rightClickBtn')) {
+                logEvent('document.contextmenu', `Document right-clicked at (${e.clientX}, ${e.clientY})`);
+            }
+        });
+
+        // Wheel events
+        document.addEventListener('wheel', function(e) {
+            if (moveCount % 20 === 0) { // Log every 20th wheel event
+                logEvent('wheel', `Wheel event: deltaX=${e.deltaX}, deltaY=${e.deltaY}, deltaZ=${e.deltaZ}`);
+            }
+        });
+    </script>
+</body>
+</html>

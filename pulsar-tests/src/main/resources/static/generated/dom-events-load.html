@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DOM Events Load Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        #output {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            border: 1px solid #dee2e6;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+        .loading {
+            color: #007bff;
+            font-weight: bold;
+        }
+        .loaded {
+            color: #28a745;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>DOM Events Load Test</h1>
+        <p>This page tests DOMContentLoaded and Load events.</p>
+        <p class="loading">Page is loading...</p>
+
+        <div id="output"></div>
+    </div>
+
+    <script>
+        // Log events as they happen
+        document.addEventListener('DOMContentLoaded', function() {
+            appendOutput('DOMContentLoaded event fired - DOM is ready');
+            document.querySelector('.loading').textContent = 'DOM Content Loaded';
+            document.querySelector('.loading').className = 'loaded';
+        });
+
+        window.addEventListener('load', function() {
+            appendOutput('Load event fired - Page fully loaded');
+            document.querySelector('.loaded').textContent = 'Page Fully Loaded';
+        });
+
+        function appendOutput(text) {
+            const output = document.getElementById('output');
+            output.textContent += new Date().toLocaleTimeString() + ' - ' + text + '\n';
+        }
+
+        // Simulate some loading delays to make events more distinguishable
+        // This script tag is placed at the end to ensure DOM is parsed first
+        const largeContent = new Array(1000).fill('Lorem ipsum dolor sit amet.').join(' ');
+        const delayedElement = document.createElement('div');
+        delayedElement.innerHTML = `<p>${largeContent}</p>
+                                   <img src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMSIgaGVpZ2h0PSIxIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxyZWN0IHdpZHRoPSIxMDAlIiBoZWlnaHQ9IjEwMCUiIGZpbGw9IiNjY2MiLz48L3N2Zz4=" alt="test image">`;
+        document.body.appendChild(delayedElement);
+    </script>
+</body>
+</html>

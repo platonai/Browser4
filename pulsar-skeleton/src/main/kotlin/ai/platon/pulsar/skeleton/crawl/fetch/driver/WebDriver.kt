@@ -15,6 +15,18 @@ import java.io.Closeable
 import java.time.Duration
 
 /**
+ * Frame information for iframe management
+ */
+data class FrameInfo(
+    val frameId: String,
+    val url: String,
+    val name: String? = null,
+    val parentFrameId: String? = null,
+    val isAccessible: Boolean = true,
+    val loadState: String = "LOADED"
+)
+
+/**
  * [WebDriver] defines a concise interface to visit and manipulate webpages.
  *
  * The webpage is rendered to a Document Object Model (DOM) in a real browser, and the interface provides methods to
@@ -1561,4 +1573,90 @@ interface WebDriver : Closeable {
      * */
     @Throws(WebDriverException::class)
     suspend fun stop()
+
+    // Iframe management methods
+
+    /**
+     * Switch to iframe by index.
+     *
+     * @param index The index of the iframe to switch to (0-based)
+     * @return true if the switch was successful, false otherwise
+     * @throws WebDriverException if an error occurs during frame switching
+     */
+    @Throws(WebDriverException::class)
+    suspend fun switchToFrame(index: Int): Boolean
+
+    /**
+     * Switch to iframe by name or ID.
+     *
+     * @param nameOrId The name or ID attribute of the iframe to switch to
+     * @return true if the switch was successful, false otherwise
+     * @throws WebDriverException if an error occurs during frame switching
+     */
+    @Throws(WebDriverException::class)
+    suspend fun switchToFrame(nameOrId: String): Boolean
+
+    /**
+     * Switch to parent frame.
+     *
+     * @return true if the switch was successful, false otherwise
+     * @throws WebDriverException if an error occurs during frame switching
+     */
+    @Throws(WebDriverException::class)
+    suspend fun switchToParentFrame(): Boolean
+
+    /**
+     * Switch to default content (main frame).
+     *
+     * @return true if the switch was successful, false otherwise
+     * @throws WebDriverException if an error occurs during frame switching
+     */
+    @Throws(WebDriverException::class)
+    suspend fun switchToDefaultContent(): Boolean
+
+    /**
+     * Get all available frames.
+     *
+     * @return List of frame information for all available iframes
+     * @throws WebDriverException if an error occurs while retrieving frames
+     */
+    @Throws(WebDriverException::class)
+    suspend fun getFrames(): List<FrameInfo>
+
+    /**
+     * Get current frame information.
+     *
+     * @return Frame information for the currently active frame, or null if in main frame
+     * @throws WebDriverException if an error occurs while retrieving frame info
+     */
+    @Throws(WebDriverException::class)
+    suspend fun getCurrentFrame(): FrameInfo?
+
+    /**
+     * Check if currently in an iframe.
+     *
+     * @return true if the driver is currently focused on an iframe, false if in main frame
+     */
+    fun isInFrame(): Boolean
+
+    /**
+     * Execute JavaScript in current frame context.
+     *
+     * @param expression JavaScript expression to evaluate
+     * @return The result of the JavaScript evaluation
+     * @throws WebDriverException if an error occurs during evaluation
+     */
+    @Throws(WebDriverException::class)
+    suspend fun evaluateInFrame(expression: String): Any?
+
+    /**
+     * Wait for frame to load.
+     *
+     * @param frameId The ID of the frame to wait for
+     * @param timeout Maximum time to wait for the frame to load
+     * @return true if the frame loaded successfully, false if timeout occurred
+     * @throws WebDriverException if an error occurs while waiting
+     */
+    @Throws(WebDriverException::class)
+    suspend fun waitForFrameLoad(frameId: String, timeout: Duration): Boolean
 }

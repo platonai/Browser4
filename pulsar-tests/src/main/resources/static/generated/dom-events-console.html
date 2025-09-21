@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DOM Events - Console Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        button {
+            margin: 5px;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            background: #007bff;
+            color: white;
+            cursor: pointer;
+        }
+        button:hover { background: #0056b3; }
+        .error-btn { background: #dc3545; }
+        .error-btn:hover { background: #c82333; }
+        .warn-btn { background: #ffc107; color: black; }
+        .warn-btn:hover { background: #e0a800; }
+        .info-btn { background: #17a2b8; }
+        .info-btn:hover { background: #138496; }
+        #output {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            border: 1px solid #dee2e6;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>DOM Events - Console Message Test</h1>
+        <p>This page tests console message events and JavaScript errors.</p>
+
+        <h3>Console Messages</h3>
+        <button onclick="logMessage()">Log Message</button>
+        <button onclick="logError()" class="error-btn">Log Error</button>
+        <button onclick="logWarning()" class="warn-btn">Log Warning</button>
+        <button onclick="logInfo()" class="info-btn">Log Info</button>
+        <button onclick="logMultiple()">Log Multiple Args</button>
+        <button onclick="logObject()">Log Object</button>
+
+        <h3>JavaScript Errors</h3>
+        <button onclick="throwError()" class="error-btn">Throw Error</button>
+        <button onclick="throwTypeError()" class="error-btn">Throw TypeError</button>
+        <button onclick="throwReferenceError()" class="error-btn">Throw ReferenceError</button>
+        <button onclick="promiseRejection()" class="error-btn">Promise Rejection</button>
+
+        <h3>Dialogs</h3>
+        <button onclick="showAlert()">Show Alert</button>
+        <button onclick="showConfirm()">Show Confirm</button>
+        <button onclick="showPrompt()">Show Prompt</button>
+
+        <h3>Network Requests</h3>
+        <button onclick="makeXHR()">Make XHR Request</button>
+        <button onclick="makeFetch()">Make Fetch Request</button>
+        <button onclick="makeFailedRequest()">Make Failed Request</button>
+
+        <div id="output"></div>
+    </div>
+
+    <script>
+        let messageCount = 0;
+
+        function logMessage() {
+            messageCount++;
+            console.log('Test log message #' + messageCount);
+            appendOutput('Console log: Test log message #' + messageCount);
+        }
+
+        function logError() {
+            console.error('Test error message');
+            appendOutput('Console error: Test error message');
+        }
+
+        function logWarning() {
+            console.warn('Test warning message');
+            appendOutput('Console warn: Test warning message');
+        }
+
+        function logInfo() {
+            console.info('Test info message');
+            appendOutput('Console info: Test info message');
+        }
+
+        function logMultiple() {
+            console.log('Multiple', 'arguments', 123, {key: 'value'}, [1,2,3]);
+            appendOutput('Console log: Multiple arguments');
+        }
+
+        function logObject() {
+            const obj = {
+                name: 'Test Object',
+                value: 42,
+                nested: { prop: 'value' },
+                array: [1, 2, 3]
+            };
+            console.log('Object:', obj);
+            appendOutput('Console log: Object logged');
+        }
+
+        function throwError() {
+            try {
+                throw new Error('Test error thrown');
+            } catch (e) {
+                console.error('Caught error:', e.message);
+                appendOutput('Error thrown and caught: ' + e.message);
+            }
+        }
+
+        function throwTypeError() {
+            try {
+                null.f(); // This will throw TypeError
+            } catch (e) {
+                console.error('TypeError caught:', e.message);
+                appendOutput('TypeError: ' + e.message);
+            }
+        }
+
+        function throwReferenceError() {
+            try {
+                undefinedFunction(); // This will throw ReferenceError
+            } catch (e) {
+                console.error('ReferenceError caught:', e.message);
+                appendOutput('ReferenceError: ' + e.message);
+            }
+        }
+
+        function promiseRejection() {
+            Promise.reject(new Error('Promise rejection test'));
+            appendOutput('Promise rejection triggered');
+        }
+
+        function showAlert() {
+            alert('This is a test alert!');
+            appendOutput('Alert shown');
+        }
+
+        function showConfirm() {
+            const result = confirm('This is a test confirm dialog. Click OK or Cancel.');
+            appendOutput('Confirm result: ' + result);
+        }
+
+        function showPrompt() {
+            const result = prompt('This is a test prompt. Enter some text:', 'default value');
+            appendOutput('Prompt result: ' + result);
+        }
+
+        function makeXHR() {
+            const xhr = new XMLHttpRequest();
+            xhr.open('GET', '/generated/interactive-1.html', true);
+            xhr.onreadystatechange = function() {
+                if (xhr.readyState === 4) {
+                    appendOutput('XHR completed: ' + xhr.status);
+                }
+            };
+            xhr.send();
+            appendOutput('XHR request sent');
+        }
+
+        function makeFetch() {
+            fetch('/generated/interactive-2.html')
+                .then(response => response.text())
+                .then(data => appendOutput('Fetch successful: ' + data.length + ' bytes'))
+                .catch(error => appendOutput('Fetch error: ' + error.message));
+            appendOutput('Fetch request sent');
+        }
+
+        function makeFailedRequest() {
+            fetch('/nonexistent-page-12345.html')
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('HTTP error! status: ' + response.status);
+                    }
+                    return response.text();
+                })
+                .then(data => appendOutput('Unexpected success'))
+                .catch(error => appendOutput('Failed request error: ' + error.message));
+            appendOutput('Failed request sent');
+        }
+
+        function appendOutput(text) {
+            const output = document.getElementById('output');
+            output.textContent += new Date().toLocaleTimeString() + ' - ' + text + '\n';
+            output.scrollTop = output.scrollHeight;
+        }
+
+        // Log initial message after a delay to ensure event handlers are set up
+        setTimeout(function() {
+            console.log('Hello from console.log');
+            console.warn('Warning from console.warn');
+            console.error('Error from console.error');
+            appendOutput('Console messages sent');
+        }, 1000);
+
+        appendOutput('Page loaded - ready for testing');
+    </script>
+</body>
+</html>

@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DOM Events - Network Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: #fafafa;
+        }
+        button {
+            margin: 5px;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            background: #007bff;
+            color: white;
+            cursor: pointer;
+        }
+        button:hover { background: #0056b3; }
+        .xhr-btn { background: #28a745; }
+        .xhr-btn:hover { background: #218838; }
+        .fetch-btn { background: #17a2b8; }
+        .fetch-btn:hover { background: #138496; }
+        .fail-btn { background: #dc3545; }
+        .fail-btn:hover { background: #c82333; }
+        .ws-btn { background: #6f42c1; }
+        .ws-btn:hover { background: #5a32a3; }
+        #output {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            border: 1px solid #dee2e6;
+            font-family: monospace;
+            white-space: pre-wrap;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .status-success { color: #28a745; }
+        .status-error { color: #dc3545; }
+        .status-info { color: #17a2b8; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>DOM Events - Network Test</h1>
+        <p>This page tests network request/response events, WebSocket connections, and various HTTP methods.</p>
+
+        <div class="test-section">
+            <h3>XHR Requests</h3>
+            <button onclick="xhrGet()" class="xhr-btn">XHR GET</button>
+            <button onclick="xhrPost()" class="xhr-btn">XHR POST</button>
+            <button onclick="xhrPut()" class="xhr-btn">XHR PUT</button>
+            <button onclick="xhrDelete()" class="xhr-btn">XHR DELETE</button>
+            <button onclick="xhrWithHeaders()" class="xhr-btn">XHR with Headers</button>
+        </div>
+
+        <div class="test-section">
+            <h3>Fetch Requests</h3>
+            <button onclick="fetchGet()" class="fetch-btn">Fetch GET</button>
+            <button onclick="fetchPost()" class="fetch-btn">Fetch POST</button>
+            <button onclick="fetchPut()" class="fetch-btn">Fetch PUT</button>
+            <button onclick="fetchDelete()" class="fetch-btn">Fetch DELETE</button>
+            <button onclick="fetchWithHeaders()" class="fetch-btn">Fetch with Headers</button>
+            <button onclick="fetchJSON()" class="fetch-btn">Fetch JSON</button>
+        </div>
+
+        <div class="test-section">
+            <h3>Failed Requests</h3>
+            <button onclick="failedXHR()" class="fail-btn">Failed XHR (404)</button>
+            <button onclick="failedFetch()" class="fail-btn">Failed Fetch (404)</button>
+            <button onclick="timeoutXHR()" class="fail-btn">XHR Timeout</button>
+            <button onclick="networkError()" class="fail-btn">Network Error</button>
+            <button onclick="corsError()" class="fail-btn">CORS Error</button>
+        </div>
+
+        <div class="test-section">
+            <h3>WebSocket Tests</h3>
+            <button onclick="connectWebSocket()" class="ws-btn">Connect WebSocket</button>
+            <button onclick="sendWebSocketMessage()" class="ws-btn">Send Message</button>
+            <button onclick="closeWebSocket()" class="ws-btn">Close WebSocket</button>
+            <button onclick="failedWebSocket()" class="fail-btn">Failed WebSocket</button>
+        </div>
+
+        <div class="test-section">
+            <h3>Resource Loading</h3>
+            <button onclick="loadImage()">Load Image</button>
+            <button onclick="loadScript()">Load Script</button>
+            <button onclick="loadCSS()">Load CSS</button>
+            <button onclick="loadFont()">Load Font</button>
+            <button onclick="loadFailedResource()" class="fail-btn">Load Failed Resource</button>
+        </div>
+
+        <div id="output"></div>
+    </div>
+
+    <script>
+        let ws = null;
+        let requestCounter = 0;
+
+        // XHR Functions
+        function xhrGet() {
+            requestCounter++;
+            const xhr = new XMLHttpRequest();
+            const requestId = 'xhr-get-' + requestCounter;
+
+            xhr.open('GET', '/generated/interactive-1.html', true);
+            xhr.setRequestHeader('X-Request-ID', requestId);
+
+            xhr.onreadystatechange = function() {
+                if (xhr.readyState === 4) {
+                    const status = xhr.status;
+                    const statusText = xhr.statusText;
+                    appendOutput(`XHR GET completed: ${status} ${statusText}`, status >= 200 && status < 300 ? 'success' : 'error');
+                }
+            };
+
+            xhr.onerror = function() {
+                appendOutput('XHR GET failed: Network error', 'error');
+            };
+
+            xhr.send();
+            appendOutput(`XHR GET request sent: ${requestId}`, 'info');
+        }
+
+        function xhrPost() {
+            requestCounter++;
+            const xhr = new XMLHttpRequest();
+            const requestId = 'xhr-post-' + requestCounter;
+
+            xhr.open('POST', '/generated/interactive-2.html', true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.setRequestHeader('X-Request-ID', requestId);
+
+            xhr.onreadystatechange = function() {
+                if (xhr.readyState === 4) {
+                    appendOutput(`XHR POST completed: ${xhr.status}`, xhr.status >= 200 && xhr.status < 300 ? 'success' : 'error');
+                }
+            };
+
+            xhr.send(JSON.stringify({ test: 'data', timestamp: Date.now() }));
+            appendOutput(`XHR POST request sent: ${requestId}`, 'info');
+        }
+
+        function xhrPut() {
+            requestCounter++;
+            const xhr = new XMLHttpRequest();
+            xhr.open('PUT', '/generated/interactive-3.html', true);
+            xhr.onreadystatechange = function() {
+                if (xhr.readyState === 4) {
+                    appendOutput(`XHR PUT completed: ${xhr.status}`, xhr.status >= 200 && xhr.status < 300 ? 'success' : 'error');
+                }
+            };
+            xhr.send('test=data');
+            appendOutput('XHR PUT request sent', 'info');
+        }
+
+        function xhrDelete() {
+            requestCounter++;
+            const xhr = new XMLHttpRequest();
+            xhr.open('DELETE', '/generated/interactive-4.html', true);
+            xhr.onreadystatechange = function() {
+                if (xhr.readyState === 4) {
+                    appendOutput(`XHR DELETE completed: ${xhr.status}`, xhr.status >= 200 && xhr.status < 300 ? 'success' : 'error');
+                }
+            };
+            xhr.send();
+            appendOutput('XHR DELETE request sent', 'info');
+        }
+
+        function xhrWithHeaders() {
+            requestCounter++;
+            const xhr = new XMLHttpRequest();
+            xhr.open('GET', '/generated/interactive-1.html', true);
+            xhr.setRequestHeader('Authorization', 'Bearer test-token');
+            xhr.setRequestHeader('X-Custom-Header', 'custom-value');
+            xhr.setRequestHeader('Accept', 'application/json');
+            xhr.onreadystatechange = function() {
+                if (xhr.readyState === 4) {
+                    appendOutput(`XHR with headers completed: ${xhr.status}`, xhr.status >= 200 && xhr.status < 300 ? 'success' : 'error');
+                }
+            };
+            xhr.send();
+            appendOutput('XHR with custom headers sent', 'info');
+        }
+
+        // Fetch Functions
+        function fetchGet() {
+            requestCounter++;
+            const requestId = 'fetch-get-' + requestCounter;
+
+            fetch('/generated/interactive-1.html', {
+                method: 'GET',
+                headers: {
+                    'X-Request-ID': requestId,
+                    'Accept': 'text/html'
+                }
+            })
+            .then(response => {
+                appendOutput(`Fetch GET completed: ${response.status} ${response.statusText}`,
+                    response.ok ? 'success' : 'error');
+                return response.text();
+            })
+            .then(data => {
+                appendOutput(`Fetch GET data received: ${data.length} bytes`, 'info');
+            })
+            .catch(error => {
+                appendOutput(`Fetch GET error: ${error.message}`, 'error');
+            });
+
+            appendOutput(`Fetch GET request sent: ${requestId}`, 'info');
+        }
+
+        function fetchPost() {
+            requestCounter++;
+            const requestId = 'fetch-post-' + requestCounter;
+
+            fetch('/generated/interactive-2.html', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Request-ID': requestId
+                },
+                body: JSON.stringify({
+                    test: 'data',
+                    timestamp: Date.now(),
+                    id: requestId
+                })
+            })
+            .then(response => {
+                appendOutput(`Fetch POST completed: ${response.status}`, response.ok ? 'success' : 'error');
+                return response.text();
+            })
+            .then(data => {
+                appendOutput(`Fetch POST data received: ${data.length} bytes`, 'info');
+            })
+            .catch(error => {
+                appendOutput(`Fetch POST error: ${error.message}`, 'error');
+            });
+
+            appendOutput(`Fetch POST request sent: ${requestId}`, 'info');
+        }
+
+        function fetchPut() {
+            fetch('/generated/interactive-3.html', {
+                method: 'PUT',
+                body: 'test=data'
+            })
+            .then(response => {
+                appendOutput(`Fetch PUT completed: ${response.status}`, response.ok ? 'success' : 'error');
+            })
+            .catch(error => {
+                appendOutput(`Fetch PUT error: ${error.message}`, 'error');
+            });
+            appendOutput('Fetch PUT request sent', 'info');
+        }
+
+        function fetchDelete() {
+            fetch('/generated/interactive-4.html', {
+                method: 'DELETE'
+            })
+            .then(response => {
+                appendOutput(`Fetch DELETE completed: ${response.status}`, response.ok ? 'success' : 'error');
+            })
+            .catch(error => {
+                appendOutput(`Fetch DELETE error: ${error.message}`, 'error');
+            });
+            appendOutput('Fetch DELETE request sent', 'info');
+        }
+
+        function fetchWithHeaders() {
+            fetch('/generated/interactive-1.html', {
+                method: 'GET',
+                headers: {
+                    'Authorization': 'Bearer test-token',
+                    'X-Custom-Header': 'custom-value',
+                    'Accept': 'application/json',
+                    'User-Agent': 'DOM-Events-Test/1.0'
+                }
+            })
+            .then(response => {
+                appendOutput(`Fetch with headers completed: ${response.status}`, response.ok ? 'success' : 'error');
+            })
+            .catch(error => {
+                appendOutput(`Fetch with headers error: ${error.message}`, 'error');
+            });
+            appendOutput('Fetch with custom headers sent', 'info');
+        }
+
+        function fetchJSON() {
+            fetch('/generated/interactive-1.html', {
+                method: 'GET',
+                headers: {
+                    'Accept': 'application/json'
+                }
+            })
+            .then(response => {
+                appendOutput(`Fetch JSON completed: ${response.status}`, response.ok ? 'success' : 'error');
+                return response.text();
+            })
+            .then(text => {
+                appendOutput(`JSON response length: ${text.length} characters`, 'info');
+            })
+            .catch(error => {
+                appendOutput(`Fetch JSON error: ${error.message}`, 'error');
+            });
+            appendOutput('Fetch JSON request sent', 'info');
+        }
+
+        // Failed Request Functions
+        function failedXHR() {
+            const xhr = new XMLHttpRequest();
+            xhr.open('GET', '/nonexistent-page-404-test.html', true);
+            xhr.onreadystatechange = function() {
+                if (xhr.readyState === 4) {
+                    appendOutput(`Failed XHR completed: ${xhr.status} ${xhr.statusText}`, 'error');
+                }
+            };
+            xhr.onerror = function() {
+                appendOutput('Failed XHR: Network error', 'error');
+            };
+            xhr.send();
+            appendOutput('Failed XHR request sent (expecting 404)', 'info');
+        }
+
+        function failedFetch() {
+            fetch('/another-nonexistent-page-404.html')
+            .then(response => {
+                appendOutput(`Failed Fetch response: ${response.status} ${response.statusText}`, 'error');
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+            })
+            .catch(error => {
+                appendOutput(`Failed Fetch error: ${error.message}`, 'error');
+            });
+            appendOutput('Failed Fetch request sent (expecting 404)', 'info');
+        }
+
+        function timeoutXHR() {
+            const xhr = new XMLHttpRequest();
+            xhr.open('GET', '/generated/interactive-1.html', true);
+            xhr.timeout = 1; // 1ms timeout to force timeout error
+            xhr.ontimeout = function() {
+                appendOutput('XHR Timeout: Request timed out', 'error');
+            };
+            xhr.onerror = function() {
+                appendOutput('XHR Timeout: Network error', 'error');
+            };
+            xhr.send();
+            appendOutput('XHR timeout request sent', 'info');
+        }
+
+        function networkError() {
+            const xhr = new XMLHttpRequest();
+            xhr.open('GET', 'http://localhost:99999/nonexistent', true); // Invalid port
+            xhr.onerror = function() {
+                appendOutput('Network Error: Connection failed', 'error');
+            };
+            xhr.send();
+            appendOutput('Network error request sent', 'info');
+        }
+
+        function corsError() {
+            fetch('https://httpbin.org/status/403', {
+                method: 'GET',
+                mode: 'cors'
+            })
+            .then(response => {
+                appendOutput(`CORS response: ${response.status}`, response.ok ? 'success' : 'error');
+            })
+            .catch(error => {
+                appendOutput(`CORS error: ${error.message}`, 'error');
+            });
+            appendOutput('CORS request sent', 'info');
+        }
+
+        // WebSocket Functions
+        function connectWebSocket() {
+            if (ws) {
+                appendOutput('WebSocket already connected', 'warn');
+                return;
+            }
+
+            try {
+                // Use a public WebSocket echo server for testing
+                ws = new WebSocket('wss://echo.websocket.org/');
+
+                ws.onopen = function() {
+                    appendOutput('WebSocket connected', 'success');
+                };
+
+                ws.onmessage = function(event) {
+                    appendOutput(`WebSocket message received: ${event.data}`, 'info');
+                };
+
+                ws.onerror = function(error) {
+                    appendOutput('WebSocket error occurred', 'error');
+                };
+
+                ws.onclose = function() {
+                    appendOutput('WebSocket connection closed', 'info');
+                    ws = null;
+                };
+
+                appendOutput('WebSocket connection attempt started', 'info');
+            } catch (error) {
+                appendOutput(`WebSocket connection error: ${error.message}`, 'error');
+            }
+        }
+
+        function sendWebSocketMessage() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                const message = 'Test message ' + Date.now();
+                ws.send(message);
+                appendOutput(`WebSocket message sent: ${message}`, 'info');
+            } else {
+                appendOutput('WebSocket not connected', 'error');
+            }
+        }
+
+        function closeWebSocket() {
+            if (ws) {
+                ws.close();
+                appendOutput('WebSocket close requested', 'info');
+            } else {
+                appendOutput('WebSocket not connected', 'error');
+            }
+        }
+
+        function failedWebSocket() {
+            try {
+                const failedWs = new WebSocket('wss://invalid-websocket-server-12345.com');
+                failedWs.onerror = function() {
+                    appendOutput('Failed WebSocket: Connection failed', 'error');
+                };
+                appendOutput('Failed WebSocket connection attempt', 'info');
+            } catch (error) {
+                appendOutput(`Failed WebSocket error: ${error.message}`, 'error');
+            }
+        }
+
+        // Resource Loading Functions
+        function loadImage() {
+            const img = new Image();
+            img.onload = function() {
+                appendOutput('Image loaded successfully', 'success');
+            };
+            img.onerror = function() {
+                appendOutput('Image load failed', 'error');
+            };
+            img.src = '/favicon.ico?' + Date.now(); // Add cache buster
+            appendOutput('Image load started', 'info');
+        }
+
+        function loadScript() {
+            const script = document.createElement('script');
+            script.onload = function() {
+                appendOutput('Script loaded successfully', 'success');
+            };
+            script.onerror = function() {
+                appendOutput('Script load failed', 'error');
+            };
+            script.src = '/js/test-script.js?' + Date.now(); // Non-existent script
+            document.head.appendChild(script);
+            appendOutput('Script load started', 'info');
+        }
+
+        function loadCSS() {
+            const link = document.createElement('link');
+            link.rel = 'stylesheet';
+            link.type = 'text/css';
+            link.onload = function() {
+                appendOutput('CSS loaded successfully', 'success');
+            };
+            link.onerror = function() {
+                appendOutput('CSS load failed', 'error');
+            };
+            link.href = '/css/test-styles.css?' + Date.now(); // Non-existent CSS
+            document.head.appendChild(link);
+            appendOutput('CSS load started', 'info');
+        }
+
+        function loadFont() {
+            const link = document.createElement('link');
+            link.rel = 'stylesheet';
+            link.href = 'https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap';
+            link.onload = function() {
+                appendOutput('Font loaded successfully', 'success');
+            };
+            link.onerror = function() {
+                appendOutput('Font load failed', 'error');
+            };
+            document.head.appendChild(link);
+            appendOutput('Font load started', 'info');
+        }
+
+        function loadFailedResource() {
+            const img = new Image();
+            img.onerror = function() {
+                appendOutput('Failed resource load detected (as expected)', 'info');
+            };
+            img.src = '/nonexistent-resource-404-' + Date.now() + '.png';
+            appendOutput('Failed resource load attempt', 'info');
+        }
+
+        function appendOutput(text, type = 'info') {
+            const output = document.getElementById('output');
+            const className = type === 'success' ? 'status-success' :
+                             type === 'error' ? 'status-error' :
+                             type === 'warn' ? 'status-error' : 'status-info';
+            output.innerHTML += <span class="${className}">${new Date().toLocaleTimeString()} - ${text}</span> + '\n';
+            output.scrollTop = output.scrollHeight;
+        }
+
+        // Log initial message
+        console.log('DOM Events Network Test Page Loaded');
+        appendOutput('Page loaded - ready for network testing', 'info');
+    </script>
+</body>
+</html>
