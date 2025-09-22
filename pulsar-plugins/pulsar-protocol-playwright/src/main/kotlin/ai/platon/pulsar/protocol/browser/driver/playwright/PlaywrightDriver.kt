@@ -17,6 +17,7 @@ import com.microsoft.playwright.options.WaitUntilState
 import org.jsoup.Connection
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.atomic.AtomicInteger
 
 data class Credentials(
     val username: String,
@@ -47,6 +48,21 @@ class PlaywrightDriver(
     private var credentials: Credentials? = null
 
     private var navigateUrl = ""
+
+    // Frame management state -----------------------------------------------
+    private val frameIdSeq = AtomicInteger(1)
+    private val frameIds = Collections.synchronizedMap(IdentityHashMap<com.microsoft.playwright.Frame, String>())
+    private var currentFrame: com.microsoft.playwright.Frame? = null
+
+    private fun ensureFrameId(frame: com.microsoft.playwright.Frame): String {
+        return frameIds.getOrPut(frame) { "frame_${frameIdSeq.getAndIncrement()}" }
+    }
+
+    private fun resolveFrameById(frameId: String): com.microsoft.playwright.Frame? {
+        return page.frames().firstOrNull { ensureFrameId(it) == frameId }
+    }
+
+    // ----------------------------------------------------------------------
 
     override suspend fun addBlockedURLs(urlPatterns: List<String>) {
         try {
@@ -950,5 +966,138 @@ class PlaywrightDriver(
 
     private fun check(page: Page, url: String) {
         check(!page.isClosed) { "Page is closed | $url" }
+    }
+
+    override suspend fun waitForFrameLoad(frameId: String, timeout: Duration): Boolean {
+        return try {
+            rpc.invokeDeferred("waitForFrameLoad") {
+                val deadline = System.nanoTime() + timeout.toNanos()
+                while (System.nanoTime() < deadline) {
+                    if (page.frames().any { ensureFrameId(it) == frameId }) return@invokeDeferred true
+                    delay(50)
+                }
+                false
+            } ?: false
+        } catch (e: Exception) {
+            rpc.handleWebDriverException(e, "waitForFrameLoad", frameId)
+            false
+        }
+    }
+
+    override suspend fun switchToFrame(index: Int): Boolean {
+        return try {
+            rpc.invokeDeferred("switchToFrame") {
+                val frames = page.frames()
+                if (index in frames.indices) {
+                    currentFrame = frames[index]
+                    true
+                } else false
+            } ?: false
+        } catch (e: Exception) {
+            rpc.handleWebDriverException(e, "switchToFrame", "index: $index")
+            false
+        }
+    }
+
+    override suspend fun switchToFrame(nameOrId: String): Boolean {
+        return try {
+            rpc.invokeDeferred("switchToFrame") {
+                val frame = page.frames().firstOrNull { f ->
+                    f.name() == nameOrId || ensureFrameId(f) == nameOrId
+                }
+                if (frame != null) {
+                    currentFrame = frame
+                    true
+                } else false
+            } ?: false
+        } catch (e: Exception) {
+            rpc.handleWebDriverException(e, "switchToFrame", nameOrId)
+            false
+        }
+    }
+
+    override suspend fun switchToParentFrame(): Boolean {
+        return try {
+            rpc.invokeDeferred("switchToParentFrame") {
+                val cf = currentFrame ?: page.mainFrame()
+                val parent = cf.parentFrame()
+                if (parent != null) {
+                    currentFrame = parent
+                    true
+                } else false
+            } ?: false
+        } catch (e: Exception) {
+            rpc.handleWebDriverException(e, "switchToParentFrame")
+            false
+        }
+    }
+
+    override suspend fun switchToDefaultContent(): Boolean {
+        return try {
+            rpc.invokeDeferred("switchToDefaultContent") {
+                currentFrame = page.mainFrame()
+                true
+            } ?: false
+        } catch (e: Exception) {
+            rpc.handleWebDriverException(e, "switchToDefaultContent")
+            false
+        }
+    }
+
+    override suspend fun getFrames(): List<FrameInfo> {
+        return try {
+            rpc.invokeDeferred("getFrames") {
+                page.frames().map { f ->
+                    FrameInfo(
+                        frameId = ensureFrameId(f),
+                        url = f.url(),
+                        name = f.name(),
+                        parentFrameId = f.parentFrame()?.let { ensureFrameId(it) },
+                        isAccessible = true,
+                        loadState = "LOADED"
+                    )
+                }
+            } ?: emptyList()
+        } catch (e: Exception) {
+            rpc.handleWebDriverException(e, "getFrames")
+            emptyList()
+        }
+    }
+
+    override suspend fun getCurrentFrame(): FrameInfo? {
+        return try {
+            rpc.invokeDeferred("getCurrentFrame") {
+                val cf = currentFrame ?: page.mainFrame()
+                FrameInfo(
+                    frameId = ensureFrameId(cf),
+                    url = cf.url(),
+                    name = cf.name(),
+                    parentFrameId = cf.parentFrame()?.let { ensureFrameId(it) },
+                    isAccessible = true,
+                    loadState = "LOADED"
+                )
+            }
+        } catch (e: Exception) {
+            rpc.handleWebDriverException(e, "getCurrentFrame")
+            null
+        }
+    }
+
+    override fun isInFrame(): Boolean {
+        val cf = currentFrame
+        return cf != null && cf != page.mainFrame()
+    }
+
+    override suspend fun evaluateInFrame(expression: String): Any? {
+        return try {
+            rpc.invokeDeferred("evaluateInFrame") {
+                val cf = currentFrame ?: page.mainFrame()
+                // Playwright Frame has evaluate; fall back to page if needed
+                cf.evaluate(expression)
+            }
+        } catch (e: Exception) {
+            rpc.handleWebDriverException(e, "evaluateInFrame", expression)
+            null
+        }
     }
 }
