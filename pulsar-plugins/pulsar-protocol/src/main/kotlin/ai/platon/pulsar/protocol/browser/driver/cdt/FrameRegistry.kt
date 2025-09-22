@@ -217,7 +217,8 @@ class FrameRegistry {
      * Find frame by index (depth-first traversal)
      */
     fun findFrameByIndex(index: Int): IframeContext? {
-        val frames = getAllFrameContexts()
+        // Make ordering deterministic by creation time to ensure stable test behavior
+        val frames = getAllFrameContexts().sortedBy { it.createdAt }
         return if (index >= 0 && index < frames.size) frames[index] else null
     }
 
