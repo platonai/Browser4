@@ -34,6 +34,37 @@ class SessionLoadTests: TestBase() {
         assertTrue { session is BasicPulsarSession }
     }
 
+    @Test
+    fun `When visit a page then it's fetched`() {
+        val options = session.options("-refresh")
+        options.eventHandlers.browseEventHandlers.onDidScroll.addLast { page, driver ->
+            require(driver is PulsarWebDriver)
+        }
+        val page = session.load(url, options)
+        assertTrue { page.isFetched }
+        assertTrue { page.originalContentLength > 0 }
+    }
+
+    @Test
+    fun `When loaded a HTML page then the navigate state are correct`() {
+        val options = session.options("-refresh")
+        options.eventHandlers.browseEventHandlers.onDidScroll.addLast { page, driver ->
+            require(driver is PulsarWebDriver)
+            val navigateEntry = driver.navigateEntry
+            assertTrue { navigateEntry.documentTransferred }
+            assertTrue { navigateEntry.networkRequestCount.get() > 0 }
+            assertTrue { navigateEntry.networkResponseCount.get() > 0 }
+
+            assertEquals(200, driver.mainResponseStatus)
+            assertTrue { driver.mainResponseStatus == 200 }
+            assertTrue { driver.mainResponseHeaders.isNotEmpty() }
+            assertEquals(200, navigateEntry.mainResponseStatus)
+            assertTrue { navigateEntry.mainResponseStatus == 200 }
+            assertTrue { navigateEntry.mainResponseHeaders.isNotEmpty() }
+        }
+        session.load(url, options)
+    }
+
     /**
      * Test event handlers.
      *
@@ -134,29 +165,5 @@ class SessionLoadTests: TestBase() {
         assertEquals(pages.size, pages2.size)
 
         logger.info("Tested - whenLoadAllAsyncSecondlyWithoutExpiry_thenPagesAreLoadedFromCache")
-    }
-
-    @Test
-    fun `When loaded a HTML page then the navigate state are correct`() {
-        logger.info("Testing - When loaded a HTML page then the navigate state are correct")
-
-        val options = session.options("-refresh")
-        options.eventHandlers.browseEventHandlers.onDidScroll.addLast { page, driver ->
-            require(driver is PulsarWebDriver)
-            val navigateEntry = driver.navigateEntry
-            assertTrue { navigateEntry.documentTransferred }
-            assertTrue { navigateEntry.networkRequestCount.get() > 0 }
-            assertTrue { navigateEntry.networkResponseCount.get() > 0 }
-            
-            assertEquals(200, driver.mainResponseStatus)
-            assertTrue { driver.mainResponseStatus == 200 }
-            assertTrue { driver.mainResponseHeaders.isNotEmpty() }
-            assertEquals(200, navigateEntry.mainResponseStatus)
-            assertTrue { navigateEntry.mainResponseStatus == 200 }
-            assertTrue { navigateEntry.mainResponseHeaders.isNotEmpty() }
-        }
-        session.load(url, options)
-
-        logger.info("Tested - When loaded a HTML page then the navigate state are correct")
     }
 }

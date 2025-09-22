@@ -1,5 +1,6 @@
 package ai.platon.pulsar.browser
 
+import kotlinx.coroutines.runBlocking
 import kotlin.test.*
 
 /**
@@ -9,6 +10,15 @@ import kotlin.test.*
 class PulsarWebDriverIframeTest : WebDriverTestBase() {
 
     override val webDriverService get() = WebDriverService(browserFactory, requiredPageSize = 10)
+
+    @Test
+    fun testVisitPage() {
+        runBlocking {
+            browser.newDriver().use { driver ->
+                driver.navigateTo("https://www.baidu.com/")
+            }
+        }
+    }
 
     @Test
     fun testBasicIframeSwitching() = runWebDriverTest("$assetsBaseURL/frames/nested-frames.html", browser) { driver ->
