@@ -164,5 +164,27 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
-
+    <build>
+        <plugins>
+            <!-- Ensure JUnit5 Kotlin tests are discovered -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.3.0</version>
+                <configuration>
+                    <useModulePath>false</useModulePath>
+                    <failIfNoTests>false</failIfNoTests>
+                    <includes>
+                        <include>**/*Test.kt</include>
+                        <include>**/*Tests.kt</include>
+                        <include>**/*IT.kt</include>
+                    </includes>
+                    <systemPropertyVariables>
+                        <!-- Default: disable LLM network calls for unit test scope unless explicitly overridden -->
+                        <pulsar.tta.disableLLM>true</pulsar.tta.disableLLM>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 </project>

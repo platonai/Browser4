@@ -23,10 +23,42 @@ and **CI/CD integration**.
 - Prefer **data classes** for DTOs and state holders
 - Keep functions **small and single-responsibility**
 - Document all **public functions and classes** with KDoc
-
----
+- Original (Chinese): 如果在任何 README-AI.md 中遇到中文条款，将其翻译为英文。例外：1. 中文引用，2. 明确要求保留中文。
+- Translation: If any Chinese clauses appear in a README-AI.md, translate them into English unless (1) they are direct quotations, or (2) the text explicitly requires keeping Chinese.
 
 ## 3. 🤖 AI Agent Behavior
+
+Provide consistent, minimal, verifiable contributions:
+
+- Environment Detection:
+  - Always detect OS (Windows/macOS/Linux) before suggesting shell commands; prefer cross-platform forms.
+  - Use the Maven wrapper: `./mvnw` (Unix) or `mvnw.cmd` (Windows) from project root.
+- Editing Rules:
+  - Do not mass‑reformat unrelated code; restrict diffs to purposeful changes.
+  - Preserve license headers and existing comment style.
+  - Avoid introducing new dependencies unless absolutely necessary; justify in commit/PR description.
+- Code Generation:
+  - Favor pure functions and immutability for new utilities.
+  - Provide minimal, focused unit tests for each new public function (happy path + 1 edge case).
+  - When adding an abstraction (interface/strategy), include a concise rationale in KDoc.
+- Testing Integration:
+  - New features must include at least one `@Tag("UnitTest")` test.
+  - For behavior relying on external services (LLM, network), inject a strategy or generator to allow deterministic offline tests.
+  - Use the system property `-Dpulsar.tta.disableLLM=true` to disable model calls in unit tests.
+- Prompt / LLM Aware Code:
+  - Keep model/system prompts short, structured, and versionable as constants.
+  - Centralize parsing of model outputs; avoid scattering ad hoc JSON parsing.
+- Documentation:
+  - Update the closest README-* file when adding or changing a developer-facing concept.
+  - Translate any lingering Chinese lines per the translation rule above.
+- Security & Safety:
+  - Never log secrets or raw authorization headers.
+  - Validate untrusted input (selectors, URLs) before execution.
+- Performance:
+  - Defer heavy initialization (LLM clients, large caches) until first use (lazy or on-demand pattern).
+- PR Hygiene:
+  - Keep commits logically grouped (docs, refactor, feature, test).
+  - Reference related issue/ticket IDs in commit messages when available.
 
 ---
 
@@ -78,7 +110,7 @@ project-root/
 
 - **Test Base Classes**:
   - **`TestBase`**: Fundamental test configuration and Spring context
-  - **`TestWebSiteAccess`**: Inherit for tests requiring test website access
+  - **`TestWebSiteAccess`**: Inherit for tests requiring test website access (start a mock server automatically)
   - **`WebDriverTestBase`**: Inherit for WebDriver-based automation tests
   - **Test website resources**: Located in `pulsar-tests/src/main/resources/static/`
 
@@ -169,6 +201,12 @@ project-root/
   - **Unit tests**: Mock external dependencies extensively
   - **Integration tests**: Real Spring beans, mock external services only
   - **E2E tests**: Minimize mocking, use real systems where possible
+  - Local Mock Server (Original Chinese guidance retained for context):
+    > 如果需要访问网页，优先使用 Mock Server 的网页进行测试
+    - English: If a test needs to access a webpage, prefer using the Local Mock Server pages.
+    - Inherit `TestWebSiteAccess` to auto‑start the Local Mock Server
+    - Static web resources path: `pulsar-tests-common/src/main/resources/static`
+    - Generated test pages may be placed under `pulsar-tests-common/src/main/resources/static/generated/`
 
 - **Recommended Libraries**:
   ```kotlin

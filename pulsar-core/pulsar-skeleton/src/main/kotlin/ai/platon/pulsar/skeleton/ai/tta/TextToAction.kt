@@ -112,10 +112,14 @@ open class TextToAction(val conf: ImmutableConfig) {
 - scrollToTop()
 - scrollToBottom()
 - scrollToMiddle(ratio: Double = 0.5)
+- scrollToScreen(screenNumber: Double)
+- clickTextMatches(selector: String, pattern: String, count: Int = 1)
+- clickMatches(selector: String, attrName: String, pattern: String, count: Int = 1)
+- clickNthAnchor(n: Int, rootSelector: String = "body")
 - captureScreenshot()
 - captureScreenshot(selector: String)
 - delay(millis: Long)
-- stop()
+- stop() // 标记任务完成
     """.trimIndent()
 
     // Tool-use helpers -------------------------------------------------------------------------

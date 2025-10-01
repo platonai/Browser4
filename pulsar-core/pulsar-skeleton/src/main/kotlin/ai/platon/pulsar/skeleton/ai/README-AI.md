@@ -5,46 +5,47 @@
 Before starting, read the following documents to understand the project structure:
 
 1. **Root Directory** `README-AI.md` - Global development guidelines and project structure
+2. All tests that need webpage interaction must use the Mock Server pages located at `pulsar-tests-common/src/main/resources/static/generated/tta`.
 
-## Core Tasks:
+## Core Tasks
 
-- Optimize this documentation
-- Implement code according to this specification
+- Optimize this documentation (✅ updated)
+- Implement code according to this specification (✅ implemented: stop() handling, tool list extended)
 
 ## 🎯 Overview
 
-[WebDriverAgent.kt](WebDriverAgent.kt) is a **multi-round planning executor** that enables AI models to perform 
-web automation through screenshot observation and historical action analysis. It plans and executes atomic 
-actions (act/extract/navigate) step-by-step until the target is achieved.
+[`WebDriverAgent.kt`](WebDriverAgent.kt) is a **multi-round planning executor** that enables AI models to perform
+web automation through screenshot observation and historical action analysis. It plans and executes **atomic actions**
+(single click, single input, single selection, single wait) step-by-step until the goal is achieved or termination criteria are met.
 
 ### Key Architecture Principles
 
-- **Atomic Actions**: Each step performs exactly one atomic action (single click, single input, single selection)
-- **Multi-round Planning**: AI model plans next action based on screenshot + action history
-- **Structured Output**: Model returns JSON-formatted function calls
-- **Termination Control**: Loop ends via `stop` function call or `taskComplete=true`
-- **Result Summarization**: Final summary generated using `operatorSummarySchema`
+- **Atomic Actions**: Each loop iteration executes exactly one tool call
+- **Observation + Memory**: Next action planned from (screenshot + latest history window)
+- **Deterministic Interface**: Model must output strict JSON (no markdown / prose)
+- **Single-Step Enforcement**: Maximum 1 tool call per response; empty list means "no-op / cannot progress"
+- **Graceful Termination**: `stop()` tool, `taskComplete=true`, `method=close`, repeated no-ops, or `maxSteps`
+- **Structured Summary**: Final summarization with constrained JSON schema
 
 ### Core Workflow
 
-1. **System Prompt** (`buildOperatorSystemPrompt(goal)`):
-   - Establishes AI as general-purpose agent for step-by-step task completion
-   - Enforces atomic action decomposition
-   - Provides tool specification and user goal
+1. System prompt asserts role + constraints + tool schema
+2. User message supplies: recent action history (last 8), goal, current URL and implicit screenshot (base64 side channel)
+3. Model returns JSON: `{"tool_calls":[{"name":"click","args":{...}}]}` or empty list
+4. First (and only) tool call executed; history appended
+5. Loop continues until termination condition satisfied
+6. Summary model call produces execution recap JSON
 
-2. **User Message** (per iteration):
-   - Previous action summary (last 8 steps)
-   - Current page screenshot (base64 encoded)
-   - Target instruction and current URL
+### Termination Conditions
 
-3. **AI Response Processing**:
-   - Parse structured JSON with tool calls
-   - Execute single atomic action via WebDriver
-   - Update history and continue loop
+Execution loop stops when ANY of these occur:
 
-4. **Termination & Summary**:
-   - Loop ends on `taskComplete=true`, `method=close`, or `maxSteps` reached
-   - Generate final summary of execution trajectory
+- Model returns `{"tool_calls":[{"name":"stop","args":{}}]}`
+- JSON includes `"taskComplete": true`
+- JSON includes `"method":"close"` (driver close attempted)
+- Consecutive no-op responses exceed threshold (5)
+- Action generation errors exceed threshold (3)
+- Step count reaches configured `maxSteps`
 
 ## 🔧 Key Components
 
@@ -54,56 +55,165 @@ actions (act/extract/navigate) step-by-step until the target is achieved.
 // Generate EXACT ONE step using AI
 val action = tta.generateWebDriverAction(message, driver, screenshotB64)
 
-// Execute the generated action
+// Execute model-produced action list (currently only first is dispatched)
 suspend fun act(action: ActionDescription): InstructionResult
 ```
 
-### Action Execution Pipeline
+### Execution Pipeline
 
-1. **Screenshot Capture**: `safeScreenshot()` - Base64 encoded current page
-2. **Message Construction**: Combine system prompt + user context + screenshot
-3. **AI Action Generation**: Single atomic action via TextToAction
-4. **Action Execution**: WebDriver command execution with error handling
-5. **History Tracking**: Maintain execution trajectory for context
+1. `safeScreenshot()` → best-effort base64 page snapshot
+2. `buildOperatorSystemPrompt(goal)` + dynamic user message
+3. LLM call → constrained JSON tool call response
+4. Tool dispatch → low-level WebDriver operations
+5. Append concise history line (eg: `#5 click -> #login-btn x1`)
+6. Check termination & loop control
+7. After exit → summarization + transcript persistence
 
-### Supported Tool Calls
+### Supported Tool Calls (Current Contract)
 
-- **Navigation**: `navigateTo(url)`, `waitForSelector(selector, timeout)`
-- **Interactions**: `click(selector)`, `fill(selector, text)`, `press(selector, key)`
-- **Form Controls**: `check(selector)`, `uncheck(selector)`
-- **Scrolling**: `scrollDown(count)`, `scrollUp(count)`, `scrollToTop()`, `scrollToBottom()`
-- **Screenshots**: `captureScreenshot()`, `captureScreenshot(selector)`
-- **Timing**: `delay(millis)`
+Category | Tools
+:--|:--
+Navigation | `navigateTo(url)`, `waitForSelector(selector, timeoutMillis)`
+Interaction | `click(selector)`, `fill(selector, text)`, `press(selector, key)`
+Form | `check(selector)`, `uncheck(selector)`
+Scrolling | `scrollDown(count)`, `scrollUp(count)`, `scrollToTop()`, `scrollToBottom()`, `scrollToMiddle(ratio)`, `scrollToScreen(screenNumber)`
+Advanced Selection | `clickTextMatches(selector, pattern, count)`, `clickMatches(selector, attrName, pattern, count)`, `clickNthAnchor(n, rootSelector)`
+Visual | `captureScreenshot()`, `captureScreenshot(selector)`
+Timing | `delay(millis)`
+Control | `stop()` (explicit termination)
+
+> NOTE: Only the FIRST tool call in `tool_calls` is executed per step (others are discarded if provided).
+
+### Sample Valid Model Response
+
+```json
+{
+  "tool_calls": [
+    {"name": "click", "args": {"selector": "#search-button"}}
+  ]
+}
+```
+
+Explicit completion example:
+
+```json
+{
+  "tool_calls": [ {"name": "stop", "args": {}} ],
+  "taskComplete": true,
+  "method": "close"
+}
+```
 
 ### Error Handling & Resilience
 
-- **Graceful Degradation**: Continue execution on individual action failures
-- **Screenshot Safety**: Handle screenshot capture failures without crashing
-- **Tool Call Validation**: Skip invalid/unknown tool calls with warnings
-- **Navigation Safety**: URL validation and navigation error handling
+Aspect | Strategy
+:--|:--
+Malformed JSON | Fallback parser, then treated as no-op
+Missing / blank args | Action skipped with descriptive history line
+Unknown tool name | Skipped (`skip unknown tool 'xyz'`)
+Screenshot failure | Logged; loop continues
+Driver action failure | History records `ERR <tool>`; loop continues
+Repeated failures | Threshold-based termination (configurable constants inline)
 
-## 📊 Performance & Monitoring
+### History Format
 
-- **Step Limit**: Configurable `maxSteps` (default: 100) prevents infinite loops
-- **History Management**: Keep last 8 actions for context efficiency
-- **Screenshot Persistence**: Optional step-by-step screenshot saving
-- **Session Logging**: Complete execution transcript with timestamps
+Each line is prefixed with step number (or FINAL). Examples:
+```
+#1 navigateTo -> https://example.com
+#2 waitForSelector -> #login-btn (5000ms)
+#3 click -> #login-btn x1
+FINAL {"taskComplete":true,"summary":"..."}
+```
 
-## 🔒 Security Considerations
+## ♻️ Extensibility & Injection (New)
 
-- **Input Validation**: All user inputs sanitized before execution
-- **URL Validation**: Navigation targets validated for safety
-- **Resource Limits**: Configurable timeouts and step limits
-- **Error Isolation**: Individual action failures don't crash entire session
+The agent now supports dependency injection to simplify deterministic unit testing and custom orchestration:
 
-## Human Reviewer Comments
+Injection Point | Type | Purpose
+:--|:--|:--
+`actionGenerator` | `suspend (prompt, driver, screenshot?) -> ActionDescription` | Bypass real LLM; return synthetic JSON/tool calls
+`executionStrategy` | `ActionExecutionStrategy` | Customize how a single tool call is executed (e.g. dry-run, logging, batching)
+`historySnapshot()` | `List<String>` | Read-only copy of accumulated step history for assertions / diagnostics
 
-### Nonsense tests
+### Example: Deterministic Test Harness
+```kotlin
+val fakeGenerator: suspend (String, WebDriver, String?) -> ActionDescription = { _, _, _ ->
+    ActionDescription(emptyList(), null, ModelResponse("""{"tool_calls":[{"name":"stop","args":{}}]}""", ResponseState.SUCCESS))
+}
+val agent = WebDriverAgent(fakeDriver, actionGenerator = fakeGenerator)
+agent.execute(ActionOptions("noop"))
+assertTrue(agent.historySnapshot().any { it.contains("stop()") })
+```
 
-Nonsense tests in WebDriverAgentBasicTest, none of the tests make sense.
+### Custom Execution Strategy Skeleton
+```kotlin
+object LoggingExec : ActionExecutionStrategy {
+  override suspend fun execute(driver: WebDriver, actionDescription: ActionDescription, toolCallName: String, args: Map<String, Any?>): String? {
+    println("Would execute: $toolCallName $args")
+    return "dry-run $toolCallName"
+  }
+}
+```
 
-### Examples
+### Disabling LLM for Tests
+Set system property to suppress model initialization & external network calls:
+```bash
+-Dpulsar.tta.disableLLM=true
+```
+(or inside test code: `System.setProperty("pulsar.tta.disableLLM", "true")`)
 
-[SessionInstructionsExample](/pulsar-examples/src/main/kotlin/ai/platon/pulsar/examples/agent/SessionInstructions.kt)
+This forces `TextToAction.model` to `null`, causing generation helpers to return `LLM_NOT_AVAILABLE` unless an injected `actionGenerator` is provided.
 
+## 📊 Observability
 
+- **History Window**: Last 8 lines passed back for context (keeps prompt small)
+- **Transcript Files**: `agent/session-<epoch>.log` contain full trace + final JSON
+- **Screenshots**: When explicitly captured, saved as `agent/screenshot-<epoch>.b64`
+- **Structured Summary**: JSON containing keys: `taskComplete`, `summary`, `keyFindings`, `nextSuggestions`
+
+## 🔒 Security & Safety
+
+Control | Notes
+:--|:--
+URL Scheme Filter | Blocks non-http(s) navigation
+Selector Use | Must be explicit; no invented selectors
+Atomic Semantics | Prevents multi-action hallucinations
+Rate Moderation | Minor delay between steps + backoff on no-ops
+Stop Conditions | Multiple layers prevent infinite loops
+
+## ✅ Recent Enhancements (This Revision)
+
+- Added support + docs for: `scrollToScreen`, `clickTextMatches`, `clickMatches`, `clickNthAnchor`, `stop()`
+- Unified termination logic (explicit stop tool, close method, taskComplete flag)
+- Enriched system prompt with termination contract & safety line
+- Strengthened documentation (tool taxonomy, examples, observability table)
+- Injectible `actionGenerator` & `executionStrategy` for deterministic tests
+- Added `pulsar.tta.disableLLM` system property to run offline
+- Added transcript truncation safeguard (max 500 lines / 500 chars per line)
+
+## 🧪 Testing Guidance
+
+Recommended focused unit tests:
+
+- Tool call parsing (`parseToolCalls`) covers numeric + string args
+- Mapping coverage for newly added advanced click & scroll tools
+- Termination logic via synthetic model responses (mock model returning stop / no-op)
+- Summary JSON schema shape validation (keys present, no extraneous fields)
+- Execution strategy dry-run verification
+
+> Existing lightweight parsing tests live under `src/test/.../ai/tta`.
+
+## 🔄 Future Improvement Ideas
+
+- Pluggable retry / recovery strategies (eg. re-locate element variants)
+- Adaptive wait heuristics before acting after navigation
+- Multi-tool suggestion mode with internal action ranking
+- DOM diff compression instead of screenshot for certain steps
+- Telemetry hooks (metrics counters for each tool call / termination path)
+
+## Examples
+
+See: [`SessionInstructionsExample`](/pulsar-examples/src/main/kotlin/ai/platon/pulsar/examples/agent/SessionInstructions.kt)
+
+---
+**End of Developer Guide**

@@ -17,12 +17,14 @@ import java.util.*
 class WebDriverAgent(
     val driver: WebDriver,
     val maxSteps: Int = 100,
+    private val actionGenerator: (suspend (String, WebDriver, String?) -> ai.platon.pulsar.skeleton.ai.tta.ActionDescription)? = null,
+    private val executionStrategy: ActionExecutionStrategy = DefaultActionExecutionStrategy,
 ) {
     private val logger = getLogger(this)
 
     val uuid = UUID.randomUUID()
     val baseDir = AppPaths.get("agent")
-    val conf get() = (driver as AbstractWebDriver).settings.config
+    val conf get() = (driver as? AbstractWebDriver)?.settings?.config ?: ai.platon.pulsar.common.config.ImmutableConfig()
 
     private val tta by lazy { TextToAction(conf) }
 
@@ -58,8 +60,12 @@ class WebDriverAgent(
             }
 
             // Use TextToAction to generate EXACT ONE step
-            val action = try {
-                tta.generateWebDriverAction(message, driver, screenshotB64)
+            val actionDesc = try {
+                if (actionGenerator != null) {
+                    actionGenerator.invoke(message, driver, screenshotB64)
+                } else {
+                    tta.generateWebDriverAction(message, driver, screenshotB64)
+                }
             } catch (e: Exception) {
                 logger.error("Failed to generate action at step {}: {}", step, e.message)
                 history += "#$step ERROR: Action generation failed - ${e.message}"
@@ -72,7 +78,7 @@ class WebDriverAgent(
                 continue
             }
 
-            val response = action.modelResponse
+            val response = actionDesc.modelResponse
             val parsed = parseOperatorResponse(response.content)
 
             // termination checks (supported if model responded with such fields)
@@ -99,12 +105,18 @@ class WebDriverAgent(
                 continue
             }
 
+            // Handle explicit stop() tool call
+            if (toolCall.name.equals("stop", ignoreCase = true)) {
+                history += "#$step stop() received"
+                logger.info("Stop tool call received at step {}, terminating.", step)
+                break
+            }
+
             // Reset consecutive no-ops counter when we have a valid action
             consecutiveNoOps = 0
 
             val execSummary = runCatching {
-                logger.debug("Executing tool call: {} with args: {}", toolCall.name, toolCall.args)
-                driver.act(action)
+                executionStrategy.execute(driver, actionDesc, toolCall.name, toolCall.args)
             }.onFailure { e ->
                 logger.error("Tool execution failed at step {}: {} - {}", step, toolCall.name, e.message)
                 history += "#$step ERR ${toolCall.name}: ${e.message}"
@@ -146,6 +158,7 @@ class WebDriverAgent(
 4) 多个动作用多步表达；
 5) 始终验证目标元素存在且可见后再执行操作；
 6) 遇到错误时尝试替代方案或优雅终止；
+7) 若任务完成或无法继续，请调用 stop() 或设置 taskComplete=true。
 
 输出严格使用 JSON，字段：
 - tool_calls: [ { name: string, args: object } ] // 最多 1 个
@@ -159,6 +172,12 @@ class WebDriverAgent(
 
 工具规范：
 ${tta.TOOL_CALL_LIST}
+
+终止条件：
+- tool_calls 中的 name 为 stop
+- taskComplete=true
+- method=close
+- 连续多次无操作或超过最大步数
 
 用户总目标：$goal
         """.trimIndent()
@@ -417,7 +436,9 @@ $h
             sb.appendLine("EXECUTION_TIME: ${ts}")
             sb.appendLine("AGENT_UUID: $uuid")
             sb.appendLine("HISTORY:")
-            history.forEach { sb.appendLine(it) }
+            val maxLines = 500
+            val trimmedHistory = if (history.size > maxLines) history.takeLast(maxLines) else history
+            trimmedHistory.forEach { sb.appendLine(it.take(500)) }
             sb.appendLine()
             sb.appendLine("FINAL_SUMMARY:")
             sb.appendLine(finalResp.content)
@@ -444,7 +465,25 @@ $h
     }
 
     private fun summarize(goal: String): ModelResponse {
+        if (model == null) {
+            return ModelResponse("""{"taskComplete":false,"summary":"LLM not configured","keyFindings":[],"nextSuggestions":[]}""".trimIndent(), ai.platon.pulsar.external.ResponseState.OTHER)
+        }
         val (system, user) = buildSummaryPrompt(goal)
         return model!!.call(user, system)
+    }
+
+    // Internal history snapshot accessor
+    internal fun historySnapshot(): List<String> = history.toList()
+}
+
+// Simple strategy abstraction -------------------------------------------------------------
+interface ActionExecutionStrategy {
+    suspend fun execute(driver: WebDriver, actionDescription: ai.platon.pulsar.skeleton.ai.tta.ActionDescription, toolCallName: String, args: Map<String, Any?>): String?
+}
+object DefaultActionExecutionStrategy : ActionExecutionStrategy {
+    override suspend fun execute(driver: WebDriver, actionDescription: ai.platon.pulsar.skeleton.ai.tta.ActionDescription, toolCallName: String, args: Map<String, Any?>): String? {
+        // Delegate to driver.act for backward compatibility
+        val result = driver.act(actionDescription)
+        return result.toString()
     }
 }
