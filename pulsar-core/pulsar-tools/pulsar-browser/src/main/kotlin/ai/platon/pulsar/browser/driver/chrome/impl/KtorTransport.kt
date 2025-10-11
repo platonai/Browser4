@@ -105,6 +105,19 @@ class KtorTransport : Transport {
         }
     }
 
+    override suspend fun sendDeferred(message: String) {
+        meterRequests.mark()
+        val ws = session ?: throw ChromeIOException("WebSocket session is not open", isOpen = false)
+        try {
+            tracer?.trace("▶ Send {}", shortenMessage(message))
+            ws.send(Frame.Text(message))
+        } catch (e: CancellationException) {
+            throw ChromeIOException("Failed to send message (cancelled)", e, isOpen)
+        } catch (e: Exception) {
+            throw ChromeIOException("Failed to send message", e, isOpen)
+        }
+    }
+
     override fun sendAsync(message: String): Future<Void> {
         meterRequests.mark()
         val future = CompletableFuture<Void>()

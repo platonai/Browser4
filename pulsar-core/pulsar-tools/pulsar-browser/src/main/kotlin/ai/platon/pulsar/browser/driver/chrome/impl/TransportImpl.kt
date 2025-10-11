@@ -99,7 +99,15 @@ class TransportImpl : Transport {
             throw ChromeIOException("Failed to send message", e, isOpen)
         }
     }
-    
+
+    /**
+     * Reserved for test purposes only.
+     * */
+    @Throws(ChromeIOException::class)
+    override suspend fun sendDeferred(message: String) {
+        return send(message)
+    }
+
     @Throws(ChromeIOException::class)
     override fun sendAsync(message: String): Future<Void> {
         meterRequests.mark()

@@ -111,6 +111,22 @@ abstract class ChromeDevToolsImpl(
         method: MethodInvocation
     ): T? {
         try {
+            return runBlocking { invoke0Deferred(returnProperty, clazz, returnTypeClasses, method) }
+        } catch (e: InterruptedException) {
+            logger.warn("Interrupted while invoke ${method.method}")
+            Thread.currentThread().interrupt()
+            return null
+        }
+    }
+
+    @Throws(ChromeIOException::class, ChromeRPCException::class)
+    fun <T> invokeLegacy(
+        returnProperty: String?,
+        clazz: Class<T>,
+        returnTypeClasses: Array<Class<out Any>>?,
+        method: MethodInvocation
+    ): T? {
+        try {
             return invoke0(returnProperty, clazz, returnTypeClasses, method)
         } catch (e: InterruptedException) {
             logger.warn("Interrupted while invoke ${method.method}")
@@ -118,7 +134,7 @@ abstract class ChromeDevToolsImpl(
             return null
         }
     }
-    
+
     @Throws(ChromeIOException::class, InterruptedException::class, ChromeRPCException::class)
     private fun <T> invoke0(
         returnProperty: String?,
@@ -146,7 +162,35 @@ abstract class ChromeDevToolsImpl(
             else -> dispatcher.deserialize(clazz, future.result)
         }
     }
-    
+
+    @Throws(ChromeIOException::class, InterruptedException::class, ChromeRPCException::class)
+    private suspend fun <T> invoke0Deferred(
+        returnProperty: String?,
+        clazz: Class<T>,
+        returnTypeClasses: Array<Class<out Any>>?,
+        method: MethodInvocation
+    ): T? {
+        numInvokes.inc()
+        lastActiveTime = Instant.now()
+
+        // blocks the current thread which is optimized by Kotlin since this method is running within
+        // withContext(Dispatchers.IO), so it's OK for the client code to run efficiently.
+        val (future, responded) = invoke1Deferred(returnProperty, method)
+
+        if (!responded) {
+            val methodName = method.method
+            val readTimeout = config.readTimeout
+            throw ChromeRPCTimeoutException("Response timeout $methodName | #${numInvokes.count}, ($readTimeout)")
+        }
+
+        return when {
+            !future.isSuccess -> handleFailedFurther(future).let { throw ChromeRPCException(it.first.code, it.second) }
+            Void.TYPE == clazz -> null
+            returnTypeClasses != null -> dispatcher.deserialize(returnTypeClasses, clazz, future.result)
+            else -> dispatcher.deserialize(clazz, future.result)
+        }
+    }
+
     @Throws(ChromeIOException::class, InterruptedException::class)
     private fun invoke1(
         returnProperty: String?,
@@ -175,6 +219,28 @@ abstract class ChromeDevToolsImpl(
         val responded = future.await(config.readTimeout)
         dispatcher.unsubscribe(method.id)
         
+        return future to responded
+    }
+
+    @Throws(ChromeIOException::class, InterruptedException::class)
+    private suspend fun invoke1Deferred(
+        returnProperty: String?,
+        method: MethodInvocation
+    ): Pair<InvocationFuture, Boolean> {
+        val future = dispatcher.subscribe(method.id, returnProperty)
+        val message = dispatcher.serialize(method)
+
+        // See https://github.com/hardkoded/puppeteer-sharp/issues/796 to understand why we need handle Target methods
+        // differently.
+        if (method.method.startsWith("Target.")) {
+            browserTransport.sendDeferred(message)
+        } else {
+            pageTransport.sendDeferred(message)
+        }
+
+        val responded = future.await(config.readTimeout)
+        dispatcher.unsubscribe(method.id)
+
         return future to responded
     }
 

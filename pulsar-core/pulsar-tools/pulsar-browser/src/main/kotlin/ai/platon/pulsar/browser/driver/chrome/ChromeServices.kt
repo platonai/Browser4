@@ -18,7 +18,10 @@ interface Transport: AutoCloseable {
     
     @Throws(ChromeIOException::class)
     fun send(message: String)
-    
+
+    @Throws(ChromeIOException::class)
+    suspend fun sendDeferred(message: String)
+
     @Throws(ChromeIOException::class)
     fun sendAsync(message: String): Future<Void>
     
