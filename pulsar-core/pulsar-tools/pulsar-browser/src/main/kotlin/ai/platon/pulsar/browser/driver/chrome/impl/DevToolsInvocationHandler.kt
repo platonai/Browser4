@@ -13,10 +13,22 @@ import com.github.kklisura.cdt.protocol.v2023.support.types.EventListener
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
 import java.lang.reflect.ParameterizedType
-import java.util.*
 import java.util.concurrent.atomic.AtomicLong
 
-class DevToolsInvocationHandler: InvocationHandler {
+interface KInvocationHandler: InvocationHandler {
+    suspend fun invokeDeferred(unused: Any, method: Method, args: Array<Any>?): Any?
+
+    override fun invoke(proxy: Any, method: Method, args: Array<Any>?): Any?
+}
+
+class InvokeParam<T>(
+    val returnProperty: String?,
+    val clazz: Class<T>,
+    val returnTypeClasses: Array<Class<out Any>>?,
+    val method: MethodInvocation
+)
+
+class DevToolsInvocationHandler: KInvocationHandler {
     companion object {
         private const val EVENT_LISTENER_PREFIX = "on"
         private val ID_SUPPLIER = AtomicLong(1L)
@@ -28,12 +40,9 @@ class DevToolsInvocationHandler: InvocationHandler {
      * Notice: args must be nullable, since methods can have no arguments
      * */
     @Throws(ChromeIOException::class, ChromeRPCException::class)
-    override fun invoke(unused: Any, method: Method, args: Array<Any>?): Any? {
+    override fun invoke(target: Any, method: Method, args: Array<Any>?): Any? {
         if (isEventSubscription(method)) {
-            val domainName = method.declaringClass.simpleName
-            val eventName: String = getEventName(method)
-            val eventHandlerType: Class<*> = getEventHandlerType(method)
-            return devTools.addEventListener(domainName, eventName, args!![0] as EventHandler<Any>, eventHandlerType)
+            return handleEventSubscription(target, method, args)
         }
 
         val returnType = method.returnType
@@ -41,7 +50,30 @@ class DevToolsInvocationHandler: InvocationHandler {
                 ?.value?.map { it.java }?.toTypedArray()
         val returnProperty = method.getAnnotation(Returns::class.java)?.value
         val methodInvocation = createMethodInvocation(method, args)
+
         return devTools.invoke(returnProperty, returnType, returnTypeClasses, methodInvocation)
+    }
+
+    @Throws(ChromeIOException::class, ChromeRPCException::class)
+    override suspend fun invokeDeferred(target: Any, method: Method, args: Array<Any>?): Any? {
+        if (isEventSubscription(method)) {
+            return handleEventSubscription(target, method, args)
+        }
+
+        val returnType = method.returnType
+        val returnTypeClasses = method.getAnnotation(ReturnTypeParameter::class.java)
+            ?.value?.map { it.java }?.toTypedArray()
+        val returnProperty = method.getAnnotation(Returns::class.java)?.value
+        val methodInvocation = createMethodInvocation(method, args)
+
+        return devTools.invokeDeferred(returnProperty, returnType, returnTypeClasses, methodInvocation)
+    }
+
+    private fun handleEventSubscription(target: Any, method: Method, args: Array<Any>?): EventListener {
+        val domainName = method.declaringClass.simpleName
+        val eventName: String = getEventName(method)
+        val eventHandlerType: Class<*> = getEventHandlerType(method)
+        return devTools.addEventListener(domainName, eventName, args!![0] as EventHandler<Any>, eventHandlerType)
     }
 
     private fun createMethodInvocation(method: Method, args: Array<Any>? = null): MethodInvocation {

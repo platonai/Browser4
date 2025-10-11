@@ -104,14 +104,14 @@ abstract class ChromeDevToolsImpl(
      * @return The result of the invocation.
      * */
     @Throws(ChromeIOException::class, ChromeRPCException::class)
-    override operator fun <T> invoke(
+    override fun <T> invoke(
         returnProperty: String?,
         clazz: Class<T>,
         returnTypeClasses: Array<Class<out Any>>?,
         method: MethodInvocation
     ): T? {
         try {
-            return runBlocking { invoke0Deferred(returnProperty, clazz, returnTypeClasses, method) }
+            return invoke0(returnProperty, clazz, returnTypeClasses, method)
         } catch (e: InterruptedException) {
             logger.warn("Interrupted while invoke ${method.method}")
             Thread.currentThread().interrupt()
@@ -120,14 +120,14 @@ abstract class ChromeDevToolsImpl(
     }
 
     @Throws(ChromeIOException::class, ChromeRPCException::class)
-    fun <T> invokeLegacy(
+    override suspend fun <T> invokeDeferred(
         returnProperty: String?,
         clazz: Class<T>,
         returnTypeClasses: Array<Class<out Any>>?,
         method: MethodInvocation
     ): T? {
         try {
-            return invoke0(returnProperty, clazz, returnTypeClasses, method)
+            return invoke0Deferred(returnProperty, clazz, returnTypeClasses, method)
         } catch (e: InterruptedException) {
             logger.warn("Interrupted while invoke ${method.method}")
             Thread.currentThread().interrupt()

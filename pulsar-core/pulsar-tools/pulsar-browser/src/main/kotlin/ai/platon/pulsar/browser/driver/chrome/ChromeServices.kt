@@ -70,13 +70,21 @@ interface RemoteDevTools: ChromeDevTools, AutoCloseable {
     val isOpen: Boolean
     
     @Throws(ChromeIOException::class, ChromeRPCException::class)
-    operator fun <T> invoke(
+    fun <T> invoke(
             returnProperty: String?,
             clazz: Class<T>,
             returnTypeClasses: Array<Class<out Any>>?,
             method: MethodInvocation
     ): T?
-    
+
+    @Throws(ChromeIOException::class, ChromeRPCException::class)
+    suspend fun <T> invokeDeferred(
+        returnProperty: String?,
+        clazz: Class<T>,
+        returnTypeClasses: Array<Class<out Any>>?,
+        method: MethodInvocation
+    ): T?
+
     @Throws(InterruptedException::class)
     fun awaitTermination()
 

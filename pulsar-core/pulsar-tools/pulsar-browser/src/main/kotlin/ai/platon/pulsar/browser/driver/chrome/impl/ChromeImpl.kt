@@ -136,8 +136,14 @@ class ChromeImpl(
         // Create invocation handler
         val commandHandler = DevToolsInvocationHandler()
         val commands: MutableMap<Method, Any> = ConcurrentHashMap()
-        val invocationHandler = InvocationHandler { _, method, _ ->
-            commands.computeIfAbsent(method) { ProxyClasses.createProxy(method.returnType, commandHandler) }
+        val invocationHandler = object: KInvocationHandler {
+            override suspend fun invokeDeferred(unused: Any, method: Method, args: Array<Any>?): Any? {
+                return commands.computeIfAbsent(method) { ProxyClasses.createProxy(method.returnType, commandHandler) }
+            }
+
+            override fun invoke(proxy: Any, method: Method, args: Array<Any>?): Any? {
+                return commands.computeIfAbsent(method) { ProxyClasses.createProxy(method.returnType, commandHandler) }
+            }
         }
         
         val browserUrl = version.webSocketDebuggerUrl
@@ -148,16 +154,39 @@ class ChromeImpl(
         val debuggerUrl = tab.webSocketDebuggerUrl
             ?: throw ChromeIOException("Invalid web socket url to page")
         val pageTransport = wss.createWebSocketService(debuggerUrl)
-        
-        // Create concrete dev tools instance from interface
-        return ProxyClasses.createProxyFromAbstract(
-            ChromeDevToolsImpl::class.java,
-            arrayOf(Transport::class.java, Transport::class.java, DevToolsConfig::class.java),
-            arrayOf(browserTransport, pageTransport, config),
-            invocationHandler
-        ).also { commandHandler.devTools = it }
+
+        val devTools: RemoteDevTools = createRemoteDevToolsProxy(browserTransport, pageTransport, config, invocationHandler)
+
+        commandHandler.devTools = devTools
+
+        return devTools
     }
-    
+
+    private fun createRemoteDevToolsProxy(
+        browserTransport: Transport, pageTransport: Transport, config: DevToolsConfig,
+        invocationHandler: KInvocationHandler, supportCoroutine: Boolean = true
+    ): RemoteDevTools {
+        // Create concrete dev tools instance from interface
+
+        val devTools: RemoteDevTools = if (supportCoroutine) {
+            ProxyClasses.createCoroutineSupportedProxyFromAbstract(
+                ChromeDevToolsImpl::class.java,
+                arrayOf(Transport::class.java, Transport::class.java, DevToolsConfig::class.java),
+                arrayOf(browserTransport, pageTransport, config),
+                invocationHandler
+            )
+        } else {
+            ProxyClasses.createProxyFromAbstract(
+                ChromeDevToolsImpl::class.java,
+                arrayOf(Transport::class.java, Transport::class.java, DevToolsConfig::class.java),
+                arrayOf(browserTransport, pageTransport, config),
+                invocationHandler
+            )
+        }
+
+        return devTools
+    }
+
     /**
      * Sends a request and parses json response as type T.
      *
