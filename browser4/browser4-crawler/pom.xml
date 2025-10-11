@@ -15,6 +15,7 @@
         <groupId>ai.platon.pulsar</groupId>
         <artifactId>pulsar</artifactId>
         <version>4.0.0.ktor-SNAPSHOT</version>
+        <relativePath>../../pom.xml</relativePath>
     </parent>
 
     <artifactId>browser4-crawler</artifactId>
