@@ -6,9 +6,11 @@ import ai.platon.pulsar.browser.driver.chrome.common.LauncherOptions
 import ai.platon.pulsar.common.browser.BrowserFiles
 import ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper
 import com.google.gson.Gson
+import org.junit.jupiter.api.Tag
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
+@Tag("SkippableLowerLevelTest")
 class TestChromeImplLauncher {
     private val USER_DATA_DIR_REGEX = ".+pulsar-.+/context/cx.+".toRegex()
 
@@ -58,6 +60,8 @@ class TestChromeImplLauncher {
             println(prettyPulsarObjectMapper().writeValueAsString(tab))
             println(prettyPulsarObjectMapper().writeValueAsString(chrome.version))
             println(versionString)
+
+            
         }
     }
 }

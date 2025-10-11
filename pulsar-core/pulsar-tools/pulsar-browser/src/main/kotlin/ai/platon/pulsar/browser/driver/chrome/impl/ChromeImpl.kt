@@ -58,12 +58,8 @@ class ChromeImpl(
      * */
     override val version get() = _version.value
     
-    constructor(host: String, port: Int) : this(host, port, object : WebSocketServiceFactory {
-        override fun createWebSocketService(wsUrl: String): Transport {
-            return TransportImpl.create(URI.create(wsUrl))
-        }
-    })
-    
+    constructor(host: String, port: Int) : this(host, port, WebSocketFactories.default())
+
     constructor(port: Int) : this(LOCALHOST, port)
     
     @Throws(ChromeIOException::class)
