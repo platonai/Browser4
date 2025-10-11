@@ -3,6 +3,7 @@ package ai.platon.pulsar.browser.driver.chrome.util
 import ai.platon.pulsar.browser.driver.chrome.impl.KInvocationHandler
 import javassist.Modifier
 import javassist.util.proxy.ProxyFactory
+import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Proxy
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED
@@ -34,7 +35,7 @@ object ProxyClasses {
      */
     @Throws(Exception::class)
     fun <T> createProxyFromAbstract(
-        clazz: Class<T>, paramTypes: Array<Class<*>>, args: Array<Any>? = null, invocationHandler: KInvocationHandler
+        clazz: Class<T>, paramTypes: Array<Class<*>>, args: Array<Any>? = null, invocationHandler: InvocationHandler
     ): T {
         try {
             val factory = ProxyFactory()
@@ -55,9 +56,10 @@ object ProxyClasses {
      */
     @Throws(Exception::class)
     fun <T> createCoroutineSupportedProxyFromAbstract(
-        clazz: Class<T>, paramTypes: Array<Class<*>>, args: Array<Any>? = null, invocationHandler: KInvocationHandler
+        clazz: Class<T>, paramTypes: Array<Class<*>>, args: Array<Any>? = null,
+        invocationHandler: KInvocationHandler
     ): T {
-        val bridgeHandler = java.lang.reflect.InvocationHandler { proxy, method, methodArgs ->
+        val bridgeHandler = InvocationHandler { proxy, method, methodArgs ->
             when (method.name) {
                 "equals" -> methodArgs?.getOrNull(0)?.let { proxy === it } ?: false
                 "hashCode" -> System.identityHashCode(proxy)
@@ -88,16 +90,6 @@ object ProxyClasses {
             }
         }
 
-        try {
-            val factory = ProxyFactory()
-            factory.superclass = clazz
-            factory.setFilter { Modifier.isAbstract(it.modifiers) }
-
-            return factory.create(paramTypes, args) { o, method, _, objects ->
-                bridgeHandler.invoke(o, method, objects)
-            } as T
-        } catch (e: Exception) {
-            throw RuntimeException("Failed creating proxy from abstract class | ${clazz.name}", e)
-        }
+        return createProxyFromAbstract(clazz, paramTypes, args, bridgeHandler)
     }
 }
