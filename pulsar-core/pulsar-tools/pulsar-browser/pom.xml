@@ -4,7 +4,7 @@
     <parent>
         <groupId>ai.platon.pulsar</groupId>
         <artifactId>pulsar</artifactId>
-        <version>4.0.0-SNAPSHOT</version>
+        <version>4.0.0.ktor-SNAPSHOT</version>
         <relativePath>../../pom.xml</relativePath>
     </parent>
 
@@ -32,6 +32,21 @@
             <groupId>org.glassfish.tyrus</groupId>
             <artifactId>tyrus-container-grizzly-client</artifactId>
             <version>${tyrus.version}</version>
+        </dependency>
+
+        <!-- Ktor client for coroutine-friendly WebSocket transport -->
+        <dependency>
+            <groupId>io.ktor</groupId>
+            <artifactId>ktor-client-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.ktor</groupId>
+            <artifactId>ktor-client-cio</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.ktor</groupId>
+            <artifactId>ktor-client-websockets</artifactId>
+            <version>${ktor.version}</version>
         </dependency>
 
         <!-- https://mvnrepository.com/artifact/org.javassist/javassist -->
