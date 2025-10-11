@@ -59,7 +59,7 @@ interface RemoteChrome: AutoCloseable {
     fun closeTab(tab: ChromeTab)
     
     @Throws(ChromeServiceException::class)
-    fun createDevTools(tab: ChromeTab, config: DevToolsConfig): RemoteDevTools
+    fun createDevTools(tab: ChromeTab, config: DevToolsConfig = DevToolsConfig()): RemoteDevTools
 }
 
 interface RemoteDevTools: ChromeDevTools, AutoCloseable {

@@ -1,6 +1,7 @@
 package ai.platon.pulsar.browser.driver
 
 import ai.platon.pulsar.browser.driver.chrome.ChromeLauncher
+import ai.platon.pulsar.browser.driver.chrome.DevToolsConfig
 import ai.platon.pulsar.browser.driver.chrome.common.ChromeOptions
 import ai.platon.pulsar.browser.driver.chrome.common.LauncherOptions
 import ai.platon.pulsar.common.browser.BrowserFiles
@@ -61,7 +62,9 @@ class TestChromeImplLauncher {
             println(prettyPulsarObjectMapper().writeValueAsString(chrome.version))
             println(versionString)
 
-            
+            val devTools = chrome.createDevTools(tab)
+            devTools.page.enable()
+            devTools.page.navigate("https://www.xiaohongshu.com/")
         }
     }
 }

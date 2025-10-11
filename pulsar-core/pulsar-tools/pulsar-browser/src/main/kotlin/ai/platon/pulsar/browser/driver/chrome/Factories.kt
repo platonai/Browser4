@@ -58,7 +58,7 @@ class KtorWebSocketServiceFactory : WebSocketServiceFactory {
 
 object WebSocketFactories {
     const val WS_ENGINE_PROPERTY = "ai.platon.pulsar.browser.driver.chrome.wsEngine" // values: tyrus | ktor
-    private const val DEFAULT_ENGINE = "tyrus"
+    private const val DEFAULT_ENGINE = "ktor"
 
     /**
      * Select default WebSocket engine via system property. Example:
