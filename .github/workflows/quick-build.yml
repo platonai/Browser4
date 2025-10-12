@@ -35,7 +35,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  ci-build:
+  quick-build:
     runs-on: ubuntu-latest
     env:
       NETWORK_NAME: browser4_backend
