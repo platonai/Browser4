@@ -23,6 +23,7 @@ import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.code
 import kotlin.reflect.KClass
 
 class CachedDevToolsInvocationHandlerProxies : KInvocationHandler {
@@ -82,71 +83,8 @@ abstract class ChromeDevToolsImpl(
         pageTransport.addMessageHandler(dispatcher)
     }
 
-    /**
-     * Invokes a remote method and returns the result.
-     *
-     * NOTE: this method blocks in java proxy objects.
-     *
-     * For example, when we call `devTools.page.navigate(url)`, the framework translates the function call to `invoke`
-     * method, but `devTools.page.navigate(url)` is not a suspend function, so `invoke` has to be wrappered in
-     * `runBlocking` method.
-     *
-     * @param returnProperty The property to return from the response.
-     * @param clazz The class of the return type.
-     * @param returnTypeClasses The classes of the return type.
-     * @param method The method to invoke.
-     * @param <T> The return type.
-     * @return The result of the invocation.
-     * */
-    @Throws(ChromeRPCException::class)
-    override suspend fun <T> invoke(
-        clazz: Class<T>,
-        returnProperty: String?,
-        returnTypeClasses: Array<Class<out Any>>?,
-        method: MethodInvocation
-    ): T? {
-        // Send the request and await result in a coroutine-friendly way
-        val message = dispatcher.serialize(method)
-        // Non-blocking
-        val rpcResult = sendAndReceive(method.id, method.method, returnProperty, message)
-
-        if (rpcResult == null) {
-            val methodName = method.method
-            val readTimeout = config.readTimeout
-            throw ChromeRPCTimeoutException("Response timeout $methodName | #${numInvokes.count}, ($readTimeout)")
-        }
-
-        return when {
-            !rpcResult.isSuccess -> handleFailedFurther(rpcResult.result).let {
-                throw ChromeRPCException(
-                    it.first.code,
-                    it.second
-                )
-            }
-
-            Void.TYPE == clazz -> null
-            returnTypeClasses != null -> dispatcher.deserialize(returnTypeClasses, clazz, rpcResult.result)
-            else -> dispatcher.deserialize(clazz, rpcResult.result)
-        }
-    }
-
     @Throws(ChromeIOException::class, ChromeRPCException::class)
-    override suspend fun invoke(method: String, params: Map<String, Any?>?): RpcResult? {
-        numInvokes.inc()
-        lastActiveTime = Instant.now()
-
-        val invocation = DevToolsInvocationHandler.createMethodInvocation(method, params)
-
-        // Non-blocking
-        val message = dispatcher.serialize(invocation.id, invocation.method, invocation.params, null)
-
-        val rpcResult: RpcResult? = sendAndReceive(invocation.id, method, null, message)
-
-        return rpcResult
-    }
-
-    @Throws(ChromeIOException::class, ChromeRPCException::class)
-    override suspend fun <T : Any> invoke(
+    override suspend operator fun <T : Any> invoke(
         method: String, params: Map<String, Any?>?, returnClass: KClass<T>, returnProperty: String?
     ): T? {
         val invocation = DevToolsInvocationHandler.createMethodInvocation(method, params)
@@ -158,6 +96,66 @@ abstract class ChromeDevToolsImpl(
         val jsonNode = rpcResult.result ?: return null
 
         return dispatcher.deserialize(returnClass.java, jsonNode)
+    }
+
+    /**
+     * Invokes a remote method and returns the result.
+     *
+     * This method is designed to be non-blocking, but it is often called in blocking methods
+     * from Java proxy objects. For example, when calling `devTools.page.navigate(url)`, the
+     * framework translates the function call to this `invoke` method. Since `devTools.page.navigate(url)`
+     * is not a suspend function, this method is wrapped in `runBlocking` to ensure compatibility.
+     *
+     * @param clazz The class of the return type. This is used to deserialize the result into the expected type.
+     * @param returnProperty The property to return from the response. This is optional and can be null.
+     * @param returnTypeClasses An array of classes representing the return type. This is used for deserialization
+     *                          when the return type involves generics or complex types.
+     * @param method The `MethodInvocation` object containing details about the method to invoke, such as its ID,
+     *               name, and parameters.
+     * @param <T> The generic return type of the method.
+     * @return The result of the invocation, deserialized into the specified type `T`, or null if the result is not available.
+     * @throws ChromeRPCException If the remote procedure call fails or the result indicates an error.
+     * @throws ChromeRPCTimeoutException If the response times out based on the configured read timeout.
+     */
+    @Throws(ChromeRPCException::class)
+    override suspend fun <T> invoke(
+        clazz: Class<T>,
+        returnProperty: String?,
+        returnTypeClasses: Array<Class<out Any>>?,
+        method: MethodInvocation
+    ): T? {
+        // Serialize the method invocation into a message to be sent to the remote server.
+        val message = dispatcher.serialize(method)
+
+        // Send the request and await the result in a coroutine-friendly way.
+        val rpcResult = sendAndReceive(method.id, method.method, returnProperty, message)
+
+        // If no result is received within the timeout, throw a timeout exception.
+        if (rpcResult == null) {
+            val methodName = method.method
+            val readTimeout = config.readTimeout
+            throw ChromeRPCTimeoutException("Response timeout $methodName | #${numInvokes.count}, ($readTimeout)")
+        }
+
+        // Handle the result based on its success status and the expected return type.
+        return when {
+            // If the result indicates failure, handle the error and throw an exception.
+            !rpcResult.isSuccess -> handleFailedFurther(rpcResult.result).let {
+                throw ChromeRPCException(
+                    it.first.code,
+                    it.second
+                )
+            }
+
+            // If the expected return type is `Void`, return null.
+            Void.TYPE == clazz -> null
+
+            // If returnTypeClasses is provided, use it for deserialization.
+            returnTypeClasses != null -> dispatcher.deserialize(returnTypeClasses, clazz, rpcResult.result)
+
+            // Otherwise, deserialize the result using the provided class type.
+            else -> dispatcher.deserialize(clazz, rpcResult.result)
+        }
     }
 
     @Throws(ChromeIOException::class, InterruptedException::class)

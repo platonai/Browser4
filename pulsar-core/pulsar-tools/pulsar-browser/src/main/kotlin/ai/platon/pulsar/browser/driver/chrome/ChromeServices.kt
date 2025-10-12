@@ -1,6 +1,5 @@
 package ai.platon.pulsar.browser.driver.chrome
 
-import ai.platon.pulsar.browser.driver.chrome.impl.RpcResult
 import ai.platon.pulsar.browser.driver.chrome.util.ChromeIOException
 import ai.platon.pulsar.browser.driver.chrome.util.ChromeServiceException
 import com.github.kklisura.cdt.protocol.v2023.ChromeDevTools
@@ -64,9 +63,7 @@ interface RemoteDevTools : ChromeDevTools, AutoCloseable {
         method: MethodInvocation
     ): T?
 
-    suspend fun invoke(method: String, params: Map<String, Any?>?): RpcResult?
-
-    suspend fun <T : Any> invoke(
+    suspend operator fun <T : Any> invoke(
         method: String,
         params: Map<String, Any?>?,
         returnClass: KClass<T>,
@@ -86,6 +83,6 @@ interface RemoteDevTools : ChromeDevTools, AutoCloseable {
     fun removeEventListener(eventListener: EventListener)
 }
 
-suspend inline fun <reified T : Any> RemoteDevTools.call(
+suspend inline operator fun <reified T : Any> RemoteDevTools.invoke(
     method: String, params: Map<String, Any?>?, returnProperty: String? = null
 ): T? = invoke(method, params, T::class, returnProperty)

@@ -67,11 +67,6 @@ class ChromeImplLauncherTest {
             devTools.page.enable()
             devTools.page.navigate("https://www.xiaohongshu.com/")
 
-            runBlocking {
-                val jsonNode = devTools.invoke("Page.navigate", mapOf("url" to "https://www.aliyun.com"))
-                println(jsonNode)
-            }
-
             sleepSeconds(2)
         }
     }

@@ -52,7 +52,7 @@ class PageHandler(
         val params =
             mapOf("url" to url, "referrer" to referrer, "transitionType" to transitionType, "frameId" to frameId)
 
-        return devTools.call("Page.navigate", params)
+        return devTools.invoke("Page.navigate", params)
     }
 
     /**
