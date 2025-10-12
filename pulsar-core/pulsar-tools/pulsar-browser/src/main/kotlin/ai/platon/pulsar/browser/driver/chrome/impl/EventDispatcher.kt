@@ -20,6 +20,7 @@ import java.util.concurrent.ConcurrentSkipListSet
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.function.Consumer
 
 /**
@@ -78,6 +79,10 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
         val OBJECT_MAPPER = ObjectMapper()
             .setSerializationInclusion(JsonInclude.Include.NON_NULL)
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+
+        private val ID_SUPPLIER = AtomicInteger(0)
+
+        fun nextId() = ID_SUPPLIER.incrementAndGet()
     }
     
     private val logger = getLogger(this)
@@ -95,13 +100,23 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
     
     @Throws(JsonProcessingException::class)
     fun serialize(message: Any): String = OBJECT_MAPPER.writeValueAsString(message)
-    
+
+    @Throws(JsonProcessingException::class)
+    fun serialize(method: String, params: Map<String, String?>?, sessionId: String?): String {
+        return OBJECT_MAPPER.writeValueAsString(mapOf(
+            "id" to nextId(),
+            "method" to method,
+            "params" to params,
+            "sessionId" to sessionId
+        ))
+    }
+
     @Throws(IOException::class)
     fun <T> deserialize(classParameters: Array<Class<*>>, parameterizedClazz: Class<T>, jsonNode: JsonNode?): T {
         if (jsonNode == null) {
             throw ChromeRPCException("Failed converting null response to clazz $parameterizedClazz")
         }
-        
+
         val typeFactory: TypeFactory = OBJECT_MAPPER.typeFactory
         var javaType: JavaType? = null
         if (classParameters.size > 1) {
@@ -119,7 +134,13 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
         
         return OBJECT_MAPPER.readerFor(javaType).readValue(jsonNode)
     }
-    
+
+    /**
+     * A typical Server Side Event:
+     * ```json
+     * {"method":"Page.frameStartedLoading","params":{"frameId":"53F48CA08C50A3A72887CB9F15B293D5"}}
+     * ```
+     * */
     @Throws(IOException::class, ChromeRPCException::class)
     fun <T> deserialize(clazz: Class<T>, jsonNode: JsonNode?): T {
         if (jsonNode == null) {
@@ -171,7 +192,42 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
     fun removeAllListeners() {
         eventListeners.clear()
     }
-    
+
+    @Throws(ChromeRPCException::class, IOException::class)
+    fun parse(message: String, returnProperty: String? = null): Pair<Boolean, JsonNode?> {
+        tracer?.trace("◀ Accept I {}", StringUtils.abbreviateMiddle(message, "...", 500))
+
+        ChromeDevToolsImpl.numAccepts.inc()
+        val jsonNode = OBJECT_MAPPER.readTree(message)
+        val idNode = jsonNode.get(ID_PROPERTY)
+        if (idNode != null) {
+            val id = idNode.asLong()
+
+            var resultNode = jsonNode.get(RESULT_PROPERTY)
+            val errorNode = jsonNode.get(ERROR_PROPERTY)
+            if (errorNode != null) {
+                // future.signal(false, errorNode)
+                return false to errorNode
+            } else {
+                if (returnProperty != null) {
+                    if (resultNode != null) {
+                        resultNode = resultNode.get(returnProperty)
+                    }
+                }
+
+                return true to resultNode
+            }
+        } else {
+            val methodNode = jsonNode.get(METHOD_PROPERTY)
+            val paramsNode = jsonNode.get(PARAMS_PROPERTY)
+            if (methodNode != null) {
+                handleEventAsync(methodNode.asText(), paramsNode)
+            }
+
+            return true to null
+        }
+    }
+
     @Throws(ChromeRPCException::class, IOException::class)
     override fun accept(message: String) {
         tracer?.trace("◀ Accept {}", StringUtils.abbreviateMiddle(message, "...", 500))
@@ -208,7 +264,7 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
                 val methodNode = jsonNode.get(METHOD_PROPERTY)
                 val paramsNode = jsonNode.get(PARAMS_PROPERTY)
                 if (methodNode != null) {
-                    handleEvent(methodNode.asText(), paramsNode)
+                    handleEventAsync(methodNode.asText(), paramsNode)
                 }
             }
         } catch (e: IOException) {
@@ -226,7 +282,7 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
         }
     }
 
-    private fun handleEvent(name: String, params: JsonNode) {
+    private fun handleEventAsync(name: String, params: JsonNode) {
         val listeners = eventListeners[name] ?: return
 
         // make a copy
@@ -236,6 +292,7 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
             return
         }
 
+        // Handle event in a separate coroutine
         eventDispatcherScope.launch {
             handleEvent0(params, unmodifiedListeners)
         }
@@ -245,6 +302,11 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
      * Handles the event by deserializing the params and calling the event handler.
      *
      * Do not throw any exception, all exceptions are caught and logged.
+     *
+     * A typical Server Side Event:
+     * ```json
+     * {"method":"Page.frameStartedLoading","params":{"frameId":"53F48CA08C50A3A72887CB9F15B293D5"}}
+     * ```
      *
      * @param params the params node
      * @param unmodifiedListeners the listeners
@@ -260,6 +322,12 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
         }
     }
 
+    /**
+     * A typical Server Side Event:
+     * ```json
+     * {"method":"Page.frameStartedLoading","params":{"frameId":"53F48CA08C50A3A72887CB9F15B293D5"}}
+     * ```
+     * */
     @Throws(ChromeRPCException::class, IOException::class)
     private fun handleEvent1(params: JsonNode, unmodifiedListeners: Iterable<DevToolsEventListener>) {
         var event: Any? = null
@@ -267,16 +335,14 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
             if (event == null) {
                 event = deserialize(listener.paramType, params)
             }
-            
-            if (event != null) {
-                try {
-                    listener.handler.onEvent(event)
-                } catch (e: Exception) {
-                    logger.warn("Failed to handle event, rethrow ChromeRPCException. Enable debug logging to see the stack trace | {}", e.message)
-                    logger.debug("Failed to handle event", e)
-                    // Let the exception throw again, they might be caught by RobustRPC, or somewhere else
-                    throw ChromeRPCException("Failed to handle event | ${listener.key}, ${listener.paramType}", e)
-                }
+
+            try {
+                listener.handler.onEvent(event)
+            } catch (e: Exception) {
+                logger.warn("Failed to handle event, rethrow ChromeRPCException. Enable debug logging to see the stack trace | {}", e.message)
+                logger.debug("Failed to handle event", e)
+                // Let the exception throw again, they might be caught by RobustRPC, or somewhere else
+                throw ChromeRPCException("Failed to handle event | ${listener.key}, ${listener.paramType}", e)
             }
         }
     }

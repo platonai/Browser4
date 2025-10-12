@@ -16,6 +16,7 @@ import io.ktor.websocket.*
 import kotlinx.coroutines.*
 import java.io.IOException
 import java.net.URI
+import java.time.Duration
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Future
 import java.util.concurrent.atomic.AtomicBoolean
@@ -35,7 +36,7 @@ class KtorTransport : Transport {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private var client: HttpClient? = null
-    private var session: io.ktor.client.plugins.websocket.DefaultClientWebSocketSession? = null
+    private var session: DefaultClientWebSocketSession? = null
     private val messageConsumer = AtomicReference<Consumer<String>?>()
 
     private val metricsPrefix = "c.i.WebSocketClient"
@@ -94,7 +95,7 @@ class KtorTransport : Transport {
         meterRequests.mark()
         val ws = session ?: throw ChromeIOException("WebSocket session is not open", isOpen = false)
         try {
-            tracer?.trace("▶ Send {}", shortenMessage(message))
+            tracer?.trace("▶ Send (Blocking) {}", shortenMessage(message))
             runBlocking(Dispatchers.IO) {
                 ws.send(Frame.Text(message))
             }
@@ -105,12 +106,17 @@ class KtorTransport : Transport {
         }
     }
 
-    override suspend fun sendDeferred(message: String) {
+    override suspend fun sendAndReceiveNext(message: String): String? {
         meterRequests.mark()
         val ws = session ?: throw ChromeIOException("WebSocket session is not open", isOpen = false)
         try {
             tracer?.trace("▶ Send {}", shortenMessage(message))
             ws.send(Frame.Text(message))
+
+            val timeoutMillis = Duration.ofSeconds(10).toMillis()
+            val frame = withTimeout(timeoutMillis) { ws.incoming.receive() }
+
+            return (frame as? Frame.Text)?.readText()
         } catch (e: CancellationException) {
             throw ChromeIOException("Failed to send message (cancelled)", e, isOpen)
         } catch (e: Exception) {
@@ -125,13 +131,19 @@ class KtorTransport : Transport {
             future.completeExceptionally(ChromeIOException("WebSocket session is not open", isOpen = false))
             return future
         }
-        tracer?.trace("▶ Send {}", shortenMessage(message))
+        tracer?.trace("▶ Send (async) {}", shortenMessage(message))
         scope.launch {
             try {
                 ws.send(Frame.Text(message))
                 future.complete(null)
             } catch (e: Exception) {
-                future.completeExceptionally(ChromeIOException("Failed to send message, caused by ${e.message}", e, isOpen))
+                future.completeExceptionally(
+                    ChromeIOException(
+                        "Failed to send message, caused by ${e.message}",
+                        e,
+                        isOpen
+                    )
+                )
             }
         }
         return future

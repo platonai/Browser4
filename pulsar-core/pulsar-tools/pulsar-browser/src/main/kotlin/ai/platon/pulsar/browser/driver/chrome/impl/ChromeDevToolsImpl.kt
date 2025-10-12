@@ -8,9 +8,9 @@ import ai.platon.pulsar.common.sleepSeconds
 import ai.platon.pulsar.common.warnForClose
 import com.codahale.metrics.Gauge
 import com.codahale.metrics.SharedMetricRegistries
+import com.fasterxml.jackson.databind.JsonNode
 import com.github.kklisura.cdt.protocol.v2023.support.types.EventHandler
 import com.github.kklisura.cdt.protocol.v2023.support.types.EventListener
-import kotlinx.coroutines.*
 import org.slf4j.LoggerFactory
 import java.io.IOException
 import java.time.Duration
@@ -126,13 +126,62 @@ abstract class ChromeDevToolsImpl(
         returnTypeClasses: Array<Class<out Any>>?,
         method: MethodInvocation
     ): T? {
-        try {
-            return invoke0Deferred(returnProperty, clazz, returnTypeClasses, method)
-        } catch (e: InterruptedException) {
-            logger.warn("Interrupted while invoke ${method.method}")
-            Thread.currentThread().interrupt()
-            return null
+        numInvokes.inc()
+        lastActiveTime = Instant.now()
+
+        val rawMessage = dispatcher.serialize(method)
+
+        val received = if (method.method.startsWith("Target.")) {
+            browserTransport.sendAndReceiveNext(rawMessage)
+        } else {
+            pageTransport.sendAndReceiveNext(rawMessage)
         }
+
+        if (received == null) {
+            val methodName = method.method
+            val readTimeout = config.readTimeout
+            throw ChromeRPCTimeoutException("Response timeout $methodName | #${numInvokes.count}, ($readTimeout)")
+        }
+
+        val (isSuccess, jsonNode) = dispatcher.parse(received)
+
+        return when {
+            !isSuccess -> handleFailedFurther(jsonNode).let { throw ChromeRPCException(it.first.code, it.second) }
+            // !future.isSuccess -> handleFailedFurther(future).let { throw ChromeRPCException(it.first.code, it.second) }
+            Void.TYPE == clazz -> null
+            returnTypeClasses != null -> dispatcher.deserialize(returnTypeClasses, clazz, jsonNode)
+            else -> dispatcher.deserialize(clazz, jsonNode)
+        }
+    }
+
+    @Throws(ChromeIOException::class, ChromeRPCException::class)
+    override suspend fun send(method: String, params: Map<String, String?>?, sessionId: String?): String? {
+        numInvokes.inc()
+        lastActiveTime = Instant.now()
+
+        val rawMessage = dispatcher.serialize(method, params, sessionId)
+
+        val received = if (method.startsWith("Target.")) {
+            browserTransport.sendAndReceiveNext(rawMessage)
+        } else {
+            pageTransport.sendAndReceiveNext(rawMessage)
+        }
+
+        if (received == null) {
+            val readTimeout = config.readTimeout
+            throw ChromeRPCTimeoutException("Response timeout $method | #${numInvokes.count}, ($readTimeout)")
+        }
+
+        return received
+
+//        val (isSuccess, jsonNode) = dispatcher.parse(received)
+//
+////        return when {
+////            !isSuccess -> handleFailedFurther(jsonNode).let { throw ChromeRPCException(it.first.code, it.second) }
+////            else -> dispatcher.deserialize(clazz, jsonNode)
+////        }
+//
+//        return jsonNode
     }
 
     @Throws(ChromeIOException::class, InterruptedException::class, ChromeRPCException::class)
@@ -155,34 +204,6 @@ abstract class ChromeDevToolsImpl(
             throw ChromeRPCTimeoutException("Response timeout $methodName | #${numInvokes.count}, ($readTimeout)")
         }
         
-        return when {
-            !future.isSuccess -> handleFailedFurther(future).let { throw ChromeRPCException(it.first.code, it.second) }
-            Void.TYPE == clazz -> null
-            returnTypeClasses != null -> dispatcher.deserialize(returnTypeClasses, clazz, future.result)
-            else -> dispatcher.deserialize(clazz, future.result)
-        }
-    }
-
-    @Throws(ChromeIOException::class, InterruptedException::class, ChromeRPCException::class)
-    private suspend fun <T> invoke0Deferred(
-        returnProperty: String?,
-        clazz: Class<T>,
-        returnTypeClasses: Array<Class<out Any>>?,
-        method: MethodInvocation
-    ): T? {
-        numInvokes.inc()
-        lastActiveTime = Instant.now()
-
-        // blocks the current thread which is optimized by Kotlin since this method is running within
-        // withContext(Dispatchers.IO), so it's OK for the client code to run efficiently.
-        val (future, responded) = invoke1Deferred(returnProperty, method)
-
-        if (!responded) {
-            val methodName = method.method
-            val readTimeout = config.readTimeout
-            throw ChromeRPCTimeoutException("Response timeout $methodName | #${numInvokes.count}, ($readTimeout)")
-        }
-
         return when {
             !future.isSuccess -> handleFailedFurther(future).let { throw ChromeRPCException(it.first.code, it.second) }
             Void.TYPE == clazz -> null
@@ -222,38 +243,52 @@ abstract class ChromeDevToolsImpl(
         return future to responded
     }
 
-    @Throws(ChromeIOException::class, InterruptedException::class)
-    private suspend fun invoke1Deferred(
-        returnProperty: String?,
-        method: MethodInvocation
-    ): Pair<InvocationFuture, Boolean> {
-        val future = dispatcher.subscribe(method.id, returnProperty)
-        val message = dispatcher.serialize(method)
-
-        // See https://github.com/hardkoded/puppeteer-sharp/issues/796 to understand why we need handle Target methods
-        // differently.
-        if (method.method.startsWith("Target.")) {
-            browserTransport.sendDeferred(message)
-        } else {
-            pageTransport.sendDeferred(message)
-        }
-
-        val responded = future.await(config.readTimeout)
-        dispatcher.unsubscribe(method.id)
-
-        return future to responded
-    }
+//    @Throws(ChromeIOException::class, InterruptedException::class)
+//    private suspend fun invoke1Deferred(
+//        returnProperty: String?,
+//        method: MethodInvocation
+//    ): Pair<InvocationFuture, Boolean> {
+//        val future = dispatcher.subscribe(method.id, returnProperty)
+//        val message = dispatcher.serialize(method)
+//
+//        // See https://github.com/hardkoded/puppeteer-sharp/issues/796 to understand why we need handle Target methods
+//        // differently.
+//        val received = if (method.method.startsWith("Target.")) {
+//            browserTransport.sendAndReceiveNext(message)
+//        } else {
+//            pageTransport.sendAndReceiveNext(message)
+//        }
+//
+//        val responded = future.await(config.readTimeout)
+//        dispatcher.unsubscribe(method.id)
+//
+//        return future to responded
+//    }
 
     @Throws(ChromeRPCException::class, IOException::class)
     private fun handleFailedFurther(future: InvocationFuture): Pair<ErrorObject, String> {
+        return handleFailedFurther(future.result)
         // Received an error
-        val error = dispatcher.deserialize(ErrorObject::class.java, future.result)
+//        val error = dispatcher.deserialize(ErrorObject::class.java, future.result)
+//        val sb = StringBuilder(error.message)
+//        if (error.data != null) {
+//            sb.append(": ")
+//            sb.append(error.data)
+//        }
+//
+//        return error to sb.toString()
+    }
+
+    @Throws(ChromeRPCException::class, IOException::class)
+    private fun handleFailedFurther(error: JsonNode?): Pair<ErrorObject, String> {
+        // Received an error
+        val error = dispatcher.deserialize(ErrorObject::class.java, error)
         val sb = StringBuilder(error.message)
         if (error.data != null) {
             sb.append(": ")
             sb.append(error.data)
         }
-        
+
         return error to sb.toString()
     }
 

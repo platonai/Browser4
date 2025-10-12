@@ -3,6 +3,7 @@ package ai.platon.pulsar.browser.driver.chrome
 import ai.platon.pulsar.browser.driver.chrome.util.ChromeIOException
 import ai.platon.pulsar.browser.driver.chrome.util.ChromeRPCException
 import ai.platon.pulsar.browser.driver.chrome.util.ChromeServiceException
+import com.fasterxml.jackson.databind.JsonNode
 import com.github.kklisura.cdt.protocol.v2023.ChromeDevTools
 import com.github.kklisura.cdt.protocol.v2023.support.types.EventHandler
 import com.github.kklisura.cdt.protocol.v2023.support.types.EventListener
@@ -20,7 +21,7 @@ interface Transport: AutoCloseable {
     fun send(message: String)
 
     @Throws(ChromeIOException::class)
-    suspend fun sendDeferred(message: String)
+    suspend fun sendAndReceiveNext(message: String): String?
 
     @Throws(ChromeIOException::class)
     fun sendAsync(message: String): Future<Void>
@@ -84,6 +85,9 @@ interface RemoteDevTools: ChromeDevTools, AutoCloseable {
         returnTypeClasses: Array<Class<out Any>>?,
         method: MethodInvocation
     ): T?
+
+    @Throws(ChromeIOException::class, ChromeRPCException::class)
+    suspend fun send(method: String, params: Map<String, String?>?, sessionId: String? = null): String?
 
     @Throws(InterruptedException::class)
     fun awaitTermination()

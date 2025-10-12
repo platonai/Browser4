@@ -1,9 +1,9 @@
 package ai.platon.pulsar.browser.driver.chrome.impl
 
 import ai.platon.pulsar.browser.driver.chrome.*
+import ai.platon.pulsar.browser.driver.chrome.util.ChromeIOException
 import ai.platon.pulsar.browser.driver.chrome.util.ChromeServiceException
 import ai.platon.pulsar.browser.driver.chrome.util.ProxyClasses
-import ai.platon.pulsar.browser.driver.chrome.util.ChromeIOException
 import ai.platon.pulsar.common.NetUtil
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.warnForClose
@@ -11,7 +11,6 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
-import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
 import java.net.ConnectException
 import java.net.HttpURLConnection
@@ -22,8 +21,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 class ChromeImpl(
     override var host: String = LOCALHOST,
-    override var port: Int = 0,
-    var wss: WebSocketServiceFactory
+    override var port: Int = 0
 ) : RemoteChrome {
     companion object {
         const val ABOUT_BLANK_PAGE = "about:blank"
@@ -57,8 +55,6 @@ class ChromeImpl(
      * The Chrome version.
      * */
     override val version get() = _version.value
-    
-    constructor(host: String, port: Int) : this(host, port, WebSocketFactories.default())
 
     constructor(port: Int) : this(LOCALHOST, port)
     
@@ -148,12 +144,12 @@ class ChromeImpl(
         
         val browserUrl = version.webSocketDebuggerUrl
             ?: throw ChromeIOException("Invalid web socket url to browser")
-        val browserTransport = wss.createWebSocketService(browserUrl)
-        
+        val browserTransport = KtorTransport.create(URI.create(browserUrl))
+
         // Connect to a tab via web socket
         val debuggerUrl = tab.webSocketDebuggerUrl
             ?: throw ChromeIOException("Invalid web socket url to page")
-        val pageTransport = wss.createWebSocketService(debuggerUrl)
+        val pageTransport = KtorTransport.create(URI.create(debuggerUrl))
 
         val devTools: RemoteDevTools = createRemoteDevToolsProxy(browserTransport, pageTransport, config, invocationHandler)
 

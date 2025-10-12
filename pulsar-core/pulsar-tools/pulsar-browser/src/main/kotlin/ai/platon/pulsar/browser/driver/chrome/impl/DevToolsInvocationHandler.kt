@@ -21,13 +21,6 @@ interface KInvocationHandler: InvocationHandler {
     override fun invoke(proxy: Any, method: Method, args: Array<Any>?): Any?
 }
 
-class InvokeParam<T>(
-    val returnProperty: String?,
-    val clazz: Class<T>,
-    val returnTypeClasses: Array<Class<out Any>>?,
-    val method: MethodInvocation
-)
-
 class DevToolsInvocationHandler: KInvocationHandler {
     companion object {
         private const val EVENT_LISTENER_PREFIX = "on"

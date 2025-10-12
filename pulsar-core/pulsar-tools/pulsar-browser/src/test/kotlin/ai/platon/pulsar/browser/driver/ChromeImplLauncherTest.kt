@@ -1,25 +1,26 @@
 package ai.platon.pulsar.browser.driver
 
 import ai.platon.pulsar.browser.driver.chrome.ChromeLauncher
-import ai.platon.pulsar.browser.driver.chrome.DevToolsConfig
 import ai.platon.pulsar.browser.driver.chrome.common.ChromeOptions
 import ai.platon.pulsar.browser.driver.chrome.common.LauncherOptions
 import ai.platon.pulsar.common.browser.BrowserFiles
 import ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper
+import ai.platon.pulsar.common.sleepSeconds
 import com.google.gson.Gson
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Tag
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
 @Tag("SkippableLowerLevelTest")
-class TestChromeImplLauncher {
+class ChromeImplLauncherTest {
     private val USER_DATA_DIR_REGEX = ".+pulsar-.+/context/cx.+".toRegex()
 
     /**
      * Test ChromeLauncher
      * */
     @Test
-    fun testRegex3() {
+    fun testUserDataDirRegex() {
         val text = """
             |xvfb-run -a -e /dev/stdout -s "-screen 0 1920x1080x24" /usr/bin/google-chrome-stable 
             |--proxy-server=119.49.122.242:4224 --disable-gpu --hide-scrollbars --remote-debugging-port=0 
@@ -38,7 +39,7 @@ class TestChromeImplLauncher {
     }
 
     @Test
-    fun testLauncher() {
+    fun testChromeLauncher() {
         val launchOptions = ChromeOptions()
         launchOptions.headless = false
 
@@ -65,6 +66,13 @@ class TestChromeImplLauncher {
             val devTools = chrome.createDevTools(tab)
             devTools.page.enable()
             devTools.page.navigate("https://www.xiaohongshu.com/")
+
+            runBlocking {
+                val jsonNode = devTools.send("Page.navigate", mapOf("url" to "https://www.aliyun.com"))
+                println(jsonNode)
+            }
+
+            sleepSeconds(2)
         }
     }
 }
