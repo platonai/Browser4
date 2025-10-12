@@ -132,9 +132,9 @@ abstract class ChromeDevToolsImpl(
         val rawMessage = dispatcher.serialize(method)
 
         val received = if (method.method.startsWith("Target.")) {
-            browserTransport.sendAndReceiveNext(rawMessage)
+            browserTransport.send(rawMessage)
         } else {
-            pageTransport.sendAndReceiveNext(rawMessage)
+            pageTransport.send(rawMessage)
         }
 
         if (received == null) {
@@ -162,9 +162,9 @@ abstract class ChromeDevToolsImpl(
         val rawMessage = dispatcher.serialize(method, params, sessionId)
 
         val received = if (method.startsWith("Target.")) {
-            browserTransport.sendAndReceiveNext(rawMessage)
+            browserTransport.send(rawMessage)
         } else {
-            pageTransport.sendAndReceiveNext(rawMessage)
+            pageTransport.send(rawMessage)
         }
 
         if (received == null) {
@@ -197,7 +197,7 @@ abstract class ChromeDevToolsImpl(
         // blocks the current thread which is optimized by Kotlin since this method is running within
         // withContext(Dispatchers.IO), so it's OK for the client code to run efficiently.
         val (future, responded) = invoke1(returnProperty, method)
-        
+
         if (!responded) {
             val methodName = method.method
             val readTimeout = config.readTimeout
@@ -243,40 +243,9 @@ abstract class ChromeDevToolsImpl(
         return future to responded
     }
 
-//    @Throws(ChromeIOException::class, InterruptedException::class)
-//    private suspend fun invoke1Deferred(
-//        returnProperty: String?,
-//        method: MethodInvocation
-//    ): Pair<InvocationFuture, Boolean> {
-//        val future = dispatcher.subscribe(method.id, returnProperty)
-//        val message = dispatcher.serialize(method)
-//
-//        // See https://github.com/hardkoded/puppeteer-sharp/issues/796 to understand why we need handle Target methods
-//        // differently.
-//        val received = if (method.method.startsWith("Target.")) {
-//            browserTransport.sendAndReceiveNext(message)
-//        } else {
-//            pageTransport.sendAndReceiveNext(message)
-//        }
-//
-//        val responded = future.await(config.readTimeout)
-//        dispatcher.unsubscribe(method.id)
-//
-//        return future to responded
-//    }
-
     @Throws(ChromeRPCException::class, IOException::class)
     private fun handleFailedFurther(future: InvocationFuture): Pair<ErrorObject, String> {
         return handleFailedFurther(future.result)
-        // Received an error
-//        val error = dispatcher.deserialize(ErrorObject::class.java, future.result)
-//        val sb = StringBuilder(error.message)
-//        if (error.data != null) {
-//            sb.append(": ")
-//            sb.append(error.data)
-//        }
-//
-//        return error to sb.toString()
     }
 
     @Throws(ChromeRPCException::class, IOException::class)

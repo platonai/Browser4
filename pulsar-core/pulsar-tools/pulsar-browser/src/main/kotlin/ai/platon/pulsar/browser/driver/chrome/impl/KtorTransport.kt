@@ -91,7 +91,7 @@ class KtorTransport : Transport {
         }
     }
 
-    override suspend fun sendAndReceiveNext(message: String): String? {
+    override suspend fun send(message: String): String? {
         meterRequests.mark()
         val ws = session ?: throw ChromeIOException("WebSocket session is not open", isOpen = false)
         try {
