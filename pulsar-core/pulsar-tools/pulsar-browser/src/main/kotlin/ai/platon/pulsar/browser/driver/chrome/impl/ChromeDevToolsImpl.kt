@@ -23,7 +23,6 @@ import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 
 class CachedDevToolsInvocationHandlerProxies: KInvocationHandler {
     val commandHandler: DevToolsInvocationHandler = DevToolsInvocationHandler()
@@ -52,8 +51,6 @@ abstract class ChromeDevToolsImpl(
 ) : RemoteDevTools, AutoCloseable {
 
     companion object {
-        private val instanceSequencer = AtomicInteger()
-
         private val startTime = Instant.now()
         private var lastActiveTime = startTime
         private val idleTime get() = Duration.between(lastActiveTime, Instant.now())
@@ -72,7 +69,6 @@ abstract class ChromeDevToolsImpl(
     }
 
     private val logger = LoggerFactory.getLogger(ChromeDevToolsImpl::class.java)
-    private val id = instanceSequencer.incrementAndGet()
 
     private val closeLatch = CountDownLatch(1)
     private val closed = AtomicBoolean()
@@ -87,6 +83,12 @@ abstract class ChromeDevToolsImpl(
 
     /**
      * Invokes a remote method and returns the result.
+     *
+     * NOTE: this method blocks in java proxy objects.
+     *
+     * For example, when we call `devTools.page.navigate(url)`, the framework translates the function call to `invoke`
+     * method, but `devTools.page.navigate(url)` is not a suspend function, so `invoke` has to be wrappered in
+     * `runBlocking` method.
      *
      * @param returnProperty The property to return from the response.
      * @param clazz The class of the return type.
@@ -106,7 +108,9 @@ abstract class ChromeDevToolsImpl(
         lastActiveTime = Instant.now()
 
         // Send the request and await result in a coroutine-friendly way
-        val rpcResult = invokeAndWaitForDeferred(returnProperty, method)
+        val message = dispatcher.serialize(method)
+        // Non-blocking
+        val rpcResult = sendAndReceive(method.id, method.method, returnProperty, message)
 
         if (rpcResult == null) {
             val methodName = method.method
@@ -123,53 +127,57 @@ abstract class ChromeDevToolsImpl(
     }
 
     @Throws(ChromeIOException::class, ChromeRPCException::class)
-    override suspend fun sendAndReceive(method: String, params: Map<String, String?>?, sessionId: String?): String? {
+    override suspend fun invoke(method: String, params: Map<String, String?>?, sessionId: String?): RpcResult? {
         numInvokes.inc()
         lastActiveTime = Instant.now()
 
-        val rawMessage = dispatcher.serialize(method, params, sessionId)
+        val params0 = params?.toMutableMap() ?: mutableMapOf()
 
-        val received = if (method.startsWith("Target.")) {
-            browserTransport.sendAndReceive(rawMessage)
-        } else {
-            pageTransport.sendAndReceive(rawMessage)
+        var methodId = params?.get("id")?.toLongOrNull()
+        if (methodId == null) {
+            methodId = DevToolsInvocationHandler.nextId()
+            params0["id"] = methodId.toString()
         }
 
-        if (received == null) {
-            val readTimeout = config.readTimeout
-            throw ChromeRPCTimeoutException("Response timeout $method | #${numInvokes.count}, ($readTimeout)")
-        }
+        val returnProperty: String? = null
 
-        return received
+        val message = dispatcher.serialize(method, params0, sessionId)
+
+        val rpcResult: RpcResult? = sendAndReceive(methodId, method, returnProperty, message)
+
+        return rpcResult
     }
 
     @Throws(ChromeIOException::class, InterruptedException::class)
-    private suspend fun invokeAndWaitForDeferred(
-        returnProperty: String?,
-        method: MethodInvocation
+    private suspend fun sendAndReceive(
+        methodId: Long, method: String, returnProperty: String?, rawMessage: String
     ): RpcResult? {
-        val future = dispatcher.subscribe(method.id, returnProperty)
+        val future = dispatcher.subscribe(methodId, returnProperty)
 
         // See https://github.com/hardkoded/puppeteer-sharp/issues/796 to understand why we need handle Target methods
         // differently.
-        val message = dispatcher.serialize(method)
-        if (method.method.startsWith("Target.")) {
-            // return immediately
-            browserTransport.send(message)
-        } else {
-            // return immediately
-            pageTransport.send(message)
-        }
+        sendToBrowser(method, rawMessage)
 
         // Await without blocking a thread; enforce the configured timeout.
         val timeoutMillis = config.readTimeout.toMillis()
         val result = withTimeoutOrNull(timeoutMillis) { future.deferred.await() }
         if (result == null) {
             // Ensure we don't leak the future if timed out
-            dispatcher.unsubscribe(method.id)
+            dispatcher.unsubscribe(methodId)
         }
 
         return result
+    }
+
+    /**
+     * Send the message to the server and return immediately
+     * */
+    private suspend fun sendToBrowser(method: String, message: String) {
+        if (method.startsWith("Target.")) {
+            browserTransport.send(message)
+        } else {
+            pageTransport.send(message)
+        }
     }
 
     @Throws(ChromeRPCException::class, IOException::class)

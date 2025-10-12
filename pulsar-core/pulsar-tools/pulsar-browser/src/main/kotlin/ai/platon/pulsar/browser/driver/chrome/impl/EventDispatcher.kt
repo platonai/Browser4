@@ -150,9 +150,7 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
         // Complete any pending futures with a failed result to unblock waiters
         val ids = invocationFutures.keys.toList()
         ids.forEach { id ->
-            invocationFutures.remove(id)?.let { future ->
-                future.deferred.complete(RpcResult(false, null))
-            }
+            invocationFutures.remove(id)?.deferred?.complete(RpcResult(false, null))
         }
     }
     
@@ -166,41 +164,6 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
     
     fun removeAllListeners() {
         eventListeners.clear()
-    }
-
-    @Throws(ChromeRPCException::class, IOException::class)
-    fun parse(message: String, returnProperty: String? = null): Pair<Boolean, JsonNode?> {
-        tracer?.trace("◀ Accept I {}", StringUtils.abbreviateMiddle(message, "...", 500))
-
-        ChromeDevToolsImpl.numAccepts.inc()
-        val jsonNode = OBJECT_MAPPER.readTree(message)
-        val idNode = jsonNode.get(ID_PROPERTY)
-        if (idNode != null) {
-            val id = idNode.asLong()
-
-            var resultNode = jsonNode.get(RESULT_PROPERTY)
-            val errorNode = jsonNode.get(ERROR_PROPERTY)
-            if (errorNode != null) {
-                // future.signal(false, errorNode)
-                return false to errorNode
-            } else {
-                if (returnProperty != null) {
-                    if (resultNode != null) {
-                        resultNode = resultNode.get(returnProperty)
-                    }
-                }
-
-                return true to resultNode
-            }
-        } else {
-            val methodNode = jsonNode.get(METHOD_PROPERTY)
-            val paramsNode = jsonNode.get(PARAMS_PROPERTY)
-            if (methodNode != null) {
-                handleEventAsync(methodNode.asText(), paramsNode)
-            }
-
-            return true to null
-        }
     }
 
     @Throws(ChromeRPCException::class, IOException::class)
@@ -225,7 +188,10 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
                                 resultNode = resultNode.get(future.returnProperty)
                             }
                         }
-                        
+
+                        println("==============================")
+                        println(message)
+
                         future.deferred.complete(RpcResult(true, resultNode))
                     }
                 } else {

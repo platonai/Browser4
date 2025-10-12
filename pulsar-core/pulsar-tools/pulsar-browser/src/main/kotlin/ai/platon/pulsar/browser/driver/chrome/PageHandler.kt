@@ -31,17 +31,17 @@ class PageHandler(
     private val domAPI get() = devTools.dom.takeIf { isActive }
     private val cssAPI get() = devTools.css.takeIf { isActive }
     private val runtimeAPI get() = devTools.runtime.takeIf { isActive }
-    
+
     val mouse = Mouse(devTools)
     val keyboard = Keyboard(devTools)
-    
+
     @Throws(ChromeDriverException::class)
-    fun navigate(@ParamName("url") url: String): Navigate? {
+    suspend fun navigate(url: String): Navigate? {
         return pageAPI?.navigate(url)
     }
-    
+
     @Throws(ChromeDriverException::class)
-    fun navigate(
+    suspend fun navigate(
         @ParamName("url") url: String,
         @Optional @ParamName("referrer") referrer: String? = null,
         @Optional @ParamName("transitionType") transitionType: TransitionType? = null,
@@ -50,7 +50,7 @@ class PageHandler(
     ): Navigate? {
         return pageAPI?.navigate(url, referrer, transitionType, frameId, referrerPolicy)
     }
-    
+
     /**
      * TODO: make sure the meaning of 0 node id
      * */

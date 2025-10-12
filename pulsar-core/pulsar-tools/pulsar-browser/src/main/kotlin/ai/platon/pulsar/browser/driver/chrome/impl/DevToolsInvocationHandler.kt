@@ -19,6 +19,8 @@ class DevToolsInvocationHandler: KInvocationHandler {
     companion object {
         private const val EVENT_LISTENER_PREFIX = "on"
         private val ID_SUPPLIER = AtomicLong(1L)
+
+        fun nextId() = ID_SUPPLIER.incrementAndGet()
     }
 
     lateinit var devTools: RemoteDevTools
@@ -49,7 +51,7 @@ class DevToolsInvocationHandler: KInvocationHandler {
     private fun createMethodInvocation(method: Method, args: Array<Any>? = null): MethodInvocation {
         val domainName = method.declaringClass.simpleName
         val methodName = method.name
-        return MethodInvocation(ID_SUPPLIER.getAndIncrement(), "$domainName.$methodName", buildMethodParams(method, args))
+        return MethodInvocation(nextId(), "$domainName.$methodName", buildMethodParams(method, args))
     }
 
     private fun buildMethodParams(method: Method, args: Array<Any>? = null): Map<String, Any> {

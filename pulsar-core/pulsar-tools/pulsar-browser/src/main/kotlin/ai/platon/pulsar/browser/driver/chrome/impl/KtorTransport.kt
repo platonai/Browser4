@@ -96,25 +96,6 @@ class KtorTransport : Transport {
         ws.send(Frame.Text(message))
     }
 
-    @ExperimentalApi
-    override suspend fun sendAndReceive(message: String): String? {
-        meterRequests.mark()
-        val ws = session ?: throw ChromeIOException("WebSocket session is not open", isOpen = false)
-        try {
-            tracer?.trace("▶ Send & receive {}", shortenMessage(message))
-            ws.send(Frame.Text(message))
-
-            val timeoutMillis = Duration.ofSeconds(10).toMillis()
-            val frame = withTimeout(timeoutMillis) { ws.incoming.receive() }
-
-            return (frame as? Frame.Text)?.readText()
-        } catch (e: CancellationException) {
-            throw ChromeIOException("Failed to send message (cancelled)", e, isOpen)
-        } catch (e: Exception) {
-            throw ChromeIOException("Failed to send message", e, isOpen)
-        }
-    }
-
     override fun addMessageHandler(consumer: Consumer<String>) {
         if (!messageConsumer.compareAndSet(null, consumer)) {
             throw ChromeDriverException("You are already subscribed to this web socket service.")
