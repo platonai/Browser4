@@ -22,7 +22,7 @@ interface Transport: AutoCloseable {
     suspend fun sendAndReceive(message: String): String?
 
     @Throws(ChromeIOException::class)
-    fun sendAsync(message: String): Future<Void>
+    fun send(message: String): Future<Void>
     
     fun addMessageHandler(consumer: Consumer<String>)
 }

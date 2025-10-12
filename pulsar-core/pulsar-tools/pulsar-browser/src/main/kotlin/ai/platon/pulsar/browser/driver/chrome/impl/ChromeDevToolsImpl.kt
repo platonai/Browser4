@@ -223,9 +223,9 @@ abstract class ChromeDevToolsImpl(
         // See https://github.com/hardkoded/puppeteer-sharp/issues/796 to understand why we need handle Target methods
         // differently.
         if (method.method.startsWith("Target.")) {
-            browserTransport.sendAsync(message)
+            browserTransport.send(message)
         } else {
-            pageTransport.sendAsync(message)
+            pageTransport.send(message)
         }
 
         // await() blocks the current thread

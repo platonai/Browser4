@@ -112,7 +112,7 @@ class KtorTransport : Transport {
         }
     }
 
-    override fun sendAsync(message: String): Future<Void> {
+    override fun send(message: String): Future<Void> {
         meterRequests.mark()
         val future = CompletableFuture<Void>()
         val ws = session ?: run {
