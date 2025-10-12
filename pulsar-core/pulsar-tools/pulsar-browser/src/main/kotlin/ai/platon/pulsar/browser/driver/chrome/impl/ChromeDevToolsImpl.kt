@@ -1,7 +1,12 @@
 package ai.platon.pulsar.browser.driver.chrome.impl
 
-import ai.platon.pulsar.browser.driver.chrome.*
-import ai.platon.pulsar.browser.driver.chrome.util.*
+import ai.platon.pulsar.browser.driver.chrome.DevToolsConfig
+import ai.platon.pulsar.browser.driver.chrome.MethodInvocation
+import ai.platon.pulsar.browser.driver.chrome.RemoteDevTools
+import ai.platon.pulsar.browser.driver.chrome.Transport
+import ai.platon.pulsar.browser.driver.chrome.util.ChromeIOException
+import ai.platon.pulsar.browser.driver.chrome.util.ChromeRPCException
+import ai.platon.pulsar.browser.driver.chrome.util.ChromeRPCTimeoutException
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.readable
 import ai.platon.pulsar.common.sleepSeconds
@@ -11,6 +16,7 @@ import com.codahale.metrics.SharedMetricRegistries
 import com.fasterxml.jackson.databind.JsonNode
 import com.github.kklisura.cdt.protocol.v2023.support.types.EventHandler
 import com.github.kklisura.cdt.protocol.v2023.support.types.EventListener
+import kotlinx.coroutines.runBlocking
 import org.slf4j.LoggerFactory
 import java.io.IOException
 import java.time.Duration
@@ -77,7 +83,7 @@ abstract class ChromeDevToolsImpl(
         methodInvocation: MethodInvocation
     ): T? {
         try {
-            return invoke0(returnProperty, clazz, null, methodInvocation)
+            return runBlocking { invoke0(returnProperty, clazz, null, methodInvocation) }
         }  catch (e: ChromeIOException) {
             // TODO: if the connection is lost, we should close the browser and restart it
             throw ChromeRPCException("Web socket connection lost", e)
@@ -111,7 +117,7 @@ abstract class ChromeDevToolsImpl(
         method: MethodInvocation
     ): T? {
         try {
-            return invoke0(returnProperty, clazz, returnTypeClasses, method)
+            return runBlocking { invoke0(returnProperty, clazz, returnTypeClasses, method) }
         } catch (e: InterruptedException) {
             logger.warn("Interrupted while invoke ${method.method}")
             Thread.currentThread().interrupt()
@@ -119,6 +125,7 @@ abstract class ChromeDevToolsImpl(
         }
     }
 
+    @Deprecated("Not a possible way")
     @Throws(ChromeIOException::class, ChromeRPCException::class)
     override suspend fun <T> invokeDeferred(
         returnProperty: String?,
@@ -185,7 +192,7 @@ abstract class ChromeDevToolsImpl(
     }
 
     @Throws(ChromeIOException::class, InterruptedException::class, ChromeRPCException::class)
-    private fun <T> invoke0(
+    private suspend fun <T> invoke0(
         returnProperty: String?,
         clazz: Class<T>,
         returnTypeClasses: Array<Class<out Any>>?,
@@ -213,13 +220,13 @@ abstract class ChromeDevToolsImpl(
     }
 
     @Throws(ChromeIOException::class, InterruptedException::class)
-    private fun invoke1(
+    private suspend fun invoke1(
         returnProperty: String?,
         method: MethodInvocation
     ): Pair<InvocationFuture, Boolean> {
         val future = dispatcher.subscribe(method.id, returnProperty)
         val message = dispatcher.serialize(method)
-        
+
         // See https://github.com/hardkoded/puppeteer-sharp/issues/796 to understand why we need handle Target methods
         // differently.
         if (method.method.startsWith("Target.")) {

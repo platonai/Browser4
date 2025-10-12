@@ -22,7 +22,7 @@ interface Transport: AutoCloseable {
     suspend fun sendAndReceive(message: String): String?
 
     @Throws(ChromeIOException::class)
-    fun send(message: String): Future<Void>
+    suspend fun send(message: String)
     
     fun addMessageHandler(consumer: Consumer<String>)
 }
@@ -76,6 +76,7 @@ interface RemoteDevTools: ChromeDevTools, AutoCloseable {
             method: MethodInvocation
     ): T?
 
+    @Deprecated("Not a possible way")
     @Throws(ChromeIOException::class, ChromeRPCException::class)
     suspend fun <T> invokeDeferred(
         returnProperty: String?,

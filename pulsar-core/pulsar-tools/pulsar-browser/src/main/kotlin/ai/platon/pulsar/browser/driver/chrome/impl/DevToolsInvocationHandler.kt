@@ -41,6 +41,7 @@ class DevToolsInvocationHandler: KInvocationHandler {
         return devTools.invoke(returnProperty, returnType, returnTypeClasses, methodInvocation)
     }
 
+    @Deprecated("Not a possible way")
     @Throws(ChromeIOException::class, ChromeRPCException::class)
     override suspend fun invokeDeferred(target: Any, method: Method, args: Array<Any>?): Any? {
         if (isEventSubscription(method)) {

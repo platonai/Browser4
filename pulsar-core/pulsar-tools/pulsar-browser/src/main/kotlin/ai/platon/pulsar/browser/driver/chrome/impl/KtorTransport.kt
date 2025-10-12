@@ -3,12 +3,8 @@ package ai.platon.pulsar.browser.driver.chrome.impl
 import ai.platon.pulsar.browser.driver.chrome.Transport
 import ai.platon.pulsar.browser.driver.chrome.util.ChromeDriverException
 import ai.platon.pulsar.browser.driver.chrome.util.ChromeIOException
-import ai.platon.pulsar.common.ExperimentalApi
-import ai.platon.pulsar.common.brief
+import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.config.AppConstants
-import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.common.getTracerOrNull
-import ai.platon.pulsar.common.warnForClose
 import com.codahale.metrics.SharedMetricRegistries
 import io.ktor.client.*
 import io.ktor.client.engine.cio.*
@@ -18,8 +14,6 @@ import kotlinx.coroutines.*
 import java.io.IOException
 import java.net.URI
 import java.time.Duration
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.Future
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
@@ -93,12 +87,21 @@ class KtorTransport : Transport {
         }
     }
 
+    override suspend fun send(message: String) {
+        meterRequests.mark()
+        val ws = session ?: return
+
+        tracer?.trace("▶ Send {}", shortenMessage(message))
+
+        ws.send(Frame.Text(message))
+    }
+
     @ExperimentalApi
     override suspend fun sendAndReceive(message: String): String? {
         meterRequests.mark()
         val ws = session ?: throw ChromeIOException("WebSocket session is not open", isOpen = false)
         try {
-            tracer?.trace("▶ Send {}", shortenMessage(message))
+            tracer?.trace("▶ Send & receive {}", shortenMessage(message))
             ws.send(Frame.Text(message))
 
             val timeoutMillis = Duration.ofSeconds(10).toMillis()
@@ -110,31 +113,6 @@ class KtorTransport : Transport {
         } catch (e: Exception) {
             throw ChromeIOException("Failed to send message", e, isOpen)
         }
-    }
-
-    override fun send(message: String): Future<Void> {
-        meterRequests.mark()
-        val future = CompletableFuture<Void>()
-        val ws = session ?: run {
-            future.completeExceptionally(ChromeIOException("WebSocket session is not open", isOpen = false))
-            return future
-        }
-        tracer?.trace("▶ Send {}", shortenMessage(message))
-        scope.launch {
-            try {
-                ws.send(Frame.Text(message))
-                future.complete(null)
-            } catch (e: Exception) {
-                future.completeExceptionally(
-                    ChromeIOException(
-                        "Failed to send message, caused by ${e.message}",
-                        e,
-                        isOpen
-                    )
-                )
-            }
-        }
-        return future
     }
 
     override fun addMessageHandler(consumer: Consumer<String>) {
