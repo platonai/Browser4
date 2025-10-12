@@ -18,6 +18,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentSkipListSet
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import java.util.function.Consumer
 
 /**
@@ -50,10 +51,6 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
         val OBJECT_MAPPER = ObjectMapper()
             .setSerializationInclusion(JsonInclude.Include.NON_NULL)
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
-
-        private val ID_SUPPLIER = AtomicInteger(0)
-
-        fun nextId() = ID_SUPPLIER.incrementAndGet()
     }
     
     private val logger = getLogger(this)
@@ -73,11 +70,11 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
     fun serialize(message: Any): String = OBJECT_MAPPER.writeValueAsString(message)
 
     @Throws(JsonProcessingException::class)
-    fun serialize(method: String, params: Map<String, String?>?, sessionId: String?): String {
+    fun serialize(id: Long, method: String, params: Map<String, Any>?, sessionId: String?): String {
         return OBJECT_MAPPER.writeValueAsString(mapOf(
-            "id" to nextId(),
-            "method" to method,
-            "params" to params,
+            ID_PROPERTY to id,
+            METHOD_PROPERTY to method,
+            PARAMS_PROPERTY to params,
             "sessionId" to sessionId
         ))
     }
@@ -177,6 +174,13 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
             if (idNode != null) {
                 val id = idNode.asLong()
                 val future = invocationFutures.remove(id)
+
+
+                logger.info("==============================")
+                println(id)
+                println(future.toString())
+                println(message)
+
                 if (future != null) {
                     var resultNode = jsonNode.get(RESULT_PROPERTY)
                     val errorNode = jsonNode.get(ERROR_PROPERTY)
@@ -188,9 +192,6 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
                                 resultNode = resultNode.get(future.returnProperty)
                             }
                         }
-
-                        println("==============================")
-                        println(message)
 
                         future.deferred.complete(RpcResult(true, resultNode))
                     }

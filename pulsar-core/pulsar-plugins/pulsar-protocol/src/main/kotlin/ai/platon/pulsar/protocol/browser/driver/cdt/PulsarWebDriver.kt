@@ -6,7 +6,6 @@ import ai.platon.pulsar.browser.driver.chrome.util.ChromeDriverException
 import ai.platon.pulsar.browser.driver.chrome.util.ChromeIOException
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.browser.BrowserType
-import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.math.geometric.OffsetD
 import ai.platon.pulsar.common.math.geometric.PointD
 import ai.platon.pulsar.common.math.geometric.RectD
@@ -31,13 +30,10 @@ import com.github.kklisura.cdt.protocol.v2023.types.network.LoadNetworkResourceO
 import com.github.kklisura.cdt.protocol.v2023.types.network.ResourceType
 import com.github.kklisura.cdt.protocol.v2023.types.runtime.Evaluate
 import kotlinx.coroutines.channels.Channel
-import org.apache.commons.lang3.SystemUtils
-import org.apache.hc.core5.net.URIBuilder
 import java.nio.file.Files
 import java.text.MessageFormat
 import java.time.Duration
 import java.time.Instant
-import java.util.*
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.random.Random
 
@@ -652,7 +648,7 @@ class PulsarWebDriver(
     /**
      * Navigate to the page and inject scripts.
      * */
-    private fun navigateInvaded(entry: NavigateEntry) {
+    private suspend fun navigateInvaded(entry: NavigateEntry) {
         val url = entry.url
 
         addScriptToEvaluateOnNewDocument()
@@ -696,30 +692,10 @@ class PulsarWebDriver(
         }
     }
 
-    private fun openLocalFile(url: String) {
+    private suspend fun openLocalFile(url: String) {
         val path = URLUtils.localURLToPath(url)
         val uri = path.toUri()
         page.navigate(uri.toString())
-    }
-
-    @Deprecated("Use openLocalFile instead")
-    private fun openLocalFileDeprecated(url: String) {
-        if (url.contains("?path=")) {
-            val queryParams = URIBuilder(url).queryParams
-            val path = queryParams.firstOrNull { it.name == "path" }?.value
-            if (path != null) {
-                val path2 = Base64.getUrlDecoder().decode(path).toString(Charsets.UTF_8)
-                page.navigate(path2)
-            }
-            return
-        }
-
-        val url0 = url.removePrefix(AppConstants.LOCAL_FILE_BASE_URL)
-        if (SystemUtils.IS_OS_WINDOWS) {
-            page.navigate(url0)
-        } else {
-            page.navigate(url0)
-        }
     }
 
     private fun onWindowOpen(event: WindowOpen) {

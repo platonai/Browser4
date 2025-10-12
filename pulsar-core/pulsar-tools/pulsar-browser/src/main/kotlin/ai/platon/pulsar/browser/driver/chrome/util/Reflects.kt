@@ -2,9 +2,6 @@ package ai.platon.pulsar.browser.driver.chrome.util
 
 import javassist.Modifier
 import javassist.util.proxy.ProxyFactory
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.runBlocking
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
@@ -16,9 +13,7 @@ interface KInvocationHandler {
 
 object ProxyClasses {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-
-    var debug = true
+    var debug = false
 
     /**
      * Creates a proxy class to a given abstract clazz supplied with invocation handler for

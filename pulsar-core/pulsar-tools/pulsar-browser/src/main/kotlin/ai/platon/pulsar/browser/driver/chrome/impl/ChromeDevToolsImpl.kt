@@ -4,6 +4,7 @@ import ai.platon.pulsar.browser.driver.chrome.DevToolsConfig
 import ai.platon.pulsar.browser.driver.chrome.MethodInvocation
 import ai.platon.pulsar.browser.driver.chrome.RemoteDevTools
 import ai.platon.pulsar.browser.driver.chrome.Transport
+import ai.platon.pulsar.browser.driver.chrome.impl.EventDispatcher.Companion.ID_PROPERTY
 import ai.platon.pulsar.browser.driver.chrome.util.*
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.readable
@@ -127,23 +128,18 @@ abstract class ChromeDevToolsImpl(
     }
 
     @Throws(ChromeIOException::class, ChromeRPCException::class)
-    override suspend fun invoke(method: String, params: Map<String, String?>?, sessionId: String?): RpcResult? {
+    override suspend fun invoke(method: String, params: Map<String, Any>?, sessionId: String?): RpcResult? {
         numInvokes.inc()
         lastActiveTime = Instant.now()
 
-        val params0 = params?.toMutableMap() ?: mutableMapOf()
-
-        var methodId = params?.get("id")?.toLongOrNull()
-        if (methodId == null) {
-            methodId = DevToolsInvocationHandler.nextId()
-            params0["id"] = methodId.toString()
-        }
+        val invocation = DevToolsInvocationHandler.createMethodInvocation(method, params)
 
         val returnProperty: String? = null
 
-        val message = dispatcher.serialize(method, params0, sessionId)
+        // Non-blocking
+        val message = dispatcher.serialize(invocation.id, invocation.method, invocation.params, sessionId)
 
-        val rpcResult: RpcResult? = sendAndReceive(methodId, method, returnProperty, message)
+        val rpcResult: RpcResult? = sendAndReceive(invocation.id, method, returnProperty, message)
 
         return rpcResult
     }
@@ -154,8 +150,6 @@ abstract class ChromeDevToolsImpl(
     ): RpcResult? {
         val future = dispatcher.subscribe(methodId, returnProperty)
 
-        // See https://github.com/hardkoded/puppeteer-sharp/issues/796 to understand why we need handle Target methods
-        // differently.
         sendToBrowser(method, rawMessage)
 
         // Await without blocking a thread; enforce the configured timeout.
@@ -173,6 +167,8 @@ abstract class ChromeDevToolsImpl(
      * Send the message to the server and return immediately
      * */
     private suspend fun sendToBrowser(method: String, message: String) {
+        // See https://github.com/hardkoded/puppeteer-sharp/issues/796 to understand why we need handle Target methods
+        // differently.
         if (method.startsWith("Target.")) {
             browserTransport.send(message)
         } else {

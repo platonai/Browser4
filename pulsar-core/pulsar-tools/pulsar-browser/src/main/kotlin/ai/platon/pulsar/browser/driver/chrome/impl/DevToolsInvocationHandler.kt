@@ -2,6 +2,7 @@ package ai.platon.pulsar.browser.driver.chrome.impl
 
 import ai.platon.pulsar.browser.driver.chrome.MethodInvocation
 import ai.platon.pulsar.browser.driver.chrome.RemoteDevTools
+import ai.platon.pulsar.browser.driver.chrome.impl.EventDispatcher.Companion.ID_PROPERTY
 import ai.platon.pulsar.browser.driver.chrome.util.ChromeIOException
 import ai.platon.pulsar.browser.driver.chrome.util.ChromeRPCException
 import ai.platon.pulsar.browser.driver.chrome.util.KInvocationHandler
@@ -21,6 +22,35 @@ class DevToolsInvocationHandler: KInvocationHandler {
         private val ID_SUPPLIER = AtomicLong(1L)
 
         fun nextId() = ID_SUPPLIER.incrementAndGet()
+
+        /**
+         *
+         * */
+        fun createMethodInvocation(method: String, params: Map<String, Any>?): MethodInvocation {
+            val params0 = params?.toMutableMap() ?: mutableMapOf()
+
+            val methodId = params?.get(ID_PROPERTY)?.toString()?.toLongOrNull() ?: nextId()
+            params0[ID_PROPERTY] = methodId.toString()
+
+            return MethodInvocation(methodId, method, params)
+        }
+
+        fun createMethodInvocation(method: Method, args: Array<Any>? = null): MethodInvocation {
+            val domainName = method.declaringClass.simpleName
+            val methodName = method.name
+            return MethodInvocation(nextId(), "$domainName.$methodName", buildMethodParams(method, args))
+        }
+
+        private fun buildMethodParams(method: Method, args: Array<Any>? = null): Map<String, Any> {
+            val params: MutableMap<String, Any> = HashMap()
+            val parameters = method.parameters
+            if (args != null) {
+                for (i in args.indices) {
+                    params[parameters[i].getAnnotation(ParamName::class.java).value] = args[i]
+                }
+            }
+            return params
+        }
     }
 
     lateinit var devTools: RemoteDevTools
@@ -46,23 +76,6 @@ class DevToolsInvocationHandler: KInvocationHandler {
         val eventName: String = getEventName(method)
         val eventHandlerType: Class<*> = getEventHandlerType(method)
         return devTools.addEventListener(domainName, eventName, args!![0] as EventHandler<Any>, eventHandlerType)
-    }
-
-    private fun createMethodInvocation(method: Method, args: Array<Any>? = null): MethodInvocation {
-        val domainName = method.declaringClass.simpleName
-        val methodName = method.name
-        return MethodInvocation(nextId(), "$domainName.$methodName", buildMethodParams(method, args))
-    }
-
-    private fun buildMethodParams(method: Method, args: Array<Any>? = null): Map<String, Any> {
-        val params: MutableMap<String, Any> = HashMap()
-        val parameters = method.parameters
-        if (args != null) {
-            for (i in args.indices) {
-                params[parameters[i].getAnnotation(ParamName::class.java).value] = args[i]
-            }
-        }
-        return params
     }
 
     private fun getEventName(method: Method): String {

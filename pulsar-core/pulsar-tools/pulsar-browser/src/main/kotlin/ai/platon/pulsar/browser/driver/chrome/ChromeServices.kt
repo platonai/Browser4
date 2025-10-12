@@ -67,7 +67,7 @@ interface RemoteDevTools : ChromeDevTools, AutoCloseable {
     ): T?
 
     @Throws(ChromeIOException::class, ChromeRPCException::class)
-    suspend fun invoke(method: String, params: Map<String, String?>?, sessionId: String? = null): RpcResult?
+    suspend fun invoke(method: String, params: Map<String, Any>?, sessionId: String? = null): RpcResult?
 
     @Throws(InterruptedException::class)
     fun awaitTermination()
