@@ -21,18 +21,11 @@
             <artifactId>metrics-core</artifactId>
         </dependency>
 
-        <dependency>
-            <groupId>javax.websocket</groupId>
-            <artifactId>javax.websocket-api</artifactId>
-            <version>${websocket.api.version}</version>
-        </dependency>
-        <!-- required by org.glassfish.tyrus.client.ClientManager -->
-        <!-- https://github.com/eclipse-ee4j/tyrus/blob/master/containers/grizzly-client/src/main/java/org/glassfish/tyrus/container/grizzly/client/GrizzlyClientContainer.java -->
-        <dependency>
-            <groupId>org.glassfish.tyrus</groupId>
-            <artifactId>tyrus-container-grizzly-client</artifactId>
-            <version>${tyrus.version}</version>
-        </dependency>
+<!--        <dependency>-->
+<!--            <groupId>javax.websocket</groupId>-->
+<!--            <artifactId>javax.websocket-api</artifactId>-->
+<!--            <version>${websocket.api.version}</version>-->
+<!--        </dependency>-->
 
         <!-- Ktor client for coroutine-friendly WebSocket transport -->
         <dependency>
