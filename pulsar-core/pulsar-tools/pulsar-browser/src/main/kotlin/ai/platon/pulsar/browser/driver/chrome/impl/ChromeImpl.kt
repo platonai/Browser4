@@ -12,7 +12,6 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
-import java.lang.reflect.Method
 import java.net.ConnectException
 import java.net.HttpURLConnection
 import java.net.URI
@@ -130,18 +129,6 @@ class ChromeImpl(
     
     @Throws(ChromeIOException::class)
     private fun createDevTools0(version: ChromeVersion, tab: ChromeTab, config: DevToolsConfig): RemoteDevTools {
-        // Create invocation handler
-        val commandHandler = DevToolsInvocationHandler()
-        val commands: MutableMap<Method, Any> = ConcurrentHashMap()
-
-        val invocationHandler = object: KInvocationHandler {
-            override suspend fun invoke(proxy: Any, method: Method, args: Array<Any>?): Any? {
-                return commands.computeIfAbsent(method) {
-                    ProxyClasses.createProxy(method.returnType, commandHandler)
-                }
-            }
-        }
-
         val browserUrl = version.webSocketDebuggerUrl
             ?: throw ChromeIOException("Invalid web socket url to browser")
         val browserTransport = KtorTransport.create(URI.create(browserUrl))
@@ -151,9 +138,11 @@ class ChromeImpl(
             ?: throw ChromeIOException("Invalid web socket url to page")
         val pageTransport = KtorTransport.create(URI.create(debuggerUrl))
 
+        val invocationHandler = CachedDevToolsInvocationHandlerProxies()
+
         val devTools: RemoteDevTools = createRemoteDevToolsProxy(browserTransport, pageTransport, config, invocationHandler)
 
-        commandHandler.devTools = devTools
+        invocationHandler.commandHandler.devTools = devTools
 
         return devTools
     }
@@ -162,8 +151,7 @@ class ChromeImpl(
         browserTransport: Transport, pageTransport: Transport, config: DevToolsConfig,
         invocationHandler: KInvocationHandler
     ): RemoteDevTools {
-        // Create concrete dev tools instance from interface
-
+        // Create a class that inherits from ChromeDevToolsImpl and construct an object
         return ProxyClasses.createCoroutineSupportedProxyFromAbstract(
             ChromeDevToolsImpl::class.java,
             arrayOf(Transport::class.java, Transport::class.java, DevToolsConfig::class.java),

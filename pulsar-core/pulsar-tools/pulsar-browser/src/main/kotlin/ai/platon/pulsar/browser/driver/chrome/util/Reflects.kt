@@ -9,9 +9,6 @@ import kotlinx.coroutines.runBlocking
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
 import java.lang.reflect.Proxy
-import kotlin.coroutines.Continuation
-import kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED
-import kotlin.coroutines.startCoroutine
 
 interface KInvocationHandler {
     suspend fun invoke(proxy: Any, method: Method, args: Array<Any>?): Any?
@@ -20,6 +17,8 @@ interface KInvocationHandler {
 object ProxyClasses {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    var debug = true
 
     /**
      * Creates a proxy class to a given abstract clazz supplied with invocation handler for
@@ -41,9 +40,20 @@ object ProxyClasses {
             factory.superclass = clazz
             factory.setFilter { Modifier.isAbstract(it.modifiers) }
 
-            return factory.create(paramTypes, args) { o, method, _, objects ->
+            val proxy = factory.create(paramTypes, args) { o, method, _, objects ->
+                // Example:
+                // InvocationHandler:
+                //   - a wrapper of CachedDevToolsInvocationHandlerProxies
+                // Typical proxy:
+                //   - jdk.proxy1.$Proxy24
+                // Typical methods:
+                //   - public abstract void com.github.kklisura.cdt.protocol.v2023.commands.Page.enable()
+                //   - public abstract com...page.Navigate com...Page.navigate(java.lang.String)
                 invocationHandler.invoke(o, method, objects)
-            } as T
+            }
+
+            @Suppress("UNCHECKED_CAST")
+            return proxy as T
         } catch (e: Exception) {
             throw RuntimeException("Failed creating proxy from abstract class | ${clazz.name}", e)
         }
@@ -56,14 +66,13 @@ object ProxyClasses {
     @Throws(Exception::class)
     fun <T> createCoroutineSupportedProxyFromAbstract(
         clazz: Class<T>, paramTypes: Array<Class<*>>, args: Array<Any>? = null,
-        invocationHandler: KInvocationHandler,
-        debug: Boolean = false,
+        invocationHandler: KInvocationHandler
     ): T {
         if (debug) {
             debugParameters(clazz, paramTypes, args)
         }
 
-        val bridgeHandler = toJvmInvocationHandler(invocationHandler, debug)!!
+        val bridgeHandler = toJvmInvocationHandler(invocationHandler)!!
 
         return createProxyFromAbstract(clazz, paramTypes, args, bridgeHandler)
     }
@@ -77,7 +86,7 @@ object ProxyClasses {
      * @return Proxy instance.
     </T> */
     fun <T> createProxy(clazz: Class<T>, invocationHandler: KInvocationHandler?): T {
-        val bridgeHandler = toJvmInvocationHandler(invocationHandler, debug = true)
+        val bridgeHandler = toJvmInvocationHandler(invocationHandler)
 
         // Example
         // class: com.github.kklisura.cdt.protocol.v2023.commands.Page
@@ -86,7 +95,7 @@ class: ${clazz.name}
 
         """.trimIndent()
 
-        println(message)
+        println("createProxy: $message")
 
         val proxy = Proxy.newProxyInstance(clazz.classLoader, arrayOf<Class<*>>(clazz), bridgeHandler)
 
@@ -94,50 +103,27 @@ class: ${clazz.name}
         return proxy as T
     }
 
-    fun toJvmInvocationHandler(handler: KInvocationHandler?, debug: Boolean = false): InvocationHandler? {
+    fun toJvmInvocationHandler(handler: KInvocationHandler?): InvocationHandler? {
         if (handler == null) {
             return null
         }
 
         val bridgeHandler = InvocationHandler { proxy, method, methodArgs ->
             if (debug) {
-                // debugParameters(proxy, method, methodArgs)
+                // Typical proxy:
+                //   - jdk.proxy1.$Proxy24
+                // Typical methods:
+                //   - public abstract void com.github.kklisura.cdt.protocol.v2023.commands.Page.enable()
+                //   - public abstract com...page.Navigate com...Page.navigate(java.lang.String)
+                debugParameters(proxy, method, methodArgs)
             }
 
             when (method.name) {
                 "equals" -> methodArgs?.getOrNull(0)?.let { proxy === it } ?: false
                 "hashCode" -> System.identityHashCode(proxy)
                 else -> {
-                    // Suspend function: last arg is a Continuation
-
-                    if (methodArgs != null && methodArgs.isNotEmpty() && methodArgs.last() is Continuation<*>) {
-                        @Suppress("UNCHECKED_CAST")
-                        val cont = methodArgs.last() as Continuation<Any?>
-
-                        val realArgs =
-                            if (methodArgs.size > 1) methodArgs.copyOf(methodArgs.size - 1) as Array<Any>? else null
-
-                        val block: suspend () -> Any? = {
-                            handler.invoke(proxy, method, realArgs)
-                        }
-
-                        block.startCoroutine(object : Continuation<Any?> {
-                            override val context = cont.context
-                            override fun resumeWith(result: Result<Any?>) {
-                                cont.resumeWith(result)
-                            }
-                        })
-
-                        COROUTINE_SUSPENDED
-                    } else {
-//                        scope.launch {
-//                            @Suppress("UNCHECKED_CAST")
-//                            handler.invoke(proxy, method, methodArgs as Array<Any>?)
-//                        }
-                        runBlocking {
-                            @Suppress("UNCHECKED_CAST")
-                            handler.invoke(proxy, method, methodArgs as Array<Any>?)
-                        }
+                    runBlocking {
+                        handler.invoke(proxy, method, methodArgs as Array<Any>?)
                     }
                 }
             }
@@ -187,7 +173,7 @@ args:
         val message = """
 Parameters:
 
-proxy: $proxy
+proxy: ${proxy.javaClass.name}
 method:
     - $method
 methodArgs:

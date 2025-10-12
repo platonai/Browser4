@@ -4,9 +4,7 @@ import ai.platon.pulsar.browser.driver.chrome.DevToolsConfig
 import ai.platon.pulsar.browser.driver.chrome.MethodInvocation
 import ai.platon.pulsar.browser.driver.chrome.RemoteDevTools
 import ai.platon.pulsar.browser.driver.chrome.Transport
-import ai.platon.pulsar.browser.driver.chrome.util.ChromeIOException
-import ai.platon.pulsar.browser.driver.chrome.util.ChromeRPCException
-import ai.platon.pulsar.browser.driver.chrome.util.ChromeRPCTimeoutException
+import ai.platon.pulsar.browser.driver.chrome.util.*
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.readable
 import ai.platon.pulsar.common.sleepSeconds
@@ -19,11 +17,33 @@ import com.github.kklisura.cdt.protocol.v2023.support.types.EventListener
 import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
 import java.io.IOException
+import java.lang.reflect.Method
 import java.time.Duration
 import java.time.Instant
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+
+class CachedDevToolsInvocationHandlerProxies: KInvocationHandler {
+    val commandHandler: DevToolsInvocationHandler = DevToolsInvocationHandler()
+    val commands: MutableMap<Method, Any> = ConcurrentHashMap()
+
+    init {
+        // println("CommandHandler hashCode: " + commandHandler.hashCode())
+    }
+
+    // Typical proxy:
+    //   - jdk.proxy1.$Proxy24
+    // Typical methods:
+    //   - public abstract void com.github.kklisura.cdt.protocol.v2023.commands.Page.enable()
+    //   - public abstract com...page.Navigate com...Page.navigate(java.lang.String)
+    override suspend fun invoke(proxy: Any, method: Method, args: Array<Any>?): Any? {
+        return commands.computeIfAbsent(method) {
+            ProxyClasses.createProxy(method.returnType, commandHandler)
+        }
+    }
+}
 
 abstract class ChromeDevToolsImpl(
     private val browserTransport: Transport,
