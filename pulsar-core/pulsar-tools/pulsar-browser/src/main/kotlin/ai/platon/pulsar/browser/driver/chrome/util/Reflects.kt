@@ -5,7 +5,6 @@ import javassist.util.proxy.ProxyFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
@@ -114,6 +113,7 @@ class: ${clazz.name}
                     if (methodArgs != null && methodArgs.isNotEmpty() && methodArgs.last() is Continuation<*>) {
                         @Suppress("UNCHECKED_CAST")
                         val cont = methodArgs.last() as Continuation<Any?>
+
                         val realArgs =
                             if (methodArgs.size > 1) methodArgs.copyOf(methodArgs.size - 1) as Array<Any>? else null
 

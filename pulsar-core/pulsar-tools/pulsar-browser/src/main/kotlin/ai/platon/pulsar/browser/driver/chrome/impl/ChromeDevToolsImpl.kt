@@ -70,55 +70,35 @@ abstract class ChromeDevToolsImpl(
      *
      * @param returnProperty The property to return from the response.
      * @param clazz The class of the return type.
-     * @param <T> The return type.
-     * @return The result of the invocation.
-     * */
-    @Throws(InterruptedException::class)
-    open suspend fun <T> invoke(
-        clazz: Class<T>,
-        returnProperty: String,
-        methodInvocation: MethodInvocation
-    ): T? {
-        try {
-            return invoke0(clazz, returnProperty, null, methodInvocation)
-        }  catch (e: ChromeIOException) {
-            // TODO: if the connection is lost, we should close the browser and restart it
-            throw ChromeRPCException("Web socket connection lost", e)
-        } catch (e: InterruptedException) {
-            logger.warn("Interrupted while invoke ${clazz::javaClass.name}.${methodInvocation.method}")
-            Thread.currentThread().interrupt()
-            return null
-        } catch (e: IOException) {
-            throw ChromeRPCException("Failed reading response message", e)
-        }
-    }
-
-    /**
-     * Invokes a remote method and returns the result.
-     * The method is blocking and will wait for the response.
-     *
-     * TODO: use non-blocking version
-     *
-     * @param returnProperty The property to return from the response.
-     * @param clazz The class of the return type.
      * @param returnTypeClasses The classes of the return type.
      * @param method The method to invoke.
      * @param <T> The return type.
      * @return The result of the invocation.
      * */
-    @Throws(ChromeIOException::class, ChromeRPCException::class)
+    @Throws(ChromeRPCException::class)
     override suspend fun <T> invoke(
         clazz: Class<T>,
         returnProperty: String?,
         returnTypeClasses: Array<Class<out Any>>?,
         method: MethodInvocation
     ): T? {
-        try {
-            return invoke0(clazz, returnProperty, returnTypeClasses, method)
-        } catch (e: InterruptedException) {
-            logger.warn("Interrupted while invoke ${method.method}")
-            Thread.currentThread().interrupt()
-            return null
+        numInvokes.inc()
+        lastActiveTime = Instant.now()
+
+        // Send the request and await result in a coroutine-friendly way
+        val rpcResult = invokeAndWaitForDeferred(returnProperty, method)
+
+        if (rpcResult == null) {
+            val methodName = method.method
+            val readTimeout = config.readTimeout
+            throw ChromeRPCTimeoutException("Response timeout $methodName | #${numInvokes.count}, ($readTimeout)")
+        }
+
+        return when {
+            !rpcResult.isSuccess -> handleFailedFurther(rpcResult.result).let { throw ChromeRPCException(it.first.code, it.second) }
+            Void.TYPE == clazz -> null
+            returnTypeClasses != null -> dispatcher.deserialize(returnTypeClasses, clazz, rpcResult.result)
+            else -> dispatcher.deserialize(clazz, rpcResult.result)
         }
     }
 
@@ -141,33 +121,6 @@ abstract class ChromeDevToolsImpl(
         }
 
         return received
-    }
-
-    @Throws(ChromeIOException::class, InterruptedException::class, ChromeRPCException::class)
-    private suspend fun <T> invoke0(
-        clazz: Class<T>,
-        returnProperty: String?,
-        returnTypeClasses: Array<Class<out Any>>?,
-        method: MethodInvocation
-    ): T? {
-        numInvokes.inc()
-        lastActiveTime = Instant.now()
-
-        // Send the request and await result in a coroutine-friendly way
-        val rpcResult = invokeAndWaitForDeferred(returnProperty, method)
-
-        if (rpcResult == null) {
-            val methodName = method.method
-            val readTimeout = config.readTimeout
-            throw ChromeRPCTimeoutException("Response timeout $methodName | #${numInvokes.count}, ($readTimeout)")
-        }
-        
-        return when {
-            !rpcResult.isSuccess -> handleFailedFurther(rpcResult.result).let { throw ChromeRPCException(it.first.code, it.second) }
-            Void.TYPE == clazz -> null
-            returnTypeClasses != null -> dispatcher.deserialize(returnTypeClasses, clazz, rpcResult.result)
-            else -> dispatcher.deserialize(clazz, rpcResult.result)
-        }
     }
 
     @Throws(ChromeIOException::class, InterruptedException::class)

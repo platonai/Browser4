@@ -23,9 +23,6 @@ class DevToolsInvocationHandler: KInvocationHandler {
 
     lateinit var devTools: RemoteDevTools
 
-    /**
-     * Notice: args must be nullable, since methods can have no arguments
-     * */
     @Throws(ChromeIOException::class, ChromeRPCException::class)
     override suspend fun invoke(target: Any, method: Method, args: Array<Any>?): Any? {
         if (isEventSubscription(method)) {
@@ -38,6 +35,7 @@ class DevToolsInvocationHandler: KInvocationHandler {
         val returnProperty = method.getAnnotation(Returns::class.java)?.value
         val methodInvocation = createMethodInvocation(method, args)
 
+        // Invokes a remote method and returns the result.
         return devTools.invoke(returnType, returnProperty, returnTypeClasses, methodInvocation)
     }
 
