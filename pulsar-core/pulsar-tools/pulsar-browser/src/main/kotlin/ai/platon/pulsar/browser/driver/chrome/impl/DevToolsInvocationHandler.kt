@@ -38,7 +38,7 @@ class DevToolsInvocationHandler: KInvocationHandler {
         val returnProperty = method.getAnnotation(Returns::class.java)?.value
         val methodInvocation = createMethodInvocation(method, args)
 
-        return devTools.invoke(returnProperty, returnType, returnTypeClasses, methodInvocation)
+        return devTools.invoke(returnType, returnProperty, returnTypeClasses, methodInvocation)
     }
 
     private fun handleEventSubscription(target: Any, method: Method, args: Array<Any>?): EventListener {

@@ -3,18 +3,15 @@ package ai.platon.pulsar.browser.driver.chrome
 import ai.platon.pulsar.browser.driver.chrome.util.ChromeIOException
 import ai.platon.pulsar.browser.driver.chrome.util.ChromeRPCException
 import ai.platon.pulsar.browser.driver.chrome.util.ChromeServiceException
-import ai.platon.pulsar.common.ExperimentalApi
-import com.fasterxml.jackson.databind.JsonNode
 import com.github.kklisura.cdt.protocol.v2023.ChromeDevTools
 import com.github.kklisura.cdt.protocol.v2023.support.types.EventHandler
 import com.github.kklisura.cdt.protocol.v2023.support.types.EventListener
 import java.net.URI
-import java.util.concurrent.Future
 import java.util.function.Consumer
 
-interface Transport: AutoCloseable {
+interface Transport : AutoCloseable {
     val isOpen: Boolean
-    
+
     @Throws(ChromeIOException::class)
     fun connect(uri: URI)
 
@@ -23,20 +20,20 @@ interface Transport: AutoCloseable {
 
     @Throws(ChromeIOException::class)
     suspend fun send(message: String)
-    
+
     fun addMessageHandler(consumer: Consumer<String>)
 }
 
-interface CoTransport: AutoCloseable {
+interface CoTransport : AutoCloseable {
     val isClosed: Boolean
     suspend fun connect(uri: URI)
     suspend fun send(message: String): String?
 }
 
-interface RemoteChrome: AutoCloseable {
+interface RemoteChrome : AutoCloseable {
 
     val isActive: Boolean
-    
+
     val version: ChromeVersion
 
     val host: String
@@ -44,7 +41,7 @@ interface RemoteChrome: AutoCloseable {
     val port: Int
 
     fun canConnect(): Boolean
-    
+
     @Throws(ChromeServiceException::class)
     fun listTabs(): Array<ChromeTab>
 
@@ -59,21 +56,21 @@ interface RemoteChrome: AutoCloseable {
 
     @Throws(ChromeServiceException::class)
     fun closeTab(tab: ChromeTab)
-    
+
     @Throws(ChromeServiceException::class)
     fun createDevTools(tab: ChromeTab, config: DevToolsConfig = DevToolsConfig()): RemoteDevTools
 }
 
-interface RemoteDevTools: ChromeDevTools, AutoCloseable {
+interface RemoteDevTools : ChromeDevTools, AutoCloseable {
 
     val isOpen: Boolean
-    
+
     @Throws(ChromeIOException::class, ChromeRPCException::class)
     suspend fun <T> invoke(
-            returnProperty: String?,
-            clazz: Class<T>,
-            returnTypeClasses: Array<Class<out Any>>?,
-            method: MethodInvocation
+        clazz: Class<T>,
+        returnProperty: String?,
+        returnTypeClasses: Array<Class<out Any>>?,
+        method: MethodInvocation
     ): T?
 
     @Throws(ChromeIOException::class, ChromeRPCException::class)
@@ -82,22 +79,12 @@ interface RemoteDevTools: ChromeDevTools, AutoCloseable {
     @Throws(InterruptedException::class)
     fun awaitTermination()
 
-    fun addEventListener(domainName: String, eventName: String, eventHandler: EventHandler<Any>, eventType: Class<*>): EventListener
+    fun addEventListener(
+        domainName: String,
+        eventName: String,
+        eventHandler: EventHandler<Any>,
+        eventType: Class<*>
+    ): EventListener
 
     fun removeEventListener(eventListener: EventListener)
-}
-
-interface CoRemoteDevTools: ChromeDevTools, AutoCloseable {
-    
-    val isOpen: Boolean
-    
-    suspend operator fun <T> invoke(
-        returnProperty: String?,
-        clazz: Class<T>,
-        returnTypeClasses: Array<Class<out Any>>?,
-        method: MethodInvocation
-    ): T?
-    
-    @Throws(InterruptedException::class)
-    fun awaitTermination()
 }

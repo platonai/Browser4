@@ -64,12 +64,9 @@ abstract class ChromeDevToolsImpl(
         browserTransport.addMessageHandler(dispatcher)
         pageTransport.addMessageHandler(dispatcher)
     }
-    
+
     /**
      * Invokes a remote method and returns the result.
-     * The method is blocking and will wait for the response.
-     *
-     * TODO: use non-blocking version
      *
      * @param returnProperty The property to return from the response.
      * @param clazz The class of the return type.
@@ -78,13 +75,12 @@ abstract class ChromeDevToolsImpl(
      * */
     @Throws(InterruptedException::class)
     open suspend fun <T> invoke(
-        returnProperty: String,
         clazz: Class<T>,
+        returnProperty: String,
         methodInvocation: MethodInvocation
     ): T? {
         try {
-//            return runBlocking { invoke0(returnProperty, clazz, null, methodInvocation) }
-            return invoke0(returnProperty, clazz, null, methodInvocation)
+            return invoke0(clazz, returnProperty, null, methodInvocation)
         }  catch (e: ChromeIOException) {
             // TODO: if the connection is lost, we should close the browser and restart it
             throw ChromeRPCException("Web socket connection lost", e)
@@ -96,7 +92,7 @@ abstract class ChromeDevToolsImpl(
             throw ChromeRPCException("Failed reading response message", e)
         }
     }
-    
+
     /**
      * Invokes a remote method and returns the result.
      * The method is blocking and will wait for the response.
@@ -112,14 +108,13 @@ abstract class ChromeDevToolsImpl(
      * */
     @Throws(ChromeIOException::class, ChromeRPCException::class)
     override suspend fun <T> invoke(
-        returnProperty: String?,
         clazz: Class<T>,
+        returnProperty: String?,
         returnTypeClasses: Array<Class<out Any>>?,
         method: MethodInvocation
     ): T? {
         try {
-            // return runBlocking { invoke0(returnProperty, clazz, returnTypeClasses, method) }
-            return invoke0(returnProperty, clazz, returnTypeClasses, method)
+            return invoke0(clazz, returnProperty, returnTypeClasses, method)
         } catch (e: InterruptedException) {
             logger.warn("Interrupted while invoke ${method.method}")
             Thread.currentThread().interrupt()
@@ -150,8 +145,8 @@ abstract class ChromeDevToolsImpl(
 
     @Throws(ChromeIOException::class, InterruptedException::class, ChromeRPCException::class)
     private suspend fun <T> invoke0(
-        returnProperty: String?,
         clazz: Class<T>,
+        returnProperty: String?,
         returnTypeClasses: Array<Class<out Any>>?,
         method: MethodInvocation
     ): T? {
