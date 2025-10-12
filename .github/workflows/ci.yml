@@ -6,7 +6,7 @@ on:
       - master
       - main
     tags:
-      - 'v.+-ci.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-ci.[0-9]+'
     paths:
       - '*.java'
       - '*.kt'
