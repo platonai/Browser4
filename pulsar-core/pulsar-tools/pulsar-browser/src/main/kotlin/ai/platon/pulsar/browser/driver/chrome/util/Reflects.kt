@@ -1,5 +1,6 @@
 package ai.platon.pulsar.browser.driver.chrome.util
 
+import ai.platon.pulsar.browser.driver.chrome.util.ProxyClasses.debugParameters
 import javassist.Modifier
 import javassist.util.proxy.ProxyFactory
 import java.lang.reflect.InvocationHandler
@@ -9,6 +10,9 @@ import kotlin.coroutines.Continuation
 import kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED
 import kotlin.coroutines.startCoroutine
 
+object ReflectUtils {
+}
+
 interface KInvocationHandler: InvocationHandler {
     suspend fun invokeDeferred(unused: Any, method: Method, args: Array<Any>?): Any?
 
@@ -16,6 +20,7 @@ interface KInvocationHandler: InvocationHandler {
 }
 
 object ProxyClasses {
+
     /**
      * Creates a proxy class to a given abstract clazz supplied with invocation handler for
      * un-implemented/abstract methods
@@ -52,48 +57,13 @@ object ProxyClasses {
     fun <T> createCoroutineSupportedProxyFromAbstract(
         clazz: Class<T>, paramTypes: Array<Class<*>>, args: Array<Any>? = null,
         invocationHandler: KInvocationHandler,
-        debug: Boolean = true,
+        debug: Boolean = false,
     ): T {
         if (debug) {
             debugParameters(clazz, paramTypes, args)
         }
 
-        val bridgeHandler = InvocationHandler { proxy, method, methodArgs ->
-            if (debug) {
-                debugParameters(proxy, method, methodArgs)
-            }
-
-            when (method.name) {
-                "equals" -> methodArgs?.getOrNull(0)?.let { proxy === it } ?: false
-                "hashCode" -> System.identityHashCode(proxy)
-                "toString" -> "Proxy(${clazz.simpleName})"
-                else -> {
-                    // Suspend function: last arg is a Continuation
-
-                    if (methodArgs != null && methodArgs.isNotEmpty() && methodArgs.last() is Continuation<*>) {
-                        @Suppress("UNCHECKED_CAST")
-                        val cont = methodArgs.last() as Continuation<Any?>
-                        val realArgs =
-                            if (methodArgs.size > 1) methodArgs.copyOf(methodArgs.size - 1) as Array<Any>? else null
-
-                        val block: suspend () -> Any? = {
-                            invocationHandler.invokeDeferred(proxy, method, realArgs)
-                        }
-                        block.startCoroutine(object : Continuation<Any?> {
-                            override val context = cont.context
-                            override fun resumeWith(result: Result<Any?>) {
-                                cont.resumeWith(result)
-                            }
-                        })
-
-                        COROUTINE_SUSPENDED
-                    } else {
-                        @Suppress("UNCHECKED_CAST")
-                        invocationHandler.invoke(proxy, method, methodArgs as Array<Any>?)
-                    }
-                }
-            }
-        }
+        val bridgeHandler = toJvmInvocationHandler(invocationHandler, debug)!!
 
         return createProxyFromAbstract(clazz, paramTypes, args, bridgeHandler)
     }
@@ -107,7 +77,66 @@ object ProxyClasses {
      * @return Proxy instance.
     </T> */
     fun <T> createProxy(clazz: Class<T>, invocationHandler: KInvocationHandler?): T {
-        return Proxy.newProxyInstance(clazz.classLoader, arrayOf<Class<*>>(clazz), invocationHandler) as T
+        // val bridgeHandler = toJvmInvocationHandler(invocationHandler, debug = true)
+
+        // Example
+        // class: com.github.kklisura.cdt.protocol.v2023.commands.Page
+        val message = """
+class: ${clazz.name}
+
+        """.trimIndent()
+
+        println(message)
+
+        val proxy = Proxy.newProxyInstance(clazz.classLoader, arrayOf<Class<*>>(clazz), invocationHandler)
+
+        @Suppress("UNCHECKED_CAST")
+        return proxy as T
+    }
+
+    fun toJvmInvocationHandler(handler: KInvocationHandler?, debug: Boolean = false): InvocationHandler? {
+        if (handler == null) {
+            return null
+        }
+
+        val bridgeHandler = InvocationHandler { proxy, method, methodArgs ->
+            if (debug) {
+                // debugParameters(proxy, method, methodArgs)
+            }
+
+            when (method.name) {
+                "equals" -> methodArgs?.getOrNull(0)?.let { proxy === it } ?: false
+                "hashCode" -> System.identityHashCode(proxy)
+                else -> {
+                    // Suspend function: last arg is a Continuation
+
+                    if (methodArgs != null && methodArgs.isNotEmpty() && methodArgs.last() is Continuation<*>) {
+                        @Suppress("UNCHECKED_CAST")
+                        val cont = methodArgs.last() as Continuation<Any?>
+                        val realArgs =
+                            if (methodArgs.size > 1) methodArgs.copyOf(methodArgs.size - 1) as Array<Any>? else null
+
+                        val block: suspend () -> Any? = {
+                            handler.invokeDeferred(proxy, method, realArgs)
+                        }
+
+                        block.startCoroutine(object : Continuation<Any?> {
+                            override val context = cont.context
+                            override fun resumeWith(result: Result<Any?>) {
+                                cont.resumeWith(result)
+                            }
+                        })
+
+                        COROUTINE_SUSPENDED
+                    } else {
+                         @Suppress("UNCHECKED_CAST")
+                         handler.invoke(proxy, method, methodArgs as Array<Any>?)
+                    }
+                }
+            }
+        }
+
+        return bridgeHandler
     }
 
     /**

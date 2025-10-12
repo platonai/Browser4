@@ -133,16 +133,21 @@ class ChromeImpl(
         // Create invocation handler
         val commandHandler = DevToolsInvocationHandler()
         val commands: MutableMap<Method, Any> = ConcurrentHashMap()
+
         val invocationHandler = object: KInvocationHandler {
             override suspend fun invokeDeferred(unused: Any, method: Method, args: Array<Any>?): Any? {
-                return commands.computeIfAbsent(method) { ProxyClasses.createProxy(method.returnType, commandHandler) }
+                return commands.computeIfAbsent(method) {
+                    ProxyClasses.createProxy(method.returnType, commandHandler)
+                }
             }
 
             override fun invoke(proxy: Any, method: Method, args: Array<Any>?): Any? {
-                return commands.computeIfAbsent(method) { ProxyClasses.createProxy(method.returnType, commandHandler) }
+                return commands.computeIfAbsent(method) {
+                    ProxyClasses.createProxy(method.returnType, commandHandler)
+                }
             }
         }
-        
+
         val browserUrl = version.webSocketDebuggerUrl
             ?: throw ChromeIOException("Invalid web socket url to browser")
         val browserTransport = KtorTransport.create(URI.create(browserUrl))
