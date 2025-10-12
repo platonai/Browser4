@@ -26,13 +26,13 @@ class DevToolsInvocationHandler: KInvocationHandler {
         /**
          *
          * */
-        fun createMethodInvocation(method: String, params: Map<String, Any>?): MethodInvocation {
-            val params0 = params?.toMutableMap() ?: mutableMapOf()
-
-            val methodId = params?.get(ID_PROPERTY)?.toString()?.toLongOrNull() ?: nextId()
+        fun createMethodInvocation(method: String, params: Map<String, Any?>?): MethodInvocation {
+            val params0 = (params ?: emptyMap()).toMutableMap()
+            val methodId = params0[ID_PROPERTY]?.toString()?.toLongOrNull() ?: nextId()
             params0[ID_PROPERTY] = methodId.toString()
 
-            return MethodInvocation(methodId, method, params)
+            val params1 = params0.filterValues { it != null } as Map<String, Any>
+            return MethodInvocation(methodId, method, params1)
         }
 
         fun createMethodInvocation(method: Method, args: Array<Any>? = null): MethodInvocation {

@@ -17,14 +17,16 @@ import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentSkipListSet
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicLong
 import java.util.function.Consumer
 
 /**
  * Coroutine-friendly invocation result wrapper to avoid blocking the calling thread.
  */
-data class RpcResult(val isSuccess: Boolean, val result: JsonNode?)
+data class RpcResult(
+    val isSuccess: Boolean,
+    val result: JsonNode?,
+    val message: String? = null
+)
 
 /**
  * Coroutine-based future that completes when a response with the matching id arrives.
@@ -175,24 +177,22 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
                 val id = idNode.asLong()
                 val future = invocationFutures.remove(id)
 
-//                logger.info("==============================")
-//                println(id)
-//                println(future.toString())
-//                println(message)
+                logger.info("==============================")
+                println(id)
+                println(future?.returnProperty)
+                println(message)
 
                 if (future != null) {
                     var resultNode = jsonNode.get(RESULT_PROPERTY)
                     val errorNode = jsonNode.get(ERROR_PROPERTY)
                     if (errorNode != null) {
-                        future.deferred.complete(RpcResult(false, errorNode))
+                        future.deferred.complete(RpcResult(false, errorNode, message))
                     } else {
                         if (future.returnProperty != null) {
-                            if (resultNode != null) {
-                                resultNode = resultNode.get(future.returnProperty)
-                            }
+                            resultNode = resultNode?.get(future.returnProperty)
                         }
 
-                        future.deferred.complete(RpcResult(true, resultNode))
+                        future.deferred.complete(RpcResult(true, resultNode, message))
                     }
                 } else {
                     logger.warn("Received response with unknown invocation #{} - {}", id, jsonNode.asText())

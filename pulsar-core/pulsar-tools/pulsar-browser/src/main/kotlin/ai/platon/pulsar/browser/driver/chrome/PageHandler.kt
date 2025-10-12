@@ -16,16 +16,16 @@ import com.github.kklisura.cdt.protocol.v2023.types.runtime.Evaluate
 import com.github.kklisura.cdt.protocol.v2023.types.runtime.SerializationOptions
 
 class PageHandler(
-    private val devTools: RemoteDevTools,
+    val devTools: RemoteDevTools,
     private val confuser: ScriptConfuser,
 ) {
     companion object {
         // see org.w3c.dom.Node.ELEMENT_NODE
         const val ELEMENT_NODE = 1
     }
-    
+
     private val logger = getLogger(this)
-    
+
     private val isActive get() = AppContext.isActive && devTools.isOpen
     private val pageAPI get() = devTools.page.takeIf { isActive }
     private val domAPI get() = devTools.dom.takeIf { isActive }
@@ -37,7 +37,7 @@ class PageHandler(
 
     @Throws(ChromeDriverException::class)
     suspend fun navigate(url: String): Navigate? {
-        return pageAPI?.navigate(url)
+        return navigate(url, null)
     }
 
     @Throws(ChromeDriverException::class)
@@ -48,7 +48,11 @@ class PageHandler(
         @Optional @ParamName("frameId") frameId: String? = null,
         @Experimental @Optional @ParamName("referrerPolicy") referrerPolicy: ReferrerPolicy? = null
     ): Navigate? {
-        return pageAPI?.navigate(url, referrer, transitionType, frameId, referrerPolicy)
+        // return pageAPI?.navigate(url, referrer, transitionType, frameId, referrerPolicy)
+        val params =
+            mapOf("url" to url, "referrer" to referrer, "transitionType" to transitionType, "frameId" to frameId)
+
+        return devTools.call("Page.navigate", params)
     }
 
     /**
@@ -58,24 +62,24 @@ class PageHandler(
     fun querySelector(selector: String): Int? {
         return querySelectorOrNull(selector)
     }
-    
+
     @Throws(ChromeDriverException::class)
     fun querySelectorAll(selector: String): List<Int> {
         return invokeOnElement(selector) { nodeId ->
             domAPI?.querySelectorAll(nodeId, selector)
         } ?: listOf()
     }
-    
+
     @Throws(ChromeDriverException::class)
     fun getAttributes(selector: String): Map<String, String> {
         return invokeOnElement(selector) { nodeId ->
             domAPI?.getAttributes(nodeId)?.zipWithNext()?.toMap()
         } ?: emptyMap()
     }
-    
+
     @Throws(ChromeDriverException::class)
     fun getAttribute(selector: String, attrName: String) = invokeOnElement(selector) { getAttribute(it, attrName) }
-    
+
     @Throws(ChromeDriverException::class)
     fun getAttribute(nodeId: Int, attrName: String): String? {
         // `attributes`: n1, v1, n2, v2, n3, v3, ...
@@ -92,7 +96,7 @@ class PageHandler(
     fun setAttribute(nodeId: Int, attrName: String, attrValue: String) {
         domAPI?.setAttributeValue(nodeId, attrName, attrValue)
     }
-    
+
     /**
      * TODO: too many requests, need to optimize
      * RobustRPC - Too many RPC failures: selectAttributeAll (6/5) | DOM Error while querying
@@ -103,10 +107,10 @@ class PageHandler(
             .mapNotNull { getAttribute(it, attrName) }
             .toList()
     }
-    
+
     @Throws(ChromeDriverException::class)
     fun visible(selector: String) = predicateOnElement(selector) { visible(it) }
-    
+
     @Throws(ChromeDriverException::class)
     fun visible(nodeId: Int): Boolean {
         if (nodeId <= 0) {
@@ -130,7 +134,7 @@ class PageHandler(
 
         return isVisible
     }
-    
+
     /**
      * This method fetches an element with `selector` and focuses it. If there's no
      * element matching `selector`, the method returns 0.
@@ -146,17 +150,17 @@ class PageHandler(
     @Throws(ChromeDriverException::class)
     fun focusOnSelector(selector: String): Int {
         val rootId = domAPI?.document?.nodeId ?: return 0
-        
+
         val nodeId = domAPI?.querySelector(rootId, selector)
         if (nodeId == 0) {
             return 0
         }
 
         domAPI?.focus(nodeId, rootId, null)
-        
+
         return nodeId ?: 0
     }
-    
+
     @Throws(ChromeDriverException::class)
     fun scrollIntoViewIfNeeded(selector: String, rect: Rect? = null): Int? {
         val nodeId = querySelector(selector)
@@ -167,7 +171,7 @@ class PageHandler(
 
         return scrollIntoViewIfNeeded(nodeId, selector, rect)
     }
-    
+
     @Throws(ChromeDriverException::class)
     fun scrollIntoViewIfNeeded(nodeId: Int, selector: String? = null, rect: Rect? = null): Int? {
         try {
@@ -179,15 +183,17 @@ class PageHandler(
 
             domAPI?.scrollIntoViewIfNeeded(nodeId, node.backendNodeId, null, rect)
         } catch (e: ChromeRPCException) {
-            logger.debug("DOM.scrollIntoViewIfNeeded is not supported, fallback to Element.scrollIntoView | {} | {} | {}",
-                nodeId, e.message, selector)
+            logger.debug(
+                "DOM.scrollIntoViewIfNeeded is not supported, fallback to Element.scrollIntoView | {} | {} | {}",
+                nodeId, e.message, selector
+            )
             // Fallback to Element.scrollIntoView if DOM.scrollIntoViewIfNeeded is not supported
             evaluate("__pulsar_utils__.scrollIntoView('$selector')")
         }
 
         return nodeId
     }
-    
+
     /**
      * Evaluates expression on global object.
      *
@@ -255,24 +261,24 @@ class PageHandler(
             domAPI?.querySelector(rootId, selector)
         } else null
     }
-    
+
     @Throws(ChromeDriverException::class)
     private fun <T> invokeOnElement(selector: String, action: (Int) -> T): T? {
         val nodeId = querySelectorOrNull(selector)
         if (nodeId != null && nodeId > 0) {
             return action(nodeId)
         }
-        
+
         return null
     }
-    
+
     @Throws(ChromeDriverException::class)
     private fun predicateOnElement(selector: String, action: (Int) -> Boolean): Boolean {
         val nodeId = querySelectorOrNull(selector)
         if (nodeId != null && nodeId > 0) {
             return action(nodeId)
         }
-        
+
         return false
     }
 

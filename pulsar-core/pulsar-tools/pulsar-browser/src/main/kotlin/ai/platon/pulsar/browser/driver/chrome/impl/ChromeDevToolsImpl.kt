@@ -4,7 +4,6 @@ import ai.platon.pulsar.browser.driver.chrome.DevToolsConfig
 import ai.platon.pulsar.browser.driver.chrome.MethodInvocation
 import ai.platon.pulsar.browser.driver.chrome.RemoteDevTools
 import ai.platon.pulsar.browser.driver.chrome.Transport
-import ai.platon.pulsar.browser.driver.chrome.impl.EventDispatcher.Companion.ID_PROPERTY
 import ai.platon.pulsar.browser.driver.chrome.util.*
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.readable
@@ -24,8 +23,9 @@ import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.reflect.KClass
 
-class CachedDevToolsInvocationHandlerProxies: KInvocationHandler {
+class CachedDevToolsInvocationHandlerProxies : KInvocationHandler {
     val commandHandler: DevToolsInvocationHandler = DevToolsInvocationHandler()
     val commands: MutableMap<Method, Any> = ConcurrentHashMap()
 
@@ -105,9 +105,6 @@ abstract class ChromeDevToolsImpl(
         returnTypeClasses: Array<Class<out Any>>?,
         method: MethodInvocation
     ): T? {
-        numInvokes.inc()
-        lastActiveTime = Instant.now()
-
         // Send the request and await result in a coroutine-friendly way
         val message = dispatcher.serialize(method)
         // Non-blocking
@@ -120,7 +117,13 @@ abstract class ChromeDevToolsImpl(
         }
 
         return when {
-            !rpcResult.isSuccess -> handleFailedFurther(rpcResult.result).let { throw ChromeRPCException(it.first.code, it.second) }
+            !rpcResult.isSuccess -> handleFailedFurther(rpcResult.result).let {
+                throw ChromeRPCException(
+                    it.first.code,
+                    it.second
+                )
+            }
+
             Void.TYPE == clazz -> null
             returnTypeClasses != null -> dispatcher.deserialize(returnTypeClasses, clazz, rpcResult.result)
             else -> dispatcher.deserialize(clazz, rpcResult.result)
@@ -128,20 +131,33 @@ abstract class ChromeDevToolsImpl(
     }
 
     @Throws(ChromeIOException::class, ChromeRPCException::class)
-    override suspend fun invoke(method: String, params: Map<String, Any>?, sessionId: String?): RpcResult? {
+    override suspend fun invoke(method: String, params: Map<String, Any?>?): RpcResult? {
         numInvokes.inc()
         lastActiveTime = Instant.now()
 
         val invocation = DevToolsInvocationHandler.createMethodInvocation(method, params)
 
-        val returnProperty: String? = null
-
         // Non-blocking
-        val message = dispatcher.serialize(invocation.id, invocation.method, invocation.params, sessionId)
+        val message = dispatcher.serialize(invocation.id, invocation.method, invocation.params, null)
 
-        val rpcResult: RpcResult? = sendAndReceive(invocation.id, method, returnProperty, message)
+        val rpcResult: RpcResult? = sendAndReceive(invocation.id, method, null, message)
 
         return rpcResult
+    }
+
+    @Throws(ChromeIOException::class, ChromeRPCException::class)
+    override suspend fun <T : Any> invoke(
+        method: String, params: Map<String, Any?>?, returnClass: KClass<T>, returnProperty: String?
+    ): T? {
+        val invocation = DevToolsInvocationHandler.createMethodInvocation(method, params)
+
+        // Non-blocking
+        val message = dispatcher.serialize(invocation.id, invocation.method, invocation.params, null)
+
+        val rpcResult = sendAndReceive(invocation.id, method, returnProperty, message) ?: return null
+        val jsonNode = rpcResult.result ?: return null
+
+        return dispatcher.deserialize(returnClass.java, jsonNode)
     }
 
     @Throws(ChromeIOException::class, InterruptedException::class)

@@ -2,14 +2,13 @@ package ai.platon.pulsar.browser.driver.chrome
 
 import ai.platon.pulsar.browser.driver.chrome.impl.RpcResult
 import ai.platon.pulsar.browser.driver.chrome.util.ChromeIOException
-import ai.platon.pulsar.browser.driver.chrome.util.ChromeRPCException
 import ai.platon.pulsar.browser.driver.chrome.util.ChromeServiceException
-import com.fasterxml.jackson.databind.JsonNode
 import com.github.kklisura.cdt.protocol.v2023.ChromeDevTools
 import com.github.kklisura.cdt.protocol.v2023.support.types.EventHandler
 import com.github.kklisura.cdt.protocol.v2023.support.types.EventListener
 import java.net.URI
 import java.util.function.Consumer
+import kotlin.reflect.KClass
 
 interface Transport : AutoCloseable {
     val isOpen: Boolean
@@ -58,7 +57,6 @@ interface RemoteDevTools : ChromeDevTools, AutoCloseable {
 
     val isOpen: Boolean
 
-    @Throws(ChromeIOException::class, ChromeRPCException::class)
     suspend fun <T> invoke(
         clazz: Class<T>,
         returnProperty: String?,
@@ -66,8 +64,14 @@ interface RemoteDevTools : ChromeDevTools, AutoCloseable {
         method: MethodInvocation
     ): T?
 
-    @Throws(ChromeIOException::class, ChromeRPCException::class)
-    suspend fun invoke(method: String, params: Map<String, Any>?, sessionId: String? = null): RpcResult?
+    suspend fun invoke(method: String, params: Map<String, Any?>?): RpcResult?
+
+    suspend fun <T : Any> invoke(
+        method: String,
+        params: Map<String, Any?>?,
+        returnClass: KClass<T>,
+        returnProperty: String? = null
+    ): T?
 
     @Throws(InterruptedException::class)
     fun awaitTermination()
@@ -81,3 +85,7 @@ interface RemoteDevTools : ChromeDevTools, AutoCloseable {
 
     fun removeEventListener(eventListener: EventListener)
 }
+
+suspend inline fun <reified T : Any> RemoteDevTools.call(
+    method: String, params: Map<String, Any?>?, returnProperty: String? = null
+): T? = invoke(method, params, T::class, returnProperty)
