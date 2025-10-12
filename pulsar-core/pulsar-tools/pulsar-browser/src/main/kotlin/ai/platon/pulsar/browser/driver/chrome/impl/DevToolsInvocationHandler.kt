@@ -27,7 +27,7 @@ class DevToolsInvocationHandler: KInvocationHandler {
      * Notice: args must be nullable, since methods can have no arguments
      * */
     @Throws(ChromeIOException::class, ChromeRPCException::class)
-    override fun invoke(target: Any, method: Method, args: Array<Any>?): Any? {
+    override suspend fun invoke(target: Any, method: Method, args: Array<Any>?): Any? {
         if (isEventSubscription(method)) {
             return handleEventSubscription(target, method, args)
         }
@@ -39,22 +39,6 @@ class DevToolsInvocationHandler: KInvocationHandler {
         val methodInvocation = createMethodInvocation(method, args)
 
         return devTools.invoke(returnProperty, returnType, returnTypeClasses, methodInvocation)
-    }
-
-    @Deprecated("Not a possible way")
-    @Throws(ChromeIOException::class, ChromeRPCException::class)
-    override suspend fun invokeDeferred(target: Any, method: Method, args: Array<Any>?): Any? {
-        if (isEventSubscription(method)) {
-            return handleEventSubscription(target, method, args)
-        }
-
-        val returnType = method.returnType
-        val returnTypeClasses = method.getAnnotation(ReturnTypeParameter::class.java)
-            ?.value?.map { it.java }?.toTypedArray()
-        val returnProperty = method.getAnnotation(Returns::class.java)?.value
-        val methodInvocation = createMethodInvocation(method, args)
-
-        return devTools.invokeDeferred(returnProperty, returnType, returnTypeClasses, methodInvocation)
     }
 
     private fun handleEventSubscription(target: Any, method: Method, args: Array<Any>?): EventListener {

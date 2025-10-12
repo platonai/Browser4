@@ -135,13 +135,7 @@ class ChromeImpl(
         val commands: MutableMap<Method, Any> = ConcurrentHashMap()
 
         val invocationHandler = object: KInvocationHandler {
-            override suspend fun invokeDeferred(unused: Any, method: Method, args: Array<Any>?): Any? {
-                return commands.computeIfAbsent(method) {
-                    ProxyClasses.createProxy(method.returnType, commandHandler)
-                }
-            }
-
-            override fun invoke(proxy: Any, method: Method, args: Array<Any>?): Any? {
+            override suspend fun invoke(proxy: Any, method: Method, args: Array<Any>?): Any? {
                 return commands.computeIfAbsent(method) {
                     ProxyClasses.createProxy(method.returnType, commandHandler)
                 }

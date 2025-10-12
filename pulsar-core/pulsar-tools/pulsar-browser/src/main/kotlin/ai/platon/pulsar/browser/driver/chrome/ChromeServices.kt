@@ -69,7 +69,7 @@ interface RemoteDevTools: ChromeDevTools, AutoCloseable {
     val isOpen: Boolean
     
     @Throws(ChromeIOException::class, ChromeRPCException::class)
-    fun <T> invoke(
+    suspend fun <T> invoke(
             returnProperty: String?,
             clazz: Class<T>,
             returnTypeClasses: Array<Class<out Any>>?,

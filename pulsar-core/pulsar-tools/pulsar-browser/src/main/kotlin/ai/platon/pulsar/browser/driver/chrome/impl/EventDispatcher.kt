@@ -14,51 +14,22 @@ import com.fasterxml.jackson.databind.type.TypeFactory
 import kotlinx.coroutines.*
 import org.apache.commons.lang3.StringUtils
 import java.io.IOException
-import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentSkipListSet
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.function.Consumer
 
 /**
- * TODO: use kotlinx.coroutines channels instead of CountDownLatch
- * */
+ * Coroutine-friendly invocation result wrapper to avoid blocking the calling thread.
+ */
+data class RpcResult(val isSuccess: Boolean, val result: JsonNode?)
+
+/**
+ * Coroutine-based future that completes when a response with the matching id arrives.
+ */
 class InvocationFuture(val returnProperty: String? = null) {
-    var result: JsonNode? = null
-    var isSuccess = false
-    private val countDownLatch = CountDownLatch(1)
-    
-    fun signal(isSuccess: Boolean, result: JsonNode?) {
-        this.isSuccess = isSuccess
-        this.result = result
-        countDownLatch.countDown()
-    }
-    
-    /**
-     * Causes the current thread to wait until the latch has counted down to
-     * zero, unless the thread is interrupted, or the specified waiting time elapses.
-     *
-     * TODO: this method blocks the current thread, so it should not used in a coroutine
-     * */
-    @Throws(InterruptedException::class)
-    fun await(timeout: Duration) = await(timeout.toMillis(), TimeUnit.MILLISECONDS)
-    
-    /**
-     * Causes the current thread to wait until the latch has counted down to
-     * zero, unless the thread is interrupted, or the specified waiting time elapses.
-     *
-     * TODO: this method blocks the current thread, so it should not used in a coroutine
-     * */
-    @Throws(InterruptedException::class)
-    fun await(timeout: Long, timeUnit: TimeUnit): Boolean {
-        return if (timeout == 0L) {
-            countDownLatch.await()
-            true
-        } else countDownLatch.await(timeout, timeUnit)
-    }
+    val deferred: CompletableDeferred<RpcResult> = CompletableDeferred()
 }
 
 /** Error object returned from dev tools. */
@@ -176,8 +147,12 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
     }
     
     fun unsubscribeAll() {
-        invocationFutures.keys.forEach {
-            invocationFutures.remove(it)?.signal(false, null)
+        // Complete any pending futures with a failed result to unblock waiters
+        val ids = invocationFutures.keys.toList()
+        ids.forEach { id ->
+            invocationFutures.remove(id)?.let { future ->
+                future.deferred.complete(RpcResult(false, null))
+            }
         }
     }
     
@@ -238,12 +213,12 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
             val idNode = jsonNode.get(ID_PROPERTY)
             if (idNode != null) {
                 val id = idNode.asLong()
-                val future = invocationFutures[id]
+                val future = invocationFutures.remove(id)
                 if (future != null) {
                     var resultNode = jsonNode.get(RESULT_PROPERTY)
                     val errorNode = jsonNode.get(ERROR_PROPERTY)
                     if (errorNode != null) {
-                        future.signal(false, errorNode)
+                        future.deferred.complete(RpcResult(false, errorNode))
                     } else {
                         if (future.returnProperty != null) {
                             if (resultNode != null) {
@@ -251,11 +226,7 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
                             }
                         }
                         
-                        if (resultNode != null) {
-                            future.signal(true, resultNode)
-                        } else {
-                            future.signal(true, null)
-                        }
+                        future.deferred.complete(RpcResult(true, resultNode))
                     }
                 } else {
                     logger.warn("Received response with unknown invocation #{} - {}", id, jsonNode.asText())

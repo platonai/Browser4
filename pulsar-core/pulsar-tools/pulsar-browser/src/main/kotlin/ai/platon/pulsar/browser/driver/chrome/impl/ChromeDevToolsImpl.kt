@@ -17,6 +17,7 @@ import com.fasterxml.jackson.databind.JsonNode
 import com.github.kklisura.cdt.protocol.v2023.support.types.EventHandler
 import com.github.kklisura.cdt.protocol.v2023.support.types.EventListener
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
 import java.io.IOException
 import java.time.Duration
@@ -77,13 +78,14 @@ abstract class ChromeDevToolsImpl(
      * @return The result of the invocation.
      * */
     @Throws(InterruptedException::class)
-    open operator fun <T> invoke(
+    open suspend fun <T> invoke(
         returnProperty: String,
         clazz: Class<T>,
         methodInvocation: MethodInvocation
     ): T? {
         try {
-            return runBlocking { invoke0(returnProperty, clazz, null, methodInvocation) }
+//            return runBlocking { invoke0(returnProperty, clazz, null, methodInvocation) }
+            return invoke0(returnProperty, clazz, null, methodInvocation)
         }  catch (e: ChromeIOException) {
             // TODO: if the connection is lost, we should close the browser and restart it
             throw ChromeRPCException("Web socket connection lost", e)
@@ -110,14 +112,15 @@ abstract class ChromeDevToolsImpl(
      * @return The result of the invocation.
      * */
     @Throws(ChromeIOException::class, ChromeRPCException::class)
-    override fun <T> invoke(
+    override suspend fun <T> invoke(
         returnProperty: String?,
         clazz: Class<T>,
         returnTypeClasses: Array<Class<out Any>>?,
         method: MethodInvocation
     ): T? {
         try {
-            return runBlocking { invoke0(returnProperty, clazz, returnTypeClasses, method) }
+            // return runBlocking { invoke0(returnProperty, clazz, returnTypeClasses, method) }
+            return invoke0(returnProperty, clazz, returnTypeClasses, method)
         } catch (e: InterruptedException) {
             logger.warn("Interrupted while invoke ${method.method}")
             Thread.currentThread().interrupt()
@@ -201,58 +204,55 @@ abstract class ChromeDevToolsImpl(
         numInvokes.inc()
         lastActiveTime = Instant.now()
 
-        // blocks the current thread which is optimized by Kotlin since this method is running within
-        // withContext(Dispatchers.IO), so it's OK for the client code to run efficiently.
-        val (future, responded) = invoke1(returnProperty, method)
+        // Send the request and await result in a coroutine-friendly way
+        val rpcResult = invokeAndWaitForDeferred(returnProperty, method)
 
-        if (!responded) {
+        if (rpcResult == null) {
             val methodName = method.method
             val readTimeout = config.readTimeout
             throw ChromeRPCTimeoutException("Response timeout $methodName | #${numInvokes.count}, ($readTimeout)")
         }
         
         return when {
-            !future.isSuccess -> handleFailedFurther(future).let { throw ChromeRPCException(it.first.code, it.second) }
+            !rpcResult.isSuccess -> handleFailedFurther(rpcResult.result).let { throw ChromeRPCException(it.first.code, it.second) }
             Void.TYPE == clazz -> null
-            returnTypeClasses != null -> dispatcher.deserialize(returnTypeClasses, clazz, future.result)
-            else -> dispatcher.deserialize(clazz, future.result)
+            returnTypeClasses != null -> dispatcher.deserialize(returnTypeClasses, clazz, rpcResult.result)
+            else -> dispatcher.deserialize(clazz, rpcResult.result)
         }
     }
 
     @Throws(ChromeIOException::class, InterruptedException::class)
-    private suspend fun invoke1(
+    private suspend fun invokeAndWaitForDeferred(
         returnProperty: String?,
         method: MethodInvocation
-    ): Pair<InvocationFuture, Boolean> {
+    ): RpcResult? {
         val future = dispatcher.subscribe(method.id, returnProperty)
-        val message = dispatcher.serialize(method)
 
         // See https://github.com/hardkoded/puppeteer-sharp/issues/796 to understand why we need handle Target methods
         // differently.
+        val message = dispatcher.serialize(method)
         if (method.method.startsWith("Target.")) {
+            // return immediately
             browserTransport.send(message)
         } else {
+            // return immediately
             pageTransport.send(message)
         }
 
-        // await() blocks the current thread
-        // 1. the current thread is optimized by Kotlin since this method is running within withContext(Dispatchers.IO)
-        // 2. there are still better solutions to avoid blocking the current thread
-        // 3. it is unclear whether there is a significant performance improvement by using non-blocking solution
-        // 4. unfortunately, there is no easy way to combine the coroutine with the [ProxyClasses.createProxyFromAbstract]
-        // 5. a possible solutions is to send CDP messages directly instead of using the proxy classes
-        // 6. kotlin channel can help which do not block the current thread
+        // Await without blocking a thread; enforce the configured timeout.
+        val timeoutMillis = config.readTimeout.toMillis()
+        val result = withTimeoutOrNull(timeoutMillis) { future.deferred.await() }
+        if (result == null) {
+            // Ensure we don't leak the future if timed out
+            dispatcher.unsubscribe(method.id)
+        }
 
-        // see: https://ktor.io/docs/websocket-client.html
-        val responded = future.await(config.readTimeout)
-        dispatcher.unsubscribe(method.id)
-        
-        return future to responded
+        return result
     }
 
     @Throws(ChromeRPCException::class, IOException::class)
-    private fun handleFailedFurther(future: InvocationFuture): Pair<ErrorObject, String> {
-        return handleFailedFurther(future.result)
+    private fun handleFailedFurther(result: RpcResult): Pair<ErrorObject, String> {
+        return handleFailedFurther(result.result)
     }
 
     @Throws(ChromeRPCException::class, IOException::class)

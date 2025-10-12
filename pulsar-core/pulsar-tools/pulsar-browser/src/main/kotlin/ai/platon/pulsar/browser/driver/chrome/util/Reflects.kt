@@ -1,8 +1,12 @@
 package ai.platon.pulsar.browser.driver.chrome.util
 
-import ai.platon.pulsar.browser.driver.chrome.util.ProxyClasses.debugParameters
 import javassist.Modifier
 import javassist.util.proxy.ProxyFactory
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
 import java.lang.reflect.Proxy
@@ -10,16 +14,13 @@ import kotlin.coroutines.Continuation
 import kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED
 import kotlin.coroutines.startCoroutine
 
-object ReflectUtils {
-}
-
-interface KInvocationHandler: InvocationHandler {
-    suspend fun invokeDeferred(unused: Any, method: Method, args: Array<Any>?): Any?
-
-    override fun invoke(proxy: Any, method: Method, args: Array<Any>?): Any?
+interface KInvocationHandler {
+    suspend fun invoke(proxy: Any, method: Method, args: Array<Any>?): Any?
 }
 
 object ProxyClasses {
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     /**
      * Creates a proxy class to a given abstract clazz supplied with invocation handler for
@@ -77,7 +78,7 @@ object ProxyClasses {
      * @return Proxy instance.
     </T> */
     fun <T> createProxy(clazz: Class<T>, invocationHandler: KInvocationHandler?): T {
-        // val bridgeHandler = toJvmInvocationHandler(invocationHandler, debug = true)
+        val bridgeHandler = toJvmInvocationHandler(invocationHandler, debug = true)
 
         // Example
         // class: com.github.kklisura.cdt.protocol.v2023.commands.Page
@@ -88,7 +89,7 @@ class: ${clazz.name}
 
         println(message)
 
-        val proxy = Proxy.newProxyInstance(clazz.classLoader, arrayOf<Class<*>>(clazz), invocationHandler)
+        val proxy = Proxy.newProxyInstance(clazz.classLoader, arrayOf<Class<*>>(clazz), bridgeHandler)
 
         @Suppress("UNCHECKED_CAST")
         return proxy as T
@@ -117,7 +118,7 @@ class: ${clazz.name}
                             if (methodArgs.size > 1) methodArgs.copyOf(methodArgs.size - 1) as Array<Any>? else null
 
                         val block: suspend () -> Any? = {
-                            handler.invokeDeferred(proxy, method, realArgs)
+                            handler.invoke(proxy, method, realArgs)
                         }
 
                         block.startCoroutine(object : Continuation<Any?> {
@@ -129,8 +130,14 @@ class: ${clazz.name}
 
                         COROUTINE_SUSPENDED
                     } else {
-                         @Suppress("UNCHECKED_CAST")
-                         handler.invoke(proxy, method, methodArgs as Array<Any>?)
+//                        scope.launch {
+//                            @Suppress("UNCHECKED_CAST")
+//                            handler.invoke(proxy, method, methodArgs as Array<Any>?)
+//                        }
+                        runBlocking {
+                            @Suppress("UNCHECKED_CAST")
+                            handler.invoke(proxy, method, methodArgs as Array<Any>?)
+                        }
                     }
                 }
             }
