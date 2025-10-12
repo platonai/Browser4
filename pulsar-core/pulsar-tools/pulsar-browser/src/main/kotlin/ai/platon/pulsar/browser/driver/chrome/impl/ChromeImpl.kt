@@ -3,6 +3,7 @@ package ai.platon.pulsar.browser.driver.chrome.impl
 import ai.platon.pulsar.browser.driver.chrome.*
 import ai.platon.pulsar.browser.driver.chrome.util.ChromeIOException
 import ai.platon.pulsar.browser.driver.chrome.util.ChromeServiceException
+import ai.platon.pulsar.browser.driver.chrome.util.KInvocationHandler
 import ai.platon.pulsar.browser.driver.chrome.util.ProxyClasses
 import ai.platon.pulsar.common.NetUtil
 import ai.platon.pulsar.common.getLogger

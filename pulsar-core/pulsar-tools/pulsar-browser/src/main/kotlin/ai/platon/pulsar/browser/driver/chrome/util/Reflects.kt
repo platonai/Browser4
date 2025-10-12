@@ -1,6 +1,5 @@
 package ai.platon.pulsar.browser.driver.chrome.util
 
-import ai.platon.pulsar.browser.driver.chrome.impl.KInvocationHandler
 import javassist.Modifier
 import javassist.util.proxy.ProxyFactory
 import java.lang.reflect.InvocationHandler
@@ -9,6 +8,12 @@ import java.lang.reflect.Proxy
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED
 import kotlin.coroutines.startCoroutine
+
+interface KInvocationHandler: InvocationHandler {
+    suspend fun invokeDeferred(unused: Any, method: Method, args: Array<Any>?): Any?
+
+    override fun invoke(proxy: Any, method: Method, args: Array<Any>?): Any?
+}
 
 object ProxyClasses {
     /**

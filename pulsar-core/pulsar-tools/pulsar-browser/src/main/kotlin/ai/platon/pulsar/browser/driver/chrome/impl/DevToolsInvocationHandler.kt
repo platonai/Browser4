@@ -4,22 +4,16 @@ import ai.platon.pulsar.browser.driver.chrome.MethodInvocation
 import ai.platon.pulsar.browser.driver.chrome.RemoteDevTools
 import ai.platon.pulsar.browser.driver.chrome.util.ChromeIOException
 import ai.platon.pulsar.browser.driver.chrome.util.ChromeRPCException
+import ai.platon.pulsar.browser.driver.chrome.util.KInvocationHandler
 import com.github.kklisura.cdt.protocol.v2023.support.annotations.EventName
 import com.github.kklisura.cdt.protocol.v2023.support.annotations.ParamName
 import com.github.kklisura.cdt.protocol.v2023.support.annotations.ReturnTypeParameter
 import com.github.kklisura.cdt.protocol.v2023.support.annotations.Returns
 import com.github.kklisura.cdt.protocol.v2023.support.types.EventHandler
 import com.github.kklisura.cdt.protocol.v2023.support.types.EventListener
-import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
 import java.lang.reflect.ParameterizedType
 import java.util.concurrent.atomic.AtomicLong
-
-interface KInvocationHandler: InvocationHandler {
-    suspend fun invokeDeferred(unused: Any, method: Method, args: Array<Any>?): Any?
-
-    override fun invoke(proxy: Any, method: Method, args: Array<Any>?): Any?
-}
 
 class DevToolsInvocationHandler: KInvocationHandler {
     companion object {
