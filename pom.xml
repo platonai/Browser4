@@ -21,7 +21,7 @@
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>pulsar</artifactId>
     <packaging>pom</packaging>
-    <version>4.0.0.ktor-SNAPSHOT</version>
+    <version>4.0.0-ktor+build.1</version>
 
     <name>Browser4</name>
     <description>A lightning-fast, coroutine-safe browser for your AI.</description>

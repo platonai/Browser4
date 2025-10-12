@@ -1,0 +1,80 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - master
+      - main
+    tags:
+      - 'v*.*.*+build.*'
+    paths:
+      - '*.java'
+      - '*.kt'
+  workflow_dispatch:
+    inputs:
+      skip_tests:
+        description: 'Skip tests'
+        required: false
+        default: false
+        type: boolean
+      debug_mode:
+        description: 'Enable debug mode'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  ci-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Environment
+        id: setup
+        uses: ./.github/actions/setup-environment
+        with:
+          java_version: '17'
+
+      - name: Verify Dependencies
+        id: deps
+        uses: ./.github/actions/verify-dependencies
+        with:
+          network_name: ${{ env.NETWORK_NAME }}
+          services_to_start: 'mongodb'
+          startup_timeout: '120'
+          verify_network_connectivity: 'true'
+
+      - name: Maven Build
+        id: build-maven
+        uses: ./.github/actions/maven-build
+        with:
+          skip_tests: ${{ inputs.skip_tests || 'true' }}
+          timeout_minutes: '15'
+
+      - name: Pipeline Summary
+        if: always()
+        shell: bash
+        run: |
+          echo "::group::📊 Pipeline Summary"
+          
+          echo "🎯 Pipeline Results:"
+          echo "  - Setup: ${{ steps.setup.outcome }}"
+          echo "  - Dependencies: ${{ steps.deps.outcome }}"
+          echo "  - Maven Build: ${{ steps.build-maven.outcome }}"
+
+          echo ""
+          echo "📅 Completed at: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          echo "👤 Triggered by: ${{ github.actor }}"
+          echo "🌟 Commit: ${{ github.sha }}"
+          
+          echo "::endgroup::"
+
+      - name: Cleanup Resources
+        if: always()
+        uses: ./.github/actions/cleanup-resources
+        with:
+          container_name: ${{ env.CONTAINER_NAME }}
+          cleanup_compose: 'true'
+          cleanup_volumes: 'true'

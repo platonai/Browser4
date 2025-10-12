@@ -15,7 +15,7 @@
     <parent>
         <groupId>ai.platon.pulsar</groupId>
         <artifactId>pulsar-plugins</artifactId>
-        <version>4.0.0.ktor-SNAPSHOT</version>
+        <version>4.0.0-ktor+build.1</version>
     </parent>
 
     <artifactId>pulsar-parse</artifactId>
