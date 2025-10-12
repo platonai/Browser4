@@ -4,24 +4,13 @@ import ai.platon.pulsar.browser.driver.chrome.impl.KInvocationHandler
 import javassist.Modifier
 import javassist.util.proxy.ProxyFactory
 import java.lang.reflect.InvocationHandler
+import java.lang.reflect.Method
 import java.lang.reflect.Proxy
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED
 import kotlin.coroutines.startCoroutine
 
 object ProxyClasses {
-    /**
-     * Creates a proxy class to a given interface clazz supplied with invocation handler.
-     *
-     * @param clazz Proxy to class.
-     * @param invocationHandler Invocation handler.
-     * @param <T> Class type.
-     * @return Proxy instance.
-    </T> */
-    fun <T> createProxy(clazz: Class<T>, invocationHandler: KInvocationHandler?): T {
-        return Proxy.newProxyInstance(clazz.classLoader, arrayOf<Class<*>>(clazz), invocationHandler) as T
-    }
-
     /**
      * Creates a proxy class to a given abstract clazz supplied with invocation handler for
      * un-implemented/abstract methods
@@ -57,19 +46,30 @@ object ProxyClasses {
     @Throws(Exception::class)
     fun <T> createCoroutineSupportedProxyFromAbstract(
         clazz: Class<T>, paramTypes: Array<Class<*>>, args: Array<Any>? = null,
-        invocationHandler: KInvocationHandler
+        invocationHandler: KInvocationHandler,
+        debug: Boolean = true,
     ): T {
+        if (debug) {
+            debugParameters(clazz, paramTypes, args)
+        }
+
         val bridgeHandler = InvocationHandler { proxy, method, methodArgs ->
+            if (debug) {
+                debugParameters(proxy, method, methodArgs)
+            }
+
             when (method.name) {
                 "equals" -> methodArgs?.getOrNull(0)?.let { proxy === it } ?: false
                 "hashCode" -> System.identityHashCode(proxy)
                 "toString" -> "Proxy(${clazz.simpleName})"
                 else -> {
                     // Suspend function: last arg is a Continuation
+
                     if (methodArgs != null && methodArgs.isNotEmpty() && methodArgs.last() is Continuation<*>) {
                         @Suppress("UNCHECKED_CAST")
                         val cont = methodArgs.last() as Continuation<Any?>
-                        val realArgs = if (methodArgs.size > 1) methodArgs.copyOf(methodArgs.size - 1) as Array<Any>? else null
+                        val realArgs =
+                            if (methodArgs.size > 1) methodArgs.copyOf(methodArgs.size - 1) as Array<Any>? else null
 
                         val block: suspend () -> Any? = {
                             invocationHandler.invokeDeferred(proxy, method, realArgs)
@@ -91,5 +91,68 @@ object ProxyClasses {
         }
 
         return createProxyFromAbstract(clazz, paramTypes, args, bridgeHandler)
+    }
+
+    /**
+     * Creates a proxy class to a given interface clazz supplied with invocation handler.
+     *
+     * @param clazz Proxy to class.
+     * @param invocationHandler Invocation handler.
+     * @param <T> Class type.
+     * @return Proxy instance.
+    </T> */
+    fun <T> createProxy(clazz: Class<T>, invocationHandler: KInvocationHandler?): T {
+        return Proxy.newProxyInstance(clazz.classLoader, arrayOf<Class<*>>(clazz), invocationHandler) as T
+    }
+
+    /**
+     * Example parameters:
+     *
+     * class: ai.platon.pulsar.browser.driver.chrome.impl.ChromeDevToolsImpl
+     * paramTypes:
+     *   - interface ai.platon.pulsar.browser.driver.chrome.Transport,
+     *   - interface ai.platon.pulsar.browser.driver.chrome.Transport,
+     *   - class ai.platon.pulsar.browser.driver.chrome.DevToolsConfig
+     * args:
+     *   - ws://localhost:4644/devtools/browser/fefcf5b0-eb7f-4158-8a07-d5be61024292,
+     *   - ws://localhost:4644/devtools/page/8A485D7DE2D7E9A0971C47686A81B645,
+     *   - ai.platon.pulsar.browser.driver.chrome.DevToolsConfig@257cc1fc
+     * */
+    private fun <T> debugParameters(clazz: Class<T>, paramTypes: Array<Class<*>>, args: Array<Any>? = null) {
+
+        val message = """
+Parameters:
+
+class: ${clazz.name}
+paramTypes: 
+    - ${paramTypes.joinToString("\n    - ")}
+args: 
+    - ${args?.joinToString("\n    - ")}
+"""
+
+        println(message)
+    }
+
+    /**
+     * Example Parameters:
+     *
+     * proxy: ai.platon.pulsar.browser.driver.chrome.impl.ChromeDevToolsImpl_$$_jvst2b9_0@421a4ee1
+     * method:
+     *   - public abstract com.github.kklisura.cdt.protocol.v2023.commands.Page com.github.kklisura.cdt.protocol.v2023.ChromeDevTools.getPage()
+     * methodArgs:
+     *   -
+     * */
+    private fun debugParameters(proxy: Any, method: Method, args: Array<Any>?) {
+        val message = """
+Parameters:
+
+proxy: $proxy
+method:
+    - $method
+methodArgs:
+    - ${args?.joinToString("\n    - ")}
+        """
+
+        println(message)
     }
 }

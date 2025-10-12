@@ -3,6 +3,7 @@ package ai.platon.pulsar.browser.driver.chrome
 import ai.platon.pulsar.browser.driver.chrome.util.ChromeIOException
 import ai.platon.pulsar.browser.driver.chrome.util.ChromeRPCException
 import ai.platon.pulsar.browser.driver.chrome.util.ChromeServiceException
+import ai.platon.pulsar.common.ExperimentalApi
 import com.fasterxml.jackson.databind.JsonNode
 import com.github.kklisura.cdt.protocol.v2023.ChromeDevTools
 import com.github.kklisura.cdt.protocol.v2023.support.types.EventHandler
@@ -18,6 +19,7 @@ interface Transport: AutoCloseable {
     fun connect(uri: URI)
 
     @Throws(ChromeIOException::class)
+    @ExperimentalApi
     suspend fun send(message: String): String?
 
     @Throws(ChromeIOException::class)

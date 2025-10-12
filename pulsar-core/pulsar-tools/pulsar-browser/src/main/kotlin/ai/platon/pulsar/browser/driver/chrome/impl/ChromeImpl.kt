@@ -160,27 +160,16 @@ class ChromeImpl(
 
     private fun createRemoteDevToolsProxy(
         browserTransport: Transport, pageTransport: Transport, config: DevToolsConfig,
-        invocationHandler: KInvocationHandler, supportCoroutine: Boolean = true
+        invocationHandler: KInvocationHandler
     ): RemoteDevTools {
         // Create concrete dev tools instance from interface
 
-        val devTools: RemoteDevTools = if (supportCoroutine) {
-            ProxyClasses.createCoroutineSupportedProxyFromAbstract(
-                ChromeDevToolsImpl::class.java,
-                arrayOf(Transport::class.java, Transport::class.java, DevToolsConfig::class.java),
-                arrayOf(browserTransport, pageTransport, config),
-                invocationHandler
-            )
-        } else {
-            ProxyClasses.createProxyFromAbstract(
-                ChromeDevToolsImpl::class.java,
-                arrayOf(Transport::class.java, Transport::class.java, DevToolsConfig::class.java),
-                arrayOf(browserTransport, pageTransport, config),
-                invocationHandler
-            )
-        }
-
-        return devTools
+        return ProxyClasses.createCoroutineSupportedProxyFromAbstract(
+            ChromeDevToolsImpl::class.java,
+            arrayOf(Transport::class.java, Transport::class.java, DevToolsConfig::class.java),
+            arrayOf(browserTransport, pageTransport, config),
+            invocationHandler
+        )
     }
 
     /**

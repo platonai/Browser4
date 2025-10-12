@@ -3,6 +3,7 @@ package ai.platon.pulsar.browser.driver.chrome.impl
 import ai.platon.pulsar.browser.driver.chrome.Transport
 import ai.platon.pulsar.browser.driver.chrome.util.ChromeDriverException
 import ai.platon.pulsar.browser.driver.chrome.util.ChromeIOException
+import ai.platon.pulsar.common.ExperimentalApi
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.getLogger
@@ -45,7 +46,8 @@ class KtorTransport : Transport {
 
     private var uri: URI? = null
 
-    val id = instanceSequencer.incrementAndGet()
+    val id = ID_SUPPLIER.incrementAndGet()
+
     override val isOpen: Boolean
         get() = (session?.isActive == true) && !closed.get()
 
@@ -91,6 +93,7 @@ class KtorTransport : Transport {
         }
     }
 
+    @ExperimentalApi
     override suspend fun send(message: String): String? {
         meterRequests.mark()
         val ws = session ?: throw ChromeIOException("WebSocket session is not open", isOpen = false)
@@ -163,7 +166,7 @@ class KtorTransport : Transport {
     }
 
     companion object {
-        private val instanceSequencer = AtomicInteger()
+        private val ID_SUPPLIER = AtomicInteger()
 
         @Throws(ChromeIOException::class)
         fun create(uri: URI): Transport {
