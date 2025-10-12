@@ -91,21 +91,6 @@ class KtorTransport : Transport {
         }
     }
 
-    override fun send(message: String) {
-        meterRequests.mark()
-        val ws = session ?: throw ChromeIOException("WebSocket session is not open", isOpen = false)
-        try {
-            tracer?.trace("▶ Send (Blocking) {}", shortenMessage(message))
-            runBlocking(Dispatchers.IO) {
-                ws.send(Frame.Text(message))
-            }
-        } catch (e: CancellationException) {
-            throw ChromeIOException("Failed to send message (cancelled)", e, isOpen)
-        } catch (e: Exception) {
-            throw ChromeIOException("Failed to send message", e, isOpen)
-        }
-    }
-
     override suspend fun sendAndReceiveNext(message: String): String? {
         meterRequests.mark()
         val ws = session ?: throw ChromeIOException("WebSocket session is not open", isOpen = false)
@@ -131,7 +116,7 @@ class KtorTransport : Transport {
             future.completeExceptionally(ChromeIOException("WebSocket session is not open", isOpen = false))
             return future
         }
-        tracer?.trace("▶ Send (async) {}", shortenMessage(message))
+        tracer?.trace("▶ Send {}", shortenMessage(message))
         scope.launch {
             try {
                 ws.send(Frame.Text(message))

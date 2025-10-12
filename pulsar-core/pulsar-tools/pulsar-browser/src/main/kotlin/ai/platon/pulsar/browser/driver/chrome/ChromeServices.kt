@@ -16,9 +16,6 @@ interface Transport: AutoCloseable {
     
     @Throws(ChromeIOException::class)
     fun connect(uri: URI)
-    
-    @Throws(ChromeIOException::class)
-    fun send(message: String)
 
     @Throws(ChromeIOException::class)
     suspend fun sendAndReceiveNext(message: String): String?
