@@ -19,8 +19,7 @@ interface Transport: AutoCloseable {
     fun connect(uri: URI)
 
     @Throws(ChromeIOException::class)
-    @ExperimentalApi
-    suspend fun send(message: String): String?
+    suspend fun sendAndReceive(message: String): String?
 
     @Throws(ChromeIOException::class)
     fun sendAsync(message: String): Future<Void>

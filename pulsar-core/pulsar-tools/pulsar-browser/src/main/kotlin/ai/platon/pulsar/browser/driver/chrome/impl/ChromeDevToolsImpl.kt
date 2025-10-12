@@ -132,9 +132,9 @@ abstract class ChromeDevToolsImpl(
         val rawMessage = dispatcher.serialize(method)
 
         val received = if (method.method.startsWith("Target.")) {
-            browserTransport.send(rawMessage)
+            browserTransport.sendAndReceive(rawMessage)
         } else {
-            pageTransport.send(rawMessage)
+            pageTransport.sendAndReceive(rawMessage)
         }
 
         if (received == null) {
@@ -162,9 +162,9 @@ abstract class ChromeDevToolsImpl(
         val rawMessage = dispatcher.serialize(method, params, sessionId)
 
         val received = if (method.startsWith("Target.")) {
-            browserTransport.send(rawMessage)
+            browserTransport.sendAndReceive(rawMessage)
         } else {
-            pageTransport.send(rawMessage)
+            pageTransport.sendAndReceive(rawMessage)
         }
 
         if (received == null) {
