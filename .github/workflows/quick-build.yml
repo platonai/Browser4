@@ -3,7 +3,7 @@ name: CI/CD Pipeline
 on:
   push:
     tags:
-      - 'v*.*.*+build.*'
+      - 'v*.*.*\+build.*'
     paths:
       - '**/*.java'
       - '**/*.kt'
