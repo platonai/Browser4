@@ -175,11 +175,10 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
                 val id = idNode.asLong()
                 val future = invocationFutures.remove(id)
 
-
-                logger.info("==============================")
-                println(id)
-                println(future.toString())
-                println(message)
+//                logger.info("==============================")
+//                println(id)
+//                println(future.toString())
+//                println(message)
 
                 if (future != null) {
                     var resultNode = jsonNode.get(RESULT_PROPERTY)

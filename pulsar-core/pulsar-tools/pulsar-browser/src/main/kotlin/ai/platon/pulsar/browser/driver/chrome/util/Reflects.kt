@@ -1,5 +1,6 @@
 package ai.platon.pulsar.browser.driver.chrome.util
 
+import ai.platon.pulsar.common.getLogger
 import javassist.Modifier
 import javassist.util.proxy.ProxyFactory
 import kotlinx.coroutines.runBlocking
@@ -12,8 +13,9 @@ interface KInvocationHandler {
 }
 
 object ProxyClasses {
+    private val logger = getLogger(this)
 
-    var debug = false
+    private val isDebugEnabled get() = logger.isDebugEnabled
 
     /**
      * Creates a proxy class to a given abstract clazz supplied with invocation handler for
@@ -63,7 +65,7 @@ object ProxyClasses {
         clazz: Class<T>, paramTypes: Array<Class<*>>, args: Array<Any>? = null,
         invocationHandler: KInvocationHandler
     ): T {
-        if (debug) {
+        if (isDebugEnabled) {
             debugParameters(clazz, paramTypes, args)
         }
 
@@ -79,18 +81,20 @@ object ProxyClasses {
      * @param invocationHandler Invocation handler.
      * @param <T> Class type.
      * @return Proxy instance.
-    </T> */
+     */
     fun <T> createProxy(clazz: Class<T>, invocationHandler: KInvocationHandler?): T {
         val bridgeHandler = toJvmInvocationHandler(invocationHandler)
 
-        // Example
-        // class: com.github.kklisura.cdt.protocol.v2023.commands.Page
-        val message = """
+        if (isDebugEnabled) {
+            // Example
+            // class: com.github.kklisura.cdt.protocol.v2023.commands.Page
+            val message = """
 class: ${clazz.name}
 
         """.trimIndent()
 
-        println("createProxy: $message")
+            logger.info("createProxy: $message")
+        }
 
         val proxy = Proxy.newProxyInstance(clazz.classLoader, arrayOf<Class<*>>(clazz), bridgeHandler)
 
@@ -104,7 +108,7 @@ class: ${clazz.name}
         }
 
         val bridgeHandler = InvocationHandler { proxy, method, methodArgs ->
-            if (debug) {
+            if (isDebugEnabled) {
                 // Typical proxy:
                 //   - jdk.proxy1.$Proxy24
                 // Typical methods:
@@ -152,7 +156,7 @@ args:
     - ${args?.joinToString("\n    - ")}
 """
 
-        println(message)
+        logger.info(message)
     }
 
     /**
@@ -175,6 +179,6 @@ methodArgs:
     - ${args?.joinToString("\n    - ")}
         """
 
-        println(message)
+        logger.info(message)
     }
 }
