@@ -76,17 +76,8 @@ interface RemoteDevTools: ChromeDevTools, AutoCloseable {
             method: MethodInvocation
     ): T?
 
-    @Deprecated("Not a possible way")
     @Throws(ChromeIOException::class, ChromeRPCException::class)
-    suspend fun <T> invokeDeferred(
-        returnProperty: String?,
-        clazz: Class<T>,
-        returnTypeClasses: Array<Class<out Any>>?,
-        method: MethodInvocation
-    ): T?
-
-    @Throws(ChromeIOException::class, ChromeRPCException::class)
-    suspend fun send(method: String, params: Map<String, String?>?, sessionId: String? = null): String?
+    suspend fun sendAndReceive(method: String, params: Map<String, String?>?, sessionId: String? = null): String?
 
     @Throws(InterruptedException::class)
     fun awaitTermination()

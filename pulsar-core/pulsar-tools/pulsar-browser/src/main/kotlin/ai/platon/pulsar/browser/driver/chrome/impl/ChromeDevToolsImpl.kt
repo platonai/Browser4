@@ -16,7 +16,6 @@ import com.codahale.metrics.SharedMetricRegistries
 import com.fasterxml.jackson.databind.JsonNode
 import com.github.kklisura.cdt.protocol.v2023.support.types.EventHandler
 import com.github.kklisura.cdt.protocol.v2023.support.types.EventListener
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
 import java.io.IOException
@@ -128,44 +127,8 @@ abstract class ChromeDevToolsImpl(
         }
     }
 
-    @Deprecated("Not a possible way")
     @Throws(ChromeIOException::class, ChromeRPCException::class)
-    override suspend fun <T> invokeDeferred(
-        returnProperty: String?,
-        clazz: Class<T>,
-        returnTypeClasses: Array<Class<out Any>>?,
-        method: MethodInvocation
-    ): T? {
-        numInvokes.inc()
-        lastActiveTime = Instant.now()
-
-        val rawMessage = dispatcher.serialize(method)
-
-        val received = if (method.method.startsWith("Target.")) {
-            browserTransport.sendAndReceive(rawMessage)
-        } else {
-            pageTransport.sendAndReceive(rawMessage)
-        }
-
-        if (received == null) {
-            val methodName = method.method
-            val readTimeout = config.readTimeout
-            throw ChromeRPCTimeoutException("Response timeout $methodName | #${numInvokes.count}, ($readTimeout)")
-        }
-
-        val (isSuccess, jsonNode) = dispatcher.parse(received)
-
-        return when {
-            !isSuccess -> handleFailedFurther(jsonNode).let { throw ChromeRPCException(it.first.code, it.second) }
-            // !future.isSuccess -> handleFailedFurther(future).let { throw ChromeRPCException(it.first.code, it.second) }
-            Void.TYPE == clazz -> null
-            returnTypeClasses != null -> dispatcher.deserialize(returnTypeClasses, clazz, jsonNode)
-            else -> dispatcher.deserialize(clazz, jsonNode)
-        }
-    }
-
-    @Throws(ChromeIOException::class, ChromeRPCException::class)
-    override suspend fun send(method: String, params: Map<String, String?>?, sessionId: String?): String? {
+    override suspend fun sendAndReceive(method: String, params: Map<String, String?>?, sessionId: String?): String? {
         numInvokes.inc()
         lastActiveTime = Instant.now()
 
@@ -183,15 +146,6 @@ abstract class ChromeDevToolsImpl(
         }
 
         return received
-
-//        val (isSuccess, jsonNode) = dispatcher.parse(received)
-//
-////        return when {
-////            !isSuccess -> handleFailedFurther(jsonNode).let { throw ChromeRPCException(it.first.code, it.second) }
-////            else -> dispatcher.deserialize(clazz, jsonNode)
-////        }
-//
-//        return jsonNode
     }
 
     @Throws(ChromeIOException::class, InterruptedException::class, ChromeRPCException::class)

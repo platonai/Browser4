@@ -1,10 +1,8 @@
 package ai.platon.pulsar.browser.driver
 
 import ai.platon.pulsar.browser.driver.chrome.ChromeLauncher
-import ai.platon.pulsar.browser.driver.chrome.ChromeTab
 import ai.platon.pulsar.browser.driver.chrome.RemoteChrome
 import ai.platon.pulsar.browser.driver.chrome.RemoteDevTools
-import ai.platon.pulsar.browser.driver.chrome.common.ChromeOptions
 import ai.platon.pulsar.browser.driver.chrome.common.LauncherOptions
 import ai.platon.pulsar.common.browser.BrowserFiles
 import ai.platon.pulsar.common.sleepSeconds
@@ -53,7 +51,7 @@ class ChromeDevToolsTest {
         devTools.page.navigate("https://www.xiaohongshu.com/")
 
         runBlocking {
-            val received = devTools.send("Page.navigate", mapOf("url" to "https://www.aliyun.com"))
+            val received = devTools.sendAndReceive("Page.navigate", mapOf("url" to "https://www.aliyun.com"))
             println(received)
         }
 
