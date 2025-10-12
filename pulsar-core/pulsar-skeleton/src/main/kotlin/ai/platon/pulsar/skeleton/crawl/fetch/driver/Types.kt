@@ -2,6 +2,7 @@ package ai.platon.pulsar.skeleton.crawl.fetch.driver
 
 import ai.platon.pulsar.browser.driver.chrome.NetworkResourceResponse
 import org.jsoup.Connection
+import java.time.Duration
 import java.util.*
 import java.util.concurrent.ConcurrentLinkedQueue
 
@@ -19,6 +20,40 @@ data class JsEvaluation(
     var description: String? = null,
     var exception: JsException? = null
 )
+
+// ---------------- Evaluate scaffolding (Playwright-aligned) ----------------
+
+data class EvaluateOptions(
+    val timeout: Duration? = null,
+    val awaitPromise: Boolean = true,
+    val world: String? = null,
+    val frameTarget: FrameTarget = FrameTarget.CurrentMain,
+    val returnByValue: Boolean = true
+)
+
+data class WaitForFunctionOptions(
+    val timeout: Duration? = null,
+    val polling: Polling = Polling.RAF
+)
+
+sealed interface Polling {
+    data object RAF : Polling
+    data class Interval(val ms: Long) : Polling
+}
+
+sealed interface FrameTarget {
+    data object CurrentMain : FrameTarget
+    data class ByName(val name: String) : FrameTarget
+    data class ByUrl(val urlRegex: Regex) : FrameTarget
+}
+
+/** Minimal handle interfaces; backends can provide concrete implementations. */
+interface JsHandle {
+    val type: String get() = "object"
+    fun dispose() { /* default no-op; backend should override */ }
+}
+
+interface ElementHandle : JsHandle
 
 /**
  * The webpage navigation history.
