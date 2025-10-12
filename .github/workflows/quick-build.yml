@@ -2,14 +2,18 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches:
-      - master
-      - main
     tags:
       - 'v*.*.*+build.*'
     paths:
-      - '*.java'
-      - '*.kt'
+      - '**/*.java'
+      - '**/*.kt'
+  pull_request:
+    paths:
+      - '**/*.java'
+      - '**/*.kt'
+      - '**/pom.xml'
+      - 'docker-compose.yml'
+      - '.github/workflows/quick-build.yml'
   workflow_dispatch:
     inputs:
       skip_tests:
@@ -23,9 +27,18 @@ on:
         default: false
         type: boolean
 
+permissions:
+  contents: read
+
+concurrency:
+  group: quick-build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   ci-build:
     runs-on: ubuntu-latest
+    env:
+      NETWORK_NAME: browser4_backend
 
     steps:
       - name: Checkout repository
@@ -50,7 +63,9 @@ jobs:
         id: build-maven
         uses: ./.github/actions/maven-build
         with:
-          skip_tests: ${{ inputs.skip_tests || 'true' }}
+          # If not manually dispatched, default to skipping tests; otherwise honor the input
+          skip_tests: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_tests }}
+          maven_profiles: ''
           timeout_minutes: '15'
 
       - name: Pipeline Summary
@@ -75,6 +90,7 @@ jobs:
         if: always()
         uses: ./.github/actions/cleanup-resources
         with:
-          container_name: ${{ env.CONTAINER_NAME }}
+          container_name: 'browser4'
+          network_name: ${{ env.NETWORK_NAME }}
           cleanup_compose: 'true'
           cleanup_volumes: 'true'
