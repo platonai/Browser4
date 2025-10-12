@@ -14,7 +14,7 @@
     <parent>
         <groupId>ai.platon.pulsar</groupId>
         <artifactId>pulsar</artifactId>
-        <version>4.0.0-stagehand.0</version>
+        <version>4.0.0-jseval.0</version>
     </parent>
 
     <artifactId>browser4-crawler</artifactId>

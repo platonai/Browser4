@@ -16,7 +16,7 @@
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>pulsar-bom</artifactId>
     <name>Pulsar BOM</name>
-    <version>4.0.0-stagehand.0</version>
+    <version>4.0.0-jseval.0</version>
 
     <packaging>pom</packaging>
 
