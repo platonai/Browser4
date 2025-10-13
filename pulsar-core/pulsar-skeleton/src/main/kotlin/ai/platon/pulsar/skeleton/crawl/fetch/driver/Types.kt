@@ -13,12 +13,32 @@ data class JsException(
     val url: String? = null
 )
 
+data class JsError(
+    val message: String? = null,
+    val stack: String? = null,
+    val name: String? = null,
+    val lineNumber: Int? = null,
+    val columnNumber: Int? = null
+)
+
 data class JsEvaluation(
     var value: Any? = null,
     var unserializableValue: String? = null,
     var className: String? = null,
     var description: String? = null,
     var exception: JsException? = null
+)
+
+/**
+ * Represents a JavaScript evaluation result with detailed metadata.
+ * This is the new Playwright-aligned evaluation result structure.
+ */
+data class JsEvaluationResult(
+    val value: Any? = null,
+    val type: String,
+    val handleId: String? = null,
+    val durationMs: Long? = null,
+    val exception: JsError? = null
 )
 
 // ---------------- Evaluate scaffolding (Playwright-aligned) ----------------
@@ -51,6 +71,41 @@ sealed interface FrameTarget {
 interface JsHandle {
     val type: String get() = "object"
     fun dispose() { /* default no-op; backend should override */ }
+
+    /**
+     * Evaluates JavaScript expression or function with optional arguments in the context of this handle.
+     * @param expression JavaScript expression or function body
+     * @param args Optional arguments to pass to the function
+     * @return JSON-serializable result
+     */
+    suspend fun evaluate(expression: String, vararg args: Any?): Any?
+
+    /**
+     * Evaluates JavaScript expression or function with optional arguments and returns a handle.
+     * @param expression JavaScript expression or function body
+     * @param args Optional arguments to pass to the function
+     * @return JsHandle to the remote object (must be disposed by caller)
+     */
+    suspend fun evaluateHandle(expression: String, vararg args: Any?): JsHandle
+
+    /**
+     * Gets a property of the object referenced by this handle.
+     * @param propertyName Name of the property to get
+     * @return JsHandle to the property value
+     */
+    suspend fun getProperty(propertyName: String): JsHandle
+
+    /**
+     * Gets all properties of the object referenced by this handle.
+     * @return Map of property names to JsHandle values
+     */
+    suspend fun getProperties(): Map<String, JsHandle>
+
+    /**
+     * Gets the JSON-serializable value of the object referenced by this handle.
+     * @return JSON-serializable value
+     */
+    suspend fun jsonValue(): Any?
 }
 
 interface ElementHandle : JsHandle

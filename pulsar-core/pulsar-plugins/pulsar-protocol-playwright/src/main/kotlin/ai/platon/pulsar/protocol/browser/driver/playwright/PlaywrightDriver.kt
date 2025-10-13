@@ -4,6 +4,7 @@ import ai.platon.pulsar.browser.driver.chrome.NetworkResourceResponse
 import ai.platon.pulsar.browser.driver.chrome.impl.ChromeImpl
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.getLogger
+import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import ai.platon.pulsar.common.math.geometric.PointD
 import ai.platon.pulsar.common.math.geometric.RectD
 import ai.platon.pulsar.common.urls.URLUtils
@@ -13,6 +14,8 @@ import com.fasterxml.jackson.module.kotlin.readValue
 import com.github.kklisura.cdt.protocol.v2023.types.runtime.Evaluate
 import com.microsoft.playwright.Page
 import com.microsoft.playwright.options.WaitUntilState
+import com.microsoft.playwright.JSHandle
+import kotlinx.coroutines.delay
 import org.jsoup.Connection
 import java.time.Duration
 import java.util.*
@@ -36,8 +39,20 @@ class PlaywrightDriver(
     private val page: Page,
 ) : AbstractWebDriver(uniqueID, browser) {
 
-    private val logger = getLogger(this)
-    private val rpc = RobustRPC(this)
+    internal val logger = getLogger(this)
+    internal val rpc = RobustRPC(this)
+
+    // Telemetry metrics for evaluation operations
+    private val registry = MetricsSystem.reg
+    private val counterEvaluations by lazy { registry.counter(this, "playwright.evaluations") }
+    private val counterEvaluateErrors by lazy { registry.counter(this, "playwright.evaluate.errors") }
+    private val counterEvaluateTimeouts by lazy { registry.counter(this, "playwright.evaluate.timeouts") }
+    private val counterHandleCreations by lazy { registry.counter(this, "playwright.handle.creations") }
+    internal val counterHandleDisposals by lazy { registry.counter(this, "playwright.handle.disposals") }
+    private val counterSelectorEvaluations by lazy { registry.counter(this, "playwright.selector.evaluations") }
+    private val counterWaitForFunctions by lazy { registry.counter(this, "playwright.waitforfunctions") }
+    private val timerEvaluationDuration by lazy { registry.meter(this, "playwright.evaluation.duration") }
+    private val timerWaitForFunctionDuration by lazy { registry.meter(this, "playwright.waitforfunction.duration") }
 
     override val browserType: BrowserType = BrowserType.PLAYWRIGHT_CHROME
 
@@ -947,7 +962,452 @@ class PlaywrightDriver(
         }
     }
 
+    // ---------------- New Playwright-aligned Evaluate API Implementation ----------------
+
+    /**
+     * Playwright implementation of the new evaluate method with proper argument passing and options support.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun evaluate(expressionOrFunction: String, vararg args: Any?, options: EvaluateOptions): Any? {
+        val startTime = System.currentTimeMillis()
+        counterEvaluations.inc()
+
+        logger.trace("Playwright evaluate | expression: {}, args: {}", expressionOrFunction, args.size)
+
+        return try {
+            val result = rpc.invokeDeferred("evaluate") {
+                // Handle argument passing based on Playwright's API
+                when {
+                    args.isEmpty() -> {
+                        // No arguments, simple evaluation
+                        page.evaluate(expressionOrFunction)
+                    }
+                    else -> {
+                        // With arguments - Playwright supports passing arguments directly
+                        page.evaluate(expressionOrFunction, args)
+                    }
+                }
+            }
+
+            val duration = System.currentTimeMillis() - startTime
+            timerEvaluationDuration.mark()
+            logger.trace("Playwright evaluate completed | duration: {}ms", duration)
+
+            result
+        } catch (e: Exception) {
+            counterEvaluateErrors.inc()
+            val duration = System.currentTimeMillis() - startTime
+            logger.warn("Playwright evaluate failed | duration: {}ms | error: {}", duration, e.message)
+
+            throw EvaluationScriptException(
+                message = "Playwright evaluation failed: ${e.message}",
+                cause = e,
+                driver = this@PlaywrightDriver,
+                expression = expressionOrFunction,
+                args = args.toList()
+            )
+        }
+    }
+
+    /**
+     * Playwright implementation of evaluateJson with JSON deserialization support.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun <T> evaluateJson(expressionOrFunction: String, vararg args: Any?, options: EvaluateOptions): T {
+        val result = evaluate(expressionOrFunction, args = args, options = options)
+        return try {
+            when (result) {
+                null -> null as T
+                is String -> {
+                    // For JSON strings, try to deserialize using the target type's class
+                    @Suppress("UNCHECKED_CAST")
+                    jacksonObjectMapper().readValue(result, Any::class.java) as T
+                }
+                else -> result as T
+            }
+        } catch (e: Exception) {
+            throw EvaluationSerializationException(
+                valueType = result?.javaClass?.simpleName,
+                message = "Failed to deserialize Playwright evaluation result to requested type",
+                cause = e,
+                driver = this@PlaywrightDriver,
+                expression = expressionOrFunction,
+                args = args.toList()
+            )
+        }
+    }
+
+    /**
+     * Playwright implementation of evaluateHandle - returns a handle to the JavaScript object.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun evaluateHandle(expressionOrFunction: String, vararg args: Any?, options: EvaluateOptions): JsHandle {
+        val startTime = System.currentTimeMillis()
+        counterHandleCreations.inc()
+
+        logger.trace("Playwright evaluateHandle | expression: {}, args: {}", expressionOrFunction, args.size)
+
+        return try {
+            val handle = rpc.invokeDeferred("evaluateHandle") {
+                val handle = when {
+                    args.isEmpty() -> page.evaluateHandle(expressionOrFunction)
+                    else -> page.evaluateHandle(expressionOrFunction, args)
+                }
+                PlaywrightJsHandle(handle, this@PlaywrightDriver)
+            } ?: throw EvaluationException("Failed to create JavaScript handle", driver = this@PlaywrightDriver, expression = expressionOrFunction, args = args.toList())
+
+            val duration = System.currentTimeMillis() - startTime
+            logger.trace("Playwright evaluateHandle completed | duration: {}ms", duration)
+
+            handle
+        } catch (e: Exception) {
+            counterEvaluateErrors.inc()
+            val duration = System.currentTimeMillis() - startTime
+            logger.warn("Playwright evaluateHandle failed | duration: {}ms | error: {}", duration, e.message)
+
+            throw EvaluationScriptException(
+                message = "Playwright evaluateHandle failed: ${e.message}",
+                cause = e,
+                driver = this@PlaywrightDriver,
+                expression = expressionOrFunction,
+                args = args.toList()
+            )
+        }
+    }
+
+    /**
+     * Playwright implementation of evaluateOnSelector - evaluates on the first element matching the selector.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun evaluateOnSelector(selector: String, expressionOrFunction: String, vararg args: Any?, options: EvaluateOptions): Any? {
+        val startTime = System.currentTimeMillis()
+        counterSelectorEvaluations.inc()
+
+        logger.trace("Playwright evaluateOnSelector | selector: {}, expression: {}, args: {}", selector, expressionOrFunction, args.size)
+
+        return try {
+            val result = rpc.invokeDeferred("evaluateOnSelector") {
+                val element = page.querySelector(selector)
+                    ?: return@invokeDeferred null // Return null if element not found
+
+                when {
+                    args.isEmpty() -> element.evaluate(expressionOrFunction)
+                    else -> element.evaluate(expressionOrFunction, args)
+                }
+            }
+
+            val duration = System.currentTimeMillis() - startTime
+            logger.trace("Playwright evaluateOnSelector completed | duration: {}ms", duration)
+
+            result
+        } catch (e: Exception) {
+            counterEvaluateErrors.inc()
+            val duration = System.currentTimeMillis() - startTime
+            logger.warn("Playwright evaluateOnSelector failed | selector: {} | duration: {}ms | error: {}", selector, duration, e.message)
+
+            throw EvaluationScriptException(
+                message = "Playwright evaluateOnSelector failed: ${e.message}",
+                cause = e,
+                driver = this@PlaywrightDriver,
+                expression = expressionOrFunction,
+                args = args.toList()
+            )
+        }
+    }
+
+    /**
+     * Playwright implementation of evaluateOnSelectorJson with JSON deserialization.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun <T> evaluateOnSelectorJson(selector: String, expressionOrFunction: String, vararg args: Any?, options: EvaluateOptions): T {
+        val result = evaluateOnSelector(selector, expressionOrFunction, args = args, options = options)
+        return try {
+            when (result) {
+                null -> null as T
+                is String -> {
+                    @Suppress("UNCHECKED_CAST")
+                    jacksonObjectMapper().readValue(result, Any::class.java) as T
+                }
+                else -> result as T
+            }
+        } catch (e: Exception) {
+            throw EvaluationSerializationException(
+                valueType = result?.javaClass?.simpleName,
+                message = "Failed to deserialize Playwright evaluation result to requested type",
+                cause = e,
+                driver = this@PlaywrightDriver,
+                expression = expressionOrFunction,
+                args = args.toList()
+            )
+        }
+    }
+
+    /**
+     * Playwright implementation of evaluateOnSelectorAll - evaluates on all elements matching the selector.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun evaluateOnSelectorAll(selector: String, expressionOrFunction: String, vararg args: Any?, options: EvaluateOptions): Any? {
+        return try {
+            rpc.invokeDeferred("evaluateOnSelectorAll") {
+                val elements = page.querySelectorAll(selector)
+                if (elements.isEmpty()) {
+                    return@invokeDeferred emptyList<Any?>()
+                }
+
+                // Evaluate on each element and collect results
+                elements.map { element ->
+                    when {
+                        args.isEmpty() -> element.evaluate(expressionOrFunction)
+                        else -> element.evaluate(expressionOrFunction, args)
+                    }
+                }
+            } ?: emptyList<Any?>()
+        } catch (e: Exception) {
+            throw EvaluationScriptException(
+                message = "Playwright evaluateOnSelectorAll failed: ${e.message}",
+                cause = e,
+                driver = this@PlaywrightDriver,
+                expression = expressionOrFunction,
+                args = args.toList()
+            )
+        }
+    }
+
+    /**
+     * Playwright implementation of evaluateOnSelectorHandle - returns a handle to the element.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun evaluateOnSelectorHandle(selector: String, expressionOrFunction: String, vararg args: Any?, options: EvaluateOptions): JsHandle {
+        return try {
+            rpc.invokeDeferred("evaluateOnSelectorHandle") {
+                val element = page.querySelector(selector)
+                    ?: throw EvaluationException("Element not found: $selector", driver = this@PlaywrightDriver, expression = expressionOrFunction, args = args.toList())
+
+                val handle = when {
+                    args.isEmpty() -> element.evaluateHandle(expressionOrFunction)
+                    else -> element.evaluateHandle(expressionOrFunction, args)
+                }
+                PlaywrightJsHandle(handle, this@PlaywrightDriver)
+            } ?: throw EvaluationException("Failed to create element handle", driver = this, expression = expressionOrFunction, args = args.toList())
+        } catch (e: Exception) {
+            when (e) {
+                is EvaluationException -> throw e // Re-throw our own exceptions
+                else -> throw EvaluationScriptException(
+                    message = "Playwright evaluateOnSelectorHandle failed: ${e.message}",
+                    cause = e,
+                    driver = this@PlaywrightDriver,
+                    expression = expressionOrFunction,
+                    args = args.toList()
+                )
+            }
+        }
+    }
+
+    /**
+     * Playwright implementation of waitForFunction with polling support.
+     */
+    @Throws(WebDriverException::class)
+    override suspend fun waitForFunction(expressionOrFunction: String, options: WaitForFunctionOptions, vararg args: Any?): Any? {
+        val startTime = System.currentTimeMillis()
+        counterWaitForFunctions.inc()
+
+        logger.trace("Playwright waitForFunction | expression: {}, args: {}, timeout: {}", expressionOrFunction, args.size, options.timeout)
+
+        return try {
+            val result = rpc.invokeDeferred("waitForFunction") {
+                val timeout = options.timeout?.toMillis()?.toDouble() ?: 30000.0
+                val pollingInterval = when (options.polling) {
+                    is Polling.RAF -> 16.0 // ~60fps
+                    is Polling.Interval -> (options.polling as Polling.Interval).ms.toDouble()
+                }
+
+                logger.trace("Playwright waitForFunction polling | interval: {}ms, timeout: {}ms", pollingInterval, timeout)
+
+                // Playwright's waitForFunction equivalent - use a polling approach
+                val startTime = System.currentTimeMillis()
+                val timeoutMs = timeout.toLong()
+
+                while (System.currentTimeMillis() - startTime < timeoutMs) {
+                    val result = when {
+                        args.isEmpty() -> page.evaluate(expressionOrFunction)
+                        else -> page.evaluate(expressionOrFunction, args)
+                    }
+
+                    // Check if the function returns a truthy value (similar to Playwright's behavior)
+                    if (result != null && result != false && result != 0 && result != "") {
+                        return@invokeDeferred result
+                    }
+
+                    // Wait for the polling interval
+                    kotlinx.coroutines.delay(pollingInterval.toLong())
+                }
+
+                throw EvaluationTimeoutException(
+                    timeout = options.timeout ?: Duration.ofSeconds(30),
+                    message = "waitForFunction timed out after ${timeoutMs}ms",
+                    driver = this@PlaywrightDriver,
+                    expression = expressionOrFunction,
+                    args = args.toList()
+                )
+            }
+
+            val duration = System.currentTimeMillis() - startTime
+            timerWaitForFunctionDuration.mark()
+            logger.trace("Playwright waitForFunction completed | duration: {}ms", duration)
+
+            result
+        } catch (e: Exception) {
+            when (e) {
+                is EvaluationTimeoutException -> {
+                    counterEvaluateTimeouts.inc()
+                    val duration = System.currentTimeMillis() - startTime
+                    logger.warn("Playwright waitForFunction timed out | duration: {}ms | timeout: {}", duration, options.timeout)
+                    throw e
+                }
+                else -> {
+                    counterEvaluateErrors.inc()
+                    val duration = System.currentTimeMillis() - startTime
+                    logger.warn("Playwright waitForFunction failed | duration: {}ms | error: {}", duration, e.message)
+                    throw EvaluationScriptException(
+                        message = "Playwright waitForFunction failed: ${e.message}",
+                        cause = e,
+                        driver = this@PlaywrightDriver,
+                        expression = expressionOrFunction,
+                        args = args.toList()
+                    )
+                }
+            }
+        }
+    }
+
     private fun check(page: Page, url: String) {
         check(!page.isClosed) { "Page is closed | $url" }
+    }
+}
+
+/**
+ * Playwright implementation of JsHandle that wraps Playwright's JSHandle.
+ */
+class PlaywrightJsHandle(
+    private val playwrightHandle: JSHandle,
+    private val playwrightDriver: PlaywrightDriver
+) : JsHandle {
+
+    val driver: WebDriver get() = playwrightDriver
+    private val logger get() = playwrightDriver.logger
+
+    override suspend fun evaluate(expression: String, vararg args: Any?): Any? {
+        val startTime = System.currentTimeMillis()
+        logger.trace("Playwright JSHandle evaluate | expression: {}, args: {}", expression, args.size)
+
+        return try {
+            val result = playwrightDriver.rpc.invokeDeferred("jsHandle.evaluate") {
+                when {
+                    args.isEmpty() -> playwrightHandle.evaluate(expression)
+                    else -> playwrightHandle.evaluate(expression, args)
+                }
+            }
+
+            val duration = System.currentTimeMillis() - startTime
+            logger.trace("Playwright JSHandle evaluate completed | duration: {}ms", duration)
+            result
+        } catch (e: Exception) {
+            val duration = System.currentTimeMillis() - startTime
+            logger.warn("Playwright JSHandle evaluate failed | duration: {}ms | error: {}", duration, e.message)
+
+            throw EvaluationScriptException(
+                message = "Playwright JSHandle evaluation failed: ${e.message}",
+                cause = e,
+                driver = driver,
+                expression = expression,
+                args = args.toList()
+            )
+        }
+    }
+
+    override suspend fun evaluateHandle(expression: String, vararg args: Any?): JsHandle {
+        return try {
+            playwrightDriver.rpc.invokeDeferred("jsHandle.evaluateHandle") {
+                val newHandle = when {
+                    args.isEmpty() -> playwrightHandle.evaluateHandle(expression)
+                    else -> playwrightHandle.evaluateHandle(expression, args)
+                }
+                PlaywrightJsHandle(newHandle, playwrightDriver)
+            } ?: throw EvaluationException("Failed to create JSHandle from evaluation", driver = playwrightDriver, expression = expression, args = args.toList())
+        } catch (e: Exception) {
+            throw EvaluationScriptException(
+                message = "Playwright JSHandle evaluateHandle failed: ${e.message}",
+                cause = e,
+                driver = driver,
+                expression = expression,
+                args = args.toList()
+            )
+        }
+    }
+
+    override suspend fun getProperty(propertyName: String): JsHandle {
+        return try {
+            playwrightDriver.rpc.invokeDeferred("jsHandle.getProperty") {
+                val propertyHandle = playwrightHandle.getProperty(propertyName)
+                PlaywrightJsHandle(propertyHandle, playwrightDriver)
+            } ?: throw EvaluationException("Failed to get property: $propertyName", driver = playwrightDriver)
+        } catch (e: Exception) {
+            throw EvaluationScriptException(
+                message = "Playwright JSHandle getProperty failed: ${e.message}",
+                cause = e,
+                driver = playwrightDriver
+            )
+        }
+    }
+
+    override suspend fun getProperties(): Map<String, JsHandle> {
+        return try {
+            playwrightDriver.rpc.invokeDeferred("jsHandle.getProperties") {
+                val properties = playwrightHandle.getProperties()
+                properties.mapValues { PlaywrightJsHandle(it.value, playwrightDriver) }
+            } ?: emptyMap()
+        } catch (e: Exception) {
+            throw EvaluationScriptException(
+                message = "Playwright JSHandle getProperties failed: ${e.message}",
+                cause = e,
+                driver = playwrightDriver
+            )
+        }
+    }
+
+    override suspend fun jsonValue(): Any? {
+        return try {
+            playwrightDriver.rpc.invokeDeferred("jsHandle.jsonValue") {
+                playwrightHandle.jsonValue()
+            }
+        } catch (e: Exception) {
+            throw EvaluationSerializationException(
+                message = "Playwright JSHandle jsonValue failed: ${e.message}",
+                cause = e,
+                driver = playwrightDriver
+            )
+        }
+    }
+
+    override fun dispose() {
+        val startTime = System.currentTimeMillis()
+        playwrightDriver.counterHandleDisposals.inc()
+
+        logger.trace("Playwright JSHandle dispose")
+
+        try {
+            playwrightHandle.dispose()
+            val duration = System.currentTimeMillis() - startTime
+            logger.trace("Playwright JSHandle dispose completed | duration: {}ms", duration)
+        } catch (e: Exception) {
+            val duration = System.currentTimeMillis() - startTime
+            logger.warn("Playwright JSHandle dispose failed | duration: {}ms | error: {}", duration, e.message)
+            // Log but don't throw on disposal errors
+            playwrightDriver.logger.warn("Failed to dispose JSHandle: ${e.message}")
+        }
+    }
+
+    override fun toString(): String {
+        return "PlaywrightJsHandle(${playwrightHandle.toString()})"
     }
 }
