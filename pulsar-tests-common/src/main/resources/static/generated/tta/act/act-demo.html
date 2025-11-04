@@ -5,107 +5,467 @@
     <title>Session Instructions Demo</title>
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <style>
-        body { font-family: system-ui, Arial, sans-serif; margin:0; padding:0 1rem 4rem; line-height:1.5; }
-        header { background:#111827; color:#fff; padding:1rem; margin:0 -1rem 1rem; }
-        nav a { color:#93c5fd; margin-right:1rem; text-decoration:none; }
-        nav a:hover { text-decoration:underline; }
-        #title { margin:0 0 1rem; }
-        form.search { margin:1rem 0; display:flex; gap:.5rem; }
-        form.search input { flex:1; padding:.5rem .75rem; font-size:1rem; }
-        form.search button { padding:.55rem 1rem; font-size:1rem; cursor:pointer; }
-        .hint { font-size:.85rem; color:#555; }
-        ul#articleList { list-style:none; padding:0; margin:1rem 0; }
-        ul#articleList li { padding:.4rem .3rem; border-bottom:1px solid #e5e7eb; display:flex; gap:.75rem; flex-wrap:wrap; }
-        .title a { font-weight:600; color:#1d4ed8; text-decoration:none; }
-        .title a:hover { text-decoration:underline; }
-        .comments-link { font-size:.8rem; color:#6b7280; text-decoration:none; margin-left:auto; }
-        .comments-link:hover { text-decoration:underline; }
-        .results { border:1px solid #e5e7eb; padding:.75rem; border-radius:6px; margin:1rem 0; background:#f9fafb; }
-        .results.hidden { display:none; }
-        .badge { background:#f3f4f6; border:1px solid #d1d5db; padding:2px 6px; border-radius:4px; font-size:.65rem; letter-spacing:.5px; text-transform:uppercase; }
-        .infinite-loading { text-align:center; padding:1rem; color:#6b7280; }
-        .comment-thread { border:1px solid #d1d5db; border-radius:6px; padding:.75rem; margin:.5rem 0; background:#fff; }
-        .comment-thread[hidden] { display:none; }
-        .comment { margin:.5rem 0; }
-        .deep { margin-left:1.25rem; border-left:2px solid #e5e7eb; padding-left:.75rem; }
-        footer { position:fixed; bottom:0; left:0; right:0; background:#111827; color:#fff; font-size:.75rem; padding:.35rem .75rem; }
-        .screen-tall { height:1400px; }
-        .pill { display:inline-block; background:#e0f2fe; color:#0369a1; padding:2px 8px; border-radius:999px; font-size:.65rem; margin-right:.4rem; }
-        .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); border:0; }
-        .action-log { font-family:monospace; font-size:.75rem; max-height:160px; overflow:auto; background:#0f172a; color:#e2e8f0; padding:.5rem .75rem; border-radius:4px; }
-        .action-log-entry { border-bottom:1px solid #334155; padding:.25rem 0; }
-        .action-log-entry:last-child { border-bottom:none; }
+        * { box-sizing: border-box; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif; 
+            margin: 0; 
+            padding: 0; 
+            line-height: 1.6; 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background-attachment: fixed;
+            color: #1f2937;
+            min-height: 100vh;
+        }
+        
+        /* Header Styles */
+        header { 
+            background: rgba(17, 24, 39, 0.95);
+            backdrop-filter: blur(10px);
+            color: #fff; 
+            padding: 1.5rem 2rem; 
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+        }
+        
+        .header-content {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        #title { 
+            margin: 0 0 1rem; 
+            font-size: 2rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        nav { 
+            display: flex; 
+            gap: 1.5rem; 
+            flex-wrap: wrap;
+            margin-bottom: 0.75rem;
+        }
+        
+        nav a { 
+            color: #93c5fd; 
+            text-decoration: none; 
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            transition: all 0.3s ease;
+            font-weight: 500;
+        }
+        
+        nav a:hover { 
+            background: rgba(147, 197, 253, 0.1);
+            transform: translateY(-2px);
+        }
+        
+        .hint { 
+            font-size: 0.875rem; 
+            color: #9ca3af; 
+            margin: 0;
+        }
+        
+        /* Main Container */
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        
+        section {
+            background: white;
+            border-radius: 12px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            animation: fadeIn 0.5s ease-in;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        h2 {
+            color: #111827;
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin: 0 0 1.5rem;
+            padding-bottom: 0.75rem;
+            border-bottom: 3px solid #667eea;
+            display: inline-block;
+        }
+        
+        /* Search Form */
+        form.search { 
+            margin: 1rem 0; 
+            display: flex; 
+            gap: 0.75rem;
+            flex-wrap: wrap;
+        }
+        
+        form.search input { 
+            flex: 1; 
+            min-width: 250px;
+            padding: 0.75rem 1rem; 
+            font-size: 1rem;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+        }
+        
+        form.search input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        
+        form.search button { 
+            padding: 0.75rem 2rem; 
+            font-size: 1rem; 
+            cursor: pointer;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+        
+        form.search button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px -5px rgba(102, 126, 234, 0.5);
+        }
+        
+        form.search button:active {
+            transform: translateY(0);
+        }
+        
+        /* Article List */
+        ul#articleList { 
+            list-style: none; 
+            padding: 0; 
+            margin: 1rem 0; 
+        }
+        
+        ul#articleList li { 
+            padding: 1rem; 
+            border-bottom: 1px solid #e5e7eb; 
+            display: flex; 
+            gap: 1rem; 
+            flex-wrap: wrap;
+            align-items: center;
+            transition: all 0.3s ease;
+            border-radius: 8px;
+        }
+        
+        ul#articleList li:hover {
+            background: #f9fafb;
+            transform: translateX(5px);
+        }
+        
+        .title a { 
+            font-weight: 600; 
+            color: #1d4ed8; 
+            text-decoration: none;
+            transition: color 0.3s ease;
+        }
+        
+        .title a:hover { 
+            color: #667eea;
+        }
+        
+        .comments-link { 
+            font-size: 0.875rem; 
+            color: #6b7280; 
+            text-decoration: none; 
+            margin-left: auto;
+            padding: 0.25rem 0.75rem;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            transition: all 0.3s ease;
+        }
+        
+        .comments-link:hover { 
+            background: #667eea;
+            color: white;
+            border-color: #667eea;
+        }
+        
+        /* Results */
+        .results { 
+            border: 2px solid #667eea; 
+            padding: 1.5rem; 
+            border-radius: 12px; 
+            margin: 1.5rem 0; 
+            background: linear-gradient(135deg, rgba(102, 126, 234, 0.05) 0%, rgba(118, 75, 162, 0.05) 100%);
+            animation: slideIn 0.5s ease-out;
+        }
+        
+        @keyframes slideIn {
+            from { opacity: 0; max-height: 0; }
+            to { opacity: 1; max-height: 1000px; }
+        }
+        
+        .results.hidden { 
+            display: none; 
+        }
+        
+        .badge { 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 4px 12px; 
+            border-radius: 6px; 
+            font-size: 0.75rem; 
+            letter-spacing: 0.5px; 
+            text-transform: uppercase;
+            font-weight: 600;
+            display: inline-block;
+            margin-bottom: 0.5rem;
+        }
+        
+        .infinite-loading { 
+            text-align: center; 
+            padding: 1.5rem; 
+            color: #6b7280;
+            font-style: italic;
+        }
+        
+        /* Comment Threads */
+        .comment-thread { 
+            border: 2px solid #e5e7eb; 
+            border-radius: 12px; 
+            padding: 1.5rem; 
+            margin: 1rem 0; 
+            background: #f9fafb;
+            animation: expandThread 0.3s ease-out;
+        }
+        
+        @keyframes expandThread {
+            from { opacity: 0; max-height: 0; padding: 0; }
+            to { opacity: 1; max-height: 500px; padding: 1.5rem; }
+        }
+        
+        .comment-thread[hidden] { 
+            display: none; 
+        }
+        
+        .comment { 
+            margin: 0.75rem 0;
+            padding: 0.75rem;
+            background: white;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+        
+        .deep { 
+            margin-left: 2rem; 
+            border-left: 3px solid #e5e7eb; 
+            padding-left: 1rem;
+        }
+        
+        /* Footer */
+        footer { 
+            position: fixed; 
+            bottom: 0; 
+            left: 0; 
+            right: 0; 
+            background: rgba(17, 24, 39, 0.95);
+            backdrop-filter: blur(10px);
+            color: #fff; 
+            font-size: 0.813rem; 
+            padding: 0.75rem 1rem;
+            text-align: center;
+            box-shadow: 0 -4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+        
+        .screen-tall { 
+            height: 1400px; 
+        }
+        
+        .pill { 
+            display: inline-block; 
+            background: #e0f2fe; 
+            color: #0369a1; 
+            padding: 4px 12px; 
+            border-radius: 999px; 
+            font-size: 0.75rem; 
+            margin-right: 0.5rem;
+            font-weight: 500;
+        }
+        
+        .sr-only { 
+            position: absolute; 
+            width: 1px; 
+            height: 1px; 
+            padding: 0; 
+            margin: -1px; 
+            overflow: hidden; 
+            clip: rect(0,0,0,0); 
+            border: 0; 
+        }
+        
+        /* Action Log */
+        .action-log { 
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace; 
+            font-size: 0.813rem; 
+            max-height: 250px; 
+            overflow: auto; 
+            background: #0f172a; 
+            color: #e2e8f0; 
+            padding: 1rem; 
+            border-radius: 8px;
+            border: 2px solid #334155;
+        }
+        
+        .action-log-entry { 
+            border-bottom: 1px solid #334155; 
+            padding: 0.5rem 0;
+            transition: background 0.2s ease;
+        }
+        
+        .action-log-entry:hover {
+            background: rgba(51, 65, 85, 0.3);
+        }
+        
+        .action-log-entry:last-child { 
+            border-bottom: none; 
+        }
+        
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .container {
+                padding: 1rem;
+            }
+            
+            section {
+                padding: 1.5rem;
+            }
+            
+            header {
+                padding: 1rem;
+            }
+            
+            #title {
+                font-size: 1.5rem;
+            }
+            
+            nav {
+                gap: 0.75rem;
+            }
+            
+            nav a {
+                padding: 0.4rem 0.75rem;
+                font-size: 0.875rem;
+            }
+            
+            form.search {
+                flex-direction: column;
+            }
+            
+            form.search input {
+                min-width: 100%;
+            }
+            
+            ul#articleList li {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            
+            .comments-link {
+                margin-left: 0;
+            }
+            
+            .deep {
+                margin-left: 1rem;
+            }
+        }
+        
+        /* Scroll Behavior */
+        html {
+            scroll-behavior: smooth;
+        }
     </style>
 </head>
 <body>
 <header>
-    <h1 id="title">Session Instructions Demo</h1>
-    <nav aria-label="Primary">
-        <!-- 3+ links so that "click the 3rd link" has a deterministic target (Link C) -->
-        <a href="pageA.html">Link A</a>
-        <a href="pageB.html">Link B</a>
-        <a href="pageC.html" id="thirdLink">Link C</a>
-        <a href="#" id="noopLink" onclick="event.preventDefault()">Link D</a>
-    </nav>
-    <p class="hint">Local test page simulating actions for SessionInstructionsExample (search, link navigation, Show/Ask HN, infinite scroll, comments, etc.).</p>
+    <div class="header-content">
+        <h1 id="title">Session Instructions Demo</h1>
+        <nav aria-label="Primary">
+            <!-- 3+ links so that "click the 3rd link" has a deterministic target (Link C) -->
+            <a href="pageA.html">🏠 Link A</a>
+            <a href="pageB.html">📄 Link B</a>
+            <a href="pageC.html" id="thirdLink">🔗 Link C</a>
+            <a href="#" id="noopLink" onclick="event.preventDefault()">⚙️ Link D</a>
+        </nav>
+        <p class="hint">Local test page simulating actions for SessionInstructionsExample (search, link navigation, Show/Ask HN, infinite scroll, comments, etc.).</p>
+    </div>
 </header>
 
-<section aria-labelledby="searchSection">
-    <h2 id="searchSection">Search</h2>
-    <form id="searchForm" class="search" role="search" aria-label="Site search">
-        <label class="sr-only" for="searchBox">Search</label>
-        <input id="searchBox" name="q" type="search" placeholder="Search…" autocomplete="off" />
-        <button type="submit">Search</button>
-    </form>
-    <div id="searchResults" class="results hidden" aria-live="polite"></div>
-</section>
+<div class="container">
+    <section aria-labelledby="searchSection">
+        <h2 id="searchSection">🔍 Search</h2>
+        <form id="searchForm" class="search" role="search" aria-label="Site search">
+            <label class="sr-only" for="searchBox">Search</label>
+            <input id="searchBox" name="q" type="search" placeholder="Search for anything..." autocomplete="off" />
+            <button type="submit">Search</button>
+        </form>
+        <div id="searchResults" class="results hidden" aria-live="polite"></div>
+    </section>
 
-<section aria-labelledby="articlesHeader">
-    <h2 id="articlesHeader">Article List (HN-like)</h2>
-    <ul id="articleList">
-        <li class="athing" data-rank="1">
-            <span class="title"><a href="page2.html">Show HN: Demo Project</a></span>
-            <a href="#" class="comments-link" data-thread="c1">comments</a>
-        </li>
-        <li class="athing" data-rank="2">
-            <span class="title"><a href="page3.html">Ask HN: Need help with scraping</a></span>
-            <a href="#" class="comments-link" data-thread="c2">comments</a>
-        </li>
-        <li class="athing" data-rank="3">
-            <span class="title"><a href="page4.html">Discussion: Web Agents</a></span>
-            <a href="#" class="comments-link" data-thread="c3">comments</a>
-        </li>
-        <li class="athing" data-rank="4">
-            <span class="title"><a href="page5.html">Another Link</a></span>
-            <a href="#" class="comments-link" data-thread="c4">comments</a>
-        </li>
-    </ul>
-    <div id="infiniteMarker" class="infinite-loading">Scroll to bottom to load more…</div>
-</section>
+    <section aria-labelledby="articlesHeader">
+        <h2 id="articlesHeader">📰 Article List (HN-like)</h2>
+        <ul id="articleList">
+            <li class="athing" data-rank="1">
+                <span class="title"><a href="page2.html">Show HN: Demo Project</a></span>
+                <a href="#" class="comments-link" data-thread="c1">💬 comments</a>
+            </li>
+            <li class="athing" data-rank="2">
+                <span class="title"><a href="page3.html">Ask HN: Need help with scraping</a></span>
+                <a href="#" class="comments-link" data-thread="c2">💬 comments</a>
+            </li>
+            <li class="athing" data-rank="3">
+                <span class="title"><a href="page4.html">Discussion: Web Agents</a></span>
+                <a href="#" class="comments-link" data-thread="c3">💬 comments</a>
+            </li>
+            <li class="athing" data-rank="4">
+                <span class="title"><a href="page5.html">Another Link</a></span>
+                <a href="#" class="comments-link" data-thread="c4">💬 comments</a>
+            </li>
+        </ul>
+        <div id="infiniteMarker" class="infinite-loading">⏬ Scroll to bottom to load more…</div>
+    </section>
 
-<section aria-labelledby="commentsHeader">
-    <h2 id="commentsHeader">Comment Threads</h2>
-    <p class="hint">"open the first comment thread" should expand Thread 1 below.</p>
-    <div class="comment-thread" id="thread-c1" hidden>
-        <strong>Thread 1</strong>
-        <div class="comment">UserA: This is a demo comment.</div>
-        <div class="comment deep">UserB: A reply to the demo comment.</div>
-    </div>
-    <div class="comment-thread" id="thread-c2" hidden>
-        <strong>Thread 2</strong>
-        <div class="comment">UserC: Another comment.</div>
-    </div>
-</section>
+    <section aria-labelledby="commentsHeader">
+        <h2 id="commentsHeader">💭 Comment Threads</h2>
+        <p class="hint">"open the first comment thread" should expand Thread 1 below.</p>
+        <div class="comment-thread" id="thread-c1" hidden>
+            <strong>Thread 1</strong>
+            <div class="comment">UserA: This is a demo comment.</div>
+            <div class="comment deep">UserB: A reply to the demo comment.</div>
+        </div>
+        <div class="comment-thread" id="thread-c2" hidden>
+            <strong>Thread 2</strong>
+            <div class="comment">UserC: Another comment.</div>
+        </div>
+    </section>
 
-<section aria-labelledby="actionsHeader">
-    <h2 id="actionsHeader">Action Log</h2>
-    <div id="actionLog" class="action-log" aria-live="polite"></div>
-</section>
+    <section aria-labelledby="actionsHeader">
+        <h2 id="actionsHeader">📊 Action Log</h2>
+        <div id="actionLog" class="action-log" aria-live="polite"></div>
+    </section>
+</div>
 
 <div class="screen-tall" aria-hidden="true"></div>
 
 <footer>
-    Local Demo • Supports: search, 3rd link navigation, Show/Ask HN link, scroll load, comment thread, extraction (.athing .title a), navigation history.
+    🚀 Local Demo • Supports: search, 3rd link navigation, Show/Ask HN link, scroll load, comment thread, extraction (.athing .title a), navigation history.
 </footer>
 
 <script>

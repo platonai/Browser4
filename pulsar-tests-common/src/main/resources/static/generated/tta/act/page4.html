@@ -1,2 +1,81 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Discussion: Web Agents</title></head><body><h1 id="title">Discussion: Web Agents</h1><p>Discussion page.</p><p><a href="act-demo.html">Back to Demo</a></p></body></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Discussion: Web Agents</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif; 
+            margin: 0; 
+            padding: 0; 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background-attachment: fixed;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .container {
+            background: white;
+            border-radius: 16px;
+            padding: 3rem;
+            max-width: 800px;
+            margin: 2rem;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+            animation: fadeIn 0.5s ease-in;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        h1#title { 
+            color: #111827; 
+            font-size: 2.25rem; 
+            margin: 0 0 1rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        p { 
+            color: #4b5563; 
+            line-height: 1.8; 
+            margin: 1rem 0;
+        }
+        .back-link {
+            display: inline-block;
+            margin-top: 2rem;
+            padding: 0.75rem 1.5rem;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+        .back-link:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px -5px rgba(102, 126, 234, 0.5);
+        }
+        .content {
+            background: #f9fafb;
+            padding: 1.5rem;
+            border-radius: 8px;
+            margin: 1.5rem 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 id="title">Discussion: Web Agents</h1>
+        <div class="content">
+            <p>Discussion page exploring the world of intelligent web agents and automation.</p>
+            <p>Web agents are autonomous programs that can interact with websites, perform tasks, and extract information on behalf of users.</p>
+        </div>
+        <a href="act-demo.html" class="back-link">← Back to Demo</a>
+    </div>
+</body>
+</html>
 
