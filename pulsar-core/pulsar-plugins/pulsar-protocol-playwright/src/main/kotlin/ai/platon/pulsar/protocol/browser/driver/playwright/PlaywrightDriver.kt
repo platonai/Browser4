@@ -1,5 +1,6 @@
 package ai.platon.pulsar.protocol.browser.driver.playwright
 
+import ai.platon.pulsar.browser.common.PulsarUtilsIIFEConverter
 import ai.platon.pulsar.browser.driver.chrome.NetworkResourceResponse
 import ai.platon.pulsar.browser.driver.chrome.impl.ChromeImpl
 import ai.platon.pulsar.common.browser.BrowserType
@@ -53,6 +54,8 @@ class PlaywrightDriver(
     private val counterWaitForFunctions by lazy { registry.counter(this, "playwright.waitforfunctions") }
     private val timerEvaluationDuration by lazy { registry.meter(this, "playwright.evaluation.duration") }
     private val timerWaitForFunctionDuration by lazy { registry.meter(this, "playwright.waitforfunction.duration") }
+    
+    private val iifeConverter = PulsarUtilsIIFEConverter()
 
     override val browserType: BrowserType = BrowserType.PLAYWRIGHT_CHROME
 
@@ -757,8 +760,13 @@ class PlaywrightDriver(
 
     override suspend fun evaluateDetail(expression: String): JsEvaluation? {
         return try {
+            val transformed = if (iifeConverter.needsTransformation(expression)) {
+                iifeConverter.transform(expression)
+            } else {
+                expression
+            }
             rpc.invokeDeferred("evaluateDetail") {
-                val result = page.evaluate(settings.confuser.confuse(expression))
+                val result = page.evaluate(settings.confuser.confuse(transformed))
                 JsEvaluation(result)
             }
         } catch (e: Exception) {
@@ -773,8 +781,13 @@ class PlaywrightDriver(
 
     override suspend fun evaluateValueDetail(expression: String): JsEvaluation? {
         return try {
+            val transformed = if (iifeConverter.needsTransformation(expression)) {
+                iifeConverter.transform(expression)
+            } else {
+                expression
+            }
             rpc.invokeDeferred("evaluateDetail") {
-                val result = page.evaluate(settings.confuser.confuse(expression))
+                val result = page.evaluate(settings.confuser.confuse(transformed))
                 JsEvaluation(result)
             }
         } catch (e: Exception) {
