@@ -113,6 +113,9 @@ Module guidelines:
 - Agentic/LLM-facing APIs → `pulsar-core/pulsar-agentic`
 - AI client/utilities → `pulsar-third/pulsar-llm`
 
+**Architecture Documentation:**
+- [Agent Action and Tool Call Architecture](./docs/agent-action-architecture.md) - Unified action execution system
+
 ---
 
 ## 6. Kotlin & Java Interop
