@@ -17,6 +17,10 @@ import javax.script.ScriptEngineManager
  * It parses string commands and executes the corresponding WebDriver methods, enabling
  * script-based control of browser automation.
  *
+ * ## Deprecation Notice:
+ * This class is maintained for backward compatibility. New code should use [ActionExecutionService]
+ * which provides a more unified and maintainable approach to action execution.
+ *
  * ## Key Features:
  * - Supports a wide range of WebDriver commands, such as navigation, interaction, and evaluation.
  * - Provides error handling to ensure robust execution of commands.
@@ -25,15 +29,27 @@ import javax.script.ScriptEngineManager
  * ## Example Usage:
  *
  * ```kotlin
+ * // Deprecated approach
  * val executor = ToolCallExecutor()
  * val result = executor.execute("driver.open('https://example.com')", driver)
+ * 
+ * // Preferred approach
+ * val service = ActionExecutionService()
+ * val result = service.execute("driver.open('https://example.com')", driver)
  * ```
  *
  * @author Vincent Zhang, ivincent.zhang@gmail.com, platon.ai
  */
+@Deprecated(
+    message = "Use ActionExecutionService for better maintainability",
+    replaceWith = ReplaceWith("ActionExecutionService", "ai.platon.pulsar.agentic.ai.support.ActionExecutionService")
+)
 open class ToolCallExecutor {
     private val logger = getLogger(this)
     private val engine = ScriptEngineManager().getEngineByExtension("kts")
+    
+    // Delegate to the new unified service
+    private val service = ActionExecutionService()
 
     /**
      * Evaluate [expression].
@@ -45,11 +61,11 @@ open class ToolCallExecutor {
      * ```
      * */
     fun eval(expression: String, driver: WebDriver): Any? {
-        return eval(expression, mapOf("driver" to driver))
+        return service.eval(expression, driver)
     }
 
     fun eval(expression: String, browser: Browser): Any? {
-        return eval(expression, mapOf("browser" to browser))
+        return service.eval(expression, browser)
     }
 
     fun eval(expression: String, agent: PerceptiveAgent): Any? {
@@ -57,13 +73,7 @@ open class ToolCallExecutor {
     }
 
     fun eval(expression: String, variables: Map<String, Any>): Any? {
-        return try {
-            variables.forEach { (key, value) -> engine.put(key, value) }
-            engine.eval(expression)
-        } catch (e: Exception) {
-            logger.warn("Error eval expression: {} - {}", expression, e.brief())
-            null
-        }
+        return service.eval(expression, variables)
     }
 
     /**
@@ -78,40 +88,23 @@ open class ToolCallExecutor {
      * @return The result of the command execution, or null if the command could not be executed.
      */
     suspend fun execute(expression: String, driver: WebDriver): Any? {
-        return WebDriverToolCallExecutor().execute(expression, driver)
+        return service.execute(expression, driver)
     }
 
     suspend fun execute(expression: String, browser: Browser): Any? {
-        return BrowserToolCallExecutor().execute(expression, browser)
+        return service.execute(expression, browser)
     }
 
     suspend fun execute(expression: String, browser: Browser, session: AgenticSession): Any? {
-        return BrowserToolCallExecutor().execute(expression, browser, session)
+        return service.execute(expression, browser, session)
     }
 
     suspend fun execute(toolCall: ToolCall, driver: WebDriver): Any? {
-        require(toolCall.domain == "driver") { "Tool call domain should be `driver`" }
-        val expression = toolCallToExpression(toolCall) ?:
-            throw IllegalArgumentException("Failed to convert to expression: $toolCall")
-
-        return try {
-            execute(expression, driver)
-        } catch (e: Exception) {
-            logger.warn("Error executing TOOL CALL: {} - {}", toolCall, e.brief())
-            null
-        }
+        return service.execute(toolCall, driver)
     }
 
     suspend fun execute(toolCall: ToolCall, browser: Browser): Any? {
-        require(toolCall.domain == "browser") { "Tool call domain should be `browser`" }
-        val expression = toolCallToExpression(toolCall) ?: return null
-
-        return try {
-            execute(expression, browser)
-        } catch (e: Exception) {
-            logger.warn("Error executing TOOL CALL: {} - {}", toolCall, e.brief())
-            null
-        }
+        return service.execute(toolCall, browser)
     }
 
     suspend fun execute(toolCall: ToolCall, agent: PerceptiveAgent): Any? {

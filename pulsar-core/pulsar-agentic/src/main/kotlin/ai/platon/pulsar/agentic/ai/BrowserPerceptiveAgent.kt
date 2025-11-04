@@ -3,6 +3,7 @@ package ai.platon.pulsar.agentic.ai
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.ai.agent.*
 import ai.platon.pulsar.agentic.ai.agent.detail.*
+import ai.platon.pulsar.agentic.ai.support.ActionExecutionService
 import ai.platon.pulsar.agentic.ai.support.AgentTool
 import ai.platon.pulsar.agentic.ai.support.ToolCallExecutor
 import ai.platon.pulsar.agentic.ai.tta.ActionDescription
@@ -100,8 +101,8 @@ class BrowserPerceptiveAgent constructor(
     private val domService get() = inference.domService
     private val promptBuilder = PromptBuilder()
 
-    // Reuse ToolCallExecutor to avoid recreation overhead (Medium Priority #14)
-    private val toolCallExecutor = ToolCallExecutor()
+    // Reuse ActionExecutionService for unified action execution (Medium Priority #14)
+    private val actionExecutionService = ActionExecutionService()
 
     // Helper classes for better code organization
     private val pageStateTracker = PageStateTracker(session, config)
@@ -378,8 +379,8 @@ class BrowserPerceptiveAgent constructor(
         val driver = activeDriver
 
         val callResult = when (toolCall.domain) {
-            "driver" -> toolCallExecutor.execute(toolCall, driver)
-            "browser" -> toolCallExecutor.execute(toolCall, driver.browser)
+            "driver" -> actionExecutionService.execute(toolCall, driver)
+            "browser" -> actionExecutionService.execute(toolCall, driver.browser)
             else -> throw IllegalArgumentException("❓ Unsupported domain: ${toolCall.domain} | $toolCall")
         }
 

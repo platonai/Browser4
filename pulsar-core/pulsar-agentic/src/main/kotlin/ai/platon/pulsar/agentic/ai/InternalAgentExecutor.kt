@@ -1,6 +1,7 @@
 package ai.platon.pulsar.agentic.ai
 
 import ai.platon.pulsar.agentic.AgenticSession
+import ai.platon.pulsar.agentic.ai.support.ActionExecutionService
 import ai.platon.pulsar.agentic.ai.support.ToolCallExecutor
 import ai.platon.pulsar.agentic.ai.tta.ActionDescription
 import ai.platon.pulsar.agentic.ai.tta.ToolCallResults
@@ -21,7 +22,7 @@ internal class InternalAgentExecutor(
         session.sessionConfig
     )
 
-    private val toolCallExecutor = ToolCallExecutor()
+    private val actionExecutionService = ActionExecutionService()
 
     val agent = BrowserPerceptiveAgent(driver, session)
 
@@ -44,9 +45,11 @@ internal class InternalAgentExecutor(
         }
 
         val result = if (toolCall != null) {
-            toolCallExecutor.execute(toolCall, driver)
+            actionExecutionService.execute(toolCall, driver)
         } else {
-            action.expressions.take(1).map { expr -> toolCallExecutor.execute(expr, driver) }.firstOrNull()
+            action.expressions.take(1).map<String, Any?> { expr -> 
+                actionExecutionService.execute(expr, driver) 
+            }.firstOrNull()
         }
 
         return ToolCallResults(
