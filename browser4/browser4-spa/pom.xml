@@ -15,6 +15,7 @@
         <groupId>ai.platon.pulsar</groupId>
         <artifactId>pulsar</artifactId>
         <version>4.0.0-jseval.0</version>
+        <relativePath>../../pom.xml</relativePath>
     </parent>
 
     <artifactId>browser4-spa</artifactId>
