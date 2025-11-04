@@ -27,6 +27,8 @@ open class ScriptLoader(
             jsInitParameters[name] = value
         }
 
+        // Note: __pulsar_utils__.js is still included for legacy node_ext.js usage
+        // Direct calls from Kotlin code now use IIFE transformation instead of global injection
         val RESOURCES = """
             stealth.js
             stagehand.js

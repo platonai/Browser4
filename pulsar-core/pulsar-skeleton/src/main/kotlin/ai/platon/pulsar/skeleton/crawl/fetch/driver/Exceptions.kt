@@ -1,6 +1,7 @@
 package ai.platon.pulsar.skeleton.crawl.fetch.driver
 
 import ai.platon.pulsar.common.browser.BrowserErrorCode
+import java.time.Duration
 
 open class WebDriverException(
     message: String? = null,
@@ -37,3 +38,37 @@ open class BrowserErrorPageException(
     pageContent: String? = null,
     cause: Throwable? = null
 ): RuntimeException(message, cause)
+
+open class EvaluationException(
+    message: String? = null,
+    cause: Throwable? = null,
+    driver: WebDriver? = null,
+    val expression: String? = null,
+    val args: List<Any?>? = null
+): WebDriverException(message, cause, driver)
+
+open class EvaluationScriptException(
+    message: String? = null,
+    cause: Throwable? = null,
+    driver: WebDriver? = null,
+    expression: String? = null,
+    args: List<Any?>? = null
+): EvaluationException(message, cause, driver, expression, args)
+
+open class EvaluationSerializationException(
+    message: String? = null,
+    cause: Throwable? = null,
+    driver: WebDriver? = null,
+    expression: String? = null,
+    args: List<Any?>? = null,
+    val valueType: String? = null
+): EvaluationException(message, cause, driver, expression, args)
+
+open class EvaluationTimeoutException(
+    message: String? = null,
+    cause: Throwable? = null,
+    driver: WebDriver? = null,
+    expression: String? = null,
+    args: List<Any?>? = null,
+    val timeout: Duration? = null
+): EvaluationException(message, cause, driver, expression, args)

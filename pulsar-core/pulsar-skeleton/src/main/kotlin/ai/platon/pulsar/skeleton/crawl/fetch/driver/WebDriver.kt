@@ -1412,6 +1412,98 @@ interface WebDriver : Closeable {
     suspend fun evaluateValueDetail(expression: String): JsEvaluation?
 
     /**
+     * Evaluates a JavaScript expression or function with arguments and options.
+     * @param expressionOrFunction JavaScript code to evaluate
+     * @param args Arguments to pass to the function
+     * @param options Evaluation options (timeout, polling, etc.)
+     * @return The evaluation result
+     */
+    @Beta
+    @Throws(WebDriverException::class)
+    suspend fun evaluate(expressionOrFunction: String, vararg args: Any?, options: EvaluateOptions = EvaluateOptions()): Any?
+
+    /**
+     * Evaluates a JavaScript expression and deserializes the result as JSON.
+     * @param expressionOrFunction JavaScript code to evaluate
+     * @param args Arguments to pass to the function
+     * @param options Evaluation options
+     * @return The deserialized result
+     */
+    @Beta
+    @Throws(WebDriverException::class)
+    suspend fun <T> evaluateJson(expressionOrFunction: String, vararg args: Any?, options: EvaluateOptions = EvaluateOptions()): T
+
+    /**
+     * Evaluates a JavaScript expression and returns a handle to the result.
+     * @param expressionOrFunction JavaScript code to evaluate
+     * @param args Arguments to pass to the function
+     * @param options Evaluation options
+     * @return A handle to the JavaScript object
+     */
+    @Beta
+    @Throws(WebDriverException::class)
+    suspend fun evaluateHandle(expressionOrFunction: String, vararg args: Any?, options: EvaluateOptions = EvaluateOptions()): JsHandle
+
+    /**
+     * Evaluates a JavaScript expression on a specific DOM element.
+     * @param selector CSS selector to find the element
+     * @param expressionOrFunction JavaScript code to evaluate
+     * @param args Arguments to pass to the function
+     * @param options Evaluation options
+     * @return The evaluation result
+     */
+    @Beta
+    @Throws(WebDriverException::class)
+    suspend fun evaluateOnSelector(selector: String, expressionOrFunction: String, vararg args: Any?, options: EvaluateOptions = EvaluateOptions()): Any?
+
+    /**
+     * Evaluates a JavaScript expression on a specific DOM element and deserializes as JSON.
+     * @param selector CSS selector to find the element
+     * @param expressionOrFunction JavaScript code to evaluate
+     * @param args Arguments to pass to the function
+     * @param options Evaluation options
+     * @return The deserialized result
+     */
+    @Beta
+    @Throws(WebDriverException::class)
+    suspend fun <T> evaluateOnSelectorJson(selector: String, expressionOrFunction: String, vararg args: Any?, options: EvaluateOptions = EvaluateOptions()): T
+
+    /**
+     * Evaluates a JavaScript expression on all matching DOM elements.
+     * @param selector CSS selector to find elements
+     * @param expressionOrFunction JavaScript code to evaluate
+     * @param args Arguments to pass to the function
+     * @param options Evaluation options
+     * @return The evaluation result
+     */
+    @Beta
+    @Throws(WebDriverException::class)
+    suspend fun evaluateOnSelectorAll(selector: String, expressionOrFunction: String, vararg args: Any?, options: EvaluateOptions = EvaluateOptions()): Any?
+
+    /**
+     * Evaluates a JavaScript expression on a specific DOM element and returns a handle.
+     * @param selector CSS selector to find the element
+     * @param expressionOrFunction JavaScript code to evaluate
+     * @param args Arguments to pass to the function
+     * @param options Evaluation options
+     * @return A handle to the JavaScript object
+     */
+    @Beta
+    @Throws(WebDriverException::class)
+    suspend fun evaluateOnSelectorHandle(selector: String, expressionOrFunction: String, vararg args: Any?, options: EvaluateOptions = EvaluateOptions()): JsHandle
+
+    /**
+     * Waits for a JavaScript function to return a truthy value.
+     * @param expressionOrFunction JavaScript code to evaluate repeatedly
+     * @param args Optional arguments to pass to the function
+     * @param options Wait options (including timeout and polling interval)
+     * @return The truthy result value
+     */
+    @Beta
+    @Throws(WebDriverException::class)
+    suspend fun waitForFunction(expressionOrFunction: String, options: WaitForFunctionOptions = WaitForFunctionOptions(), vararg args: Any?): Any?
+
+    /**
      * Capture a screenshot of the current viewport (or primary browsing context) after ensuring any pending layout.
      * If the backend supports element-centric capture this may represent the full page; implementation specific.
      *

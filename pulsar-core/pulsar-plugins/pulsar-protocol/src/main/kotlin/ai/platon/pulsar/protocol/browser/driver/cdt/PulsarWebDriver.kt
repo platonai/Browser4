@@ -1,5 +1,6 @@
 package ai.platon.pulsar.protocol.browser.driver.cdt
 
+import ai.platon.pulsar.browser.common.PulsarUtilsIIFEConverter
 import ai.platon.pulsar.browser.driver.chrome.*
 import ai.platon.pulsar.browser.driver.chrome.impl.ChromeImpl
 import ai.platon.pulsar.browser.driver.chrome.util.ChromeDriverException
@@ -74,6 +75,8 @@ class PulsarWebDriver(
 
     private val networkManager by lazy { NetworkManager(this, rpc) }
     private val messageWriter = MiscMessageWriter()
+    
+    private val iifeConverter = PulsarUtilsIIFEConverter()
 
     private val closed = AtomicBoolean()
 
@@ -176,22 +179,42 @@ class PulsarWebDriver(
 
     @Throws(WebDriverException::class)
     override suspend fun evaluate(expression: String): Any? {
-        return invokeOnPage("evaluate") { page.evaluate(expression) }
+        val transformed = if (iifeConverter.needsTransformation(expression)) {
+            iifeConverter.transform(expression)
+        } else {
+            expression
+        }
+        return invokeOnPage("evaluate") { page.evaluate(transformed) }
     }
 
     @Throws(WebDriverException::class)
     override suspend fun evaluateDetail(expression: String): JsEvaluation? {
-        return invokeOnPage("evaluateDetail") { createJsEvaluate(page.evaluateDetail(expression)) }
+        val transformed = if (iifeConverter.needsTransformation(expression)) {
+            iifeConverter.transform(expression)
+        } else {
+            expression
+        }
+        return invokeOnPage("evaluateDetail") { createJsEvaluate(page.evaluateDetail(transformed)) }
     }
 
     @Throws(WebDriverException::class)
     override suspend fun evaluateValue(expression: String): Any? {
-        return invokeOnPage("evaluateValue") { page.evaluateValue(expression) }
+        val transformed = if (iifeConverter.needsTransformation(expression)) {
+            iifeConverter.transform(expression)
+        } else {
+            expression
+        }
+        return invokeOnPage("evaluateValue") { page.evaluateValue(transformed) }
     }
 
     @Throws(WebDriverException::class)
     override suspend fun evaluateValueDetail(expression: String): JsEvaluation? {
-        return invokeOnPage("evaluateValueDetail") { createJsEvaluate(page.evaluateValueDetail(expression)) }
+        val transformed = if (iifeConverter.needsTransformation(expression)) {
+            iifeConverter.transform(expression)
+        } else {
+            expression
+        }
+        return invokeOnPage("evaluateValueDetail") { createJsEvaluate(page.evaluateValueDetail(transformed)) }
     }
 
     @Throws(WebDriverException::class)
