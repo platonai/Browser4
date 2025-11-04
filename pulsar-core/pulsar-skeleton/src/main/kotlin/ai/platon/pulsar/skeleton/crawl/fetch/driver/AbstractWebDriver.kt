@@ -596,4 +596,81 @@ abstract class AbstractWebDriver(
         val path = Files.writeString(dir.resolve("preload.all.js"), scripts)
         getTracerOrNull(this)?.trace("All injected js: {}", path.toUri())
     }
+
+    // Default implementations for new Playwright-aligned evaluate API
+    // Subclasses should override these with backend-specific implementations
+    
+    override suspend fun evaluate(expressionOrFunction: String, vararg args: Any?, options: EvaluateOptions): Any? {
+        // Default implementation delegates to simple evaluate
+        return evaluate(expressionOrFunction)
+    }
+
+    override suspend fun <T> evaluateJson(expressionOrFunction: String, vararg args: Any?, options: EvaluateOptions): T {
+        val result = evaluate(expressionOrFunction, args = args, options = options)
+        @Suppress("UNCHECKED_CAST")
+        return result as T
+    }
+
+    override suspend fun evaluateHandle(expressionOrFunction: String, vararg args: Any?, options: EvaluateOptions): JsHandle {
+        throw UnsupportedOperationException("evaluateHandle not implemented for this driver type")
+    }
+
+    override suspend fun evaluateOnSelector(selector: String, expressionOrFunction: String, vararg args: Any?, options: EvaluateOptions): Any? {
+        // Default implementation: select element first, then evaluate
+        val expression = """
+            (function(selector, fn, ...args) {
+                const element = document.querySelector(selector);
+                if (!element) return null;
+                return fn.apply(element, args);
+            })('$selector', $expressionOrFunction, ${args.joinToString(",")})
+        """.trimIndent()
+        return evaluate(expression)
+    }
+
+    override suspend fun <T> evaluateOnSelectorJson(selector: String, expressionOrFunction: String, vararg args: Any?, options: EvaluateOptions): T {
+        val result = evaluateOnSelector(selector, expressionOrFunction, args = args, options = options)
+        @Suppress("UNCHECKED_CAST")
+        return result as T
+    }
+
+    override suspend fun evaluateOnSelectorAll(selector: String, expressionOrFunction: String, vararg args: Any?, options: EvaluateOptions): Any? {
+        val expression = """
+            (function(selector, fn, ...args) {
+                const elements = Array.from(document.querySelectorAll(selector));
+                return elements.map(el => fn.apply(el, args));
+            })('$selector', $expressionOrFunction, ${args.joinToString(",")})
+        """.trimIndent()
+        return evaluate(expression)
+    }
+
+    override suspend fun evaluateOnSelectorHandle(selector: String, expressionOrFunction: String, vararg args: Any?, options: EvaluateOptions): JsHandle {
+        throw UnsupportedOperationException("evaluateOnSelectorHandle not implemented for this driver type")
+    }
+
+    override suspend fun waitForFunction(expressionOrFunction: String, options: WaitForFunctionOptions, vararg args: Any?): Any? {
+        // Default implementation: simple polling
+        val startTime = System.currentTimeMillis()
+        val timeoutMs = options.timeout?.toMillis() ?: 30000L
+        val pollingMs = when (val polling = options.polling) {
+            is Polling.RAF -> 16L // ~60fps
+            is Polling.Interval -> polling.ms
+        }
+
+        while (System.currentTimeMillis() - startTime < timeoutMs) {
+            val result = evaluate(expressionOrFunction)
+            // Check if the function returns a truthy value
+            if (result != null && result != false && result != 0 && result != "") {
+                return result
+            }
+            kotlinx.coroutines.delay(pollingMs)
+        }
+
+        throw EvaluationTimeoutException(
+            timeout = options.timeout ?: java.time.Duration.ofSeconds(30),
+            message = "waitForFunction timed out after ${timeoutMs}ms",
+            driver = this,
+            expression = expressionOrFunction,
+            args = args.toList()
+        )
+    }
 }
