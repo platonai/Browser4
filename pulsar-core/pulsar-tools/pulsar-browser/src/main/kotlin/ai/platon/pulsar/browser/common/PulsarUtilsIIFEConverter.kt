@@ -35,15 +35,30 @@ class PulsarUtilsIIFEConverter {
         }
 
         var transformed = expression
-        val pattern = Regex("""__pulsar_utils__\.(\w+)\s*\((.*?)\)""")
+        // Match __pulsar_utils__.methodName(...) with better handling of nested parentheses
+        // We'll use a simple approach: match up to the method name, then extract args manually
+        val pattern = Regex("""__pulsar_utils__\.(\w+)\s*\(""")
         val matches = pattern.findAll(expression).toList()
 
         // Process matches in reverse order to maintain correct positions
         for (match in matches.reversed()) {
             val methodName = match.groupValues[1]
-            val args = match.groupValues[2]
+            val argsStart = match.range.last + 1
+            
+            // Find matching closing parenthesis for arguments
+            var parenCount = 1
+            var argsEnd = argsStart
+            while (parenCount > 0 && argsEnd < expression.length) {
+                when (expression[argsEnd]) {
+                    '(' -> parenCount++
+                    ')' -> parenCount--
+                }
+                argsEnd++
+            }
+            
+            val args = expression.substring(argsStart, argsEnd - 1)
             val iife = createIIFE(methodName, args)
-            transformed = transformed.replaceRange(match.range, iife)
+            transformed = transformed.replaceRange(match.range.first until argsEnd, iife)
         }
 
         return transformed
@@ -58,7 +73,11 @@ class PulsarUtilsIIFEConverter {
      */
     private fun createIIFE(methodName: String, args: String): String {
         val methodDef = extractMethodDefinition(methodName)
-            ?: return "__pulsar_utils__.$methodName($args)" // fallback to original
+        
+        if (methodDef == null) {
+            logger.error("Failed to extract definition for __pulsar_utils__.$methodName - falling back to original call. This may indicate a missing or malformed method definition.")
+            return "__pulsar_utils__.$methodName($args)" // fallback to original
+        }
 
         // Build IIFE: (function(params) { body })(args)
         val iife = "(function${methodDef.paramsDeclaration} ${methodDef.body})($args)"
@@ -115,9 +134,16 @@ class PulsarUtilsIIFEConverter {
         val body: String
 
         init {
-            val parts = fullDefinition.split(Regex("""\s+"""), limit = 2)
-            paramsDeclaration = parts.getOrNull(0) ?: "()"
-            body = parts.getOrNull(1) ?: "{}"
+            // More robust parsing: find the opening brace to split params from body
+            val braceIndex = fullDefinition.indexOf('{')
+            if (braceIndex > 0) {
+                paramsDeclaration = fullDefinition.substring(0, braceIndex).trim()
+                body = fullDefinition.substring(braceIndex)
+            } else {
+                // Fallback for malformed definitions
+                paramsDeclaration = "()"
+                body = fullDefinition
+            }
         }
     }
 
