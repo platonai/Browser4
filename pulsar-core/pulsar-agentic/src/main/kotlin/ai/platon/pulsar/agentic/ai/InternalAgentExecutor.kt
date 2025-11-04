@@ -47,7 +47,7 @@ internal class InternalAgentExecutor(
         val result = if (toolCall != null) {
             actionExecutionService.execute(toolCall, driver)
         } else {
-            action.expressions.take(1).map<String, Any?> { expr -> 
+            action.expressions.take(1).map { expr -> 
                 actionExecutionService.execute(expr, driver) 
             }.firstOrNull()
         }
