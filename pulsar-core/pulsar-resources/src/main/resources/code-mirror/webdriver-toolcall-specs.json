@@ -1,0 +1,1207 @@
+[ {
+  "domain" : "driver",
+  "method" : "addBlockedURLs",
+  "arguments" : [ {
+    "name" : "urlPatterns",
+    "type" : "collections.List<String>",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "addInitScript",
+  "arguments" : [ {
+    "name" : "script",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "baseURI",
+  "arguments" : [ ],
+  "returnType" : "String",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "boundingBox",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "common.math.geometric.RectD?",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "bringToFront",
+  "arguments" : [ ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "captureScreenshot",
+  "arguments" : [ {
+    "name" : "fullPage",
+    "type" : "Boolean",
+    "defaultValue" : "false"
+  } ],
+  "returnType" : "String?",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "captureScreenshot",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "String?",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "captureScreenshot",
+  "arguments" : [ {
+    "name" : "rect",
+    "type" : "common.math.geometric.RectD",
+    "defaultValue" : null
+  } ],
+  "returnType" : "String?",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "chat",
+  "arguments" : [ {
+    "name" : "prompt",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "external.ModelResponse",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "check",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "clearBrowserCookies",
+  "arguments" : [ ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "click",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "count",
+    "type" : "Int",
+    "defaultValue" : "0"
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "click",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "modifier",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "clickMatches",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "attrName",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "pattern",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "count",
+    "type" : "Int",
+    "defaultValue" : "0"
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "clickNthAnchor",
+  "arguments" : [ {
+    "name" : "n",
+    "type" : "Int",
+    "defaultValue" : null
+  }, {
+    "name" : "rootSelector",
+    "type" : "String",
+    "defaultValue" : "\"\""
+  } ],
+  "returnType" : "String?",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "clickTextMatches",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "pattern",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "count",
+    "type" : "Int",
+    "defaultValue" : "0"
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "clickablePoint",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "common.math.geometric.PointD?",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "currentUrl",
+  "arguments" : [ ],
+  "returnType" : "String",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "delay",
+  "arguments" : [ {
+    "name" : "millis",
+    "type" : "Long",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "delay",
+  "arguments" : [ {
+    "name" : "duration",
+    "type" : "java.time.Duration",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "delay",
+  "arguments" : [ {
+    "name" : "duration",
+    "type" : "time.Duration",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "deleteCookies",
+  "arguments" : [ {
+    "name" : "name",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Unit",
+  "description" : "Use deleteCookies(name, url, domain, path) instead.[deleteCookies] (3/5) | code: -32602, At least one of the url and domain needs to be specified"
+}, {
+  "domain" : "driver",
+  "method" : "deleteCookies",
+  "arguments" : [ {
+    "name" : "name",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "url",
+    "type" : "String?",
+    "defaultValue" : "\"\""
+  }, {
+    "name" : "domain",
+    "type" : "String?",
+    "defaultValue" : "\"\""
+  }, {
+    "name" : "path",
+    "type" : "String?",
+    "defaultValue" : "\"\""
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "documentURI",
+  "arguments" : [ ],
+  "returnType" : "String",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "dragAndDrop",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "deltaX",
+    "type" : "Int",
+    "defaultValue" : null
+  }, {
+    "name" : "deltaY",
+    "type" : "Int",
+    "defaultValue" : "0"
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "evaluate",
+  "arguments" : [ {
+    "name" : "expression",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Any?",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "evaluate",
+  "arguments" : [ {
+    "name" : "expression",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "defaultValue",
+    "type" : "T",
+    "defaultValue" : null
+  } ],
+  "returnType" : "T",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "evaluateDetail",
+  "arguments" : [ {
+    "name" : "expression",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "skeleton.crawl.fetch.driver.JsEvaluation?",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "evaluateValue",
+  "arguments" : [ {
+    "name" : "expression",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Any?",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "evaluateValue",
+  "arguments" : [ {
+    "name" : "expression",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "defaultValue",
+    "type" : "T",
+    "defaultValue" : null
+  } ],
+  "returnType" : "T",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "evaluateValue",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "functionDeclaration",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Any?",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "evaluateValueDetail",
+  "arguments" : [ {
+    "name" : "expression",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "skeleton.crawl.fetch.driver.JsEvaluation?",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "exists",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Boolean",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "extract",
+  "arguments" : [ {
+    "name" : "fields",
+    "type" : "collections.Map<String, String>",
+    "defaultValue" : null
+  } ],
+  "returnType" : "collections.Map<String, String?>",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "fill",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "text",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "focus",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "getCookies",
+  "arguments" : [ ],
+  "returnType" : "collections.List<collections.Map<String, String>>",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "goBack",
+  "arguments" : [ ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "goForward",
+  "arguments" : [ ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "isChecked",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Boolean",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "isHidden",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Boolean",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "isVisible",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Boolean",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "jvm",
+  "arguments" : [ ],
+  "returnType" : "skeleton.crawl.fetch.driver.JvmWebDriver",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "loadJsoupResource",
+  "arguments" : [ {
+    "name" : "url",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "org.jsoup.Connection.Response",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "loadResource",
+  "arguments" : [ {
+    "name" : "url",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "browser.driver.chrome.NetworkResourceResponse",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "mouseWheelDown",
+  "arguments" : [ {
+    "name" : "count",
+    "type" : "Int",
+    "defaultValue" : "0"
+  }, {
+    "name" : "deltaX",
+    "type" : "Double",
+    "defaultValue" : null
+  }, {
+    "name" : "deltaY",
+    "type" : "Double",
+    "defaultValue" : null
+  }, {
+    "name" : "delayMillis",
+    "type" : "Long",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "mouseWheelUp",
+  "arguments" : [ {
+    "name" : "count",
+    "type" : "Int",
+    "defaultValue" : "0"
+  }, {
+    "name" : "deltaX",
+    "type" : "Double",
+    "defaultValue" : null
+  }, {
+    "name" : "deltaY",
+    "type" : "Double",
+    "defaultValue" : null
+  }, {
+    "name" : "delayMillis",
+    "type" : "Long",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "moveMouseTo",
+  "arguments" : [ {
+    "name" : "x",
+    "type" : "Double",
+    "defaultValue" : null
+  }, {
+    "name" : "y",
+    "type" : "Double",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "moveMouseTo",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "deltaX",
+    "type" : "Int",
+    "defaultValue" : null
+  }, {
+    "name" : "deltaY",
+    "type" : "Int",
+    "defaultValue" : "0"
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "nanoDOMTree",
+  "arguments" : [ ],
+  "returnType" : "browser.driver.chrome.dom.model.NanoDOMTree? /* = browser.driver.chrome.dom.model.NanoDOMTreeNode? */",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "navigateTo",
+  "arguments" : [ {
+    "name" : "url",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "navigateTo",
+  "arguments" : [ {
+    "name" : "entry",
+    "type" : "skeleton.crawl.fetch.driver.NavigateEntry",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "newJsoupSession",
+  "arguments" : [ ],
+  "returnType" : "org.jsoup.Connection",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "open",
+  "arguments" : [ {
+    "name" : "url",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "outerHTML",
+  "arguments" : [ ],
+  "returnType" : "String?",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "outerHTML",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "String?",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "pageSource",
+  "arguments" : [ ],
+  "returnType" : "String?",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "pause",
+  "arguments" : [ ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "press",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "key",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "referrer",
+  "arguments" : [ ],
+  "returnType" : "String",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "reload",
+  "arguments" : [ ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "scrollBy",
+  "arguments" : [ {
+    "name" : "pixels",
+    "type" : "Double",
+    "defaultValue" : null
+  }, {
+    "name" : "smooth",
+    "type" : "Boolean",
+    "defaultValue" : "false"
+  } ],
+  "returnType" : "Double",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "scrollDown",
+  "arguments" : [ {
+    "name" : "count",
+    "type" : "Int",
+    "defaultValue" : "0"
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "scrollTo",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "scrollToBottom",
+  "arguments" : [ ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "scrollToMiddle",
+  "arguments" : [ {
+    "name" : "ratio",
+    "type" : "Double",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "scrollToScreen",
+  "arguments" : [ {
+    "name" : "screenNumber",
+    "type" : "Double",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Double",
+  "description" : "Inappropriate name"
+}, {
+  "domain" : "driver",
+  "method" : "scrollToTop",
+  "arguments" : [ ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "scrollToViewport",
+  "arguments" : [ {
+    "name" : "n",
+    "type" : "Double",
+    "defaultValue" : null
+  }, {
+    "name" : "smooth",
+    "type" : "Boolean",
+    "defaultValue" : "false"
+  } ],
+  "returnType" : "Double",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "scrollUp",
+  "arguments" : [ {
+    "name" : "count",
+    "type" : "Int",
+    "defaultValue" : "0"
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "selectAnchors",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "offset",
+    "type" : "Int",
+    "defaultValue" : "0"
+  }, {
+    "name" : "limit",
+    "type" : "Int",
+    "defaultValue" : "0"
+  } ],
+  "returnType" : "collections.List<dom.nodes.GeoAnchor>",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "selectAttributeAll",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "attrName",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "start",
+    "type" : "Int",
+    "defaultValue" : "0"
+  }, {
+    "name" : "limit",
+    "type" : "Int",
+    "defaultValue" : "0"
+  } ],
+  "returnType" : "collections.List<String>",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "selectAttributes",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "collections.Map<String, String>",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "selectFirstAttributeOrNull",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "attrName",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "String?",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "selectFirstPropertyValueOrNull",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "propName",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "String?",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "selectFirstTextOrNull",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "String?",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "selectHyperlinks",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "offset",
+    "type" : "Int",
+    "defaultValue" : "0"
+  }, {
+    "name" : "limit",
+    "type" : "Int",
+    "defaultValue" : "0"
+  } ],
+  "returnType" : "collections.List<common.urls.Hyperlink>",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "selectImages",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "offset",
+    "type" : "Int",
+    "defaultValue" : "0"
+  }, {
+    "name" : "limit",
+    "type" : "Int",
+    "defaultValue" : "0"
+  } ],
+  "returnType" : "collections.List<String>",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "selectPropertyValueAll",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "propName",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "start",
+    "type" : "Int",
+    "defaultValue" : "0"
+  }, {
+    "name" : "limit",
+    "type" : "Int",
+    "defaultValue" : "0"
+  } ],
+  "returnType" : "collections.List<String>",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "selectTextAll",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "collections.List<String>",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "setAttribute",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "attrName",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "attrValue",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "setAttributeAll",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "attrName",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "attrValue",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "setProperty",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "propName",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "propValue",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "setPropertyAll",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "propName",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "propValue",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "stop",
+  "arguments" : [ ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "textContent",
+  "arguments" : [ ],
+  "returnType" : "String?",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "type",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "text",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "uncheck",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Unit",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "url",
+  "arguments" : [ ],
+  "returnType" : "String",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "visible",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Boolean",
+  "description" : "Use isVisible instead"
+}, {
+  "domain" : "driver",
+  "method" : "waitForNavigation",
+  "arguments" : [ {
+    "name" : "oldUrl",
+    "type" : "String",
+    "defaultValue" : "\"\""
+  } ],
+  "returnType" : "java.time.Duration",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "waitForNavigation",
+  "arguments" : [ {
+    "name" : "oldUrl",
+    "type" : "String",
+    "defaultValue" : "\"\""
+  }, {
+    "name" : "timeoutMillis",
+    "type" : "Long",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Long",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "waitForNavigation",
+  "arguments" : [ {
+    "name" : "oldUrl",
+    "type" : "String",
+    "defaultValue" : "\"\""
+  }, {
+    "name" : "timeout",
+    "type" : "java.time.Duration",
+    "defaultValue" : null
+  } ],
+  "returnType" : "java.time.Duration",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "waitForPage",
+  "arguments" : [ {
+    "name" : "url",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "timeout",
+    "type" : "java.time.Duration",
+    "defaultValue" : null
+  } ],
+  "returnType" : "skeleton.crawl.fetch.driver.WebDriver?",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "waitForSelector",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  } ],
+  "returnType" : "java.time.Duration",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "waitForSelector",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "timeoutMillis",
+    "type" : "Long",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Long",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "waitForSelector",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "timeout",
+    "type" : "java.time.Duration",
+    "defaultValue" : null
+  } ],
+  "returnType" : "java.time.Duration",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "waitForSelector",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "action",
+    "type" : "???",
+    "defaultValue" : null
+  } ],
+  "returnType" : "java.time.Duration",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "waitForSelector",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "timeoutMillis",
+    "type" : "Long",
+    "defaultValue" : null
+  }, {
+    "name" : "action",
+    "type" : "???",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Long",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "waitForSelector",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "defaultValue" : null
+  }, {
+    "name" : "timeout",
+    "type" : "java.time.Duration",
+    "defaultValue" : null
+  }, {
+    "name" : "action",
+    "type" : "???",
+    "defaultValue" : null
+  } ],
+  "returnType" : "java.time.Duration",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "waitUntil",
+  "arguments" : [ {
+    "name" : "predicate",
+    "type" : "???",
+    "defaultValue" : null
+  } ],
+  "returnType" : "java.time.Duration",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "waitUntil",
+  "arguments" : [ {
+    "name" : "timeoutMillis",
+    "type" : "Long",
+    "defaultValue" : null
+  }, {
+    "name" : "predicate",
+    "type" : "???",
+    "defaultValue" : null
+  } ],
+  "returnType" : "Long",
+  "description" : null
+}, {
+  "domain" : "driver",
+  "method" : "waitUntil",
+  "arguments" : [ {
+    "name" : "timeout",
+    "type" : "java.time.Duration",
+    "defaultValue" : null
+  }, {
+    "name" : "predicate",
+    "type" : "???",
+    "defaultValue" : null
+  } ],
+  "returnType" : "java.time.Duration",
+  "description" : null
+} ]

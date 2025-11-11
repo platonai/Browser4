@@ -2,8 +2,18 @@ package ai.platon.pulsar.agentic.ai.tta
 
 import ai.platon.pulsar.common.ResourceLoader
 import ai.platon.pulsar.common.Strings
+import ai.platon.pulsar.common.code.ProjectUtils
 import ai.platon.pulsar.skeleton.ai.ToolCallSpec
 import ai.platon.pulsar.skeleton.common.llm.LLMUtils
+import com.fasterxml.jackson.databind.ObjectMapper
+import com.fasterxml.jackson.databind.SerializationFeature
+import java.nio.file.Files
+import java.nio.file.StandardOpenOption
+import kotlin.reflect.KClass
+import kotlin.reflect.KFunction
+import kotlin.reflect.full.declaredFunctions
+import kotlin.reflect.full.findAnnotation
+import kotlin.reflect.jvm.javaMethod
 
 object SourceCodeToToolCallSpec {
 
@@ -43,6 +53,155 @@ object SourceCodeToToolCallSpec {
         }
 
         return toolCallSpecs
+    }
+
+    /**
+     * Generate ToolCallSpec list from a Kotlin interface using reflection.
+     *
+     * This method uses Kotlin reflection to inspect the methods of the given interface class,
+     * extracting method signatures, parameters, return types, and documentation.
+     * The generated list is then saved as a JSON file in the PROJECT_UTILS.CODE_RESOURCE_DIR directory.
+     *
+     * @param domain The domain name for the tool call specs (e.g., "driver")
+     * @param interfaceClass The Kotlin class representing the interface to inspect
+     * @param outputFileName The name of the output JSON file (without path)
+     * @return List of ToolCallSpec objects generated from the interface
+     */
+    fun generateFromReflection(
+        domain: String,
+        interfaceClass: KClass<*>,
+        outputFileName: String = "webdriver-toolcall-specs.json"
+    ): List<ToolCallSpec> {
+        val toolCallSpecs = mutableListOf<ToolCallSpec>()
+
+        // Get all declared functions from the interface
+        val functions = interfaceClass.declaredFunctions
+
+        for (function in functions) {
+            // Skip private, internal, or deprecated functions if needed
+            // For now, we'll include all declared functions
+
+            val methodName = function.name
+            val arguments = mutableListOf<ToolCallSpec.Arg>()
+
+            // Extract parameters
+            for (param in function.parameters) {
+                // Skip the instance parameter (this)
+                if (param.kind == kotlin.reflect.KParameter.Kind.INSTANCE) {
+                    continue
+                }
+
+                val paramName = param.name ?: "arg${param.index}"
+                val paramType = extractTypeName(param.type.toString())
+                
+                // Check if parameter has a default value
+                val defaultValue = if (param.isOptional) {
+                    // Try to extract default value from parameter
+                    // Note: Reflection doesn't give us the actual default value,
+                    // so we'll use null as a marker for optional parameters
+                    extractDefaultValue(param)
+                } else {
+                    null
+                }
+
+                arguments.add(ToolCallSpec.Arg(paramName, paramType, defaultValue))
+            }
+
+            // Extract return type
+            val returnType = extractTypeName(function.returnType.toString())
+
+            // Extract KDoc if available
+            val description = extractKDoc(function)
+
+            toolCallSpecs.add(ToolCallSpec(domain, methodName, arguments, returnType, description))
+        }
+
+        // Save to JSON file in CODE_RESOURCE_DIR
+        saveToJsonFile(toolCallSpecs, outputFileName)
+
+        return toolCallSpecs
+    }
+
+    /**
+     * Extract a simple type name from a full qualified type string.
+     * For example: "kotlin.String?" -> "String"
+     */
+    private fun extractTypeName(typeString: String): String {
+        // Remove package names and keep just the class name
+        val cleaned = typeString
+            .replace("kotlin.", "")
+            .replace("java.lang.", "")
+            .replace("ai.platon.pulsar.", "")
+        
+        // Handle nullable types
+        return cleaned.trim()
+    }
+
+    /**
+     * Extract default value for optional parameters.
+     * Since Kotlin reflection doesn't provide actual default values,
+     * we return a placeholder or null.
+     */
+    private fun extractDefaultValue(param: kotlin.reflect.KParameter): String? {
+        // For optional parameters, we can't get the actual default value via reflection
+        // We'll return null to indicate it has a default but we don't know what it is
+        return if (param.isOptional) {
+            // Return a type-appropriate default marker
+            when {
+                param.type.toString().contains("Int") -> "0"
+                param.type.toString().contains("Boolean") -> "false"
+                param.type.toString().contains("String") -> "\"\""
+                else -> null
+            }
+        } else {
+            null
+        }
+    }
+
+    /**
+     * Extract KDoc documentation from a function.
+     * Note: KDoc is not available through Kotlin reflection at runtime,
+     * so this will return null. For proper documentation, use source code parsing.
+     */
+    private fun extractKDoc(function: KFunction<*>): String? {
+        // KDoc is not available via reflection at runtime
+        // To get KDoc, we would need to parse the source file
+        // For now, return null or try to get from annotations
+        
+        // Try to get from Deprecated annotation as an example
+        val deprecated = function.findAnnotation<Deprecated>()
+        return deprecated?.message
+    }
+
+    /**
+     * Save ToolCallSpec list to a JSON file in the CODE_RESOURCE_DIR.
+     */
+    private fun saveToJsonFile(toolCallSpecs: List<ToolCallSpec>, fileName: String): Boolean {
+        val rootDir = ProjectUtils.findProjectRootDir() ?: return false
+        val destPath = rootDir.resolve(ProjectUtils.CODE_RESOURCE_DIR)
+
+        // Ensure directory exists
+        Files.createDirectories(destPath)
+
+        val targetFile = destPath.resolve(fileName)
+
+        // Configure ObjectMapper for pretty printing
+        val objectMapper = ObjectMapper().apply {
+            enable(SerializationFeature.INDENT_OUTPUT)
+        }
+
+        // Serialize to JSON
+        val jsonContent = objectMapper.writeValueAsString(toolCallSpecs)
+
+        // Write to file
+        Files.writeString(
+            targetFile,
+            jsonContent,
+            StandardOpenOption.CREATE,
+            StandardOpenOption.TRUNCATE_EXISTING
+        )
+
+        return true
     }
 
     // Helper types and parsers for SourceCodeToToolCall

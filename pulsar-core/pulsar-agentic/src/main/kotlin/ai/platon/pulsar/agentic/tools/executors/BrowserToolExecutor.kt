@@ -26,7 +26,7 @@ class BrowserToolExecutor: AbstractToolExecutor() {
             return driver
         }
 
-        return TcEvaluate(expression, IllegalArgumentException("Unknown expression: $expression, domain: browser"))
+        return TcEvaluate(expression, IllegalArgumentException("Unknown expression: $expression, domain: browser"), "Unknown expression")
     }
 
     /**
