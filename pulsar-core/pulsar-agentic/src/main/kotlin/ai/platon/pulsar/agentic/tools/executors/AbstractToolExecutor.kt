@@ -45,7 +45,7 @@ abstract class AbstractToolExecutor : ToolExecutor {
 
     override suspend fun execute(expression: String, target: Any): TcEvaluate {
         val (objectName, functionName, args) = simpleParser.parseFunctionExpression(expression)
-            ?: return TcEvaluate(expression = expression, cause = IllegalArgumentException("Illegal expression"))
+            ?: return TcEvaluate(expression, IllegalArgumentException("Illegal expression"), "Illegal expression")
 
         val tc = ToolCall(objectName, functionName, args)
         return execute(tc, target)
