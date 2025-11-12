@@ -5,6 +5,9 @@ import ai.platon.pulsar.agentic.ai.PromptBuilder
 import ai.platon.pulsar.agentic.ai.agent.InferenceEngine
 import ai.platon.pulsar.agentic.ai.agent.ObserveParams
 import ai.platon.pulsar.agentic.ai.agent.detail.*
+import ai.platon.pulsar.agentic.ai.memory.CompositeMemory
+import ai.platon.pulsar.agentic.ai.memory.LongTermMemory
+import ai.platon.pulsar.agentic.ai.memory.ShortTermMemory
 import ai.platon.pulsar.agentic.ai.todo.ToDoManager
 import ai.platon.pulsar.agentic.ai.tta.ContextToAction
 import ai.platon.pulsar.agentic.ai.tta.DetailedActResult
@@ -95,6 +98,12 @@ data class AgentConfig(
     val todoMaxProgressLines: Int = 200,
     val todoEnableAutoCheck: Boolean = true,
     val todoTagsFromToolCall: Boolean = true,
+    // --- Memory configuration ---
+    val enableMemory: Boolean = true,
+    val shortTermMemorySize: Int = 50,
+    val longTermMemorySize: Int = 200,
+    val longTermMemoryThreshold: Double = 0.7,
+    val memoryRetrievalLimit: Int = 10,
 )
 
 open class BrowserPerceptiveAgent constructor(
@@ -148,6 +157,14 @@ open class BrowserPerceptiveAgent constructor(
     }
     private val checkpointManager by lazy {
         CheckpointManager(baseDir.resolve("checkpoints"))
+    }
+
+    // Memory system for maintaining context across interactions
+    val memory: CompositeMemory by lazy {
+        CompositeMemory(
+            shortTerm = ShortTermMemory(config.shortTermMemorySize),
+            longTerm = LongTermMemory(config.longTermMemoryThreshold, config.longTermMemorySize)
+        )
     }
 
     val baseDir get() = toolExecutor.baseDir
@@ -387,8 +404,13 @@ open class BrowserPerceptiveAgent constructor(
         } else null
         context.screenshotB64 = screenshotB64
 
+        // Get memory context if enabled
+        val memoryContext = if (config.enableMemory) {
+            memory.getMemoryContext(context.instruction, config.memoryRetrievalLimit)
+        } else ""
+
         // Prepare messages for model
-        val messages = promptBuilder.buildResolveObserveMessageList(context, stateHistory)
+        val messages = promptBuilder.buildResolveObserveMessageList(context, stateHistory, memoryContext)
 
         return try {
             val action = cta.generate(messages, context)
@@ -767,6 +789,8 @@ open class BrowserPerceptiveAgent constructor(
                     stateManager.updateAgentState(context.agentState, detailedActResult)
 
                     updateTodo(context, detailedActResult)
+                    
+                    saveMemory(detailedActResult)
 
                     updatePerformanceMetrics(step, context.timestamp, true)
 
@@ -893,6 +917,44 @@ open class BrowserPerceptiveAgent constructor(
                 } catch (e: Exception) {
                     slogger.logError("📝❌ todo.progress.fail", e, sid)
                 }
+            }
+        }
+    }
+
+    private fun saveMemory(detailedActResult: DetailedActResult) {
+        if (!config.enableMemory) return
+
+        val observeElement = detailedActResult.actionDescription.observeElement
+        
+        // Save the memory field if present
+        observeElement?.memory?.let { memoryContent ->
+            if (memoryContent.isNotBlank()) {
+                // Calculate importance based on success and context
+                val importance = when {
+                    !detailedActResult.success -> 0.3 // Less important if failed
+                    detailedActResult.actionDescription.isComplete -> 1.0 // Very important if task complete
+                    else -> 0.7 // Normal importance for successful actions
+                }
+                
+                val metadata = mutableMapOf<String, String>()
+                observeElement.method?.let { metadata["action"] = it }
+                observeElement.locator?.let { metadata["locator"] = it }
+                
+                memory.add(memoryContent, importance, metadata)
+                logger.debug("💾 memory.saved importance={} content={}", importance, memoryContent.take(50))
+            }
+        }
+        
+        // Also save evaluation and next goal as memories if they exist
+        observeElement?.evaluationPreviousGoal?.let { evaluation ->
+            if (evaluation.isNotBlank()) {
+                memory.add("评估: $evaluation", 0.6)
+            }
+        }
+        
+        observeElement?.nextGoal?.let { nextGoal ->
+            if (nextGoal.isNotBlank()) {
+                memory.add("下一步目标: $nextGoal", 0.8)
             }
         }
     }

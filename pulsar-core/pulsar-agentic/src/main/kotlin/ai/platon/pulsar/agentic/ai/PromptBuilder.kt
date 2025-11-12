@@ -657,7 +657,11 @@ $AGENT_GUIDE_SYSTEM_PROMPT
         }
     }
 
-    fun buildResolveObserveMessageList(context: ExecutionContext, stateHistory: List<AgentState>): AgentMessageList {
+    fun buildResolveObserveMessageList(
+        context: ExecutionContext, 
+        stateHistory: List<AgentState>,
+        memoryContext: String = ""
+    ): AgentMessageList {
         val instruction = context.instruction
         val messages = AgentMessageList()
 
@@ -666,6 +670,12 @@ $AGENT_GUIDE_SYSTEM_PROMPT
         messages.addSystem(systemMsg)
         messages.addLast("user", buildUserRequestMessage(instruction), name = "user_request")
         messages.addUser(buildAgentStateHistoryMessage(stateHistory))
+        
+        // Add memory context if available
+        if (memoryContext.isNotBlank()) {
+            messages.addUser(buildMemoryContextMessage(memoryContext))
+        }
+        
         if (context.screenshotB64 != null) {
             messages.addUser(buildBrowserVisionInfo())
         }
@@ -747,6 +757,25 @@ $historyJson
 ---
 
 		""".trimIndent()
+
+        return msg
+    }
+
+    fun buildMemoryContextMessage(memoryContext: String): String {
+        if (memoryContext.isBlank()) {
+            return ""
+        }
+
+        val msg = """
+## 记忆
+
+智能体在过往交互中积累的重要记忆信息。这些记忆可以帮助你更好地理解上下文和完成任务。
+
+$memoryContext
+
+---
+
+        """.trimIndent()
 
         return msg
     }
