@@ -91,4 +91,42 @@ class CompositeMemory(
             }
         }
     }
+
+    /**
+     * Create a snapshot of the memory state for checkpointing.
+     *
+     * @return A snapshot containing all memories
+     */
+    fun createSnapshot(): MemorySnapshot {
+        return MemorySnapshot(
+            shortTermMemories = shortTerm.getAll(),
+            longTermMemories = longTerm.getAll()
+        )
+    }
+
+    /**
+     * Restore memory state from a snapshot.
+     *
+     * @param snapshot The snapshot to restore from
+     */
+    fun restoreFromSnapshot(snapshot: MemorySnapshot) {
+        clear()
+        snapshot.shortTermMemories.forEach { memory ->
+            shortTerm.add(memory.content, memory.importance, memory.metadata)
+        }
+        snapshot.longTermMemories.forEach { memory ->
+            longTerm.add(memory.content, memory.importance, memory.metadata)
+        }
+    }
 }
+
+/**
+ * Snapshot of memory state for serialization and restoration.
+ *
+ * @property shortTermMemories List of memories from short-term storage
+ * @property longTermMemories List of memories from long-term storage
+ */
+data class MemorySnapshot(
+    val shortTermMemories: List<Memory> = emptyList(),
+    val longTermMemories: List<Memory> = emptyList()
+)

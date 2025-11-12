@@ -1225,6 +1225,7 @@ open class BrowserPerceptiveAgent constructor(
             instruction = context.instruction,
             targetUrl = context.targetUrl,
             recentStateHistory = stateHistory.takeLast(20).map { AgentStateSnapshot.from(it) },
+            memorySnapshot = if (config.enableMemory) memory.createSnapshot() else null,
             totalSteps = performanceMetrics.totalSteps,
             successfulActions = performanceMetrics.successfulActions,
             failedActions = performanceMetrics.failedActions,
@@ -1263,7 +1264,19 @@ open class BrowserPerceptiveAgent constructor(
                     "💾 checkpoint.restored sid={} step={} age={}ms",
                     sessionId.take(8), checkpoint.currentStep, checkpoint.age
                 )
-                // TODO: Restore state from checkpoint (implementation depends on requirements)
+                
+                // Restore memory state if available
+                if (config.enableMemory && checkpoint.memorySnapshot != null) {
+                    memory.restoreFromSnapshot(checkpoint.memorySnapshot)
+                    logger.info(
+                        "💾 memory.restored sid={} shortTerm={} longTerm={}",
+                        sessionId.take(8),
+                        checkpoint.memorySnapshot.shortTermMemories.size,
+                        checkpoint.memorySnapshot.longTermMemories.size
+                    )
+                }
+                
+                // TODO: Restore other state from checkpoint
                 // This would involve:
                 // - Restoring performance metrics
                 // - Restoring circuit breaker state

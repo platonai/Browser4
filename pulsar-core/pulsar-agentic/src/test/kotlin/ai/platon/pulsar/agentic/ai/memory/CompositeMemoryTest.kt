@@ -109,4 +109,38 @@ class CompositeMemoryTest {
         // Both are in both stores but should count as 2 unique
         assertEquals(2, memory.size())
     }
+
+    @Test
+    fun `Given memories When createSnapshot called Then should capture all memories`() {
+        memory.add("Short term only", 0.5)
+        memory.add("Both stores", 0.8)
+        memory.add("Another important", 0.9)
+        
+        val snapshot = memory.createSnapshot()
+        
+        assertEquals(3, snapshot.shortTermMemories.size)
+        assertEquals(2, snapshot.longTermMemories.size)
+    }
+
+    @Test
+    fun `Given snapshot When restoreFromSnapshot called Then memories should be restored`() {
+        // Add initial memories
+        memory.add("Memory 1", 0.8)
+        memory.add("Memory 2", 0.9)
+        
+        // Create snapshot
+        val snapshot = memory.createSnapshot()
+        
+        // Clear memory
+        memory.clear()
+        assertEquals(0, memory.size())
+        
+        // Restore from snapshot
+        memory.restoreFromSnapshot(snapshot)
+        
+        assertEquals(2, memory.size())
+        val restored = memory.getAll()
+        assertTrue(restored.any { it.content == "Memory 1" })
+        assertTrue(restored.any { it.content == "Memory 2" })
+    }
 }

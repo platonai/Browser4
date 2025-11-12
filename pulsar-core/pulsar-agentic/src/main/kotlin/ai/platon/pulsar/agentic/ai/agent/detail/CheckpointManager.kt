@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.ai.agent.detail
 
+import ai.platon.pulsar.agentic.ai.memory.MemorySnapshot
 import ai.platon.pulsar.skeleton.ai.AgentState
 import com.fasterxml.jackson.annotation.JsonIgnore
 import com.fasterxml.jackson.databind.ObjectMapper
@@ -27,6 +28,9 @@ data class AgentCheckpoint(
 
     // State history (limited to avoid large files)
     val recentStateHistory: List<AgentStateSnapshot>,
+
+    // Memory snapshot
+    val memorySnapshot: MemorySnapshot? = null,
 
     // Performance metrics
     val totalSteps: Int,
