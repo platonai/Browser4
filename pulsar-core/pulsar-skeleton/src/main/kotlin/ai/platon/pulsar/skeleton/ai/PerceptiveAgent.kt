@@ -160,6 +160,7 @@ data class ObserveElement constructor(
     val currentPageContentSummary: String? = null,
     val evaluationPreviousGoal: String? = null,
     val nextGoal: String? = null,
+    val memory: String? = null,
 
     val modelResponse: String? = null,
 
