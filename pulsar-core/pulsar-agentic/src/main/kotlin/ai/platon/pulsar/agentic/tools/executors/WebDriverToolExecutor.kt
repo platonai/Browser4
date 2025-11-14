@@ -29,17 +29,88 @@ class WebDriverToolExecutor: AbstractToolExecutor() {
 
         fun allowed(vararg names: String) = names.toSet()
 
+        // Convert positional arguments to named arguments based on common method signatures
+        val namedArgs = convertPositionalToNamedArgs(functionName, args)
+
+        return executeWithNamedArgs(objectName, functionName, namedArgs, driver, ::allowed)
+    }
+
+    /**
+     * Convert positional arguments (indexed by numbers like "0", "1") to named arguments
+     * based on the expected signature of the function.
+     */
+    private fun convertPositionalToNamedArgs(functionName: String, args: Map<String, Any?>): Map<String, Any?> {
+        // If already has named arguments, return as-is
+        if (args.keys.any { !it.matches(Regex("\\d+")) }) {
+            return args
+        }
+
+        val positionalArgs = args.filterKeys { it.matches(Regex("\\d+")) }.entries.sortedBy { it.key.toInt() }.map { it.value.toString() }
+
+        return when (functionName) {
+            // Single parameter methods
+            "exists", "isVisible", "visible", "isHidden", "isChecked", "focus" -> {
+                if (positionalArgs.size == 1) mapOf("selector" to positionalArgs[0]) else args
+            }
+            // Two parameter methods
+            "type", "fill", "press" -> {
+                if (positionalArgs.size == 2) mapOf("selector" to positionalArgs[0], "text" to positionalArgs[1]) else args
+            }
+            "waitForSelector" -> {
+                when (positionalArgs.size) {
+                    1 -> mapOf("selector" to positionalArgs[0])
+                    2 -> mapOf("selector" to positionalArgs[0], "timeoutMillis" to positionalArgs[1])
+                    else -> args
+                }
+            }
+            "navigateTo", "open" -> {
+                if (positionalArgs.size == 1) mapOf("url" to positionalArgs[0]) else args
+            }
+            "click" -> {
+                when (positionalArgs.size) {
+                    1 -> mapOf("selector" to positionalArgs[0])
+                    2 -> {
+                        // Assume second arg is count (int) or modifier (string)
+                        if (positionalArgs[1].toIntOrNull() != null) {
+                            mapOf("selector" to positionalArgs[0], "count" to positionalArgs[1])
+                        } else {
+                            mapOf("selector" to positionalArgs[0], "modifier" to positionalArgs[1])
+                        }
+                    }
+                    else -> args
+                }
+            }
+            else -> args // Unknown function, return as-is
+        }
+    }
+
+    private suspend fun executeWithNamedArgs(
+        objectName: String, functionName: String, args: Map<String, Any?>, driver: WebDriver, allowed: (String) -> Set<String>
+    ): Any? {
+        fun allowed(vararg names: String) = names.toSet()
+
         return when (functionName) {
             // Navigation
             "open" -> { validateArgs(args, allowed("url"), setOf("url"), functionName); driver.open(paramString(args, "url", functionName)!!) }
             "navigateTo" -> {
-                when {
-                    args.containsKey("url") -> { validateArgs(args, allowed("url"), setOf("url"), functionName); driver.navigateTo(paramString(args, "url", functionName)!!) }
-                    args.containsKey("rawUrl") || args.containsKey("pageUrl") -> {
-                        validateArgs(args, allowed("rawUrl", "pageUrl"), setOf("rawUrl", "pageUrl"), functionName)
-                        driver.navigateTo(NavigateEntry(paramString(args, "rawUrl", functionName)!!, pageUrl = paramString(args, "pageUrl", functionName)!!))
+                val url = if (args.containsKey("url")) {
+                    paramString(args, "url", functionName)!!
+                } else {
+                    val positionalArgs = args.filterKeys { it.matches(Regex("\\d+")) }.entries.sortedBy { it.key.toInt() }
+                    if (positionalArgs.isNotEmpty()) positionalArgs[0].value.toString() else null
+                }
+
+                if (url != null) {
+                    driver.navigateTo(url)
+                } else {
+                    // Handle rawUrl/pageUrl case
+                    val rawUrl = args["rawUrl"]?.toString()
+                    val pageUrl = args["pageUrl"]?.toString()
+                    if (rawUrl != null && pageUrl != null) {
+                        driver.navigateTo(NavigateEntry(rawUrl, pageUrl = pageUrl))
+                    } else {
+                        throw IllegalArgumentException("navigateTo requires 'url' or ('rawUrl','pageUrl')")
                     }
-                    else -> throw IllegalArgumentException("navigateTo requires 'url' or ('rawUrl','pageUrl')")
                 }
             }
             "reload" -> { validateArgs(args, emptySet(), emptySet(), functionName); driver.reload() }
@@ -48,17 +119,24 @@ class WebDriverToolExecutor: AbstractToolExecutor() {
 
             // Wait
             "waitForSelector" -> {
-                when {
-                    args.isEmpty() -> throw IllegalArgumentException("waitForSelector requires 'selector' (optional 'timeoutMillis')")
-                    args.containsKey("selector") && !args.containsKey("timeoutMillis") -> {
-                        validateArgs(args, allowed("selector"), setOf("selector"), functionName)
-                        driver.waitForSelector(paramString(args, "selector", functionName)!!)
-                    }
-                    args.containsKey("selector") && args.containsKey("timeoutMillis") -> {
-                        validateArgs(args, allowed("selector", "timeoutMillis"), setOf("selector", "timeoutMillis"), functionName)
-                        driver.waitForSelector(paramString(args, "selector", functionName)!!, paramLong(args, "timeoutMillis", functionName)!!)
-                    }
-                    else -> throw IllegalArgumentException("waitForSelector requires 'selector' (optional 'timeoutMillis')")
+                val selector = if (args.containsKey("selector")) {
+                    paramString(args, "selector", functionName)!!
+                } else {
+                    val positionalArgs = args.filterKeys { it.matches(Regex("\\d+")) }.entries.sortedBy { it.key.toInt() }
+                    if (positionalArgs.isNotEmpty()) positionalArgs[0].value.toString() else null
+                } ?: throw IllegalArgumentException("waitForSelector requires 'selector' (optional 'timeoutMillis')")
+
+                val timeoutMillis = if (args.containsKey("timeoutMillis")) {
+                    paramLong(args, "timeoutMillis", functionName)
+                } else {
+                    val positionalArgs = args.filterKeys { it.matches(Regex("\\d+")) }.entries.sortedBy { it.key.toInt() }
+                    if (positionalArgs.size > 1) positionalArgs[1].value.toString().toLongOrNull() else null
+                }
+
+                if (timeoutMillis != null) {
+                    driver.waitForSelector(selector, timeoutMillis)
+                } else {
+                    driver.waitForSelector(selector)
                 }
             }
             "waitForNavigation" -> {
@@ -90,31 +168,121 @@ class WebDriverToolExecutor: AbstractToolExecutor() {
             }
 
             // Status checking
-            "exists" -> { validateArgs(args, allowed("selector"), setOf("selector"), functionName); driver.exists(paramString(args, "selector", functionName)!!) }
-            "isVisible" -> { validateArgs(args, allowed("selector"), setOf("selector"), functionName); driver.isVisible(paramString(args, "selector", functionName)!!) }
-            "visible" -> { validateArgs(args, allowed("selector"), setOf("selector"), functionName); driver.isVisible(paramString(args, "selector", functionName)!!) }
-            "isHidden" -> { validateArgs(args, allowed("selector"), setOf("selector"), functionName); driver.isHidden(paramString(args, "selector", functionName)!!) }
-            "isChecked" -> { validateArgs(args, allowed("selector"), setOf("selector"), functionName); driver.isChecked(paramString(args, "selector", functionName)!!) }
+            "exists" -> {
+                // Handle both positional and named arguments
+                val selector = if (args.containsKey("selector")) {
+                    paramString(args, "selector", functionName)!!
+                } else {
+                    // Try to get positional argument
+                    val positionalArgs = args.filterKeys { it.matches(Regex("\\d+")) }.entries.sortedBy { it.key.toInt() }
+                    if (positionalArgs.isNotEmpty()) positionalArgs[0].value.toString() else null
+                } ?: throw IllegalArgumentException("Missing required parameter 'selector' for exists")
+                driver.exists(selector)
+            }
+            "isVisible" -> {
+                val selector = if (args.containsKey("selector")) {
+                    paramString(args, "selector", functionName)!!
+                } else {
+                    val positionalArgs = args.filterKeys { it.matches(Regex("\\d+")) }.entries.sortedBy { it.key.toInt() }
+                    if (positionalArgs.isNotEmpty()) positionalArgs[0].value.toString() else null
+                } ?: throw IllegalArgumentException("Missing required parameter 'selector' for isVisible")
+                driver.isVisible(selector)
+            }
+            "visible" -> {
+                val selector = if (args.containsKey("selector")) {
+                    paramString(args, "selector", functionName)!!
+                } else {
+                    val positionalArgs = args.filterKeys { it.matches(Regex("\\d+")) }.entries.sortedBy { it.key.toInt() }
+                    if (positionalArgs.isNotEmpty()) positionalArgs[0].value.toString() else null
+                } ?: throw IllegalArgumentException("Missing required parameter 'selector' for visible")
+                driver.isVisible(selector)
+            }
+            "isHidden" -> {
+                val selector = if (args.containsKey("selector")) {
+                    paramString(args, "selector", functionName)!!
+                } else {
+                    val positionalArgs = args.filterKeys { it.matches(Regex("\\d+")) }.entries.sortedBy { it.key.toInt() }
+                    if (positionalArgs.isNotEmpty()) positionalArgs[0].value.toString() else null
+                } ?: throw IllegalArgumentException("Missing required parameter 'selector' for isHidden")
+                driver.isHidden(selector)
+            }
+            "isChecked" -> {
+                val selector = if (args.containsKey("selector")) {
+                    paramString(args, "selector", functionName)!!
+                } else {
+                    val positionalArgs = args.filterKeys { it.matches(Regex("\\d+")) }.entries.sortedBy { it.key.toInt() }
+                    if (positionalArgs.isNotEmpty()) positionalArgs[0].value.toString() else null
+                } ?: throw IllegalArgumentException("Missing required parameter 'selector' for isChecked")
+                driver.isChecked(selector)
+            }
 
             // Interactions
             "focus" -> { validateArgs(args, allowed("selector"), setOf("selector"), functionName); driver.focus(paramString(args, "selector", functionName)!!) }
-            "type" -> { validateArgs(args, allowed("selector", "text"), setOf("selector", "text"), functionName); driver.type(paramString(args, "selector", functionName)!!, paramString(args, "text", functionName)!!) }
-            "fill" -> { validateArgs(args, allowed("selector", "text"), setOf("selector", "text"), functionName); driver.fill(paramString(args, "selector", functionName)!!, paramString(args, "text", functionName)!!) }
+            "type" -> {
+                val selector = if (args.containsKey("selector")) {
+                    paramString(args, "selector", functionName)!!
+                } else {
+                    val positionalArgs = args.filterKeys { it.matches(Regex("\\d+")) }.entries.sortedBy { it.key.toInt() }
+                    if (positionalArgs.isNotEmpty()) positionalArgs[0].value.toString() else null
+                } ?: throw IllegalArgumentException("type requires 'selector' and 'text'")
+
+                val text = if (args.containsKey("text")) {
+                    paramString(args, "text", functionName)!!
+                } else {
+                    val positionalArgs = args.filterKeys { it.matches(Regex("\\d+")) }.entries.sortedBy { it.key.toInt() }
+                    if (positionalArgs.size > 1) positionalArgs[1].value.toString() else null
+                } ?: throw IllegalArgumentException("type requires 'selector' and 'text'")
+
+                driver.type(selector, text)
+            }
+            "fill" -> {
+                val selector = if (args.containsKey("selector")) {
+                    paramString(args, "selector", functionName)!!
+                } else {
+                    val positionalArgs = args.filterKeys { it.matches(Regex("\\d+")) }.entries.sortedBy { it.key.toInt() }
+                    if (positionalArgs.isNotEmpty()) positionalArgs[0].value.toString() else null
+                } ?: throw IllegalArgumentException("fill requires 'selector' and 'text'")
+
+                val text = if (args.containsKey("text")) {
+                    paramString(args, "text", functionName)!!
+                } else {
+                    val positionalArgs = args.filterKeys { it.matches(Regex("\\d+")) }.entries.sortedBy { it.key.toInt() }
+                    if (positionalArgs.size > 1) positionalArgs[1].value.toString() else null
+                } ?: throw IllegalArgumentException("fill requires 'selector' and 'text'")
+
+                driver.fill(selector, text)
+            }
             "press" -> { validateArgs(args, allowed("selector", "key"), setOf("selector", "key"), functionName); driver.press(paramString(args, "selector", functionName)!!, paramString(args, "key", functionName)!!) }
             "click" -> {
+                val selector = if (args.containsKey("selector")) {
+                    paramString(args, "selector", functionName)!!
+                } else {
+                    val positionalArgs = args.filterKeys { it.matches(Regex("\\d+")) }.entries.sortedBy { it.key.toInt() }
+                    if (positionalArgs.isNotEmpty()) positionalArgs[0].value.toString() else null
+                } ?: throw IllegalArgumentException("click requires 'selector' plus optionally one of 'count' or 'modifier'")
+
+                val count = if (args.containsKey("count")) {
+                    paramInt(args, "count", functionName)
+                } else {
+                    val positionalArgs = args.filterKeys { it.matches(Regex("\\d+")) }.entries.sortedBy { it.key.toInt() }
+                    if (positionalArgs.size > 1) positionalArgs[1].value.toString().toIntOrNull() else null
+                }
+
+                val modifier = if (args.containsKey("modifier")) {
+                    paramString(args, "modifier", functionName)
+                } else {
+                    val positionalArgs = args.filterKeys { it.matches(Regex("\\d+")) }.entries.sortedBy { it.key.toInt() }
+                    if (positionalArgs.size > 1 && positionalArgs[1].value.toString().toIntOrNull() == null) {
+                        positionalArgs[1].value.toString()
+                    } else {
+                        null
+                    }
+                }
+
                 when {
-                    args.containsKey("selector") && args.containsKey("count") && !args.containsKey("modifier") -> {
-                        validateArgs(args, allowed("selector", "count"), setOf("selector", "count"), functionName)
-                        driver.click(selector = paramString(args, "selector", functionName)!!, count = paramInt(args, "count", functionName)!!)
-                    }
-                    args.containsKey("selector") && args.containsKey("modifier") && !args.containsKey("count") -> {
-                        validateArgs(args, allowed("selector", "modifier"), setOf("selector", "modifier"), functionName)
-                        driver.click(selector = paramString(args, "selector", functionName)!!, modifier = paramString(args, "modifier", functionName)!!)
-                    }
-                    args.containsKey("selector") && !args.containsKey("count") && !args.containsKey("modifier") -> {
-                        validateArgs(args, allowed("selector"), setOf("selector"), functionName)
-                        driver.click(selector = paramString(args, "selector", functionName)!!)
-                    }
+                    count != null && modifier == null -> driver.click(selector = selector, count = count)
+                    count == null && modifier != null -> driver.click(selector = selector, modifier = modifier)
+                    count == null && modifier == null -> driver.click(selector = selector)
                     else -> throw IllegalArgumentException("click requires 'selector' plus optionally one of 'count' or 'modifier'")
                 }
             }
