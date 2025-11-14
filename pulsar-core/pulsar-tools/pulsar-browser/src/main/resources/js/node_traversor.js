@@ -39,6 +39,7 @@ __pulsar_NodeTraversor.prototype.traverse = function(root) {
     }
 
     // Use TreeWalker API to traverse all nodes in document order
+    // TreeWalker methods (firstChild, nextSibling, parentNode) return the node and update currentNode
     let walker = document.createTreeWalker(
         root,
         NodeFilter.SHOW_ALL,  // Show all nodes
@@ -53,7 +54,7 @@ __pulsar_NodeTraversor.prototype.traverse = function(root) {
         visitor.head(node, depth);
         
         if (node.childNodes.length > 0) {
-            // Has children, go to first child
+            // Has children, go to first child using TreeWalker
             node = walker.firstChild();
             depth++;
         } else {
