@@ -3,11 +3,23 @@ kotlin = "2.2.20"
 kotlinCoroutines = "1.10.2"
 springBoot = "3.3.8"
 springDependencyManagement = "1.1.7"
+spring = "6.1.16"
 junit = "5.10.3"
 mockito = "5.4.0"
 guava = "33.3.1-jre"
 slf4j = "2.0.16"
 logback = "1.5.12"
+commonsIo = "2.18.0"
+commonsCodec = "1.17.1"
+commonsLang3 = "3.17.0"
+commonsMath3 = "3.6.1"
+commonsCollections4 = "4.5.0-M2"
+gson = "2.11.0"
+httpclient5 = "5.4.1"
+icu4j = "76.1"
+xmlApis = "1.4.01"
+stax2Api = "4.2.2"
+woodstoxCoreAsl = "4.4.1"
 
 [libraries]
 # Kotlin
@@ -16,6 +28,10 @@ kotlin-reflect = { module = "org.jetbrains.kotlin:kotlin-reflect", version.ref =
 kotlin-test-junit5 = { module = "org.jetbrains.kotlin:kotlin-test-junit5", version.ref = "kotlin" }
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinCoroutines" }
 kotlinx-coroutines-jdk8 = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-jdk8", version.ref = "kotlinCoroutines" }
+
+# Spring Framework
+spring-core = { module = "org.springframework:spring-core", version.ref = "spring" }
+spring-context = { module = "org.springframework:spring-context", version.ref = "spring" }
 
 # Spring Boot
 spring-boot-starter = { module = "org.springframework.boot:spring-boot-starter", version.ref = "springBoot" }
@@ -30,6 +46,19 @@ mockito-kotlin = { module = "org.mockito.kotlin:mockito-kotlin", version.ref = "
 guava = { module = "com.google.guava:guava", version.ref = "guava" }
 slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
 logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+commons-io = { module = "commons-io:commons-io", version.ref = "commonsIo" }
+commons-codec = { module = "commons-codec:commons-codec", version.ref = "commonsCodec" }
+commons-lang3 = { module = "org.apache.commons:commons-lang3", version.ref = "commonsLang3" }
+commons-math3 = { module = "org.apache.commons:commons-math3", version.ref = "commonsMath3" }
+commons-collections4 = { module = "org.apache.commons:commons-collections4", version.ref = "commonsCollections4" }
+gson = { module = "com.google.code.gson:gson", version.ref = "gson" }
+
+# HTTP & XML
+httpclient5 = { module = "org.apache.httpcomponents.client5:httpclient5", version.ref = "httpclient5" }
+icu4j = { module = "com.ibm.icu:icu4j", version.ref = "icu4j" }
+xml-apis = { module = "xml-apis:xml-apis", version.ref = "xmlApis" }
+stax2-api = { module = "org.codehaus.woodstox:stax2-api", version.ref = "stax2Api" }
+woodstox-core-asl = { module = "org.codehaus.woodstox:woodstox-core-asl", version.ref = "woodstoxCoreAsl" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

@@ -98,17 +98,38 @@ Each module can have its own `build.gradle.kts` to declare:
 
 ## Current Status
 
-### ✅ Completed
-- Gradle wrapper installation (Gradle 8.12)
-- Root build configuration
-- Settings for all 38 modules
-- Version catalog with key dependencies
-- Basic publishing configuration
-- .gitignore updates for Gradle artifacts
+### ✅ Completed - Gradle Infrastructure
+- ✅ Gradle wrapper installation (Gradle 8.12)
+- ✅ Root build configuration with Kotlin 2.2.20 and Spring Boot 3.3.8
+- ✅ Settings for all 38 modules
+- ✅ Version catalog with common dependencies
+- ✅ Basic publishing configuration
+- ✅ .gitignore updates for Gradle artifacts
+- ✅ Build system coexistence with Maven
 
-### 🚧 Work in Progress
-- Individual module build files need to be created based on their respective pom.xml files
-- Dependencies from pom.xml need to be migrated to build.gradle.kts for each module
+### 🚧 In Progress - Module-Specific Configuration
+Individual modules need their `build.gradle.kts` files to declare dependencies. The infrastructure is ready, but dependency migration from Maven to Gradle for each module is pending.
+
+**Example modules with partial Gradle support:**
+- `pulsar-core` - Template build file created
+- `pulsar-core/pulsar-common` - Partial dependencies added (example)
+
+**Migration Status:**
+- Core Gradle infrastructure: **100% Complete** ✅
+- Module dependency migration: **~5% Complete** (1-2 of 38 modules)
+
+### ⚠️ Important Note
+Maven remains the **primary and fully-functional build system**. The Gradle support provides:
+- Foundation for gradual migration
+- Alternative build option for teams preferring Gradle
+- Modern build tool capabilities (faster incremental builds, better caching)
+
+**To use Gradle for building, you will need to:**
+1. Create `build.gradle.kts` for each module you want to build
+2. Migrate dependencies from `pom.xml` to Gradle format
+3. Test and verify the module builds correctly
+
+See the "Migration Guide" section below for detailed instructions.
 
 ## Migration Guide
 

@@ -83,6 +83,8 @@ docker run -d -p 8182:8182 -e DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY} galaxyeye88/b
 ### Build from Source
 Refer to [Build from Source](docs/development/build.md). Quick commands:
 
+**Using Maven (Primary):**
+
 Windows (CMD):
 ```shell
 mvnw.cmd -q -DskipTests
@@ -93,6 +95,22 @@ Linux/macOS:
 ./mvnw -q -DskipTests
 ./mvnw -pl browser4 -am test -Dsurefire.failIfNoSpecifiedTests=false
 ```
+
+**Using Gradle (Alternative):**
+
+Linux/macOS:
+```shell
+./gradlew build -x test
+./gradlew :browser4:test
+```
+Windows:
+```shell
+gradlew.bat build -x test
+gradlew.bat :browser4:test
+```
+
+> 📖 See [GRADLE.md](GRADLE.md) for complete Gradle usage documentation.
+
 Run the app after build:
 ```shell
 java -jar browser4/browser4-crawler/target/Browser4.jar
