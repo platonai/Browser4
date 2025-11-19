@@ -83,6 +83,8 @@ docker run -d -p 8182:8182 -e DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY} galaxyeye88/b
 ### 从源码构建
 参考 [从源码构建](docs/development/build.md)。快速命令：
 
+**使用 Maven（主要方式）：**
+
 Windows (CMD):
 ```shell
 mvnw.cmd -q -DskipTests
@@ -93,6 +95,22 @@ Linux/macOS:
 ./mvnw -q -DskipTests
 ./mvnw -pl browser4 -am test -Dsurefire.failIfNoSpecifiedTests=false
 ```
+
+**使用 Gradle（备选方式）：**
+
+Linux/macOS:
+```shell
+./gradlew build -x test
+./gradlew :browser4:test
+```
+Windows:
+```shell
+gradlew.bat build -x test
+gradlew.bat :browser4:test
+```
+
+> 📖 查看 [GRADLE.md](GRADLE.md) 了解完整的 Gradle 使用文档。
+
 构建后运行应用：
 ```shell
 java -jar browser4/browser4-crawler/target/Browser4.jar
