@@ -1,0 +1,43 @@
+rootProject.name = "pulsar"
+
+// Core modules
+include("pulsar-core")
+include("pulsar-core:pulsar-resources")
+include("pulsar-core:pulsar-common")
+include("pulsar-core:pulsar-dom")
+include("pulsar-core:pulsar-persist")
+include("pulsar-core:pulsar-plugins")
+include("pulsar-core:pulsar-plugins:pulsar-filter")
+include("pulsar-core:pulsar-plugins:pulsar-index")
+include("pulsar-core:pulsar-plugins:pulsar-parse")
+include("pulsar-core:pulsar-plugins:pulsar-protocol")
+include("pulsar-core:pulsar-plugins:pulsar-protocol-playwright")
+include("pulsar-core:pulsar-plugins:pulsar-schedule")
+include("pulsar-core:pulsar-plugins:pulsar-scoring")
+include("pulsar-core:pulsar-ql-common")
+include("pulsar-core:pulsar-third")
+include("pulsar-core:pulsar-third:pulsar-boilerpipe")
+include("pulsar-core:pulsar-third:pulsar-llm")
+include("pulsar-core:pulsar-tools")
+include("pulsar-core:pulsar-tools:pulsar-browser")
+include("pulsar-core:pulsar-skeleton")
+include("pulsar-core:pulsar-spring-support")
+include("pulsar-core:pulsar-spring-support:pulsar-beans")
+include("pulsar-core:pulsar-spring-support:pulsar-boot")
+include("pulsar-core:pulsar-ql")
+include("pulsar-core:pulsar-agentic")
+
+// Other modules
+include("pulsar-rest")
+include("pulsar-client")
+include("pulsar-tests-common")
+include("pulsar-tests")
+include("pulsar-examples")
+include("pulsar-benchmarks")
+include("pulsar-all")
+include("pulsar-bom")
+
+// Browser4 modules
+include("browser4")
+include("browser4:browser4-spa")
+include("browser4:browser4-crawler")

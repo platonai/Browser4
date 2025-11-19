@@ -120,3 +120,9 @@ application-private.properties
 /node_modules/
 */**/py/dom/
 */**/human-private/
+
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/**/build/
