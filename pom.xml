@@ -98,6 +98,8 @@
         <!-- Benchmark / performance regression module (not published in release profile) -->
         <module>pulsar-benchmarks</module>
         <module>browser4</module>
+        <!-- Add SDK module for REST API clients generated from OpenAPI -->
+        <module>pulsar-rest-sdk</module>
     </modules>
 
     <profiles>
@@ -504,7 +506,7 @@
                 <plugin>
                     <groupId>org.codehaus.mojo</groupId>
                     <artifactId>exec-maven-plugin</artifactId>
-                    <version>${maven-exec-plugin.version}</version>
+                    <version>${version.maven-exec-plugin}</version>
                 </plugin>
                 <plugin>
                     <groupId>org.springframework.boot</groupId>

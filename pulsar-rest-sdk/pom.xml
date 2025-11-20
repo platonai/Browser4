@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>ai.platon.pulsar</groupId>
+        <artifactId>pulsar</artifactId>
+        <version>4.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>pulsar-rest-sdk</artifactId>
+    <name>Pulsar REST SDKs</name>
+    <packaging>pom</packaging>
+
+    <properties>
+        <openapi.generator.version>7.10.0</openapi.generator.version>
+        <generated.sources>${project.build.directory}/generated-sources</generated.sources>
+        <openapi.spec>${project.basedir}/openapi.yaml</openapi.spec>
+    </properties>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.openapitools</groupId>
+                <artifactId>openapi-generator-maven-plugin</artifactId>
+                <version>${openapi.generator.version}</version>
+                <executions>
+                    <!-- Kotlin client -->
+                    <execution>
+                        <id>generate-kotlin-client</id>
+                        <phase>generate-sources</phase>
+                        <goals>
+                            <goal>generate</goal>
+                        </goals>
+                        <configuration>
+                            <inputSpec>${openapi.spec}</inputSpec>
+                            <generatorName>kotlin</generatorName>
+                            <library>jvm-retrofit2</library>
+                            <configOptions>
+                                <dateLibrary>java8</dateLibrary>
+                                <serializationLibrary>jackson</serializationLibrary>
+                                <useCoroutines>true</useCoroutines>
+                                <packageName>ai.platon.pulsar.sdk.kotlin</packageName>
+                                <artifactId>pulsar-rest-sdk-kotlin</artifactId>
+                                <artifactVersion>${project.version}</artifactVersion>
+                            </configOptions>
+                            <output>${generated.sources}/kotlin</output>
+                        </configuration>
+                    </execution>
+
+                    <!-- Java client -->
+                    <execution>
+                        <id>generate-java-client</id>
+                        <phase>generate-sources</phase>
+                        <goals>
+                            <goal>generate</goal>
+                        </goals>
+                        <configuration>
+                            <inputSpec>${openapi.spec}</inputSpec>
+                            <generatorName>java</generatorName>
+                            <library>resttemplate</library>
+                            <configOptions>
+                                <dateLibrary>java8</dateLibrary>
+                                <useJakartaEe>true</useJakartaEe>
+                                <useFeign>false</useFeign>
+                                <packageName>ai.platon.pulsar.sdk.java</packageName>
+                                <artifactId>pulsar-rest-sdk-java</artifactId>
+                                <artifactVersion>${project.version}</artifactVersion>
+                            </configOptions>
+                            <output>${generated.sources}/java</output>
+                        </configuration>
+                    </execution>
+
+                    <!-- TypeScript Axios client -->
+                    <execution>
+                        <id>generate-typescript-sdk</id>
+                        <phase>generate-sources</phase>
+                        <goals>
+                            <goal>generate</goal>
+                        </goals>
+                        <configuration>
+                            <inputSpec>${openapi.spec}</inputSpec>
+                            <generatorName>typescript-axios</generatorName>
+                            <apiPackage>api</apiPackage>
+                            <modelPackage>models</modelPackage>
+                            <configOptions>
+                                <npmName>@platonai/pulsar-rest-sdk</npmName>
+                                <npmVersion>${project.version}</npmVersion>
+                                <supportsES6>true</supportsES6>
+                                <withSeparateModelsAndApi>true</withSeparateModelsAndApi>
+                            </configOptions>
+                            <output>${generated.sources}/typescript</output>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

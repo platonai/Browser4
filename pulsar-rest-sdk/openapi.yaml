@@ -1,0 +1,808 @@
+openapi: 3.0.1
+info:
+  title: Pulsar REST API
+  description: Browser4 / Pulsar REST endpoints
+  version: v4.1.0-SNAPSHOT
+servers:
+- url: http://localhost:8182
+  description: Local dev
+- url: /
+  description: Relative
+paths:
+  /api/x/s:
+    post:
+      tags:
+      - scrape-controller
+      operationId: submitJob
+      requestBody:
+        content:
+          '*/*':
+            schema:
+              type: string
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: string
+  /api/x/e:
+    post:
+      tags:
+      - scrape-controller
+      operationId: execute
+      requestBody:
+        content:
+          '*/*':
+            schema:
+              type: string
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScrapeResponse"
+  /api/extractions:
+    post:
+      tags:
+      - extraction-controller
+      operationId: executeExtraction
+      requestBody:
+        content:
+          '*/*':
+            schema:
+              $ref: "#/components/schemas/PromptRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: string
+  /api/extractions/async:
+    post:
+      tags:
+      - extraction-controller
+      operationId: executeExtractionAsync
+      requestBody:
+        content:
+          '*/*':
+            schema:
+              $ref: "#/components/schemas/PromptRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: string
+  /api/conversations:
+    get:
+      tags:
+      - conversation-controller
+      operationId: conversations
+      parameters:
+      - name: prompt
+        in: query
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: string
+    post:
+      tags:
+      - conversation-controller
+      operationId: conversationsPost
+      requestBody:
+        content:
+          '*/*':
+            schema:
+              type: string
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: string
+  /api/conversations/async:
+    get:
+      tags:
+      - conversation-controller
+      operationId: conversationsAsync
+      parameters:
+      - name: prompt
+        in: query
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: string
+    post:
+      tags:
+      - conversation-controller
+      operationId: conversationsPostAsync
+      requestBody:
+        content:
+          '*/*':
+            schema:
+              type: string
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: string
+  /api/conversations/about:
+    post:
+      tags:
+      - conversation-controller
+      operationId: conversationsAbout
+      requestBody:
+        content:
+          '*/*':
+            schema:
+              $ref: "#/components/schemas/PromptRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: string
+  /api/conversations/about/async:
+    post:
+      tags:
+      - conversation-controller
+      operationId: conversationsAboutAsync
+      requestBody:
+        content:
+          '*/*':
+            schema:
+              $ref: "#/components/schemas/PromptRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: string
+  /api/commands/plain:
+    post:
+      tags:
+      - command-controller
+      operationId: submitPlainCommand
+      parameters:
+      - name: async
+        in: query
+        required: false
+        schema:
+          type: boolean
+      - name: mode
+        in: query
+        required: false
+        schema:
+          type: string
+      requestBody:
+        content:
+          '*/*':
+            schema:
+              type: string
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/commands/:
+    post:
+      tags:
+      - command-controller
+      operationId: submitCommand
+      requestBody:
+        content:
+          '*/*':
+            schema:
+              $ref: "#/components/schemas/CommandRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/command-revisions:
+    post:
+      tags:
+      - command-revision-controller
+      operationId: create
+      requestBody:
+        content:
+          '*/*':
+            schema:
+              type: string
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: string
+            text/plain:
+              schema:
+                type: string
+  /health:
+    get:
+      tags:
+      - default-controller
+      operationId: health
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: object
+                additionalProperties:
+                  type: string
+  /api/x/{id}/stream:
+    get:
+      tags:
+      - scrape-controller
+      operationId: streamEvents
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            text/event-stream:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ServerSentEventScrapeResponse"
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ServerSentEventScrapeResponse"
+  /api/x/{id}/status:
+    get:
+      tags:
+      - scrape-controller
+      operationId: getStatus
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScrapeResponse"
+  /api/x/status:
+    get:
+      tags:
+      - scrape-controller
+      operationId: status
+      parameters:
+      - name: uuid
+        in: query
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScrapeResponse"
+  /api/x/c:
+    get:
+      tags:
+      - scrape-controller
+      operationId: count
+      parameters:
+      - name: status
+        in: query
+        required: false
+        schema:
+          type: integer
+          format: int32
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: integer
+                format: int32
+  /api/w3page:
+    get:
+      tags:
+      - w-3-page-controller
+      operationId: loadContent
+      parameters:
+      - name: url
+        in: query
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: string
+  /api/w3doc:
+    get:
+      tags:
+      - w-3-doc-controller
+      operationId: get
+      parameters:
+      - name: request
+        in: query
+        required: true
+        schema:
+          $ref: "#/components/schemas/W3DocumentRequest"
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: string
+  /api/system/report:
+    get:
+      tags:
+      - system-controller
+      operationId: report
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: string
+  /api/system/hello:
+    get:
+      tags:
+      - system-controller
+      operationId: hello
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: string
+  /api/system/health:
+    get:
+      tags:
+      - system-controller
+      operationId: health_1
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                type: object
+                additionalProperties:
+                  type: string
+  /api/extractions/{uuid}:
+    get:
+      tags:
+      - extraction-controller
+      operationId: extractionResult
+      parameters:
+      - name: uuid
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: string
+  /api/extractions/{uuid}/stream:
+    get:
+      tags:
+      - extraction-controller
+      operationId: extractionStream
+      parameters:
+      - name: uuid
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SseEmitter"
+  /api/extractions/{uuid}/status:
+    get:
+      tags:
+      - extraction-controller
+      operationId: extractionStatus
+      parameters:
+      - name: uuid
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: string
+  /api/conversations/{id}:
+    get:
+      tags:
+      - conversation-controller
+      operationId: conversationResult
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: string
+  /api/conversations/{id}/stream:
+    get:
+      tags:
+      - conversation-controller
+      operationId: conversationStream
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SseEmitter"
+  /api/conversations/{id}/status:
+    get:
+      tags:
+      - conversation-controller
+      operationId: conversationStatus
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: string
+  /api/commands/{id}/stream:
+    get:
+      tags:
+      - command-controller
+      operationId: streamEvents_1
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            text/event-stream:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ServerSentEventCommandStatus"
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ServerSentEventCommandStatus"
+  /api/commands/{id}/status:
+    get:
+      tags:
+      - command-controller
+      operationId: getStatus_1
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandStatus"
+  /api/commands/{id}/result:
+    get:
+      tags:
+      - command-controller
+      operationId: getResult
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CommandResult"
+components:
+  schemas:
+    ScrapeResponse:
+      required:
+      - createTime
+      - event
+      - isDone
+      - pageContentBytes
+      - pageStatus
+      - pageStatusCode
+      - status
+      - statusCode
+      type: object
+      properties:
+        id:
+          type: string
+        statusCode:
+          type: integer
+          format: int32
+        pageStatusCode:
+          type: integer
+          format: int32
+        pageContentBytes:
+          type: integer
+          format: int32
+        isDone:
+          type: boolean
+        resultSet:
+          type: array
+          items:
+            type: object
+            additionalProperties:
+              type: object
+        event:
+          type: string
+        createTime:
+          type: string
+          format: date-time
+        lastModifiedTime:
+          type: string
+          format: date-time
+        finishTime:
+          type: string
+          format: date-time
+        done:
+          type: boolean
+          writeOnly: true
+        status:
+          type: string
+        pageStatus:
+          type: string
+    PromptRequest:
+      required:
+      - url
+      type: object
+      properties:
+        url:
+          type: string
+        prompt:
+          type: string
+        args:
+          type: string
+        actions:
+          type: array
+          items:
+            type: string
+    CommandRequest:
+      required:
+      - url
+      type: object
+      properties:
+        url:
+          type: string
+        args:
+          type: string
+        onBrowserLaunchedActions:
+          type: array
+          items:
+            type: string
+        onPageReadyActions:
+          type: array
+          items:
+            type: string
+        actions:
+          type: array
+          items:
+            type: string
+        pageSummaryPrompt:
+          type: string
+        dataExtractionRules:
+          type: string
+        uriExtractionRules:
+          type: string
+        xsql:
+          type: string
+        richText:
+          type: boolean
+        async:
+          type: boolean
+        mode:
+          type: string
+        id:
+          type: string
+    ServerSentEventScrapeResponse:
+      type: object
+    W3DocumentRequest:
+      required:
+      - url
+      type: object
+      properties:
+        url:
+          type: string
+        args:
+          type: string
+    SseEmitter:
+      type: object
+      properties:
+        timeout:
+          type: integer
+          format: int64
+    ServerSentEventCommandStatus:
+      type: object
+    CommandResult:
+      type: object
+      properties:
+        pageSummary:
+          type: string
+        fields:
+          type: object
+          additionalProperties:
+            type: string
+        links:
+          type: array
+          items:
+            type: string
+        xsqlResultSet:
+          type: array
+          items:
+            type: object
+            additionalProperties:
+              type: object
+    CommandStatus:
+      required:
+      - createTime
+      - event
+      - id
+      - instructResults
+      - isDone
+      - pageContentBytes
+      - pageStatus
+      - pageStatusCode
+      - status
+      - statusCode
+      type: object
+      properties:
+        id:
+          type: string
+        statusCode:
+          type: integer
+          format: int32
+        event:
+          type: string
+        isDone:
+          type: boolean
+        pageStatusCode:
+          type: integer
+          format: int32
+        pageContentBytes:
+          type: integer
+          format: int32
+        message:
+          type: string
+        request:
+          $ref: "#/components/schemas/CommandRequest"
+        commandResult:
+          $ref: "#/components/schemas/CommandResult"
+        instructResults:
+          type: array
+          items:
+            $ref: "#/components/schemas/InstructResult"
+        createTime:
+          type: string
+          format: date-time
+        lastModifiedTime:
+          type: string
+          format: date-time
+        finishTime:
+          type: string
+          format: date-time
+        done:
+          type: boolean
+          writeOnly: true
+        status:
+          type: string
+        pageStatus:
+          type: string
+    InstructResult:
+      required:
+      - name
+      - statusCode
+      type: object
+      properties:
+        name:
+          type: string
+        statusCode:
+          type: integer
+          format: int32
+        result:
+          type: object
+        resultType:
+          type: string
+        instruct:
+          type: string

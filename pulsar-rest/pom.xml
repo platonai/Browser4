@@ -120,27 +120,28 @@
             <groupId>org.jetbrains.kotlinx</groupId>
             <artifactId>kotlinx-coroutines-reactor</artifactId>
         </dependency>
+        <!-- Add Springdoc OpenAPI starter to expose /v3/api-docs and Swagger UI -->
+        <dependency>
+            <groupId>org.springdoc</groupId>
+            <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+            <version>2.6.0</version>
+        </dependency>
+        <!-- Add YAML support for converting OpenAPI json to yaml -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.dataformat</groupId>
+            <artifactId>jackson-dataformat-yaml</artifactId>
+        </dependency>
 
+        <!-- OkHttp needed at runtime by GenerateOpenApi -->
         <dependency>
             <groupId>com.squareup.okhttp3</groupId>
             <artifactId>okhttp</artifactId>
-            <scope>test</scope>
         </dependency>
-
-        <!-- Automatic Restart, LiveReload, Remote Debug -->
-<!--        <dependency>-->
-<!--            <groupId>org.springframework.boot</groupId>-->
-<!--            <artifactId>spring-boot-devtools</artifactId>-->
-<!--            <scope>runtime</scope>-->
-<!--            <optional>true</optional> &lt;!&ndash; 推荐设置 &ndash;&gt;-->
-<!--        </dependency>-->
-
-        <!--
-            - health checks, metrics, and monitoring
-         -->
+        <!-- Explicit swagger annotations for OpenAPIDefinition -->
         <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-actuator</artifactId>
+            <groupId>io.swagger.core.v3</groupId>
+            <artifactId>swagger-annotations</artifactId>
+            <version>2.2.27</version>
         </dependency>
 
         <dependency>
