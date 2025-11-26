@@ -1122,8 +1122,6 @@ components:
 
     ElementValueRequest:
       type: object
-      required:
-        - text
       properties:
         text:
           type: string
@@ -1132,7 +1130,7 @@ components:
           type: array
           items:
             type: string
-          description: Alternative array of characters
+          description: Alternative array of characters (either text or value should be provided)
 
     ExecuteScriptRequest:
       type: object

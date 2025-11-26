@@ -106,12 +106,14 @@ class InMemoryStore {
 
     /**
      * Generate a deterministic element ID based on session and selector.
-     * This allows finding the same element with the same selector to return
-     * a consistent element ID.
+     * Uses SHA-256 hash to minimize collision probability while keeping
+     * IDs reasonably short (16 hex characters).
      */
     private fun generateElementId(sessionId: String, selector: String): String {
         val combined = "$sessionId:$selector"
-        return combined.hashCode().toUInt().toString(16).padStart(8, '0')
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        val hashBytes = digest.digest(combined.toByteArray(Charsets.UTF_8))
+        return hashBytes.take(8).joinToString("") { "%02x".format(it) }
     }
 
     // Event config operations

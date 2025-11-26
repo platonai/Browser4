@@ -177,6 +177,9 @@ class ElementController(
 
     /**
      * Convert W3C WebDriver locator strategy to CSS selector.
+     * Note: This is a mock implementation. Link text strategies use non-standard
+     * :contains() pseudo-selector which won't work with standard CSS engines.
+     * Full browser integration will properly implement text-based element finding.
      */
     private fun convertToSelector(using: String, value: String): String {
         return when (using) {
@@ -185,9 +188,10 @@ class ElementController(
             FindElementRequest.STRATEGY_NAME -> "[name=\"$value\"]"
             FindElementRequest.STRATEGY_TAG_NAME -> value
             FindElementRequest.STRATEGY_CLASS_NAME -> ".$value"
-            FindElementRequest.STRATEGY_XPATH -> value // Store xpath as-is
-            FindElementRequest.STRATEGY_LINK_TEXT -> "a:contains('$value')"
-            FindElementRequest.STRATEGY_PARTIAL_LINK_TEXT -> "a:contains('$value')"
+            FindElementRequest.STRATEGY_XPATH -> value // Store xpath as-is for mock
+            // Note: :contains() is non-standard CSS; real impl will use browser's text search
+            FindElementRequest.STRATEGY_LINK_TEXT -> "a[text='$value']"
+            FindElementRequest.STRATEGY_PARTIAL_LINK_TEXT -> "a[text*='$value']"
             else -> value
         }
     }
