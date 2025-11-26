@@ -106,14 +106,15 @@ class InMemoryStore {
 
     /**
      * Generates an element ID from a selector string using SHA-256 hash.
+     * Uses the full hash to minimize collision probability.
      *
      * @param selector The CSS selector
-     * @return A deterministic element ID
+     * @return A deterministic element ID (64 hex characters)
      */
     fun generateElementId(selector: String): String {
         val digest = MessageDigest.getInstance("SHA-256")
         val hash = digest.digest(selector.toByteArray())
-        return hash.take(16).joinToString("") { "%02x".format(it) }
+        return hash.joinToString("") { "%02x".format(it) }
     }
 
     /**

@@ -145,8 +145,7 @@ class ElementController(
                 .body(ErrorResponse(ErrorValue("no such element", "Element $elementId not found")))
 
         // In mock implementation, update element text
-        val text = request.text ?: request.value?.joinToString("") ?: ""
-        element.text = element.text + text
+        element.text = element.text + request.getEffectiveText()
 
         return ResponseEntity.ok()
             .header("X-Request-Id", effectiveRequestId)
@@ -224,6 +223,8 @@ class ElementController(
 
     /**
      * Converts WebDriver locator strategy to CSS selector.
+     * Note: For link text matching, we store a special format since CSS doesn't
+     * support text content matching. Real implementation would use JavaScript.
      */
     private fun convertToSelector(using: String, value: String): String {
         return when (using) {
@@ -232,8 +233,8 @@ class ElementController(
             "name" -> "[name=\"$value\"]"
             "tag name" -> value
             "class name" -> ".$value"
-            "link text" -> "a:contains(\"$value\")"
-            "partial link text" -> "a:contains(\"$value\")"
+            "link text" -> "linktext:$value" // Store as special format for link text matching
+            "partial link text" -> "partiallinktext:$value" // Store as special format
             "xpath" -> "xpath:$value" // Store xpath as-is with prefix
             else -> value
         }

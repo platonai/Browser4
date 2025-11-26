@@ -29,6 +29,24 @@ class WebDriverApiIntegrationTest {
     @Autowired
     lateinit var objectMapper: ObjectMapper
 
+    /**
+     * Helper method to create a new session.
+     * @return The session ID
+     */
+    private fun createSession(): String {
+        val createRequest = NewSessionRequest(capabilities = emptyMap())
+        val createResult = mockMvc.perform(
+            post("/session")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(createRequest))
+        )
+            .andExpect(status().isOk)
+            .andReturn()
+
+        val sessionResponse = objectMapper.readValue(createResult.response.contentAsString, NewSessionResponse::class.java)
+        return sessionResponse.value.sessionId
+    }
+
     @Test
     fun `create session should return sessionId`() {
         val request = NewSessionRequest(capabilities = mapOf("browserName" to "chrome"))
@@ -49,18 +67,7 @@ class WebDriverApiIntegrationTest {
 
     @Test
     fun `navigate to URL should succeed`() {
-        // First create a session
-        val createRequest = NewSessionRequest(capabilities = emptyMap())
-        val createResult = mockMvc.perform(
-            post("/session")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(createRequest))
-        )
-            .andExpect(status().isOk)
-            .andReturn()
-
-        val sessionResponse = objectMapper.readValue(createResult.response.contentAsString, NewSessionResponse::class.java)
-        val sessionId = sessionResponse.value.sessionId
+        val sessionId = createSession()
 
         // Navigate to URL
         val navRequest = SetUrlRequest(url = "https://example.com")
@@ -80,18 +87,7 @@ class WebDriverApiIntegrationTest {
 
     @Test
     fun `selector exists should return exists true`() {
-        // Create session
-        val createRequest = NewSessionRequest(capabilities = emptyMap())
-        val createResult = mockMvc.perform(
-            post("/session")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(createRequest))
-        )
-            .andExpect(status().isOk)
-            .andReturn()
-
-        val sessionResponse = objectMapper.readValue(createResult.response.contentAsString, NewSessionResponse::class.java)
-        val sessionId = sessionResponse.value.sessionId
+        val sessionId = createSession()
 
         // Check selector exists
         val selectorRequest = SelectorRef(selector = "#test-element")
@@ -106,18 +102,7 @@ class WebDriverApiIntegrationTest {
 
     @Test
     fun `selector element should return element reference`() {
-        // Create session
-        val createRequest = NewSessionRequest(capabilities = emptyMap())
-        val createResult = mockMvc.perform(
-            post("/session")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(createRequest))
-        )
-            .andExpect(status().isOk)
-            .andReturn()
-
-        val sessionResponse = objectMapper.readValue(createResult.response.contentAsString, NewSessionResponse::class.java)
-        val sessionId = sessionResponse.value.sessionId
+        val sessionId = createSession()
 
         // Find element by selector
         val selectorRequest = SelectorRef(selector = ".my-button")
@@ -133,18 +118,7 @@ class WebDriverApiIntegrationTest {
 
     @Test
     fun `selector click should succeed`() {
-        // Create session
-        val createRequest = NewSessionRequest(capabilities = emptyMap())
-        val createResult = mockMvc.perform(
-            post("/session")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(createRequest))
-        )
-            .andExpect(status().isOk)
-            .andReturn()
-
-        val sessionResponse = objectMapper.readValue(createResult.response.contentAsString, NewSessionResponse::class.java)
-        val sessionId = sessionResponse.value.sessionId
+        val sessionId = createSession()
 
         // Click selector
         val selectorRequest = SelectorRef(selector = "button.submit")
@@ -158,18 +132,7 @@ class WebDriverApiIntegrationTest {
 
     @Test
     fun `delete session should succeed`() {
-        // Create session
-        val createRequest = NewSessionRequest(capabilities = emptyMap())
-        val createResult = mockMvc.perform(
-            post("/session")
-                .contentType(MediaType.APPLICATION_JSON)
-                .content(objectMapper.writeValueAsString(createRequest))
-        )
-            .andExpect(status().isOk)
-            .andReturn()
-
-        val sessionResponse = objectMapper.readValue(createResult.response.contentAsString, NewSessionResponse::class.java)
-        val sessionId = sessionResponse.value.sessionId
+        val sessionId = createSession()
 
         // Delete session
         mockMvc.perform(delete("/session/$sessionId"))

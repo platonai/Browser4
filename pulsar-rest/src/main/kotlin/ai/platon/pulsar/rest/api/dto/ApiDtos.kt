@@ -99,13 +99,19 @@ data class ElementRef(
 )
 
 /**
- * Send keys request.
+ * Send keys request. Either text or value must be provided.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 data class SendKeysRequest(
     val text: String? = null,
     val value: List<String>? = null
-)
+) {
+    /**
+     * Gets the effective text to send.
+     * @return Combined text from text field or value array
+     */
+    fun getEffectiveText(): String = text ?: value?.joinToString("") ?: ""
+}
 
 /**
  * Execute script request.
