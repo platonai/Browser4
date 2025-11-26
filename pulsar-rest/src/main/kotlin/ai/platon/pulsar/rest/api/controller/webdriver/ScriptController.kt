@@ -37,7 +37,9 @@ class ScriptController(
             return notFound("invalid session id", "Session not found: $sessionId")
         }
         
-        require(request.script.isNotBlank()) { "Script must not be blank" }
+        if (request.script.isBlank()) {
+            return badRequest("invalid argument", "Script must not be blank")
+        }
         
         // Mock: return a placeholder result
         val mockResult = mapOf(
@@ -64,7 +66,9 @@ class ScriptController(
             return notFound("invalid session id", "Session not found: $sessionId")
         }
         
-        require(request.script.isNotBlank()) { "Script must not be blank" }
+        if (request.script.isBlank()) {
+            return badRequest("invalid argument", "Script must not be blank")
+        }
         
         // Mock: return a placeholder result
         val mockResult = mapOf(
@@ -79,6 +83,11 @@ class ScriptController(
 
     private fun notFound(error: String, message: String): ResponseEntity<Any> {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
+            .body(errorResponse(error, message))
+    }
+
+    private fun badRequest(error: String, message: String): ResponseEntity<Any> {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
             .body(errorResponse(error, message))
     }
 }

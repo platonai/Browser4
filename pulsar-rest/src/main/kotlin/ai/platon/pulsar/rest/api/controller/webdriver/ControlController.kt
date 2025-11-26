@@ -37,7 +37,9 @@ class ControlController(
             return notFound("invalid session id", "Session not found: $sessionId")
         }
         
-        require(request.milliseconds >= 0) { "Delay must be non-negative" }
+        if (request.milliseconds < 0) {
+            return badRequest("invalid argument", "Delay must be non-negative")
+        }
         
         // Mock: don't actually delay, just return success
         // In a real implementation, this would delay the session
@@ -83,6 +85,11 @@ class ControlController(
 
     private fun notFound(error: String, message: String): ResponseEntity<Any> {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
+            .body(errorResponse(error, message))
+    }
+
+    private fun badRequest(error: String, message: String): ResponseEntity<Any> {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
             .body(errorResponse(error, message))
     }
 }

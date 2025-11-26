@@ -2,6 +2,7 @@ package ai.platon.pulsar.rest.api.controller.webdriver
 
 import ai.platon.pulsar.rest.api.dto.*
 import com.fasterxml.jackson.databind.ObjectMapper
+import org.hamcrest.Matchers.containsString
 import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc
@@ -286,7 +287,7 @@ class WebDriverApiIntegrationTest {
         mockMvc.get("/openapi.yaml")
             .andExpect {
                 status { isOk() }
-                content { string(org.hamcrest.Matchers.containsString("openapi: 3.1.0")) }
+                content { string(containsString("openapi: 3.1.0")) }
             }
     }
 

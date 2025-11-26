@@ -38,7 +38,9 @@ class SelectorController(
             return notFound("invalid session id", "Session not found: $sessionId")
         }
         
-        require(request.selector.isNotBlank()) { "Selector must not be blank" }
+        if (request.selector.isBlank()) {
+            return badRequest("invalid argument", "Selector must not be blank")
+        }
         
         // Mock: always return true for valid session
         return ResponseEntity.ok(valueResponse(true))
@@ -60,7 +62,9 @@ class SelectorController(
             return notFound("invalid session id", "Session not found: $sessionId")
         }
         
-        require(request.selector.isNotBlank()) { "Selector must not be blank" }
+        if (request.selector.isBlank()) {
+            return badRequest("invalid argument", "Selector must not be blank")
+        }
         
         // Mock: immediately return success
         return ResponseEntity.ok(valueResponse(true))
@@ -81,7 +85,9 @@ class SelectorController(
             return notFound("invalid session id", "Session not found: $sessionId")
         }
         
-        require(request.selector.isNotBlank()) { "Selector must not be blank" }
+        if (request.selector.isBlank()) {
+            return badRequest("invalid argument", "Selector must not be blank")
+        }
         
         val elementId = sessionService.storeElement(sessionId, request.selector)
             ?: return notFound("invalid session id", "Session not found: $sessionId")
@@ -104,7 +110,9 @@ class SelectorController(
             return notFound("invalid session id", "Session not found: $sessionId")
         }
         
-        require(request.selector.isNotBlank()) { "Selector must not be blank" }
+        if (request.selector.isBlank()) {
+            return badRequest("invalid argument", "Selector must not be blank")
+        }
         
         // Mock: return a single element for simplicity
         val elementId = sessionService.storeElement(sessionId, request.selector)
@@ -128,7 +136,9 @@ class SelectorController(
             return notFound("invalid session id", "Session not found: $sessionId")
         }
         
-        require(request.selector.isNotBlank()) { "Selector must not be blank" }
+        if (request.selector.isBlank()) {
+            return badRequest("invalid argument", "Selector must not be blank")
+        }
         
         // Mock: store element and return success
         sessionService.storeElement(sessionId, request.selector)
@@ -151,7 +161,9 @@ class SelectorController(
             return notFound("invalid session id", "Session not found: $sessionId")
         }
         
-        require(request.selector.isNotBlank()) { "Selector must not be blank" }
+        if (request.selector.isBlank()) {
+            return badRequest("invalid argument", "Selector must not be blank")
+        }
         
         // Mock: store element and return success
         sessionService.storeElement(sessionId, request.selector)
@@ -174,8 +186,13 @@ class SelectorController(
             return notFound("invalid session id", "Session not found: $sessionId")
         }
         
-        require(request.selector.isNotBlank()) { "Selector must not be blank" }
-        require(request.key.isNotBlank()) { "Key must not be blank" }
+        if (request.selector.isBlank()) {
+            return badRequest("invalid argument", "Selector must not be blank")
+        }
+        
+        if (request.key.isBlank()) {
+            return badRequest("invalid argument", "Key must not be blank")
+        }
         
         // Mock: store element and return success
         sessionService.storeElement(sessionId, request.selector)
@@ -198,7 +215,9 @@ class SelectorController(
             return notFound("invalid session id", "Session not found: $sessionId")
         }
         
-        require(request.selector.isNotBlank()) { "Selector must not be blank" }
+        if (request.selector.isBlank()) {
+            return badRequest("invalid argument", "Selector must not be blank")
+        }
         
         // Mock: return placeholder HTML
         val mockHtml = "<div class=\"mock-element\">${request.selector}</div>"
@@ -221,7 +240,9 @@ class SelectorController(
             return notFound("invalid session id", "Session not found: $sessionId")
         }
         
-        require(request.selector.isNotBlank()) { "Selector must not be blank" }
+        if (request.selector.isBlank()) {
+            return badRequest("invalid argument", "Selector must not be blank")
+        }
         
         // Mock: return placeholder base64 string (1x1 transparent PNG)
         val mockScreenshot = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
@@ -231,6 +252,11 @@ class SelectorController(
 
     private fun notFound(error: String, message: String): ResponseEntity<Any> {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
+            .body(errorResponse(error, message))
+    }
+
+    private fun badRequest(error: String, message: String): ResponseEntity<Any> {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
             .body(errorResponse(error, message))
     }
 }

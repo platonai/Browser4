@@ -300,7 +300,8 @@ fun <T> valueResponse(value: T?): ValueResponse<T> {
 
 /**
  * Generate element ID from selector (mock implementation)
+ * Uses UUID to avoid collisions from hashCode
  */
 fun generateElementId(selector: String): String {
-    return "element-${selector.hashCode().toUInt()}"
+    return "element-${java.util.UUID.randomUUID()}"
 }

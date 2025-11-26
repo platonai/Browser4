@@ -37,8 +37,13 @@ class ElementController(
             return notFound("invalid session id", "Session not found: $sessionId")
         }
         
-        require(request.using.isNotBlank()) { "Locator strategy must not be blank" }
-        require(request.value.isNotBlank()) { "Locator value must not be blank" }
+        if (request.using.isBlank()) {
+            return badRequest("invalid argument", "Locator strategy must not be blank")
+        }
+        
+        if (request.value.isBlank()) {
+            return badRequest("invalid argument", "Locator value must not be blank")
+        }
         
         // Convert locator to selector-like string for storage
         val selector = "${request.using}:${request.value}"
@@ -63,8 +68,13 @@ class ElementController(
             return notFound("invalid session id", "Session not found: $sessionId")
         }
         
-        require(request.using.isNotBlank()) { "Locator strategy must not be blank" }
-        require(request.value.isNotBlank()) { "Locator value must not be blank" }
+        if (request.using.isBlank()) {
+            return badRequest("invalid argument", "Locator strategy must not be blank")
+        }
+        
+        if (request.value.isBlank()) {
+            return badRequest("invalid argument", "Locator value must not be blank")
+        }
         
         // Convert locator to selector-like string for storage
         val selector = "${request.using}:${request.value}"
@@ -174,6 +184,11 @@ class ElementController(
 
     private fun notFound(error: String, message: String): ResponseEntity<Any> {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
+            .body(errorResponse(error, message))
+    }
+
+    private fun badRequest(error: String, message: String): ResponseEntity<Any> {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
             .body(errorResponse(error, message))
     }
 }

@@ -144,7 +144,7 @@ class WebDriverSessionService {
      */
     fun addEventConfig(sessionId: String, config: EventConfig): EventConfig? {
         val configs = eventConfigs[sessionId] ?: return null
-        val configWithId = if (config.id.isEmpty()) {
+        val configWithId = if (config.id.isNullOrEmpty()) {
             config.copy(id = UUID.randomUUID().toString())
         } else {
             config

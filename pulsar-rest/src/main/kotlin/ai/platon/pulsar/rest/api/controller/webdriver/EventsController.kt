@@ -37,7 +37,9 @@ class EventsController(
             return notFound("invalid session id", "Session not found: $sessionId")
         }
         
-        require(config.eventType.isNotBlank()) { "Event type must not be blank" }
+        if (config.eventType.isBlank()) {
+            return badRequest("invalid argument", "Event type must not be blank")
+        }
         
         val savedConfig = sessionService.addEventConfig(sessionId, config)
             ?: return notFound("invalid session id", "Session not found: $sessionId")
@@ -88,7 +90,9 @@ class EventsController(
             return notFound("invalid session id", "Session not found: $sessionId")
         }
         
-        require(subscription.eventTypes.isNotEmpty()) { "Event types must not be empty" }
+        if (subscription.eventTypes.isEmpty()) {
+            return badRequest("invalid argument", "Event types must not be empty")
+        }
         
         val savedSubscription = sessionService.addSubscription(sessionId, subscription)
             ?: return notFound("invalid session id", "Session not found: $sessionId")
@@ -98,6 +102,11 @@ class EventsController(
 
     private fun notFound(error: String, message: String): ResponseEntity<Any> {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
+            .body(errorResponse(error, message))
+    }
+
+    private fun badRequest(error: String, message: String): ResponseEntity<Any> {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
             .body(errorResponse(error, message))
     }
 }

@@ -37,7 +37,9 @@ class NavigationController(
             return notFound("invalid session id", "Session not found: $sessionId")
         }
         
-        require(request.url.isNotBlank()) { "URL must not be blank" }
+        if (request.url.isBlank()) {
+            return badRequest("invalid argument", "URL must not be blank")
+        }
         
         // Mock navigation - just update the URL in session
         sessionService.updateSessionUrl(sessionId, request.url)
@@ -106,6 +108,11 @@ class NavigationController(
 
     private fun notFound(error: String, message: String): ResponseEntity<Any> {
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
+            .body(errorResponse(error, message))
+    }
+
+    private fun badRequest(error: String, message: String): ResponseEntity<Any> {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
             .body(errorResponse(error, message))
     }
 }
