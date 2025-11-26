@@ -1,0 +1,1280 @@
+openapi: 3.1.0
+info:
+  title: Browser4 WebDriver API
+  description: |
+    OpenAPI specification for Browser4 WebDriver-style API.
+    This API provides browser automation capabilities including session management,
+    navigation, element interactions, script execution, and event handling.
+    
+    **Note**: This is a mocked skeleton implementation. Full browser integration 
+    will be implemented in subsequent PRs.
+  version: 1.0.0
+  contact:
+    name: Platon AI
+    url: https://github.com/platonai/Browser4
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+
+servers:
+  - url: http://localhost:8182
+    description: Local development server
+
+tags:
+  - name: Session
+    description: Session management operations
+  - name: Navigation
+    description: Page navigation operations
+  - name: Selectors
+    description: CSS selector-based element operations
+  - name: Element
+    description: Element reference-based operations
+  - name: Script
+    description: JavaScript execution
+  - name: Control
+    description: Browser control operations
+  - name: Events
+    description: Event subscription and management
+
+paths:
+  /session:
+    post:
+      tags:
+        - Session
+      summary: Create a new browser session
+      operationId: createSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewSessionRequest'
+      responses:
+        '200':
+          description: Session created successfully
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+              description: Request tracking identifier
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}:
+    get:
+      tags:
+        - Session
+      summary: Get session information
+      operationId: getSession
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Session information
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      tags:
+        - Session
+      summary: Delete a browser session
+      operationId: deleteSession
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Session deleted successfully
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValueResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/url:
+    post:
+      tags:
+        - Navigation
+      summary: Navigate to a URL
+      operationId: navigateTo
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetUrlRequest'
+      responses:
+        '200':
+          description: Navigation successful
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValueResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    get:
+      tags:
+        - Navigation
+      summary: Get current URL
+      operationId: getCurrentUrl
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Current URL
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValueResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/documentUri:
+    get:
+      tags:
+        - Navigation
+      summary: Get document URI
+      operationId: getDocumentUri
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Document URI
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValueResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/baseUri:
+    get:
+      tags:
+        - Navigation
+      summary: Get base URI
+      operationId: getBaseUri
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Base URI
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValueResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/selectors/exists:
+    post:
+      tags:
+        - Selectors
+      summary: Check if element exists by selector
+      operationId: selectorExists
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SelectorRef'
+      responses:
+        '200':
+          description: Element existence check result
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BooleanValueResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/selectors/waitFor:
+    post:
+      tags:
+        - Selectors
+      summary: Wait for element by selector
+      operationId: selectorWaitFor
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SelectorWaitRequest'
+      responses:
+        '200':
+          description: Wait completed
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BooleanValueResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '408':
+          description: Timeout waiting for element
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/selectors/element:
+    post:
+      tags:
+        - Selectors
+      summary: Find single element by selector
+      operationId: selectorElement
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SelectorRef'
+      responses:
+        '200':
+          description: Element reference
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ElementRefResponse'
+        '404':
+          description: Session or element not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/selectors/elements:
+    post:
+      tags:
+        - Selectors
+      summary: Find multiple elements by selector
+      operationId: selectorElements
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SelectorRef'
+      responses:
+        '200':
+          description: Element references
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ElementRefsResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/selectors/click:
+    post:
+      tags:
+        - Selectors
+      summary: Click element by selector
+      operationId: selectorClick
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SelectorRef'
+      responses:
+        '200':
+          description: Click successful
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValueResponse'
+        '404':
+          description: Session or element not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/selectors/fill:
+    post:
+      tags:
+        - Selectors
+      summary: Fill element by selector
+      operationId: selectorFill
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SelectorFillRequest'
+      responses:
+        '200':
+          description: Fill successful
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValueResponse'
+        '404':
+          description: Session or element not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/selectors/press:
+    post:
+      tags:
+        - Selectors
+      summary: Press key on element by selector
+      operationId: selectorPress
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SelectorPressRequest'
+      responses:
+        '200':
+          description: Key press successful
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValueResponse'
+        '404':
+          description: Session or element not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/selectors/outerHtml:
+    post:
+      tags:
+        - Selectors
+      summary: Get outer HTML by selector
+      operationId: selectorOuterHtml
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SelectorRef'
+      responses:
+        '200':
+          description: Outer HTML content
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValueResponse'
+        '404':
+          description: Session or element not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/selectors/screenshot:
+    post:
+      tags:
+        - Selectors
+      summary: Take screenshot of element by selector
+      operationId: selectorScreenshot
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SelectorRef'
+      responses:
+        '200':
+          description: Screenshot as base64 encoded string
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValueResponse'
+        '404':
+          description: Session or element not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/element:
+    post:
+      tags:
+        - Element
+      summary: Find single element
+      operationId: findElement
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FindElementRequest'
+      responses:
+        '200':
+          description: Element reference
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ElementRefResponse'
+        '404':
+          description: Session or element not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/elements:
+    post:
+      tags:
+        - Element
+      summary: Find multiple elements
+      operationId: findElements
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FindElementRequest'
+      responses:
+        '200':
+          description: Element references
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ElementRefsResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/element/{elementId}/click:
+    post:
+      tags:
+        - Element
+      summary: Click element by reference
+      operationId: elementClick
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/ElementId'
+      responses:
+        '200':
+          description: Click successful
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValueResponse'
+        '404':
+          description: Session or element not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/element/{elementId}/value:
+    post:
+      tags:
+        - Element
+      summary: Send keys to element
+      operationId: elementValue
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/ElementId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ElementValueRequest'
+      responses:
+        '200':
+          description: Keys sent successfully
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValueResponse'
+        '404':
+          description: Session or element not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/element/{elementId}/attribute/{name}:
+    get:
+      tags:
+        - Element
+      summary: Get element attribute
+      operationId: getElementAttribute
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/ElementId'
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Attribute name
+      responses:
+        '200':
+          description: Attribute value
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValueResponse'
+        '404':
+          description: Session or element not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/element/{elementId}/text:
+    get:
+      tags:
+        - Element
+      summary: Get element text
+      operationId: getElementText
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/ElementId'
+      responses:
+        '200':
+          description: Element text
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValueResponse'
+        '404':
+          description: Session or element not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/execute/sync:
+    post:
+      tags:
+        - Script
+      summary: Execute script synchronously
+      operationId: executeSync
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecuteScriptRequest'
+      responses:
+        '200':
+          description: Script execution result
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValueResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/execute/async:
+    post:
+      tags:
+        - Script
+      summary: Execute script asynchronously
+      operationId: executeAsync
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecuteScriptRequest'
+      responses:
+        '200':
+          description: Script execution result
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValueResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/control/delay:
+    post:
+      tags:
+        - Control
+      summary: Add delay
+      operationId: controlDelay
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DelayRequest'
+      responses:
+        '200':
+          description: Delay completed
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValueResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/control/pause:
+    post:
+      tags:
+        - Control
+      summary: Pause session
+      operationId: controlPause
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Session paused
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValueResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/control/stop:
+    post:
+      tags:
+        - Control
+      summary: Stop session
+      operationId: controlStop
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Session stopped
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValueResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/event-configs:
+    post:
+      tags:
+        - Events
+      summary: Create event configuration
+      operationId: createEventConfig
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventConfig'
+      responses:
+        '200':
+          description: Event configuration created
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventConfigResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    get:
+      tags:
+        - Events
+      summary: Get event configurations
+      operationId: getEventConfigs
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Event configurations
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventConfigsResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/events:
+    get:
+      tags:
+        - Events
+      summary: Get events
+      operationId: getEvents
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Events list
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventsResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/events/subscribe:
+    post:
+      tags:
+        - Events
+      summary: Subscribe to events
+      operationId: subscribeEvents
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventSubscribeRequest'
+      responses:
+        '200':
+          description: Subscription created
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubscriptionResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  parameters:
+    SessionId:
+      name: sessionId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Browser session identifier
+    ElementId:
+      name: elementId
+      in: path
+      required: true
+      schema:
+        type: string
+      description: Element reference identifier
+
+  schemas:
+    NewSessionRequest:
+      type: object
+      properties:
+        capabilities:
+          type: object
+          description: Desired capabilities for the session
+          additionalProperties: true
+        desiredCapabilities:
+          type: object
+          description: Legacy desired capabilities
+          additionalProperties: true
+
+    SessionResponse:
+      type: object
+      required:
+        - value
+      properties:
+        value:
+          type: object
+          required:
+            - sessionId
+          properties:
+            sessionId:
+              type: string
+              description: Unique session identifier
+            capabilities:
+              type: object
+              description: Actual capabilities of the session
+              additionalProperties: true
+
+    SetUrlRequest:
+      type: object
+      required:
+        - url
+      properties:
+        url:
+          type: string
+          description: URL to navigate to
+
+    SelectorRef:
+      type: object
+      required:
+        - selector
+      properties:
+        selector:
+          type: string
+          description: CSS selector
+
+    SelectorWaitRequest:
+      type: object
+      required:
+        - selector
+      properties:
+        selector:
+          type: string
+          description: CSS selector
+        timeout:
+          type: integer
+          description: Timeout in milliseconds
+          default: 30000
+
+    SelectorFillRequest:
+      type: object
+      required:
+        - selector
+        - value
+      properties:
+        selector:
+          type: string
+          description: CSS selector
+        value:
+          type: string
+          description: Value to fill
+
+    SelectorPressRequest:
+      type: object
+      required:
+        - selector
+        - key
+      properties:
+        selector:
+          type: string
+          description: CSS selector
+        key:
+          type: string
+          description: Key to press
+
+    FindElementRequest:
+      type: object
+      required:
+        - using
+        - value
+      properties:
+        using:
+          type: string
+          enum:
+            - css selector
+            - xpath
+            - id
+            - name
+            - tag name
+            - class name
+            - link text
+            - partial link text
+          description: Locator strategy
+        value:
+          type: string
+          description: Locator value
+
+    ElementRef:
+      type: object
+      required:
+        - element-6066-11e4-a52e-4f735466cecf
+      properties:
+        element-6066-11e4-a52e-4f735466cecf:
+          type: string
+          description: Element reference identifier (W3C WebDriver standard)
+
+    ElementRefResponse:
+      type: object
+      required:
+        - value
+      properties:
+        value:
+          $ref: '#/components/schemas/ElementRef'
+
+    ElementRefsResponse:
+      type: object
+      required:
+        - value
+      properties:
+        value:
+          type: array
+          items:
+            $ref: '#/components/schemas/ElementRef'
+
+    ElementValueRequest:
+      type: object
+      required:
+        - text
+      properties:
+        text:
+          type: string
+          description: Text to send to element
+        value:
+          type: array
+          items:
+            type: string
+          description: Alternative array of characters
+
+    ExecuteScriptRequest:
+      type: object
+      required:
+        - script
+      properties:
+        script:
+          type: string
+          description: JavaScript to execute
+        args:
+          type: array
+          items: {}
+          description: Arguments to pass to script
+
+    DelayRequest:
+      type: object
+      required:
+        - ms
+      properties:
+        ms:
+          type: integer
+          description: Delay in milliseconds
+
+    EventConfig:
+      type: object
+      required:
+        - eventType
+      properties:
+        id:
+          type: string
+          description: Configuration identifier
+        eventType:
+          type: string
+          description: Type of event to configure
+        selector:
+          type: string
+          description: CSS selector for event target
+        options:
+          type: object
+          additionalProperties: true
+          description: Event-specific options
+
+    EventConfigResponse:
+      type: object
+      required:
+        - value
+      properties:
+        value:
+          $ref: '#/components/schemas/EventConfig'
+
+    EventConfigsResponse:
+      type: object
+      required:
+        - value
+      properties:
+        value:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventConfig'
+
+    Event:
+      type: object
+      properties:
+        id:
+          type: string
+        eventType:
+          type: string
+        timestamp:
+          type: integer
+          format: int64
+        data:
+          type: object
+          additionalProperties: true
+
+    EventsResponse:
+      type: object
+      required:
+        - value
+      properties:
+        value:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+
+    EventSubscribeRequest:
+      type: object
+      required:
+        - eventTypes
+      properties:
+        eventTypes:
+          type: array
+          items:
+            type: string
+          description: Event types to subscribe to
+
+    SubscriptionResponse:
+      type: object
+      required:
+        - value
+      properties:
+        value:
+          type: object
+          properties:
+            subscriptionId:
+              type: string
+              description: Subscription identifier
+            eventTypes:
+              type: array
+              items:
+                type: string
+
+    ValueResponse:
+      type: object
+      properties:
+        value:
+          description: Response value (can be any type including null)
+
+    BooleanValueResponse:
+      type: object
+      required:
+        - value
+      properties:
+        value:
+          type: boolean
+
+    ErrorResponse:
+      type: object
+      required:
+        - value
+      properties:
+        value:
+          type: object
+          required:
+            - error
+            - message
+          properties:
+            error:
+              type: string
+              description: Error code
+            message:
+              type: string
+              description: Error message
+            stacktrace:
+              type: string
+              description: Optional stack trace
