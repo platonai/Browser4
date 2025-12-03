@@ -3,12 +3,9 @@ info:
   title: Browser4 WebDriver-Compatible API
   description: |
     A WebDriver-compatible HTTP API with selector-first extensions for browser automation.
-    This API provides session management, navigation, element interactions, and event handling.
-    All responses follow the WebDriver JSON wire protocol format: `{ "value": ... }`.
+    This API provides session management, navigation, element interaction, and event handling
+    capabilities.
   version: 1.0.0
-  contact:
-    name: Platon AI
-    url: https://github.com/platonai/Browser4
   license:
     name: Apache 2.0
     url: https://www.apache.org/licenses/LICENSE-2.0
@@ -18,27 +15,31 @@ servers:
     description: Local development server
 
 tags:
-  - name: Session
-    description: Session management endpoints
-  - name: Navigation
-    description: Page navigation endpoints
-  - name: Selectors
-    description: Selector-first element operations (extensions)
-  - name: Elements
-    description: Standard WebDriver element operations
-  - name: Script
-    description: JavaScript execution endpoints
-  - name: Control
-    description: Browser control operations
-  - name: Events
+  - name: session
+    description: Session lifecycle management
+  - name: navigation
+    description: Page navigation operations
+  - name: selectors
+    description: Selector-first element operations
+  - name: element
+    description: Element interactions by ID
+  - name: script
+    description: JavaScript execution
+  - name: control
+    description: Execution control (delay, pause, stop)
+  - name: events
     description: Event configuration and subscription
+  - name: agent
+    description: AI-powered browser automation (PerceptiveAgent)
+  - name: pulsar
+    description: PulsarSession operations (normalize, open, load, submit)
 
 paths:
   /session:
     post:
       tags:
-        - Session
-      summary: Create a new session
+        - session
+      summary: Create a new browser session
       operationId: createSession
       requestBody:
         required: true
@@ -54,7 +55,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/NewSessionResponse'
         '400':
-          description: Invalid request
+          description: Bad request
           content:
             application/json:
               schema:
@@ -63,18 +64,18 @@ paths:
   /session/{sessionId}:
     get:
       tags:
-        - Session
-      summary: Get session information
+        - session
+      summary: Get session details
       operationId: getSession
       parameters:
         - $ref: '#/components/parameters/sessionId'
       responses:
         '200':
-          description: Session information
+          description: Session details
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SessionInfo'
+                $ref: '#/components/schemas/SessionDetails'
         '404':
           description: Session not found
           content:
@@ -83,18 +84,18 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
     delete:
       tags:
-        - Session
+        - session
       summary: Delete a session
       operationId: deleteSession
       parameters:
         - $ref: '#/components/parameters/sessionId'
       responses:
         '200':
-          description: Session deleted successfully
+          description: Session deleted
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ValueResponse'
+                $ref: '#/components/schemas/WebDriverResponse'
         '404':
           description: Session not found
           content:
@@ -105,8 +106,8 @@ paths:
   /session/{sessionId}/url:
     post:
       tags:
-        - Navigation
-      summary: Navigate to URL
+        - navigation
+      summary: Navigate to a URL
       operationId: navigateTo
       parameters:
         - $ref: '#/components/parameters/sessionId'
@@ -122,7 +123,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ValueResponse'
+                $ref: '#/components/schemas/WebDriverResponse'
         '404':
           description: Session not found
           content:
@@ -131,7 +132,7 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
     get:
       tags:
-        - Navigation
+        - navigation
       summary: Get current URL
       operationId: getCurrentUrl
       parameters:
@@ -142,16 +143,18 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  value:
-                    type: string
-                    description: The current page URL
+                $ref: '#/components/schemas/UrlResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /session/{sessionId}/documentUri:
     get:
       tags:
-        - Navigation
+        - navigation
       summary: Get document URI
       operationId: getDocumentUri
       parameters:
@@ -162,15 +165,18 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  value:
-                    type: string
+                $ref: '#/components/schemas/UrlResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /session/{sessionId}/baseUri:
     get:
       tags:
-        - Navigation
+        - navigation
       summary: Get base URI
       operationId: getBaseUri
       parameters:
@@ -181,15 +187,18 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  value:
-                    type: string
+                $ref: '#/components/schemas/UrlResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /session/{sessionId}/selectors/exists:
     post:
       tags:
-        - Selectors
+        - selectors
       summary: Check if selector exists
       operationId: selectorExists
       parameters:
@@ -202,24 +211,24 @@ paths:
               $ref: '#/components/schemas/SelectorRef'
       responses:
         '200':
-          description: Selector existence result
+          description: Existence check result
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  value:
-                    type: object
-                    properties:
-                      exists:
-                        type: boolean
+                $ref: '#/components/schemas/ExistsResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /session/{sessionId}/selectors/waitFor:
     post:
       tags:
-        - Selectors
+        - selectors
       summary: Wait for selector to appear
-      operationId: selectorWaitFor
+      operationId: waitForSelector
       parameters:
         - $ref: '#/components/parameters/sessionId'
       requestBody:
@@ -227,30 +236,27 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SelectorWaitRequest'
+              $ref: '#/components/schemas/WaitForRequest'
       responses:
         '200':
-          description: Wait result
+          description: Selector found
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  value:
-                    type: object
-                    properties:
-                      found:
-                        type: boolean
-                      elementId:
-                        type: string
-                        nullable: true
+                $ref: '#/components/schemas/WebDriverResponse'
+        '408':
+          description: Timeout waiting for selector
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /session/{sessionId}/selectors/element:
     post:
       tags:
-        - Selectors
+        - selectors
       summary: Find element by selector
-      operationId: selectorFindElement
+      operationId: findElementBySelector
       parameters:
         - $ref: '#/components/parameters/sessionId'
       requestBody:
@@ -261,16 +267,13 @@ paths:
               $ref: '#/components/schemas/SelectorRef'
       responses:
         '200':
-          description: Element reference
+          description: Element found
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  value:
-                    $ref: '#/components/schemas/ElementRef'
+                $ref: '#/components/schemas/ElementResponse'
         '404':
-          description: Element not found
+          description: Element not found or session not found
           content:
             application/json:
               schema:
@@ -279,9 +282,9 @@ paths:
   /session/{sessionId}/selectors/elements:
     post:
       tags:
-        - Selectors
-      summary: Find elements by selector
-      operationId: selectorFindElements
+        - selectors
+      summary: Find all elements matching selector
+      operationId: findElementsBySelector
       parameters:
         - $ref: '#/components/parameters/sessionId'
       requestBody:
@@ -292,23 +295,24 @@ paths:
               $ref: '#/components/schemas/SelectorRef'
       responses:
         '200':
-          description: Element references
+          description: Elements found
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  value:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/ElementRef'
+                $ref: '#/components/schemas/ElementsResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /session/{sessionId}/selectors/click:
     post:
       tags:
-        - Selectors
+        - selectors
       summary: Click element by selector
-      operationId: selectorClick
+      operationId: clickBySelector
       parameters:
         - $ref: '#/components/parameters/sessionId'
       requestBody:
@@ -323,14 +327,20 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ValueResponse'
+                $ref: '#/components/schemas/WebDriverResponse'
+        '404':
+          description: Element or session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /session/{sessionId}/selectors/fill:
     post:
       tags:
-        - Selectors
-      summary: Fill element by selector
-      operationId: selectorFill
+        - selectors
+      summary: Fill input element by selector
+      operationId: fillBySelector
       parameters:
         - $ref: '#/components/parameters/sessionId'
       requestBody:
@@ -338,21 +348,27 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SelectorFillRequest'
+              $ref: '#/components/schemas/FillRequest'
       responses:
         '200':
-          description: Fill performed
+          description: Input filled
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ValueResponse'
+                $ref: '#/components/schemas/WebDriverResponse'
+        '404':
+          description: Element or session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /session/{sessionId}/selectors/press:
     post:
       tags:
-        - Selectors
+        - selectors
       summary: Press key on element by selector
-      operationId: selectorPress
+      operationId: pressBySelector
       parameters:
         - $ref: '#/components/parameters/sessionId'
       requestBody:
@@ -360,21 +376,27 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SelectorPressRequest'
+              $ref: '#/components/schemas/PressRequest'
       responses:
         '200':
-          description: Key press performed
+          description: Key pressed
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ValueResponse'
+                $ref: '#/components/schemas/WebDriverResponse'
+        '404':
+          description: Element or session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /session/{sessionId}/selectors/outerHtml:
     post:
       tags:
-        - Selectors
-      summary: Get outerHTML of element by selector
-      operationId: selectorOuterHtml
+        - selectors
+      summary: Get outer HTML of element by selector
+      operationId: getOuterHtmlBySelector
       parameters:
         - $ref: '#/components/parameters/sessionId'
       requestBody:
@@ -385,21 +407,24 @@ paths:
               $ref: '#/components/schemas/SelectorRef'
       responses:
         '200':
-          description: Element outer HTML
+          description: Outer HTML content
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  value:
-                    type: string
+                $ref: '#/components/schemas/HtmlResponse'
+        '404':
+          description: Element or session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /session/{sessionId}/selectors/screenshot:
     post:
       tags:
-        - Selectors
+        - selectors
       summary: Take screenshot of element by selector
-      operationId: selectorScreenshot
+      operationId: screenshotBySelector
       parameters:
         - $ref: '#/components/parameters/sessionId'
       requestBody:
@@ -410,21 +435,23 @@ paths:
               $ref: '#/components/schemas/SelectorRef'
       responses:
         '200':
-          description: Screenshot data (base64)
+          description: Screenshot captured
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  value:
-                    type: string
-                    description: Base64-encoded screenshot
+                $ref: '#/components/schemas/ScreenshotResponse'
+        '404':
+          description: Element or session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /session/{sessionId}/element:
     post:
       tags:
-        - Elements
-      summary: Find element using WebDriver strategy
+        - element
+      summary: Find element using strategy
       operationId: findElement
       parameters:
         - $ref: '#/components/parameters/sessionId'
@@ -436,20 +463,23 @@ paths:
               $ref: '#/components/schemas/FindElementRequest'
       responses:
         '200':
-          description: Element reference
+          description: Element found
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  value:
-                    $ref: '#/components/schemas/ElementRef'
+                $ref: '#/components/schemas/ElementResponse'
+        '404':
+          description: Element or session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /session/{sessionId}/elements:
     post:
       tags:
-        - Elements
-      summary: Find elements using WebDriver strategy
+        - element
+      summary: Find elements using strategy
       operationId: findElements
       parameters:
         - $ref: '#/components/parameters/sessionId'
@@ -461,35 +491,36 @@ paths:
               $ref: '#/components/schemas/FindElementRequest'
       responses:
         '200':
-          description: Element references
+          description: Elements found
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  value:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/ElementRef'
+                $ref: '#/components/schemas/ElementsResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /session/{sessionId}/element/{elementId}/click:
     post:
       tags:
-        - Elements
-      summary: Click element by element ID
-      operationId: elementClick
+        - element
+      summary: Click an element
+      operationId: clickElement
       parameters:
         - $ref: '#/components/parameters/sessionId'
         - $ref: '#/components/parameters/elementId'
       responses:
         '200':
-          description: Click performed
+          description: Element clicked
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ValueResponse'
+                $ref: '#/components/schemas/WebDriverResponse'
         '404':
-          description: Element not found
+          description: Element or session not found
           content:
             application/json:
               schema:
@@ -498,9 +529,9 @@ paths:
   /session/{sessionId}/element/{elementId}/value:
     post:
       tags:
-        - Elements
+        - element
       summary: Send keys to element
-      operationId: elementSendKeys
+      operationId: sendKeysToElement
       parameters:
         - $ref: '#/components/parameters/sessionId'
         - $ref: '#/components/parameters/elementId'
@@ -516,12 +547,18 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ValueResponse'
+                $ref: '#/components/schemas/WebDriverResponse'
+        '404':
+          description: Element or session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /session/{sessionId}/element/{elementId}/attribute/{name}:
     get:
       tags:
-        - Elements
+        - element
       summary: Get element attribute
       operationId: getElementAttribute
       parameters:
@@ -539,16 +576,18 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  value:
-                    type: string
-                    nullable: true
+                $ref: '#/components/schemas/AttributeResponse'
+        '404':
+          description: Element or session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /session/{sessionId}/element/{elementId}/text:
     get:
       tags:
-        - Elements
+        - element
       summary: Get element text
       operationId: getElementText
       parameters:
@@ -560,15 +599,18 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  value:
-                    type: string
+                $ref: '#/components/schemas/TextResponse'
+        '404':
+          description: Element or session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /session/{sessionId}/execute/sync:
     post:
       tags:
-        - Script
+        - script
       summary: Execute synchronous script
       operationId: executeSync
       parameters:
@@ -578,21 +620,25 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ExecuteScriptRequest'
+              $ref: '#/components/schemas/ScriptRequest'
       responses:
         '200':
           description: Script result
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  value: {}
+                $ref: '#/components/schemas/ScriptResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /session/{sessionId}/execute/async:
     post:
       tags:
-        - Script
+        - script
       summary: Execute asynchronous script
       operationId: executeAsync
       parameters:
@@ -602,23 +648,27 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ExecuteScriptRequest'
+              $ref: '#/components/schemas/ScriptRequest'
       responses:
         '200':
           description: Script result
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  value: {}
+                $ref: '#/components/schemas/ScriptResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /session/{sessionId}/control/delay:
     post:
       tags:
-        - Control
-      summary: Add delay
-      operationId: controlDelay
+        - control
+      summary: Delay execution
+      operationId: delay
       parameters:
         - $ref: '#/components/parameters/sessionId'
       requestBody:
@@ -629,18 +679,24 @@ paths:
               $ref: '#/components/schemas/DelayRequest'
       responses:
         '200':
-          description: Delay applied
+          description: Delay completed
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ValueResponse'
+                $ref: '#/components/schemas/WebDriverResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /session/{sessionId}/control/pause:
     post:
       tags:
-        - Control
-      summary: Pause session
-      operationId: controlPause
+        - control
+      summary: Pause session execution
+      operationId: pause
       parameters:
         - $ref: '#/components/parameters/sessionId'
       responses:
@@ -649,14 +705,20 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ValueResponse'
+                $ref: '#/components/schemas/WebDriverResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /session/{sessionId}/control/stop:
     post:
       tags:
-        - Control
-      summary: Stop session
-      operationId: controlStop
+        - control
+      summary: Stop session execution
+      operationId: stop
       parameters:
         - $ref: '#/components/parameters/sessionId'
       responses:
@@ -665,12 +727,18 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ValueResponse'
+                $ref: '#/components/schemas/WebDriverResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /session/{sessionId}/event-configs:
     post:
       tags:
-        - Events
+        - events
       summary: Create event configuration
       operationId: createEventConfig
       parameters:
@@ -687,15 +755,18 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  value:
-                    $ref: '#/components/schemas/EventConfig'
+                $ref: '#/components/schemas/EventConfigResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     get:
       tags:
-        - Events
-      summary: List event configurations
-      operationId: listEventConfigs
+        - events
+      summary: Get event configurations
+      operationId: getEventConfigs
       parameters:
         - $ref: '#/components/parameters/sessionId'
       responses:
@@ -704,44 +775,40 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  value:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/EventConfig'
+                $ref: '#/components/schemas/EventConfigsResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /session/{sessionId}/events:
     get:
       tags:
-        - Events
+        - events
       summary: Get events
       operationId: getEvents
       parameters:
         - $ref: '#/components/parameters/sessionId'
-        - name: since
-          in: query
-          schema:
-            type: integer
-            format: int64
-          description: Timestamp to get events since (epoch millis)
       responses:
         '200':
           description: Events list
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  value:
-                    type: array
-                    items:
-                      $ref: '#/components/schemas/Event'
+                $ref: '#/components/schemas/EventsResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /session/{sessionId}/events/subscribe:
     post:
       tags:
-        - Events
+        - events
       summary: Subscribe to events
       operationId: subscribeToEvents
       parameters:
@@ -751,20 +818,325 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/EventSubscription'
+              $ref: '#/components/schemas/SubscribeRequest'
       responses:
         '200':
           description: Subscription created
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  value:
-                    type: object
-                    properties:
-                      subscriptionId:
-                        type: string
+                $ref: '#/components/schemas/SubscriptionResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ========== PerceptiveAgent Endpoints ==========
+  /session/{sessionId}/agent/run:
+    post:
+      tags:
+        - agent
+      summary: Run an autonomous agent task
+      description: |
+        Runs an autonomous loop (observe -> act -> ...) attempting to fulfill
+        the user goal described in the request.
+      operationId: agentRun
+      parameters:
+        - $ref: '#/components/parameters/sessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentRunRequest'
+      responses:
+        '200':
+          description: Agent task completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentRunResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/agent/observe:
+    post:
+      tags:
+        - agent
+      summary: Observe the page
+      description: |
+        Observes the page given an instruction and returns potential actions
+        that could be taken.
+      operationId: agentObserve
+      parameters:
+        - $ref: '#/components/parameters/sessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentObserveRequest'
+      responses:
+        '200':
+          description: Observation results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentObserveResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/agent/act:
+    post:
+      tags:
+        - agent
+      summary: Execute a single action
+      description: |
+        Executes a single observe->act cycle for the supplied action.
+      operationId: agentAct
+      parameters:
+        - $ref: '#/components/parameters/sessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentActRequest'
+      responses:
+        '200':
+          description: Action result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentActResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/agent/extract:
+    post:
+      tags:
+        - agent
+      summary: Extract structured data from the page
+      description: |
+        Extracts structured data from the page using an instruction and
+        optional JSON schema.
+      operationId: agentExtract
+      parameters:
+        - $ref: '#/components/parameters/sessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentExtractRequest'
+      responses:
+        '200':
+          description: Extraction result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentExtractResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/agent/summarize:
+    post:
+      tags:
+        - agent
+      summary: Summarize page content
+      description: |
+        Summarizes text captured from the current page or a specific element.
+      operationId: agentSummarize
+      parameters:
+        - $ref: '#/components/parameters/sessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AgentSummarizeRequest'
+      responses:
+        '200':
+          description: Summary result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentSummarizeResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/agent/clearHistory:
+    post:
+      tags:
+        - agent
+      summary: Clear agent history
+      description: |
+        Clears the agent's history so new tasks remain unaffected by previous ones.
+      operationId: agentClearHistory
+      parameters:
+        - $ref: '#/components/parameters/sessionId'
+      responses:
+        '200':
+          description: History cleared
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentClearHistoryResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ========== PulsarSession Endpoints ==========
+  /session/{sessionId}/normalize:
+    post:
+      tags:
+        - pulsar
+      summary: Normalize a URL
+      description: |
+        Normalizes a URL with optional load arguments. Returns the normalized URL
+        and parsed arguments.
+      operationId: normalize
+      parameters:
+        - $ref: '#/components/parameters/sessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NormalizeRequest'
+      responses:
+        '200':
+          description: Normalized URL
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NormalizeResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/open:
+    post:
+      tags:
+        - pulsar
+      summary: Open a URL immediately
+      description: |
+        Opens the URL immediately, bypassing the local cache and fetching
+        fresh content from the internet.
+      operationId: open
+      parameters:
+        - $ref: '#/components/parameters/sessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpenRequest'
+      responses:
+        '200':
+          description: Page opened
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/load:
+    post:
+      tags:
+        - pulsar
+      summary: Load a URL from storage or internet
+      description: |
+        Loads a page from local storage if it exists and meets the specified criteria.
+        Otherwise, fetches the page from the Internet. Supports expiration, page size
+        requirements, and other load options.
+      operationId: load
+      parameters:
+        - $ref: '#/components/parameters/sessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoadRequest'
+      responses:
+        '200':
+          description: Page loaded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoadResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /session/{sessionId}/submit:
+    post:
+      tags:
+        - pulsar
+      summary: Submit a URL to the crawl pool
+      description: |
+        Submits a URL to the URL pool for asynchronous processing. This is a
+        non-blocking operation that returns immediately. The URL will be
+        processed later in the crawl loop.
+      operationId: submit
+      parameters:
+        - $ref: '#/components/parameters/sessionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitRequest'
+      responses:
+        '200':
+          description: URL submitted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SubmitResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
 components:
   parameters:
@@ -774,14 +1146,14 @@ components:
       required: true
       schema:
         type: string
-      description: The session identifier
+      description: Session identifier
     elementId:
       name: elementId
       in: path
       required: true
       schema:
         type: string
-      description: The element identifier
+      description: Element identifier
 
   schemas:
     NewSessionRequest:
@@ -790,10 +1162,6 @@ components:
         capabilities:
           type: object
           description: Desired capabilities for the session
-          additionalProperties: true
-        desiredCapabilities:
-          type: object
-          description: Legacy desired capabilities
           additionalProperties: true
 
     NewSessionResponse:
@@ -808,7 +1176,7 @@ components:
               type: object
               additionalProperties: true
 
-    SessionInfo:
+    SessionDetails:
       type: object
       properties:
         value:
@@ -816,174 +1184,20 @@ components:
           properties:
             sessionId:
               type: string
-            capabilities:
-              type: object
-              additionalProperties: true
             url:
               type: string
-              nullable: true
             status:
               type: string
               enum: [active, paused, stopped]
+            capabilities:
+              type: object
+              additionalProperties: true
 
-    SetUrlRequest:
-      type: object
-      required:
-        - url
-      properties:
-        url:
-          type: string
-          description: The URL to navigate to
-
-    SelectorRef:
-      type: object
-      required:
-        - selector
-      properties:
-        selector:
-          type: string
-          description: CSS selector
-
-    SelectorWaitRequest:
-      type: object
-      required:
-        - selector
-      properties:
-        selector:
-          type: string
-        timeout:
-          type: integer
-          default: 5000
-          description: Timeout in milliseconds
-
-    SelectorFillRequest:
-      type: object
-      required:
-        - selector
-        - value
-      properties:
-        selector:
-          type: string
-        value:
-          type: string
-
-    SelectorPressRequest:
-      type: object
-      required:
-        - selector
-        - key
-      properties:
-        selector:
-          type: string
-        key:
-          type: string
-          description: Key to press (e.g., 'Enter', 'Tab')
-
-    FindElementRequest:
-      type: object
-      required:
-        - using
-        - value
-      properties:
-        using:
-          type: string
-          enum: [css selector, xpath, id, name, tag name, class name, link text, partial link text]
-        value:
-          type: string
-
-    ElementRef:
-      type: object
-      properties:
-        element-6066-11e4-a52e-4f735466cecf:
-          type: string
-          description: WebDriver element ID (W3C format)
-        elementId:
-          type: string
-          description: Element ID (convenience field)
-
-    SendKeysRequest:
-      type: object
-      required:
-        - text
-      properties:
-        text:
-          type: string
-        value:
-          type: array
-          items:
-            type: string
-          description: Array of keys (WebDriver format)
-
-    ExecuteScriptRequest:
-      type: object
-      required:
-        - script
-      properties:
-        script:
-          type: string
-        args:
-          type: array
-          items: {}
-          default: []
-
-    DelayRequest:
-      type: object
-      required:
-        - ms
-      properties:
-        ms:
-          type: integer
-          description: Delay in milliseconds
-
-    EventConfig:
-      type: object
-      required:
-        - eventType
-      properties:
-        id:
-          type: string
-        eventType:
-          type: string
-          enum: [click, input, scroll, navigation, network, console, mutation]
-        selector:
-          type: string
-          nullable: true
-        enabled:
-          type: boolean
-          default: true
-
-    Event:
-      type: object
-      properties:
-        id:
-          type: string
-        eventType:
-          type: string
-        timestamp:
-          type: integer
-          format: int64
-        data:
-          type: object
-          additionalProperties: true
-
-    EventSubscription:
-      type: object
-      required:
-        - eventTypes
-      properties:
-        eventTypes:
-          type: array
-          items:
-            type: string
-        callback:
-          type: string
-          description: Optional callback URL for webhooks
-
-    ValueResponse:
+    WebDriverResponse:
       type: object
       properties:
         value:
-          nullable: true
+          description: Response value (can be null for success)
 
     ErrorResponse:
       type: object
@@ -997,4 +1211,617 @@ components:
               type: string
             stacktrace:
               type: string
-              nullable: true
+
+    SetUrlRequest:
+      type: object
+      required:
+        - url
+      properties:
+        url:
+          type: string
+          format: uri
+          description: URL to navigate to
+
+    UrlResponse:
+      type: object
+      properties:
+        value:
+          type: string
+          description: Current URL
+
+    SelectorRef:
+      type: object
+      required:
+        - selector
+      properties:
+        selector:
+          type: string
+          description: CSS selector or XPath expression
+        strategy:
+          type: string
+          enum: [css, xpath]
+          default: css
+          description: Selector strategy
+
+    WaitForRequest:
+      type: object
+      required:
+        - selector
+      properties:
+        selector:
+          type: string
+        strategy:
+          type: string
+          enum: [css, xpath]
+          default: css
+        timeout:
+          type: integer
+          default: 30000
+          description: Timeout in milliseconds
+
+    FindElementRequest:
+      type: object
+      required:
+        - using
+        - value
+      properties:
+        using:
+          type: string
+          enum: [css selector, xpath, id, name, class name, tag name]
+          description: Locator strategy
+        value:
+          type: string
+          description: Locator value
+
+    ElementRef:
+      type: object
+      properties:
+        element-6066-11e4-a52e-4f735466cecf:
+          type: string
+          description: WebDriver element identifier
+
+    ElementResponse:
+      type: object
+      properties:
+        value:
+          $ref: '#/components/schemas/ElementRef'
+
+    ElementsResponse:
+      type: object
+      properties:
+        value:
+          type: array
+          items:
+            $ref: '#/components/schemas/ElementRef'
+
+    ExistsResponse:
+      type: object
+      properties:
+        value:
+          type: object
+          properties:
+            exists:
+              type: boolean
+
+    FillRequest:
+      type: object
+      required:
+        - selector
+        - value
+      properties:
+        selector:
+          type: string
+        strategy:
+          type: string
+          enum: [css, xpath]
+          default: css
+        value:
+          type: string
+          description: Text to fill
+
+    PressRequest:
+      type: object
+      required:
+        - selector
+        - key
+      properties:
+        selector:
+          type: string
+        strategy:
+          type: string
+          enum: [css, xpath]
+          default: css
+        key:
+          type: string
+          description: Key to press (e.g., Enter, Tab)
+
+    HtmlResponse:
+      type: object
+      properties:
+        value:
+          type: string
+          description: HTML content
+
+    ScreenshotResponse:
+      type: object
+      properties:
+        value:
+          type: string
+          format: byte
+          description: Base64-encoded PNG screenshot
+
+    SendKeysRequest:
+      type: object
+      required:
+        - text
+      properties:
+        text:
+          type: string
+          description: Text to send
+
+    AttributeResponse:
+      type: object
+      properties:
+        value:
+          type: string
+          description: Attribute value (can be null)
+
+    TextResponse:
+      type: object
+      properties:
+        value:
+          type: string
+          description: Element text content
+
+    ScriptRequest:
+      type: object
+      required:
+        - script
+      properties:
+        script:
+          type: string
+          description: JavaScript code to execute
+        args:
+          type: array
+          items: {}
+          description: Arguments to pass to the script
+
+    ScriptResponse:
+      type: object
+      properties:
+        value:
+          description: Script return value
+
+    DelayRequest:
+      type: object
+      required:
+        - ms
+      properties:
+        ms:
+          type: integer
+          minimum: 0
+          description: Delay duration in milliseconds
+
+    EventConfig:
+      type: object
+      required:
+        - eventType
+      properties:
+        eventType:
+          type: string
+          description: Event type to listen for
+        selector:
+          type: string
+          description: Optional CSS selector to scope events
+        enabled:
+          type: boolean
+          default: true
+
+    EventConfigResponse:
+      type: object
+      properties:
+        value:
+          type: object
+          properties:
+            configId:
+              type: string
+            eventType:
+              type: string
+            enabled:
+              type: boolean
+
+    EventConfigsResponse:
+      type: object
+      properties:
+        value:
+          type: array
+          items:
+            type: object
+            properties:
+              configId:
+                type: string
+              eventType:
+                type: string
+              enabled:
+                type: boolean
+
+    Event:
+      type: object
+      properties:
+        eventId:
+          type: string
+        eventType:
+          type: string
+        timestamp:
+          type: integer
+          format: int64
+        data:
+          type: object
+          additionalProperties: true
+
+    EventsResponse:
+      type: object
+      properties:
+        value:
+          type: array
+          items:
+            $ref: '#/components/schemas/Event'
+
+    SubscribeRequest:
+      type: object
+      required:
+        - eventTypes
+      properties:
+        eventTypes:
+          type: array
+          items:
+            type: string
+          description: Event types to subscribe to
+
+    SubscriptionResponse:
+      type: object
+      properties:
+        value:
+          type: object
+          properties:
+            subscriptionId:
+              type: string
+            eventTypes:
+              type: array
+              items:
+                type: string
+
+    # ========== PerceptiveAgent Schemas ==========
+    AgentRunRequest:
+      type: object
+      required:
+        - task
+      properties:
+        task:
+          type: string
+          description: The user goal or instruction to fulfill
+        multiAct:
+          type: boolean
+          default: false
+          description: Whether each act forms a new chained context
+        modelName:
+          type: string
+          description: Optional LLM model name to use
+        variables:
+          type: object
+          additionalProperties:
+            type: string
+          description: Extra variables for prompt/tool
+        domSettleTimeoutMs:
+          type: integer
+          format: int64
+          description: Timeout in ms to wait for DOM settling
+        timeoutMs:
+          type: integer
+          format: int64
+          description: Overall timeout in ms for this action
+
+    AgentRunResponse:
+      type: object
+      properties:
+        value:
+          type: object
+          properties:
+            success:
+              type: boolean
+            message:
+              type: string
+            historySize:
+              type: integer
+            processTraceSize:
+              type: integer
+
+    AgentObserveRequest:
+      type: object
+      properties:
+        instruction:
+          type: string
+          description: The observation instruction
+        modelName:
+          type: string
+          description: Optional LLM model name
+        domSettleTimeoutMs:
+          type: integer
+          format: int64
+        returnAction:
+          type: boolean
+          description: Whether to return actionable tool calls
+        drawOverlay:
+          type: boolean
+          default: true
+          description: Whether to highlight interactive elements
+
+    AgentObserveResponse:
+      type: object
+      properties:
+        value:
+          type: array
+          items:
+            $ref: '#/components/schemas/ObserveResult'
+
+    ObserveResult:
+      type: object
+      properties:
+        locator:
+          type: string
+          description: DOM node locator (frameIndex,backendNodeId)
+        domain:
+          type: string
+          description: Tool call domain (driver, browser, etc.)
+        method:
+          type: string
+          description: Tool call method (click, type, etc.)
+        arguments:
+          type: object
+          additionalProperties: true
+          description: Tool call arguments
+        description:
+          type: string
+        screenshotContentSummary:
+          type: string
+        currentPageContentSummary:
+          type: string
+        nextGoal:
+          type: string
+        thinking:
+          type: string
+        summary:
+          type: string
+        keyFindings:
+          type: string
+        nextSuggestions:
+          type: array
+          items:
+            type: string
+
+    AgentActRequest:
+      type: object
+      required:
+        - action
+      properties:
+        action:
+          type: string
+          description: The action command to execute
+        multiAct:
+          type: boolean
+          default: false
+        modelName:
+          type: string
+        variables:
+          type: object
+          additionalProperties:
+            type: string
+        domSettleTimeoutMs:
+          type: integer
+          format: int64
+        timeoutMs:
+          type: integer
+          format: int64
+
+    AgentActResponse:
+      type: object
+      properties:
+        value:
+          type: object
+          properties:
+            success:
+              type: boolean
+            message:
+              type: string
+            action:
+              type: string
+            isComplete:
+              type: boolean
+            expression:
+              type: string
+              description: The tool expression with parameters
+
+    AgentExtractRequest:
+      type: object
+      required:
+        - instruction
+      properties:
+        instruction:
+          type: string
+          description: The extraction instruction
+        schema:
+          $ref: '#/components/schemas/ExtractionSchema'
+        modelName:
+          type: string
+        domSettleTimeoutMs:
+          type: integer
+          format: int64
+        selector:
+          type: string
+          description: Optional CSS selector to scope extraction
+
+    ExtractionSchema:
+      type: object
+      properties:
+        type:
+          type: string
+          default: object
+        properties:
+          type: object
+          additionalProperties: true
+        required:
+          type: array
+          items:
+            type: string
+
+    AgentExtractResponse:
+      type: object
+      properties:
+        value:
+          type: object
+          properties:
+            success:
+              type: boolean
+            message:
+              type: string
+            data:
+              type: object
+              additionalProperties: true
+
+    AgentSummarizeRequest:
+      type: object
+      properties:
+        instruction:
+          type: string
+          description: Optional guidance for summarization
+        selector:
+          type: string
+          description: Optional CSS selector to limit which element to summarize
+
+    AgentSummarizeResponse:
+      type: object
+      properties:
+        value:
+          type: string
+          description: The generated summary text
+
+    AgentClearHistoryResponse:
+      type: object
+      properties:
+        value:
+          type: boolean
+          description: Whether history was cleared successfully
+
+    # ========== PulsarSession Schemas ==========
+    NormalizeRequest:
+      type: object
+      required:
+        - url
+      properties:
+        url:
+          type: string
+          description: The URL to normalize
+        args:
+          type: string
+          description: Optional load arguments (e.g., "-expire 1d")
+        toItemOption:
+          type: boolean
+          default: false
+          description: Whether to convert to item load options
+
+    NormalizeResponse:
+      type: object
+      properties:
+        value:
+          type: object
+          properties:
+            spec:
+              type: string
+              description: The normalized URL specification
+            url:
+              type: string
+              description: The normalized URL
+            args:
+              type: string
+              description: Parsed arguments
+            isNil:
+              type: boolean
+              description: Whether the URL is nil/invalid
+
+    OpenRequest:
+      type: object
+      required:
+        - url
+      properties:
+        url:
+          type: string
+          description: The URL to open immediately
+
+    OpenResponse:
+      type: object
+      properties:
+        value:
+          $ref: '#/components/schemas/WebPageResult'
+
+    LoadRequest:
+      type: object
+      required:
+        - url
+      properties:
+        url:
+          type: string
+          description: The URL to load
+        args:
+          type: string
+          description: |
+            Optional load arguments. Examples:
+            - "-expire 1d" for 1 day expiration
+            - "-refresh" for forced refresh
+            - "-requireSize 100000" for minimum page size
+
+    LoadResponse:
+      type: object
+      properties:
+        value:
+          $ref: '#/components/schemas/WebPageResult'
+
+    SubmitRequest:
+      type: object
+      required:
+        - url
+      properties:
+        url:
+          type: string
+          description: The URL to submit to the crawl pool
+        args:
+          type: string
+          description: Optional load arguments for when the URL is processed
+
+    SubmitResponse:
+      type: object
+      properties:
+        value:
+          type: boolean
+          description: Whether the URL was submitted successfully
+
+    WebPageResult:
+      type: object
+      properties:
+        url:
+          type: string
+          description: The page URL
+        location:
+          type: string
+          description: The final location after redirects
+        contentType:
+          type: string
+          description: Content type of the page
+        contentLength:
+          type: integer
+          description: Content length in bytes
+        protocolStatus:
+          type: string
+          description: HTTP protocol status
+        isNil:
+          type: boolean
+          description: Whether the page is nil/invalid
