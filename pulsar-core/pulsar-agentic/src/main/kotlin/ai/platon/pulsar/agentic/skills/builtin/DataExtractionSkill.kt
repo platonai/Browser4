@@ -40,10 +40,13 @@ class DataExtractionSkill : AbstractSkill(
                 val selector = getRequiredParameter(context, "selector") as String
                 val text = driver.selectFirstTextOrNull(selector)
                 
+                // Store result in context state
+                context.state["extractedText"] = text ?: ""
+                
                 if (text != null) {
                     ActResult(
                         success = true,
-                        message = "Extracted text from selector: $selector",
+                        message = "Extracted text from selector '$selector': ${text.take(100)}${if (text.length > 100) "..." else ""}",
                         action = "data-extraction.text"
                     )
                 } else {
@@ -59,20 +62,26 @@ class DataExtractionSkill : AbstractSkill(
                 val selector = getRequiredParameter(context, "selector") as String
                 val attribute = getRequiredParameter(context, "attribute") as String
                 
-                // Use evaluate to get attribute value
+                // Use JSON-safe escaping to prevent injection
+                val escapedSelector = selector.replace("\\", "\\\\").replace("'", "\\'")
+                val escapedAttribute = attribute.replace("\\", "\\\\").replace("'", "\\'")
+                
                 val script = """
                     (() => {
-                        const el = document.querySelector('$selector');
-                        return el ? el.getAttribute('$attribute') : null;
+                        const el = document.querySelector('$escapedSelector');
+                        return el ? el.getAttribute('$escapedAttribute') : null;
                     })()
                 """.trimIndent()
                 
                 val value = driver.evaluate(script)
                 
+                // Store result in context state
+                context.state["extractedAttribute"] = value ?: ""
+                
                 if (value != null) {
                     ActResult(
                         success = true,
-                        message = "Extracted attribute '$attribute' from selector: $selector",
+                        message = "Extracted attribute '$attribute' from selector '$selector': $value",
                         action = "data-extraction.attribute"
                     )
                 } else {
@@ -87,19 +96,25 @@ class DataExtractionSkill : AbstractSkill(
             "list" -> {
                 val selector = getRequiredParameter(context, "selector") as String
                 
-                // Use evaluate to get all matching elements' text
+                // Use JSON-safe escaping to prevent injection
+                val escapedSelector = selector.replace("\\", "\\\\").replace("'", "\\'")
+                
                 val script = """
                     (() => {
-                        const elements = document.querySelectorAll('$selector');
+                        const elements = document.querySelectorAll('$escapedSelector');
                         return Array.from(elements).map(el => el.textContent?.trim()).filter(t => t);
                     })()
                 """.trimIndent()
                 
                 val items = driver.evaluate(script)
                 
+                // Store result in context state
+                context.state["extractedList"] = items ?: emptyList<String>()
+                
+                val itemCount = (items as? List<*>)?.size ?: 0
                 ActResult(
                     success = true,
-                    message = "Extracted list of elements for selector: $selector",
+                    message = "Extracted $itemCount items from selector: $selector",
                     action = "data-extraction.list"
                 )
             }

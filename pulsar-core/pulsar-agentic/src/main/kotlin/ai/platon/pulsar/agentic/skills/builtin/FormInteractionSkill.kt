@@ -54,16 +54,19 @@ class FormInteractionSkill : AbstractSkill(
             "select" -> {
                 val value = getRequiredParameter(context, "value") as String
                 
-                // Use JavaScript to set select value
+                // Use JSON-safe escaping to prevent injection
+                val escapedSelector = selector.replace("\\", "\\\\").replace("'", "\\'")
+                val escapedValue = value.replace("\\", "\\\\").replace("'", "\\'")
+                
                 val script = """
                     (() => {
-                        const select = document.querySelector('$selector');
+                        const select = document.querySelector('$escapedSelector');
                         if (!select) return false;
                         
                         // Try to find option by text or value
                         const options = Array.from(select.options);
                         const option = options.find(o => 
-                            o.text === '$value' || o.value === '$value'
+                            o.text === '$escapedValue' || o.value === '$escapedValue'
                         );
                         
                         if (option) {
@@ -106,16 +109,18 @@ class FormInteractionSkill : AbstractSkill(
             }
             
             "submit" -> {
-                // Find and click submit button or trigger form submit
+                // Use JSON-safe escaping to prevent injection
+                val escapedSelector = selector.replace("\\", "\\\\").replace("'", "\\'")
+                
                 val script = """
                     (() => {
-                        const form = document.querySelector('$selector');
+                        const form = document.querySelector('$escapedSelector');
                         if (form && form.tagName === 'FORM') {
                             form.submit();
                             return true;
                         }
                         // Otherwise try to click the element
-                        const button = document.querySelector('$selector');
+                        const button = document.querySelector('$escapedSelector');
                         if (button) {
                             button.click();
                             return true;

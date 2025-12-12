@@ -17,6 +17,7 @@ English | [简体中文](README-CN.md) | [中国镜像](https://gitee.com/platon
     - [🚀 Quick Start](#-quick-start)
     - [💡 Usage Examples](#-usage-examples)
         - [Browser Agents](#browser-agents)
+        - [Claude Skills](#claude-skills)
         - [Workflow Automation](#workflow-automation)
         - [LLM + X-SQL](#llm--x-sql)
         - [High-Speed Parallel Processing](#high-speed-parallel-processing)
@@ -120,6 +121,56 @@ val task = """
 
 agent.run(task)
 ```
+
+### Claude Skills
+
+Modular, reusable task modules that enhance Claude's capabilities with encapsulated expertise.
+
+**What are Skills?**
+- Self-contained modules for specific browser automation tasks
+- Built-in skills: navigation, data extraction, form interaction
+- Easy to create custom skills for specialized workflows
+- Automatic dependency management and validation
+
+```kotlin
+val session = AgenticContexts.createSession()
+
+// Use built-in navigation skill
+session.executeSkill("navigation", mapOf(
+    "action" to "navigate",
+    "url" to "https://example.com",
+    "waitForSelector" to "body"
+))
+
+// Use data extraction skill
+session.executeSkill("data-extraction", mapOf(
+    "action" to "text",
+    "selector" to ".product-title"
+))
+
+// Create and register custom skills
+val customSkill = object : AbstractSkill(
+    SkillMetadata(
+        name = "custom-scraper",
+        description = "Specialized scraping logic",
+        tags = setOf("scraping", "custom")
+    )
+) {
+    override suspend fun execute(context: SkillContext): ActResult {
+        // Your custom logic here
+        return ActResult(success = true, message = "Done")
+    }
+}
+session.getSkillManager().registerSkill(customSkill)
+```
+
+**Benefits:**
+- **Consistency**: Repeatable tasks executed the same way
+- **Reusability**: Share skills across projects
+- **Maintainability**: Update logic in one place
+- **Extensibility**: Add capabilities without modifying core code
+
+📖 [Learn more about Skills](docs/skills/README.md)
 
 ### Workflow Automation
 
