@@ -5,7 +5,7 @@ import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.annotation.JsonProperty
 
 /**
- * MCP (Model Context Protocol) compatible data types for Claude skill integration.
+ * MCP (Model Context Protocol) compatible data types for AI assistant integration.
  *
  * This file contains the core data structures required for MCP compatibility:
  * - Tool definitions with JSON Schema

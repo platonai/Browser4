@@ -284,6 +284,10 @@ class MCPProtocolHandler(
 
     /**
      * Handle tools/call request.
+     *
+     * TODO: Integrate with AgentToolManager for actual tool execution.
+     * Current implementation returns a placeholder response to validate
+     * the protocol handling. Full tool execution will be added in Phase 4.4.
      */
     private suspend fun handleToolsCall(request: JsonRpcRequest): MCPToolResult {
         val params = request.params?.let {
@@ -293,8 +297,8 @@ class MCPProtocolHandler(
         val tool = registry.getTool(params.name)
             ?: throw InvalidParamsException("Tool not found: ${params.name}")
 
-        // Execute the tool - this would integrate with AgentToolManager
-        // For now, return a placeholder indicating the tool exists
+        // TODO: Phase 4.4 - Integrate with AgentToolManager for actual tool execution
+        // Current placeholder validates protocol handling and tool lookup
         return MCPToolRenderer.createTextResult(
             "Tool '${params.name}' called with arguments: ${params.arguments}"
         )
@@ -337,6 +341,10 @@ class MCPProtocolHandler(
 
     /**
      * Handle prompts/get request.
+     *
+     * TODO: Implement proper prompt message generation with argument substitution.
+     * Current implementation returns basic prompt information without argument processing.
+     * Full prompt templating will be added when specific prompt use cases are defined.
      */
     private fun handlePromptsGet(request: JsonRpcRequest): Map<String, Any> {
         val params = request.params?.let {
@@ -346,7 +354,8 @@ class MCPProtocolHandler(
         val prompt = registry.getPrompt(params.name)
             ?: throw InvalidParamsException("Prompt not found: ${params.name}")
 
-        // Return a placeholder message - actual implementation would generate messages
+        // TODO: Implement proper prompt message generation with argument substitution
+        // Current placeholder returns basic prompt structure for protocol validation
         return mapOf(
             "description" to (prompt.description ?: ""),
             "messages" to listOf(

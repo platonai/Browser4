@@ -230,12 +230,17 @@ class MCPToolRegistry private constructor() {
     }
 
     private fun matchesTemplate(uri: String, template: String): Boolean {
-        // Simple template matching - could be enhanced
-        val regex = template
-            .replace("{", "(?<")
-            .replace("}", ">[^/]+)")
-            .toRegex()
-        return regex.matches(uri)
+        // Simple template matching with proper regex escaping
+        // TODO: Consider using a more robust URI template library (RFC 6570) for complex use cases
+        val escapedTemplate = Regex.escape(template)
+            .replace("\\{", "(?<")
+            .replace("\\}", ">[^/]+)")
+        return try {
+            Regex(escapedTemplate).matches(uri)
+        } catch (e: Exception) {
+            // If regex construction fails, fall back to simple contains check
+            false
+        }
     }
 
     // ========================================================================

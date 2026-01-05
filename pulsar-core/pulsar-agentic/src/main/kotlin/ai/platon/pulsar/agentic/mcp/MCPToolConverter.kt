@@ -7,7 +7,7 @@ import ai.platon.pulsar.agentic.tools.ToolSpecification
  * Converter for transforming Browser4 tool specifications to MCP format and vice versa.
  *
  * This converter enables bidirectional transformation between:
- * - Kotlin-style tool specifications (ToolCallSpec)
+ * - Browser4-style tool specifications (ToolCallSpec)
  * - MCP JSON Schema tool definitions (MCPToolDefinition)
  *
  * @author Vincent Zhang, ivincent.zhang@gmail.com, platon.ai
