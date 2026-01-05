@@ -222,6 +222,7 @@ Usage:
 | Docs | Public APIs need KDoc / README entries |
 | Benchmarks | JMH in `pulsar-benchmarks` |
 | Testing | See `devdocs/copilot/test-guide.md` |
+| LoadOptions | See `devdocs/copilot/load-options-guide.md` or quick ref at `devdocs/copilot/load-options-quick-ref.md` |
 
 ---
 

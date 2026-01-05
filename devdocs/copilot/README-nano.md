@@ -30,6 +30,7 @@
   - 基础：`PulsarContexts.createSession()`
   - Agent：`AgenticContexts.createSession()`
 - 加载参数：使用 `LoadOptions` 解析 URL 中的 CLI 风格参数
+  - 详见：`load-options-guide-zh.md` 或快速参考 `load-options-quick-ref.md`
 - 浏览器自动化：查看 `ai.platon.pulsar.browser`，关注 `PageHandler`、`ClickableDOM`
 - 异常重试：Chrome CDP RPC 相关使用现有重试工具，避免日志风暴
 
