@@ -3,6 +3,8 @@ Event Handling
 
 [Prev](8continuous-crawling.md) [Home](1home.md) [Next](10RPA.md)
 
+**📖 For comprehensive AI-friendly EventHandlers documentation, see [EventHandlers AI Guide](../event-handlers-ai.md)**
+
 The event handling mechanism offers a comprehensive approach to capture and process events across the entire lifecycle of a web page. The following concise program logs the sequence of all page events along with their respective names.
 Page event handlers are encapsulated within the `PageEventHandlers` class, categorized into three distinct groups to manage events at various phases:
 

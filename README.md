@@ -273,6 +273,7 @@ Python/Node.js SDKs are on the way.
 * 🛠️ [Configuration Guide](docs/config.md)
 * 📚 [Build from Source](docs/build.md)
 * 🧠 [Expert Guide](docs/advanced-guides.md)
+* 🎯 [EventHandlers AI Guide](docs/event-handlers-ai.md) - Comprehensive event handling reference
 
 ---
 
