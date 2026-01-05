@@ -22,6 +22,7 @@ class MCPService {
     private val logger = getLogger(MCPService::class)
 
     private val registry = MCPToolRegistry.instance
+    private val toolExecutor = MCPToolExecutor()
     private val protocolHandler = MCPProtocolHandler(registry)
 
     // ========================================================================
@@ -56,30 +57,27 @@ class MCPService {
      * @return Tool execution result
      */
     suspend fun executeTool(toolCall: MCPToolCall): MCPToolResult {
-        return withContext(Dispatchers.IO) {
-            try {
-                val tool = registry.getTool(toolCall.name)
-                    ?: return@withContext MCPToolRenderer.createErrorResult("Tool not found: ${toolCall.name}")
+        return toolExecutor.execute(toolCall)
+    }
 
-                // Convert MCPToolCall to internal ToolCall format
-                val internalToolCall = ToolCall(
-                    domain = toolCall.domain,
-                    method = toolCall.method,
-                    arguments = toolCall.arguments.mapValues { it.value?.toString() }.toMutableMap()
-                )
+    /**
+     * Validate a tool call without executing it.
+     *
+     * @param toolCall The MCP tool call to validate
+     * @return Validation result
+     */
+    fun validateToolCall(toolCall: MCPToolCall): ValidationResult {
+        return toolExecutor.validate(toolCall)
+    }
 
-                // TODO: Full integration with AgentToolManager for actual tool execution
-                // Current placeholder validates tool lookup. Full execution requires browser session context.
-                logger.info("MCP tool call: {} with args: {}", toolCall.name, toolCall.arguments)
-
-                MCPToolRenderer.createTextResult(
-                    "Tool '${toolCall.name}' recognized. Arguments: ${toolCall.arguments}"
-                )
-            } catch (e: Exception) {
-                logger.error("Failed to execute MCP tool: ${toolCall.name}", e)
-                MCPToolRenderer.createErrorResult("Execution failed: ${e.message}")
-            }
-        }
+    /**
+     * Get help information for a tool.
+     *
+     * @param toolName The tool name (domain.method)
+     * @return Help text or null if tool not found
+     */
+    fun getToolHelp(toolName: String): String? {
+        return toolExecutor.getHelp(toolName)
     }
 
     // ========================================================================

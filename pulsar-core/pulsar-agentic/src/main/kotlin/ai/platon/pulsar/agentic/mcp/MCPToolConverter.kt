@@ -79,9 +79,71 @@ object MCPToolConverter {
 
     /**
      * Parse all built-in tool specifications and convert to MCP format.
+     *
+     * When multiple tool specs have the same name (different signatures/overloads),
+     * they are merged into a single MCP tool definition where:
+     * - All parameters from all overloads are included
+     * - Only parameters present in ALL overloads are marked as required
+     * - Parameters only in some overloads become optional
      */
     fun getAllBuiltInMCPTools(): List<MCPToolDefinition> {
-        return parseBuiltInToolSpecs().map { toMCPToolDefinition(it) }
+        val specs = parseBuiltInToolSpecs()
+
+        // Group specs by tool name
+        val groupedSpecs = specs.groupBy { "${it.domain}.${it.method}" }
+
+        return groupedSpecs.map { (name, specGroup) ->
+            mergeToolSpecs(name, specGroup)
+        }
+    }
+
+    /**
+     * Merge multiple tool specifications with the same name into a single MCP definition.
+     */
+    private fun mergeToolSpecs(name: String, specs: List<ToolCallSpec>): MCPToolDefinition {
+        if (specs.size == 1) {
+            return toMCPToolDefinition(specs.first())
+        }
+
+        // Collect all parameters and their occurrences
+        val allParams = mutableMapOf<String, MCPPropertySchema>()
+        val paramOccurrences = mutableMapOf<String, Int>()
+
+        specs.forEach { spec ->
+            spec.arguments.forEach { arg ->
+                val schema = MCPPropertySchema(
+                    type = kotlinTypeToJsonSchemaType(arg.type),
+                    description = null,
+                    default = parseDefaultValue(arg.defaultValue, arg.type),
+                )
+                // Keep the first occurrence's schema
+                if (arg.name !in allParams) {
+                    allParams[arg.name] = schema
+                }
+                paramOccurrences[arg.name] = (paramOccurrences[arg.name] ?: 0) + 1
+            }
+        }
+
+        // Parameters required in ALL overloads are marked as required
+        val totalSpecs = specs.size
+        val required = paramOccurrences
+            .filter { it.value == totalSpecs }
+            .keys
+            .toList()
+
+        // Use the first spec's description
+        val description = specs.first().description
+            ?: "Execute ${specs.first().method} in ${specs.first().domain} domain"
+
+        return MCPToolDefinition(
+            name = name,
+            description = description,
+            inputSchema = MCPInputSchema(
+                type = "object",
+                properties = allParams,
+                required = required,
+            )
+        )
     }
 
     /**

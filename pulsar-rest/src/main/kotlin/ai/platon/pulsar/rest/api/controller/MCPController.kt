@@ -83,6 +83,41 @@ class MCPController(
         }
     }
 
+    /**
+     * Validate a tool call without executing it.
+     *
+     * @param request Tool call request to validate
+     * @return Validation result
+     */
+    @PostMapping("/tools/validate", consumes = [MediaType.APPLICATION_JSON_VALUE])
+    fun validateTool(@RequestBody request: ToolCallRequest): ValidationResponse {
+        val toolCall = MCPToolCall(
+            name = request.name,
+            arguments = request.arguments ?: emptyMap()
+        )
+        val result = mcpService.validateToolCall(toolCall)
+        return ValidationResponse(
+            valid = result.valid,
+            error = result.error
+        )
+    }
+
+    /**
+     * Get help information for a specific tool.
+     *
+     * @param name Tool name (e.g., "driver.click")
+     * @return Help text or error message
+     */
+    @GetMapping("/tools/{name}/help")
+    fun getToolHelp(@PathVariable name: String): Map<String, String?> {
+        val help = mcpService.getToolHelp(name)
+        return if (help != null) {
+            mapOf("help" to help)
+        } else {
+            mapOf("error" to "Tool not found: $name")
+        }
+    }
+
     // ========================================================================
     // Resource Endpoints
     // ========================================================================
@@ -223,6 +258,14 @@ data class ToolCallRequest(
  */
 data class ToolsListResponse(
     val tools: List<MCPToolDefinition>
+)
+
+/**
+ * Response for tool validation.
+ */
+data class ValidationResponse(
+    val valid: Boolean,
+    val error: String? = null
 )
 
 /**
