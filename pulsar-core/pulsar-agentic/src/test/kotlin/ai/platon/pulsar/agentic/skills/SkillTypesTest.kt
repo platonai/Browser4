@@ -2,7 +2,6 @@ package ai.platon.pulsar.agentic.skills
 
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
-import org.junit.jupiter.api.BeforeEach
 
 /**
  * Tests for Claude Skill types.
