@@ -1,7 +1,7 @@
-package ai.platon.pulsar.rest.api.service
+package ai.platon.pulsar.crawl.api.service
 
-import ai.platon.pulsar.rest.api.common.DEFAULT_INTRODUCE
-import ai.platon.pulsar.rest.api.entities.PromptRequest
+import ai.platon.pulsar.crawl.api.common.DEFAULT_INTRODUCE
+import ai.platon.pulsar.crawl.api.entities.PromptRequest
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import org.springframework.stereotype.Service

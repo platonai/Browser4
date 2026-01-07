@@ -1,4 +1,4 @@
-package ai.platon.pulsar.rest.api.service
+package ai.platon.pulsar.crawl.api.service
 
 import ai.platon.pulsar.common.LinkExtractors
 import ai.platon.pulsar.common.ai.llm.PromptTemplate
@@ -6,10 +6,10 @@ import ai.platon.pulsar.common.ai.llm.PromptTemplateLoader
 import ai.platon.pulsar.common.serialize.json.JSONExtractor
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.common.urls.URLUtils
-import ai.platon.pulsar.rest.api.common.*
-import ai.platon.pulsar.rest.api.entities.CommandRequest
-import ai.platon.pulsar.rest.api.entities.CommandStatus
-import ai.platon.pulsar.rest.api.entities.PromptRequest
+import ai.platon.pulsar.crawl.api.common.*
+import ai.platon.pulsar.crawl.api.entities.CommandRequest
+import ai.platon.pulsar.crawl.api.entities.CommandStatus
+import ai.platon.pulsar.crawl.api.entities.PromptRequest
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import com.fasterxml.jackson.module.kotlin.readValue

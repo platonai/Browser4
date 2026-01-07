@@ -1,11 +1,11 @@
-package ai.platon.pulsar.rest.api.common
+package ai.platon.pulsar.crawl.api.common
 
 import ai.platon.pulsar.common.urls.DegenerateUrl
 import ai.platon.pulsar.common.warnUnexpected
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.model.GoraWebPage
 import ai.platon.pulsar.ql.h2.utils.ResultSetUtils
-import ai.platon.pulsar.rest.api.entities.ScrapeRequest
+import ai.platon.pulsar.crawl.api.entities.ScrapeRequest
 import ai.platon.pulsar.skeleton.crawl.PageEventHandlers
 import ai.platon.pulsar.skeleton.crawl.event.impl.DefaultPageEventHandlers
 import ai.platon.pulsar.skeleton.session.PulsarSession

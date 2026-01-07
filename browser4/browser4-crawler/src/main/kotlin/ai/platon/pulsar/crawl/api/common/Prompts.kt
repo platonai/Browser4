@@ -1,4 +1,4 @@
-package ai.platon.pulsar.rest.api.common
+package ai.platon.pulsar.crawl.api.common
 
 const val SYSTEM_PROMPT = """
 You are Browser4 Assistant, an AI-powered web automation and data extraction specialist.

@@ -1,7 +1,7 @@
-package ai.platon.pulsar.rest.api.common
+package ai.platon.pulsar.crawl.api.common
 
 import ai.platon.pulsar.common.ai.llm.PromptTemplateLoader
-import ai.platon.pulsar.rest.api.service.CommandService.Companion.MIN_USER_MESSAGE_LENGTH
+import ai.platon.pulsar.crawl.api.service.CommandService.Companion.MIN_USER_MESSAGE_LENGTH
 
 object RestAPIPromptUtils {
 

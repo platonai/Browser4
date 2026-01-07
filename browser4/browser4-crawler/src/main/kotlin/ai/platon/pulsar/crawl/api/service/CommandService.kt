@@ -1,4 +1,4 @@
-package ai.platon.pulsar.rest.api.service
+package ai.platon.pulsar.crawl.api.service
 
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.ResourceStatus
@@ -12,11 +12,11 @@ import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.dom.UriExtractor
 import ai.platon.pulsar.dom.nodes.node.ext.numChars
 import ai.platon.pulsar.persist.WebPage
-import ai.platon.pulsar.rest.api.common.DomUtils
-import ai.platon.pulsar.rest.api.common.PLACEHOLDER_PAGE_CONTENT
-import ai.platon.pulsar.rest.api.common.RestAPIPromptUtils
-import ai.platon.pulsar.rest.api.common.ScrapeAPIUtils
-import ai.platon.pulsar.rest.api.entities.*
+import ai.platon.pulsar.crawl.api.common.DomUtils
+import ai.platon.pulsar.crawl.api.common.PLACEHOLDER_PAGE_CONTENT
+import ai.platon.pulsar.crawl.api.common.RestAPIPromptUtils
+import ai.platon.pulsar.crawl.api.common.ScrapeAPIUtils
+import ai.platon.pulsar.crawl.api.entities.*
 import ai.platon.pulsar.skeleton.crawl.PageEventHandlers
 import ai.platon.pulsar.skeleton.crawl.event.impl.PageEventHandlersFactory
 import ai.platon.pulsar.skeleton.session.PulsarSession

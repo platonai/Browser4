@@ -1,10 +1,10 @@
-package ai.platon.pulsar.rest.api.controller
+package ai.platon.pulsar.crawl.api.controller
 
 import ai.platon.pulsar.common.LinkExtractors
 import ai.platon.pulsar.common.ai.llm.PromptTemplateLoader
 import ai.platon.pulsar.common.config.AppConstants
-import ai.platon.pulsar.rest.api.common.*
-import ai.platon.pulsar.rest.api.service.ConversationService
+import ai.platon.pulsar.crawl.api.common.*
+import ai.platon.pulsar.crawl.api.service.ConversationService
 import kotlinx.coroutines.runBlocking
 import org.springframework.http.MediaType
 import org.springframework.web.bind.annotation.*

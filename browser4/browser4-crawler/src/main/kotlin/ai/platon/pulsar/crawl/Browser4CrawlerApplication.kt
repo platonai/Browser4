@@ -18,6 +18,7 @@ import org.springframework.context.annotation.ImportResource
 @ComponentScan(
     "ai.platon.pulsar.boot.autoconfigure",
     "ai.platon.pulsar.rest.api",
+    "ai.platon.pulsar.crawl.api",
 )
 class Browser4CrawlerApplication {
     private val logger = getLogger(Browser4CrawlerApplication::class)

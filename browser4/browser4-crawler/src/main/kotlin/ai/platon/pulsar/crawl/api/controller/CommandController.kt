@@ -1,10 +1,10 @@
-package ai.platon.pulsar.rest.api.controller
+package ai.platon.pulsar.crawl.api.controller
 
-import ai.platon.pulsar.rest.api.entities.CommandRequest
-import ai.platon.pulsar.rest.api.entities.CommandResult
-import ai.platon.pulsar.rest.api.entities.CommandStatus
-import ai.platon.pulsar.rest.api.service.CommandService
-import ai.platon.pulsar.rest.api.service.ConversationService
+import ai.platon.pulsar.crawl.api.entities.CommandRequest
+import ai.platon.pulsar.crawl.api.entities.CommandResult
+import ai.platon.pulsar.crawl.api.entities.CommandStatus
+import ai.platon.pulsar.crawl.api.service.CommandService
+import ai.platon.pulsar.crawl.api.service.ConversationService
 import ai.platon.pulsar.skeleton.crawl.event.impl.PageEventHandlersFactory
 import kotlinx.coroutines.runBlocking
 import org.springframework.http.MediaType

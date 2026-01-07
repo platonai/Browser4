@@ -1,9 +1,9 @@
-package ai.platon.pulsar.rest.api.controller
+package ai.platon.pulsar.crawl.api.controller
 
-import ai.platon.pulsar.rest.api.entities.ScrapeRequest
-import ai.platon.pulsar.rest.api.entities.ScrapeResponse
-import ai.platon.pulsar.rest.api.entities.ScrapeStatusRequest
-import ai.platon.pulsar.rest.api.service.ScrapeService
+import ai.platon.pulsar.crawl.api.entities.ScrapeRequest
+import ai.platon.pulsar.crawl.api.entities.ScrapeResponse
+import ai.platon.pulsar.crawl.api.entities.ScrapeStatusRequest
+import ai.platon.pulsar.crawl.api.service.ScrapeService
 import jakarta.servlet.http.HttpServletRequest
 import org.springframework.context.ApplicationContext
 import org.springframework.http.MediaType

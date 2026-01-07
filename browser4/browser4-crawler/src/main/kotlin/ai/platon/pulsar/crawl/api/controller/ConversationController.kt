@@ -1,7 +1,7 @@
-package ai.platon.pulsar.rest.api.controller
+package ai.platon.pulsar.crawl.api.controller
 
-import ai.platon.pulsar.rest.api.entities.PromptRequest
-import ai.platon.pulsar.rest.api.service.ConversationService
+import ai.platon.pulsar.crawl.api.entities.PromptRequest
+import ai.platon.pulsar.crawl.api.service.ConversationService
 import kotlinx.coroutines.runBlocking
 import org.springframework.http.MediaType
 import org.springframework.web.bind.annotation.*

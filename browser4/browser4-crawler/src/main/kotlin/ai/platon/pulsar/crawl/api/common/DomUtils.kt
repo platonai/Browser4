@@ -1,4 +1,4 @@
-package ai.platon.pulsar.rest.api.common
+package ai.platon.pulsar.crawl.api.common
 
 import ai.platon.pulsar.common.config.AppConstants.BROWSER_INTERACTIVE_ELEMENTS_SELECTOR
 import ai.platon.pulsar.common.urls.URLUtils

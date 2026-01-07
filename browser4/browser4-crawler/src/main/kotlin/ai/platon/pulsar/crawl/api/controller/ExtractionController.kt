@@ -1,7 +1,7 @@
-package ai.platon.pulsar.rest.api.controller
+package ai.platon.pulsar.crawl.api.controller
 
-import ai.platon.pulsar.rest.api.entities.PromptRequest
-import ai.platon.pulsar.rest.api.service.ExtractService
+import ai.platon.pulsar.crawl.api.entities.PromptRequest
+import ai.platon.pulsar.crawl.api.service.ExtractService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.launch

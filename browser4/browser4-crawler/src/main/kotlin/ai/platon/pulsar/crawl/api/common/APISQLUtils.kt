@@ -1,4 +1,4 @@
-package ai.platon.pulsar.rest.api.common
+package ai.platon.pulsar.crawl.api.common
 
 import org.apache.commons.lang3.StringUtils
 import java.util.*

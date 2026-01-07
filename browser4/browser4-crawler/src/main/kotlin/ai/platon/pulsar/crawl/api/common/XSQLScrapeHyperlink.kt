@@ -1,4 +1,4 @@
-package ai.platon.pulsar.rest.api.common
+package ai.platon.pulsar.crawl.api.common
 
 import ai.platon.pulsar.common.PulsarParams.VAR_IS_SCRAPE
 import ai.platon.pulsar.common.ResourceStatus
@@ -9,9 +9,9 @@ import ai.platon.pulsar.persist.AbstractWebPage
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.model.GoraWebPage
 import ai.platon.pulsar.ql.h2.utils.ResultSetUtils
-import ai.platon.pulsar.rest.api.entities.ScrapeRequest
-import ai.platon.pulsar.rest.api.entities.ScrapeResponse
-import ai.platon.pulsar.rest.api.entities.refresh
+import ai.platon.pulsar.crawl.api.entities.ScrapeRequest
+import ai.platon.pulsar.crawl.api.entities.ScrapeResponse
+import ai.platon.pulsar.crawl.api.entities.refresh
 import ai.platon.pulsar.skeleton.crawl.event.impl.DefaultCrawlEventHandlers
 import ai.platon.pulsar.skeleton.crawl.event.impl.DefaultLoadEventHandlers
 import ai.platon.pulsar.skeleton.crawl.event.impl.PageEventHandlersFactory
