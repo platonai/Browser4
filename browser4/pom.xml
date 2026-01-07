@@ -23,5 +23,6 @@
     <modules>
         <module>browser4-spa</module>
         <module>browser4-agents</module>
+        <module>browser4-crawler</module>
     </modules>
 </project>

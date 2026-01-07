@@ -1,4 +1,4 @@
-package ai.platon.pulsar.app
+package ai.platon.pulsar.crawl
 
 import ai.platon.pulsar.boot.autoconfigure.PulsarContextInitializer
 import ai.platon.pulsar.common.getLogger
@@ -19,8 +19,8 @@ import org.springframework.context.annotation.ImportResource
     "ai.platon.pulsar.boot.autoconfigure",
     "ai.platon.pulsar.rest.api",
 )
-class Browser4Application {
-    private val logger = getLogger(Browser4Application::class)
+class Browser4CrawlerApplication {
+    private val logger = getLogger(Browser4CrawlerApplication::class)
 
     @Value("\${server.port:8182}")
     var port: Int = 8182
@@ -130,9 +130,9 @@ class Browser4Application {
 }
 
 fun main(args: Array<String>) {
-    runApplication<Browser4Application>(*args) {
+    runApplication<Browser4CrawlerApplication>(*args) {
         addInitializers(PulsarContextInitializer())
-        setAdditionalProfiles("agents", "private")
+        setAdditionalProfiles("crawler", "private")
         setLogStartupInfo(true)
     }
 }

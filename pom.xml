@@ -102,6 +102,7 @@
             <modules>
                 <module>browser4/browser4-agents</module>
                 <module>browser4/browser4-spa</module>
+                <module>browser4/browser4-crawler</module>
                 <module>examples/browser4-examples</module>
                 <module>examples/java-compatible</module>
             </modules>
