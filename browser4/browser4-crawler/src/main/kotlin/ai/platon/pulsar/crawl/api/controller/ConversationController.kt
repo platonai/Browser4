@@ -75,9 +75,9 @@ class ConversationController(
     @GetMapping("/{id}/status")
     fun conversationStatus(@PathVariable id: String): String {
         return if (conversationsCache.containsKey(id)) {
-            "Processing"
-        } else {
             "Completed"
+        } else {
+            "Processing"
         }
     }
 
