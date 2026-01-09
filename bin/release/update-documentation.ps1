@@ -30,7 +30,7 @@ Write-Host "   Prefix:   $PREFIX"
 # 包含版本号的文件
 $VERSION_AWARE_FILES = @(
     "$APP_HOME/README.md",
-    "$APP_HOME/README-CN.md"
+    "$APP_HOME/README.zh.md"
 )
 
 Write-Host "🔍 Processing files..."

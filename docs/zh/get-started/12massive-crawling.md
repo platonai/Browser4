@@ -94,7 +94,7 @@ urlPool.delayCache.add(DelayUrl(url5, Duration.ofHours(2)))
 
 默认配置中，URLCache 都是基于内存的，我们也可以重新配置，使用支持文件系统或者数据库的缓存实现。
 
-本课程提供了[完整代码](/pulsar-app/pulsar-examples/src/main/kotlin/ai/platon/pulsar/examples/_9_MassiveCrawler.kt)，[国内镜像](https://gitee.com/platonai_galaxyeye/browser4/blob/1.10.x/pulsar-app/pulsar-examples/src/main/kotlin/ai/platon/pulsar/examples/_9_MassiveCrawler.kt)。
+本课程提供了[完整代码](/examples/browser4-examples/src/main/kotlin/ai/platon/pulsar/manual/_9_MassiveCrawler.kt)，[国内镜像](https://gitee.com/platonai_galaxyeye/browser4/blob/1.10.x/examples/browser4-examples/src/main/kotlin/ai/platon/pulsar/manual/_9_MassiveCrawler.kt)。
 
 ------
 

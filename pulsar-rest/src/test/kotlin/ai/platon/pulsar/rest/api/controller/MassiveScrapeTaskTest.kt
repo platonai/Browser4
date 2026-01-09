@@ -82,13 +82,26 @@ class MassiveScrapeTaskTest : IntegrationTestBase() {
             .map { SQL_TEMPLATE.createInstance("$it -refresh") }
             .toList()
 
-        val tasks = sqls.associateBy { sql ->
-            restTemplate.postForObject("$baseUri/api/x/s", sql.sql, String::class.java)
+        // Submit tasks and keep returned UUIDs
+        val uuids: List<String> = sqls.mapNotNull { sql ->
+            client.post().uri("/api/x/s")
+                .body(sql.sql)
+                .exchange()
+                .expectStatus().is2xxSuccessful
+                .expectBody(String::class.java)
+                .returnResult()
+                .responseBody
         }
 
         var round = 0
         while (++round < MAX_ROUNDS && AppContext.isActive && !Thread.interrupted()) {
-            val count = restTemplate.getForObject("$baseUri/api/x/c?status={status}", Int::class.java, ResourceStatus.SC_OK)
+            val count = client.get().uri("/api/x/c?status=${ResourceStatus.SC_OK}")
+                .exchange()
+                .expectStatus().is2xxSuccessful
+                .expectBody(Int::class.java)
+                .returnResult()
+                .responseBody
+
             logger.info("Total $count finished tasks")
 
             if (count == TEST_FILE_COUNT) {
@@ -97,5 +110,8 @@ class MassiveScrapeTaskTest : IntegrationTestBase() {
 
             sleepSeconds(POLLING_INTERVAL_SECONDS)
         }
+
+        // Keep variables used to avoid warnings, and preserve intent of tracking tasks.
+        kotlin.test.assertTrue(uuids.isNotEmpty())
     }
 }

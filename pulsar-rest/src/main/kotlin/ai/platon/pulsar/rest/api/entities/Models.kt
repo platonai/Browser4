@@ -1,16 +1,19 @@
 package ai.platon.pulsar.rest.api.entities
 
+import ai.platon.pulsar.agentic.AgentHistory
+import ai.platon.pulsar.agentic.AgentState
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.persist.ProtocolStatus
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
+import com.fasterxml.jackson.annotation.JsonCreator
+import com.fasterxml.jackson.annotation.JsonIgnore
+import com.fasterxml.jackson.annotation.JsonProperty
 import java.time.Instant
 import java.util.*
 
 /**
  * Request for chat
- *
- * @see [ai.platon.pulsar.rest.api.controller.AiController.chatBackward]
  *
  * @property url The page url
  * @property prompt The prompt, e.g. "Tell me something about the page"
@@ -139,24 +142,32 @@ data class W3DocumentRequest(
  * @property async If true, the command is executed asynchronous; otherwise, it's synchronously.
  * @property mode The execution mode, either "sync" or "async", default to "sync". (Deprecated: use [async] instead)
  */
-data class CommandRequest(
-    var url: String,
-    var args: String? = null,
-    var onBrowserLaunchedActions: List<String>? = null,
-    var onPageReadyActions: List<String>? = null,
-    var actions: List<String>? = null,
-    var pageSummaryPrompt: String? = null,
-    var dataExtractionRules: String? = null,
-    var uriExtractionRules: String? = null,
-    var xsql: String? = null,
-    var richText: Boolean? = null,
-    var async: Boolean? = null,
+data class CommandRequest @JsonCreator constructor(
+    @param:JsonProperty("url") var url: String,
+    @param:JsonProperty("args") var args: String? = null,
+    @param:JsonProperty("onBrowserLaunchedActions") var onBrowserLaunchedActions: List<String>? = null,
+    @param:JsonProperty("onPageReadyActions") var onPageReadyActions: List<String>? = null,
+    @param:JsonProperty("actions") var actions: List<String>? = null,
+    @param:JsonProperty("pageSummaryPrompt") var pageSummaryPrompt: String? = null,
+    @param:JsonProperty("dataExtractionRules") var dataExtractionRules: String? = null,
+    @param:JsonProperty("uriExtractionRules") var uriExtractionRules: String? = null,
+    @param:JsonProperty("xsql") var xsql: String? = null,
+    @param:JsonProperty("richText") var richText: Boolean? = null,
+    @param:JsonProperty("async") var async: Boolean? = null,
     @Deprecated("Use async instead")
-    var mode: String? = null, // "sync" or "async", default to "sync"
-    var id: String? = null,
+    @param:JsonProperty("mode") var mode: String? = null, // "sync" or "async", default to "sync"
+    @param:JsonProperty("id") var id: String? = null,
 ) {
     fun hasAction(): Boolean {
         return !onBrowserLaunchedActions.isNullOrEmpty() || !onPageReadyActions.isNullOrEmpty()
+    }
+
+    fun isAsync(): Boolean {
+        return when {
+            async == true -> true
+            mode?.lowercase() == "async" -> true
+            else -> false
+        }
     }
 
     fun enhanceArgs(): String {
@@ -181,6 +192,7 @@ data class CommandRequest(
  * @property xsqlResultSet The result set from the X-SQL query.
  */
 data class CommandResult(
+    var summary: String? = null,
     var pageSummary: String? = null,
 //    var fields: String? = null,
 //    var links: String? = null,
@@ -198,12 +210,12 @@ data class CommandResult(
  * @property resultType The json type of the result, e.g. "string", "number", "boolean", "array", "object".
  * @property instruct The instruction text.
  * */
-data class InstructResult(
-    var name: String,
-    var statusCode: Int = ResourceStatus.SC_CREATED,
-    var result: Any? = null,
-    var resultType: String? = null,
-    var instruct: String? = null,
+data class InstructResult @JsonCreator constructor(
+    @param:JsonProperty("name") var name: String,
+    @param:JsonProperty("statusCode") var statusCode: Int = ResourceStatus.SC_CREATED,
+    @param:JsonProperty("result") var result: Any? = null,
+    @param:JsonProperty("resultType") var resultType: String? = null,
+    @param:JsonProperty("instruct") var instruct: String? = null,
 ) {
     companion object {
 
@@ -252,6 +264,21 @@ data class CommandStatus(
     val createTime: Instant = Instant.now()
     var lastModifiedTime: Instant? = null
     var finishTime: Instant? = null
+
+    /**
+     * The agent's state history reference for tracking agent execution progress.
+     * This is set when executing agent commands and provides access to the latest agent state.
+     * It is excluded from JSON serialization as it's only used for internal tracking.
+     */
+    @get:JsonIgnore
+    var agentHistory: AgentHistory? = null
+
+    /**
+     * Returns the current (latest) agent state from the agent history.
+     * This provides real-time access to the agent's execution state during async operations.
+     */
+    val currentAgentState: AgentState?
+        get() = agentHistory?.lastOrNull()
 
     companion object {
         fun notFound(id: String) = CommandStatus(id, ResourceStatus.SC_NOT_FOUND, isDone = true)

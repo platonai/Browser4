@@ -109,7 +109,7 @@ poll_tasks() {
         fi
 
         # if there is a line contains "isDone" and "true", then the task is completed
-        if [[ "$response" =~ isDone.*true ]]; then
+        if [[ "$response" =~ isDone.*true ]] || [[ "$response" =~ done.*true ]]; then
           TASK_MAP["$id"]=0
           echo "[SUCCESS] Task $id completed."
         else

@@ -29,7 +29,7 @@ class TestHtmlStrings {
 
     @Test
     fun testRandomString() {
-        val strings = IntRange(1, 20).map { RandomStringUtils.randomAlphanumeric(5) }
+        val strings = IntRange(1, 20).map { RandomStringUtils.secure().nextAlphanumeric(5) }
         assertEquals(strings.size, strings.distinct().size)
     }
 }

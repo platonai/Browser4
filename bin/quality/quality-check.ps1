@@ -5,7 +5,7 @@ $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $Root
 
-$Exempt = @('pulsar-benchmarks','pulsar-examples','pulsar-bom','pulsar-all','browser4')
+$Exempt = @('pulsar-benchmarks','examples/browser4-examples','pulsar-bom','browser4')
 
 $modules = Select-String -Path pom.xml -Pattern '<module>([^<]+)</module>' -AllMatches | ForEach-Object { $_.Matches } | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
 

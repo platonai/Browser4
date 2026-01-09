@@ -105,7 +105,7 @@ class ChromeImpl(
     }
 
     override fun canConnect(): Boolean {
-        val url = URL("http://$host:$port")
+        val url = URI.create("http://$host:$port").toURL()
         return NetUtil.testHttpNetwork(url)
     }
 
@@ -178,9 +178,9 @@ class ChromeImpl(
         var inputStream: InputStream? = null
 
         try {
-            val uri = URL(String.format(path, *params))
+            val uri = URI.create(String.format(path, *params))
 
-            connection = uri.openConnection() as HttpURLConnection
+            connection = uri.toURL().openConnection() as HttpURLConnection
 
             /**
              * Chrome 111 no longer accepts HTTP GET to create tabs, PUT is the correct verb.

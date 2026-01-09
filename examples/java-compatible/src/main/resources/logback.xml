@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<configuration scan="true" scanPeriod="30 seconds" debug="false">
+
+    <!--0. 日志格式和颜色渲染 -->
+    <!-- 彩色日志依赖的渲染类 -->
+    <conversionRule conversionWord="clr" converterClass="org.springframework.boot.logging.logback.ColorConverter" />
+    <conversionRule conversionWord="wex" converterClass="org.springframework.boot.logging.logback.WhitespaceThrowableProxyConverter" />
+    <conversionRule conversionWord="wEx" converterClass="org.springframework.boot.logging.logback.ExtendedWhitespaceThrowableProxyConverter" />
+    <!-- 彩色日志格式 -->
+    <property name="CONSOLE_LOG_PATTERN" value="${CONSOLE_LOG_PATTERN:-%clr(%d{yyyy-MM-dd HH:mm:ss.SSS}){faint} %clr(${LOG_LEVEL_PATTERN:-%5p}) %clr([%.10t]){faint} %clr(%c{2}){cyan} %clr(-){faint} %m%n${LOG_EXCEPTION_CONVERSION_WORD:-%wEx}}"/>
+    <property name="RFA_LOG_PATTERN" value="%d{HH:mm:ss.SSS} [%.10thread] %-5level %logger{26} - %msg%n"/>
+
+    <!-- Stop logback status INFO at the start -->
+    <statusListener class="ch.qos.logback.core.status.NopStatusListener" />
+
+    <appender name="Console" class="ch.qos.logback.core.ConsoleAppender">
+        <layout class="ch.qos.logback.classic.PatternLayout">
+            <pattern>${CONSOLE_LOG_PATTERN}</pattern>
+        </layout>
+    </appender>
+
+    <appender name="RFA" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <File>logs/pulsar.exam.log</File>
+        <encoder>
+            <pattern>${RFA_LOG_PATTERN}</pattern>
+        </encoder>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>logs/pulsar.exam.log.%d{.yyyy-MM-dd}</fileNamePattern>
+        </rollingPolicy>
+    </appender>
+
+    <root level="${log.level:-INFO}">
+        <appender-ref ref="RFA"/>
+        <appender-ref ref="Console"/>
+    </root>
+
+    <logger name="ai.platon.pulsar" level="INFO"/>
+    <logger name="ai.platon.pulsar.common" level="INFO"/>
+
+    <logger name="ai.platon.pulsar.agentic" level="INFO"/>
+    <logger name="ai.platon.pulsar.browser.driver" level="INFO"/>
+
+    <logger name="org.springframework.core" level="INFO"/>
+    <logger name="org.springframework.core.env" level="INFO"/>
+
+    <logger name="org.springframework.orm.jpa" level="INFO"/>
+    <logger name="org.springframework.transaction" level="INFO"/>
+
+    <logger name="org.apache.gora" level="ERROR"/>
+    <logger name="org.apache.hadoop" level="WARN"/>
+
+    <logger name="dev.langchain4j.http.client.log" level="WARN" />
+
+</configuration>

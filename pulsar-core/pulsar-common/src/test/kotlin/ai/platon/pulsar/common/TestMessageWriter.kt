@@ -17,7 +17,7 @@ class TestMessageWriter {
     @Test
     fun testFileRolling() {
         IntRange(1, 100000).forEach { _ ->
-            sinkWriter.write(RandomStringUtils.randomAlphanumeric(100))
+            sinkWriter.write(RandomStringUtils.secure().nextAlphanumeric(100))
         }
 
         val count = Files.list(filePath.parent)

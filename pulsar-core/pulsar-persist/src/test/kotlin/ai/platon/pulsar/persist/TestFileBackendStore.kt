@@ -49,7 +49,7 @@ class TestFileBackendStore {
 
     @Test
     fun whenUpdatePageModel_ThenSuccess() {
-        val url2 = url + "/" + RandomUtils.nextInt()
+        val url2 = url + "/" + RandomUtils.secure().randomInt()
         val page2 = WebPageExt.newTestWebPage(url2)
         val groupId = 100
         page2.ensurePageModel().emplace(100, mapOf("a" to "1", "b" to "2"))

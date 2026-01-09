@@ -24,11 +24,21 @@ object Runtimes {
     private val heavyOperationResultCache = ConcurrentExpiringLRUCache<String, Any>(ttl = Duration.ofSeconds(10))
 
     fun exec(name: String): List<String> {
+        val processBuilder = if (SystemUtils.IS_OS_WINDOWS) {
+            ProcessBuilder("cmd.exe", "/c", name)
+        } else {
+            ProcessBuilder("bash", "-c", name)
+        }
+
         try {
-            val process = Runtime.getRuntime().exec(name)
-            return process.inputStream.bufferedReader().useLines { it.toList() }
+            val process = processBuilder.redirectErrorStream(true).start()
+            val output = process.inputStream.bufferedReader().useLines { it.toList() }
+            if (!process.waitFor(10, TimeUnit.SECONDS)) {
+                process.destroyForcibly()
+            }
+            return output
         } catch (err: Exception) {
-            err.printStackTrace()
+            logger.debug("Failed to exec command {}", name, err)
         }
 
         return listOf()
@@ -74,10 +84,6 @@ object Runtimes {
     }
 
     fun listAllChromeProcessesOnPosix(): List<String> {
-        if (!SystemUtils.IS_OS_LINUX) {
-            return listOf()
-        }
-
         val result = mutableListOf<String>()
         try {
             // Command to list all Chrome processes
@@ -104,14 +110,10 @@ object Runtimes {
     }
 
     fun listAllChromeProcessesOnWindows(): List<String> {
-        if (!SystemUtils.IS_OS_WINDOWS) {
-            return listOf()
-        }
-
         val result = mutableListOf<String>()
         try {
             // Command to list all Chrome processes
-            val command = "tasklist | findstr chrome && tasklist | findstr chromium"
+            val command = "tasklist | findstr /I \"chrome chromium\""
 
             // Execute the command
             val process = Runtime.getRuntime().exec(arrayOf("cmd.exe", "/c", command))
@@ -155,16 +157,25 @@ object Runtimes {
     }
 
     fun destroyProcessForcibly(pid: Int) {
-        if (pid <= 0) {
+        if (pid <= 0) return
+
+        try {
+            ProcessHandle.of(pid.toLong()).ifPresent { handle ->
+                destroyChildProcess(handle)
+                if (handle.isAlive) handle.destroy()
+                if (handle.isAlive) handle.destroyForcibly()
+            }
             return
-        } else if (SystemUtils.IS_OS_WINDOWS) {
-            exec("taskkill /F /PID $pid")
-        } else if (SystemUtils.IS_OS_LINUX) {
-            exec("kill -9 $pid")
-        } else {
-            // TODO: more OS support
-            exec("kill -9 $pid")
+        } catch (e: Exception) {
+            logger.debug("ProcessHandle kill failed for pid {}", pid, e)
         }
+
+        val command = when {
+            SystemUtils.IS_OS_WINDOWS -> "taskkill /F /PID $pid"
+            SystemUtils.IS_OS_LINUX || SystemUtils.IS_OS_MAC -> "kill -9 $pid"
+            else -> "kill -9 $pid"
+        }
+        runCatching { exec(command) }.onFailure { logger.warn("Failed to forcibly kill pid {}", pid, it) }
     }
 
     fun destroyProcessForcibly(namePattern: String) {
@@ -186,7 +197,7 @@ object Runtimes {
 
             // Check if the command executed successfully
             if (process.exitValue() == 0) {
-                logger.info("All Chrome processes have been terminated")
+                logger.info("Processes matching pattern {} have been terminated", namePattern)
             }
         } catch (e: Exception) {
             logger.info("Failed to terminate Chrome processes", e)

@@ -29,7 +29,7 @@ echo "   Prefix:   $PREFIX"
 # Files containing the version number to upgrade
 VERSION_AWARE_FILES=(
   "$APP_HOME/README.md"
-  "$APP_HOME/README-CN.md"  # Removed .delete extension
+  "$APP_HOME/README.zh.md"  # Removed .delete extension
 )
 
 echo "🔍 Processing files..."

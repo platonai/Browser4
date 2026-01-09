@@ -1,5 +1,6 @@
 package ai.platon.pulsar.rest.api.service
 
+import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.ai.llm.PromptTemplate
@@ -19,7 +20,6 @@ import ai.platon.pulsar.rest.api.common.ScrapeAPIUtils
 import ai.platon.pulsar.rest.api.entities.*
 import ai.platon.pulsar.skeleton.crawl.PageEventHandlers
 import ai.platon.pulsar.skeleton.crawl.event.impl.PageEventHandlersFactory
-import ai.platon.pulsar.skeleton.session.PulsarSession
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import org.springframework.http.codec.ServerSentEvent
@@ -29,11 +29,12 @@ import reactor.core.publisher.FluxSink
 import java.nio.file.Files
 import java.time.Instant
 import java.util.concurrent.ConcurrentSkipListMap
+import java.util.concurrent.Executors
 import kotlin.io.path.writeText
 
 @Service
 class CommandService(
-    val session: PulsarSession,
+    val session: AgenticSession,
     val loadService: LoadService,
     val conversationService: ConversationService,
     val scrapeService: ScrapeService,
@@ -47,7 +48,8 @@ class CommandService(
     private val commandStatusCache = ConcurrentSkipListMap<String, CommandStatus>()
 
     // Create a dedicated dispatcher for long-running command operations
-    private val commandDispatcher = Dispatchers.IO.limitedParallelism(10) // Adjust number based on your server capacity
+    private val scrapingExecutor = Executors.newFixedThreadPool(10)
+    private val commandDispatcher = scrapingExecutor.asCoroutineDispatcher()
 
     private val commanderScope: CoroutineScope = CoroutineScope(
         commandDispatcher + SupervisorJob() + CoroutineName("commander")
@@ -65,6 +67,123 @@ class CommandService(
         val status = createCachedCommandStatus(request)
         commanderScope.launch { executeCommand(request, status, eventHandlers) }
         return status.id
+    }
+
+    /**
+     * Execute a plain command synchronously.
+     *
+     * If `conversationService.normalizePlainCommand(plainCommand)` returns a valid CommandRequest,
+     * it executes the command using the standard command execution flow.
+     * If it returns null (meaning the command cannot be normalized to a URL-based command),
+     * it executes the command using the agent's run method.
+     *
+     * @param plainCommand The plain text command to execute.
+     * @return CommandStatus containing the execution result.
+     */
+    suspend fun executePlainCommandSync(plainCommand: String): CommandStatus {
+        if (plainCommand.isBlank()) {
+            val status = createCachedCommandStatus()
+            status.failed(ResourceStatus.SC_BAD_REQUEST)
+            return status
+        }
+
+        val request = conversationService.normalizePlainCommand(plainCommand)
+        return if (request != null) {
+            // Standard URL-based command execution
+            val status = createCachedCommandStatus(request)
+            val eventHandlers = PageEventHandlersFactory.create()
+            executeCommand(request, status, eventHandlers)
+        } else {
+            // Agent-based command execution
+            executeAgentCommand(plainCommand)
+        }
+    }
+
+    /**
+     * Submit a plain command for asynchronous execution.
+     *
+     * If `conversationService.normalizePlainCommand(plainCommand)` returns a valid CommandRequest,
+     * it submits the command using the standard async command execution flow.
+     * If it returns null (meaning the command cannot be normalized to a URL-based command),
+     * it submits the command for agent-based execution.
+     *
+     * @param plainCommand The plain text command to execute.
+     * @return The command status ID for tracking execution progress.
+     */
+    suspend fun submitPlainCommandAsync(plainCommand: String): String {
+        if (plainCommand.isBlank()) {
+            val status = createCachedCommandStatus()
+            status.failed(ResourceStatus.SC_BAD_REQUEST)
+            return status.id
+        }
+
+        val request = conversationService.normalizePlainCommand(plainCommand)
+        return if (request != null) {
+            // Standard URL-based async command execution
+            val eventHandlers = PageEventHandlersFactory.create()
+            submitAsync(request, eventHandlers)
+        } else {
+            // Agent-based async command execution
+            submitAgentCommandAsync(plainCommand)
+        }
+    }
+
+    /**
+     * Execute a plain command using the agent's run method.
+     *
+     * This method creates a cached status, executes the agent's run method, and updates
+     * the status with the result.
+     *
+     * @param plainCommand The plain text command for the agent to execute.
+     * @return CommandStatus containing the execution result.
+     */
+    suspend fun executeAgentCommand(plainCommand: String): CommandStatus {
+        val status = createCachedCommandStatus()
+        executeAgentCommandInternal(plainCommand, status)
+        return status
+    }
+
+    /**
+     * Submit a plain command for asynchronous agent execution.
+     *
+     * @param plainCommand The plain text command for the agent to execute.
+     * @return The command status ID for tracking execution progress.
+     */
+    fun submitAgentCommandAsync(plainCommand: String): String {
+        val status = createCachedCommandStatus()
+        commanderScope.launch { executeAgentCommandInternal(plainCommand, status) }
+        return status.id
+    }
+
+    /**
+     * Internal method to execute agent command with a pre-created status.
+     *
+     * The status is updated with the agent's state history reference, allowing callers
+     * to access the latest agent state via [CommandStatus.currentAgentState] during execution.
+     */
+    private suspend fun executeAgentCommandInternal(plainCommand: String, status: CommandStatus) {
+        try {
+            status.refresh(ResourceStatus.SC_PROCESSING)
+            val agent = session.companionAgent
+
+            // Set agent history reference to allow real-time state tracking
+            status.agentHistory = agent.stateHistory
+
+            val history = agent.run(plainCommand)
+            val finalState = history.finalResult
+
+            // AgentState has 'summary' for the final result message
+            val resultSummary = finalState?.summary ?: finalState?.description ?: ""
+            status.message = resultSummary
+            status.ensureCommandResult().summary = resultSummary
+            status.refresh(ResourceStatus.SC_OK)
+        } catch (e: Exception) {
+            logger.error("Failed to execute agent command: {}", plainCommand, e)
+            status.failed(ResourceStatus.SC_EXPECTATION_FAILED)
+            status.message = e.message
+        } finally {
+            status.done()
+        }
     }
 
     fun getStatus(id: String) = commandStatusCache[id]

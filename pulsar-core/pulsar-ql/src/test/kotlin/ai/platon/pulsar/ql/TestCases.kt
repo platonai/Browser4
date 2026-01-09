@@ -1,5 +1,7 @@
 package ai.platon.pulsar.ql
 
+import ai.platon.pulsar.test.TestResourceUtil
+import org.junit.jupiter.api.Tag
 import kotlin.test.Test
 
 class TestCases: TestBase() {
@@ -25,7 +27,7 @@ class TestCases: TestBase() {
             SELECT
                 DOM_HEIGHT(DOM), DOM_TEXT(DOM), DOM_BASE_URI(DOM), DOM_CSS_SELECTOR(DOM)
             FROM
-                DOM_SELECT(DOM_LOAD('http://category.dangdang.com/cid4001403.html'), '#breadcrumb');
+                DOM_SELECT(DOM_LOAD('$productIndexUrl'), '#breadcrumb');
         """.trimIndent()
         execute(sql)
     }
@@ -47,7 +49,7 @@ class TestCases: TestBase() {
 
     @Test
     fun testExtractTable() {
-        val url = "https://www.amazon.com/dp/B01M9I779L"
+        val url = TestResourceUtil.PRODUCT_DETAIL_URL
         val sql = """
             select
                 dom_all_texts(dom, '#comparison_title, tr.comparison_table_image_row th a[href~=/dp/]') as `Product name`,
@@ -65,6 +67,7 @@ class TestCases: TestBase() {
     }
 
     @Test
+    @Tag("MustManuallyRun")
     fun loadAndSelectNeeq() {
         val url = "http://www.neeq.com.cn/nq/listedcompany.html"
         // execute("select dom, dom_css_selector(dom), dom_text(dom), dom_text_length(dom) from dom_load_and_select('$url', 'tbody > tr');", remote = true)
@@ -85,6 +88,8 @@ class TestCases: TestBase() {
     }
 
     @Test
+    @Tag("MustManuallyRun")
+    @Tag("ExternalResourceDependent")
     fun loadAndGetLinksCityflower() {
         val sql = """
 select *

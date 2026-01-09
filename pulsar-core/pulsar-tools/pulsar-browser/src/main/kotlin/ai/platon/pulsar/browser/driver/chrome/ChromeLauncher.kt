@@ -26,6 +26,7 @@ import java.nio.channels.FileLockInterruptionException
 import java.nio.channels.OverlappingFileLockException
 import java.nio.charset.Charset
 import java.nio.file.*
+import java.time.Duration
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.atomic.AtomicBoolean
@@ -264,6 +265,9 @@ class ChromeLauncher constructor(
             try {
                 if (p != null && p.isAlive) {
                     Runtimes.destroyProcess(p, options.shutdownWaitTime)
+                    if (p.isAlive) {
+                        destroyForcibly()
+                    }
                 }
             } catch (t: Throwable) {
                 warnForClose(this, t)
@@ -274,7 +278,7 @@ class ChromeLauncher constructor(
             try {
                 BrowserFiles.runCatching {
                     cleanUpContextTmpDir(temporaryUddExpiry)
-                    cleanOldestContextTmpDirs(120.seconds.toJavaDuration(), recentNToKeep)
+                    cleanOldestContextTmpDirs(Duration.ofMinutes(2), recentNToKeep)
                 }.onFailure { warnForClose(this, it) }
             } catch (t: Throwable) {
                 // ignored
@@ -385,9 +389,6 @@ class ChromeLauncher constructor(
             // Close the process if failed to start, it throws nothing by design.
             close()
             throw e
-        } finally {
-            // Unsubscribe from registry on exceptions.
-            shutdownHookRegistry.remove(shutdownHookThread)
         }
     }
 

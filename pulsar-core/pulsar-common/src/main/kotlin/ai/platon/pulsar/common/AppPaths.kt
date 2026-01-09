@@ -243,7 +243,7 @@ object AppPaths {
      * @return the path in the process's temporary directory
      * */
     fun getRandomTmpDirectory(prefix: String = "", suffix: String = ""): Path =
-        getTmpDirectory(prefix, RandomStringUtils.randomAlphabetic(18), suffix)
+        getTmpDirectory(prefix, RandomStringUtils.secure().nextAlphabetic(18), suffix)
 
     @Deprecated("Inappropriate name", ReplaceWith("AppPaths.getRandomTmpDirectory(prefix, suffix)"))
     fun getRandomTmp(prefix: String = "", suffix: String = "") = getRandomTmpDirectory(prefix, suffix)
@@ -307,7 +307,7 @@ object AppPaths {
      * @return the path in the process's temporary directory
      * */
     fun getRandomProcTmpTmpPath(prefix: String = "", suffix: String = ""): Path =
-        getProcTmpTmpDirectory(prefix + RandomStringUtils.randomAlphabetic(18) + suffix)
+        getProcTmpTmpDirectory(prefix + RandomStringUtils.secure().nextAlphabetic(18) + suffix)
 
     fun getContextGroupDir(group: String) = CONTEXT_GROUP_BASE_DIR.resolve(group)
 
@@ -335,7 +335,7 @@ object AppPaths {
      * @return the random string
      * */
     fun random(prefix: String = "", suffix: String = ""): String =
-        "$prefix${RandomStringUtils.randomAlphabetic(18)}$suffix"
+        "$prefix${RandomStringUtils.secure().nextAlphabetic(18)}$suffix"
 
     /**
      * Generates a path-compatible, hex string that can be used as a file name.

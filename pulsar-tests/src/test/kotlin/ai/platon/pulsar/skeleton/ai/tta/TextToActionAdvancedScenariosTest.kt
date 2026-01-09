@@ -18,7 +18,7 @@ import kotlin.test.Ignore
  * Testing complex scenarios, error conditions, and edge cases
  */
 @Order(1000)
-@Tag("ExternalServiceTest")
+@Tag("ExternalResourceDependent")
 @Tag("TimeConsumingTest")
 @Ignore("Takes very long time, run it manually. The test cases are suitable for multiple actions, but actually one action is forced")
 @SpringBootTest(

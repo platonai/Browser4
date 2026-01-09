@@ -20,97 +20,14 @@ import java.time.ZoneId
  * Represents a static web page in the Browser4 system. This interface provides methods to access and manipulate
  * various properties and metadata associated with a web page, such as its content, headers, fetch status,
  * and more. It also includes methods for managing beans, and other page-related data.
- *
- * This interface extends `Comparable<WebPage>` to allow for comparison between web pages.
  */
-interface WebPage : Comparable<WebPage> {
-    /**
-     * The unique, in-process identifier of the web page.
-     */
-    val id: Long
-
-    /**
-     * The url is the permanent internal address, and it's also the storage key (reserved).
-     * The url can differ from the original url passed by the user, because the original url might be normalized,
-     * and the url also can differ from the final location of the page, because the page can be redirected in the browser.
-     */
-    val url: String
-
+interface WebPage : PageSnapshot {
     /**
      * The key associated with the web page, typically used for indexing or identification purposes.
      * The key is defined as the reserved url, for example, the key for page TestResourceUtil.PRODUCT_DETAIL_URL
      * is "uk.co.amazon.www:https/dp/B0E000001".
      */
     val key: String
-
-    /**
-     * The href (hypertext reference) of the web page, the href should not be normalized and kept the original form
-     * where it extracted from.
-     * For example, the href can be extracted from an HTML page:
-     * ```html
-     * <a href='https://www.amazon.com/dp/B0E000001?th=1'>Huawei P60 ...</a>
-     * ```
-     */
-    var href: String?
-
-    /**
-     * A baseUrl is used to resolve relative URLs.
-     *
-     * The base URL is determined as follows:
-     * 1. By default, the base URL is the location of the document
-     *    (as determined by window.location).
-     * 2. If the document has an `<base>` element, its href attribute is used.
-     * */
-    var baseURI: String
-    /**
-     * Returns the document location as a string.
-     *
-     * [location] is the last working address,
-     * it might redirect from the original url, or it might have additional query parameters.
-     * [location] can differ from [url].
-     *
-     * In javascript, the documentURI property can be used on any document types. The document.URL
-     * property can only be used on HTML documents.
-     *
-     * @see <a href='https://www.w3schools.com/jsref/prop_document_documenturi.asp'>
-     *     HTML DOM Document documentURI</a>
-     * */
-    var location: String
-    /**
-     * The URL of the page that linked to this page.
-     */
-    var referrer: String?
-
-    /**
-     * The load arguments which can be parsed into a `LoadOptions` object.
-     * It's usually used by `session.load()` method series.
-     */
-    var args: String
-
-    /**
-     * The configured URL of the web page, which is always a combination of `url` and `args`.
-     */
-    val configuredUrl: String
-
-    /**
-     * Indicates whether the web page is nil (i.e., not initialized or empty).
-     */
-    val isNil: Boolean
-
-    /**
-     * Indicates whether the web page is not nil (i.e., initialized and contains data).
-     */
-    val isNotNil: Boolean
-
-    /**
-     * Indicates whether the web page is internal (i.e., part of the same domain or system).
-     */
-    val isInternal: Boolean
-
-    /**
-     * Indicates whether the web page is not internal (i.e., external to the domain or system).
-     */
-    val isNotInternal: Boolean
 
     /**
      * The page scope configuration, which is expected to be modified frequently.
@@ -168,24 +85,9 @@ interface WebPage : Comparable<WebPage> {
     var fetchMode: FetchMode
 
     /**
-     * The last browser used to fetch the web page.
-     */
-    var lastBrowser: BrowserType
-
-    /**
-     * Indicates whether the web page is a resource, which can be fetched using a single request.
-     */
-    var isResource: Boolean
-
-    /**
      * The integrity of the web page, used to check if the page is valid.
      */
     var htmlIntegrity: HtmlIntegrity
-
-    /**
-     * The time when the web page was created.
-     */
-    var createTime: Instant
 
     /**
      * The number of times the web page has been fetched.
@@ -223,39 +125,9 @@ interface WebPage : Comparable<WebPage> {
     var prevModifiedTime: Instant
 
     /**
-     * The protocol status of the web page, used to check if the page was fetched successfully.
-     */
-    var protocolStatus: ProtocolStatus
-
-    /**
-     * The metadata of the web page, which will be persisted to storage.
-     */
-    val metadata: Metadata
-
-    /**
-     * The headers of the web page, which will be persisted to storage.
-     */
-    val headers: ProtocolHeaders
-
-    /**
      * The content category of the web page.
      */
     var pageCategory: OpenPageCategory
-
-    /**
-     * The encoding of the web page, which is UTF-8 by default.
-     */
-    var encoding: String?
-
-    /**
-     * The content type of the web page, which is `text/html` by default.
-     */
-    var contentType: String
-
-    /**
-     * The content of the web page, stored as a `ByteBuffer`.
-     */
-    val content: ByteBuffer?
 
     /**
      * The temporary content of the web page, stored as a `ByteBuffer`.
@@ -268,16 +140,6 @@ interface WebPage : Comparable<WebPage> {
     val persistContent: ByteBuffer?
 
     /**
-     * The content of the web page, stored as a `ByteArray`.
-     */
-    val contentAsBytes: ByteArray
-
-    /**
-     * The content of the web page, stored as a `String`.
-     */
-    val contentAsString: String
-
-    /**
      * The content of the web page, stored as a `ByteArrayInputStream`.
      */
     val contentAsInputStream: ByteArrayInputStream
@@ -286,16 +148,6 @@ interface WebPage : Comparable<WebPage> {
      * The content of the web page, stored as an `InputSource` for SAX parsing.
      */
     val contentAsSaxInputSource: InputSource?
-
-    /**
-     * The length of the content of the web page.
-     */
-    val contentLength: Long
-
-    /**
-     * The original length of the content of the web page.
-     */
-    var originalContentLength: Long
 
     /**
      * The length of the persisted content of the web page.
@@ -331,26 +183,6 @@ interface WebPage : Comparable<WebPage> {
      * The current signature of the web page, stored as a `String`.
      */
     val signatureAsString: String
-
-    /**
-     * The proxy used to fetch the web page.
-     */
-    var proxy: String?
-
-    /**
-     * The active DOM status of the web page.
-     */
-    var activeDOMStatus: ActiveDOMStatus?
-
-    /**
-     * The trace of active DOM status changes for the web page.
-     */
-    var activeDOMStatTrace: Map<String, ActiveDOMStat?>
-
-    /**
-     * The metadata of the active DOM for the web page.
-     */
-    var activeDOMMetadata: ActiveDOMMetadata?
 
     /**
      * The title of the web page.

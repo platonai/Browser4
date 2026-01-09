@@ -3,6 +3,7 @@ package ai.platon.pulsar.browser.driver.chrome.dom
 import ai.platon.cdt.kt.protocol.types.accessibility.AXNode
 import ai.platon.pulsar.browser.driver.chrome.RemoteDevTools
 import ai.platon.pulsar.browser.driver.chrome.dom.AccessibilityHandler.AccessibilityTreeResult
+import ai.platon.pulsar.browser.driver.chrome.dom.DOMSerializer
 import ai.platon.pulsar.browser.driver.chrome.dom.model.*
 import ai.platon.pulsar.browser.driver.chrome.dom.util.DomDebug
 import ai.platon.pulsar.browser.driver.chrome.dom.util.HashUtils
@@ -52,7 +53,7 @@ class ChromeCdpDomService(
 
         val domState = buildDOMState(tinyTree)
         if (logger.isDebugEnabled) {
-            val json = DOMStateBuilder.toJson(domState.microTree)
+            val json = DOMSerializer.toJson(domState.microTree)
             logger.debug("browserState summary: \n{}", DomDebug.summarize(domState))
             logger.debug("browserState.json: \nlength: {}\n{}", json.length, json)
         }

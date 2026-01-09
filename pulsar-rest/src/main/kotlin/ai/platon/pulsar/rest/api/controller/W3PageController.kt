@@ -1,7 +1,6 @@
 package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.rest.api.service.LoadService
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.web.bind.annotation.*
 
 /**
@@ -10,11 +9,9 @@ import org.springframework.web.bind.annotation.*
 @RestController
 @CrossOrigin
 @RequestMapping("api/w3page")
-class W3PageController {
-
-    @Autowired
-    lateinit var loadService: LoadService
-
+class W3PageController(
+    val loadService: LoadService
+) {
     @GetMapping
     fun loadContent(@RequestParam url: String): String {
         return loadService.load(url).contentAsString

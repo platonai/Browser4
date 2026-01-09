@@ -1,7 +1,7 @@
 services:
-  b4-mongodb:
+  mongodb:
     image: 'mongo:latest'
-    container_name: 'b4-mongodb'
+    container_name: 'mongodb'
     restart: always
     ports:
       - '27017:27017'
@@ -28,7 +28,7 @@ services:
     image: 'galaxyeye88/browser4:latest'
     container_name: 'browser4'
     depends_on:
-      b4-mongodb:
+      mongodb:
         condition: service_healthy
     environment:
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}

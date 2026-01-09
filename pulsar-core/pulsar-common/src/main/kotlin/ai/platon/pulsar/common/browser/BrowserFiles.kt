@@ -393,7 +393,7 @@ object BrowserFiles {
         val monthDay = MonthDay.now()
         val monthValue = monthDay.monthValue
         val dayOfMonth = monthDay.dayOfMonth
-        val rand = RandomStringUtils.randomAlphanumeric(5)
+        val rand = RandomStringUtils.secure().nextAlphanumeric(5)
         val contextCount = computeContextCount(baseDir, prefix, channel)
         val fileName = String.format("%s%02d%02d%s%s", prefix, monthValue, dayOfMonth, rand, contextCount)
 

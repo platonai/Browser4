@@ -1,0 +1,47 @@
+<?xml version = "1.0" encoding = "UTF-8"?>
+
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:schemaLocation="http://www.springframework.org/schema/beans
+       http://www.springframework.org/schema/beans/spring-beans-3.0.xsd" default-lazy-init="true">
+
+    <import resource="classpath*:pulsar-beans/plugins/schedule-context.xml"/>
+    <import resource="classpath*:pulsar-beans/plugins/urlfilter-context.xml"/>
+    <import resource="classpath*:pulsar-beans/plugins/protocol-context.xml"/>
+    <import resource="classpath*:pulsar-beans/plugins/parse-context.xml"/>
+    <import resource="classpath*:pulsar-beans/plugins/indexing-context.xml"/>
+    <import resource="classpath*:pulsar-beans/plugins/scoring-context.xml"/>
+
+    <import resource="classpath*:pulsar-beans/plugins/monitor-context.xml"/>
+
+    <bean id="fetchComponentCustom" class="ai.platon.pulsar.skeleton.crawl.component.BatchFetchComponent"
+          destroy-method="close">
+        <constructor-arg ref="webDb"/>
+        <constructor-arg ref="globalCacheFactory"/>
+        <constructor-arg ref="protocolFactory"/>
+        <constructor-arg ref="coreMetrics"/>
+        <constructor-arg ref="conf"/>
+    </bean>
+
+    <bean id="parseComponentCustom" class="ai.platon.pulsar.skeleton.crawl.component.ParseComponent">
+        <constructor-arg ref="pageParser"/>
+        <constructor-arg ref="globalCacheFactory"/>
+        <constructor-arg ref="conf"/>
+    </bean>
+    <bean id="updateComponentCustom" class="ai.platon.pulsar.skeleton.crawl.component.UpdateComponent">
+        <constructor-arg ref="webDb"/>
+        <constructor-arg ref="fetchSchedule"/>
+        <constructor-arg ref="messageWriter"/>
+        <constructor-arg ref="conf"/>
+    </bean>
+    <bean id="loadComponentCustom" class="ai.platon.pulsar.skeleton.crawl.component.LoadComponent"
+          destroy-method="close">
+        <constructor-arg ref="webDb"/>
+        <constructor-arg ref="globalCacheFactory"/>
+        <constructor-arg ref="fetchComponentCustom"/>
+        <constructor-arg ref="updateComponentCustom"/>
+        <constructor-arg ref="parseComponentCustom"/>
+        <constructor-arg ref="conf"/>
+        <constructor-arg ref="appStatusTracker"/>
+    </bean>
+</beans>

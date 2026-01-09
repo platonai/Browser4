@@ -1,0 +1,617 @@
+<!--  Licensed to the Apache Software Foundation (ASF) under one or more contributor
+    license agreements. See the NOTICE file distributed with this work for additional
+    information regarding copyright ownership. The ASF licenses this file to
+    you under the Apache License, Version 2.0 (the "License"); you may not use
+    this file except in compliance with the License. You may obtain a copy of
+    the License at http://www.apache.org/licenses/LICENSE-2.0 Unless required
+    by applicable law or agreed to in writing, software distributed under the
+    License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS
+    OF ANY KIND, either express or implied. See the License for the specific
+    language governing permissions and limitations under the License.  -->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- From apache: "Most projects will want to override some of these settings." -->
+    <!-- for more information, see the documentation of this POM: http://maven.apache.org/pom/asf/ -->
+
+    <groupId>ai.platon</groupId>
+    <artifactId>pulsar-dependencies</artifactId>
+    <name>Pulsar Dependencies</name>
+    <version>4.3.0-SNAPSHOT</version>
+    <packaging>pom</packaging>
+
+    <description>Pulsar Dependencies</description>
+
+    <url>https://platon.ai</url>
+    <inceptionYear>2014</inceptionYear>
+    <licenses>
+        <license>
+            <name>The Apache Software License, Version 2.0</name>
+            <url>http://www.apache.org/licenses/LICENSE-2.0.txt</url>
+        </license>
+    </licenses>
+    <organization>
+        <name>The Platon AI Web Data Engine</name>
+        <url>http://platon.ai</url>
+    </organization>
+    <developers>
+        <developer>
+            <name>Vincent Zhang</name>
+            <email>ivincent.zhang@gmail.com</email>
+            <organization>platon.ai</organization>
+            <timezone>+8</timezone>
+        </developer>
+    </developers>
+    <issueManagement>
+        <system>GitHub</system>
+        <url>http://www.github.com/platonai</url>
+    </issueManagement>
+    <scm>
+        <connection>scm:git:https://github.com/platonai/platon.git</connection>
+        <developerConnection>scm:git:https://github.com/platonai/platon.git</developerConnection>
+        <url>https://github.com/platonai/platon.git</url>
+        <tag>v4.0.3-SNAPSHOT</tag>
+    </scm>
+
+    <distributionManagement>
+        <repository>
+            <id>central</id>
+            <url>https://central.sonatype.com/api/v1/publisher</url>
+        </repository>
+    </distributionManagement>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>com.squareup.okhttp3</groupId>
+                <artifactId>okhttp-bom</artifactId>
+                <version>${okhttp.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>org.jetbrains.kotlinx</groupId>
+                <artifactId>kotlinx-coroutines-bom</artifactId>
+                <version>${kotlin.coroutine.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.jetbrains.kotlin</groupId>
+                <artifactId>kotlin-bom</artifactId>
+                <version>${kotlin.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.jetbrains.kotlin</groupId>
+                <artifactId>kotlin-serialization</artifactId>
+                <version>${kotlin.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.apache.hadoop</groupId>
+                <artifactId>hadoop-common</artifactId>
+                <version>${hadoop.version}</version>
+                <exclusions>
+                    <exclusion>
+                        <groupId>*</groupId>
+                        <artifactId>*</artifactId>
+                    </exclusion>
+                </exclusions>
+            </dependency>
+
+            <!-- TODO: This artifact was moved to: jakarta.servlet » jakarta.servlet-api -->
+            <dependency>
+                <groupId>javax.servlet</groupId>
+                <artifactId>javax.servlet-api</artifactId>
+                <version>${javax.servlet-api.version}</version>
+                <scope>provided</scope>
+            </dependency>
+
+            <!--  Html  -->
+            <dependency>
+                <groupId>org.jodd</groupId>
+                <artifactId>jodd-core</artifactId>
+                <version>${jodd-trove4j-core.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>net.sourceforge.nekohtml</groupId>
+                <artifactId>nekohtml</artifactId>
+                <version>${nekohtml.version}</version>
+            </dependency>
+            <!-- TODO: This artifact was moved to: net.sf.trove4j » core -->
+            <dependency>
+                <groupId>net.sf.trove4j</groupId>
+                <artifactId>trove4j</artifactId>
+                <version>${trove4j.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>net.sf.trove4j</groupId>
+                <artifactId>core</artifactId>
+                <version>${trove4j-core.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>jtidy</groupId>
+                <artifactId>jtidy</artifactId>
+                <version>4aug2000r7-dev</version>
+            </dependency>
+            <!--  for EncodingDetector  -->
+            <!-- International Components for Unicode for Java (ICU4J) is a mature, widely used Java library providing
+            Unicode and Globalization support -->
+            <dependency>
+                <groupId>com.ibm.icu</groupId>
+                <artifactId>icu4j</artifactId>
+                <version>${icu4j.version}</version>
+            </dependency>
+            <!-- https://mvnrepository.com/artifact/xerces/xercesImpl -->
+            <!-- Xerces2 provides high performance, fully compliant XML parsers -->
+            <dependency>
+                <groupId>xerces</groupId>
+                <artifactId>xercesImpl</artifactId>
+                <version>${xercesImpl.version}</version>
+            </dependency>
+            <!--  Tika for general document parsers  -->
+            <dependency>
+                <groupId>org.apache.tika</groupId>
+                <artifactId>tika-core</artifactId>
+                <version>${tika.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.tika</groupId>
+                <artifactId>tika-parser-html-module</artifactId>
+                <version>${tika.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.apache.tika</groupId>
+                <artifactId>tika-parsers</artifactId>
+                <version>${tika.version}</version>
+                <exclusions>
+                    <exclusion>
+                        <groupId>org.jsoup</groupId>
+                        <artifactId>jsoup</artifactId>
+                    </exclusion>
+                </exclusions>
+            </dependency>
+            <!-- Persist -->
+            <!-- TODO: This artifact was moved to: jakarta.persistence » jakarta.persistence-api -->
+            <dependency>
+                <groupId>javax.persistence</groupId>
+                <artifactId>javax.persistence-api</artifactId>
+                <version>${javax.persistence-api.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>dev.langchain4j</groupId>
+                <artifactId>langchain4j-bom</artifactId>
+                <version>${langchain4j.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>commons-io</groupId>
+                <artifactId>commons-io</artifactId>
+                <version>${commons-io.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-text</artifactId>
+                <version>${commons-text.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-math3</artifactId>
+                <version>${commons-math3.version}</version>
+            </dependency>
+            <!--  Required by org.apache.hadoop.conf.Configuration  -->
+            <dependency>
+                <groupId>commons-configuration</groupId>
+                <artifactId>commons-configuration</artifactId>
+                <version>${commons-configuration.version}</version>
+            </dependency>
+            <!--  Required by org.apache.hadoop.conf.Configuration  -->
+            <dependency>
+                <groupId>commons-collections</groupId>
+                <artifactId>commons-collections</artifactId>
+                <version>${commons-collections.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-collections4</artifactId>
+                <version>${commons-collections4.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>commons-logging</groupId>
+                <artifactId>commons-logging</artifactId>
+                <version>${commons-logging.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-compress</artifactId>
+                <version>${commons-compress.version}</version>
+            </dependency>
+
+            <!-- https://mvnrepository.com/artifact/org.apache.commons/commons-numbers-bom -->
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-numbers-bom</artifactId>
+                <version>${commons-numbers-bom.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <!-- Spreadsheet, CSV, etc -->
+            <dependency>
+                <groupId>org.apache.poi</groupId>
+                <artifactId>poi</artifactId>
+                <version>${poi.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.poi</groupId>
+                <artifactId>poi-ooxml</artifactId>
+                <version>${poi-ooxml.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>xml-apis</groupId>
+                <artifactId>xml-apis</artifactId>
+                <version>${xml-apis.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.google.guava</groupId>
+                <artifactId>guava</artifactId>
+                <version>${guava.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.jetbrains.kotlinx</groupId>
+                <artifactId>dataframe-core</artifactId>
+                <version>${dataframe.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.jetbrains.kotlinx</groupId>
+                <artifactId>dataframe-excel</artifactId>
+                <version>${dataframe.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.jetbrains.kotlinx</groupId>
+                <artifactId>dataframe-bom</artifactId>
+                <version>${dataframe.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.apache.httpcomponents</groupId>
+                <artifactId>httpcore</artifactId>
+                <version>${httptrove4j-core.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.httpcomponents</groupId>
+                <artifactId>httpclient</artifactId>
+                <version>${httpclient.version}</version>
+                <exclusions>
+                    <exclusion>
+                        <groupId>commons-logging</groupId>
+                        <artifactId>commons-logging</artifactId>
+                    </exclusion>
+                </exclusions>
+            </dependency>
+
+            <dependency>
+                <groupId>javax.websocket</groupId>
+                <artifactId>javax.websocket-api</artifactId>
+                <version>${websocket.api.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.ktor</groupId>
+                <artifactId>ktor-client-core</artifactId>
+                <version>${ktor.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.ktor</groupId>
+                <artifactId>ktor-client-core-jvm</artifactId>
+                <version>${ktor.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.ktor</groupId>
+                <artifactId>ktor-client-cio-jvm</artifactId>
+                <version>${ktor.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.ktor</groupId>
+                <artifactId>ktor-client-websockets</artifactId>
+                <version>${ktor.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.ktor</groupId>
+                <artifactId>ktor-client-cio</artifactId>
+                <version>${ktor.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.ktor</groupId>
+                <artifactId>ktor-serialization-kotlinx-json-jvm</artifactId>
+                <version>${ktor.version}</version>
+            </dependency>
+
+            <!--  NLP  -->
+            <dependency>
+                <groupId>org.apache.lucene</groupId>
+                <artifactId>lucene-core</artifactId>
+                <version>${lucene.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.lucene</groupId>
+                <artifactId>lucene-analyzers-common</artifactId>
+                <version>${lucene.version}</version>
+            </dependency>
+            <!--  https://mvnrepository.com/artifact/org.apache.lucene/lucene-analyzers-smartcn  -->
+            <dependency>
+                <groupId>org.apache.lucene</groupId>
+                <artifactId>lucene-analyzers-smartcn</artifactId>
+                <version>${lucene.version}</version>
+            </dependency>
+            <!--  First introduced for hyperlink graph computing  -->
+            <dependency>
+                <groupId>org.jgrapht</groupId>
+                <artifactId>jgrapht-core</artifactId>
+                <version>${jgrapht.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.jgrapht</groupId>
+                <artifactId>jgrapht-ext</artifactId>
+                <version>${jgrapht.version}</version>
+            </dependency>
+            <!--
+                Hamcrest is a framework for writing matcher objects allowing ‘match�?rules to be defined declaratively.
+              -->
+            <dependency>
+                <groupId>org.hamcrest</groupId>
+                <artifactId>hamcrest-all</artifactId>
+                <version>${hamcrest-all.version}</version>
+                <scope>test</scope>
+            </dependency>
+            <!--
+                The Jakarta-ORO Java classes are a set of text-processing Java classes
+                that provide Perl5 compatible regular expressions.
+                As of 2010-09-01, the ORO project is retired.
+             -->
+            <dependency>
+                <groupId>oro</groupId>
+                <artifactId>oro</artifactId>
+                <version>${oro.version}</version>
+            </dependency>
+            <!--  Commander line parser  -->
+            <dependency>
+                <groupId>com.beust</groupId>
+                <artifactId>jcommander</artifactId>
+                <version>${jcommander.version}</version>
+            </dependency>
+            <!--  Expression  -->
+            <dependency>
+                <groupId>com.udojava</groupId>
+                <artifactId>EvalEx</artifactId>
+                <version>${EvalEx.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.nield</groupId>
+                <artifactId>kotlin-statistics</artifactId>
+                <version>${kotlin-statistics.version}</version>
+            </dependency>
+
+            <!--  Logging, Tracking, Metrics  -->
+            <!--  System monitor  -->
+            <dependency>
+                <groupId>com.github.oshi</groupId>
+                <artifactId>oshi-core</artifactId>
+                <version>${oshi-trove4j-core.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.dropwizard.metrics</groupId>
+                <artifactId>metrics-core</artifactId>
+                <version>${metrics.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.dropwizard.metrics</groupId>
+                <artifactId>metrics-jmx</artifactId>
+                <version>${metrics.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.dropwizard.metrics</groupId>
+                <artifactId>metrics-json</artifactId>
+                <version>${metrics.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.dropwizard.metrics</groupId>
+                <artifactId>metrics-graphite</artifactId>
+                <version>${metrics.version}</version>
+            </dependency>
+
+
+
+
+            <dependency>
+                <groupId>org.nibor.autolink</groupId>
+                <artifactId>autolink</artifactId>
+                <version>${autolink.version}</version>
+            </dependency>
+
+
+
+            <!--  Testing  -->
+            <dependency>
+                <groupId>com.google.code.findbugs</groupId>
+                <artifactId>jsr305</artifactId>
+                <version>${jsr305.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.perf4j</groupId>
+                <artifactId>perf4j</artifactId>
+                <version>${perf4j.version}</version>
+            </dependency>
+            <!--  junit 5  -->
+            <dependency>
+                <groupId>org.junit</groupId>
+                <artifactId>junit-bom</artifactId>
+                <version>${junit5.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>org.mockito.kotlin</groupId>
+                <artifactId>mockito-kotlin</artifactId>
+                <version>${mockito-kotlin.version}</version>
+                <scope>test</scope>
+            </dependency>
+
+            <!-- MockBean and SpyBean, but for MockK instead of Mockito -->
+            <!-- Be careful to keep consistent with spring-boot -->
+            <!-- MockK for Kotlin-friendly mocking -->
+            <dependency>
+                <groupId>io.mockk</groupId>
+                <artifactId>mockk</artifactId>
+                <version>${mockk.version}</version>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>io.mockk</groupId>
+                <artifactId>mockk-jvm</artifactId>
+                <version>${mockk.version}</version>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>com.ninja-squad</groupId>
+                <artifactId>springmockk</artifactId>
+                <version>${springmockk.version}</version>
+                <scope>test</scope>
+            </dependency>
+
+
+            <!-- Platon dependency -->
+            <dependency>
+                <groupId>ai.platon.pulsar</groupId>
+                <artifactId>pulsar-h2</artifactId>
+                <version>${pulsar-h2.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>ai.platon.pulsar</groupId>
+                <artifactId>pulsar-jsoup</artifactId>
+                <version>${pulsar-jsoup.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <properties>
+        <!-- Apache common libraries -->
+        <!-- managed by spring-boot-dependencies -->
+        <!--        <commons-lang.version>2.6</commons-lang.version>-->
+        <commons-io.version>2.16.1</commons-io.version>
+        <commons-codec.version>1.17.0</commons-codec.version>
+        <commons-text.version>1.11.0</commons-text.version>
+        <!-- managed by spring-boot-dependencies -->
+        <!--        <commons-lang3.version>3.12.0</commons-lang3.version>-->
+        <commons-math3.version>3.6.1</commons-math3.version>
+        <commons-numbers-bom.version>1.1</commons-numbers-bom.version>
+        <commons-configuration.version>1.6</commons-configuration.version>
+        <commons-collections.version>3.2.2</commons-collections.version>
+        <commons-collections4.version>4.4</commons-collections4.version>
+        <commons-logging.version>1.3.2</commons-logging.version>
+        <commons-compress.version>1.26.2</commons-compress.version>
+
+        <poi-ooxml.version>5.3.0</poi-ooxml.version>
+        <poi.version>5.3.0</poi.version>
+
+        <oshi-trove4j-core.version>6.6.6</oshi-trove4j-core.version>
+
+        <xercesImpl.version>2.12.2</xercesImpl.version>
+        <trove4j-core.version>3.0.3</trove4j-core.version>
+        <icu4j.version>75.1</icu4j.version>
+        <trove4j.version>3.0.3</trove4j.version>
+        <jodd-trove4j-core.version>3.5.2</jodd-trove4j-core.version>
+
+        <!-- 2.5.2 suggested, but 2.7.2 is a correct version, we will consider using a shaded gora -->
+        <hadoop.version>2.7.2</hadoop.version>
+
+        <!--  HTML parsing  -->
+        <xerces.version>2.11.0</xerces.version>
+        <nekohtml.version>1.9.22</nekohtml.version>
+        <tika.version>2.9.0</tika.version>
+
+        <!--  Persistence  -->
+        <javax.persistence-api.version>2.2</javax.persistence-api.version>
+
+        <!-- Web server -->
+        <httptrove4j-core.version>4.4.15</httptrove4j-core.version>
+        <httpclient.version>4.5.13</httpclient.version>
+        <!-- Java Servlet is the foundation web specification in the Java Enterprise Platform. Developers can build
+        web applications using the Servlet API to interact with the request/response workflow. -->
+        <!-- https://mvnrepository.com/artifact/javax.servlet/javax.servlet-api/4.0.1 -->
+        <!-- TODO: This artifact was moved to: jakarta.servlet » jakarta.servlet-api -->
+        <javax.servlet-api.version>4.0.1</javax.servlet-api.version>
+
+        <ktor.version>3.3.1</ktor.version>
+        <okhttp.version>5.2.1</okhttp.version>
+        <!-- required by pulsar-browser -->
+        <websocket.api.version>1.1</websocket.api.version>
+
+        <xml-apis.version>1.3.04</xml-apis.version>
+        <oro.version>2.0.8</oro.version>
+        <EvalEx.version>2.0</EvalEx.version>
+        <jsr305.version>3.0.0</jsr305.version>
+        <jcommander.version>1.82</jcommander.version>
+
+        <guava.version>33.2.1-jre</guava.version>
+        <dataframe.version>0.13.1</dataframe.version>
+        <jgrapht.version>1.0.1</jgrapht.version>
+
+        <!-- NLP -->
+        <lucene.version>7.3.1</lucene.version>
+
+        <!-- AI -->
+        <langchain4j.version>1.5.0</langchain4j.version>
+
+        <!--  Misc Dependencies  -->
+        <autolink.version>0.11.0</autolink.version>
+
+        <perf4j.version>0.9.16</perf4j.version>
+
+        <!--  metrics analyze  -->
+        <oshi.version>6.4.13</oshi.version>
+        <metrics.version>4.2.12</metrics.version>
+
+        <!--  Matchers that can be combined to create flexible expressions of intent  -->
+        <hamcrest-all.version>1.3</hamcrest-all.version>
+        <org.hamcrest.version>1.3</org.hamcrest.version>
+        <!-- Mockito is a popular and widely-used mocking framework for unit testing in Java. -->
+        <!-- managed by spring-boot-dependencies -->
+        <!--        <mockito.version>5.12.0</mockito.version>-->
+        <mockito-kotlin.version>5.4.0</mockito-kotlin.version>
+        <!-- MockK is a powerful and flexible mocking library designed specifically for Kotlin. -->
+
+        <junit5.version>5.12.1</junit5.version>
+        <mockk.version>1.14.6</mockk.version>
+        <springmockk.version>4.0.2</springmockk.version>
+        <mockito-junit-jupiter.version>5.20.0</mockito-junit-jupiter.version>
+
+        <!--  Kotlin  -->
+        <kotlin.version>2.2.21</kotlin.version>
+        <kotlin.coroutine.version>1.10.2</kotlin.coroutine.version>
+        <kotlin-statistics.version>1.2.1</kotlin-statistics.version>
+
+        <spring-boot.version>4.0.1</spring-boot.version>
+
+        <!-- Pulsar dependency -->
+        <pulsar-h2.version>1.4.196</pulsar-h2.version>
+        <pulsar-jsoup.version>1.14.3</pulsar-jsoup.version>
+    </properties>
+</project>

@@ -178,7 +178,7 @@ fun main() = PulsarContexts.createSession().scrapeOutPages(
   "https://www.amazon.com/",  "-outLink a[href~=/dp/]", listOf("#title", "#acrCustomerReviewText"))
 ```
 
-The complete code for this course can be found here: [kotlin](/pulsar-app/pulsar-examples/src/main/kotlin/ai/platon/pulsar/examples/_0_BasicUsage.kt), [Chinese mirror](https://gitee.com/platonai_galaxyeye/browser4/blob/1.10.x/pulsar-app/pulsar-examples/src/main/kotlin/ai/platon/pulsar/examples/_0_BasicUsage.kt). To understand more detailed usage methods, you can directly read the source code: [PulsarSession](/pulsar-skeleton/src/main/kotlin/ai/platon/pulsar/session/PulsarSession.kt), [Chinese mirror](https://gitee.com/platonai_galaxyeye/browser4/blob/1.10.x/pulsar-skeleton/src/main/kotlin/ai/platon/pulsar/session/PulsarSession.kt).
+The complete code for this course can be found here: [kotlin](/examples/browser4-examples/src/main/kotlin/ai/platon/pulsar/manual/_0_BasicUsage.kt), [Chinese mirror](https://gitee.com/platonai_galaxyeye/browser4/blob/1.10.x/examples/browser4-examples/src/main/kotlin/ai/platon/pulsar/manual/_0_BasicUsage.kt). To understand more detailed usage methods, you can directly read the source code: [PulsarSession](/pulsar-skeleton/src/main/kotlin/ai/platon/pulsar/session/PulsarSession.kt), [Chinese mirror](https://gitee.com/platonai_galaxyeye/browser4/blob/1.10.x/pulsar-skeleton/src/main/kotlin/ai/platon/pulsar/session/PulsarSession.kt).
 
 In the next chapter, we will introduce [Load Options](3load-options.md) in detail. By configuring load options, you can precisely define our crawling tasks.
 

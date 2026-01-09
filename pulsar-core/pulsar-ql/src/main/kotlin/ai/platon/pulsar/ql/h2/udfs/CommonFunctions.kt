@@ -23,13 +23,6 @@ object CommonFunctions {
         return StringUtils.isNumeric(str)
     }
 
-    @Deprecated("use getTopPrivateDomain instead", ReplaceWith("getTopPrivateDomain"))
-    @UDFunction(description = "Get the domain of a url")
-    @JvmStatic
-    fun getDomain(url: String): String {
-        return URLUtils.getTopPrivateDomain(url)
-    }
-
     @UDFunction(description = "Get the top private domain of the url")
     @JvmStatic
     fun getTopPrivateDomain(url: String): String {

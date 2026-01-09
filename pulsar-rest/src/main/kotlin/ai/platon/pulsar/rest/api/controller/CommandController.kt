@@ -4,7 +4,6 @@ import ai.platon.pulsar.rest.api.entities.CommandRequest
 import ai.platon.pulsar.rest.api.entities.CommandResult
 import ai.platon.pulsar.rest.api.entities.CommandStatus
 import ai.platon.pulsar.rest.api.service.CommandService
-import ai.platon.pulsar.rest.api.service.ConversationService
 import ai.platon.pulsar.skeleton.crawl.event.impl.PageEventHandlersFactory
 import kotlinx.coroutines.runBlocking
 import org.springframework.http.MediaType
@@ -21,7 +20,6 @@ import reactor.core.publisher.Flux
     produces = [MediaType.APPLICATION_JSON_VALUE]
 )
 class CommandController(
-    val conversationService: ConversationService,
     val commandService: CommandService,
 ) {
     /**
@@ -30,13 +28,11 @@ class CommandController(
      * @param request The structured command request
      * @return Structured command response
      * */
-    @PostMapping("/")
+    @PostMapping(value = ["", "/"])
     fun submitCommand(@RequestBody request: CommandRequest): ResponseEntity<Any> {
-        val async = request.async ?: (request.mode?.lowercase() == "async")
-
         val eventHandlers = PageEventHandlersFactory.create()
         val response = when {
-            async -> commandService.submitAsync(request, eventHandlers)
+            request.isAsync() -> commandService.submitAsync(request, eventHandlers)
             else -> runBlocking { commandService.executeSync(request, eventHandlers) }
         }
 
@@ -46,10 +42,15 @@ class CommandController(
     /**
      * Execute a command with plain text input and output.
      *
+     * When `conversationService.normalizePlainCommand(plainCommand)` returns a valid CommandRequest,
+     * the command is executed using the standard command execution flow.
+     * When it returns null (meaning the command cannot be normalized to a URL-based command),
+     * the command is executed using the agent's run method.
+     *
      * @param plainCommand The plain text command
      * @param async Whether to execute the command asynchronously
      * @param mode The execution mode, e.g., "sync" or "async". (Deprecated: use [async] instead)
-     * @return Command response
+     * @return Command response (CommandStatus for sync execution, status ID string for async execution)
      * */
     @PostMapping("/plain")
     fun submitPlainCommand(
@@ -57,17 +58,18 @@ class CommandController(
         @RequestParam(name = "async") async: Boolean? = null,
         @RequestParam(name = "mode") mode: String? = null,
     ): ResponseEntity<Any> {
-        val request = runBlocking { conversationService.normalizePlainCommand(plainCommand) }
-            ?: return ResponseEntity.badRequest().body("Invalid plain command: $plainCommand")
+        fun isAsync(): Boolean {
+            return when {
+                async == true -> true
+                mode?.lowercase() == "async" -> true
+                else -> false
+            }
+        }
 
-        val async = async ?: (mode?.lowercase() == "async")
-        request.mode = mode?.lowercase()
-        request.async = async
-
-        val eventHandlers = PageEventHandlersFactory.create()
-        val response = when {
-            async -> commandService.submitAsync(request, eventHandlers)
-            else -> runBlocking { commandService.executeSync(request, eventHandlers) }
+        val response = if (isAsync()) {
+            runBlocking { commandService.submitPlainCommandAsync(plainCommand) }
+        } else {
+            runBlocking { commandService.executePlainCommandSync(plainCommand) }
         }
 
         return ResponseEntity.ok(response)

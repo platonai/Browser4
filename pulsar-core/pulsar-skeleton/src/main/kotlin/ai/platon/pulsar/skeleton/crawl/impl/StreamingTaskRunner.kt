@@ -282,7 +282,7 @@ open class StreamingTaskRunner(
     /**
      * The job name.
      * */
-    var jobName: String = "crawler-" + RandomStringUtils.randomAlphanumeric(5)
+    var jobName: String = "crawler-" + RandomStringUtils.secure().nextAlphanumeric(5)
 
     init {
         MetricsSystem.reg.registerAll(this, "$id.g", gauges)

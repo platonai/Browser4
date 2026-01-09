@@ -8,6 +8,7 @@ import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.rest.api.entities.ScrapeResponse
 import org.assertj.core.api.Assumptions
 import org.junit.jupiter.api.Test
+import org.springframework.test.web.servlet.client.expectBody
 import kotlin.test.assertNotNull
 
 open class ScrapeControllerTests : ScrapeControllerTestBase() {
@@ -21,8 +22,15 @@ open class ScrapeControllerTests : ScrapeControllerTestBase() {
         val url = requireNotNull(urls[pageType])
         val sql = requireNotNull(sqlTemplates[pageType]).createSQL(url)
 
-        val response = restTemplate.postForObject("$baseUri/api/x/e", sql, ScrapeResponse::class.java)
+        val response = client.post().uri("/api/x/e")
+            .body(sql)
+            .exchange()
+            .expectStatus().is2xxSuccessful
+            .expectBody<ScrapeResponse>()
+            .returnResult()
+            .responseBody
         printlnPro(response)
+        assertNotNull(response)
     }
 
     /**
@@ -34,7 +42,13 @@ open class ScrapeControllerTests : ScrapeControllerTestBase() {
         val url = requireNotNull(urls[pageType])
         val sql = requireNotNull(sqlTemplates[pageType]).createSQL(url)
 
-        val uuid = restTemplate.postForObject("$baseUri/api/x/s", sql, String::class.java)
+        val uuid = client.post().uri("/api/x/s")
+            .body(sql)
+            .exchange()
+            .expectStatus().is2xxSuccessful
+            .expectBody<String>()
+            .returnResult()
+            .responseBody
         printlnPro("UUID: $uuid")
         assertNotNull(uuid)
 
@@ -51,7 +65,13 @@ open class ScrapeControllerTests : ScrapeControllerTestBase() {
         val url = requireNotNull(urls[pageType])
         val sql = requireNotNull(sqlTemplates[pageType]).createSQL(url)
 
-        val uuid = restTemplate.postForObject("$baseUri/api/x/s", sql, String::class.java)
+        val uuid = client.post().uri("/api/x/s")
+            .body(sql)
+            .exchange()
+            .expectStatus().is2xxSuccessful
+            .expectBody<String>()
+            .returnResult()
+            .responseBody
         printlnPro("UUID: $uuid")
         assertNotNull(uuid)
 
@@ -65,7 +85,13 @@ open class ScrapeControllerTests : ScrapeControllerTestBase() {
         while (records == null && ++tick < timeout) {
             sleepSeconds(1)
 
-            val response = restTemplate.getForObject("$baseUri/api/x/status?uuid=$uuid", ScrapeResponse::class.java)
+            val response = client.get().uri("/api/x/status?uuid=$uuid")
+                .exchange()
+                .expectStatus().is2xxSuccessful
+                .expectBody<ScrapeResponse>()
+                .returnResult()
+                .responseBody
+            assertNotNull(response)
 
             if (tick % 10 == 0) {
                 printlnPro(pulsarObjectMapper().writeValueAsString(response))
@@ -91,11 +117,17 @@ open class ScrapeControllerTests : ScrapeControllerTestBase() {
         // wait for callback
         sleepSeconds(3)
 
-        val response = restTemplate.getForObject("$baseUri/api/x/a/status?uuid=$uuid", ScrapeResponse::class.java)
+        val response = client.get().uri("/api/x/a/status?uuid=$uuid")
+            .exchange()
+            .expectStatus().is2xxSuccessful
+            .expectBody<ScrapeResponse>()
+            .returnResult()
+            .responseBody
+        assertNotNull(response)
+
         printlnPro("Final scrape task status: ")
         printlnPro(pulsarObjectMapper().writeValueAsString(response))
 
         Assumptions.assumeThat(tick).isLessThanOrEqualTo(timeout)
     }
 }
-

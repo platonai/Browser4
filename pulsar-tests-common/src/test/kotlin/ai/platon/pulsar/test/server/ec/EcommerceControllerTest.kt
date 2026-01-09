@@ -5,12 +5,12 @@ import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.SpringBootTest
-import org.springframework.boot.test.web.client.TestRestTemplate
 import org.springframework.boot.test.web.server.LocalServerPort
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
-import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.test.web.servlet.client.RestTestClient
+import org.springframework.test.web.servlet.client.expectBody
 
 @Tag("TestInfraCheck")
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -18,10 +18,16 @@ class EcommerceControllerTest {
     @LocalServerPort
     private var port: Int = 0
 
-    @Autowired
-    lateinit var rest: TestRestTemplate
+    // Build a RestTestClient bound to the running server on demand
+    private val rest get() = RestTestClient.bindToServer().baseUrl("http://localhost:$port").build()
 
-    private fun url(path: String) = "http://localhost:$port$path"
+    private fun getHtml(path: String): ResponseEntity<String> =
+        rest.get().uri(path)
+            .exchange()
+            .expectStatus().is2xxSuccessful
+            .expectBody<String>()
+            .returnResult()
+            .let { result -> ResponseEntity(result.responseBody!!, result.responseHeaders, result.status) }
 
     private fun assertHtml(resp: ResponseEntity<String>, expected: HttpStatus) {
         assertThat(resp.statusCode).isEqualTo(expected)
@@ -32,7 +38,7 @@ class EcommerceControllerTest {
     @Test
     @DisplayName("GET /ec/ home page lists categories")
     fun home() {
-        val resp = rest.getForEntity(url("/ec/"), String::class.java)
+        val resp = getHtml("/ec/")
         assertHtml(resp, HttpStatus.OK)
         assertThat(resp.body).contains("id=\"category-list\"")
         // check one known category id present
@@ -41,14 +47,14 @@ class EcommerceControllerTest {
 
     @Test
     fun homeWithoutTrailingSlash() {
-        val resp = rest.getForEntity(url("/ec"), String::class.java)
+        val resp = getHtml("/ec")
         assertHtml(resp, HttpStatus.OK)
         assertThat(resp.body).contains("id=\"category-list\"")
     }
 
     @Test
     fun categoryPage() {
-        val resp = rest.getForEntity(url("/ec/b?node=1292115012"), String::class.java)
+        val resp = getHtml("/ec/b?node=1292115012")
         assertHtml(resp, HttpStatus.OK)
         assertThat(resp.body).contains("data-category-id=\"1292115012\"")
         assertThat(resp.body).contains("product-")
@@ -56,7 +62,7 @@ class EcommerceControllerTest {
 
     @Test
     fun productPage() {
-        val resp = rest.getForEntity(url("/ec/dp/B0E000001"), String::class.java)
+        val resp = getHtml("/ec/dp/B0E000001")
         assertHtml(resp, HttpStatus.OK)
         assertThat(resp.body).contains("data-product-id=\"B0E000001\"")
         assertThat(resp.body).contains("product-price")
@@ -65,21 +71,21 @@ class EcommerceControllerTest {
 
     @Test
     fun missingCategoryParam() {
-        val resp = rest.getForEntity(url("/ec/b"), String::class.java)
+        val resp = getHtml("/ec/b")
         assertHtml(resp, HttpStatus.BAD_REQUEST)
         assertThat(resp.body).contains("Error 400")
     }
 
     @Test
     fun invalidCategory() {
-        val resp = rest.getForEntity(url("/ec/b?node=DOES_NOT_EXIST"), String::class.java)
+        val resp = getHtml("/ec/b?node=DOES_NOT_EXIST")
         assertHtml(resp, HttpStatus.NOT_FOUND)
         assertThat(resp.body).contains("Error 404")
     }
 
     @Test
     fun invalidProduct() {
-        val resp = rest.getForEntity(url("/ec/dp/DOES_NOT_EXIST"), String::class.java)
+        val resp = getHtml("/ec/dp/DOES_NOT_EXIST")
         assertHtml(resp, HttpStatus.NOT_FOUND)
         assertThat(resp.body).contains("Error 404")
     }

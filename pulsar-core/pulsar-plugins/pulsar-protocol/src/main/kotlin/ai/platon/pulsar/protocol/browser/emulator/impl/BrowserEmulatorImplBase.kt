@@ -307,7 +307,7 @@ abstract class BrowserEmulatorImplBase(
                 if (count > maxExportCountPerRun) {
                     // if there are too many files, move them to a new directory
                     val date = DateTimes.now("yyyyMMdd")
-                    val ident = RandomStringUtils.randomAlphanumeric(4)
+                    val ident = RandomStringUtils.secure().nextAlphanumeric(4)
                     val dest = baseDir.resolveSibling(baseDir.fileName.toString() + ".$date.$ident")
                     Files.move(baseDir, dest, StandardCopyOption.ATOMIC_MOVE)
                 }

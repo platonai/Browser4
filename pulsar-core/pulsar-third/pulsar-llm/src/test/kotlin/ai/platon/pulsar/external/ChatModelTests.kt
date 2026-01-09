@@ -13,7 +13,7 @@ import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
-@Tag("ExternalServiceTest")
+@Tag("ExternalResourceDependent")
 class ChatModelTests {
 
     companion object {

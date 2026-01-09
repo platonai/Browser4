@@ -30,9 +30,6 @@ extracted
 **/application-private.yml
 application-private.yml
 
-docker/browser4-prod/Dockerfile
-docker/browser4/Dockerfile
-
 #########
 ## 包含规则
 

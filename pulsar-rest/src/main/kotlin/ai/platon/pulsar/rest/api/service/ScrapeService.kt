@@ -13,8 +13,6 @@ import ai.platon.pulsar.rest.api.entities.ScrapeResponse
 import ai.platon.pulsar.rest.api.entities.ScrapeStatusRequest
 import ai.platon.pulsar.rest.api.entities.refreshed
 import ai.platon.pulsar.rest.api.service.CommandService.Companion.FLOW_POLLING_INTERVAL
-import ai.platon.pulsar.skeleton.session.BasicPulsarSession
-import ai.platon.pulsar.skeleton.session.PulsarSession
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import org.apache.commons.collections4.MultiMapUtils
@@ -24,6 +22,7 @@ import org.springframework.stereotype.Service
 import reactor.core.publisher.Flux
 import java.time.Instant
 import java.util.concurrent.ConcurrentSkipListMap
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 
@@ -44,7 +43,8 @@ class ScrapeService(
     private val responseStatusIndex = MultiMapUtils.newListValuedHashMap<Int, String>()
 
     // Create a dedicated dispatcher for long-running command operations
-    private val scrapingDispatcher = Dispatchers.IO.limitedParallelism(10) // Adjust number based on your server capacity
+    private val scrapingExecutor = Executors.newFixedThreadPool(10)
+    private val scrapingDispatcher = scrapingExecutor.asCoroutineDispatcher()
 
     private val scrapingScope: CoroutineScope = CoroutineScope(
         scrapingDispatcher + SupervisorJob() + CoroutineName("scraping")
@@ -91,13 +91,6 @@ class ScrapeService(
     }
 
 
-
-
-
-
-
-
-
     fun streamEvents(id: String): Flux<ServerSentEvent<ScrapeResponse>> {
         return Flux.create<ScrapeResponse> { sink ->
             val job = commandStatusFlow(id).onEach {
@@ -135,15 +128,6 @@ class ScrapeService(
             }
         } while (!status.isDone)
     }
-
-
-
-
-
-
-
-
-
 
 
     /**

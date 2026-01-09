@@ -143,7 +143,7 @@ session.load(url)
 上面的代码与下面的代码意义相同:
 
 ```kotlin
-val url = "https://www.amazon.com/dp/B10000" 
+val url = "https://www.amazon.com/dp/B10000"
 val args = "-taskName amazon -expires 1d -ignoreFailure"
 session.load(url, args)
 ```
@@ -180,7 +180,7 @@ val link = ListenableHyperlink(portalUrl, args = "-refresh -parse", event = Prin
 session.submit(link)
 ```
 
-示例代码: [kotlin](/pulsar-app/pulsar-examples/src/main/kotlin/ai/platon/pulsar/examples/_6_EventHandler.kt).
+示例代码: [kotlin](/examples/browser4-examples/src/main/kotlin/ai/platon/pulsar/manual/_6_EventHandler.kt).
 
 - `CompletableListenableHyperlink` 帮助我们做到这两点:
 
@@ -263,7 +263,7 @@ val pages = session.loadOutPages("$url -expires 1d -ignoreFailure", options)
 
 这里的事件处理程序是网页事件处理程序，它在网页的整个生命周期中捕获和处理事件。
 
-查看 [EventHandlerUsage](/pulsar-app/pulsar-examples/src/main/kotlin/ai/platon/pulsar/examples/_6_EventHandler.kt) 了解所有支持的事件，以及它们被执行的顺序。
+查看 [EventHandlerUsage](/examples/browser4-examples/src/main/kotlin/ai/platon/pulsar/manual/_6_EventHandler.kt) 了解所有支持的事件，以及它们被执行的顺序。
 
 ## X-SQL
 

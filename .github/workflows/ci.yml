@@ -28,6 +28,12 @@ env:
   IMAGE_NAME: browser4
   NETWORK_NAME: 'browser4_backend'
   CONTAINER_NAME: 'browser4-test'
+  DOCKER_COMPOSE_FILE: './docker-compose.yml'
+  DEPENDENCY_SERVICES: 'mongodb'
+  MONGODB_CONTAINER: 'mongodb'
+  MONGODB_PORT: '27017'
+  JAVA_VERSION: '17'
+  MAVEN_OPTS: '-Xmx3g -XX:+UseG1GC'
 
 jobs:
   ci-build:
@@ -45,17 +51,17 @@ jobs:
         id: setup
         uses: ./.github/actions/setup-environment
         with:
-          java_version: '17'
+          java_version: ${{ env.JAVA_VERSION }}
 
       - name: Verify Dependencies
         id: deps
         uses: ./.github/actions/verify-dependencies
         with:
           network_name: ${{ env.NETWORK_NAME }}
-          compose_file: './docker-compose.yml'
-          services_to_start: 'b4-mongodb'
-          mongodb_container: 'b4-mongodb'
-          mongodb_port: '27017'
+          compose_file: ${{ env.DOCKER_COMPOSE_FILE }}
+          services_to_start: ${{ env.DEPENDENCY_SERVICES }}
+          mongodb_container: ${{ env.MONGODB_CONTAINER }}
+          mongodb_port: ${{ env.MONGODB_PORT }}
           startup_timeout: '120'
           verify_network_connectivity: 'true'
 
@@ -103,7 +109,7 @@ jobs:
         id: build
         uses: ./.github/actions/docker-build
         with:
-          image_name: 'browser4'
+          image_name: ${{ env.IMAGE_NAME }}
           version: ${{ github.sha }}
           timeout_minutes: '20'
 
@@ -111,7 +117,7 @@ jobs:
         id: app
         uses: ./.github/actions/start-application
         with:
-          image_name: 'browser4'
+          image_name: ${{ env.IMAGE_NAME }}
           version: ${{ github.sha }}
           container_name: ${{ env.CONTAINER_NAME }}
           network_name: ${{ env.NETWORK_NAME }}
@@ -178,7 +184,7 @@ jobs:
           echo "🌐 Infrastructure:"
           echo "  - Network: ${{ env.NETWORK_NAME }}"
           echo "  - Container: ${{ env.CONTAINER_NAME }}"
-          echo "  - Image: browser4:${{ github.sha }}"
+          echo "  - Image: ${{ env.IMAGE_NAME }}:${{ github.sha }}"
           echo "  - MongoDB: ${{ steps.deps.outputs.mongodb_status }}"
           echo "  - Redis: ${{ steps.deps.outputs.redis_status }}"
 
@@ -196,3 +202,4 @@ jobs:
           container_name: ${{ env.CONTAINER_NAME }}
           cleanup_compose: 'true'
           cleanup_volumes: 'true'
+          network_name: ${{ env.NETWORK_NAME }}

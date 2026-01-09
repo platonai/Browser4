@@ -46,12 +46,12 @@ runs:
       shell: bash
       run: |
         echo "::group::Maven Setup Validation"
-        
+
         if [ ! -f "./mvnw" ] && ! command -v mvn &> /dev/null; then
           echo "❌ Neither Maven wrapper (./mvnw) nor system Maven found"
           exit 1
         fi
-        
+
         if [ -f "./mvnw" ]; then
           MAVEN_CMD="./mvnw"
           echo "✅ Using Maven wrapper: ./mvnw"
@@ -59,13 +59,13 @@ runs:
           MAVEN_CMD="mvn"
           echo "✅ Using system Maven: $(which mvn)"
         fi
-        
+
         echo "MAVEN_CMD=$MAVEN_CMD" >> $GITHUB_ENV
-        
+
         # Display Maven version
         echo "📊 Maven Version:"
         $MAVEN_CMD --version
-        
+
         echo "::endgroup::"
 
     - name: Maven Build
@@ -73,9 +73,9 @@ runs:
       shell: bash
       run: |
         echo "::group::Maven Build"
-        
+
         start_time=$(date +%s)
-        
+
         echo "🔨 Starting Maven build..."
         echo "📋 Configuration:"
         echo "  - Profiles: ${{ inputs.maven_profiles }}"
@@ -84,43 +84,43 @@ runs:
         echo "  - Parallel Builds: ${{ inputs.parallel_builds }}"
         echo "  - Timeout: ${{ inputs.timeout_minutes }} minutes"
         echo "  - Additional Args: ${{ inputs.maven_args }}"
-        
+
         # Build Maven command
         build_cmd="$MAVEN_CMD"
-        
+
         # Add clean if requested
         if [ "${{ inputs.clean_before_build }}" == "true" ]; then
           build_cmd="$build_cmd clean"
         fi
-        
+
         build_cmd="$build_cmd install"
-        
+
         # Add test skipping if requested
         if [ "${{ inputs.skip_tests }}" == "true" ]; then
           build_cmd="$build_cmd -DskipTests"
         fi
-        
+
         # Add profiles if specified
         if [ -n "${{ inputs.maven_profiles }}" ]; then
           build_cmd="$build_cmd -P${{ inputs.maven_profiles }}"
         fi
-        
+
         # Add parallel builds if enabled
         if [ "${{ inputs.parallel_builds }}" == "true" ]; then
           build_cmd="$build_cmd -T 1C"
         fi
-        
+
         # Add additional arguments
         if [ -n "${{ inputs.maven_args }}" ]; then
           build_cmd="$build_cmd ${{ inputs.maven_args }}"
         fi
-        
+
         echo "🚀 Executing: $build_cmd"
         echo ""
-        
+
         # Execute with timeout
         timeout_seconds=$(( ${{ fromJSON(inputs.timeout_minutes) }} * 60 ))
-        
+
         if timeout $timeout_seconds $build_cmd; then
           end_time=$(date +%s)
           build_time=$((end_time - start_time))
@@ -137,7 +137,7 @@ runs:
           echo "build_time=$build_time" >> $GITHUB_OUTPUT
           exit 1
         fi
-        
+
         echo "::endgroup::"
 
     - name: Build Summary
@@ -145,13 +145,13 @@ runs:
       shell: bash
       run: |
         echo "::group::Build Summary"
-        
+
         # Show target directory contents
         if [ -d "target" ]; then
           echo "📁 Build artifacts in target/:"
           ls -la target/ | head -20
         fi
-        
+
         # Show multi-module artifacts if they exist
         if find . -name "target" -type d | grep -v "^./target$" | head -1 > /dev/null; then
           echo ""
@@ -164,15 +164,15 @@ runs:
             fi
           done
         fi
-        
+
         # Show disk usage
         echo ""
         echo "💾 Disk usage after build:"
         du -sh target/ 2>/dev/null || echo "No target directory found"
-        
+
         # Show Maven repository cache size
         if [ -d ~/.m2/repository ]; then
           echo "💾 Maven repository cache size: $(du -sh ~/.m2/repository 2>/dev/null | cut -f1)"
         fi
-        
+
         echo "::endgroup::"

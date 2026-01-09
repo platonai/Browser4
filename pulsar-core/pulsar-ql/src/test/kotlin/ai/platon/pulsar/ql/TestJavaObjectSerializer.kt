@@ -29,7 +29,6 @@ class TestJavaObjectSerializer : TestBase() {
         val conf = H2DbConfig(baseDir = baseDir, networked = true)
         val remoteDB = H2Db(conf)
         var server: Server? = null
-
     }
 
     @BeforeEach

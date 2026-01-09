@@ -16,7 +16,7 @@
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>pulsar-bom</artifactId>
     <name>Pulsar BOM</name>
-    <version>4.2.0-SNAPSHOT</version>
+    <version>4.3.0-SNAPSHOT</version>
 
     <packaging>pom</packaging>
 
@@ -53,13 +53,6 @@
         <tag>HEAD</tag>
     </scm>
 
-    <repositories>
-        <repository>
-            <id>Central</id>
-            <url>https://repo1.maven.org/maven2/</url>
-        </repository>
-    </repositories>
-
     <distributionManagement>
         <repository>
             <id>central</id>
@@ -67,147 +60,40 @@
         </repository>
     </distributionManagement>
 
+    <repositories>
+        <repository>
+            <id>Central</id>
+            <url>https://repo1.maven.org/maven2/</url>
+        </repository>
+    </repositories>
+
+    <!-- Required by dokka-maven-plugin -->
+    <pluginRepositories>
+        <pluginRepository>
+            <id>jcenter</id>
+            <name>JCenter</name>
+            <url>https://jcenter.bintray.com/</url>
+        </pluginRepository>
+    </pluginRepositories>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-clean-plugin</artifactId>
+                <version>${version.maven-clean-plugin}</version>
+            </plugin>
+        </plugins>
+    </build>
+
     <profiles>
-        <!-- Release profile -->
-        <profile>
-            <id>release</id>
-            <build>
-                <plugins>
-                    <plugin>
-                        <groupId>org.apache.maven.plugins</groupId>
-                        <artifactId>maven-release-plugin</artifactId>
-                        <version>${maven-release-plugin.version}</version>
-                        <configuration>
-                            <tagNameFormat>v@{project.version}</tagNameFormat>
-                            <releaseProfiles>deploy</releaseProfiles>
-                            <autoVersionSubmodules>true</autoVersionSubmodules>
-                            <preparationGoals>clean verify</preparationGoals>
-                            <completionGoals>clean</completionGoals>
-                            <goals>deploy nexus-staging:release</goals>
-                            <pushChanges>false</pushChanges>
-                            <localCheckout>true</localCheckout>
-                            <checkModificationExcludes>
-                                <checkModificationExclude>pom.xml</checkModificationExclude>
-                            </checkModificationExcludes>
-                        </configuration>
-                    </plugin>
-                    <plugin>
-                        <groupId>com.commsen.maven</groupId>
-                        <artifactId>bom-helper-maven-plugin</artifactId>
-                        <version>0.4.0</version>
-                    </plugin>
-                </plugins>
-            </build>
-        </profile>
         <profile>
             <id>deploy</id>
 
             <build>
+                <defaultGoal>deploy</defaultGoal>
+
                 <plugins>
-                    <!-- Attach sources -->
-                    <plugin>
-                        <groupId>org.apache.maven.plugins</groupId>
-                        <artifactId>maven-source-plugin</artifactId>
-                        <version>${maven-source-plugin.version}</version>
-                        <executions>
-                            <execution>
-                                <id>attach-sources</id>
-                                <goals>
-                                    <goal>jar-no-fork</goal>
-                                </goals>
-                            </execution>
-                        </executions>
-                    </plugin>
-
-                    <!-- Help maven-source-plugin works with kotlin -->
-                    <plugin>
-                        <groupId>org.codehaus.mojo</groupId>
-                        <artifactId>build-helper-maven-plugin</artifactId>
-                        <version>3.6.0</version>
-
-                        <executions>
-                            <execution>
-                                <phase>generate-sources</phase>
-                                <goals>
-                                    <goal>add-source</goal>
-                                </goals>
-                                <configuration>
-                                    <sources>
-                                        <source>src/main/kotlin</source>
-                                    </sources>
-                                </configuration>
-                            </execution>
-                        </executions>
-                    </plugin>
-
-                    <!-- Override parent pom's javadoc settings, skip generating javadoc, use kdoc instead -->
-                    <plugin>
-                        <groupId>org.apache.maven.plugins</groupId>
-                        <artifactId>maven-javadoc-plugin</artifactId>
-                        <version>${maven-javadoc-plugin.version}</version>
-                        <configuration>
-                            <skip>true</skip>
-                        </configuration>
-                    </plugin>
-
-                    <plugin>
-                        <groupId>org.jetbrains.dokka</groupId>
-                        <artifactId>dokka-maven-plugin</artifactId>
-                        <version>${dokka.version}</version>
-                        <executions>
-                            <execution>
-                                <!-- generate javadoc.jar before package gpg plugin can generate asc for it -->
-                                <phase>prepare-package</phase>
-                                <goals>
-                                    <goal>dokka</goal>
-                                    <goal>javadocJar</goal>
-                                </goals>
-                            </execution>
-                        </executions>
-                        <configuration>
-                            <!-- Set to true to skip dokka task, default: false -->
-                            <skip>false</skip>
-
-                            <!-- Use default or set to custom path to cache directory to enable package-list caching. -->
-                            <!-- When set to default, caches stored in $USER_HOME/.cache/dokka -->
-                            <cacheRoot>default</cacheRoot>
-
-                            <!-- Used for linking to JDK, default: 11 -->
-                            <jdkVersion>11</jdkVersion>
-
-                            <!-- Do not output deprecated members, applies globally, can be overridden by packageOptions -->
-                            <skipDeprecated>true</skipDeprecated>
-                            <!-- Emit warnings about not documented members, applies globally, also can be overridden by packageOptions -->
-                            <reportUndocumented>true</reportUndocumented>
-                            <!-- Do not create index pages for empty packages -->
-                            <skipEmptyPackages>false</skipEmptyPackages>
-                            <includeNonPublic>false</includeNonPublic>
-
-                            <!-- Short form list of sourceRoots, by default, set to ${project.compileSourceRoots} -->
-                            <sourceDirectories>
-                                <dir>${project.basedir}/src/main/java</dir>
-                                <dir>${project.basedir}/src/main/kotlin</dir>
-                            </sourceDirectories>
-
-                            <!-- Disable linking to online kotlin-stdlib documentation  -->
-                            <noStdlibLink>false</noStdlibLink>
-                            <noJdkLink>false</noJdkLink>
-
-                            <!-- Allows to customize documentation generation options on a per-package basis -->
-                            <perPackageOptions>
-                                <packageOptions>
-                                    <!-- Will match kotlin and all sub-packages of it -->
-                                    <!-- <prefix>kotlin</prefix>-->
-
-                                    <!-- All options are optional, default values are below: -->
-                                    <skipDeprecated>false</skipDeprecated>
-                                    <!-- Emit warnings about not documented members  -->
-                                    <reportUndocumented>true</reportUndocumented>
-                                    <includeNonPublic>false</includeNonPublic>
-                                </packageOptions>
-                            </perPackageOptions>
-                        </configuration>
-                    </plugin>
 
                     <!-- GPG signing -->
                     <plugin>
@@ -275,6 +161,7 @@
                     </plugin>
                 </plugins>
             </build>
+
         </profile>
     </profiles>
 
@@ -284,13 +171,6 @@
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-common</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-plugins</artifactId>
-                <type>pom</type>
                 <version>${project.version}</version>
             </dependency>
 
@@ -315,6 +195,13 @@
                 <type>test-jar</type>
                 <classifier>tests</classifier>
                 <scope>test</scope>
+                <version>${project.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>ai.platon.pulsar</groupId>
+                <artifactId>pulsar-plugins</artifactId>
+                <type>pom</type>
                 <version>${project.version}</version>
             </dependency>
 
@@ -354,6 +241,17 @@
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
+                <artifactId>pulsar-beans</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>ai.platon.pulsar</groupId>
+                <artifactId>pulsar-boot</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-ql-common</artifactId>
                 <version>${project.version}</version>
             </dependency>
@@ -364,16 +262,6 @@
                 <version>${project.version}</version>
             </dependency>
 
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-beans</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-boot</artifactId>
-                <version>${project.version}</version>
-            </dependency>
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-ql</artifactId>
@@ -390,6 +278,11 @@
                 <version>${project.version}</version>
             </dependency>
 
+            <dependency>
+                <groupId>ai.platon.pulsar</groupId>
+                <artifactId>pulsar-tests-common</artifactId>
+                <version>${project.version}</version>
+            </dependency>
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-tests</artifactId>
@@ -412,6 +305,14 @@
                 <artifactId>kotlin-stdlib</artifactId>
                 <version>${kotlin.version}</version>
             </dependency>
+
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 
@@ -422,14 +323,13 @@
 
         <ktor.version>2.3.11</ktor.version>
         <springmockk.version>4.0.2</springmockk.version>
-        <version.maven-exec-plugin>3.6.1</version.maven-exec-plugin>
-        <mockito-junit-jupiter.version>5.11.0</mockito-junit-jupiter.version>
 
         <langchain4j.version>1.5.0</langchain4j.version>
 
         <!-- Plugin versions -->
         <!-- Overrides ai.platon:platon -->
         <maven-compiler-plugin.version>3.12.1</maven-compiler-plugin.version>
+        <version.maven-clean-plugin>3.3.2</version.maven-clean-plugin>
         <maven-source-plugin.version>3.3.0</maven-source-plugin.version>
         <maven-javadoc-plugin.version>3.6.3</maven-javadoc-plugin.version>
         <maven-deploy-plugin.version>3.1.1</maven-deploy-plugin.version>
@@ -444,13 +344,8 @@
         <dokka.version>1.9.20</dokka.version>
         <central-publishing-maven-plugin.version>0.9.0</central-publishing-maven-plugin.version>
 
-        <junit5.version>5.12.1</junit5.version>
-        <surefire.excludedGroups>
-            TimeConsumingTest,ExternalServiceTest,IntegrationTest,E2ETest,HeavyTest,
-            TestInfraCheck,SkippableLowerLevelTest
-        </surefire.excludedGroups>
-        <kotlin.version>2.2.20</kotlin.version>
-        <kotlin.coroutine.version>1.10.2</kotlin.coroutine.version>
+        <kotlin.version>2.2.21</kotlin.version>
         <kotlin.compiler.jvmTarget>17</kotlin.compiler.jvmTarget>
+        <spring-boot.version>4.0.1</spring-boot.version>
     </properties>
 </project>

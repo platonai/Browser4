@@ -160,7 +160,7 @@ session.load(url)
 The above code has the same meaning as the following code:
 
 ```kotlin
-val url = "https://www.amazon.com/dp/B10000" 
+val url = "https://www.amazon.com/dp/B10000"
 val args = "-taskName amazon -expires 1d -ignoreFailure"
 session.load(url, args)
 ```
@@ -216,7 +216,7 @@ val link = ListenableHyperlink(portalUrl, args = "-refresh -parse", event = Prin
 session.submit(link)
 ```
 
-Example code: [kotlin](/pulsar-app/pulsar-examples/src/main/kotlin/ai/platon/pulsar/examples/_6_EventHandler.kt).
+Example code: [kotlin](/examples/browser4-examples/src/main/kotlin/ai/platon/pulsar/manual/_6_EventHandler.kt).
 
 `CompletableListenableHyperlink` allows us to do both:
 

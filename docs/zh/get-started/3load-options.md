@@ -37,7 +37,7 @@ page = session.load(url, "-i 10s")
 page = session.load(url, "-ignoreFailure -expires 0s")
 ```
 
-选项 -refresh 用来强制重新采集，就像在真实浏览器上点击“刷新”按钮： 
+选项 -refresh 用来强制重新采集，就像在真实浏览器上点击“刷新”按钮：
 
 ```kotlin
 // Add option `-refresh` to force re-fetch ignoring all failures and set `fetchRetries` to be 0,
@@ -150,7 +150,7 @@ var pages = session.loadOutPages(url, "-expires 10s" +
 )
 ```
 
-本课程提供了[完整代码](/pulsar-app/pulsar-examples/src/main/kotlin/ai/platon/pulsar/examples/_1_LoadOptions.kt)，[国内镜像](https://gitee.com/platonai_galaxyeye/browser4/blob/1.10.x/pulsar-app/pulsar-examples/src/main/kotlin/ai/platon/pulsar/examples/_1_LoadOptions.kt)。
+本课程提供了[完整代码](/examples/browser4-examples/src/main/kotlin/ai/platon/pulsar/manual/_1_LoadOptions.kt)，[国内镜像](https://gitee.com/platonai_galaxyeye/browser4/blob/1.10.x/examples/browser4-examples/src/main/kotlin/ai/platon/pulsar/manual/_1_LoadOptions.kt)。
 
 ------
 

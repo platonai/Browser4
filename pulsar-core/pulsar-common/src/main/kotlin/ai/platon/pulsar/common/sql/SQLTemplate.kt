@@ -17,7 +17,7 @@ class SQLTemplate(
     override fun toString() = template
 
     companion object {
-        private val generatedName: String = RandomStringUtils.randomAlphabetic(4)
+        private val generatedName: String = RandomStringUtils.secure().nextAlphabetic(4)
 
         private fun generateDisplay(resource: String?, name: String): String {
             return resource?.substringAfterLast("/") ?: name

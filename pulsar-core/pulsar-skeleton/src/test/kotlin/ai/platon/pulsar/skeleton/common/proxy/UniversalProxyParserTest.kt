@@ -8,7 +8,7 @@ import org.junit.jupiter.api.Tag
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
-@Tag("ExternalServiceTest")
+@Tag("ExternalResourceDependent")
 class UniversalProxyParserTest {
     private val session = PulsarContexts.getOrCreateSession()
     private val conf = session.sessionConfig

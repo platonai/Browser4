@@ -112,7 +112,7 @@ if (Test-Path $pomXmlPath) {
 # Files containing the version number to upgrade (if present)
 $VERSION_AWARE_FILES = @(
     "$AppHome\README.md",
-    "$AppHome\README-CN.md"
+    "$AppHome\README.zh.md"
 )
 foreach ($F in $VERSION_AWARE_FILES) {
     if (Test-Path $F) {

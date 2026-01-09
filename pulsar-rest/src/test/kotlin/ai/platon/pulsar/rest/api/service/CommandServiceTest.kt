@@ -287,5 +287,94 @@ class CommandServiceTest : MockEcServerTestBase() {
         assertNotNull(status.commandResult?.pageSummary)
         assertNotNull(status.commandResult?.fields)
     }
+
+    @Test
+    fun `test executePlainCommandSync with URL-based command`() {
+        // A command with URL should be handled by the standard flow
+        val plainCommand = """
+            Visit $MOCK_PRODUCT_DETAIL_URL
+            Summarize the product.
+        """.trimIndent()
+
+        val status = runBlocking { commandService.executePlainCommandSync(plainCommand) }
+        printlnPro(prettyPulsarObjectMapper().writeValueAsString(status))
+        assertNotNull(status)
+
+        // The command should complete (either successfully or with expected status)
+        assertTrue { status.isDone }
+    }
+
+    @Test
+    fun `test executePlainCommandSync with blank command returns bad request`() {
+        val status = runBlocking { commandService.executePlainCommandSync("") }
+        assertNotNull(status)
+        assertTrue { status.isDone }
+        assertTrue { status.statusCode == 400 }
+    }
+
+    @Test
+    fun `test submitPlainCommandAsync with URL-based command`() {
+        // A command with URL should be handled by the standard async flow
+        val plainCommand = """
+            Visit $MOCK_PRODUCT_DETAIL_URL
+            Summarize the product.
+        """.trimIndent()
+
+        val statusId = runBlocking { commandService.submitPlainCommandAsync(plainCommand) }
+        assertNotNull(statusId)
+        assertTrue { statusId.isNotBlank() }
+
+        // Verify we can retrieve the status
+        val status = commandService.getStatus(statusId)
+        assertNotNull(status)
+    }
+
+    @Test
+    fun `test submitPlainCommandAsync with blank command`() {
+        val statusId = runBlocking { commandService.submitPlainCommandAsync("") }
+        assertNotNull(statusId)
+
+        // Even blank commands should have a status
+        val status = commandService.getStatus(statusId)
+        assertNotNull(status)
+        assertTrue { status.isDone }
+        assertTrue { status.statusCode == 400 }
+    }
+
+    @Test
+    fun `test executeAgentCommand sets agentHistory on status`() {
+        // Use a simple command that will trigger agent execution
+        val plainCommand = "Search for test information"
+
+        val status = runBlocking { commandService.executeAgentCommand(plainCommand) }
+        assertNotNull(status)
+
+        // After execution, the agent history should be set
+        assertNotNull(status.agentHistory)
+
+        // The command should be done
+        assertTrue { status.isDone }
+    }
+
+    @Test
+    fun `test submitAgentCommandAsync sets agentHistory allowing real-time state tracking`() {
+        // Use a simple command that will trigger agent execution
+        val plainCommand = "Search for test information"
+
+        val statusId = commandService.submitAgentCommandAsync(plainCommand)
+        assertNotNull(statusId)
+        assertTrue { statusId.isNotBlank() }
+
+        // Retrieve the status
+        val status = commandService.getStatus(statusId)
+        assertNotNull(status)
+
+        // Agent history should be set immediately after submission, allowing state tracking
+        // Note: agentHistory is set before agent.run() is called, so it should be available
+        assertNotNull(status.agentHistory)
+
+        // currentAgentState may or may not be set depending on timing
+        // We just verify that the agentHistory reference is available for tracking
+    }
 }
 

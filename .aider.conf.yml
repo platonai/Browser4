@@ -1,0 +1,121 @@
+# Aider Configuration for Browser4 Project
+# See https://aider.chat/docs/config.html for more configuration options
+
+# Repository conventions and guidelines
+# This file provides context and instructions for AI-assisted development with Aider
+
+# Quick Start Commands:
+# - Linux/macOS: ./mvnw -q -DskipTests
+# - Windows (cmd): mvnw.cmd -q -DskipTests
+# - Test core modules: ./mvnw -pl pulsar-core -am test -Dsurefire.failIfNoSpecifiedTests=false
+
+conventions:
+  repository:
+    type: "Multi-module Maven"
+    wrapper: "./mvnw (Unix/macOS) or mvnw.cmd (Windows)"
+    language: "Kotlin (primary), Java (interop)"
+    principles:
+      - "最小改动 (Minimal changes)"
+      - "保持风格 (Maintain existing style)"
+      - "清晰日志 (Clear logging)"
+      - "自动校验与测试 (Automated validation and testing)"
+
+  build:
+    windows:
+      - "mvnw.cmd -q -DskipTests"
+      - "mvnw.cmd -pl pulsar-core -am test -D\"surefire.failIfNoSpecifiedTests=false\""
+    unix:
+      - "./mvnw -q -DskipTests"
+      - "./mvnw -pl pulsar-core -am test -Dsurefire.failIfNoSpecifiedTests=false"
+    scripts:
+      windows: "bin/build.ps1 [-test]"
+      unix: "bin/build.sh [-test]"
+    note: "Windows requires quoting -D parameters: -D\"dot.separated.parameter=quoted\""
+
+  modules:
+    pulsar-core: "核心引擎（会话、调度、DOM、浏览器控制）"
+    pulsar-rest: "Spring Boot REST/命令入口"
+    pulsar-client: "客户端 SDK/CLI"
+    browser4: "产品聚合（SPA 与打包）"
+    tests:
+      - "pulsar-tests (heavy scenarios)"
+      - "pulsar-tests-common (shared)"
+
+  key_apis:
+    - "WebDriver"
+    - "PulsarSession -> AgenticSession"
+    - "AgenticContexts.createSession()"
+    - "LoadOptions (URL CLI-style parameters)"
+  
+  browser_automation:
+    package: "ai.platon.pulsar.browser"
+    api: "WebDriver"
+    implementation: 
+      - "PageHandler"
+      - "ClickableDOM"
+  
+  agents:
+    interface: "AgenticSession"
+    implementation: "BrowserPerceptiveAgent"
+
+  configuration:
+    default_port: 8182
+    layers: "application*.properties"
+    note: "避免在代码中硬编码默认值"
+    references:
+      - "docs/config.md"
+      - "docs/rest-api-examples.md"
+
+  logging:
+    format: "docs/log-format.md"
+    style: "Use placeholders: logger.info(\"Task {} finished in {} ms\", taskId, cost)"
+    avoid: "字符串拼接 (string concatenation)"
+
+  kotlin_style:
+    - "不可变 data class"
+    - "显式返回类型 (explicit return types)"
+    - "空安全 (require/check/?:)"
+    - "公共 API 要有 KDoc (summary/params/returns/exceptions)"
+
+  testing:
+    location:
+      - "各模块 src/test"
+      - "pulsar-tests-common (shared)"
+      - "pulsar-tests (heavy scenarios)"
+    speed_targets:
+      unit: "<100ms"
+      integration: "<5s"
+      e2e: "<30s"
+    coverage: "~70% instruction coverage (Jacoco)"
+    tags: "See docs/copilot/templates/test-tag-usage.md"
+
+  definition_of_done:
+    - "构建与相关测试通过，无新增高噪日志/告警"
+    - "新/变更逻辑：主路径 + 至少 1 个边界用例"
+    - "不提交密钥/私有端点；输入已校验"
+    - "无随意版本漂移（遵守 parent BOM）"
+    - "公共行为/配置变更同步更新文档"
+    - "对潜在性能影响（>≈5%）给出评估或基准"
+
+  troubleshooting:
+    browser_cdp: "优先使用 pulsar-tests 重型套件复现"
+    proxy_privacy: "保持处理程序幂等、线程安全"
+    logging: "遵循结构化字段，便于筛选"
+    common_issues:
+      - "Linux/macOS: mvnw 无执行权限 → chmod +x mvnw"
+      - "JDK 版本不匹配 → 确保使用仓库要求版本"
+      - "Windows 参数转义 → -D\"key.with.dots=value\""
+      - "端口占用（默认 8182）→ 覆盖配置 server.port"
+      - "日志风暴（CDP 重试）→ 复用现有重试工具并调低日志级别"
+
+  references:
+    - "README-AI.md"
+    - "docs/concepts.md"
+    - "docs/advanced-guides.md"
+    - "docs/rest-api-examples.md"
+
+# Aider-specific settings (uncomment to use)
+# model: gpt-4-turbo-preview
+# edit-format: diff
+# auto-commits: true
+# dirty-commits: false

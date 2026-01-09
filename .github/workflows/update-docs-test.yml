@@ -10,7 +10,7 @@ on:
       files:
         description: 'Files to update (JSON array)'
         required: false
-        default: '["README.md", "README-CN.md"]'
+        default: '["README.md", "README.zh.md"]'
 
 jobs:
   test-update-docs:

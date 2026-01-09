@@ -23,9 +23,8 @@ class ExtractService(
         val prompt2 = """
             Extract the following information from the web page:
             $prompt
-            
-            ${document.text}
 
+            ${document.text}
 
             """.trimIndent()
 

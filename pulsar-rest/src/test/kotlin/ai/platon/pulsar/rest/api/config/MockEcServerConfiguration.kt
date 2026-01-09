@@ -1,19 +1,14 @@
 package ai.platon.pulsar.rest.api.config
 
+import ai.platon.pulsar.test.server.MockSiteApplication
 import org.slf4j.LoggerFactory
-import org.springframework.boot.test.context.TestConfiguration
-import org.springframework.context.annotation.Bean
-import org.springframework.context.annotation.Primary
-import org.springframework.boot.web.client.RestTemplateBuilder
-import org.springframework.web.client.RestTemplate
 import org.springframework.beans.factory.DisposableBean
 import org.springframework.beans.factory.InitializingBean
-import java.net.ServerSocket
-import java.util.concurrent.TimeUnit
 import org.springframework.boot.SpringApplication
+import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.ConfigurableApplicationContext
 import org.springframework.context.annotation.ComponentScan
-import ai.platon.pulsar.test.server.MockSiteApplication
+import java.net.ServerSocket
 
 /**
  * Test configuration that automatically starts and stops the mock EC server for tests.
@@ -77,7 +72,9 @@ class MockEcServerConfiguration : InitializingBean, DisposableBean {
             // Start the application in a separate thread to avoid blocking
             serverThread = Thread {
                 try {
-                    log.info("Starting MockSiteApplication with properties: server.port=${System.getProperty("server.port")}, default properties: ${properties}")
+                    log.info(
+                        "Starting MockSiteApplication with properties: server.port=${System.getProperty("server.port")}, default properties: $properties"
+                    )
                     mockServerContext = app.run()
                     log.info("Mock EC server application context created successfully")
 
@@ -94,7 +91,6 @@ class MockEcServerConfiguration : InitializingBean, DisposableBean {
             serverThread?.start()
 
             // Wait for server to start with longer timeout
-            val startTime = System.currentTimeMillis()
             val checkInterval = 1000L // Check every second
             var attempts = 0
             val maxAttempts = 60 // 60 seconds total
@@ -116,7 +112,6 @@ class MockEcServerConfiguration : InitializingBean, DisposableBean {
 
             log.error("Mock EC server failed to start within timeout (${maxAttempts} seconds)")
             stopMockEcServer()
-
         } catch (e: Exception) {
             log.error("Failed to start mock EC server", e)
             stopMockEcServer()
@@ -156,14 +151,5 @@ class MockEcServerConfiguration : InitializingBean, DisposableBean {
         } catch (e: java.net.BindException) {
             true
         }
-    }
-
-    @Bean
-    @Primary
-    fun restTemplate(): RestTemplate {
-        return RestTemplateBuilder()
-            .setConnectTimeout(java.time.Duration.ofSeconds(30))
-            .setReadTimeout(java.time.Duration.ofSeconds(30))
-            .build()
     }
 }

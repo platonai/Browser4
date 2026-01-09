@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "$ROOT_DIR"
 
-EXEMPT_MODULES=(pulsar-benchmarks pulsar-examples pulsar-bom pulsar-all browser4)
+EXEMPT_MODULES=(pulsar-benchmarks examples/browser4-examples pulsar-bom pulsar-all browser4)
 
 function is_exempt() {
   local target=$1

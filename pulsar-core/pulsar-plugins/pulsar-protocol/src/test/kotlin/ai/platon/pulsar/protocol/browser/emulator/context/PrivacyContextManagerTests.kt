@@ -187,7 +187,7 @@ class PrivacyContextManagerTests {
         runBlocking {
             repeat(10) {
                 val task = FetchTask.create(page)
-                task.fingerprint.userAgent = RandomStringUtils.randomAlphanumeric(10)
+                task.fingerprint.userAgent = RandomStringUtils.secure().nextAlphanumeric(10)
                 manager.run(task) { _, driver -> mockFetch(task, driver) }
                 assertTrue { manager.temporaryContexts.size <= manager.maxAllowedBadContexts }
             }

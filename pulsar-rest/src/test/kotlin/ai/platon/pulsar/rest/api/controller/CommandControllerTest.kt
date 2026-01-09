@@ -1,9 +1,9 @@
 package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper
+import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.rest.api.TestHelper.MOCK_PRODUCT_DETAIL_URL
 import ai.platon.pulsar.rest.api.entities.CommandRequest
-import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.rest.api.entities.CommandStatus
 import org.junit.jupiter.api.Assumptions
 import org.junit.jupiter.api.Test
@@ -21,13 +21,21 @@ class CommandControllerTest : ScrapeControllerTestBase() {
         val pageType = "productDetailPage"
         val url = requireNotNull(urls[pageType])
 
-        val request = CommandRequest(url,
+        val request = CommandRequest(
+            url,
             "",
             pageSummaryPrompt = "Summarize the product.",
-            mode = "sync",
+            async = false
         )
 
-        val status = restTemplate.postForObject("$baseUri/api/commands", request, CommandStatus::class.java)
+        val status = client.post().uri("/api/commands")
+            .body(request)
+            .exchange()
+            .expectStatus().is2xxSuccessful
+            .expectBody(CommandStatus::class.java)
+            .returnResult()
+            .responseBody
+        assertNotNull(status)
 
         printlnPro(status)
         Assumptions.assumeTrue(status.pageStatusCode == 200)
@@ -51,14 +59,22 @@ class CommandControllerTest : ScrapeControllerTestBase() {
         val pageType = "productDetailPage"
         val url = requireNotNull(urls[pageType])
 
-        val request = CommandRequest(url,
+        val request = CommandRequest(
+            url,
             "",
             pageSummaryPrompt = "Summarize the product.",
             dataExtractionRules = "product name, ratings, price",
-            mode = "sync",
+            async = false
         )
 
-        val status = restTemplate.postForObject("$baseUri/api/commands", request, CommandStatus::class.java)
+        val status = client.post().uri("/api/commands")
+            .body(request)
+            .exchange()
+            .expectStatus().is2xxSuccessful
+            .expectBody(CommandStatus::class.java)
+            .returnResult()
+            .responseBody
+        assertNotNull(status)
 
         printlnPro(status)
         Assumptions.assumeTrue(status.pageStatusCode == 200)
@@ -79,9 +95,18 @@ class CommandControllerTest : ScrapeControllerTestBase() {
         val request = CommandRequest(
             MOCK_PRODUCT_DETAIL_URL,
             xsql = sqlTemplate,
-            mode = "sync",
+            async = false
         )
-        val status = restTemplate.postForObject("$baseUri/api/commands", request, CommandStatus::class.java)
+
+        val status = client.post().uri("/api/commands")
+            .body(request)
+            .exchange()
+            .expectStatus().is2xxSuccessful
+            .expectBody(CommandStatus::class.java)
+            .returnResult()
+            .responseBody
+        assertNotNull(status)
+
         printlnPro(prettyPulsarObjectMapper().writeValueAsString(status))
         val result = status.commandResult
 
@@ -96,4 +121,3 @@ class CommandControllerTest : ScrapeControllerTestBase() {
         assertNotNull(result.xsqlResultSet)
     }
 }
-

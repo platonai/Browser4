@@ -30,7 +30,7 @@ Scrape a webpage using Browser4 using async API.
 
 ## seeds.txt
 
-The seed urls to test Browser4.
+The seed URLs to test Browser4.
 
 ## test-curl-commands.ps1, test-curl-commands.sh
 

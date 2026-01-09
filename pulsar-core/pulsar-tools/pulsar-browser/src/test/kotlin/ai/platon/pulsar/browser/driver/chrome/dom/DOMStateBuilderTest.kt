@@ -1,14 +1,8 @@
 package ai.platon.pulsar.browser.driver.chrome.dom
 
-import ai.platon.pulsar.browser.driver.chrome.dom.model.DOMRect
-import ai.platon.pulsar.browser.driver.chrome.dom.model.DOMTreeNodeEx
-import ai.platon.pulsar.browser.driver.chrome.dom.model.SnapshotNodeEx
-import ai.platon.pulsar.browser.driver.chrome.dom.model.NodeType
-import ai.platon.pulsar.browser.driver.chrome.dom.model.TinyNode
+import ai.platon.pulsar.browser.driver.chrome.dom.model.*
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertNotNull
-import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Test
 
@@ -36,7 +30,7 @@ class DOMStateBuilderTest {
         )
 
         val result = DOMStateBuilder.build(root, listOf("data-id", "aria-label"))
-        val json = DOMStateBuilder.toJson(result.microTree)
+        val json = DOMSerializer.toJson(result.microTree)
         val tree = mapper.readTree(json)
 
         val rootAttrs = tree.get("originalNode").get("attributes")
@@ -78,7 +72,7 @@ class DOMStateBuilderTest {
         )
 
         val result = DOMStateBuilder.build(simplified)
-        val json = DOMStateBuilder.toJson(result.microTree)
+        val json = DOMSerializer.toJson(result.microTree)
         val tree = mapper.readTree(json)
         val child = tree.get("children").first()
 
@@ -123,7 +117,7 @@ class DOMStateBuilderTest {
             maxPaintOrderThreshold = 1000
         )
         val result = DOMStateBuilder.build(simplified, emptyList(), options)
-        val json = DOMStateBuilder.toJson(result.microTree)
+        val json = DOMSerializer.toJson(result.microTree)
         val tree = mapper.readTree(json)
 
         val children = tree.get("children")
@@ -171,7 +165,7 @@ class DOMStateBuilderTest {
             compoundComponentMinChildren = 3
         )
         val result = DOMStateBuilder.build(simplified, emptyList(), options)
-        val json = DOMStateBuilder.toJson(result.microTree)
+        val json = DOMSerializer.toJson(result.microTree)
         val tree = mapper.readTree(json)
 
         val ulNode = tree.get("children").first()
@@ -199,7 +193,7 @@ class DOMStateBuilderTest {
             preserveOriginalCasing = false
         )
         val result = DOMStateBuilder.build(simplified, listOf("class", "for", "readonly", "customattr"), options)
-        val json = DOMStateBuilder.toJson(result.microTree)
+        val json = DOMSerializer.toJson(result.microTree)
         val tree = mapper.readTree(json)
 
         val attrs = tree.get("originalNode").get("attributes")
@@ -251,7 +245,7 @@ class DOMStateBuilderTest {
             preserveOriginalCasing = true
         )
         val result = DOMStateBuilder.build(simplified, emptyList(), options)
-        val json = DOMStateBuilder.toJson(result.microTree)
+        val json = DOMSerializer.toJson(result.microTree)
         val tree = mapper.readTree(json)
 
         assertEquals("CustomElement", tree.get("originalNode").get("nodeName").asText(),
@@ -283,7 +277,7 @@ class DOMStateBuilderTest {
         }
 
         val result = DOMStateBuilder.build(leaf)
-        val json = DOMStateBuilder.toJson(result.microTree)
+        val json = DOMSerializer.toJson(result.microTree)
         val tree = mapper.readTree(json)
 
         // Traverse down the first-child chain and count levels

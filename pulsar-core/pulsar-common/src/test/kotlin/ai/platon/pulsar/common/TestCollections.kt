@@ -29,7 +29,7 @@ class TestCollections {
     @Test
     fun `When group by than the order of keys are reserved`() {
         val sortedEntries = IntRange(1, 100).map {
-            Random(10).nextInt() to RandomStringUtils.randomAlphanumeric(10)
+            Random(10).nextInt() to RandomStringUtils.secure().nextAlphanumeric(10)
         }.shuffled().sortedBy { it.first }
         val groupedEntries = sortedEntries.groupBy { it.first }
         groupedEntries.entries.zipWithNext().forEach {

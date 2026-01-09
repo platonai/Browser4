@@ -40,7 +40,7 @@ import kotlin.test.*
 class TestGoraStorageInMemory {
 
     val LOG = LoggerFactory.getLogger(TestGoraStorage::class.java)
-    val crawlId = "test_" + RandomStringUtils.randomAlphabetic(4)
+    val crawlId = "test_" + RandomStringUtils.secure().nextAlphabetic(4)
 
     private val conf = VolatileConfig().apply {
         set(CapabilityTypes.STORAGE_CRAWL_ID, crawlId)

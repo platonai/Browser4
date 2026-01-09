@@ -12,28 +12,28 @@ import kotlin.test.*
 @Ignore("Only test when MongoDB is started")
 class TestMongoStore : MongoTestBase() {
     companion object {
-        private val crawlId = "test_" + RandomStringUtils.randomAlphanumeric(5)
+        private val crawlId = "test_" + RandomStringUtils.secure().nextAlphanumeric(5)
         private val conf = MutableConfig().also {
             it[CapabilityTypes.STORAGE_DATA_STORE_CLASS] = AppConstants.MONGO_STORE_CLASS
             it[CapabilityTypes.STORAGE_CRAWL_ID] = crawlId
         }
     }
-    
+
     @Test
     fun testRealSchema() {
         val store = MongoStore<String, GWebPage>()
         assertNull(store.schemaName)
-        
+
         val provider = DataStorageFactory(conf)
         val store2 = provider.getOrCreatePageStore()
         assertEquals(AppConstants.MONGO_STORE_CLASS, provider.storeClassName)
         assertTrue("Actual schema name: ${store2.schemaName}") { crawlId in store2.schemaName }
     }
-    
+
     @Test
     fun testOperation() {
         val store = DataStorageFactory(conf).getOrCreatePageStore()
-        
+
         val key = System.currentTimeMillis().toString()
         store.put(key, GWebPage())
         // why ?

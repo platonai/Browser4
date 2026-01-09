@@ -12,7 +12,7 @@ inputs:
   files:
     description: 'Documentation files to update (JSON array)'
     required: false
-    default: '["README.md", "README-CN.md"]'
+    default: '["README.md", "README.zh.md"]'
   commit_message:
     description: 'Git commit message template (use {version} as placeholder)'
     required: false
@@ -47,19 +47,19 @@ runs:
         GITHUB_TOKEN: ${{ github.token }}
       run: |
         set -euo pipefail
-        
+
         VERSION="${{ inputs.version }}"
         OLD_PATTERN="${{ inputs.old_version_pattern }}"
-        
+
         echo "🔄 Updating documentation..."
         echo "📅 Current Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-        
+
         # Validate version input
         if [ -z "$VERSION" ]; then
           echo "❌ Error: version input is required"
           exit 1
         fi
-        
+
         # Clean version
         # remove v prefix if present
         VERSION=$(echo "$VERSION" | sed 's/^v//')
@@ -72,51 +72,51 @@ runs:
           echo "Expected format: X.Y.Z (e.g., 1.0.0)"
           exit 1
         fi
-        
+
         # Extract version prefix for pattern matching
         PREFIX=$(echo "$VERSION" | cut -d'.' -f1,2)
-        
+
         echo "📦 Version Info:"
         echo "   Target Version: v$VERSION"
         echo "   Version Prefix: $PREFIX"
         if [ -n "$OLD_PATTERN" ]; then
           echo "   Old Pattern: $OLD_PATTERN"
         fi
-        
+
         # Validate JSON input
         if ! echo '${{ inputs.files }}' | jq empty 2>/dev/null; then
           echo "❌ Error: Invalid JSON in files input"
           exit 1
         fi
-        
+
         # Parse input files
         if ! FILES_LIST=$(echo '${{ inputs.files }}' | jq -r '.[]' 2>/dev/null); then
           echo "❌ Error: Failed to parse files JSON"
           exit 1
         fi
-        
+
         echo "🔍 Processing files..."
         UPDATED_FILES=()
         PROCESSED_COUNT=0
         SKIPPED_COUNT=0
-        
+
         while IFS= read -r FILE_NAME; do
           [ -z "$FILE_NAME" ] && continue
-        
+
           F="${FILE_NAME}"
           PROCESSED_COUNT=$((PROCESSED_COUNT + 1))
-        
+
           if [ -e "$F" ]; then
             echo "  📄 Processing: $(basename "$F")"
-        
+
             # Create backup
             if ! cp "$F" "$F.backup"; then
               echo "    ❌ Failed to create backup for $F"
               continue
             fi
-        
+
             CHANGES_MADE=false
-        
+
             # Replace SNAPSHOT versions if they exist
             SNAPSHOT_VERSION="${VERSION}-SNAPSHOT"
             if grep -q "\b${SNAPSHOT_VERSION}\b" "$F" 2>/dev/null; then
@@ -124,7 +124,7 @@ runs:
               CHANGES_MADE=true
               echo "    🔄 Replaced SNAPSHOT: $SNAPSHOT_VERSION → v$VERSION"
             fi
-        
+
             # Replace old versions based on pattern or prefix
             if [ -n "$OLD_PATTERN" ]; then
               # Use custom pattern
@@ -133,18 +133,18 @@ runs:
               # Use prefix-based pattern (e.g., 1.0.x)
               OLD_VERSIONS=$(grep -oE "\bv?${PREFIX}\.[0-9]+\b" "$F" 2>/dev/null | sort -u || true)
             fi
-        
+
             for OLD_VERSION in $OLD_VERSIONS; do
               # Clean version without 'v' prefix for comparison
               CLEAN_OLD=$(echo "$OLD_VERSION" | sed 's/^v//')
-        
+
               if [[ "$CLEAN_OLD" != "$VERSION" ]]; then
                 sed -i "s/\b${OLD_VERSION}\b/v${VERSION}/g" "$F"
                 CHANGES_MADE=true
                 echo "    🔄 Replaced: $OLD_VERSION → v$VERSION"
               fi
             done
-        
+
             # Check if file was actually modified
             if [ "$CHANGES_MADE" = true ] && ! cmp -s "$F" "$F.backup"; then
               UPDATED_FILES+=("$F")
@@ -152,7 +152,7 @@ runs:
             else
               echo "    ℹ️  No changes needed"
             fi
-        
+
             # Remove backup
             rm -f "$F.backup"
           else
@@ -160,13 +160,13 @@ runs:
             SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
           fi
         done <<< "$FILES_LIST"
-        
+
         echo ""
         echo "📊 Processing Summary:"
         echo "   - Files processed: $PROCESSED_COUNT"
         echo "   - Files updated: ${#UPDATED_FILES[@]}"
         echo "   - Files skipped: $SKIPPED_COUNT"
-        
+
         # Export outputs
         if [ ${#UPDATED_FILES[@]} -eq 0 ]; then
           # 空数组的情况下输出空JSON数组
@@ -175,44 +175,44 @@ runs:
         else
           # 将文件路径数组转换为正确的JSON格式
           # 注意：使用JSON序列化来避免特殊字符和格式问题
-          
+
           # 方法1：使用简单的JSON输出方式，避免格式问题
           echo "changes_made=true" >> $GITHUB_OUTPUT
           echo "updated_files<<EOF" >> $GITHUB_OUTPUT
-          echo "$(printf '%s\n' "${UPDATED_FILES[@]}" | jq -R -s -c 'split("\n") | map(select(length > 0))')" >> $GITHUB_OUTPUT 
+          echo "$(printf '%s\n' "${UPDATED_FILES[@]}" | jq -R -s -c 'split("\n") | map(select(length > 0))')" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
         fi
-        
+
         echo "version=$VERSION" >> $GITHUB_OUTPUT
-        
+
         if [ ${#UPDATED_FILES[@]} -eq 0 ]; then
           echo "ℹ️  No files were updated."
           exit 0
         fi
-        
+
         echo "✅ Documentation updated to version v$VERSION"
         echo "📝 Files updated:"
         for file in "${UPDATED_FILES[@]}"; do
           echo "   - $(basename "$file")"
         done
-        
+
         # Commit and push changes if enabled
         if [ "${{ inputs.push_changes }}" == "true" ]; then
           COMMIT_MSG=$(echo '${{ inputs.commit_message }}' | sed "s/{version}/$VERSION/g")
-        
+
           echo ""
           echo "🔍 Committing changes..."
-        
+
           # Configure git user
           git config --global user.name "${GITHUB_ACTOR:-github-actions}"
           git config --global user.email "${GITHUB_ACTOR:-github-actions}@users.noreply.github.com"
-        
+
           # Add, commit and push changes
           for file in "${UPDATED_FILES[@]}"; do
             git add -- "$file"
           done
           git commit -m "$COMMIT_MSG"
           git push
-        
+
           echo "✅ Changes committed and pushed"
         fi

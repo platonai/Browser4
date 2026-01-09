@@ -34,7 +34,7 @@ MockSiteLauncher.stop()
 Override health path with JVM property: `-Dmock.site.healthPath=/custom/health`.
 
 ### Auto-start in examples
-`SessionInstructionsExample` (in `pulsar-examples`) auto-starts the mock site if unreachable and `-Ddemo.autoStart=true` (default true). It also probes `/actuator/health` before falling back.
+`SessionInstructionsExample` (in `browser4-examples`) auto-starts the mock site if unreachable and `-Ddemo.autoStart=true` (default true). It also probes `/actuator/health` before falling back.
 
 System properties:
 - `demo.url`        : Override full demo page URL (default points to localhost:8080 demo page)

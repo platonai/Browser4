@@ -6,6 +6,7 @@ import com.microsoft.playwright.Playwright
 import org.junit.jupiter.api.*
 import org.junit.jupiter.api.Assertions.assertTrue
 
+@Tag("OptionalTest")
 open class PlaywrightTestBase {
 
     companion object {

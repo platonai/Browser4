@@ -115,6 +115,7 @@ class DataStorageFactory(conf: ImmutableConfig) {
          * @param conf AppConstants configuration
          * @return the DataStore persistent class
          */
+        @Suppress("UNCHECKED_CAST")
         @Throws(ClassNotFoundException::class)
         fun <K, V : Persistent> detectDataStoreClass(conf: HadoopConfiguration): Class<out DataStore<K, V>> {
             return Class.forName(detectDataStoreClassName(conf)) as Class<out DataStore<K, V>>
@@ -148,7 +149,7 @@ class DataStorageFactory(conf: ImmutableConfig) {
                 conf[PROP_MONGO_SERVERS] = servers
             }
         }
-        
+
         private fun checkIfMongoClientAvailable(conf: HadoopConfiguration): Boolean {
             val mongoServers = conf.get(PROP_MONGO_SERVERS)
             if (mongoServers != null) {

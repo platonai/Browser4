@@ -19,7 +19,7 @@ class SQLInstance(
     }
 
     companion object {
-        private val generatedName: String = RandomStringUtils.randomAlphabetic(4)
+        private val generatedName: String = RandomStringUtils.secure().nextAlphabetic(4)
 
         fun load(url: String, resource: String, name: String = generatedName): SQLInstance {
             val template = SQLTemplate.load(resource, name = name)

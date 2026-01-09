@@ -26,7 +26,7 @@ fun getTracerOrNull(target: Any): Logger? = if (target is Logger) {
     getLogger(target).takeIf { it.isTraceEnabled }
 }
 
-fun getRandomLogger(): Logger = LoggerFactory.getLogger(RandomStringUtils.randomAlphabetic(8))
+fun getRandomLogger(): Logger = LoggerFactory.getLogger(RandomStringUtils.secure().nextAlphabetic(8))
 
 /**
  * Log messages using [System.err] and [Throwable.printStackTrace] in the case when the logging system was crashed.

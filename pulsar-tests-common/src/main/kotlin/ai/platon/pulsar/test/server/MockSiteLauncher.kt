@@ -46,7 +46,7 @@ object MockSiteLauncher : Closeable {
     @Synchronized
     fun start(
         port: Int = 18080,
-        properties: Map<String, Any?> = emptyMap(),
+        properties: Map<String, Any> = emptyMap(),
         profiles: Array<String> = emptyArray(),
         headless: Boolean = true,
         enforcePort: Boolean = true,
@@ -113,7 +113,7 @@ object MockSiteLauncher : Closeable {
 
     /** Restart the server: stops if running, then starts again. */
     @Synchronized
-    fun restart(port: Int = boundPort ?: 8080, properties: Map<String, Any?> = emptyMap()): ConfigurableApplicationContext {
+    fun restart(port: Int = boundPort ?: 8080, properties: Map<String, Any> = emptyMap()): ConfigurableApplicationContext {
         stop()
         return start(port = port, properties = properties)
     }

@@ -13,7 +13,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 @Order(1100)
-@Tag("ExternalServiceTest")
+@Tag("ExternalResourceDependent")
 @Tag("TimeConsumingTest")
 @Ignore("Takes very long time, run it manually.")
 @SpringBootTest(

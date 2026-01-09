@@ -28,7 +28,7 @@ env:
   PRODUCTION_JAR_MODULE_PATH: 'browser4/browser4-agents'
   PRODUCTION_JAR_NAME: 'Browser4.jar'
   PRODUCTION_JAR_PATH: 'browser4/browser4-agents/target/Browser4.jar'
-  JAVA_VERSION: '21'
+  JAVA_VERSION: '17'
   MAVEN_OPTS: '-Xmx3g -XX:+UseG1GC'
 
 jobs:

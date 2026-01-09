@@ -3,7 +3,6 @@ package ai.platon.pulsar.persist.gora;
 import ai.platon.pulsar.common.config.ImmutableConfig;
 import ai.platon.pulsar.persist.HadoopUtils;
 import ai.platon.pulsar.persist.gora.generated.GWebPage;
-import org.apache.gora.mongodb.store.MongoStoreParameters;
 import org.apache.gora.persistency.Persistent;
 import org.apache.gora.store.DataStore;
 import org.apache.gora.store.DataStoreFactory;
@@ -13,14 +12,12 @@ import org.slf4j.LoggerFactory;
 
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Properties;
 
 import static ai.platon.pulsar.common.LogsKt.warnForClose;
 import static ai.platon.pulsar.common.config.AppConstants.MONGO_STORE_CLASS;
 import static ai.platon.pulsar.common.config.AppConstants.WEBPAGE_SCHEMA;
 import static ai.platon.pulsar.common.config.CapabilityTypes.*;
-import static org.apache.gora.mongodb.store.MongoStoreParameters.PROP_MONGO_SERVERS;
 
 public class GoraStorage {
     public static final Logger logger = LoggerFactory.getLogger(GoraStorage.class);
@@ -35,7 +32,8 @@ public class GoraStorage {
     public static Properties goraProperties = DataStoreFactory.createProps();
     /**
      * The dataStores map is used to cache DataStore instances
-     * */
+     *
+     */
     private static Map<String, Object> dataStores = new HashMap<>();
 
     public synchronized static <K, V extends Persistent> DataStore<K, V>
@@ -49,7 +47,7 @@ public class GoraStorage {
     createDataStore(org.apache.hadoop.conf.Configuration conf, Class<K> keyClass, Class<V> persistentClass)
             throws GoraException, ClassNotFoundException {
         String className = conf.get(STORAGE_DATA_STORE_CLASS, MONGO_STORE_CLASS);
-        Class<? extends DataStore<K, V>> dataStoreClass = (Class<? extends DataStore<K, V>>)Class.forName(className);
+        Class<? extends DataStore<K, V>> dataStoreClass = (Class<? extends DataStore<K, V>>) Class.forName(className);
         return createDataStore(conf, keyClass, persistentClass, dataStoreClass);
     }
 

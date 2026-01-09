@@ -15,8 +15,8 @@ RUN chmod +x mvnw
 
 # Build only the SPA module and its dependencies
 RUN --mount=type=cache,target=/root/.m2 ./mvnw -pl browser4/browser4-spa -am package -DskipTests -Dmaven.javadoc.skip=true -B
-RUN test -f browser4/browser4-spa/target/Browser4.jar
-RUN cp browser4/browser4-spa/target/Browser4.jar /workspace/app.jar
+RUN test -f browser4/browser4-spa/target/Browser4SPA.jar
+RUN cp browser4/browser4-spa/target/Browser4SPA.jar /workspace/app.jar
 
 FROM eclipse-temurin:21-jre AS runtime
 WORKDIR /app

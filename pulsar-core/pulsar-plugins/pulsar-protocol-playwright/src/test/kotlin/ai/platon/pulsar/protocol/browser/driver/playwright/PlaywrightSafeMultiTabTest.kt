@@ -7,6 +7,7 @@ import com.microsoft.playwright.BrowserType
 import com.microsoft.playwright.Page
 import com.microsoft.playwright.Playwright
 import com.microsoft.playwright.options.LoadState
+import org.junit.jupiter.api.Tag
 import java.nio.file.Paths
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -20,6 +21,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * Playwright methods at any given time. Having said that it's okay to create multiple Playwright instances each on its
  * own thread.
  * */
+@Tag("OptionalTest")
 class PlaywrightSafeMultiTabTest {
 
     private val originURL = "https://www.amazon.com/"

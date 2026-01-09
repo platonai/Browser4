@@ -26,7 +26,7 @@ from load_and_select('$productDetailUrl', ':root');
 
     @Test
     fun testAllHrefs2() {
-        val url = "https://www.amazon.de/dp/B08Y5SQTCX"
+        val url = productDetailUrl
         val page = session.load(url)
         if (!page.protocolStatus.isSuccess) {
             logger.warn("Failed to load page | {}", url)

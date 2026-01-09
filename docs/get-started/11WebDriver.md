@@ -112,7 +112,7 @@ class WebDriverDemo(private val session: PulsarSession) {
 }
 ```
 
-Complete code: [kotlin](/pulsar-app/pulsar-examples/src/main/kotlin/ai/platon/pulsar/examples/_8_WebDriver.kt), [Chinese mirror](https://gitee.com/platonai_galaxyeye/browser4/blob/1.10.x/pulsar-app/pulsar-examples/src/main/kotlin/ai/platon/pulsar/examples/_8_WebDriver.kt).
+Complete code: [kotlin](/examples/browser4-examples/src/main/kotlin/ai/platon/pulsar/manual/_8_WebDriver.kt), [Chinese mirror](https://gitee.com/platonai_galaxyeye/browser4/blob/1.10.x/examples/browser4-examples/src/main/kotlin/ai/platon/pulsar/manual/_8_WebDriver.kt).
 
 ------
 

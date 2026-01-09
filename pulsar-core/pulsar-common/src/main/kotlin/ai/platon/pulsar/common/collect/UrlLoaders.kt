@@ -72,5 +72,5 @@ open class TemporaryLocalFileUrlLoader: LocalFileUrlLoader(
     AppPaths.PROC_TMP_TMP_DIR
         .resolve("urls")
         .resolve("TemporaryLocalFileUrlLoader")
-        .resolve("hyperlink-${RandomStringUtils.randomAlphanumeric(8)}.txt")
+        .resolve("hyperlink-${RandomStringUtils.secure().nextAlphanumeric(8)}.txt")
 )

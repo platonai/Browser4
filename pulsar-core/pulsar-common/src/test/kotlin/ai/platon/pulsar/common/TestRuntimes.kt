@@ -36,10 +36,10 @@ class TestRuntimes {
         }
 
         val tmp = AppPaths.getTmpDirectory("test")
-        val file = tmp.resolve(RandomStringUtils.randomAlphabetic(5))
+        val file = tmp.resolve(RandomStringUtils.secure().nextAlphabetic(5))
         Files.createDirectories(file.parent)
         Files.writeString(file, "to be deleted")
-        val symbolicPath = tmp.resolve(RandomStringUtils.randomAlphabetic(5))
+        val symbolicPath = tmp.resolve(RandomStringUtils.secure().nextAlphabetic(5))
         Files.createSymbolicLink(symbolicPath, file)
 
         assertTrue { Files.exists(file) }
@@ -61,10 +61,10 @@ class TestRuntimes {
     @Test
     fun testDeleteBrokenSymbolicLinksUsingJava() {
         val tmpDir = AppPaths.getTmpDirectory("test")
-        val file = tmpDir.resolve(RandomStringUtils.randomAlphabetic(5))
+        val file = tmpDir.resolve(RandomStringUtils.secure().nextAlphanumeric(5))
         Files.createDirectories(file.parent)
         Files.writeString(file, "to be deleted")
-        val symbolicPath = tmpDir.resolve(RandomStringUtils.randomAlphabetic(5))
+        val symbolicPath = tmpDir.resolve(RandomStringUtils.secure().nextAlphabetic(5))
         AppFiles.createSymbolicLink(symbolicPath, file)
 
         assertTrue { Files.exists(file) }

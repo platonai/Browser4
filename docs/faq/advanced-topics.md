@@ -45,7 +45,7 @@ session.loadOutPages(portalUrl, options)
 
 The key point is: adding a LoginHandler to perform just after the browser launching. The login event handler will open the login page and automatically type the username, password and other information required to sign in the website.
 
-The example code can be found here: [TmallCrawler](/pulsar-app/pulsar-examples/src/main/kotlin/ai/platon/pulsar/examples/sites/topEc/chinese/login/tmall/TmallCrawler.kt).
+The example code can be found here: [TmallCrawler](/examples/browser4-examples/src/main/kotlin/ai/platon/pulsar/examples/sites/topEc/chinese/login/tmall/TmallCrawler.kt).
 
 ## How to download resources directly within a browser context?
 
@@ -54,10 +54,10 @@ There are many cases we want to download resources directly without a browser re
 * The data is returned by an AJAX request and easy to parse
 * Non-browser-rendering scraping is super-fast
 
-But the resources are often protected within a browsing session, we can not just issue http requests directly to ask 
+But the resources are often protected within a browsing session, we can not just issue http requests directly to ask
 for the resources. To simulate the browsing session, we have to fetch the resources within a browsing context:
 
-[AjaxCrawler](/pulsar-app/pulsar-examples/src/main/kotlin/ai/platon/pulsar/examples/sites/spa/wemix/AjaxCrawler.kt)
+[AjaxCrawler](/examples/browser4-examples/src/main/kotlin/ai/platon/pulsar/examples/sites/spa/wemix/AjaxCrawler.kt)
 
 ## How to scrape a single page application (SPA)?
 

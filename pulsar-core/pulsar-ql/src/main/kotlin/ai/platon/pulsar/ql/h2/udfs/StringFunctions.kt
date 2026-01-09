@@ -7,6 +7,86 @@ import org.apache.commons.lang3.StringUtils
 import java.nio.charset.Charset
 import java.util.*
 
+/**
+ * # Null-safe string operations
+ *
+ * This UDF group mainly delegates to [StringUtils] and is intended for use from H2 SQL.
+ * Unless otherwise stated, methods follow the exact behavior of `org.apache.commons.lang3.StringUtils`.
+ *
+ * ## Covered categories
+ *
+ * - **isEmpty / isBlank**
+ *   - checks whether a string contains text
+ * - **trim / strip**
+ *   - removes leading and trailing whitespace
+ * - **equals / compare**
+ *   - compares two strings in a null-safe manner
+ * - **startsWith**
+ *   - checks whether a string starts with a prefix in a null-safe manner
+ * - **endsWith**
+ *   - checks whether a string ends with a suffix in a null-safe manner
+ * - **indexOf / lastIndexOf / contains**
+ *   - null-safe index-of checks
+ * - **indexOfAny / lastIndexOfAny / indexOfAnyBut / lastIndexOfAnyBut**
+ *   - index-of any of a set of strings
+ * - **containsOnly / containsNone / containsAny**
+ *   - checks if a string contains only / none / any of the given characters
+ * - **substring / left / right / mid**
+ *   - null-safe substring extractions
+ * - **substringBefore / substringAfter / substringBetween**
+ *   - substring extraction relative to other strings
+ * - **split / join**
+ *   - splits a string into an array of substrings and vice versa
+ * - **remove / delete**
+ *   - removes part of a string
+ * - **replace / overlay**
+ *   - searches a string and replaces one string with another
+ * - **chomp / chop**
+ *   - removes the last part of a string
+ * - **appendIfMissing**
+ *   - appends a suffix to the end of the string if not present
+ * - **prependIfMissing**
+ *   - prepends a prefix to the start of the string if not present
+ * - **leftPad / rightPad / center / repeat**
+ *   - pads a string
+ * - **upperCase / lowerCase / swapCase / capitalize / uncapitalize**
+ *   - changes the case of a string
+ * - **countMatches**
+ *   - counts the number of occurrences of one string in another
+ * - **isAlpha / isNumeric / isWhitespace / isAsciiPrintable**
+ *   - checks the characters in a string
+ * - **defaultString**
+ *   - protects against a null input string
+ * - **rotate**
+ *   - rotates (circular shift) a string
+ * - **reverse / reverseDelimited**
+ *   - reverses a string
+ * - **abbreviate**
+ *   - abbreviates a string using ellipses or another given string
+ * - **difference**
+ *   - compares strings and reports on their differences
+ * - **levenshteinDistance**
+ *   - the number of changes needed to change one string into another
+ *
+ * ## Terminology
+ *
+ * - **null**: `null`
+ * - **empty**: a zero-length string (`""`)
+ * - **space**: the space character (`' '`, char 32)
+ * - **whitespace**: characters defined by [Character.isWhitespace]
+ * - **trim**: the characters `<= 32` as in [String.trim]
+ *
+ * ## Notes on `null` handling
+ *
+ * `StringUtils` handles `null` input strings quietly.
+ * That is, a `null` input typically returns `null`. Where a `boolean` or `int` is returned,
+ * details vary by method.
+ *
+ * A side effect of this `null` handling is that a [NullPointerException] should be considered a bug
+ * in [StringFunctions].
+ *
+ * The sample docs in upstream `StringUtils` sometimes use `*` to indicate any input, including `null`.
+ */
 @SuppressWarnings("unused")
 @UDFGroup(namespace = "STR")
 object StringFunctions {

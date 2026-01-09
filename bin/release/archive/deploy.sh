@@ -79,9 +79,9 @@ wait_for_service() {
     local url="http://localhost:$SERVICE_PORT/actuator/health"
     local start_time=$(date +%s)
     local end_time=$((start_time + MAX_WAIT_TIME))
-    
+
     log "⏳ Waiting for service to be ready..."
-    
+
     while [[ $(date +%s) -lt $end_time ]]; do
         if curl -s "$url" | grep -q "UP"; then
             log "✅ Service is ready!"
@@ -89,7 +89,7 @@ wait_for_service() {
         fi
         sleep $WAIT_INTERVAL
     done
-    
+
     echo "❌ Service failed to start within $MAX_WAIT_TIME seconds"
     return 1
 }
@@ -97,7 +97,7 @@ wait_for_service() {
 # Function to run integration tests
 run_integration_tests() {
     log "🔍 Running integration tests..."
-        
+
     # Extract curl commands using Python script
     local curl_file_dir
     if ! curl_file_dir=$(python3 "$APP_HOME/bin/tools/python/extract_curl_blocks.py" "$APP_HOME/README.md"); then
@@ -116,27 +116,27 @@ run_integration_tests() {
     # Execute each curl example
     local test_count=0
     local success_count=0
-    
+
     for curl_file in "$curl_file_dir/curl_block*.sh"; do
         if [[ ! -f "$curl_file" ]]; then
             continue
         fi
-        
+
         test_count=$((test_count + 1))
-        log "🔍 Testing ($test_count): $curl_file"   
-        
+        log "🔍 Testing ($test_count): $curl_file"
+
         # Execute the curl example and capture output
         if output=$("$curl_file" 2>&1); then
             success_count=$((success_count + 1))
             log "✅ Test passed"
         else
-            log "❌ Test failed: $curl_file"    
+            log "❌ Test failed: $curl_file"
             log "Error output:"
             log "$output"
             return 1
         fi
     done
-    
+
     log "✅ Integration tests completed: $success_count/$test_count passed"
 
     return 0
@@ -163,21 +163,21 @@ if [[ "$TEST_MODE" == true ]]; then
         echo "❌ Failed to start docker container"
         exit 1
     fi
-    
+
     # Wait for service to be ready
     if ! wait_for_service; then
         docker logs "$DOCKER_CONTAINER_NAME"
         docker rm -f "$DOCKER_CONTAINER_NAME"
         exit 1
     fi
-    
+
     # Run integration tests
     if ! run_integration_tests; then
         docker logs "$DOCKER_CONTAINER_NAME"
         docker rm -f "$DOCKER_CONTAINER_NAME"
         exit 1
     fi
-    
+
     # Cleanup
     log "🧹 Cleaning up test container..."
     docker rm -f "$DOCKER_CONTAINER_NAME"
@@ -190,7 +190,7 @@ if [[ "$PRODUCTION_MODE" == true ]]; then
         echo "❌ Failed to deploy to Sonatype"
         exit 1
     fi
-    
+
     # 4.2 Push docker image
     log "🐳 Pushing docker image..."
     if ! docker push "$DOCKER_IMAGE_NAME:$DOCKER_TAG"; then
@@ -199,4 +199,4 @@ if [[ "$PRODUCTION_MODE" == true ]]; then
     fi
 fi
 
-echo "✅ Deployment process completed successfully!" 
+echo "✅ Deployment process completed successfully!"

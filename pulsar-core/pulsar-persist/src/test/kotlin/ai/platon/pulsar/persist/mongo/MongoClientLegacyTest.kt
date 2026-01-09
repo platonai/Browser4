@@ -25,11 +25,11 @@ import kotlin.test.*
 // @Ignore("Only test when MongoDB is started")
 class MongoClientLegacyTest {
     companion object {
-        private val crawlId = RandomStringUtils.randomAlphanumeric(18)
+        private val crawlId = RandomStringUtils.secure().nextAlphanumeric(18)
         private val conf = MutableConfig()
-        
+
         private lateinit var mongoClient: MongoClient
-        
+
         @BeforeAll
         @JvmStatic
         fun setupClass() {
@@ -40,11 +40,11 @@ class MongoClientLegacyTest {
             mongoClient = MongoClient("localhost", 27017)
         }
     }
-    
+
     val database get() = mongoClient.getDatabase(MongoTestBase.databaseName)
-    
+
     val collection get() = database.getCollection(MongoTestBase.collectionName)
-    
+
     @BeforeEach
     fun checkMongoDBConnection() {
         // test if MongoDB is available, if not, skip the test
@@ -55,23 +55,23 @@ class MongoClientLegacyTest {
             Assumptions.assumeTrue(false, "MongoDB is not available: skip tests")
         }
     }
-    
+
     @BeforeEach
     fun ensureCollectionDoesNotExist() {
         val collections = database.listCollectionNames()
         assertFalse { collections.contains(MongoTestBase.collectionName) }
     }
-    
+
     @AfterEach
     fun dropCollection() {
         collection.drop()
     }
-    
+
     @Test
     fun testRealSchema() {
         val store = MongoStore<String, GWebPage>()
         assertNull(store.schemaName)
-        
+
         val provider = DataStorageFactory(conf)
         val store2 = provider.getOrCreatePageStore()
         assertEquals(AppConstants.MONGO_STORE_CLASS, provider.storeClassName)

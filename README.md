@@ -6,7 +6,7 @@
 
 ---
 
-English | [简体中文](README-CN.md) | [中国镜像](https://gitee.com/platonai_galaxyeye/Browser4)
+English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platonai_galaxyeye/Browser4)
 
 <!-- TOC -->
 **Table of Contents**
@@ -88,14 +88,14 @@ val result = agent.run("""
 
 4. **Run examples**
    ```shell
-   ./mvnw -pl pulsar-examples exec:java -D"exec.mainClass=ai.platon.pulsar.examples.agent.Browser4AgentKt"
+   ./mvnw -pl examples/browser4-examples exec:java -D"exec.mainClass=ai.platon.pulsar.examples.agent.Browser4AgentKt"
    ```
    If you have encoding problem on Windows:
    ```shell
    ./bin/run-examples.ps1
    ```
 
-   Explore and run examples in the `pulsar-examples` module to see Browser4 in action.
+   Explore and run examples in the `browser4-examples` module to see Browser4 in action.
 
 For Docker deployment, see our [Docker Hub repository](https://hub.docker.com/r/galaxyeye88/browser4).
 
@@ -125,6 +125,7 @@ agent.run(task)
 Low-level browser automation & data extraction with fine-grained control.
 
 **Features:**
+- Both live DOM access and offline snapshot parsing
 - Direct and full Chrome DevTools Protocol (CDP) control, coroutine safe
 - Precise element interactions (click, scroll, input)
 - Fast data extraction using CSS selectors/XPath
@@ -134,21 +135,28 @@ val session = AgenticContexts.getOrCreateSession()
 val agent = session.companionAgent
 val driver = session.getOrCreateBoundDriver()
 
-// Open, capture and parse a page
+// Load the initial page referenced by your input URL
 var page = session.open(url)
+
+// Drive the browser with natural-language instructions
+agent.act("scroll to the comment section")
+// Read the first matching comment node directly from the live DOM
+val content = driver.selectFirstTextOrNull("#comments")
+
+// Snapshot the page to an in-memory document for offline parsing
 var document = session.parse(page)
+// Map CSS selectors to structured fields in one call
 var fields = session.extract(document, mapOf("title" to "#title"))
 
-// Interact with the page
-var result = agent.act("scroll to the comment section")
-var content = driver.selectFirstTextOrNull("#comments")
+// Let the companion agent execute a multi-step navigation/search flow
+val history = agent.run(
+  "Go to amazon.com, search for 'smart phone', open the product page with the highest ratings"
+)
 
-// Complex agent tasks
-var history = agent.run("Search for 'smart phone', read the first four products, and give me a comparison.")
-
-// Capture and extract from current state
+// Capture the updated browser state back into a PageSnapshot
 page = session.capture(driver)
 document = session.parse(page)
+// Extract additional attributes from the captured snapshot
 fields = session.extract(document, mapOf("ratings" to "#ratings"))
 ```
 
@@ -229,7 +237,8 @@ Automatic, large-scale, high-precision field discovery and extraction powered by
 
 **Quick Commands (PulsarRPAPro):**
 ```bash
-curl -L -o PulsarRPAPro.jar https://github.com/platonai/PulsarRPAPro/releases/download/v3.0.0/PulsarRPAPro.jar
+# NOTE: MongoDB required
+curl -L -o PulsarRPAPro.jar https://github.com/platonai/PulsarRPAPro/releases/download/v4.3.0/PulsarRPAPro.jar
 ```
 
 **Integration Status:**
@@ -273,6 +282,7 @@ Python/Node.js SDKs are on the way.
 * 🛠️ [Configuration Guide](docs/config.md)
 * 📚 [Build from Source](docs/build.md)
 * 🧠 [Expert Guide](docs/advanced-guides.md)
+* 🤖 [AI Programming Products Guidance](docs/ai-products-guidance.md) - Support for Cursor, Windsurf, Cline, Aider, GitHub Copilot
 
 ---
 
@@ -346,4 +356,5 @@ Ask your proxy provider for such a URL.
 
 ---
 
-> For Chinese documentation, refer to [简体中文 README](README-CN.md).
+> For Chinese documentation, refer to [简体中文 README](README.zh.md).
+

@@ -103,7 +103,7 @@ fun `Given complex form when asking to fill a specific field then select correct
 
 ### 3. Annotations
 ```kotlin
-@Tag("ExternalServiceTest")    // Requires external service (LLM API)
+@Tag("ExternalResourceDependent")    // Requires external service (LLM API)
 @Tag("TimeConsumingTest")      // Long-running tests
 class TextToActionComprehensiveTests : TextToActionTestBase() {
     // ...

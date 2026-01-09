@@ -19,12 +19,16 @@ env:
   IMAGE_NAME: browser4
   CONTAINER_NAME: browser4
   NETWORK_NAME: 'browser4_backend'
+  DOCKER_COMPOSE_FILE: './docker-compose.yml'
+  DEPENDENCY_SERVICES: 'mongodb'
+  MONGODB_CONTAINER: 'mongodb'
+  MONGODB_PORT: '27017'
   DOCKER_USERNAME: galaxyeye88
   PRODUCTION_JAR_MODULE_NAME: 'browser4-agents'
   PRODUCTION_JAR_MODULE_PATH: 'browser4/browser4-agents'
   PRODUCTION_JAR_NAME: 'Browser4.jar'
   PRODUCTION_JAR_PATH: 'browser4/browser4-agents/target/Browser4.jar'
-  JAVA_VERSION: '21'
+  JAVA_VERSION: '17'
   MAVEN_OPTS: '-Xmx3g -XX:+UseG1GC'
 
 jobs:
@@ -140,3 +144,39 @@ jobs:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
           CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
           CENTRAL_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
+
+      - name: Start Docker container for testing
+        if: success() && github.event.inputs.skip_tests != 'true'
+        run: |
+          docker network create ${{ env.NETWORK_NAME }} || true
+          docker-compose -f ${{ env.DOCKER_COMPOSE_FILE }} up -d ${{ env.DEPENDENCY_SERVICES }}
+
+      - name: Run End to End Tests
+        id: end-to-end-tests
+        if: success() && github.event.inputs.skip_tests != 'true'
+        run: |
+          echo "=== Running End to End Tests ==="
+          # Add commands to run your end-to-end tests here
+          # Example: ./run-e2e-tests.sh
+          echo "Application URL: http://localhost:8182"
+          echo "Network: ${{ env.NETWORK_NAME }}"
+          echo "Container: ${{ env.CONTAINER_NAME }}"
+
+      - name: Stop and remove Docker containers
+        if: always()
+        run: |
+          docker-compose -f ${{ env.DOCKER_COMPOSE_FILE }} down
+          docker network rm ${{ env.NETWORK_NAME }} || true
+
+      - name: Push Docker Images to Docker Hub
+        if: success() && github.event.inputs.skip_tests == 'true'
+        run: |
+          echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+          docker push ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}
+          docker push ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Push Docker Images to GitHub Container Registry
+        if: success() && github.event.inputs.skip_tests == 'true'
+        run: |
+          docker tag ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }} ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}
+          docker tag ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }} ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest

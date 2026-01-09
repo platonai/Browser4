@@ -14,14 +14,14 @@
 
     <parent>
         <groupId>ai.platon</groupId>
-        <artifactId>platon</artifactId>
-        <version>4.0.2</version>
+        <artifactId>pulsar-parent</artifactId>
+        <version>4.3.0-SNAPSHOT</version>
+        <relativePath>pulsar-parent/pom.xml</relativePath>
     </parent>
 
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>pulsar</artifactId>
     <packaging>pom</packaging>
-    <version>4.2.0-SNAPSHOT</version>
 
     <name>Browser4</name>
     <description>A lightning-fast, coroutine-safe browser for your AI.</description>
@@ -85,16 +85,29 @@
     <!-- Default active modules. The main goal is to allow the user to run PulsarApplication
      with a single click in the IDE right after opening the project. -->
     <modules>
+        <module>pulsar-parent</module>
+        <module>pulsar-dependencies</module>
         <module>pulsar-core</module>
         <module>pulsar-rest</module>
         <module>pulsar-client</module>
         <module>pulsar-tests-common</module>
         <module>pulsar-tests</module>
-        <module>pulsar-examples</module>
-        <module>browser4</module>
+        <module>pulsar-bom</module>
     </modules>
 
     <profiles>
+        <profile>
+            <id>examples</id>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
+            <modules>
+                <module>browser4/browser4-agents</module>
+                <module>browser4/browser4-spa</module>
+                <module>examples/browser4-examples</module>
+                <module>examples/java-compatible</module>
+            </modules>
+        </profile>
 
         <!-- CI profile -->
         <profile>
@@ -130,34 +143,6 @@
             </build>
         </profile>
 
-        <!-- Release profile -->
-        <profile>
-            <id>release</id>
-            <build>
-                <plugins>
-                    <plugin>
-                        <groupId>org.apache.maven.plugins</groupId>
-                        <artifactId>maven-release-plugin</artifactId>
-                        <version>${maven-release-plugin.version}</version>
-                        <configuration>
-                            <tagNameFormat>v@{project.version}</tagNameFormat>
-                            <releaseProfiles>deploy</releaseProfiles>
-                            <autoVersionSubmodules>true</autoVersionSubmodules>
-                            <preparationGoals>clean verify</preparationGoals>
-                            <completionGoals>clean</completionGoals>
-                            <goals>deploy nexus-staging:release</goals>
-                            <pushChanges>false</pushChanges>
-                            <localCheckout>true</localCheckout>
-                            <checkModificationExcludes>
-                                <checkModificationExclude>pom.xml</checkModificationExclude>
-                            </checkModificationExcludes>
-                        </configuration>
-                    </plugin>
-
-                </plugins>
-            </build>
-        </profile>
-
         <!-- Deployment profile -->
         <profile>
             <id>deploy</id>
@@ -165,16 +150,14 @@
                 <deploy-active>true</deploy-active>
             </properties>
             <modules>
+                <module>pulsar-parent</module>
+                <module>pulsar-dependencies</module>
                 <module>pulsar-core</module>
 
                 <module>pulsar-tests-common</module>
                 <module>pulsar-tests</module>
-                <module>pulsar-all</module>
                 <module>pulsar-client</module>
                 <module>pulsar-bom</module>
-                <module>pulsar-examples</module>
-
-                <module>browser4</module>
             </modules>
 
             <build>
@@ -246,7 +229,7 @@
                             <cacheRoot>default</cacheRoot>
 
                             <!-- Used for linking to JDK, default: 11 -->
-                            <jdkVersion>11</jdkVersion>
+                            <jdkVersion>${javaVersion}</jdkVersion>
 
                             <!-- Do not output deprecated members, applies globally, can be overridden by packageOptions -->
                             <skipDeprecated>true</skipDeprecated>
@@ -280,7 +263,6 @@
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-gpg-plugin</artifactId>
-                        <version>${maven-gpg-plugin.version}</version>
                         <configuration>
                             <gpgArguments>
                                 <arg>--pinentry-mode</arg>
@@ -302,7 +284,6 @@
                     <plugin>
                         <groupId>net.nicoulaj.maven.plugins</groupId>
                         <artifactId>checksum-maven-plugin</artifactId>
-                        <version>${checksum-maven-plugin.version}</version>
                         <executions>
                             <execution>
                                 <id>source-release-checksum</id>
@@ -343,198 +324,80 @@
                 </plugins>
             </build>
         </profile>
-
-        <profile>
-            <id>OS-WIN</id>
-            <activation>
-                <os>
-                    <family>windows</family>
-                </os>
-            </activation>
-            <build>
-                <plugins>
-
-                </plugins>
-            </build>
-        </profile>
     </profiles>
 
     <build>
         <defaultGoal>install</defaultGoal>
         <directory>target</directory>
         <finalName>${project.artifactId}-${project.version}</finalName>
-        <pluginManagement>
-            <plugins>
-                <!--  kotlin  -->
-                <plugin>
-                    <groupId>org.jetbrains.kotlin</groupId>
-                    <artifactId>kotlin-maven-plugin</artifactId>
-                    <version>${kotlin.version}</version>
-                    <!-- You can set this option to automatically take information about lifecycles -->
-                    <extensions>true</extensions>
-                    <executions>
-                        <execution>
-                            <id>compile</id>
-                            <goals>
-                                <goal>compile</goal>
-                            </goals>
-                            <configuration>
-                                <sourceDirs>
-                                    <sourceDir>${project.basedir}/src/main/kotlin</sourceDir>
-                                    <sourceDir>${project.basedir}/src/main/java</sourceDir>
-                                </sourceDirs>
-                            </configuration>
-                        </execution>
-                        <execution>
-                            <id>test-compile</id>
-                            <goals>
-                                <goal>test-compile</goal>
-                            </goals>
-                            <configuration>
-                                <sourceDirs>
-                                    <sourceDir>${project.basedir}/src/test/kotlin</sourceDir>
-                                    <sourceDir>${project.basedir}/src/test/java</sourceDir>
-                                </sourceDirs>
-                            </configuration>
-                        </execution>
-                    </executions>
-                    <!--  Required by spring  -->
-                    <dependencies>
-                        <dependency>
-                            <groupId>org.jetbrains.kotlin</groupId>
-                            <artifactId>kotlin-maven-allopen</artifactId>
-                            <version>${kotlin.version}</version>
-                        </dependency>
-                        <dependency>
-                            <groupId>org.jetbrains.kotlin</groupId>
-                            <artifactId>kotlin-maven-noarg</artifactId>
-                            <version>${kotlin.version}</version>
-                        </dependency>
-                    </dependencies>
-                    <configuration>
-                        <args>
-                            <arg>-Xjsr305=strict</arg>
-                        </args>
-                        <compilerPlugins>
-                            <plugin>spring</plugin>
-                            <plugin>jpa</plugin>
-                            <plugin>all-open</plugin>
-                        </compilerPlugins>
-                        <pluginOptions>
-                            <option>all-open:annotation=javax.persistence.Entity</option>
-                            <option>all-open:annotation=javax.persistence.Embeddable</option>
-                            <option>all-open:annotation=javax.persistence.MappedSuperclass</option>
-                        </pluginOptions>
-                        <jvmTarget>${kotlin.compiler.jvmTarget}</jvmTarget>
-                    </configuration>
-                </plugin>
-                <!--  java  -->
-                <plugin>
-                    <groupId>org.apache.maven.plugins</groupId>
-                    <artifactId>maven-compiler-plugin</artifactId>
-                    <version>${version.maven-compiler-plugin}</version>
-                    <executions>
-                        <!--  Replacing default-compile as it is treated specially by maven  -->
-                        <execution>
-                            <id>default-compile</id>
-                            <phase>none</phase>
-                        </execution>
-                        <!--  Replacing default-testCompile as it is treated specially by maven  -->
-                        <execution>
-                            <id>default-testCompile</id>
-                            <phase>none</phase>
-                        </execution>
-                        <execution>
-                            <id>java-compile</id>
-                            <phase>compile</phase>
-                            <goals>
-                                <goal>compile</goal>
-                            </goals>
-                        </execution>
-                        <execution>
-                            <id>java-test-compile</id>
-                            <phase>test-compile</phase>
-                            <goals>
-                                <goal>testCompile</goal>
-                            </goals>
-                        </execution>
-                    </executions>
-                    <configuration>
-                        <verbose>true</verbose>
-                        <fork>true</fork>
-                        <source>${javac.src.version}</source>
-                        <target>${javac.target.version}</target>
-                    </configuration>
-                </plugin>
-                <plugin>
-                    <artifactId>maven-clean-plugin</artifactId>
-                    <version>${version.maven-clean-plugin}</version>
-                    <configuration>
-                        <filesets>
-                            <fileset>
-                                <directory>${basedir}/lib</directory>
-                                <followSymlinks>false</followSymlinks>
-                                <useDefaultExcludes>true</useDefaultExcludes>
-                                <includes>
-                                    <include>*.*</include>
-                                </includes>
-                            </fileset>
-                        </filesets>
-                    </configuration>
-                </plugin>
-                <plugin>
-                    <groupId>org.codehaus.mojo</groupId>
-                    <artifactId>exec-maven-plugin</artifactId>
-                    <version>${version.maven-exec-plugin}</version>
-
-                    <configuration>
-                        <arguments>
-                            <argument>-Dfile.encoding=UTF-8</argument>
-                        </arguments>
-                        <systemProperties>
-                            <systemProperty>
-                                <key>file.encoding</key>
-                                <value>UTF-8</value>
-                            </systemProperty>
-                            <systemProperty>
-                                <key>sun.jnu.encoding</key>
-                                <value>UTF-8</value>
-                            </systemProperty>
-                        </systemProperties>
-                    </configuration>
-                </plugin>
-                <plugin>
-                    <groupId>org.springframework.boot</groupId>
-                    <artifactId>spring-boot-maven-plugin</artifactId>
-                    <version>${spring-boot.version}</version>
-                </plugin>
-            </plugins>
-        </pluginManagement>
 
         <plugins>
             <!--  kotlin plugin should come before maven-compiler-plugin  -->
+
+            <!--  kotlin  -->
             <plugin>
                 <groupId>org.jetbrains.kotlin</groupId>
                 <artifactId>kotlin-maven-plugin</artifactId>
+                <version>${kotlin.version}</version>
+                <!-- You can set this option to automatically take information about lifecycles -->
+                <extensions>true</extensions>
+                <executions>
+                    <execution>
+                        <id>compile</id>
+                        <goals>
+                            <goal>compile</goal>
+                        </goals>
+                        <configuration>
+                            <sourceDirs>
+                                <sourceDir>${project.basedir}/src/main/kotlin</sourceDir>
+                                <sourceDir>${project.basedir}/src/main/java</sourceDir>
+                            </sourceDirs>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>test-compile</id>
+                        <goals>
+                            <goal>test-compile</goal>
+                        </goals>
+                        <configuration>
+                            <sourceDirs>
+                                <sourceDir>${project.basedir}/src/test/kotlin</sourceDir>
+                                <sourceDir>${project.basedir}/src/test/java</sourceDir>
+                            </sourceDirs>
+                        </configuration>
+                    </execution>
+                </executions>
+                <!--  Required by spring  -->
+                <dependencies>
+                    <dependency>
+                        <groupId>org.jetbrains.kotlin</groupId>
+                        <artifactId>kotlin-maven-allopen</artifactId>
+                        <version>${kotlin.version}</version>
+                    </dependency>
+                    <dependency>
+                        <groupId>org.jetbrains.kotlin</groupId>
+                        <artifactId>kotlin-maven-noarg</artifactId>
+                        <version>${kotlin.version}</version>
+                    </dependency>
+                </dependencies>
                 <configuration>
-                    <!-- Disable warnings or not -->
-                    <nowarn>false</nowarn>
                     <args>
-                        <!-- Enable strict mode for JSR-305 annotations -->
                         <arg>-Xjsr305=strict</arg>
                     </args>
+                    <compilerPlugins>
+                        <plugin>spring</plugin>
+                        <plugin>jpa</plugin>
+                        <plugin>all-open</plugin>
+                    </compilerPlugins>
+                    <pluginOptions>
+                        <option>all-open:annotation=javax.persistence.Entity</option>
+                        <option>all-open:annotation=javax.persistence.Embeddable</option>
+                        <option>all-open:annotation=javax.persistence.MappedSuperclass</option>
+                    </pluginOptions>
                     <jvmTarget>${kotlin.compiler.jvmTarget}</jvmTarget>
                 </configuration>
             </plugin>
-            <!-- NO java code by default, so do NOT include maven-compiler-plugin -->
-            <!--            <plugin>-->
-            <!--                <groupId>org.apache.maven.plugins</groupId>-->
-            <!--                <artifactId>maven-compiler-plugin</artifactId>-->
-            <!--            </plugin>-->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-dependency-plugin</artifactId>
-            </plugin>
+
             <plugin>
                 <groupId>org.owasp</groupId>
                 <artifactId>dependency-check-maven</artifactId>
@@ -559,7 +422,6 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
-                <version>${maven-surefire-plugin.version}</version>
                 <configuration>
                     <!--
 
@@ -573,40 +435,27 @@
                     <useModulePath>false</useModulePath>
                 </configuration>
 
-                <dependencies>
-                    <dependency>
-                        <groupId>org.junit.jupiter</groupId>
-                        <artifactId>junit-jupiter-engine</artifactId>
-                        <version>${junit5.version}</version>
-                    </dependency>
-                </dependencies>
-            </plugin>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-clean-plugin</artifactId>
-            </plugin>
-
-            <!-- Override parent pom's javadoc settings, skip generating javadoc, use kdoc instead -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-javadoc-plugin</artifactId>
-                <configuration>
-                    <skip>true</skip>
-                </configuration>
-            </plugin>
-            <!-- Skip maven-deploy-plugin to use nexus-staging-maven-plugin -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-deploy-plugin</artifactId>
-                <configuration>
-                    <skip>true</skip>
-                </configuration>
+<!--                <dependencies>-->
+<!--                    <dependency>-->
+<!--                        <groupId>org.junit.jupiter</groupId>-->
+<!--                        <artifactId>junit-jupiter-engine</artifactId>-->
+<!--                        <version>${junit5.version}</version>-->
+<!--                    </dependency>-->
+<!--                </dependencies>-->
             </plugin>
         </plugins>
     </build>
 
     <dependencyManagement>
         <dependencies>
+            <dependency>
+                <groupId>ai.platon</groupId>
+                <artifactId>pulsar-dependencies</artifactId>
+                <version>${project.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
             <!-- Internal Dependencies -->
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
@@ -752,99 +601,6 @@
                 <scope>test</scope>
             </dependency>
 
-
-            <dependency>
-                <groupId>dev.langchain4j</groupId>
-                <artifactId>langchain4j-bom</artifactId>
-                <version>${langchain4j.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>org.nibor.autolink</groupId>
-                <artifactId>autolink</artifactId>
-                <version>${autolink.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>io.ktor</groupId>
-                <artifactId>ktor-client-core</artifactId>
-                <version>${ktor.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>io.ktor</groupId>
-                <artifactId>ktor-client-cio</artifactId>
-                <version>${ktor.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>io.ktor</groupId>
-                <artifactId>ktor-serialization-kotlinx-json-jvm</artifactId>
-                <version>${ktor.version}</version>
-            </dependency>
-            <!-- https://mvnrepository.com/artifact/com.squareup.okhttp3/okhttp-bom -->
-            <dependency>
-                <groupId>com.squareup.okhttp3</groupId>
-                <artifactId>okhttp-bom</artifactId>
-                <version>${okhttp.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-
-            <dependency>
-                <groupId>org.jetbrains.kotlinx</groupId>
-                <artifactId>kotlinx-coroutines-bom</artifactId>
-                <version>${kotlin.coroutine.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.jetbrains.kotlin</groupId>
-                <artifactId>kotlin-bom</artifactId>
-                <version>${kotlin.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-            <dependency>
-                <groupId>org.jetbrains.kotlin</groupId>
-                <artifactId>kotlin-serialization</artifactId>
-                <version>${kotlin.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>org.junit</groupId>
-                <artifactId>junit-bom</artifactId>
-                <version>${junit5.version}</version>
-                <scope>import</scope>
-                <type>pom</type>
-            </dependency>
-            <dependency>
-                <groupId>org.springframework.boot</groupId>
-                <artifactId>spring-boot-dependencies</artifactId>
-                <version>${spring-boot.version}</version>
-                <scope>import</scope>
-                <type>pom</type>
-            </dependency>
-
-            <!-- MockBean and SpyBean, but for MockK instead of Mockito -->
-            <!-- Be careful to keep consistent with spring-boot -->
-            <!-- MockK for Kotlin-friendly mocking -->
-            <dependency>
-                <groupId>io.mockk</groupId>
-                <artifactId>mockk</artifactId>
-                <version>${mockk.version}</version>
-                <scope>test</scope>
-            </dependency>
-            <dependency>
-                <groupId>io.mockk</groupId>
-                <artifactId>mockk-jvm</artifactId>
-                <version>${mockk.version}</version>
-                <scope>test</scope>
-            </dependency>
-            <dependency>
-                <groupId>com.ninja-squad</groupId>
-                <artifactId>springmockk</artifactId>
-                <version>${springmockk.version}</version>
-                <scope>test</scope>
-            </dependency>
         </dependencies>
     </dependencyManagement>
 
@@ -852,82 +608,40 @@
         <dependency>
             <groupId>org.jetbrains.kotlin</groupId>
             <artifactId>kotlin-stdlib</artifactId>
-            <version>${kotlin.version}</version>
         </dependency>
         <dependency>
             <groupId>org.jetbrains.kotlin</groupId>
             <artifactId>kotlin-reflect</artifactId>
-            <version>${kotlin.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.jetbrains.kotlin</groupId>
-            <artifactId>kotlin-test-junit5</artifactId>
-            <version>${kotlin.version}</version>
-            <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.jetbrains.kotlinx</groupId>
             <artifactId>kotlinx-coroutines-core</artifactId>
         </dependency>
         <dependency>
-            <groupId>org.jetbrains.kotlinx</groupId>
-            <artifactId>kotlinx-coroutines-core-jvm</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>org.mockito</groupId>
-            <artifactId>mockito-junit-jupiter</artifactId>
-            <version>${mockito-junit-jupiter.version}</version>
+            <groupId>org.jetbrains.kotlin</groupId>
+            <artifactId>kotlin-test-junit5</artifactId>
             <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.openjdk.jmh</groupId>
-            <artifactId>jmh-core</artifactId>
-            <version>1.37</version>
-            <scope>compile</scope>
         </dependency>
     </dependencies>
 
     <properties>
-        <!-- Build properties -->
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
 
         <surefire.excludedGroups>
-            TimeConsumingTest,ExternalServiceTest,IntegrationTest,E2ETest,HeavyTest,
-            SkippableLowerLevelTest,TestInfraCheck,MustManualRun
+            TimeConsumingTest,ExternalResourceDependent,IntegrationTest,E2ETest,HeavyTest,
+            SkippableLowerLevelTest,TestInfraCheck,MustManuallyRun,OptionalTest
         </surefire.excludedGroups>
 
-        <ktor.version>3.3.1</ktor.version>
-        <okhttp.version>5.2.1</okhttp.version>
-        <junit5.version>5.12.1</junit5.version>
-        <mockk.version>1.14.6</mockk.version>
-        <springmockk.version>4.0.2</springmockk.version>
-        <mockito-junit-jupiter.version>5.20.0</mockito-junit-jupiter.version>
-        <langchain4j.version>1.5.0</langchain4j.version>
-
-        <version.maven-exec-plugin>3.6.1</version.maven-exec-plugin>
-        <!-- Plugin versions -->
-        <!-- Overrides ai.platon:platon -->
-        <maven-compiler-plugin.version>3.12.1</maven-compiler-plugin.version>
-        <maven-source-plugin.version>3.3.0</maven-source-plugin.version>
-        <maven-javadoc-plugin.version>3.6.3</maven-javadoc-plugin.version>
-        <maven-deploy-plugin.version>3.1.1</maven-deploy-plugin.version>
-        <maven-release-plugin.version>3.0.1</maven-release-plugin.version>
-        <maven-gpg-plugin.version>3.1.0</maven-gpg-plugin.version>
-        <maven-surefire-plugin.version>3.5.4</maven-surefire-plugin.version>
-        <maven-failsafe-plugin.version>3.2.5</maven-failsafe-plugin.version>
-        <nexus-staging-maven-plugin.version>1.7.0</nexus-staging-maven-plugin.version>
-        <checksum-maven-plugin.version>1.11</checksum-maven-plugin.version>
         <jacoco-maven-plugin.version>0.8.11</jacoco-maven-plugin.version>
-        <license-maven-plugin.version>4.3</license-maven-plugin.version>
-        <versions-maven-plugin.version>2.16.2</versions-maven-plugin.version>
-        <dokka.version>1.9.20</dokka.version>
         <central-publishing-maven-plugin.version>0.9.0</central-publishing-maven-plugin.version>
 
-        <kotlin.version>2.2.20</kotlin.version>
-        <kotlin.coroutine.version>1.10.2</kotlin.coroutine.version>
-        <kotlin.compiler.jvmTarget>17</kotlin.compiler.jvmTarget>
+        <dokka.version>1.9.10</dokka.version>
+
+        <javaVersion>17</javaVersion>
+        <kotlinVersion>2.2.21</kotlinVersion>
+
+        <kotlin.version>${kotlinVersion}</kotlin.version>
+        <maven.compiler.release>${javaVersion}</maven.compiler.release>
+        <kotlin.compiler.jvmTarget>${javaVersion}</kotlin.compiler.jvmTarget>
     </properties>
 
 </project>

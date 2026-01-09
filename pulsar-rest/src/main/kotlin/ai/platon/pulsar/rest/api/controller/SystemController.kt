@@ -1,9 +1,12 @@
 package ai.platon.pulsar.rest.api.controller
 
-import ai.platon.pulsar.skeleton.crawl.fetch.privacy.AbstractPrivacyManager
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager
-import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.web.bind.annotation.*
+import ai.platon.pulsar.skeleton.crawl.fetch.privacy.AbstractPrivacyManager
+import ai.platon.pulsar.skeleton.session.PulsarSession
+import org.springframework.web.bind.annotation.CrossOrigin
+import org.springframework.web.bind.annotation.GetMapping
+import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RestController
 
 /**
  * The controller to handle www resources
@@ -11,17 +14,22 @@ import org.springframework.web.bind.annotation.*
 @RestController
 @CrossOrigin
 @RequestMapping("api/system")
-class SystemController {
-
-    @Autowired
-    lateinit var driverPoolManager: WebDriverPoolManager
-
-    @Autowired
-    lateinit var privacyManager: AbstractPrivacyManager
-
+class SystemController(
+    val session: PulsarSession,
+    val driverPoolManager: WebDriverPoolManager,
+    val privacyManager: AbstractPrivacyManager
+) {
     @GetMapping("health")
     fun health(): Map<String, String> {
-        return mapOf("status" to "UP")
+        return if (session.context.isActive) {
+            mapOf(
+                "status" to "healthy"
+            )
+        } else {
+            mapOf(
+                "status" to "unhealthy"
+            )
+        }
     }
 
     @GetMapping("hello")

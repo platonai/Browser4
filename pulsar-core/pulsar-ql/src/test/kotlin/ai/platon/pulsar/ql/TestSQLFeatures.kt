@@ -144,4 +144,3 @@ class TestSQLFeatures : TestBase() {
         query(("SELECT a,b FROM table(a INT=(1, 2, 3, 4), b CHAR=('x', 'y', 'w', 'z')) " + "WHERE a>0 AND b IN ('x', 'y')"))
     }
 }
-
