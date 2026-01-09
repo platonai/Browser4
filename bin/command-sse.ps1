@@ -131,12 +131,23 @@ try {
   $reader = New-Object System.IO.StreamReader($stream)
 
   # SSE 主循环
+  # Add timeout protection
+  $TIMEOUT_SECONDS = 900  # 15 minutes maximum
+  $START_TIME = Get-Date
+  
   $isDone = $false
   $lastUpdate = ""
 
   Write-Host "Reading SSE stream..."
 
   while (-not $reader.EndOfStream -and -not $isDone) {
+    # Check for timeout
+    $ELAPSED = (Get-Date) - $START_TIME
+    if ($ELAPSED.TotalSeconds -gt $TIMEOUT_SECONDS) {
+      Write-Error "ERROR: SSE stream timed out after $TIMEOUT_SECONDS seconds without receiving done signal"
+      exit 1
+    }
+
     $line = $reader.ReadLine()
 
     # 跳过空行或注释
@@ -154,10 +165,11 @@ try {
         $lastUpdate = $data
       }
 
-      # 检查是否已完成
-      if ($data -match '"isDone"\s*:\s*true') {
+      # 检查是否已完成 - Note: Jackson serializes "isDone" field to "done" in JSON
+      if ($data -match '"done"\s*:\s*true') {
         $isDone = $true
-        Write-Host "`nTask completed! Fetching final result..." -ForegroundColor Green
+        Write-Host "`nReceived done signal, preparing to exit..." -ForegroundColor Green
+        Write-Host "Task completed! Fetching final result..." -ForegroundColor Green
         Start-Sleep -Seconds 2  # 等待服务器完全处理完成
 
         # 获取并打印最终结果

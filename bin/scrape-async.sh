@@ -108,8 +108,9 @@ poll_tasks() {
           echo "[DEBUG] Final attempt raw response for task $id: '$response'"
         fi
 
-        # if there is a line contains "isDone" and "true", then the task is completed
-        if [[ "$response" =~ isDone.*true ]]; then
+        # if there is a line contains "done" and "true", then the task is completed
+        # Note: Jackson serializes "isDone" field to "done" in JSON
+        if [[ "$response" =~ done.*true ]]; then
           TASK_MAP["$id"]=0
           echo "[SUCCESS] Task $id completed."
         else
