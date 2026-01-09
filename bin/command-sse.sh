@@ -52,7 +52,18 @@ trap cleanup EXIT INT TERM
 
 # SSE 主循环
 isDone=0
+TIMEOUT_SECONDS=900  # 15 minutes
+START_TIME=$(date +%s)
+
 while read -r line; do
+  # Check timeout
+  CURRENT_TIME=$(date +%s)
+  ELAPSED=$((CURRENT_TIME - START_TIME))
+  if [[ $ELAPSED -gt $TIMEOUT_SECONDS ]]; then
+    echo "ERROR: SSE stream timed out after ${TIMEOUT_SECONDS} seconds without receiving done signal"
+    exit 1
+  fi
+
   # 跳过空行或注释
   if [[ -z "$line" || "$line" == :* ]]; then
     continue
@@ -65,8 +76,9 @@ while read -r line; do
     echo "SSE update: $data"
 
     # 检查是否已完成
-    if [[ "$data" =~ \"isDone\"[[:space:]]*:[[:space:]]*true ]]; then
+    if [[ "$data" =~ \"done\"[[:space:]]*:[[:space:]]*true ]]; then
       isDone=1
+      echo "Received done signal, preparing to exit..."
       sleep 1 # 等待一秒以确保所有数据都已接收
     fi
   fi

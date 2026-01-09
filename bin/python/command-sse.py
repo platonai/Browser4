@@ -90,9 +90,17 @@ def process_sse_stream(api_base, command_id):
         
         is_done = False
         last_update = ""
+        timeout_seconds = 900  # 15 minutes
+        start_time = time.time()
         
         # Process SSE stream line by line
         for line in response.iter_lines(decode_unicode=True):
+            # Check timeout
+            elapsed = time.time() - start_time
+            if elapsed > timeout_seconds:
+                print(f"ERROR: SSE stream timed out after {timeout_seconds} seconds without receiving done signal", file=sys.stderr)
+                sys.exit(1)
+            
             if line is None or line.strip() == "" or line.startswith(":"):
                 continue
                 
@@ -106,21 +114,23 @@ def process_sse_stream(api_base, command_id):
                     last_update = data
                 
                 # Check if task is completed
-                if '"isDone"' in data and ':' in data:
+                if '"done"' in data and ':' in data:
                     try:
-                        # Try to parse as JSON to check isDone status
+                        # Try to parse as JSON to check done status
                         json_data = json.loads(data)
-                        if json_data.get('isDone', False):
+                        if json_data.get('done', False):
                             is_done = True
-                            print("\nTask completed! Fetching final result...")
+                            print("\nReceived done signal, preparing to exit...")
+                            print("Task completed! Fetching final result...")
                             time.sleep(2)  # Wait for server to fully process
                             get_final_result(api_base, command_id)
                             break
                     except json.JSONDecodeError:
                         # Fallback to string matching
-                        if '"isDone": true' in data or '"isDone":true' in data:
+                        if '"done": true' in data or '"done":true' in data:
                             is_done = True
-                            print("\nTask completed! Fetching final result...")
+                            print("\nReceived done signal, preparing to exit...")
+                            print("Task completed! Fetching final result...")
                             time.sleep(2)
                             get_final_result(api_base, command_id)
                             break

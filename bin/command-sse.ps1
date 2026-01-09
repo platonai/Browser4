@@ -133,11 +133,20 @@ try {
   # SSE 主循环
   $isDone = $false
   $lastUpdate = ""
+  $TIMEOUT_SECONDS = 900  # 15 minutes
+  $START_TIME = Get-Date
 
   Write-Host "Reading SSE stream..."
 
   while (-not $reader.EndOfStream -and -not $isDone) {
     $line = $reader.ReadLine()
+
+    # Check timeout
+    $ELAPSED = ((Get-Date) - $START_TIME).TotalSeconds
+    if ($ELAPSED -gt $TIMEOUT_SECONDS) {
+      Write-Error "ERROR: SSE stream timed out after $TIMEOUT_SECONDS seconds without receiving done signal"
+      exit 1
+    }
 
     # 跳过空行或注释
     if ([string]::IsNullOrWhiteSpace($line) -or $line.StartsWith(":")) {
@@ -155,9 +164,10 @@ try {
       }
 
       # 检查是否已完成
-      if ($data -match '"isDone"\s*:\s*true') {
+      if ($data -match '"done"\s*:\s*true') {
         $isDone = $true
-        Write-Host "`nTask completed! Fetching final result..." -ForegroundColor Green
+        Write-Host "`nReceived done signal, preparing to exit..." -ForegroundColor Green
+        Write-Host "Task completed! Fetching final result..." -ForegroundColor Green
         Start-Sleep -Seconds 2  # 等待服务器完全处理完成
 
         # 获取并打印最终结果
