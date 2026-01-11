@@ -923,7 +923,6 @@ open class BrowserPerceptiveAgent constructor(
                 "consecutiveNoOpLimit" to config.consecutiveNoOpLimit
             ),
             metadata = mapOf(
-                "agentUuid" to uuid.toString(),
                 "startTime" to startTime.toString()
             ),
             consecutiveNoOps = consecutiveNoOps,
@@ -1099,10 +1098,10 @@ open class BrowserPerceptiveAgent constructor(
                 try {
                     context = prepareStep(action, context, consecutiveNoOps)
 
-                    // Skip steps that were already completed
-                    if (context.step <= resumeFromStep) {
+                    // Skip steps that were already completed (use < to continue from the next step after checkpoint)
+                    if (context.step < resumeFromStep) {
                         logger.info("⏭️ Skipping already completed step {} (resume from {})", context.step, resumeFromStep)
-                        consecutiveNoOps = 0
+                        // Preserve consecutive no-ops count from checkpoint when skipping
                         continue
                     }
 
