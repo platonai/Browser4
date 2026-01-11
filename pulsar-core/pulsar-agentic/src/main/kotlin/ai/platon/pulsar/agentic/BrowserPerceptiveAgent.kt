@@ -79,6 +79,8 @@ data class AgentConfig(
     val enableCheckpointing: Boolean = false,
     val checkpointIntervalSteps: Int = 10,
     val maxCheckpointsPerSession: Int = 5,
+    // Enable per-step checkpointing for full context persistence and resume support
+    val enableStepCheckpointing: Boolean = false,
     // --- todolist.md integration flags ---
     val enableTodoWrites: Boolean = true,
     val todoPlanWithLLM: Boolean = true,
@@ -563,6 +565,11 @@ open class BrowserPerceptiveAgent constructor(
 
         if (actionDescription.isReallyComplete) {
             onTaskCompletion(actionDescription, context)
+            // Save final checkpoint when task is complete
+            if (config.enableStepCheckpointing) {
+                runCatching { saveStepCheckpoint(context, consecutiveNoOps, isComplete = true) }
+                    .onFailure { e -> logger.warn("💾❌ step.checkpoint.fail sid={} step={} msg={}", context.sid, context.step, e.message) }
+            }
             return StepProcessingResult(context, consecutiveNoOps, true)
         }
 
@@ -587,7 +594,20 @@ open class BrowserPerceptiveAgent constructor(
             consecutiveNoOps++
             val stop = handleConsecutiveNoOps(consecutiveNoOps, context)
             updatePerformanceMetrics(step, stepStartTime, false)
-            if (stop) return StepProcessingResult(context, consecutiveNoOps, true)
+            if (stop) {
+                // Save checkpoint when stopping due to no-ops
+                if (config.enableStepCheckpointing) {
+                    runCatching { saveStepCheckpoint(context, consecutiveNoOps, isComplete = false) }
+                        .onFailure { e -> logger.warn("💾❌ step.checkpoint.fail sid={} step={} msg={}", context.sid, context.step, e.message) }
+                }
+                return StepProcessingResult(context, consecutiveNoOps, true)
+            }
+        }
+
+        // Save step checkpoint after each successful step
+        if (config.enableStepCheckpointing) {
+            runCatching { saveStepCheckpoint(context, consecutiveNoOps, isComplete = false) }
+                .onFailure { e -> logger.warn("💾❌ step.checkpoint.fail sid={} step={} msg={}", context.sid, context.step, e.message) }
         }
 
         delay(calculateAdaptiveDelay())
@@ -866,8 +886,27 @@ open class BrowserPerceptiveAgent constructor(
         }
     }
 
+    /**
+     * Save a checkpoint at specific intervals (legacy behavior).
+     */
     protected fun saveCheckpoint(context: ExecutionContext) {
         if (!config.enableCheckpointing) return
+        saveCheckpointInternal(context, consecutiveNoOps = 0, isComplete = false)
+    }
+
+    /**
+     * Save a step-level checkpoint with full execution state for resume support.
+     *
+     * @param context The current execution context
+     * @param consecutiveNoOps The current count of consecutive no-op steps
+     * @param isComplete Whether the task has been completed
+     */
+    protected fun saveStepCheckpoint(context: ExecutionContext, consecutiveNoOps: Int, isComplete: Boolean) {
+        if (!config.enableStepCheckpointing) return
+        saveCheckpointInternal(context, consecutiveNoOps, isComplete)
+    }
+
+    private fun saveCheckpointInternal(context: ExecutionContext, consecutiveNoOps: Int, isComplete: Boolean) {
         val checkpoint = AgentCheckpoint(
             sessionId = context.sessionId,
             currentStep = context.step,
@@ -884,13 +923,216 @@ open class BrowserPerceptiveAgent constructor(
                 "consecutiveNoOpLimit" to config.consecutiveNoOpLimit
             ),
             metadata = mapOf(
-                "agentUuid" to uuid,
-                "startTime" to startTime
-            )
+                "agentUuid" to uuid.toString(),
+                "startTime" to startTime.toString()
+            ),
+            consecutiveNoOps = consecutiveNoOps,
+            isComplete = isComplete,
+            lastEvent = context.event,
+            agentUuid = uuid.toString()
         )
         val path = checkpointManager.save(checkpoint)
         logger.info("💾 checkpoint.saved sid={} step={} path={}", context.sid, context.step, path)
         checkpointManager.pruneOldCheckpoints(context.sessionId, config.maxCheckpointsPerSession)
+    }
+
+    /**
+     * Load a checkpoint for resumption.
+     *
+     * @param sessionId The session ID to load
+     * @return The loaded checkpoint, or null if not found
+     */
+    fun loadCheckpoint(sessionId: String): AgentCheckpoint? {
+        return checkpointManager.load(sessionId)
+    }
+
+    /**
+     * Check if a checkpoint exists for the given session.
+     *
+     * @param sessionId The session ID to check
+     * @return true if a checkpoint exists
+     */
+    fun hasCheckpoint(sessionId: String): Boolean {
+        return checkpointManager.exists(sessionId)
+    }
+
+    /**
+     * Resume execution from a previously saved checkpoint.
+     *
+     * This method loads the checkpoint from the given sessionId and continues
+     * the task execution from where it left off.
+     *
+     * @param sessionId The session ID of the checkpoint to resume from
+     * @return The agent history after resumption, or empty history if checkpoint not found
+     */
+    suspend fun resumeFromCheckpoint(sessionId: String): AgentHistory {
+        val checkpoint = loadCheckpoint(sessionId)
+        if (checkpoint == null) {
+            logger.warn("💾❌ No checkpoint found for session: {}", sessionId)
+            return stateHistory
+        }
+
+        if (checkpoint.isComplete) {
+            logger.info("💾✅ Checkpoint already completed for session: {}", sessionId)
+            return stateHistory
+        }
+
+        logger.info(
+            "💾🔄 Resuming from checkpoint sid={} step={} instruction='{}'",
+            sessionId.take(8), checkpoint.currentStep, checkpoint.instruction.take(50)
+        )
+
+        // Restore performance metrics
+        performanceMetrics.totalSteps = checkpoint.totalSteps
+        performanceMetrics.successfulActions = checkpoint.successfulActions
+        performanceMetrics.failedActions = checkpoint.failedActions
+
+        // Restore circuit breaker state
+        checkpoint.failureCounts.forEach { (key, count) ->
+            runCatching {
+                val failureType = CircuitBreaker.FailureType.valueOf(key)
+                repeat(count) { circuitBreaker.recordFailure(failureType) }
+            }
+        }
+
+        // Create action options and resume
+        val action = ActionOptions(action = checkpoint.instruction)
+        return resumeRun(action, checkpoint)
+    }
+
+    /**
+     * Resume run from a checkpoint with the given action options.
+     */
+    private suspend fun resumeRun(action: ActionOptions, checkpoint: AgentCheckpoint): AgentHistory {
+        if (isClosed) {
+            return stateHistory
+        }
+
+        try {
+            withContext(agentScope.coroutineContext) {
+                resumeResolveInCoroutine(action, checkpoint)
+            }
+        } catch (_: CancellationException) {
+            logger.info("Cancelled due to cancellation during resume")
+        } finally {
+            stateManager.writeProcessTrace()
+        }
+
+        return stateHistory
+    }
+
+    /**
+     * Resume resolve loop from a checkpoint.
+     */
+    private suspend fun resumeResolveInCoroutine(action: ActionOptions, checkpoint: AgentCheckpoint): ResolveResult {
+        val instruction = action.action
+        val baseContext = stateManager.buildBaseExecutionContext(action, "resume-init")
+        stateManager.setActiveContext(baseContext)
+        val sessionStartTime = baseContext.stepStartTime
+
+        stateManager.addTrace(
+            baseContext.agentState,
+            mapOf(
+                "session" to baseContext.sid,
+                "goal" to Strings.compactInline(instruction, 160),
+                "resumeFromStep" to checkpoint.currentStep,
+                "maxSteps" to config.maxSteps
+            ),
+            event = "resumeStart",
+            message = "🔄 resume START from step ${checkpoint.currentStep}"
+        )
+
+        val maxPossibleDelays = (0 until config.maxRetries).fold(0L) { acc, i -> acc + calculateRetryDelay(i) }
+        val effectiveTimeout = config.resolveTimeoutMs + maxPossibleDelays
+
+        return try {
+            val result = withTimeout(effectiveTimeout) {
+                doResumeResolveProblem(action, baseContext, checkpoint)
+            }
+
+            val dur = Duration.between(sessionStartTime, Instant.now()).toMillis()
+            stateManager.addTrace(
+                result.context.agentState, mapOf(
+                    "session" to baseContext.sid,
+                    "success" to result.result.success, "durationMs" to dur
+                ), event = "resumeDone", message = "✅ resume DONE"
+            )
+
+            result
+        } catch (_: TimeoutCancellationException) {
+            val msg = "⏳ Resume timed out after ${effectiveTimeout}ms: $instruction"
+            stateManager.addTrace(
+                baseContext.agentState, mapOf(
+                    "timeoutMs" to effectiveTimeout, "instruction" to Strings.compactInline(instruction, 160)
+                ),
+                event = "resumeTimeout",
+                message = "⏳ resume TIMEOUT"
+            )
+            ResolveResult(baseContext, ActResult(success = false, message = msg, action = instruction))
+        }
+    }
+
+    /**
+     * Continue problem resolution from a checkpoint.
+     */
+    private suspend fun doResumeResolveProblem(
+        initActionOptions: ActionOptions, initContext: ExecutionContext, checkpoint: AgentCheckpoint
+    ): ResolveResult {
+        var consecutiveNoOps = checkpoint.consecutiveNoOps
+        var context = initContext
+        val startTime = Instant.now()
+
+        // Start from the next step after the checkpoint
+        val resumeFromStep = checkpoint.currentStep
+
+        logger.info(
+            "🔄 resume.start sid={} resumeStep={} url={} instr='{}'",
+            context.sid, resumeFromStep, checkpoint.targetUrl, Strings.compactInline(checkpoint.instruction, 100)
+        )
+
+        try {
+            val action = initActionOptions.copy(fromResolve = true)
+
+            // Continue from checkpoint step
+            while (!isClosed && context.step < config.maxSteps) {
+                val stepResult: StepProcessingResult
+                try {
+                    context = prepareStep(action, context, consecutiveNoOps)
+
+                    // Skip steps that were already completed
+                    if (context.step <= resumeFromStep) {
+                        logger.info("⏭️ Skipping already completed step {} (resume from {})", context.step, resumeFromStep)
+                        consecutiveNoOps = 0
+                        continue
+                    }
+
+                    stepResult = step(action, context, consecutiveNoOps)
+
+                    context = stepResult.context
+                    consecutiveNoOps = stepResult.consecutiveNoOps
+                } finally {
+                    stateManager.addToHistory(context.agentState)
+                }
+
+                // Save step checkpoint after each step
+                if (config.enableStepCheckpointing) {
+                    runCatching { saveStepCheckpoint(context, consecutiveNoOps, stepResult.shouldStop) }
+                        .onFailure { e -> logger.warn("💾❌ step.checkpoint.fail sid={} step={} msg={}", context.sid, context.step, e.message) }
+                }
+
+                if (stepResult.shouldStop) {
+                    break
+                }
+            }
+
+            val actResult = buildFinalActResult(initContext.instruction, context, startTime)
+            return ResolveResult(context, actResult)
+        } catch (_: CancellationException) {
+            logger.info("🛑 [USER interrupted during resume] sid={} steps={}", context.sid, context.step)
+            return ResolveResult(context, ActResult(success = false, message = "USER interrupted", action = initContext.instruction))
+        } catch (e: Exception) {
+            throw handleResolutionFailure(e, context, startTime)
+        }
     }
 
     protected fun shouldTerminate(actionDescription: ActionDescription? = null): Boolean {

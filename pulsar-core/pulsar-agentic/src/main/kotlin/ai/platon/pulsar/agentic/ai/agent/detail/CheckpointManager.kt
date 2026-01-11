@@ -40,7 +40,13 @@ data class AgentCheckpoint(
     val configSnapshot: Map<String, Any>,
 
     // Additional metadata
-    val metadata: Map<String, Any> = emptyMap()
+    val metadata: Map<String, Any> = emptyMap(),
+
+    // Step-level state for resumption (added for per-step checkpointing)
+    val consecutiveNoOps: Int = 0,
+    val isComplete: Boolean = false,
+    val lastEvent: String? = null,
+    val agentUuid: String? = null
 ) {
     @get:JsonIgnore
     val age: Long get() = System.currentTimeMillis() - timestamp.toEpochMilli()
@@ -178,6 +184,22 @@ class CheckpointManager(
             .filter { it.fileName.toString().startsWith("checkpoint-$sessionId-") }
             .forEach { Files.deleteIfExists(it) }
     }
+
+    /**
+     * Check if a checkpoint exists for a session.
+     *
+     * @param sessionId The session ID to check
+     * @return true if a checkpoint exists, false otherwise
+     */
+    fun exists(sessionId: String): Boolean {
+        val latestFile = checkpointDir.resolve("checkpoint-$sessionId-latest.json")
+        return Files.exists(latestFile)
+    }
+
+    /**
+     * Get the checkpoint directory path.
+     */
+    fun getCheckpointDir(): Path = checkpointDir
 }
 
 /**

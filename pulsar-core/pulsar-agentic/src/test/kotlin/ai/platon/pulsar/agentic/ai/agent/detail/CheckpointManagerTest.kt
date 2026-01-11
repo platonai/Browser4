@@ -160,6 +160,89 @@ class CheckpointManagerTest {
         assertEquals(2, loaded?.configSnapshot?.size)
         assertEquals(2, loaded?.metadata?.size)
     }
+
+    @Test
+    fun `should check if checkpoint exists`() {
+        val session = "session-exists-test"
+        
+        // Before saving, should not exist
+        assertFalse(checkpointManager.exists(session))
+        
+        // After saving, should exist
+        checkpointManager.save(createTestCheckpoint(session, step = 10))
+        assertTrue(checkpointManager.exists(session))
+        
+        // After deleting, should not exist
+        checkpointManager.deleteAll(session)
+        assertFalse(checkpointManager.exists(session))
+    }
+
+    @Test
+    fun `should preserve step-level state for resumption`() {
+        val checkpoint = AgentCheckpoint(
+            sessionId = "session-resume-test",
+            currentStep = 15,
+            instruction = "Test resume instruction",
+            targetUrl = "https://example.com/resume",
+            recentStateHistory = listOf(
+                AgentStateSnapshot(15, "instruction", "domain", "action", "description", true)
+            ),
+            totalSteps = 20,
+            successfulActions = 18,
+            failedActions = 2,
+            failureCounts = mapOf("LLM_FAILURE" to 1),
+            configSnapshot = mapOf("maxSteps" to 100),
+            metadata = mapOf("test" to "value"),
+            consecutiveNoOps = 2,
+            isComplete = false,
+            lastEvent = "toolExec",
+            agentUuid = "test-agent-uuid-123"
+        )
+        
+        checkpointManager.save(checkpoint)
+        val loaded = checkpointManager.load(checkpoint.sessionId)
+        
+        assertNotNull(loaded)
+        assertEquals(2, loaded?.consecutiveNoOps)
+        assertEquals(false, loaded?.isComplete)
+        assertEquals("toolExec", loaded?.lastEvent)
+        assertEquals("test-agent-uuid-123", loaded?.agentUuid)
+    }
+
+    @Test
+    fun `should preserve completed checkpoint state`() {
+        val checkpoint = AgentCheckpoint(
+            sessionId = "session-complete-test",
+            currentStep = 25,
+            instruction = "Test complete instruction",
+            targetUrl = "https://example.com/complete",
+            recentStateHistory = listOf(
+                AgentStateSnapshot(25, "instruction", "domain", "action", "description", true)
+            ),
+            totalSteps = 25,
+            successfulActions = 24,
+            failedActions = 1,
+            failureCounts = mapOf("LLM_FAILURE" to 0),
+            configSnapshot = mapOf("maxSteps" to 100),
+            metadata = mapOf("test" to "value"),
+            consecutiveNoOps = 0,
+            isComplete = true,
+            lastEvent = "complete",
+            agentUuid = "test-agent-uuid-456"
+        )
+        
+        checkpointManager.save(checkpoint)
+        val loaded = checkpointManager.load(checkpoint.sessionId)
+        
+        assertNotNull(loaded)
+        assertEquals(true, loaded?.isComplete)
+        assertEquals("complete", loaded?.lastEvent)
+    }
+
+    @Test
+    fun `should return checkpoint directory path`() {
+        assertEquals(tempDir, checkpointManager.getCheckpointDir())
+    }
     
     private fun createTestCheckpoint(sessionId: String, step: Int = 10): AgentCheckpoint {
         return AgentCheckpoint(
