@@ -328,15 +328,9 @@ class CommandService(
             val serverSideEventHandlers = ai.platon.pulsar.skeleton.crawl.DefaultServerSideEventHandlers()
             status.serverSideEventHandlers = serverSideEventHandlers
             
-            // Set the global server-side event handlers
-            val previousServerSideEventHandlers = ai.platon.pulsar.skeleton.crawl.GlobalEventHandlers.serverSideEventHandlers
-            ai.platon.pulsar.skeleton.crawl.GlobalEventHandlers.serverSideEventHandlers = serverSideEventHandlers
-            
-            try {
+            // Use scoped handlers API for automatic cleanup
+            ai.platon.pulsar.skeleton.crawl.GlobalEventHandlers.withServerSideHandlers(serverSideEventHandlers) {
                 executeCommandStepByStep(request, status, eventHandlers)
-            } finally {
-                // Restore previous server-side event handlers
-                ai.platon.pulsar.skeleton.crawl.GlobalEventHandlers.serverSideEventHandlers = previousServerSideEventHandlers
             }
         } catch (e: Exception) {
             status.failed(ResourceStatus.SC_EXPECTATION_FAILED)
