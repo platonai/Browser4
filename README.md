@@ -283,6 +283,10 @@ Python/Node.js SDKs are on the way.
 * 📚 [Build from Source](docs/build.md)
 * 🧠 [Expert Guide](docs/advanced-guides.md)
 * 🤖 [AI Programming Products Guidance](docs/ai-products-guidance.md) - Support for Cursor, Windsurf, Cline, Aider, GitHub Copilot
+* 📖 [REST API Examples](docs/rest-api-examples.md)
+* 🔄 [Version Evolution Plan](docs/api-version-evolution.md) | [中文](docs/api-version-evolution.zh.md)
+* 📋 [Release Checklist](docs/release-checklist.md)
+* ⚡ [Version Quick Reference](docs/version-quick-ref.md)
 
 ---
 

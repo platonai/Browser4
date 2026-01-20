@@ -222,3 +222,16 @@ WebDriver-Compatible API 的实现基本集中在：
 ## 附录 A：其它 REST surfaces
 
 仓库中还存在非 `/session...` 的 REST Controller（例如 `/api/*` 命令、对话、抽取等）。这些端点是否纳入 OpenAPI（以及是否与本文同一契约面）建议另起文档说明，避免与 WebDriver-Compatible API 混淆。
+
+---
+
+## 其他资源
+
+- **[OpenAPI 规范](./openapi.yaml)** - 完整 API 规范
+- **[变更日志](./CHANGELOG.md)** - 版本历史和发布说明
+- **[版本演化方案](../docs/api-version-evolution.zh.md)** - 版本策略和规则
+- **[REST API 示例](../docs/rest-api-examples.md)** - 实用示例
+
+---
+
+_最后更新：2025-01-20 | 文档版本：1.0.0_

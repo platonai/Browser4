@@ -285,6 +285,10 @@ Python / Node.js SDK 正在筹备中。
 * 📚 [源码构建](docs/build.md)
 * 🧠 [进阶指南](docs/advanced-guides.md)
 * 🤖 [AI 编程产品指导](docs/zh/ai-products-guidance-cn.md) - 支持 Cursor、Windsurf、Cline、Aider、GitHub Copilot
+* 📖 [REST API 示例](docs/rest-api-examples.md)
+* 🔄 [版本演化方案](docs/api-version-evolution.zh.md) | [English](docs/api-version-evolution.md)
+* 📋 [发布检查清单](docs/release-checklist.md)
+* ⚡ [版本管理快速参考](docs/version-quick-ref.md)
 
 ---
 

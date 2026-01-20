@@ -235,3 +235,16 @@ Key dependencies (used to differentiate real vs mock):
 
 There are also REST controllers outside `/session...` in this repo (for example, `/api/*` commands, chat, extraction, etc.). Whether those endpoints are included in OpenAPI (and whether they belong to the same contract surface as this doc) should be described in a separate document to avoid mixing them with the WebDriver-Compatible API.
 
+---
+
+## Additional Resources
+
+- **[OpenAPI Specification](./openapi.yaml)** - Complete API specification
+- **[CHANGELOG](./CHANGELOG.md)** - Version history and release notes
+- **[Version Evolution Plan](../docs/api-version-evolution.md)** - Versioning strategy and policies
+- **[REST API Examples](../docs/rest-api-examples.md)** - Practical usage examples
+
+---
+
+_Last updated: 2025-01-20 | Document version: 1.0.0_
+
