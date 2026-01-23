@@ -5,6 +5,7 @@ import ai.platon.pulsar.agentic.mcp.MCPBootstrap
 import ai.platon.pulsar.agentic.mcp.MCPConfig
 import ai.platon.pulsar.agentic.mcp.MCPPluginRegistry
 import ai.platon.pulsar.agentic.mcp.MCPTransportType
+import ai.platon.pulsar.test.mcp.MCPServerStarter
 
 /**
  * # Browser4 MCP Agent Example
@@ -92,31 +93,37 @@ suspend fun connectToMCPServer() {
     println("\n=== Connecting to MCP Server ===\n")
     
     try {
-        // Example 1: Connect to a local STDIO MCP server
-        // This would start a Node.js process running an MCP server
-        val stdioConfig = MCPConfig(
-            serverName = "weather-server",
-            transportType = MCPTransportType.STDIO,
-            command = "node",
-            args = listOf("path/to/weather-server.js"),
-            enabled = true  // Set to false to disable this server
-        )
+        // Use local test MCP server for reliable, deterministic examples
+        val mcpUrl = "http://localhost:18088/mcp"
         
-        // Example 2: Connect to an HTTP-based MCP server
-        val sseConfig = MCPConfig(
-            serverName = "database-tools",
+        // Start the MCP server if not already running (similar to DemoSiteStarter pattern)
+        println("Starting MCP server...")
+        val starter = MCPServerStarter()
+        starter.start(mcpUrl)
+        
+        println("✓ MCP server started successfully!")
+        
+        // Connect to the local test server (SSE transport)
+        val config = MCPConfig(
+            serverName = "test-mcp-server",
             transportType = MCPTransportType.SSE,
-            url = "http://localhost:8080/mcp",
+            url = mcpUrl,
             enabled = true
         )
         
-        // Register a single server with auto-registration of tools
+        // Register the server with auto-registration of tools
         // autoRegisterTools = true means tools will be available to the agent
         println("Registering MCP server...")
-        MCPBootstrap.register(stdioConfig, autoRegisterTools = true)
+        MCPBootstrap.register(config, autoRegisterTools = true)
         
         println("✓ MCP server registered successfully!")
-        println("  The agent can now use tools from '${stdioConfig.serverName}'")
+        println("  The agent can now use tools from '${config.serverName}'")
+        println("  Available tools: echo, add, multiply")
+        
+        // Clean up on shutdown
+        Runtime.getRuntime().addShutdownHook(Thread {
+            starter.close()
+        })
         
     } catch (e: Exception) {
         println("✗ Failed to register MCP server: ${e.message}")
@@ -124,6 +131,7 @@ suspend fun connectToMCPServer() {
         println("  - MCP server is not running or not reachable")
         println("  - Incorrect command or URL configuration")
         println("  - Missing dependencies for the transport type")
+        e.printStackTrace()
     }
 }
 
@@ -204,20 +212,30 @@ suspend fun agentWithMCPTools() {
     println("\n=== Agent Using MCP Tools ===\n")
     
     try {
-        // First, register MCP servers (in a real app, this would be done at startup)
+        // Use local test MCP server for reliable, deterministic examples
+        val mcpUrl = "http://localhost:18088/mcp"
+        
+        // Start the MCP server if not already running
+        println("Starting MCP server...")
+        val starter = MCPServerStarter()
+        starter.start(mcpUrl)
+        
+        // Register MCP server with the agent
         val config = MCPConfig(
-            serverName = "calculator",
-            transportType = MCPTransportType.STDIO,
-            command = "node",
-            args = listOf("calculator-server.js"),
+            serverName = "test-mcp-server",
+            transportType = MCPTransportType.SSE,
+            url = mcpUrl,
             enabled = true
         )
         
         println("Registering MCP server with agent...")
         MCPBootstrap.register(config, autoRegisterTools = true)
         
-        // Create or get the Browser4 agent
-        val agent = AgenticContexts.getOrCreateAgent()
+        // Create or get the Browser4 agent session
+        val session = AgenticContexts.getOrCreateSession()
+        session.registerClosable(starter)
+        
+        val agent = session.companionAgent
         
         // The agent can now use MCP tools in natural language
         val task = """
@@ -245,13 +263,12 @@ suspend fun agentWithMCPTools() {
             println("  llm.apiKey=your-api-key-here")
         }
         
+        // Clean up
+        session.context.close()
+        
     } catch (e: Exception) {
         println("✗ Error: ${e.message}")
         e.printStackTrace()
-    } finally {
-        // Clean up: close all MCP connections
-        MCPBootstrap.close()
-        println("\n✓ MCP connections closed.")
     }
 }
 
@@ -265,12 +282,19 @@ suspend fun inspectMCPTools() {
     println("\n=== Inspecting MCP Tools ===\n")
     
     try {
+        // Use local test MCP server for reliable, deterministic examples
+        val mcpUrl = "http://localhost:18088/mcp"
+        
+        // Start the MCP server if not already running
+        println("Starting MCP server...")
+        val starter = MCPServerStarter()
+        starter.start(mcpUrl)
+        
         // Register an MCP server (without auto-registering tools to the agent)
         val config = MCPConfig(
-            serverName = "example-server",
-            transportType = MCPTransportType.STDIO,
-            command = "node",
-            args = listOf("example-server.js"),
+            serverName = "test-mcp-server",
+            transportType = MCPTransportType.SSE,
+            url = mcpUrl,
             enabled = true
         )
         
@@ -278,7 +302,7 @@ suspend fun inspectMCPTools() {
         MCPPluginRegistry.instance.registerMCPServer(config, autoRegisterTools = false)
         
         // Get the tool executor for this server
-        val toolExecutor = MCPPluginRegistry.instance.getToolExecutor("example-server")
+        val toolExecutor = MCPPluginRegistry.instance.getToolExecutor("test-mcp-server")
         
         if (toolExecutor != null) {
             // Display available tools and their descriptions
@@ -290,10 +314,13 @@ suspend fun inspectMCPTools() {
             println("✗ Tool executor not found for '${config.serverName}'")
         }
         
+        // Clean up
+        MCPPluginRegistry.instance.close()
+        starter.close()
+        
     } catch (e: Exception) {
         println("✗ Failed to inspect MCP tools: ${e.message}")
-    } finally {
-        MCPPluginRegistry.instance.close()
+        e.printStackTrace()
     }
 }
 
@@ -335,9 +362,8 @@ suspend fun main() {
         3. Using MCP tools with the Browser4 agent
         4. Inspecting available MCP tools
         
-        Note: To run these examples, you need:
-        - An MCP server (STDIO, SSE, or WebSocket)
-        - LLM API key configured for agent integration
+        The examples now use a local test MCP server that starts automatically,
+        following the same pattern as FusedActs with DemoSiteStarter.
         
     """.trimIndent())
     
@@ -346,9 +372,9 @@ suspend fun main() {
     println("─".repeat(66))
     
     try {
-        // Example 1: Connect to a single MCP server
+        // Example 1: Connect to a single MCP server (auto-started)
         // Uncomment to run:
-        // connectToMCPServer()
+        connectToMCPServer()
         
         // Example 2: Connect to multiple MCP servers
         // Uncomment to run:
@@ -362,15 +388,12 @@ suspend fun main() {
         // Uncomment to run:
         // inspectMCPTools()
         
-        println("\n💡 Tip: Uncomment the examples above to run them!")
-        println("   Each example demonstrates a different MCP integration pattern.")
-        
     } catch (e: Exception) {
         println("\n✗ Unexpected error: ${e.message}")
         e.printStackTrace()
     }
     
     println("\n╔════════════════════════════════════════════════════════════════╗")
-    println("║                   MCP Examples Guide Completed                 ║")
+    println("║                   MCP Examples Completed                       ║")
     println("╚════════════════════════════════════════════════════════════════╝")
 }
