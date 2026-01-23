@@ -69,7 +69,7 @@ class ChatModelLogger : AutoCloseable {
             sb.append(";;REQUEST ID: ${pair.id}\n")
             sb.append(";;TIMESTAMP: ${pair.timestamp}\n")
 
-            if (enableSystemMessages || pair.id == 1) {
+            if (enableSystemMessages || pair.id <= 2) {
                 sb.append(";;SYSTEM MESSAGE:\n${pair.systemMessage}\n")
             }
 
@@ -113,7 +113,7 @@ class ChatModelLogger : AutoCloseable {
     /**
      * 请求响应对象，用于存储一次对话的请求和响应
      */
-    data class RequestResponsePair(
+    data class RequestResponsePair constructor(
         val id: Int,
         val timestamp: LocalDateTime,
         val userMessage: String,

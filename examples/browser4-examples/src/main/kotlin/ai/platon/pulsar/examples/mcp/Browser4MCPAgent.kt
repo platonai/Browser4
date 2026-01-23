@@ -91,7 +91,7 @@ import ai.platon.pulsar.test.mcp.MCPServerStarter
  */
 suspend fun connectToMCPServer() {
     println("\n=== Connecting to MCP Server ===\n")
-    
+
     try {
         // Use local test MCP server for reliable, deterministic examples
         val mcpUrl = "http://localhost:18088/mcp"
@@ -143,42 +143,47 @@ suspend fun connectToMCPServer() {
  */
 suspend fun connectToMultipleMCPServers() {
     println("\n=== Connecting to Multiple MCP Servers ===\n")
-    
+
     try {
+        // Start the test MCP server
+        val url = "http://localhost:18182/mcp/info"
+        val starter = MCPServerStarter()
+        starter.start(url)
+        
         // Configure multiple MCP servers
         val configs = listOf(
+            MCPConfig(
+                serverName = "test-mcp-server",
+                transportType = MCPTransportType.SSE,
+                url = "http://localhost:18182/mcp",
+                enabled = true
+            ),
+            // Example configurations for other MCP servers (disabled by default)
             MCPConfig(
                 serverName = "weather-service",
                 transportType = MCPTransportType.STDIO,
                 command = "python",
                 args = listOf("weather_mcp_server.py"),
-                enabled = true
+                enabled = false  // Set to true if you have this server
             ),
             MCPConfig(
                 serverName = "database-tools",
                 transportType = MCPTransportType.SSE,
                 url = "http://localhost:8080/mcp",
-                enabled = true
+                enabled = false  // Set to true if you have this server
             ),
             MCPConfig(
                 serverName = "file-operations",
                 transportType = MCPTransportType.WEBSOCKET,
                 url = "ws://localhost:8081/ws",
-                enabled = true
-            ),
-            MCPConfig(
-                serverName = "optional-service",
-                transportType = MCPTransportType.STDIO,
-                command = "node",
-                args = listOf("optional-server.js"),
-                enabled = false  // This server won't be connected
+                enabled = false  // Set to true if you have this server
             )
         )
-        
+
         // Register all enabled servers at once
         println("Registering multiple MCP servers...")
         val errors = MCPBootstrap.registerAll(configs, autoRegisterTools = true)
-        
+
         if (errors.isEmpty()) {
             println("✓ All enabled servers registered successfully!")
         } else {
@@ -187,14 +192,14 @@ suspend fun connectToMultipleMCPServers() {
                 println("  ✗ $name: ${exception.message}")
             }
         }
-        
+
         // List successfully registered servers
         val registeredServers = MCPPluginRegistry.instance.getRegisteredServers()
         println("\n✓ Registered servers (${registeredServers.size}):")
         registeredServers.forEach { serverName ->
             println("  - $serverName")
         }
-        
+
     } catch (e: Exception) {
         println("✗ Failed to register MCP servers: ${e.message}")
         e.printStackTrace()
@@ -210,7 +215,7 @@ suspend fun connectToMultipleMCPServers() {
  */
 suspend fun agentWithMCPTools() {
     println("\n=== Agent Using MCP Tools ===\n")
-    
+
     try {
         // Use local test MCP server for reliable, deterministic examples
         val mcpUrl = "http://localhost:18088/mcp"
@@ -227,7 +232,7 @@ suspend fun agentWithMCPTools() {
             url = mcpUrl,
             enabled = true
         )
-        
+
         println("Registering MCP server with agent...")
         MCPBootstrap.register(config, autoRegisterTools = true)
         
@@ -238,17 +243,18 @@ suspend fun agentWithMCPTools() {
         val agent = session.companionAgent
         
         // The agent can now use MCP tools in natural language
+        // The test MCP server provides: echo, add, multiply tools
         val task = """
-            Using the calculator MCP tools, please:
+            Using the MCP tools available, please:
             1. Add 123 and 456
             2. Multiply the result by 2
             3. Tell me the final answer
         """.trimIndent()
-        
+
         println("\n--- Agent Task ---")
         println(task)
         println("\n--- Agent Execution ---")
-        
+
         try {
             val history = agent.run(task)
             println("\n--- Agent Result ---")
@@ -280,7 +286,7 @@ suspend fun agentWithMCPTools() {
  */
 suspend fun inspectMCPTools() {
     println("\n=== Inspecting MCP Tools ===\n")
-    
+
     try {
         // Use local test MCP server for reliable, deterministic examples
         val mcpUrl = "http://localhost:18088/mcp"
@@ -297,10 +303,10 @@ suspend fun inspectMCPTools() {
             url = mcpUrl,
             enabled = true
         )
-        
+
         println("Connecting to MCP server...")
         MCPPluginRegistry.instance.registerMCPServer(config, autoRegisterTools = false)
-        
+
         // Get the tool executor for this server
         val toolExecutor = MCPPluginRegistry.instance.getToolExecutor("test-mcp-server")
         
@@ -308,7 +314,7 @@ suspend fun inspectMCPTools() {
             // Display available tools and their descriptions
             println("\n--- Available Tools from '${config.serverName}' ---")
             println(toolExecutor.help())
-            
+
             println("\n✓ Tools discovered and ready to use")
         } else {
             println("✗ Tool executor not found for '${config.serverName}'")
@@ -328,14 +334,12 @@ suspend fun inspectMCPTools() {
  * Main entry point - demonstrates MCP integration patterns
  *
  * This example shows various ways to integrate MCP with Browser4.
- * Uncomment the examples you want to run.
  *
  * ## Running the Examples:
  *
- * 1. Ensure you have an MCP server running or available
- * 2. Update the configuration with your MCP server details
- * 3. Configure LLM API key in application.properties
- * 4. Run this file
+ * 1. The TestMCPServer will be automatically started
+ * 2. Configure LLM API key in application.properties (for agent examples)
+ * 3. Run this file
  *
  * ## Learn More:
  *
@@ -347,52 +351,50 @@ suspend fun main() {
     println("╔════════════════════════════════════════════════════════════════╗")
     println("║         Browser4 MCP (Model Context Protocol) Examples        ║")
     println("╚════════════════════════════════════════════════════════════════╝")
-    
+
     println("""
-        
+
         This example demonstrates MCP integration with Browser4.
-        
+
         MCP (Model Context Protocol) allows you to extend the Browser4 agent
         with external tools and services. Tools from MCP servers become
         available to the agent automatically through natural language.
-        
+
         Examples included:
         1. Connecting to a single MCP server
         2. Connecting to multiple MCP servers
-        3. Using MCP tools with the Browser4 agent
+        3. Using MCP tools with the Browser4 agent (requires LLM API key)
         4. Inspecting available MCP tools
         
         The examples now use a local test MCP server that starts automatically,
         following the same pattern as FusedActs with DemoSiteStarter.
         
     """.trimIndent())
-    
+
     println("\n" + "─".repeat(66))
-    println("Select an example to run (uncomment in the code):")
+    println("Running examples:")
     println("─".repeat(66))
-    
+
     try {
         // Example 1: Connect to a single MCP server (auto-started)
         // Uncomment to run:
         connectToMCPServer()
         
         // Example 2: Connect to multiple MCP servers
-        // Uncomment to run:
-        // connectToMultipleMCPServers()
+        connectToMultipleMCPServers()
         
-        // Example 3: Use MCP tools with the agent (requires LLM configuration)
-        // Uncomment to run:
-        // agentWithMCPTools()
+        println("\n" + "─".repeat(66))
         
         // Example 4: Inspect MCP tools manually
-        // Uncomment to run:
-        // inspectMCPTools()
+        inspectMCPTools()
+        
+        println("\n" + "─".repeat(66))
         
     } catch (e: Exception) {
         println("\n✗ Unexpected error: ${e.message}")
         e.printStackTrace()
     }
-    
+
     println("\n╔════════════════════════════════════════════════════════════════╗")
     println("║                   MCP Examples Completed                       ║")
     println("╚════════════════════════════════════════════════════════════════╝")
