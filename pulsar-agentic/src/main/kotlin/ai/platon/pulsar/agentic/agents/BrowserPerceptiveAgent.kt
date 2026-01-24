@@ -4,6 +4,7 @@ import ai.platon.browser4.driver.chrome.dom.util.DomDebug
 import ai.platon.pulsar.agentic.*
 import ai.platon.pulsar.agentic.inference.detail.*
 import ai.platon.pulsar.agentic.inference.todo.ToDoManager
+import ai.platon.pulsar.agentic.logging.AgentLogger
 import ai.platon.pulsar.agentic.model.ActionDescription
 import ai.platon.pulsar.agentic.model.AgentHistory
 import ai.platon.pulsar.agentic.model.DetailedActResult
@@ -308,6 +309,7 @@ open class BrowserPerceptiveAgent(
             // Record close event before cancelling operations to ensure it's captured
             runCatching {
                 val last = stateHistory.states.lastOrNull()
+                agentLogger.logUserClose(last)
                 stateManager.addTrace(last, event = "userClose", message = "🛑 USER CLOSE")
             }.onFailure { logger.warn("Failed to record close trace: ${it.message}") }
 
@@ -348,6 +350,7 @@ open class BrowserPerceptiveAgent(
         val sessionStartTime = baseContext.stepStartTime
 
         // Add start history for better traceability (meta record only)
+        agentLogger.logResolveStart(baseContext.sid, instruction, config.maxSteps)
         stateManager.addTrace(
             baseContext.agentState,
             event = "resolveStart",
@@ -372,6 +375,9 @@ open class BrowserPerceptiveAgent(
 
             val dur = Duration.between(sessionStartTime, Instant.now()).toMillis()
             // Not a single-step action, keep it out of AgentState history
+            agentLogger.logResolveDone(
+                baseContext.sid, result.context.step, result.result.success, dur, result.result.message
+            )
             stateManager.addTrace(
                 result.context.agentState, event = "resolveDone",
                 items = mapOf(
@@ -384,6 +390,7 @@ open class BrowserPerceptiveAgent(
         } catch (_: TimeoutCancellationException) {
             val msg = "⏳ Resolve timed out after ${effectiveTimeout}ms (base: ${config.resolveTimeoutMs}ms + " +
                     "retries: ${maxPossibleDelays}ms): $instruction"
+            agentLogger.logResolveTimeout(baseContext.sid, effectiveTimeout, instruction)
             stateManager.addTrace(
                 baseContext.agentState,
                 event = "resolveTimeout",
@@ -709,6 +716,8 @@ open class BrowserPerceptiveAgent(
                 context.sid, context.step, failures, actionDescription.locator, toolCall.method, toolCall.arguments,
                 actionDescription.cssFriendlyExpression
             )
+            val reason = "Tool call validation failed: ${toolCall.method}"
+            agentLogger.logValidationFailed(context.sid, context.step, reason)
             stateManager.addTrace(
                 context.agentState,
                 event = "validationFailed",
@@ -736,6 +745,7 @@ open class BrowserPerceptiveAgent(
             circuitBreaker.recordSuccess(CircuitBreaker.FailureType.EXECUTION_FAILURE)
             val summary = "✅ ${toolCall.method} executed successfully"
 
+            agentLogger.logToolExecOk(context.sid, context.step, toolCall.method, summary)
             stateManager.addTrace(
                 context.agentState,
                 event = "toolExecOk",
@@ -757,6 +767,7 @@ open class BrowserPerceptiveAgent(
                 e.message,
                 e
             )
+            agentLogger.logToolExecFail(context.sid, context.step, toolCall.method, e.message ?: "Unknown error")
             stateManager.addTrace(
                 context.agentState,
                 event = "toolExecUnexpectedFail",
@@ -852,6 +863,7 @@ open class BrowserPerceptiveAgent(
     protected suspend fun generateFinalSummary(instruction: String, context: ExecutionContext): SummarizeResult {
         return try {
             val result = summarize(instruction, context)
+            agentLogger.logFinalSummary(context.sid, context.step)
             stateManager.addTrace(
                 context.agentState,
                 event = "final",
@@ -905,6 +917,7 @@ open class BrowserPerceptiveAgent(
 
     protected suspend fun handleConsecutiveNoOps(consecutiveNoOps: Int, context: ExecutionContext): Boolean {
         val step = context.step
+        agentLogger.logNoOp(context.agentState, consecutiveNoOps, config.consecutiveNoOpLimit)
         stateManager.addTrace(
             context.agentState,
             event = "noop",
@@ -1005,6 +1018,7 @@ open class BrowserPerceptiveAgent(
         }
 
         logger.info("✅ task.complete sid={} step={} complete={}", sid.take(8), step, true)
+        agentLogger.logComplete(sid, step, true)
         stateManager.addTrace(context.agentState, event = "complete", message = "#${step} complete")
 
         val files = fs.listOSFiles().filterNot { it.fileName.toString().contains("todolist.md") }

@@ -8,6 +8,7 @@ import ai.platon.pulsar.agentic.inference.detail.ActResultHelper
 import ai.platon.pulsar.agentic.inference.detail.AgentStateManager
 import ai.platon.pulsar.agentic.inference.detail.ExecutionContext
 import ai.platon.pulsar.agentic.inference.detail.PageStateTracker
+import ai.platon.pulsar.agentic.logging.AgentLogger
 import ai.platon.pulsar.agentic.mcp.MCPPluginRegistry
 import ai.platon.pulsar.agentic.model.*
 import ai.platon.pulsar.agentic.skills.SkillContext
@@ -35,6 +36,7 @@ open class BasicBrowserAgent(
     val config: AgentConfig
 ) : PerceptiveAgent {
     private val logger = getLogger(BasicBrowserAgent::class)
+    protected val agentLogger = AgentLogger.forClass(BasicBrowserAgent::class.java)
     private val _startTime: Instant = Instant.now()
     private val _uuid: UUID = UUID.randomUUID()
     private val _baseDir: Path = AppPaths.get("agent")
@@ -139,6 +141,7 @@ open class BasicBrowserAgent(
             }
         } catch (_: TimeoutCancellationException) {
             val msg = "⏳ Action timed out after ${config.actTimeoutMs}ms: ${action.action}"
+            agentLogger.logActionTimeout(context.agentState, config.actTimeoutMs, action.action)
             stateManager.addTrace(
                 context.agentState,
                 items = mapOf("timeoutMs" to config.actTimeoutMs, "instruction" to action.action),
@@ -179,6 +182,7 @@ open class BasicBrowserAgent(
             // Update agent state after tool call
             stateManager.updateAgentState(context, element, toolCall, result, description = description)
 
+            agentLogger.logToolExecOk(context.sid, context.step, method, description)
             stateManager.addTrace(
                 context.agentState,
                 items = mapOf("tool" to method), event = "toolExecOk", message = description
@@ -290,6 +294,7 @@ open class BasicBrowserAgent(
 
         if (observeResults.isEmpty()) {
             val msg = "⚠️ doObserveAct: No observe result"
+            agentLogger.logObserveNoAction(context.agentState)
             stateManager.addTrace(context.agentState, event = "observeActNoAction", message = msg)
             return ActResultHelper.failed(msg, action = options.action)
         }
@@ -326,6 +331,7 @@ open class BasicBrowserAgent(
                 continue
             }
 
+            agentLogger.logActionSuccess(context.agentState, index + 1, resultsToTry.size)
             stateManager.addTrace(
                 context.agentState,
                 event = "actSuccess",
@@ -337,6 +343,7 @@ open class BasicBrowserAgent(
         }
 
         val msg = "❌ All ${resultsToTry.size} candidates failed. Last error: $lastError"
+        agentLogger.logActionAllFailed(context.agentState, resultsToTry.size, lastError)
         stateManager.addTrace(
             context.agentState,
             event = "actAllFailed",
