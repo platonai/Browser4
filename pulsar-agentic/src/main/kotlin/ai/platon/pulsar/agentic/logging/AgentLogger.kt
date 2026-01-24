@@ -270,19 +270,21 @@ class AgentLogger(private val logger: Logger) {
     private fun formatValue(value: Any?): String {
         return when (value) {
             null -> "null"
-            is String -> if (value.length > 50) value.take(50) + "..." else value
+            is String -> if (value.length > MAX_VALUE_LENGTH) value.take(MAX_VALUE_LENGTH) + "..." else value
             is Number, is Boolean -> value.toString()
             is Instant -> value.toString()
-            else -> value.toString().take(50)
+            else -> value.toString().take(MAX_VALUE_LENGTH)
         }
     }
 
     companion object {
+        private const val MAX_VALUE_LENGTH = 50
+
         /**
          * Create an AgentLogger for a specific class.
          */
         fun forClass(clazz: Class<*>): AgentLogger {
-            return AgentLogger(getLogger(clazz.kotlin))
+            return AgentLogger(getLogger(clazz))
         }
 
         /**
