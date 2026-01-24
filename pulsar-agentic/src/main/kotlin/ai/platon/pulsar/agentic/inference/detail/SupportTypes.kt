@@ -7,7 +7,6 @@ import ai.platon.pulsar.agentic.inference.ExtractParams
 import ai.platon.pulsar.agentic.inference.ObserveParams
 import ai.platon.pulsar.agentic.model.*
 import ai.platon.pulsar.common.Strings
-import java.lang.ref.WeakReference
 import java.time.Instant
 import java.util.*
 
@@ -93,7 +92,37 @@ data class PerformanceMetrics(
 }
 
 /**
- * Structured logging context for better debugging
+ * Execution context for a single agent step.
+ * 
+ * Represents the execution state for one step in the agent's autonomous loop.
+ * Each context is created when entering a new step and contains:
+ * - Current step number and instruction
+ * - Reference to the current AgentState (mutable snapshot of browser state)
+ * - Reference to shared AgentHistory (accumulated history across all steps)
+ * - Configuration and session identifiers
+ * 
+ * **Lifecycle:**
+ * 1. Created via `AgentStateManager.buildExecutionContext()` for each step
+ * 2. Set as active via `setActiveContext()`, which appends to contexts list
+ * 3. Used during step execution (observe, act, update state)
+ * 4. Trimmed from contexts list when exceeding max size (100 contexts)
+ * 
+ * **Relationship to AgentStateManager:**
+ * - `_baseContext`: First context created (step 0 or 1), never changed
+ * - `_activeContext`: Points to this context when it's the current step
+ * - `contexts`: All contexts created in session, includes this context
+ * 
+ * @property step Current step number in the execution sequence
+ * @property instruction User's instruction for this context
+ * @property screenshotB64 Base64-encoded screenshot (captured every N steps)
+ * @property event Event name for this step (e.g., "observe", "act-1", "summary")
+ * @property targetUrl Target URL for this step
+ * @property agentState Current agent state (mutable, updated during step)
+ * @property stateHistory Shared history of all executed states
+ * @property config Agent configuration
+ * @property sessionId Session identifier (same across all contexts in session)
+ * @property stepStartTime When this step started
+ * @property additionalContext Additional context data
  */
 data class ExecutionContext constructor(
     var step: Int,
@@ -111,9 +140,7 @@ data class ExecutionContext constructor(
 
     val sessionId: String,
     val stepStartTime: Instant = Instant.now(),
-    val additionalContext: Map<String, Any> = emptyMap(),
-
-    var baseContext: WeakReference<ExecutionContext> = WeakReference<ExecutionContext>(null)
+    val additionalContext: Map<String, Any> = emptyMap()
 ) {
     val sid get() = sessionId.take(8)
 

@@ -19,25 +19,69 @@ import java.util.*
 /**
  * Manages agent state, execution contexts, and history tracking.
  * 
- * This class is responsible for:
- * - Creating and managing execution contexts for each step
- * - Maintaining state history for all executed actions
- * - Tracking process traces for debugging
- * - Managing the lifecycle of contexts (creation, activation, cleanup)
+ * This class is the central coordinator for state management in the agent's
+ * autonomous execution loop. It maintains three interconnected state representations:
+ * execution contexts, state history, and process traces.
  * 
- * **Context Management**:
- * - `_baseContext`: The initial context created when an agent session starts
- * - `_activeContext`: The currently active context being processed
- * - `contexts`: List of all contexts created during the session (cleaned periodically)
+ * ## Responsibilities
+ * - **Context Lifecycle**: Creating, activating, and cleaning up execution contexts
+ * - **History Management**: Recording successfully executed actions in state history
+ * - **Trace Logging**: Maintaining detailed process traces for debugging
+ * - **Memory Management**: Preventing unbounded growth through periodic cleanup
  * 
- * **State History**:
- * - `_stateHistory`: Contains AgentState objects for successfully executed actions
- * - Limited to `config.maxHistorySize` entries to prevent unbounded growth
+ * ## Context Management Architecture
  * 
- * **Process Trace**:
- * - `_processTrace`: Detailed trace of all events including failures
- * - Limited to 200 entries to prevent memory leaks
- * - Written to disk for debugging via `writeProcessTrace()`
+ * Three context references work together to track execution state:
+ * 
+ * ### `_baseContext` (Initial Context)
+ * - **Purpose**: The first context created when a resolve() session starts
+ * - **Lifecycle**: Created once via `buildBaseExecutionContext()`, never changes
+ * - **Step Number**: Always 0 (metadata context, not in history)
+ * - **Usage**: Provides session ID and configuration for subsequent contexts
+ * 
+ * ### `_activeContext` (Current Context)
+ * - **Purpose**: The context currently being executed
+ * - **Lifecycle**: Updated via `setActiveContext()` for each new step
+ * - **Invariant**: Always equals `contexts.last()` when non-null
+ * - **Usage**: Primary reference for current step's execution state
+ * 
+ * ### `contexts` (All Contexts List)
+ * - **Purpose**: Complete history of all contexts created in this session
+ * - **Lifecycle**: Grows with each step, trimmed when exceeding 100 entries
+ * - **Cleanup**: Keeps most recent 50 contexts when trimming
+ * - **Usage**: Provides full context history for debugging and rollback
+ * 
+ * ## State Transition Flow
+ * 
+ * ```
+ * resolve() start:
+ *   1. buildBaseExecutionContext(step=0) → _baseContext
+ *   2. setActiveContext(_baseContext) → _activeContext, contexts += _baseContext
+ * 
+ * Each step in loop:
+ *   1. buildExecutionContext(step=N, baseContext=previous) → newContext
+ *   2. setActiveContext(newContext) → _activeContext, contexts += newContext
+ *   3. Execute step (observe, act, update state)
+ *   4. addToHistory(newContext.agentState) → _stateHistory.states += state
+ *   5. addTrace(...) → _processTrace += trace
+ * 
+ * Cleanup (every 50 steps or on demand):
+ *   - clearUpHistory() trims contexts, _stateHistory, _processTrace
+ *   - Keeps most recent entries to prevent memory leaks
+ * ```
+ * 
+ * ## State vs Trace vs Context
+ * 
+ * - **AgentState** (in _stateHistory): Successfully executed tool actions only
+ * - **ProcessTrace** (in _processTrace): All events including failures, retries
+ * - **ExecutionContext**: Execution metadata + reference to current AgentState
+ * 
+ * ## Memory Management
+ * 
+ * Automatic cleanup prevents unbounded growth:
+ * - `_stateHistory.states`: Limited to `config.maxHistorySize * 2`, trimmed to `maxHistorySize`
+ * - `contexts`: Limited to 100 entries, trimmed to 50
+ * - `_processTrace`: Limited to 200 entries, trimmed to 100
  * 
  * @param agent The agent actor using this state manager
  * @param pageStateTracker Tracks page state changes for detecting progress
