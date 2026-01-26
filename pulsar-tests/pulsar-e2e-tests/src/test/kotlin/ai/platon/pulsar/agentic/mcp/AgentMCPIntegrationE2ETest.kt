@@ -52,7 +52,7 @@ class AgentMCPIntegrationE2ETest {
     fun setUpAll() {
         // Create MockMCPServer directly
         mockMCPServer = MockMCPServer(
-            serverName = "test-mcp-server",
+            serverName = serverName,
             serverVersion = "1.0.0"
         )
         assertTrue(mockMCPServer.isRunning(), "MockMCPServer should be running")
@@ -242,12 +242,15 @@ class AgentMCPIntegrationE2ETest {
         val result = toolExecutor.callFunctionOn(toolCall, Any())
 
         // Then: The result should indicate an error
-        // The MCP server returns an error response which is captured
-        val hasError = result.exception != null ||
-            result.value?.toString()?.contains("Error", ignoreCase = true) == true ||
-            result.value?.toString()?.contains("required", ignoreCase = true) == true
+        // The MCP server returns an error response which is captured in either:
+        // - result.exception (if tool execution failed)
+        // - result.value containing error message (if server returned error response)
+        val hasException = result.exception != null
+        val hasErrorInValue = result.value?.toString()?.let { value ->
+            value.contains("Error", ignoreCase = true) || value.contains("required", ignoreCase = true)
+        } ?: false
 
-        assertTrue(hasError || result.value != null, "Should handle missing argument")
+        assertTrue(hasException || hasErrorInValue, "Should indicate error for missing argument")
     }
 
     @Test
@@ -581,12 +584,10 @@ class TestMCPToolExecutor(
 
         return try {
             // Call the tool on the mock MCP server
+            val argumentsNode = objectMapper.valueToTree<com.fasterxml.jackson.databind.node.ObjectNode>(args)
             val request = objectMapper.createObjectNode().apply {
                 put("name", toolName)
-                set<com.fasterxml.jackson.databind.node.ObjectNode>(
-                    "arguments",
-                    objectMapper.valueToTree(args)
-                )
+                set<com.fasterxml.jackson.databind.JsonNode>("arguments", argumentsNode)
             }
 
             val response = mockServer.callTool(request)
@@ -609,7 +610,7 @@ class TestMCPToolExecutor(
             } else {
                 TcEvaluate(
                     value = resultValue,
-                    className = resultValue.let { it::class.qualifiedName } ?: "null",
+                    className = "String",
                     expression = pseudoExpression
                 )
             }
