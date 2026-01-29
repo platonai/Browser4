@@ -214,4 +214,38 @@ class PreemptChannelSupportTest {
         assertTrue(results.contains("normal-0"))
         assertTrue(results.contains("normal-1"))
     }
+
+    @Test
+    @Timeout(value = 5, unit = TimeUnit.SECONDS)
+    fun testPreemptReturnsValue() {
+        val result = channel.preempt { 42 }
+        assertEquals(42, result)
+    }
+
+    @Test
+    @Timeout(value = 5, unit = TimeUnit.SECONDS)
+    fun testWhenNormalReturnsValue() {
+        val result = channel.whenNormal { "hello" }
+        assertEquals("hello", result)
+    }
+
+    @Test
+    @Timeout(value = 5, unit = TimeUnit.SECONDS)
+    fun testPreemptReturnsComplexValue() {
+        val result = channel.preempt {
+            data class Result(val value: Int, val message: String)
+            Result(100, "success")
+        }
+        assertEquals(100, result.value)
+        assertEquals("success", result.message)
+    }
+
+    @Test
+    @Timeout(value = 5, unit = TimeUnit.SECONDS)
+    fun testWhenNormalReturnsComplexValue() {
+        val result = channel.whenNormal {
+            listOf(1, 2, 3, 4, 5)
+        }
+        assertEquals(listOf(1, 2, 3, 4, 5), result)
+    }
 }

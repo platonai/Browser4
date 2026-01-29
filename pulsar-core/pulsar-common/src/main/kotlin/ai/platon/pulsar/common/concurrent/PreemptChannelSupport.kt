@@ -59,8 +59,8 @@ open class PreemptChannelSupport(val name: String = "") {
      * Indicates whether there are any active events (preemptive or normal tasks).
      */
     val hasEvent get() = arrayOf(
-        numRunningPreemptiveTasks,
-            numRunningPreemptiveTasks, numPendingNormalTasks, numRunningNormalTasks
+        numPreemptiveTasks,
+        numRunningPreemptiveTasks, numPendingNormalTasks, numRunningNormalTasks
     ).sumOf { it.get() } > 0
 
     /**
@@ -73,8 +73,8 @@ open class PreemptChannelSupport(val name: String = "") {
      * @throws InterruptedException If the thread is interrupted while waiting.
      */
     @Throws(InterruptedException::class)
-    fun <T> preempt(preemptiveTask: () -> T) {
-        beforePreempt().runCatching { preemptiveTask() }.also { afterPreempt() }.getOrThrow()
+    fun <T> preempt(preemptiveTask: () -> T): T {
+        return beforePreempt().runCatching { preemptiveTask() }.also { afterPreempt() }.getOrThrow()
     }
 
     /**
@@ -85,8 +85,8 @@ open class PreemptChannelSupport(val name: String = "") {
      * @throws InterruptedException If the thread is interrupted while waiting.
      */
     @Throws(InterruptedException::class)
-    fun <T> whenNormal(task: () -> T) {
-        beforeTask().runCatching { task() }.also { afterTask() }.getOrThrow()
+    fun <T> whenNormal(task: () -> T): T {
+        return beforeTask().runCatching { task() }.also { afterTask() }.getOrThrow()
     }
 
     /**
@@ -99,8 +99,8 @@ open class PreemptChannelSupport(val name: String = "") {
      * @throws InterruptedException If the thread is interrupted while waiting.
      */
     @Throws(InterruptedException::class)
-    suspend fun <T> whenNormalDeferred(task: suspend () -> T) {
-        beforeTask().runCatching { task() }.also { afterTask() }.getOrThrow()
+    suspend fun <T> whenNormalDeferred(task: suspend () -> T): T {
+        return beforeTask().runCatching { task() }.also { afterTask() }.getOrThrow()
     }
 
     /**
