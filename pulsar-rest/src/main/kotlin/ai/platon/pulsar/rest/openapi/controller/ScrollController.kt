@@ -1,6 +1,7 @@
 package ai.platon.pulsar.rest.openapi.controller
 
 import ai.platon.pulsar.rest.openapi.dto.*
+import ai.platon.pulsar.rest.openapi.exception.RequestSupersededException
 import ai.platon.pulsar.rest.openapi.service.SessionManager
 import ai.platon.pulsar.skeleton.crawl.fetch.driver.WebDriverException
 import jakarta.servlet.http.HttpServletResponse
@@ -28,6 +29,7 @@ class ScrollController(
 
     /**
      * Scrolls down on the page.
+     * Implements last-request-wins strategy.
      */
     @PostMapping("/down", consumes = [MediaType.APPLICATION_JSON_VALUE])
     suspend fun scrollDown(
@@ -41,11 +43,19 @@ class ScrollController(
         val managed = sessionManager.getSession(sessionId)
             ?: return ControllerUtils.notFound("session not found", "No active session with id $sessionId")
 
+        val requestId = managed.newRequest()
+
         return try {
             val scrollY = managed.mutex.withLock {
+                if (!managed.isLatestRequest(requestId)) {
+                    throw RequestSupersededException(sessionId, requestId)
+                }
                 managed.driver.scrollDown(request.count)
             }
             ResponseEntity.ok(WebDriverResponse(value = scrollY))
+        } catch (e: RequestSupersededException) {
+            logger.info("Session {} scrollDown was superseded by newer request", sessionId)
+            ResponseEntity.ok(WebDriverResponse(value = 0))
         } catch (e: WebDriverException) {
             logger.error("Scroll down failed | sessionId={} | {}", sessionId, e.message)
             ControllerUtils.errorResponse("webdriver error", e.message ?: "WebDriver error")
@@ -57,6 +67,7 @@ class ScrollController(
 
     /**
      * Scrolls up on the page.
+     * Implements last-request-wins strategy.
      */
     @PostMapping("/up", consumes = [MediaType.APPLICATION_JSON_VALUE])
     suspend fun scrollUp(
@@ -70,11 +81,19 @@ class ScrollController(
         val managed = sessionManager.getSession(sessionId)
             ?: return ControllerUtils.notFound("session not found", "No active session with id $sessionId")
 
+        val requestId = managed.newRequest()
+
         return try {
             val scrollY = managed.mutex.withLock {
+                if (!managed.isLatestRequest(requestId)) {
+                    throw RequestSupersededException(sessionId, requestId)
+                }
                 managed.driver.scrollUp(request.count)
             }
             ResponseEntity.ok(WebDriverResponse(value = scrollY))
+        } catch (e: RequestSupersededException) {
+            logger.info("Session {} scrollUp was superseded by newer request", sessionId)
+            ResponseEntity.ok(WebDriverResponse(value = 0))
         } catch (e: WebDriverException) {
             logger.error("Scroll up failed | sessionId={} | {}", sessionId, e.message)
             ControllerUtils.errorResponse("webdriver error", e.message ?: "WebDriver error")
@@ -86,6 +105,7 @@ class ScrollController(
 
     /**
      * Scrolls to an element.
+     * Implements last-request-wins strategy.
      */
     @PostMapping("/to", consumes = [MediaType.APPLICATION_JSON_VALUE])
     suspend fun scrollTo(
@@ -99,11 +119,19 @@ class ScrollController(
         val managed = sessionManager.getSession(sessionId)
             ?: return ControllerUtils.notFound("session not found", "No active session with id $sessionId")
 
+        val requestId = managed.newRequest()
+
         return try {
             val scrollY = managed.mutex.withLock {
+                if (!managed.isLatestRequest(requestId)) {
+                    throw RequestSupersededException(sessionId, requestId)
+                }
                 managed.driver.scrollTo(request.selector)
             }
             ResponseEntity.ok(WebDriverResponse(value = scrollY))
+        } catch (e: RequestSupersededException) {
+            logger.info("Session {} scrollTo was superseded by newer request", sessionId)
+            ResponseEntity.ok(WebDriverResponse(value = 0))
         } catch (e: WebDriverException) {
             logger.error("Scroll to failed | sessionId={} selector={} | {}", sessionId, request.selector, e.message)
             ControllerUtils.errorResponse("webdriver error", e.message ?: "WebDriver error")
@@ -115,6 +143,7 @@ class ScrollController(
 
     /**
      * Scrolls to the top of the page.
+     * Implements last-request-wins strategy.
      */
     @PostMapping("/top")
     suspend fun scrollToTop(
@@ -127,11 +156,19 @@ class ScrollController(
         val managed = sessionManager.getSession(sessionId)
             ?: return ControllerUtils.notFound("session not found", "No active session with id $sessionId")
 
+        val requestId = managed.newRequest()
+
         return try {
             val scrollY = managed.mutex.withLock {
+                if (!managed.isLatestRequest(requestId)) {
+                    throw RequestSupersededException(sessionId, requestId)
+                }
                 managed.driver.scrollToTop()
             }
             ResponseEntity.ok(WebDriverResponse(value = scrollY))
+        } catch (e: RequestSupersededException) {
+            logger.info("Session {} scrollToTop was superseded by newer request", sessionId)
+            ResponseEntity.ok(WebDriverResponse(value = 0))
         } catch (e: WebDriverException) {
             logger.error("Scroll to top failed | sessionId={} | {}", sessionId, e.message)
             ControllerUtils.errorResponse("webdriver error", e.message ?: "WebDriver error")
@@ -143,6 +180,7 @@ class ScrollController(
 
     /**
      * Scrolls to the bottom of the page.
+     * Implements last-request-wins strategy.
      */
     @PostMapping("/bottom")
     suspend fun scrollToBottom(
@@ -155,11 +193,19 @@ class ScrollController(
         val managed = sessionManager.getSession(sessionId)
             ?: return ControllerUtils.notFound("session not found", "No active session with id $sessionId")
 
+        val requestId = managed.newRequest()
+
         return try {
             val scrollY = managed.mutex.withLock {
+                if (!managed.isLatestRequest(requestId)) {
+                    throw RequestSupersededException(sessionId, requestId)
+                }
                 managed.driver.scrollToBottom()
             }
             ResponseEntity.ok(WebDriverResponse(value = scrollY))
+        } catch (e: RequestSupersededException) {
+            logger.info("Session {} scrollToBottom was superseded by newer request", sessionId)
+            ResponseEntity.ok(WebDriverResponse(value = 0))
         } catch (e: WebDriverException) {
             logger.error("Scroll to bottom failed | sessionId={} | {}", sessionId, e.message)
             ControllerUtils.errorResponse("webdriver error", e.message ?: "WebDriver error")
@@ -171,6 +217,7 @@ class ScrollController(
 
     /**
      * Scrolls to a position on the page.
+     * Implements last-request-wins strategy.
      */
     @PostMapping("/middle", consumes = [MediaType.APPLICATION_JSON_VALUE])
     suspend fun scrollToMiddle(
@@ -184,11 +231,19 @@ class ScrollController(
         val managed = sessionManager.getSession(sessionId)
             ?: return ControllerUtils.notFound("session not found", "No active session with id $sessionId")
 
+        val requestId = managed.newRequest()
+
         return try {
             val scrollY = managed.mutex.withLock {
+                if (!managed.isLatestRequest(requestId)) {
+                    throw RequestSupersededException(sessionId, requestId)
+                }
                 managed.driver.scrollToMiddle(request.ratio)
             }
             ResponseEntity.ok(WebDriverResponse(value = scrollY))
+        } catch (e: RequestSupersededException) {
+            logger.info("Session {} scrollToMiddle was superseded by newer request", sessionId)
+            ResponseEntity.ok(WebDriverResponse(value = 0))
         } catch (e: WebDriverException) {
             logger.error("Scroll to middle failed | sessionId={} | {}", sessionId, e.message)
             ControllerUtils.errorResponse("webdriver error", e.message ?: "WebDriver error")
@@ -200,6 +255,7 @@ class ScrollController(
 
     /**
      * Scrolls by a specific amount of pixels.
+     * Implements last-request-wins strategy.
      */
     @PostMapping("/by", consumes = [MediaType.APPLICATION_JSON_VALUE])
     suspend fun scrollBy(
@@ -213,11 +269,19 @@ class ScrollController(
         val managed = sessionManager.getSession(sessionId)
             ?: return ControllerUtils.notFound("session not found", "No active session with id $sessionId")
 
+        val requestId = managed.newRequest()
+
         return try {
             val scrollY = managed.mutex.withLock {
+                if (!managed.isLatestRequest(requestId)) {
+                    throw RequestSupersededException(sessionId, requestId)
+                }
                 managed.driver.scrollBy(request.pixels, request.smooth)
             }
             ResponseEntity.ok(WebDriverResponse(value = scrollY))
+        } catch (e: RequestSupersededException) {
+            logger.info("Session {} scrollBy was superseded by newer request", sessionId)
+            ResponseEntity.ok(WebDriverResponse(value = 0))
         } catch (e: WebDriverException) {
             logger.error("Scroll by failed | sessionId={} | {}", sessionId, e.message)
             ControllerUtils.errorResponse("webdriver error", e.message ?: "WebDriver error")

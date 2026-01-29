@@ -2,6 +2,7 @@ package ai.platon.pulsar.rest.openapi.controller
 
 import ai.platon.pulsar.rest.openapi.dto.SetUrlRequest
 import ai.platon.pulsar.rest.openapi.dto.WebDriverResponse
+import ai.platon.pulsar.rest.openapi.exception.RequestSupersededException
 import ai.platon.pulsar.rest.openapi.service.SessionManager
 import jakarta.servlet.http.HttpServletResponse
 import kotlinx.coroutines.sync.withLock
@@ -31,6 +32,8 @@ class NavigationController(
 
     /**
      * Navigates to a URL.
+     * Implements last-request-wins strategy: if multiple navigation requests arrive
+     * for the same session, only the latest one will be executed.
      */
     @PostMapping("/url", consumes = [MediaType.APPLICATION_JSON_VALUE])
     suspend fun navigateTo(
@@ -49,13 +52,34 @@ class NavigationController(
             return ResponseEntity.ok(WebDriverResponse<Any?>(value = null))
         }
 
+        // Register this as a new request - makes it the "latest" and supersedes any pending requests
+        val requestId = session.newRequest()
+        logger.debug("Session {} navigation request {} registered", sessionId, requestId)
+
         try {
-            // Serialize WebDriver operations using mutex to prevent parallel execution
+            // Try to acquire the mutex - if another operation is running, wait for it
             session.mutex.withLock {
+                // Before executing, check if this is still the latest request
+                if (!session.isLatestRequest(requestId)) {
+                    logger.debug(
+                        "Session {} navigation request {} was superseded, skipping execution",
+                        sessionId,
+                        requestId
+                    )
+                    throw RequestSupersededException(sessionId, requestId)
+                }
+
+                // Still the latest request, proceed with navigation
+                logger.debug("Session {} navigation request {} executing", sessionId, requestId)
                 val driver = session.pulsarSession.getOrCreateBoundDriver()
                 driver.navigateTo(request.url)
             }
             sessionManager.setSessionUrl(sessionId, request.url)
+            logger.debug("Session {} navigation request {} completed successfully", sessionId, requestId)
+        } catch (e: RequestSupersededException) {
+            // Request was superseded - return success but log for debugging
+            logger.info("Session {} navigation to {} was superseded by newer request", sessionId, request.url)
+            return ResponseEntity.ok(WebDriverResponse<Any?>(value = null))
         } catch (e: Exception) {
             logger.error("Error navigating to URL: {}", e.message, e)
             return ControllerUtils.errorResponse("navigation error", "Failed to navigate: ${e.message}")
@@ -133,6 +157,7 @@ class NavigationController(
 
     /**
      * Reloads the current page.
+     * Implements last-request-wins strategy.
      */
     @PostMapping("/reload")
     suspend fun reload(
@@ -145,10 +170,22 @@ class NavigationController(
         val managed = sessionManager.getSession(sessionId)
             ?: return ControllerUtils.notFound("session not found", "No active session with id $sessionId")
 
+        val requestId = managed.newRequest()
+        logger.debug("Session {} reload request {} registered", sessionId, requestId)
+
         return try {
             managed.mutex.withLock {
+                if (!managed.isLatestRequest(requestId)) {
+                    logger.debug("Session {} reload request {} was superseded, skipping", sessionId, requestId)
+                    throw RequestSupersededException(sessionId, requestId)
+                }
+                logger.debug("Session {} reload request {} executing", sessionId, requestId)
                 managed.driver.reload()
             }
+            logger.debug("Session {} reload request {} completed", sessionId, requestId)
+            ResponseEntity.ok(WebDriverResponse<Any?>(value = null))
+        } catch (e: RequestSupersededException) {
+            logger.info("Session {} reload was superseded by newer request", sessionId)
             ResponseEntity.ok(WebDriverResponse<Any?>(value = null))
         } catch (e: Exception) {
             logger.error("Reload failed | sessionId={} | {}", sessionId, e.message)
@@ -158,6 +195,7 @@ class NavigationController(
 
     /**
      * Navigates back in browser history.
+     * Implements last-request-wins strategy.
      */
     @PostMapping("/back")
     suspend fun goBack(
@@ -170,10 +208,22 @@ class NavigationController(
         val managed = sessionManager.getSession(sessionId)
             ?: return ControllerUtils.notFound("session not found", "No active session with id $sessionId")
 
+        val requestId = managed.newRequest()
+        logger.debug("Session {} goBack request {} registered", sessionId, requestId)
+
         return try {
             managed.mutex.withLock {
+                if (!managed.isLatestRequest(requestId)) {
+                    logger.debug("Session {} goBack request {} was superseded, skipping", sessionId, requestId)
+                    throw RequestSupersededException(sessionId, requestId)
+                }
+                logger.debug("Session {} goBack request {} executing", sessionId, requestId)
                 managed.driver.goBack()
             }
+            logger.debug("Session {} goBack request {} completed", sessionId, requestId)
+            ResponseEntity.ok(WebDriverResponse<Any?>(value = null))
+        } catch (e: RequestSupersededException) {
+            logger.info("Session {} goBack was superseded by newer request", sessionId)
             ResponseEntity.ok(WebDriverResponse<Any?>(value = null))
         } catch (e: Exception) {
             logger.error("Go back failed | sessionId={} | {}", sessionId, e.message)
@@ -183,6 +233,7 @@ class NavigationController(
 
     /**
      * Navigates forward in browser history.
+     * Implements last-request-wins strategy.
      */
     @PostMapping("/forward")
     suspend fun goForward(
@@ -195,10 +246,22 @@ class NavigationController(
         val managed = sessionManager.getSession(sessionId)
             ?: return ControllerUtils.notFound("session not found", "No active session with id $sessionId")
 
+        val requestId = managed.newRequest()
+        logger.debug("Session {} goForward request {} registered", sessionId, requestId)
+
         return try {
             managed.mutex.withLock {
+                if (!managed.isLatestRequest(requestId)) {
+                    logger.debug("Session {} goForward request {} was superseded, skipping", sessionId, requestId)
+                    throw RequestSupersededException(sessionId, requestId)
+                }
+                logger.debug("Session {} goForward request {} executing", sessionId, requestId)
                 managed.driver.goForward()
             }
+            logger.debug("Session {} goForward request {} completed", sessionId, requestId)
+            ResponseEntity.ok(WebDriverResponse<Any?>(value = null))
+        } catch (e: RequestSupersededException) {
+            logger.info("Session {} goForward was superseded by newer request", sessionId)
             ResponseEntity.ok(WebDriverResponse<Any?>(value = null))
         } catch (e: Exception) {
             logger.error("Go forward failed | sessionId={} | {}", sessionId, e.message)
@@ -208,6 +271,7 @@ class NavigationController(
 
     /**
      * Gets the page title.
+     * Implements last-request-wins strategy.
      */
     @GetMapping("/title")
     suspend fun getTitle(
@@ -220,11 +284,23 @@ class NavigationController(
         val managed = sessionManager.getSession(sessionId)
             ?: return ControllerUtils.notFound("session not found", "No active session with id $sessionId")
 
+        val requestId = managed.newRequest()
+        logger.debug("Session {} getTitle request {} registered", sessionId, requestId)
+
         return try {
             val title = managed.mutex.withLock {
+                if (!managed.isLatestRequest(requestId)) {
+                    logger.debug("Session {} getTitle request {} was superseded, skipping", sessionId, requestId)
+                    throw RequestSupersededException(sessionId, requestId)
+                }
+                logger.debug("Session {} getTitle request {} executing", sessionId, requestId)
                 managed.driver.title()
             }
+            logger.debug("Session {} getTitle request {} completed", sessionId, requestId)
             ResponseEntity.ok(WebDriverResponse(value = title))
+        } catch (e: RequestSupersededException) {
+            logger.info("Session {} getTitle was superseded by newer request", sessionId)
+            ResponseEntity.ok(WebDriverResponse(value = ""))
         } catch (e: Exception) {
             logger.error("Get title failed | sessionId={} | {}", sessionId, e.message)
             ControllerUtils.errorResponse("webdriver error", e.message ?: "Failed to get title")
@@ -233,6 +309,7 @@ class NavigationController(
 
     /**
      * Brings the browser window to the front.
+     * Implements last-request-wins strategy.
      */
     @PostMapping("/bringToFront")
     suspend fun bringToFront(
@@ -245,10 +322,22 @@ class NavigationController(
         val managed = sessionManager.getSession(sessionId)
             ?: return ControllerUtils.notFound("session not found", "No active session with id $sessionId")
 
+        val requestId = managed.newRequest()
+        logger.debug("Session {} bringToFront request {} registered", sessionId, requestId)
+
         return try {
             managed.mutex.withLock {
+                if (!managed.isLatestRequest(requestId)) {
+                    logger.debug("Session {} bringToFront request {} was superseded, skipping", sessionId, requestId)
+                    throw RequestSupersededException(sessionId, requestId)
+                }
+                logger.debug("Session {} bringToFront request {} executing", sessionId, requestId)
                 managed.driver.bringToFront()
             }
+            logger.debug("Session {} bringToFront request {} completed", sessionId, requestId)
+            ResponseEntity.ok(WebDriverResponse<Any?>(value = null))
+        } catch (e: RequestSupersededException) {
+            logger.info("Session {} bringToFront was superseded by newer request", sessionId)
             ResponseEntity.ok(WebDriverResponse<Any?>(value = null))
         } catch (e: Exception) {
             logger.error("Bring to front failed | sessionId={} | {}", sessionId, e.message)

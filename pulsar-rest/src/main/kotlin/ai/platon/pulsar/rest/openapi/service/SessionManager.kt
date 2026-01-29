@@ -12,6 +12,7 @@ import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Manages WebDriver sessions with real PulsarSession and AgenticSession instances.
@@ -28,8 +29,10 @@ class SessionManager(
     /**
      * Container for session-related objects.
      *
-     * The driverMutex ensures that WebDriver operations are executed serially, not in parallel.
-     * This is critical because WebDriver methods must not be called concurrently.
+     * Implements "last-request-wins" concurrency strategy:
+     * - Cross-session requests can execute in parallel (different sessions have separate mutexes)
+     * - Same-session concurrent requests: only the latest request executes, earlier ones are cancelled
+     * - Each operation checks if it's still the latest before executing
      */
     data class ManagedSession(
         val sessionId: String,
@@ -41,9 +44,45 @@ class SessionManager(
         var lastAccessedAt: Long = System.currentTimeMillis(),
     ) {
         val mutex: Mutex = Mutex()
+        
+        /**
+         * Monotonically increasing request counter for this session.
+         * Used to implement "last-request-wins" strategy.
+         */
+        private val requestCounter = AtomicLong(0)
+        
+        /**
+         * The ID of the latest request for this session.
+         * Earlier requests should be cancelled when they see a newer request ID.
+         */
+        @Volatile
+        private var latestRequestId: Long = 0
 
         val driver get() = pulsarSession.getOrCreateBoundDriver()
         val agent: PerceptiveAgent get() = pulsarSession.companionAgent
+        
+        /**
+         * Generates and registers a new request ID for this session.
+         * This makes the new request the "latest" and causes older requests to be cancelled.
+         *
+         * @return The new request ID
+         */
+        fun newRequest(): Long {
+            val requestId = requestCounter.incrementAndGet()
+            latestRequestId = requestId
+            return requestId
+        }
+        
+        /**
+         * Checks if the given request ID is still the latest for this session.
+         * Used to implement cancellation of superseded requests.
+         *
+         * @param requestId The request ID to check
+         * @return true if this is still the latest request, false if it has been superseded
+         */
+        fun isLatestRequest(requestId: Long): Boolean {
+            return requestId == latestRequestId
+        }
     }
 
     private val sessions = ConcurrentHashMap<String, ManagedSession>()

@@ -1,6 +1,7 @@
 package ai.platon.pulsar.rest.openapi.controller
 
 import ai.platon.pulsar.rest.openapi.dto.*
+import ai.platon.pulsar.rest.openapi.exception.RequestSupersededException
 import ai.platon.pulsar.rest.openapi.service.SessionManager
 import ai.platon.pulsar.rest.openapi.store.InMemoryStore
 import ai.platon.pulsar.skeleton.crawl.fetch.driver.WebDriverException
@@ -75,6 +76,7 @@ class ElementController(
 
     /**
      * Clicks an element by ID.
+     * Implements last-request-wins strategy.
      */
     @PostMapping("/element/{elementId}/click")
     suspend fun clickElement(
@@ -91,10 +93,18 @@ class ElementController(
         val element = store.getElement(sessionId, elementId)
             ?: return ControllerUtils.notFound("no such element", "Element with id $elementId not found")
 
+        val requestId = managed.newRequest()
+
         return try {
             managed.mutex.withLock {
+                if (!managed.isLatestRequest(requestId)) {
+                    throw RequestSupersededException(sessionId, requestId)
+                }
                 managed.driver.click(element.selector)
             }
+            ResponseEntity.ok(WebDriverResponse<Any?>(value = null))
+        } catch (e: RequestSupersededException) {
+            logger.info("Session {} clickElement was superseded by newer request", sessionId)
             ResponseEntity.ok(WebDriverResponse<Any?>(value = null))
         } catch (e: WebDriverException) {
             logger.error("Element click failed | sessionId={} elementId={} | {}", sessionId, elementId, e.message)
@@ -107,6 +117,7 @@ class ElementController(
 
     /**
      * Sends keys to an element by ID.
+     * Implements last-request-wins strategy.
      */
     @PostMapping("/element/{elementId}/value", consumes = [MediaType.APPLICATION_JSON_VALUE])
     suspend fun sendKeysToElement(
@@ -124,10 +135,18 @@ class ElementController(
         val element = store.getElement(sessionId, elementId)
             ?: return ControllerUtils.notFound("no such element", "Element with id $elementId not found")
 
+        val requestId = managed.newRequest()
+
         return try {
             managed.mutex.withLock {
+                if (!managed.isLatestRequest(requestId)) {
+                    throw RequestSupersededException(sessionId, requestId)
+                }
                 managed.driver.fill(element.selector, request.text)
             }
+            ResponseEntity.ok(WebDriverResponse<Any?>(value = null))
+        } catch (e: RequestSupersededException) {
+            logger.info("Session {} sendKeysToElement was superseded by newer request", sessionId)
             ResponseEntity.ok(WebDriverResponse<Any?>(value = null))
         } catch (e: WebDriverException) {
             logger.error("Send keys failed | sessionId={} elementId={} | {}", sessionId, elementId, e.message)
@@ -140,6 +159,7 @@ class ElementController(
 
     /**
      * Gets an element attribute by name.
+     * Implements last-request-wins strategy.
      */
     @GetMapping("/element/{elementId}/attribute/{name}")
     suspend fun getElementAttribute(
@@ -157,11 +177,19 @@ class ElementController(
         val element = store.getElement(sessionId, elementId)
             ?: return ControllerUtils.notFound("no such element", "Element with id $elementId not found")
 
+        val requestId = managed.newRequest()
+
         return try {
             val value = managed.mutex.withLock {
+                if (!managed.isLatestRequest(requestId)) {
+                    throw RequestSupersededException(sessionId, requestId)
+                }
                 managed.driver.selectFirstAttributeOrNull(element.selector, name)
             }
             ResponseEntity.ok(AttributeResponse(value = value ?: ""))
+        } catch (e: RequestSupersededException) {
+            logger.info("Session {} getElementAttribute was superseded by newer request", sessionId)
+            ResponseEntity.ok(AttributeResponse(value = ""))
         } catch (e: WebDriverException) {
             logger.error(
                 "Get attribute failed | sessionId={} elementId={} name={} | {}",
@@ -186,6 +214,7 @@ class ElementController(
 
     /**
      * Gets an element's text content.
+     * Implements last-request-wins strategy.
      */
     @GetMapping("/element/{elementId}/text")
     suspend fun getElementText(
@@ -202,11 +231,19 @@ class ElementController(
         val element = store.getElement(sessionId, elementId)
             ?: return ControllerUtils.notFound("no such element", "Element with id $elementId not found")
 
+        val requestId = managed.newRequest()
+
         return try {
             val text = managed.mutex.withLock {
+                if (!managed.isLatestRequest(requestId)) {
+                    throw RequestSupersededException(sessionId, requestId)
+                }
                 managed.driver.selectFirstTextOrNull(element.selector) ?: ""
             }
             ResponseEntity.ok(TextResponse(value = text))
+        } catch (e: RequestSupersededException) {
+            logger.info("Session {} getElementText was superseded by newer request", sessionId)
+            ResponseEntity.ok(TextResponse(value = ""))
         } catch (e: WebDriverException) {
             logger.error("Get text failed | sessionId={} elementId={} | {}", sessionId, elementId, e.message)
             ControllerUtils.errorResponse("webdriver error", e.message ?: "WebDriver error")
