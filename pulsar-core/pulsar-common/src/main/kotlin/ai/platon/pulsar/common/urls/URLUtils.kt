@@ -193,43 +193,53 @@ object URLUtils {
     /**
      * Safely encodes a URL with special characters in query parameters.
      * 
-     * This method attempts to parse the URL and encode any special characters that would
-     * cause URIBuilder to fail. It preserves already-encoded characters and only encodes
-     * raw special characters.
+     * This method attempts to parse the URL and encode any special characters in the query string
+     * that would cause URIBuilder to fail. It does NOT fix URLs with special characters in the path.
      * 
-     * @param url The URL string that may contain unencoded special characters
+     * @param url The URL string that may contain unencoded special characters in query parameters
      * @return A properly encoded URL string safe for URIBuilder
-     * @throws URISyntaxException If the URL structure is fundamentally invalid
+     * @throws URISyntaxException If the URL structure is fundamentally invalid or has illegal characters in the path
      */
     private fun safeEncodeUrl(url: String): String {
         return try {
             // First try to parse with URIBuilder - if it works, the URL is already well-formed
             URIBuilder(url)
             url
-        } catch (e: Exception) {
-            // If URIBuilder fails, manually parse and encode the URL
-            val queryStart = url.indexOf('?')
-            val fragmentStart = url.indexOf('#')
+        } catch (e: URISyntaxException) {
+            // Check if the error is specifically about query parameters
+            val message = e.message ?: ""
+            if (!message.contains("Illegal character in query", ignoreCase = true) &&
+                !message.contains("query", ignoreCase = true)) {
+                // The error is not in the query string (e.g., it's in the path or authority)
+                // Don't try to fix it - let it fail
+                throw e
+            }
             
-            if (queryStart == -1 && fragmentStart == -1) {
-                // No query or fragment, the base URL itself is malformed
-                throw URISyntaxException(url, "Invalid URL structure")
+            // The error is in the query string - try to encode the query parameters
+            val queryStart = url.indexOf('?')
+            if (queryStart == -1) {
+                // No query string, but we got a query error? Re-throw the original exception
+                throw e
             }
             
             // Split into base URL and query/fragment parts
-            val baseUrl = if (queryStart != -1) url.substring(0, queryStart) else {
-                if (fragmentStart != -1) url.substring(0, fragmentStart) else url
+            val fragmentStart = url.indexOf('#', queryStart)
+            val baseUrl = url.substring(0, queryStart)
+            
+            // Verify that the base URL is valid by itself
+            try {
+                URI(baseUrl)
+            } catch (baseException: URISyntaxException) {
+                // Base URL is invalid - can't fix this
+                throw baseException
             }
             
-            // Parse base URL to extract components
-            val baseUri = URI(baseUrl)
-            
             // Extract query string (between ? and # or end of string)
-            val queryEnd = if (fragmentStart != -1 && fragmentStart > queryStart) fragmentStart else url.length
-            val queryString = if (queryStart != -1) url.substring(queryStart + 1, queryEnd) else null
+            val queryEnd = if (fragmentStart != -1) fragmentStart else url.length
+            val queryString = url.substring(queryStart + 1, queryEnd)
             
             // Encode query parameters by encoding each parameter value
-            val encodedQuery = queryString?.split("&")?.joinToString("&") { param ->
+            val encodedQuery = queryString.split("&").joinToString("&") { param ->
                 val eqIndex = param.indexOf('=')
                 if (eqIndex != -1) {
                     val key = param.substring(0, eqIndex)
@@ -241,13 +251,7 @@ object URLUtils {
             }
             
             // Reconstruct the URL with encoded query
-            StringBuilder().apply {
-                append(baseUri.scheme)
-                append("://")
-                baseUri.authority?.let { append(it) }
-                baseUri.path?.let { append(it) } ?: append("/")
-                encodedQuery?.let { append("?").append(it) }
-            }.toString()
+            "$baseUrl?$encodedQuery"
         }
     }
 
