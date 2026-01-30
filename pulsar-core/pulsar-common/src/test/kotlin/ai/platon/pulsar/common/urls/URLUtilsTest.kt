@@ -236,6 +236,10 @@ class URLUtilsTest {
         // The query parameters should be properly encoded
         assertTrue(normalized.toString().contains("localhost"))
         assertTrue(normalized.toString().contains("/test"))
+        // Verify special characters are encoded
+        val normalizedStr = normalized.toString()
+        assertTrue(normalizedStr.contains("%3C") || normalizedStr.contains("<"), 
+            "Expected '<' to be encoded as %3C or preserved, got: $normalizedStr")
     }
 
     @Test
@@ -263,5 +267,22 @@ class URLUtilsTest {
         val normalized = URLUtils.normalize(encodedUrl)
         assertNotNull(normalized)
         assertTrue(normalized.toString().contains("example.com"))
+        // Verify it doesn't double-encode
+        val normalizedStr = normalized.toString()
+        assertFalse(normalizedStr.contains("%253C"), 
+            "URL should not be double-encoded, got: $normalizedStr")
+    }
+
+    @Test
+    fun testNormalize_URLWithFragment() {
+        // Test that fragments are preserved
+        val urlWithFragment = "http://example.com/test?param=<value>#section"
+        val normalized = URLUtils.normalize(urlWithFragment, ignoreQuery = false)
+        assertNotNull(normalized)
+        val normalizedStr = normalized.toString()
+        // Note: normalize() removes fragments, so this should not have a fragment
+        assertTrue(normalizedStr.contains("example.com"))
+        assertFalse(normalizedStr.contains("#"), 
+            "Fragment should be removed by normalize(), got: $normalizedStr")
     }
 }

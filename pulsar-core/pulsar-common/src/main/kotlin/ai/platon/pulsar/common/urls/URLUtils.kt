@@ -191,10 +191,11 @@ object URLUtils {
     }
 
     /**
-     * Safely encodes a URL with special characters in query parameters.
+     * Safely encodes a URL with unencoded special characters in query parameters.
      * 
      * This method attempts to parse the URL and encode any special characters in the query string
      * that would cause URIBuilder to fail. It does NOT fix URLs with special characters in the path.
+     * It preserves already-encoded characters and handles fragments correctly.
      * 
      * @param url The URL string that may contain unencoded special characters in query parameters
      * @return A properly encoded URL string safe for URIBuilder
@@ -222,7 +223,7 @@ object URLUtils {
                 throw e
             }
             
-            // Split into base URL and query/fragment parts
+            // Split into base URL, query, and fragment parts
             val fragmentStart = url.indexOf('#', queryStart)
             val baseUrl = url.substring(0, queryStart)
             
@@ -238,20 +239,50 @@ object URLUtils {
             val queryEnd = if (fragmentStart != -1) fragmentStart else url.length
             val queryString = url.substring(queryStart + 1, queryEnd)
             
-            // Encode query parameters by encoding each parameter value
+            // Extract fragment if present
+            val fragment = if (fragmentStart != -1 && fragmentStart < url.length - 1) {
+                url.substring(fragmentStart + 1)
+            } else null
+            
+            // Encode query parameters
+            // Note: We encode each parameter independently which means ampersands in values
+            // must be already encoded, otherwise they'll be treated as parameter separators
             val encodedQuery = queryString.split("&").joinToString("&") { param ->
                 val eqIndex = param.indexOf('=')
                 if (eqIndex != -1) {
                     val key = param.substring(0, eqIndex)
                     val value = param.substring(eqIndex + 1)
-                    "$key=${URLEncoder.encode(value, "UTF-8")}"
+                    // Encode the value if it contains illegal characters
+                    // We use a simple strategy: try to construct a URI with this query parameter
+                    // If it fails, encode it
+                    val testUri = try {
+                        java.net.URI("http://test.com?$param")
+                        // URI construction succeeded, the parameter is already well-formed
+                        param
+                    } catch (testException: Exception) {
+                        // URI construction failed, need to encode the value
+                        "$key=${URLEncoder.encode(value, "UTF-8").replace("+", "%20")}"
+                    }
+                    testUri
                 } else {
-                    URLEncoder.encode(param, "UTF-8")
+                    // Key without value - try to encode if needed
+                    try {
+                        java.net.URI("http://test.com?$param")
+                        param
+                    } catch (testException: Exception) {
+                        URLEncoder.encode(param, "UTF-8").replace("+", "%20")
+                    }
                 }
             }
             
-            // Reconstruct the URL with encoded query
-            "$baseUrl?$encodedQuery"
+            // Reconstruct the URL with encoded query and fragment
+            StringBuilder().apply {
+                append(baseUrl)
+                append("?").append(encodedQuery)
+                if (fragment != null) {
+                    append("#").append(fragment)
+                }
+            }.toString()
         }
     }
 
