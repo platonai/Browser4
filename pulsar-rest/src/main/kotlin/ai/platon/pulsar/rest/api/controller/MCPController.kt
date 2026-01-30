@@ -23,7 +23,7 @@ import org.springframework.web.bind.annotation.*
  * @property mcpService The MCP service that handles tool execution.
  */
 @RestController
-@CrossOrigin
+@CrossOrigin(origins = ["\${mcp.server.allowed-origins:*}"])
 @RequestMapping("api/mcp")
 class MCPController(
     private val mcpService: MCPService
@@ -84,11 +84,11 @@ class MCPController(
         consumes = [MediaType.APPLICATION_JSON_VALUE]
     )
     @ResponseBody
-    fun callTool(@RequestBody request: JsonNode): Map<String, Any> = runBlocking {
+    suspend fun callTool(@RequestBody request: JsonNode): Map<String, Any> {
         val toolName = request.get("name")?.asText()
             ?: throw IllegalArgumentException("Tool name is required")
-        val arguments = request.get("arguments") ?: request
+        val arguments = request.get("arguments") ?: throw IllegalArgumentException("Arguments are required")
 
-        mcpService.callTool(toolName, arguments)
+        return mcpService.callTool(toolName, arguments)
     }
 }

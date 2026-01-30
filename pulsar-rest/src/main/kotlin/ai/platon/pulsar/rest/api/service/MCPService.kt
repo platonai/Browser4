@@ -3,10 +3,11 @@ package ai.platon.pulsar.rest.api.service
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.tools.crawl.ScrapeRequest
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.persist.WebPage
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Service
+import java.net.URI
 
 /**
  * MCP (Model Context Protocol) Service for Browser4.
@@ -23,7 +24,7 @@ import org.springframework.stereotype.Service
  * - load_page: Load a web page and return its content
  * - scrape_data: Extract structured data using X-SQL
  * - extract_text: Extract text content from a page
- * - take_screenshot: Capture a screenshot of a page
+ * - get_page_info: Get metadata about a page
  *
  * @property session The agentic session for executing browser operations.
  * @property scrapeService The scrape service for data extraction.
@@ -31,16 +32,14 @@ import org.springframework.stereotype.Service
 @Service
 class MCPService(
     private val session: AgenticSession,
-    private val scrapeService: ScrapeService
+    private val scrapeService: ScrapeService,
+    @Value("\${mcp.server.name:browser4-mcp-server}") private val serverName: String,
+    @Value("\${mcp.server.version:1.0.0}") private val serverVersion: String,
+    @Value("\${mcp.server.description:Browser4 MCP Server - AI-powered browser automation and data extraction}")
+    private val serverDescription: String
 ) {
     private val logger = getLogger(this)
     private val objectMapper = jacksonObjectMapper()
-
-    companion object {
-        const val SERVER_NAME = "browser4-mcp-server"
-        const val SERVER_VERSION = "1.0.0"
-        const val SERVER_DESCRIPTION = "Browser4 MCP Server - AI-powered browser automation and data extraction"
-    }
 
     /**
      * Tool definitions for the MCP server.
@@ -117,9 +116,9 @@ class MCPService(
      */
     fun getServerInfo(): Map<String, Any> {
         return mapOf(
-            "name" to SERVER_NAME,
-            "version" to SERVER_VERSION,
-            "description" to SERVER_DESCRIPTION,
+            "name" to serverName,
+            "version" to serverVersion,
+            "description" to serverDescription,
             "capabilities" to mapOf(
                 "tools" to mapOf<String, Any>()
             )
@@ -170,8 +169,8 @@ class MCPService(
                     )
                 )
             )
-        } catch (e: Exception) {
-            logger.error("Error executing tool '{}': {}", toolName, e.message, e)
+        } catch (e: IllegalArgumentException) {
+            logger.warn("Invalid argument for tool '{}': {}", toolName, e.message)
             mapOf(
                 "isError" to true,
                 "content" to listOf(
@@ -181,6 +180,42 @@ class MCPService(
                     )
                 )
             )
+        } catch (e: Exception) {
+            logger.error("Error executing tool '{}': {}", toolName, e.message, e)
+            mapOf(
+                "isError" to true,
+                "content" to listOf(
+                    mapOf(
+                        "type" to "text",
+                        "text" to "Error: An unexpected error occurred while executing the tool"
+                    )
+                )
+            )
+        }
+    }
+
+    /**
+     * Validates that a URL is safe to load.
+     * 
+     * @param url The URL to validate.
+     * @throws IllegalArgumentException if the URL is invalid or unsafe.
+     */
+    private fun validateUrl(url: String) {
+        require(url.isNotBlank()) { "URL cannot be blank" }
+        
+        try {
+            val uri = URI(url)
+            val scheme = uri.scheme?.lowercase()
+            
+            require(scheme in setOf("http", "https")) { 
+                "Only HTTP and HTTPS protocols are supported. Got: $scheme" 
+            }
+            
+            require(!url.contains(":8182/")) {
+                "Internal URLs are not allowed"
+            }
+        } catch (e: Exception) {
+            throw IllegalArgumentException("Invalid URL format: ${e.message}")
         }
     }
 
@@ -190,6 +225,8 @@ class MCPService(
     private fun executeLoadPage(arguments: JsonNode): String {
         val url = arguments.get("url")?.asText()
             ?: throw IllegalArgumentException("url is required")
+        validateUrl(url)
+        
         val options = arguments.get("options")?.asText() ?: ""
 
         val page = session.load(url, options)
@@ -233,6 +270,8 @@ class MCPService(
     private fun executeExtractText(arguments: JsonNode): String {
         val url = arguments.get("url")?.asText()
             ?: throw IllegalArgumentException("url is required")
+        validateUrl(url)
+        
         val selector = arguments.get("selector")?.asText()
 
         val page = session.load(url)
@@ -262,6 +301,7 @@ class MCPService(
     private fun executeGetPageInfo(arguments: JsonNode): String {
         val url = arguments.get("url")?.asText()
             ?: throw IllegalArgumentException("url is required")
+        validateUrl(url)
 
         val page = session.load(url)
 

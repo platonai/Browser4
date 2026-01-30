@@ -184,23 +184,9 @@ mcp.server.description=Browser4 MCP Server - AI-powered browser automation and d
 
 ### Claude Desktop
 
-Add the following to your Claude Desktop configuration:
+**Note:** Claude Desktop requires MCP servers to communicate via STDIO protocol, not HTTP. To use Browser4 with Claude Desktop, you need a proxy script that converts between STDIO and HTTP.
 
-```json
-{
-  "mcpServers": {
-    "browser4": {
-      "command": "curl",
-      "args": [
-        "-X", "POST",
-        "-H", "Content-Type: application/json",
-        "-d", "@-",
-        "http://localhost:8182/api/mcp/call_tool"
-      ]
-    }
-  }
-}
-```
+See the `mcp-server-examples.md` file for a complete working example of a Node.js proxy script.
 
 ### HTTP Client
 
