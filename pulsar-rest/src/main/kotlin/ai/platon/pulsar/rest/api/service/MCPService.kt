@@ -202,7 +202,7 @@ class MCPService(
             appendLine("Content Length: ${page.contentLength} bytes")
             appendLine()
             appendLine("Text Content Preview (first 500 chars):")
-            val text = page.contentText
+            val text = page.contentText ?: ""
             appendLine(if (text.length > 500) text.substring(0, 500) + "..." else text)
         }
     }
@@ -220,10 +220,10 @@ class MCPService(
         return buildString {
             appendLine("Scrape completed:")
             appendLine("Status: ${response.statusCode}")
-            appendLine("Protocol Status: ${response.protocolStatusCode}")
+            appendLine("Page Status: ${response.pageStatusCode}")
             appendLine()
             appendLine("Result:")
-            appendLine(response.result)
+            appendLine(response.resultSet?.toString() ?: "No results")
         }
     }
 
@@ -239,9 +239,9 @@ class MCPService(
         val document = session.parse(page)
 
         val text = if (selector != null) {
-            document.selectFirst(selector)?.text() ?: ""
+            document.selectFirstTextOrNull(selector) ?: ""
         } else {
-            document.text()
+            document.text
         }
 
         return buildString {
@@ -274,9 +274,6 @@ class MCPService(
             appendLine("Encoding: ${page.encoding}")
             appendLine("Content Length: ${page.contentLength} bytes")
             appendLine("Fetch Time: ${page.fetchTime}")
-            appendLine("Parse Time: ${page.parseTime}")
-            appendLine("Total Time: ${page.fetchTime + page.parseTime}ms")
-            appendLine("Links Count: ${page.liveLinks.size}")
             appendLine("Modified Time: ${page.modifiedTime}")
         }
     }
