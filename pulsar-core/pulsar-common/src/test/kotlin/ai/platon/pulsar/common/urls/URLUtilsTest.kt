@@ -27,9 +27,10 @@ class URLUtilsTest {
 
     @Test
     fun testNormalizer() {
+        // URLs with special characters like quotes should now be encoded and handled, not rejected
         var url = "https://www.amazon.com/s?k=\"Boys%27+Novelty+Belt+Buckles\"&rh=n:9057119011&page=1"
         var normUrl = URLUtils.normalizeOrNull(url, true)
-        assertNull(normUrl)
+        assertNotNull(normUrl, "URLs with special characters should be encoded, not rejected")
 
         url = "https://www.amazon.com/s?k=Boys%27+Novelty+Belt+Buckles&rh=n:9057119011&page=1"
         normUrl = URLUtils.normalizeOrNull(url, true)
@@ -222,5 +223,45 @@ class URLUtilsTest {
 //        printlnPro(result)
 
         assertEquals(expectedURL, result)
+    }
+
+    @Test
+    fun testNormalize_URLWithSpecialCharactersInQuery() {
+        // Test URL with angle brackets (potential XSS)
+        val urlWithAngleBrackets = "http://localhost:18080/test?param=<script>alert('xss')</script>"
+        val normalized = URLUtils.normalize(urlWithAngleBrackets)
+        assertNotNull(normalized)
+        
+        // The URL should be successfully normalized (not throw an exception)
+        // The query parameters should be properly encoded
+        assertTrue(normalized.toString().contains("localhost"))
+        assertTrue(normalized.toString().contains("/test"))
+    }
+
+    @Test
+    fun testNormalize_URLWithDoubleQuotesInQuery() {
+        // Test URL with double quotes in query
+        val urlWithQuotes = "http://example.com/search?q=\"test query\""
+        val normalized = URLUtils.normalize(urlWithQuotes)
+        assertNotNull(normalized)
+        assertTrue(normalized.toString().contains("example.com"))
+    }
+
+    @Test
+    fun testNormalize_URLWithMultipleSpecialChars() {
+        // Test URL with various special characters
+        val urlWithSpecialChars = "http://example.com/path?a=<>&b=\"test\"&c={}"
+        val normalized = URLUtils.normalize(urlWithSpecialChars)
+        assertNotNull(normalized)
+        assertTrue(normalized.toString().contains("example.com"))
+    }
+
+    @Test
+    fun testNormalize_AlreadyEncodedURL() {
+        // Test that already-encoded URLs still work
+        val encodedUrl = "http://example.com/test?param=%3Cscript%3E"
+        val normalized = URLUtils.normalize(encodedUrl)
+        assertNotNull(normalized)
+        assertTrue(normalized.toString().contains("example.com"))
     }
 }

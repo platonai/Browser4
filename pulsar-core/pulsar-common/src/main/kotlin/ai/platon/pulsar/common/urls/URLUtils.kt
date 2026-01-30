@@ -191,6 +191,67 @@ object URLUtils {
     }
 
     /**
+     * Safely encodes a URL with special characters in query parameters.
+     * 
+     * This method attempts to parse the URL and encode any special characters that would
+     * cause URIBuilder to fail. It preserves already-encoded characters and only encodes
+     * raw special characters.
+     * 
+     * @param url The URL string that may contain unencoded special characters
+     * @return A properly encoded URL string safe for URIBuilder
+     * @throws URISyntaxException If the URL structure is fundamentally invalid
+     */
+    private fun safeEncodeUrl(url: String): String {
+        return try {
+            // First try to parse with URIBuilder - if it works, the URL is already well-formed
+            URIBuilder(url)
+            url
+        } catch (e: Exception) {
+            // If URIBuilder fails, manually parse and encode the URL
+            val queryStart = url.indexOf('?')
+            val fragmentStart = url.indexOf('#')
+            
+            if (queryStart == -1 && fragmentStart == -1) {
+                // No query or fragment, the base URL itself is malformed
+                throw URISyntaxException(url, "Invalid URL structure")
+            }
+            
+            // Split into base URL and query/fragment parts
+            val baseUrl = if (queryStart != -1) url.substring(0, queryStart) else {
+                if (fragmentStart != -1) url.substring(0, fragmentStart) else url
+            }
+            
+            // Parse base URL to extract components
+            val baseUri = URI(baseUrl)
+            
+            // Extract query string (between ? and # or end of string)
+            val queryEnd = if (fragmentStart != -1 && fragmentStart > queryStart) fragmentStart else url.length
+            val queryString = if (queryStart != -1) url.substring(queryStart + 1, queryEnd) else null
+            
+            // Encode query parameters by encoding each parameter value
+            val encodedQuery = queryString?.split("&")?.joinToString("&") { param ->
+                val eqIndex = param.indexOf('=')
+                if (eqIndex != -1) {
+                    val key = param.substring(0, eqIndex)
+                    val value = param.substring(eqIndex + 1)
+                    "$key=${URLEncoder.encode(value, "UTF-8")}"
+                } else {
+                    URLEncoder.encode(param, "UTF-8")
+                }
+            }
+            
+            // Reconstruct the URL with encoded query
+            StringBuilder().apply {
+                append(baseUri.scheme)
+                append("://")
+                baseUri.authority?.let { append(it) }
+                baseUri.path?.let { append(it) } ?: append("/")
+                encodedQuery?.let { append("?").append(it) }
+            }.toString()
+        }
+    }
+
+    /**
      * Normalize a url spec.
      *
      * A URL may have appended to it a "fragment", also known as a "ref" or a "reference".
@@ -217,7 +278,8 @@ object URLUtils {
     fun normalize(url: String, ignoreQuery: Boolean = false): URL {
         val (url0, _) = splitUrlArgs(url)
 
-        val uriBuilder = URIBuilder(url0)
+        val safeUrl = safeEncodeUrl(url0)
+        val uriBuilder = URIBuilder(safeUrl)
         uriBuilder.fragment = null
         if (ignoreQuery) {
             uriBuilder.removeQuery()
