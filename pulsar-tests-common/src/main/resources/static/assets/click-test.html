@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Click Functions Test Page</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+        }
+        .test-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+        .test-button {
+            margin: 5px;
+            padding: 10px 15px;
+            cursor: pointer;
+        }
+        .result {
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #f0f0f0;
+            border-radius: 3px;
+            min-height: 30px;
+        }
+        .clicked {
+            background-color: #90EE90 !important;
+        }
+    </style>
+</head>
+<body>
+    <h1>Click Functions Test Page</h1>
+    
+    <div class="test-section">
+        <h2>Test clickTextMatches</h2>
+        <button class="test-button" onclick="handleClick(this, 'text-1')">Submit Form</button>
+        <button class="test-button" onclick="handleClick(this, 'text-2')">Submit Data</button>
+        <button class="test-button" onclick="handleClick(this, 'text-3')">Cancel</button>
+        <button class="test-button" onclick="handleClick(this, 'text-4')">Reset Form</button>
+        <div id="text-result" class="result">No clicks yet</div>
+    </div>
+    
+    <div class="test-section">
+        <h2>Test clickMatches (attribute matching)</h2>
+        <button class="test-button" data-action="save" onclick="handleClick(this, 'attr-1')">Save</button>
+        <button class="test-button" data-action="save-draft" onclick="handleClick(this, 'attr-2')">Save Draft</button>
+        <button class="test-button" data-action="delete" onclick="handleClick(this, 'attr-3')">Delete</button>
+        <button class="test-button" data-action="archive" onclick="handleClick(this, 'attr-4')">Archive</button>
+        <div id="attr-result" class="result">No clicks yet</div>
+    </div>
+    
+    <div class="test-section">
+        <h2>Test clickNthAnchor</h2>
+        <a href="#link1" onclick="handleClick(this, 'anchor-1'); return false;">First Link</a><br>
+        <a href="#link2" onclick="handleClick(this, 'anchor-2'); return false;">Second Link</a><br>
+        <a href="#link3" onclick="handleClick(this, 'anchor-3'); return false;">Third Link</a><br>
+        <a href="#link4" onclick="handleClick(this, 'anchor-4'); return false;">Fourth Link</a><br>
+        <a href="#link5" onclick="handleClick(this, 'anchor-5'); return false;">Fifth Link</a><br>
+        <div id="anchor-result" class="result">No clicks yet</div>
+    </div>
+    
+    <script>
+        let clickLog = [];
+        
+        function handleClick(element, id) {
+            element.classList.add('clicked');
+            const timestamp = new Date().toISOString();
+            const entry = {
+                id: id,
+                timestamp: timestamp,
+                text: element.textContent || element.innerText,
+                tag: element.tagName.toLowerCase()
+            };
+            clickLog.push(entry);
+            
+            // Update the appropriate result div
+            let resultDiv;
+            if (id.startsWith('text-')) {
+                resultDiv = document.getElementById('text-result');
+            } else if (id.startsWith('attr-')) {
+                resultDiv = document.getElementById('attr-result');
+            } else if (id.startsWith('anchor-')) {
+                resultDiv = document.getElementById('anchor-result');
+            }
+            
+            if (resultDiv) {
+                resultDiv.textContent = `Clicked: ${entry.text} (${entry.id}) at ${timestamp}`;
+            }
+            
+            console.log('Click logged:', entry);
+            console.log('Total clicks:', clickLog.length);
+        }
+        
+        // Expose clickLog for testing
+        window.getClickLog = function() {
+            return clickLog;
+        };
+        
+        window.getLastClick = function() {
+            return clickLog[clickLog.length - 1];
+        };
+        
+        window.clearClickLog = function() {
+            clickLog = [];
+            document.querySelectorAll('.result').forEach(div => {
+                div.textContent = 'No clicks yet';
+            });
+            document.querySelectorAll('.clicked').forEach(el => {
+                el.classList.remove('clicked');
+            });
+        };
+    </script>
+</body>
+</html>
