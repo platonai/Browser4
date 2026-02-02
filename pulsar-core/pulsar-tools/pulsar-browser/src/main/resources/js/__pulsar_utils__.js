@@ -615,27 +615,83 @@ __pulsar_utils__.click = function(selector) {
  * @param  {String} pattern
  * @return
  */
-__pulsar_utils__.clickTextMatches = function(selector, pattern) {
+/**
+ * Click elements matching selector whose text content matches pattern.
+ *
+ * @param  {string} selector CSS selector
+ * @param  {string} pattern Pattern to match text content (regex)
+ * @param  {number} count Maximum number of elements to click (default: 1)
+ * @return {number} Number of elements clicked
+ */
+__pulsar_utils__.clickTextMatches = function(selector, pattern, count = 1) {
     // TODO: handle selector `*`
 
-    let elements = document.querySelectorAll(selector)
-    for (let ele of elements) {
-        if (ele instanceof HTMLElement) {
-            let text = ele.textContent
-            if (text.match(pattern)) {
-                ele.scrollIntoView()
-                ele.click()
+    try {
+        let elements = document.querySelectorAll(selector)
+        let clicked = 0
+        let regex = new RegExp(pattern)
+        
+        for (let ele of elements) {
+            if (clicked >= count) {
+                break
+            }
+            if (ele instanceof HTMLElement) {
+                let text = ele.textContent
+                if (regex.test(text)) {
+                    ele.scrollIntoView()
+                    ele.click()
+                    clicked++
+                }
             }
         }
+        return clicked
+    } catch (e) {
+        console.error('Error in clickTextMatches:', e)
+        return 0
     }
 }
 
 /**
- * Select the first element and click it.
+ * Click elements matching selector whose attribute matches pattern.
  *
- * @param  {number} n The n-th anchor.
- * @param  {string|null} rootSelector The n-th anchor.
- * @return {string|null}
+ * @param  {string} selector CSS selector
+ * @param  {string} attrName Attribute name to match
+ * @param  {string} pattern Pattern to match attribute value (regex)
+ * @param  {number} count Maximum number of elements to click (default: 1)
+ * @return {number} Number of elements clicked
+ */
+__pulsar_utils__.clickMatches = function(selector, attrName, pattern, count = 1) {
+    try {
+        let elements = document.querySelectorAll(selector)
+        let clicked = 0
+        let regex = new RegExp(pattern)
+        
+        for (let ele of elements) {
+            if (clicked >= count) {
+                break
+            }
+            if (ele instanceof HTMLElement) {
+                let attrValue = ele.getAttribute(attrName)
+                if (attrValue && regex.test(attrValue)) {
+                    ele.scrollIntoView()
+                    ele.click()
+                    clicked++
+                }
+            }
+        }
+        return clicked
+    } catch (e) {
+        console.error('Error in clickMatches:', e)
+        return 0
+    }
+}
+
+/**
+ * Click the n-th anchor element within the specified root.
+ *
+ * @param  {number} n The index of anchor to click (1-based).
+ * @param  {string|null} rootSelector CSS selector of the root element.
+ * @return {string|null} The href of the clicked anchor, or null if not found.
  */
 __pulsar_utils__.clickNthAnchor = function(n, rootSelector) {
     let rootNode

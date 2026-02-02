@@ -612,13 +612,16 @@ abstract class AbstractWebDriver(
     @Throws(WebDriverException::class)
     override suspend fun clickTextMatches(selector: String, pattern: String, count: Int) {
         val safeSelector = Strings.escapeJsString(selector)
-        evaluate("__pulsar_utils__.clickTextMatches('$safeSelector', '$pattern')")
+        val safePattern = Strings.escapeJsString(pattern)
+        evaluate("__pulsar_utils__.clickTextMatches('$safeSelector', '$safePattern', $count)")
     }
 
     @Throws(WebDriverException::class)
     override suspend fun clickMatches(selector: String, attrName: String, pattern: String, count: Int) {
         val safeSelector = Strings.escapeJsString(selector)
-        evaluate("__pulsar_utils__.clickMatches('$safeSelector', '$attrName', '$pattern')")
+        val safeAttrName = Strings.escapeJsString(attrName)
+        val safePattern = Strings.escapeJsString(pattern)
+        evaluate("__pulsar_utils__.clickMatches('$safeSelector', '$safeAttrName', '$safePattern', $count)")
     }
 
     @Throws(WebDriverException::class)
