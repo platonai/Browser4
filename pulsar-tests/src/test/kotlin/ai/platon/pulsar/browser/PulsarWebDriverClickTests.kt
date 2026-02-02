@@ -185,8 +185,12 @@ class PulsarWebDriverClickTests : WebDriverTestBase() {
             driver.clickTextMatches("button.test-button", "'; alert('xss'); '")
             delay(300)
             
-            // If we get here without exception, the escaping worked
-            printlnPro("Pattern escaping prevented potential injection")
+            // Verify no elements were clicked since the pattern won't match any text
+            val clickLog = driver.evaluate("window.getClickLog()") as? List<*>
+            assertNotNull(clickLog)
+            assertEquals(0, clickLog.size, "No elements should be clicked with escaped injection pattern")
+            
+            printlnPro("Pattern escaping prevented potential injection - no elements clicked")
         } catch (e: Exception) {
             // Some regex errors are acceptable (invalid regex pattern)
             printlnPro("Pattern caused error (expected for invalid regex): ${e.message}")

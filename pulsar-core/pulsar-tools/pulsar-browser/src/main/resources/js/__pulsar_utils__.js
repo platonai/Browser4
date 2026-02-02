@@ -646,7 +646,7 @@ __pulsar_utils__.clickTextMatches = function(selector, pattern, count = 1) {
         }
         return clicked
     } catch (e) {
-        console.error('Error in clickTextMatches:', e)
+        console.error('Error in clickTextMatches with selector=' + selector + ', pattern=' + pattern + ':', e)
         return 0
     }
 }
@@ -681,7 +681,7 @@ __pulsar_utils__.clickMatches = function(selector, attrName, pattern, count = 1)
         }
         return clicked
     } catch (e) {
-        console.error('Error in clickMatches:', e)
+        console.error('Error in clickMatches with selector=' + selector + ', attrName=' + attrName + ', pattern=' + pattern + ':', e)
         return 0
     }
 }
