@@ -463,27 +463,27 @@ The kotlin-sdk-tests module now provides:
 ### Running All Tests
 ```bash
 # From kotlin-sdk-tests directory
-mvn test -DrunITs=true
+mvn test
 
 # From project root
-mvn test -pl sdks/kotlin-sdk-tests -DrunITs=true
+mvn test -pl sdks/kotlin-sdk-tests
 ```
 
 ### Running Specific Test Classes
 ```bash
-mvn test -Dtest=WebDriverClickAndAttributeTest -DrunITs=true
-mvn test -Dtest=WebDriverKeyboardAndFocusTest -DrunITs=true
-mvn test -Dtest=ErrorHandlingAndEdgeCasesTest -DrunITs=true
+mvn test -Dtest=WebDriverClickAndAttributeTest
+mvn test -Dtest=WebDriverKeyboardAndFocusTest
+mvn test -Dtest=ErrorHandlingAndEdgeCasesTest
 ```
 
 ### Running Fast Tests Only
 ```bash
-mvn test -Dgroups="IntegrationTest,Fast" -DrunITs=true
+mvn test -Dgroups="IntegrationTest,Fast"
 ```
 
 ### Excluding Slow Tests
 ```bash
-mvn test -Dgroups="IntegrationTest,!Slow" -DrunITs=true
+mvn test -Dgroups="IntegrationTest,!Slow"
 ```
 
 ## Appendix B: Test File Structure

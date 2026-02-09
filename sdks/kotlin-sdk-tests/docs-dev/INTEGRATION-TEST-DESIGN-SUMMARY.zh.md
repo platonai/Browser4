@@ -192,14 +192,14 @@ mvn test
 
 # 运行集成测试（在独立模块）
 cd sdks/kotlin-sdk-tests
-mvn test -DrunITs=true
+mvn test
 
 # 运行所有测试（包括 AI 功能）
 cd sdks/kotlin-sdk-tests
 mvn test -DrunSDKTests=true
 
 # 从项目根目录运行
-mvn test -pl sdks/kotlin-sdk-tests -DrunITs=true
+mvn test -pl sdks/kotlin-sdk-tests
 ```
 
 ### 本地脚本

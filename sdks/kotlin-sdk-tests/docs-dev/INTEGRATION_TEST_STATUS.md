@@ -187,12 +187,12 @@ Ensure all DTOs serialize/deserialize correctly:
 
 ### Run All Tests
 ```bash
-./mvnw -pl sdks/kotlin-sdk-tests test -DrunITs=true
+./mvnw -pl sdks/kotlin-sdk-tests test
 ```
 
 ### Run Specific Test Class
 ```bash
-./mvnw -pl sdks/kotlin-sdk-tests test -DrunITs=true -Dtest=PulsarClientIntegrationTest
+./mvnw -pl sdks/kotlin-sdk-tests test -Dtest=PulsarClientIntegrationTest
 ```
 
 ### Build Without Tests

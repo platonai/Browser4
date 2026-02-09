@@ -304,13 +304,11 @@ fun cleanup() {
 ```bash
 # 运行所有事件机制测试
 ./mvnw -Psdk -pl sdks/kotlin-sdk-tests test \
-  -Dtest=EventMechanismIntegrationTest \
-  -DrunITs=true
+  -Dtest=EventMechanismIntegrationTest
 
 # 运行单个测试
 ./mvnw -Psdk -pl sdks/kotlin-sdk-tests test \
-  -Dtest=EventMechanismIntegrationTest#"should receive SSE events from simple load" \
-  -DrunITs=true
+  -Dtest=EventMechanismIntegrationTest#"should receive SSE events from simple load"
 ```
 
 ## 问题修复

@@ -115,10 +115,10 @@ Tests are located in `sdks/kotlin-sdk-tests/src/test/kotlin/ai/platon/pulsar/sdk
 
 ```bash
 # Run all event mechanism tests
-./mvnw -Psdk -pl sdks/kotlin-sdk-tests test -Dtest=EventMechanismIntegrationTest -DrunITs=true
+./mvnw -Psdk -pl sdks/kotlin-sdk-tests test -Dtest=EventMechanismIntegrationTest
 
 # Run specific test
-./mvnw -Psdk -pl sdks/kotlin-sdk-tests test -Dtest=EventMechanismIntegrationTest#"should receive SSE events from simple load" -DrunITs=true
+./mvnw -Psdk -pl sdks/kotlin-sdk-tests test -Dtest=EventMechanismIntegrationTest#"should receive SSE events from simple load"
 ```
 
 ### Test Implementation Patterns

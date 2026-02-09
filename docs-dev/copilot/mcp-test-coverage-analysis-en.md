@@ -392,8 +392,8 @@ class MCPToolExecutionBenchmark {
 # Run all MCP-related tests
 ./mvnw -pl pulsar-agentic test -Dtest="*MCP*"
 
-# Run E2E tests (requires -DrunITs=true)
-./mvnw -pl pulsar-tests/pulsar-e2e-tests test -Dtest="MCPToolExecutorE2ETest" -DrunITs=true
+# Run E2E tests
+./mvnw -pl pulsar-tests/pulsar-e2e-tests test -Dtest="MCPToolExecutorE2ETest"
 
 # Run all tests with mcp tag
 ./mvnw test -Dgroups="mcp"

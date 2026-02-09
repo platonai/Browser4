@@ -137,9 +137,7 @@ runs:
         fi
 
         # Add pulsar-tests flag
-        if [ "${{ inputs.run_pulsar_tests }}" == "true" ]; then
-          test_cmd="$test_cmd -DrunITs=true"
-        fi
+        # Note: -DrunITs option has been removed as it's no longer needed
 
         # Add batch mode and other options
         test_cmd="$test_cmd -B"

@@ -463,27 +463,27 @@ kotlin-sdk-tests模块现在提供：
 ### 运行所有测试
 ```bash
 # 从kotlin-sdk-tests目录
-mvn test -DrunITs=true
+mvn test
 
 # 从项目根目录
-mvn test -pl sdks/kotlin-sdk-tests -DrunITs=true
+mvn test -pl sdks/kotlin-sdk-tests
 ```
 
 ### 运行特定测试类
 ```bash
-mvn test -Dtest=WebDriverClickAndAttributeTest -DrunITs=true
-mvn test -Dtest=WebDriverKeyboardAndFocusTest -DrunITs=true
-mvn test -Dtest=ErrorHandlingAndEdgeCasesTest -DrunITs=true
+mvn test -Dtest=WebDriverClickAndAttributeTest
+mvn test -Dtest=WebDriverKeyboardAndFocusTest
+mvn test -Dtest=ErrorHandlingAndEdgeCasesTest
 ```
 
 ### 仅运行快速测试
 ```bash
-mvn test -Dgroups="IntegrationTest,Fast" -DrunITs=true
+mvn test -Dgroups="IntegrationTest,Fast"
 ```
 
 ### 排除慢速测试
 ```bash
-mvn test -Dgroups="IntegrationTest,!Slow" -DrunITs=true
+mvn test -Dgroups="IntegrationTest,!Slow"
 ```
 
 ## 附录B：测试文件结构

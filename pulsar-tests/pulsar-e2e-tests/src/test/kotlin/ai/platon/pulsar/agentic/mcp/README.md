@@ -25,22 +25,22 @@ The tests in the `pulsar-tests` module are skipped by default because they are t
 
 ### Run all MCP tests
 ```bash
-./mvnw -pl pulsar-tests test -Dtest="MCPToolExecutorE2ETest" -DrunITs=true
+./mvnw -pl pulsar-tests test -Dtest="MCPToolExecutorE2ETest"
 ```
 
 ### Run a specific test method
 ```bash
-./mvnw -pl pulsar-tests test -Dtest="MCPToolExecutorE2ETest#test server is accessible via HTTP" -DrunITs=true
+./mvnw -pl pulsar-tests test -Dtest="MCPToolExecutorE2ETest#test server is accessible via HTTP"
 ```
 
 ### Run all tests with MCP tag
 ```bash
-./mvnw -pl pulsar-tests test -Dgroups="mcp" -DrunITs=true
+./mvnw -pl pulsar-tests test -Dgroups="mcp"
 ```
 
 ### Run all E2E tests (including MCP)
 ```bash
-./mvnw -pl pulsar-tests test -Dgroups="E2ETest" -DrunITs=true
+./mvnw -pl pulsar-tests test -Dgroups="E2ETest"
 ```
 
 ## Test Coverage

@@ -100,7 +100,7 @@ mvn clean install
 
 #### Integration Tests (Exclude AI)
 ```bash
-mvn test -DrunITs=true -pl sdks/kotlin-sdk-tests
+mvn test -pl sdks/kotlin-sdk-tests
 # Runs: PulsarClient + WebDriver + PulsarSession tests
 # Excludes: AgenticSession tests (require AI)
 ```
@@ -114,19 +114,19 @@ mvn test -DrunSDKTests=true -pl sdks/kotlin-sdk-tests
 
 #### Specific Test Class
 ```bash
-mvn test -Dtest=PulsarSessionIntegrationTest -DrunITs=true
+mvn test -Dtest=PulsarSessionIntegrationTest
 ```
 
 #### Tag-Based Filtering
 ```bash
 # Only fast tests
-mvn test -Dgroups="IntegrationTest,Fast" -DrunITs=true
+mvn test -Dgroups="IntegrationTest,Fast"
 
 # Exclude slow tests
-mvn test -Dgroups="IntegrationTest,!Slow" -DrunITs=true
+mvn test -Dgroups="IntegrationTest,!Slow"
 
 # Exclude browser tests (if Chrome not available)
-mvn test -Dgroups="IntegrationTest,!RequiresBrowser" -DrunITs=true
+mvn test -Dgroups="IntegrationTest,!RequiresBrowser"
 ```
 
 ## Technical Details
@@ -213,7 +213,7 @@ To use these tests in CI/CD:
    ```bash
    cd /home/runner/work/Browser4/Browser4
    mvn clean install -DskipTests
-   mvn test -pl sdks/kotlin-sdk-tests -DrunITs=true
+   mvn test -pl sdks/kotlin-sdk-tests
    ```
 
 3. **Enable in CI**: Add GitHub Actions workflow for SDK tests (template already in design docs).

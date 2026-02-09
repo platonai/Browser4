@@ -93,28 +93,28 @@ cd /home/runner/work/Browser4/Browser4
 ### Run All Integration Tests / 运行所有集成测试
 ```bash
 # From project root / 从项目根目录
-./mvnw -Pall-modules test -pl :kotlin-sdk-tests -DrunITs=true
+./mvnw -Pall-modules test -pl :kotlin-sdk-tests
 
 # Or / 或者
 cd sdks/kotlin-sdk-tests
-../../mvnw test -DrunITs=true
+../../mvnw test
 ```
 
 ### Run Specific Test Class / 运行特定测试类
 ```bash
-./mvnw -Pall-modules test -pl :kotlin-sdk-tests -Dtest=WebDriverClickAndAttributeTest -DrunITs=true
-./mvnw -Pall-modules test -pl :kotlin-sdk-tests -Dtest=WebDriverKeyboardAndFocusTest -DrunITs=true
-./mvnw -Pall-modules test -pl :kotlin-sdk-tests -Dtest=ErrorHandlingAndEdgeCasesTest -DrunITs=true
+./mvnw -Pall-modules test -pl :kotlin-sdk-tests -Dtest=WebDriverClickAndAttributeTest
+./mvnw -Pall-modules test -pl :kotlin-sdk-tests -Dtest=WebDriverKeyboardAndFocusTest
+./mvnw -Pall-modules test -pl :kotlin-sdk-tests -Dtest=ErrorHandlingAndEdgeCasesTest
 ```
 
 ### Run Fast Tests Only / 仅运行快速测试
 ```bash
-./mvnw -Pall-modules test -pl :kotlin-sdk-tests -Dgroups="IntegrationTest,Fast" -DrunITs=true
+./mvnw -Pall-modules test -pl :kotlin-sdk-tests -Dgroups="IntegrationTest,Fast"
 ```
 
 ### Exclude Slow Tests / 排除慢速测试
 ```bash
-./mvnw -Pall-modules test -pl :kotlin-sdk-tests -Dgroups="IntegrationTest,!Slow" -DrunITs=true
+./mvnw -Pall-modules test -pl :kotlin-sdk-tests -Dgroups="IntegrationTest,!Slow"
 ```
 
 ---
