@@ -1042,12 +1042,7 @@ mvn test -pl sdks/kotlin-sdk-tests -Dgroups="IntegrationTest,!Slow"
     <!-- 运行集成测试 Profile -->
     <profile>
         <id>run-integration-tests</id>
-        <activation>
-            <property>
-                <name>runITs</name>
-                <value>true</value>
-            </property>
-        </activation>
+        <!-- Profile can be activated directly with -Prun-integration-tests -->
         <properties>
             <skipTests>false</skipTests>
         </properties>

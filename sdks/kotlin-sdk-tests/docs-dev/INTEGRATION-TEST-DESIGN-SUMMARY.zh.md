@@ -159,12 +159,7 @@ abstract class KotlinSdkIntegrationTestBase {
 ```xml
 <profile>
     <id>run-integration-tests</id>
-    <activation>
-        <property>
-            <name>runITs</name>
-            <value>true</value>
-        </property>
-    </activation>
+    <!-- Profile can be activated directly with -Prun-integration-tests -->
     <properties>
         <skipTests>false</skipTests>
     </properties>
