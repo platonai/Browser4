@@ -1,3 +1,34 @@
+# Agentic Documentation
+
+This directory contains documentation for the Browser4 agentic component (`pulsar-agentic`).
+
+## Table of Contents
+
+- [Custom Agent Tools](custom-agent-tools.md) - Guide for creating custom agent tools
+- [LLM Memory Design](llm-memory-design.md) - Comprehensive design for LLM memory functionality
+- [Agent Event Bus Integration](agentEventBus-integration-plan.md) - Event bus integration plan
+- [Skills](skills/) - Agent skills documentation
+- [Use Cases](use-cases.md) - Common use cases and examples
+
+## LLM Memory Design
+
+> **Status**: Design Document (仅设计，不编程)  
+> **Date**: 2026-02-09
+
+A comprehensive design for adding memory capabilities to the pulsar-agentic component. The design enables AI agents to maintain contextual awareness across multiple interactions, sessions, and tasks through a multi-layered memory system.
+
+- **English**: [llm-memory-design.md](llm-memory-design.md)
+- **中文**: [llm-memory-design.zh.md](llm-memory-design.zh.md)
+
+**Key Features:**
+- Three-layer memory system (working, episodic, semantic)
+- Automatic memory consolidation
+- Vector-based semantic search
+- Token-efficient context integration
+- Pluggable storage backends
+
+---
+
 # Custom Agent Tools - Quick Start
 
 This guide provides a quick overview of how to create and use custom agent tools to extend the agent's capabilities.
