@@ -1,14 +1,16 @@
-# Link Checker
+# Link Checker and Fixer
 
-A Python script to check the validity of all links in documentation files.
+A Python script to check and automatically fix links in documentation files.
 
 ## Features
 
 - ✅ **Multi-format support**: Markdown, HTML, reStructuredText, and plain text
 - 🔗 **Internal link validation**: Checks if referenced files exist (supports relative and absolute paths)
 - 🌐 **External link validation**: Verifies connectivity using HEAD requests (fallback to GET)
+- 🔧 **Auto-fix mode**: Automatically repairs broken internal links using fuzzy matching
+- 💾 **Safe backups**: Creates .bak files before modifying documents
 - ⚡ **Multi-threaded**: Fast parallel checking with configurable worker count
-- 📊 **Detailed reporting**: Shows broken links with file locations and line numbers
+- 📊 **Detailed reporting**: Shows broken links with file locations, line numbers, and suggested fixes
 - 🚀 **CI-friendly**: Returns non-zero exit code when broken links are found
 
 ## Requirements
@@ -49,6 +51,18 @@ Skip external links (faster for local development):
 ./bin/quality/check-links.sh --skip-external
 ```
 
+**Auto-fix broken internal links:**
+```bash
+./bin/quality/check-links.sh --fix
+```
+
+The --fix flag will:
+1. Build a file cache for fast lookups
+2. Find similar files using fuzzy matching
+3. Calculate correct relative paths
+4. Create .bak backups before changes
+5. Update broken links automatically
+
 Use more workers for faster checking:
 ```bash
 ./bin/quality/check-links.sh --workers 20
@@ -73,6 +87,8 @@ python3 bin/quality/fix-links.py --help
 - `--workers N`: Number of worker threads (default: 10)
 - `--timeout N`: Timeout for external links in seconds (default: 10)
 - `--skip-external`: Skip checking external links
+- `--fix`: Automatically fix broken internal links (creates .bak backups)
+- `--check-localhost`: Check localhost/loopback URLs (default: skipped)
 - `--root PATH`: Root directory of the project (default: auto-detect)
 
 ## Examples
@@ -84,12 +100,65 @@ python3 bin/quality/fix-links.py --help
 # Quick check (skip external links)
 ./bin/quality/check-links.sh --skip-external
 
+# Auto-fix broken internal links
+./bin/quality/check-links.sh --skip-external --fix
+
 # Check specific directories
 ./bin/quality/check-links.sh docs docs-dev
 
 # Exclude build artifacts and use 20 workers
 ./bin/quality/check-links.sh --exclude target --exclude build --workers 20
 ```
+
+## Auto-Fix Mode
+
+The `--fix` flag enables automatic correction of broken internal links. This is useful for:
+- Fixing links after files are moved or renamed
+- Correcting typos in file paths
+- Updating references after directory restructuring
+
+### How it works:
+
+1. **Detection**: Identifies broken internal links during normal checking
+2. **Fuzzy Matching**: Searches for similar file paths using intelligent matching (60-70% similarity)
+3. **Path Calculation**: Computes correct relative paths from source to target
+4. **Safe Update**: Creates `.bak` backup files before making any changes
+5. **Verification**: Only replaces exact URL matches in markdown/HTML links
+
+### Example Output:
+
+```
+🔨 Building file cache for auto-fix mode...
+🔧 Applying fixes to 3 file(s)...
+   ✓ Fixed: ../devdocs/test-guide.md → ../docs-dev/copilot/test-guide.md
+   ✓ Fixed: /pulsar-skeleton/WebDriver.kt → ../../pulsar-core/pulsar-skeleton/.../WebDriver.kt
+   📝 Updated: docs/test-strategy.md
+
+✅ Fixed 2 broken link(s)!
+   💾 Backup files created with .bak extension
+```
+
+### What Gets Fixed:
+
+- ✅ Wrong directory names (e.g., `devdocs` → `docs-dev`)
+- ✅ Missing path prefixes for absolute paths
+- ✅ Incorrect relative paths between files
+- ✅ Files moved to different module directories
+- ✅ Case-sensitive path issues
+
+### What Doesn't Get Fixed:
+
+- ❌ External URLs (HTTP/HTTPS links)
+- ❌ Links where no similar file exists
+- ❌ Anchor-only references (#section)
+- ❌ Special URI schemes (mailto:, javascript:, etc.)
+
+### Tips for Using --fix:
+
+1. **Always review changes**: Check `.bak` files to verify fixes are correct
+2. **Run without --fix first**: Preview suggested fixes before applying them
+3. **Use with --skip-external**: Faster for local testing
+4. **Commit separately**: Keep link fixes in separate commits from content changes
 
 ## Output
 
@@ -133,6 +202,7 @@ The script provides a detailed report including:
 📄 docs/concepts.md:42
    🔗 /docs/missing-file.md
    ❌ File not found: /path/to/Browser4/docs/missing-file.md (internal)
+   💡 Suggested fix: /docs/existing-file.md
 
 📄 README.md:156
    🔗 https://example.com/dead-link
@@ -140,6 +210,8 @@ The script provides a detailed report including:
 
 ================================================================================
 ```
+
+Note: When `--fix` is not used, suggested fixes are shown with "💡 Suggested fix" but not applied.
 
 ## CI Integration
 
