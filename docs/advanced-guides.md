@@ -81,7 +81,7 @@ curl -X POST --location "http://localhost:8182/api/x/e" -H "Content-Type: text/p
 "
 ```
 
-Example code: [bash](../bin/legacy/scrape.sh), [PowerShell](../bin/legacy/scrape.ps1), [batch](../bin/legacy/scrape.bat), [java](../pulsar-core/pulsar-common/src/main/java/ai/platon/pulsar/common/SParser.java), [kotlin](../pulsar-rest/src/main/kotlin/ai/platon/pulsar/rest/api/service/ScrapeService.kt), [php](../bin/legacy/scrape.sh).
+Example code: [bash](bin/scrape.sh), [PowerShell](bin/scrape.ps1), [batch](bin/scrape.bat), [java](/ai/platon/pulsar/client/Scraper.java), [kotlin](/ai/platon/pulsar/client/Scraper.kt), [php](/src/main/php/Scraper.php).
 
 Click [X-SQL](x-sql.md) to see a detailed introduction and function descriptions about X-SQL.
 

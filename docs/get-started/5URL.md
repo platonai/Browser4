@@ -8,10 +8,10 @@ In Browser4, each task is defined as some form of URL, which often appears with 
 
 A Uniform Resource Locator (URL), commonly known as a web address, is a reference to a network resource that specifies its location on a computer network and the mechanism for retrieving it. URLs in Browser4 carry additional information for describing data collection tasks and come in several basic forms:
 
-- A [NormURL](../../pulsar-core/pulsar-skeleton/src/main/kotlin/ai/platon/pulsar/skeleton/common/urls/NormURL.kt)
+- A [NormURL](/pulsar-skeleton/src/main/kotlin/ai/platon/pulsar/common/urls/NormURL.kt)
 - A String
-- A [UrlAware](../../pulsar-tests/pulsar-it-tests/src/test/kotlin/ai/platon/pulsar/basic/Hyperlinks.kt)
-- A [DegenerateUrl](../../pulsar-core/pulsar-common/src/main/kotlin/ai/platon/pulsar/common/urls/Urls.kt)
+- A [UrlAware](/pulsar-common/src/main/kotlin/ai/platon/pulsar/common/urls/Hyperlinks.kt)
+- A [DegenerateUrl](/pulsar-common/src/main/kotlin/ai/platon/pulsar/common/urls/Urls.kt)
 
 NormURL represents a "normalized URL," meaning that this URL is the final form for the fetch component and is usually ultimately passed to the actual browser.
 
@@ -32,11 +32,11 @@ session.load(url, args)
 
 UrlAware provides more complex control to describe collection tasks and is the interface for all Hyperlinks.
 
-Finally, [DegenerateUrl](../../pulsar-core/pulsar-common/src/main/kotlin/ai/platon/pulsar/common/urls/Urls.kt) literally means a "degenerate url," which is not actually a url. It is designed to describe non-scraping tasks, such as local computing tasks that do not involve the network, to be executed in the main loop.
+Finally, [DegenerateUrl](/pulsar-common/src/main/kotlin/ai/platon/pulsar/common/urls/Urls.kt) literally means a "degenerate url," which is not actually a url. It is designed to describe non-scraping tasks, such as local computing tasks that do not involve the network, to be executed in the main loop.
 
 ## Hyperlinks
 
-A [hyperlink](https://en.wikipedia.org/wiki/Hyperlink), or simply a link, specifically refers to a reference to data on the Web, usually containing a URL, text, and a set of attributes that users can follow by clicking or tapping. [Hyperlinks in Browser4](../../pulsar-tests/pulsar-it-tests/src/test/kotlin/ai/platon/pulsar/basic/Hyperlinks.kt) are like ordinary hyperlinks but with additional information to describe tasks.
+A [hyperlink](https://en.wikipedia.org/wiki/Hyperlink), or simply a link, specifically refers to a reference to data on the Web, usually containing a URL, text, and a set of attributes that users can follow by clicking or tapping. [Hyperlinks in Browser4](/pulsar-common/src/main/kotlin/ai/platon/pulsar/common/urls/Hyperlinks.kt) are like ordinary hyperlinks but with additional information to describe tasks.
 
 Pulsar predefines several hyperlinks:
 

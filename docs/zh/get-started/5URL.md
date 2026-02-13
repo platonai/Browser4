@@ -7,10 +7,10 @@ URL
 
 统一资源定位符(URL)，俗称网址，是对网络资源的引用，指定其在计算机网络上的位置和检索它的机制。Browser4 中的 URL 带有描述数据采集任务的额外信息，有几种基本形式：
 
-- A [NormURL](../../../pulsar-core/pulsar-skeleton/src/main/kotlin/ai/platon/pulsar/skeleton/common/urls/NormURL.kt)
+- A [NormURL](/pulsar-skeleton/src/main/kotlin/ai/platon/pulsar/common/urls/NormURL.kt)
 - A String
-- A [UrlAware](../../../pulsar-tests/pulsar-it-tests/src/test/kotlin/ai/platon/pulsar/basic/Hyperlinks.kt)
-- A [DegenerateUrl](../../../pulsar-tests/pulsar-it-tests/src/test/kotlin/ai/platon/pulsar/basic/Hyperlinks.kt)
+- A [UrlAware](/pulsar-common/src/main/kotlin/ai/platon/pulsar/common/urls/Hyperlinks.kt)
+- A [DegenerateUrl](/pulsar-common/src/main/kotlin/ai/platon/pulsar/common/urls/Hyperlinks.kt)
 
 NormURL 代表 “规范化的 URL”，这意味着该 url 是 fetch 组件的最终形式，并且通常最终被传递给真正的浏览器。
 
@@ -31,11 +31,11 @@ session.load(url, args)
 
 UrlAware 提供了更复杂的控制来描述采集任务，是所有 Hyperlink 的接口。
 
-最后，[DegenerateUrl](../../../pulsar-tests/pulsar-it-tests/src/test/kotlin/ai/platon/pulsar/basic/Hyperlinks.kt) 字面意思是“退化链接”，事实上不是链接，它被设计来描述非采集任务，譬如不涉及网络的本地计算任务，以便在主循环中执行。
+最后，[DegenerateUrl](/pulsar-common/src/main/kotlin/ai/platon/pulsar/common/urls/Hyperlinks.kt) 字面意思是“退化链接”，事实上不是链接，它被设计来描述非采集任务，譬如不涉及网络的本地计算任务，以便在主循环中执行。
 
 ## Hyperlinks
 
-[超链接](https://en.wikipedia.org/wiki/Hyperlink)，或简称为链接，特指 Web 上对数据的引用，通常包含一个 URL，一个文本和一组属性，用户可以通过单击或点击来跟随它。[Browser4 中的 Hyperlink](../../../pulsar-tests/pulsar-it-tests/src/test/kotlin/ai/platon/pulsar/basic/Hyperlinks.kt) 如同普通超链接，但带有描述任务的额外信息。
+[超链接](https://en.wikipedia.org/wiki/Hyperlink)，或简称为链接，特指 Web 上对数据的引用，通常包含一个 URL，一个文本和一组属性，用户可以通过单击或点击来跟随它。[Browser4 中的 Hyperlink](/pulsar-common/src/main/kotlin/ai/platon/pulsar/common/urls/Hyperlinks.kt) 如同普通超链接，但带有描述任务的额外信息。
 
 Browser4 预定义了几个超链接：
 

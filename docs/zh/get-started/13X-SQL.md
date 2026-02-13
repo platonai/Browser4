@@ -90,7 +90,7 @@ from
 
 ### DOM 函数
 
-DOM 函数被设计为查询 DOM 的属性。每个 DOM 函数都接受一个 ValueDom 参数，它是一个 Jsoup Element 的包装。DOM 函数定义在下面文件中：[DomFunctions](../../../pulsar-core/pulsar-ql/src/main/kotlin/ai/platon/pulsar/ql/h2/udfs/DomFunctions.kt)，所有的 DOM 函数都在命名空间 DOM 中。
+DOM 函数被设计为查询 DOM 的属性。每个 DOM 函数都接受一个 ValueDom 参数，它是一个 Jsoup Element 的包装。DOM 函数定义在下面文件中：[DomFunctions](/pulsar-ql/src/main/kotlin/ai/platon/pulsar/ql/h2/udfs/DomFunctions.kt)，所有的 DOM 函数都在命名空间 DOM 中。
 
 ### DOM_BASE_URI
 
@@ -108,7 +108,7 @@ select dom_base_uri(dom) from load_and_select('https://www.amazon.com/dp/B08PP5M
 
 ## DOM 选择函数
 
-DOM 选择函数被设计为从 DOM 中查询元素及其属性。每个 DOM 函数都接受一个名为 DOM（大小写不敏感），类型为 ValueDom 的参数，它是一个 Jsoup Element 的包装。DOM 选择函数通常也接受一个 cssSelector 参数，从而选择 DOM 的子元素。最重要的 DOM 选择函数定义在下面文件中：[DomSelectFunctions](../../../pulsar-core/pulsar-ql/src/main/kotlin/ai/platon/pulsar/ql/h2/udfs/DomSelectFunctions.kt)。所有的 DOM 选择函数都在命名空间 DOM 中。
+DOM 选择函数被设计为从 DOM 中查询元素及其属性。每个 DOM 函数都接受一个名为 DOM（大小写不敏感），类型为 ValueDom 的参数，它是一个 Jsoup Element 的包装。DOM 选择函数通常也接受一个 cssSelector 参数，从而选择 DOM 的子元素。最重要的 DOM 选择函数定义在下面文件中：[DomSelectFunctions](/pulsar-ql/src/main/kotlin/ai/platon/pulsar/ql/h2/udfs/DomSelectFunctions.kt)。所有的 DOM 选择函数都在命名空间 DOM 中。
 
 ###  DOM_FIRST_TEXT
 
@@ -158,7 +158,7 @@ from
 
 ## String Functions
 
-大多数字符串函数是通过程序从 org.apache.commons.lang3.StringUtils 自动转换而来。你可以在下述文件中找到 UDF 定义：[StringFunctions](../../../pulsar-core/pulsar-ql/src/main/kotlin/ai/platon/pulsar/ql/h2/udfs/StringFunctions.kt)（[国内镜像](https://gitee.com/platonai_galaxyeye/browser4/blob/1.10.x/pulsar-ql/src/main/kotlin/ai/platon/pulsar/ql/h2/udfs/StringFunctions.kt)），所有的字符串函数都在命名空间 STR 中。
+大多数字符串函数是通过程序从 org.apache.commons.lang3.StringUtils 自动转换而来。你可以在下述文件中找到 UDF 定义：[StringFunctions](/pulsar-ql/src/main/kotlin/ai/platon/pulsar/ql/h2/udfs/StringFunctions.kt)（[国内镜像](https://gitee.com/platonai_galaxyeye/browser4/blob/1.10.x/pulsar-ql/src/main/kotlin/ai/platon/pulsar/ql/h2/udfs/StringFunctions.kt)），所有的字符串函数都在命名空间 STR 中。
 
 ### STR_SUBSTRING_AFTER
 

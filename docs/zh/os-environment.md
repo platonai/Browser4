@@ -1,7 +1,7 @@
 系统环境
 =================
 
-Linux[get-started](../test-strategy.md)
+Linux[get-started](get-started)
 -----
 
 更新系统:
