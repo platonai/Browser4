@@ -120,3 +120,5 @@ application-private.properties
 /node_modules/
 */**/py/dom/
 */**/human-private/
+**/pycache__/
+**/__pycache__/
