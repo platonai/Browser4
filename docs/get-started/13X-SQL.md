@@ -91,7 +91,7 @@ from
 
 ### DOM Functions
 
-DOM functions are designed to query DOM attributes. Each DOM function accepts a ValueDom argument, which is a wrapper for a Jsoup Element. DOM functions are defined in the following file: [DomFunctions](/pulsar-ql/src/main/kotlin/ai/platon/pulsar/ql/h2/udfs/DomFunctions.kt), and all DOM functions are in the namespace DOM.
+DOM functions are designed to query DOM attributes. Each DOM function accepts a ValueDom argument, which is a wrapper for a Jsoup Element. DOM functions are defined in the following file: [DomFunctions](../../pulsar-core/pulsar-ql/src/main/kotlin/ai/platon/pulsar/ql/h2/udfs/DomFunctions.kt), and all DOM functions are in the namespace DOM.
 
 ### DOM_BASE_URI
 
@@ -109,7 +109,7 @@ select dom_base_uri(dom) from load_and_select('https://www.amazon.com/dp/B08PP5M
 
 ## DOM Selection Functions
 
-DOM selection functions are designed to query elements and their attributes from the DOM. Each DOM function accepts a parameter named DOM (case-insensitive), of type ValueDom, which is a wrapper for a Jsoup Element. DOM selection functions usually also accept a cssSelector parameter to select a child element of the DOM. The most important DOM selection functions are defined in the following file: [DomSelectFunctions](/pulsar-ql/src/main/kotlin/ai/platon/pulsar/ql/h2/udfs/DomSelectFunctions.kt). All DOM selection functions are in the namespace DOM.
+DOM selection functions are designed to query elements and their attributes from the DOM. Each DOM function accepts a parameter named DOM (case-insensitive), of type ValueDom, which is a wrapper for a Jsoup Element. DOM selection functions usually also accept a cssSelector parameter to select a child element of the DOM. The most important DOM selection functions are defined in the following file: [DomSelectFunctions](../../pulsar-core/pulsar-ql/src/main/kotlin/ai/platon/pulsar/ql/h2/udfs/DomSelectFunctions.kt). All DOM selection functions are in the namespace DOM.
 
 ### DOM_FIRST_TEXT
 
@@ -159,7 +159,7 @@ from
 
 ## String Functions
 
-Most string functions are automatically converted from org.apache.commons.lang3.StringUtils through programming. You can find the UDF definitions in the following file: [StringFunctions](/pulsar-ql/src/main/kotlin/ai/platon/pulsar/ql/h2/udfs/StringFunctions.kt) ([Chinese mirror](https://gitee.com/platonai_galaxyeye/browser4/blob/1.10.x/pulsar-ql/src/main/kotlin/ai/platon/pulsar/ql/h2/udfs/StringFunctions.kt)), and all string functions are in the namespace STR.
+Most string functions are automatically converted from org.apache.commons.lang3.StringUtils through programming. You can find the UDF definitions in the following file: [StringFunctions](../../pulsar-core/pulsar-ql/src/main/kotlin/ai/platon/pulsar/ql/h2/udfs/StringFunctions.kt) ([Chinese mirror](https://gitee.com/platonai_galaxyeye/browser4/blob/1.10.x/pulsar-ql/src/main/kotlin/ai/platon/pulsar/ql/h2/udfs/StringFunctions.kt)), and all string functions are in the namespace STR.
 
 ### STR_SUBSTRING_AFTER
 

@@ -10,7 +10,7 @@ Massively extracting Web data is very challenging. **Websites frequently change 
 
 Browser4 has designed a set of data structures to handle the problem of URL pools. This allows Browser4 not only to handle millions of URLs simultaneously but also to accurately define the behavior of these URLs.
 
-When running continuous crawling, URLs are added to [URLPool](/pulsar-common/src/main/kotlin/ai/platon/pulsar/common/collect/UrlPool.kt). URLPool contains various carefully designed [URLCache](/pulsar-common/src/main/kotlin/ai/platon/pulsar/common/collect/UrlCache.kt) to meet different needs, such as priority tasks, delayed tasks, deadlines, external loading, and so on.
+When running continuous crawling, URLs are added to [URLPool](../../pulsar-core/pulsar-common/src/main/kotlin/ai/platon/pulsar/common/collect/UrlPool.kt). URLPool contains various carefully designed [URLCache](../../pulsar-core/pulsar-common/src/main/kotlin/ai/platon/pulsar/common/collect/UrlCache.kt) to meet different needs, such as priority tasks, delayed tasks, deadlines, external loading, and so on.
 
 By combining URLCache and LoadOptions, we can meet the most complex collection requirements.
 

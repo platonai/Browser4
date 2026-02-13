@@ -333,7 +333,7 @@ Join our community for support, feedback, and collaboration!
 - **Issue Tracker**: Report bugs or request features.
 - **Social Media**: Follow us for updates and news.
 
-We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+We welcome contributions! See [CONTRIBUTING.md](TESTING.md) for details.
 
 ---
 

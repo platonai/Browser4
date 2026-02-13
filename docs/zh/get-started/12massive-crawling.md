@@ -8,7 +8,7 @@
 
 Browser4 设计了一组数据结构来处理 URL 池的问题。这使得 Browser4 不仅能同时处理数以百万计的 URL，还能够准确定义这些 URL 的行为。
 
-运行连续采集时，URL 会添加到 [URLPool](/pulsar-common/src/main/kotlin/ai/platon/pulsar/common/collect/UrlPool.kt) 中。URLPool 包含各种精心设计的 [URLCache](/pulsar-common/src/main/kotlin/ai/platon/pulsar/common/collect/UrlCache.kt) 来满足不同的需求，例如，优先任务、延时任务、截止日期、外部加载等等。
+运行连续采集时，URL 会添加到 [URLPool](../../../pulsar-core/pulsar-common/src/main/kotlin/ai/platon/pulsar/common/collect/UrlPool.kt) 中。URLPool 包含各种精心设计的 [URLCache](../../../pulsar-core/pulsar-common/src/main/kotlin/ai/platon/pulsar/common/collect/UrlCache.kt) 来满足不同的需求，例如，优先任务、延时任务、截止日期、外部加载等等。
 
 通过组合 URLCache 和 LoadOptions，我们可以满足最复杂的采集需求。
 

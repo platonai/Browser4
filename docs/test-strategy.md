@@ -283,6 +283,6 @@ java -jar pulsar-benchmarks/target/pulsar-benchmarks-*-shaded.jar
 
 ## References
 
-- [TESTING.md](TESTING.md) - Quick start guide for running tests
-- [test-guide.md](../devdocs/copilot/test-guide.md) - Detailed testing guide
+- [TESTING.md](../TESTING.md) - Quick start guide for running tests
+- [test-guide.md](../docs-dev/copilot/test-guide.md) - Detailed testing guide
 - [mvn-test.md](../devdocs/development/mvn-test.md) - Maven test process control

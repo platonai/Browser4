@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-Link Checker for Documentation
+Link Checker and Fixer for Documentation
 
 This script checks all links in documentation files (Markdown, HTML, reStructuredText).
 - Internal links: Validates that target files/anchors exist
 - External links: Verifies connectivity with HEAD/GET requests
+- Auto-fix mode: Automatically fixes broken internal links
 - Multi-threaded for performance
 - CI-friendly with non-zero exit code on failures
 """
@@ -16,10 +17,12 @@ import re
 import sys
 import time
 import threading
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Set, Tuple, Optional
+from typing import List, Set, Tuple, Optional, Dict
 from urllib.parse import urlparse, urljoin, unquote
+from difflib import get_close_matches
 
 try:
     import requests
@@ -39,6 +42,7 @@ class LinkCheckResult:
     is_valid: bool
     error_message: str = ""
     link_type: str = "unknown"  # internal, external, anchor
+    suggested_fix: Optional[str] = None  # Suggested fixed URL
 
 
 @dataclass
@@ -52,6 +56,7 @@ class Statistics:
     valid_links: int = 0
     broken_links: int = 0
     skipped_links: int = 0
+    fixed_links: int = 0
     errors: List[LinkCheckResult] = field(default_factory=list)
 
 
@@ -82,16 +87,22 @@ class LinkChecker:
 
     def __init__(self, root_dir: Path, exclude_patterns: List[str] = None,
                  max_workers: int = 10, timeout: int = 10, skip_external: bool = False,
-                 check_localhost: bool = False):
+                 check_localhost: bool = False, fix_mode: bool = False):
         self.root_dir = root_dir.resolve()
         self.exclude_patterns = exclude_patterns or []
         self.max_workers = max_workers
         self.timeout = timeout
         self.skip_external = skip_external
         self.check_localhost = check_localhost
+        self.fix_mode = fix_mode
         self.stats = Statistics()
         self.checked_external_urls: Set[str] = set()
         self.external_urls_lock = threading.Lock()  # Thread safety for checked URLs
+        
+        # Cache for file lookups to improve performance
+        self.file_cache: Dict[str, Path] = {}
+        self.file_cache_lock = threading.Lock()
+        self._build_file_cache()
 
         # Configure requests session with retries
         self.session = requests.Session()
@@ -106,6 +117,79 @@ class LinkChecker:
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (compatible; LinkChecker/1.0)'
         })
+
+    def _build_file_cache(self):
+        """Build a cache of all files in the repository for fast lookup"""
+        if self.fix_mode:
+            print("🔨 Building file cache for auto-fix mode...")
+            for file_path in self.root_dir.rglob('*'):
+                if file_path.is_file() and not self.should_skip_file(file_path):
+                    # Store both full name and stem for matching
+                    file_name = file_path.name
+                    relative_path = file_path.relative_to(self.root_dir)
+                    self.file_cache[str(relative_path)] = file_path
+                    self.file_cache[file_name] = file_path
+
+    def find_file_fuzzy(self, target_file: str) -> Optional[Path]:
+        """Try to find a file using fuzzy matching"""
+        target_file = target_file.strip('/')
+        
+        # Try exact match first
+        if target_file in self.file_cache:
+            return self.file_cache[target_file]
+        
+        # Try filename only
+        target_name = Path(target_file).name
+        if target_name in self.file_cache:
+            return self.file_cache[target_name]
+        
+        # Try fuzzy matching on all cached paths
+        all_paths = list(self.file_cache.keys())
+        matches = get_close_matches(target_file, all_paths, n=1, cutoff=0.6)
+        if matches:
+            return self.file_cache[matches[0]]
+        
+        # Try matching just the filename with fuzzy matching
+        matches = get_close_matches(target_name, all_paths, n=1, cutoff=0.7)
+        if matches:
+            return self.file_cache[matches[0]]
+        
+        return None
+
+    def suggest_fix_for_link(self, url: str, source_file: Path) -> Optional[str]:
+        """Suggest a fix for a broken internal link"""
+        # Parse the URL to get the file part
+        url_parts = url.split('#', 1)
+        file_part = url_parts[0].split('?', 1)[0]
+        anchor = url_parts[1] if len(url_parts) > 1 else None
+        
+        if not file_part:
+            return None
+        
+        # Try to find the file
+        found_file = self.find_file_fuzzy(file_part)
+        if found_file:
+            # Calculate relative path from source file to found file
+            source_dir = source_file.parent
+            try:
+                rel_path = os.path.relpath(found_file, source_dir)
+                # Normalize path separators for URLs
+                rel_path = rel_path.replace('\\', '/')
+                
+                # Add anchor back if it existed
+                if anchor:
+                    rel_path = f"{rel_path}#{anchor}"
+                
+                return rel_path
+            except ValueError:
+                # Can't create relative path, use absolute from root
+                rel_from_root = found_file.relative_to(self.root_dir)
+                fixed_url = f"/{rel_from_root}".replace('\\', '/')
+                if anchor:
+                    fixed_url = f"{fixed_url}#{anchor}"
+                return fixed_url
+        
+        return None
 
     def should_skip_file(self, file_path: Path) -> bool:
         """Check if file should be skipped based on exclude patterns"""
@@ -328,13 +412,19 @@ class LinkChecker:
         else:
             self.stats.broken_links += 1
 
+        # Try to suggest a fix for broken internal links
+        suggested_fix = None
+        if not is_valid and link_type == 'internal' and self.fix_mode:
+            suggested_fix = self.suggest_fix_for_link(url, source_file)
+
         return LinkCheckResult(
             url=url,
             source_file=str(source_file.relative_to(self.root_dir)),
             line_number=line_number,
             is_valid=is_valid,
             error_message=error,
-            link_type=link_type
+            link_type=link_type,
+            suggested_fix=suggested_fix
         )
 
     def check_file(self, file_path: Path) -> List[LinkCheckResult]:
@@ -386,6 +476,70 @@ class LinkChecker:
 
         return self.stats
 
+    def apply_fixes(self) -> int:
+        """Apply suggested fixes to documentation files"""
+        if not self.fix_mode:
+            return 0
+        
+        # Group errors by source file
+        fixes_by_file: Dict[Path, List[LinkCheckResult]] = {}
+        for error in self.stats.errors:
+            if error.suggested_fix and error.link_type == 'internal':
+                source_path = self.root_dir / error.source_file
+                if source_path not in fixes_by_file:
+                    fixes_by_file[source_path] = []
+                fixes_by_file[source_path].append(error)
+        
+        if not fixes_by_file:
+            print("\n⚠️  No fixable broken links found.")
+            return 0
+        
+        print(f"\n🔧 Applying fixes to {len(fixes_by_file)} file(s)...")
+        fixed_count = 0
+        
+        for file_path, errors in fixes_by_file.items():
+            try:
+                # Create backup
+                backup_path = file_path.with_suffix(file_path.suffix + '.bak')
+                shutil.copy2(file_path, backup_path)
+                
+                # Read file content
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                
+                # Apply fixes in reverse order to preserve line numbers
+                errors_sorted = sorted(errors, key=lambda e: e.line_number, reverse=True)
+                
+                for error in errors_sorted:
+                    line_idx = error.line_number - 1
+                    if 0 <= line_idx < len(lines):
+                        original_line = lines[line_idx]
+                        # Replace the old URL with the fixed one
+                        fixed_line = original_line.replace(f"]({error.url})", f"]({error.suggested_fix})")
+                        
+                        # Also try replacing without the parentheses in case of other link formats
+                        if fixed_line == original_line:
+                            fixed_line = original_line.replace(f'"{error.url}"', f'"{error.suggested_fix}"')
+                        if fixed_line == original_line:
+                            fixed_line = original_line.replace(f"'{error.url}'", f"'{error.suggested_fix}'")
+                        
+                        if fixed_line != original_line:
+                            lines[line_idx] = fixed_line
+                            fixed_count += 1
+                            print(f"   ✓ Fixed: {error.url} → {error.suggested_fix}")
+                
+                # Write back
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.writelines(lines)
+                
+                print(f"   📝 Updated: {file_path.relative_to(self.root_dir)}")
+                
+            except Exception as e:
+                print(f"   ❌ Failed to fix {file_path}: {e}", file=sys.stderr)
+        
+        self.stats.fixed_links = fixed_count
+        return fixed_count
+
     def print_report(self):
         """Print detailed report"""
         print("\n" + "="*80)
@@ -400,6 +554,8 @@ class LinkChecker:
 
         print(f"\n✅ Valid links:       {self.stats.valid_links}")
         print(f"❌ Broken links:      {self.stats.broken_links}")
+        if self.fix_mode and self.stats.fixed_links > 0:
+            print(f"🔧 Fixed links:       {self.stats.fixed_links}")
 
         if self.stats.errors:
             print(f"\n{'='*80}")
@@ -410,6 +566,8 @@ class LinkChecker:
                 print(f"📄 {error.source_file}:{error.line_number}")
                 print(f"   🔗 {error.url}")
                 print(f"   ❌ {error.error_message} ({error.link_type})")
+                if error.suggested_fix:
+                    print(f"   💡 Suggested fix: {error.suggested_fix}")
                 print()
 
         print("="*80)
@@ -429,6 +587,9 @@ Examples:
 
   # Skip external links (faster)
   %(prog)s --skip-external
+
+  # Auto-fix broken internal links
+  %(prog)s --fix
 
   # Use more workers
   %(prog)s --workers 20
@@ -482,6 +643,12 @@ Examples:
     )
 
     parser.add_argument(
+        '--fix',
+        action='store_true',
+        help='Automatically fix broken internal links (creates .bak backups)'
+    )
+
+    parser.add_argument(
         '--root',
         type=Path,
         default=None,
@@ -529,15 +696,25 @@ Examples:
         max_workers=args.workers,
         timeout=args.timeout,
         skip_external=args.skip_external,
-        check_localhost=args.check_localhost
+        check_localhost=args.check_localhost,
+        fix_mode=args.fix
     )
 
     try:
         stats = checker.run(search_paths)
+        
+        # Apply fixes if in fix mode
+        if args.fix and stats.broken_links > 0:
+            fixed = checker.apply_fixes()
+            if fixed > 0:
+                print(f"\n✅ Fixed {fixed} broken link(s)!")
+                print("   💾 Backup files created with .bak extension")
+        
         checker.print_report()
 
-        # Exit with error code if broken links found
-        if stats.broken_links > 0:
+        # Exit with error code if broken links found (and not all fixed)
+        remaining_broken = stats.broken_links - stats.fixed_links
+        if remaining_broken > 0:
             sys.exit(1)
         else:
             print("\n✨ All links are valid!")

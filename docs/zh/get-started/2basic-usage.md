@@ -179,7 +179,7 @@ fun main() = PulsarContexts.createSession().scrapeOutPages(
   "https://www.amazon.com/", "-outLink a[href~=/dp/]", listOf("#title", "#acrCustomerReviewText"))
 ```
 
-本课程完整的代码可以在这里找到：[kotlin](/examples/browser4-examples/src/main/kotlin/ai/platon/pulsar/manual/_0_BasicUsage.kt)，[国内镜像](https://gitee.com/platonai_galaxyeye/browser4/blob/1.10.x/examples/browser4-examples/src/main/kotlin/ai/platon/pulsar/manual/_0_BasicUsage.kt)。了解更加详细的使用方法，可以直接阅读源代码：[PulsarSession](/pulsar-skeleton/src/main/kotlin/ai/platon/pulsar/session/PulsarSession.kt)，[国内镜像](https://gitee.com/platonai_galaxyeye/browser4/blob/1.10.x/pulsar-skeleton/src/main/kotlin/ai/platon/pulsar/session/PulsarSession.kt)。
+本课程完整的代码可以在这里找到：[kotlin](/examples/browser4-examples/src/main/kotlin/ai/platon/pulsar/manual/_0_BasicUsage.kt)，[国内镜像](https://gitee.com/platonai_galaxyeye/browser4/blob/1.10.x/examples/browser4-examples/src/main/kotlin/ai/platon/pulsar/manual/_0_BasicUsage.kt)。了解更加详细的使用方法，可以直接阅读源代码：[PulsarSession](../../../pulsar-core/pulsar-skeleton/src/main/kotlin/ai/platon/pulsar/skeleton/session/PulsarSession.kt)，[国内镜像](https://gitee.com/platonai_galaxyeye/browser4/blob/1.10.x/pulsar-skeleton/src/main/kotlin/ai/platon/pulsar/session/PulsarSession.kt)。
 
 下一章我们将详细介绍[加载参数](3load-options.md)，通过配置加载参数，可以精确定义我们的采集任务。
 
