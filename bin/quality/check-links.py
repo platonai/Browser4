@@ -185,6 +185,34 @@ class LinkChecker:
 
         return links
 
+    def _is_localhost_url(self, url: str) -> bool:
+        """Check if URL points to localhost"""
+        parsed = urlparse(url)
+        if not parsed.netloc:
+            return False
+        
+        # Extract hostname (handle IPv6 addresses in brackets)
+        netloc = parsed.netloc.lower()
+        
+        # For IPv6 addresses in brackets like [::1]:port
+        if netloc.startswith('['):
+            # Extract the part between brackets
+            hostname = netloc.split(']')[0] + ']'
+        else:
+            # For regular hostnames, remove port if present
+            hostname = netloc.split(':')[0]
+        
+        # Check for localhost patterns
+        localhost_patterns = [
+            'localhost',
+            '127.0.0.1',
+            '[::1]',  # IPv6 localhost with brackets
+            '0.0.0.0',
+        ]
+        
+        # Check exact matches and 127.x.x.x range
+        return hostname in localhost_patterns or hostname.startswith('127.')
+    
     def _should_skip_url(self, url: str) -> bool:
         """Check if URL should be skipped"""
         # Skip email links
@@ -198,6 +226,9 @@ class LinkChecker:
             return True
         # Skip template variables
         if '${' in url or '{{' in url:
+            return True
+        # Skip localhost connections
+        if self._is_localhost_url(url):
             return True
         return False
 
