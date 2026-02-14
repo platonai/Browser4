@@ -1,0 +1,219 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 
+    Example POM configuration for Testcontainers integration
+    
+    This file demonstrates how to add Testcontainers dependencies to a Browser4 test module.
+    
+    Usage:
+    1. Copy the <dependencies> section to your test module's pom.xml
+    2. Or copy the <dependencyManagement> to pulsar-bom/pom.xml for centralized version management
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 
+         http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    
+    <modelVersion>4.0.0</modelVersion>
+    
+    <!-- Example: Add to pulsar-bom/pom.xml for version management -->
+    <dependencyManagement>
+        <dependencies>
+            <!-- Testcontainers BOM (Bill of Materials) -->
+            <!-- This ensures all Testcontainers modules use the same version -->
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>testcontainers-bom</artifactId>
+                <version>1.20.4</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+    
+    <!-- Example: Add to test module's pom.xml (e.g., pulsar-it-tests/pom.xml) -->
+    <dependencies>
+        
+        <!-- ============================================ -->
+        <!-- Testcontainers Core Dependencies             -->
+        <!-- ============================================ -->
+        
+        <!-- Testcontainers Core Library -->
+        <!-- Required for all Testcontainers usage -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <scope>test</scope>
+            <!-- Version managed by testcontainers-bom -->
+        </dependency>
+        
+        <!-- JUnit 5 Integration -->
+        <!-- Provides @Testcontainers and @Container annotations -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        
+        <!-- ============================================ -->
+        <!-- Testcontainers Container Modules             -->
+        <!-- ============================================ -->
+        
+        <!-- MongoDB Container -->
+        <!-- For testing MongoDB-based persistence -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>mongodb</artifactId>
+            <scope>test</scope>
+        </dependency>
+        
+        <!-- Redis Container (Optional) -->
+        <!-- Uncomment if you need Redis testing -->
+        <!--
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>redis</artifactId>
+            <scope>test</scope>
+        </dependency>
+        -->
+        
+        <!-- Selenium Containers (Optional) -->
+        <!-- Uncomment if you need browser testing via Testcontainers -->
+        <!-- Note: Browser4's optimized Chrome Launcher is recommended instead -->
+        <!--
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>selenium</artifactId>
+            <scope>test</scope>
+        </dependency>
+        -->
+        
+        <!-- Generic Container (Optional) -->
+        <!-- For custom Docker images like Browser4 server -->
+        <!--
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        -->
+        
+        <!-- Docker Compose Module (Optional) -->
+        <!-- For reusing existing docker-compose.yml files -->
+        <!--
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>docker-compose</artifactId>
+            <scope>test</scope>
+        </dependency>
+        -->
+        
+        <!-- ============================================ -->
+        <!-- Supporting Dependencies                      -->
+        <!-- ============================================ -->
+        
+        <!-- SLF4J API (Usually already present in Browser4) -->
+        <!-- Testcontainers uses SLF4J for logging -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <scope>test</scope>
+        </dependency>
+        
+    </dependencies>
+    
+    <!-- ============================================ -->
+    <!-- Build Configuration                          -->
+    <!-- ============================================ -->
+    
+    <build>
+        <plugins>
+            
+            <!-- Maven Surefire Plugin Configuration -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    
+                    <!-- Exclude Testcontainers tests by default -->
+                    <!-- They require Docker and are slower -->
+                    <excludedGroups>RequiresDocker</excludedGroups>
+                    
+                    <!-- Enable Testcontainers tests with property -->
+                    <!-- mvn test -DrunITs=true -->
+                    <groups combine.children="append">
+                        ${test.groups}
+                    </groups>
+                    
+                    <!-- System properties for Testcontainers configuration -->
+                    <systemPropertyVariables>
+                        <!-- Disable Ryuk (container cleanup daemon) if needed -->
+                        <!-- <testcontainers.ryuk.disabled>false</testcontainers.ryuk.disabled> -->
+                        
+                        <!-- Enable container reuse for faster tests -->
+                        <!-- <testcontainers.reuse.enable>true</testcontainers.reuse.enable> -->
+                        
+                        <!-- Override Docker host if needed -->
+                        <!-- <DOCKER_HOST>unix:///var/run/docker.sock</DOCKER_HOST> -->
+                    </systemPropertyVariables>
+                    
+                </configuration>
+            </plugin>
+            
+        </plugins>
+    </build>
+    
+    <!-- ============================================ -->
+    <!-- Profiles for Different Test Scenarios        -->
+    <!-- ============================================ -->
+    
+    <profiles>
+        
+        <!-- Profile: Integration Tests with Testcontainers -->
+        <profile>
+            <id>integration-tests</id>
+            <activation>
+                <property>
+                    <name>runITs</name>
+                    <value>true</value>
+                </property>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <!-- Include RequiresDocker tests -->
+                            <groups>Integration,RequiresDocker</groups>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        
+        <!-- Profile: Skip Testcontainers tests if Docker unavailable -->
+        <profile>
+            <id>no-docker</id>
+            <activation>
+                <property>
+                    <name>skipDocker</name>
+                    <value>true</value>
+                </property>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <!-- Exclude all Docker-dependent tests -->
+                            <excludedGroups>RequiresDocker</excludedGroups>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        
+    </profiles>
+    
+</project>
