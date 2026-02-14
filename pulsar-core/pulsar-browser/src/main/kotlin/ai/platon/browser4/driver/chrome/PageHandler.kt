@@ -419,7 +419,7 @@ class PageHandler(
                 try {
                     runtimeAPI?.releaseObject(objectId)
                 } catch (e: Exception) {
-                    logger.debug("Failed to release object {}", objectId)
+                    logger.debug("Failed to release object {}", objectId, e)
                 }
             }
         } catch (e: Exception) {
@@ -501,7 +501,7 @@ class PageHandler(
                 try { 
                     domAPI?.discardSearchResults(searchResult.searchId) 
                 } catch (e: Exception) { 
-                    logger.debug("Failed to discard search results for searchId={}", searchResult.searchId)
+                    logger.debug("Failed to discard search results for searchId={}", searchResult.searchId, e)
                 }
                 results?.firstOrNull()
             } else {
@@ -574,8 +574,8 @@ class PageHandler(
             // Use DOM.requestNode to get the nodeId from the runtime object
             val resolvedNodeId = domAPI?.requestNode(tempObjectId) ?: 0
             // Release the remote object to avoid memory leaks
-            try { runtimeAPI?.releaseObject(tempObjectId) } catch (_: Exception) {
-                logger.debug("Failed to release object {}", tempObjectId)
+            try { runtimeAPI?.releaseObject(tempObjectId) } catch (e: Exception) {
+                logger.debug("Failed to release object {}", tempObjectId, e)
             }
 
             // Do NOT cache objectId; return only ids that are stable across calls
