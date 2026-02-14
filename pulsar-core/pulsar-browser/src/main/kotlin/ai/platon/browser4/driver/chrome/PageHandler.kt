@@ -154,7 +154,7 @@ class PageHandler(
      * @param selector A string representing the selector. It can be:
      * - A CSS selector (e.g., "div.class", "#id").
      * - A backend node ID in the format "backend:123".
-     * - A frame-backendNode int the format "fbn:FRAMExID,123"
+     * - A frame-backendNode in the format "fbn:FRAMEID,123"
      *
      * @return A `NodeRef` object if the selector resolves successfully, or `null` if not found.
      *
@@ -164,8 +164,6 @@ class PageHandler(
     private suspend fun resolveSelector0(selector: String): NodeRef? {
         // Parse the selector into a Locator object. If parsing fails, return null.
         val locator = Locator.parse(selector) ?: return null
-
-        require(Locator.Type.CSS_PATH.text.isEmpty())
 
         // Determine the type of the locator and resolve accordingly.
         val nodeRef = when (locator.type) {
@@ -287,7 +285,6 @@ class PageHandler(
         val result = jsHandler.evaluateValue(expression)
 
         if (result is Boolean) return result
-        // if ("mixed" == result) return null // 可按需返回 tri-state
         return false
     }
 
@@ -421,7 +418,8 @@ class PageHandler(
                 // Always release to avoid leaks
                 try {
                     runtimeAPI?.releaseObject(objectId)
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    logger.debug("Failed to release object {}", objectId)
                 }
             }
         } catch (e: Exception) {
@@ -482,28 +480,15 @@ class PageHandler(
      */
     @Throws(ChromeDriverException::class)
     private suspend fun resolveXPath(xpath: String): NodeRef? {
-        val selector = "#preferencesSection"
-        val r = domAPI?.performSearch(selector)
-        println("resultCount for selector: " + r?.resultCount)
-
-        val xpath2 = "//*[@id='preferencesSection']/h2"
-        val r2 = domAPI?.performSearch(xpath2, true)
-        println("resultCount for xpath2: " + r2?.resultCount)
-
-        val xpath3 = "//*[@id=preferencesSection]/h2"
-        val r3 = domAPI?.performSearch(xpath3, true)
-        println("resultCount for xpath3: " + r3?.resultCount)
-
-        var node = resolveXPath1(xpath)
-
-        println("nodeId: " + node?.nodeId)
-
-        return node
+        return resolveXPath1(xpath)
     }
 
     @Throws(ChromeDriverException::class)
     private suspend fun resolveXPath1(xpath: String): NodeRef? {
-        require(xpath.startsWith("//"))
+        if (xpath.isBlank()) {
+            return null
+        }
+        require(xpath.startsWith("//")) { "XPath must start with '//', got: $xpath" }
 
         val nodeId = try {
             domAPI?.getDocument()?.nodeId ?: return null
@@ -513,7 +498,11 @@ class PageHandler(
                 // Only retrieve the first matching node if results exist
                 val results = domAPI?.getSearchResults(searchResult.searchId, fromIndex = 0, toIndex = 1)
                 // Clean up search results to avoid resource leak
-                try { domAPI?.discardSearchResults(searchResult.searchId) } catch (_: Exception) { }
+                try { 
+                    domAPI?.discardSearchResults(searchResult.searchId) 
+                } catch (e: Exception) { 
+                    logger.debug("Failed to discard search results for searchId={}", searchResult.searchId)
+                }
                 results?.firstOrNull()
             } else {
                 null
@@ -585,43 +574,12 @@ class PageHandler(
             // Use DOM.requestNode to get the nodeId from the runtime object
             val resolvedNodeId = domAPI?.requestNode(tempObjectId) ?: 0
             // Release the remote object to avoid memory leaks
-            try { runtimeAPI?.releaseObject(tempObjectId) } catch (_: Exception) { }
+            try { runtimeAPI?.releaseObject(tempObjectId) } catch (_: Exception) {
+                logger.debug("Failed to release object {}", tempObjectId)
+            }
 
             // Do NOT cache objectId; return only ids that are stable across calls
             NodeRef(resolvedNodeId, backendNodeId ?: 0, null)
-        } catch (e: Exception) {
-            logger.warn("Exception resolving backend node ID {}: {}", backendNodeId, e.message)
-            null
-        }
-    }
-
-    /**
-     * Resolves a backend node ID to a regular node ID.
-     *
-     * @param backendNodeId The backend node ID
-     * @return nodeId or null if resolution fails
-     */
-    @Throws(ChromeDriverException::class)
-    private suspend fun resolveBackendNodeId(backendNodeId: Int?): Int? {
-        backendNodeId ?: return null
-
-        return try {
-            // Use DOM.resolveNode to convert backendNodeId to a runtime object
-            val remoteObject = domAPI?.resolveNode(null, backendNodeId, null, null)
-
-            val tempObjectId = remoteObject?.objectId
-            if (tempObjectId == null) {
-                logger.warn("Failed to resolve backend node ID: {}", backendNodeId)
-                return null
-            }
-
-            // Use DOM.requestNode to get the nodeId from the runtime object
-            val nodeId = domAPI?.requestNode(tempObjectId)
-
-            // Release the remote object to avoid memory leaks
-            try { runtimeAPI?.releaseObject(tempObjectId) } catch (_: Exception) { }
-
-            nodeId
         } catch (e: Exception) {
             logger.warn("Exception resolving backend node ID {}: {}", backendNodeId, e.message)
             null
