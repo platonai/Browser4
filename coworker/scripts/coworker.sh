@@ -264,7 +264,7 @@ for file in "${review_files[@]}"; do
     log_message "[REVIEW] Task: $(basename "$file")" INFO
 done
 
-# 3. Process 5approved
+# 4. Process 5approved
 # Find files recursively in approvedDir
 if [[ -d "$approvedDir" ]]; then
     # Use find to get all files recursively and process them in a loop
@@ -315,7 +315,7 @@ if [[ -d "$approvedDir" ]]; then
     fi
 fi
 
-# 4. Process 6git-pushed (last 2 days)
+# 5. Process 6git-pushed (last 2 days)
 # Use find to locate files modified in the last 2 days
 # -mtime -2 means modified less than 2 days ago
 if command -v find >/dev/null 2>&1; then
@@ -505,8 +505,8 @@ for file in "${files[@]}"; do
         fi
 
         # Check timeout
-        currentTime=$(date +%s)
-        elapsed=$((currentTime - startTime))
+        nowEpoch=$(date +%s)
+        elapsed=$((nowEpoch - startTime))
 
         if [[ "$elapsed" -gt "$COPILOT_RUN_TIMEOUT_SECONDS" ]]; then
             kill -9 "$copilotPid" 2>/dev/null
@@ -566,16 +566,25 @@ for file in "${files[@]}"; do
 
     popd > /dev/null
 
-    # Move to finished
+    # Move completed task from working directory to finished or approved directory
+    # Check for #auto-approve tag in content
     currentYear=$(date +%Y)
     currentDate=$(date +%m%d)
-    finishedSubDir="$finishedDir/$currentYear/$currentDate"
-    mkdir -p "$finishedSubDir"
 
-    finishedPath=$(resolve_unique_path "$finishedSubDir" "$workingBaseName" "$fileExt")
+    if echo "$content" | grep -q '#auto-approve'; then
+        destDir="$approvedDir/$currentYear/$currentDate"
+        destLabel="approved (auto-approve)"
+    else
+        destDir="$finishedDir/$currentYear/$currentDate"
+        destLabel="finished"
+    fi
 
-    mv "$workingPath" "$finishedPath"
-    log_message "Task moved to finished: $finishedPath" INFO
+    mkdir -p "$destDir"
+
+    destPath=$(resolve_unique_path "$destDir" "$workingBaseNameNoExt" "$fileExt")
+
+    mv "$workingPath" "$destPath"
+    log_message "Task moved to ${destLabel}: $destPath" INFO
 
     log_message "---" INFO
 

@@ -297,6 +297,7 @@ foreach ($taskRoot in $taskRoots) {
     $currentYear = Get-Date -Format "yyyy"
     $currentMonth = Get-Date -Format "MM"
     $currentDay = Get-Date -Format "dd"
+    $currentDate = Get-Date -Format "MMdd"
     $currentTime = Get-Date -Format "HHmmss"
 
     # 1. Process 0prepare
@@ -322,7 +323,7 @@ foreach ($taskRoot in $taskRoots) {
         Write-LogMessage "[REVIEW] Task: $($file.Name)" INFO
     }
 
-    # 3. Process 5approved
+    # 4. Process 5approved
     # If there are any files in 5approved or its subdirectories, move them to 6git-pushed with date-based organization, and then call the commit script
     if (Test-Path $approvedDir) {
         $approvedFiles = Get-ChildItem -Path $approvedDir -Recurse -File
@@ -358,7 +359,7 @@ foreach ($taskRoot in $taskRoots) {
         }
     }
 
-    # 4. Process 6git-pushed (last 2 days)
+    # 5. Process 6git-pushed (last 2 days)
     # Recursively find files in 6git-pushed
     if (Test-Path $pushedDir) {
         $pushedFiles = Get-ChildItem -Path $pushedDir -Recurse -File
@@ -388,8 +389,8 @@ foreach ($taskRoot in $taskRoots) {
         # The current implementation attempts to rename ALL files using gh copilot via rename.ps1.
         # This seems to cover the requirement "1.md, 2.md... are treated as random... rename these".
 
-        Write-Host "DEBUG: renameScript path: $renameScript"
-        Write-Host "DEBUG: Test-Path renameScript: $(Test-Path $renameScript)"
+        Write-LogVerbose "renameScript path: $renameScript"
+        Write-LogVerbose "Test-Path renameScript: $(Test-Path $renameScript)"
 
         if (Test-Path $renameScript) {
             # Execute rename.ps1 script
@@ -434,7 +435,7 @@ foreach ($taskRoot in $taskRoots) {
         Move-Item -Path $file.FullName -Destination $workingPath -Force
         Write-LogMessage "Moved to working: $workingPath" INFO
 
-        # 3. Parse content for execution (logging purposes)
+        # 4. Parse content for execution (logging purposes)
         $title = $descriptiveName
         $description = "Task from $($file.Name)"
         $prompt = $content
@@ -554,8 +555,6 @@ Copilot Execution Output:
                 }
             }
 
-            $runWaited = $process.HasExited
-
             # Combine copilot stdout and stderr logs into the copilot-specific log
             # First append stdout if it exists
             if (Test-Path $stdOutLog) { Get-Content $stdOutLog -Encoding UTF8 | Out-File -FilePath $copilotLogPath -Append -Encoding UTF8 }
@@ -598,19 +597,30 @@ Copilot Log: $copilotLogPath
             Pop-Location
         }
 
-        # Move completed task from working directory to finished directory
+        # Move completed task from working directory to finished or approved directory
+        # Check for #auto-approve tag in content
+        $autoApprove = $content -match '#auto-approve'
+
         # Create date-based subdirectory: YYYY/MMDD
         $currentYear = Get-Date -Format "yyyy"
         $currentDate = Get-Date -Format "MMdd"
-        $finishedSubDir = Join-Path $finishedDir "$currentYear\$currentDate"
-        if (!(Test-Path $finishedSubDir)) {
-            New-Item -ItemType Directory -Path $finishedSubDir | Out-Null
+
+        if ($autoApprove) {
+            $destDir = Join-Path $approvedDir "$currentYear\$currentDate"
+            $destLabel = "approved (auto-approve)"
+        } else {
+            $destDir = Join-Path $finishedDir "$currentYear\$currentDate"
+            $destLabel = "finished"
         }
 
-        $finishedInfo = Resolve-UniquePath -Directory $finishedSubDir -BaseName $workingBaseName -Extension $file.Extension
+        if (!(Test-Path $destDir)) {
+            New-Item -ItemType Directory -Path $destDir | Out-Null
+        }
 
-        Move-Item -Path $workingPath -Destination $finishedInfo.Path -Force
-        Write-LogMessage "Task moved to finished: $($finishedInfo.Path)" INFO
+        $destInfo = Resolve-UniquePath -Directory $destDir -BaseName $workingBaseName -Extension $file.Extension
+
+        Move-Item -Path $workingPath -Destination $destInfo.Path -Force
+        Write-LogMessage "Task moved to ${destLabel}: $($destInfo.Path)" INFO
 
 
         Write-LogMessage "---" INFO
