@@ -497,7 +497,6 @@ Copilot Execution Output:
             # Capture both standard output and error output to separate files
             $process = Start-Process -FilePath 'gh' -ArgumentList $copilotArgList -NoNewWindow -PassThru -RedirectStandardOutput $stdOutLog -RedirectStandardError $stdErrLog
 
-            $runWaited = $false
             $lastOutputLineCount = 0
 
             # Monitor output in real-time while process is running
@@ -602,9 +601,6 @@ Copilot Log: $copilotLogPath
         $autoApprove = $content -match '#auto-approve'
 
         # Create date-based subdirectory: YYYY/MMDD
-        $currentYear = Get-Date -Format "yyyy"
-        $currentDate = Get-Date -Format "MMdd"
-
         if ($autoApprove) {
             $destDir = Join-Path $approvedDir "$currentYear\$currentDate"
             $destLabel = "approved (auto-approve)"
