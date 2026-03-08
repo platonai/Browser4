@@ -13,7 +13,7 @@ import java.awt.Dimension
 import java.util.*
 
 /**
- * CDP-backed implementation of DomService using RemoteDevTools.
+ * CDP-backed implementation of [SnapshotService] using RemoteDevTools.
  */
 class ChromeCdpSnapshotService(
     private val devTools: RemoteDevTools,
@@ -24,6 +24,8 @@ class ChromeCdpSnapshotService(
     private val accessibility = AccessibilityHandler(devTools)
     private val domTree = DomTreeHandler(devTools)
     private val snapshot = DomSnapshotHandler(devTools)
+    private val highlightManager = HighlightManager(devTools)
+    private val clickableDetector = ClickableElementDetector()
 
     @Volatile
     private var lastEnhancedRoot: DOMTreeNodeEx? = null
@@ -156,14 +158,6 @@ class ChromeCdpSnapshotService(
         // Build sibling map for XPath index calculation
         val siblingMap = buildSiblingMap(trees.domTree)
 
-//        // Build paint order map for interaction index calculation
-//        val paintOrderMap = buildPaintOrderMap(trees.snapshotByBackendId)
-//
-//        // Build stacking context map for z-index analysis
-//        val stackingContextMap = buildStackingContextMap(trees.snapshotByBackendId)
-//
-//        data class FrameNode(val node: DOMTreeNodeEx)
-
         fun visibilityStyleCheck(snapshotNode: SnapshotNodeEx?): Boolean? {
             snapshotNode ?: return null
 
@@ -250,7 +244,7 @@ class ChromeCdpSnapshotService(
 
             // Interactivity and indices
             val isScrollable = if (options.includeScrollAnalysis) {
-                calculateScalability(node, snapshot, ancestors)
+                calculateScrollability(node, snapshot, ancestors)
             } else null
 
             val isInteractable = if (options.includeInteractivity) {
@@ -384,6 +378,50 @@ class ChromeCdpSnapshotService(
         return DOMStateBuilder.build(root, includeAttributes, options)
     }
 
+    /**
+     * Safely evaluate a JS expression and return the result as a Double.
+     */
+    private suspend fun evalDouble(expr: String): Double? {
+        return try {
+            val result = devTools.runtime.evaluate(expr).result
+            result.value?.toString()?.toDoubleOrNull() ?: result.unserializableValue?.toDoubleOrNull()
+        } catch (e: Exception) {
+            tracer?.trace("Evaluation error | expr={} | err={}", expr, e.toString())
+            null
+        }
+    }
+
+    /**
+     * Safely evaluate a JS expression and return the result as an Int.
+     */
+    private suspend fun evalInt(expr: String): Int? = evalDouble(expr)?.toInt()
+
+    /**
+     * Safely evaluate a JS expression and return the result as a String.
+     */
+    private suspend fun evalString(expr: String): String? = try {
+        devTools.runtime.evaluate(expr).result.value?.toString()
+    } catch (e: Exception) {
+        tracer?.trace("Evaluation error | expr={} | err={}", expr, e.toString())
+        null
+    }
+
+    /**
+     * Safely evaluate a JS expression and return the result as a Boolean.
+     */
+    private suspend fun evalBoolean(expr: String): Boolean? = try {
+        val v = devTools.runtime.evaluate(expr).result.value
+        when (v) {
+            is Boolean -> v
+            is String -> v.equals("true", true)
+            is Number -> v.toInt() != 0
+            else -> null
+        }
+    } catch (e: Exception) {
+        tracer?.trace("Evaluation error | expr={} | err={}", expr, e.toString())
+        null
+    }
+
     private suspend fun buildBrowserState(domState: DOMState): BrowserUseState {
         // URL from DOM domain (resilient)
         val url: String = runCatching { devTools.dom.getDocument().documentURL }.getOrNull() ?: ""
@@ -399,20 +437,6 @@ class ChromeCdpSnapshotService(
             val forward = entries.getOrNull(currentIndex + 1)?.url
             back to forward
         }.getOrElse { "" to "" }
-
-        // Helper to evaluate numeric JS safely
-        suspend fun evalDouble(expr: String): Double? {
-            return try {
-                val evaluation = devTools.runtime.evaluate(expr)
-                val result = evaluation.result
-                result.value?.toString()?.toDoubleOrNull() ?: result.unserializableValue?.toDoubleOrNull()
-            } catch (e: Exception) {
-                tracer?.trace("Evaluation error | expr={} | err={}", expr, e.toString())
-                null
-            }
-        }
-
-        suspend fun evalInt(expr: String): Int? = evalDouble(expr)?.toInt()
 
         // Scroll positions and viewport size (resilient)
         val scrollX = evalDouble("window.scrollX || window.pageXOffset || 0") ?: 0.0
@@ -483,33 +507,6 @@ class ChromeCdpSnapshotService(
      * Reserved.
      * */
     suspend fun computeFullClientInfo(): FullClientInfo {
-        // Helpers
-        suspend fun evalString(expr: String): String? = try {
-            devTools.runtime.evaluate(expr).result.value?.toString()
-        } catch (_: Exception) {
-            null
-        }
-
-        suspend fun evalDouble(expr: String): Double? = try {
-            val res = devTools.runtime.evaluate(expr).result
-            res?.value?.toString()?.toDoubleOrNull() ?: res.unserializableValue?.toDoubleOrNull()
-        } catch (_: Exception) {
-            null
-        }
-
-        suspend fun evalInt(expr: String): Int? = evalDouble(expr)?.toInt()
-        suspend fun evalBoolean(expr: String): Boolean? = try {
-            val v = devTools.runtime.evaluate(expr).result.value
-            when (v) {
-                is Boolean -> v
-                is String -> v.equals("true", true)
-                is Number -> v.toInt() != 0
-                else -> null
-            }
-        } catch (_: Exception) {
-            null
-        }
-
         val tzId = evalString("Intl.DateTimeFormat().resolvedOptions().timeZone")
         val timeZone = runCatching { if (!tzId.isNullOrBlank()) TimeZone.getTimeZone(tzId) else TimeZone.getDefault() }
             .getOrDefault(TimeZone.getDefault())
@@ -575,93 +572,57 @@ class ChromeCdpSnapshotService(
 
         // Try element hash first (fastest)
         ref.elementHash?.let { hash ->
-            var found: DOMTreeNodeEx? = null
-            fun dfs(n: DOMTreeNodeEx) {
-                if (found != null) return
-                if (n.elementHash == hash) {
-                    found = n
-                    return
-                }
-                n.children.forEach { dfs(it) }
-                n.shadowRoots.forEach { dfs(it) }
-                n.contentDocument?.let { dfs(it) }
-            }
-            dfs(root)
-            if (found != null) return found
+            findByDfs(root) { it.elementHash == hash }?.let { return it }
         }
 
         // Try XPath
         ref.xPath?.let { xpath ->
-            var found: DOMTreeNodeEx? = null
-            fun dfs(n: DOMTreeNodeEx) {
-                if (found != null) return
-                if (n.xpath == xpath) {
-                    found = n
-                    return
-                }
-                n.children.forEach { dfs(it) }
-                n.shadowRoots.forEach { dfs(it) }
-                n.contentDocument?.let { dfs(it) }
-            }
-            dfs(root)
-            if (found != null) return found
+            findByDfs(root) { it.xpath == xpath }?.let { return it }
         }
 
         // Try backend node ID
         ref.backendNodeId?.let { backendId ->
             lastDomByBackend[backendId]?.let { return it }
-            var found: DOMTreeNodeEx? = null
-            fun dfs(n: DOMTreeNodeEx) {
-                if (found != null) return
-                if (n.backendNodeId == backendId) {
-                    found = n
-                    return
-                }
-                n.children.forEach { dfs(it) }
-                n.shadowRoots.forEach { dfs(it) }
-                n.contentDocument?.let { dfs(it) }
-            }
-            dfs(root)
-            if (found != null) return found
+            findByDfs(root) { it.backendNodeId == backendId }?.let { return it }
         }
 
         // Try CSS selector (simple cases only)
         ref.cssSelector?.let { selector ->
-            // Simple selector matching (tag, #id, .class)
-            val tagRegex = Regex("^[a-zA-Z0-9]+")
-            val idRegex = Regex("#([a-zA-Z0-9_-]+)")
-            val classRegex = Regex("\\.([a-zA-Z0-9_-]+)")
-
-            val tag = tagRegex.find(selector)?.value?.lowercase()
-            val id = idRegex.find(selector)?.groupValues?.getOrNull(1)
-            val classes = classRegex.findAll(selector).map { it.groupValues[1] }.toSet()
-
-            fun matches(n: DOMTreeNodeEx): Boolean {
-                if (tag != null && !n.nodeName.equals(tag, ignoreCase = true)) return false
-                if (id != null && n.attributes["id"] != id) return false
-                if (classes.isNotEmpty()) {
-                    val nodeClasses = n.attributes["class"]?.split(Regex("\\s+"))?.toSet() ?: emptySet()
-                    if (!classes.all { it in nodeClasses }) return false
-                }
-                return true
-            }
-
-            var found: DOMTreeNodeEx? = null
-            fun dfs(n: DOMTreeNodeEx) {
-                if (found != null) return
-                if (matches(n)) {
-                    found = n
-                    return
-                }
-                n.children.forEach { dfs(it) }
-                n.shadowRoots.forEach { dfs(it) }
-                n.contentDocument?.let { dfs(it) }
-            }
-            dfs(root)
-            if (found != null) return found
+            val matcher = buildCssMatcher(selector)
+            findByDfs(root, matcher)?.let { return it }
         }
 
         return null
+    }
+
+    /**
+     * Depth-first search for the first node matching the predicate.
+     */
+    private fun findByDfs(root: DOMTreeNodeEx, predicate: (DOMTreeNodeEx) -> Boolean): DOMTreeNodeEx? {
+        if (predicate(root)) return root
+        root.children.forEach { child -> findByDfs(child, predicate)?.let { return it } }
+        root.shadowRoots.forEach { shadow -> findByDfs(shadow, predicate)?.let { return it } }
+        root.contentDocument?.let { doc -> findByDfs(doc, predicate)?.let { return it } }
+        return null
+    }
+
+    /**
+     * Build a CSS selector matcher for simple selectors (tag, #id, .class).
+     */
+    private fun buildCssMatcher(selector: String): (DOMTreeNodeEx) -> Boolean {
+        val tagRegex = Regex("^[a-zA-Z0-9]+")
+        val idRegex = Regex("#([a-zA-Z0-9_-]+)")
+        val classRegex = Regex("\\.([a-zA-Z0-9_-]+)")
+
+        val tag = tagRegex.find(selector)?.value?.lowercase()
+        val id = idRegex.find(selector)?.groupValues?.getOrNull(1)
+        val classes = classRegex.findAll(selector).map { it.groupValues[1] }.toSet()
+
+        return { n: DOMTreeNodeEx ->
+            (tag == null || n.nodeName.equals(tag, ignoreCase = true)) &&
+                    (id == null || n.attributes["id"] == id) &&
+                    (classes.isEmpty() || classes.all { it in (n.attributes["class"]?.split(Regex("\\s+"))?.toSet() ?: emptySet()) })
+        }
     }
 
     fun toInteractedElement(node: DOMTreeNodeEx): DOMInteractedElement {
@@ -672,36 +633,6 @@ class ChromeCdpSnapshotService(
             isVisible = node.isVisible,
             isInteractable = node.isInteractable
         )
-    }
-
-    private fun computeVisibility(node: DOMTreeNodeEx): Boolean? {
-        val snapshot = node.snapshotNode ?: return null
-        val styles = snapshot.computedStyles ?: return null
-        val display = styles["display"]
-        if (display != null && display.equals("none", ignoreCase = true)) return false
-        val visibility = styles["visibility"]
-        if (visibility != null && visibility.equals("hidden", ignoreCase = true)) return false
-        val opacity = styles["opacity"]?.toDoubleOrNull()
-        if (opacity != null && opacity <= 0.0) return false
-        val pointerEvents = styles["pointer-events"]
-        if (pointerEvents != null && pointerEvents.equals("none", ignoreCase = true)) return false
-        return true
-    }
-
-    private fun computeInteractivity(node: DOMTreeNodeEx): Boolean? {
-        val snapshot = node.snapshotNode
-        if (snapshot?.isClickable == true) {
-            return true
-        }
-        val tag = node.nodeName.uppercase()
-        if (tag in setOf("BUTTON", "A", "INPUT", "SELECT", "TEXTAREA", "OPTION")) {
-            return true
-        }
-        val role = node.axNode?.role
-        if (role != null && role.lowercase() in setOf("button", "link", "checkbox", "textbox", "combobox")) {
-            return true
-        }
-        return snapshot?.cursorStyle?.equals("pointer", ignoreCase = true)
     }
 
     private suspend fun getDevicePixelRatio(): Double {
@@ -754,23 +685,9 @@ class ChromeCdpSnapshotService(
     }
 
     /**
-     * Build paint order map from snapshot data for interaction index calculation.
+     * Calculate scrollability with enhanced logic covering iframe/body/html and nested containers.
      */
-    private fun buildPaintOrderMap(snapshotByBackendId: Map<Int, SnapshotNodeEx>): Map<Int, Int?> {
-        return snapshotByBackendId.mapValues { (_, snapshot) -> snapshot.paintOrder }
-    }
-
-    /**
-     * Build stacking context map from snapshot data for z-index analysis.
-     */
-    private fun buildStackingContextMap(snapshotByBackendId: Map<Int, SnapshotNodeEx>): Map<Int, Int?> {
-        return snapshotByBackendId.mapValues { (_, snapshot) -> snapshot.stackingContexts }
-    }
-
-    /**
-     * Calculate scalability with enhanced logic covering iframe/body/html and nested containers.
-     */
-    private fun calculateScalability(
+    private fun calculateScrollability(
         node: DOMTreeNodeEx,
         snap: SnapshotNodeEx?,
         ancestors: List<DOMTreeNodeEx>
@@ -794,7 +711,7 @@ class ChromeCdpSnapshotService(
             return scrollHeight > clientHeight + 1 // Allow 1px tolerance
         }
 
-        // For nested containers, check for duplicate scalability in ancestors
+        // For nested containers, check for duplicate scrollability in ancestors
         val hasScrollableAncestor = ancestors.any { ancestor ->
             ancestor.isScrollable == true && ancestor.snapshotNode?.scrollRects != null
         }
@@ -817,33 +734,6 @@ class ChromeCdpSnapshotService(
         } else {
             true
         }
-    }
-
-    /**
-     * Calculate visibility with stacking context consideration.
-     */
-    private fun calculateVisibility(
-        node: DOMTreeNodeEx,
-        snap: SnapshotNodeEx?,
-        stackingContext: Int?
-    ): Boolean? {
-        if (snap == null) return null
-
-        // Basic visibility checks from computed styles
-        val styles = snap.computedStyles ?: return null
-        val display = styles["display"]
-        if (display != null && display.equals("none", ignoreCase = true)) return false
-        val visibility = styles["visibility"]
-        if (visibility != null && visibility.equals("hidden", ignoreCase = true)) return false
-        val opacity = styles["opacity"]?.toDoubleOrNull()
-        if (opacity != null && opacity <= 0.0) return false
-        val pointerEvents = styles["pointer-events"]
-        if (pointerEvents != null && pointerEvents.equals("none", ignoreCase = true)) return false
-
-        // Consider stacking context - elements in higher stacking contexts may obscure lower ones
-        // For now, just return true if basic checks pass
-        // TODO: Implement more sophisticated stacking context analysis
-        return true
     }
 
     /**
@@ -874,7 +764,7 @@ class ChromeCdpSnapshotService(
         // Check cursor style
         if (snap.cursorStyle?.equals("pointer", ignoreCase = true) == true) return true
 
-        return ClickableElementDetector().isInteractive(node)
+        return clickableDetector.isInteractive(node)
     }
 
     /**
@@ -909,17 +799,14 @@ class ChromeCdpSnapshotService(
     }
 
     override suspend fun addHighlights(elements: InteractiveDOMTreeNodeList) {
-        val highlightManager = HighlightManager(devTools)
         highlightManager.addHighlights(elements)
     }
 
     override suspend fun removeHighlights(force: Boolean) {
-        val highlightManager = HighlightManager(devTools)
         highlightManager.removeHighlights(force)
     }
 
     override suspend fun removeHighlights(elements: InteractiveDOMTreeNodeList) {
-        val highlightManager = HighlightManager(devTools)
         highlightManager.removeHighlights(elements)
     }
 }
