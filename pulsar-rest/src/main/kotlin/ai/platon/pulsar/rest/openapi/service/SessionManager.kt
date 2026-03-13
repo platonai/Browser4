@@ -178,6 +178,28 @@ class SessionManager(
     }
 
     /**
+     * Returns all active managed sessions.
+     *
+     * @return List of all active managed sessions.
+     */
+    fun getAllSessions(): List<ManagedSession> {
+        return sessions.values.toList()
+    }
+
+    /**
+     * Deletes all active sessions and releases their resources.
+     *
+     * @return Number of sessions deleted.
+     */
+    fun deleteAllSessions(): Int {
+        val count = sessions.size
+        sessions.keys.toList().forEach { sessionId ->
+            deleteSession(sessionId)
+        }
+        return count
+    }
+
+    /**
      * Cleans up idle sessions that haven't been accessed for more than 30 minutes.
      */
     private fun cleanupIdleSessions() {
