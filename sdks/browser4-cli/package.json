@@ -1,0 +1,64 @@
+{
+  "name": "@platonai/browser4-cli",
+  "version": "0.1.0",
+  "description": "Command-line interface for the Browser4 browser automation platform",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "browser4": "./dist/cli.js",
+    "b4": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "jest --testPathPattern 'tests/(?!e2e)'",
+    "test:e2e": "BROWSER4_CLI_E2E=true jest --testPathPattern tests/e2e",
+    "lint": "eslint src tests --ext .ts",
+    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\"",
+    "prepare": "npm run build",
+    "verify:build": "node -e \"require('./dist/index.js'); console.log('OK')\""
+  },
+  "keywords": [
+    "browser4",
+    "browser-automation",
+    "cli",
+    "web-scraping",
+    "ai-agent",
+    "mcp"
+  ],
+  "author": "Browser4 Team",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/platonai/Browser4.git",
+    "directory": "sdks/browser4-cli"
+  },
+  "bugs": {
+    "url": "https://github.com/platonai/Browser4/issues"
+  },
+  "homepage": "https://github.com/platonai/Browser4/tree/main/sdks/browser4-cli#readme",
+  "dependencies": {
+    "axios": "^1.6.0",
+    "commander": "^12.0.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.0",
+    "@types/node": "^20.0.0",
+    "@typescript-eslint/eslint-plugin": "^6.0.0",
+    "@typescript-eslint/parser": "^6.0.0",
+    "eslint": "^8.0.0",
+    "eslint-config-prettier": "^9.0.0",
+    "eslint-plugin-prettier": "^5.0.0",
+    "jest": "^29.5.0",
+    "prettier": "^3.0.0",
+    "ts-jest": "^29.1.0",
+    "typescript": "^5.0.0"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=16"
+  }
+}

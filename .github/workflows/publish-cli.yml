@@ -1,0 +1,249 @@
+name: Publish browser4-cli
+
+on:
+  push:
+    tags:
+      - 'cli-v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g., 0.1.0)'
+        required: true
+        type: string
+      npm_tag:
+        description: 'NPM dist-tag'
+        required: false
+        default: 'latest'
+        type: choice
+        options:
+          - latest
+          - beta
+          - next
+          - rc
+
+# Prevent two releases from running at the same time
+concurrency:
+  group: publish-cli-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # needed to create a GitHub Release
+  id-token: write   # needed for npm provenance
+
+jobs:
+  # ─── 1. Build & test ──────────────────────────────────────────────────────────
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+          cache-dependency-path: sdks/browser4-cli/package-lock.json
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+            NPM_TAG="${{ github.event.inputs.npm_tag }}"
+          else
+            # Validate and strip leading 'cli-v' from tag: cli-v0.1.0 → 0.1.0
+            FULL_TAG="${GITHUB_REF#refs/tags/}"
+            if [[ ! "$FULL_TAG" =~ ^cli-v[0-9]+\.[0-9]+\.[0-9]+(-.*)?$ ]]; then
+              echo "❌ Unexpected tag format: '$FULL_TAG' — expected cli-v<X.Y.Z>"
+              exit 1
+            fi
+            VERSION="${FULL_TAG#cli-v}"
+            if   [[ "$VERSION" == *"-beta"* ]]; then NPM_TAG="beta"
+            elif [[ "$VERSION" == *"-rc"*   ]]; then NPM_TAG="rc"
+            elif [[ "$VERSION" == *"-next"* ]]; then NPM_TAG="next"
+            else                                     NPM_TAG="latest"
+            fi
+          fi
+          echo "version=$VERSION"  >> "$GITHUB_OUTPUT"
+          echo "npm_tag=$NPM_TAG"  >> "$GITHUB_OUTPUT"
+          echo "📦 Version: $VERSION  (dist-tag: $NPM_TAG)"
+
+      - name: Install dependencies
+        working-directory: sdks/browser4-cli
+        run: npm ci
+
+      - name: Lint
+        working-directory: sdks/browser4-cli
+        run: npm run lint
+
+      - name: Run unit tests
+        working-directory: sdks/browser4-cli
+        run: npm test
+
+      - name: Build
+        working-directory: sdks/browser4-cli
+        run: npm run build
+
+      - name: Verify build artefacts
+        working-directory: sdks/browser4-cli
+        run: npm run verify:build
+
+      - name: Stamp version into package.json
+        working-directory: sdks/browser4-cli
+        run: npm version ${{ steps.ver.outputs.version }} --no-git-tag-version
+
+      - name: Dry-run pack (inspect contents)
+        working-directory: sdks/browser4-cli
+        run: npm pack --dry-run
+
+      - name: Upload dist artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: cli-dist
+          path: |
+            sdks/browser4-cli/dist/
+            sdks/browser4-cli/package.json
+          if-no-files-found: error
+
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      npm_tag: ${{ steps.ver.outputs.npm_tag }}
+
+  # ─── 2. Cross-platform smoke-test ─────────────────────────────────────────────
+  smoke-test:
+    name: Smoke test (${{ matrix.os }}, Node ${{ matrix.node }})
+    needs: build
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: ['18', '20']
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Download dist artefacts
+        uses: actions/download-artifact@v4
+        with:
+          name: cli-dist
+          path: sdks/browser4-cli
+
+      - name: Install production dependencies
+        working-directory: sdks/browser4-cli
+        run: npm ci --omit=dev
+
+      - name: Verify CLI binary is executable
+        working-directory: sdks/browser4-cli
+        run: node dist/cli.js --version
+
+  # ─── 3. Publish to npm ────────────────────────────────────────────────────────
+  publish:
+    name: Publish to npm
+    needs: [build, smoke-test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/@platonai/browser4-cli
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Download dist artefacts
+        uses: actions/download-artifact@v4
+        with:
+          name: cli-dist
+          path: sdks/browser4-cli
+
+      - name: Install production dependencies
+        working-directory: sdks/browser4-cli
+        run: npm ci --omit=dev
+
+      - name: Publish
+        working-directory: sdks/browser4-cli
+        run: npm publish --access public --tag ${{ needs.build.outputs.npm_tag }} --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Post-publish verification
+        run: |
+          echo "⏳ Waiting for npm registry propagation…"
+          sleep 30
+          echo "✅ Published @platonai/browser4-cli@${{ needs.build.outputs.version }} (tag: ${{ needs.build.outputs.npm_tag }})"
+          echo "🔗 https://www.npmjs.com/package/@platonai/browser4-cli/v/${{ needs.build.outputs.version }}"
+
+  # ─── 4. GitHub Release ────────────────────────────────────────────────────────
+  github-release:
+    name: Create GitHub Release
+    needs: [build, publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Only create a GitHub Release when triggered by a tag push
+    if: github.event_name == 'push'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref }}
+          name: browser4-cli ${{ needs.build.outputs.version }}
+          body: |
+            # @platonai/browser4-cli ${{ needs.build.outputs.version }}
+
+            ## Installation
+
+            ```bash
+            npm install -g @platonai/browser4-cli@${{ needs.build.outputs.version }}
+            # or
+            npx @platonai/browser4-cli@${{ needs.build.outputs.version }} --help
+            ```
+
+            ## Changes
+
+            See [CHANGELOG.md](https://github.com/platonai/Browser4/blob/main/sdks/browser4-cli/CHANGELOG.md) for details.
+
+            ## Documentation
+
+            - [README](https://github.com/platonai/Browser4/tree/main/sdks/browser4-cli/README.md)
+            - [npm package](https://www.npmjs.com/package/@platonai/browser4-cli/v/${{ needs.build.outputs.version }})
+          draft: false
+          prerelease: ${{ contains(needs.build.outputs.version, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Release summary
+        run: |
+          {
+            echo "## 🚀 Release Summary"
+            echo ""
+            echo "| Field   | Value |"
+            echo "| ------- | ----- |"
+            echo "| Version | \`${{ needs.build.outputs.version }}\` |"
+            echo "| npm tag | \`${{ needs.build.outputs.npm_tag }}\` |"
+            echo "| npm URL | https://www.npmjs.com/package/@platonai/browser4-cli/v/${{ needs.build.outputs.version }} |"
+            echo "| GitHub Release | https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }} |"
+          } >> "$GITHUB_STEP_SUMMARY"

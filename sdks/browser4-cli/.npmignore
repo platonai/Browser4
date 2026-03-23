@@ -1,0 +1,8 @@
+node_modules/
+coverage/
+*.tgz
+src/
+tests/
+tsconfig.json
+jest.config.js
+.eslintrc.js
