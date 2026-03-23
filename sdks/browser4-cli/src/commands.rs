@@ -184,22 +184,22 @@ pub fn all_commands() -> Vec<CommandDef> {
             category: Category::Keyboard,
             hidden: false,
             args: &[
-                ArgDef { name: "key_or_ref", description: "Key name (e.g. `Enter`) or element reference when followed by a key", optional: false },
+                ArgDef { name: "ref_or_key", description: "Key name (e.g. `Enter`), or element reference when followed by a key", optional: false },
                 ArgDef { name: "key", description: "Key name when first argument is an element reference", optional: true },
             ],
             options: &[],
             tool_name_fn: |_| "browser_press_key".to_string(),
             tool_params_fn: |args| {
-                // 1-arg form: `press Enter`  → key_or_ref is the key
-                // 2-arg form: `press e5 Enter` → key_or_ref is ref, key is the key
+                // 1-arg form: `press Enter`  → ref_or_key is the key
+                // 2-arg form: `press e5 Enter` → ref_or_key is ref, key is the key
                 if let Some(key) = get_opt_str(args, "key") {
                     json!({
-                        "ref": get_str(args, "key_or_ref").unwrap_or_default(),
+                        "ref": get_str(args, "ref_or_key").unwrap_or_default(),
                         "key": key,
                     })
                 } else {
                     json!({
-                        "key": get_str(args, "key_or_ref").unwrap_or_default(),
+                        "key": get_str(args, "ref_or_key").unwrap_or_default(),
                     })
                 }
             },
@@ -210,7 +210,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             category: Category::Core,
             hidden: false,
             args: &[
-                ArgDef { name: "text_or_ref", description: "Text to type, or element reference when followed by text", optional: false },
+                ArgDef { name: "ref_or_text", description: "Text to type, or element reference when followed by text", optional: false },
                 ArgDef { name: "text", description: "Text to type when first argument is an element reference", optional: true },
             ],
             options: &[
@@ -218,16 +218,16 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             tool_name_fn: |_| "browser_press_sequentially".to_string(),
             tool_params_fn: |args| {
-                // 1-arg form: `type "hello"` → text_or_ref is the text
-                // 2-arg form: `type e5 "hello"` → text_or_ref is ref, text is the text
+                // 1-arg form: `type "hello"` → ref_or_text is the text
+                // 2-arg form: `type e5 "hello"` → ref_or_text is ref, text is the text
                 let mut p = if let Some(text) = get_opt_str(args, "text") {
                     json!({
-                        "ref": get_str(args, "text_or_ref").unwrap_or_default(),
+                        "ref": get_str(args, "ref_or_text").unwrap_or_default(),
                         "text": text,
                     })
                 } else {
                     json!({
-                        "text": get_str(args, "text_or_ref").unwrap_or_default(),
+                        "text": get_str(args, "ref_or_text").unwrap_or_default(),
                     })
                 };
                 if let Some(submit) = get_bool(args, "submit") {
@@ -443,18 +443,18 @@ pub fn all_commands() -> Vec<CommandDef> {
             category: Category::Core,
             hidden: false,
             args: &[
-                ArgDef { name: "file_or_ref", description: "File path, or element reference when followed by a file path", optional: false },
+                ArgDef { name: "ref_or_file", description: "File path, or element reference when followed by a file path", optional: false },
                 ArgDef { name: "file", description: "File path when first argument is an element reference", optional: true },
             ],
             options: &[],
             tool_name_fn: |_| "browser_file_upload".to_string(),
             tool_params_fn: |args| {
-                // 1-arg form: `upload ./doc.pdf` → file_or_ref is the file
-                // 2-arg form: `upload e5 ./doc.pdf` → file_or_ref is ref, file is the file
+                // 1-arg form: `upload ./doc.pdf` → ref_or_file is the file
+                // 2-arg form: `upload e5 ./doc.pdf` → ref_or_file is ref, file is the file
                 if let Some(file) = get_opt_str(args, "file") {
-                    json!({ "ref": get_str(args, "file_or_ref").unwrap_or_default(), "paths": [file] })
+                    json!({ "ref": get_str(args, "ref_or_file").unwrap_or_default(), "paths": [file] })
                 } else {
-                    json!({ "paths": [get_str(args, "file_or_ref").unwrap_or_default()] })
+                    json!({ "paths": [get_str(args, "ref_or_file").unwrap_or_default()] })
                 }
             },
         },
@@ -783,9 +783,9 @@ mod tests {
     fn test_press_single_arg_key_only() {
         let map = commands_map();
         let cmd = map.get("press").unwrap();
-        // Simulate: `press Enter` → key_or_ref=Enter, key=absent
+        // Simulate: `press Enter` → ref_or_key=Enter, key=absent
         let mut args = HashMap::new();
-        args.insert("key_or_ref".to_string(), json!("Enter"));
+        args.insert("ref_or_key".to_string(), json!("Enter"));
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params.get("key").and_then(|v| v.as_str()), Some("Enter"));
         assert!(params.get("ref").is_none(), "ref should not be present when only key is given");
@@ -795,9 +795,9 @@ mod tests {
     fn test_press_two_args_ref_and_key() {
         let map = commands_map();
         let cmd = map.get("press").unwrap();
-        // Simulate: `press e5 Enter` → key_or_ref=e5, key=Enter
+        // Simulate: `press e5 Enter` → ref_or_key=e5, key=Enter
         let mut args = HashMap::new();
-        args.insert("key_or_ref".to_string(), json!("e5"));
+        args.insert("ref_or_key".to_string(), json!("e5"));
         args.insert("key".to_string(), json!("Enter"));
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params.get("key").and_then(|v| v.as_str()), Some("Enter"));
@@ -808,9 +808,9 @@ mod tests {
     fn test_type_single_arg_text_only() {
         let map = commands_map();
         let cmd = map.get("type").unwrap();
-        // Simulate: `type "hello"` → text_or_ref=hello, text=absent
+        // Simulate: `type "hello"` → ref_or_text=hello, text=absent
         let mut args = HashMap::new();
-        args.insert("text_or_ref".to_string(), json!("hello"));
+        args.insert("ref_or_text".to_string(), json!("hello"));
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params.get("text").and_then(|v| v.as_str()), Some("hello"));
         assert!(params.get("ref").is_none(), "ref should not be present when only text is given");
@@ -820,9 +820,9 @@ mod tests {
     fn test_type_two_args_ref_and_text() {
         let map = commands_map();
         let cmd = map.get("type").unwrap();
-        // Simulate: `type e5 "hello"` → text_or_ref=e5, text=hello
+        // Simulate: `type e5 "hello"` → ref_or_text=e5, text=hello
         let mut args = HashMap::new();
-        args.insert("text_or_ref".to_string(), json!("e5"));
+        args.insert("ref_or_text".to_string(), json!("e5"));
         args.insert("text".to_string(), json!("hello"));
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params.get("text").and_then(|v| v.as_str()), Some("hello"));
@@ -833,9 +833,9 @@ mod tests {
     fn test_upload_single_arg_file_only() {
         let map = commands_map();
         let cmd = map.get("upload").unwrap();
-        // Simulate: `upload ./doc.pdf` → file_or_ref=./doc.pdf, file=absent
+        // Simulate: `upload ./doc.pdf` → ref_or_file=./doc.pdf, file=absent
         let mut args = HashMap::new();
-        args.insert("file_or_ref".to_string(), json!("./doc.pdf"));
+        args.insert("ref_or_file".to_string(), json!("./doc.pdf"));
         let params = (cmd.tool_params_fn)(&args);
         let paths = params.get("paths").and_then(|v| v.as_array()).unwrap();
         assert_eq!(paths[0].as_str(), Some("./doc.pdf"));
@@ -846,9 +846,9 @@ mod tests {
     fn test_upload_two_args_ref_and_file() {
         let map = commands_map();
         let cmd = map.get("upload").unwrap();
-        // Simulate: `upload e5 ./doc.pdf` → file_or_ref=e5, file=./doc.pdf
+        // Simulate: `upload e5 ./doc.pdf` → ref_or_file=e5, file=./doc.pdf
         let mut args = HashMap::new();
-        args.insert("file_or_ref".to_string(), json!("e5"));
+        args.insert("ref_or_file".to_string(), json!("e5"));
         args.insert("file".to_string(), json!("./doc.pdf"));
         let params = (cmd.tool_params_fn)(&args);
         let paths = params.get("paths").and_then(|v| v.as_array()).unwrap();
