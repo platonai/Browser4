@@ -68,8 +68,12 @@ fn get_session_id(state: &CliState) -> Result<&str, String> {
         .ok_or_else(|| r#"No active session. Run "browser4-cli open" first."#.to_string())
 }
 
-async fn create_session(client: &Client, base_url: &str, state: &CliState) -> Result<String, String> {
-    let result = call_tool(client, base_url, "open_session", json!({})).await?;
+async fn create_session(client: &Client, base_url: &str, state: &CliState, capabilities: Option<Value>) -> Result<String, String> {
+    let params = match capabilities {
+        Some(caps) => json!({ "capabilities": caps }),
+        None => json!({}),
+    };
+    let result = call_tool(client, base_url, "open_session", params).await?;
     // The server response may be a JSON object `{"sessionId":"..."}` or a plain
     // string. Try JSON first; fall back to using the raw string as the session ID.
     let session_id = if let Ok(parsed) = serde_json::from_str::<Value>(&result) {
@@ -120,7 +124,7 @@ where
             if !recover_stale {
                 return Err(r#"Saved session expired. Run "browser4-cli open" first."#.to_string());
             }
-            let new_session_id = create_session(client, base_url, &state).await?;
+            let new_session_id = create_session(client, base_url, &state, None).await?;
             action(new_session_id).await
         }
     }
@@ -166,10 +170,22 @@ async fn handle_open(
     tool_name: &str,
     tool_params: &Value,
     session_name: Option<&str>,
+    parsed_args: &std::collections::HashMap<String, Value>,
 ) -> Result<(), String> {
     let mut state = read_state(None);
     state.session_name = session_name.map(|s| s.to_string());
-    let session_id = create_session(client, base_url, &state).await?;
+
+    // Build capabilities from --persistent and --profile flags
+    let mut caps = serde_json::Map::new();
+    if let Some(Value::Bool(true)) = parsed_args.get("persistent") {
+        caps.insert("persistent".to_string(), json!(true));
+    }
+    if let Some(Value::String(profile)) = parsed_args.get("profile") {
+        caps.insert("profile".to_string(), json!(profile));
+    }
+    let capabilities = if caps.is_empty() { None } else { Some(Value::Object(caps)) };
+
+    let session_id = create_session(client, base_url, &state, capabilities).await?;
 
     let url = tool_params.get("url").and_then(|u| u.as_str()).unwrap_or("about:blank");
     if !url.is_empty() && url != "about:blank" {
@@ -500,7 +516,7 @@ async fn run(command: &str, global: &args::GlobalFlags) -> Result<(), String> {
     // Dispatch the command
     match command {
         "open" => {
-            handle_open(&client, &base_url, &tool_name, &tool_params, global.session_name.as_deref()).await?;
+            handle_open(&client, &base_url, &tool_name, &tool_params, global.session_name.as_deref(), &parsed).await?;
         }
         "close" => {
             handle_close(&client, &base_url).await?;

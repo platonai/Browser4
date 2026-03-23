@@ -117,9 +117,31 @@ class BrowserTabToolExecutor: AbstractToolExecutor() {
             // Interactions
             "focus" -> { validateArgs(args, allowed("selector"), setOf("selector"), functionName); driver.focus(paramString(args, "selector", functionName)!!) }
             "hover" -> { validateArgs(args, allowed("selector"), setOf("selector"), functionName); driver.hover(paramString(args, "selector", functionName)!!) }
-            "type" -> { validateArgs(args, allowed("selector", "text"), setOf("selector", "text"), functionName); driver.type(paramString(args, "selector", functionName)!!, paramString(args, "text", functionName)!!) }
+            "type" -> {
+                validateArgs(args, allowed("selector", "text"), setOf("text"), functionName)
+                val selector = paramString(args, "selector", functionName, required = false)
+                val text = paramString(args, "text", functionName)!!
+                if (selector != null) {
+                    driver.type(selector, text)
+                } else {
+                    for (ch in text) {
+                        driver.keyDown(ch.toString())
+                        driver.keyUp(ch.toString())
+                    }
+                }
+            }
             "fill" -> { validateArgs(args, allowed("selector", "text"), setOf("selector", "text"), functionName); driver.fill(paramString(args, "selector", functionName)!!, paramString(args, "text", functionName)!!) }
-            "press" -> { validateArgs(args, allowed("selector", "key"), setOf("selector", "key"), functionName); driver.press(paramString(args, "selector", functionName)!!, paramString(args, "key", functionName)!!) }
+            "press" -> {
+                validateArgs(args, allowed("selector", "key"), setOf("key"), functionName)
+                val selector = paramString(args, "selector", functionName, required = false)
+                val key = paramString(args, "key", functionName)!!
+                if (selector != null) {
+                    driver.press(selector, key)
+                } else {
+                    driver.keyDown(key)
+                    driver.keyUp(key)
+                }
+            }
             "click" -> {
                 when {
                     args.containsKey("selector") && args.containsKey("count") && !args.containsKey("modifier") -> {
