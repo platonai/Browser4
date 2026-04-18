@@ -2,7 +2,7 @@ package ai.platon.pulsar.agentic.inference.action
 
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecGenerator
 import ai.platon.pulsar.common.ai.llm.MCP
-import ai.platon.pulsar.skeleton.common.llm.LLMUtils
+import ai.platon.pulsar.skeleton.common.B4LLMUtils
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
