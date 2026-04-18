@@ -92,7 +92,6 @@
         <module>pulsar-tools</module>
         <module>pulsar-agentic</module>
         <module>pulsar-rest</module>
-        <module>pulsar-bom</module>
     </modules>
 
     <profiles>
@@ -174,9 +173,9 @@
                 <module>pulsar-core</module>
                 <module>pulsar-core/pulsar-core-tests</module>
                 <module>pulsar-tools</module>
+                <module>pulsar-bom</module>
                 <module>pulsar-agentic</module>
                 <module>pulsar-rest</module>
-                <module>pulsar-bom</module>
 
                 <module>browser4</module>
 
@@ -254,186 +253,6 @@
             </build>
         </profile>
 
-        <!-- Deployment profile -->
-        <profile>
-            <id>deploy</id>
-            <properties>
-                <deploy-active>true</deploy-active>
-                <skipTests>false</skipTests>
-                <maven.test.failure.ignore>false</maven.test.failure.ignore>
-            </properties>
-            <modules>
-                <module>pulsar-dependencies</module>
-                <module>pulsar-core</module>
-
-                <module>pulsar-tests</module>
-                <module>pulsar-bom</module>
-            </modules>
-
-            <build>
-                <plugins>
-                    <!-- Attach sources -->
-                    <plugin>
-                        <groupId>org.apache.maven.plugins</groupId>
-                        <artifactId>maven-source-plugin</artifactId>
-                        <executions>
-                            <execution>
-                                <id>attach-sources</id>
-                                <goals>
-                                    <goal>jar-no-fork</goal>
-                                </goals>
-                            </execution>
-                        </executions>
-                    </plugin>
-
-                    <!-- Help maven-source-plugin works with kotlin -->
-                    <plugin>
-                        <groupId>org.codehaus.mojo</groupId>
-                        <artifactId>build-helper-maven-plugin</artifactId>
-                        <version>3.6.0</version>
-
-                        <executions>
-                            <execution>
-                                <phase>generate-sources</phase>
-                                <goals>
-                                    <goal>add-source</goal>
-                                </goals>
-                                <configuration>
-                                    <sources>
-                                        <source>src/main/kotlin</source>
-                                    </sources>
-                                </configuration>
-                            </execution>
-                        </executions>
-                    </plugin>
-
-                    <!-- Override parent pom's javadoc settings, skip generating javadoc, use kdoc instead -->
-                    <plugin>
-                        <groupId>org.apache.maven.plugins</groupId>
-                        <artifactId>maven-javadoc-plugin</artifactId>
-                        <configuration>
-                            <skip>true</skip>
-                        </configuration>
-                    </plugin>
-
-                    <plugin>
-                        <groupId>org.jetbrains.dokka</groupId>
-                        <artifactId>dokka-maven-plugin</artifactId>
-                        <version>${dokka.version}</version>
-                        <executions>
-                            <execution>
-                                <!-- generate javadoc.jar before package gpg plugin can generate asc for it -->
-                                <phase>prepare-package</phase>
-                                <goals>
-                                    <goal>dokka</goal>
-                                    <goal>javadocJar</goal>
-                                </goals>
-                            </execution>
-                        </executions>
-                        <configuration>
-                            <!-- Set to true to skip a dokka task, default: false -->
-                            <skip>false</skip>
-
-                            <!-- Use default or set to a custom path to cache directory to enable package-list caching. -->
-                            <!-- When set to default, caches stored in $USER_HOME/.cache/dokka -->
-                            <cacheRoot>default</cacheRoot>
-
-                            <!-- Used for linking to JDK, default: 11 -->
-                            <jdkVersion>${javaVersion}</jdkVersion>
-
-                            <!-- Do not output deprecated members, applies globally, can be overridden by packageOptions -->
-                            <skipDeprecated>true</skipDeprecated>
-                            <!-- Emit warnings about not documented members, applies globally, also can be overridden by packageOptions -->
-                            <reportUndocumented>true</reportUndocumented>
-                            <!-- Do not create index pages for empty packages -->
-                            <skipEmptyPackages>true</skipEmptyPackages>
-                            <includeNonPublic>false</includeNonPublic>
-
-
-                            <!-- Allows to customize documentation generation options on a per-package basis -->
-                            <perPackageOptions>
-                                <packageOptions>
-                                    <!-- Will match kotlin and all sub-packages of it -->
-                                    <!-- <prefix>kotlin</prefix>-->
-
-                                    <!-- All options are optional, default values are below: -->
-                                    <skipDeprecated>false</skipDeprecated>
-                                    <!-- Emit warnings about not documented members  -->
-                                    <reportUndocumented>true</reportUndocumented>
-                                    <includeNonPublic>false</includeNonPublic>
-                                </packageOptions>
-                            </perPackageOptions>
-                            <sourceDirectories>
-                                <dir>${project.basedir}/src/main/kotlin</dir>
-                            </sourceDirectories>
-                        </configuration>
-                    </plugin>
-
-                    <!-- GPG signing -->
-                    <plugin>
-                        <groupId>org.apache.maven.plugins</groupId>
-                        <artifactId>maven-gpg-plugin</artifactId>
-                        <configuration>
-                            <gpgArguments>
-                                <arg>--pinentry-mode</arg>
-                                <arg>loopback</arg>
-                            </gpgArguments>
-                        </configuration>
-                        <executions>
-                            <execution>
-                                <id>sign-artifacts</id>
-                                <phase>verify</phase>
-                                <goals>
-                                    <goal>sign</goal>
-                                </goals>
-                            </execution>
-                        </executions>
-                    </plugin>
-
-                    <!-- Calculate checksums -->
-                    <plugin>
-                        <groupId>net.nicoulaj.maven.plugins</groupId>
-                        <artifactId>checksum-maven-plugin</artifactId>
-                        <executions>
-                            <execution>
-                                <id>source-release-checksum</id>
-                                <goals>
-                                    <goal>files</goal>
-                                </goals>
-                            </execution>
-                        </executions>
-                        <configuration>
-                            <algorithms>
-                                <algorithm>SHA-512</algorithm>
-                                <algorithm>SHA-256</algorithm>
-                            </algorithms>
-                            <csvSummary>false</csvSummary>
-                            <fileSets>
-                                <fileSet>
-                                    <directory>${project.build.directory}</directory>
-                                    <includes>
-                                        <include>${project.artifactId}-${project.version}-sources.jar</include>
-                                        <include>${project.artifactId}-${project.version}-javadoc.jar</include>
-                                        <include>${project.artifactId}-${project.version}.jar</include>
-                                    </includes>
-                                </fileSet>
-                            </fileSets>
-                            <failIfNoFiles>false</failIfNoFiles>
-                        </configuration>
-                    </plugin>
-
-                    <plugin>
-                        <groupId>org.sonatype.central</groupId>
-                        <artifactId>central-publishing-maven-plugin</artifactId>
-                        <version>${central-publishing-maven-plugin.version}</version>
-                        <extensions>true</extensions>
-                        <configuration>
-                            <publishingServerId>central</publishingServerId>
-                        </configuration>
-                    </plugin>
-                </plugins>
-            </build>
-        </profile>
     </profiles>
 
     <build>
@@ -552,13 +371,15 @@
                 <scope>import</scope>
             </dependency>
 
-            <!-- Internal Dependencies -->
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-common</artifactId>
-                <version>${pulsar.modules.version}</version>
+                <artifactId>pulsar-bom</artifactId>
+                <version>${project.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
             </dependency>
 
+            <!-- Internal Dependencies -->
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-plugins</artifactId>
@@ -566,11 +387,6 @@
                 <version>${pulsar.modules.version}</version>
             </dependency>
 
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-persist</artifactId>
-                <version>${pulsar.modules.version}</version>
-            </dependency>
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-skeleton</artifactId>
@@ -615,30 +431,7 @@
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-dom</artifactId>
-                <version>${pulsar.modules.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-beans</artifactId>
-                <version>${pulsar.modules.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-ql-common</artifactId>
-                <version>${pulsar.modules.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-ql-common</artifactId>
-                <classifier>shaded</classifier>
-                <version>${pulsar.modules.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-ql</artifactId>
                 <version>${pulsar.modules.version}</version>
             </dependency>
 
@@ -663,19 +456,6 @@
                 <version>${pulsar.modules.version}</version>
             </dependency>
 
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-qa</artifactId>
-                <version>${pulsar.modules.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-qa</artifactId>
-                <version>${pulsar.modules.version}</version>
-                <type>test-jar</type>
-                <classifier>tests</classifier>
-                <scope>test</scope>
-            </dependency>
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-tests-common</artifactId>
@@ -798,6 +578,7 @@
             IntegrationTest,E2ETest,HeavyTest
         </surefire.excludedGroups>
 
+        <browser4.base.version>4.7.0</browser4.base.version>
         <pulsar.modules.version>4.7.0-SNAPSHOT</pulsar.modules.version>
     </properties>
 
