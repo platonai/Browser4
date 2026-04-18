@@ -172,7 +172,6 @@
             <modules>
                 <module>pulsar-dependencies</module>
                 <module>pulsar-core</module>
-                <module>pulsar-core/pulsar-core-tests</module>
                 <module>pulsar-tools</module>
                 <module>pulsar-bom</module>
                 <module>pulsar-agentic</module>

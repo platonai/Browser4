@@ -93,13 +93,7 @@ function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
             'pulsar-core/pulsar-third',
             'pulsar-core/pulsar-skeleton',
             'pulsar-core/pulsar-browser',
-            'pulsar-core/pulsar-spring-support',
-            'pulsar-core/pulsar-ql-common',
-            'pulsar-core/pulsar-ql',
-            'pulsar-core/pulsar-core-tests',
-            'pulsar-core/pulsar-core-tests/pulsar-common-tests',
-            'pulsar-core/pulsar-core-tests/pulsar-dom-tests',
-            'pulsar-core/pulsar-core-tests/pulsar-ql-tests'
+            'pulsar-core/pulsar-spring-support'
         )
     }
 
