@@ -106,6 +106,11 @@ struct ServerLaunchSpec {
     description: String,
 }
 
+struct PreparedLaunchCommand {
+    command: Command,
+    cleanup_dir: Option<PathBuf>,
+}
+
 async fn resolve_server_launch_spec(port: u16) -> Result<ServerLaunchSpec, String> {
     if let Some(repo_root) = find_browser4_root() {
         return build_maven_launch_spec(&repo_root, port);
@@ -180,7 +185,9 @@ fn build_jar_launch_spec(jar_path: &Path, port: u16) -> ServerLaunchSpec {
     }
 }
 
-fn command_for_launch_spec(launch_spec: &ServerLaunchSpec) -> Command {
+fn command_for_launch_spec(
+    launch_spec: &ServerLaunchSpec,
+) -> Result<PreparedLaunchCommand, String> {
     #[cfg(windows)]
     if launch_spec.kind == ServerLaunchKind::Maven && is_windows_batch_program(&launch_spec.program) {
         let mut command = Command::new("powershell.exe");
@@ -195,17 +202,36 @@ fn command_for_launch_spec(launch_spec: &ServerLaunchSpec) -> Command {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        return command;
+        return Ok(PreparedLaunchCommand {
+            command,
+            cleanup_dir: None,
+        });
     }
 
-    let mut command = Command::new(&launch_spec.program);
+    #[cfg(not(windows))]
+    let (program, cleanup_dir) = if launch_spec.kind == ServerLaunchKind::Maven
+        && launch_spec.program.file_name().and_then(|name| name.to_str()) == Some("mvnw")
+        && launch_spec.program.is_file()
+    {
+        prepare_unix_maven_wrapper_launcher(launch_spec)?
+    } else {
+        (launch_spec.program.clone(), None)
+    };
+
+    #[cfg(windows)]
+    let (program, cleanup_dir) = (launch_spec.program.clone(), None);
+
+    let mut command = Command::new(&program);
     command
         .args(&launch_spec.args)
         .current_dir(&launch_spec.working_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    command
+    Ok(PreparedLaunchCommand {
+        command,
+        cleanup_dir,
+    })
 }
 
 fn launch_ready_timeout(launch_spec: &ServerLaunchSpec) -> Duration {
@@ -232,6 +258,82 @@ fn build_powershell_batch_invocation(program: &Path, args: &[String]) -> String 
         .collect::<Vec<_>>()
         .join(" ")
         .pipe(|command| format!("& {command}"))
+}
+
+#[cfg(not(windows))]
+fn prepare_unix_maven_wrapper_launcher(
+    launch_spec: &ServerLaunchSpec,
+) -> Result<(PathBuf, Option<PathBuf>), String> {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let Some(repo_root) = launch_spec.program.parent() else {
+        return Ok((launch_spec.program.clone(), None));
+    };
+    let wrapper_support_dir = repo_root.join(".mvn");
+    if !wrapper_support_dir.is_dir() {
+        return Ok((launch_spec.program.clone(), None));
+    }
+
+    let launcher_base_dir = resolve_default_state_dir().join("launchers");
+    fs::create_dir_all(&launcher_base_dir).map_err(|e| {
+        format!(
+            "Failed to create Browser4 launcher directory {}: {e}",
+            launcher_base_dir.display()
+        )
+    })?;
+
+    let unique_suffix = format!(
+        "{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| format!("Failed to compute Browser4 launcher timestamp: {e}"))?
+            .as_nanos()
+    );
+    let launcher_dir = launcher_base_dir.join(format!("maven-wrapper-{unique_suffix}"));
+    fs::create_dir(&launcher_dir).map_err(|e| {
+        format!(
+            "Failed to create Browser4 Maven wrapper directory {}: {e}",
+            launcher_dir.display()
+        )
+    })?;
+
+    let launcher_wrapper_path = launcher_dir.join("mvnw");
+    let launcher_support_dir = launcher_dir.join(".mvn");
+    let wrapper_contents = fs::read(&launch_spec.program).map_err(|e| {
+        format!(
+            "Failed to read Maven wrapper {}: {e}",
+            launch_spec.program.display()
+        )
+    })?;
+    let normalized_wrapper_contents = wrapper_contents
+        .into_iter()
+        .filter(|byte| *byte != b'\r')
+        .collect::<Vec<_>>();
+    fs::write(&launcher_wrapper_path, normalized_wrapper_contents).map_err(|e| {
+        format!(
+            "Failed to write normalized Maven wrapper {}: {e}",
+            launcher_wrapper_path.display()
+        )
+    })?;
+    fs::set_permissions(&launcher_wrapper_path, fs::Permissions::from_mode(0o755)).map_err(
+        |e| {
+            format!(
+                "Failed to set executable permissions on normalized Maven wrapper {}: {e}",
+                launcher_wrapper_path.display()
+            )
+        },
+    )?;
+    symlink(&wrapper_support_dir, &launcher_support_dir).map_err(|e| {
+        format!(
+            "Failed to link Maven wrapper support directory {} -> {}: {e}",
+            launcher_support_dir.display(),
+            wrapper_support_dir.display()
+        )
+    })?;
+
+    Ok((launcher_wrapper_path, Some(launcher_dir)))
 }
 
 fn find_browser4_root() -> Option<PathBuf> {
@@ -397,7 +499,10 @@ async fn start_server(
     let startup_log = create_server_startup_log(launch_spec, port)?;
     eprintln!("Browser4 startup log: {}", startup_log.path.display());
 
-    let mut command = command_for_launch_spec(launch_spec);
+    let PreparedLaunchCommand {
+        mut command,
+        mut cleanup_dir,
+    } = command_for_launch_spec(launch_spec)?;
     command.stdout(startup_log.stdout).stderr(startup_log.stderr);
 
     let mut child = command
@@ -412,6 +517,7 @@ async fn start_server(
     let ready_timeout = launch_ready_timeout(launch_spec);
 
     if let Err(error) = wait_for_server_ready(&client, base_url, ready_timeout).await {
+        cleanup_prepared_launch_dir(cleanup_dir.take());
         let exit_context = match child.try_wait() {
             Ok(Some(status)) => format!(" Process exited early with status {status}."),
             Ok(None) => String::new(),
@@ -422,6 +528,8 @@ async fn start_server(
             startup_log.path.display()
         ));
     }
+
+    cleanup_prepared_launch_dir(cleanup_dir.take());
 
     let managed_pid = resolve_managed_server_pid(child.id());
     register_managed_server_process(
@@ -445,6 +553,12 @@ async fn start_server(
         startup_log.path.display()
     );
     Ok(())
+}
+
+fn cleanup_prepared_launch_dir(path: Option<PathBuf>) {
+    if let Some(path) = path {
+        let _ = fs::remove_dir_all(path);
+    }
 }
 
 struct ServerStartupLog {
@@ -937,6 +1051,54 @@ mod tests {
             ]
         );
     }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn test_command_for_launch_spec_normalizes_unix_maven_wrapper() {
+        let tmp = TempDir::new().unwrap();
+        let root = create_browser4_root(&tmp);
+        create_dir_all(root.join(".mvn").join("wrapper")).unwrap();
+        let wrapper = root.join("mvnw");
+        write(&wrapper, "#!/bin/sh\r\nset -eu\r\n").unwrap();
+        write(
+            root.join(".mvn").join("wrapper").join("maven-wrapper.properties"),
+            "distributionUrl=https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/3.9.7/apache-maven-3.9.7-bin.zip\n",
+        )
+        .unwrap();
+
+        let spec = build_maven_launch_spec(&root, 8199).unwrap();
+        let prepared = command_for_launch_spec(&spec).unwrap();
+        let cleanup_dir = prepared
+            .cleanup_dir
+            .clone()
+            .expect("Unix wrapper launch should stage a normalized temp wrapper");
+        let prepared_program = PathBuf::from(Path::new(prepared.command.get_program()));
+
+        assert_ne!(prepared_program, wrapper);
+        assert_eq!(
+            prepared_program.file_name().and_then(|name| name.to_str()),
+            Some("mvnw")
+        );
+        assert_eq!(
+            prepared.command.get_current_dir(),
+            Some(spec.working_dir.as_path())
+        );
+        assert_eq!(
+            prepared
+                .command
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            spec.args
+        );
+        assert_eq!(
+            fs::read_to_string(&prepared_program).unwrap(),
+            "#!/bin/sh\nset -eu\n"
+        );
+        assert!(cleanup_dir.join(".mvn").exists());
+
+        cleanup_prepared_launch_dir(Some(cleanup_dir));
+    }
 }
 
 trait Pipe: Sized {
@@ -946,4 +1108,3 @@ trait Pipe: Sized {
 }
 
 impl<T> Pipe for T {}
-
