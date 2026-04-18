@@ -366,7 +366,7 @@
             <dependency>
                 <groupId>ai.platon</groupId>
                 <artifactId>pulsar-dependencies</artifactId>
-                <version>${pulsar.modules.version}</version>
+                <version>${project.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -580,7 +580,6 @@
         </surefire.excludedGroups>
 
         <pulsar.base.version>4.7.0</pulsar.base.version>
-        <pulsar.modules.version>4.7.0-SNAPSHOT</pulsar.modules.version>
     </properties>
 
 </project>
