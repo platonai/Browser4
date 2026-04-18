@@ -1,6 +1,6 @@
 package ai.platon.pulsar.test.server
 
-import ai.platon.pulsar.common.ResourceLoader
+import ai.platon.browser4.common.B4ResourceLoader
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.RestController
 
@@ -59,12 +59,12 @@ a,b,c,d,e,f,g
 
     @GetMapping("amazon/home.htm", produces = ["text/html"])
     fun amazonHome(): String {
-        return ResourceLoader.readString("pages/amazon/home.htm")
+        return B4ResourceLoader.readString("pages/amazon/home.htm")
     }
 
     @GetMapping("amazon/product.htm", produces = ["text/html"])
     fun amazonProduct(): String {
-        return ResourceLoader.readString("pages/amazon/B08PP5MSVB.original.htm")
+        return B4ResourceLoader.readString("pages/amazon/B08PP5MSVB.original.htm")
     }
 
     @GetMapping("assets/test-pages/form-page.html", produces = ["text/html"])

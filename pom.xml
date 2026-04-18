@@ -382,20 +382,14 @@
             <!-- Internal Dependencies -->
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-plugins</artifactId>
-                <type>pom</type>
-                <version>${pulsar.modules.version}</version>
+                <artifactId>browser4-common</artifactId>
+                <version>${project.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-skeleton</artifactId>
-                <version>${pulsar.modules.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-resources</artifactId>
-                <version>${pulsar.modules.version}</version>
+                <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
@@ -403,30 +397,43 @@
                 <type>test-jar</type>
                 <classifier>tests</classifier>
                 <scope>test</scope>
-                <version>${pulsar.modules.version}</version>
+                <version>${project.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>ai.platon.pulsar</groupId>
+                <artifactId>pulsar-plugins</artifactId>
+                <type>pom</type>
+                <version>${project.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>ai.platon.pulsar</groupId>
+                <artifactId>pulsar-skeleton</artifactId>
+                <version>${project.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-protocol</artifactId>
-                <version>${pulsar.modules.version}</version>
+                <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-parse</artifactId>
-                <version>${pulsar.modules.version}</version>
+                <version>${project.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-browser</artifactId>
-                <version>${pulsar.modules.version}</version>
+                <version>${project.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-llm</artifactId>
-                <version>${pulsar.modules.version}</version>
+                <version>${project.version}</version>
             </dependency>
 
             <dependency>

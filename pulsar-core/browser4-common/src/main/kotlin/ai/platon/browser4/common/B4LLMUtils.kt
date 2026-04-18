@@ -1,11 +1,11 @@
-package ai.platon.pulsar.skeleton.common
+package ai.platon.browser4.common
 
-import ai.platon.pulsar.common.ResourceLoader
 import java.io.FileNotFoundException
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.notExists
+import kotlin.io.resolve
 
 object B4LLMUtils {
 
@@ -31,7 +31,7 @@ object B4LLMUtils {
         copySourceFileAsResource(moduleName, resource)
 
         val resource = "$resource.txt"
-        return ResourceLoader.readString("${B4ProjectUtils.CODE_MIRROR_DIR}/$resource")
+        return B4ResourceLoader.readString("${B4ProjectUtils.CODE_MIRROR_DIR}/$resource")
     }
 
     fun writeAsResource(fileName: String, content: String): Path? {

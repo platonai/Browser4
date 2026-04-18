@@ -1,13 +1,14 @@
 package ai.platon.pulsar.agentic.inference.detail
 
+import ai.platon.browser4.common.B4ResourceLoader
 import ai.platon.browser4.driver.chrome.dom.model.BrowserUseState
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.agents.AgentConfig
-import ai.platon.pulsar.common.ResourceLoader
 import ai.platon.pulsar.common.getLogger
 import kotlinx.coroutines.delay
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.collections.ArrayDeque
 
 /**
  * Tracks page state changes to detect loops and ensure DOM stability.
@@ -140,7 +141,7 @@ class PageStateTracker(
         val driver = activeDriver
 
         if (domSettleJsLoaded.compareAndSet(false, true)) {
-            val rawJs = ResourceLoader.readString("js/dom_settle.js")
+            val rawJs = B4ResourceLoader.readString("js/dom_settle.js")
             domSettleJs = rawJs.replace("__DOM_STATE_VAR__", domStateHandle)
         }
 

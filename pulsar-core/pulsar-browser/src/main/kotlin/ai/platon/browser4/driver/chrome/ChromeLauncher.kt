@@ -751,7 +751,7 @@ class ChromeLauncher constructor(
         val scriptFileName = if (SystemUtils.IS_OS_WINDOWS) "kill-browsers.ps1" else "kill-browsers.sh"
         val scriptPath = AppPaths.SCRIPT_DIR.resolve(scriptFileName)
         if (scriptPath.notExists()) {
-            val content = ResourceLoader.readString(scriptFileName)
+            val content = B4ResourceLoader.readString(scriptFileName)
             Files.write(scriptPath, content.toByteArray())
         }
 

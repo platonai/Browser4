@@ -1,6 +1,6 @@
 package ai.platon.browser4.driver.common
 
-import ai.platon.pulsar.common.ResourceLoader
+import ai.platon.browser4.common.B4ResourceLoader
 import org.apache.commons.lang3.SystemUtils
 import kotlin.random.Random
 
@@ -30,7 +30,7 @@ class UserAgent {
     fun loadUserAgents() {
         if (userAgents.isNotEmpty()) return
 
-        var cua = ResourceLoader.readAllLines("ua/chrome-user-agents.txt")
+        var cua = B4ResourceLoader.readAllLines("ua/chrome-user-agents.txt")
             .filter { it.startsWith("Mozilla/5.0") }
         if (SystemUtils.IS_OS_LINUX) {
             cua = cua.filter { it.contains("X11") }

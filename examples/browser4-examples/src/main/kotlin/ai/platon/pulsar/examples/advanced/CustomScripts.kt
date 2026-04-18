@@ -1,11 +1,11 @@
 package ai.platon.pulsar.examples.advanced
 
-import ai.platon.pulsar.common.ResourceLoader
+import ai.platon.browser4.common.B4ResourceLoader
 import ai.platon.pulsar.human.manual.PRODUCT_DETAIL_URL
 import ai.platon.pulsar.skeleton.context.PulsarContexts
 
 fun main() {
-    val scripts = listOf("custom-js/custom-scripts.js").map { ResourceLoader.readString(it) }
+    val scripts = listOf("custom-js/custom-scripts.js").map { B4ResourceLoader.readString(it) }
 
     val session = PulsarContexts.createSession()
     val options = session.options("-refresh")

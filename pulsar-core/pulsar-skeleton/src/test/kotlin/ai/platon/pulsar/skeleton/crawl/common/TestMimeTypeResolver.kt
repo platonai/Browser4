@@ -1,6 +1,6 @@
 package ai.platon.pulsar.skeleton.crawl.common
 
-import ai.platon.pulsar.common.ResourceLoader
+import ai.platon.pulsar.skeleton.common.B4ResourceLoader
 import ai.platon.pulsar.persist.metadata.MultiMetadata
 import org.apache.tika.Tika
 import org.apache.tika.mime.MimeTypes
@@ -22,7 +22,7 @@ class MimeTypeDatum(
 }
 
 class TestMimeTypeResolver {
-    private val file = ResourceLoader.getPath("seeds/best-sellers.txt")
+    private val file = B4ResourceLoader.getPath("seeds/best-sellers.txt")
 
     @Test
     fun whenUsingTika_thenSuccess() {

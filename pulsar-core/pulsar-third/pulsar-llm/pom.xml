@@ -28,6 +28,11 @@
             <artifactId>pulsar-dom</artifactId>
         </dependency>
 
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>browser4-common</artifactId>
+        </dependency>
+
         <!-- OpenAI model is the default, many LLM providers keep compatible OpenAI API -->
         <dependency>
             <groupId>dev.langchain4j</groupId>
@@ -58,6 +63,11 @@
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-tests-common</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>pulsar-skeleton</artifactId>
             <scope>test</scope>
         </dependency>
 

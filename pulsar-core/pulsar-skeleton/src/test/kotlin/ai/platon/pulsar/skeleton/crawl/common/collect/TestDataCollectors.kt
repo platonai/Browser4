@@ -1,33 +1,33 @@
 package ai.platon.pulsar.skeleton.crawl.common.collect
 
+import ai.platon.browser4.common.B4ResourceLoader
 import ai.platon.pulsar.common.LinkExtractors
 import ai.platon.pulsar.common.Priority13
-import ai.platon.pulsar.common.ResourceLoader
 import ai.platon.pulsar.common.collect.*
 import ai.platon.pulsar.common.collect.collector.AbstractPriorityDataCollector
 import ai.platon.pulsar.common.collect.collector.PriorityDataCollector
 import ai.platon.pulsar.common.collect.collector.UrlCacheCollector
 import ai.platon.pulsar.common.config.AppConstants
+import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.common.urls.Hyperlink
 import ai.platon.pulsar.common.urls.PlainUrl
 import ai.platon.pulsar.common.urls.UrlAware
-import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.skeleton.common.collect.LocalFileHyperlinkCollector
 import org.apache.commons.collections4.MultiValuedMap
 import org.apache.commons.collections4.multimap.ArrayListValuedHashMap
-import kotlin.test.*
+import org.junit.jupiter.api.DisplayName
 import java.nio.file.Paths
 import java.util.*
+import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import org.junit.jupiter.api.DisplayName
 
 class TestDataCollectors : TestBase() {
 
     private val lowerCacheSize = 10
 
     @Test
-        @DisplayName("When add a item to queue then queue is not empty")
+    @DisplayName("When add a item to queue then queue is not empty")
     fun whenAddAItemToQueueThenQueueIsNotEmpty() {
         val source = LoadingUrlCache("", 0, TemporaryLocalFileUrlLoader())
         val sink = mutableListOf<UrlAware>()
@@ -42,7 +42,7 @@ class TestDataCollectors : TestBase() {
     }
 
     @Test
-        @DisplayName("When add an item to LoadingurlCache then LoadingIterable has next")
+    @DisplayName("When add an item to LoadingurlCache then LoadingIterable has next")
     fun whenAddAnItemToLoadingurlcacheThenLoadingiterableHasNext() {
         val urlCache = LoadingUrlCache("", 0, TemporaryLocalFileUrlLoader())
         urlCache.nReentrantQueue.add(PlainUrl(AppConstants.EXAMPLE_URL))
@@ -107,10 +107,10 @@ class TestDataCollectors : TestBase() {
     }
 
     @Test
-        @DisplayName("When iterate through fetch iterable then items are correct")
+    @DisplayName("When iterate through fetch iterable then items are correct")
     fun whenIterateThroughFetchIterableThenItemsAreCorrect() {
         val fetchIterable = UrlFeeder(urlPool, lowerCacheSize)
-        val resourceURI = ResourceLoader.getURL("seeds/head100/best-sellers.txt").toURI()
+        val resourceURI = B4ResourceLoader.getURL("seeds/head100/best-sellers.txt").toURI()
         val collector = LocalFileHyperlinkCollector(Paths.get(resourceURI), Priority13.NORMAL)
         fetchIterable.addDefaultCollectors()
         fetchIterable.addCollector(collector)

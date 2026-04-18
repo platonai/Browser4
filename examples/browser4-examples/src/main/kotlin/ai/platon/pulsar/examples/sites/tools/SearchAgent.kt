@@ -1,7 +1,7 @@
 package ai.platon.pulsar.examples.sites.tools
 
+import ai.platon.browser4.common.B4ResourceLoader
 import ai.platon.pulsar.common.NetUtil
-import ai.platon.pulsar.common.ResourceLoader
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.proxy.ProxyEntry
 import ai.platon.pulsar.common.proxy.ProxyPool
@@ -33,7 +33,7 @@ class SearchAgent {
 
         val async = false
         val limit = 4
-        val businessNames = ResourceLoader.readAllLines("entity/business.names.com.txt").shuffled().take(limit)
+        val businessNames = B4ResourceLoader.readAllLines("entity/business.names.com.txt").shuffled().take(limit)
         val contactNames = listOf("Email", "Phone", "Facebook")
         businessNames.forEach { businessName ->
             contactNames.forEach { contactName ->

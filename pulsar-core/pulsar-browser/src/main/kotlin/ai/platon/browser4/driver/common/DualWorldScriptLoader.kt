@@ -1,7 +1,7 @@
 package ai.platon.browser4.driver.common
 
+import ai.platon.browser4.common.B4ResourceLoader
 import ai.platon.pulsar.common.AppPaths
-import ai.platon.pulsar.common.ResourceLoader
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.getLogger
 import com.google.gson.GsonBuilder
@@ -188,7 +188,7 @@ open class DualWorldScriptLoader(
 
     private fun loadDefaultResource(resources: List<String>, cache: MutableMap<String, String>) {
         resources.filter { !it.startsWith("#") }.distinct().associateWithTo(cache) {
-            ResourceLoader.readAllLines(it).joinToString("\n") { line -> confuser.confuse(line) }
+            B4ResourceLoader.readAllLines(it).joinToString("\n") { line -> confuser.confuse(line) }
         }
     }
 

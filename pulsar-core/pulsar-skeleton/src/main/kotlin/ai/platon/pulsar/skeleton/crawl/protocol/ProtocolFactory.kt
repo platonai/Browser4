@@ -1,6 +1,6 @@
 package ai.platon.pulsar.skeleton.crawl.protocol
 
-import ai.platon.pulsar.common.ResourceLoader
+import ai.platon.browser4.common.B4ResourceLoader
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.stringify
 import ai.platon.pulsar.persist.WebPage
@@ -18,12 +18,12 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 class ProtocolFactory(private val immutableConfig: ImmutableConfig) : AutoCloseable {
     private val logger = LoggerFactory.getLogger(ProtocolFactory::class.java)
-    
+
     private val protocols: MutableMap<String, Protocol> = ConcurrentHashMap()
     private val closed = AtomicBoolean()
-    
+
     init {
-        ResourceLoader.readAllLines("protocol-plugins.txt")
+        B4ResourceLoader.readAllLines("protocol-plugins.txt")
             .asSequence()
             .map { it.trim() }
             .filterNot { it.startsWith("#") }
@@ -54,7 +54,7 @@ class ProtocolFactory(private val immutableConfig: ImmutableConfig) : AutoClosea
             else -> getProtocol(page.url)
         } ?: throw ProtocolNotFound(page.url)
     }
-    
+
     /**
      * Returns the appropriate [Protocol] implementation for a url.
      *
@@ -66,11 +66,11 @@ class ProtocolFactory(private val immutableConfig: ImmutableConfig) : AutoClosea
         // sub protocol can be supported by main:sub://example.com later
         return protocols[protocolName]
     }
-    
+
     fun getProtocol(mode: FetchMode): Protocol? {
         return getProtocol(mode.name.lowercase(Locale.getDefault()) + "://")
     }
-    
+
     private fun getInstance(config: List<String>): Protocol? {
         try {
             // config[0] is the protocol name, config[1] is the class name, and the rest are properties
@@ -85,7 +85,7 @@ class ProtocolFactory(private val immutableConfig: ImmutableConfig) : AutoClosea
         }
         return null
     }
-    
+
     override fun close() {
         if (closed.compareAndSet(false, true)) {
             protocols.values.forEach { protocol: Protocol ->

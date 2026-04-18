@@ -1,7 +1,6 @@
-
 package ai.platon.pulsar.skeleton.crawl.parse
 
-import ai.platon.pulsar.common.ResourceLoader
+import ai.platon.browser4.common.B4ResourceLoader
 import ai.platon.pulsar.common.config.CapabilityTypes
 import ai.platon.pulsar.common.config.ImmutableConfig
 import org.slf4j.LoggerFactory
@@ -22,6 +21,7 @@ class ParserConfigReader {
      */
     private lateinit var parseConfigFile: String
     private val notDefinedParsers = mutableListOf<String>()
+
     /**
      * Reads the `parse-plugins.xml` file and returns the
      * [ParserConfig] defined by it.
@@ -35,7 +35,7 @@ class ParserConfigReader {
         val fileResource = conf[PARSE_PLUGINS_FILE, "parse-plugins.xml"]
         var document: Document? = null
         try {
-            ResourceLoader.getResourceAsReader(fileResource, resourcePrefix).use { reader ->
+            B4ResourceLoader.getResourceAsReader(fileResource, resourcePrefix).use { reader ->
                 val inputSource = InputSource(reader)
                 val parser = DocumentBuilderFactory.newInstance().newDocumentBuilder()
                 document = parser.parse(inputSource)
@@ -125,6 +125,7 @@ class ParserConfigReader {
     companion object {
         /* our log stream */
         val LOG = LoggerFactory.getLogger(ParserConfigReader::class.java)
+
         /**
          * The property name of the parse-plugins location
          */
