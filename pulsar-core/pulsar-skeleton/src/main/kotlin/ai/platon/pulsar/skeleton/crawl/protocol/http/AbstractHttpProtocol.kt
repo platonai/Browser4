@@ -1,7 +1,6 @@
 package ai.platon.pulsar.skeleton.crawl.protocol.http
 
 import ai.platon.pulsar.common.*
-import ai.platon.pulsar.common.config.CapabilityTypes
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.persist.ProtocolStatus
@@ -12,7 +11,6 @@ import ai.platon.pulsar.persist.metadata.MultiMetadata
 import ai.platon.pulsar.persist.metadata.Name
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
 import ai.platon.pulsar.skeleton.crawl.common.MimeTypeResolver
-import ai.platon.pulsar.skeleton.crawl.protocol.ForwardingResponse
 import ai.platon.pulsar.skeleton.crawl.protocol.Protocol
 import ai.platon.pulsar.skeleton.crawl.protocol.ProtocolOutput
 import ai.platon.pulsar.skeleton.crawl.protocol.Response
@@ -33,11 +31,6 @@ abstract class AbstractHttpProtocol : Protocol {
     val isActive get() = !closed.get() && AppContext.isActive
 
     /**
-     * The max retry time
-     */
-    private var fetchMaxRetry = 3
-
-    /**
      * The configuration
      */
     override lateinit var conf: ImmutableConfig
@@ -52,7 +45,6 @@ abstract class AbstractHttpProtocol : Protocol {
      * */
     override fun configure(conf1: ImmutableConfig) {
         conf = conf1
-        fetchMaxRetry = conf1.getInt(CapabilityTypes.HTTP_FETCH_MAX_RETRY, 3)
         robots = HttpRobotRulesParser(conf1)
     }
 
@@ -71,7 +63,7 @@ abstract class AbstractHttpProtocol : Protocol {
 
     override fun getProtocolOutput(page: WebPage): ProtocolOutput {
         return try {
-            getProtocolOutputWithRetry(page)
+            doGetProtocolOutput(page)
         } catch (e: Throwable) {
             // log.warn("Unexpected exception", e)
             warnUnexpected(this, e)
@@ -94,41 +86,28 @@ abstract class AbstractHttpProtocol : Protocol {
      * @param page The web page for which the protocol output is to be retrieved.
      * @return The protocol output containing the status and response data.
      */
-    private fun getProtocolOutputWithRetry(page: WebPage): ProtocolOutput {
+    private fun doGetProtocolOutput(page: WebPage): ProtocolOutput {
         val startTime = Instant.now()
         var response: Response?
-        var retry = false
         var lastThrowable: Throwable? = null
-        var i = 0
 
-        // Calculate the maximum number of retries, ensuring it does not exceed the maximum retry guard value
-        val maxTry = fetchMaxRetry.coerceAtMost(MAX_REY_GUARD)
-        do {
-            if (i > 0) {
-                log.info("Protocol retry: {}/{} | {}", i, maxTry, page.url)
-            }
-
-            try {
-                // TODO: FETCH_PROTOCOL does not work if the response is a ForwardingResponse
-                // Fetch the response and determine if a retry is necessary
-                response = getResponse(page, false)
-                retry = response == null || shouldRetry(response)
-            } catch (e: IllegalApplicationStateException) {
-                log.warn(e.message)
-                response = null
-                lastThrowable = e
-            } catch (e: Exception) {
-                response = null
-                lastThrowable = e
-                // log.warn(e.stringify("[Unexpected]"))
-                warnUnexpected(this, e)
-            } catch (t: Throwable) {
-                response = null
-                lastThrowable = t
-                // log.warn(t.stringify("[Unexpected]"))
-                warnUnexpected(this, t)
-            }
-        } while (retry && ++i < maxTry && isActive)
+        try {
+            response = getResponse(page, false)
+        } catch (e: IllegalApplicationStateException) {
+            log.warn(e.message)
+            response = null
+            lastThrowable = e
+        } catch (e: Exception) {
+            response = null
+            lastThrowable = e
+            // log.warn(e.stringify("[Unexpected]"))
+            warnUnexpected(this, e)
+        } catch (t: Throwable) {
+            response = null
+            lastThrowable = t
+            // log.warn(t.stringify("[Unexpected]"))
+            warnUnexpected(this, t)
+        }
 
         // If the system is no longer active, return a canceled status
         if (!isActive) {
@@ -137,16 +116,12 @@ abstract class AbstractHttpProtocol : Protocol {
 
         // If the response is null, return a failed response
         if (response == null) {
-            return getFailedResponse(lastThrowable, i, maxTry)
+            return getFailedResponse(lastThrowable)
         }
 
         // Set the response time and return the translated protocol output
         setResponseTime(startTime, page, response)
         return getOutputWithHttpCodeTranslated(page.url, response)
-    }
-
-    private fun shouldRetry(response: Response): Boolean {
-        return response !is ForwardingResponse && response.protocolStatus.isRetry(RetryScope.PROTOCOL)
     }
 
     private fun getOutputWithHttpCodeTranslated(url: String, response: Response): ProtocolOutput {
@@ -178,7 +153,7 @@ abstract class AbstractHttpProtocol : Protocol {
         return ProtocolOutput(pageDatum, headers, finalProtocolStatus)
     }
 
-    private fun getFailedResponse(lastThrowable: Throwable?, tryCount: Int, maxRry: Int): ProtocolOutput {
+    private fun getFailedResponse(lastThrowable: Throwable?): ProtocolOutput {
         val code = when (lastThrowable) {
             is ConnectException -> ProtocolStatusCodes.REQUEST_TIMEOUT
             is SocketTimeoutException -> ProtocolStatusCodes.REQUEST_TIMEOUT
@@ -187,9 +162,7 @@ abstract class AbstractHttpProtocol : Protocol {
         }
         val protocolStatus = ProtocolStatus.failed(
             code,
-            "exception", lastThrowable,
-            "retry", tryCount,
-            "maxRetry", maxRry
+            "exception", lastThrowable
         )
         return ProtocolOutput(null, MultiMetadata(), protocolStatus)
     }
@@ -208,7 +181,6 @@ abstract class AbstractHttpProtocol : Protocol {
         } else {
             Duration.between(startTime, Instant.now())
         }
-        // TODO: update in FetchComponent?
         page.metadata[Name.RESPONSE_TIME] = elapsedTime.toString()
     }
 
