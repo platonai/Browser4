@@ -28,11 +28,6 @@
         </dependency>
 
         <dependency>
-            <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-protocol-playwright</artifactId>
-        </dependency>
-
-        <dependency>
             <groupId>org.apache.httpcomponents</groupId>
             <artifactId>httpclient</artifactId>
         </dependency>

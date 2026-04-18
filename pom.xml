@@ -87,6 +87,7 @@
      with a single click in the IDE right after opening the project. -->
     <modules>
         <module>pulsar-dependencies</module>
+        <module>pulsar-bom</module>
         <module>pulsar-tests/pulsar-tests-common</module>
         <module>pulsar-core</module>
         <module>pulsar-tools</module>
@@ -432,51 +433,51 @@
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-beans</artifactId>
-                <version>${pulsar.modules.version}</version>
+                <version>${project.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-agentic</artifactId>
-                <version>${pulsar.modules.version}</version>
+                <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-tools</artifactId>
-                <version>${pulsar.modules.version}</version>
+                <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-rest</artifactId>
-                <version>${pulsar.modules.version}</version>
+                <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-boot</artifactId>
-                <version>${pulsar.modules.version}</version>
+                <version>${project.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-tests-common</artifactId>
-                <version>${pulsar.modules.version}</version>
+                <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-tests-common</artifactId>
                 <classifier>tests</classifier>
                 <scope>test</scope>
-                <version>${pulsar.modules.version}</version>
+                <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-it-tests</artifactId>
-                <version>${pulsar.modules.version}</version>
+                <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-it-tests</artifactId>
-                <version>${pulsar.modules.version}</version>
+                <version>${project.version}</version>
                 <type>test-jar</type>
                 <classifier>tests</classifier>
                 <scope>test</scope>

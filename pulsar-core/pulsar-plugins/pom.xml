@@ -27,7 +27,6 @@
     <modules>
         <module>pulsar-parse</module>
         <module>pulsar-protocol</module>
-        <module>pulsar-protocol-playwright</module>
     </modules>
 
     <dependencyManagement>
@@ -49,11 +48,6 @@
                 <version>${project.version}</version>
             </dependency>
 
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-protocol-playwright</artifactId>
-                <version>${project.version}</version>
-            </dependency>
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-protocol</artifactId>
