@@ -523,29 +523,3 @@ jobs:
           git push --delete origin ${{ env.TAG }} 2>/dev/null || echo "Tag cleanup skipped or already removed"
 
           echo "::warning::Release failed. Tag ${{ env.TAG }} has been removed. Please fix issues and retry."
-
-#      - name: Set up JDK ${{ env.JAVA_VERSION }} For Deployment
-#        uses: actions/setup-java@v4
-#        with:
-#          distribution: 'temurin'
-#          java-version: ${{ env.JAVA_VERSION }}
-#          cache: maven
-#          server-id: 'central'                        # Matches <id> in your pom.xml for OSSRH
-#          server-username: CENTRAL_USERNAME
-#          server-password: CENTRAL_PASSWORD
-#          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}   # ASCII-armored (exported with --armor)
-#          gpg-passphrase: ${{ secrets.GPG_PASSPHRASE }}
-#
-#      - name: Deploy to Sonatype OSSRH
-#        if: success()
-#        run: |
-#          echo "=== Deploying to Maven Central ==="
-#          ./mvnw --batch-mode deploy -P deploy,release -DskipTests \
-#            -Dgpg.passphrase="$GPG_PASSPHRASE" \
-#            -Dgpg.batch=true \
-#            -Dgpg.pinentry-mode=loopback \
-#            --show-version --errors
-#        env:
-#          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-#          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
-#          CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
