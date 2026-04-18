@@ -8,7 +8,6 @@ import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.common.sleepSeconds
 import ai.platon.pulsar.protocol.browser.DefaultWebDriverPoolManager
 import ai.platon.pulsar.protocol.browser.driver.LoadingWebDriverPool
-import ai.platon.pulsar.protocol.browser.driver.playwright.PlaywrightDriver
 import ai.platon.pulsar.skeleton.common.AppSystemInfo
 import ai.platon.pulsar.skeleton.crawl.fetch.driver.WebDriver
 import ai.platon.pulsar.skeleton.crawl.fetch.privacy.BrowserId
@@ -59,11 +58,7 @@ class LoadingWebDriverPoolTest {
             while(pool.numDriverSlots > 0 && !AppSystemInfo.isSystemOverCriticalLoad) {
                 val driver = pool.poll()
 
-                if (driver is PlaywrightDriver) {
-                    printlnPro("Created WebDriver #${driver.id} | ${pool.takeSnapshot()} | ${driver.guid} | ${driver::class.qualifiedName}")
-                } else {
-                    printlnPro("Created WebDriver #${driver.id} | ${pool.takeSnapshot()} | ${driver::class.qualifiedName}")
-                }
+                printlnPro("Created WebDriver #${driver.id} | ${pool.takeSnapshot()} | ${driver::class.qualifiedName}")
 
                 driver.navigate(seeds.random())
                 driver.waitForSelector("body")
@@ -89,11 +84,7 @@ class LoadingWebDriverPoolTest {
             val driver = pool.poll()
             drivers += driver
 
-            if (driver is PlaywrightDriver) {
-                printlnPro("Created WebDriver #${driver.id} | ${pool.takeSnapshot()} | ${driver.guid} | ${driver::class.qualifiedName}")
-            } else {
-                printlnPro("Created WebDriver #${driver.id} | ${pool.takeSnapshot()} | ${driver::class.qualifiedName}")
-            }
+            printlnPro("Created WebDriver #${driver.id} | ${pool.takeSnapshot()} | ${driver::class.qualifiedName}")
 
             executor.submit {
                 val url = seeds.random()
