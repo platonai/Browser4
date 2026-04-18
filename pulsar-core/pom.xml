@@ -34,13 +34,4 @@
         <module>pulsar-browser</module>
         <module>pulsar-spring-support</module>
     </modules>
-
-    <profiles>
-        <profile>
-            <id>pulsar-core-tests</id>
-            <modules>
-                <module>pulsar-core-tests</module>
-            </modules>
-        </profile>
-    </profiles>
 </project>

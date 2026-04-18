@@ -1,29 +1,27 @@
-package ai.platon.pulsar.skeleton.common.llm
+package ai.platon.pulsar.skeleton.common
 
 import ai.platon.pulsar.common.ResourceLoader
-import ai.platon.pulsar.common.code.ProjectUtils
-import ai.platon.pulsar.common.code.ProjectUtils.CODE_MIRROR_DIR
 import java.io.FileNotFoundException
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.notExists
 
-object LLMUtils {
+object B4LLMUtils {
 
     @Throws(IOException::class)
     fun copySourceFileAsResource(moduleName: String, filename: String) {
-        if (ProjectUtils.isInJar()) {
+        if (B4ProjectUtils.isInJar()) {
             return
         }
 
-        if (ProjectUtils.findProjectRootDir() == null) {
+        if (B4ProjectUtils.findProjectRootDir() == null) {
             // we are not in a source code project
             return
         }
 
-        val file = ProjectUtils.findFiles(moduleName, filename).firstOrNull() ?: throw FileNotFoundException(filename)
-        ProjectUtils.copySourceFileAsCodeResource(file)
+        val file = B4ProjectUtils.findFiles(moduleName, filename).firstOrNull() ?: throw FileNotFoundException(filename)
+        B4ProjectUtils.copySourceFileAsCodeResource(file)
     }
 
     /**
@@ -33,11 +31,11 @@ object LLMUtils {
         copySourceFileAsResource(moduleName, resource)
 
         val resource = "$resource.txt"
-        return ResourceLoader.readString("$CODE_MIRROR_DIR/$resource")
+        return ResourceLoader.readString("${B4ProjectUtils.CODE_MIRROR_DIR}/$resource")
     }
 
     fun writeAsResource(fileName: String, content: String): Path? {
-        val baseDir = ProjectUtils.findFiles(CODE_MIRROR_DIR).firstOrNull() ?: return null
+        val baseDir = B4ProjectUtils.findFiles(B4ProjectUtils.CODE_MIRROR_DIR).firstOrNull() ?: return null
         if (baseDir.notExists()) {
             return null
         }

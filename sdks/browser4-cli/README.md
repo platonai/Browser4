@@ -168,7 +168,7 @@ browser4-cli -s=<session> <command> [args] [options]
 ## Element References
 
 The `snapshot` command returns an accessibility tree where every interactive
-node is labelled with a short identifier such as `e15`. Pass this identifier
+node is labeled with a short identifier such as `e15`. Pass this identifier
 directly to commands like `click`, `type`, or `press`; the CLI automatically
 converts it to the `backend:15` selector format required by the server.
 
