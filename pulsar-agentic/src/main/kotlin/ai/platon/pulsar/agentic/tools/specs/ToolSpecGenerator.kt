@@ -1,11 +1,11 @@
 package ai.platon.pulsar.agentic.tools.specs
 
+import ai.platon.browser4.common.B4LLMUtils
+import ai.platon.browser4.common.B4ProjectUtils
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.common.ExperimentalApi
 import ai.platon.pulsar.common.Strings
 import ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper
-import ai.platon.pulsar.skeleton.common.B4LLMUtils
-import ai.platon.pulsar.skeleton.common.B4ProjectUtils
 import java.util.concurrent.atomic.AtomicBoolean
 
 @ExperimentalApi
