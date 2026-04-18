@@ -132,6 +132,15 @@ class MCPToolController(
 
     private val logger = LoggerFactory.getLogger(MCPToolController::class.java)
 
+    /**
+     * Cached tool names for the /tools endpoint.
+     * Tool specs are static (determined by executor classes, not session state),
+     * so we cache after the first successful enumeration to avoid creating
+     * a throwaway session on every probe request.
+     */
+    @Volatile
+    private var cachedToolNames: List<String>? = null
+
     private data class NormalizedToolCall(
         val tool: String,
         val arguments: Map<String, Any?>
@@ -207,6 +216,11 @@ class MCPToolController(
 
     /**
      * List available MCP tools.
+     *
+     * Tool specs are static (they come from executor class definitions, not session state),
+     * so we cache the result after the first successful enumeration. This avoids creating
+     * and destroying a throwaway session on every probe — which previously caused a
+     * create→launch-browser→close cycle every time the CLI polled this endpoint.
      */
     @GetMapping("/tools")
     fun listTools(
@@ -214,30 +228,44 @@ class MCPToolController(
     ): ResponseEntity<Any> {
         addRequestId(response)
 
-        val tools = linkedSetOf(
-            // Session management
-            "open_session", "close_session", "list_sessions",
-            "close_all_sessions", "kill_all_sessions", "delete_session_data",
-            // Command tools (no session required)
-            "command_run", "command_batch", "command_status", "command_result"
-        )
-
-        val activeSession = sessionManager.getAllSessions().firstOrNull()
-        val managedSession = activeSession ?: sessionManager.createSession(null)
-        val deleteAfterListing = activeSession == null
-
-        try {
-            val agent = managedSession.agenticSession.companionAgent as? BasicBrowserAgent
-            if (agent != null) {
-                tools.addAll(collectAdvertisedToolNames(agent.toolExtractor.getAllToolSpecs()))
-            }
-        } finally {
-            if (deleteAfterListing) {
-                sessionManager.deleteSession(managedSession.sessionId)
-            }
+        // Fast path: return cached tool names if already computed
+        cachedToolNames?.let {
+            return ResponseEntity.ok(mapOf("tools" to it))
         }
 
-        return ResponseEntity.ok(mapOf("tools" to tools.toList()))
+        // Slow path: compute tool names under a lock so only one request creates a session
+        synchronized(this) {
+            cachedToolNames?.let {
+                return ResponseEntity.ok(mapOf("tools" to it))
+            }
+
+            val tools = linkedSetOf(
+                // Session management
+                "open_session", "close_session", "list_sessions",
+                "close_all_sessions", "kill_all_sessions", "delete_session_data",
+                // Command tools (no session required)
+                "command_run", "command_batch", "command_status", "command_result"
+            )
+
+            val activeSession = sessionManager.getAllSessions().firstOrNull()
+            val managedSession = activeSession ?: sessionManager.createSession(null)
+            val deleteAfterListing = activeSession == null
+
+            try {
+                val agent = managedSession.agenticSession.companionAgent as? BasicBrowserAgent
+                if (agent != null) {
+                    tools.addAll(collectAdvertisedToolNames(agent.toolExtractor.getAllToolSpecs()))
+                }
+            } finally {
+                if (deleteAfterListing) {
+                    sessionManager.deleteSession(managedSession.sessionId)
+                }
+            }
+
+            val result = tools.toList()
+            cachedToolNames = result
+            return ResponseEntity.ok(mapOf("tools" to result))
+        }
     }
 
     // =========================================================================
