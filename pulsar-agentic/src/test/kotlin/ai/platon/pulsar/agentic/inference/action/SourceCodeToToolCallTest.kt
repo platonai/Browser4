@@ -1,7 +1,7 @@
 package ai.platon.pulsar.agentic.inference.action
 
+import ai.platon.browser4.common.B4LLMUtils
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecGenerator
-import ai.platon.pulsar.skeleton.common.B4LLMUtils
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
@@ -28,15 +28,22 @@ class SourceCodeToToolCallTest {
         val tools = ToolSpecGenerator.extractInterface("tab", sourceCode, "WebDriver")
         assertTrue(tools.isNotEmpty(), "Tool list should not be empty")
 
-        val click = tools.firstOrNull { it.domain == "tab" && it.method == "click" && it.arguments.any { arg -> arg.name == "count" } }
+        val click =
+            tools.firstOrNull { it.domain == "tab" && it.method == "click" && it.arguments.any { arg -> arg.name == "count" } }
         assertNotNull(click, "Should contain driver.click method")
 
         val help = click!!.help
         assertNotNull(help, "Help should not be null")
 
         // Verify full description content
-        assertTrue(help!!.contains("Focus on an element with [selector] and click it."), "Help should contain main description")
-        assertTrue(help.contains("If there's no element matching `selector`, nothing to do."), "Help should contain secondary description")
+        assertTrue(
+            help!!.contains("Focus on an element with [selector] and click it."),
+            "Help should contain main description"
+        )
+        assertTrue(
+            help.contains("If there's no element matching `selector`, nothing to do."),
+            "Help should contain secondary description"
+        )
         assertTrue(help.contains("driver.click"), "Help should contain code example")
 
         // Verify annotations are removed
