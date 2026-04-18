@@ -113,7 +113,7 @@
 
         <kotlin.version>2.2.21</kotlin.version>
         <spring-boot.version>4.0.1</spring-boot.version>
-        <browser4.base.version>4.7.0</browser4.base.version>
+        <pulsar.base.version>4.7.0</pulsar.base.version>
         <exec.mainClass>ai.platon.pulsar.examples.agent.Browser4AgentKt</exec.mainClass>
     </properties>
 </project>

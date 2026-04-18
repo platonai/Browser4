@@ -160,80 +160,49 @@
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-common</artifactId>
-                <version>${browser4.base.version}</version>
+                <version>${pulsar.base.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-persist</artifactId>
-                <version>${browser4.base.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-skeleton</artifactId>
-                <version>${browser4.base.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-resources</artifactId>
-                <type>test-jar</type>
-                <classifier>tests</classifier>
-                <scope>test</scope>
-                <version>${browser4.base.version}</version>
+                <version>${pulsar.base.version}</version>
             </dependency>
 
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-plugins</artifactId>
-                <type>pom</type>
-                <version>${browser4.base.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-protocol</artifactId>
-                <version>${browser4.base.version}</version>
-            </dependency>
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-parse</artifactId>
-                <version>${browser4.base.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-browser</artifactId>
-                <version>${browser4.base.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-llm</artifactId>
-                <version>${browser4.base.version}</version>
+                <version>${pulsar.base.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-dom</artifactId>
-                <version>${browser4.base.version}</version>
+                <version>${pulsar.base.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-ql-common</artifactId>
-                <version>${browser4.base.version}</version>
+                <version>${pulsar.base.version}</version>
             </dependency>
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-ql-common</artifactId>
                 <classifier>shaded</classifier>
-                <version>${browser4.base.version}</version>
+                <version>${pulsar.base.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-ql</artifactId>
-                <version>${browser4.base.version}</version>
+                <version>${pulsar.base.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>ai.platon.pulsar</groupId>
+                <artifactId>pulsar-llm</artifactId>
+                <version>${pulsar.base.version}</version>
             </dependency>
 
             <!-- Kotlin -->
@@ -270,7 +239,7 @@
         <kotlin.compiler.jvmTarget>${javaVersion}</kotlin.compiler.jvmTarget>
 
         <spring-boot.version>4.0.1</spring-boot.version>
-        <browser4.base.version>4.7.0</browser4.base.version>
+        <pulsar.base.version>4.7.0</pulsar.base.version>
 
         <!-- keep consistent with io.modelcontextprotocol:kotlin-sdk-core-jvm:jar:0.8.1 -->
         <ktor.version>3.2.3</ktor.version>

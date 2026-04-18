@@ -96,11 +96,6 @@
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-common</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>ai.platon.pulsar</groupId>
-            <artifactId>browser4-common</artifactId>
         </dependency>
 
         <!-- Kotlin-friendly mocking -->

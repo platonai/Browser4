@@ -432,12 +432,6 @@
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-llm</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-beans</artifactId>
                 <version>${project.version}</version>
             </dependency>
@@ -585,7 +579,7 @@
             IntegrationTest,E2ETest,HeavyTest
         </surefire.excludedGroups>
 
-        <browser4.base.version>4.7.0</browser4.base.version>
+        <pulsar.base.version>4.7.0</pulsar.base.version>
         <pulsar.modules.version>4.7.0-SNAPSHOT</pulsar.modules.version>
     </properties>
 

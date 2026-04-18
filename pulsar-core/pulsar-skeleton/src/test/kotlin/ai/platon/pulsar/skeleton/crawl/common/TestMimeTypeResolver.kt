@@ -1,6 +1,6 @@
 package ai.platon.pulsar.skeleton.crawl.common
 
-import ai.platon.pulsar.skeleton.common.B4ResourceLoader
+import ai.platon.browser4.common.B4ResourceLoader
 import ai.platon.pulsar.persist.metadata.MultiMetadata
 import org.apache.tika.Tika
 import org.apache.tika.mime.MimeTypes

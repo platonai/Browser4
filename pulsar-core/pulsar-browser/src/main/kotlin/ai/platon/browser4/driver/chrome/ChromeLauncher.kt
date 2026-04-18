@@ -1,5 +1,6 @@
 package ai.platon.browser4.driver.chrome
 
+import ai.platon.browser4.common.B4ResourceLoader
 import ai.platon.browser4.driver.chrome.common.ChromeOptions
 import ai.platon.browser4.driver.chrome.common.LauncherOptions
 import ai.platon.browser4.driver.chrome.impl.ChromeImpl
