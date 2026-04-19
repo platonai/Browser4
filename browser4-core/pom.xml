@@ -17,10 +17,10 @@
         <version>4.7.0-SNAPSHOT</version>
     </parent>
 
-    <artifactId>pulsar-core</artifactId>
+    <artifactId>browser4-core</artifactId>
     <packaging>pom</packaging>
 
-    <name>Pulsar Core</name>
+    <name>Browser4 Core</name>
 
     <build>
         <defaultGoal>package</defaultGoal>

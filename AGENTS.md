@@ -58,12 +58,12 @@ mvnw.cmd -q -DskipTests
 
 **Core module tests (Linux/macOS):**
 ```bash
-./mvnw -pl pulsar-core -am test -Dsurefire.failIfNoSpecifiedTests=false
+./mvnw -pl browser4-core -am test -Dsurefire.failIfNoSpecifiedTests=false
 ```
 
 **Core module tests (Windows PowerShell):**
 ```powershell
-.\mvnw.cmd -pl pulsar-core -am test -D"surefire.failIfNoSpecifiedTests=false"
+.\mvnw.cmd -pl browser4-core -am test -D"surefire.failIfNoSpecifiedTests=false"
 ```
 
 ### Recommended Build Scripts
@@ -74,7 +74,7 @@ mvnw.cmd -q -DskipTests
 
 | Module | Description |
 |--------|-------------|
-| `pulsar-core` | Core engine: sessions, scheduling, DOM, browser control |
+| `browser4-core` | Core engine: sessions, scheduling, DOM, browser control |
 | `pulsar-agentic` | AI agents implementation, MCP, skills registration |
 | `pulsar-rest` | Spring Boot REST layer & command endpoints |
 | `sdks/*` | Browser4 CLI + skill assets (`sdks/browser4-cli`, `sdks/skill`) |
@@ -271,7 +271,7 @@ When given a task, Claude should:
 
 #### Adding a New Feature
 
-1. Identify the relevant module (pulsar-core, pulsar-agentic, pulsar-rest)
+1. Identify the relevant module (browser4-core, pulsar-agentic, pulsar-rest)
 2. Check existing similar features for patterns
 3. Add interface/API in appropriate package
 4. Implement with proper error handling and logging
@@ -379,10 +379,10 @@ skillRegistry.register(CustomTool())
 **For Test Failures:**
 ```bash
 # Run specific test
-./mvnw -pl pulsar-core test -Dtest=SpecificTest
+./mvnw -pl browser4-core test -Dtest=SpecificTest
 
 # With debug output
-./mvnw -pl pulsar-core test -Dtest=SpecificTest -X
+./mvnw -pl browser4-core test -Dtest=SpecificTest -X
 ```
 
 **For Runtime Issues:**

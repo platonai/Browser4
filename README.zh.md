@@ -301,7 +301,7 @@ Invoke-WebRequest -Uri https://github.com/platonai/PulsarRPAPro/releases/downloa
 
 | 模块 | 说明                      |
 |--------|-------------------------|
-| `pulsar-core` | 核心引擎：会话、调度、DOM、浏览器控制    |
+| `browser4-core` | 核心引擎：会话、调度、DOM、浏览器控制    |
 | `pulsar-agentic` | 智能体实现、MCP 与技能注册         |
 | `pulsar-rest` | Spring Boot REST 层与命令端点 |
 | `pulsar-tools` | 高阶智能体工具                 |

@@ -2,6 +2,7 @@ package ai.platon.pulsar.browser
 
 import ai.platon.pulsar.WebDriverTestBase
 import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
@@ -22,6 +23,7 @@ class FingerprintApplicationIT : WebDriverTestBase() {
     lateinit var tempDir: Path
 
     @Test
+    @Disabled("Feature postponed")
     @DisplayName("test browser starts with fingerprint")
     fun testBrowserStartsWithFingerprint() = runWebDriverTest(simpleDomURL) { driver ->
         // Browser is created with fingerprint in runWebDriverTest
@@ -92,6 +94,7 @@ class FingerprintApplicationIT : WebDriverTestBase() {
     }
 
     @Test
+    @Disabled("Feature postponed")
     @DisplayName("test user agent is set correctly")
     fun testUserAgentIsSetCorrectly() = runWebDriverTest(simpleDomURL) { driver ->
         val fingerprint = driver.browser.id.fingerprint

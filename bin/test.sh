@@ -39,7 +39,7 @@ print_usage() {
   echo "  test.sh skills                     # Run skills-focused agentic tests"
   echo "  test.sh mcp                        # Run MCP-focused agentic tests"
   echo "  test.sh browser4                   # Run all Browser4 main tests"
-  echo "  test.sh it -pl pulsar-core         # Pass additional Maven args through"
+  echo "  test.sh it -pl browser4-core       # Pass additional Maven args through"
   exit 1
 }
 

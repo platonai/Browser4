@@ -310,7 +310,7 @@ curl -L -o PulsarRPAPro.jar https://github.com/platonai/PulsarRPAPro/releases/do
 
 | Module            | Description                                             |
 |-------------------|---------------------------------------------------------|
-| `pulsar-core`     | Core engine: sessions, scheduling, DOM, browser control |
+| `browser4-core`   | Core engine: sessions, scheduling, DOM, browser control |
 | `pulsar-agentic`  | Agent implementation, MCP, and skill registration       |
 | `pulsar-rest`     | Spring Boot REST layer & command endpoints              |
 | `browser4-agents` | Agent & crawler orchestration with product packaging    |

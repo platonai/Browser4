@@ -98,7 +98,7 @@ EXAMPLES:
     $SCRIPT_NAME -f -l 120
 
     # Build specific modules every 90s
-    $SCRIPT_NAME -m ":pulsar-core,pulsar-client" 90
+    $SCRIPT_NAME -m ":browser4-core,pulsar-client" 90
 
     # Build all modules with clean flag
     $SCRIPT_NAME -c -m all

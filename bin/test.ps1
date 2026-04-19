@@ -44,7 +44,7 @@ function Print-Usage {
     Write-Host "  test.ps1 skills                     # Run skills-focused agentic tests"
     Write-Host "  test.ps1 mcp                        # Run MCP-focused agentic tests"
     Write-Host "  test.ps1 browser4                   # Run all Browser4 main tests"
-    Write-Host '  test.ps1 it -pl pulsar-core         # Pass additional Maven args through'
+    Write-Host '  test.ps1 it -pl browser4-core       # Pass additional Maven args through'
     exit 1
 }
 

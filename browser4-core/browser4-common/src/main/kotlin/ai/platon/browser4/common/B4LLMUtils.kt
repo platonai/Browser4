@@ -5,7 +5,6 @@ import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.io.path.notExists
-import kotlin.io.resolve
 
 object B4LLMUtils {
 
@@ -30,8 +29,20 @@ object B4LLMUtils {
     fun readSourceFileFromResource(moduleName: String, resource: String): String {
         copySourceFileAsResource(moduleName, resource)
 
-        val resource = "$resource.txt"
-        return B4ResourceLoader.readString("${B4ProjectUtils.CODE_MIRROR_DIR}/$resource")
+        val mirroredResource = "$resource.txt"
+        val classpathResource = "${B4ProjectUtils.CODE_MIRROR_DIR}/$mirroredResource"
+        val content = B4ResourceLoader.readString(classpathResource)
+        if (content.isNotBlank()) {
+            return content
+        }
+
+        val projectRootDir = B4ProjectUtils.findProjectRootDir() ?: return content
+        val mirroredPath = projectRootDir.resolve(B4ProjectUtils.CODE_RESOURCE_DIR).resolve(mirroredResource)
+        return if (Files.exists(mirroredPath)) {
+            Files.readString(mirroredPath)
+        } else {
+            content
+        }
     }
 
     fun writeAsResource(fileName: String, content: String): Path? {

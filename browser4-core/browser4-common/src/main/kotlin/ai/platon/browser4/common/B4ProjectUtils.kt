@@ -334,7 +334,7 @@ object B4ProjectUtils {
 
     const val CODE_MIRROR_DIR = "code-mirror"
 
-    const val CODE_RESOURCE_DIR = "pulsar-core/pulsar-resources/src/main/resources/$CODE_MIRROR_DIR"
+    const val CODE_RESOURCE_DIR = "browser4-core/pulsar-resources/src/main/resources/$CODE_MIRROR_DIR"
 
     fun isInJar(): Boolean {
         val location = this::class.java.protectionDomain.codeSource.location
@@ -369,7 +369,8 @@ object B4ProjectUtils {
 
         if (projectRootDir == null && deepSearch) {
             // The working directory may not be the project root, try to find the module directory first and then search for the project root.
-            val moduleDir = Files.walk(startDir).filter { it.fileName.toString().endsWith("pulsar-common") }
+            val moduleDir = Files.walk(startDir)
+                .filter { it.fileName.toString().endsWith("browser4-common") }
                 .findFirst().orElse(null)?.toAbsolutePath()
 
             if (moduleDir != null) {

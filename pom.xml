@@ -89,7 +89,7 @@
         <module>pulsar-dependencies</module>
         <module>pulsar-bom</module>
         <module>pulsar-tests/pulsar-tests-common</module>
-        <module>pulsar-core</module>
+        <module>browser4-core</module>
         <module>pulsar-tools</module>
         <module>pulsar-agentic</module>
         <module>pulsar-rest</module>
@@ -171,7 +171,7 @@
             <id>all-modules</id>
             <modules>
                 <module>pulsar-dependencies</module>
-                <module>pulsar-core</module>
+                <module>browser4-core</module>
                 <module>pulsar-tools</module>
                 <module>pulsar-bom</module>
                 <module>pulsar-agentic</module>

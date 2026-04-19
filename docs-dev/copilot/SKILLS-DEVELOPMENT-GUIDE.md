@@ -184,14 +184,14 @@ Content-Type: application/json
 
 ### 2.9 Backend: WebDriver → CDP
 
-**File**: `pulsar-core/.../WebDriver.kt` (line ~268)
+**File**: `browser4-core/.../WebDriver.kt` (line ~268)
 
 ```kotlin
 @MCP
 suspend fun navigate(url: String)
 ```
 
-**File**: `pulsar-core/.../PulsarWebDriver.kt` (line ~112)
+**File**: `browser4-core/.../PulsarWebDriver.kt` (line ~112)
 
 Actual Chrome navigation via Chrome DevTools Protocol (CDP).
 
@@ -305,7 +305,7 @@ The `BrowserTabToolExecutor` auto-discovers methods via `ToolSpecGenerator`.
 
 1. **Add the method to WebDriver interface**:
 
-   **File**: `pulsar-core/pulsar-skeleton/.../WebDriver.kt`
+   **File**: `browser4-core/pulsar-skeleton/.../WebDriver.kt`
 
    ```kotlin
    /**
@@ -321,7 +321,7 @@ The `BrowserTabToolExecutor` auto-discovers methods via `ToolSpecGenerator`.
 
 2. **Implement in concrete driver classes**:
 
-   **File**: `pulsar-core/pulsar-plugins/.../PulsarWebDriver.kt`
+   **File**: `browser4-core/pulsar-plugins/.../PulsarWebDriver.kt`
 
    ```kotlin
    override suspend fun myTool(arg1: String): String {

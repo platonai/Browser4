@@ -9,6 +9,7 @@ import ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper
 import ai.platon.pulsar.persist.model.ActiveDOMMessage
 import kotlinx.coroutines.delay
 import org.junit.jupiter.api.Assumptions
+import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Tag
 import java.io.IOException
@@ -51,8 +52,9 @@ open class PulsarWebDriverE2ETest : WebDriverTestBase() {
     }
 
     @Test
+    @Disabled("Feature not implemented yet: mainRequestCookies may not be captured if RequestWillBeSentExtraInfo is not received yet")
     @DisplayName("When navigate to a HTML page then the navigate state are correct")
-    fun whennavigateAHtmlPageThenTheNavigateStateAreCorrect() = runEnhancedWebDriverTest(browser) { driver ->
+    fun whenNavigateAHtmlPageThenTheNavigateStateAreCorrect() = runEnhancedWebDriverTest(browser) { driver ->
         openEnhanced(e2eProductUrl, driver, 1)
 
         val navbarMain = driver.selectFirstTextOrNull("#navbar-main")

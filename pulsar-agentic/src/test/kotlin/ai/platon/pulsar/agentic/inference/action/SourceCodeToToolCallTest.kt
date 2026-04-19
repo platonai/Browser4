@@ -12,7 +12,7 @@ class SourceCodeToToolCallTest {
     @DisplayName("extract methods from WebDriver resource")
     fun extractMethodsFromWebdriverResource() {
         val sourceCode =
-            B4LLMUtils.readSourceFileFromResource("pulsar-core", "WebDriver.kt")
+            B4LLMUtils.readSourceFileFromResource("browser4-core", "WebDriver.kt")
         val tools = ToolSpecGenerator.extractInterface("tab", sourceCode, "WebDriver")
         assertTrue(tools.isNotEmpty(), "Tool list should not be empty")
         val click = tools.firstOrNull { it.domain == "tab" && it.method == "click" }
@@ -24,7 +24,7 @@ class SourceCodeToToolCallTest {
     @DisplayName("extract KDoc full comment as help")
     fun extractKDocFullCommentAsHelp() {
         val sourceCode =
-            B4LLMUtils.readSourceFileFromResource("pulsar-core", "WebDriver.kt")
+            B4LLMUtils.readSourceFileFromResource("browser4-core", "WebDriver.kt")
         val tools = ToolSpecGenerator.extractInterface("tab", sourceCode, "WebDriver")
         assertTrue(tools.isNotEmpty(), "Tool list should not be empty")
 

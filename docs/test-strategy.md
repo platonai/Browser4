@@ -54,7 +54,7 @@ The project follows this approximate distribution:
 ### Global Coverage Targets
 
 - **Overall Coverage**: ≥ 70% instruction coverage
-- **Core Logic**: ≥ 80% (pulsar-core modules)
+- **Core Logic**: ≥ 80% (browser4-core modules)
 - **Utilities**: ≥ 90% (utility classes and helpers)
 - **Controllers**: ≥ 85% (REST API endpoints)
 
