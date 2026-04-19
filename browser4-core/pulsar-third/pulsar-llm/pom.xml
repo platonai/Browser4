@@ -65,11 +65,6 @@
             <artifactId>browser4-tests-common</artifactId>
             <scope>test</scope>
         </dependency>
-        <dependency>
-            <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-skeleton</artifactId>
-            <scope>test</scope>
-        </dependency>
 
     </dependencies>
 
