@@ -51,11 +51,10 @@ Comprehensive test runner for the current Maven reactors plus the Browser4 CLI p
 - `fast`: Run fast unit tests (default)
 - `it`: Run integration tests
 - `e2e`: Run end-to-end tests
-- `core`: Run core module supplementary tests
 - `rest`: Run REST module tests
 - `skills`: Run skills module tests
 - `mcp`: Run MCP module tests
-- `browser4`: Run all Browser4 main tests (`fast`, `core`, `rest`, `it`, `e2e`)
+- `browser4`: Run all Browser4 main tests (`fast`, `rest`, `it`, `e2e`)
 - `cli`: Run Rust Browser4 CLI tests from `sdks/browser4-cli`
 
 **Examples:**

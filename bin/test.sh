@@ -25,11 +25,10 @@ print_usage() {
   echo "  it          Run integration tests"
   echo "  e2e         Run end-to-end tests"
   echo "  cli         Run Rust Browser4 CLI tests from sdks/browser4-cli"
-  echo "  core        Run core module supplementary tests"
   echo "  rest        Run REST module tests"
   echo "  skills      Run skills-focused agentic tests"
   echo "  mcp         Run MCP-focused agentic tests"
-  echo "  browser4    Run all Browser4 main tests (fast, core, rest, it, e2e)"
+  echo "  browser4    Run all Browser4 main tests (fast, rest, it, e2e)"
   echo ""
   echo "Examples:"
   echo "  test.sh fast                       # Run fast unit tests"
@@ -46,7 +45,7 @@ print_usage() {
 
 exit_unknown_test_type() {
   local test_type=$1
-  echo "Error: Unknown test type '$test_type'. Valid test types: fast, it, e2e, cli, core, rest, skills, mcp, browser4." >&2
+  echo "Error: Unknown test type '$test_type'. Valid test types: fast, it, e2e, cli, rest, skills, mcp, browser4." >&2
   exit 1
 }
 
@@ -60,7 +59,6 @@ run_maven_tests() {
   local has_fast=false
   local has_it=false
   local has_e2e=false
-  local has_core=false
   local has_rest=false
   local has_skills=false
   local has_mcp=false
@@ -74,7 +72,6 @@ run_maven_tests() {
       fast) has_fast=true ;;
       it) has_it=true ;;
       e2e) has_e2e=true ;;
-      core) has_core=true ;;
       rest) has_rest=true ;;
       skills) has_skills=true ;;
       mcp) has_mcp=true ;;
@@ -83,31 +80,10 @@ run_maven_tests() {
 
   [[ "$has_it" == "true" ]] && mvn_test_args+=("-DrunITs=true")
   [[ "$has_e2e" == "true" ]] && mvn_test_args+=("-DrunE2ETests=true")
-  if [[ "$has_core" == "true" ]]; then
-    mvn_test_args+=("-DrunCoreTests=true" "-Ppulsar-core-tests")
-    modules+=(
-      "pulsar-core/pulsar-resources"
-      "pulsar-core/pulsar-common"
-      "pulsar-core/pulsar-dom"
-      "pulsar-core/pulsar-persist"
-      "pulsar-core/pulsar-plugins"
-      "pulsar-core/pulsar-third"
-      "pulsar-core/pulsar-skeleton"
-      "pulsar-core/pulsar-browser"
-      "pulsar-core/pulsar-spring-support"
-      "pulsar-core/pulsar-ql-common"
-      "pulsar-core/pulsar-ql"
-      "pulsar-core/pulsar-core-tests"
-      "pulsar-core/pulsar-core-tests/pulsar-common-tests"
-      "pulsar-core/pulsar-core-tests/pulsar-dom-tests"
-      "pulsar-core/pulsar-core-tests/pulsar-ql-tests"
-    )
-  fi
-
   if [[ "$has_skills" == "true" || "$has_mcp" == "true" ]]; then
     modules+=("pulsar-agentic")
 
-    if [[ "$has_fast" == "false" && "$has_it" == "false" && "$has_e2e" == "false" && "$has_core" == "false" && "$has_rest" == "false" ]]; then
+    if [[ "$has_fast" == "false" && "$has_it" == "false" && "$has_e2e" == "false" && "$has_rest" == "false" ]]; then
       [[ "$has_skills" == "true" ]] && test_patterns+=("*Skill*")
       [[ "$has_mcp" == "true" ]] && test_patterns+=("*MCP*")
 
@@ -189,7 +165,7 @@ run_browser4_cli_tests() {
   echo "=========================================="
 }
 
-KnownTestTypes=(fast it e2e cli browser4-cli core rest skills mcp browser4)
+KnownTestTypes=(fast it e2e cli browser4-cli rest skills mcp browser4)
 TestTypes=()
 MavenTests=()
 CLITests=()
@@ -205,7 +181,7 @@ while [[ $# -gt 0 ]]; do
     -h|-help|--help)
       print_usage
       ;;
-    fast|it|e2e|cli|browser4-cli|core|rest|skills|mcp|browser4)
+    fast|it|e2e|cli|browser4-cli|rest|skills|mcp|browser4)
       if [[ "$ParsingTestTypes" == "true" ]]; then
         TestTypes+=("$1")
       else
@@ -229,7 +205,7 @@ fi
 
 for type in "${TestTypes[@]}"; do
   if [[ "$type" == "browser4" ]]; then
-    MavenTests+=(fast core it e2e rest)
+    MavenTests+=(fast it e2e rest)
   elif [[ "$type" == "cli" || "$type" == "browser4-cli" ]]; then
     CLITests+=("$type")
   else

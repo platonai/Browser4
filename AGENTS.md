@@ -157,7 +157,7 @@ To keep iteration fast, **don’t run full test suites by default**.
 See [TESTING.md](docs/TESTING.md) for details and trade-offs.
 
 ### Test Commands in This Repository
-- Use `bin/test.ps1` on Windows for scoped runs: `fast`, `it`, `e2e`, `core`, `rest`, `skills`, `mcp`, `cli`, `browser4`
+- Use `bin/test.ps1` on Windows for scoped runs: `fast`, `it`, `e2e`, `rest`, `skills`, `mcp`, `cli`, `browser4`
 - Maven profile switches in root `pom.xml` are property-driven: `-DrunITs=true`, `-DrunE2ETests=true`, `-DrunSDKTests=true`, `-DrunCoreTests=true`, `-DrunRestTests=true`
 - `sdks/browser4-cli/tests/e2e.rs`: all e2e scenarios must start and depend on Browser4.jar; this includes single-scenario runs via `--scenario`.
 
