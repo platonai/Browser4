@@ -1869,9 +1869,22 @@ async fn handle_batch(global: &args::GlobalFlags) -> Result<(), String> {
             "steps": compiled.steps,
         });
         let raw = submit_batch_commands(&client, &base_url, payload).await?;
+        let raw_trimmed = raw.trim();
+        if raw_trimmed.is_empty() {
+            return Err(
+                "Batch backend returned an empty payload. Check that Browser4 server and CLI versions are compatible."
+                    .to_string(),
+            );
+        }
+        let preview = if raw_trimmed.chars().count() > 240 {
+            let head = raw_trimmed.chars().take(240).collect::<String>();
+            format!("{head}...")
+        } else {
+            raw_trimmed.to_string()
+        };
         Some(
             serde_json::from_str::<BatchExecutionResponse>(&raw)
-                .map_err(|e| format!("Failed to parse batch response JSON: {e}"))?,
+                .map_err(|e| format!("Failed to parse batch response JSON: {e}. Response preview: {preview}"))?,
         )
     };
 

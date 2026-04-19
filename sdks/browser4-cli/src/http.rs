@@ -28,6 +28,33 @@ fn normalize_refs(args: &mut Value) {
     }
 }
 
+fn extract_mcp_text_payload(data: &Value) -> Option<String> {
+    if let Some(text) = data.as_str() {
+        return Some(text.to_string());
+    }
+
+    if let Some(content) = data.get("content").and_then(|value| value.as_array()) {
+        for item in content {
+            if let Some(text) = item.get("text").and_then(|value| value.as_str()) {
+                return Some(text.to_string());
+            }
+            if let Some(json_payload) = item.get("json") {
+                return Some(json_payload.to_string());
+            }
+        }
+    }
+
+    if let Some(structured) = data.get("structuredContent") {
+        return Some(structured.to_string());
+    }
+
+    if data.is_object() || data.is_array() {
+        return Some(data.to_string());
+    }
+
+    None
+}
+
 /// Call an MCP tool on the Browser4 server.
 ///
 /// Makes a `POST /mcp/call-tool` request and returns the text of the first
@@ -71,16 +98,8 @@ pub async fn call_tool(
         return Err(msg.to_string());
     }
 
-    let text = data
-        .get("content")
-        .and_then(|c| c.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|item| item.get("text"))
-        .and_then(|t| t.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    Ok(text)
+    extract_mcp_text_payload(&data)
+        .ok_or_else(|| "MCP response did not contain a readable payload.".to_string())
 }
 
 /// Check whether a server error message indicates a stale/expired session.
@@ -178,5 +197,35 @@ mod tests {
         assert!(is_stale_session_error("Invalid session ID"));
         assert!(is_stale_session_error("Session not found"));
         assert!(!is_stale_session_error("Connection refused"));
+    }
+
+    #[test]
+    fn test_extract_mcp_text_payload_prefers_text_content() {
+        let payload = json!({
+            "content": [{ "type": "text", "text": "ok" }],
+            "structuredContent": { "ignored": true }
+        });
+        assert_eq!(extract_mcp_text_payload(&payload).as_deref(), Some("ok"));
+    }
+
+    #[test]
+    fn test_extract_mcp_text_payload_supports_structured_content() {
+        let payload = json!({ "structuredContent": { "sessionId": "s-1" } });
+        assert_eq!(
+            extract_mcp_text_payload(&payload).as_deref(),
+            Some("{\"sessionId\":\"s-1\"}")
+        );
+    }
+
+    #[test]
+    fn test_extract_mcp_text_payload_supports_direct_object_response() {
+        let payload = json!({
+            "sessionId": "s-1",
+            "results": []
+        });
+        assert_eq!(
+            extract_mcp_text_payload(&payload).as_deref(),
+            Some("{\"results\":[],\"sessionId\":\"s-1\"}")
+        );
     }
 }
