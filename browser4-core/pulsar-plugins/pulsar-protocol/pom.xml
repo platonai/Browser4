@@ -19,7 +19,7 @@
 
     <artifactId>pulsar-protocol</artifactId>
 
-    <name>Pulsar Protocol</name>
+    <name>Browser4 Protocol</name>
 
     <dependencies>
         <dependency>

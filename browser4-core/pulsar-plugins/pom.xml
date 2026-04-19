@@ -22,7 +22,7 @@
     <artifactId>pulsar-plugins</artifactId>
     <packaging>pom</packaging>
 
-    <name>Pulsar Plugins</name>
+    <name>Browser4 Plugins</name>
 
     <modules>
         <module>pulsar-parse</module>

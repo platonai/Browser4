@@ -15,7 +15,7 @@
 
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>pulsar-bom</artifactId>
-    <name>Pulsar BOM</name>
+    <name>Browser4 BOM</name>
     <version>4.7.0-SNAPSHOT</version>
 
     <packaging>pom</packaging>

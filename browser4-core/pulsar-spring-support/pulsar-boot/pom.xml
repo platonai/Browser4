@@ -19,7 +19,7 @@
     </parent>
 
     <artifactId>pulsar-boot</artifactId>
-    <name>Pulsar Boot</name>
+    <name>Browser4 Boot</name>
 
     <dependencies>
         <dependency>

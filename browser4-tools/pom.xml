@@ -19,7 +19,7 @@
     </parent>
 
     <artifactId>browser4-tools</artifactId>
-    <name>Pulsar Tools</name>
+    <name>Browser4 Tools</name>
     <description>High level tools based on Browser4 core functionality in browser4-core module</description>
 
     <dependencies>

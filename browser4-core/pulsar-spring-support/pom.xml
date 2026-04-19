@@ -20,7 +20,7 @@
     </parent>
 
     <artifactId>pulsar-spring-support</artifactId>
-    <name>Pulsar Spring Support</name>
+    <name>Browser4 Spring Support</name>
     <packaging>pom</packaging>
 
     <modules>

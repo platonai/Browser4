@@ -8,7 +8,7 @@
     </parent>
 
     <artifactId>pulsar-resources</artifactId>
-    <name>Pulsar Resources</name>
+    <name>Browser4 Resources</name>
     <description>Pulsar Resources</description>
 
     <build>

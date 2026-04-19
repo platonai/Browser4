@@ -19,7 +19,7 @@
     </parent>
 
     <artifactId>pulsar-parse</artifactId>
-    <name>Pulsar Parse</name>
+    <name>Browser4 Parse</name>
 
     <dependencies>
         <dependency>

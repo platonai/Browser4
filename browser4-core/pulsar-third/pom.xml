@@ -22,7 +22,7 @@
     <artifactId>pulsar-third</artifactId>
     <packaging>pom</packaging>
 
-    <name>Pulsar Third</name>
+    <name>Browser4 Third</name>
 
     <modules>
         <module>pulsar-llm</module>

@@ -19,7 +19,7 @@
     </parent>
 
     <artifactId>browser4-agentic</artifactId>
-    <name>Pulsar Agentic</name>
+    <name>Browser4 Agentic</name>
 
     <dependencies>
         <dependency>

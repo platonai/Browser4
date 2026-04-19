@@ -8,7 +8,7 @@
         <relativePath>../../pom.xml</relativePath>
     </parent>
 
-    <name>Pulsar Browser</name>
+    <name>Browser4 Browser</name>
     <artifactId>pulsar-browser</artifactId>
 
     <dependencies>

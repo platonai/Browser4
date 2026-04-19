@@ -19,7 +19,7 @@
 
     <artifactId>pulsar-beans</artifactId>
 
-    <name>Pulsar Beans</name>
+    <name>Browser4 Beans</name>
 
     <dependencies>
         <dependency>
