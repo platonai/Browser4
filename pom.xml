@@ -92,7 +92,7 @@
         <module>browser4-core</module>
         <module>browser4-tools</module>
         <module>browser4-agentic</module>
-        <module>pulsar-rest</module>
+        <module>browser4-rest</module>
     </modules>
 
     <profiles>
@@ -175,7 +175,7 @@
                 <module>browser4-tools</module>
                 <module>pulsar-bom</module>
                 <module>browser4-agentic</module>
-                <module>pulsar-rest</module>
+                <module>browser4-rest</module>
 
                 <module>browser4</module>
 
@@ -449,7 +449,7 @@
             </dependency>
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-rest</artifactId>
+                <artifactId>browser4-rest</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

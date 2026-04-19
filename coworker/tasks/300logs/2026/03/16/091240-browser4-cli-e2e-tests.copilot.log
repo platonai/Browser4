@@ -125,7 +125,7 @@ ess_sequentially|browser_take_screenshot|browser_pdf_save" in **/*.kt
 
 ● Grep "browser_click|browser_drag|browser_handle_dialog|browser_tabs|browser_file_upload|browser_pr
 ess_sequentially|browser_take_screenshot|browser_pdf_save" in **/*.kt
-(D:\workspace\Browser4\Browser4-4.6\pulsar-rest\src\main\kotlin)
+(D:\workspace\Browser4\Browser4-4.6\browser4-rest\src\main\kotlin)
   └ 12 lines found
 
 I’m down to the tricky commands now. The easy path is CSS-selector-based fixtures, but `upload` and the dialog commands need the backend’s exact live behavior, so I’m checking how those tools are expected to be driven before I write brittle tests.
@@ -136,7 +136,7 @@ upload|handle_dialog|dialog-accept|dialog-dismiss|browser_press_sequentially|bro
   └ No matches found
 
 ● Grep "browser_file_upload|browser_handle_dialog|browser_press_sequentially|browser_mouse_wheel"
-(D:\workspace\Browser4\Browser4-4.6\pulsar-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller
+(D:\workspace\Browser4\Browser4-4.6\browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller
 \MCPToolController.kt)
   └ 8 lines found
 
@@ -190,7 +190,7 @@ I found a likely mismatch: the low-level tool executor wants `selector + paths`,
 ● Read sdks\browser4-cli\tests\commands.test.ts lines 260-320
   └ 61 lines read
 
-● Read pulsar-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt lines
+● Read browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt lines
   280-360
   └ 81 lines read
 
@@ -200,7 +200,7 @@ st\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt)
 
 I found the missing piece: the REST layer auto-maps `ref -> selector`, which makes CSS-selector-based live tests viable even for frontend-style tool calls. I’m reading that small normalization block and then I can implement the suite without guessing backend internals.
 
-● Read pulsar-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt lines
+● Read browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt lines
   384-410
   └ 27 lines read
 
@@ -222,7 +222,7 @@ I hit the first real product issue while designing the live cases: `upload` look
   └ 1 line found
 
 ● Grep "browser_file_upload|upload\(" in **/*.kt
-(D:\workspace\Browser4\Browser4-4.6\pulsar-rest\src\test\kotlin)
+(D:\workspace\Browser4\Browser4-4.6\browser4-rest\src\test\kotlin)
   └ No matches found
 
 ● Grep "upload.*selector|browser_file_upload|setInputFiles|file input|upload one or multiple files"
@@ -676,27 +676,27 @@ The interaction/export rerun is underway again. I’m reading it back next so we
 
 The live suite just found a product bug, not a test issue: the CLI’s `console` command calls `browser_console_messages`, but the REST MCP layer doesn’t recognize that frontend tool name. I’m patching the backend alias list so the real command works end-to-end, then I’ll rerun.
 
-● Read pulsar-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt lines
+● Read browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt lines
   60-110
   └ 51 lines read
 
 ● Grep "console|browser_console_messages|browser_console_clear|console_messages|console_clear"
-(D:\workspace\Browser4\Browser4-4.6\pulsar-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller
+(D:\workspace\Browser4\Browser4-4.6\browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller
 \MCPToolController.kt)
   └ No matches found
 
 ● Grep "browser_console_messages|browser_console_clear|console_messages|console_clear" in **/*.kt
-(D:\workspace\Browser4\Browser4-4.6\pulsar-tests\pulsar-rest-tests)
+(D:\workspace\Browser4\Browser4-4.6\pulsar-tests\browser4-rest-tests)
   └ No matches found
 
 I found the alias map hole. I’m checking the rest of the MCP controller’s recognized-tool set as well so I can add the missing console alias cleanly and avoid immediately hitting the next missing frontend name.
 
-● Read pulsar-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt lines
+● Read browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt lines
   180-220
   └ 41 lines read
 
 ● Grep "browser_pdf_save|pdf_save|browser_console_messages|browser_console_clear|console_messages|co
-nsole_clear" (D:\workspace\Browser4\Browser4-4.6\pulsar-rest\src\main\kotlin\ai\platon\pulsar\rest\m
+nsole_clear" (D:\workspace\Browser4\Browser4-4.6\browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\m
 cp\controller\MCPToolController.kt)
   └ No matches found
 
@@ -926,7 +926,7 @@ I need the actual tab run trace, not the older dialog one, so I’m reading the 
 
 The tab behavior doesn’t line up with a simple index switch, so I’m checking the backend’s tab-argument normalization directly. If `tab-select` is silently translating `index` to something else—or not at all—I want the test and the CLI contract to match the real implementation rather than guess.
 
-● Read pulsar-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt lines
+● Read browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt lines
   300-430
   └ 131 lines read
 

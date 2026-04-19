@@ -31,7 +31,7 @@ Fixed a bug in `MCPToolController.kt` where the batch `"open"` op eagerly called
 
 **Fix**: Removed the `managedSession.driver` line. The open step now mirrors `handleOpenSession` — it creates the session and returns the `sessionId` without touching the driver.
 
-**File changed**: `pulsar-rest/src/main/kotlin/ai/platon/pulsar/rest/mcp/controller/MCPToolController.kt` (1 line deleted)
+**File changed**: `browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/mcp/controller/MCPToolController.kt` (1 line deleted)
 
 ### Outcome
 Build and `MCPToolControllerTest` pass. The fix is a 1-line deletion.

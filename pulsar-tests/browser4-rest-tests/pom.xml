@@ -19,14 +19,14 @@
         <relativePath>../../pom.xml</relativePath>
     </parent>
 
-    <artifactId>pulsar-rest-tests</artifactId>
+    <artifactId>browser4-rest-tests</artifactId>
     <name>Pulsar Rest Tests</name>
 
     <dependencies>
 
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-rest</artifactId>
+            <artifactId>browser4-rest</artifactId>
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>

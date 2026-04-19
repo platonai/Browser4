@@ -55,7 +55,7 @@ Here is the compressed content (≈1 450 chars):
 ## fix-batch-form-submission-bug
 **Root cause**: `executeBatchStep` for the `"open"` op had a stray `managedSession.driver` expression (line 419) that eagerly initialised the CDP browser context, breaking subsequent batch tool steps with "Cannot find context with specified id".
 **Fix**: Remove that 1 line. Batch `"open"` now mirrors `handleOpenSession` — creates session, returns `sessionId`, defers driver init to first actual tool use.
-**File**: `pulsar-rest/…/MCPToolController.kt`
+**File**: `browser4-rest/…/MCPToolController.kt`
 **Lesson**: Never access `managedSession.driver` in batch open; rely on lazy initialization.
 ---
 

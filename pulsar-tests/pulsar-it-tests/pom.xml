@@ -29,7 +29,7 @@
         <!-- Internal Dependencies -->
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-rest</artifactId>
+            <artifactId>browser4-rest</artifactId>
         </dependency>
 
         <!-- Ensure browser DOM service & debug utilities are available to tests -->

@@ -12,7 +12,7 @@ Added Playwright-style low-level WebDriver input APIs for keyboard and mouse int
 ### Validation
 - `npx jest --runInBand tests/commands.test.ts tests/program.test.ts` ✅
 - `..\..\mvnw.cmd -DskipTests compile` from `sdks\browser4-kotlin` ✅
-- `mvnw.cmd -pl pulsar-rest -am -Dtest=MCPToolControllerTest -D"surefire.failIfNoSpecifiedTests=false" test` was still running through reactor compilation at handoff time; no failure observed in streamed output.
+- `mvnw.cmd -pl browser4-rest -am -Dtest=MCPToolControllerTest -D"surefire.failIfNoSpecifiedTests=false" test` was still running through reactor compilation at handoff time; no failure observed in streamed output.
 
 ### Lessons Learned
 - Keeping MCP/controller aliases in sync with CLI tool names avoids split-brain behavior when one side speaks Playwright-style names and the server expects raw driver method names.

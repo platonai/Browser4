@@ -17,7 +17,7 @@
 
 ## Task: Create MCPToolController Integration Tests
 - **Goal**: Create comprehensive tests for `MCPToolController` covering all commands in the CLI switch statement.
-- **Outcome**: Created `pulsar-rest/src/test/kotlin/ai/platon/pulsar/rest/openapi/controller/MCPToolControllerTest.kt`. Implemented tests for session management (`open_session`, `close_session`, `delete_session_data`, etc.), generic driver commands (`click`, `fill`, `navigate`, etc.), and explicit tool mappings (`page_title`, `switch_tab`, `tab_new`, etc.). Verified 16 tests pass successfully using `mvnw`.
+- **Outcome**: Created `browser4-rest/src/test/kotlin/ai/platon/pulsar/rest/openapi/controller/MCPToolControllerTest.kt`. Implemented tests for session management (`open_session`, `close_session`, `delete_session_data`, etc.), generic driver commands (`click`, `fill`, `navigate`, etc.), and explicit tool mappings (`page_title`, `switch_tab`, `tab_new`, etc.). Verified 16 tests pass successfully using `mvnw`.
 - **Lessons**: When testing Kotlin with Mockito, handle non-nullable parameters carefully by creating custom helpers like `anyToolCall()` or `capture()` that return dummy non-null values, as standard `any()` returns null and causes Kotlin NPEs before Mockito interception. Also, mocking properties of data classes (like `val driver`) works if the class is mockable (open or mockito-inline).
 
 ## Task: Fix Coworker Rename Logic (Correction)

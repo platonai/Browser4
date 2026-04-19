@@ -76,7 +76,7 @@ mvnw.cmd -q -DskipTests
 |--------|-------------|
 | `browser4-core` | Core engine: sessions, scheduling, DOM, browser control |
 | `browser4-agentic` | AI agents implementation, MCP, skills registration |
-| `pulsar-rest` | Spring Boot REST layer & command endpoints |
+| `browser4-rest` | Spring Boot REST layer & command endpoints |
 | `sdks/*` | Browser4 CLI + skill assets (`sdks/browser4-cli`, `sdks/skill`) |
 | `browser4/*` | Product packaging (`browser4/browser4-agents`) |
 | `examples/*` | Runnable examples (`examples/browser4-examples`) |
@@ -271,7 +271,7 @@ When given a task, Claude should:
 
 #### Adding a New Feature
 
-1. Identify the relevant module (browser4-core, browser4-agentic, pulsar-rest)
+1. Identify the relevant module (browser4-core, browser4-agentic, browser4-rest)
 2. Check existing similar features for patterns
 3. Add interface/API in appropriate package
 4. Implement with proper error handling and logging
@@ -297,11 +297,11 @@ When given a task, Claude should:
 #### Adding a `browser4-cli` Command
 
 1. Add a `CommandDef` in `sdks/browser4-cli/src/commands.rs`; keep the CLI command name kebab-case, use a `browser_`-prefixed snake_case MCP tool name, and map args/options to JSON in `tool_params_fn`
-2. Add the frontend alias in `pulsar-rest/.../MCPToolController.kt` so names like `browser_my_tool` resolve to the internal tool name such as `my_tool`
+2. Add the frontend alias in `browser4-rest/.../MCPToolController.kt` so names like `browser_my_tool` resolve to the internal tool name such as `my_tool`
 3. Reuse existing backend tools when possible; if a new browser capability is required, add an `@MCP` method in `WebDriver.kt`, implement it in the concrete driver, and only add an explicit `BrowserTabToolExecutor` case when parameter mapping is non-trivial
 4. Update `sdks/browser4-cli/src/main.rs` only when the command needs custom dispatch, dynamic tool-name selection, stale-session recovery, or inclusion in `no_snapshot_commands()` for read-only behavior
 5. Update `sdks/skill/SKILL.md` for user-facing command documentation; CLI help is generated from `CommandDef`, so avoid hand-editing help infrastructure
-6. Cover the change with the smallest relevant tests: `sdks/browser4-cli/src/commands.rs` unit tests, `pulsar-rest` controller mapping tests, `sdks/browser4-cli/tests/e2e.rs`, and `pulsar-tests/pulsar-rest-tests/.../MCPToolControllerE2ETest.kt` when the command changes the end-to-end flow
+6. Cover the change with the smallest relevant tests: `sdks/browser4-cli/src/commands.rs` unit tests, `browser4-rest` controller mapping tests, `sdks/browser4-cli/tests/e2e.rs`, and `pulsar-tests/browser4-rest-tests/.../MCPToolControllerE2ETest.kt` when the command changes the end-to-end flow
 7. Watch the common failure points: missing backend alias, omitted `sessionId` in custom handlers, forgetting `no_snapshot_commands()` for read-only commands, mismatched element-ref parameter names, and snake_case/camelCase argument normalization
 
 ### Browser Automation Specifics

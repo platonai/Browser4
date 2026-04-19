@@ -17,13 +17,13 @@ I’ve got the task scope: remove the CLI alias bridge and make the backend acce
   Path does not exist
 
 ● Grep "LEGACY_TOOL_NAME_ALIASES|declareCommand|browser_|aria_snapshot|tab_" in
-{sdks/**,pulsar-rest/**,browser4-agentic/**,browser4/**,docs/**}/*
+{sdks/**,browser4-rest/**,browser4-agentic/**,browser4/**,docs/**}/*
 (D:\workspace\Browser4\Browser4-4.6)
   └ 5 lines found
 
 ● Todo started: inspect-task
 
-● Glob "**/*MCPToolController*.kt" in D:\workspace\Browser4\Browser4-4.6\pulsar-rest
+● Glob "**/*MCPToolController*.kt" in D:\workspace\Browser4\Browser4-4.6\browser4-rest
   └ 2 files found
 
 ● Glob "**/*program*.ts" in D:\workspace\Browser4\Browser4-4.6\sdks\browser4-cli
@@ -48,21 +48,21 @@ I found the current alias bridge in `sdks/browser4-cli/src/program.ts`. Now I’
 ● Read sdks\browser4-cli\src\program.ts lines 1-260
   └ 260 lines read
 
-● Read pulsar-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt lines
+● Read browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt lines
   1-380
   └ 380 lines read
 
-● Read pulsar-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
+● Read browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
   lines 1-360
   └ 360 lines read
 
 ● Read sdks\browser4-cli\src\cli\daemon\commands.ts lines 1-220
   └ 220 lines read
 
-● Grep "browser_[a-z_]+|aria_snapshot|tab_[a-z_]+" (D:\workspace\Browser4\Browser4-4.6\pulsar-rest)
+● Grep "browser_[a-z_]+|aria_snapshot|tab_[a-z_]+" (D:\workspace\Browser4\Browser4-4.6\browser4-rest)
   └ 28 lines found
 
-● Read pulsar-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
+● Read browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
   lines 360-520
   └ 161 lines read
 
@@ -85,7 +85,7 @@ I found the current alias bridge in `sdks/browser4-cli/src/program.ts`. Now I’
 
 The frontend command catalog is definitely still the Playwright-style `browser_*` surface. I’m now checking how broad the backend support needs to be so we can remove the shim without breaking commands beyond the small alias list already in `program.ts`.
 
-● Grep "browser_[a-z0-9_]+" (D:\workspace\Browser4\Browser4-4.6\pulsar-rest)
+● Grep "browser_[a-z0-9_]+" (D:\workspace\Browser4\Browser4-4.6\browser4-rest)
   └ 12 lines found
 
 ● Grep "browser_[a-z0-9_]+" (D:\workspace\Browser4\Browser4-4.6\browser4-agentic)
@@ -132,7 +132,7 @@ ng|runCode|snapshot" (D:\workspace\Browser4\Browser4-4.6\browser4-agentic\src\ma
 ● Grep "listTools\(|/mcp/tools|tools"\s*to" (D:\workspace\Browser4\Browser4-4.6)
   └ 13 lines found
 
-● Read pulsar-tests\pulsar-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon
+● Read pulsar-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon
   trollerE2ETest.kt lines 1-300
   └ 300 lines read
 
@@ -151,18 +151,18 @@ ng|runCode|snapshot" (D:\workspace\Browser4\Browser4-4.6\browser4-agentic\src\ma
   └ No matches found
 
 ● Grep "browser_navigate|aria_snapshot|navigate|tab_list"
-(D:\workspace\Browser4\Browser4-4.6\pulsar-rest\src\main\kotlin)
+(D:\workspace\Browser4\Browser4-4.6\browser4-rest\src\main\kotlin)
   └ 4 lines found
 
 ● Grep "callTool\("(navigate|go_back|go_forward|aria_snapshot|tab_list|tab_new|tab_close|tab_select|
 click|dblclick|dialog_accept|dialog_dismiss|fill|select_option|upload|screenshot)"
-(D:\workspace\Browser4\Browser4-4.6\pulsar-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller
+(D:\workspace\Browser4\Browser4-4.6\browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller
 \MCPToolControllerTest.kt)
   └ No matches found
 
 ● Grep "callTool\("(navigate|go_back|go_forward|aria_snapshot|tab_list|tab_new|tab_close|tab_select|
 click|dblclick|dialog_accept|dialog_dismiss|fill|select_option|upload|screenshot)"
-(D:\workspace\Browser4\Browser4-4.6\pulsar-tests\pulsar-rest-tests\src\test\kotlin\ai\platon\pulsar\
+(D:\workspace\Browser4\Browser4-4.6\pulsar-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\
 rest\api\controller\MCPToolControllerE2ETest.kt)
   └ 5 lines found
 
@@ -176,11 +176,11 @@ I’ve got the change shape now: shift the CLI’s name/shape translation into `
   └ 67 lines...
 
 ● Run REST baseline tests
-  $ Set-Location 'D:\workspace\Browser4\Browser4-4.6'; .\mvnw.cmd -f pulsar-rest\pom.xml
+  $ Set-Location 'D:\workspace\Browser4\Browser4-4.6'; .\mvnw.cmd -f browser4-rest\pom.xml
   "-Dtest=MCPToolControllerTest" -D"surefire.failIfNoSpecifiedTests=false" test
   └ 25 lines...
 
-● Read pulsar-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt lines
+● Read browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt lines
   240-380
   └ 141 lines read
 
@@ -209,10 +209,10 @@ uncheck|fun drag|fun press|fun type|fun screenshot|fun ariaSnapshot"
   └ 2 lines found
 
 ✗ Edit sdks\browser4-cli\src\program.ts
-  Edit pulsar-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt
+  Edit browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt
   Edit sdks\browser4-cli\tests\program.test.ts
-  Edit pulsar-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
-  Edit pulsar-tests\pulsar-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon
+  Edit browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
+  Edit pulsar-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon
   trollerE2ETest.kt
   Failed to apply patch: Error: Failed to find expected lines in
   D:\workspace\Browser4\Browser4-4.6\sdks\browser4-cli\tests\program.test.ts:
@@ -275,9 +275,9 @@ uncheck|fun drag|fun press|fun type|fun screenshot|fun ariaSnapshot"
 
 ● Inspect partial diff
   $ git --no-pager diff -- sdks\browser4-cli\src\program.ts
-  pulsar-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt
-  pulsar-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
-  pulsar-tests\pulsar-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolControl
+  browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt
+  browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
+  pulsar-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolControl
   lerE2ETest.kt sdks\browser4-cli\tests\program.test.ts
   └ 6 lines...
 
@@ -286,15 +286,15 @@ The first patch landed only partially, so I’m spot-checking the touched files 
 ● Read sdks\browser4-cli\src\program.ts lines 35-190
   └ 156 lines read
 
-● Read pulsar-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt lines
+● Read browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt lines
   70-390
   └ 321 lines read
 
-● Read pulsar-tests\pulsar-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon
+● Read pulsar-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon
   trollerE2ETest.kt lines 24-235
   └ 212 lines read
 
-● Read pulsar-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
+● Read browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
   lines 170-520
   └ 351 lines read
 
@@ -304,14 +304,14 @@ The first patch landed only partially, so I’m spot-checking the touched files 
 ● Read sdks\browser4-cli\src\program.ts lines 360-540
   └ 181 lines read
 
-● Read pulsar-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt lines
+● Read browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt lines
   389-460
   └ 72 lines read
 
 ● Read sdks\browser4-cli\src\program.ts lines 300-360
   └ 61 lines read
 
-● Read pulsar-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt lines
+● Read browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt lines
   458-490
   └ 25 lines read
 
@@ -325,15 +325,15 @@ The first patch landed only partially, so I’m spot-checking the touched files 
 ● Edit sdks\browser4-cli\src\program.ts
   Edit sdks\browser4-cli\tests\program.test.ts
 
-● Edit pulsar-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
-  Edit pulsar-tests\pulsar-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon
+● Edit browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
+  Edit pulsar-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon
   trollerE2ETest.kt
 
-● Read pulsar-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
+● Read browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
   lines 176-520
   └ 344 lines read
 
-● Read pulsar-tests\pulsar-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon
+● Read pulsar-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon
   trollerE2ETest.kt lines 30-220
   └ 191 lines read
 
@@ -351,15 +351,15 @@ The edits are in. I’m doing focused verification now: TypeScript build/tests o
   └ 70 lines...
 
 ● Run REST unit tests
-  $ Set-Location 'D:\workspace\Browser4\Browser4-4.6'; .\mvnw.cmd -f pulsar-rest\pom.xml
+  $ Set-Location 'D:\workspace\Browser4\Browser4-4.6'; .\mvnw.cmd -f browser4-rest\pom.xml
   "-Dtest=MCPToolControllerTest" -D"surefire.failIfNoSpecifiedTests=false" test
   └ 82 lines...
 
 Unit validation is green on both sides. I’m doing one focused REST E2E pass now so the contract change is verified through the actual HTTP layer, not just mocked controller tests.
 
-● Install pulsar-rest and run focused REST E2E
-  $ Set-Location 'D:\workspace\Browser4\Browser4-4.6'; .\mvnw.cmd -f pulsar-rest\pom.xml -DskipTests
-   install && .\mvnw.cmd -f pulsar-tests\pom.xml -pl pulsar-rest-tests -am -DrunE2ETests=true
+● Install browser4-rest and run focused REST E2E
+  $ Set-Location 'D:\workspace\Browser4\Browser4-4.6'; .\mvnw.cmd -f browser4-rest\pom.xml -DskipTests
+   install && .\mvnw.cmd -f pulsar-tests\pom.xml -pl browser4-rest-tests -am -DrunE2ETests=true
   "-Dtest=MCPToolControllerE2ETest#testToolsEndpointCoversAllCliCommands+testFrontendToolNamesAreRec
   ognized" -D"surefire.failIfNoSpecifiedTests=false" test
   └ 123 lines...
@@ -393,9 +393,9 @@ D:\workspace\Browser4\Browser4-4.6\coworker\tasks\300logs
 ● Review final diff
   $ git --no-pager diff -- sdks\browser4-cli\src\program.ts
   sdks\browser4-cli\tests\program.test.ts
-  pulsar-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt
-  pulsar-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
-  pulsar-tests\pulsar-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon...
+  browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt
+  browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
+  pulsar-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon...
   └ 7 lines...
 
 ● List directory coworker\tasks\300logs\2026\03
@@ -427,9 +427,9 @@ I’m on the final housekeeping pass now: appending today’s memory, rolling th
 ● Check final touched files
   $ git --no-pager status --short -- sdks\browser4-cli\src\program.ts
   sdks\browser4-cli\tests\program.test.ts
-  pulsar-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt
-  pulsar-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
-  pulsar-tests\pulsar-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon...
+  browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt
+  browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
+  pulsar-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon...
   └ 8 lines...
 
 ● Append daily and monthly memory entries
@@ -477,27 +477,27 @@ I spotted a PowerShell escaping artifact in the memory append: backticks around 
 ● Summarize diff stats
   $ git --no-pager diff --stat -- sdks\browser4-cli\src\program.ts
   sdks\browser4-cli\tests\program.test.ts
-  pulsar-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt
-  pulsar-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
-  pulsar-tests\pulsar-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon...
+  browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt
+  browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
+  pulsar-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon...
   └ 13 lines...
 
 ● Inspect final diff excerpt
   $ git --no-pager diff -- sdks\browser4-cli\src\program.ts
   sdks\browser4-cli\tests\program.test.ts
-  pulsar-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt
-  pulsar-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
-  pulsar-tests\pulsar-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon...
+  browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt
+  browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
+  pulsar-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon...
   └ 230 lines...
 
 Done — I completed the tool-name unification task without moving the task file.
 
-I changed `sdks/browser4-cli/src/program.ts` so the CLI now sends the frontend-declared `browser_*` tool names directly, keeping only ref-value normalization. I moved the name/arg compatibility logic into `pulsar-rest/.../MCPToolController.kt`, updated `/mcp/tools` to advertise the frontend names, and added focused unit/E2E coverage in the REST tests plus updated CLI tests.
+I changed `sdks/browser4-cli/src/program.ts` so the CLI now sends the frontend-declared `browser_*` tool names directly, keeping only ref-value normalization. I moved the name/arg compatibility logic into `browser4-rest/.../MCPToolController.kt`, updated `/mcp/tools` to advertise the frontend names, and added focused unit/E2E coverage in the REST tests plus updated CLI tests.
 
 Validated with:
 `npm run build`
 `npm test -- --runInBand tests/program.test.ts tests/commands.test.ts`
-`.\mvnw.cmd -f pulsar-rest\pom.xml "-Dtest=MCPToolControllerTest" -D"surefire.failIfNoSpecifiedTests=false" test`
+`.\mvnw.cmd -f browser4-rest\pom.xml "-Dtest=MCPToolControllerTest" -D"surefire.failIfNoSpecifiedTests=false" test`
 focused `MCPToolControllerE2ETest` E2E pass
 
 I also appended today’s daily memory and rolled the missing March monthly summary forward.

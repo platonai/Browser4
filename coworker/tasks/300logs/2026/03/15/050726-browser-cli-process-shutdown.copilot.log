@@ -78,15 +78,15 @@ I found the root problem: `kill-all` is currently hunting for a `--daemon-sessio
 |closeSession|openSession" in *.kt (D:\workspace\Browser4\Browser4-4.6)
   └ 39 lines found
 
-● Read pulsar-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt lines
+● Read browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt lines
   190-240
   └ 51 lines read
 
-● Read pulsar-tests\pulsar-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon
+● Read pulsar-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon
   trollerE2ETest.kt lines 248-286
   └ 39 lines read
 
-● Read pulsar-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
+● Read browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
   lines 145-185
   └ 41 lines read
 

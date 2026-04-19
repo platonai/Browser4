@@ -18,7 +18,7 @@
         <relativePath>../pom.xml</relativePath>
     </parent>
 
-    <artifactId>pulsar-rest</artifactId>
+    <artifactId>browser4-rest</artifactId>
     <name>Pulsar Rest</name>
 
     <dependencies>
