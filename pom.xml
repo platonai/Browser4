@@ -371,6 +371,7 @@
                 <scope>import</scope>
             </dependency>
 
+            <!-- Temporary use, will remove and use the published version later -->
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-bom</artifactId>

@@ -628,8 +628,6 @@ class PulsarWebDriver(
                 // so the cursor appears at the tail of the text
                 emulator.click(node, 1, "right")
                 keyboard?.delete(value.length, randomDelayMillis("delete"))
-                // ensure the input is empty
-                // page.setAttribute(node, "value", "")
             }
 
             emulator.click(node, 1)

@@ -198,24 +198,12 @@ pub fn stop_browser4_server_gracefully() -> ShutdownResult {
 
 /// Force-stop all managed Browser4 server processes, then kill all related Chrome processes.
 pub fn stop_browser4_server_forcibly() -> ForceStopBrowser4ServerResult {
-    println!("Force-stopping Browser4 server processes and related browsers...");
-
     let result = stop_browser4_server_forcibly_with_steps(
         || notify_close_all_sessions_before_force_stop(None, None),
         kill_all_browsers,
         || stop_browser4_server(true),
         || sleep(std::time::Duration::from_secs(5)),
     );
-
-    // if this is linux, run "pkill -9 chrome"
-    // TODO: this is a temporary solution
-    if cfg!(target_os = "linux") || cfg!(target_os = "macos")
-    {
-        let _ = std::process::Command::new("pkill")
-            .args(["-9", "chrome"])
-            .status();
-        sleep(std::time::Duration::from_secs(3));
-    }
 
     result
 }
@@ -247,17 +235,7 @@ fn notify_close_all_sessions_before_force_stop(
     _registry_path: Option<&Path>,
     _state_dir: Option<&Path>,
 ) {
-    // let mut warnings = Vec::new();
-    //
-    // for base_url in close_all_base_urls_for_force_stop(registry_path, state_dir) {
-    //     if let Err(error) = call_close_all_sessions(client, &base_url) {
-    //         warnings.push(format!("{}: {}", base_url, error));
-    //     }
-    // }
-    //
-    // if !warnings.is_empty() {
-    //     eprintln!("kill-all close-all warnings: {}", warnings.join(" | "));
-    // }
+    // do not notify
 }
 
 #[allow(dead_code)]
@@ -366,14 +344,6 @@ pub fn kill_all_browsers() -> BrowserKillResult {
     result.killed_pids.sort_unstable();
     result.killed_pids.dedup();
     result.remaining_pids = find_unique_pulsar_browser_processes();
-
-    if result.killed_pids.len() + result.remaining_pids.len() > 0 {
-        println!(
-            "Browser4 Chrome kill complete. Killed: {}, Remaining: {}",
-            result.killed_pids.len(),
-            result.remaining_pids.len()
-        );
-    }
 
     result
 }
