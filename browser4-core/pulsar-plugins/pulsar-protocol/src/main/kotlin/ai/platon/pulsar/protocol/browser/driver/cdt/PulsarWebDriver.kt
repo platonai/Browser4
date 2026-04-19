@@ -596,7 +596,7 @@ class PulsarWebDriver(
     override suspend fun type(selector: String, text: String) {
         driverHelper.invokeOnElement(selector, "type") {
             val node = page.focusOnSelector(selector) ?: return@invokeOnElement
-            emulator.click(node, 1)
+            emulator.click(node, 1, position = "right")
             keyboard?.type(text, randomDelayMillis("type"))
             gap("type")
         }
@@ -605,37 +605,65 @@ class PulsarWebDriver(
     @Throws(WebDriverException::class)
     override suspend fun fill(selector: String, text: String) {
         driverHelper.invokeOnElement(selector, "fill", focus = true) { node ->
-            // value exists both as an HTML attribute and a JavaScript property, but the property represents the
-            // current state, which may differ from the attribute.
-            // | 类型        | 含义        | 是否随运行时变化                |
-            //| --------- | --------- | ----------------------- |
-            //| attribute | HTML 初始声明 | ❌ 不变（除非手动 setAttribute） |
-            //| property  | DOM 当前状态  | ✅ 会变（用户交互 / JS 修改）      |
-            val value = run {
-                val objectId = node.objectId ?: domAPI?.resolveNode(nodeId = node.nodeId)?.objectId
-                val liveValue = objectId?.let {
-                    runtimeAPI?.callFunctionOn(
-                        "function() { return this && typeof this.value !== 'undefined' ? this.value : null; }",
-                        objectId = it,
-                        returnByValue = true
-                    )?.result?.value?.toString()
-                }
-                liveValue ?: page.getAttribute(node, "value")
-            }
+            // TODO: check if the element is editable
 
-            if (value != null) {
-                // it's an input element, we should click on the right side of the element,
-                // so the cursor appears at the tail of the text
-                emulator.click(node, 1, "right")
-                keyboard?.delete(value.length, randomDelayMillis("delete"))
-            }
+            clear(node)
 
-            emulator.click(node, 1)
+            emulator.click(node, 1, "right")
 
-            // For fill, there is no delay between key presses
+            // For fill, there is no delay between key presses, just like paste
             keyboard?.type(text, 0)
 
             gap("fill")
+        }
+    }
+
+    @Throws(WebDriverException::class)
+    private suspend fun getLiveValueOrEmpty(node: NodeRef): String {
+        // value exists both as an HTML attribute and a JavaScript property, but the property represents the
+        // current state, which may differ from the attribute.
+        // | 类型        | 含义        | 是否随运行时变化                |
+        //| --------- | --------- | ----------------------- |
+        //| attribute | HTML 初始声明 | ❌ 不变（除非手动 setAttribute） |
+        //| property  | DOM 当前状态  | ✅ 会变（用户交互 / JS 修改）      |
+
+        val objectId = node.objectId ?: domAPI?.resolveNode(nodeId = node.nodeId)?.objectId
+        return objectId?.let {
+            runtimeAPI?.callFunctionOn(
+                "function() { return this && typeof this.value !== 'undefined' ? this.value : null; }",
+                objectId = it,
+                returnByValue = true
+            )?.result?.value?.toString()
+        } ?: ""
+    }
+
+    @Throws(WebDriverException::class)
+    private suspend fun clear(node: NodeRef) {
+        // value exists both as an HTML attribute and a JavaScript property, but the property represents the
+        // current state, which may differ from the attribute.
+        // | 类型        | 含义        | 是否随运行时变化                |
+        //| --------- | --------- | ----------------------- |
+        //| attribute | HTML 初始声明 | ❌ 不变（除非手动 setAttribute） |
+        //| property  | DOM 当前状态  | ✅ 会变（用户交互 / JS 修改）      |
+
+        var liveValue = getLiveValueOrEmpty(node)
+        var n = 3
+        while (n-- > 0 && liveValue.isNotEmpty()) {
+            // it's an input element, we should click on the right side of the element,
+            // so the cursor appears at the tail of the text
+            emulator.click(node, 1, "right")
+
+            if (liveValue.length > 5) {
+                // select all text and delete
+                //press('Control+A'); // macOS 用 Meta+A, normalized in `keyboard?.press`
+                //press('Delete');
+                keyboard?.press("Control+A", randomDelayMillis("delete"))
+                keyboard?.press("Delete", randomDelayMillis("delete"))
+            } else {
+                keyboard?.delete(liveValue.length, randomDelayMillis("delete"))
+            }
+
+            liveValue = getLiveValueOrEmpty(node)
         }
     }
 

@@ -218,14 +218,14 @@ browser4-cli screenshot
 browser4-cli open --server http://localhost:9090
 
 # Execute multiple commands in one process
-browser4-cli batch "open https://example.com" "snapshot"
+browser4-cli batch "open https://playwright.dev" "snapshot"
 
 # Stop on the first batch failure
-browser4-cli batch --bail "open https://example.com" "click e1" "screenshot"
+browser4-cli batch --bail "open https://playwright.dev" "click e1" "screenshot"
 
 # Pipe batch commands as JSON via stdin
 echo '[
-  ["open", "https://example.com"],
+  ["open", "https://playwright.dev"],
   ["snapshot"],
   ["click", "e1"],
   ["screenshot", "--filename=result.png"]

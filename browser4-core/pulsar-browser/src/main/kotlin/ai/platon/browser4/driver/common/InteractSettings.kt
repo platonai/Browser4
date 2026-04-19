@@ -76,7 +76,7 @@ data class InteractSettings constructor(
     var delayPolicy = mutableMapOf(
         "gap" to 200..700,
         "click" to 500..1500,
-        "delete" to 30..80,
+        "delete" to 0..30,
         "keyUpDown" to 50..150,
         "press" to 100..400,
         "type" to 20..200,
