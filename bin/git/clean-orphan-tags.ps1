@@ -1,3 +1,5 @@
+#!/usr/bin/env pwsh
+
 param (
     [string]$Remote = "origin",
     [switch]$DryRun

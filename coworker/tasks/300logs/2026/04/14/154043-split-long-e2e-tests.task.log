@@ -1,0 +1,23 @@
+Task: split-long-e2e-tests
+Description: Task from split-long-e2e-tests.md
+Original File: split-long-e2e-tests.md
+Started: 2026-04-14 15:41:11
+Prompt:
+Finish the task described in file: /home/vincent/workspace/Browser4/coworker/tasks/2working/split-long-e2e-tests.md.
+Do not move **this** task file, just execute the task based on its content, the system will move it after you finished the task.
+
+*** MEMORY UPDATE INSTRUCTIONS ***
+You have a memory system to help you learn and improve.
+Your memory files are located in: /home/vincent/workspace/Browser4/coworker/tasks/300logs
+
+After completing the task, you MUST update your daily memory file: /home/vincent/workspace/Browser4/coworker/tasks/300logs/2026/04/14/MEMORY.20260414.md
+1. Append a summary of this task, its outcome, and any lessons learned to /home/vincent/workspace/Browser4/coworker/tasks/300logs/2026/04/14/MEMORY.20260414.md.
+2. Check if the Monthly Memory file (/home/vincent/workspace/Browser4/coworker/tasks/300logs/2026/04/MEMORY.202604.md) has been updated with the previous day's summary. If not, summarize all daily memories from this month (excluding today) into the Monthly Memory.
+3. Ensure you do not overwrite existing content, always append.
+
+
+---
+Copilot Execution Output:
+
+Copilot Exit Code: 0
+Copilot Log: /home/vincent/workspace/Browser4/coworker/tasks/300logs/2026/04/14/154043-split-long-e2e-tests.copilot.log

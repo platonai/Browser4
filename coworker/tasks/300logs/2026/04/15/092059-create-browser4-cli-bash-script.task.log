@@ -1,0 +1,68 @@
+Task: create-browser4-cli-bash-script
+Description: Task from create-browser4-cli-bash-script.md
+Original File: create-browser4-cli-bash-script.md
+Started: 2026-04-15 09:22:13
+Prompt:
+Finish the task described in file: /home/vincent/workspace/Browser4/coworker/tasks/2working/create-browser4-cli-bash-script.md.
+Do not move **this** task file, just execute the task based on its content, the system will move it after you finished the task.
+
+*** MEMORY UPDATE INSTRUCTIONS ***
+You have a memory system to help you learn and improve.
+Your memory files are located in: /home/vincent/workspace/Browser4/coworker/tasks/300logs
+
+After completing the task, you MUST update your daily memory file: /home/vincent/workspace/Browser4/coworker/tasks/300logs/2026/04/15/MEMORY.20260415.md
+1. Append a summary of this task, its outcome, and any lessons learned to /home/vincent/workspace/Browser4/coworker/tasks/300logs/2026/04/15/MEMORY.20260415.md.
+2. Check if the Monthly Memory file (/home/vincent/workspace/Browser4/coworker/tasks/300logs/2026/04/MEMORY.202604.md) has been updated with the previous day's summary. If not, summarize all daily memories from this month (excluding today) into the Monthly Memory.
+3. Ensure you do not overwrite existing content, always append.
+
+
+[Monthly Memory (2026-04)]:
+# Monthly Memory – 2026-04
+
+## Summary of daily memories (excluding 2026-04-15)
+
+### 2026-04-14
+
+**Task 1: Split Long E2E Tests in e2e.rs**
+Split 6 slow e2e scenario functions (>30s each) into 12 smaller ones. Splits: `test_session_lifecycle` → open+list / close; `test_navigation_and_storage` → navigation / storage; `test_interaction_commands` → typing / keyboard+pointer; `test_form_controls_and_exports` → controls / exports; `test_mouse_and_dialog` → mouse / dialog; `test_tab_commands` → list+new / select+close. `SCENARIOS` const grew from 9 to 15 entries. First-half scenarios leave sessions open; second-halves continue them with `restart_browser4: false`.
+
+**Task 2: Fix E2E Kill Warnings and test_storage Failure**
+- Added `.stderr(Stdio::null())` to `force_stop`'s `kill -KILL` call so "No such process" noise is suppressed.
+- Removed per-scenario `kill_all_browsers()` from the main loop; it now only fires inside `run_named_scenario` when `restart_browser4 == true`, preventing Chrome from being killed between linked split-tests that share an open session.
+
+---
+
+*This file will be updated with summaries from each day as the month progresses.*
+
+
+[Daily Memory (2026-04-15)]:
+Here is the compressed content (≈1 450 chars):
+---
+# Daily Memory – 2026-04-15
+## fix-e2e-test-cleanup-bugs
+**Bug 1 – "kill: No such process" spam**
+- `is_process_running` in `managed_processes.rs` ran `kill -0 <pid>` without suppressing stderr.
+- Fix: add `.stderr(Stdio::null())` to the `kill -0` command (Unix path).
+- File: `sdks/browser4-cli/src/managed_processes.rs`
+**Bug 2 – `test_e2e_batch_error_handling` panic**
+- `type` command simulates keystrokes and *appends* to existing field content, not replaces. Test expected exact match `"bail test"` but actual value was `"before errorbail test"`.
+- Fix: change `wait_for_state` predicates to use `.ends_with(expected_text)` for `typeValue` checks.
+- File: `sdks/browser4-cli/tests/e2e.rs`
+**Lessons**
+- `type` always appends; use `.ends_with()` (or clear field first) when testing across sub-tests on the same page.
+- Always add `stderr(null)` when using `kill -0` purely for existence checks.
+---
+## fix-batch-form-submission-bug
+**Root cause**: `executeBatchStep` for the `"open"` op had a stray `managedSession.driver` expression (line 419) that eagerly initialised the CDP browser context, breaking subsequent batch tool steps with "Cannot find context with specified id".
+**Fix**: Remove that 1 line. Batch `"open"` now mirrors `handleOpenSession` — creates session, returns `sessionId`, defers driver init to first actual tool use.
+**File**: `browser4-rest/…/MCPToolController.kt`
+**Lesson**: Never access `managedSession.driver` in batch open; rely on lazy initialization.
+---
+
+
+
+---
+Copilot Execution Output:
+
+Copilot Exit Code: 0
+Copilot Log: /home/vincent/workspace/Browser4/coworker/tasks/300logs/2026/04/15/092059-create-browser4-cli-bash-script.copilot.log

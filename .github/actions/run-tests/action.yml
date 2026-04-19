@@ -39,7 +39,7 @@ inputs:
     required: false
     default: 'true'
   run_pulsar_tests:
-    description: 'Run pulsar-tests module tests (default: true for CI)'
+    description: 'Run browser4-tests module tests (default: true for CI)'
     required: false
     default: 'true'
   report_name:
@@ -140,7 +140,7 @@ runs:
           test_cmd="$test_cmd -Dsurefire.parallel=methods -Dsurefire.threadCount=4"
         fi
 
-        # Add pulsar-tests flag
+        # Add browser4-tests flag
         if [ "${{ inputs.run_pulsar_tests }}" == "true" ]; then
           test_cmd="$test_cmd -DrunITs=true"
         fi
@@ -272,19 +272,19 @@ runs:
       shell: bash
       run: |
         echo "::group::Reconciling Test Status"
-        
+
         # Get the initial status from test execution
         EXEC_STATUS="${{ steps.run-tests.outputs.status }}"
         FAILED_COUNT="${{ steps.test-summary.outputs.failed_count }}"
-        
+
         # Set defaults if empty
         EXEC_STATUS="${EXEC_STATUS:-failed}"
         FAILED_COUNT="${FAILED_COUNT:-0}"
-        
+
         echo "🔍 Status Analysis:"
         echo "  - Execution Status: $EXEC_STATUS"
         echo "  - Failed Test Count: $FAILED_COUNT"
-        
+
         # Reconcile: if no tests failed, override status to success
         # This handles cases where Maven exits non-zero for non-test-failure reasons
         if [ "$FAILED_COUNT" == "0" ]; then
@@ -294,10 +294,10 @@ runs:
           FINAL_STATUS="$EXEC_STATUS"
           echo "  - Final Status: $EXEC_STATUS (test failures detected)"
         fi
-        
+
         # Update the status output
         echo "status=$FINAL_STATUS" >> $GITHUB_OUTPUT
-        
+
         echo "::endgroup::"
 
     - name: Upload Test Reports

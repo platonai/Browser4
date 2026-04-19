@@ -1,3 +1,5 @@
+#!/usr/bin/env pwsh
+
 # Delete branches created by GitHub Copilot, which are named "copilot/*".
 # Usage: .\delete-copilot-branches.ps1
 
@@ -23,13 +25,13 @@ $remoteBranches = git branch -r --list "origin/copilot/*" | ForEach-Object { $_.
 
 if ($remoteBranches) {
     Write-Host "Found remote copilot branches."
-    
+
     foreach ($remoteBranch in $remoteBranches) {
         if ($remoteBranch) {
             # The branch name comes as "origin/copilot/branch-name"
             # We need just "copilot/branch-name" for the push command
             $branchName = $remoteBranch -replace "^origin/", ""
-            
+
             $confirmation = Read-Host "Delete remote branch '$branchName'? (y/n)"
             if ($confirmation -eq 'y') {
                 Write-Host "Deleting remote branch: $branchName"

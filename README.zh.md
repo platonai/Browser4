@@ -1,4 +1,4 @@
-# 🤖 Browser4
+﻿# 🤖 Browser4
 
 [![Docker Pulls](https://img.shields.io/docker/pulls/galaxyeye88/browser4?style=flat-square)](https://hub.docker.com/r/galaxyeye88/browser4)
 [![License: APACHE2](https://img.shields.io/badge/license-APACHE2-green?style=flat-square)](https://github.com/platonai/browser4/blob/main/LICENSE)
@@ -200,7 +200,7 @@ fields = session.extract(document, mapOf("ratings" to "#ratings"))
 
 ### LLM + X-SQL
 
-适用于高复杂度的数据抽取流水线，包含数十个实体与每个实体数百个字段。
+适用于高复杂度的数据抽取流水线，典型场景包含数十个实体与每个实体数百个字段。
 
 **优势：**
 - 相比传统方法，可多提取 10 倍实体与 100 倍字段
@@ -301,14 +301,14 @@ Invoke-WebRequest -Uri https://github.com/platonai/PulsarRPAPro/releases/downloa
 
 | 模块 | 说明                      |
 |--------|-------------------------|
-| `pulsar-core` | 核心引擎：会话、调度、DOM、浏览器控制    |
-| `pulsar-agentic` | 智能体实现、MCP 与技能注册         |
-| `pulsar-rest` | Spring Boot REST 层与命令端点 |
-| `pulsar-tools` | 高阶智能体工具                 |
+| `browser4-core` | 核心引擎：会话、调度、DOM、浏览器控制    |
+| `browser4-agentic` | 智能体实现、MCP 与技能注册         |
+| `browser4-rest` | Spring Boot REST 层与命令端点 |
+| `browser4-tools` | 高阶智能体工具                 |
 | `browser4-agents` | 智能体与爬虫编排及产品打包           |
 | `sdks` | Rust 实现的 CLI，支持 SKILLS  |
 | `examples` | 可运行示例与演示工程              |
-| `pulsar-tests` | 重型集成与场景测试               |
+| `browser4-tests` | 重型集成与场景测试               |
 
 ---
 

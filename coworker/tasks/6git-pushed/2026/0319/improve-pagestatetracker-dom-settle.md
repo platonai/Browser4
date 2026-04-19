@@ -4,4 +4,4 @@ Design a non-detectable way to wait for the DOM to settle after a page load or n
 
 ## References
 
-[PageStateTracker.kt](../../../pulsar-agentic/src/main/kotlin/ai/platon/pulsar/agentic/inference/detail/PageStateTracker.kt)
+[PageStateTracker.kt](../../../browser4-agentic/src/main/kotlin/ai/platon/pulsar/agentic/inference/detail/PageStateTracker.kt)

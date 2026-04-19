@@ -254,4 +254,4 @@ openrouter.model.name=bytedance-seed/seed-1.6
 
 - [browser4-cli-collective.md](browser4-cli-collective.md) — Collective session & parallel scraping commands
 - [rest-api-examples.md](rest-api-examples.md) — REST API usage examples
-- [BasicBrowserAgent.kt](../pulsar-agentic/src/main/kotlin/ai/platon/pulsar/agentic/agents/BasicBrowserAgent.kt) — Agent implementation
+- [BasicBrowserAgent.kt](../browser4-agentic/src/main/kotlin/ai/platon/pulsar/agentic/agents/BasicBrowserAgent.kt) — Agent implementation

@@ -1,5 +1,0 @@
-# High level Pulsar tools README
-
-## Introduction
-
-High level tools based on Browser4 core functionality in pulsar-core module.

@@ -230,7 +230,7 @@ fun executeQuery(request: ScrapeRequest): ScrapeResponse {
 }
 ```
 
-Example code: [kotlin](/pulsar-rest/src/main/kotlin/ai/platon/pulsar/rest/api/service/ScrapeService.kt).
+Example code: [kotlin](/browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/api/service/ScrapeService.kt).
 
 ### Load Options
 

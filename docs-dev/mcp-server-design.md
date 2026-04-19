@@ -33,8 +33,8 @@ The implementation lives in:
 
 | File | Purpose |
 |------|---------|
-| `pulsar-agentic/.../mcp/server/Browser4MCPServer.kt` | MCP Server — registers all tools |
-| `pulsar-agentic/.../mcp/server/Browser4MCPServerRunner.kt` | STDIO entry-point (`main`) |
+| `browser4-agentic/.../mcp/server/Browser4MCPServer.kt` | MCP Server — registers all tools |
+| `browser4-agentic/.../mcp/server/Browser4MCPServerRunner.kt` | STDIO entry-point (`main`) |
 
 ---
 
@@ -126,7 +126,7 @@ The server reads newline-delimited JSON-RPC from `stdin` and writes responses to
 ### Optional: SSE (HTTP Streaming)
 
 For remote or shared deployments, the server can be fronted by a Ktor HTTP server
-using the `mcp {}` extension from `kotlin-sdk-server-jvm`.  
+using the `mcp {}` extension from `kotlin-sdk-server-jvm`.
 The `Browser4MCPServer.server` field exposes the `Server` instance,
 making it straightforward to attach any transport.
 

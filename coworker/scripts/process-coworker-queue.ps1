@@ -49,12 +49,37 @@ function Get-RunningCoworkerProcesses {
         [string]$WrapperName
     )
 
-    return @(Get-CimInstance Win32_Process | Where-Object {
-        $_.Name -match 'pwsh|powershell' -and
-                $_.CommandLine -match [regex]::Escape($ScriptName) -and
-                $_.CommandLine -notmatch [regex]::Escape($WrapperName) -and
-                $_.ProcessId -ne $PID
-    })
+    $scriptNameEscaped   = [regex]::Escape($ScriptName)
+    $wrapperNameEscaped  = [regex]::Escape($WrapperName)
+
+    $candidates = @(Get-Process -Name 'pwsh', 'powershell' -ErrorAction SilentlyContinue |
+        Where-Object { $_.Id -ne $PID })
+
+    $result = @()
+    foreach ($proc in $candidates) {
+        $cmdLine = ''
+        try {
+            if ($IsWindows) {
+                $cimProc = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId=$($proc.Id)" -ErrorAction Stop
+                $cmdLine = [string]$cimProc.CommandLine
+            } elseif ($IsLinux) {
+                $cmdLinePath = "/proc/$($proc.Id)/cmdline"
+                if (Test-Path $cmdLinePath) {
+                    $bytes = [System.IO.File]::ReadAllBytes($cmdLinePath)
+                    $cmdLine = [System.Text.Encoding]::UTF8.GetString($bytes) -replace "`0", ' '
+                }
+            } elseif ($IsMacOS) {
+                $cmdLine = (& ps -p $proc.Id -o args= 2>/dev/null) -join ' '
+            }
+        } catch {
+            continue
+        }
+
+        if ($cmdLine -match $scriptNameEscaped -and $cmdLine -notmatch $wrapperNameEscaped) {
+            $result += $proc
+        }
+    }
+    return $result
 }
 
 function Invoke-TaskSourceMonitor {

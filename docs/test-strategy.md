@@ -37,7 +37,7 @@ The project follows this approximate distribution:
 - **Scope**: Multiple components working together
 - **Dependencies**: Real Spring beans, mock external services
 - **Speed**: < 5 seconds per test
-- **Location**: `pulsar-tests/` or module `src/test/kotlin`
+- **Location**: `browser4-tests/` or module `src/test/kotlin`
 - **Naming**: `*IT.kt` or `*Test.kt`
 - **Tags**: `@Tag("IntegrationTest")`
 
@@ -45,7 +45,7 @@ The project follows this approximate distribution:
 - **Scope**: Full system with browser automation
 - **Dependencies**: Real browser, real services
 - **Speed**: < 30 seconds per test
-- **Location**: `pulsar-tests/`
+- **Location**: `browser4-tests/`
 - **Naming**: `*E2ETest.kt`
 - **Tags**: `@Tag("E2ETest")`
 
@@ -54,7 +54,7 @@ The project follows this approximate distribution:
 ### Global Coverage Targets
 
 - **Overall Coverage**: ≥ 70% instruction coverage
-- **Core Logic**: ≥ 80% (pulsar-core modules)
+- **Core Logic**: ≥ 80% (browser4-core modules)
 - **Utilities**: ≥ 90% (utility classes and helpers)
 - **Controllers**: ≥ 85% (REST API endpoints)
 
@@ -157,9 +157,9 @@ The project provides several base classes for common test scenarios:
 
 ### Test Resources
 
-- **Mock Data**: `pulsar-tests-common/src/main/resources/static/generated/`
+- **Mock Data**: `browser4-tests-common/src/main/resources/static/generated/`
 - **Test Fixtures**: `src/test/resources/` in each module
-- **Test Utilities**: `pulsar-tests-common/` module
+- **Test Utilities**: `browser4-tests-common/` module
 
 ### Test Configuration
 

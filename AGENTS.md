@@ -58,12 +58,12 @@ mvnw.cmd -q -DskipTests
 
 **Core module tests (Linux/macOS):**
 ```bash
-./mvnw -pl pulsar-core -am test -Dsurefire.failIfNoSpecifiedTests=false
+./mvnw -pl browser4-core -am test -Dsurefire.failIfNoSpecifiedTests=false
 ```
 
 **Core module tests (Windows PowerShell):**
 ```powershell
-.\mvnw.cmd -pl pulsar-core -am test -D"surefire.failIfNoSpecifiedTests=false"
+.\mvnw.cmd -pl browser4-core -am test -D"surefire.failIfNoSpecifiedTests=false"
 ```
 
 ### Recommended Build Scripts
@@ -74,14 +74,14 @@ mvnw.cmd -q -DskipTests
 
 | Module | Description |
 |--------|-------------|
-| `pulsar-core` | Core engine: sessions, scheduling, DOM, browser control |
-| `pulsar-agentic` | AI agents implementation, MCP, skills registration |
-| `pulsar-rest` | Spring Boot REST layer & command endpoints |
+| `browser4-core` | Core engine: sessions, scheduling, DOM, browser control |
+| `browser4-agentic` | AI agents implementation, MCP, skills registration |
+| `browser4-rest` | Spring Boot REST layer & command endpoints |
 | `sdks/*` | Browser4 CLI + skill assets (`sdks/browser4-cli`, `sdks/skill`) |
 | `browser4/*` | Product packaging (`browser4/browser4-agents`) |
 | `examples/*` | Runnable examples (`examples/browser4-examples`) |
-| `pulsar-tests` | E2E & heavy integration & scenario tests |
-| `pulsar-tests-common` | Shared test base classes and utilities |
+| `browser4-tests` | E2E & heavy integration & scenario tests |
+| `browser4-tests-common` | Shared test base classes and utilities |
 | `pulsar-benchmarks` | JMH benchmarks |
 
 ## Key APIs and Concepts
@@ -157,14 +157,14 @@ To keep iteration fast, **don’t run full test suites by default**.
 See [TESTING.md](docs/TESTING.md) for details and trade-offs.
 
 ### Test Commands in This Repository
-- Use `bin/test.ps1` on Windows for scoped runs: `fast`, `it`, `e2e`, `core`, `rest`, `skills`, `mcp`, `browser4-cli`, `browser4`
+- Use `bin/test.ps1` on Windows for scoped runs: `fast`, `it`, `e2e`, `rest`, `skills`, `mcp`, `cli`, `browser4`
 - Maven profile switches in root `pom.xml` are property-driven: `-DrunITs=true`, `-DrunE2ETests=true`, `-DrunSDKTests=true`, `-DrunCoreTests=true`, `-DrunRestTests=true`
 - `sdks/browser4-cli/tests/e2e.rs`: all e2e scenarios must start and depend on Browser4.jar; this includes single-scenario runs via `--scenario`.
 
 ### Test Location
 - Module unit tests: `src/test/kotlin/...`
-- Centralized integration/E2E: `pulsar-tests/`
-- Shared utilities: `pulsar-tests-common/`
+- Centralized integration/E2E: `browser4-tests/`
+- Shared utilities: `browser4-tests-common/`
 
 ### Naming Conventions
 - Unit tests: `<ClassName>Test.kt`
@@ -271,7 +271,7 @@ When given a task, Claude should:
 
 #### Adding a New Feature
 
-1. Identify the relevant module (pulsar-core, pulsar-agentic, pulsar-rest)
+1. Identify the relevant module (browser4-core, browser4-agentic, browser4-rest)
 2. Check existing similar features for patterns
 3. Add interface/API in appropriate package
 4. Implement with proper error handling and logging
@@ -297,11 +297,11 @@ When given a task, Claude should:
 #### Adding a `browser4-cli` Command
 
 1. Add a `CommandDef` in `sdks/browser4-cli/src/commands.rs`; keep the CLI command name kebab-case, use a `browser_`-prefixed snake_case MCP tool name, and map args/options to JSON in `tool_params_fn`
-2. Add the frontend alias in `pulsar-rest/.../MCPToolController.kt` so names like `browser_my_tool` resolve to the internal tool name such as `my_tool`
+2. Add the frontend alias in `browser4-rest/.../MCPToolController.kt` so names like `browser_my_tool` resolve to the internal tool name such as `my_tool`
 3. Reuse existing backend tools when possible; if a new browser capability is required, add an `@MCP` method in `WebDriver.kt`, implement it in the concrete driver, and only add an explicit `BrowserTabToolExecutor` case when parameter mapping is non-trivial
 4. Update `sdks/browser4-cli/src/main.rs` only when the command needs custom dispatch, dynamic tool-name selection, stale-session recovery, or inclusion in `no_snapshot_commands()` for read-only behavior
 5. Update `sdks/skill/SKILL.md` for user-facing command documentation; CLI help is generated from `CommandDef`, so avoid hand-editing help infrastructure
-6. Cover the change with the smallest relevant tests: `sdks/browser4-cli/src/commands.rs` unit tests, `pulsar-rest` controller mapping tests, `sdks/browser4-cli/tests/e2e.rs`, and `pulsar-tests/pulsar-rest-tests/.../MCPToolControllerE2ETest.kt` when the command changes the end-to-end flow
+6. Cover the change with the smallest relevant tests: `sdks/browser4-cli/src/commands.rs` unit tests, `browser4-rest` controller mapping tests, `sdks/browser4-cli/tests/e2e.rs`, and `browser4-tests/browser4-rest-tests/.../MCPToolControllerE2ETest.kt` when the command changes the end-to-end flow
 7. Watch the common failure points: missing backend alias, omitted `sessionId` in custom handlers, forgetting `no_snapshot_commands()` for read-only commands, mismatched element-ref parameter names, and snake_case/camelCase argument normalization
 
 ### Browser Automation Specifics
@@ -379,10 +379,10 @@ skillRegistry.register(CustomTool())
 **For Test Failures:**
 ```bash
 # Run specific test
-./mvnw -pl pulsar-core test -Dtest=SpecificTest
+./mvnw -pl browser4-core test -Dtest=SpecificTest
 
 # With debug output
-./mvnw -pl pulsar-core test -Dtest=SpecificTest -X
+./mvnw -pl browser4-core test -Dtest=SpecificTest -X
 ```
 
 **For Runtime Issues:**
@@ -433,7 +433,7 @@ Before submitting changes, verify:
 
 - Check `docs/` for detailed guides
 - Review `examples/` for usage patterns
-- Look in `pulsar-tests/` for test examples
+- Look in `browser4-tests/` for test examples
 - See `docs-dev/copilot/` for development notes
 
 ---

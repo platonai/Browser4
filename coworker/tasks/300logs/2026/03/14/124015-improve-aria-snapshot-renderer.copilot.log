@@ -20,7 +20,7 @@ I found a very small task scope, but the worktree is already dirty in nearby are
   $ @(
     'git --no-pager diff -- pulsar-core/pulsar-browser/src/main/kotlin/ai/platon/browser4/driver
   /chrome/dom/model/DomModels.kt',
-    'git --no-pager diff -- pulsar-tests/pulsar-it-tests/src/test/kotlin/ai/platon/browser4/driv
+    'git --no-pager diff -- browser4-tests/pulsar-it-tests/src/test/kotlin/ai/platon/browser4/driv
   er/chrome/dom/SnapshotServiceE2ETest.kt'...
   └ 7 lines...
 
@@ -51,13 +51,13 @@ The task looks like a focused renderer cleanup, and there are already nearby ARI
 
 ● Show related local diffs
   $ git --no-pager diff -- 'pulsar-core/pulsar-browser/src/main/kotlin/ai/platon/browser4/driver/chr
-  ome/dom/model/DomModels.kt' ; Write-Output "`n---DIFF---`n" ; git --no-pager diff -- 'pulsar-tests
+  ome/dom/model/DomModels.kt' ; Write-Output "`n---DIFF---`n" ; git --no-pager diff -- 'browser4-tests
   /pulsar-it-tests/src/test/kotlin/ai/platon/browser4/driver/chrome/dom/SnapshotServiceE2ETest.kt'
   └ 50 lines...
 
 I’ve got the renderer in view now; next I’m checking whether the invalid-node filtering is already covered or if I need to add a focused regression.
 
-● Read pulsar-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\AriaSnapshot
+● Read browser4-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\AriaSnapshot
   RendererE2ETest.kt lines 1-260
   └ 121 lines read
 

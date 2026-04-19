@@ -194,7 +194,7 @@ fun executeQuery(request: ScrapeRequest): ScrapeResponse {
 }
 ```
 
-示例代码: [kotlin](/pulsar-rest/src/main/kotlin/ai/platon/pulsar/rest/api/service/ScrapeService.kt).
+示例代码: [kotlin](/browser4-rest/src/main/kotlin/ai/platon/pulsar/rest/api/service/ScrapeService.kt).
 
 ## Load Options
 

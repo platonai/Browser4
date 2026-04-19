@@ -131,6 +131,16 @@ Browser4 CLI is compatible with Playwright and supports a wide range of commands
 It can be used in scripts, terminal sessions, or integrated into AI agents through SKILLS.
 
 ```shell
+# install the latest Unix CLI (+ Browser4.jar fallback runtime)
+curl -fsSL https://raw.githubusercontent.com/platonai/Browser4/master/sdks/browser4-cli/install.sh | bash
+
+# Windows: keep a Browser4 checkout for localhost Maven auto-start; Browser4.jar remains the fallback runtime
+New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.browser4\lib" | Out-Null
+Invoke-WebRequest 'https://github.com/platonai/Browser4/releases/latest/download/Browser4.jar' -OutFile "$env:USERPROFILE\.browser4\lib\Browser4.jar"
+git clone https://github.com/platonai/Browser4.git
+cd Browser4\sdks\browser4-cli
+cargo install --path . --locked
+
 # open new browser
 browser4-cli open
 # navigate to a page
@@ -300,13 +310,13 @@ curl -L -o PulsarRPAPro.jar https://github.com/platonai/PulsarRPAPro/releases/do
 
 | Module            | Description                                             |
 |-------------------|---------------------------------------------------------|
-| `pulsar-core`     | Core engine: sessions, scheduling, DOM, browser control |
-| `pulsar-agentic`  | Agent implementation, MCP, and skill registration       |
-| `pulsar-rest`     | Spring Boot REST layer & command endpoints              |
+| `browser4-core`   | Core engine: sessions, scheduling, DOM, browser control |
+| `browser4-agentic`  | Agent implementation, MCP, and skill registration       |
+| `browser4-rest`     | Spring Boot REST layer & command endpoints              |
 | `browser4-agents` | Agent & crawler orchestration with product packaging    |
 | `sdks`            | CLI in Rust that supports SKILLS                        |
 | `examples`        | Runnable examples and demos                             |
-| `pulsar-tests`    | E2E & heavy integration & scenario tests                |
+| `browser4-tests`    | E2E & heavy integration & scenario tests                |
 
 ---
 
@@ -388,4 +398,3 @@ If you need this type of URL, please contact your proxy service provider.
 ## License
 
 Apache 2.0 License. See [LICENSE](LICENSE) for details.
-

@@ -51,9 +51,9 @@ override fun close() {
                         ws.close(CloseReason(CloseReason.Codes.NORMAL, ""))
                     }
                 }
-            }.onFailure { 
+            }.onFailure {
                 logger.debug("WebSocket close timeout or error, forcing closure | {}", uri)
-                warnForClose(this, it) 
+                warnForClose(this, it)
             }
         }
         runCatching { client?.close() }.onFailure { warnForClose(this, it) }
@@ -79,11 +79,11 @@ private fun doClose() {
     } else {
         Duration.ofSeconds(3)   // 异常情况：快速退出
     }
-    
+
     waitUntilIdle(shutdownWaitTimeout)
-    
+
     logger.debug("Closing devtools client ...")
-    
+
     pageTransport.close()
     browserTransport.close()
 }
@@ -105,19 +105,19 @@ fun destroyForcibly() {
         if (pid > 0) {
             logger.warn("Destroy chrome launcher forcibly, pid: {} | {}", pid, userDataDir)
             Runtimes.destroyProcessForcibly(pid)
-            
+
             // 轮询验证进程是否真正终止
             var attempts = 0
             val maxAttempts = 5
             val pollInterval = 200L // milliseconds
-            
+
             while (attempts < maxAttempts && Runtimes.isProcessAlive(pid)) {
                 Thread.sleep(pollInterval)
                 attempts++
             }
-            
+
             if (Runtimes.isProcessAlive(pid)) {
-                logger.error("Failed to kill chrome process, pid: {} is still alive after {} attempts | {}", 
+                logger.error("Failed to kill chrome process, pid: {} is still alive after {} attempts | {}",
                     pid, attempts, userDataDir)
             } else {
                 logger.info("Chrome process killed successfully, pid: {} | {}", pid, userDataDir)
@@ -155,7 +155,7 @@ fun destroyProcess(process: Process, shutdownWaitTime: Duration) {
     process.destroy()
     try {
         if (!process.waitFor(shutdownWaitTime.seconds, TimeUnit.SECONDS)) {
-            logger.warn("Chrome process {} did not exit gracefully within {} seconds, force killing", 
+            logger.warn("Chrome process {} did not exit gracefully within {} seconds, force killing",
                 pid, shutdownWaitTime.seconds)
             process.destroyForcibly()
             process.waitFor(shutdownWaitTime.seconds, TimeUnit.SECONDS)
@@ -213,12 +213,12 @@ fun `test process cleanup with short-lived process`() {
     val processBuilder = ProcessBuilder("sh", "-c", "sleep 1")
     val process = processBuilder.start()
     val pid = process.pid()
-    
+
     assertTrue(process.isAlive)
     assertTrue(Runtimes.isProcessAlive(pid.toInt()))
-    
+
     process.waitFor()
-    
+
     assertFalse(process.isAlive)
     assertFalse(Runtimes.isProcessAlive(pid.toInt()))
 }
@@ -304,11 +304,11 @@ fun `test process cleanup with short-lived process`() {
 ---
 
 **变更文件**:
-1. `pulsar-core/pulsar-tools/pulsar-browser/src/main/kotlin/ai/platon/pulsar/browser/driver/chrome/impl/KtorTransport.kt`
-2. `pulsar-core/pulsar-tools/pulsar-browser/src/main/kotlin/ai/platon/pulsar/browser/driver/chrome/impl/ChromeDevToolsImpl.kt`
-3. `pulsar-core/pulsar-tools/pulsar-browser/src/main/kotlin/ai/platon/pulsar/browser/driver/chrome/ChromeLauncher.kt`
-4. `pulsar-core/pulsar-common/src/main/kotlin/ai/platon/pulsar/common/Runtimes.kt`
-5. `pulsar-core/pulsar-common/src/test/kotlin/ai/platon/pulsar/common/ProcessCleanupTest.kt` (新增)
+1. `browser4-core/pulsar-browser/src/main/kotlin/ai/platon/browser4/driver/chrome/impl/KtorTransport.kt`
+2. `browser4-core/pulsar-browser/src/main/kotlin/ai/platon/browser4/driver/chrome/impl/ChromeDevToolsImpl.kt`
+3. `browser4-core/pulsar-browser/src/main/kotlin/ai/platon/browser4/driver/chrome/ChromeLauncher.kt`
+4. `ai.platon.pulsar.common.Runtimes`（共享运行时工具）
+5. `ProcessCleanupTest.kt`（新增测试）
 
 **提交记录**:
 - Improve Chrome process and WebSocket cleanup to prevent orphans

@@ -1,0 +1,41 @@
+[2026-04-15 15:03:45] [INFO] ===========================================================================
+[2026-04-15 15:03:45] [INFO] Coworker Task Runner - PowerShell Version
+[2026-04-15 15:03:45] [INFO] Started at: 04/15/2026 15:03:45
+[2026-04-15 15:03:45] [INFO] Script Log: /home/vincent/workspace/Browser4/coworker/tasks/300logs/2026/04/15/150345-coworker.log
+[2026-04-15 15:03:45] [INFO] ==========================================================================
+[2026-04-15 15:03:45] [INFO] Created missing draft placeholder: /home/vincent/workspace/Browser4/coworker/tasks/0draft/1.md
+[2026-04-15 15:03:45] [INFO] [PREPARE] Task: 1.md
+[2026-04-15 15:03:45] [INFO] [PREPARE] Task: 2.md
+[2026-04-15 15:03:45] [INFO] [PREPARE] Task: 3.md
+[2026-04-15 15:03:45] [INFO] [PREPARE] Task: 4.md
+[2026-04-15 15:03:45] [INFO] [PREPARE] Task: 5.md
+[2026-04-15 15:03:45] [INFO] [PREPARE] Task: README.md
+[2026-04-15 15:03:45] [INFO] [PREPARE] Task: README.zh.md
+[2026-04-15 15:03:45] [INFO] [COMPLETE] Task waiting for review: fix-e2e-kill-warnings.md
+[2026-04-15 15:03:45] [INFO] [COMPLETE] Task waiting for review: split-long-e2e-tests.md
+[2026-04-15 15:03:46] [INFO] [PUSHED] Task: create-browser4-cli-bash-script.md (updated 04/15/2026 17:20:59)
+[2026-04-15 15:03:46] [INFO] [PUSHED] Task: fix-batch-form-submission-bug.md (updated 04/15/2026 17:06:05)
+[2026-04-15 15:03:46] [INFO] [PUSHED] Task: fix-e2e-test-cleanup-bugs.md (updated 04/15/2026 14:37:12)
+[2026-04-15 15:03:46] [DEBUG] renameScript path: /home/vincent/workspace/Browser4/coworker/scripts/workers/rename.ps1
+[2026-04-15 15:03:46] [DEBUG] Test-Path renameScript: True
+[2026-04-15 15:05:46] [DEBUG] Rename returned invalid name: Error: Timeout
+[2026-04-15 15:07:48] [DEBUG] Rename returned invalid name: Error: Timeout
+[2026-04-15 15:09:51] [DEBUG] Rename returned invalid name: Error: Timeout
+[2026-04-15 15:09:51] [WARN] Renaming failed after 3 attempts. Using fallback safe title.
+[2026-04-15 15:09:51] [INFO] Moved to working: /home/vincent/workspace/Browser4/coworker/tasks/2working/1.md
+[2026-04-15 15:09:51] [INFO] Memory context initialized via generator.
+[2026-04-15 15:09:51] [DEBUG] Task log will be written to: /home/vincent/workspace/Browser4/coworker/tasks/300logs/2026/04/15/150345-1.task.log
+[2026-04-15 15:09:51] [INFO] Executing Copilot for task: 1
+[2026-04-15 15:09:51] [DEBUG] Prompt length: 4438 characters
+[2026-04-15 15:09:51] [INFO] === Starting Copilot execution ===
+[2026-04-15 15:13:15] [INFO] Copilot execution finished with exit code 1
+[2026-04-15 15:13:15] [INFO] === Copilot execution completed ===
+[2026-04-15 15:13:15] [DEBUG] Copilot external tool log: /home/vincent/workspace/Browser4/coworker/tasks/300logs/2026/04/15/150345-1.copilot.log
+[2026-04-15 15:13:15] [WARN] Warning: Copilot exited with non-zero code. Check log: /home/vincent/workspace/Browser4/coworker/tasks/300logs/2026/04/15/150345-1.copilot.log
+[2026-04-15 15:13:15] [INFO] Task moved to finished : /home/vincent/workspace/Browser4/coworker/tasks/3_1complete/2026/0415/1.md
+[2026-04-15 15:13:15] [INFO] ---
+[2026-04-15 15:13:15] [INFO] ===========================================================================
+[2026-04-15 15:13:15] [INFO] All tasks completed
+[2026-04-15 15:13:15] [INFO] Ended at: 04/15/2026 15:13:15
+[2026-04-15 15:13:15] [INFO] Script Log: /home/vincent/workspace/Browser4/coworker/tasks/300logs/2026/04/15/150345-coworker.log
+[2026-04-15 15:13:15] [INFO] ==========================================================================

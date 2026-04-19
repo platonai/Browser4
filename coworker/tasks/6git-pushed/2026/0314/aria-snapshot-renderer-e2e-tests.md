@@ -7,7 +7,7 @@
 参考 SnapshotServiceE2ETest 模式，编写 AriaSnapshotRendererE2ETest 测试类，启动真实网页服务器，在真实网页上测试。
 
 测试资源源代码目录：
-pulsar-tests/pulsar-tests-common/src/main/resources/static/assets/frames
+browser4-tests/browser4-tests-common/src/main/resources/static/assets/frames
 
 ## Reference
 

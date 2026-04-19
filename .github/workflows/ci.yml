@@ -69,34 +69,6 @@ jobs:
           timeout_minutes: '15'
           maven_profiles: 'all-modules'
 
-      - name: Run Tests
-        id: run-tests
-        if: inputs.skip_tests != true # Temporarily disable tests in CI pipeline
-        uses: ./.github/actions/run-tests
-        with:
-          maven_profiles: 'all-modules'
-          # CI Pipeline: Run only Fast unit tests (same as PR tests)
-          # Comprehensive tests (Slow + Integration) run in nightly.yml
-          # Exclude: Slow, Heavy, Integration, E2E, SDK, and all environment-dependent tests
-          excluded_groups: 'Slow,Heavy,RequiresServer,RequiresBrowser,RequiresAI,RequiresDocker,Integration,E2E,SDK,ManualOnly,IntegrationTest,E2ETest,HeavyTest,SkippableLowerLevelTest,TestInfraCheck,OptionalTest'
-          timeout_minutes: '35'
-
-      - name: Check Test Status
-        if: inputs.skip_tests != true # Temporarily disable tests in CI pipeline
-        run: |
-          if [ "${{ steps.run-tests.outputs.test_status }}" != "success" ]; then
-            echo "❌ Tests failed with status: ${{ steps.run-tests.outputs.test_status }}"
-            echo "📊 Test Results:"
-            echo "  - Total Tests: ${{ steps.run-tests.outputs.test_count }}"
-            echo "  - Failed Tests: ${{ steps.run-tests.outputs.failed_count }}"
-            echo "  - Passed Tests: ${{ steps.run-tests.outputs.passed_count }}"
-            echo "  - Skipped Tests: ${{ steps.run-tests.outputs.skipped_count }}"
-            exit 1
-          else
-            echo "✅ All tests passed successfully"
-            echo "📊 Test Results: ${{ steps.run-tests.outputs.passed_count }} tests passed"
-          fi
-
       - name: Setup Rust Toolchain
         id: rust-setup
         uses: dtolnay/rust-toolchain@stable
@@ -161,6 +133,34 @@ jobs:
 
           echo "::endgroup::"
 
+      - name: Run Tests
+        id: run-tests
+        if: inputs.skip_tests != true
+        uses: ./.github/actions/run-tests
+        with:
+          maven_profiles: 'all-modules'
+          # CI Pipeline: Run only Fast unit tests (same as PR tests)
+          # Comprehensive tests (Slow + Integration) run in nightly.yml
+          # Exclude: Slow, Heavy, Integration, E2E, SDK, and all environment-dependent tests
+          excluded_groups: 'Slow,Heavy,RequiresServer,RequiresBrowser,RequiresAI,RequiresDocker,Integration,E2E,SDK,ManualOnly,IntegrationTest,E2ETest,HeavyTest,SkippableLowerLevelTest,TestInfraCheck,OptionalTest'
+          timeout_minutes: '35'
+
+      - name: Check Test Status
+        if: inputs.skip_tests != true
+        run: |
+          if [ "${{ steps.run-tests.outputs.test_status }}" != "success" ]; then
+            echo "❌ Tests failed with status: ${{ steps.run-tests.outputs.test_status }}"
+            echo "📊 Test Results:"
+            echo "  - Total Tests: ${{ steps.run-tests.outputs.test_count }}"
+            echo "  - Failed Tests: ${{ steps.run-tests.outputs.failed_count }}"
+            echo "  - Passed Tests: ${{ steps.run-tests.outputs.passed_count }}"
+            echo "  - Skipped Tests: ${{ steps.run-tests.outputs.skipped_count }}"
+            exit 1
+          else
+            echo "✅ All tests passed successfully"
+            echo "📊 Test Results: ${{ steps.run-tests.outputs.passed_count }} tests passed"
+          fi
+
       - name: Pipeline Summary
         if: always()
         shell: bash
@@ -171,11 +171,11 @@ jobs:
           echo "  - Setup: ${{ steps.setup.outcome }}"
           echo "  - Dependencies: ${{ steps.deps.outcome }}"
           echo "  - Maven Build: ${{ steps.build-maven.outcome }}"
-          echo "  - Unit Tests: ${{ steps.run-tests.outcome || 'skipped' }}"
           echo "  - Docker Build: ${{ steps.build.outcome }}"
           echo "  - Application: ${{ steps.app.outcome }}"
           echo "  - Health Check: ${{ steps.health.outcome }}"
           echo "  - CLI E2E Tests: ${{ steps.e2e-cli.outcome }}"
+          echo "  - Unit Tests: ${{ steps.run-tests.outcome || 'skipped' }}"
 
           echo ""
           echo "🌐 Infrastructure:"

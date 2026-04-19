@@ -158,7 +158,7 @@ Content-Type: application/json
 
 ### 2.7 Backend: MCPToolController
 
-**File**: `pulsar-rest/.../MCPToolController.kt`
+**File**: `browser4-rest/.../MCPToolController.kt`
 
 1. **callTool()**: Routes to `dispatchToAgentToolExecutor()` for non-session tools
 2. **normalizeFrontendToolCall()**: `"browser_navigate"` → `"navigate"` via `FRONTEND_TOOL_NAME_ALIASES`
@@ -168,7 +168,7 @@ Content-Type: application/json
 
 ### 2.8 Backend: BrowserTabToolExecutor
 
-**File**: `pulsar-agentic/.../BrowserTabToolExecutor.kt` (line ~45)
+**File**: `browser4-agentic/.../BrowserTabToolExecutor.kt` (line ~45)
 
 ```kotlin
 "navigate" -> {
@@ -184,14 +184,14 @@ Content-Type: application/json
 
 ### 2.9 Backend: WebDriver → CDP
 
-**File**: `pulsar-core/.../WebDriver.kt` (line ~268)
+**File**: `browser4-core/.../WebDriver.kt` (line ~268)
 
 ```kotlin
 @MCP
 suspend fun navigate(url: String)
 ```
 
-**File**: `pulsar-core/.../PulsarWebDriver.kt` (line ~112)
+**File**: `browser4-core/.../PulsarWebDriver.kt` (line ~112)
 
 Actual Chrome navigation via Chrome DevTools Protocol (CDP).
 
@@ -275,7 +275,7 @@ tool_name_fn: |args| {
 
 ### Step 2: Add Backend Tool Name Alias (Kotlin)
 
-**File**: `pulsar-rest/.../MCPToolController.kt`
+**File**: `browser4-rest/.../MCPToolController.kt`
 
 Add the mapping in `FRONTEND_TOOL_NAME_ALIASES`:
 
@@ -305,7 +305,7 @@ The `BrowserTabToolExecutor` auto-discovers methods via `ToolSpecGenerator`.
 
 1. **Add the method to WebDriver interface**:
 
-   **File**: `pulsar-core/pulsar-skeleton/.../WebDriver.kt`
+   **File**: `browser4-core/pulsar-skeleton/.../WebDriver.kt`
 
    ```kotlin
    /**
@@ -321,7 +321,7 @@ The `BrowserTabToolExecutor` auto-discovers methods via `ToolSpecGenerator`.
 
 2. **Implement in concrete driver classes**:
 
-   **File**: `pulsar-core/pulsar-plugins/.../PulsarWebDriver.kt`
+   **File**: `browser4-core/pulsar-plugins/.../PulsarWebDriver.kt`
 
    ```kotlin
    override suspend fun myTool(arg1: String): String {
@@ -331,7 +331,7 @@ The `BrowserTabToolExecutor` auto-discovers methods via `ToolSpecGenerator`.
 
 3. **Add handling in BrowserTabToolExecutor** (if non-trivial parameter mapping):
 
-   **File**: `pulsar-agentic/.../BrowserTabToolExecutor.kt`
+   **File**: `browser4-agentic/.../BrowserTabToolExecutor.kt`
 
    Add a case in `callFunctionOn()`:
 
@@ -432,7 +432,7 @@ fn test_my_command_tool_name_and_params() {
 
 ### 4.2 Backend Unit Tests (Kotlin)
 
-**File**: `pulsar-rest/src/test/kotlin/.../MCPToolControllerTest.kt`
+**File**: `browser4-rest/src/test/kotlin/.../MCPToolControllerTest.kt`
 
 Add a test verifying the full name mapping chain:
 
@@ -461,7 +461,7 @@ fun `test frontend my-tool maps to my_tool`() = runBlocking {
 }
 ```
 
-**Run**: `./mvnw -pl pulsar-rest -am test -Dtest=MCPToolControllerTest -Dsurefire.failIfNoSpecifiedTests=false`
+**Run**: `./mvnw -pl browser4-rest -am test -Dtest=MCPToolControllerTest -Dsurefire.failIfNoSpecifiedTests=false`
 
 ### 4.3 CLI E2E Tests (Rust)
 
@@ -487,7 +487,7 @@ Then call `test_my_command(&mut ctx);` in the main test runner function.
 
 ### 4.4 Backend E2E Tests (Kotlin)
 
-**File**: `pulsar-tests/pulsar-rest-tests/src/test/.../MCPToolControllerE2ETest.kt`
+**File**: `browser4-tests/browser4-rest-tests/src/test/.../MCPToolControllerE2ETest.kt`
 
 Add the command-to-tool mapping and an E2E test:
 
@@ -505,7 +505,7 @@ fun testMyTool() {
 }
 ```
 
-**Run**: `./mvnw -P pulsar-tests -pl pulsar-tests/pulsar-rest-tests -am test -Dtest=MCPToolControllerE2ETest -Dsurefire.failIfNoSpecifiedTests=false`
+**Run**: `./mvnw -P browser4-tests -pl browser4-tests/browser4-rest-tests -am test -Dtest=MCPToolControllerE2ETest -Dsurefire.failIfNoSpecifiedTests=false`
 
 ### 4.5 Testing Summary
 
@@ -513,8 +513,8 @@ fun testMyTool() {
 |-------|------|-------------|-------------|
 | CLI unit | `commands.rs` | tool name, params mapping | `cargo test --quiet` |
 | CLI E2E | `tests/e2e.rs` | Full round-trip | `BROWSER4_CLI_E2E=true cargo test --test e2e` |
-| Backend unit | `MCPToolControllerTest.kt` | Name alias resolution, dispatch | `./mvnw -pl pulsar-rest test` |
-| Backend E2E | `MCPToolControllerE2ETest.kt` | Real browser execution | `./mvnw -P pulsar-tests -pl pulsar-tests/pulsar-rest-tests test` |
+| Backend unit | `MCPToolControllerTest.kt` | Name alias resolution, dispatch | `./mvnw -pl browser4-rest test` |
+| Backend E2E | `MCPToolControllerE2ETest.kt` | Real browser execution | `./mvnw -P browser4-tests -pl browser4-tests/browser4-rest-tests test` |
 
 ---
 
@@ -586,8 +586,8 @@ Commands that don't modify browser state (add to `no_snapshot_commands()`).
 |------|---------|
 | `sdks/browser4-cli/src/commands.rs` (test mod) | CLI unit tests for command mapping |
 | `sdks/browser4-cli/tests/e2e.rs` | CLI end-to-end tests |
-| `pulsar-rest/src/test/.../MCPToolControllerTest.kt` | Backend unit tests |
-| `pulsar-tests/pulsar-rest-tests/src/test/.../MCPToolControllerE2ETest.kt` | Backend E2E tests |
+| `browser4-rest/src/test/.../MCPToolControllerTest.kt` | Backend unit tests |
+| `browser4-tests/browser4-rest-tests/src/test/.../MCPToolControllerE2ETest.kt` | Backend E2E tests |
 
 ### Documentation
 

@@ -88,7 +88,7 @@ I found a likely root cause and a likely consumer: the packaged jar is fine for 
 ● Read browser4\browser4-agents\README.md lines 108-124
   └ 16 lines read
 
-● Read pulsar-agentic\src\main\kotlin\ai\platon\pulsar\agentic\mcp\server\Browser4MCPServerRunner.kt
+● Read browser4-agentic\src\main\kotlin\ai\platon\pulsar\agentic\mcp\server\Browser4MCPServerRunner.kt
   └ 78 lines read
 
 ● Grep
@@ -118,7 +118,7 @@ I’ve narrowed this down to a bad launch pattern rather than a missing compiled
   -D"surefire.failIfNoSpecifiedTests=false" test
   └ 15 lines...
 
-● Edit pulsar-agentic\src\main\kotlin\ai\platon\pulsar\agentic\mcp\server\Browser4MCPServerRunner.kt
+● Edit browser4-agentic\src\main\kotlin\ai\platon\pulsar\agentic\mcp\server\Browser4MCPServerRunner.kt
   Edit browser4\browser4-agents\README.md
 
 I’ve applied the minimal, behavior-safe fix: remove the bad `-cp` launch guidance and document the correct `-jar` usage where users will see it. I’m now validating module-local builds/tests and a real `java -jar ... --app=mcp` launch path.
@@ -139,8 +139,8 @@ I’ve applied the minimal, behavior-safe fix: remove the bad `-cp` launch guida
   exit $code
   No Content
 
-● Compile pulsar-agentic module
-  $ .\mvnw.cmd -f pulsar-agentic\pom.xml -DskipTests compile
+● Compile browser4-agentic module
+  $ .\mvnw.cmd -f browser4-agentic\pom.xml -DskipTests compile
   └ 52 lines...
 
 The fix is validated: module-local compiles/tests pass, and the real jar launch path remains `java -jar`. I’m doing the required memory rollups now, including backfilling the monthly summary for days that weren’t rolled up yet.
@@ -191,7 +191,7 @@ I found the monthly memory lag: it rolls up through `2026-03-10`, and there’s 
 
 ● Inspect final diff
   $ git --no-pager diff --
-  pulsar-agentic\src\main\kotlin\ai\platon\pulsar\agentic\mcp\server\Browser4MCPServerRunner.kt
+  browser4-agentic\src\main\kotlin\ai\platon\pulsar\agentic\mcp\server\Browser4MCPServerRunner.kt
   browser4\browser4-agents\README.md coworker\tasks\300logs\2026\03\13\MEMORY.20260313.md
   coworker\tasks\300logs\2026\03\MEMORY.202603.md
   └ 46 lines...
@@ -207,7 +207,7 @@ I found the monthly memory lag: it rolls up through `2026-03-10`, and there’s 
 Done — I fixed the `Browser4Launcher` classpath task by correcting the misleading MCP launch guidance rather than changing jar packaging.
 
 Updated:
-- `pulsar-agentic\src\main\kotlin\ai\platon\pulsar\agentic\mcp\server\Browser4MCPServerRunner.kt`
+- `browser4-agentic\src\main\kotlin\ai\platon\pulsar\agentic\mcp\server\Browser4MCPServerRunner.kt`
 - `browser4\browser4-agents\README.md`
 
 The packaged `browser4\browser4-agents\target\Browser4.jar` is a Spring Boot executable jar, so it must be launched with `java -jar ... --app=mcp`; `java -cp ... ai.platon.pulsar.app.Browser4Launcher` cannot see classes under `BOOT-INF\classes`.
@@ -215,7 +215,7 @@ The packaged `browser4\browser4-agents\target\Browser4.jar` is a Spring Boot exe
 Validated with:
 - `.\mvnw.cmd -f browser4\browser4-agents\pom.xml -DskipTests compile`
 - `.\mvnw.cmd -f browser4\browser4-agents\pom.xml -Dtest=Browser4LauncherTest -D"surefire.failIfNoSpecifiedTests=false" test`
-- `.\mvnw.cmd -f pulsar-agentic\pom.xml -DskipTests compile`
+- `.\mvnw.cmd -f browser4-agentic\pom.xml -DskipTests compile`
 
 I also appended the required daily/monthly memory updates.
 

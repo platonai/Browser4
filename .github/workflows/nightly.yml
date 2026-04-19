@@ -65,7 +65,7 @@ jobs:
         uses: ./.github/actions/run-tests
         with:
           # Nightly: All unit tests (Fast + Slow) + Integration tests
-          maven_profiles: 'all-modules,pulsar-tests,integration-tests'
+          maven_profiles: 'all-modules,browser4-tests,integration-tests'
           # Include: Unit (Fast + Slow) + Integration
           # Exclude: E2E (manual only), SDK (separate workflows), ManualOnly
           excluded_groups: 'E2E,SDK,ManualOnly,E2ETest,RequiresBrowser,RequiresAI'

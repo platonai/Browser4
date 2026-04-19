@@ -30,19 +30,19 @@ I’ve got the failing test names. Next I’m locating the controller, related t
   2. Reproduce with the smallest relevant targeted test command....
   └ 5 lines...
 
-● Read pulsar-tests\pulsar-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon
+● Read browser4-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon
   trollerE2ETest.kt lines 1-260
   └ 260 lines read
 
-● Read pulsar-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt lines
+● Read browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt lines
   1-320
   └ 320 lines read
 
-● Read pulsar-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
+● Read browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
   lines 1-320
   └ 320 lines read
 
-● Read pulsar-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
+● Read browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
   lines 320-520
   └ 192 lines read
 
@@ -58,31 +58,31 @@ I’ve narrowed it to the MCP controller/session-management path. I’m reading 
 
 ● Todo started: plan-work
 
-● Read pulsar-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\service\SessionManager.kt lines 1-260
+● Read browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\service\SessionManager.kt lines 1-260
   └ 181 lines read
 
-● Read pulsar-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt lines
+● Read browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt lines
   320-440
   └ 27 lines read
 
 ● Run focused failing MCP E2E tests
-  $ .\mvnw.cmd -f pulsar-tests\pulsar-rest-tests\pom.xml -DrunE2ETests=true
+  $ .\mvnw.cmd -f browser4-tests\browser4-rest-tests\pom.xml -DrunE2ETests=true
   "-Dtest=MCPToolControllerE2ETest#testUnknownTool,testCallToolWithoutSessionId,testCallToolWithInva
   lidSessionId,testCloseSessionNotFound,testDeleteSessionData"
   -D"surefire.failIfNoSpecifiedTests=false" test
   └ 67 lines...
 
 ● Grep "testUnknownTool|testCallToolWithoutSessionId|testCallToolWithInvalidSessionId|testDeleteSess
-ionData" (D:\workspace\Browser4\Browser4-4.6\pulsar-tests\pulsar-rest-tests\src\test\kotlin\ai\plato
+ionData" (D:\workspace\Browser4\Browser4-4.6\browser4-tests\browser4-rest-tests\src\test\kotlin\ai\plato
 n\pulsar\rest\api\controller\MCPToolControllerE2ETest.kt)
   └ 27 lines found
 
 ● Grep "Missing required parameter: sessionId|Session not found|Unknown tool:|User data deleted for
-session|delete_session_data" (D:\workspace\Browser4\Browser4-4.6\pulsar-tests\pulsar-rest-tests\src\
+session|delete_session_data" (D:\workspace\Browser4\Browser4-4.6\browser4-tests\browser4-rest-tests\src\
 test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolControllerE2ETest.kt)
   └ 51 lines found
 
-● Read pulsar-tests\pulsar-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon
+● Read browser4-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon
   trollerE2ETest.kt lines 560-610
   └ 50 lines read
 
@@ -92,12 +92,12 @@ test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolControllerE2ETest.kt)
 The first repro command matched no methods, so I’m running the actual E2E class now and a focused unit test in parallel to get the real failure signal before changing code.
 
 ● Run MCPToolController E2E class
-  $ .\mvnw.cmd -f pulsar-tests\pom.xml -pl pulsar-rest-tests -am -DrunE2ETests=true
+  $ .\mvnw.cmd -f browser4-tests\pom.xml -pl browser4-rest-tests -am -DrunE2ETests=true
   "-Dtest=MCPToolControllerE2ETest" -D"surefire.failIfNoSpecifiedTests=false" test
   └ 89 lines...
 
 ● Run MCPToolController unit tests
-  $ .\mvnw.cmd -f pulsar-rest\pom.xml "-Dtest=MCPToolControllerTest"
+  $ .\mvnw.cmd -f browser4-rest\pom.xml "-Dtest=MCPToolControllerTest"
   -D"surefire.failIfNoSpecifiedTests=false" test
   └ 67 lines...
 
@@ -110,7 +110,7 @@ The first repro command matched no methods, so I’m running the actual E2E clas
 The unit suite is green; I’m waiting on the real E2E class because that’s where the failures from the task file should show up if they still exist.
 
 ● Grep "class RestAPITestBase|@Tag\("E2ETest"\)|runE2ETests|E2ETest" in **/*.{kt,xml}
-(D:\workspace\Browser4\Browser4-4.6\pulsar-tests)
+(D:\workspace\Browser4\Browser4-4.6\browser4-tests)
   └ 26 lines found
 
 ● read_powershell
@@ -121,13 +121,13 @@ The unit suite is green; I’m waiting on the real E2E class because that’s wh
 
 The E2E suite is slower than the unit path, likely because it’s booting the test server/browser stack. I’m giving it a bit more time and, in parallel, checking the REST test base so I know whether any environment assumption could explain the failures.
 
-● Read pulsar-tests\pulsar-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\RestAPITes
+● Read browser4-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\RestAPITes
   tBase.kt lines 1-220
   └ 65 lines read
 
 ● Grep "class
 IntegrationTestBase|MockEcServerConfiguration|MockSiteApplication|WebTestClient|RestAPITestBase" in
-**/*.kt (D:\workspace\Browser4\Browser4-4.6\pulsar-tests)
+**/*.kt (D:\workspace\Browser4\Browser4-4.6\browser4-tests)
   └ 36 lines found
 
 ● read_powershell
@@ -139,7 +139,7 @@ I found the earlier method-name mismatch. I’m stopping the broad class run and
   └ 1 line...
 
 ● Run exact failing MCP E2E methods
-  $ .\mvnw.cmd -f pulsar-tests\pom.xml -pl pulsar-rest-tests -am -DrunE2ETests=true
+  $ .\mvnw.cmd -f browser4-tests\pom.xml -pl browser4-rest-tests -am -DrunE2ETests=true
   "-Dtest=MCPToolControllerE2ETest#testUnknownToolReturnsError+testMissingSessionIdReturnsError+test
   InvalidSessionIdReturnsError+testCloseSessionNotFound+testDeleteSessionData"
   -D"surefire.failIfNoSpecifiedTests=false" test
@@ -194,92 +194,92 @@ rData|clearDataForOrigin" in **/*.kt (D:\workspace\Browser4\Browser4-4.6)
 ● Grep "evaluate\(".*localStorage|sessionStorage" in **/*.kt (D:\workspace\Browser4\Browser4-4.6)
   └ 2 lines found
 
-● Edit pulsar-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt
+● Edit browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt
 
-● Edit pulsar-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt
+● Edit browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt
 
-● Edit pulsar-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
+● Edit browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
 
-I’ve patched the controller and unit coverage. Now I’m validating the local module, installing the updated `pulsar-rest` artifact for the sibling test module, and then rerunning the exact five E2E methods.
+I’ve patched the controller and unit coverage. Now I’m validating the local module, installing the updated `browser4-rest` artifact for the sibling test module, and then rerunning the exact five E2E methods.
 
-● Run unit tests, install pulsar-rest, rerun MCP E2Es
-  $ .\mvnw.cmd -f pulsar-rest\pom.xml "-Dtest=MCPToolControllerTest"
-  -D"surefire.failIfNoSpecifiedTests=false" test && .\mvnw.cmd -f pulsar-rest\pom.xml
-  -DskipTests install && .\mvnw.cmd -f pulsar-tests\pom.xml -pl pulsar-rest-tests -am
+● Run unit tests, install browser4-rest, rerun MCP E2Es
+  $ .\mvnw.cmd -f browser4-rest\pom.xml "-Dtest=MCPToolControllerTest"
+  -D"surefire.failIfNoSpecifiedTests=false" test && .\mvnw.cmd -f browser4-rest\pom.xml
+  -DskipTests install && .\mvnw.cmd -f browser4-tests\pom.xml -pl browser4-rest-tests -am
   -DrunE2ETests=true
   "-Dtest=MCPToolControllerE2ETest#testUnknownToolReturnsError+testMissingSessionIdReturnsError+...
   └ 45 lines...
 
 ● Todo started: implement-fix
 
-● Read pulsar-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt lines
+● Read browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt lines
   60-100
   └ 40 lines read
 
 The build failure is just from Kotlin interpreting JS template literals inside the multiline constant. I’m escaping that now and rerunning validation.
 
-● Edit pulsar-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt
+● Edit browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt
 
 I’ve fixed the string-literal issue. Re-running the module test/install and the exact E2E repro now.
 
 ● Todo started: validate-changes
 
 ● Run MCP controller unit and focused E2E tests
-  $ .\mvnw.cmd -f pulsar-rest\pom.xml "-Dtest=MCPToolControllerTest"
-  -D"surefire.failIfNoSpecifiedTests=false" test && .\mvnw.cmd -f pulsar-rest\pom.xml
-  -DskipTests install && .\mvnw.cmd -f pulsar-tests\pom.xml -pl pulsar-rest-tests -am
+  $ .\mvnw.cmd -f browser4-rest\pom.xml "-Dtest=MCPToolControllerTest"
+  -D"surefire.failIfNoSpecifiedTests=false" test && .\mvnw.cmd -f browser4-rest\pom.xml
+  -DskipTests install && .\mvnw.cmd -f browser4-tests\pom.xml -pl browser4-rest-tests -am
   -DrunE2ETests=true
   "-Dtest=MCPToolControllerE2ETest#testUnknownToolReturnsError+testMissingSessionIdReturnsError+...
   └ 84 lines...
 
 ● Todo started: implement-fix
 
-● Read pulsar-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
+● Read browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
   lines 476-490
   └ 15 lines read
 
-● Edit pulsar-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
+● Edit browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
 
 I hit a small Kotlin/Mockito matcher issue in the new unit assertion; that’s fixed now, and I’m rerunning the same validation chain.
 
 ● Todo started: validate-changes
 
 ● Run MCP controller unit and focused E2E tests
-  $ .\mvnw.cmd -f pulsar-rest\pom.xml "-Dtest=MCPToolControllerTest"
-  -D"surefire.failIfNoSpecifiedTests=false" test && .\mvnw.cmd -f pulsar-rest\pom.xml
-  -DskipTests install && .\mvnw.cmd -f pulsar-tests\pom.xml -pl pulsar-rest-tests -am
+  $ .\mvnw.cmd -f browser4-rest\pom.xml "-Dtest=MCPToolControllerTest"
+  -D"surefire.failIfNoSpecifiedTests=false" test && .\mvnw.cmd -f browser4-rest\pom.xml
+  -DskipTests install && .\mvnw.cmd -f browser4-tests\pom.xml -pl browser4-rest-tests -am
   -DrunE2ETests=true
   "-Dtest=MCPToolControllerE2ETest#testUnknownToolReturnsError+testMissingSessionIdReturnsError+...
   └ 194 lines...
 
 The production fix is fine; the remaining failure is only in my new Mockito assertion. I’m switching that assertion to a simple string captor and then rerunning validation.
 
-● Edit pulsar-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
+● Edit browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
 
 I’ve replaced the brittle matcher with a captor. Running the same end-to-end validation sequence one more time.
 
 ● Todo started: validate-changes
 
 ● Run MCP controller unit and focused E2E tests
-  $ .\mvnw.cmd -f pulsar-rest\pom.xml "-Dtest=MCPToolControllerTest"
-  -D"surefire.failIfNoSpecifiedTests=false" test && .\mvnw.cmd -f pulsar-rest\pom.xml
-  -DskipTests install && .\mvnw.cmd -f pulsar-tests\pom.xml -pl pulsar-rest-tests -am
+  $ .\mvnw.cmd -f browser4-rest\pom.xml "-Dtest=MCPToolControllerTest"
+  -D"surefire.failIfNoSpecifiedTests=false" test && .\mvnw.cmd -f browser4-rest\pom.xml
+  -DskipTests install && .\mvnw.cmd -f browser4-tests\pom.xml -pl browser4-rest-tests -am
   -DrunE2ETests=true
   "-Dtest=MCPToolControllerE2ETest#testUnknownToolReturnsError+testMissingSessionIdReturnsError+...
   └ 194 lines...
 
 The only remaining breakage is the unit test’s interaction matcher against a suspend method. I’m simplifying that assertion so validation can focus on the production behavior we actually changed.
 
-● Edit pulsar-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
+● Edit browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
 
 I’ve removed the flaky matcher from the unit test. Re-running the full validation chain again now.
 
 ● Todo started: validate-changes
 
 ● Run MCP controller unit and focused E2E tests
-  $ .\mvnw.cmd -f pulsar-rest\pom.xml "-Dtest=MCPToolControllerTest"
-  -D"surefire.failIfNoSpecifiedTests=false" test && .\mvnw.cmd -f pulsar-rest\pom.xml
-  -DskipTests install && .\mvnw.cmd -f pulsar-tests\pom.xml -pl pulsar-rest-tests -am
+  $ .\mvnw.cmd -f browser4-rest\pom.xml "-Dtest=MCPToolControllerTest"
+  -D"surefire.failIfNoSpecifiedTests=false" test && .\mvnw.cmd -f browser4-rest\pom.xml
+  -DskipTests install && .\mvnw.cmd -f browser4-tests\pom.xml -pl browser4-rest-tests -am
   -DrunE2ETests=true
   "-Dtest=MCPToolControllerE2ETest#testUnknownToolReturnsError+testMissingSessionIdReturnsError+...
   └ 111 lines...
@@ -304,14 +304,14 @@ I’ve confirmed the exact five E2E failures now pass. I’m appending the task 
 ● Todo started: update-memory
 
 ● Memory stored: build commands
-  └ After pulsar-rest changes, install pulsar-rest locally before running focused pu…
+  └ After browser4-rest changes, install browser4-rest locally before running focused pu…
 
 ● Show relevant diff and status
   $ git --no-pager diff --
-  pulsar-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt
-  pulsar-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt &&
+  browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt
+  browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt &&
   git --no-pager status --short --
-  pulsar-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt ...
+  browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt ...
   └ 124 lines...
 
 ● Append task summary to daily memory
@@ -332,8 +332,8 @@ I’ve appended today’s memory entry and confirmed the monthly rollup was alre
 Done — I fixed the MCP controller path and verified the exact failing tests now pass.
 
 Changed:
-- `pulsar-rest\src\main\kotlin\...\MCPToolController.kt`
-- `pulsar-rest\src\test\kotlin\...\MCPToolControllerTest.kt`
+- `browser4-rest\src\main\kotlin\...\MCPToolController.kt`
+- `browser4-rest\src\test\kotlin\...\MCPToolControllerTest.kt`
 
 Fixes:
 - serialized REST errors under canonical `isError`
@@ -341,8 +341,8 @@ Fixes:
 - made `delete_session_data` clear cookies plus best-effort storage without failing on `SecurityError`
 
 Validated with:
-- `.\mvnw.cmd -f pulsar-rest\pom.xml "-Dtest=MCPToolControllerTest" -D"surefire.failIfNoSpecifiedTests=false" test`
-- `.\mvnw.cmd -f pulsar-rest\pom.xml -DskipTests install`
+- `.\mvnw.cmd -f browser4-rest\pom.xml "-Dtest=MCPToolControllerTest" -D"surefire.failIfNoSpecifiedTests=false" test`
+- `.\mvnw.cmd -f browser4-rest\pom.xml -DskipTests install`
 - focused `MCPToolControllerE2ETest` run for the 5 named failures: all passed
 
 I also appended today’s daily memory; monthly backfill was already up to date.

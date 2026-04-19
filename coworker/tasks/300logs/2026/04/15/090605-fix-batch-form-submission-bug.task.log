@@ -1,0 +1,68 @@
+Task: fix-batch-form-submission-bug
+Description: Task from fix-batch-form-submission-bug.md
+Original File: fix-batch-form-submission-bug.md
+Started: 2026-04-15 09:06:32
+Prompt:
+Finish the task described in file: /home/vincent/workspace/Browser4/coworker/tasks/2working/fix-batch-form-submission-bug.md.
+Do not move **this** task file, just execute the task based on its content, the system will move it after you finished the task.
+
+*** MEMORY UPDATE INSTRUCTIONS ***
+You have a memory system to help you learn and improve.
+Your memory files are located in: /home/vincent/workspace/Browser4/coworker/tasks/300logs
+
+After completing the task, you MUST update your daily memory file: /home/vincent/workspace/Browser4/coworker/tasks/300logs/2026/04/15/MEMORY.20260415.md
+1. Append a summary of this task, its outcome, and any lessons learned to /home/vincent/workspace/Browser4/coworker/tasks/300logs/2026/04/15/MEMORY.20260415.md.
+2. Check if the Monthly Memory file (/home/vincent/workspace/Browser4/coworker/tasks/300logs/2026/04/MEMORY.202604.md) has been updated with the previous day's summary. If not, summarize all daily memories from this month (excluding today) into the Monthly Memory.
+3. Ensure you do not overwrite existing content, always append.
+
+
+[Monthly Memory (2026-04)]:
+# Monthly Memory – 2026-04
+
+## Summary of daily memories (excluding 2026-04-15)
+
+### 2026-04-14
+
+**Task 1: Split Long E2E Tests in e2e.rs**
+Split 6 slow e2e scenario functions (>30s each) into 12 smaller ones. Splits: `test_session_lifecycle` → open+list / close; `test_navigation_and_storage` → navigation / storage; `test_interaction_commands` → typing / keyboard+pointer; `test_form_controls_and_exports` → controls / exports; `test_mouse_and_dialog` → mouse / dialog; `test_tab_commands` → list+new / select+close. `SCENARIOS` const grew from 9 to 15 entries. First-half scenarios leave sessions open; second-halves continue them with `restart_browser4: false`.
+
+**Task 2: Fix E2E Kill Warnings and test_storage Failure**
+- Added `.stderr(Stdio::null())` to `force_stop`'s `kill -KILL` call so "No such process" noise is suppressed.
+- Removed per-scenario `kill_all_browsers()` from the main loop; it now only fires inside `run_named_scenario` when `restart_browser4 == true`, preventing Chrome from being killed between linked split-tests that share an open session.
+
+---
+
+*This file will be updated with summaries from each day as the month progresses.*
+
+
+[Daily Memory (2026-04-15)]:
+# Daily Memory – 2026-04-15
+
+## Task: fix-e2e-test-cleanup-bugs
+
+### Summary
+Fixed two bugs identified in the browser4-cli e2e test output.
+
+**Bug 1 – "kill: No such process" spam in test output**
+- **Root cause**: `is_process_running` in `src/managed_processes.rs` used `kill -0 <pid>` without suppressing stderr. When the process had already exited, the shell printed "kill: (PID): No such process" to stderr, which appeared in the test runner output.
+- **Fix**: Added `.stderr(std::process::Stdio::null())` to the `kill -0` command in `is_process_running` (Unix path only).
+- **File changed**: `sdks/browser4-cli/src/managed_processes.rs`
+
+**Bug 2 – `test_e2e_batch_error_handling` panic (timeout waiting for interactive state)**
+- **Root cause**: The `type` command simulates keyboard events and *appends* to existing input field content rather than replacing it. The test expected `typeValue == "bail test"` but the actual value was `"before errorbail test"` because a prior sub-test had typed `"before error"` into the same field.
+- **Fix**: Changed `wait_for_state` predicates in `test_batch_error_handling` to use `.ends_with(expected_text)` instead of exact equality for `typeValue` checks. This correctly validates that the `type` command ran and appended the expected text.
+- **File changed**: `sdks/browser4-cli/tests/e2e.rs` (two predicates updated, plus comments)
+
+### Outcome
+Both changes compile cleanly. Unit tests for `managed_processes` pass. E2e tests require a running Browser4 instance and were not fully run, but the test file compiles successfully.
+
+### Lessons Learned
+- The `type` command in Browser4 CLI simulates keystrokes and appends to existing input; use `ends_with` (or clear first) when checking `typeValue` across multiple sub-tests on the same page.
+- On Unix, `kill -0 <pid>` always emits "No such process" to stderr for dead PIDs; always redirect stderr to null when using it purely for existence checks.
+
+
+---
+Copilot Execution Output:
+
+Copilot Exit Code: 0
+Copilot Log: /home/vincent/workspace/Browser4/coworker/tasks/300logs/2026/04/15/090605-fix-batch-form-submission-bug.copilot.log

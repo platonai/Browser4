@@ -4,7 +4,7 @@
 **Outcome**: Completed.
 **Summary**:
 - Reimplemented MockMCPServer using the official io.modelcontextprotocol Kotlin SDK (v0.8.1).
-- Updated pulsar-tests-common dependencies to include SDK and serialization libraries.
+- Updated browser4-tests-common dependencies to include SDK and serialization libraries.
 - Refactored callTool endpoint to accept Map<String, Any> instead of raw JSON string, allowing Spring to handle deserialization.
 - Updated unit tests (TestMCPServerMock, TestMCPServerForPluginMock) to pass Maps and verify SDK behavior.
 - Updated E2E tests (MCPToolExecutorE2ETest) to handle ObjectNode to Map conversion correctly for requests, ensuring compatibility with the new server implementation.

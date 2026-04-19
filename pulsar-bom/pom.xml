@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="UTF-8"?>
+﻿<?xml version="1.0" encoding="UTF-8"?>
 <!-- Licensed to the Apache Software Foundation (ASF) under one or more contributor
 	license agreements. See the NOTICE file distributed with this work for additional
 	information regarding copyright ownership. The ASF licenses this file to
@@ -15,8 +15,8 @@
 
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>pulsar-bom</artifactId>
-    <name>Pulsar BOM</name>
-    <version>4.6.0-SNAPSHOT</version>
+    <name>Browser4 BOM</name>
+    <version>4.7.0-SNAPSHOT</version>
 
     <packaging>pom</packaging>
 
@@ -76,216 +76,54 @@
         </pluginRepository>
     </pluginRepositories>
 
-    <profiles>
-        <profile>
-            <id>deploy</id>
-
-            <build>
-                <defaultGoal>deploy</defaultGoal>
-
-                <plugins>
-
-                    <!-- GPG signing -->
-                    <plugin>
-                        <groupId>org.apache.maven.plugins</groupId>
-                        <artifactId>maven-gpg-plugin</artifactId>
-                        <version>${maven-gpg-plugin.version}</version>
-                        <configuration>
-                            <gpgArguments>
-                                <arg>--pinentry-mode</arg>
-                                <arg>loopback</arg>
-                            </gpgArguments>
-                        </configuration>
-                        <executions>
-                            <execution>
-                                <id>sign-artifacts</id>
-                                <phase>verify</phase>
-                                <goals>
-                                    <goal>sign</goal>
-                                </goals>
-                            </execution>
-                        </executions>
-                    </plugin>
-
-                    <!-- Calculate checksums -->
-                    <plugin>
-                        <groupId>net.nicoulaj.maven.plugins</groupId>
-                        <artifactId>checksum-maven-plugin</artifactId>
-                        <version>${checksum-maven-plugin.version}</version>
-                        <executions>
-                            <execution>
-                                <id>source-release-checksum</id>
-                                <goals>
-                                    <goal>files</goal>
-                                </goals>
-                            </execution>
-                        </executions>
-                        <configuration>
-                            <algorithms>
-                                <algorithm>SHA-512</algorithm>
-                                <algorithm>SHA-256</algorithm>
-                            </algorithms>
-                            <csvSummary>false</csvSummary>
-                            <fileSets>
-                                <fileSet>
-                                    <directory>${project.build.directory}</directory>
-                                    <includes>
-                                        <include>${project.artifactId}-${project.version}-sources.jar</include>
-                                        <include>${project.artifactId}-${project.version}-javadoc.jar</include>
-                                        <include>${project.artifactId}-${project.version}.jar</include>
-                                    </includes>
-                                </fileSet>
-                            </fileSets>
-                            <failIfNoFiles>false</failIfNoFiles>
-                        </configuration>
-                    </plugin>
-
-                    <plugin>
-                        <groupId>org.sonatype.central</groupId>
-                        <artifactId>central-publishing-maven-plugin</artifactId>
-                        <version>${central-publishing-maven-plugin.version}</version>
-                        <extensions>true</extensions>
-                        <configuration>
-                            <publishingServerId>central</publishingServerId>
-                        </configuration>
-                    </plugin>
-                </plugins>
-            </build>
-
-        </profile>
-    </profiles>
-
     <dependencyManagement>
         <dependencies>
-            <!-- Internal Dependencies -->
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-common</artifactId>
-                <version>${project.version}</version>
+                <version>${pulsar.base.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-persist</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-skeleton</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-resources</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-resources</artifactId>
-                <type>test-jar</type>
-                <classifier>tests</classifier>
-                <scope>test</scope>
-                <version>${project.version}</version>
+                <version>${pulsar.base.version}</version>
             </dependency>
 
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-plugins</artifactId>
-                <type>pom</type>
-                <version>${project.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-protocol</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-protocol-playwright</artifactId>
-                <version>${project.version}</version>
-            </dependency>
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-parse</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-browser</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-llm</artifactId>
-                <version>${project.version}</version>
+                <version>${pulsar.base.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-dom</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-beans</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-boot</artifactId>
-                <version>${project.version}</version>
+                <version>${pulsar.base.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-ql-common</artifactId>
-                <version>${project.version}</version>
+                <version>${pulsar.base.version}</version>
             </dependency>
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-ql-common</artifactId>
                 <classifier>shaded</classifier>
-                <version>${project.version}</version>
+                <version>${pulsar.base.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-ql</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-agentic</artifactId>
-                <version>${project.version}</version>
+                <version>${pulsar.base.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-rest</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-tests-common</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-it-tests</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-it-tests</artifactId>
-                <version>${project.version}</version>
-                <type>test-jar</type>
-                <classifier>tests</classifier>
-                <scope>test</scope>
+                <artifactId>pulsar-llm</artifactId>
+                <version>${pulsar.base.version}</version>
             </dependency>
 
             <!-- Kotlin -->
@@ -322,6 +160,7 @@
         <kotlin.compiler.jvmTarget>${javaVersion}</kotlin.compiler.jvmTarget>
 
         <spring-boot.version>4.0.1</spring-boot.version>
+        <pulsar.base.version>4.7.0</pulsar.base.version>
 
         <!-- keep consistent with io.modelcontextprotocol:kotlin-sdk-core-jvm:jar:0.8.1 -->
         <ktor.version>3.2.3</ktor.version>

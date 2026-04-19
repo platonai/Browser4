@@ -1,12 +1,8 @@
 #!/usr/bin/env pwsh
 
-$browser4JarPattern = '.+Browser4.jar.*'
+. (Join-Path $PSScriptRoot 'browser4-process-common.ps1')
 
-$procs = Get-CimInstance Win32_Process | Where-Object {
-    $_.Name -match '^(java|javaw)\.exe$' -and
-    -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and
-    $_.CommandLine -match $browser4JarPattern
-};
+$procs = Get-Browser4JavaProcesses
 
 if (-not $procs)
 {

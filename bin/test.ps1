@@ -29,28 +29,27 @@ function Print-Usage {
     Write-Host "  fast        Run fast unit tests only"
     Write-Host "  it          Run integration tests"
     Write-Host "  e2e         Run end-to-end tests"
-    Write-Host "  browser4-cli Run Rust Browser4 CLI tests from sdks\browser4-cli"
-    Write-Host "  core        Run core module supplementary tests"
+    Write-Host "  cli         Run Rust Browser4 CLI tests from sdks\browser4-cli"
     Write-Host "  rest        Run REST module tests"
     Write-Host "  skills      Run skills-focused agentic tests"
     Write-Host "  mcp         Run MCP-focused agentic tests"
-    Write-Host "  browser4    Run all Browser4 main tests (fast, core, rest, it, e2e)"
+    Write-Host "  browser4    Run all Browser4 main tests (fast, rest, it, e2e)"
     Write-Host ""
     Write-Host "Examples:"
     Write-Host "  test.ps1 fast                       # Run fast unit tests"
     Write-Host "  test.ps1 it                         # Run integration tests"
     Write-Host "  test.ps1 e2e                        # Run end-to-end tests"
-    Write-Host "  test.ps1 browser4-cli               # Run Browser4 CLI tests"
-    Write-Host "  test.ps1 browser4-cli -- --nocapture # Pass extra cargo test args"
+    Write-Host "  test.ps1 cli                        # Run Browser4 CLI tests"
+    Write-Host "  test.ps1 cli -- --nocapture         # Pass extra cargo test args"
     Write-Host "  test.ps1 skills                     # Run skills-focused agentic tests"
     Write-Host "  test.ps1 mcp                        # Run MCP-focused agentic tests"
     Write-Host "  test.ps1 browser4                   # Run all Browser4 main tests"
-    Write-Host '  test.ps1 it -pl pulsar-core         # Pass additional Maven args through'
+    Write-Host '  test.ps1 it -pl browser4-core       # Pass additional Maven args through'
     exit 1
 }
 
 function Exit-UnknownTestType([string]$testType) {
-    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, browser4-cli, core, rest, skills, mcp, browser4."
+    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, rest, skills, mcp, browser4."
     exit 1
 }
 
@@ -70,43 +69,18 @@ function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
     $hasFast = $testTypes -contains 'fast'
     $hasIT = $testTypes -contains 'it'
     $hasE2E = $testTypes -contains 'e2e'
-    $hasCore = $testTypes -contains 'core'
     $hasRest = $testTypes -contains 'rest'
     $hasSkills = $testTypes -contains 'skills'
     $hasMcp = $testTypes -contains 'mcp'
 
     if ($hasIT) { $mvnTestArgs += '-DrunITs=true' }
     if ($hasE2E) { $mvnTestArgs += '-DrunE2ETests=true' }
-    if ($hasCore) {
-        $mvnTestArgs += '-DrunCoreTests=true'
-        $mvnTestArgs += '-Ppulsar-core-tests'
-    }
 
     $modules = @()
-    if ($hasCore) {
-        $modules += @(
-            'pulsar-core/pulsar-resources',
-            'pulsar-core/pulsar-common',
-            'pulsar-core/pulsar-dom',
-            'pulsar-core/pulsar-persist',
-            'pulsar-core/pulsar-plugins',
-            'pulsar-core/pulsar-third',
-            'pulsar-core/pulsar-skeleton',
-            'pulsar-core/pulsar-browser',
-            'pulsar-core/pulsar-spring-support',
-            'pulsar-core/pulsar-ql-common',
-            'pulsar-core/pulsar-ql',
-            'pulsar-core/pulsar-core-tests',
-            'pulsar-core/pulsar-core-tests/pulsar-common-tests',
-            'pulsar-core/pulsar-core-tests/pulsar-dom-tests',
-            'pulsar-core/pulsar-core-tests/pulsar-ql-tests'
-        )
-    }
-
     if ($hasSkills -or $hasMcp) {
-        $modules += 'pulsar-agentic'
+        $modules += 'browser4-agentic'
 
-        if (-not ($hasFast -or $hasIT -or $hasE2E -or $hasCore -or $hasRest)) {
+        if (-not ($hasFast -or $hasIT -or $hasE2E -or $hasRest)) {
             $patterns = @()
             if ($hasSkills) { $patterns += '*Skill*' }
             if ($hasMcp) { $patterns += '*MCP*' }
@@ -204,7 +178,7 @@ function Invoke-Browser4CliTests([string[]]$additionalArgs) {
     }
 }
 
-$knownTestTypes = @('fast', 'it', 'e2e', 'browser4-cli', 'core', 'rest', 'skills', 'mcp', 'browser4')
+$knownTestTypes = @('fast', 'it', 'e2e', 'cli', 'browser4-cli', 'rest', 'skills', 'mcp', 'browser4')
 $testTypes = @()
 $additionalArgs = @()
 $parsingTestTypes = $true
@@ -240,11 +214,11 @@ $cliTests = @()
 
 foreach ($type in $testTypes) {
     if ($type -eq 'browser4') {
-        $mavenTests += 'fast', 'core', 'it', 'e2e', 'rest'
+        $mavenTests += 'fast', 'it', 'e2e', 'rest'
         continue
     }
 
-    if ($type -eq 'browser4-cli') {
+    if ($type -in @('cli', 'browser4-cli')) {
         $cliTests += $type
         continue
     }
@@ -259,7 +233,7 @@ if ($mavenTests.Count -gt 0) {
     Invoke-MavenTests -testTypes $mavenTests -additionalMvnArgs $additionalArgs
 }
 
-if ($cliTests -contains 'browser4-cli') {
+if (($cliTests | Where-Object { $_ -in @('cli', 'browser4-cli') }).Count -gt 0) {
     Invoke-Browser4CliTests -additionalArgs $additionalArgs
 }
 

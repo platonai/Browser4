@@ -115,6 +115,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "headed", description: "Run browser in headed mode", is_bool: true },
                 OptionDef { name: "persistent", description: "Use persistent browser profile", is_bool: true },
                 OptionDef { name: "profile", description: "Path to browser profile directory", is_bool: false },
+                OptionDef { name: "profile-mode", description: "Browser profile mode (temporary, default, system_default, prototype)", is_bool: false },
             ],
             tool_name_fn: |args| {
                 if args.get("url").and_then(|v| v.as_str()).map(|u| !u.is_empty()).unwrap_or(false) {
@@ -135,6 +136,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(pf) = get_opt_str(args, "profile") {
                     params["profilePath"] = json!(pf);
                 }
+                if let Some(pm) = get_opt_str(args, "profile-mode") {
+                    params["profileMode"] = json!(pm);
+                }
                 params
             },
         },
@@ -145,6 +149,31 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             args: &[],
             options: &[],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "batch",
+            description: "Execute multiple commands in one invocation",
+            category: Category::Core,
+            hidden: false,
+            args: &[ArgDef {
+                name: "command...",
+                description: "Quoted command strings to execute sequentially",
+                optional: true,
+            }],
+            options: &[
+                OptionDef {
+                    name: "bail",
+                    description: "Stop on the first command failure",
+                    is_bool: true,
+                },
+                OptionDef {
+                    name: "json",
+                    description: "Read commands as JSON from stdin",
+                    is_bool: true,
+                },
+            ],
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
@@ -748,7 +777,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             args: &[ArgDef { name: "task", description: "Natural language task for the agent to execute", optional: false }],
             options: &[],
-            tool_name_fn: |_| "__agent_run__".to_string(),
+            tool_name_fn: |_| "command_run".to_string(),
             tool_params_fn: |args| {
                 json!({ "task": get_str(args, "task").unwrap_or_default() })
             },
@@ -760,7 +789,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             args: &[ArgDef { name: "id", description: "Task ID returned by agent-run", optional: false }],
             options: &[],
-            tool_name_fn: |_| "__agent_status__".to_string(),
+            tool_name_fn: |_| "command_status".to_string(),
             tool_params_fn: |args| {
                 json!({ "id": get_str(args, "id").unwrap_or_default() })
             },
@@ -772,7 +801,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             args: &[ArgDef { name: "id", description: "Task ID returned by agent-run", optional: false }],
             options: &[],
-            tool_name_fn: |_| "__agent_result__".to_string(),
+            tool_name_fn: |_| "command_result".to_string(),
             tool_params_fn: |args| {
                 json!({ "id": get_str(args, "id").unwrap_or_default() })
             },
@@ -790,7 +819,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "max-browser-contexts", description: "Number of isolated browser environments (default: 2)", is_bool: false },
                 OptionDef { name: "display-mode", description: "Display mode: GUI, HEADLESS, SUPERVISED", is_bool: false },
             ],
-            tool_name_fn: |_| "__co_create__".to_string(),
+            tool_name_fn: |_| "open_session".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
                 if let Some(v) = get_opt_str(args, "profile-mode") { p["profileMode"] = json!(v); }
@@ -814,7 +843,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "parse", description: "Parse page immediately after fetching", is_bool: true },
                 OptionDef { name: "store-content", description: "Persist page content to storage", is_bool: true },
             ],
-            tool_name_fn: |_| "__co_submit__".to_string(),
+            tool_name_fn: |_| "command_run".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
                 if let Some(v) = get_opt_str(args, "url") { p["url"] = json!(v); }
@@ -841,7 +870,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "expires", description: "Cache expiration duration (e.g. 1d, 1h)", is_bool: false },
                 OptionDef { name: "refresh", description: "Force a fresh fetch, ignoring cache", is_bool: true },
             ],
-            tool_name_fn: |_| "__co_scrape__".to_string(),
+            tool_name_fn: |_| "command_run".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({ "url": get_str(args, "url").unwrap_or_default() });
                 if let Some(v) = get_opt_str(args, "selector") { p["selector"] = json!(v); }
@@ -860,7 +889,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             args: &[ArgDef { name: "id", description: "Task ID returned by co submit or co scrape", optional: false }],
             options: &[],
-            tool_name_fn: |_| "__co_status__".to_string(),
+            tool_name_fn: |_| "command_status".to_string(),
             tool_params_fn: |args| {
                 json!({ "id": get_str(args, "id").unwrap_or_default() })
             },
@@ -872,7 +901,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             args: &[ArgDef { name: "id", description: "Task ID returned by co submit or co scrape", optional: false }],
             options: &[],
-            tool_name_fn: |_| "__co_result__".to_string(),
+            tool_name_fn: |_| "command_result".to_string(),
             tool_params_fn: |args| {
                 json!({ "id": get_str(args, "id").unwrap_or_default() })
             },
@@ -911,6 +940,7 @@ mod tests {
         for expected in &[
             "open",
             "close",
+            "batch",
             "goto",
             "click",
             "type",
@@ -947,6 +977,15 @@ mod tests {
         let cmd = map.get("open").unwrap();
         let args = HashMap::new();
         assert_eq!((cmd.tool_name_fn)(&args), "browser_snapshot");
+    }
+
+    #[test]
+    fn test_batch_command_is_help_only() {
+        let map = commands_map();
+        let cmd = map.get("batch").unwrap();
+        let args = HashMap::new();
+        assert!((cmd.tool_name_fn)(&args).is_empty());
+        assert_eq!((cmd.tool_params_fn)(&args), json!({}));
     }
 
     #[test]
@@ -1000,7 +1039,7 @@ mod tests {
         let cmd = map.get("agent-run").unwrap();
         let mut args = HashMap::new();
         args.insert("task".to_string(), json!("go to amazon.com"));
-        assert_eq!((cmd.tool_name_fn)(&args), "__agent_run__");
+        assert_eq!((cmd.tool_name_fn)(&args), "command_run");
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["task"], "go to amazon.com");
     }
@@ -1011,7 +1050,7 @@ mod tests {
         let cmd = map.get("agent-status").unwrap();
         let mut args = HashMap::new();
         args.insert("id".to_string(), json!("abc-123"));
-        assert_eq!((cmd.tool_name_fn)(&args), "__agent_status__");
+        assert_eq!((cmd.tool_name_fn)(&args), "command_status");
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["id"], "abc-123");
     }
@@ -1022,7 +1061,7 @@ mod tests {
         let cmd = map.get("agent-result").unwrap();
         let mut args = HashMap::new();
         args.insert("id".to_string(), json!("abc-123"));
-        assert_eq!((cmd.tool_name_fn)(&args), "__agent_result__");
+        assert_eq!((cmd.tool_name_fn)(&args), "command_result");
     }
 
     #[test]
@@ -1030,7 +1069,19 @@ mod tests {
         let map = commands_map();
         let cmd = map.get("co-create").unwrap();
         let args = HashMap::new();
-        assert_eq!((cmd.tool_name_fn)(&args), "__co_create__");
+        assert_eq!((cmd.tool_name_fn)(&args), "open_session");
+    }
+
+    #[test]
+    fn test_open_params_with_profile_mode() {
+        let map = commands_map();
+        let cmd = map.get("open").unwrap();
+        let mut args = HashMap::new();
+        args.insert("profile-mode".to_string(), json!("TEMPORARY"));
+
+        let params = (cmd.tool_params_fn)(&args);
+
+        assert_eq!(params["profileMode"], "TEMPORARY");
     }
 
     #[test]
@@ -1059,7 +1110,7 @@ mod tests {
             json!("https://www.amazon.com/dp/B08PP5MSVB"),
         );
         args.insert("deadline".to_string(), json!("2026-02-24T23:59:59Z"));
-        assert_eq!((cmd.tool_name_fn)(&args), "__co_submit__");
+        assert_eq!((cmd.tool_name_fn)(&args), "command_run");
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["url"], "https://www.amazon.com/dp/B08PP5MSVB");
         assert_eq!(params["deadline"], "2026-02-24T23:59:59Z");
@@ -1104,7 +1155,7 @@ mod tests {
         args.insert("selector".to_string(), json!(".product-title"));
         args.insert("attribute".to_string(), json!("textContent"));
         args.insert("output".to_string(), json!("title.txt"));
-        assert_eq!((cmd.tool_name_fn)(&args), "__co_scrape__");
+        assert_eq!((cmd.tool_name_fn)(&args), "command_run");
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["url"], "https://www.amazon.com/dp/B08PP5MSVB");
         assert_eq!(params["selector"], ".product-title");
@@ -1118,7 +1169,7 @@ mod tests {
         let cmd = map.get("co-status").unwrap();
         let mut args = HashMap::new();
         args.insert("id".to_string(), json!("abc-123"));
-        assert_eq!((cmd.tool_name_fn)(&args), "__co_status__");
+        assert_eq!((cmd.tool_name_fn)(&args), "command_status");
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["id"], "abc-123");
     }
@@ -1129,7 +1180,7 @@ mod tests {
         let cmd = map.get("co-result").unwrap();
         let mut args = HashMap::new();
         args.insert("id".to_string(), json!("abc-123"));
-        assert_eq!((cmd.tool_name_fn)(&args), "__co_result__");
+        assert_eq!((cmd.tool_name_fn)(&args), "command_result");
     }
 
     #[test]

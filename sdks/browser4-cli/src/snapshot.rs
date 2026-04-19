@@ -5,8 +5,13 @@ use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 
-/// Default directory for snapshot and screenshot outputs.
-pub const SNAPSHOT_DIR: &str = ".browser4-cli/snapshot";
+/// Default path segments for snapshot and screenshot outputs.
+pub const SNAPSHOT_DIR: [&str; 2] = [".browser4-cli", "snapshot"];
+
+/// Build the default snapshot output directory using OS-native separators.
+pub fn snapshot_dir() -> PathBuf {
+    PathBuf::from(SNAPSHOT_DIR[0]).join(SNAPSHOT_DIR[1])
+}
 
 /// Ensure a directory exists, creating it recursively if needed.
 pub fn ensure_dir(dir: &Path) -> std::io::Result<()> {
@@ -26,7 +31,7 @@ pub fn resolve_output_path(filename: Option<&str>, prefix: &str, ext: &str) -> P
         .map(|f| f.to_string())
         .unwrap_or_else(|| timestamped_filename(prefix, ext));
 
-    let out = PathBuf::from(SNAPSHOT_DIR).join(&name);
+    let out = snapshot_dir().join(&name);
     let canonical = std::env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
         .join(&out);
@@ -55,6 +60,18 @@ mod tests {
         let name = timestamped_filename("page", "yml");
         assert!(name.starts_with("page-"));
         assert!(name.ends_with(".yml"));
+    }
+
+    #[test]
+    fn test_snapshot_dir_uses_os_native_segments() {
+        assert_eq!(snapshot_dir(), Path::new(".browser4-cli").join("snapshot"));
+    }
+
+    #[test]
+    fn test_resolve_output_path_uses_snapshot_dir() {
+        let path = resolve_output_path(Some("snap.yml"), "snapshot", "yml");
+
+        assert!(path.ends_with(snapshot_dir().join("snap.yml")));
     }
 
     #[test]

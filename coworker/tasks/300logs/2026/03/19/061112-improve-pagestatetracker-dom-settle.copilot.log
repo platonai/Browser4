@@ -1,7 +1,7 @@
 ● Read coworker\tasks\2working\improve-pagestatetracker-dom-settle.md
   └ 7 lines read
 
-● Read pulsar-agentic\src\main\kotlin\ai\platon\pulsar\agentic\inference\detail\PageStateTracker.kt
+● Read browser4-agentic\src\main\kotlin\ai\platon\pulsar\agentic\inference\detail\PageStateTracker.kt
   └ 210 lines read
 
 ● Find dom_settle.js file
@@ -11,7 +11,7 @@
 ● Read pulsar-core\pulsar-browser\src\main\resources\js\dom_settle.js
   └ 43 lines read
 
-✗ Read pulsar-agentic\src\main\kotlin\ai\platon\pulsar\agentic\agents\AgentConfig.kt
+✗ Read browser4-agentic\src\main\kotlin\ai\platon\pulsar\agentic\agents\AgentConfig.kt
   Path does not exist
 
 ● Find AgentConfig.kt file
@@ -20,7 +20,7 @@
 
 ● List files in agentic agents directory
   $ Get-ChildItem -Path
-  D:\workspace\Browser4\Browser4-4.6\pulsar-agentic\src\main\kotlin\ai\platon\pulsar\agentic\agents\
+  D:\workspace\Browser4\Browser4-4.6\browser4-agentic\src\main\kotlin\ai\platon\pulsar\agentic\agents\
   └ 5 lines...
 
 ● Grep "class AgentConfig"
@@ -40,32 +40,32 @@
   r\src\main\resources\js\dom_settle.js" -Force
   └ 1 line...
 
-● Read pulsar-agentic\src\main\kotlin\ai\platon\pulsar\agentic\inference\detail\PageStateTracker.kt
+● Read browser4-agentic\src\main\kotlin\ai\platon\pulsar\agentic\inference\detail\PageStateTracker.kt
   └ 210 lines read
 
-● Edit pulsar-agentic\src\main\kotlin\ai\platon\pulsar\agentic\inference\detail\PageStateTracker.kt
+● Edit browser4-agentic\src\main\kotlin\ai\platon\pulsar\agentic\inference\detail\PageStateTracker.kt
   (+1)
 
-● Edit pulsar-agentic\src\main\kotlin\ai\platon\pulsar\agentic\inference\detail\PageStateTracker.kt
+● Edit browser4-agentic\src\main\kotlin\ai\platon\pulsar\agentic\inference\detail\PageStateTracker.kt
   (+1)
 
-● Edit pulsar-agentic\src\main\kotlin\ai\platon\pulsar\agentic\inference\detail\PageStateTracker.kt
+● Edit browser4-agentic\src\main\kotlin\ai\platon\pulsar\agentic\inference\detail\PageStateTracker.kt
   (+2 -1)
 
-● Edit pulsar-agentic\src\main\kotlin\ai\platon\pulsar\agentic\inference\detail\PageStateTracker.kt
+● Edit browser4-agentic\src\main\kotlin\ai\platon\pulsar\agentic\inference\detail\PageStateTracker.kt
   (+1 -1)
 
 ● Find PageStateTracker tests
-  $ Get-ChildItem -Path D:\workspace\Browser4\Browser4-4.6\pulsar-agentic\src\test -Recurse -Filter
+  $ Get-ChildItem -Path D:\workspace\Browser4\Browser4-4.6\browser4-agentic\src\test -Recurse -Filter
   "*PageStateTracker*"
   └ 1 line...
 
 ● Grep "waitForDOMSettle"
   └ 3 files found
 
-● List tests in pulsar-agentic
+● List tests in browser4-agentic
   $ Get-ChildItem -Path
-  D:\workspace\Browser4\Browser4-4.6\pulsar-agentic\src\test\kotlin\ai\platon\pulsar\agentic\
+  D:\workspace\Browser4\Browser4-4.6\browser4-agentic\src\test\kotlin\ai\platon\pulsar\agentic\
   -Recurse
   └ 146 lines...
 

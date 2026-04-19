@@ -93,6 +93,27 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         }
     }
 
+    if cmd.name == "batch" {
+        lines.push(String::new());
+        lines.push("Notes:".to_string());
+        lines.push("  - Quote each subcommand so it is parsed as one batch item.".to_string());
+        lines.push("  - Use --bail to stop execution on the first failed subcommand.".to_string());
+        lines.push("  - Use --json to read command arrays from stdin JSON payload.".to_string());
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push(
+            "  browser4-cli batch \"open https://playwright.dev\" \"snapshot\"".to_string(),
+        );
+        lines.push(
+            "  browser4-cli batch --bail \"open https://playwright.dev\" \"click e1\" \"screenshot\""
+                .to_string(),
+        );
+        lines.push(
+            "  echo '[ [\"open\", \"https://playwright.dev\"], [\"snapshot\"] ]' | browser4-cli batch --json"
+                .to_string(),
+        );
+    }
+
     lines.join("\n")
 }
 
@@ -132,6 +153,7 @@ mod tests {
     fn test_generate_help_contains_commands() {
         let help = generate_help();
         assert!(help.contains("goto"));
+        assert!(help.contains("batch"));
         assert!(help.contains("click"));
         assert!(help.contains("snapshot"));
         assert!(help.contains("Core:"));
@@ -152,6 +174,20 @@ mod tests {
         let help = generate_command_help(goto);
         assert!(help.contains("browser4-cli goto <url>"));
         assert!(help.contains("Navigate to a URL"));
+    }
+
+    #[test]
+    fn test_generate_command_help_batch() {
+        let cmds = all_commands();
+        let batch = cmds.iter().find(|c| c.name == "batch").unwrap();
+        let help = generate_command_help(batch);
+        assert!(help.contains("browser4-cli batch [command...]"));
+        assert!(help.contains("Execute multiple commands in one invocation"));
+        assert!(help.contains("--bail"));
+        assert!(help.contains("--json"));
+        assert!(help.contains("Quote each subcommand"));
+        assert!(help.contains("browser4-cli batch \"open https://playwright.dev\" \"snapshot\""));
+        assert!(help.contains("batch --json"));
     }
 
     #[test]

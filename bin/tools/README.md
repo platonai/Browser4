@@ -37,7 +37,7 @@ Windows:
 .\bin\tools\check-dependencies.ps1 -Full
 ```
 
-**Output:** 
+**Output:**
 Reports are generated in `target/dependency-reports/`:
 - `dependency-updates.txt`: Available dependency updates
 - `plugin-updates.txt`: Available plugin updates
@@ -248,7 +248,7 @@ stage('Dependency Check') {
 ### Maven Versions Plugin Not Working
 
 **Issue:** Commands fail with plugin not found
-**Solution:** 
+**Solution:**
 ```bash
 # Add plugin to pulsar-parent/pom.xml
 # Or use full coordinates:
@@ -292,7 +292,7 @@ Then reference in plugin config:
 # 1. Identify conflict
 ./mvnw dependency:tree -Dverbose | grep "omitted for conflict"
 
-# 2. Force version in pulsar-dependencies/pom.xml:
+# 2. Force version in browser4-dependencies/pom.xml:
 <dependencyManagement>
   <dependencies>
     <dependency>
@@ -343,6 +343,6 @@ To add new tools or improve existing ones:
 
 ---
 
-**Maintained by:** Browser4 Team  
-**Last Updated:** 2026-01-14  
+**Maintained by:** Browser4 Team
+**Last Updated:** 2026-01-14
 **Questions?** Open an issue or contact the maintainers

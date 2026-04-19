@@ -20,31 +20,39 @@ mod managed_processes;
 mod snapshot;
 mod state;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::io::Read;
+use std::path::PathBuf;
 
 use base64::Engine;
 use reqwest::Client;
+use serde::Deserialize;
 use serde_json::{json, Value};
 
-use args::{build_command_args, parse_global_flags, parse_raw_args};
+use args::{
+    build_command_args, parse_batch_args, parse_batch_json_commands, parse_command_string,
+    parse_global_flags, parse_raw_args,
+};
 use commands::commands_map;
 use daemon::{ensure_server_running, resolve_base_url};
 use help::{generate_command_help, generate_help};
 use http::{
     call_tool, get_command_result, get_command_status, is_stale_session_error, make_client,
-    submit_plain_command,
+    submit_batch_commands, submit_plain_command,
 };
 use managed_processes::{
-    kill_all_browsers, read_managed_server_processes, shutdown_managed_server_processes,
-    ShutdownResult,
+    read_managed_server_processes, stop_browser4_server_forcibly,
+    ManagedServerProcess,
+    stop_browser4_server_gracefully, ShutdownResult,
 };
 use snapshot::{resolve_output_path, save_binary, save_snapshot};
 use state::{
-    clear_all_state, clear_state, read_state, resolve_default_state_dir, write_state, CliState,
-    MousePosition,
+    clear_all_state, clear_state, read_state, resolve_default_state_dir, resolve_ref, write_state,
+    CliState, MousePosition,
 };
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+const TEST_TEMPORARY_PROFILE_ENV: &str = "BROWSER4_CLI_TEST_TEMPORARY_PROFILE";
 
 /// Commands that should NOT trigger a post-command snapshot.
 fn no_snapshot_commands() -> HashSet<&'static str> {
@@ -55,6 +63,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "kill-all",
         "list",
         "help",
+        "eval",
         "snapshot",
         "screenshot",
         "pdf",
@@ -188,7 +197,10 @@ async fn create_session(
     session_name: Option<&str>,
     capabilities: Option<Value>,
 ) -> Result<String, String> {
-    let params = capabilities.unwrap_or(json!({}));
+    let params = capabilities
+        .filter(|caps| !caps.as_object().map(|map| map.is_empty()).unwrap_or(false))
+        .map(|caps| json!({ "capabilities": caps }))
+        .unwrap_or_else(|| json!({}));
     let result = call_tool(client, base_url, "open_session", params).await?;
     // The server response may be a JSON object `{"sessionId":"..."}` or a plain
     // string. Try JSON first; fall back to using the raw string as the session ID.
@@ -209,6 +221,56 @@ async fn create_session(
     new_state.last_mouse_position = None;
     write_state(&new_state, None, session_name).map_err(|e| e.to_string())?;
     Ok(session_id)
+}
+
+fn build_open_session_capabilities(tool_params: &Value) -> Value {
+    build_open_session_capabilities_with_test_mode(tool_params, should_use_test_temporary_profile())
+}
+
+fn should_use_test_temporary_profile() -> bool {
+    matches!(
+        std::env::var(TEST_TEMPORARY_PROFILE_ENV).ok().as_deref(),
+        Some("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON")
+    )
+}
+
+fn build_open_session_capabilities_with_test_mode(
+    tool_params: &Value,
+    use_test_temporary_profile: bool,
+) -> Value {
+    let mut caps = json!({});
+
+    if let Some(pm) = tool_params.get("profileMode") {
+        caps["profileMode"] = pm.clone();
+    }
+
+    if let Some(h) = tool_params.get("headed") {
+        caps["headed"] = h.clone();
+    }
+
+    let persistent = tool_params
+        .get("persistent")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    if let Some(p) = tool_params.get("persistent") {
+        caps["persistent"] = p.clone();
+    }
+
+    let has_profile_path = tool_params
+        .get("profilePath")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some();
+    if let Some(pp) = tool_params.get("profilePath") {
+        caps["profilePath"] = pp.clone();
+    }
+
+    if use_test_temporary_profile && !persistent && !has_profile_path {
+        caps["profileMode"] = json!("TEMPORARY");
+    }
+
+    caps
 }
 
 fn invalidate_session(state: &CliState, base_url: &str, session_name: Option<&str>) {
@@ -310,19 +372,7 @@ async fn handle_open(
     let mut state = read_state(None, session_name);
     state.session_name = session_name.map(|s| s.to_string());
 
-    let capabilities = {
-        let mut caps = json!({});
-        if let Some(h) = tool_params.get("headed") {
-            caps["headed"] = h.clone();
-        }
-        if let Some(p) = tool_params.get("persistent") {
-            caps["persistent"] = p.clone();
-        }
-        if let Some(pp) = tool_params.get("profilePath") {
-            caps["profilePath"] = pp.clone();
-        }
-        caps
-    };
+    let capabilities = build_open_session_capabilities(tool_params);
 
     let session_id =
         create_session(client, base_url, &state, session_name, Some(capabilities)).await?;
@@ -349,6 +399,8 @@ async fn handle_close(
     base_url: &str,
     session_name: Option<&str>,
 ) -> Result<(), String> {
+    // `close` is intentionally scoped to one browser session. Global Browser4
+    // server shutdown and PULSAR_CHROME cleanup belong to `close-all`/`kill-all`.
     let state = require_session(session_name)?;
     let session_id = get_session_id(&state)?.to_string();
     // Ignore errors — session might already be closed
@@ -365,62 +417,115 @@ async fn handle_close(
 }
 
 async fn handle_close_all(client: &Client, base_url: &str) -> Result<(), String> {
-    // Collect all known base URLs (current + managed processes)
-    let mut base_urls = std::collections::HashSet::new();
-    base_urls.insert(base_url.to_string());
-    for proc in read_managed_server_processes(None) {
-        base_urls.insert(proc.base_url.trim_end_matches('/').to_string());
-    }
+    let close_summary = close_all_sessions_across_servers(client, base_url).await;
 
-    let mut close_results: Vec<String> = Vec::new();
-    let mut close_errors: Vec<String> = Vec::new();
+    let shutdown_result = stop_browser4_server_gracefully();
+    finalize_global_cleanup("Stopped", &shutdown_result);
 
-    for url in &base_urls {
-        match call_tool(client, url, "close_all_sessions", json!({})).await {
-            Ok(result) => {
-                if url == base_url {
-                    close_results.push(result);
-                } else {
-                    close_results.push(format!("{}: {}", url, result));
-                }
-            }
-            Err(e) => close_errors.push(format!("{}: {}", url, e)),
-        }
-    }
-
-    let shutdown_result = shutdown_managed_server_processes(false, None, 5_000, 250);
-    clear_all_state(None);
-
-    if close_results.is_empty() {
-        println!("No reachable Browser4 servers responded to close-all.");
-    } else {
-        for r in &close_results {
-            println!("{}", r);
-        }
-    }
-    log_shutdown_result("Stopped", &shutdown_result);
-
-    if !close_errors.is_empty() {
-        eprintln!("close-all warnings: {}", close_errors.join(" | "));
-    }
+    log_close_all_summary(&close_summary, "close-all");
     Ok(())
 }
 
 async fn handle_kill_all() -> Result<(), String> {
-    let result = shutdown_managed_server_processes(true, None, 5_000, 250);
-    clear_all_state(None);
-    log_shutdown_result("Killed", &result);
+    let result = stop_browser4_server_forcibly();
+    let shutdown_result = result.shutdown;
+    finalize_global_cleanup("Killed", &shutdown_result);
 
-    let browser_pids = kill_all_browsers();
-    if !browser_pids.is_empty() {
-        let pids: Vec<String> = browser_pids.iter().map(|p| p.to_string()).collect();
+    if !shutdown_result.fallback_killed_server_pids.is_empty() {
+        let pids: Vec<String> = shutdown_result
+            .fallback_killed_server_pids
+            .iter()
+            .map(|p| p.to_string())
+            .collect();
         println!(
-            "Killed found Browser4 Chrome process(es): {}",
+            "Fallback-killed Browser4 backend process(es): {}",
             pids.join(", ")
         );
     }
 
+    let browser_result = result.browser_kill;
+    if !browser_result.killed_pids.is_empty() {
+        let pids: Vec<String> = browser_result
+            .killed_pids
+            .iter()
+            .map(|p| p.to_string())
+            .collect();
+        println!(
+            "Killed found Browser4 browser process(es): {}",
+            pids.join(", ")
+        );
+    }
+
+    if !browser_result.remaining_pids.is_empty() {
+        let pids: Vec<String> = browser_result
+            .remaining_pids
+            .iter()
+            .map(|p| p.to_string())
+            .collect();
+        return Err(format!(
+            "Browser cleanup incomplete. Remaining Browser4 browser process(es): {}",
+            pids.join(", ")
+        ));
+    }
+
     Ok(())
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct CloseAllSummary {
+    results: Vec<String>,
+    errors: Vec<String>,
+}
+
+fn known_server_base_urls(base_url: &str, managed_processes: &[ManagedServerProcess]) -> Vec<String> {
+    let mut base_urls: Vec<String> = managed_processes
+        .iter()
+        .map(|proc| proc.base_url.trim_end_matches('/').to_string())
+        .chain(std::iter::once(base_url.trim_end_matches('/').to_string()))
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    base_urls.sort();
+    base_urls
+}
+
+async fn close_all_sessions_across_servers(client: &Client, base_url: &str) -> CloseAllSummary {
+    let normalized_base_url = base_url.trim_end_matches('/').to_string();
+    let mut summary = CloseAllSummary::default();
+
+    for url in known_server_base_urls(base_url, &read_managed_server_processes(None)) {
+        match call_tool(client, &url, "close_all_sessions", json!({})).await {
+            Ok(result) => {
+                if url == normalized_base_url {
+                    summary.results.push(result);
+                } else {
+                    summary.results.push(format!("{}: {}", url, result));
+                }
+            }
+            Err(error) => summary.errors.push(format!("{}: {}", url, error)),
+        }
+    }
+
+    summary
+}
+
+fn log_close_all_summary(summary: &CloseAllSummary, command_name: &str) {
+    if summary.results.is_empty() {
+        println!("No reachable Browser4 servers responded to {}.", command_name);
+    } else {
+        for result in &summary.results {
+            println!("{}", result);
+        }
+    }
+
+    if !summary.errors.is_empty() {
+        eprintln!("{} warnings: {}", command_name, summary.errors.join(" | "));
+    }
+}
+
+fn finalize_global_cleanup(action: &str, result: &ShutdownResult) {
+    clear_all_state(None);
+    log_shutdown_result(action, result);
 }
 
 fn log_shutdown_result(action: &str, result: &ShutdownResult) {
@@ -1228,13 +1333,8 @@ fn rewrite_co_prefix(args: &[String]) -> Option<Vec<String>> {
     Some(rewritten)
 }
 
-#[tokio::main]
-async fn main() {
-    let raw_args: Vec<String> = std::env::args().skip(1).collect();
-    let global = parse_global_flags(&raw_args);
-
-    // Handle "co <subcommand>" → "co-<subcommand>" prefix rewriting.
-    let (command, effective_global) = if let Some(rewritten) = rewrite_co_prefix(&global.args) {
+fn normalize_command_invocation(global: &args::GlobalFlags) -> (String, args::GlobalFlags) {
+    if let Some(rewritten) = rewrite_co_prefix(&global.args) {
         let cmd = rewritten[0].clone();
         let new_global = args::GlobalFlags {
             session_name: global.session_name.clone(),
@@ -1248,8 +1348,664 @@ async fn main() {
             .first()
             .map(|s| s.to_string())
             .unwrap_or_default();
-        (cmd, global)
+        (cmd, global.clone())
+    }
+}
+
+#[derive(Debug, Clone)]
+struct BatchCommandSpec {
+    display: String,
+    tokens: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+enum PlannedBatchOutput {
+    Text,
+    Snapshot { path: PathBuf },
+    Screenshot { path: PathBuf },
+}
+
+#[derive(Debug, Clone)]
+enum PlannedBatchEntry {
+    Backend {
+        display: String,
+        request_indices: Vec<usize>,
+        outputs: Vec<PlannedBatchOutput>,
+    },
+    LocalFailure {
+        display: String,
+        error: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct CompiledBatchRequest {
+    steps: Vec<Value>,
+    entries: Vec<PlannedBatchEntry>,
+    final_state: CliState,
+    requires_response_session_id: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BatchExecutionResponse {
+    session_id: Option<String>,
+    stopped_on_error: bool,
+    results: Vec<BatchExecutionResult>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BatchExecutionResult {
+    index: usize,
+    ok: bool,
+    text: Option<String>,
+    error: Option<String>,
+    page_url: Option<String>,
+    page_title: Option<String>,
+    snapshot: Option<String>,
+    screenshot: Option<String>,
+}
+
+fn read_batch_stdin() -> Result<String, String> {
+    let mut input = String::new();
+    std::io::stdin()
+        .read_to_string(&mut input)
+        .map_err(|e| format!("Failed to read batch JSON from stdin: {e}"))?;
+
+    if input.trim().is_empty() {
+        return Err("Batch --json mode requires JSON input on stdin.".to_string());
+    }
+
+    Ok(input)
+}
+
+fn format_batch_command(tokens: &[String]) -> String {
+    tokens
+        .iter()
+        .map(|token| {
+            if token.chars().any(char::is_whitespace) {
+                serde_json::to_string(token).unwrap_or_else(|_| token.clone())
+            } else {
+                token.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn normalize_batch_step_args(args: &Value) -> Value {
+    let mut normalized = args.clone();
+    let ref_keys = ["selector", "ref", "startRef", "endRef"];
+    if let Value::Object(map) = &mut normalized {
+        for key in ref_keys {
+            if let Some(Value::String(value)) = map.get(key) {
+                map.insert(key.to_string(), json!(resolve_ref(value)));
+            }
+        }
+    }
+    normalized
+}
+
+fn push_batch_local_failure(
+    entries: &mut Vec<PlannedBatchEntry>,
+    spec: &BatchCommandSpec,
+    error: String,
+    bail: bool,
+) -> bool {
+    entries.push(PlannedBatchEntry::LocalFailure {
+        display: spec.display.clone(),
+        error,
+    });
+    bail
+}
+
+fn compile_batch_request(
+    commands: &[BatchCommandSpec],
+    bail: bool,
+    base_url: &str,
+    session_name: Option<&str>,
+) -> Result<CompiledBatchRequest, String> {
+    let mut final_state = read_state(None, session_name);
+    final_state.base_url = base_url.to_string();
+
+    let mut active_selector = final_state.active_selector.clone();
+    let mut last_mouse_position = final_state.last_mouse_position.clone();
+    let mut requires_response_session_id = false;
+    let mut steps: Vec<Value> = Vec::new();
+    let mut entries: Vec<PlannedBatchEntry> = Vec::new();
+    let command_map = commands_map();
+
+    for spec in commands {
+        let nested_global = parse_global_flags(&spec.tokens);
+        if nested_global.server_url.is_some() {
+            if push_batch_local_failure(
+                &mut entries,
+                spec,
+                "Batch subcommands cannot override --server.".to_string(),
+                bail,
+            ) {
+                break;
+            }
+            continue;
+        }
+        if nested_global.session_name.is_some() {
+            if push_batch_local_failure(
+                &mut entries,
+                spec,
+                "Batch subcommands cannot override -s/--session.".to_string(),
+                bail,
+            ) {
+                break;
+            }
+            continue;
+        }
+
+        let (nested_command, effective_nested_global) = normalize_command_invocation(&nested_global);
+        if nested_command.is_empty() {
+            if push_batch_local_failure(
+                &mut entries,
+                spec,
+                "Batch command is empty.".to_string(),
+                bail,
+            ) {
+                break;
+            }
+            continue;
+        }
+        if nested_command == "batch" {
+            if push_batch_local_failure(
+                &mut entries,
+                spec,
+                "Nested batch commands are not supported.".to_string(),
+                bail,
+            ) {
+                break;
+            }
+            continue;
+        }
+
+        let cmd_def = match command_map.get(&nested_command) {
+            Some(def) => def,
+            None => {
+                if push_batch_local_failure(
+                    &mut entries,
+                    spec,
+                    format!(
+                        "Unknown command: {}. Run 'browser4-cli help' for usage.",
+                        nested_command
+                    ),
+                    bail,
+                ) {
+                    break;
+                }
+                continue;
+            }
+        };
+
+        let raw_parsed = parse_raw_args(&effective_nested_global.args);
+        let arg_names: Vec<&str> = cmd_def.args.iter().map(|arg| arg.name).collect();
+        let parsed = match build_command_args(&raw_parsed, &arg_names) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                if push_batch_local_failure(&mut entries, spec, error, bail) {
+                    break;
+                }
+                continue;
+            }
+        };
+
+        let tool_name = (cmd_def.tool_name_fn)(&parsed);
+        let tool_params = (cmd_def.tool_params_fn)(&parsed);
+
+        match nested_command.as_str() {
+            "open" => {
+                let capabilities = build_open_session_capabilities(&tool_params);
+
+                let url = tool_params
+                    .get("url")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("about:blank");
+
+                let request_index = steps.len();
+                steps.push(json!({
+                    "op": "open",
+                    "command": spec.display,
+                    "capabilities": capabilities,
+                }));
+                let mut request_indices = vec![request_index];
+                let mut outputs = vec![PlannedBatchOutput::Text];
+                if url != "about:blank" {
+                    let navigate_request_index = steps.len();
+                    steps.push(json!({
+                        "op": "tool",
+                        "command": spec.display,
+                        "tool": "browser_navigate",
+                        "arguments": { "url": url },
+                    }));
+                    request_indices.push(navigate_request_index);
+                    outputs.push(PlannedBatchOutput::Text);
+                }
+                entries.push(PlannedBatchEntry::Backend {
+                    display: spec.display.clone(),
+                    request_indices,
+                    outputs,
+                });
+
+                final_state.session_id = None;
+                final_state.active_selector = None;
+                final_state.last_mouse_position = None;
+                active_selector = None;
+                last_mouse_position = None;
+                requires_response_session_id = true;
+            }
+            "close" => {
+                let request_index = steps.len();
+                steps.push(json!({
+                    "op": "close",
+                    "command": spec.display,
+                }));
+                entries.push(PlannedBatchEntry::Backend {
+                    display: spec.display.clone(),
+                    request_indices: vec![request_index],
+                    outputs: vec![PlannedBatchOutput::Text],
+                });
+
+                final_state.session_id = None;
+                final_state.active_selector = None;
+                final_state.last_mouse_position = None;
+                active_selector = None;
+                last_mouse_position = None;
+                requires_response_session_id = false;
+            }
+            "snapshot" => {
+                let filename = tool_params.get("filename").and_then(|value| value.as_str());
+                let output_path = resolve_output_path(filename, "snapshot", "yml");
+                let mut arguments = tool_params.clone();
+                if let Value::Object(map) = &mut arguments {
+                    map.remove("filename");
+                }
+
+                let request_index = steps.len();
+                steps.push(json!({
+                    "op": "snapshot",
+                    "command": spec.display,
+                    "tool": tool_name,
+                    "arguments": normalize_batch_step_args(&arguments),
+                }));
+                entries.push(PlannedBatchEntry::Backend {
+                    display: spec.display.clone(),
+                    request_indices: vec![request_index],
+                    outputs: vec![PlannedBatchOutput::Snapshot { path: output_path }],
+                });
+            }
+            "screenshot" => {
+                let filename = tool_params.get("filename").and_then(|value| value.as_str());
+                let output_path = resolve_output_path(filename, "screenshot", "png");
+                let mut arguments = tool_params.clone();
+                if let Value::Object(map) = &mut arguments {
+                    map.remove("filename");
+                }
+
+                let request_index = steps.len();
+                steps.push(json!({
+                    "op": "screenshot",
+                    "command": spec.display,
+                    "tool": tool_name,
+                    "arguments": normalize_batch_step_args(&arguments),
+                }));
+                entries.push(PlannedBatchEntry::Backend {
+                    display: spec.display.clone(),
+                    request_indices: vec![request_index],
+                    outputs: vec![PlannedBatchOutput::Screenshot { path: output_path }],
+                });
+            }
+            "press" => {
+                let selector = tool_params
+                    .get("ref")
+                    .and_then(|value| value.as_str())
+                    .or_else(|| tool_params.get("selector").and_then(|value| value.as_str()));
+                let key = tool_params.get("key").and_then(|value| value.as_str());
+
+                let (selector, key) = match (selector, key) {
+                    (Some(selector), Some(key)) => (selector.to_string(), key.to_string()),
+                    _ => {
+                        if push_batch_local_failure(
+                            &mut entries,
+                            spec,
+                            "Press requires both a target selector and a key.".to_string(),
+                            bail,
+                        ) {
+                            break;
+                        }
+                        continue;
+                    }
+                };
+
+                let request_index = steps.len();
+                steps.push(json!({
+                    "op": "press",
+                    "command": spec.display,
+                    "selector": selector,
+                    "key": key,
+                }));
+                entries.push(PlannedBatchEntry::Backend {
+                    display: spec.display.clone(),
+                    request_indices: vec![request_index],
+                    outputs: vec![PlannedBatchOutput::Text],
+                });
+
+                active_selector = Some(selector);
+                final_state.active_selector = active_selector.clone();
+            }
+            "list" | "close-all" | "kill-all" | "delete-data" | "agent-run" | "agent-status"
+            | "agent-result" | "co-create" | "co-submit" | "co-scrape" | "co-status"
+            | "co-result" => {
+                if push_batch_local_failure(
+                    &mut entries,
+                    spec,
+                    format!("Batch does not support command '{}'.", nested_command),
+                    bail,
+                ) {
+                    break;
+                }
+            }
+            _ => {
+                if tool_name.is_empty() {
+                    if push_batch_local_failure(
+                        &mut entries,
+                        spec,
+                        format!("Batch does not support command '{}'.", nested_command),
+                        bail,
+                    ) {
+                        break;
+                    }
+                    continue;
+                }
+
+                let mut step = json!({
+                    "op": "tool",
+                    "command": spec.display,
+                    "tool": tool_name,
+                    "arguments": normalize_batch_step_args(&tool_params),
+                });
+
+                if matches!(nested_command.as_str(), "keydown" | "keyup") {
+                    if let Some(selector) = active_selector
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|selector| !selector.is_empty() && !selector.starts_with("backend:"))
+                    {
+                        step["preFocusSelector"] = json!(selector);
+                    }
+                }
+
+                if matches!(nested_command.as_str(), "mousedown" | "mouseup" | "mousewheel") {
+                    if let Some(position) = &last_mouse_position {
+                        step["preMousePosition"] = json!({
+                            "x": position.x,
+                            "y": position.y,
+                        });
+                    }
+                }
+
+                let request_index = steps.len();
+                steps.push(step);
+                entries.push(PlannedBatchEntry::Backend {
+                    display: spec.display.clone(),
+                    request_indices: vec![request_index],
+                    outputs: vec![PlannedBatchOutput::Text],
+                });
+
+                if nested_command == "mousemove" {
+                    let x = parse_number_arg(&tool_params, "x")?;
+                    let y = parse_number_arg(&tool_params, "y")?;
+                    last_mouse_position = Some(MousePosition { x, y });
+                    final_state.last_mouse_position = last_mouse_position.clone();
+                }
+
+                if let Some(selector) = tracked_selector(&tool_params) {
+                    active_selector = Some(selector.to_string());
+                    final_state.active_selector = active_selector.clone();
+                }
+            }
+        }
+    }
+
+    Ok(CompiledBatchRequest {
+        steps,
+        entries,
+        final_state,
+        requires_response_session_id,
+    })
+}
+
+fn render_batch_result(
+    output: &PlannedBatchOutput,
+    result: &BatchExecutionResult,
+) -> Result<(), String> {
+    match output {
+        PlannedBatchOutput::Text => {
+            if let Some(text) = result.text.as_deref().map(str::trim).filter(|text| !text.is_empty()) {
+                println!("{}", text);
+            }
+        }
+        PlannedBatchOutput::Snapshot { path } => {
+            let snapshot = result
+                .snapshot
+                .as_deref()
+                .ok_or_else(|| "Batch snapshot response was missing snapshot content.".to_string())?;
+            save_snapshot(path, snapshot).map_err(|e| e.to_string())?;
+            println!("### Page");
+            println!("- Page URL: {}", result.page_url.as_deref().unwrap_or_default());
+            println!("- Page Title: {}", result.page_title.as_deref().unwrap_or_default());
+            println!("### Snapshot");
+            println!("[Snapshot]({})", path.display());
+        }
+        PlannedBatchOutput::Screenshot { path } => {
+            let encoded = result
+                .screenshot
+                .as_deref()
+                .ok_or_else(|| "Batch screenshot response was missing image data.".to_string())?;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(encoded.trim())
+                .map_err(|e| format!("Failed to decode screenshot: {e}"))?;
+            save_binary(path, &bytes).map_err(|e| e.to_string())?;
+            println!("[Screenshot]({})", path.display());
+        }
+    }
+
+    Ok(())
+}
+
+fn resolve_batch_commands(
+    global: &args::GlobalFlags,
+) -> Result<(bool, Vec<BatchCommandSpec>), String> {
+    let batch_args = parse_batch_args(&global.args[1..])?;
+    let commands = if batch_args.json {
+        parse_batch_json_commands(&read_batch_stdin()?)?
+            .into_iter()
+            .map(|tokens| BatchCommandSpec {
+                display: format_batch_command(&tokens),
+                tokens,
+            })
+            .collect()
+    } else {
+        batch_args
+            .commands
+            .iter()
+            .map(|command| {
+                Ok(BatchCommandSpec {
+                    display: command.clone(),
+                    tokens: parse_command_string(command)?,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?
     };
+
+    Ok((batch_args.bail, commands))
+}
+
+async fn handle_batch(global: &args::GlobalFlags) -> Result<(), String> {
+    let (bail, commands) = resolve_batch_commands(global)?;
+    let base_url = resolve_base_url(global.server_url.as_deref(), global.session_name.as_deref());
+
+    if let Some(ref server_url) = global.server_url {
+        let current_state = read_state(None, global.session_name.as_deref());
+        if server_url != &current_state.base_url {
+            let mut updated = current_state;
+            updated.base_url = server_url.clone();
+            write_state(&updated, None, global.session_name.as_deref())
+                .map_err(|e| e.to_string())?;
+        }
+    }
+
+    ensure_server_running(&base_url).await?;
+    let client = make_client();
+    let compiled = compile_batch_request(
+        &commands,
+        bail,
+        &base_url,
+        global.session_name.as_deref(),
+    )?;
+
+    let backend_response = if compiled.steps.is_empty() {
+        None
+    } else {
+        let initial_state = read_state(None, global.session_name.as_deref());
+        let initial_session_id = initial_state
+            .session_id
+            .filter(|id| !id.trim().is_empty());
+        let payload = json!({
+            "bail": bail,
+            "sessionId": initial_session_id,
+            "steps": compiled.steps,
+        });
+        let raw = submit_batch_commands(&client, &base_url, payload).await?;
+        let raw_trimmed = raw.trim();
+        if raw_trimmed.is_empty() {
+            return Err(
+                "Batch backend returned an empty payload. Check that Browser4 server and CLI versions are compatible."
+                    .to_string(),
+            );
+        }
+        let preview = if raw_trimmed.chars().count() > 240 {
+            let head = raw_trimmed.chars().take(240).collect::<String>();
+            format!("{head}...")
+        } else {
+            raw_trimmed.to_string()
+        };
+        Some(
+            serde_json::from_str::<BatchExecutionResponse>(&raw)
+                .map_err(|e| format!("Failed to parse batch response JSON: {e}. Response preview: {preview}"))?,
+        )
+    };
+
+    let mut result_map: HashMap<usize, BatchExecutionResult> = backend_response
+        .as_ref()
+        .map(|response| {
+            response
+                .results
+                .iter()
+                .cloned()
+                .map(|result| (result.index, result))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut failures: Vec<String> = Vec::new();
+    let mut stop_processing = false;
+
+    for (index, entry) in compiled.entries.iter().enumerate() {
+        if stop_processing {
+            break;
+        }
+
+        match entry {
+            PlannedBatchEntry::LocalFailure { display, error } => {
+                let failure = format!("Batch command {} failed ({}): {}", index + 1, display, error);
+                if bail {
+                    stop_processing = true;
+                }
+                eprintln!("{failure}");
+                failures.push(failure);
+            }
+            PlannedBatchEntry::Backend {
+                display,
+                request_indices,
+                outputs,
+            } => {
+                let mut command_failed = false;
+                for (request_index, output) in request_indices.iter().zip(outputs.iter()) {
+                    let Some(result) = result_map.remove(request_index) else {
+                        if backend_response
+                            .as_ref()
+                            .map(|response| response.stopped_on_error)
+                            .unwrap_or(false)
+                        {
+                            stop_processing = true;
+                            break;
+                        }
+                        return Err(format!(
+                            "Batch backend response was missing command {} ({}).",
+                            index + 1,
+                            display
+                        ));
+                    };
+
+                    if result.ok {
+                        render_batch_result(output, &result)?;
+                    } else {
+                        let failure = format!(
+                            "Batch command {} failed ({}): {}",
+                            index + 1,
+                            display,
+                            result
+                                .error
+                                .as_deref()
+                                .unwrap_or("Unknown batch execution error")
+                        );
+                        eprintln!("{failure}");
+                        failures.push(failure);
+                        command_failed = true;
+                        if bail
+                            || backend_response
+                                .as_ref()
+                                .map(|response| response.stopped_on_error)
+                                .unwrap_or(false)
+                        {
+                            stop_processing = true;
+                        }
+                        break;
+                    }
+                }
+                if command_failed && bail {
+                    stop_processing = true;
+                }
+            }
+        }
+    }
+
+    let mut final_state = compiled.final_state.clone();
+    if let Some(response) = &backend_response {
+        if compiled.requires_response_session_id || response.session_id.is_some() {
+            final_state.session_id = response.session_id.clone();
+        }
+    }
+    write_state(&final_state, None, global.session_name.as_deref()).map_err(|e| e.to_string())?;
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("{} batch command(s) failed.", failures.len()))
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    let raw_args: Vec<String> = std::env::args().skip(1).collect();
+    let global = parse_global_flags(&raw_args);
+    let (command, effective_global) = normalize_command_invocation(&global);
 
     if let Err(e) = run(&command, &effective_global).await {
         eprintln!("Error: {}", e);
@@ -1275,6 +2031,10 @@ async fn run(command: &str, global: &args::GlobalFlags) -> Result<(), String> {
     if command == "--version" || command == "-v" || command == "version" {
         println!("browser4-cli {}", VERSION);
         return Ok(());
+    }
+
+    if command == "batch" {
+        return handle_batch(global).await;
     }
 
     // Resolve base URL: --server flag > persisted state > default
@@ -1454,7 +2214,7 @@ async fn run(command: &str, global: &args::GlobalFlags) -> Result<(), String> {
                 &base_url,
                 &tool_name,
                 &tool_params,
-                command == "goto",
+                matches!(command, "goto"),
                 global.session_name.as_deref(),
             )
             .await?;
@@ -1490,8 +2250,13 @@ fn print_help(command_name: Option<&str>) {
 
 #[cfg(test)]
 mod tests {
-    use super::tracked_selector;
+    use super::*;
     use serde_json::json;
+
+    #[test]
+    fn no_snapshot_commands_include_eval() {
+        assert!(no_snapshot_commands().contains("eval"));
+    }
 
     #[test]
     fn tracked_selector_prefers_ref() {
@@ -1519,5 +2284,79 @@ mod tests {
         });
 
         assert_eq!(tracked_selector(&params), None);
+    }
+
+    #[test]
+    fn known_server_base_urls_deduplicate_and_trim_trailing_slashes() {
+        let urls = known_server_base_urls(
+            "http://127.0.0.1:9222/",
+            &[
+                ManagedServerProcess {
+                    pid: 1,
+                    base_url: "http://127.0.0.1:9444/".to_string(),
+                    port: 9444,
+                    jar_path: "browser4.jar".to_string(),
+                    started_at: "2026-04-17T00:00:00Z".to_string(),
+                },
+                ManagedServerProcess {
+                    pid: 2,
+                    base_url: "http://127.0.0.1:9222".to_string(),
+                    port: 9222,
+                    jar_path: "browser4.jar".to_string(),
+                    started_at: "2026-04-17T00:00:01Z".to_string(),
+                },
+            ],
+        );
+
+        assert_eq!(
+            urls,
+            vec![
+                "http://127.0.0.1:9222".to_string(),
+                "http://127.0.0.1:9444".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn build_open_session_capabilities_does_not_default_to_temporary_profile_outside_tests() {
+        let caps = build_open_session_capabilities_with_test_mode(&json!({}), false);
+
+        assert!(caps.get("profileMode").is_none());
+    }
+
+    #[test]
+    fn build_open_session_capabilities_defaults_to_temporary_profile_for_tests() {
+        let caps = build_open_session_capabilities_with_test_mode(&json!({}), true);
+
+        assert_eq!(caps["profileMode"], json!("TEMPORARY"));
+    }
+
+    #[test]
+    fn build_open_session_capabilities_does_not_force_temporary_when_persistent() {
+        let caps = build_open_session_capabilities_with_test_mode(&json!({
+            "persistent": true,
+        }), true);
+
+        assert_eq!(caps["persistent"], json!(true));
+        assert!(caps.get("profileMode").is_none());
+    }
+
+    #[test]
+    fn build_open_session_capabilities_does_not_force_temporary_when_profile_path_is_set() {
+        let caps = build_open_session_capabilities_with_test_mode(&json!({
+            "profilePath": "C:/tmp/browser-profile",
+        }), true);
+
+        assert_eq!(caps["profilePath"], json!("C:/tmp/browser-profile"));
+        assert!(caps.get("profileMode").is_none());
+    }
+
+    #[test]
+    fn build_open_session_capabilities_keeps_explicit_profile_mode() {
+        let caps = build_open_session_capabilities_with_test_mode(&json!({
+            "profileMode": "TEMPORARY",
+        }), false);
+
+        assert_eq!(caps["profileMode"], json!("TEMPORARY"));
     }
 }

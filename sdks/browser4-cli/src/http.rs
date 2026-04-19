@@ -28,6 +28,33 @@ fn normalize_refs(args: &mut Value) {
     }
 }
 
+fn extract_mcp_text_payload(data: &Value) -> Option<String> {
+    if let Some(text) = data.as_str() {
+        return Some(text.to_string());
+    }
+
+    if let Some(content) = data.get("content").and_then(|value| value.as_array()) {
+        for item in content {
+            if let Some(text) = item.get("text").and_then(|value| value.as_str()) {
+                return Some(text.to_string());
+            }
+            if let Some(json_payload) = item.get("json") {
+                return Some(json_payload.to_string());
+            }
+        }
+    }
+
+    if let Some(structured) = data.get("structuredContent") {
+        return Some(structured.to_string());
+    }
+
+    if data.is_object() || data.is_array() {
+        return Some(data.to_string());
+    }
+
+    None
+}
+
 /// Call an MCP tool on the Browser4 server.
 ///
 /// Makes a `POST /mcp/call-tool` request and returns the text of the first
@@ -51,9 +78,27 @@ pub async fn call_tool(
         .await
         .map_err(|e| format!("HTTP request failed: {e}"))?;
 
-    let data: Value = response
-        .json()
+    let status = response.status();
+    let response_text = response
+        .text()
         .await
+        .map_err(|e| format!("Failed to read response body: {e}"))?;
+
+    if !status.is_success() {
+        let message = response_text.trim();
+        if message.is_empty() {
+            return Err(format!(
+                "HTTP request failed with status {} and an empty response body.",
+                status
+            ));
+        }
+        return Err(format!(
+            "HTTP request failed with status {}: {}",
+            status, message
+        ));
+    }
+
+    let data: Value = serde_json::from_str(&response_text)
         .map_err(|e| format!("Failed to parse response JSON: {e}"))?;
 
     if data
@@ -71,16 +116,8 @@ pub async fn call_tool(
         return Err(msg.to_string());
     }
 
-    let text = data
-        .get("content")
-        .and_then(|c| c.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|item| item.get("text"))
-        .and_then(|t| t.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    Ok(text)
+    extract_mcp_text_payload(&data)
+        .ok_or_else(|| "MCP response did not contain a readable payload.".to_string())
 }
 
 /// Check whether a server error message indicates a stale/expired session.
@@ -92,88 +129,62 @@ pub fn is_stale_session_error(message: &str) -> bool {
         || lower.contains("session does not exist")
 }
 
-/// Submit a plain-text command to the Browser4 server.
+/// Submit a plain-text command to the Browser4 server via the MCP endpoint.
 ///
 /// When `async_mode` is true, the server returns a task ID immediately.
-/// When false, the server blocks until execution completes.
+/// When false, the server blocks until execution completes and returns the CommandStatus JSON.
 pub async fn submit_plain_command(
     client: &Client,
     base_url: &str,
     command: &str,
     async_mode: bool,
 ) -> Result<String, String> {
-    let url = format!(
-        "{}/api/commands/plain?async={}",
-        base_url.trim_end_matches('/'),
-        async_mode
-    );
-
-    let response = client
-        .post(&url)
-        .header("Content-Type", "text/plain")
-        .body(command.to_string())
-        .send()
-        .await
-        .map_err(|e| format!("HTTP request failed: {e}"))?;
-
-    let text = response
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read response: {e}"))?;
-
-    Ok(text)
+    call_tool(
+        client,
+        base_url,
+        "command_run",
+        serde_json::json!({ "command": command, "async": async_mode }),
+    )
+    .await
 }
 
-/// Get the status of a command by its task ID.
+/// Get the status of a command by its task ID via the MCP endpoint.
 pub async fn get_command_status(
     client: &Client,
     base_url: &str,
     task_id: &str,
 ) -> Result<String, String> {
-    let url = format!(
-        "{}/api/commands/{}/status",
-        base_url.trim_end_matches('/'),
-        task_id
-    );
-
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("HTTP request failed: {e}"))?;
-
-    let text = response
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read response: {e}"))?;
-
-    Ok(text)
+    call_tool(
+        client,
+        base_url,
+        "command_status",
+        serde_json::json!({ "id": task_id }),
+    )
+    .await
 }
 
-/// Get the result of a completed command by its task ID.
+/// Get the result of a completed command by its task ID via the MCP endpoint.
 pub async fn get_command_result(
     client: &Client,
     base_url: &str,
     task_id: &str,
 ) -> Result<String, String> {
-    let url = format!(
-        "{}/api/commands/{}/result",
-        base_url.trim_end_matches('/'),
-        task_id
-    );
+    call_tool(
+        client,
+        base_url,
+        "command_result",
+        serde_json::json!({ "id": task_id }),
+    )
+    .await
+}
 
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("HTTP request failed: {e}"))?;
-
-    let text = response
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read response: {e}"))?;
-
-    Ok(text)
+/// Execute a batch of CLI-derived operations in a single backend request.
+pub async fn submit_batch_commands(
+    client: &Client,
+    base_url: &str,
+    args: Value,
+) -> Result<String, String> {
+    call_tool(client, base_url, "command_batch", args).await
 }
 
 #[cfg(test)]
@@ -204,5 +215,35 @@ mod tests {
         assert!(is_stale_session_error("Invalid session ID"));
         assert!(is_stale_session_error("Session not found"));
         assert!(!is_stale_session_error("Connection refused"));
+    }
+
+    #[test]
+    fn test_extract_mcp_text_payload_prefers_text_content() {
+        let payload = json!({
+            "content": [{ "type": "text", "text": "ok" }],
+            "structuredContent": { "ignored": true }
+        });
+        assert_eq!(extract_mcp_text_payload(&payload).as_deref(), Some("ok"));
+    }
+
+    #[test]
+    fn test_extract_mcp_text_payload_supports_structured_content() {
+        let payload = json!({ "structuredContent": { "sessionId": "s-1" } });
+        assert_eq!(
+            extract_mcp_text_payload(&payload).as_deref(),
+            Some("{\"sessionId\":\"s-1\"}")
+        );
+    }
+
+    #[test]
+    fn test_extract_mcp_text_payload_supports_direct_object_response() {
+        let payload = json!({
+            "sessionId": "s-1",
+            "results": []
+        });
+        assert_eq!(
+            extract_mcp_text_payload(&payload).as_deref(),
+            Some("{\"results\":[],\"sessionId\":\"s-1\"}")
+        );
     }
 }
