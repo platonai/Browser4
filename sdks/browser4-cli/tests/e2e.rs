@@ -946,6 +946,25 @@ fn wait_for_health(base_url: &str, timeout_ms: u64) -> Result<(), String> {
     ))
 }
 
+fn is_browser4_healthy_now(base_url: &str) -> bool {
+    let health_url = format!("{}/actuator/health", base_url.trim_end_matches('/'));
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => return false,
+    };
+
+    match client.get(&health_url).send() {
+        Ok(resp) => resp
+            .text()
+            .map(|body| body.contains("\"status\":\"UP\""))
+            .unwrap_or(false),
+        Err(_) => false,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // CLI runner
 // ---------------------------------------------------------------------------
@@ -1053,6 +1072,7 @@ impl E2ETestResources {
             return steps;
         }
 
+        let was_healthy_before = is_browser4_healthy_now(&self.ctx.browser4_base_url);
         let started_at = Instant::now();
         let startup_result = run_cli_process_with_live_output(&self.ctx, &["list"]);
         let startup_log_hint = format_browser4_startup_log_hint(&startup_result.stderr);
@@ -1066,25 +1086,29 @@ impl E2ETestResources {
             startup_result.stderr,
         );
         if !self.local_browser4_started {
-            assert!(
-                started_via_maven,
-                "Expected local e2e startup to use Maven spring-boot:run so tests run against latest backend code.{}\nstdout:\n{}\nstderr:\n{}",
-                startup_log_hint,
-                startup_result.stdout,
-                startup_result.stderr,
-            );
-            assert!(
-                startup_result.stderr.contains("Browser4 startup log:"),
-                "Expected startup diagnostics to include the Browser4 startup log path.{}\nstdout:\n{}\nstderr:\n{}",
-                startup_log_hint,
-                startup_result.stdout,
-                startup_result.stderr,
-            );
+            if !was_healthy_before {
+                assert!(
+                    started_via_maven,
+                    "Expected local e2e startup to use Maven spring-boot:run so tests run against latest backend code.{}\nstdout:\n{}\nstderr:\n{}",
+                    startup_log_hint,
+                    startup_result.stdout,
+                    startup_result.stderr,
+                );
+                assert!(
+                    startup_result.stderr.contains("Browser4 startup log:"),
+                    "Expected startup diagnostics to include the Browser4 startup log path.{}\nstdout:\n{}\nstderr:\n{}",
+                    startup_log_hint,
+                    startup_result.stdout,
+                    startup_result.stderr,
+                );
+            }
             self.local_browser4_started = true;
-            steps.push(TimedStep::new(
-                "browser4 cli startup trigger",
-                started_at.elapsed(),
-            ));
+            let step_name = if started_via_maven {
+                "browser4 cli startup trigger"
+            } else {
+                "browser4 cli readiness probe"
+            };
+            steps.push(TimedStep::new(step_name, started_at.elapsed()));
         } else {
             if started_via_maven {
                 assert!(
@@ -3307,7 +3331,7 @@ fn main() {
 
     let mut resources = create_e2e_test_resources();
     // let cleanup_browser4 = !cfg!(target_os = "windows");
-    let cleanup_browser4 = false;
+    let cleanup_browser4 = true;
     for scenario in selected_scenarios {
         let report = run_named_scenario(
             scenario.name,
