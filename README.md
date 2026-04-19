@@ -39,19 +39,49 @@ English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platon
 * ⚡  **Extreme Performance** — Fully coroutine-safe; supports 100k ~ 200k complex page visits per machine per day.
 * 🧬 **Data Extraction** — Hybrid of LLM, ML, and selectors for clean data across chaotic pages.
 
-## ⚡ Quick Example: Agentic Workflow
+## CLI & SKILLS
 
-```kotlin
-// Give your Agent a mission, not just a script.
-val agent = AgenticContexts.getOrCreateAgent()
+```shell
+# Open a new browser window
+browser4-cli open
 
-// The Agent plans, navigates, and executes using Browser4 as its hands and eyes.
-val result = agent.run("""
-    1. Go to amazon.com
-    2. Search for '4k monitors'
-    3. Analyze the top 5 results for price/performance ratio
-    4. Return the best option as JSON
-""")
+# Navigate to a page
+browser4-cli goto https://playwright.dev
+
+# Inspect the page — note the eN labels on interactive nodes
+browser4-cli snapshot
+
+# Interact using refs from the snapshot
+browser4-cli click e15
+browser4-cli type e15 "Hello World"
+browser4-cli press e15 Enter
+browser4-cli keydown Shift
+browser4-cli mousemove 150 300
+browser4-cli mousewheel 0 100
+browser4-cli keyup Shift
+
+# Take a screenshot and save it to disk
+browser4-cli screenshot
+
+# Use a custom server URL
+browser4-cli open --server http://localhost:9090
+
+# Execute multiple commands in one process
+browser4-cli batch "open https://playwright.dev" "snapshot"
+
+# Stop on the first batch failure
+browser4-cli batch --bail "open https://playwright.dev" "click e1" "screenshot"
+
+# Pipe batch commands as JSON via stdin
+echo '[
+  ["open", "https://playwright.dev"],
+  ["snapshot"],
+  ["click", "e1"],
+  ["screenshot", "--filename=result.png"]
+]' | browser4-cli batch --json
+
+# Close the session when done
+browser4-cli close
 ```
 
 ---
@@ -105,24 +135,7 @@ For Docker deployment, see our [Docker Hub repository](https://hub.docker.com/r/
 
 ## 💡 Usage Examples
 
-### Browser Agents
-
-Autonomous agents that understand natural language instructions and execute complex browser workflows.
-
-```kotlin
-val agent = AgenticContexts.getOrCreateAgent()
-
-val task = """
-    1. go to amazon.com
-    2. search for pens to draw on whiteboards
-    3. compare the first 4 ones
-    4. write the result to a markdown file
-    """
-
-agent.run(task)
-```
-
-### CLI & SKILLS
+## CLI & SKILLS
 
 Browser4 CLI is a powerful command-line interface for direct browser control and automation, designed for both human
 users and AI agents. It provides a simple syntax to perform complex browser interactions without writing code.
@@ -141,19 +154,45 @@ git clone https://github.com/platonai/Browser4.git
 cd Browser4\sdks\browser4-cli
 cargo install --path . --locked
 
-# open new browser
+# Open a new browser window
 browser4-cli open
-# navigate to a page
-browser4-cli goto https://browser4.io/
-# take a snapshot
+
+# Navigate to a page
+browser4-cli goto https://playwright.dev
+
+# Inspect the page — note the eN labels on interactive nodes
 browser4-cli snapshot
-# interact with the page using refs from the snapshot
+
+# Interact using refs from the snapshot
 browser4-cli click e15
-browser4-cli type "page.click"
-browser4-cli press Enter
-# take a screenshot
+browser4-cli type e15 "Hello World"
+browser4-cli press e15 Enter
+browser4-cli keydown Shift
+browser4-cli mousemove 150 300
+browser4-cli mousewheel 0 100
+browser4-cli keyup Shift
+
+# Take a screenshot and save it to disk
 browser4-cli screenshot
-# close the browser
+
+# Use a custom server URL
+browser4-cli open --server http://localhost:9090
+
+# Execute multiple commands in one process
+browser4-cli batch "open https://playwright.dev" "snapshot"
+
+# Stop on the first batch failure
+browser4-cli batch --bail "open https://playwright.dev" "click e1" "screenshot"
+
+# Pipe batch commands as JSON via stdin
+echo '[
+  ["open", "https://playwright.dev"],
+  ["snapshot"],
+  ["click", "e1"],
+  ["screenshot", "--filename=result.png"]
+]' | browser4-cli batch --json
+
+# Close the session when done
 browser4-cli close
 ```
 
@@ -166,6 +205,23 @@ Browser4 CLI is designed for use by AI agents through SKILLS + CLI.
 [SKILL.md](sdks/skill/SKILL.md)
 
 ---
+
+### Browser Agents
+
+Autonomous agents that understand natural language instructions and execute complex browser workflows.
+
+```kotlin
+val agent = AgenticContexts.getOrCreateAgent()
+
+val task = """
+    1. go to amazon.com
+    2. search for pens to draw on whiteboards
+    3. compare the first 4 ones
+    4. write the result to a markdown file
+    """
+
+agent.run(task)
+```
 
 ### Workflow Automation
 
