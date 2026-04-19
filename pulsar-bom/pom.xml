@@ -160,7 +160,7 @@
         <kotlin.compiler.jvmTarget>${javaVersion}</kotlin.compiler.jvmTarget>
 
         <spring-boot.version>4.0.1</spring-boot.version>
-        <pulsar.base.version>4.7.0</pulsar.base.version>
+        <pulsar.base.version>4.7.1</pulsar.base.version>
 
         <!-- keep consistent with io.modelcontextprotocol:kotlin-sdk-core-jvm:jar:0.8.1 -->
         <ktor.version>3.2.3</ktor.version>
