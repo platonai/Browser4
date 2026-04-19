@@ -160,6 +160,12 @@ pub fn shutdown_managed_server_processes(
             continue;
         }
 
+        if !is_browser4_server_process(pid) {
+            // PID may have been reused by a non-Browser4 process; treat as stale.
+            result.missing_pids.push(pid);
+            continue;
+        }
+
         if force {
             force_stop(pid);
             result.forced_pids.push(pid);
@@ -485,6 +491,24 @@ fn command_line_matches_marker_dir(command_line: &str, marker_dir: &Path) -> boo
 
 fn normalize_process_text(value: &str) -> String {
     value.replace('\\', "/").to_ascii_lowercase()
+}
+
+fn command_line_matches_browser4_server(command_line: &str) -> bool {
+    let normalized = normalize_process_text(command_line);
+    normalized.contains("browser4.jar")
+        || normalized.contains("browser4launcherkt")
+}
+
+fn is_browser4_server_process(pid: u32) -> bool {
+    process_name(pid)
+        .map(|name| {
+            let normalized = normalize_process_text(&name);
+            normalized == "java" || normalized == "java.exe" || normalized == "javaw" || normalized == "javaw.exe"
+        })
+        .unwrap_or(false)
+        && process_command_line(pid)
+            .map(|command_line| command_line_matches_browser4_server(&command_line))
+            .unwrap_or(false)
 }
 
 fn find_pulsar_browser_processes() -> Vec<u32> {
@@ -858,6 +882,22 @@ mod tests {
         let command_line = r#""C:/Program Files/Google/Chrome/Application/chrome.exe" --user-data-dir=C:/Users/tester/.browser4/browser/chrome/default/chrome --remote-debugging-port=0"#;
 
         assert!(command_line_matches_marker_dir(command_line, &marker_dir));
+    }
+
+    #[test]
+    fn test_command_line_matches_browser4_server_for_jar_and_launcher() {
+        let jar = r#""C:/Java/bin/java.exe" -jar D:/browser4/Browser4.jar --server.port=8182"#;
+        let launcher = r#""C:/Java/bin/java.exe" -cp @C:/Temp/spring-boot.argfile Browser4LauncherKt --server.port=8182"#;
+
+        assert!(command_line_matches_browser4_server(jar));
+        assert!(command_line_matches_browser4_server(launcher));
+    }
+
+    #[test]
+    fn test_command_line_matches_browser4_server_rejects_non_browser4_java() {
+        let non_browser4 = r#""C:/Java/bin/java.exe" -jar D:/apps/another-service.jar --server.port=8080"#;
+
+        assert!(!command_line_matches_browser4_server(non_browser4));
     }
 
     #[test]

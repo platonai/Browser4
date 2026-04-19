@@ -1,7 +1,14 @@
 #!/usr/bin/env pwsh
 
-# Get all processes with the name "java" and filter those that have "Browser4.jar" in their command line
-$procs = Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^(java|javaw)\.exe$' -and $_.CommandLine -match 'Browser4\.jar' }
+[CmdletBinding(SupportsShouldProcess)]
+param(
+    [switch]$ListOnly
+)
+
+. (Join-Path $PSScriptRoot 'browser4-process-common.ps1')
+
+# Get java/javaw processes whose command line indicates Browser4.
+$procs = Get-Browser4JavaProcesses
 
 if (-not $procs)
 {
@@ -9,17 +16,34 @@ if (-not $procs)
 }
 else
 {
+    if ($ListOnly)
+    {
+        foreach ($proc in $procs)
+        {
+            Write-Output "PID=$($proc.ProcessId) CMD=$($proc.CommandLine)"
+        }
+        return
+    }
+
     foreach ($proc in $procs)
     {
-        try
+        $target = "process ID $( $proc.ProcessId )"
+        if ($PSCmdlet.ShouldProcess($target, 'Stop-Process -Force'))
         {
-            # Attempt to kill the process
-            Stop-Process -Id $proc.ProcessId -Force -ErrorAction Stop
-            Write-Output "Killed process with ID: $( $proc.ProcessId )"
+            try
+            {
+                # Attempt to kill the process
+                Stop-Process -Id $proc.ProcessId -Force -ErrorAction Stop
+                Write-Output "Killed process with ID: $( $proc.ProcessId )"
+            }
+            catch
+            {
+                Write-Output "Failed to kill process with ID: $( $proc.ProcessId ). Error: $_"
+            }
         }
-        catch
+        else
         {
-            Write-Output "Failed to kill process with ID: $( $proc.ProcessId ). Error: $_"
+            Write-Output "Would kill process with ID: $( $proc.ProcessId )"
         }
     }
 }

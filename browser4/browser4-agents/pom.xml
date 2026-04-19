@@ -122,6 +122,11 @@
     <dependencies>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
+            <artifactId>pulsar-skeleton</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-rest</artifactId>
             <version>${project.version}</version>
         </dependency>

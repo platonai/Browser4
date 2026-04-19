@@ -78,9 +78,27 @@ pub async fn call_tool(
         .await
         .map_err(|e| format!("HTTP request failed: {e}"))?;
 
-    let data: Value = response
-        .json()
+    let status = response.status();
+    let response_text = response
+        .text()
         .await
+        .map_err(|e| format!("Failed to read response body: {e}"))?;
+
+    if !status.is_success() {
+        let message = response_text.trim();
+        if message.is_empty() {
+            return Err(format!(
+                "HTTP request failed with status {} and an empty response body.",
+                status
+            ));
+        }
+        return Err(format!(
+            "HTTP request failed with status {}: {}",
+            status, message
+        ));
+    }
+
+    let data: Value = serde_json::from_str(&response_text)
         .map_err(|e| format!("Failed to parse response JSON: {e}"))?;
 
     if data
