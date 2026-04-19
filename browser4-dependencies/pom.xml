@@ -15,7 +15,7 @@
     <!-- for more information, see the documentation of this POM: http://maven.apache.org/pom/asf/ -->
 
     <groupId>ai.platon</groupId>
-    <artifactId>pulsar-dependencies</artifactId>
+    <artifactId>browser4-dependencies</artifactId>
     <name>Pulsar Dependencies</name>
     <version>4.7.0-SNAPSHOT</version>
     <packaging>pom</packaging>

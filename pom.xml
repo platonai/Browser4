@@ -86,7 +86,7 @@
     <!-- Default active modules. The main goal is to allow the user to run PulsarApplication
      with a single click in the IDE right after opening the project. -->
     <modules>
-        <module>pulsar-dependencies</module>
+        <module>browser4-dependencies</module>
         <module>pulsar-bom</module>
         <module>pulsar-tests/pulsar-tests-common</module>
         <module>browser4-core</module>
@@ -365,7 +365,7 @@
             </dependency>
             <dependency>
                 <groupId>ai.platon</groupId>
-                <artifactId>pulsar-dependencies</artifactId>
+                <artifactId>browser4-dependencies</artifactId>
                 <version>${project.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
