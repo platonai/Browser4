@@ -304,7 +304,7 @@ Invoke-WebRequest -Uri https://github.com/platonai/PulsarRPAPro/releases/downloa
 | `browser4-core` | 核心引擎：会话、调度、DOM、浏览器控制    |
 | `browser4-agentic` | 智能体实现、MCP 与技能注册         |
 | `pulsar-rest` | Spring Boot REST 层与命令端点 |
-| `pulsar-tools` | 高阶智能体工具                 |
+| `browser4-tools` | 高阶智能体工具                 |
 | `browser4-agents` | 智能体与爬虫编排及产品打包           |
 | `sdks` | Rust 实现的 CLI，支持 SKILLS  |
 | `examples` | 可运行示例与演示工程              |

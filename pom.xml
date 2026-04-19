@@ -172,7 +172,7 @@
             <modules>
                 <module>browser4-dependencies</module>
                 <module>browser4-core</module>
-                <module>pulsar-tools</module>
+                <module>browser4-tools</module>
                 <module>pulsar-bom</module>
                 <module>browser4-agentic</module>
                 <module>pulsar-rest</module>
