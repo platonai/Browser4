@@ -64,21 +64,25 @@ class PageHandler(
     }
 
     suspend fun exists(selector: String): Boolean {
-        val rootId = domAPI?.getDocument()?.nodeId ?: return false
-        val nodeId = try {
-            // Executes `querySelector` on a given node.
-            domAPI?.querySelector(rootId, selector)
-        } catch (e: CDPReturnError) {
-            // code: -32000 message: "Could not find node with given id"
-            // This exception is expected, will change this log to debug
-            if (e.errorCode != -32000L) {
-                logger.warn("Exception from domAPI?.querySelector | {} {} | {}", e.errorCode, e.errorMessage, e.brief())
-            }
-            null
-        } catch (e: Exception) {
-            logger.warn("Exception executing `querySelector` on node $rootId.", e)
-            null
-        }
+        val node = resolveSelector(selector)
+        val nodeId = node?.nodeId
+
+//        val rootId = domAPI?.getDocument()?.nodeId ?: return false
+//        val nodeId = try {
+//            // Executes `querySelector` on a given node.
+//            domAPI?.querySelector(rootId, selector)
+//        } catch (e: CDPReturnError) {
+//            // code: -32000 message: "Could not find node with given id"
+//            // This exception is expected, will change this log to debug
+//            if (e.errorCode != -32000L) {
+//                logger.warn("Exception from domAPI?.querySelector | {} {} | {}", e.errorCode, e.errorMessage, e.brief())
+//            }
+//            null
+//        } catch (e: Exception) {
+//            logger.warn("Exception executing `querySelector` on node $rootId.", e)
+//            null
+//        }
+
         return nodeId != null && nodeId > 0
     }
 
@@ -332,6 +336,8 @@ class PageHandler(
      */
     @Throws(ChromeDriverException::class)
     private suspend fun resolveSelector0(selector: String): NodeRef? {
+        val selector = normalizeCSSSelector(selector)
+
         // Parse the selector into a Locator object. If parsing fails, return null.
         val locator = Locator.parse(selector) ?: return null
 
@@ -429,6 +435,7 @@ class PageHandler(
 
     @Throws(ChromeDriverException::class)
     suspend fun isChecked(selector: String): Boolean {
+        val safeSelector = normalizeCSSSelector(selector)
         val expression = java.lang.String.format(
             """
 ((selector) => {
@@ -451,7 +458,7 @@ class PageHandler(
 
   return null;
 })('%s')
-            """.trimIndent(), normalizeCSSSelector(selector)
+            """.trimIndent(), safeSelector
         )
 
         val result = jsHandler.evaluateValue(expression)
@@ -758,14 +765,16 @@ class PageHandler(
 
     @Throws(ChromeDriverException::class)
     private suspend fun <T> invokeOnElement(selector: String, action: suspend (NodeRef) -> T): T? {
-        val node = querySelector(selector) ?: return null
+        val safeSelector = normalizeCSSSelector(selector)
+        val node = querySelector(safeSelector) ?: return null
 
         return action(node)
     }
 
     @Throws(ChromeDriverException::class)
     private suspend fun predicateOnElement(selector: String, action: suspend (NodeRef) -> Boolean): Boolean {
-        val node = querySelector(selector) ?: return false
+        val safeSelector = normalizeCSSSelector(selector)
+        val node = querySelector(safeSelector) ?: return false
 
         if (node.nodeId > 0) {
             return action(node)

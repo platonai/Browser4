@@ -344,12 +344,13 @@ abstract class AbstractWebDriver(
     // --------------------------- Attribute helpers ---------------------------
     // The following group relies on injected __pulsar_utils__ helper functions inside the page context.
 
-    @Throws(WebDriverException::class)
+    @Deprecated("Use PulsarWebDriver's version instead")
     override suspend fun isVisible(selector: String): Boolean {
         val safeSelector = normalizeCSSSelector(selector)
         return evaluateValue("__pulsar_utils__.isVisible('$safeSelector')") == true
     }
 
+    @Deprecated("Use PulsarWebDriver's version instead")
     override suspend fun isChecked(selector: String): Boolean {
         val safeSelector = normalizeCSSSelector(selector)
         return evaluateValue("__pulsar_utils__.isChecked('$safeSelector')") == true

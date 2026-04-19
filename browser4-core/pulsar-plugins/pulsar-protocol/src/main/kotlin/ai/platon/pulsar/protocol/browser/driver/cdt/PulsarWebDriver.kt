@@ -228,7 +228,11 @@ class PulsarWebDriver(
     }
 
     @Throws(WebDriverException::class)
-    override suspend fun exists(selector: String) = page.exists(selector)
+    override suspend fun exists(selector: String): Boolean {
+        return page.exists(selector)
+//        driverHelper.predicateOnElement(selector) {
+//        }
+    }
 
     /**
      * Wait until [selector] for [timeout] at most
@@ -283,11 +287,13 @@ class PulsarWebDriver(
 
     @Throws(WebDriverException::class)
     override suspend fun isVisible(selector: String): Boolean {
-        return page.isVisible(selector)
+        val safeSelector = normalizeCSSSelector(selector)
+        return page.isVisible(safeSelector)
     }
 
     override suspend fun isChecked(selector: String): Boolean {
-        return page.isChecked(selector)
+        val safeSelector = normalizeCSSSelector(selector)
+        return page.isChecked(safeSelector)
     }
 
     @Throws(WebDriverException::class)
