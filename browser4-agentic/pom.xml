@@ -45,7 +45,7 @@
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-tools</artifactId>
+            <artifactId>browser4-tools</artifactId>
         </dependency>
 
         <!-- MCP SDK for Browser4 MCP server support -->
