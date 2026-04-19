@@ -100,7 +100,7 @@ This project designed and implemented a complete observability system for the pu
 
 ### 📦 Maven 依赖更新 (2 files)
 
-1. `pulsar-dependencies/pom.xml` - 添加 OpenTelemetry 和 Micrometer 版本管理
+1. `browser4-dependencies/pom.xml` - 添加 OpenTelemetry 和 Micrometer 版本管理
 2. `pulsar-agentic/pom.xml` - 添加具体依赖
 
 ---
@@ -227,14 +227,14 @@ InferenceMetrics.recordInferenceCallTimed("gpt-4") {
 TracingUtils.withSpan("agent.resolve") { span ->
     try {
         AgentMetrics.recordAgentStart("browser-agent")
-        
+
         val result = AgentMetrics.recordActionTimed("resolve", true) {
             executeBrowserAction()
         }
-        
+
         TracingUtils.addEvent(span, "action.completed")
         AgentMetrics.recordAgentCompleted("browser-agent", totalSteps = 5)
-        
+
         result
     } catch (e: Exception) {
         TracingUtils.recordError(span, e)
@@ -439,6 +439,6 @@ This system provides powerful observability capabilities for pulsar-agentic, hel
 
 ---
 
-**文档版本 / Document Version**: 1.0  
-**最后更新 / Last Updated**: 2026-01-24  
+**文档版本 / Document Version**: 1.0
+**最后更新 / Last Updated**: 2026-01-24
 **维护者 / Maintainer**: Pulsar Team

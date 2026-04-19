@@ -170,7 +170,7 @@
         <profile>
             <id>all-modules</id>
             <modules>
-                <module>pulsar-dependencies</module>
+                <module>browser4-dependencies</module>
                 <module>browser4-core</module>
                 <module>pulsar-tools</module>
                 <module>pulsar-bom</module>
