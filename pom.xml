@@ -91,7 +91,7 @@
         <module>pulsar-tests/pulsar-tests-common</module>
         <module>browser4-core</module>
         <module>pulsar-tools</module>
-        <module>pulsar-agentic</module>
+        <module>browser4-agentic</module>
         <module>pulsar-rest</module>
     </modules>
 
@@ -439,7 +439,7 @@
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-agentic</artifactId>
+                <artifactId>browser4-agentic</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

@@ -60,7 +60,7 @@
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-agentic</artifactId>
+            <artifactId>browser4-agentic</artifactId>
         </dependency>
     </dependencies>
 </project>
