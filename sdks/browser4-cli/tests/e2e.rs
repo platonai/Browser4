@@ -3156,7 +3156,14 @@ struct ScenarioDef {
     short_name: &'static str,
     requires_browser4: bool,
     restart_browser4: bool,
+    test_count: usize,
     test_fn: ScenarioFn,
+}
+
+impl ScenarioDef {
+    fn effective_test_count(self) -> usize {
+        self.test_count.max(1)
+    }
 }
 
 const SCENARIOS: &[ScenarioDef] = &[
@@ -3165,6 +3172,7 @@ const SCENARIOS: &[ScenarioDef] = &[
         short_name: "test_session_lifecycle",
         requires_browser4: true,
         restart_browser4: false,
+        test_count: 1,
         test_fn: test_session_lifecycle,
     },
     ScenarioDef {
@@ -3172,6 +3180,7 @@ const SCENARIOS: &[ScenarioDef] = &[
         short_name: "test_navigation_and_storage",
         requires_browser4: true,
         restart_browser4: false,
+        test_count: 1,
         test_fn: test_navigation_and_storage,
     },
     ScenarioDef {
@@ -3179,6 +3188,7 @@ const SCENARIOS: &[ScenarioDef] = &[
         short_name: "test_interaction_commands",
         requires_browser4: true,
         restart_browser4: false,
+        test_count: 1,
         test_fn: test_interaction_commands,
     },
     ScenarioDef {
@@ -3186,6 +3196,7 @@ const SCENARIOS: &[ScenarioDef] = &[
         short_name: "test_interaction_commands",
         requires_browser4: true,
         restart_browser4: false,
+        test_count: 1,
         test_fn: test_interaction_commands,
     },
     ScenarioDef {
@@ -3193,6 +3204,7 @@ const SCENARIOS: &[ScenarioDef] = &[
         short_name: "test_interaction_commands",
         requires_browser4: true,
         restart_browser4: false,
+        test_count: 1,
         test_fn: test_interaction_commands,
     },
     ScenarioDef {
@@ -3200,6 +3212,7 @@ const SCENARIOS: &[ScenarioDef] = &[
         short_name: "test_batch_commands",
         requires_browser4: true,
         restart_browser4: false,
+        test_count: 1,
         test_fn: test_batch_commands,
     },
     ScenarioDef {
@@ -3207,6 +3220,7 @@ const SCENARIOS: &[ScenarioDef] = &[
         short_name: "test_batch_form_submission",
         requires_browser4: true,
         restart_browser4: false,
+        test_count: 1,
         test_fn: test_batch_form_submission,
     },
     ScenarioDef {
@@ -3214,6 +3228,7 @@ const SCENARIOS: &[ScenarioDef] = &[
         short_name: "test_batch_multi_interaction",
         requires_browser4: true,
         restart_browser4: false,
+        test_count: 1,
         test_fn: test_batch_multi_interaction,
     },
     ScenarioDef {
@@ -3221,6 +3236,7 @@ const SCENARIOS: &[ScenarioDef] = &[
         short_name: "test_batch_error_handling",
         requires_browser4: true,
         restart_browser4: false,
+        test_count: 1,
         test_fn: test_batch_error_handling,
     },
     ScenarioDef {
@@ -3228,6 +3244,7 @@ const SCENARIOS: &[ScenarioDef] = &[
         short_name: "test_batch_json_edge_cases",
         requires_browser4: true,
         restart_browser4: false,
+        test_count: 1,
         test_fn: test_batch_json_edge_cases,
     },
     ScenarioDef {
@@ -3235,6 +3252,7 @@ const SCENARIOS: &[ScenarioDef] = &[
         short_name: "test_form_controls_and_exports",
         requires_browser4: true,
         restart_browser4: false,
+        test_count: 1,
         test_fn: test_form_controls_and_exports,
     },
     ScenarioDef {
@@ -3242,6 +3260,7 @@ const SCENARIOS: &[ScenarioDef] = &[
         short_name: "test_mouse_and_dialog",
         requires_browser4: true,
         restart_browser4: false,
+        test_count: 3,
         test_fn: test_mouse_and_dialog,
     },
     ScenarioDef {
@@ -3249,6 +3268,7 @@ const SCENARIOS: &[ScenarioDef] = &[
         short_name: "test_tab_commands",
         requires_browser4: true,
         restart_browser4: false,
+        test_count: 1,
         test_fn: test_tab_commands,
     },
     ScenarioDef {
@@ -3256,6 +3276,7 @@ const SCENARIOS: &[ScenarioDef] = &[
         short_name: "test_collective_session_and_agent_tools",
         requires_browser4: false,
         restart_browser4: false,
+        test_count: 1,
         test_fn: test_collective_session_and_agent_tools,
     },
     ScenarioDef {
@@ -3263,6 +3284,7 @@ const SCENARIOS: &[ScenarioDef] = &[
         short_name: "test_open_uses_temporary_profile_mode",
         requires_browser4: false,
         restart_browser4: false,
+        test_count: 1,
         test_fn: test_open_uses_temporary_profile_mode,
     },
     ScenarioDef {
@@ -3270,6 +3292,7 @@ const SCENARIOS: &[ScenarioDef] = &[
         short_name: "test_agent_task_commands",
         requires_browser4: false,
         restart_browser4: false,
+        test_count: 1,
         test_fn: test_agent_task_commands,
     },
     ScenarioDef {
@@ -3277,6 +3300,7 @@ const SCENARIOS: &[ScenarioDef] = &[
         short_name: "test_collective_submission_commands",
         requires_browser4: false,
         restart_browser4: false,
+        test_count: 1,
         test_fn: test_collective_submission_commands,
     },
 ];
@@ -3318,7 +3342,11 @@ fn main() {
     };
 
     let run_coverage = selected_scenarios.len() == SCENARIOS.len();
-    let total_tests = selected_scenarios.len() + usize::from(run_coverage);
+    let scenario_runs: usize = selected_scenarios
+        .iter()
+        .map(|scenario| scenario.effective_test_count())
+        .sum();
+    let total_tests = scenario_runs + usize::from(run_coverage);
     println!("running {total_tests} tests");
     let mut timings: Vec<TimingReport> = Vec::with_capacity(total_tests);
 
@@ -3333,15 +3361,23 @@ fn main() {
     // let cleanup_browser4 = !cfg!(target_os = "windows");
     let cleanup_browser4 = true;
     for scenario in selected_scenarios {
-        let report = run_named_scenario(
-            scenario.name,
-            &mut resources,
-            scenario.requires_browser4,
-            scenario.restart_browser4,
-            cleanup_browser4,
-            scenario.test_fn,
-        );
-        timings.push(report);
+        let test_count = scenario.effective_test_count();
+        for run_index in 0..test_count {
+            let display_name = if test_count == 1 {
+                scenario.name.to_string()
+            } else {
+                format!("{} [{}/{}]", scenario.name, run_index + 1, test_count)
+            };
+            let report = run_named_scenario(
+                &display_name,
+                &mut resources,
+                scenario.requires_browser4,
+                scenario.restart_browser4,
+                cleanup_browser4,
+                scenario.test_fn,
+            );
+            timings.push(report);
+        }
     }
 
     println!("All scenarios complete!");

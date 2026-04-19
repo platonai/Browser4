@@ -428,7 +428,20 @@ async fn handle_close_all(client: &Client, base_url: &str) -> Result<(), String>
 
 async fn handle_kill_all() -> Result<(), String> {
     let result = stop_browser4_server_forcibly();
-    finalize_global_cleanup("Killed", &result.shutdown);
+    let shutdown_result = result.shutdown;
+    finalize_global_cleanup("Killed", &shutdown_result);
+
+    if !shutdown_result.fallback_killed_server_pids.is_empty() {
+        let pids: Vec<String> = shutdown_result
+            .fallback_killed_server_pids
+            .iter()
+            .map(|p| p.to_string())
+            .collect();
+        println!(
+            "Fallback-killed Browser4 backend process(es): {}",
+            pids.join(", ")
+        );
+    }
 
     let browser_result = result.browser_kill;
     if !browser_result.killed_pids.is_empty() {

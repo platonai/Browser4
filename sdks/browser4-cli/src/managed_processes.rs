@@ -118,6 +118,7 @@ pub struct ShutdownResult {
     pub missing_pids: Vec<u32>,
     pub forced_pids: Vec<u32>,
     pub remaining_pids: Vec<u32>,
+    pub fallback_killed_server_pids: Vec<u32>,
 }
 
 /// Result of force-killing Browser4 Chrome processes.
@@ -132,6 +133,12 @@ pub struct BrowserKillResult {
 pub struct ForceStopBrowser4ServerResult {
     pub shutdown: ShutdownResult,
     pub browser_kill: BrowserKillResult,
+}
+
+#[derive(Debug, Default)]
+struct ServerKillResult {
+    killed_pids: Vec<u32>,
+    remaining_pids: Vec<u32>,
 }
 
 fn stop_browser4_server(force: bool) -> ShutdownResult {
@@ -207,11 +214,47 @@ pub fn stop_browser4_server_forcibly() -> ForceStopBrowser4ServerResult {
     let result = stop_browser4_server_forcibly_with_steps(
         || notify_close_all_sessions_before_force_stop(None, None),
         kill_all_browsers,
-        || stop_browser4_server(true),
+        || stop_browser4_server_with_fallback_force_kill(),
         || sleep(std::time::Duration::from_secs(5)),
     );
 
     result
+}
+
+fn stop_browser4_server_with_fallback_force_kill() -> ShutdownResult {
+    let mut shutdown = stop_browser4_server(true);
+    let fallback_result = force_kill_all_browser4_server_processes();
+    merge_shutdown_with_fallback_server_kill(&mut shutdown, &fallback_result);
+    shutdown.fallback_killed_server_pids = fallback_result.killed_pids.clone();
+    shutdown
+}
+
+fn merge_shutdown_with_fallback_server_kill(
+    shutdown: &mut ShutdownResult,
+    fallback: &ServerKillResult,
+) {
+    shutdown.stopped_pids.extend(fallback.killed_pids.iter().copied());
+    shutdown.forced_pids.extend(
+        fallback
+            .killed_pids
+            .iter()
+            .chain(fallback.remaining_pids.iter())
+            .copied(),
+    );
+
+    shutdown.remaining_pids.extend(fallback.remaining_pids.iter().copied());
+    shutdown
+        .remaining_pids
+        .retain(|pid| !fallback.killed_pids.contains(pid));
+
+    dedup_sort_u32(&mut shutdown.stopped_pids);
+    dedup_sort_u32(&mut shutdown.forced_pids);
+    dedup_sort_u32(&mut shutdown.remaining_pids);
+}
+
+fn dedup_sort_u32(values: &mut Vec<u32>) {
+    values.sort_unstable();
+    values.dedup();
 }
 
 fn stop_browser4_server_forcibly_with_steps<NotifyCloseAll, StopServer, KillBrowsers, SleepAfter>(
@@ -497,6 +540,72 @@ fn command_line_matches_browser4_server(command_line: &str) -> bool {
     let normalized = normalize_process_text(command_line);
     normalized.contains("browser4.jar")
         || normalized.contains("browser4launcherkt")
+}
+
+fn find_browser4_server_processes() -> Vec<u32> {
+    let mut pids = Vec::new();
+
+    #[cfg(unix)]
+    {
+        use std::process::Command;
+        if let Ok(output) = Command::new("pgrep")
+            .args(["-f", r"browser4\.jar|browser4launcherkt"])
+            .output()
+        {
+            pids.extend(parse_pid_list(&output.stdout));
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        let ps_command = r#"
+            Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $_.Name -match '^(java|javaw)\.exe$' -and
+                    -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and
+                    $_.CommandLine -match '(?i)(Browser4\.jar|\bBrowser4LauncherKt\b)'
+                } |
+                Select-Object -ExpandProperty ProcessId
+        "#;
+        if let Ok(output) = Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", ps_command])
+            .output()
+        {
+            pids.extend(parse_pid_list(&output.stdout));
+        }
+    }
+
+    pids.sort_unstable();
+    pids.dedup();
+    pids
+}
+
+fn force_kill_all_browser4_server_processes() -> ServerKillResult {
+    const WAIT_AFTER_KILL_MS: u64 = 2_000;
+    const WAIT_POLL_MS: u64 = 100;
+
+    let pids = find_browser4_server_processes();
+    if pids.is_empty() {
+        return ServerKillResult::default();
+    }
+
+    let mut result = ServerKillResult::default();
+    for pid in &pids {
+        force_stop(*pid);
+    }
+
+    for pid in &pids {
+        if wait_for_exit(*pid, WAIT_AFTER_KILL_MS, WAIT_POLL_MS) {
+            result.killed_pids.push(*pid);
+        } else {
+            result.remaining_pids.push(*pid);
+        }
+    }
+
+    dedup_sort_u32(&mut result.killed_pids);
+    dedup_sort_u32(&mut result.remaining_pids);
+    result
 }
 
 fn is_browser4_server_process(pid: u32) -> bool {
@@ -961,5 +1070,45 @@ mod tests {
             events.lock().unwrap().as_slice(),
             ["notify", "shutdown", "browser-kill", "sleep"]
         );
+    }
+
+    #[test]
+    fn test_merge_shutdown_with_fallback_server_kill_merges_and_deduplicates() {
+        let mut shutdown = ShutdownResult {
+            stopped_pids: vec![1001],
+            missing_pids: vec![],
+            forced_pids: vec![1001],
+            remaining_pids: vec![2001],
+            fallback_killed_server_pids: vec![],
+        };
+        let fallback = ServerKillResult {
+            killed_pids: vec![2001, 3001],
+            remaining_pids: vec![4001],
+        };
+
+        merge_shutdown_with_fallback_server_kill(&mut shutdown, &fallback);
+
+        assert_eq!(shutdown.stopped_pids, vec![1001, 2001, 3001]);
+        assert_eq!(shutdown.forced_pids, vec![1001, 2001, 3001, 4001]);
+        assert_eq!(shutdown.remaining_pids, vec![4001]);
+    }
+
+    #[test]
+    fn test_merge_shutdown_with_fallback_server_kill_removes_killed_from_remaining() {
+        let mut shutdown = ShutdownResult {
+            stopped_pids: vec![],
+            missing_pids: vec![],
+            forced_pids: vec![],
+            remaining_pids: vec![5001, 5002],
+            fallback_killed_server_pids: vec![],
+        };
+        let fallback = ServerKillResult {
+            killed_pids: vec![5002],
+            remaining_pids: vec![5003],
+        };
+
+        merge_shutdown_with_fallback_server_kill(&mut shutdown, &fallback);
+
+        assert_eq!(shutdown.remaining_pids, vec![5001, 5003]);
     }
 }
