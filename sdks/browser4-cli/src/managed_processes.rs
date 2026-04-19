@@ -269,15 +269,21 @@ where
     KillBrowsers: FnOnce() -> BrowserKillResult,
     SleepAfter: FnOnce(),
 {
-    notify_close_all();
+    // Force-kill path should still attempt browser cleanup even if earlier steps panic.
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(notify_close_all));
 
-    let result = ForceStopBrowser4ServerResult {
-        shutdown: stop_server(),
-        browser_kill: kill_browsers(),
-    };
+    let shutdown = std::panic::catch_unwind(std::panic::AssertUnwindSafe(stop_server))
+        .unwrap_or_else(|_| ShutdownResult::default());
 
-    sleep_after();
-    result
+    let browser_kill = std::panic::catch_unwind(std::panic::AssertUnwindSafe(kill_browsers))
+        .unwrap_or_else(|_| BrowserKillResult::default());
+
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(sleep_after));
+
+    ForceStopBrowser4ServerResult {
+        shutdown,
+        browser_kill,
+    }
 }
 
 fn notify_close_all_sessions_before_force_stop(
@@ -1069,6 +1075,39 @@ mod tests {
         assert_eq!(
             events.lock().unwrap().as_slice(),
             ["notify", "shutdown", "browser-kill", "sleep"]
+        );
+    }
+
+    #[test]
+    fn test_stop_browser4_server_forcibly_still_kills_browsers_when_shutdown_panics() {
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+
+        let notify_events = std::sync::Arc::clone(&events);
+        let stop_events = std::sync::Arc::clone(&events);
+        let kill_events = std::sync::Arc::clone(&events);
+        let sleep_events = std::sync::Arc::clone(&events);
+
+        let result = stop_browser4_server_forcibly_with_steps(
+            move || notify_events.lock().unwrap().push("notify".to_string()),
+            move || {
+                kill_events.lock().unwrap().push("browser-kill".to_string());
+                BrowserKillResult {
+                    killed_pids: vec![9101],
+                    remaining_pids: vec![],
+                }
+            },
+            move || {
+                stop_events.lock().unwrap().push("shutdown-panic".to_string());
+                panic!("shutdown failed");
+            },
+            move || sleep_events.lock().unwrap().push("sleep".to_string()),
+        );
+
+        assert!(result.shutdown.stopped_pids.is_empty());
+        assert_eq!(result.browser_kill.killed_pids, vec![9101]);
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            ["notify", "shutdown-panic", "browser-kill", "sleep"]
         );
     }
 
