@@ -13,7 +13,7 @@ class AgenticContextTest {
     fun testCreateSessionWithTemporaryProfile() {
         val settings = PulsarSettings(profileMode = BrowserProfileMode.TEMPORARY)
         val session = context.createSession(settings)
-        val profileMode = session.sessionConfig[BROWSER_CONTEXT_MODE]?.toString()?.lowercase()
+        val profileMode = session.sessionConfig[BROWSER_CONTEXT_MODE]?.lowercase()
         assertNotNull(session)
         assertEquals(BrowserProfileMode.TEMPORARY.name.lowercase(), profileMode)
 

@@ -28,7 +28,7 @@ import java.util.*
  * @property domSettleTimeoutMs Optional timeout in ms to wait for DOM settling. DOM 稳定等待超时（毫秒）。
  * @property timeoutMs Optional overall timeout in ms for this action. 动作总超时（毫秒）。
  * @property iframes Reserved: Whether to include iframes when observing/acting. 保留字段：是否包含 iframe。
- * @property fromResolve Internal: true if invoked from resolve loop; excluded from JSON. 内部字段：是否由 resolve 驱动。
+ * @property fromRunLoop Internal: true if invoked from resolve loop; excluded from JSON. 内部字段：是否由 resolve 驱动。
  */
 data class ActionOptions(
     val action: String,
@@ -39,7 +39,7 @@ data class ActionOptions(
     val timeoutMs: Long? = null,
     val iframes: Boolean? = null,
     @get:JsonIgnore
-    val fromResolve: Boolean = true
+    val fromRunLoop: Boolean = true
 )
 
 /**

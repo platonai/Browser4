@@ -4,28 +4,28 @@
   "arguments" : [ {
     "name" : "task",
     "type" : "String",
-    "expression" : "task: String = ",
-    "cliOptions" : "--task=<String>, default="
+    "cliOptions" : "--task=<String>, default=",
+    "expression" : "task: String = "
   } ],
   "returnType" : "AgentHistory",
   "description" : "High-level problem resolution entry. Implementations should construct an [ActionOptions] from the raw problem string and delegate to [run] with the options.",
   "help" : "High-level problem resolution entry. Implementations should construct an [ActionOptions] from the raw problem string and delegate to [run] with the options.",
-  "expression" : "agent.run(Arg(name=task, type=String, defaultValue=))",
-  "cli" : "browser4-cli agent run --task=<String>, default="
+  "cli" : "browser4-cli agent run --task=<String>, default=",
+  "expression" : "agent.run(Arg(name=task, type=String, defaultValue=))"
 }, {
   "domain" : "agent",
   "method" : "observe",
   "arguments" : [ {
     "name" : "instruction",
     "type" : "String",
-    "expression" : "instruction: String = ",
-    "cliOptions" : "--instruction=<String>, default="
+    "cliOptions" : "--instruction=<String>, default=",
+    "expression" : "instruction: String = "
   } ],
   "returnType" : "List<ObserveResult>",
   "description" : "Convenience overload to observe by instruction string. Implementations typically create an [ObserveOptions] from the instruction and delegate to [observe].",
   "help" : "Convenience overload to observe by instruction string. Implementations typically create an [ObserveOptions] from the instruction and delegate to [observe].",
-  "expression" : "agent.observe(Arg(name=instruction, type=String, defaultValue=))",
-  "cli" : "browser4-cli agent observe --instruction=<String>, default="
+  "cli" : "browser4-cli agent observe --instruction=<String>, default=",
+  "expression" : "agent.observe(Arg(name=instruction, type=String, defaultValue=))"
 }, {
   "domain" : "agent",
   "method" : "summarize",
@@ -33,65 +33,65 @@
     "name" : "instruction",
     "type" : "String?",
     "defaultValue" : "null",
-    "expression" : "instruction: String? = null",
-    "cliOptions" : "--instruction=<String?>, default=null"
+    "cliOptions" : "--instruction=<String?>, default=null",
+    "expression" : "instruction: String? = null"
   }, {
     "name" : "selector",
     "type" : "String?",
     "defaultValue" : "null",
-    "expression" : "selector: String? = null",
-    "cliOptions" : "--selector=<String?>, default=null"
+    "cliOptions" : "--selector=<String?>, default=null",
+    "expression" : "selector: String? = null"
   } ],
   "returnType" : "String",
   "description" : "Summarize text captured from the current page or a specific element and return a natural-language synopsis.\n\nPassing an [instruction] tailors the tone or focus of the summary; when null, the agent relies on a default summarization prompt. Supplying a [selector] scopes the extraction to a particular DOM element; leaving it null lets the implementation infer a sensible region (for example, the main article body).",
   "help" : "Summarize text captured from the current page or a specific element and return a natural-language synopsis.\n\nPassing an [instruction] tailors the tone or focus of the summary; when null, the agent relies on a default summarization prompt. Supplying a [selector] scopes the extraction to a particular DOM element; leaving it null lets the implementation infer a sensible region (for example, the main article body).",
-  "expression" : "agent.summarize(Arg(name=instruction, type=String?, defaultValue=null), Arg(name=selector, type=String?, defaultValue=null))",
-  "cli" : "browser4-cli agent summarize --instruction=<String?>, default=null --selector=<String?>, default=null"
+  "cli" : "browser4-cli agent summarize --instruction=<String?>, default=null --selector=<String?>, default=null",
+  "expression" : "agent.summarize(Arg(name=instruction, type=String?, defaultValue=null), Arg(name=selector, type=String?, defaultValue=null))"
 }, {
   "domain" : "agent",
   "method" : "act",
   "arguments" : [ {
     "name" : "action",
     "type" : "String",
-    "expression" : "action: String = ",
-    "cliOptions" : "--action=<String>, default="
+    "cliOptions" : "--action=<String>, default=",
+    "expression" : "action: String = "
   } ],
   "returnType" : "ActResult",
   "description" : "Convenience wrapper building [ActionOptions] from a raw action string and delegating to [act].",
   "help" : "Convenience wrapper building [ActionOptions] from a raw action string and delegating to [act].",
-  "expression" : "agent.act(Arg(name=action, type=String, defaultValue=))",
-  "cli" : "browser4-cli agent act --action=<String>, default="
+  "cli" : "browser4-cli agent act --action=<String>, default=",
+  "expression" : "agent.act(Arg(name=action, type=String, defaultValue=))"
 }, {
   "domain" : "agent",
   "method" : "extract",
   "arguments" : [ {
     "name" : "instruction",
     "type" : "String",
-    "expression" : "instruction: String = ",
-    "cliOptions" : "--instruction=<String>, default="
+    "cliOptions" : "--instruction=<String>, default=",
+    "expression" : "instruction: String = "
   } ],
   "returnType" : "ExtractResult",
   "description" : "Convenience overload for structured extraction. When only an instruction string is provided, the implementation should use [ExtractionSchema.DEFAULT].",
   "help" : "Convenience overload for structured extraction. When only an instruction string is provided, the implementation should use [ExtractionSchema.DEFAULT].",
-  "expression" : "agent.extract(Arg(name=instruction, type=String, defaultValue=))",
-  "cli" : "browser4-cli agent extract --instruction=<String>, default="
+  "cli" : "browser4-cli agent extract --instruction=<String>, default=",
+  "expression" : "agent.extract(Arg(name=instruction, type=String, defaultValue=))"
 }, {
   "domain" : "agent",
   "method" : "extract",
   "arguments" : [ {
     "name" : "instruction",
     "type" : "String",
-    "expression" : "instruction: String = ",
-    "cliOptions" : "--instruction=<String>, default="
+    "cliOptions" : "--instruction=<String>, default=",
+    "expression" : "instruction: String = "
   }, {
     "name" : "schema",
     "type" : "ExtractionSchema",
-    "expression" : "schema: ExtractionSchema = ",
-    "cliOptions" : "--schema=<ExtractionSchema>, default="
+    "cliOptions" : "--schema=<ExtractionSchema>, default=",
+    "expression" : "schema: ExtractionSchema = "
   } ],
   "returnType" : "ExtractResult",
   "description" : "Convenience overload for structured extraction that constrains the result with a JSON schema.",
   "help" : "Convenience overload for structured extraction that constrains the result with a JSON schema.",
-  "expression" : "agent.extract(Arg(name=instruction, type=String, defaultValue=), Arg(name=schema, type=ExtractionSchema, defaultValue=))",
-  "cli" : "browser4-cli agent extract --instruction=<String>, default= --schema=<ExtractionSchema>, default="
+  "cli" : "browser4-cli agent extract --instruction=<String>, default= --schema=<ExtractionSchema>, default=",
+  "expression" : "agent.extract(Arg(name=instruction, type=String, defaultValue=), Arg(name=schema, type=ExtractionSchema, defaultValue=))"
 } ]
