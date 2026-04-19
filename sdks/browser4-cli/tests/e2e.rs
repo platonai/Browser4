@@ -2023,36 +2023,36 @@ fn test_interaction_commands(ctx: &mut E2ECtx) {
 
     run_command(ctx, &["click", "#type-target"]);
     let keydown_before = key_event_count(&read_interactive_state(ctx));
-    // run_command(ctx, &["keydown", "Shift"]);
-    // wait_for_state(
-    //     ctx,
-    //     |s| {
-    //         key_event_count(s) > keydown_before
-    //             && s["keyEvents"]
-    //                 .as_array()
-    //                 .and_then(|events| events.last())
-    //                 .and_then(|event| event.as_str())
-    //                 == Some("down:Shift")
-    //     },
-    //     15_000,
-    //     "Expected keydown to record a final 'down:Shift' key event",
-    // );
+    run_command(ctx, &["keydown", "Shift"]);
+    wait_for_state(
+        ctx,
+        |s| {
+            key_event_count(s) > keydown_before
+                && s["keyEvents"]
+                    .as_array()
+                    .and_then(|events| events.last())
+                    .and_then(|event| event.as_str())
+                    == Some("down:Shift")
+        },
+        15_000,
+        "Expected keydown to record a final 'down:Shift' key event",
+    );
 
-    // let keyup_before = key_event_count(&read_interactive_state(ctx));
-    // run_command(ctx, &["keyup", "Shift"]);
-    // wait_for_state(
-    //     ctx,
-    //     |s| {
-    //         key_event_count(s) > keyup_before
-    //             && s["keyEvents"]
-    //                 .as_array()
-    //                 .and_then(|events| events.last())
-    //                 .and_then(|event| event.as_str())
-    //                 == Some("up:Shift")
-    //     },
-    //     15_000,
-    //     "Expected keyup to record a final 'up:Shift' key event",
-    // );
+    let keyup_before = key_event_count(&read_interactive_state(ctx));
+    run_command(ctx, &["keyup", "Shift"]);
+    wait_for_state(
+        ctx,
+        |s| {
+            key_event_count(s) > keyup_before
+                && s["keyEvents"]
+                    .as_array()
+                    .and_then(|events| events.last())
+                    .and_then(|event| event.as_str())
+                    == Some("up:Shift")
+        },
+        15_000,
+        "Expected keyup to record a final 'up:Shift' key event",
+    );
 
     run_command(ctx, &["click", "#click-target"]);
     wait_for_state(
@@ -3192,22 +3192,6 @@ const SCENARIOS: &[ScenarioDef] = &[
         test_fn: test_interaction_commands,
     },
     ScenarioDef {
-        name: "test_e2e_interaction_commands",
-        short_name: "test_interaction_commands",
-        requires_browser4: true,
-        restart_browser4: false,
-        test_count: 1,
-        test_fn: test_interaction_commands,
-    },
-    ScenarioDef {
-        name: "test_e2e_interaction_commands",
-        short_name: "test_interaction_commands",
-        requires_browser4: true,
-        restart_browser4: false,
-        test_count: 1,
-        test_fn: test_interaction_commands,
-    },
-    ScenarioDef {
         name: "test_e2e_batch_commands",
         short_name: "test_batch_commands",
         requires_browser4: true,
@@ -3247,62 +3231,62 @@ const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: test_batch_json_edge_cases,
     },
-    ScenarioDef {
-        name: "test_e2e_form_controls_and_exports",
-        short_name: "test_form_controls_and_exports",
-        requires_browser4: true,
-        restart_browser4: false,
-        test_count: 1,
-        test_fn: test_form_controls_and_exports,
-    },
-    ScenarioDef {
-        name: "test_e2e_mouse_and_dialog",
-        short_name: "test_mouse_and_dialog",
-        requires_browser4: true,
-        restart_browser4: false,
-        test_count: 3,
-        test_fn: test_mouse_and_dialog,
-    },
-    ScenarioDef {
-        name: "test_e2e_tab_commands",
-        short_name: "test_tab_commands",
-        requires_browser4: true,
-        restart_browser4: false,
-        test_count: 1,
-        test_fn: test_tab_commands,
-    },
-    ScenarioDef {
-        name: "test_e2e_collective_session_and_agent_tools",
-        short_name: "test_collective_session_and_agent_tools",
-        requires_browser4: false,
-        restart_browser4: false,
-        test_count: 1,
-        test_fn: test_collective_session_and_agent_tools,
-    },
-    ScenarioDef {
-        name: "test_e2e_open_uses_temporary_profile_mode",
-        short_name: "test_open_uses_temporary_profile_mode",
-        requires_browser4: false,
-        restart_browser4: false,
-        test_count: 1,
-        test_fn: test_open_uses_temporary_profile_mode,
-    },
-    ScenarioDef {
-        name: "test_e2e_agent_task_commands",
-        short_name: "test_agent_task_commands",
-        requires_browser4: false,
-        restart_browser4: false,
-        test_count: 1,
-        test_fn: test_agent_task_commands,
-    },
-    ScenarioDef {
-        name: "test_e2e_collective_submission_commands",
-        short_name: "test_collective_submission_commands",
-        requires_browser4: false,
-        restart_browser4: false,
-        test_count: 1,
-        test_fn: test_collective_submission_commands,
-    },
+    // ScenarioDef {
+    //     name: "test_e2e_form_controls_and_exports",
+    //     short_name: "test_form_controls_and_exports",
+    //     requires_browser4: true,
+    //     restart_browser4: false,
+    //     test_count: 1,
+    //     test_fn: test_form_controls_and_exports,
+    // },
+    // ScenarioDef {
+    //     name: "test_e2e_mouse_and_dialog",
+    //     short_name: "test_mouse_and_dialog",
+    //     requires_browser4: true,
+    //     restart_browser4: false,
+    //     test_count: 3,
+    //     test_fn: test_mouse_and_dialog,
+    // },
+    // ScenarioDef {
+    //     name: "test_e2e_tab_commands",
+    //     short_name: "test_tab_commands",
+    //     requires_browser4: true,
+    //     restart_browser4: false,
+    //     test_count: 1,
+    //     test_fn: test_tab_commands,
+    // },
+    // ScenarioDef {
+    //     name: "test_e2e_collective_session_and_agent_tools",
+    //     short_name: "test_collective_session_and_agent_tools",
+    //     requires_browser4: false,
+    //     restart_browser4: false,
+    //     test_count: 1,
+    //     test_fn: test_collective_session_and_agent_tools,
+    // },
+    // ScenarioDef {
+    //     name: "test_e2e_open_uses_temporary_profile_mode",
+    //     short_name: "test_open_uses_temporary_profile_mode",
+    //     requires_browser4: false,
+    //     restart_browser4: false,
+    //     test_count: 1,
+    //     test_fn: test_open_uses_temporary_profile_mode,
+    // },
+    // ScenarioDef {
+    //     name: "test_e2e_agent_task_commands",
+    //     short_name: "test_agent_task_commands",
+    //     requires_browser4: false,
+    //     restart_browser4: false,
+    //     test_count: 1,
+    //     test_fn: test_agent_task_commands,
+    // },
+    // ScenarioDef {
+    //     name: "test_e2e_collective_submission_commands",
+    //     short_name: "test_collective_submission_commands",
+    //     requires_browser4: false,
+    //     restart_browser4: false,
+    //     test_count: 1,
+    //     test_fn: test_collective_submission_commands,
+    // },
 ];
 
 fn parse_scenario_filter() -> Option<String> {

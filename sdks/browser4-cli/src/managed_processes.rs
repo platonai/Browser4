@@ -209,7 +209,7 @@ pub fn stop_browser4_server_gracefully() -> ShutdownResult {
     stop_browser4_server(false)
 }
 
-/// Force-stop all managed Browser4 server processes, then kill all related Chrome processes.
+/// Force-stop all managed Browser4 server processes, then kill all related browser processes.
 pub fn stop_browser4_server_forcibly() -> ForceStopBrowser4ServerResult {
     let result = stop_browser4_server_forcibly_with_steps(
         || notify_close_all_sessions_before_force_stop(None, None),
@@ -266,17 +266,25 @@ fn stop_browser4_server_forcibly_with_steps<NotifyCloseAll, StopServer, KillBrow
 where
     NotifyCloseAll: FnOnce(),
     StopServer: FnOnce() -> ShutdownResult,
-    KillBrowsers: FnOnce() -> BrowserKillResult,
+    KillBrowsers: Fn() -> BrowserKillResult,
     SleepAfter: FnOnce(),
 {
     // Force-kill path should still attempt browser cleanup even if earlier steps panic.
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(notify_close_all));
 
+    // Pre-sweep catches already-orphaned browser processes before server shutdown.
+    let pre_browser_kill =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(&kill_browsers))
+            .unwrap_or_else(|_| BrowserKillResult::default());
+
     let shutdown = std::panic::catch_unwind(std::panic::AssertUnwindSafe(stop_server))
         .unwrap_or_else(|_| ShutdownResult::default());
 
-    let browser_kill = std::panic::catch_unwind(std::panic::AssertUnwindSafe(kill_browsers))
-        .unwrap_or_else(|_| BrowserKillResult::default());
+    // Post-sweep catches browsers that spawn late during shutdown.
+    let post_browser_kill =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(kill_browsers))
+            .unwrap_or_else(|_| BrowserKillResult::default());
+    let browser_kill = merge_browser_kill_results(pre_browser_kill, post_browser_kill);
 
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(sleep_after));
 
@@ -284,6 +292,17 @@ where
         shutdown,
         browser_kill,
     }
+}
+
+fn merge_browser_kill_results(
+    mut first: BrowserKillResult,
+    mut second: BrowserKillResult,
+) -> BrowserKillResult {
+    first.killed_pids.append(&mut second.killed_pids);
+    first.remaining_pids.append(&mut second.remaining_pids);
+    dedup_sort_u32(&mut first.killed_pids);
+    dedup_sort_u32(&mut first.remaining_pids);
+    first
 }
 
 fn notify_close_all_sessions_before_force_stop(
@@ -363,7 +382,7 @@ fn call_close_all_sessions(
         .to_string())
 }
 
-/// Kill all found Browser4 Chrome processes (marked with PULSAR_CHROME).
+/// Kill all found Browser4 browser processes (marked with PULSAR_CHROME or marker files).
 pub fn kill_all_browsers() -> BrowserKillResult {
     const KILL_TIMEOUT_MS: u64 = 30_000;
     const WAIT_BETWEEN_SWEEPS_MS: u64 = 250;
@@ -1074,7 +1093,13 @@ mod tests {
         assert!(result.browser_kill.killed_pids.is_empty());
         assert_eq!(
             events.lock().unwrap().as_slice(),
-            ["notify", "shutdown", "browser-kill", "sleep"]
+            [
+                "notify",
+                "browser-kill",
+                "shutdown",
+                "browser-kill",
+                "sleep",
+            ]
         );
     }
 
@@ -1107,8 +1132,31 @@ mod tests {
         assert_eq!(result.browser_kill.killed_pids, vec![9101]);
         assert_eq!(
             events.lock().unwrap().as_slice(),
-            ["notify", "shutdown-panic", "browser-kill", "sleep"]
+            [
+                "notify",
+                "browser-kill",
+                "shutdown-panic",
+                "browser-kill",
+                "sleep",
+            ]
         );
+    }
+
+    #[test]
+    fn test_merge_browser_kill_results_merges_and_deduplicates() {
+        let merged = merge_browser_kill_results(
+            BrowserKillResult {
+                killed_pids: vec![1001, 1002],
+                remaining_pids: vec![2001],
+            },
+            BrowserKillResult {
+                killed_pids: vec![1002, 1003],
+                remaining_pids: vec![2001, 2002],
+            },
+        );
+
+        assert_eq!(merged.killed_pids, vec![1001, 1002, 1003]);
+        assert_eq!(merged.remaining_pids, vec![2001, 2002]);
     }
 
     #[test]

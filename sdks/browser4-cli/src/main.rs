@@ -451,7 +451,7 @@ async fn handle_kill_all() -> Result<(), String> {
             .map(|p| p.to_string())
             .collect();
         println!(
-            "Killed found Browser4 Chrome process(es): {}",
+            "Killed found Browser4 browser process(es): {}",
             pids.join(", ")
         );
     }
@@ -463,7 +463,7 @@ async fn handle_kill_all() -> Result<(), String> {
             .map(|p| p.to_string())
             .collect();
         return Err(format!(
-            "Browser cleanup incomplete. Remaining Browser4 Chrome process(es): {}",
+            "Browser cleanup incomplete. Remaining Browser4 browser process(es): {}",
             pids.join(", ")
         ));
     }
