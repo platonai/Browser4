@@ -11,7 +11,7 @@ import org.springframework.context.annotation.Configuration
 class CommandServiceConfig {
 
     /**
-     * TODO: move CommandNormalizer to module pulsar-agentic
+     * TODO: move CommandNormalizer to module browser4-agentic
      * */
     @Bean
     fun commandNormalizer(conversationService: ConversationService): CommandNormalizer {

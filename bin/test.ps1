@@ -78,7 +78,7 @@ function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
 
     $modules = @()
     if ($hasSkills -or $hasMcp) {
-        $modules += 'pulsar-agentic'
+        $modules += 'browser4-agentic'
 
         if (-not ($hasFast -or $hasIT -or $hasE2E -or $hasRest)) {
             $patterns = @()

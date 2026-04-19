@@ -2,9 +2,9 @@
 
 ## 概述 / Overview
 
-本文档介绍了 pulsar-agentic 模块的可观测性系统，包括分布式追踪、指标收集、监控和告警配置。
+本文档介绍了 browser4-agentic 模块的可观测性系统，包括分布式追踪、指标收集、监控和告警配置。
 
-This guide covers the observability system for the pulsar-agentic module, including distributed tracing, metrics collection, monitoring, and alerting configuration.
+This guide covers the observability system for the browser4-agentic module, including distributed tracing, metrics collection, monitoring, and alerting configuration.
 
 ## 核心组件 / Core Components
 
@@ -26,7 +26,7 @@ export OTEL_TRACES_ENABLED=true
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 
 # 服务名称 / Service name
-export OTEL_SERVICE_NAME=pulsar-agentic
+export OTEL_SERVICE_NAME=browser4-agentic
 
 # 服务版本 / Service version
 export OTEL_SERVICE_VERSION=4.7.0-SNAPSHOT
@@ -83,7 +83,7 @@ export METRICS_ENABLED=true
 export METRICS_PREFIX=pulsar_agentic
 
 # 通用标签 / Common tags (comma-separated key:value pairs)
-export METRICS_COMMON_TAGS=service:pulsar-agentic,environment:production
+export METRICS_COMMON_TAGS=service:browser4-agentic,environment:production
 ```
 
 #### 指标端点 / Metrics Endpoint
@@ -237,13 +237,13 @@ Add scrape configuration to `prometheus.yml`:
 
 ```yaml
 scrape_configs:
-  - job_name: 'pulsar-agentic'
+  - job_name: 'browser4-agentic'
     metrics_path: '/actuator/prometheus'
     scrape_interval: 30s
     static_configs:
       - targets: ['localhost:8182']
         labels:
-          service: 'pulsar-agentic'
+          service: 'browser4-agentic'
           environment: 'production'
 ```
 
@@ -306,12 +306,12 @@ Complete observability stack:
 version: '3.8'
 
 services:
-  pulsar-agentic:
-    image: pulsar-agentic:latest
+  browser4-agentic:
+    image: browser4-agentic:latest
     environment:
       - OTEL_TRACES_ENABLED=true
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
-      - OTEL_SERVICE_NAME=pulsar-agentic
+      - OTEL_SERVICE_NAME=browser4-agentic
       - METRICS_ENABLED=true
     ports:
       - "8182:8182"

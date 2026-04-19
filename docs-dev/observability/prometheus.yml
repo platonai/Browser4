@@ -2,7 +2,7 @@ global:
   scrape_interval: 30s
   evaluation_interval: 30s
   external_labels:
-    cluster: 'pulsar-agentic'
+    cluster: 'browser4-agentic'
     environment: 'production'
 
 # Alertmanager configuration
@@ -18,15 +18,15 @@ rule_files:
 
 scrape_configs:
   # Scrape Pulsar Agentic metrics
-  - job_name: 'pulsar-agentic'
+  - job_name: 'browser4-agentic'
     metrics_path: '/actuator/prometheus'
     scrape_interval: 30s
     static_configs:
       - targets: ['host.docker.internal:8182']
         labels:
-          service: 'pulsar-agentic'
+          service: 'browser4-agentic'
           component: 'application'
-  
+
   # Scrape OpenTelemetry Collector metrics
   - job_name: 'otel-collector'
     scrape_interval: 30s
@@ -35,7 +35,7 @@ scrape_configs:
         labels:
           service: 'otel-collector'
           component: 'collector'
-  
+
   # Scrape Prometheus itself
   - job_name: 'prometheus'
     scrape_interval: 30s
@@ -44,7 +44,7 @@ scrape_configs:
         labels:
           service: 'prometheus'
           component: 'monitoring'
-  
+
   # Scrape Grafana metrics
   - job_name: 'grafana'
     scrape_interval: 30s

@@ -114,7 +114,7 @@ I’ve got enough to design the harness now. The remaining question is the safes
 ● Read browser4\browser4-agents\README.md lines 108-124
   └ 17 lines read
 
-● Read pulsar-agentic\src\main\kotlin\ai\platon\pulsar\agentic\mcp\server\Browser4MCPServerRunner.kt
+● Read browser4-agentic\src\main\kotlin\ai\platon\pulsar\agentic\mcp\server\Browser4MCPServerRunner.kt
   lines 1-120
   └ 77 lines read
 
@@ -149,13 +149,13 @@ upload|handle_dialog|dialog-accept|dialog-dismiss|browser_press_sequentially|bro
   └ 35 lines found
 
 ● Grep "browser_file_upload|browser_handle_dialog|browser_press_sequentially|browser_mouse_wheel" in
- **/*.kt (D:\workspace\Browser4\Browser4-4.6\pulsar-agentic)
+ **/*.kt (D:\workspace\Browser4\Browser4-4.6\browser4-agentic)
   └ No matches found
 
 `upload` is the one command whose CLI shape doesn’t obviously expose a selector, so I’m tracing the backend tool definition itself. If it really needs a selector behind the scenes, I’ll make the E2E fixture drive the exact flow the backend expects rather than guessing.
 
 ● Grep "browser_file_upload|browser_handle_dialog|browser_press_sequentially|browser_take_screenshot
-|browser_tabs" in **/*.kt (D:\workspace\Browser4\Browser4-4.6\pulsar-agentic)
+|browser_tabs" in **/*.kt (D:\workspace\Browser4\Browser4-4.6\browser4-agentic)
   └ No matches found
 
 ● Grep "browser_file_upload|browser_handle_dialog|browser_tabs|browser_press_sequentially" in
@@ -167,22 +167,22 @@ shot|pdfSave|tabs" in **/*.kt (D:\workspace\Browser4\Browser4-4.6\pulsar-core)
   └ 25 lines found
 
 ● Grep "fun .*upload\(|class .*Upload|@McpTool.*upload|handle dialog|promptText|accept:
-Boolean|tabs" in **/*.kt (D:\workspace\Browser4\Browser4-4.6\pulsar-agentic)
+Boolean|tabs" in **/*.kt (D:\workspace\Browser4\Browser4-4.6\browser4-agentic)
   └ 21 lines found
 
 I found the actual tab/dialog executor, which should tell me whether `upload` is selector-less by design or just hidden behind the backend. I’m reading those tool handlers directly and then I’ll start editing.
 
 ● Read
-  pulsar-agentic\src\main\kotlin\ai\platon\pulsar\agentic\tools\builtin\BrowserTabToolExecutor.kt
+  browser4-agentic\src\main\kotlin\ai\platon\pulsar\agentic\tools\builtin\BrowserTabToolExecutor.kt
   lines 1-260
   └ 260 lines read
 
-● Read pulsar-agentic\src\main\kotlin\ai\platon\pulsar\agentic\tools\builtin\BrowserToolExecutor.kt
+● Read browser4-agentic\src\main\kotlin\ai\platon\pulsar\agentic\tools\builtin\BrowserToolExecutor.kt
   lines 1-220
   └ 103 lines read
 
 ● Grep "upload|file_upload|setInputFiles|browser_file_upload|paths" in **/*.kt (D:\workspace\Browser
-4\Browser4-4.6\pulsar-agentic\src\main\kotlin\ai\platon\pulsar\agentic\tools\builtin)
+4\Browser4-4.6\browser4-agentic\src\main\kotlin\ai\platon\pulsar\agentic\tools\builtin)
   └ 4 lines found
 
 I found a likely mismatch: the low-level tool executor wants `selector + paths`, but the CLI command only exposes a file path. I’m checking the REST compatibility shim now, because that’s probably where `upload` gets translated into the backend’s expected selector form.
@@ -209,7 +209,7 @@ I found the missing piece: the REST layer auto-maps `ref -> selector`, which mak
   └ 2 lines found
 
 ● Grep "currentUrl|mouseMove|takeScreenshot|pdfSave|open_session|close_session|list_sessions|delete_
-session_data" in **/*.kt (D:\workspace\Browser4\Browser4-4.6\pulsar-agentic\src\main\kotlin\ai\plato
+session_data" in **/*.kt (D:\workspace\Browser4\Browser4-4.6\browser4-agentic\src\main\kotlin\ai\plato
 n\pulsar\agentic\tools\builtin)
   └ 6 lines found
 
@@ -701,13 +701,13 @@ cp\controller\MCPToolController.kt)
   └ No matches found
 
 ● Grep "pdfSave|consoleMessages|consoleClear|console_messages|console_clear" in **/*.kt (D:\workspac
-e\Browser4\Browser4-4.6\pulsar-agentic\src\main\kotlin\ai\platon\pulsar\agentic\tools\builtin)
+e\Browser4\Browser4-4.6\browser4-agentic\src\main\kotlin\ai\platon\pulsar\agentic\tools\builtin)
   └ No matches found
 
 The `/mcp/tools` contract confirms `console` and likely `pdf` are missing from the advertised frontend-name set too. I’m searching the backend executors one layer deeper so I can add the right aliases instead of guessing method names.
 
 ● Grep "console|pdf" in **/*.kt
-(D:\workspace\Browser4\Browser4-4.6\pulsar-agentic\src\main\kotlin\ai\platon\pulsar\agentic\tools)
+(D:\workspace\Browser4\Browser4-4.6\browser4-agentic\src\main\kotlin\ai\platon\pulsar\agentic\tools)
   └ No matches found
 
 ● Grep "consoleMessages|consoleClear|pdfSave|savePdf|pdf" (D:\workspace\Browser4\Browser4-4.6\pulsar
@@ -730,12 +730,12 @@ ar|pdf_save" in **/*.{kt,ts,md,json,yml} (D:\workspace\Browser4\Browser4-4.6)
 
 I’ve confirmed the CLI is advertising frontend `console` and `pdf` commands that don’t appear anywhere in the backend tool routing. I’m checking whether those capabilities exist under different method names before I decide whether the right fix is backend wiring or shrinking the supported command list to what’s actually real.
 
-● Grep "console|pdf" in **/*.kt (D:\workspace\Browser4\Browser4-4.6\pulsar-agentic\src\main\kotlin\a
+● Grep "console|pdf" in **/*.kt (D:\workspace\Browser4\Browser4-4.6\browser4-agentic\src\main\kotlin\a
 i\platon\pulsar\agentic\tools\specs)
   └ No matches found
 
 ● Grep "console message|console.*message|pdf.*save|save.*pdf" in **/*.{md,json,yaml}
-(D:\workspace\Browser4\Browser4-4.6\pulsar-agentic\src\main\resources)
+(D:\workspace\Browser4\Browser4-4.6\browser4-agentic\src\main\resources)
   └ 2 lines found
 
 ● Grep "List console messages|Save page as PDF|console messages|pdf save|take screenshot|screenshot
@@ -930,7 +930,7 @@ The tab behavior doesn’t line up with a simple index switch, so I’m checking
   300-430
   └ 131 lines read
 
-● Read pulsar-agentic\src\main\kotlin\ai\platon\pulsar\agentic\tools\builtin\BrowserToolExecutor.kt
+● Read browser4-agentic\src\main\kotlin\ai\platon\pulsar\agentic\tools\builtin\BrowserToolExecutor.kt
   lines 60-100
   └ 41 lines read
 

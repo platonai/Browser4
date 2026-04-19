@@ -2,9 +2,9 @@
 
 ## 快速开始 / Quick Start
 
-本指南帮助您快速启动 pulsar-agentic 的可观测性系统。
+本指南帮助您快速启动 browser4-agentic 的可观测性系统。
 
-This guide helps you quickly set up the observability system for pulsar-agentic.
+This guide helps you quickly set up the observability system for browser4-agentic.
 
 ## 5分钟快速部署 / 5-Minute Setup
 
@@ -51,13 +51,13 @@ class MyAgent {
     fun execute() {
         // 记录 agent 启动 / Record agent start
         AgentMetrics.recordAgentStart("my-agent")
-        
+
         // 使用追踪 / Use tracing
         TracingUtils.withSpan("agent.execute") { span ->
             try {
                 // 执行任务 / Execute task
                 performTask()
-                
+
                 // 记录成功 / Record success
                 AgentMetrics.recordAgentCompleted("my-agent", totalSteps = 10)
             } catch (e: Exception) {
@@ -96,14 +96,14 @@ class MyInferenceEngine {
     fun callLLM() {
         InferenceMetrics.recordInferenceCallTimed("gpt-4") {
             val response = llmClient.call(prompt)
-            
+
             // 记录 token 使用 / Record token usage
             InferenceMetrics.recordTokenUsage(
-                "gpt-4", 
+                "gpt-4",
                 inputTokens = response.inputTokens,
                 outputTokens = response.outputTokens
             )
-            
+
             response
         }
     }
@@ -122,7 +122,7 @@ class MyInferenceEngine {
 #### Jaeger Traces
 
 1. 访问 http://localhost:16686
-2. 选择服务 "pulsar-agentic"
+2. 选择服务 "browser4-agentic"
 3. 查看追踪详情 / View trace details
 
 #### Prometheus Metrics
@@ -132,10 +132,10 @@ class MyInferenceEngine {
    ```promql
    # Agent 成功率 / Agent success rate
    rate(agent_completed_total[5m]) / rate(agent_started_total[5m])
-   
+
    # Tool 调用次数 / Tool call count
    sum(rate(tool_calls_total[5m])) by (tool_name)
-   
+
    # Inference 延迟 (p95) / Inference latency (p95)
    histogram_quantile(0.95, sum(rate(inference_duration_seconds_bucket[5m])) by (le))
    ```

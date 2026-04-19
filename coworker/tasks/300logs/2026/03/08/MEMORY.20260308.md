@@ -14,7 +14,7 @@
 
 - **CLI/backend contract alignment:** `browser4-cli` now matches real MCP/backend tool names and payloads (`navigate`, `go_back`, `press`, `type`, `select_option`, `tab_*`, etc.); unsupported exports were removed; open/snapshot/screenshot now use `open`, `aria_snapshot`, and `screenshot` with base64 file saving. `MCPToolController.kt` normalizes snake_case and legacy payloads for compatibility. **Learning:** Follow the actual MCP contract, and keep backward compatibility in the controller via lightweight normalization instead of alias drift.
 
-- **Browser4 MCP startup verification:** Confirmed Browser4 MCP starts from `pulsar-agentic` via Maven exec entry point `Browser4MCPServerRunnerKt`, launches Browser4/Chrome, registers tools, and exits when STDIO closes; it does **not** start from `browser4\browser4-agents\target\Browser4.jar`. **Learning:** Browser4 MCP is a STDIO subprocess, not a long-running HTTP server; docs/tests should distinguish it clearly from the Spring Boot app.
+- **Browser4 MCP startup verification:** Confirmed Browser4 MCP starts from `browser4-agentic` via Maven exec entry point `Browser4MCPServerRunnerKt`, launches Browser4/Chrome, registers tools, and exits when STDIO closes; it does **not** start from `browser4\browser4-agents\target\Browser4.jar`. **Learning:** Browser4 MCP is a STDIO subprocess, not a long-running HTTP server; docs/tests should distinguish it clearly from the Spring Boot app.
 
 
 Total usage est:        1 Premium request

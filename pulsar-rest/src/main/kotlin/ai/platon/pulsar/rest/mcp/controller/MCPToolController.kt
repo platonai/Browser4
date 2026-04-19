@@ -431,7 +431,7 @@ class MCPToolController(
     private fun getCommandAgentToolExecutor(): AgentToolExecutor {
         val commandAgent = commandService.session.companionAgent as? BasicBrowserAgent
             ?: throw IllegalStateException("CommandService session agent does not support tools")
-        // TODO: a native CommandService is required in pulsar-agentic module for better maintainability and testing
+        // TODO: a native CommandService is required in browser4-agentic module for better maintainability and testing
         return commandAgent.toolExtractor.also { it.registerCustomTarget("command", commandService) }
     }
 

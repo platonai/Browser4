@@ -17,7 +17,7 @@ I’ve got the task scope: remove the CLI alias bridge and make the backend acce
   Path does not exist
 
 ● Grep "LEGACY_TOOL_NAME_ALIASES|declareCommand|browser_|aria_snapshot|tab_" in
-{sdks/**,pulsar-rest/**,pulsar-agentic/**,browser4/**,docs/**}/*
+{sdks/**,pulsar-rest/**,browser4-agentic/**,browser4/**,docs/**}/*
 (D:\workspace\Browser4\Browser4-4.6)
   └ 5 lines found
 
@@ -88,11 +88,11 @@ The frontend command catalog is definitely still the Playwright-style `browser_*
 ● Grep "browser_[a-z0-9_]+" (D:\workspace\Browser4\Browser4-4.6\pulsar-rest)
   └ 12 lines found
 
-● Grep "browser_[a-z0-9_]+" (D:\workspace\Browser4\Browser4-4.6\pulsar-agentic)
+● Grep "browser_[a-z0-9_]+" (D:\workspace\Browser4\Browser4-4.6\browser4-agentic)
   └ 4 lines found
 
 ● Grep "ToolSpec\(|@MCPTool|@Tool|method = "[^"]+""
-(D:\workspace\Browser4\Browser4-4.6\pulsar-agentic)
+(D:\workspace\Browser4\Browser4-4.6\browser4-agentic)
   └ 5 lines found
 
 ● Grep "browser_set_storage_state|browser_storage_state|browser_cookie_list|browser_route|browser_ru
@@ -100,16 +100,16 @@ n_code|browser_console_messages|browser_network_requests|browser_start_tracing"
 (D:\workspace\Browser4\Browser4-4.6)
   └ 9 lines found
 
-● Read pulsar-agentic\src\main\kotlin\ai\platon\pulsar\agentic\mcp\server\Browser4MCPServer.kt lines
+● Read browser4-agentic\src\main\kotlin\ai\platon\pulsar\agentic\mcp\server\Browser4MCPServer.kt lines
   120-230
   └ 93 lines read
 
 ● Grep "setStorageState|storageState|cookieList|routeList|consoleMessages|networkRequests|startTraci
-ng|runCode|snapshot" (D:\workspace\Browser4\Browser4-4.6\pulsar-agentic\src\main\kotlin)
+ng|runCode|snapshot" (D:\workspace\Browser4\Browser4-4.6\browser4-agentic\src\main\kotlin)
   └ 20 lines found
 
 ● Grep "fun .*switchTab|fun .*newTab|fun .*listTabs|fun .*closeTab|fun .*keyDown|fun .*mouseMove|fun
- .*mouseWheel" (D:\workspace\Browser4\Browser4-4.6\pulsar-agentic\src\main\kotlin)
+ .*mouseWheel" (D:\workspace\Browser4\Browser4-4.6\browser4-agentic\src\main\kotlin)
   └ No matches found
 
 ● Explore: Map tool name support
@@ -199,13 +199,13 @@ I’ve got the change shape now: shift the CLI’s name/shape translation into `
   └ 6 lines found
 
 ● Read
-  pulsar-agentic\src\main\kotlin\ai\platon\pulsar\agentic\tools\builtin\BrowserTabToolExecutor.kt
+  browser4-agentic\src\main\kotlin\ai\platon\pulsar\agentic\tools\builtin\BrowserTabToolExecutor.kt
   lines 130-310
   └ 181 lines read
 
 ● Grep "fun evaluate|fun click|fun fill|fun hover|fun selectOption|fun upload|fun check|fun
 uncheck|fun drag|fun press|fun type|fun screenshot|fun ariaSnapshot"
-(D:\workspace\Browser4\Browser4-4.6\pulsar-agentic\src\main\kotlin)
+(D:\workspace\Browser4\Browser4-4.6\browser4-agentic\src\main\kotlin)
   └ 2 lines found
 
 ✗ Edit sdks\browser4-cli\src\program.ts

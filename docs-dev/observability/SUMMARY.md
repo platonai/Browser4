@@ -2,9 +2,9 @@
 
 ## 项目概览 / Project Overview
 
-本项目为 pulsar-agentic 模块设计并实现了完整的可观测性系统，包括分布式追踪、指标收集、监控告警和可视化。
+本项目为 browser4-agentic 模块设计并实现了完整的可观测性系统，包括分布式追踪、指标收集、监控告警和可视化。
 
-This project designed and implemented a complete observability system for the pulsar-agentic module, including distributed tracing, metrics collection, monitoring/alerting, and visualization.
+This project designed and implemented a complete observability system for the browser4-agentic module, including distributed tracing, metrics collection, monitoring/alerting, and visualization.
 
 ---
 
@@ -101,7 +101,7 @@ This project designed and implemented a complete observability system for the pu
 ### 📦 Maven 依赖更新 (2 files)
 
 1. `browser4-dependencies/pom.xml` - 添加 OpenTelemetry 和 Micrometer 版本管理
-2. `pulsar-agentic/pom.xml` - 添加具体依赖
+2. `browser4-agentic/pom.xml` - 添加具体依赖
 
 ---
 
@@ -398,7 +398,7 @@ management.endpoints.web.exposure.include=prometheus
 | 告警规则 | `docs/observability/prometheus-alerts.yml` | Prometheus 告警规则定义 |
 | Grafana Dashboard | `docs/observability/grafana-dashboard.json` | Dashboard JSON 配置 |
 | Docker Compose | `docs/observability/docker-compose.yml` | 完整可观测性栈 |
-| 配置说明 | `pulsar-agentic/src/main/resources/application-observability.properties` | 应用配置参数 |
+| 配置说明 | `browser4-agentic/src/main/resources/application-observability.properties` | 应用配置参数 |
 
 ---
 
@@ -418,9 +418,9 @@ This observability system is built on top of the following open-source projects:
 
 ## 结论 / Conclusion
 
-本项目成功为 pulsar-agentic 模块构建了一套完整、生产就绪的可观测性系统。系统包含：
+本项目成功为 browser4-agentic 模块构建了一套完整、生产就绪的可观测性系统。系统包含：
 
-This project successfully built a complete, production-ready observability system for the pulsar-agentic module, including:
+This project successfully built a complete, production-ready observability system for the browser4-agentic module, including:
 
 - ✅ **完整的技术栈** - 从追踪到指标到告警全覆盖
 - ✅ **开箱即用** - Docker Compose 一键部署
@@ -429,13 +429,13 @@ This project successfully built a complete, production-ready observability syste
 - ✅ **高质量代码** - 70+ 单元测试确保可靠性
 - ✅ **低性能影响** - <2% CPU 和 <15MB 内存开销
 
-该系统为 pulsar-agentic 提供了强大的可观测性能力，帮助开发和运维团队：
+该系统为 browser4-agentic 提供了强大的可观测性能力，帮助开发和运维团队：
 - 🔍 深入了解系统行为
 - 📊 实时监控关键指标
 - ⚠️ 及时发现和解决问题
 - 📈 持续优化性能
 
-This system provides powerful observability capabilities for pulsar-agentic, helping development and operations teams to deeply understand system behavior, monitor key metrics in real-time, detect and resolve issues promptly, and continuously optimize performance.
+This system provides powerful observability capabilities for browser4-agentic, helping development and operations teams to deeply understand system behavior, monitor key metrics in real-time, detect and resolve issues promptly, and continuously optimize performance.
 
 ---
 

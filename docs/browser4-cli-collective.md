@@ -313,4 +313,4 @@ CLI parameters map directly to the underlying Agentic and Skeleton APIs.
 - [browser4-cli-agent.md](browser4-cli-agent.md) — Single-agent AI commands
 - [rest-api-examples.md](rest-api-examples.md) — REST API usage examples
 - [LoadOptions.kt](../browser4-core/pulsar-skeleton/src/main/kotlin/ai/platon/pulsar/skeleton/common/options/LoadOptions.kt) — Load options reference
-- [AgenticContexts.kt](../pulsar-agentic/src/main/kotlin/ai/platon/pulsar/agentic/AgenticContexts.kt) — Session creation API
+- [AgenticContexts.kt](../browser4-agentic/src/main/kotlin/ai/platon/pulsar/agentic/AgenticContexts.kt) — Session creation API

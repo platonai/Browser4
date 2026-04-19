@@ -1,6 +1,6 @@
 # Agent Tool Call 机制（代码索引）
 
-本目录：`pulsar-agentic/src/main/kotlin/ai/platon/pulsar/agentic/tools`
+本目录：`browser4-agentic/src/main/kotlin/ai/platon/pulsar/agentic/tools`
 
 - 总体机制文档（推荐先读）：`docs/agentic/tool-call-mechanism.md`
 

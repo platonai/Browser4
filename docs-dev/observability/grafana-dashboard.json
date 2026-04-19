@@ -1,7 +1,7 @@
 {
   "dashboard": {
     "title": "Pulsar Agentic Observability",
-    "description": "Comprehensive monitoring dashboard for pulsar-agentic module",
+    "description": "Comprehensive monitoring dashboard for browser4-agentic module",
     "tags": ["pulsar", "agentic", "observability"],
     "timezone": "browser",
     "schemaVersion": 16,

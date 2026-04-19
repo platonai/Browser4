@@ -55,7 +55,7 @@ object MetricsConfig {
         val tagsEnv = System.getenv("METRICS_COMMON_TAGS") ?: ""
         if (tagsEnv.isBlank()) {
             mapOf(
-                "service" to "pulsar-agentic",
+                "service" to "browser4-agentic",
                 "version" to "4.7.0-SNAPSHOT"
             )
         } else {

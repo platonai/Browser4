@@ -22,7 +22,7 @@ object ToolSpecGenerator {
             extractInterface("tab", sourceCode, "WebDriver").toCollection(webDriverToolSpecs)
             require(webDriverToolSpecs.isNotEmpty()) { "WebDriver's tool call list is empty" }
 
-            sourceCode = B4LLMUtils.readSourceFileFromResource("pulsar-agentic", "PerceptiveAgent.kt")
+            sourceCode = B4LLMUtils.readSourceFileFromResource("browser4-agentic", "PerceptiveAgent.kt")
             extractInterface("agent", sourceCode, "PerceptiveAgent").toCollection(agentToolSpecs)
             require(agentToolSpecs.isNotEmpty()) { "PerceptiveAgent's tool call list is empty" }
 

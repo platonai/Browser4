@@ -14,7 +14,7 @@ import io.opentelemetry.semconv.ServiceAttributes
 import java.util.concurrent.TimeUnit
 
 /**
- * OpenTelemetry configuration for distributed tracing in pulsar-agentic module.
+ * OpenTelemetry configuration for distributed tracing in browser4-agentic module.
  *
  * This configuration:
  * - Initializes OpenTelemetry SDK with OTLP exporter
@@ -24,7 +24,7 @@ import java.util.concurrent.TimeUnit
  *
  * Configuration via environment variables:
  * - OTEL_EXPORTER_OTLP_ENDPOINT: OTLP collector endpoint (default: http://localhost:4317)
- * - OTEL_SERVICE_NAME: Service name (default: pulsar-agentic)
+ * - OTEL_SERVICE_NAME: Service name (default: browser4-agentic)
  * - OTEL_SERVICE_VERSION: Service version (default: 4.7.0-SNAPSHOT)
  * - OTEL_TRACES_ENABLED: Enable/disable tracing (default: true)
  *
@@ -48,7 +48,7 @@ object OpenTelemetryConfig {
         System.getenv("OTEL_EXPORTER_OTLP_ENDPOINT") ?: "http://localhost:4317"
 
     private val serviceName: String =
-        System.getenv("OTEL_SERVICE_NAME") ?: "pulsar-agentic"
+        System.getenv("OTEL_SERVICE_NAME") ?: "browser4-agentic"
 
     private val serviceVersion: String =
         System.getenv("OTEL_SERVICE_VERSION") ?: "4.7.0-SNAPSHOT"
@@ -99,7 +99,7 @@ object OpenTelemetryConfig {
     }
 
     /**
-     * Tracer instance for pulsar-agentic instrumentation.
+     * Tracer instance for browser4-agentic instrumentation.
      */
     val tracer: Tracer by lazy {
         openTelemetry.getTracer("ai.platon.pulsar.agentic", serviceVersion)

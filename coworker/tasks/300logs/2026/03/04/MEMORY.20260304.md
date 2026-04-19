@@ -2,7 +2,7 @@
 
 ## Task: Remove ToDoManager & Cleanup
 - **Goal**: Remove `ToDoManager` class, usages, and configuration from codebase and documentation.
-- **Outcome**: Deleted `ToDoManager.kt` and empty `todo` directory. Removed all references, initialization, and `todo*` config flags from `BrowserPerceptiveAgent.kt`. Fixed residual compilation error in `ObserveActBrowserAgent.kt` (removed `updateTodo` call). Updated `docs-dev/agentic/AgentFileSystem-Review-2026-02-09.md`. Validated via `pulsar-agentic` compilation.
+- **Outcome**: Deleted `ToDoManager.kt` and empty `todo` directory. Removed all references, initialization, and `todo*` config flags from `BrowserPerceptiveAgent.kt`. Fixed residual compilation error in `ObserveActBrowserAgent.kt` (removed `updateTodo` call). Updated `docs-dev/agentic/AgentFileSystem-Review-2026-02-09.md`. Validated via `browser4-agentic` compilation.
 - **Lessons**: Large refactors require compilation to catch residual usages that static analysis might miss.
 
 ## Task: Native MCP & Skills in AgentToolExecutor

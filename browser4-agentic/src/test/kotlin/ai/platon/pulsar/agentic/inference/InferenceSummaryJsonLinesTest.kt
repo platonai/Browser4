@@ -20,15 +20,15 @@ class InferenceSummaryJsonLinesTest {
         val tempRoot = System.getProperty("java.io.tmpdir")
         Files.list(Path.of(tempRoot))
             .filter {
-                it.fileName.toString().startsWith("pulsar-agentic-jsonl-") || it.fileName.toString()
-                    .startsWith("pulsar-agentic-jsonl-concurrent-")
+                it.fileName.toString().startsWith("browser4-agentic-jsonl-") || it.fileName.toString()
+                    .startsWith("browser4-agentic-jsonl-concurrent-")
             }
             .forEach { it.toFile().deleteRecursively() }
     }
 
     @Test
     fun appendJsonLineAtomicallyWritesOneJsonPerLine() {
-        val tempDir = Files.createTempDirectory("pulsar-agentic-jsonl-")
+        val tempDir = Files.createTempDirectory("browser4-agentic-jsonl-")
         val file = tempDir.resolve("observe_summary.json")
 
         val engineAppender = InferenceEngineJsonlAppender()
@@ -48,7 +48,7 @@ class InferenceSummaryJsonLinesTest {
 
     @Test
     fun appendJsonLineAtomicallyIsSafeForConcurrentAppends() {
-        val tempDir = Files.createTempDirectory("pulsar-agentic-jsonl-concurrent-")
+        val tempDir = Files.createTempDirectory("browser4-agentic-jsonl-concurrent-")
         val file = tempDir.resolve("extract_summary.json")
 
         val engineAppender = InferenceEngineJsonlAppender()

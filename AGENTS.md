@@ -75,7 +75,7 @@ mvnw.cmd -q -DskipTests
 | Module | Description |
 |--------|-------------|
 | `browser4-core` | Core engine: sessions, scheduling, DOM, browser control |
-| `pulsar-agentic` | AI agents implementation, MCP, skills registration |
+| `browser4-agentic` | AI agents implementation, MCP, skills registration |
 | `pulsar-rest` | Spring Boot REST layer & command endpoints |
 | `sdks/*` | Browser4 CLI + skill assets (`sdks/browser4-cli`, `sdks/skill`) |
 | `browser4/*` | Product packaging (`browser4/browser4-agents`) |
@@ -271,7 +271,7 @@ When given a task, Claude should:
 
 #### Adding a New Feature
 
-1. Identify the relevant module (browser4-core, pulsar-agentic, pulsar-rest)
+1. Identify the relevant module (browser4-core, browser4-agentic, pulsar-rest)
 2. Check existing similar features for patterns
 3. Add interface/API in appropriate package
 4. Implement with proper error handling and logging

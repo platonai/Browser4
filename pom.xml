@@ -174,7 +174,7 @@
                 <module>browser4-core</module>
                 <module>pulsar-tools</module>
                 <module>pulsar-bom</module>
-                <module>pulsar-agentic</module>
+                <module>browser4-agentic</module>
                 <module>pulsar-rest</module>
 
                 <module>browser4</module>

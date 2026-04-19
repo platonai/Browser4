@@ -125,7 +125,7 @@ I found a second structural issue: the old one-shot root Maven invocation doesn�
 
 I’m opting for a more faithful fix than just renaming paths: the old “single root Maven command” no longer matches the repo’s split test modules. I’m checking where `skills` and `mcp` tests actually live so I can keep those selectors working too.
 
-● Grep "skills|mcp" (D:\workspace\Browser4\Browser4-4.6\pulsar-agentic\src\test)
+● Grep "skills|mcp" (D:\workspace\Browser4\Browser4-4.6\browser4-agentic\src\test)
   └ 19 files found
 
 ● Grep "@Tag\("IntegrationTest"\)|@Tag\("E2ETest"\)|@Tag\("RequiresServer"\)" in *.kt

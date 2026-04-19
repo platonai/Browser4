@@ -81,7 +81,7 @@ run_maven_tests() {
   [[ "$has_it" == "true" ]] && mvn_test_args+=("-DrunITs=true")
   [[ "$has_e2e" == "true" ]] && mvn_test_args+=("-DrunE2ETests=true")
   if [[ "$has_skills" == "true" || "$has_mcp" == "true" ]]; then
-    modules+=("pulsar-agentic")
+    modules+=("browser4-agentic")
 
     if [[ "$has_fast" == "false" && "$has_it" == "false" && "$has_e2e" == "false" && "$has_rest" == "false" ]]; then
       [[ "$has_skills" == "true" ]] && test_patterns+=("*Skill*")

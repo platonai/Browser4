@@ -168,7 +168,7 @@ Content-Type: application/json
 
 ### 2.8 Backend: BrowserTabToolExecutor
 
-**File**: `pulsar-agentic/.../BrowserTabToolExecutor.kt` (line ~45)
+**File**: `browser4-agentic/.../BrowserTabToolExecutor.kt` (line ~45)
 
 ```kotlin
 "navigate" -> {
@@ -331,7 +331,7 @@ The `BrowserTabToolExecutor` auto-discovers methods via `ToolSpecGenerator`.
 
 3. **Add handling in BrowserTabToolExecutor** (if non-trivial parameter mapping):
 
-   **File**: `pulsar-agentic/.../BrowserTabToolExecutor.kt`
+   **File**: `browser4-agentic/.../BrowserTabToolExecutor.kt`
 
    Add a case in `callFunctionOn()`:
 
