@@ -38,7 +38,7 @@ I’ve got the brief. Next I’m tracing the existing renderer/test patterns and
 
 I found recent aria-snapshot work in the repo, so I’m now mapping the Playwright cases onto existing Browser4 test fixtures and E2E helpers before I touch code.
 
-● Read pulsar-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\SnapshotServ
+● Read browser4-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\SnapshotServ
   iceFullCoverageTest.kt
   └ 1 line read
 
@@ -49,7 +49,7 @@ I found recent aria-snapshot work in the repo, so I’m now mapping the Playwrig
   shotFormatting.kt
   └ 216 lines read
 
-● Read pulsar-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\SnapshotServ
+● Read browser4-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\SnapshotServ
   iceE2ETest.kt
   └ 164 lines read
 
@@ -60,8 +60,8 @@ I found recent aria-snapshot work in the repo, so I’m now mapping the Playwrig
 ● Explore: Analyze aria snapshot spec
   ● List existing snapshot E2E test names
     $ Set-Location 'D:\workspace\Browser4\Browser4-4.6'; Select-String -Path
-    'pulsar-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\SnapshotServi
-    ceE2ETest.kt','pulsar-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom
+    'browser4-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\SnapshotServi
+    ceE2ETest.kt','browser4-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom
     \SnapshotServiceFullCoverageTest.kt' -Pattern '@DisplayName\(' | ForEach-Object { '{0}:{1}: {2}'
      -f $_.Path, $_.LineNumber, $_.Line.Trim() }
     └ 10 lines...
@@ -74,7 +74,7 @@ I’ve narrowed the scope to renderer-specific Playwright behaviors. Next I’m 
   rTest.kt lines 320-620
   └ 301 lines read
 
-● Read pulsar-tests\pulsar-tests-common\src\main\resources\static\generated\interactive-dynamic.html
+● Read browser4-tests\browser4-tests-common\src\main\resources\static\generated\interactive-dynamic.html
   lines 340-430
   └ 90 lines read
 
@@ -90,19 +90,19 @@ in *.kt (D:\workspace\Browser4\Browser4-4.6)
 
 I’ve confirmed the renderer already has good unit coverage, so I’m adding the missing real-page E2E layer now and will only touch renderer code if those tests expose a real mismatch.
 
-● Read pulsar-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\SnapshotServ
+● Read browser4-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\SnapshotServ
   iceFullCoverageTest.kt lines 1-220
   └ 220 lines read
 
 ● Grep "fun collectEnhancedRoot\(|collectEnhancedRoot\(" in *.kt
-(D:\workspace\Browser4\Browser4-4.6\pulsar-tests\pulsar-it-tests\src\test\kotlin)
+(D:\workspace\Browser4\Browser4-4.6\browser4-tests\pulsar-it-tests\src\test\kotlin)
   └ 21 lines found
 
 ● Grep "generatedAssetsBaseURL" in *.kt (D:\workspace\Browser4\Browser4-4.6)
   └ 31 lines found
 
 ● Grep "runEnhancedWebDriverTest\(" in *.kt
-(D:\workspace\Browser4\Browser4-4.6\pulsar-tests\pulsar-it-tests\src\test\kotlin)
+(D:\workspace\Browser4\Browser4-4.6\browser4-tests\pulsar-it-tests\src\test\kotlin)
   └ 5 lines found
 
 I’ve got the reusable helper locations. I’m reading the shared base methods once, then I’ll add the new test class and run the smallest relevant Maven scope.
@@ -110,7 +110,7 @@ I’ve got the reusable helper locations. I’m reading the shared base methods 
 ● Read logs\page-aria-snapshot-ai.spec.ts lines 249-540
   └ 292 lines read
 
-● Read pulsar-tests\pulsar-it-tests\src\test\kotlin\ai\platon\pulsar\WebDriverTestBase.kt lines
+● Read browser4-tests\pulsar-it-tests\src\test\kotlin\ai\platon\pulsar\WebDriverTestBase.kt lines
   90-150
   └ 35 lines read
 
@@ -119,16 +119,16 @@ I’ve got the reusable helper locations. I’m reading the shared base methods 
 
 The brief points at the shared frame fixtures, so I’m checking those URLs before I lock in the new E2E cases. If the server already exposes them cleanly, I’ll fold in a lightweight iframe assertion too.
 
-● Read pulsar-tests\pulsar-tests-common\src\main\resources\static\assets\frames\two-frames.html
+● Read browser4-tests\browser4-tests-common\src\main\resources\static\assets\frames\two-frames.html
   └ 16 lines read
 
-● Read pulsar-tests\pulsar-tests-common\src\main\resources\static\assets\frames\frame.html
+● Read browser4-tests\browser4-tests-common\src\main\resources\static\assets\frames\frame.html
   └ 19 lines read
 
-● Read pulsar-tests\pulsar-tests-common\src\main\resources\static\assets\frames\nested-frames.html
+● Read browser4-tests\browser4-tests-common\src\main\resources\static\assets\frames\nested-frames.html
   └ 30 lines read
 
-● Read pulsar-tests\pulsar-it-tests\src\test\kotlin\ai\platon\pulsar\TestWebSiteAccess.kt lines 1-120
+● Read browser4-tests\pulsar-it-tests\src\test\kotlin\ai\platon\pulsar\TestWebSiteAccess.kt lines 1-120
 
   └ 104 lines read
 
@@ -138,28 +138,28 @@ I found the server exposes `assets/frames/*`, so I’m using that instead of ad-
   └ 84 lines...
 
 ● Grep "nested-frames\.html|assetsBaseURL/frames|/frames/" in *.kt
-(D:\workspace\Browser4\Browser4-4.6\pulsar-tests)
+(D:\workspace\Browser4\Browser4-4.6\browser4-tests)
   └ No matches found
 
 I’ve got a clean shape for the new coverage: one server-hosted fixture page for renderer-specific formatting cases, plus one real nested-frames page to prove iframe output survives in E2E. I’m writing those now.
 
-● Create pulsar-tests/pulsar-tests-common/src/main/resources/static/assets/frames/aria-snapshot-rende
+● Create browser4-tests/browser4-tests-common/src/main/resources/static/assets/frames/aria-snapshot-rende
   rer.html
-  Create pulsar-tests/pulsar-it-tests/src/test/kotlin/ai/platon/browser4/driver/chrome/dom/AriaSnapsh
+  Create browser4-tests/pulsar-it-tests/src/test/kotlin/ai/platon/browser4/driver/chrome/dom/AriaSnapsh
   otRendererE2ETest.kt
 
 The new class and fixture are in place. I’m doing a quick read-back for obvious mistakes, then I’ll run the focused E2E Maven target with `-DrunE2ETests=true`.
 
-● Read pulsar-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\AriaSnapshot
+● Read browser4-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\AriaSnapshot
   RendererE2ETest.kt
   └ 105 lines read
 
-● Read pulsar-tests\pulsar-tests-common\src\main\resources\static\assets\frames\aria-snapshot-rendere
+● Read browser4-tests\browser4-tests-common\src\main\resources\static\assets\frames\aria-snapshot-rendere
   r.html
   └ 44 lines read
 
 ● Run focused aria snapshot renderer E2E tests
-  $ .\mvnw.cmd -f pulsar-tests\pom.xml -pl pulsar-it-tests -am -DrunE2ETests=true
+  $ .\mvnw.cmd -f browser4-tests\pom.xml -pl pulsar-it-tests -am -DrunE2ETests=true
   "-Dtest=AriaSnapshotRendererE2ETest" -D"surefire.failIfNoSpecifiedTests=false" test
   └ 9 lines...
 
@@ -190,7 +190,7 @@ The `pulsar-it-tests` module is compiling against a stale local `pulsar-browser`
 The browser module install succeeded. I’m retrying the focused `pulsar-it-tests` E2E run now against the refreshed local artifact so we can see the actual test behavior instead of stale-API errors.
 
 ● Re-run focused aria snapshot renderer E2E tests
-  $ .\mvnw.cmd -f pulsar-tests\pom.xml -pl pulsar-it-tests -am -DrunE2ETests=true
+  $ .\mvnw.cmd -f browser4-tests\pom.xml -pl pulsar-it-tests -am -DrunE2ETests=true
   "-Dtest=AriaSnapshotRendererE2ETest" -D"surefire.failIfNoSpecifiedTests=false" test
   └ 95 lines...
 
@@ -211,15 +211,15 @@ run|Failures|ERROR|BUILD FAILURE"
 
 The 404 told me the new static file wasn’t on the mock server’s active classpath in this test path, so I’m switching the main formatter scenario to a server-backed page with injected fixture DOM and trimming the iframe case to the renderer-relevant assertion.
 
-● Edit pulsar-tests/pulsar-it-tests/src/test/kotlin/ai/platon/browser4/driver/chrome/dom/AriaSnapshot
+● Edit browser4-tests/pulsar-it-tests/src/test/kotlin/ai/platon/browser4/driver/chrome/dom/AriaSnapshot
   RendererE2ETest.kt
-  Delete pulsar-tests/pulsar-tests-common/src/main/resources/static/assets/frames/aria-snapshot-rende
+  Delete browser4-tests/browser4-tests-common/src/main/resources/static/assets/frames/aria-snapshot-rende
   rer.html
 
 I’ve made the test more faithful to how the existing mock server is wired: one case now uses a real server page plus injected DOM, and the frames case only checks the renderer behavior that’s actually in scope. Re-running now.
 
 ● Re-run adjusted aria snapshot renderer E2E tests
-  $ .\mvnw.cmd -f pulsar-tests\pom.xml -pl pulsar-it-tests -am -DrunE2ETests=true
+  $ .\mvnw.cmd -f browser4-tests\pom.xml -pl pulsar-it-tests -am -DrunE2ETests=true
   "-Dtest=AriaSnapshotRendererE2ETest" -D"surefire.failIfNoSpecifiedTests=false" test
   └ 95 lines...
 
@@ -280,7 +280,7 @@ The core renderer unit suite stayed green, so the fix is at least internally con
 
 ● Install browser and run focused AriaSnapshotRenderer E2E tests
   $ .\mvnw.cmd -f pulsar-core\pulsar-browser\pom.xml -DskipTests install && .\mvnw.cmd -f
-  pulsar-tests\pom.xml -pl pulsar-it-tests -am -DrunE2ETests=true
+  browser4-tests\pom.xml -pl pulsar-it-tests -am -DrunE2ETests=true
   "-Dtest=AriaSnapshotRendererE2ETest" -D"surefire.failIfNoSpecifiedTests=false" test
   └ 124 lines...
 
@@ -300,12 +300,12 @@ The browser run finished with one more failure, so I’m reading the exact asser
   └ 1 line...
 
 ● Grep "AssertionFailedError|expected|actual|AriaSnapshotRendererE2ETest|Failures|BUILD FAILURE" in
-*.txt (D:\workspace\Browser4\Browser4-4.6\pulsar-tests\pulsar-it-tests\target\surefire-reports)
+*.txt (D:\workspace\Browser4\Browser4-4.6\browser4-tests\pulsar-it-tests\target\surefire-reports)
   └ 9 lines found
 
 I’ve narrowed it down to one surviving assertion in the new renderer fixture test. I’m opening the surefire report directly so I can correct just that mismatch and rerun once.
 
-● Read pulsar-tests\pulsar-it-tests\target\surefire-reports\ai.platon.browser4.driver.chrome.dom.Aria
+● Read browser4-tests\pulsar-it-tests\target\surefire-reports\ai.platon.browser4.driver.chrome.dom.Aria
   SnapshotRendererE2ETest.txt lines 1-80
   └ 52 lines read
 
@@ -319,7 +319,7 @@ The last patch is tiny and targeted, so I’m running the same fast core check p
 ● Run final unit and focused E2E validation
   $ .\mvnw.cmd -f pulsar-core\pulsar-browser\pom.xml -Dtest=DOMStateBuilderTest
   -D"surefire.failIfNoSpecifiedTests=false" test && .\mvnw.cmd -f pulsar-core\pulsar-browser\pom.xml
-   -DskipTests install && .\mvnw.cmd -f pulsar-tests\pom.xml -pl pulsar-it-tests -am
+   -DskipTests install && .\mvnw.cmd -f browser4-tests\pom.xml -pl pulsar-it-tests -am
   -DrunE2ETests=true "-Dtest=AriaSnapshotRendererE2ETest" -D"surefire.failIfNoSpecifiedTests=false"
   test
   └ 101 lines...
@@ -336,12 +336,12 @@ The final chained run is in the actual browser execution again. I’m polling on
 
 The run completed, so I’m reading the final report directly. At this point it should be either one last assertion tweak or done.
 
-● Read pulsar-tests\pulsar-it-tests\target\surefire-reports\ai.platon.browser4.driver.chrome.dom.Aria
+● Read browser4-tests\pulsar-it-tests\target\surefire-reports\ai.platon.browser4.driver.chrome.dom.Aria
   SnapshotRendererE2ETest.txt lines 1-70
   └ 52 lines read
 
 ● Grep "Tests run|Failures|AriaSnapshotRendererE2ETest|AssertionFailedError|BUILD FAILURE"
-(D:\workspace\Browser4\Browser4-4.6\pulsar-tests\pulsar-it-tests\target\surefire-reports\ai.platon.b
+(D:\workspace\Browser4\Browser4-4.6\browser4-tests\pulsar-it-tests\target\surefire-reports\ai.platon.b
 rowser4.driver.chrome.dom.AriaSnapshotRendererE2ETest.txt)
   └ 6 lines found
 
@@ -355,7 +355,7 @@ This one is a pure fallback-chain bug, so I’ve patched the name resolution dir
 ● Confirm final aria snapshot renderer fix
   $ .\mvnw.cmd -f pulsar-core\pulsar-browser\pom.xml -Dtest=DOMStateBuilderTest
   -D"surefire.failIfNoSpecifiedTests=false" test && .\mvnw.cmd -f pulsar-core\pulsar-browser\pom.xml
-   -DskipTests install && .\mvnw.cmd -f pulsar-tests\pom.xml -pl pulsar-it-tests -am
+   -DskipTests install && .\mvnw.cmd -f browser4-tests\pom.xml -pl pulsar-it-tests -am
   -DrunE2ETests=true "-Dtest=AriaSnapshotRendererE2ETest" -D"surefire.failIfNoSpecifiedTests=false"
   test
   └ 107 lines...
@@ -372,30 +372,30 @@ The final run is still in the browser phase, but it’s past all rebuild steps c
 
 The process exited, so I’m checking the surefire report directly for the final state instead of scrolling through the whole Maven log again.
 
-● Read pulsar-tests\pulsar-it-tests\target\surefire-reports\ai.platon.browser4.driver.chrome.dom.Aria
+● Read browser4-tests\pulsar-it-tests\target\surefire-reports\ai.platon.browser4.driver.chrome.dom.Aria
   SnapshotRendererE2ETest.txt lines 1-80
   └ 50 lines read
 
 ● Grep "Tests run|Failures|Errors|BUILD SUCCESS|BUILD FAILURE"
-(D:\workspace\Browser4\Browser4-4.6\pulsar-tests\pulsar-it-tests\target\surefire-reports\ai.platon.b
+(D:\workspace\Browser4\Browser4-4.6\browser4-tests\pulsar-it-tests\target\surefire-reports\ai.platon.b
 rowser4.driver.chrome.dom.AriaSnapshotRendererE2ETest.txt)
   └ 1 line found
 
 I’m down to a pure expectation mismatch now: the renderer is producing the Playwright-style titled generic node, but with inline text content (`: element content`). I’m aligning that assertion and rerunning just the focused E2E class.
 
-● Read pulsar-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\AriaSnapshot
+● Read browser4-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\AriaSnapshot
   RendererE2ETest.kt lines 35-60
   └ 26 lines read
 
 The last failure is just indentation sensitivity in a multiline `contains(...)` check. I’m splitting those into line-level assertions so the test validates structure without depending on exact nesting whitespace.
 
-● Edit pulsar-tests/pulsar-it-tests/src/test/kotlin/ai/platon/browser4/driver/chrome/dom/AriaSnapshot
+● Edit browser4-tests/pulsar-it-tests/src/test/kotlin/ai/platon/browser4/driver/chrome/dom/AriaSnapshot
   RendererE2ETest.kt
 
 That was just test brittleness, not renderer behavior. I’m rerunning only the focused `AriaSnapshotRendererE2ETest` now.
 
 ● Run focused AriaSnapshotRenderer E2E tests
-  $ .\mvnw.cmd -f pulsar-tests\pom.xml -pl pulsar-it-tests -am -DrunE2ETests=true
+  $ .\mvnw.cmd -f browser4-tests\pom.xml -pl pulsar-it-tests -am -DrunE2ETests=true
   "-Dtest=AriaSnapshotRendererE2ETest" -D"surefire.failIfNoSpecifiedTests=false" test
   └ 95 lines...
 
@@ -417,14 +417,14 @@ The code and focused validations are done. I’m updating the task log memory no
 
 ● Show diff for changed files
   $ git --no-pager diff -- pulsar-core/pulsar-browser/src/main/kotlin/ai/platon/browser4/driver/chro
-  me/dom/model/AriaSnapshotRenderer.kt pulsar-tests/pulsar-it-tests/src/test/kotlin/ai/platon/browse
+  me/dom/model/AriaSnapshotRenderer.kt browser4-tests/pulsar-it-tests/src/test/kotlin/ai/platon/browse
   r4/driver/chrome/dom/AriaSnapshotRendererE2ETest.kt
   └ 96 lines...
 
 ● Append daily memory entry
   $ @'
   - **Aria snapshot renderer E2E coverage added:** Added `AriaSnapshotRendererE2ETest` in
-  `pulsar-tests\pulsar-it-tests` to validate Playwright-style aria snapshot behavior against a
+  `browser4-tests\pulsar-it-tests` to validate Playwright-style aria snapshot behavior against a
   real Spring-served page plus the existing `assets/frames/nested-frames.html` fixture. The test
    injects focused DOM cases for generic collapsing, nested pointer cursors, ...
   └ 24 lines...
@@ -438,7 +438,7 @@ I’ve appended today’s memory entry and confirmed the monthly log already con
 
 ● Check final file status
   $ git --no-pager status --short -- pulsar-core\pulsar-browser\src\main\kotlin\ai\platon\browser4\d
-  river\chrome\dom\model\AriaSnapshotRenderer.kt pulsar-tests\pulsar-it-tests\src\test\kotlin\ai\pla
+  river\chrome\dom\model\AriaSnapshotRenderer.kt browser4-tests\pulsar-it-tests\src\test\kotlin\ai\pla
   ton\browser4\driver\chrome\dom\AriaSnapshotRendererE2ETest.kt
   coworker\tasks\300logs\2026\03\14\MEMORY.20260314.md
   coworker\tasks\300logs\2026\03\MEMORY.202603.md
@@ -447,7 +447,7 @@ I’ve appended today’s memory entry and confirmed the monthly log already con
 Done: I added `AriaSnapshotRendererE2ETest` and tightened `AriaSnapshotRenderer` so real-browser output better matches the Playwright aria-snapshot expectations.
 
 Changed:
-- `pulsar-tests\pulsar-it-tests\...\AriaSnapshotRendererE2ETest.kt`
+- `browser4-tests\pulsar-it-tests\...\AriaSnapshotRendererE2ETest.kt`
 - `pulsar-core\pulsar-browser\...\AriaSnapshotRenderer.kt`
 
 Renderer fixes:
@@ -458,7 +458,7 @@ Renderer fixes:
 
 Validated:
 - `.\mvnw.cmd -f pulsar-core\pulsar-browser\pom.xml -Dtest=DOMStateBuilderTest -D"surefire.failIfNoSpecifiedTests=false" test`
-- `.\mvnw.cmd -f pulsar-tests\pom.xml -pl pulsar-it-tests -am -DrunE2ETests=true "-Dtest=AriaSnapshotRendererE2ETest" -D"surefire.failIfNoSpecifiedTests=false" test`
+- `.\mvnw.cmd -f browser4-tests\pom.xml -pl pulsar-it-tests -am -DrunE2ETests=true "-Dtest=AriaSnapshotRendererE2ETest" -D"surefire.failIfNoSpecifiedTests=false" test`
 
 I also appended today’s daily memory and confirmed the monthly memory already included the `2026-03-13` rollup.
 

@@ -19,7 +19,7 @@
     </parent>
 
     <artifactId>browser4-rest</artifactId>
-    <name>Pulsar Rest</name>
+    <name>Browser4 Rest</name>
 
     <dependencies>
         <!-- Pulsar dependency -->
@@ -119,7 +119,7 @@
 
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-tests-common</artifactId>
+            <artifactId>browser4-tests-common</artifactId>
             <scope>test</scope>
         </dependency>
 

@@ -316,7 +316,7 @@ curl -L -o PulsarRPAPro.jar https://github.com/platonai/PulsarRPAPro/releases/do
 | `browser4-agents` | Agent & crawler orchestration with product packaging    |
 | `sdks`            | CLI in Rust that supports SKILLS                        |
 | `examples`        | Runnable examples and demos                             |
-| `pulsar-tests`    | E2E & heavy integration & scenario tests                |
+| `browser4-tests`    | E2E & heavy integration & scenario tests                |
 
 ---
 

@@ -10,10 +10,10 @@ domState.serializableTree.toNanoTree().ariaSnapshot 很多节点丢失了节点�
 
 
 domState.ariaSnapshot 输出：
-20:53:33.321 [outine#147] INFO  a.p.b.d.c.dom.SnapshotServiceE2ETest - Aria snapshot written (unfiltered) | file:///D:/workspace/Browser4/Browser4-4.6/pulsar-tests/pulsar-it-tests/./logs/tests/aria-snapshot-6f6a3e70d2580e0358b9cc3ed8b513c1.yml
+20:53:33.321 [outine#147] INFO  a.p.b.d.c.dom.SnapshotServiceE2ETest - Aria snapshot written (unfiltered) | file:///D:/workspace/Browser4/Browser4-4.6/browser4-tests/pulsar-it-tests/./logs/tests/aria-snapshot-6f6a3e70d2580e0358b9cc3ed8b513c1.yml
 
 domState.serializableTree.toNanoTree().ariaSnapshot 输出：
-20:53:33.329 [outine#147] INFO  a.p.b.d.c.dom.SnapshotServiceE2ETest - Aria snapshot written (nano) | file:///D:/workspace/Browser4/Browser4-4.6/pulsar-tests/pulsar-it-tests/./logs/tests/aria-snapshot-nano-6f6a3e70d2580e0358b9cc3ed8b513c1.yml
+20:53:33.329 [outine#147] INFO  a.p.b.d.c.dom.SnapshotServiceE2ETest - Aria snapshot written (nano) | file:///D:/workspace/Browser4/Browser4-4.6/browser4-tests/pulsar-it-tests/./logs/tests/aria-snapshot-nano-6f6a3e70d2580e0358b9cc3ed8b513c1.yml
 
 信息丢失：
 

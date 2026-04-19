@@ -132,8 +132,8 @@ AND NOT ManualOnly
 | 类型          | 目录                         |
 | ----------- | -------------------------- |
 | Unit        | `<module>/src/test`        |
-| Integration | `pulsar-tests/*-it-tests`  |
-| E2E         | `pulsar-tests/*-e2e-tests` |
+| Integration | `browser4-tests/*-it-tests`  |
+| E2E         | `browser4-tests/*-e2e-tests` |
 | SDK         | `sdks/*-tests`             |
 
 ---
@@ -184,7 +184,7 @@ AND NOT ManualOnly
 ```bash
 mvn test                              # 快速单测
 mvn test -DrunITs=true                # 集成测试
-mvn test -pl pulsar-tests/pulsar-it-tests  # 按模块执行
+mvn test -pl browser4-tests/pulsar-it-tests  # 按模块执行
 mvn test -Dgroups="Integration,Fast"  # 按 Tag 组合过滤
 ```
 

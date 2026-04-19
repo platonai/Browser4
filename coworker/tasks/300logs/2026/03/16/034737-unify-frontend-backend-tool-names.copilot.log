@@ -116,7 +116,7 @@ ng|runCode|snapshot" (D:\workspace\Browser4\Browser4-4.6\browser4-agentic\src\ma
   ● Read sdks\browser4-cli\src\program.ts lines 360-395
     └ 36 lines read
   ● Find press-related E2E tests
-    $ Set-Location 'D:\workspace\Browser4\Browser4-4.6'; Select-String -Path 'pulsar-tests\pulsar-re
+    $ Set-Location 'D:\workspace\Browser4\Browser4-4.6'; Select-String -Path 'browser4-tests\pulsar-re
     st-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolControllerE2ETest.kt'
     -Pattern 'press\(|"press"|keydown|keyup|mouse' | ForEach-Object { "$($_.LineNumber):
     $($_.Line.Trim())" }
@@ -132,7 +132,7 @@ ng|runCode|snapshot" (D:\workspace\Browser4\Browser4-4.6\browser4-agentic\src\ma
 ● Grep "listTools\(|/mcp/tools|tools"\s*to" (D:\workspace\Browser4\Browser4-4.6)
   └ 13 lines found
 
-● Read pulsar-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon
+● Read browser4-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon
   trollerE2ETest.kt lines 1-300
   └ 300 lines read
 
@@ -162,7 +162,7 @@ click|dblclick|dialog_accept|dialog_dismiss|fill|select_option|upload|screenshot
 
 ● Grep "callTool\("(navigate|go_back|go_forward|aria_snapshot|tab_list|tab_new|tab_close|tab_select|
 click|dblclick|dialog_accept|dialog_dismiss|fill|select_option|upload|screenshot)"
-(D:\workspace\Browser4\Browser4-4.6\pulsar-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\
+(D:\workspace\Browser4\Browser4-4.6\browser4-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\
 rest\api\controller\MCPToolControllerE2ETest.kt)
   └ 5 lines found
 
@@ -212,7 +212,7 @@ uncheck|fun drag|fun press|fun type|fun screenshot|fun ariaSnapshot"
   Edit browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt
   Edit sdks\browser4-cli\tests\program.test.ts
   Edit browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
-  Edit pulsar-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon
+  Edit browser4-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon
   trollerE2ETest.kt
   Failed to apply patch: Error: Failed to find expected lines in
   D:\workspace\Browser4\Browser4-4.6\sdks\browser4-cli\tests\program.test.ts:
@@ -277,7 +277,7 @@ uncheck|fun drag|fun press|fun type|fun screenshot|fun ariaSnapshot"
   $ git --no-pager diff -- sdks\browser4-cli\src\program.ts
   browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt
   browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
-  pulsar-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolControl
+  browser4-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolControl
   lerE2ETest.kt sdks\browser4-cli\tests\program.test.ts
   └ 6 lines...
 
@@ -290,7 +290,7 @@ The first patch landed only partially, so I’m spot-checking the touched files 
   70-390
   └ 321 lines read
 
-● Read pulsar-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon
+● Read browser4-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon
   trollerE2ETest.kt lines 24-235
   └ 212 lines read
 
@@ -326,14 +326,14 @@ The first patch landed only partially, so I’m spot-checking the touched files 
   Edit sdks\browser4-cli\tests\program.test.ts
 
 ● Edit browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
-  Edit pulsar-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon
+  Edit browser4-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon
   trollerE2ETest.kt
 
 ● Read browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
   lines 176-520
   └ 344 lines read
 
-● Read pulsar-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon
+● Read browser4-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon
   trollerE2ETest.kt lines 30-220
   └ 191 lines read
 
@@ -359,7 +359,7 @@ Unit validation is green on both sides. I’m doing one focused REST E2E pass no
 
 ● Install browser4-rest and run focused REST E2E
   $ Set-Location 'D:\workspace\Browser4\Browser4-4.6'; .\mvnw.cmd -f browser4-rest\pom.xml -DskipTests
-   install && .\mvnw.cmd -f pulsar-tests\pom.xml -pl browser4-rest-tests -am -DrunE2ETests=true
+   install && .\mvnw.cmd -f browser4-tests\pom.xml -pl browser4-rest-tests -am -DrunE2ETests=true
   "-Dtest=MCPToolControllerE2ETest#testToolsEndpointCoversAllCliCommands+testFrontendToolNamesAreRec
   ognized" -D"surefire.failIfNoSpecifiedTests=false" test
   └ 123 lines...
@@ -395,7 +395,7 @@ D:\workspace\Browser4\Browser4-4.6\coworker\tasks\300logs
   sdks\browser4-cli\tests\program.test.ts
   browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt
   browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
-  pulsar-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon...
+  browser4-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon...
   └ 7 lines...
 
 ● List directory coworker\tasks\300logs\2026\03
@@ -429,7 +429,7 @@ I’m on the final housekeeping pass now: appending today’s memory, rolling th
   sdks\browser4-cli\tests\program.test.ts
   browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt
   browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
-  pulsar-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon...
+  browser4-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon...
   └ 8 lines...
 
 ● Append daily and monthly memory entries
@@ -479,7 +479,7 @@ I spotted a PowerShell escaping artifact in the memory append: backticks around 
   sdks\browser4-cli\tests\program.test.ts
   browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt
   browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
-  pulsar-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon...
+  browser4-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon...
   └ 13 lines...
 
 ● Inspect final diff excerpt
@@ -487,7 +487,7 @@ I spotted a PowerShell escaping artifact in the memory append: backticks around 
   sdks\browser4-cli\tests\program.test.ts
   browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt
   browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolControllerTest.kt
-  pulsar-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon...
+  browser4-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon...
   └ 230 lines...
 
 Done — I completed the tool-name unification task without moving the task file.

@@ -487,7 +487,7 @@ Then call `test_my_command(&mut ctx);` in the main test runner function.
 
 ### 4.4 Backend E2E Tests (Kotlin)
 
-**File**: `pulsar-tests/browser4-rest-tests/src/test/.../MCPToolControllerE2ETest.kt`
+**File**: `browser4-tests/browser4-rest-tests/src/test/.../MCPToolControllerE2ETest.kt`
 
 Add the command-to-tool mapping and an E2E test:
 
@@ -505,7 +505,7 @@ fun testMyTool() {
 }
 ```
 
-**Run**: `./mvnw -P pulsar-tests -pl pulsar-tests/browser4-rest-tests -am test -Dtest=MCPToolControllerE2ETest -Dsurefire.failIfNoSpecifiedTests=false`
+**Run**: `./mvnw -P browser4-tests -pl browser4-tests/browser4-rest-tests -am test -Dtest=MCPToolControllerE2ETest -Dsurefire.failIfNoSpecifiedTests=false`
 
 ### 4.5 Testing Summary
 
@@ -514,7 +514,7 @@ fun testMyTool() {
 | CLI unit | `commands.rs` | tool name, params mapping | `cargo test --quiet` |
 | CLI E2E | `tests/e2e.rs` | Full round-trip | `BROWSER4_CLI_E2E=true cargo test --test e2e` |
 | Backend unit | `MCPToolControllerTest.kt` | Name alias resolution, dispatch | `./mvnw -pl browser4-rest test` |
-| Backend E2E | `MCPToolControllerE2ETest.kt` | Real browser execution | `./mvnw -P pulsar-tests -pl pulsar-tests/browser4-rest-tests test` |
+| Backend E2E | `MCPToolControllerE2ETest.kt` | Real browser execution | `./mvnw -P browser4-tests -pl browser4-tests/browser4-rest-tests test` |
 
 ---
 
@@ -587,7 +587,7 @@ Commands that don't modify browser state (add to `no_snapshot_commands()`).
 | `sdks/browser4-cli/src/commands.rs` (test mod) | CLI unit tests for command mapping |
 | `sdks/browser4-cli/tests/e2e.rs` | CLI end-to-end tests |
 | `browser4-rest/src/test/.../MCPToolControllerTest.kt` | Backend unit tests |
-| `pulsar-tests/browser4-rest-tests/src/test/.../MCPToolControllerE2ETest.kt` | Backend E2E tests |
+| `browser4-tests/browser4-rest-tests/src/test/.../MCPToolControllerE2ETest.kt` | Backend E2E tests |
 
 ### Documentation
 

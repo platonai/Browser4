@@ -22,6 +22,6 @@
 - **Absolute Path Standard**: For all future tooling scripts, strictly enforce deriving the repository root (e.g., via git rev-parse --show-toplevel) at the start of execution and constructing all file paths relative to that root. This ensures tool portability and reliability regardless of the invocation directory.
 
 ### Task: Create MCPToolController E2E Test
-- **Goal**: Implement MCPToolController E2E coverage in `pulsar-tests/browser4-rest-tests`, aligned with CLI command support.
+- **Goal**: Implement MCPToolController E2E coverage in `browser4-tests/browser4-rest-tests`, aligned with CLI command support.
 - **Outcome**: Added `MCPToolControllerE2ETest` with (1) CLI-command-to-MCP-tool coverage assertions via `/mcp/tools`, and (2) session workflow E2E using mock product page URL input (`open_session`/`list_sessions`/`close_session`). Executed targeted test run with E2E enabled; suite passed (`Tests run: 3, Failures: 0`).
 - **Lessons**: In this module, E2E tests require `-DrunE2ETests=true`; default Surefire configuration excludes `E2ETest` tag. For stable controller E2E, prefer validating contract-level coverage and session lifecycle when browser-driver runtime dependencies can be environment-sensitive.

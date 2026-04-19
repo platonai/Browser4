@@ -23,7 +23,7 @@
 - Adopt an **Absolute Path Standard** for all tooling: resolve repo root first (e.g., `git rev-parse --show-toplevel`) and build all paths from it to ensure portability and reliability from any invocation directory.
 
 ### MCPToolController E2E Task
-- **Goal:** Add MCPToolController E2E coverage in `pulsar-tests/browser4-rest-tests`, aligned with CLI command support.
+- **Goal:** Add MCPToolController E2E coverage in `browser4-tests/browser4-rest-tests`, aligned with CLI command support.
 - **Delivered:** `MCPToolControllerE2ETest` with:
   1) `/mcp/tools` coverage assertions mapping CLI commands to MCP tools,
   2) session lifecycle E2E (`open_session`, `list_sessions`, `close_session`) using mock product-page URL input.
@@ -42,6 +42,6 @@ Breakdown by AI model:
 ### MCPToolController Comprehensive Coverage Task (Follow-up)
 - **Goal:** Expand `MCPToolControllerE2ETest` to comprehensively cover all CLI-supported MCP mappings and execute against mock EC pages.
 - **Delivered:** Extended test class with a shared CLI command→MCP tool map, `/mcp/tools` contract assertion reuse, and broad `/mcp/call-tool` recognition coverage for all mapped tools (including tab/session lifecycle operations like `close_all_sessions` and `kill_all_sessions`) using `MOCK_PRODUCT_DETAIL_URL`/`MOCK_PRODUCT_LIST_URL`.
-- **Validation Attempt:** Ran `mvnw -f pulsar-tests\\browser4-rest-tests\\pom.xml -Dtest=MCPToolControllerE2ETest -DrunE2ETests=true test`; execution is currently blocked in this environment by Kotlin compiler daemon startup failure (`Failed connecting to the daemon in 4 retries`).
+- **Validation Attempt:** Ran `mvnw -f browser4-tests\\browser4-rest-tests\\pom.xml -Dtest=MCPToolControllerE2ETest -DrunE2ETests=true test`; execution is currently blocked in this environment by Kotlin compiler daemon startup failure (`Failed connecting to the daemon in 4 retries`).
 - **Learning:** Keep validation command stable (`-f` module pom + `-DrunE2ETests=true`) and treat Kotlin daemon connectivity as an environment baseline issue when it fails before test execution.
 - **Monthly Memory Check:** `MEMORY.202603.md` already contains prior-day rollup (`2026-03-01` to `2026-03-04`), so no backfill append was required.

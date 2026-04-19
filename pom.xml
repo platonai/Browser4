@@ -88,7 +88,7 @@
     <modules>
         <module>browser4-dependencies</module>
         <module>pulsar-bom</module>
-        <module>pulsar-tests/pulsar-tests-common</module>
+        <module>browser4-tests/browser4-tests-common</module>
         <module>browser4-core</module>
         <module>browser4-tools</module>
         <module>browser4-agentic</module>
@@ -180,7 +180,7 @@
                 <module>browser4</module>
 
                 <module>examples</module>
-                <module>pulsar-tests</module>
+                <module>browser4-tests</module>
                 <module>sdks</module>
             </modules>
         </profile>
@@ -197,12 +197,12 @@
         </profile>
 
         <profile>
-            <id>pulsar-tests</id>
+            <id>browser4-tests</id>
             <activation>
                 <activeByDefault>false</activeByDefault>
             </activation>
             <modules>
-                <module>pulsar-tests</module>
+                <module>browser4-tests</module>
             </modules>
             <properties>
                 <surefire.excludedGroups>None</surefire.excludedGroups>
@@ -460,12 +460,12 @@
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-tests-common</artifactId>
+                <artifactId>browser4-tests-common</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-tests-common</artifactId>
+                <artifactId>browser4-tests-common</artifactId>
                 <classifier>tests</classifier>
                 <scope>test</scope>
                 <version>${project.version}</version>

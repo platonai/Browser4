@@ -100,7 +100,7 @@
         <!-- Only for demo server starter -->
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-tests-common</artifactId>
+            <artifactId>browser4-tests-common</artifactId>
             <version>${project.version}</version>
         </dependency>
     </dependencies>

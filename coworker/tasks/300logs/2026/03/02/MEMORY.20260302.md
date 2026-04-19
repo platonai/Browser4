@@ -8,7 +8,7 @@
 
 ### Improve run-agent-examples
 - **Goal**: Configure `browser4-examples` as executable JAR and update run scripts.
-- **Outcome**: Switched to `spring-boot-maven-plugin`. Resolved `pulsar-tests-common` dependency issues by installing locally. Cleaned up `.kt.bak` files. Updated `bin/run-agent-examples.ps1` and created `bin/run-agent-examples.sh` to execute the JAR.
+- **Outcome**: Switched to `spring-boot-maven-plugin`. Resolved `browser4-tests-common` dependency issues by installing locally. Cleaned up `.kt.bak` files. Updated `bin/run-agent-examples.ps1` and created `bin/run-agent-examples.sh` to execute the JAR.
 - **Lessons**: Local installation (`mvn install`) is crucial for missing reactor dependencies.
 
 ### Improve check_links

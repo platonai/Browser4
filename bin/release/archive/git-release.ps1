@@ -74,7 +74,7 @@ function Push-ReadmeFiles-Changes {
 
 function Run-Tests {
   Write-Host "Running tests..."
-  ./mvnw test -pl pulsar-tests
+  ./mvnw test -pl browser4-tests
   if ($LASTEXITCODE -ne 0) {
     Write-Host "Tests failed. Aborting release."
     exit 1

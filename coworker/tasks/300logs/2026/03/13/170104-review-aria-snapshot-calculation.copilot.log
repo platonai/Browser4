@@ -32,7 +32,7 @@ I found the task: review whether the ARIA snapshot emitted by `SnapshotServiceE2
   2. Reproduce the targeted test failure/output with the smallest relevant Maven command....
   └ 7 lines...
 
-● Read pulsar-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\SnapshotServ
+● Read browser4-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\SnapshotServ
   iceFullCoverageTest.kt lines 1-180
   └ 180 lines read
 
@@ -41,11 +41,11 @@ I found the task: review whether the ARIA snapshot emitted by `SnapshotServiceE2
   lines 540-590
   └ 51 lines read
 
-● Glob "pulsar-tests\pulsar-it-tests\logs\tests\dom-state-aria-snapshot-*.yml" in
+● Glob "browser4-tests\pulsar-it-tests\logs\tests\dom-state-aria-snapshot-*.yml" in
 D:\workspace\Browser4\Browser4-4.6
   └ No matches found
 
-● Read pulsar-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\SnapshotServ
+● Read browser4-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\SnapshotServ
   iceE2ETest.kt lines 1-220
   └ 161 lines read
 
@@ -62,7 +62,7 @@ The test already asserts only stable semantics, which hints someone narrowed it 
   └ 9 lines found
 
 ● Run targeted aria snapshot E2E test
-  $ .\mvnw.cmd -f pulsar-tests\pom.xml -pl pulsar-it-tests -am -DrunE2ETests=true
+  $ .\mvnw.cmd -f browser4-tests\pom.xml -pl pulsar-it-tests -am -DrunE2ETests=true
   "-Dtest=SnapshotServiceE2ETest#testGetDomAxAndSnapshot" -D"surefire.failIfNoSpecifiedTests=false"
   test
   └ 41 lines...
@@ -71,11 +71,11 @@ The test already asserts only stable semantics, which hints someone narrowed it 
   shotRenderer.kt lines 1-260
   └ 259 lines read
 
-● Read pulsar-tests\pulsar-tests-common\src\main\resources\static\generated\interactive-dynamic.html
+● Read browser4-tests\browser4-tests-common\src\main\resources\static\generated\interactive-dynamic.html
   lines 1-260
   └ 260 lines read
 
-● Read pulsar-tests\pulsar-tests-common\src\main\resources\static\generated\interactive-dynamic.html
+● Read browser4-tests\browser4-tests-common\src\main\resources\static\generated\interactive-dynamic.html
   lines 260-520
   └ 260 lines read
 
@@ -99,26 +99,26 @@ The renderer is very minimal, and the fixture page is rich, so the key question 
 
 The E2E test passed and wrote both snapshot variants. I’m reading those artifacts now to answer the actual task: is the emitted ARIA snapshot semantically right, or just non-empty enough to pass?
 
-● Read pulsar-tests\pulsar-it-tests\logs\tests\dom-state-micro-6f6a3e70d2580e0358b9cc3ed8b513c1.yml
+● Read browser4-tests\pulsar-it-tests\logs\tests\dom-state-micro-6f6a3e70d2580e0358b9cc3ed8b513c1.yml
   lines 1-220
   └ 220 lines read
 
-● Read pulsar-tests\pulsar-it-tests\logs\tests\snapshot-6f6a3e70d2580e0358b9cc3ed8b513c1.yml lines
+● Read browser4-tests\pulsar-it-tests\logs\tests\snapshot-6f6a3e70d2580e0358b9cc3ed8b513c1.yml lines
   1-220
   └ 220 lines read
 
-● Read pulsar-tests\pulsar-it-tests\logs\tests\dom-state-nano-aria-snapshot-6f6a3e70d2580e0358b9cc3ed
+● Read browser4-tests\pulsar-it-tests\logs\tests\dom-state-nano-aria-snapshot-6f6a3e70d2580e0358b9cc3ed
   8b513c1.yml
   └ 1 line read
 
-● Read pulsar-tests\pulsar-it-tests\logs\tests\dom-state-aria-snapshot-6f6a3e70d2580e0358b9cc3ed8b513
+● Read browser4-tests\pulsar-it-tests\logs\tests\dom-state-aria-snapshot-6f6a3e70d2580e0358b9cc3ed8b513
   c1.yml
   └ 1 line read
 
 The generated artifact answers the core question: today’s ARIA snapshot is just a single `RootWebArea` line, despite the fixture page clearly containing headings, buttons, inputs, and list content. That means the current calculation is too lossy, so I’m tracing where descendants disappear between `microTree` and rendered ARIA output.
 
 ● Grep "nodeName: "BODY"|nodeName: "H1"|nodeName: "BUTTON"|nodeName: "INPUT"|role: "heading"|role:
-"button"|role: "textbox"" (D:\workspace\Browser4\Browser4-4.6\pulsar-tests\pulsar-it-tests\logs\test
+"button"|role: "textbox"" (D:\workspace\Browser4\Browser4-4.6\browser4-tests\pulsar-it-tests\logs\test
 s\dom-state-micro-6f6a3e70d2580e0358b9cc3ed8b513c1.yml)
   └ 63 lines found
 
@@ -156,7 +156,7 @@ I found the actual bug: the renderer drops the entire subtree when it hits a pre
 sar-browser\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\DOMStateBuilderTest.kt)
   └ 7 lines found
 
-● Read pulsar-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\SnapshotServ
+● Read browser4-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\SnapshotServ
   iceE2ETest.kt lines 40-110
   └ 71 lines read
 
@@ -200,10 +200,10 @@ sar-browser\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\DOMStateBuilder
 ● Edit pulsar-core\pulsar-browser\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\DOMStateBuilde
   rTest.kt
 
-● Edit pulsar-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\SnapshotServ
+● Edit browser4-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\SnapshotServ
   iceE2ETest.kt
 
-● Edit pulsar-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\SnapshotServ
+● Edit browser4-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\SnapshotServ
   iceFullCoverageTest.kt
 
 I’ve patched the renderer to flatten presentational nodes instead of dropping their descendants, and I tightened the tests to prove we now keep real page semantics. Next up is targeted validation: one unit regression plus the two snapshot E2Es.
@@ -211,7 +211,7 @@ I’ve patched the renderer to flatten presentational nodes instead of dropping 
 ● Run targeted unit and E2E tests
   $ .\mvnw.cmd -f pulsar-core\pulsar-browser\pom.xml -Dtest=DOMStateBuilderTest
   -D"surefire.failIfNoSpecifiedTests=false" test ; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } ;
-   .\mvnw.cmd -f pulsar-tests\pom.xml -pl pulsar-it-tests -am -DrunE2ETests=true
+   .\mvnw.cmd -f browser4-tests\pom.xml -pl pulsar-it-tests -am -DrunE2ETests=true
   "-Dtest=SnapshotServiceE2ETest#testGetDomAxAndSnapshot,SnapshotServiceFullCoverageTest#getTreesBui
   ldAndSerializeEndToEndWithAssertions" -D"surefire.failIfNoSpecifiedTests=false" test
   └ 23 lines...
@@ -240,23 +240,23 @@ The unit regression passed, but one of the snapshot E2Es failed after the render
 (C:\Users\pereg\AppData\Local\Temp\copilot-tool-output-1773421938914-ltk5mn.txt)
   └ 73 lines found
 
-● Glob "pulsar-tests\pulsar-it-tests\logs\tests\dom-state-aria-snapshot-*.yml" in
+● Glob "browser4-tests\pulsar-it-tests\logs\tests\dom-state-aria-snapshot-*.yml" in
 D:\workspace\Browser4\Browser4-4.6
   └ No matches found
 
-● Grep "role: "none"" (D:\workspace\Browser4\Browser4-4.6\pulsar-tests\pulsar-it-tests\logs\tests\do
+● Grep "role: "none"" (D:\workspace\Browser4\Browser4-4.6\browser4-tests\pulsar-it-tests\logs\tests\do
 m-state-micro-6f6a3e70d2580e0358b9cc3ed8b513c1.yml)
   └ 5 lines found
 
-● Grep "nodeName: "body"|nodeName: "BODY"" (D:\workspace\Browser4\Browser4-4.6\pulsar-tests\pulsar-i
+● Grep "nodeName: "body"|nodeName: "BODY"" (D:\workspace\Browser4\Browser4-4.6\browser4-tests\pulsar-i
 t-tests\logs\tests\dom-state-micro-6f6a3e70d2580e0358b9cc3ed8b513c1.yml)
   └ 21 lines found
 
-I found why the E2Es still showed the old one-line snapshot: `pulsar-tests` was picking up the previously installed `pulsar-browser` snapshot from the local Maven repo. I’m installing the patched browser module locally, then re-running just the two E2Es against that updated artifact.
+I found why the E2Es still showed the old one-line snapshot: `browser4-tests` was picking up the previously installed `pulsar-browser` snapshot from the local Maven repo. I’m installing the patched browser module locally, then re-running just the two E2Es against that updated artifact.
 
 ● Install browser module and rerun E2E tests
   $ .\mvnw.cmd -f pulsar-core\pulsar-browser\pom.xml -DskipTests install ; if ($LASTEXITCODE -ne 0)
-  { exit $LASTEXITCODE } ; .\mvnw.cmd -f pulsar-tests\pom.xml -pl pulsar-it-tests -am
+  { exit $LASTEXITCODE } ; .\mvnw.cmd -f browser4-tests\pom.xml -pl pulsar-it-tests -am
   -DrunE2ETests=true "-Dtest=SnapshotServiceE2ETest#testGetDomAxAndSnapshot,SnapshotServiceFullCover
   ageTest#getTreesBuildAndSerializeEndToEndWithAssertions" -D"surefire.failIfNoSpecifiedTests=false"
    test
@@ -280,11 +280,11 @@ The patched module is now installed, so this second failure should reflect the r
 run|actual:" (C:\Users\pereg\AppData\Local\Temp\copilot-tool-output-1773422107947-g12vlk.txt)
   └ 52 lines found
 
-● Glob "pulsar-tests\pulsar-it-tests\logs\tests\dom-state-aria-snapshot-*.yml" in
+● Glob "browser4-tests\pulsar-it-tests\logs\tests\dom-state-aria-snapshot-*.yml" in
 D:\workspace\Browser4\Browser4-4.6
   └ No matches found
 
-● Glob "pulsar-tests\pulsar-it-tests\target\surefire-reports\*.txt" in
+● Glob "browser4-tests\pulsar-it-tests\target\surefire-reports\*.txt" in
 D:\workspace\Browser4\Browser4-4.6
   └ No matches found
 
@@ -295,16 +295,16 @@ D:\workspace\Browser4\Browser4-4.6
 (C:\Users\pereg\AppData\Local\Temp\copilot-tool-output-1773422107947-g12vlk.txt)
   └ 16 lines found
 
-● Edit pulsar-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\SnapshotServ
+● Edit browser4-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\SnapshotServ
   iceE2ETest.kt
 
-● Edit pulsar-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\SnapshotServ
+● Edit browser4-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\SnapshotServ
   iceFullCoverageTest.kt
 
 The renderer fix is good; the remaining failures were just my E2E assertions assuming those controls would surface as `button` instead of the current `generic` role. I’ve relaxed them to stable descendant content that still proves the tree is no longer collapsing.
 
 ● Rerun targeted snapshot E2E tests
-  $ .\mvnw.cmd -f pulsar-tests\pom.xml -pl pulsar-it-tests -am -DrunE2ETests=true
+  $ .\mvnw.cmd -f browser4-tests\pom.xml -pl pulsar-it-tests -am -DrunE2ETests=true
   "-Dtest=SnapshotServiceE2ETest#testGetDomAxAndSnapshot,SnapshotServiceFullCoverageTest#getTreesBui
   ldAndSerializeEndToEndWithAssertions" -D"surefire.failIfNoSpecifiedTests=false" test
   └ 49 lines...
@@ -331,9 +331,9 @@ The fix is now verified: unit coverage passed, I installed the patched browser m
 ● Review final diff and status
   $ git --no-pager status --short && git --no-pager diff -- pulsar-core\pulsar-browser\src\main\ko
   tlin\ai\platon\browser4\driver\chrome\dom\model\AriaSnapshotRenderer.kt pulsar-core\pulsar-bro
-  wser\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\DOMStateBuilderTest.kt pulsar-tests\
+  wser\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\DOMStateBuilderTest.kt browser4-tests\
   pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\SnapshotServiceE2ETest.kt
-   pulsar-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\SnapshotSer...
+   browser4-tests\pulsar-it-tests\src\test\kotlin\ai\platon\browser4\driver\chrome\dom\SnapshotSer...
   └ 251 lines...
 
 I spotted one unrelated stub method showing up in the diff for the renderer file. I’m removing that stray change so the final patch stays tightly scoped to the ARIA snapshot fix and its regression coverage.
@@ -349,7 +349,7 @@ I spotted one unrelated stub method showing up in the diff for the renderer file
 ● read_powershell
   └ 77 lines...
 
-I’m appending the required daily memory entry now and recording one reusable repo fact from this task: when `pulsar-tests` validates browser changes, it needs the updated `pulsar-browser` artifact installed locally first.
+I’m appending the required daily memory entry now and recording one reusable repo fact from this task: when `browser4-tests` validates browser changes, it needs the updated `pulsar-browser` artifact installed locally first.
 
 ● Todo completed: update-memory
 
@@ -370,8 +370,8 @@ I’m appending the required daily memory entry now and recording one reusable r
 ● Summarize final diff
   $ git --no-pager diff --stat -- pulsar-core\pulsar-browser\src\main\kotlin\ai\platon\browser4\driv
   er\chrome\dom\model\AriaSnapshotRenderer.kt pulsar-core\pulsar-browser\src\test\kotlin\ai\platon\b
-  rowser4\driver\chrome\dom\DOMStateBuilderTest.kt pulsar-tests\pulsar-it-tests\src\test\kotlin\ai\p
-  laton\browser4\driver\chrome\dom\SnapshotServiceE2ETest.kt pulsar-tests\pulsar-it-tests\src\test\k
+  rowser4\driver\chrome\dom\DOMStateBuilderTest.kt browser4-tests\pulsar-it-tests\src\test\kotlin\ai\p
+  laton\browser4\driver\chrome\dom\SnapshotServiceE2ETest.kt browser4-tests\pulsar-it-tests\src\test\k
   otlin\ai\platon\browser4\driver\chrome\dom\SnapshotServiceFullCoverageTest.kt
   └ 10 lines...
 
@@ -383,7 +383,7 @@ Validated with:
 
 `.\mvnw.cmd -f pulsar-core\pulsar-browser\pom.xml -Dtest=DOMStateBuilderTest -D"surefire.failIfNoSpecifiedTests=false" test`
 
-`.\mvnw.cmd -f pulsar-tests\pom.xml -pl pulsar-it-tests -am -DrunE2ETests=true "-Dtest=SnapshotServiceE2ETest#testGetDomAxAndSnapshot,SnapshotServiceFullCoverageTest#getTreesBuildAndSerializeEndToEndWithAssertions" -D"surefire.failIfNoSpecifiedTests=false" test`
+`.\mvnw.cmd -f browser4-tests\pom.xml -pl pulsar-it-tests -am -DrunE2ETests=true "-Dtest=SnapshotServiceE2ETest#testGetDomAxAndSnapshot,SnapshotServiceFullCoverageTest#getTreesBuildAndSerializeEndToEndWithAssertions" -D"surefire.failIfNoSpecifiedTests=false" test`
 
 Daily memory appended; monthly memory was already current.
 

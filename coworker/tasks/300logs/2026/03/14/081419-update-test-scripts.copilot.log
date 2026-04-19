@@ -24,7 +24,7 @@ I’ve got the task brief. Next I’m checking the current test scripts against 
 ● Read bin\test.ps1
   └ 302 lines read
 
-● Read pulsar-tests\pom.xml lines 1-220
+● Read browser4-tests\pom.xml lines 1-220
   └ 34 lines read
 
 ● Read bin\test.sh
@@ -110,7 +110,7 @@ I’ve narrowed the live targets down to Maven modules plus the `sdks/browser4-c
 ● Read docs\test-strategy.md lines 115-140
   └ 26 lines read
 
-I found a second structural issue: the old one-shot root Maven invocation doesn’t map cleanly onto the current split between `pulsar-core`, `pulsar-tests`, `browser4-rest`, and the standalone CLI package. I’m checking existing CI commands so I can mirror the repo’s real validation paths instead of guessing.
+I found a second structural issue: the old one-shot root Maven invocation doesn’t map cleanly onto the current split between `pulsar-core`, `browser4-tests`, `browser4-rest`, and the standalone CLI package. I’m checking existing CI commands so I can mirror the repo’s real validation paths instead of guessing.
 
 ● Read .github\workflows\kotlin-sdk-test.yml lines 1-220
   └ 123 lines read
@@ -119,7 +119,7 @@ I found a second structural issue: the old one-shot root Maven invocation doesn�
   └ 119 lines read
 
 ● Grep "mvnw(\.cmd)? .*runITs|mvnw(\.cmd)?
-.*runE2ETests|pulsar-tests\\pom.xml|pulsar-core\\pom.xml|browser4-cli|browser4-rest-tests" in *.yml
+.*runE2ETests|browser4-tests\\pom.xml|pulsar-core\\pom.xml|browser4-cli|browser4-rest-tests" in *.yml
 (D:\workspace\Browser4\Browser4-4.6\.github\workflows)
   └ No matches found
 
@@ -133,7 +133,7 @@ I’m opting for a more faithful fix than just renaming paths: the old “single
   └ No matches found
 
 ● Grep "@Tag\("RequiresServer"\)|@Tag\("E2ETest"\)|@Tag\("IntegrationTest"\)" in *.kt
-(D:\workspace\Browser4\Browser4-4.6\pulsar-tests)
+(D:\workspace\Browser4\Browser4-4.6\browser4-tests)
   └ 10 lines found
 
 ● Grep "@Tag\("IntegrationTest"\)|@Tag\("E2ETest"\)|@Tag\("RequiresServer"\)" in *.kt
@@ -159,8 +159,8 @@ The profile deactivation syntax works, which is good. I’m now checking a few f
   validate
   └ 2 lines...
 
-● Validate pulsar-tests reactor
-  $ Set-Location 'D:\workspace\Browser4\Browser4-4.6'; .\mvnw.cmd -q -f pulsar-tests\pom.xml
+● Validate browser4-tests reactor
+  $ Set-Location 'D:\workspace\Browser4\Browser4-4.6'; .\mvnw.cmd -q -f browser4-tests\pom.xml
   -DskipTests validate
   └ 2 lines...
 

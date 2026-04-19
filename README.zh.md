@@ -308,7 +308,7 @@ Invoke-WebRequest -Uri https://github.com/platonai/PulsarRPAPro/releases/downloa
 | `browser4-agents` | 智能体与爬虫编排及产品打包           |
 | `sdks` | Rust 实现的 CLI，支持 SKILLS  |
 | `examples` | 可运行示例与演示工程              |
-| `pulsar-tests` | 重型集成与场景测试               |
+| `browser4-tests` | 重型集成与场景测试               |
 
 ---
 

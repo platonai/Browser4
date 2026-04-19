@@ -7,7 +7,7 @@
 **Change:** Removed aliasing from `sdks/browser4-cli`. Updated `browser4-rest` `MCPToolController` to accept `browser_*` names directly.
 **Validation:** CLI `npm test`, Backend `MCPToolControllerTest`, and `browser4-rest-tests` passed.
 **Key Insight:** API compatibility layers belong at the backend boundary.
-**Testing Strategy:** `mvn install` changed modules locally before running `pulsar-tests` with `-DrunE2ETests=true`.
+**Testing Strategy:** `mvn install` changed modules locally before running `browser4-tests` with `-DrunE2ETests=true`.
 
 ## 2. Log Encoding Fix
 **Context:** Windows default charset caused garbled localized logs.

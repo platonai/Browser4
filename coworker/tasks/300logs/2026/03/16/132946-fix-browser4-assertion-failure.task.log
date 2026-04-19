@@ -110,7 +110,7 @@ After completing the task, you MUST update your daily memory file: D:\workspace\
 ### Daily Rollup Update (2026-03-01 to 2026-03-15)
 - Aligned Browser4 CLI and REST MCP naming by making /mcp/call-tool accept the frontend-declared rowser_* tool names directly, moving click/dialog/tab dispatch normalization into MCPToolController, and updating /mcp/tools plus focused controller/E2E coverage to reflect the frontend contract.
 - Continued improving Browser4 CLI/REST execution hygiene by keeping the CLI focused on value-level ref normalization while the backend owns contract compatibility, and by validating the change with both targeted Jest coverage and focused REST controller/E2E Maven runs.
-- Reinforced recurring execution hygiene: when pulsar-tests E2Es depend on updated local module artifacts, install the changed module first; keep monthly memory rollups explicitly synchronized with the latest available pre-today daily memory.
+- Reinforced recurring execution hygiene: when browser4-tests E2Es depend on updated local module artifacts, install the changed module first; keep monthly memory rollups explicitly synchronized with the latest available pre-today daily memory.
 
 ### Daily Rollup Correction (2026-03-15)
 - Correction to the previous appended line: the aligned frontend contract uses the browser_* tool-name family (for example: browser_navigate, browser_tabs, browser_handle_dialog, browser_click); the earlier malformed text was a PowerShell formatting artifact.
@@ -127,7 +127,7 @@ After completing the task, you MUST update your daily memory file: D:\workspace\
 - Backend: `MCPToolControllerTest` passed.
 - E2E: Focused `browser4-rest-tests` passed after installing the modified `browser4-rest` module locally.
 **Key Insight:** API compatibility layers belong at the backend boundary, not in CLI wrappers.
-**Testing Strategy:** For cross-module E2E, `mvn install` the changed module locally before running `pulsar-tests` with `-DrunE2ETests=true`.
+**Testing Strategy:** For cross-module E2E, `mvn install` the changed module locally before running `browser4-tests` with `-DrunE2ETests=true`.
 
 ## 2. Log Encoding Fix
 **Context:** Windows default charset caused garbled localized logs (e.g., "使用 Web UI").

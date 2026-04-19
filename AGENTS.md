@@ -80,8 +80,8 @@ mvnw.cmd -q -DskipTests
 | `sdks/*` | Browser4 CLI + skill assets (`sdks/browser4-cli`, `sdks/skill`) |
 | `browser4/*` | Product packaging (`browser4/browser4-agents`) |
 | `examples/*` | Runnable examples (`examples/browser4-examples`) |
-| `pulsar-tests` | E2E & heavy integration & scenario tests |
-| `pulsar-tests-common` | Shared test base classes and utilities |
+| `browser4-tests` | E2E & heavy integration & scenario tests |
+| `browser4-tests-common` | Shared test base classes and utilities |
 | `pulsar-benchmarks` | JMH benchmarks |
 
 ## Key APIs and Concepts
@@ -163,8 +163,8 @@ See [TESTING.md](docs/TESTING.md) for details and trade-offs.
 
 ### Test Location
 - Module unit tests: `src/test/kotlin/...`
-- Centralized integration/E2E: `pulsar-tests/`
-- Shared utilities: `pulsar-tests-common/`
+- Centralized integration/E2E: `browser4-tests/`
+- Shared utilities: `browser4-tests-common/`
 
 ### Naming Conventions
 - Unit tests: `<ClassName>Test.kt`
@@ -301,7 +301,7 @@ When given a task, Claude should:
 3. Reuse existing backend tools when possible; if a new browser capability is required, add an `@MCP` method in `WebDriver.kt`, implement it in the concrete driver, and only add an explicit `BrowserTabToolExecutor` case when parameter mapping is non-trivial
 4. Update `sdks/browser4-cli/src/main.rs` only when the command needs custom dispatch, dynamic tool-name selection, stale-session recovery, or inclusion in `no_snapshot_commands()` for read-only behavior
 5. Update `sdks/skill/SKILL.md` for user-facing command documentation; CLI help is generated from `CommandDef`, so avoid hand-editing help infrastructure
-6. Cover the change with the smallest relevant tests: `sdks/browser4-cli/src/commands.rs` unit tests, `browser4-rest` controller mapping tests, `sdks/browser4-cli/tests/e2e.rs`, and `pulsar-tests/browser4-rest-tests/.../MCPToolControllerE2ETest.kt` when the command changes the end-to-end flow
+6. Cover the change with the smallest relevant tests: `sdks/browser4-cli/src/commands.rs` unit tests, `browser4-rest` controller mapping tests, `sdks/browser4-cli/tests/e2e.rs`, and `browser4-tests/browser4-rest-tests/.../MCPToolControllerE2ETest.kt` when the command changes the end-to-end flow
 7. Watch the common failure points: missing backend alias, omitted `sessionId` in custom handlers, forgetting `no_snapshot_commands()` for read-only commands, mismatched element-ref parameter names, and snake_case/camelCase argument normalization
 
 ### Browser Automation Specifics
@@ -433,7 +433,7 @@ Before submitting changes, verify:
 
 - Check `docs/` for detailed guides
 - Review `examples/` for usage patterns
-- Look in `pulsar-tests/` for test examples
+- Look in `browser4-tests/` for test examples
 - See `docs-dev/copilot/` for development notes
 
 ---

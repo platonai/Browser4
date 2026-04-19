@@ -19,7 +19,7 @@
     </parent>
 
     <artifactId>pulsar-skeleton</artifactId>
-    <name>Pulsar Skeleton</name>
+    <name>Browser4 Skeleton</name>
 
     <dependencies>
         <!-- Internal Dependencies -->
@@ -152,7 +152,7 @@
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-tests-common</artifactId>
+            <artifactId>browser4-tests-common</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>

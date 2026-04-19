@@ -20,7 +20,7 @@ function print_usage {
   echo ""
   echo "Examples:"
   echo "  build.sh -clean -test"
-  echo "  build.sh -clean -test -pl :pulsar-tests"
+  echo "  build.sh -clean -test -pl :browser4-tests"
   echo "  build.sh -DskipTests=false"
   exit 1
 }

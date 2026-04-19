@@ -120,7 +120,7 @@ I’ve got enough to design the harness now. The remaining question is the safes
 
 ● Grep "browser_click|browser_drag|browser_handle_dialog|browser_tabs|browser_file_upload|browser_pr
 ess_sequentially|browser_take_screenshot|browser_pdf_save" in **/*.kt
-(D:\workspace\Browser4\Browser4-4.6\pulsar-tests)
+(D:\workspace\Browser4\Browser4-4.6\browser4-tests)
   └ 20 lines found
 
 ● Grep "browser_click|browser_drag|browser_handle_dialog|browser_tabs|browser_file_upload|browser_pr
@@ -141,7 +141,7 @@ upload|handle_dialog|dialog-accept|dialog-dismiss|browser_press_sequentially|bro
   └ 8 lines found
 
 ● Grep "browser_file_upload|browser_handle_dialog" in **/*.kt
-(D:\workspace\Browser4\Browser4-4.6\pulsar-tests)
+(D:\workspace\Browser4\Browser4-4.6\browser4-tests)
   └ 5 lines found
 
 ● Grep "upload\(|handleDialog|fileChooser|setInputFiles|pressSequentially|mouseWheel" in **/*.kt
@@ -686,7 +686,7 @@ The live suite just found a product bug, not a test issue: the CLI’s `console`
   └ No matches found
 
 ● Grep "browser_console_messages|browser_console_clear|console_messages|console_clear" in **/*.kt
-(D:\workspace\Browser4\Browser4-4.6\pulsar-tests\browser4-rest-tests)
+(D:\workspace\Browser4\Browser4-4.6\browser4-tests\browser4-rest-tests)
   └ No matches found
 
 I found the alias map hole. I’m checking the rest of the MCP controller’s recognized-tool set as well so I can add the missing console alias cleanly and avoid immediately hitting the next missing frontend name.

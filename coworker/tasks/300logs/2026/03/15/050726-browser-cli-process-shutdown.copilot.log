@@ -82,7 +82,7 @@ I found the root problem: `kill-all` is currently hunting for a `--daemon-sessio
   190-240
   └ 51 lines read
 
-● Read pulsar-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon
+● Read browser4-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api\controller\MCPToolCon
   trollerE2ETest.kt lines 248-286
   └ 39 lines read
 

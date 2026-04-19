@@ -11,7 +11,7 @@ SCRIPT_NAME="$(basename "$0")"
 declare -i INTERVAL_SECONDS=60
 declare -i FETCH_REMOTE=1
 declare -i FORCE_BUILD=0
-BUILD_MODULES=":pulsar-tests"
+BUILD_MODULES=":browser4-tests"
 declare -i LOG_TO_FILE=0
 LOG_FILE=""
 declare -i VERBOSE=0
@@ -81,7 +81,7 @@ OPTIONS:
     -n, --no-fetch          Skip fetching remote changes (local changes only)
     -c, --clean             Perform clean build (-clean flag)
     -l, --log-to-file       Log output to file (ci-local-<timestamp>.log)
-    -m, --modules MODULES   Comma-separated list of modules to build (default: :pulsar-tests)
+    -m, --modules MODULES   Comma-separated list of modules to build (default: :browser4-tests)
                             Use 'all' to build all modules
 
 ARGUMENTS:
@@ -306,7 +306,7 @@ run_build_script() {
 
     # also build projects required
     build_cmd+=("-am")
-    build_cmd+=("-Ppulsar-tests")
+    build_cmd+=("-Pbrowser4-tests")
 
     if [[ $CLEAN_BUILD -eq 1 ]]; then
         build_cmd+=("-clean")

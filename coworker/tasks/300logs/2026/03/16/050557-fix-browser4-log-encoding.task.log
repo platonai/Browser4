@@ -110,7 +110,7 @@ After completing the task, you MUST update your daily memory file: D:\workspace\
 ### Daily Rollup Update (2026-03-01 to 2026-03-15)
 - Aligned Browser4 CLI and REST MCP naming by making /mcp/call-tool accept the frontend-declared rowser_* tool names directly, moving click/dialog/tab dispatch normalization into MCPToolController, and updating /mcp/tools plus focused controller/E2E coverage to reflect the frontend contract.
 - Continued improving Browser4 CLI/REST execution hygiene by keeping the CLI focused on value-level ref normalization while the backend owns contract compatibility, and by validating the change with both targeted Jest coverage and focused REST controller/E2E Maven runs.
-- Reinforced recurring execution hygiene: when pulsar-tests E2Es depend on updated local module artifacts, install the changed module first; keep monthly memory rollups explicitly synchronized with the latest available pre-today daily memory.
+- Reinforced recurring execution hygiene: when browser4-tests E2Es depend on updated local module artifacts, install the changed module first; keep monthly memory rollups explicitly synchronized with the latest available pre-today daily memory.
 
 ### Daily Rollup Correction (2026-03-15)
 - Correction to the previous appended line: the aligned frontend contract uses the browser_* tool-name family (for example: browser_navigate, browser_tabs, browser_handle_dialog, browser_click); the earlier malformed text was a PowerShell formatting artifact.
@@ -122,9 +122,9 @@ After completing the task, you MUST update your daily memory file: D:\workspace\
 - **Unify frontend/backend Browser4 tool names:** Removed the browser4-cli legacy tool-name alias bridge from sdks/browser4-cli/src/program.ts, moved the name/shape compatibility handling into browser4-rest MCPToolController, and updated /mcp/tools so the backend now advertises and accepts the frontend-declared rowser_* tool names directly (including rowser_tabs, rowser_handle_dialog, and rowser_click variants).
 
 - **Validation outcome:**
-pm run build && npm test -- --runInBand tests/program.test.ts tests/commands.test.ts passed in sdks/browser4-cli; ./mvnw.cmd -f browser4-rest/pom.xml "-Dtest=MCPToolControllerTest" -D"surefire.failIfNoSpecifiedTests=false" test passed; and after installing browser4-rest, the focused REST E2E slice ./mvnw.cmd -f pulsar-tests/pom.xml -pl browser4-rest-tests -am -DrunE2ETests=true "-Dtest=MCPToolControllerE2ETest#testToolsEndpointCoversAllCliCommands+testFrontendToolNamesAreRecognized" -D"surefire.failIfNoSpecifiedTests=false" test also passed.
+pm run build && npm test -- --runInBand tests/program.test.ts tests/commands.test.ts passed in sdks/browser4-cli; ./mvnw.cmd -f browser4-rest/pom.xml "-Dtest=MCPToolControllerTest" -D"surefire.failIfNoSpecifiedTests=false" test passed; and after installing browser4-rest, the focused REST E2E slice ./mvnw.cmd -f browser4-tests/pom.xml -pl browser4-rest-tests -am -DrunE2ETests=true "-Dtest=MCPToolControllerE2ETest#testToolsEndpointCoversAllCliCommands+testFrontendToolNamesAreRecognized" -D"surefire.failIfNoSpecifiedTests=false" test also passed.
 
-- **Lesson learned:** When the frontend command catalog defines both tool names and argument shapes, the compatibility layer belongs at the backend HTTP boundary instead of the CLI wrapper. For cross-module REST E2E verification in this repo, install the changed module locally first, then run the smallest pulsar-tests slice with -DrunE2ETests=true.
+- **Lesson learned:** When the frontend command catalog defines both tool names and argument shapes, the compatibility layer belongs at the backend HTTP boundary instead of the CLI wrapper. For cross-module REST E2E verification in this repo, install the changed module locally first, then run the smallest browser4-tests slice with -DrunE2ETests=true.
 - **Correction:** The frontend tool prefix referenced above is browser_* (for example: browser_navigate, browser_tabs, browser_handle_dialog, browser_click). The earlier line contains a PowerShell formatting artifact, but the intended summary is that the backend now accepts those frontend-declared names directly.
 
 

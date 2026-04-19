@@ -19,7 +19,7 @@
 
     <artifactId>pulsar-llm</artifactId>
 
-    <name>Pulsar LLM</name>
+    <name>Browser4 LLM</name>
     <description>Access to LLM via API</description>
 
     <dependencies>
@@ -62,7 +62,7 @@
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-tests-common</artifactId>
+            <artifactId>browser4-tests-common</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
