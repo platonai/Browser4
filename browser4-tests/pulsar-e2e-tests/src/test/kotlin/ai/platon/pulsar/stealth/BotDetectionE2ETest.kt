@@ -2,11 +2,13 @@ package ai.platon.pulsar.stealth
 
 import ai.platon.pulsar.WebDriverTestBase
 import org.junit.jupiter.api.Assumptions
+import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import kotlin.test.assertTrue
 
 @Tag("BotDetection")
+@Disabled("This test is expected to fail in CI environments due to bot detection. Run locally to verify stealth capabilities.")
 class BotDetectionE2ETest : WebDriverTestBase() {
 
     companion object {
