@@ -427,7 +427,7 @@
         <!--  HTML parsing  -->
         <xerces.version>2.11.0</xerces.version>
         <nekohtml.version>1.9.22</nekohtml.version>
-        <tika.version>2.9.0</tika.version>
+        <tika.version>3.2.2</tika.version>
 
         <!--  Persistence  -->
         <javax.persistence-api.version>2.2</javax.persistence-api.version>
