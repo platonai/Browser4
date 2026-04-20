@@ -1,9 +1,9 @@
-name: Sync master to main
+name: Sync main to master
 
 on:
   push:
     branches:
-      - master
+      - main
   workflow_dispatch:
 
 permissions:
@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   sync:
-    name: Force sync main with master
+    name: Force sync master with main
     runs-on: ubuntu-latest
 
     steps:
@@ -28,10 +28,11 @@ jobs:
       - name: Fetch all branches
         run: git fetch origin
 
-      - name: Reset main to origin/master
+      - name: Reset master to origin/main
         run: |
-          git checkout -B main origin/master
+          git checkout -B master origin/main
 
-      - name: Force push main
+      - name: Force push master
         run: |
-          git push origin main --force
+          git push origin master --force
+

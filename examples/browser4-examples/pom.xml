@@ -78,7 +78,7 @@
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-bom</artifactId>
-                <version>${project.version}</version>
+                <version>${pulsar.base.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>

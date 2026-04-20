@@ -87,7 +87,6 @@
      with a single click in the IDE right after opening the project. -->
     <modules>
         <module>browser4-dependencies</module>
-        <module>pulsar-bom</module>
         <module>browser4-tests/browser4-tests-common</module>
         <module>browser4-core</module>
         <module>browser4-tools</module>
@@ -173,7 +172,6 @@
                 <module>browser4-dependencies</module>
                 <module>browser4-core</module>
                 <module>browser4-tools</module>
-                <module>pulsar-bom</module>
                 <module>browser4-agentic</module>
                 <module>browser4-rest</module>
 
@@ -375,7 +373,7 @@
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-bom</artifactId>
-                <version>${project.version}</version>
+                <version>${pulsar.base.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>

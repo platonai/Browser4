@@ -10,7 +10,7 @@ while ($Root -and -not (Test-Path (Join-Path $Root 'pom.xml'))) {
 }
 Set-Location $Root
 
-$Exempt = @('pulsar-benchmarks','examples/browser4-examples','pulsar-bom','browser4')
+$Exempt = @('examples/browser4-examples','browser4')
 
 $modules = Select-String -Path pom.xml -Pattern '<module>([^<]+)</module>' -AllMatches | ForEach-Object { $_.Matches } | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
 
