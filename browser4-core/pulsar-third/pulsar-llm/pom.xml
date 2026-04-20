@@ -50,12 +50,11 @@
 
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-resources</artifactId>
-            <scope>test</scope>
+            <artifactId>browser4-resources</artifactId>
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-resources</artifactId>
+            <artifactId>browser4-resources</artifactId>
             <type>test-jar</type>
             <classifier>tests</classifier>
             <scope>test</scope>

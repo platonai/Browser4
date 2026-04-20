@@ -28,7 +28,7 @@
 
     <modules>
         <module>browser4-common</module>
-        <module>pulsar-resources</module>
+        <module>browser4-resources</module>
         <module>pulsar-plugins</module>
         <module>pulsar-third</module>
         <module>pulsar-skeleton</module>

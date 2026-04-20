@@ -22,11 +22,13 @@
     <name>Browser4 Rest</name>
 
     <dependencies>
-        <!-- Pulsar dependency -->
+        <!-- Internal dependencies -->
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-resources</artifactId>
+            <artifactId>browser4-resources</artifactId>
         </dependency>
+
+        <!-- Pulsar dependencies -->
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-persist</artifactId>

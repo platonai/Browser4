@@ -37,11 +37,11 @@
 
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-resources</artifactId>
+            <artifactId>browser4-resources</artifactId>
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-resources</artifactId>
+            <artifactId>browser4-resources</artifactId>
             <classifier>tests</classifier>
             <type>test-jar</type>
             <scope>test</scope>
