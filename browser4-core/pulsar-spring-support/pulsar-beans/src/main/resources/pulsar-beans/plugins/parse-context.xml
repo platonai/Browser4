@@ -6,7 +6,6 @@
    http://www.springframework.org/schema/beans/spring-beans-3.0.xsd" default-lazy-init="true">
 
     <import resource="../common-context.xml"/>
-    <import resource="urlfilter-context.xml"/>
 
     <bean id="htmlParser" class="ai.platon.pulsar.skeleton.crawl.parse.html.PrimerHtmlParser">
         <constructor-arg ref="parseFilters"/>

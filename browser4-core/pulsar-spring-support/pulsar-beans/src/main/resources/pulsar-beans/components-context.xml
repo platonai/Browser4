@@ -6,11 +6,8 @@
    http://www.springframework.org/schema/beans/spring-beans-3.0.xsd" default-lazy-init="true">
 
     <import resource="plugins/schedule-context.xml"/>
-    <import resource="plugins/urlfilter-context.xml"/>
     <import resource="plugins/protocol-context.xml"/>
     <import resource="plugins/parse-context.xml"/>
-    <import resource="plugins/indexing-context.xml"/>
-    <import resource="plugins/scoring-context.xml"/>
 
     <import resource="plugins/monitor-context.xml"/>
 
