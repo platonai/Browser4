@@ -27,9 +27,6 @@ class ParserFactory(private val conf: ImmutableConfig) {
             val parsers = parserClasses.mapNotNull { name -> availableNamedParsers[name] }
             mineType2Parsers[mimeType] = Collections.synchronizedList(parsers)
         }
-
-//        mineType2Parsers.keys.associateWith { mineType2Parsers[it]?.joinToString { it.javaClass.name } }
-//                .let { Params(it) }.withLogger(LOG).info("Active parsers: ", "", false)
     }
 
     constructor(parses: Map<String, List<Parser>>, conf: ImmutableConfig) : this(conf) {

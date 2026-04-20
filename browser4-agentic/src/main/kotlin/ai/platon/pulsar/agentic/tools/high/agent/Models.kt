@@ -5,7 +5,7 @@ import ai.platon.pulsar.agentic.model.AgentState
 import ai.platon.pulsar.agentic.tools.high.crawl.PGInstructResult
 import ai.platon.pulsar.agentic.tools.high.crawl.PageVisitRequest
 import ai.platon.pulsar.common.ResourceStatus
-import ai.platon.pulsar.skeleton.crawl.ServerSideEventHandlers
+import ai.platon.pulsar.skeleton.event.ServerSideEventHandlers
 import com.fasterxml.jackson.annotation.JsonIgnore
 import java.time.Instant
 import java.util.*

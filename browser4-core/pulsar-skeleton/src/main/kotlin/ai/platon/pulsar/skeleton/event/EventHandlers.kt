@@ -1,6 +1,6 @@
 @file:Suppress("PARAMETER_NAME_CHANGED_ON_OVERRIDE", "unused")
 
-package ai.platon.pulsar.skeleton.crawl.event
+package ai.platon.pulsar.skeleton.event
 
 import ai.platon.pulsar.common.lang.*
 import ai.platon.pulsar.common.urls.UrlAware

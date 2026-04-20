@@ -1,15 +1,19 @@
-package ai.platon.pulsar.skeleton.crawl.event.impl
+package ai.platon.pulsar.skeleton.event.impl
 
 import ai.platon.browser4.common.B4ResourceLoader
 import ai.platon.pulsar.common.config.CapabilityTypes
 import ai.platon.pulsar.common.config.ImmutableConfig
-import ai.platon.pulsar.skeleton.crawl.BrowseEventHandlers
-import ai.platon.pulsar.skeleton.crawl.CrawlEventHandlers
-import ai.platon.pulsar.skeleton.crawl.LoadEventHandlers
-import ai.platon.pulsar.skeleton.crawl.PageEventHandlers
-import ai.platon.pulsar.skeleton.crawl.event.*
+import ai.platon.pulsar.skeleton.event.BrowseEventHandlers
+import ai.platon.pulsar.skeleton.event.CrawlEventHandlers
+import ai.platon.pulsar.skeleton.event.LoadEventHandlers
+import ai.platon.pulsar.skeleton.event.PageEventHandlers
 import ai.platon.pulsar.skeleton.crawl.fetch.driver.rpa.BrowseRPA
 import ai.platon.pulsar.skeleton.crawl.fetch.driver.rpa.DefaultBrowseRPA
+import ai.platon.pulsar.skeleton.event.AbstractBrowseEventHandlers
+import ai.platon.pulsar.skeleton.event.AbstractCrawlEventHandlers
+import ai.platon.pulsar.skeleton.event.AbstractLoadEventHandlers
+import ai.platon.pulsar.skeleton.event.AbstractPageEventHandlers
+import ai.platon.pulsar.skeleton.event.WebPageWebDriverEventHandler
 import org.slf4j.LoggerFactory
 
 /**
@@ -142,7 +146,7 @@ class PageEventHandlersFactory(val conf: ImmutableConfig = ImmutableConfig()) {
         val clazz = try {
             // Get the value of the `name` property as a `Class`.
             // If the property is not set, or the class is not found, use the default class.
-            kotlin.runCatching { B4ResourceLoader.loadUserClass<PageEventHandlers>(className) }.getOrNull()
+            runCatching { B4ResourceLoader.loadUserClass<PageEventHandlers>(className) }.getOrNull()
                 ?: defaultClazz
 //             conf.getClass(className, defaultClazz)
         } catch (e: Exception) {

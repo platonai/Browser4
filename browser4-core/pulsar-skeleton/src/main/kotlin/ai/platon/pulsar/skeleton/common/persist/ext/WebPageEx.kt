@@ -5,9 +5,9 @@ import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.WebPageExt
 import ai.platon.pulsar.persist.model.GoraWebPage
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
-import ai.platon.pulsar.skeleton.crawl.BrowseEventHandlers
-import ai.platon.pulsar.skeleton.crawl.LoadEventHandlers
-import ai.platon.pulsar.skeleton.crawl.PageEventHandlers
+import ai.platon.pulsar.skeleton.event.BrowseEventHandlers
+import ai.platon.pulsar.skeleton.event.LoadEventHandlers
+import ai.platon.pulsar.skeleton.event.PageEventHandlers
 import java.time.Instant
 
 /**

@@ -2,7 +2,7 @@ package ai.platon.pulsar.skeleton.crawl.component
 
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.persist.WebDb
-import ai.platon.pulsar.skeleton.crawl.CoreMetrics
+import ai.platon.pulsar.skeleton.CoreMetrics
 import ai.platon.pulsar.skeleton.crawl.common.GlobalCacheFactory
 import ai.platon.pulsar.skeleton.crawl.protocol.ProtocolFactory
 

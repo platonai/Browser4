@@ -1,6 +1,4 @@
-package ai.platon.pulsar.skeleton.crawl
-
-import ai.platon.pulsar.skeleton.crawl.event.*
+package ai.platon.pulsar.skeleton.event
 
 /**
  * Event handlers during the crawl phase of the webpage lifecycle.

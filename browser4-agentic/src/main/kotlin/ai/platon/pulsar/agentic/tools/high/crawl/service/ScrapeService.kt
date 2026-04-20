@@ -12,7 +12,7 @@ import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
-import ai.platon.pulsar.skeleton.crawl.PageEventHandlers
+import ai.platon.pulsar.skeleton.event.PageEventHandlers
 import org.apache.commons.collections4.MultiMapUtils
 import org.slf4j.LoggerFactory
 import java.util.concurrent.ConcurrentSkipListMap

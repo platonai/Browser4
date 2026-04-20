@@ -65,12 +65,10 @@ abstract class RobotRulesParser(
      * matching
      * @return BaseRobotRules object
      */
-    @NotNull
     fun parseRules(url: String, content: ByteArray, contentType: String, robotName: String): BaseRobotRules {
         return robotParser.parseContent(url, content, contentType, robotName)
     }
 
-    @NotNull
     fun getRobotRulesSet(protocol: Protocol, url: String): BaseRobotRules {
         val u = try {
             URI.create(url).toURL()
@@ -80,11 +78,9 @@ abstract class RobotRulesParser(
         return getRobotRulesSet(protocol, u)
     }
 
-    @NotNull
     abstract fun getRobotRulesSet(protocol: Protocol, url: URL): BaseRobotRules
 
     companion object {
-        val LOG = LoggerFactory.getLogger(RobotRulesParser::class.java)
         /**
          * A [BaseRobotRules] object appropriate for use when the
          * `robots.txt` file is empty or missing; all requests are allowed.

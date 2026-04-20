@@ -24,7 +24,7 @@
     </bean>
 
     <!--The core metrics -->
-    <bean id="coreMetrics" class="ai.platon.pulsar.skeleton.crawl.CoreMetrics" init-method="start" destroy-method="close">
+    <bean id="coreMetrics" class="ai.platon.pulsar.skeleton.CoreMetrics" init-method="start" destroy-method="close">
         <constructor-arg ref="messageWriter"/>
         <constructor-arg ref="conf"/>
     </bean>
@@ -45,13 +45,13 @@
 
     <bean id="globalCache" factory-bean="globalCacheFactory" factory-method="getGlobalCache"/>
 
-    <bean id="taskLoop" class="ai.platon.pulsar.skeleton.crawl.impl.StreamingTaskLoop">
+    <bean id="taskLoop" class="ai.platon.pulsar.skeleton.impl.StreamingTaskLoop">
         <constructor-arg ref="conf"/>
         <constructor-arg value="SpringStreamingTaskLoop"/>
     </bean>
 
     <!-- Do not auto start crawl loops, the PulsarSession depended on might not be the correct one -->
-    <bean id="taskLoops" class="ai.platon.pulsar.skeleton.crawl.TaskLoops" destroy-method="stop">
+    <bean id="taskLoops" class="ai.platon.pulsar.skeleton.TaskLoops" destroy-method="stop">
         <constructor-arg name="loops">
             <list>
                 <ref bean="taskLoop" />

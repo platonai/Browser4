@@ -13,9 +13,9 @@ import ai.platon.pulsar.persist.AbstractWebPage
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.model.GoraWebPage
 import ai.platon.pulsar.ql.h2.utils.ResultSetUtils
-import ai.platon.pulsar.skeleton.crawl.event.impl.DefaultCrawlEventHandlers
-import ai.platon.pulsar.skeleton.crawl.event.impl.DefaultLoadEventHandlers
-import ai.platon.pulsar.skeleton.crawl.event.impl.PageEventHandlersFactory
+import ai.platon.pulsar.skeleton.event.impl.DefaultCrawlEventHandlers
+import ai.platon.pulsar.skeleton.event.impl.DefaultLoadEventHandlers
+import ai.platon.pulsar.skeleton.event.impl.PageEventHandlersFactory
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import java.util.*
 

@@ -1,4 +1,4 @@
-package ai.platon.pulsar.skeleton.crawl
+package ai.platon.pulsar.skeleton
 
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.AppPaths.PATH_UNREACHABLE_HOSTS
@@ -181,7 +181,7 @@ class CoreMetrics(
     private val closed = AtomicBoolean()
 
     init {
-        kotlin.runCatching {
+        runCatching {
             if (Files.exists(PATH_UNREACHABLE_HOSTS)) {
                 Files.readAllLines(PATH_UNREACHABLE_HOSTS).toCollection(unreachableHosts)
             }
@@ -399,7 +399,7 @@ class CoreMetrics(
     }
 
     fun updateSystemInfo() {
-        kotlin.runCatching { updateSystemInfo0() }.onFailure { warnInterruptible(this, it) }
+        runCatching { updateSystemInfo0() }.onFailure { warnInterruptible(this, it) }
     }
 
     @Throws(Exception::class)

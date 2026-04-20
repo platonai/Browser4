@@ -1,6 +1,4 @@
-package ai.platon.pulsar.skeleton.crawl.event
-
-import ai.platon.pulsar.skeleton.crawl.*
+package ai.platon.pulsar.skeleton.event
 
 abstract class AbstractLoadEventHandlers(
     override val onNormalize: UrlFilterEventHandler = UrlFilterEventHandler(),

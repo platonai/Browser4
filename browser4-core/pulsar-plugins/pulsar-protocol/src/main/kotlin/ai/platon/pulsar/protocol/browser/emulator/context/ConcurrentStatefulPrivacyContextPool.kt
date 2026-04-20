@@ -19,7 +19,7 @@ import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.proxy.ProxyException
 import ai.platon.pulsar.common.proxy.ProxyPoolManager
-import ai.platon.pulsar.skeleton.crawl.CoreMetrics
+import ai.platon.pulsar.skeleton.CoreMetrics
 import ai.platon.pulsar.skeleton.crawl.fetch.privacy.BrowserProfile
 import ai.platon.pulsar.skeleton.crawl.fetch.privacy.PrivacyContext
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager

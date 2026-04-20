@@ -1,8 +1,9 @@
 package ai.platon.pulsar.skeleton.crawl
 
 import ai.platon.pulsar.common.config.ImmutableConfig
-import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.model.GoraWebPage
+import ai.platon.pulsar.skeleton.event.DefaultServerSideEventHandlers
+import ai.platon.pulsar.skeleton.event.ServerSideEvent
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import org.junit.jupiter.api.Assertions.*

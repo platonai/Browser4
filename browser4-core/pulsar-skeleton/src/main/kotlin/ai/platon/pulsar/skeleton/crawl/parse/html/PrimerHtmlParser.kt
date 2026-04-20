@@ -8,7 +8,7 @@ import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.metadata.ParseStatusCodes
 import ai.platon.pulsar.skeleton.common.persist.ext.loadEventHandlers
 import ai.platon.pulsar.skeleton.common.persist.ext.options
-import ai.platon.pulsar.skeleton.crawl.PulsarEventBus
+import ai.platon.pulsar.skeleton.event.PulsarEventBus
 import ai.platon.pulsar.skeleton.crawl.parse.ParseFilters
 import ai.platon.pulsar.skeleton.crawl.parse.ParseResult
 import ai.platon.pulsar.skeleton.crawl.parse.Parser

@@ -1,4 +1,4 @@
-package ai.platon.pulsar.skeleton.crawl
+package ai.platon.pulsar.skeleton
 
 import ai.platon.pulsar.common.StartStopRunnable
 import ai.platon.pulsar.common.collect.collector.DataCollector

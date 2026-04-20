@@ -19,7 +19,7 @@ import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.common.urls.CombinedUrlNormalizer
 import ai.platon.pulsar.skeleton.common.urls.NormURL
 import ai.platon.pulsar.skeleton.context.PulsarContext
-import ai.platon.pulsar.skeleton.crawl.TaskLoops
+import ai.platon.pulsar.skeleton.TaskLoops
 import ai.platon.pulsar.skeleton.crawl.common.FetchState
 import ai.platon.pulsar.skeleton.crawl.common.GlobalCache
 import ai.platon.pulsar.skeleton.crawl.common.GlobalCacheFactory

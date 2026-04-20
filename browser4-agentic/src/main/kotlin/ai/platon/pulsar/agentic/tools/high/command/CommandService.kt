@@ -9,8 +9,8 @@ import ai.platon.pulsar.agentic.tools.high.crawl.failed
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.Strings
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.skeleton.crawl.PageEventHandlers
-import ai.platon.pulsar.skeleton.crawl.event.impl.PageEventHandlersFactory
+import ai.platon.pulsar.skeleton.event.PageEventHandlers
+import ai.platon.pulsar.skeleton.event.impl.PageEventHandlersFactory
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow

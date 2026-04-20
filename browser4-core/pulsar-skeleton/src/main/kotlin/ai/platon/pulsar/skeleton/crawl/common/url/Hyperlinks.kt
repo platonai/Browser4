@@ -3,7 +3,7 @@ package ai.platon.pulsar.skeleton.crawl.common.url
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.model.GoraWebPage
 import ai.platon.pulsar.skeleton.common.urls.NormURL
-import ai.platon.pulsar.skeleton.crawl.event.WebPageHandler
+import ai.platon.pulsar.skeleton.event.WebPageHandler
 import java.util.concurrent.TimeUnit
 
 internal class CompleteWebPageHyperlinkHandler(val link: CompletableListenableHyperlink<WebPage>): WebPageHandler() {

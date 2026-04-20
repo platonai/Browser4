@@ -19,10 +19,10 @@ import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.dom.UriExtractor
 import ai.platon.pulsar.dom.nodes.node.ext.numChars
 import ai.platon.pulsar.persist.WebPage
-import ai.platon.pulsar.skeleton.crawl.DefaultServerSideEventHandlers
-import ai.platon.pulsar.skeleton.crawl.PageEventHandlers
-import ai.platon.pulsar.skeleton.crawl.PulsarEventBus
-import ai.platon.pulsar.skeleton.crawl.event.impl.PageEventHandlersFactory
+import ai.platon.pulsar.skeleton.event.DefaultServerSideEventHandlers
+import ai.platon.pulsar.skeleton.event.PageEventHandlers
+import ai.platon.pulsar.skeleton.event.PulsarEventBus
+import ai.platon.pulsar.skeleton.event.impl.PageEventHandlersFactory
 import kotlinx.coroutines.*
 import java.io.Closeable
 import java.nio.file.Files

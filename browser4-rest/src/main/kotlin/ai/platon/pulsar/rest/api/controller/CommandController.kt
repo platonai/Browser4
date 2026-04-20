@@ -5,7 +5,7 @@ import ai.platon.pulsar.agentic.tools.high.command.CommandService
 import ai.platon.pulsar.agentic.tools.high.command.CommandStatus
 import ai.platon.pulsar.agentic.tools.high.crawl.PageVisitRequest
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.skeleton.crawl.event.impl.PageEventHandlersFactory
+import ai.platon.pulsar.skeleton.event.impl.PageEventHandlersFactory
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onCompletion

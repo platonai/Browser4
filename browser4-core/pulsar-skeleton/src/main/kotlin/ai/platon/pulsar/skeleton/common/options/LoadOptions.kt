@@ -10,8 +10,8 @@ import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.dom.select.appendSelectorIfMissing
 import ai.platon.pulsar.persist.metadata.FetchMode
 import ai.platon.pulsar.skeleton.common.ApiPublic
-import ai.platon.pulsar.skeleton.crawl.PageEventHandlers
-import ai.platon.pulsar.skeleton.crawl.event.impl.PageEventHandlersFactory
+import ai.platon.pulsar.skeleton.event.PageEventHandlers
+import ai.platon.pulsar.skeleton.event.impl.PageEventHandlersFactory
 import com.beust.jcommander.Parameter
 import com.google.common.annotations.Beta
 import java.time.Duration

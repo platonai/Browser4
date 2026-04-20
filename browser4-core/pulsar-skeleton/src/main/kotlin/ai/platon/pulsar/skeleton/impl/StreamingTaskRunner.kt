@@ -1,4 +1,4 @@
-package ai.platon.pulsar.skeleton.crawl.impl
+package ai.platon.pulsar.skeleton.impl
 
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.collect.ConcurrentLoadingIterable
@@ -710,7 +710,7 @@ open class StreamingTaskRunner(
             url.configuredUrl
         )
 
-        return kotlin.runCatching { session.loadDeferred(url, options) }
+        return runCatching { session.loadDeferred(url, options) }
             .onSuccess { flowState.set(handleLoadSuccess(url, it)) }
             .onFailure { flowState.set(handleLoadException(url, it)) }
             .getOrNull()

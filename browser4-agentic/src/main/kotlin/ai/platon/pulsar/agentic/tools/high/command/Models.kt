@@ -8,7 +8,7 @@ import ai.platon.pulsar.agentic.tools.high.crawl.PageVisitRequest
 import ai.platon.pulsar.agentic.tools.high.crawl.PageVisitStatus
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
-import ai.platon.pulsar.skeleton.crawl.ServerSideEventHandlers
+import ai.platon.pulsar.skeleton.event.ServerSideEventHandlers
 import com.fasterxml.jackson.annotation.JsonCreator
 import com.fasterxml.jackson.annotation.JsonIgnore
 import com.fasterxml.jackson.annotation.JsonInclude

@@ -1,8 +1,8 @@
 package ai.platon.pulsar.skeleton.crawl.common.url
 
 import ai.platon.pulsar.common.urls.Hyperlink
-import ai.platon.pulsar.skeleton.crawl.PageEventHandlers
-import ai.platon.pulsar.skeleton.crawl.event.impl.PageEventHandlersFactory
+import ai.platon.pulsar.skeleton.event.PageEventHandlers
+import ai.platon.pulsar.skeleton.event.impl.PageEventHandlersFactory
 
 /**
  * A hyperlink that contains a [PageEventHandlers] to handle page events.
@@ -68,7 +68,7 @@ open class ListenableHyperlink(
      * A listenable url is not a persistence object because the event handler is not persistent
      * */
     override val isPersistable: Boolean = false
-    
+
     constructor(link: Hyperlink): this(link.url, link.text, link.order, link.referrer, link.args, link.href)
 
     companion object {

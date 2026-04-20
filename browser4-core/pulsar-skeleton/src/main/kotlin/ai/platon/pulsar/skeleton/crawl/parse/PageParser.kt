@@ -9,7 +9,7 @@ import ai.platon.pulsar.persist.ParseStatus
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.skeleton.common.message.MiscMessageWriter
 import ai.platon.pulsar.skeleton.common.persist.ext.loadEventHandlers
-import ai.platon.pulsar.skeleton.crawl.PulsarEventBus
+import ai.platon.pulsar.skeleton.event.PulsarEventBus
 import ai.platon.pulsar.skeleton.crawl.common.LazyConfigurable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking

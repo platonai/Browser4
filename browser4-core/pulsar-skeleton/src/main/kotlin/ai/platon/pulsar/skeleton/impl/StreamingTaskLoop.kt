@@ -1,4 +1,4 @@
-package ai.platon.pulsar.skeleton.crawl.impl
+package ai.platon.pulsar.skeleton.impl
 
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.collect.UrlFeeder
@@ -7,7 +7,7 @@ import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.warnForClose
 import ai.platon.pulsar.skeleton.context.PulsarContexts
 import ai.platon.pulsar.skeleton.context.support.AbstractPulsarContext
-import ai.platon.pulsar.skeleton.crawl.TaskRunner
+import ai.platon.pulsar.skeleton.TaskRunner
 import kotlinx.coroutines.*
 import org.slf4j.LoggerFactory
 import java.util.concurrent.ConcurrentSkipListMap
@@ -86,7 +86,7 @@ open class StreamingTaskLoop(
             // url feeder should be shared by all crawlers, so we should not clear it
             // _urlFeeder.clear()
 
-            kotlin.runCatching { runBlocking { crawlJob?.cancelAndJoin() } }
+            runCatching { runBlocking { crawlJob?.cancelAndJoin() } }
                 .onFailure {
                     if (AppContext.isActive) {
                         warnForClose(it, it, "Crawl loop #${id} is stopped with exception")

@@ -6,12 +6,12 @@ import ai.platon.pulsar.common.urls.UrlAware
 import ai.platon.pulsar.persist.AbstractWebPage
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.skeleton.common.persist.ext.loadEventHandlers
-import ai.platon.pulsar.skeleton.crawl.PageEventHandlers
+import ai.platon.pulsar.skeleton.event.PageEventHandlers
 import ai.platon.pulsar.skeleton.crawl.common.url.ListenableHyperlink
-import ai.platon.pulsar.skeleton.crawl.event.AbstractCrawlEventHandlers
-import ai.platon.pulsar.skeleton.crawl.event.AbstractLoadEventHandlers
+import ai.platon.pulsar.skeleton.event.AbstractCrawlEventHandlers
+import ai.platon.pulsar.skeleton.event.AbstractLoadEventHandlers
 import ai.platon.pulsar.common.printlnPro
-import ai.platon.pulsar.skeleton.crawl.event.impl.DefaultPageEventHandlers
+import ai.platon.pulsar.skeleton.event.impl.DefaultPageEventHandlers
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.assertNotNull

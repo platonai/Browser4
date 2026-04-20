@@ -1,7 +1,7 @@
-package ai.platon.pulsar.skeleton.crawl.event.impl
+package ai.platon.pulsar.skeleton.event.impl
 
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.skeleton.crawl.event.WebPageWebDriverEventHandler
+import ai.platon.pulsar.skeleton.event.WebPageWebDriverEventHandler
 import ai.platon.pulsar.skeleton.crawl.fetch.driver.WebDriver
 import ai.platon.pulsar.persist.WebPage
 import kotlinx.coroutines.delay

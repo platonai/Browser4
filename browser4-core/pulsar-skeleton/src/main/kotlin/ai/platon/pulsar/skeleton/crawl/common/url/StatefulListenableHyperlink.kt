@@ -1,8 +1,8 @@
 package ai.platon.pulsar.skeleton.crawl.common.url
 
 import ai.platon.pulsar.common.urls.StatefulHyperlink
-import ai.platon.pulsar.skeleton.crawl.PageEventHandlers
-import ai.platon.pulsar.skeleton.crawl.event.impl.PageEventHandlersFactory
+import ai.platon.pulsar.skeleton.event.PageEventHandlers
+import ai.platon.pulsar.skeleton.event.impl.PageEventHandlersFactory
 import java.time.Duration
 import java.time.Instant
 

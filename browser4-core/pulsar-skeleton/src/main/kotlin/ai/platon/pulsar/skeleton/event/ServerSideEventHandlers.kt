@@ -1,4 +1,4 @@
-package ai.platon.pulsar.skeleton.crawl
+package ai.platon.pulsar.skeleton.event
 
 import ai.platon.pulsar.persist.WebPage
 import kotlinx.coroutines.flow.MutableSharedFlow
