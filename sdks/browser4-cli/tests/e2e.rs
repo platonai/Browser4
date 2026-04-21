@@ -2224,6 +2224,54 @@ fn test_batch_commands(ctx: &mut E2ECtx) {
         "Expected JSON batch to fill text and finish with an 'up:Shift' key event",
     );
 
+    run_command(ctx, &["close"]);
+    run_command_with_stdin(
+        ctx,
+        &["batch", "--json"],
+        &format!(
+            r##"
+[
+  ["open", "{profile_arg}", "{interactive_url}"],
+  "type #type-target 'json string input'",
+  ["fill", "#fill-target", "json opened session"],
+  "click #click-target"
+]
+"##,
+            profile_arg = OPEN_TEMPORARY_PROFILE_ARG,
+            interactive_url = interactive_url,
+        ),
+    );
+    wait_for_state(
+        ctx,
+        |s| {
+            s["typeValue"].as_str() == Some("json string input")
+                && s["fillValue"].as_str() == Some("json opened session")
+                && s["clickCount"].as_u64() == Some(1)
+        },
+        15_000,
+        "Expected full JSON batch input to open the page and execute string and array commands",
+    );
+
+    run_command_with_stdin(
+        ctx,
+        &["batch", "--json"],
+        r##"
+[
+  "fill #fill-target 'json string only'",
+  "click #click-target"
+]
+"##,
+    );
+    wait_for_state(
+        ctx,
+        |s| {
+            s["fillValue"].as_str() == Some("json string only")
+                && s["clickCount"].as_u64() == Some(2)
+        },
+        15_000,
+        "Expected JSON batch string entries to run against the active session",
+    );
+
     let continue_failure = run_command_expecting_failure(
         ctx,
         &["batch", "not-a-command", "snapshot"],
