@@ -34,7 +34,6 @@ abstract class AbstractTaskRunner(
     override val name: String get() = this.javaClass.simpleName
 
     override var retryDelayPolicy: (Int, UrlAware?) -> Duration = { nextRetryNumber, url ->
-        // Duration.ofMinutes(1L + 2 * nextRetryNumber)
         Duration.ofSeconds(30 + Random.nextLong(15))
     }
 

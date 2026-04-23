@@ -45,6 +45,7 @@ import kotlin.concurrent.withLock
 import kotlin.random.Random
 import kotlin.reflect.full.memberProperties
 import kotlin.reflect.jvm.isAccessible
+import kotlin.time.Duration.Companion.milliseconds
 
 private class StreamingCrawlerMetrics {
     private val registry = MetricsSystem.defaultMetricRegistry
@@ -309,7 +310,7 @@ open class StreamingTaskRunner(
      * Run the crawler in the given coroutine scope.
      * */
     open suspend fun run(scope: CoroutineScope) {
-        startCrawlLoop(scope)
+        startTaskLoop(scope)
     }
 
     override fun report() {
@@ -345,13 +346,13 @@ open class StreamingTaskRunner(
         super.close()
     }
 
-    protected suspend fun startCrawlLoop(scope: CoroutineScope) {
+    protected suspend fun startTaskLoop(scope: CoroutineScope) {
         logger.info("Starting crawler | {} | #{} | {} ...", name, id, session::class.java)
 
         val startTime = Instant.now()
 
         globalState.globalRunningInstances.incrementAndGet()
-        runCrawlLoopWhileActive(scope)
+        runTaskLoopWhileActive(scope)
         globalState.globalRunningInstances.decrementAndGet()
 
         logger.info(
@@ -361,7 +362,7 @@ open class StreamingTaskRunner(
         )
     }
 
-    private suspend fun runCrawlLoopWhileActive(scope: CoroutineScope) {
+    private suspend fun runTaskLoopWhileActive(scope: CoroutineScope) {
         var idleSeconds = 0
         while (isActive) {
             checkEmptyUrlSequence(++idleSeconds)
@@ -372,7 +373,7 @@ open class StreamingTaskRunner(
 
                 if (!isActive) {
                     globalState.globalMetrics.drops.mark()
-                    return@runCrawlLoopWhileActive
+                    return@runTaskLoopWhileActive
                 }
 
                 tracer?.trace(
@@ -390,7 +391,7 @@ open class StreamingTaskRunner(
                     val diskSpaces = Runtimes.unallocatedDiskSpaces().joinToString { ByteUnit.BYTE.toGB(it).toString() }
                     logger.error("Disk space is full! | {}", diskSpaces)
                     globalState.criticalWarning = CriticalWarning.OUT_OF_DISK_STORAGE
-                    return@runCrawlLoopWhileActive
+                    return@runTaskLoopWhileActive
                 }
 
                 if (url.isNil) {
@@ -408,10 +409,9 @@ open class StreamingTaskRunner(
                 val state = runWithStatusCheck(1 + j, url, scope)
 
                 if (state != FlowState.CONTINUE) {
-                    return@runCrawlLoopWhileActive
+                    return@runTaskLoopWhileActive
                 } else {
-                    // if urls is ConcurrentLoadingIterable
-                    // TODO: the line below can be removed
+                    // if URLs is ConcurrentLoadingIterable
                     (urls.iterator() as? ConcurrentLoadingIterable.LoadingIterator)?.tryLoad()
                 }
             }
@@ -433,7 +433,7 @@ open class StreamingTaskRunner(
             logger.debug("The url sequence is empty. {} {}", globalState.globalLoadingUrls.size, idleTime)
         }
 
-        delay(1_000)
+        delay(1_000.milliseconds)
 
         if (isIdle) {
             lock.withLock { notBusy.signalAll() }
