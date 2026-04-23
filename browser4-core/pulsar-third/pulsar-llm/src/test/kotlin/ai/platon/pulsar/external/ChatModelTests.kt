@@ -14,6 +14,7 @@ import kotlin.test.Test
 import kotlin.test.assertTrue
 
 @Tag("RequiresServer")
+@Tag("RequiresAI")
 class ChatModelTests {
 
     companion object {

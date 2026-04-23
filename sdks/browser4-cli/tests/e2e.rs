@@ -1801,6 +1801,13 @@ fn batch_open_command(url: &str) -> String {
     format!("open {OPEN_TEMPORARY_PROFILE_ARG} {url}")
 }
 
+fn write_json_fixture(ctx: &E2ECtx, file_name: &str, value: &serde_json::Value) -> PathBuf {
+    let path = ctx.workspace_dir.join(file_name);
+    let json = serde_json::to_string_pretty(value).expect("serialize JSON fixture failed");
+    fs::write(&path, json).expect("write JSON fixture failed");
+    path
+}
+
 fn open_resized_interactive_page(ctx: &mut E2ECtx) {
     open_interactive_page(ctx);
 
@@ -2393,6 +2400,93 @@ fn test_batch_form_submission(ctx: &mut E2ECtx) {
     assert_eq!(submission["firstName"].as_str(), Some("Bob"));
     assert_eq!(submission["lastName"].as_str(), Some("Smith"));
     assert_eq!(submission["country"].as_str(), Some("uk"));
+
+    run_command(ctx, &["close"]);
+}
+
+fn test_batch_form_submission_from_json_file(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let form_input_path = write_json_fixture(
+        ctx,
+        "batch-form-input.json",
+        &serde_json::json!({
+            "firstName": "Carol",
+            "lastName": "Nguyen",
+            "email": "carol@example.com",
+            "country": "jp",
+            "agreeTerms": true,
+            "comments": "loaded from json file"
+        }),
+    );
+    let form_input_raw = fs::read_to_string(&form_input_path).expect("read batch form input JSON failed");
+    let form_input: serde_json::Value =
+        serde_json::from_str(&form_input_raw).expect("batch form input JSON is invalid");
+
+    let first_name = form_input["firstName"]
+        .as_str()
+        .expect("batch form input must include firstName");
+    let last_name = form_input["lastName"]
+        .as_str()
+        .expect("batch form input must include lastName");
+    let email = form_input["email"]
+        .as_str()
+        .expect("batch form input must include email");
+    let country = form_input["country"]
+        .as_str()
+        .expect("batch form input must include country");
+    let comments = form_input["comments"]
+        .as_str()
+        .expect("batch form input must include comments");
+    let agree_terms = form_input["agreeTerms"]
+        .as_bool()
+        .expect("batch form input must include agreeTerms");
+    assert!(
+        agree_terms,
+        "Expected batch form input JSON to enable the agreeTerms checkbox"
+    );
+
+    let form_url = ctx.form_url();
+    let batch_commands = serde_json::json!([
+        ["open", OPEN_TEMPORARY_PROFILE_ARG, form_url],
+        ["fill", "#first-name", first_name],
+        ["fill", "#last-name", last_name],
+        ["fill", "#email", email],
+        ["select", "#country", country],
+        ["check", "#agree-terms"],
+        ["fill", "#comments", comments],
+        ["click", "#submit-btn"]
+    ]);
+    run_command_with_stdin(
+        ctx,
+        &["batch", "--json"],
+        &serde_json::to_string_pretty(&batch_commands)
+            .expect("serialize batch commands from JSON fixture failed"),
+    );
+
+    wait_for_state(
+        ctx,
+        |s| {
+            s["firstName"].as_str() == Some(first_name)
+                && s["lastName"].as_str() == Some(last_name)
+                && s["email"].as_str() == Some(email)
+                && s["country"].as_str() == Some(country)
+                && s["agreeTerms"].as_bool() == Some(true)
+                && s["comments"].as_str() == Some(comments)
+                && s["submitCount"].as_u64() == Some(1)
+                && s["validationError"].as_str() == Some("")
+        },
+        15_000,
+        "Expected JSON file-backed batch submission to populate the form and submit successfully",
+    );
+
+    let state = read_interactive_state(ctx);
+    let submission = &state["lastSubmission"];
+    assert_eq!(submission["firstName"].as_str(), Some(first_name));
+    assert_eq!(submission["lastName"].as_str(), Some(last_name));
+    assert_eq!(submission["email"].as_str(), Some(email));
+    assert_eq!(submission["country"].as_str(), Some(country));
+    assert_eq!(submission["comments"].as_str(), Some(comments));
 
     run_command(ctx, &["close"]);
 }
@@ -3254,6 +3348,14 @@ const SCENARIOS: &[ScenarioDef] = &[
         restart_browser4: false,
         test_count: 1,
         test_fn: test_batch_form_submission,
+    },
+    ScenarioDef {
+        name: "test_e2e_batch_form_submission_from_json_file",
+        short_name: "test_batch_form_submission_from_json_file",
+        requires_browser4: true,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: test_batch_form_submission_from_json_file,
     },
     ScenarioDef {
         name: "test_e2e_batch_multi_interaction",
