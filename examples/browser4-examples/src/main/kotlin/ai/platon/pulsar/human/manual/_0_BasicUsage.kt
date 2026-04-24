@@ -86,7 +86,7 @@ fun main() {
     val page2 = session.load(url, "-expires 1d")
 
     // Method 3: submit() - Async crawl queue submission
-    // Submit a url to the URL pool, the submitted url will be processed in a crawl loop.
+    // Submit a url to the URL pool, the submitted url will be processed in a Main loop.
     // AI Note: Non-blocking - returns immediately, page is processed in background.
     session.submit(url, "-expires 1d")
 

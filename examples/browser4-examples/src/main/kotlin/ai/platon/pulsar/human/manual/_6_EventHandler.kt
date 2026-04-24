@@ -19,7 +19,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * ## Event Handler Categories:
  * 1. **LoadEventHandlers** - Events during the load phase
  * 2. **BrowseEventHandlers** - Events during browser interaction
- * 3. **CrawlEventHandlers** - Events during the crawl loop
+ * 3. **CrawlEventHandlers** - Events during the Main loop
  *
  * ## Event Flow (in order of execution):
  * ```
@@ -205,16 +205,16 @@ class PrintFlowEventHandlers: DefaultPageEventHandlers() {
         // =====================================================================
         // CRAWL EVENT HANDLERS
         // =====================================================================
-        // These events track the crawl loop (when using submit())
+        // These events track the Main loop (when using submit())
         crawlEventHandlers.apply {
-            // Called before loading in crawl loop
+            // Called before loading in Main loop
             // AI Note: Return modified URL or null to skip
             onWillLoad.addLast { url: UrlAware ->
                 println("$seq. crawl - onWillLoad")
                 url
             }
 
-            // Called after loading in crawl loop
+            // Called after loading in Main loop
             onLoaded.addLast { url, page ->
                 println("$seq. crawl - onLoaded")
             }

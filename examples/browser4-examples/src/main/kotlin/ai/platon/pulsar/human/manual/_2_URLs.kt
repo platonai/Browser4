@@ -69,7 +69,7 @@ fun main() {
     val page = session.load(plainUrl)
     println("PlainUrl loaded | " + page.url)
 
-    // Submit a url to the URL pool, the submitted url will be processed in a crawl loop
+    // Submit a url to the URL pool, the submitted url will be processed in a Main loop
     session.submit(plainUrl)
 
     // =====================================================================
@@ -125,7 +125,7 @@ fun main() {
     // ListenableHyperlink provides access to the complete event handler system:
     // - loadEventHandlers: Events during the load phase
     // - browseEventHandlers: Events during browser interaction
-    // - crawlEventHandlers: Events during the crawl loop
+    // - crawlEventHandlers: Events during the Main loop
     //
     // AI Note: Use ListenableHyperlink when you need fine-grained control,
     // such as custom JavaScript execution, waiting for specific elements,

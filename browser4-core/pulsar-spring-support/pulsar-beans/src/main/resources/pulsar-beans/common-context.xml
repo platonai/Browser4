@@ -50,7 +50,7 @@
         <constructor-arg value="SpringStreamingTaskLoop"/>
     </bean>
 
-    <!-- Do not auto start crawl loops, the PulsarSession depended on might not be the correct one -->
+    <!-- Do not auto start Main loops, the PulsarSession depended on might not be the correct one -->
     <bean id="taskLoops" class="ai.platon.pulsar.skeleton.TaskLoops" destroy-method="stop">
         <constructor-arg name="loops">
             <list>

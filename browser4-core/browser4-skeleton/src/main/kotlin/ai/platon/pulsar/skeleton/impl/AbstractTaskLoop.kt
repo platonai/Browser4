@@ -25,7 +25,7 @@ abstract class AbstractTaskLoop(
         get() = running.get()
 
     /**
-     * The url feeder is used by the crawl loop to feed urls to the crawler.
+     * The url feeder is used by the Main loop to feed urls to the crawler.
      * */
     abstract override val urlFeeder: UrlFeeder
 

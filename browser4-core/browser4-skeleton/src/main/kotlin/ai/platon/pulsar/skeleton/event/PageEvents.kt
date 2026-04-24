@@ -35,7 +35,7 @@ package ai.platon.pulsar.skeleton.event
 interface CrawlEventHandlers {
 
     /**
-     * Fires when the URL is about to be loaded in the crawl loop.
+     * Fires when the URL is about to be loaded in the Main loop.
      *
      * This is the first event in the page lifecycle. Use this handler to:
      * - Filter URLs (return `null` to skip)
@@ -57,7 +57,7 @@ interface CrawlEventHandlers {
     val onWillLoad: UrlAwareEventHandler
 
     /**
-     * Fires when the URL has been loaded in the crawl loop.
+     * Fires when the URL has been loaded in the Main loop.
      *
      * This is the last event in the page lifecycle. Use this handler to:
      * - Process loaded page content

@@ -111,10 +111,10 @@ fun main() {
     // CATEGORY 5: Retry Control Options
     // =====================================================================
 
-    // Option `-nMaxRetry` specifies the maximal number of retries in the crawl loop, and if it's still failed
+    // Option `-nMaxRetry` specifies the maximal number of retries in the Main loop, and if it's still failed
     // after this number, the page will be marked as `Gone`. A retry will be triggered when a RETRY(1601) status code
     // is returned.
-    // AI Note: Crawl loop retries happen across multiple crawl cycles (not immediate).
+    // AI Note: Main loop retries happen across multiple crawl cycles (not immediate).
     page = session.load(url, "-nMaxRetry 3")
 
     // Option `-nJitRetry` specifies the maximal number of retries for the load phase, which will be triggered

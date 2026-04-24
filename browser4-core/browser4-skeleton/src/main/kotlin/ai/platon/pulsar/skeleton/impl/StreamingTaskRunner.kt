@@ -332,14 +332,14 @@ open class StreamingTaskRunner(
     }
 
     /**
-     * Quit the crawl loop.
+     * Quit the Main loop.
      * */
     fun quit() {
         forceQuit = true
     }
 
     /**
-     * Quit and close the crawl loop.
+     * Quit and close the Main loop.
      * */
     override fun close() {
         quit()
@@ -347,7 +347,7 @@ open class StreamingTaskRunner(
     }
 
     protected suspend fun startTaskLoop(scope: CoroutineScope) {
-        logger.info("Starting crawler | {} | #{} | {} ...", name, id, session::class.java)
+        logger.info("Starting task loop | {} | #{} | {} ...", name, id, session::class.java)
 
         val startTime = Instant.now()
 
@@ -446,7 +446,7 @@ open class StreamingTaskRunner(
 
         while (isActive && isPaused) {
             if (k++ % 20 == 0) {
-                logger.info("The crawl loop is paused, use resume() to resume the crawl loop")
+                logger.info("The Main loop is paused, use resume() to resume the Main loop")
             }
             delay(1000)
         }

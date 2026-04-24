@@ -43,7 +43,7 @@ open class StreamingTaskLoop(
     private val context get() = PulsarContexts.getOrCreate()
 
     init {
-        logger.info("Crawl loop is created | #{} | {}@{}", id, name, hashCode())
+        logger.info("Main loop is created | #{} | {}@{}", id, name, hashCode())
     }
 
     override val abstract: String
@@ -68,13 +68,13 @@ open class StreamingTaskLoop(
     override fun start() {
         if (isRunning) {
             // issue a warning for debug
-            logger.warn("Crawl loop {} is already running", display)
+            logger.warn("Main loop {} is already running", display)
         }
 
         if (running.compareAndSet(false, true)) {
             start0()
             val count = urlFeeder.collectors.size
-            logger.info("Crawl loop is started with {} link collectors | #{} | {}@{}", count, id, name, this)
+            logger.info("Main loop is started with {} link collectors | #{} | {}@{}", count, id, name, this)
         }
     }
 
@@ -89,18 +89,18 @@ open class StreamingTaskLoop(
             runCatching { runBlocking { crawlJob?.cancelAndJoin() } }
                 .onFailure {
                     if (AppContext.isActive) {
-                        warnForClose(it, it, "Crawl loop #${id} is stopped with exception")
+                        warnForClose(it, it, "Main loop #${id} is stopped with exception")
                     } else {
                         // it's expected that there are some uncaught exceptions if the system is shutting down,
                         // ignore them.
                         if (logger.isDebugEnabled) {
-                            logger.debug("Crawl loop #${id} is stopped with exception", it)
+                            logger.debug("Main loop #${id} is stopped with exception", it)
                         }
                     }
                 }
 
             crawlJob = null
-            logger.info("Crawl loop is stopped | #{} | {}", id, this)
+            logger.info("Main loop is stopped | #{} | {}", id, this)
         }
     }
 

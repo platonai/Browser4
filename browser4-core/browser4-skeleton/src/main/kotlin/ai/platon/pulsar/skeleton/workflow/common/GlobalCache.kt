@@ -55,7 +55,7 @@ open class GlobalCache(val conf: ImmutableConfig) {
      * */
     private val documentCacheCapacity = conf.getUint(GLOBAL_DOCUMENT_CACHE_SIZE, CACHE_CAPACITY)
     /**
-     * A url pool contains many url caches, the urls added to the pool will be processed in crawl loops.
+     * A url pool contains many url caches, the urls added to the pool will be processed in Main loops.
      * */
     open var urlPool: UrlPool = ConcurrentUrlPool(conf).apply { initialize() }
     /**
