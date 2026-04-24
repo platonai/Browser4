@@ -1,7 +1,7 @@
 package ai.platon.pulsar.examples.sites.topEc.chinese.login.s1688
 
 import ai.platon.pulsar.skeleton.context.PulsarContexts
-import ai.platon.pulsar.skeleton.workflow.event.impl.LoginHandler
+import ai.platon.pulsar.skeleton.event.impl.LoginHandler
 import ai.platon.pulsar.skeleton.session.PulsarSession
 
 class S1688Crawler(
@@ -21,8 +21,10 @@ class S1688Crawler(
     fun crawl() {
         val options = session.options(args)
 
-        val loginHandler = LoginHandler(loginUrl,
-            usernameSelector, username, passwordSelector, password, submitSelector, activateSelector)
+        val loginHandler = LoginHandler(
+            loginUrl,
+            usernameSelector, username, passwordSelector, password, submitSelector, activateSelector
+        )
         options.eventHandlers.browseEventHandlers.onBrowserLaunched.addLast(loginHandler)
 
         session.loadOutPages(portalUrl, options)

@@ -139,7 +139,7 @@ class PageEventHandlersFactory(val conf: ImmutableConfig = ImmutableConfig()) {
      * The default class is `DefaultPageEvent`.
      *
      * Set the class:
-     * `System.setProperty(CapabilityTypes.PAGE_EVENT_CLASS, "ai.platon.pulsar.skeleton.workflow.event.impl.DefaultPageEvent")`
+     * `System.setProperty(CapabilityTypes.PAGE_EVENT_CLASS, "ai.platon.pulsar.skeleton.event.impl.DefaultPageEvent")`
      * */
     private fun createUsingGlobalConfig(conf: ImmutableConfig, className: String): PageEventHandlers {
         val defaultClazz = DefaultPageEventHandlers::class.java

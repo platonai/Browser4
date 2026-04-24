@@ -2,7 +2,7 @@ package ai.platon.pulsar.examples.llm
 
 import ai.platon.pulsar.agentic.context.AgenticContexts
 import ai.platon.pulsar.common.Strings
-import ai.platon.pulsar.skeleton.workflow.event.impl.DefaultPageEventHandlers
+import ai.platon.pulsar.skeleton.event.impl.DefaultPageEventHandlers
 import ai.platon.pulsar.test.TestUrls
 import kotlinx.coroutines.delay
 import java.time.OffsetDateTime

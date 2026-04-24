@@ -67,7 +67,6 @@ object AmazonUrls {
         val marketplaceID = queryParams.firstOrNull { it.name == "marketplaceID" }?.value
 
         builder.path = "sp"
-        builder.clearParameters()
         builder.setParameter("seller", sellerId)
         if (marketplaceID != null) {
             builder.setParameter("marketplaceID", marketplaceID)

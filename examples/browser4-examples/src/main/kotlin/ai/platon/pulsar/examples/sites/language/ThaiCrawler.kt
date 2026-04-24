@@ -1,7 +1,7 @@
 package ai.platon.pulsar.examples.sites.language
 
 import ai.platon.pulsar.skeleton.context.PulsarContexts
-import ai.platon.pulsar.skeleton.workflow.event.impl.CloseMaskLayerHandler
+import ai.platon.pulsar.skeleton.event.impl.CloseMaskLayerHandler
 
 fun main() {
     val portalUrl = "https://shopee.co.th/กระเป๋าเป้ผู้ชาย-cat.49.1037.10297?page=1"
