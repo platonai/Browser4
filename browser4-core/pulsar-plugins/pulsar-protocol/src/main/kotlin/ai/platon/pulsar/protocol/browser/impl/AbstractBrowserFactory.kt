@@ -5,7 +5,7 @@ import ai.platon.browser4.driver.chrome.common.LauncherOptions
 import ai.platon.browser4.driver.common.BrowserSettings
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.config.ImmutableConfig
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.Browser
+import ai.platon.pulsar.skeleton.crawl.fetch.driver.Browser
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserFactory
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserLaunchException
 import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
@@ -72,7 +72,8 @@ abstract class AbstractBrowserFactory(
      * Launch the prototype browser, the prototype browser is a browser instance with default settings.
      * */
     @Throws(BrowserLaunchException::class)
-    override fun launchPrototypeBrowser(): Browser = launch(BrowserId.PROTOTYPE, LauncherOptions(settings), ChromeOptions())
+    override fun launchPrototypeBrowser(): Browser =
+        launch(BrowserId.PROTOTYPE, LauncherOptions(settings), ChromeOptions())
 
     /**
      * Launch the next sequential browser, the browser's user data dir rotates between a group of dirs.
@@ -85,5 +86,6 @@ abstract class AbstractBrowserFactory(
      * Launch a random temporary browser, the browser's user data dir is a random temporary dir.
      * */
     @Throws(BrowserLaunchException::class)
-    override fun launchRandomTempBrowser(): Browser = launch(BrowserId.RANDOM_TEMP, LauncherOptions(settings), ChromeOptions())
+    override fun launchRandomTempBrowser(): Browser =
+        launch(BrowserId.RANDOM_TEMP, LauncherOptions(settings), ChromeOptions())
 }

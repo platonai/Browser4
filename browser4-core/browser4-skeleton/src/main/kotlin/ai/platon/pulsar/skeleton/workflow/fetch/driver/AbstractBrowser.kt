@@ -5,6 +5,7 @@ import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.event.AbstractEventEmitter
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.warnForClose
+import ai.platon.pulsar.skeleton.crawl.fetch.driver.Browser
 import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 import java.time.Duration
 import java.time.Instant
@@ -15,7 +16,7 @@ import java.util.concurrent.atomic.AtomicInteger
 abstract class AbstractBrowser(
     override val id: BrowserId,
     override val settings: BrowserSettings
-): Browser, AutoCloseable, AbstractEventEmitter<BrowserEvents>() {
+) : Browser, AutoCloseable, AbstractEventEmitter<BrowserEvents>() {
     companion object {
         protected val SEQUENCER = AtomicInteger()
         val DEFAULT_USER_AGENT = "Browser4 Agent/1.0"

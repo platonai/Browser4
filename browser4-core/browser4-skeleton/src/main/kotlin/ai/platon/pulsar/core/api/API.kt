@@ -18,7 +18,7 @@ typealias LoadEventHandlers = LoadEventHandlers
 typealias BrowserEventHandlers = BrowseEventHandlers
 
 typealias BrowserFactory = ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserFactory
-typealias Browser = ai.platon.pulsar.skeleton.workflow.fetch.driver.Browser
+typealias Browser = ai.platon.pulsar.skeleton.crawl.fetch.driver.Browser
 typealias WebDriver = ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 typealias PageSnapshot = ai.platon.pulsar.persist.PageSnapshot
 typealias WebPage = ai.platon.pulsar.persist.WebPage

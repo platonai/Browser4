@@ -14,6 +14,7 @@ import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.protocol.browser.emulator.WebDriverPoolExhaustedException
 import ai.platon.pulsar.skeleton.common.AppSystemInfo
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
+import ai.platon.pulsar.skeleton.crawl.fetch.driver.Browser
 import ai.platon.pulsar.skeleton.event.BrowseEventHandlers
 import ai.platon.pulsar.skeleton.event.PulsarEventBus
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.*
@@ -50,10 +51,11 @@ class LoadingWebDriverPool constructor(
     /**
      * The max number of drivers the pool can hold
      * */
-    val capacity: Int get() {
-        val c = immutableConfig.get(BROWSER_MAX_OPEN_TABS)?.toIntOrNull() ?: DEFAULT_BROWSER_MAX_OPEN_TABS
-        return c.coerceAtMost(50)
-    }
+    val capacity: Int
+        get() {
+            val c = immutableConfig.get(BROWSER_MAX_OPEN_TABS)?.toIntOrNull() ?: DEFAULT_BROWSER_MAX_OPEN_TABS
+            return c.coerceAtMost(50)
+        }
 
     /**
      * The browser who create all drivers for this pool.
@@ -255,11 +257,15 @@ class LoadingWebDriverPool constructor(
         } else {
             val browser = driver.browser
             if (browser.isActive) {
-                logger.warn("Closing driver that doesn't work unexpectedly #{}: {} | browser #{}:{}",
-                    driver.id, driver.status, browser.instanceId, browser.readableState)
+                logger.warn(
+                    "Closing driver that doesn't work unexpectedly #{}: {} | browser #{}:{}",
+                    driver.id, driver.status, browser.instanceId, browser.readableState
+                )
             } else {
-                logger.debug("Closing driver that doesn't work #{}: {} | browser #{}:{}",
-                    driver.id, driver.status, browser.instanceId, browser.readableState)
+                logger.debug(
+                    "Closing driver that doesn't work #{}: {} | browser #{}:{}",
+                    driver.id, driver.status, browser.instanceId, browser.readableState
+                )
             }
 
             statefulDriverPool.close(driver)
@@ -403,7 +409,7 @@ class LoadingWebDriverPool constructor(
             // should also: numDriverSlots > 0
             logger.debug(
                 "Enough online drivers, will not create new one." +
-                    " Resource consuming drivers: {}/{}/{} (slots/pool/browser)",
+                        " Resource consuming drivers: {}/{}/{} (slots/pool/browser)",
                 numDriverSlots, resourceConsumingDriversInPool, resourceConsumingDriversInBrowser
             )
         } else if (AppSystemInfo.isCriticalMemory) {

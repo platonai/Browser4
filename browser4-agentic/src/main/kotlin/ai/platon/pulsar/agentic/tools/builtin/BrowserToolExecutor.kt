@@ -2,9 +2,7 @@ package ai.platon.pulsar.agentic.tools.builtin
 
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractBrowser
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.Browser
+import ai.platon.pulsar.skeleton.crawl.fetch.driver.Browser
 import kotlin.reflect.KClass
 
 class BrowserToolExecutor : AbstractToolExecutor() {
@@ -12,7 +10,7 @@ class BrowserToolExecutor : AbstractToolExecutor() {
 
     override val domain = "browser"
 
-    override val receiverClass: KClass<*> = _root_ide_package_.ai.platon.pulsar.skeleton.workflow.fetch.driver.Browser::class
+    override val receiverClass: KClass<*> = Browser::class
 
     init {
         toolSpec["switchTab"] = ToolSpec(
@@ -57,7 +55,8 @@ class BrowserToolExecutor : AbstractToolExecutor() {
     ): Any? {
         require(domain == this.domain) { "Unsupported domain: $domain" }
         require(functionName.isNotBlank()) { "Function name must not be blank" }
-        val browser = requireNotNull(receiver as ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractBrowser) { "Target must be Browser" }
+        val browser =
+            requireNotNull(receiver as ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractBrowser) { "Target must be Browser" }
 
         return when (functionName) {
             "switchTab" -> {
@@ -71,11 +70,13 @@ class BrowserToolExecutor : AbstractToolExecutor() {
                 logger.info("""👀 Switched to tab {} (driver {}/{})""", tabId, driver.id, driver.guid)
                 driver
             }
+
             "newTab" -> {
                 val url = paramString(args, "url", functionName) ?: "about:blank"
                 val driver = browser.newDriver(url)
                 mapOf("id" to driver.id.toString(), "url" to driver.currentUrl())
             }
+
             "closeTab" -> {
                 val tabId = paramString(args, "tabId", functionName)!!
                 val driver = tabId.toIntOrNull()?.let { browser.findDriverById(it) } ?: browser.drivers[tabId]
@@ -86,6 +87,7 @@ class BrowserToolExecutor : AbstractToolExecutor() {
                     false
                 }
             }
+
             "listTabs" -> {
                 browser.listDrivers().map { driver ->
                     mapOf(

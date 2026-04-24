@@ -120,6 +120,12 @@
     </dependencyManagement>
 
     <dependencies>
+        <!-- Internal dependencies -->
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>browser4-resources</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-skeleton</artifactId>
@@ -127,7 +133,22 @@
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>browser4-rest</artifactId>
+            <artifactId>pulsar-protocol</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>pulsar-parse</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>pulsar-beans</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>pulsar-boot</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
@@ -135,6 +156,42 @@
             <artifactId>browser4-agentic</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>browser4-tools</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>browser4-rest</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>pulsar-ql-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>pulsar-ql</artifactId>
+            <!-- Exclude the original version and use the browser4 managed ones -->
+            <exclusions>
+                <exclusion>
+                    <groupId>ai.platon.pulsar</groupId>
+                    <artifactId>pulsar-protocol</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>ai.platon.pulsar</groupId>
+                    <artifactId>pulsar-browser</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>ai.platon.pulsar</groupId>
+                    <artifactId>pulsar-skeleton</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
 
         <dependency>
             <groupId>org.springframework.boot</groupId>

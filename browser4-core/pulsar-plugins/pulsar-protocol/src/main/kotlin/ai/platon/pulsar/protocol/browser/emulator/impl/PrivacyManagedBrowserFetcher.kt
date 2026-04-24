@@ -26,6 +26,7 @@ import ai.platon.pulsar.protocol.browser.emulator.BrowserEmulator
 import ai.platon.pulsar.protocol.browser.emulator.IncognitoBrowserFetcher
 import ai.platon.pulsar.protocol.browser.emulator.context.BrowserPrivacyManager
 import ai.platon.pulsar.skeleton.common.persist.ext.browseEventHandlers
+import ai.platon.pulsar.skeleton.crawl.fetch.driver.Browser
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
 import ai.platon.pulsar.skeleton.workflow.fetch.WebDriverFetcher
@@ -42,7 +43,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 open class BrowserWebDriverFetcher(
     val browserEmulator: BrowserEmulator,
     val conf: ImmutableConfig
-): WebDriverFetcher {
+) : WebDriverFetcher {
     private val logger = LoggerFactory.getLogger(BrowserWebDriverFetcher::class.java)!!
 
     enum class EventType {
@@ -73,7 +74,7 @@ open class BrowserWebDriverFetcher(
 
     private suspend fun emit(type: EventType, page: WebPage, driver: WebDriver) {
         val event = page.browseEventHandlers ?: return
-        when(type) {
+        when (type) {
             EventType.willFetch -> notify(type.name) { event.onWillFetch(page, driver) }
             EventType.fetched -> notify(type.name) { event.onFetched(page, driver) }
         }
@@ -108,7 +109,7 @@ open class PrivacyManagedBrowserFetcher constructor(
     override val browserEmulator: BrowserEmulator,
     override val conf: ImmutableConfig,
     private val closeCascaded: Boolean = false
-): AbstractBrowserFetcher(), IncognitoBrowserFetcher {
+) : AbstractBrowserFetcher(), IncognitoBrowserFetcher {
     private val logger = LoggerFactory.getLogger(PrivacyManagedBrowserFetcher::class.java)!!
 
     override val webdriverFetcher by lazy { BrowserWebDriverFetcher(browserEmulator, conf) }
