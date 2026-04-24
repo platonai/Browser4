@@ -10,9 +10,9 @@ import ai.platon.browser4.driver.common.SimpleScriptConfuser
 import ai.platon.pulsar.browser.FastWebDriverService
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.protocol.browser.impl.DefaultBrowserFactory
-import ai.platon.pulsar.skeleton.workflow.driver.Browser
-import ai.platon.pulsar.skeleton.workflow.driver.BrowserFactory
-import ai.platon.pulsar.skeleton.workflow.driver.WebDriver
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.Browser
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserFactory
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 import ai.platon.pulsar.skeleton.workflow.privacy.BrowserId
 import ai.platon.pulsar.util.server.EnableMockServerApplication
 import org.junit.jupiter.api.AfterAll

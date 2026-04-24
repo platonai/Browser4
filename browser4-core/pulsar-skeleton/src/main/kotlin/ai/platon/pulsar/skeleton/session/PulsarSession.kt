@@ -14,8 +14,8 @@ import ai.platon.pulsar.skeleton.event.PageEventHandlers
 import ai.platon.pulsar.skeleton.workflow.common.DocumentCatch
 import ai.platon.pulsar.skeleton.workflow.common.GlobalCache
 import ai.platon.pulsar.skeleton.workflow.common.PageCatch
-import ai.platon.pulsar.skeleton.workflow.driver.Browser
-import ai.platon.pulsar.skeleton.workflow.driver.WebDriver
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.Browser
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 import com.google.common.annotations.Beta
 import org.jsoup.nodes.Element
 import java.nio.ByteBuffer

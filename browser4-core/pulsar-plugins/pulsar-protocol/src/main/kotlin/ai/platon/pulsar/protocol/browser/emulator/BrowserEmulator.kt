@@ -19,8 +19,8 @@ import ai.platon.pulsar.common.event.EventEmitter
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.skeleton.workflow.FetchResult
 import ai.platon.pulsar.skeleton.workflow.FetchTask
-import ai.platon.pulsar.skeleton.workflow.driver.WebDriver
-import ai.platon.pulsar.skeleton.workflow.driver.WebDriverException
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriverException
 
 enum class EmulateEvents {
     willNavigate,

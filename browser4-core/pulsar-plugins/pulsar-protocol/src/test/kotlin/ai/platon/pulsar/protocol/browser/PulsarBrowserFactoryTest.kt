@@ -1,7 +1,7 @@
 package ai.platon.pulsar.protocol.browser
 
 import ai.platon.pulsar.common.AppPaths
-import ai.platon.pulsar.skeleton.workflow.driver.Browser
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.Browser
 import ai.platon.pulsar.skeleton.workflow.privacy.BrowserId
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach

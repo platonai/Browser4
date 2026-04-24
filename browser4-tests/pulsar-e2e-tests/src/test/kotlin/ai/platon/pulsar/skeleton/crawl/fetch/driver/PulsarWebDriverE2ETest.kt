@@ -1,4 +1,4 @@
-package ai.platon.pulsar.skeleton.workflow.driver
+package ai.platon.pulsar.skeleton.workflow.fetch.driver
 
 import ai.platon.pulsar.WebDriverTestBase
 import ai.platon.pulsar.common.AppFiles

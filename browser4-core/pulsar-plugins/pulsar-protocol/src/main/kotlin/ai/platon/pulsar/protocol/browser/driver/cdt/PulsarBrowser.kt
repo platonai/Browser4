@@ -13,7 +13,7 @@ import ai.platon.pulsar.common.warnForClose
 import ai.platon.pulsar.common.warnInterruptible
 import ai.platon.pulsar.skeleton.common.AppSystemInfo
 import ai.platon.pulsar.skeleton.context.PulsarContexts
-import ai.platon.pulsar.skeleton.workflow.driver.*
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.*
 import ai.platon.pulsar.skeleton.workflow.privacy.BrowserId
 import org.slf4j.LoggerFactory
 import java.time.Duration

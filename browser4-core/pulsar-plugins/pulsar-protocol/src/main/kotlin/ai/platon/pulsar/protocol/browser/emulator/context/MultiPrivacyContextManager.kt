@@ -35,7 +35,7 @@ import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import ai.platon.pulsar.skeleton.CoreMetrics
 import ai.platon.pulsar.skeleton.workflow.FetchResult
 import ai.platon.pulsar.skeleton.workflow.FetchTask
-import ai.platon.pulsar.skeleton.workflow.driver.WebDriver
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 import ai.platon.pulsar.skeleton.workflow.privacy.AbstractPrivacyContext
 import ai.platon.pulsar.skeleton.workflow.privacy.BrowserProfile
 import ai.platon.pulsar.skeleton.workflow.privacy.PrivacyContext

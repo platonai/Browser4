@@ -12,7 +12,7 @@ import ai.platon.pulsar.agentic.tools.high.command.CommandService
 import ai.platon.pulsar.agentic.tools.high.command.CommandStatus
 import ai.platon.pulsar.rest.mcp.service.SessionManager
 import ai.platon.pulsar.rest.mcp.service.SessionManager.ManagedSession
-import ai.platon.pulsar.skeleton.workflow.driver.WebDriver
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex

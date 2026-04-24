@@ -23,8 +23,8 @@ import ai.platon.pulsar.skeleton.context.support.AbstractPulsarContext
 import ai.platon.pulsar.skeleton.event.PageEventHandlers
 import ai.platon.pulsar.skeleton.workflow.common.FetchEntry
 import ai.platon.pulsar.skeleton.workflow.common.url.ListenableHyperlink
-import ai.platon.pulsar.skeleton.workflow.driver.Browser
-import ai.platon.pulsar.skeleton.workflow.driver.WebDriver
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.Browser
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 import org.jsoup.nodes.Element
 import org.slf4j.LoggerFactory
 import java.nio.ByteBuffer

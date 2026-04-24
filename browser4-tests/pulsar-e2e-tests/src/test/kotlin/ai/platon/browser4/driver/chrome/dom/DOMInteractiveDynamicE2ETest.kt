@@ -1,7 +1,7 @@
 package ai.platon.browser4.driver.chrome.dom
 
 import ai.platon.pulsar.WebDriverTestBase
-import ai.platon.pulsar.skeleton.workflow.driver.WebDriver
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName

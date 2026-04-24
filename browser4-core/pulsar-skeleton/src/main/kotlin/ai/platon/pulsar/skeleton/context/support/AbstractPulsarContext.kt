@@ -27,10 +27,10 @@ import ai.platon.pulsar.skeleton.workflow.component.BatchFetchComponent
 import ai.platon.pulsar.skeleton.workflow.component.LoadComponent
 import ai.platon.pulsar.skeleton.workflow.component.ParseComponent
 import ai.platon.pulsar.skeleton.workflow.component.UpdateComponent
-import ai.platon.pulsar.skeleton.workflow.driver.BrowserFactory
-import ai.platon.pulsar.skeleton.workflow.driver.BrowserFetcher
-import ai.platon.pulsar.skeleton.workflow.driver.BrowserManager
-import ai.platon.pulsar.skeleton.workflow.driver.WebDriver
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserFactory
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserFetcher
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserManager
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 import ai.platon.pulsar.skeleton.workflow.filter.ChainedUrlNormalizer
 import ai.platon.pulsar.skeleton.session.AbstractPulsarSession
 import ai.platon.pulsar.skeleton.session.PulsarSession

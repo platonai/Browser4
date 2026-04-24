@@ -13,7 +13,7 @@ import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import ai.platon.pulsar.skeleton.common.persist.ext.eventHandlers
 import ai.platon.pulsar.skeleton.workflow.FetchResult
 import ai.platon.pulsar.skeleton.workflow.FetchTask
-import ai.platon.pulsar.skeleton.workflow.driver.*
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.*
 import ai.platon.pulsar.skeleton.workflow.privacy.BrowserId
 import com.codahale.metrics.Gauge
 import com.google.common.annotations.Beta

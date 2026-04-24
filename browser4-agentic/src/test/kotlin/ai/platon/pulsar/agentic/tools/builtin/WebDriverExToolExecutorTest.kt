@@ -1,7 +1,7 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
 import ai.platon.pulsar.agentic.model.ToolCall
-import ai.platon.pulsar.skeleton.workflow.driver.AbstractWebDriver
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk

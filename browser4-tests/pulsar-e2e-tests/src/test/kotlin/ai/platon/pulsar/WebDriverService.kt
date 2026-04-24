@@ -1,8 +1,8 @@
 package ai.platon.pulsar
 
-import ai.platon.pulsar.skeleton.workflow.driver.Browser
-import ai.platon.pulsar.skeleton.workflow.driver.BrowserFactory
-import ai.platon.pulsar.skeleton.workflow.driver.WebDriver
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.Browser
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserFactory
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 import ai.platon.pulsar.skeleton.workflow.privacy.BrowserId
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking

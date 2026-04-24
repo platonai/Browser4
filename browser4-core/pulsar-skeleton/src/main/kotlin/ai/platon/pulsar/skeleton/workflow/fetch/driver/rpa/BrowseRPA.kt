@@ -4,9 +4,9 @@ import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.Runtimes
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.skeleton.workflow.driver.AbstractWebDriver
-import ai.platon.pulsar.skeleton.workflow.driver.NavigateEntry
-import ai.platon.pulsar.skeleton.workflow.driver.WebDriver
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.NavigateEntry
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 import ai.platon.pulsar.persist.WebPage
 import kotlinx.coroutines.delay
 import java.time.Duration

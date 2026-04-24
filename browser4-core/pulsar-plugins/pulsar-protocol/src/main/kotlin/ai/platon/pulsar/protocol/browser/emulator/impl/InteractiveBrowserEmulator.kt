@@ -37,7 +37,7 @@ import ai.platon.pulsar.skeleton.common.persist.ext.options
 import ai.platon.pulsar.skeleton.event.PulsarEventBus
 import ai.platon.pulsar.skeleton.workflow.FetchResult
 import ai.platon.pulsar.skeleton.workflow.FetchTask
-import ai.platon.pulsar.skeleton.workflow.driver.*
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.*
 import ai.platon.pulsar.skeleton.workflow.protocol.ForwardingResponse
 import ai.platon.pulsar.skeleton.workflow.protocol.Response
 import ai.platon.pulsar.skeleton.workflow.protocol.http.ProtocolStatusTranslator

@@ -27,7 +27,7 @@ import ai.platon.pulsar.skeleton.common.proxy.UniversalProxyParser
 import ai.platon.pulsar.skeleton.CoreMetrics
 import ai.platon.pulsar.skeleton.workflow.FetchResult
 import ai.platon.pulsar.skeleton.workflow.FetchTask
-import ai.platon.pulsar.skeleton.workflow.driver.WebDriver
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 import ai.platon.pulsar.skeleton.workflow.privacy.AbstractPrivacyContext
 import ai.platon.pulsar.skeleton.workflow.privacy.BrowserId
 import ai.platon.pulsar.skeleton.workflow.privacy.BrowserProfile
