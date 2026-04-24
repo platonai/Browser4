@@ -5,8 +5,8 @@ import java.time.Duration
 /**
  * Simple standalone launcher with a main() entrypoint so you can start the mock site easily.
  *
- * Usage examples (Windows cmd):
- *   mvnw.cmd -pl browser4-tests-common -am spring-boot:run -Dspring-boot.run.mainClass=ai.platon.pulsar.test.server.MockSiteBoot
+ * Usage examples:
+ *   ./mvnw -pl browser4-tests/browser4-tests-common -am spring-boot:run -Dspring-boot.run.mainClass=ai.platon.pulsar.test.server.MockSiteBoot
  *
  * System properties / environment variables:
  *   -Dmock.site.port=9090 (or env MOCK_SITE_PORT)  Desired port (default 8080, 0 = random)

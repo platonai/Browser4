@@ -89,4 +89,48 @@ class InteractivePagesTest {
             assertTrue(missing.isEmpty(), "File $file has structural ids not in index: $missing")
         }
     }
+
+    @Test
+        @DisplayName("form filling page exposes stable selectors and debug outputs")
+    fun formFillingPageExposesStableSelectorsAndDebugOutputs() {
+        val html = readResource("form-filling.html")
+        val expectedIds = listOf(
+            "registration-form",
+            "first-name",
+            "last-name",
+            "email",
+            "country",
+            "agree-terms",
+            "comments",
+            "submit-btn",
+            "reset-btn",
+            "result-panel",
+            "error-panel",
+            "result-data",
+            "event-log",
+            "state-log",
+            "contact-phone",
+            "contact-business",
+            "phone-number",
+            "company"
+        )
+
+        expectedIds.forEach { id ->
+            assertTrue(html.contains("id=\"$id\""), "Missing id='$id' in form-filling.html")
+            assertTrue(html.contains("data-testid=\"$id\""), "Missing data-testid='$id' in form-filling.html")
+        }
+
+        assertTrue(
+            html.contains("window.__browser4State"),
+            "form-filling.html should expose a serialized state object"
+        )
+        assertTrue(
+            html.contains("recordEvent(") && html.contains("validateForm("),
+            "form-filling.html should capture events and run validation logic"
+        )
+        assertTrue(
+            html.contains("Preferred contact method") && html.contains("Topics of interest"),
+            "form-filling.html should include richer radio and checkbox controls"
+        )
+    }
 }

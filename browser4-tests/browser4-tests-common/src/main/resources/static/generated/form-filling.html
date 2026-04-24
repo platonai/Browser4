@@ -1,0 +1,973 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Browser4 Form Filling Playground</title>
+    <style>
+        :root {
+            color-scheme: light;
+            --bg: #f3f6fb;
+            --surface: #ffffff;
+            --surface-muted: #f7f9fc;
+            --border: #d7dfeb;
+            --border-strong: #8aa6d6;
+            --text: #1b2430;
+            --muted: #5f6b7a;
+            --primary: #2458e6;
+            --primary-soft: #eaf0ff;
+            --success: #0f8a42;
+            --success-soft: #eaf8f0;
+            --danger: #bf1d37;
+            --danger-soft: #fff0f2;
+            --warning: #9a6700;
+            --shadow: 0 18px 50px rgba(28, 40, 70, 0.12);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: "Segoe UI", Arial, sans-serif;
+            background: linear-gradient(180deg, #f8fbff 0%, var(--bg) 100%);
+            color: var(--text);
+        }
+
+        .page-shell {
+            max-width: 1180px;
+            margin: 0 auto;
+            padding: 32px 20px 48px;
+        }
+
+        .hero {
+            display: grid;
+            gap: 18px;
+            grid-template-columns: minmax(0, 1.9fr) minmax(280px, 1fr);
+            align-items: stretch;
+            margin-bottom: 24px;
+        }
+
+        .hero-card,
+        .stats-card,
+        .panel,
+        .debug-card {
+            background: var(--surface);
+            border: 1px solid rgba(138, 166, 214, 0.2);
+            border-radius: 20px;
+            box-shadow: var(--shadow);
+        }
+
+        .hero-card {
+            padding: 28px;
+        }
+
+        .hero-card h1 {
+            margin: 0 0 12px;
+            font-size: clamp(2rem, 4vw, 2.8rem);
+            line-height: 1.05;
+        }
+
+        .hero-card p {
+            margin: 0 0 16px;
+            color: var(--muted);
+            line-height: 1.6;
+        }
+
+        .hero-pills {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .pill {
+            padding: 8px 12px;
+            border-radius: 999px;
+            background: var(--primary-soft);
+            color: var(--primary);
+            font-size: 0.92rem;
+            font-weight: 600;
+        }
+
+        .stats-card {
+            padding: 24px;
+            display: grid;
+            gap: 14px;
+        }
+
+        .stats-card h2 {
+            margin: 0;
+            font-size: 1.15rem;
+        }
+
+        .stats-grid {
+            display: grid;
+            gap: 12px;
+        }
+
+        .stat {
+            padding: 14px 16px;
+            border-radius: 16px;
+            background: var(--surface-muted);
+            border: 1px solid var(--border);
+        }
+
+        .stat-label {
+            display: block;
+            color: var(--muted);
+            font-size: 0.82rem;
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+
+        .stat-value {
+            font-size: 1.3rem;
+            font-weight: 700;
+        }
+
+        .content-grid {
+            display: grid;
+            gap: 24px;
+            grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr);
+        }
+
+        .panel {
+            padding: 24px;
+        }
+
+        .panel h2,
+        .panel h3,
+        .debug-card h2 {
+            margin-top: 0;
+        }
+
+        .panel-copy {
+            margin: 0 0 18px;
+            color: var(--muted);
+            line-height: 1.6;
+        }
+
+        form {
+            display: grid;
+            gap: 20px;
+        }
+
+        .section-grid {
+            display: grid;
+            gap: 16px;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        }
+
+        .field-group,
+        fieldset {
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 18px;
+            background: var(--surface-muted);
+            min-width: 0;
+        }
+
+        fieldset {
+            display: grid;
+            gap: 12px;
+        }
+
+        legend {
+            padding: 0 8px;
+            font-weight: 700;
+        }
+
+        .field-group label,
+        .stack label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .field-group p,
+        fieldset p {
+            margin: 0;
+            color: var(--muted);
+        }
+
+        .stack {
+            display: grid;
+            gap: 12px;
+        }
+
+        .inline-options {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        .option-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            min-height: 44px;
+            padding: 10px 14px;
+            border: 1px solid var(--border);
+            border-radius: 999px;
+            background: #fff;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .option-chip input {
+            width: auto;
+            margin: 0;
+        }
+
+        input,
+        select,
+        textarea {
+            width: 100%;
+            padding: 12px 14px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            background: #fff;
+            color: var(--text);
+            font: inherit;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+        }
+
+        input:focus,
+        select:focus,
+        textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 4px rgba(36, 88, 230, 0.12);
+        }
+
+        input[aria-invalid="true"],
+        select[aria-invalid="true"],
+        textarea[aria-invalid="true"] {
+            border-color: var(--danger);
+            background: #fff9fa;
+        }
+
+        textarea {
+            min-height: 120px;
+            resize: vertical;
+        }
+
+        .helper-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 16px;
+            margin-top: 8px;
+            font-size: 0.85rem;
+        }
+
+        .helper-text {
+            color: var(--muted);
+        }
+
+        .field-error {
+            color: var(--danger);
+            font-weight: 600;
+        }
+
+        .field-error:empty {
+            display: none;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        .actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+
+        button {
+            border: 0;
+            border-radius: 12px;
+            padding: 12px 18px;
+            font: inherit;
+            font-weight: 700;
+            cursor: pointer;
+            transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+        }
+
+        button:hover {
+            transform: translateY(-1px);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        .primary-button {
+            background: var(--primary);
+            color: #fff;
+            box-shadow: 0 12px 24px rgba(36, 88, 230, 0.22);
+        }
+
+        .secondary-button {
+            background: #fff;
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+
+        .status-panel {
+            display: grid;
+            gap: 14px;
+        }
+
+        .callout {
+            padding: 14px 16px;
+            border-radius: 14px;
+            border: 1px solid transparent;
+            display: none;
+        }
+
+        .callout.visible {
+            display: block;
+        }
+
+        .callout.success {
+            background: var(--success-soft);
+            border-color: rgba(15, 138, 66, 0.22);
+            color: var(--success);
+        }
+
+        .callout.error {
+            background: var(--danger-soft);
+            border-color: rgba(191, 29, 55, 0.18);
+            color: var(--danger);
+        }
+
+        .summary-card {
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            background: var(--surface-muted);
+            padding: 16px;
+        }
+
+        .summary-card h3 {
+            margin-bottom: 10px;
+        }
+
+        pre {
+            margin: 0;
+            white-space: pre-wrap;
+            word-break: break-word;
+            font-family: Consolas, "Courier New", monospace;
+            font-size: 0.85rem;
+            line-height: 1.5;
+        }
+
+        .debug-card {
+            padding: 20px;
+            display: grid;
+            gap: 16px;
+            align-content: start;
+        }
+
+        .debug-card section {
+            display: grid;
+            gap: 10px;
+        }
+
+        .debug-card h3 {
+            margin: 0;
+            font-size: 1rem;
+        }
+
+        .debug-card .surface {
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            background: var(--surface-muted);
+            padding: 14px;
+            min-height: 112px;
+        }
+
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border: 0;
+        }
+
+        @media (max-width: 920px) {
+            .hero,
+            .content-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+<div class="page-shell">
+    <header id="pageHeader" data-testid="pageHeader" class="hero" data-role="header">
+        <section class="hero-card" id="heroIntro" data-testid="heroIntro">
+            <h1>Form Filling Playground</h1>
+            <p>
+                A stable, test-friendly page for exercising Browser4 form controls. It keeps the
+                familiar registration selectors from the CLI E2E fixture while adding radios,
+                checkboxes, dynamic fields, realtime validation, and explicit DOM event logging.
+            </p>
+            <div class="hero-pills" aria-label="Testing capabilities">
+                <span class="pill">Text inputs</span>
+                <span class="pill">Checkboxes and radios</span>
+                <span class="pill">Select menus</span>
+                <span class="pill">Dynamic fields</span>
+                <span class="pill">Realtime validation</span>
+            </div>
+        </section>
+        <aside class="stats-card" id="statsPanel" data-testid="statsPanel" aria-label="Form status summary">
+            <h2>Live Summary</h2>
+            <div class="stats-grid">
+                <div class="stat">
+                    <span class="stat-label">Completion</span>
+                    <span class="stat-value" id="completionValue" data-testid="completionValue">0 / 5 required</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Primary contact</span>
+                    <span class="stat-value" id="contactMethodValue" data-testid="contactMethodValue">email</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Last event</span>
+                    <span class="stat-value" id="lastEventValue" data-testid="lastEventValue">page-ready</span>
+                </div>
+            </div>
+        </aside>
+    </header>
+
+    <main class="content-grid">
+        <section id="formPanel" data-testid="formPanel" class="panel">
+            <h2>Registration Form</h2>
+            <p class="panel-copy">
+                Fill the form to exercise input, select, check, uncheck, click, and reset interactions.
+                The submit and reset buttons update both the visual result panel and the serialized state log below.
+            </p>
+
+            <form id="registration-form" data-testid="registration-form" novalidate>
+                <div id="identitySection" data-testid="identitySection" class="section-grid">
+                    <div class="field-group">
+                        <label for="first-name">First Name</label>
+                        <input id="first-name" data-testid="first-name" name="firstName" type="text" autocomplete="given-name" required />
+                        <div class="helper-row">
+                            <span class="helper-text">Required. Used in the final submission payload.</span>
+                            <span id="first-name-error" class="field-error" aria-live="polite"></span>
+                        </div>
+                    </div>
+                    <div class="field-group">
+                        <label for="last-name">Last Name</label>
+                        <input id="last-name" data-testid="last-name" name="lastName" type="text" autocomplete="family-name" required />
+                        <div class="helper-row">
+                            <span class="helper-text">Required. Kept for parity with CLI form tests.</span>
+                            <span id="last-name-error" class="field-error" aria-live="polite"></span>
+                        </div>
+                    </div>
+                    <div class="field-group">
+                        <label for="email">Email</label>
+                        <input id="email" data-testid="email" name="email" type="email" autocomplete="email" required />
+                        <div class="helper-row">
+                            <span class="helper-text">Realtime validation checks the email format.</span>
+                            <span id="email-error" class="field-error" aria-live="polite"></span>
+                        </div>
+                    </div>
+                    <div class="field-group">
+                        <label for="country">Country</label>
+                        <select id="country" data-testid="country" name="country">
+                            <option value="">-- select --</option>
+                            <option value="us">United States</option>
+                            <option value="uk">United Kingdom</option>
+                            <option value="jp">Japan</option>
+                            <option value="sg">Singapore</option>
+                            <option value="de">Germany</option>
+                        </select>
+                        <div class="helper-row">
+                            <span class="helper-text">Dropdown for select and batch-select coverage.</span>
+                            <span id="country-error" class="field-error" aria-live="polite"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="preferencesSection" data-testid="preferencesSection" class="section-grid">
+                    <fieldset>
+                        <legend>Preferred contact method</legend>
+                        <p>Changing this group reveals a different dynamic field below.</p>
+                        <div class="inline-options" id="contact-method-group">
+                            <label class="option-chip" for="contact-email">
+                                <input id="contact-email" data-testid="contact-email" type="radio" name="contact-method" value="email" checked />
+                                Email
+                            </label>
+                            <label class="option-chip" for="contact-phone">
+                                <input id="contact-phone" data-testid="contact-phone" type="radio" name="contact-method" value="phone" />
+                                Phone
+                            </label>
+                            <label class="option-chip" for="contact-business">
+                                <input id="contact-business" data-testid="contact-business" type="radio" name="contact-method" value="business" />
+                                Business
+                            </label>
+                        </div>
+                    </fieldset>
+
+                    <fieldset>
+                        <legend>Topics of interest</legend>
+                        <p>Useful for testing multi-checkbox state tracking.</p>
+                        <div class="inline-options" id="topics-group">
+                            <label class="option-chip" for="topic-automation">
+                                <input id="topic-automation" data-testid="topic-automation" type="checkbox" name="topic" value="automation" checked />
+                                Automation
+                            </label>
+                            <label class="option-chip" for="topic-testing">
+                                <input id="topic-testing" data-testid="topic-testing" type="checkbox" name="topic" value="testing" />
+                                Testing
+                            </label>
+                            <label class="option-chip" for="topic-ai">
+                                <input id="topic-ai" data-testid="topic-ai" type="checkbox" name="topic" value="ai" />
+                                AI agents
+                            </label>
+                        </div>
+                    </fieldset>
+                </div>
+
+                <div id="dynamicFieldsSection" data-testid="dynamicFieldsSection" class="section-grid">
+                    <div class="field-group" id="phone-field-wrapper">
+                        <label for="phone-number">Phone Number</label>
+                        <input id="phone-number" data-testid="phone-number" name="phoneNumber" type="tel" inputmode="tel" placeholder="+1 555 123 4567" />
+                        <div class="helper-row">
+                            <span class="helper-text">Visible when the contact method is phone.</span>
+                            <span id="phone-number-error" class="field-error" aria-live="polite"></span>
+                        </div>
+                    </div>
+
+                    <div class="field-group hidden" id="company-field-wrapper">
+                        <label for="company">Company</label>
+                        <input id="company" data-testid="company" name="company" type="text" placeholder="Browser4 Labs" />
+                        <div class="helper-row">
+                            <span class="helper-text">Visible when the contact method is business.</span>
+                            <span id="company-error" class="field-error" aria-live="polite"></span>
+                        </div>
+                    </div>
+
+                    <div class="field-group">
+                        <label for="experience-level">Experience level</label>
+                        <select id="experience-level" data-testid="experience-level" name="experienceLevel">
+                            <option value="beginner">Beginner</option>
+                            <option value="intermediate" selected>Intermediate</option>
+                            <option value="advanced">Advanced</option>
+                        </select>
+                        <div class="helper-row">
+                            <span class="helper-text">Extra select control for form-state assertions.</span>
+                            <span id="experience-level-error" class="field-error" aria-live="polite"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="messageSection" data-testid="messageSection" class="section-grid">
+                    <div class="field-group">
+                        <label for="comments">Comments</label>
+                        <textarea id="comments" data-testid="comments" name="comments" rows="5" placeholder="Tell us what workflow you want to automate next."></textarea>
+                        <div class="helper-row">
+                            <span class="helper-text" id="comment-length" data-testid="comment-length">0 characters</span>
+                            <span id="comments-error" class="field-error" aria-live="polite"></span>
+                        </div>
+                    </div>
+
+                    <fieldset>
+                        <legend>Consent and updates</legend>
+                        <div class="stack">
+                            <label class="option-chip" for="newsletter-opt-in">
+                                <input id="newsletter-opt-in" data-testid="newsletter-opt-in" type="checkbox" />
+                                Send me product and release updates
+                            </label>
+                            <label class="option-chip" for="agree-terms">
+                                <input id="agree-terms" data-testid="agree-terms" type="checkbox" required />
+                                I agree to the testing terms
+                            </label>
+                        </div>
+                        <div class="helper-row">
+                            <span class="helper-text">The agreement checkbox stays required for submit parity.</span>
+                            <span id="agree-terms-error" class="field-error" aria-live="polite"></span>
+                        </div>
+                    </fieldset>
+                </div>
+
+                <div class="actions">
+                    <button id="submit-btn" data-testid="submit-btn" type="button" class="primary-button">Submit form</button>
+                    <button id="reset-btn" data-testid="reset-btn" type="button" class="secondary-button">Reset form</button>
+                </div>
+            </form>
+        </section>
+
+        <aside id="statusPanel" data-testid="statusPanel" class="panel status-panel">
+            <h2>Submission Status</h2>
+            <div id="error-panel" data-testid="error-panel" class="callout error" role="alert" aria-live="assertive"></div>
+            <div id="result-panel" data-testid="result-panel" class="callout success" aria-live="polite">
+                <strong>Submission Result</strong>
+                <p>Your form data was captured successfully.</p>
+            </div>
+            <div class="summary-card">
+                <h3>Last submission payload</h3>
+                <pre id="result-data" data-testid="result-data">No submission yet.</pre>
+            </div>
+            <div class="summary-card">
+                <h3>Validation guidance</h3>
+                <pre id="validation-summary" data-testid="validation-summary">Complete the required fields to enable a clean submission.</pre>
+            </div>
+        </aside>
+    </main>
+
+    <aside id="debugPanel" data-testid="debugPanel" class="debug-card">
+        <h2>Interaction Debug</h2>
+        <section>
+            <h3>Event log</h3>
+            <div class="surface">
+                <pre id="event-log" data-testid="event-log">page-ready</pre>
+            </div>
+        </section>
+        <section>
+            <h3>Serialized state</h3>
+            <div class="surface">
+                <pre id="state-log" data-testid="state-log"></pre>
+            </div>
+        </section>
+        <span id="screen-reader-status" class="sr-only" aria-live="polite"></span>
+    </aside>
+</div>
+
+<script>
+    window.__browser4State = {
+        firstName: "",
+        lastName: "",
+        email: "",
+        country: "",
+        agreeTerms: false,
+        comments: "",
+        submitCount: 0,
+        resetCount: 0,
+        lastSubmission: null,
+        validationError: "",
+        contactMethod: "email",
+        newsletterOptIn: false,
+        topics: ["automation"],
+        phoneNumber: "",
+        company: "",
+        experienceLevel: "intermediate",
+        commentLength: 0,
+        dynamicFieldVisible: "phone-number",
+        eventLog: ["page-ready"],
+        requiredCompleted: 0,
+        formValid: false
+    };
+
+    const requiredFieldIds = ["first-name", "last-name", "email", "country", "agree-terms"];
+    const eventLog = window.__browser4State.eventLog;
+
+    function currentContactMethod() {
+        const checked = document.querySelector('input[name="contact-method"]:checked');
+        return checked ? checked.value : "email";
+    }
+
+    function selectedTopics() {
+        return Array.from(document.querySelectorAll('input[name="topic"]:checked')).map((input) => input.value);
+    }
+
+    function recordEvent(name, detail) {
+        const entry = detail ? name + ":" + detail : name;
+        eventLog.push(entry);
+        while (eventLog.length > 18) {
+            eventLog.shift();
+        }
+        document.getElementById("event-log").textContent = eventLog.join("\n");
+        document.getElementById("lastEventValue").textContent = entry;
+        document.getElementById("screen-reader-status").textContent = entry;
+    }
+
+    function setFieldError(fieldId, message) {
+        const field = document.getElementById(fieldId);
+        const error = document.getElementById(fieldId + "-error");
+        if (!field || !error) {
+            return;
+        }
+        field.setAttribute("aria-invalid", message ? "true" : "false");
+        error.textContent = message || "";
+    }
+
+    function updateDynamicFields() {
+        const phoneWrapper = document.getElementById("phone-field-wrapper");
+        const companyWrapper = document.getElementById("company-field-wrapper");
+        const phoneField = document.getElementById("phone-number");
+        const companyField = document.getElementById("company");
+        const method = currentContactMethod();
+
+        phoneWrapper.classList.toggle("hidden", method !== "phone");
+        companyWrapper.classList.toggle("hidden", method !== "business");
+        phoneField.required = method === "phone";
+        companyField.required = method === "business";
+
+        if (method !== "phone") {
+            phoneField.value = "";
+            setFieldError("phone-number", "");
+        }
+        if (method !== "business") {
+            companyField.value = "";
+            setFieldError("company", "");
+        }
+    }
+
+    function syncState() {
+        const state = window.__browser4State;
+        state.firstName = document.getElementById("first-name").value;
+        state.lastName = document.getElementById("last-name").value;
+        state.email = document.getElementById("email").value;
+        state.country = document.getElementById("country").value;
+        state.agreeTerms = document.getElementById("agree-terms").checked;
+        state.comments = document.getElementById("comments").value;
+        state.contactMethod = currentContactMethod();
+        state.newsletterOptIn = document.getElementById("newsletter-opt-in").checked;
+        state.topics = selectedTopics();
+        state.phoneNumber = document.getElementById("phone-number").value;
+        state.company = document.getElementById("company").value;
+        state.experienceLevel = document.getElementById("experience-level").value;
+        state.commentLength = state.comments.length;
+        state.dynamicFieldVisible = state.contactMethod === "business" ? "company" : state.contactMethod === "phone" ? "phone-number" : "none";
+        state.requiredCompleted = [
+            state.firstName.trim(),
+            state.lastName.trim(),
+            state.email.trim(),
+            state.country,
+            state.agreeTerms ? "checked" : ""
+        ].filter(Boolean).length;
+
+        document.getElementById("state-log").textContent = JSON.stringify(state, null, 2);
+        document.getElementById("comment-length").textContent = state.commentLength + " characters";
+        document.getElementById("completionValue").textContent = state.requiredCompleted + " / 5 required";
+        document.getElementById("contactMethodValue").textContent = state.contactMethod;
+    }
+
+    function validateEmail(email) {
+        return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+    }
+
+    function validateForm(showErrors) {
+        const state = window.__browser4State;
+        const errors = [];
+        const firstName = state.firstName.trim();
+        const lastName = state.lastName.trim();
+        const email = state.email.trim();
+        const phoneNumber = state.phoneNumber.trim();
+        const company = state.company.trim();
+        const shouldShowErrors = showErrors || firstName.length > 0 || lastName.length > 0 || email.length > 0 || state.country.length > 0 || state.agreeTerms || phoneNumber.length > 0 || company.length > 0;
+
+        if (!firstName) {
+            errors.push("First name is required.");
+            if (shouldShowErrors) {
+                setFieldError("first-name", "Required");
+            }
+        } else {
+            setFieldError("first-name", "");
+        }
+
+        if (!lastName) {
+            errors.push("Last name is required.");
+            if (shouldShowErrors) {
+                setFieldError("last-name", "Required");
+            }
+        } else {
+            setFieldError("last-name", "");
+        }
+
+        if (!email) {
+            errors.push("Email is required.");
+            if (shouldShowErrors) {
+                setFieldError("email", "Required");
+            }
+        } else if (!validateEmail(email)) {
+            errors.push("Email format is invalid.");
+            if (shouldShowErrors) {
+                setFieldError("email", "Enter a valid email");
+            }
+        } else {
+            setFieldError("email", "");
+        }
+
+        if (!state.country) {
+            errors.push("Country is required.");
+            if (shouldShowErrors) {
+                setFieldError("country", "Select a country");
+            }
+        } else {
+            setFieldError("country", "");
+        }
+
+        if (state.contactMethod === "phone") {
+            if (!phoneNumber) {
+                errors.push("Phone number is required for phone contact.");
+                if (shouldShowErrors) {
+                    setFieldError("phone-number", "Required for phone contact");
+                }
+            } else {
+                setFieldError("phone-number", "");
+            }
+        } else {
+            setFieldError("phone-number", "");
+        }
+
+        if (state.contactMethod === "business") {
+            if (!company) {
+                errors.push("Company is required for business contact.");
+                if (shouldShowErrors) {
+                    setFieldError("company", "Required for business contact");
+                }
+            } else {
+                setFieldError("company", "");
+            }
+        } else {
+            setFieldError("company", "");
+        }
+
+        if (!state.agreeTerms) {
+            errors.push("You must agree to the testing terms.");
+            if (shouldShowErrors) {
+                setFieldError("agree-terms", "Required before submit");
+            }
+        } else {
+            setFieldError("agree-terms", "");
+        }
+
+        state.formValid = errors.length === 0;
+        state.validationError = errors[0] || "";
+        document.getElementById("validation-summary").textContent = errors.length === 0
+            ? "All validation checks passed."
+            : errors.join("\n");
+        syncState();
+        return errors;
+    }
+
+    function showError(message) {
+        const errorPanel = document.getElementById("error-panel");
+        const resultPanel = document.getElementById("result-panel");
+        errorPanel.textContent = message;
+        errorPanel.classList.add("visible");
+        resultPanel.classList.remove("visible");
+    }
+
+    function showSuccess() {
+        const errorPanel = document.getElementById("error-panel");
+        const resultPanel = document.getElementById("result-panel");
+        errorPanel.textContent = "";
+        errorPanel.classList.remove("visible");
+        resultPanel.classList.add("visible");
+    }
+
+    function submitForm() {
+        const errors = validateForm(true);
+        if (errors.length > 0) {
+            recordEvent("submit-failed", errors[0]);
+            showError(errors[0]);
+            return;
+        }
+
+        const state = window.__browser4State;
+        state.submitCount += 1;
+        state.lastSubmission = {
+            firstName: state.firstName.trim(),
+            lastName: state.lastName.trim(),
+            email: state.email.trim(),
+            country: state.country,
+            comments: state.comments,
+            contactMethod: state.contactMethod,
+            topics: state.topics,
+            newsletterOptIn: state.newsletterOptIn,
+            phoneNumber: state.phoneNumber.trim(),
+            company: state.company.trim(),
+            experienceLevel: state.experienceLevel
+        };
+
+        document.getElementById("result-data").textContent = JSON.stringify(state.lastSubmission, null, 2);
+        showSuccess();
+        recordEvent("submit-success", state.lastSubmission.contactMethod);
+        syncState();
+    }
+
+    function resetForm() {
+        document.getElementById("registration-form").reset();
+        document.getElementById("contact-email").checked = true;
+        document.getElementById("topic-automation").checked = true;
+        document.getElementById("topic-testing").checked = false;
+        document.getElementById("topic-ai").checked = false;
+        document.getElementById("experience-level").value = "intermediate";
+        document.getElementById("result-data").textContent = "No submission yet.";
+        document.getElementById("error-panel").textContent = "";
+        document.getElementById("error-panel").classList.remove("visible");
+        document.getElementById("result-panel").classList.remove("visible");
+        requiredFieldIds.concat(["phone-number", "company", "comments"]).forEach((id) => setFieldError(id, ""));
+        window.__browser4State.lastSubmission = null;
+        window.__browser4State.validationError = "";
+        window.__browser4State.resetCount += 1;
+        document.getElementById("validation-summary").textContent = "Complete the required fields to enable a clean submission.";
+        updateDynamicFields();
+        recordEvent("form-reset");
+        syncState();
+    }
+
+    function bindField(fieldId, eventNames) {
+        const element = document.getElementById(fieldId);
+        eventNames.forEach((eventName) => {
+            element.addEventListener(eventName, () => {
+                if (eventName === "change" && fieldId === "country") {
+                    recordEvent("country-change", element.value || "empty");
+                } else if (eventName === "change" && fieldId === "agree-terms") {
+                    recordEvent("terms-toggle", element.checked ? "checked" : "unchecked");
+                } else if (eventName === "input") {
+                    recordEvent("input", fieldId);
+                }
+                updateDynamicFields();
+                syncState();
+                validateForm(false);
+            });
+        });
+    }
+
+    ["first-name", "last-name", "email", "comments", "phone-number", "company"].forEach((fieldId) => bindField(fieldId, ["input", "blur"]));
+    ["country", "experience-level", "agree-terms", "newsletter-opt-in"].forEach((fieldId) => bindField(fieldId, ["change"]));
+
+    Array.from(document.querySelectorAll('input[name="contact-method"]')).forEach((input) => {
+        input.addEventListener("change", () => {
+            updateDynamicFields();
+            recordEvent("contact-method", input.value);
+            syncState();
+            validateForm(false);
+        });
+    });
+
+    Array.from(document.querySelectorAll('input[name="topic"]')).forEach((input) => {
+        input.addEventListener("change", () => {
+            recordEvent("topic-toggle", input.value + ":" + (input.checked ? "on" : "off"));
+            syncState();
+            validateForm(false);
+        });
+    });
+
+    document.getElementById("submit-btn").addEventListener("click", submitForm);
+    document.getElementById("reset-btn").addEventListener("click", resetForm);
+    document.getElementById("registration-form").addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && event.target.id !== "comments") {
+            event.preventDefault();
+            recordEvent("enter-submit-attempt", event.target.id || "unknown");
+            submitForm();
+        }
+    });
+
+    updateDynamicFields();
+    syncState();
+    validateForm(false);
+</script>
+</body>
+</html>
