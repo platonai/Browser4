@@ -3,7 +3,7 @@ package ai.platon.pulsar.human.manual
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.context.AgenticContexts
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.WebDriver
+import ai.platon.pulsar.skeleton.workflow.driver.WebDriver
 import org.slf4j.LoggerFactory
 
 /**

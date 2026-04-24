@@ -11,7 +11,7 @@ import ai.platon.pulsar.ql.common.ResultSets
 import ai.platon.pulsar.ql.context.AbstractSQLContext
 import ai.platon.pulsar.ql.h2.utils.ResultSetUtils
 import ai.platon.pulsar.skeleton.event.PageEventHandlers
-import ai.platon.pulsar.skeleton.crawl.common.url.CompletableListenableHyperlink
+import ai.platon.pulsar.skeleton.workflow.common.url.CompletableListenableHyperlink
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import org.h2.jdbc.JdbcSQLException
 import java.sql.Connection

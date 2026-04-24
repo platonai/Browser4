@@ -5,9 +5,9 @@ import ai.platon.browser4.driver.chrome.common.LauncherOptions
 import ai.platon.browser4.driver.common.BrowserSettings
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.config.ImmutableConfig
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.Browser
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.BrowserLauncher
-import ai.platon.pulsar.skeleton.crawl.fetch.privacy.BrowserId
+import ai.platon.pulsar.skeleton.workflow.driver.Browser
+import ai.platon.pulsar.skeleton.workflow.driver.BrowserLauncher
+import ai.platon.pulsar.skeleton.workflow.privacy.BrowserId
 
 class DefaultBrowserFactory(
     conf: ImmutableConfig = ImmutableConfig(loadDefaults = true),

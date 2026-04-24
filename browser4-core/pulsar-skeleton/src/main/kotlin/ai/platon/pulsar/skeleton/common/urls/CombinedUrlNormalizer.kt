@@ -4,8 +4,8 @@ import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.common.urls.UrlAware
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.event.PulsarEventBus
-import ai.platon.pulsar.skeleton.crawl.common.url.ListenableUrl
-import ai.platon.pulsar.skeleton.crawl.filter.ChainedUrlNormalizer
+import ai.platon.pulsar.skeleton.workflow.common.url.ListenableUrl
+import ai.platon.pulsar.skeleton.workflow.filter.ChainedUrlNormalizer
 
 class CombinedUrlNormalizer(private val urlNormalizers: ChainedUrlNormalizer? = null) {
     /**

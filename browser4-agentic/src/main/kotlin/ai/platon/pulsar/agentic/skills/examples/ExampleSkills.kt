@@ -2,7 +2,7 @@ package ai.platon.pulsar.agentic.skills.examples
 
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.skills.*
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.WebDriver
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import org.slf4j.LoggerFactory
 
@@ -85,7 +85,7 @@ class WebScrapingSkill : AbstractSkill() {
         val attributes = params["attributes"] as? List<*> ?: listOf("text")
 
         // Try to get WebDriver and PulsarSession from context for real scraping
-        val driver = context.getResource<WebDriver>("driver")
+        val driver = context.getResource<ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver>("driver")
         val session = context.getResource<PulsarSession>("session")
 
         // If driver is available, perform real JavaScript-based extraction
@@ -117,7 +117,7 @@ class WebScrapingSkill : AbstractSkill() {
      * Execute web scraping using an existing WebDriver with JavaScript.
      */
     private suspend fun executeWithDriver(
-        driver: WebDriver,
+        driver: ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver,
         url: String,
         selector: String,
         attributes: List<*>

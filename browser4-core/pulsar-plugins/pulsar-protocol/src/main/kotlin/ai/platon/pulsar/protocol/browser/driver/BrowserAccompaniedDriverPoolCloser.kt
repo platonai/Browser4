@@ -3,9 +3,9 @@ package ai.platon.pulsar.protocol.browser.driver
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.warnInterruptible
 import ai.platon.pulsar.skeleton.common.AppSystemInfo
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.AbstractBrowser
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.Browser
-import ai.platon.pulsar.skeleton.crawl.fetch.privacy.BrowserId
+import ai.platon.pulsar.skeleton.workflow.driver.AbstractBrowser
+import ai.platon.pulsar.skeleton.workflow.driver.Browser
+import ai.platon.pulsar.skeleton.workflow.privacy.BrowserId
 import kotlinx.coroutines.runBlocking
 
 /**

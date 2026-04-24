@@ -1,8 +1,8 @@
-package ai.platon.pulsar.skeleton.crawl.fetch.privacy
+package ai.platon.pulsar.skeleton.workflow.privacy
 
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.skeleton.PulsarSettings
-import ai.platon.pulsar.skeleton.crawl.fetch.privacy.PrivacyAgentGeneratorFactory.Companion.BROWSER_CONTEXT_MODE_TO_AGENTS
+import ai.platon.pulsar.skeleton.workflow.privacy.PrivacyAgentGeneratorFactory.Companion.BROWSER_CONTEXT_MODE_TO_AGENTS
 import org.junit.jupiter.api.Assertions.assertTrue
 import kotlin.test.Test
 

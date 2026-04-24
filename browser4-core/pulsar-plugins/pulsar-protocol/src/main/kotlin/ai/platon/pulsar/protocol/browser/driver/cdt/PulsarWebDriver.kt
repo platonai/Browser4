@@ -25,8 +25,8 @@ import ai.platon.pulsar.common.math.geometric.PointD
 import ai.platon.pulsar.common.math.geometric.RectD
 import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.protocol.browser.driver.cdt.detail.*
-import ai.platon.pulsar.skeleton.crawl.common.InternalURLUtil
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.*
+import ai.platon.pulsar.skeleton.workflow.common.InternalURLUtil
+import ai.platon.pulsar.skeleton.workflow.driver.*
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue

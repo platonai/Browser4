@@ -2,9 +2,9 @@ package ai.platon.pulsar.agentic.tools.builtin
 
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.AbstractBrowser
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.AbstractWebDriver
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.Browser
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractBrowser
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.Browser
 import kotlin.reflect.KClass
 
 class BrowserToolExecutor : AbstractToolExecutor() {
@@ -12,7 +12,7 @@ class BrowserToolExecutor : AbstractToolExecutor() {
 
     override val domain = "browser"
 
-    override val receiverClass: KClass<*> = Browser::class
+    override val receiverClass: KClass<*> = _root_ide_package_.ai.platon.pulsar.skeleton.workflow.fetch.driver.Browser::class
 
     init {
         toolSpec["switchTab"] = ToolSpec(
@@ -57,14 +57,14 @@ class BrowserToolExecutor : AbstractToolExecutor() {
     ): Any? {
         require(domain == this.domain) { "Unsupported domain: $domain" }
         require(functionName.isNotBlank()) { "Function name must not be blank" }
-        val browser = requireNotNull(receiver as AbstractBrowser) { "Target must be Browser" }
+        val browser = requireNotNull(receiver as ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractBrowser) { "Target must be Browser" }
 
         return when (functionName) {
             "switchTab" -> {
                 validateArgs(args, allowed = setOf("tabId"), required = setOf("tabId"), functionName)
                 val tabId = paramString(args, "tabId", functionName)!!
                 val driver = tabId.toIntOrNull()?.let { browser.findDriverById(it) } ?: browser.drivers[tabId]
-                if (driver == null || driver !is AbstractWebDriver) {
+                if (driver == null || driver !is ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver) {
                     throw IllegalArgumentException("Tab '$tabId' not found")
                 }
                 driver.bringToFront()

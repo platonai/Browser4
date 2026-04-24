@@ -4,7 +4,7 @@ import ai.platon.pulsar.WebDriverTestBase
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.persist.model.ActiveDOMMetadata
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.WebDriver
+import ai.platon.pulsar.skeleton.workflow.driver.WebDriver
 import com.fasterxml.jackson.module.kotlin.readValue
 import kotlin.test.*
 

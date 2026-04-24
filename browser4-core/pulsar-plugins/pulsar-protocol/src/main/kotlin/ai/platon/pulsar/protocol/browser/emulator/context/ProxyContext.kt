@@ -19,9 +19,9 @@ import ai.platon.pulsar.common.DateTimes
 import ai.platon.pulsar.common.config.CapabilityTypes
 import ai.platon.pulsar.common.proxy.*
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
-import ai.platon.pulsar.skeleton.crawl.fetch.FetchResult
-import ai.platon.pulsar.skeleton.crawl.fetch.FetchTask
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.WebDriver
+import ai.platon.pulsar.skeleton.workflow.FetchResult
+import ai.platon.pulsar.skeleton.workflow.FetchTask
+import ai.platon.pulsar.skeleton.workflow.driver.WebDriver
 import com.codahale.metrics.Gauge
 import org.slf4j.LoggerFactory
 import java.time.Duration
@@ -48,7 +48,7 @@ open class ProxyContext(
                 "runningTasks" to Gauge { numRunningTasks.get() }
             ).forEach { MetricsSystem.reg.register(this, it.key, it.value) }
         }
-        
+
         /**
          * Create a proxy context for the given driver context.
          *
@@ -96,7 +96,7 @@ open class ProxyContext(
     }
 
     private val logger = LoggerFactory.getLogger(ProxyContext::class.java)!!
-    
+
     private val conf get() = proxyPoolManager.conf
     /**
      * If the number of success exceeds [maxFetchSuccess], emit a PrivacyRetry result
@@ -237,7 +237,7 @@ open class ProxyContext(
             }
         }
     }
-    
+
     internal fun afterTaskFinished(task: FetchTask, success: Boolean) {
         numRunningTasks.decrementAndGet()
         proxyEntry?.apply {

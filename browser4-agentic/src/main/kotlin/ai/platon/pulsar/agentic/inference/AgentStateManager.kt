@@ -18,7 +18,7 @@ import ai.platon.pulsar.agentic.model.ToolCallResult
 import ai.platon.pulsar.common.MessageWriter
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.protocol.browser.driver.cdt.PulsarWebDriver
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.AbstractWebDriver
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver
 import kotlinx.coroutines.withTimeout
 import java.nio.file.Path
 import java.time.Instant
@@ -499,9 +499,9 @@ class AgentStateManager(
         // fetch all drivers
         browser.listDrivers()
         val tabs = browser.drivers
-            .filter { it.value is AbstractWebDriver && (it.value as AbstractWebDriver).isConnectable }
+            .filter { it.value is ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver && (it.value as ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver).isConnectable }
             .map { (tabId, driver) ->
-                require(driver is AbstractWebDriver)
+                require(driver is ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver)
                 require(tabId == driver.guid) { "Tab ID mismatch: tabId=$tabId vs driver.id=${driver.guid}" }
 
                 val url = runCatching { driver.currentUrl() }

@@ -11,10 +11,10 @@ import ai.platon.pulsar.protocol.browser.emulator.WebDriverPoolExhaustedExceptio
 import ai.platon.pulsar.protocol.browser.impl.BasicBrowserManager
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import ai.platon.pulsar.skeleton.common.persist.ext.eventHandlers
-import ai.platon.pulsar.skeleton.crawl.fetch.FetchResult
-import ai.platon.pulsar.skeleton.crawl.fetch.FetchTask
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.*
-import ai.platon.pulsar.skeleton.crawl.fetch.privacy.BrowserId
+import ai.platon.pulsar.skeleton.workflow.FetchResult
+import ai.platon.pulsar.skeleton.workflow.FetchTask
+import ai.platon.pulsar.skeleton.workflow.driver.*
+import ai.platon.pulsar.skeleton.workflow.privacy.BrowserId
 import com.codahale.metrics.Gauge
 import com.google.common.annotations.Beta
 import kotlinx.coroutines.*

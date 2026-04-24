@@ -1,8 +1,8 @@
 package ai.platon.pulsar.parse.html
 
-import ai.platon.pulsar.skeleton.crawl.parse.PageParser
-import ai.platon.pulsar.skeleton.crawl.parse.ParseException
-import ai.platon.pulsar.skeleton.crawl.parse.html.PrimerHtmlParser
+import ai.platon.pulsar.skeleton.workflow.parse.PageParser
+import ai.platon.pulsar.skeleton.workflow.parse.ParseException
+import ai.platon.pulsar.skeleton.workflow.parse.html.PrimerHtmlParser
 import org.springframework.beans.factory.annotation.Autowired
 import java.nio.charset.Charset
 import kotlin.test.Test

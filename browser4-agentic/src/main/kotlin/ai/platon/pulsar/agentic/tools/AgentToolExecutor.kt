@@ -11,7 +11,7 @@ import ai.platon.pulsar.agentic.skills.tools.SkillToolExecutor
 import ai.platon.pulsar.agentic.skills.tools.SkillToolTarget
 import ai.platon.pulsar.agentic.tools.builtin.*
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.WebDriver
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 import kotlinx.coroutines.delay
 import java.nio.file.Path
 
@@ -28,7 +28,7 @@ class AgentToolExecutor constructor(
     private val _customTargets = mutableMapOf<String, Any>()
 
     val session: AgenticSession get() = agent.session
-    val driver: WebDriver get() = session.getOrCreateBoundDriver()
+    val driver: ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver get() = session.getOrCreateBoundDriver()
     val fs: AgentFileSystem = AgentFileSystem(baseDir)
     val shell: AgentShell = AgentShell(baseDir)
     val system: SystemToolExecutor = SystemToolExecutor(this)
@@ -240,7 +240,7 @@ class AgentToolExecutor constructor(
      * TODO: add an option to driver.navigate() to wait
      * */
     @Suppress("UNUSED_PARAMETER")
-    private suspend fun onDidNavigate(driver: WebDriver, toolCall: ToolCall, evaluate: TcEvaluate) {
+    private suspend fun onDidNavigate(driver: ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver, toolCall: ToolCall, evaluate: TcEvaluate) {
         driver.waitForNavigation()
         driver.waitForSelector("body")
         delay(3000)

@@ -4,7 +4,7 @@ import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.common.urls.*
 import ai.platon.pulsar.skeleton.common.urls.CombinedUrlNormalizer
 import ai.platon.pulsar.common.printlnPro
-import ai.platon.pulsar.skeleton.crawl.common.url.ParsableHyperlink
+import ai.platon.pulsar.skeleton.workflow.common.url.ParsableHyperlink
 import com.google.gson.GsonBuilder
 import kotlin.test.Test
 import kotlin.test.assertEquals

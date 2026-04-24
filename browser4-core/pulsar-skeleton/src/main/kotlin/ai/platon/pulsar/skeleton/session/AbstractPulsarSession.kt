@@ -21,10 +21,10 @@ import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.common.urls.NormURL
 import ai.platon.pulsar.skeleton.context.support.AbstractPulsarContext
 import ai.platon.pulsar.skeleton.event.PageEventHandlers
-import ai.platon.pulsar.skeleton.crawl.common.FetchEntry
-import ai.platon.pulsar.skeleton.crawl.common.url.ListenableHyperlink
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.Browser
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.WebDriver
+import ai.platon.pulsar.skeleton.workflow.common.FetchEntry
+import ai.platon.pulsar.skeleton.workflow.common.url.ListenableHyperlink
+import ai.platon.pulsar.skeleton.workflow.driver.Browser
+import ai.platon.pulsar.skeleton.workflow.driver.WebDriver
 import org.jsoup.nodes.Element
 import org.slf4j.LoggerFactory
 import java.nio.ByteBuffer

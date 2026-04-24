@@ -14,7 +14,7 @@
 
     <import resource="classpath*:pulsar-beans/plugins/monitor-context.xml"/>
 
-    <bean id="fetchComponentCustom" class="ai.platon.pulsar.skeleton.crawl.component.BatchFetchComponent"
+    <bean id="fetchComponentCustom" class="ai.platon.pulsar.skeleton.workflow.component.BatchFetchComponent"
           destroy-method="close">
         <constructor-arg ref="webDb"/>
         <constructor-arg ref="globalCacheFactory"/>
@@ -23,18 +23,18 @@
         <constructor-arg ref="conf"/>
     </bean>
 
-    <bean id="parseComponentCustom" class="ai.platon.pulsar.skeleton.crawl.component.ParseComponent">
+    <bean id="parseComponentCustom" class="ai.platon.pulsar.skeleton.workflow.component.ParseComponent">
         <constructor-arg ref="pageParser"/>
         <constructor-arg ref="globalCacheFactory"/>
         <constructor-arg ref="conf"/>
     </bean>
-    <bean id="updateComponentCustom" class="ai.platon.pulsar.skeleton.crawl.component.UpdateComponent">
+    <bean id="updateComponentCustom" class="ai.platon.pulsar.skeleton.workflow.component.UpdateComponent">
         <constructor-arg ref="webDb"/>
         <constructor-arg ref="fetchSchedule"/>
         <constructor-arg ref="messageWriter"/>
         <constructor-arg ref="conf"/>
     </bean>
-    <bean id="loadComponentCustom" class="ai.platon.pulsar.skeleton.crawl.component.LoadComponent"
+    <bean id="loadComponentCustom" class="ai.platon.pulsar.skeleton.workflow.component.LoadComponent"
           destroy-method="close">
         <constructor-arg ref="webDb"/>
         <constructor-arg ref="globalCacheFactory"/>

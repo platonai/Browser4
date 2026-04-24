@@ -7,7 +7,7 @@ import ai.platon.pulsar.common.browser.fingerprint.Fingerprint
 import ai.platon.pulsar.common.browser.fingerprint.FingerprintDriftDetector
 import ai.platon.pulsar.common.browser.fingerprint.FingerprintGenerator
 import ai.platon.pulsar.common.browser.fingerprint.FingerprintValidator
-import ai.platon.pulsar.skeleton.crawl.fetch.privacy.BrowserProfile
+import ai.platon.pulsar.skeleton.workflow.privacy.BrowserProfile
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.DisplayName

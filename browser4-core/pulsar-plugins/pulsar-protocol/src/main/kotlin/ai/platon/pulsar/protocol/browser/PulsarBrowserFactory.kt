@@ -7,9 +7,9 @@ import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.protocol.browser.impl.AbstractBrowserFactory
 import ai.platon.pulsar.protocol.browser.impl.PulsarBrowserLauncher
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.Browser
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.BrowserLaunchException
-import ai.platon.pulsar.skeleton.crawl.fetch.privacy.BrowserId
+import ai.platon.pulsar.skeleton.workflow.driver.Browser
+import ai.platon.pulsar.skeleton.workflow.driver.BrowserLaunchException
+import ai.platon.pulsar.skeleton.workflow.privacy.BrowserId
 
 /**
  * A factory to create browser instances.

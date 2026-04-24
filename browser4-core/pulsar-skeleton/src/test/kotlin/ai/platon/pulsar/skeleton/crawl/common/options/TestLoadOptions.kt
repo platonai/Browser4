@@ -2,14 +2,13 @@ package ai.platon.pulsar.skeleton.crawl.common.options
 
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.config.VolatileConfig
-import ai.platon.pulsar.skeleton.common.options.Condition
 import ai.platon.pulsar.skeleton.common.options.LoadOptionDefaults
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.skeleton.context.PulsarContexts
 import ai.platon.pulsar.skeleton.context.support.AbstractPulsarContext
 import ai.platon.pulsar.common.printlnPro
-import ai.platon.pulsar.skeleton.crawl.common.url.StatefulListenableHyperlink
+import ai.platon.pulsar.skeleton.workflow.common.url.StatefulListenableHyperlink
 import java.time.Duration
 import kotlin.test.*
 

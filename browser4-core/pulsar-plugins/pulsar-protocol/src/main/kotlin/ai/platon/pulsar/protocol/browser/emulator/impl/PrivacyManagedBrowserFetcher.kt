@@ -25,14 +25,13 @@ import ai.platon.pulsar.protocol.browser.emulator.AbstractBrowserFetcher
 import ai.platon.pulsar.protocol.browser.emulator.BrowserEmulator
 import ai.platon.pulsar.protocol.browser.emulator.IncognitoBrowserFetcher
 import ai.platon.pulsar.protocol.browser.emulator.context.BrowserPrivacyManager
-import ai.platon.pulsar.protocol.browser.impl.BasicBrowserManager
 import ai.platon.pulsar.skeleton.common.persist.ext.browseEventHandlers
-import ai.platon.pulsar.skeleton.crawl.fetch.FetchResult
-import ai.platon.pulsar.skeleton.crawl.fetch.FetchTask
-import ai.platon.pulsar.skeleton.crawl.fetch.WebDriverFetcher
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.*
-import ai.platon.pulsar.skeleton.crawl.protocol.ForwardingResponse
-import ai.platon.pulsar.skeleton.crawl.protocol.Response
+import ai.platon.pulsar.skeleton.workflow.FetchResult
+import ai.platon.pulsar.skeleton.workflow.FetchTask
+import ai.platon.pulsar.skeleton.workflow.WebDriverFetcher
+import ai.platon.pulsar.skeleton.workflow.driver.*
+import ai.platon.pulsar.skeleton.workflow.protocol.ForwardingResponse
+import ai.platon.pulsar.skeleton.workflow.protocol.Response
 import org.slf4j.LoggerFactory
 import java.util.concurrent.atomic.AtomicBoolean
 

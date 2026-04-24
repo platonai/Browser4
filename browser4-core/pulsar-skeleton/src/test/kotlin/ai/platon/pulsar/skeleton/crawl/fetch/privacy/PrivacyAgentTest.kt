@@ -1,4 +1,4 @@
-package ai.platon.pulsar.skeleton.crawl.fetch.privacy
+package ai.platon.pulsar.skeleton.workflow.privacy
 
 import ai.platon.pulsar.common.browser.fingerprint.Fingerprint
 import ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper

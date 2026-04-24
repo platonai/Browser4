@@ -2,7 +2,7 @@ package ai.platon.pulsar.examples.sites.spa.wemix
 
 import ai.platon.pulsar.skeleton.context.PulsarContexts
 import ai.platon.pulsar.skeleton.crawl.event.WebPageWebDriverEventHandler
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.WebDriver
+import ai.platon.pulsar.skeleton.workflow.driver.WebDriver
 import ai.platon.pulsar.persist.WebPage
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking

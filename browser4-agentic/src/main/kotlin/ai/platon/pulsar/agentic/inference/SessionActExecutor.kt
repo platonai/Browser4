@@ -8,11 +8,11 @@ import ai.platon.pulsar.agentic.tools.BasicToolCallExecutor
 import ai.platon.pulsar.agentic.tools.builtin.BrowserToolExecutor
 import ai.platon.pulsar.agentic.tools.builtin.BrowserTabToolExecutor
 import ai.platon.pulsar.common.config.ImmutableConfig
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.WebDriver
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 
 internal class SessionActExecutor(
     val session: AgenticSession,
-    val driver: WebDriver,
+    val driver: ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver,
     val conf: ImmutableConfig
 ) {
     constructor(session: AgenticSession) : this(

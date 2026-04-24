@@ -15,11 +15,11 @@ import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.skeleton.common.AppSystemInfo
 import ai.platon.pulsar.skeleton.common.message.MiscMessageWriter
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
-import ai.platon.pulsar.skeleton.crawl.common.InternalURLUtil
-import ai.platon.pulsar.skeleton.crawl.component.LoadComponent
-import ai.platon.pulsar.skeleton.crawl.component.ParseComponent
-import ai.platon.pulsar.skeleton.crawl.fetch.UrlStat
-import ai.platon.pulsar.skeleton.crawl.parse.html.JsoupParser
+import ai.platon.pulsar.skeleton.workflow.common.InternalURLUtil
+import ai.platon.pulsar.skeleton.workflow.component.LoadComponent
+import ai.platon.pulsar.skeleton.workflow.component.ParseComponent
+import ai.platon.pulsar.skeleton.workflow.UrlStat
+import ai.platon.pulsar.skeleton.workflow.parse.html.JsoupParser
 import ai.platon.pulsar.skeleton.session.AbstractPulsarSession
 import com.codahale.metrics.Gauge
 import com.google.common.collect.ConcurrentHashMultiset

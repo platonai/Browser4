@@ -1,7 +1,7 @@
 package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager
-import ai.platon.pulsar.skeleton.crawl.fetch.privacy.AbstractPrivacyManager
+import ai.platon.pulsar.skeleton.workflow.privacy.AbstractPrivacyManager
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import org.springframework.web.bind.annotation.CrossOrigin
 import org.springframework.web.bind.annotation.GetMapping

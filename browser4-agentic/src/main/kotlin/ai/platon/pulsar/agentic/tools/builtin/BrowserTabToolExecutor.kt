@@ -1,15 +1,15 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecGenerator
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.NavigateEntry
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.WebDriver
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.NavigateEntry
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 import java.time.Duration
 import kotlin.reflect.KClass
 
 class BrowserTabToolExecutor: AbstractToolExecutor() {
     override val domain = "tab"
 
-    override val receiverClass: KClass<*> = WebDriver::class
+    override val receiverClass: KClass<*> = _root_ide_package_.ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver::class
 
     init {
         ToolSpecGenerator.apply {
@@ -35,7 +35,7 @@ class BrowserTabToolExecutor: AbstractToolExecutor() {
     override suspend fun callFunctionOn(
         domain: String, functionName: String, args: Map<String, Any?>, receiver: Any
     ): Any? {
-        val driver = requireNotNull(receiver as? WebDriver) { "The target must be a WebDriver" }
+        val driver = requireNotNull(receiver as? ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver) { "The target must be a WebDriver" }
 
         fun allowed(vararg names: String) = names.toSet()
 
@@ -48,7 +48,7 @@ class BrowserTabToolExecutor: AbstractToolExecutor() {
                     args.containsKey("rawUrl") || args.containsKey("pageUrl") -> {
                         validateArgs(args, allowed("rawUrl", "pageUrl"), setOf("rawUrl", "pageUrl"), functionName)
                         driver.navigate(
-                            NavigateEntry(
+                            _root_ide_package_.ai.platon.pulsar.skeleton.workflow.fetch.driver.NavigateEntry(
                                 paramString(args, "rawUrl", functionName)!!,
                                 pageUrl = paramString(args, "pageUrl", functionName)!!
                             )

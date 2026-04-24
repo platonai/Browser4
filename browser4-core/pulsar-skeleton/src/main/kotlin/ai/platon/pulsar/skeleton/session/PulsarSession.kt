@@ -11,11 +11,11 @@ import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.common.urls.NormURL
 import ai.platon.pulsar.skeleton.context.PulsarContext
 import ai.platon.pulsar.skeleton.event.PageEventHandlers
-import ai.platon.pulsar.skeleton.crawl.common.DocumentCatch
-import ai.platon.pulsar.skeleton.crawl.common.GlobalCache
-import ai.platon.pulsar.skeleton.crawl.common.PageCatch
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.Browser
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.WebDriver
+import ai.platon.pulsar.skeleton.workflow.common.DocumentCatch
+import ai.platon.pulsar.skeleton.workflow.common.GlobalCache
+import ai.platon.pulsar.skeleton.workflow.common.PageCatch
+import ai.platon.pulsar.skeleton.workflow.driver.Browser
+import ai.platon.pulsar.skeleton.workflow.driver.WebDriver
 import com.google.common.annotations.Beta
 import org.jsoup.nodes.Element
 import java.nio.ByteBuffer
@@ -1339,8 +1339,8 @@ interface PulsarSession : AutoCloseable {
      *
      * @see PageEventHandlers
      * @see ai.platon.pulsar.common.urls.Hyperlink
-     * @see ai.platon.pulsar.skeleton.crawl.common.url.ListenableHyperlink
-     * @see ai.platon.pulsar.skeleton.crawl.common.url.ParsableHyperlink
+     * @see ai.platon.pulsar.skeleton.workflow.common.url.ListenableHyperlink
+     * @see ai.platon.pulsar.skeleton.workflow.common.url.ParsableHyperlink
      */
     fun submit(url: UrlAware): PulsarSession
 

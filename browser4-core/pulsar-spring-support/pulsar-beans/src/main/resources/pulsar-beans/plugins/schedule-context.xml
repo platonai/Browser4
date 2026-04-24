@@ -7,7 +7,7 @@
 
     <import resource="../common-context.xml"/>
 
-    <bean id="fetchSchedule" class="ai.platon.pulsar.skeleton.crawl.schedule.DefaultFetchSchedule">
+    <bean id="fetchSchedule" class="ai.platon.pulsar.skeleton.workflow.schedule.DefaultFetchSchedule">
         <constructor-arg ref="conf"/>
         <constructor-arg ref="messageWriter"/>
     </bean>

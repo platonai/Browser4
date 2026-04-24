@@ -1,9 +1,9 @@
 package ai.platon.pulsar.protocol.browser.driver
 
 import ai.platon.pulsar.persist.WebPage
-import ai.platon.pulsar.skeleton.crawl.fetch.FetchResult
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.WebDriver
-import ai.platon.pulsar.skeleton.crawl.fetch.privacy.BrowserId
+import ai.platon.pulsar.skeleton.workflow.FetchResult
+import ai.platon.pulsar.skeleton.workflow.driver.WebDriver
+import ai.platon.pulsar.skeleton.workflow.privacy.BrowserId
 import java.util.concurrent.atomic.AtomicInteger
 
 class WebDriverTask(

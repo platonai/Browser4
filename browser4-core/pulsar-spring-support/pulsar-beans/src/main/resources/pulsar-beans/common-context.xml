@@ -35,11 +35,11 @@
         <constructor-arg ref="messageWriter"/>
     </bean>
 
-    <bean id="protocolFactory" class="ai.platon.pulsar.skeleton.crawl.protocol.ProtocolFactory" destroy-method="close">
+    <bean id="protocolFactory" class="ai.platon.pulsar.skeleton.workflow.protocol.ProtocolFactory" destroy-method="close">
         <constructor-arg ref="conf" />
     </bean>
 
-    <bean id="globalCacheFactory" class="ai.platon.pulsar.skeleton.crawl.common.GlobalCacheFactory">
+    <bean id="globalCacheFactory" class="ai.platon.pulsar.skeleton.workflow.common.GlobalCacheFactory">
         <constructor-arg ref="conf"/>
     </bean>
 

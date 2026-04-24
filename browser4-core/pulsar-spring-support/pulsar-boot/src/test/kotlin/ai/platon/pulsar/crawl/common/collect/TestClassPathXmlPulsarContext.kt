@@ -5,8 +5,8 @@ import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager
 import ai.platon.pulsar.protocol.browser.emulator.context.MultiPrivacyContextManager
 import ai.platon.pulsar.protocol.browser.emulator.impl.PrivacyManagedBrowserFetcher
 import ai.platon.pulsar.skeleton.context.support.AbstractPulsarContext
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.BrowserFactory
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.BrowserManager
+import ai.platon.pulsar.skeleton.workflow.driver.BrowserFactory
+import ai.platon.pulsar.skeleton.workflow.driver.BrowserManager
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse

@@ -11,7 +11,7 @@
         <constructor-arg value="conf" />
     </bean>
 
-    <bean id="parseFilters" class="ai.platon.pulsar.skeleton.crawl.parse.ParseFilters">
+    <bean id="parseFilters" class="ai.platon.pulsar.skeleton.workflow.parse.ParseFilters">
         <constructor-arg>
             <list>
             </list>
@@ -19,7 +19,7 @@
         <constructor-arg ref="conf"/>
     </bean>
 
-    <bean id="htmlParser" class="ai.platon.pulsar.skeleton.crawl.parse.html.PrimerHtmlParser">
+    <bean id="htmlParser" class="ai.platon.pulsar.skeleton.workflow.parse.html.PrimerHtmlParser">
         <constructor-arg ref="parseFilters"/>
         <constructor-arg ref="conf"/>
     </bean>
@@ -29,7 +29,7 @@
         <constructor-arg ref="conf"/>
     </bean>
 
-    <bean id="parserFactory" class="ai.platon.pulsar.skeleton.crawl.parse.ParserFactory">
+    <bean id="parserFactory" class="ai.platon.pulsar.skeleton.workflow.parse.ParserFactory">
         <constructor-arg>
             <list>
                 <ref bean="htmlParser"/>
@@ -38,7 +38,7 @@
         <constructor-arg ref="conf"/>
     </bean>
 
-    <bean id="pageParser" class="ai.platon.pulsar.skeleton.crawl.parse.PageParser">
+    <bean id="pageParser" class="ai.platon.pulsar.skeleton.workflow.parse.PageParser">
         <constructor-arg ref="conf"/>
         <constructor-arg ref="parserFactory"/>
     </bean>

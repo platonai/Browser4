@@ -7,7 +7,7 @@ import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.skeleton.common.persist.ext.eventHandlers
 import ai.platon.pulsar.skeleton.event.PulsarEventBus
 import ai.platon.pulsar.skeleton.TaskRunner
-import ai.platon.pulsar.skeleton.crawl.common.url.ListenableUrl
+import ai.platon.pulsar.skeleton.workflow.common.url.ListenableUrl
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import java.time.Duration
 import java.util.concurrent.atomic.AtomicBoolean

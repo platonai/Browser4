@@ -1,7 +1,7 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
 import ai.platon.pulsar.agentic.model.ToolCall
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.AbstractBrowser
+import ai.platon.pulsar.skeleton.workflow.driver.AbstractBrowser
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.runBlocking

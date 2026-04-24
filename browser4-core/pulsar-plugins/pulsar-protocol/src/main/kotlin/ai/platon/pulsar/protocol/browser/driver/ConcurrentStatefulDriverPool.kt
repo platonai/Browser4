@@ -3,9 +3,9 @@ package ai.platon.pulsar.protocol.browser.driver
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.warnInterruptible
 import ai.platon.pulsar.protocol.browser.impl.BasicBrowserManager
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.AbstractWebDriver
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.BrowserManager
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.WebDriver
+import ai.platon.pulsar.skeleton.workflow.driver.AbstractWebDriver
+import ai.platon.pulsar.skeleton.workflow.driver.BrowserManager
+import ai.platon.pulsar.skeleton.workflow.driver.WebDriver
 import kotlinx.coroutines.runBlocking
 import java.util.*
 import java.util.concurrent.ArrayBlockingQueue

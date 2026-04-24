@@ -3,8 +3,8 @@ package ai.platon.pulsar.protocol.browser.driver
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.logging.ThrottlingLogger
 import ai.platon.pulsar.common.warnForClose
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.WebDriver
-import ai.platon.pulsar.skeleton.crawl.fetch.privacy.BrowserId
+import ai.platon.pulsar.skeleton.workflow.driver.WebDriver
+import ai.platon.pulsar.skeleton.workflow.privacy.BrowserId
 import com.google.common.annotations.Beta
 import java.time.Duration
 import java.util.concurrent.ConcurrentSkipListMap

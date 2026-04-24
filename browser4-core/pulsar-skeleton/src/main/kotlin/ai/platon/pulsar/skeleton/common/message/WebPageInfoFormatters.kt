@@ -9,7 +9,7 @@ import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.metadata.Name
 import ai.platon.pulsar.persist.model.ActiveDOMStat
 import ai.platon.pulsar.skeleton.common.persist.ext.options
-import ai.platon.pulsar.skeleton.crawl.common.FetchState
+import ai.platon.pulsar.skeleton.workflow.common.FetchState
 import org.apache.commons.lang3.StringUtils
 import org.apache.commons.lang3.time.DurationFormatUtils
 import java.text.DecimalFormat

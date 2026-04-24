@@ -191,10 +191,10 @@
     <logger name="ai.platon.pulsar" level="WARN">
         <appender-ref ref="SERVER"/>
     </logger>
-    <logger name="ai.platon.pulsar.skeleton.crawl.impl.StreamingCrawler" level="INFO">
+    <logger name="ai.platon.pulsar.skeleton.workflow.impl.StreamingCrawler" level="INFO">
         <appender-ref ref="SERVER"/>
     </logger>
-    <logger name="ai.platon.pulsar.skeleton.crawl.component" level="INFO">
+    <logger name="ai.platon.pulsar.skeleton.workflow.component" level="INFO">
         <appender-ref ref="SERVER"/>
     </logger>
     <logger name="ai.platon.pulsar.protocol.browser.emulator.BrowserEmulateEventHandler" level="WARN">
@@ -205,10 +205,10 @@
         <appender-ref ref="SERVER"/>
     </logger>
 
-    <logger name="ai.platon.pulsar.skeleton.crawl.impl.StreamingCrawler.Task" level="INFO" additivity="false">
+    <logger name="ai.platon.pulsar.skeleton.workflow.impl.StreamingCrawler.Task" level="INFO" additivity="false">
         <appender-ref ref="PAGES"/>
     </logger>
-    <logger name="ai.platon.pulsar.skeleton.crawl.component.LoadComponent.Task" level="INFO" additivity="true">
+    <logger name="ai.platon.pulsar.skeleton.workflow.component.LoadComponent.Task" level="INFO" additivity="true">
         <appender-ref ref="CONSOLE"/>
         <appender-ref ref="PAGES"/>
     </logger>

@@ -15,7 +15,7 @@
  */
 package ai.platon.pulsar.protocol.browser
 
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.WebDriverException
+import ai.platon.pulsar.skeleton.workflow.driver.WebDriverException
 
 class UnsupportedWebDriverException : WebDriverException {
     constructor(message: String) : super(message)

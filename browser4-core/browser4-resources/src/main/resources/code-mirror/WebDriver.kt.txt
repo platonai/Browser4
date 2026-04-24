@@ -1,4 +1,4 @@
-package ai.platon.pulsar.skeleton.crawl.fetch.driver
+package ai.platon.pulsar.skeleton.workflow.driver
 
 import ai.platon.browser4.driver.chrome.NetworkResourceResponse
 import ai.platon.browser4.driver.chrome.NodeRef

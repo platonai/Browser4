@@ -85,7 +85,7 @@
 	<!--  alias mappings for parse-xxx names to the actual extension implementation
 	ids described in each parser's parser.xml file -->
 	<aliases>
-        <alias name="parse-html" class="ai.platon.pulsar.skeleton.crawl.parse.html.PrimerHtmlParser"/>
+        <alias name="parse-html" class="ai.platon.pulsar.skeleton.workflow.parse.html.PrimerHtmlParser"/>
         <alias name="parse-tika" class="ai.platon.pulsar.tools.TikaParser"/>
 	</aliases>
 

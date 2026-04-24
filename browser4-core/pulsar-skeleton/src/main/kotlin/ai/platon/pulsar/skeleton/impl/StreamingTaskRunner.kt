@@ -22,8 +22,8 @@ import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.context.PulsarContexts
 import ai.platon.pulsar.skeleton.context.support.AbstractPulsarContext
-import ai.platon.pulsar.skeleton.crawl.common.url.ListenableUrl
-import ai.platon.pulsar.skeleton.crawl.fetch.privacy.AbstractPrivacyContext
+import ai.platon.pulsar.skeleton.workflow.common.url.ListenableUrl
+import ai.platon.pulsar.skeleton.workflow.privacy.AbstractPrivacyContext
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import com.codahale.metrics.Gauge
 import kotlinx.coroutines.*

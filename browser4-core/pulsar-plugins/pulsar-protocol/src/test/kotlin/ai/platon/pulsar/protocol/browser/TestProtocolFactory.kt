@@ -2,8 +2,7 @@
 package ai.platon.pulsar.protocol.browser
 
 import ai.platon.pulsar.common.config.ImmutableConfig
-import ai.platon.pulsar.protocol.crowd.ForwardingProtocol
-import ai.platon.pulsar.skeleton.crawl.protocol.ProtocolFactory
+import ai.platon.pulsar.skeleton.workflow.protocol.ProtocolFactory
 import kotlin.test.*
 
 /**

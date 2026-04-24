@@ -17,9 +17,9 @@ package ai.platon.pulsar.protocol.browser.emulator
 
 import ai.platon.pulsar.common.HtmlIntegrity
 import ai.platon.pulsar.common.event.EventEmitter
-import ai.platon.pulsar.skeleton.crawl.fetch.FetchTask
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.WebDriver
-import ai.platon.pulsar.skeleton.crawl.protocol.Response
+import ai.platon.pulsar.skeleton.workflow.FetchTask
+import ai.platon.pulsar.skeleton.workflow.driver.WebDriver
+import ai.platon.pulsar.skeleton.workflow.protocol.Response
 import ai.platon.pulsar.persist.ProtocolStatus
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.protocol.browser.emulator.util.ChainedHtmlIntegrityChecker

@@ -20,8 +20,8 @@ import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.external.BrowserChatModel
 import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.external.ModelResponse
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.AbstractWebDriver
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.WebDriver
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import java.nio.file.Files
@@ -41,9 +41,9 @@ open class TextToAction(
      * @return The action description
      * */
     open suspend fun generateActions(
-        action: String, driver: WebDriver, screenshotB64: String? = null
+        action: String, driver: ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver, screenshotB64: String? = null
     ): List<ActionDescription> {
-        require(driver is AbstractWebDriver)
+        require(driver is ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver)
         val snapshotService = requireNotNull(driver.snapshotService)
 
         val snapshotOptions = SnapshotOptions(

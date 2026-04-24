@@ -28,8 +28,8 @@ import ai.platon.pulsar.protocol.browser.emulator.impl.InteractiveBrowserEmulato
 import ai.platon.pulsar.protocol.browser.emulator.impl.PrivacyManagedBrowserFetcher
 import ai.platon.pulsar.protocol.browser.impl.BasicBrowserManager
 import ai.platon.pulsar.protocol.browser.impl.DefaultBrowserFactory
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.BrowserFactory
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.BrowserManager
+import ai.platon.pulsar.skeleton.workflow.driver.BrowserFactory
+import ai.platon.pulsar.skeleton.workflow.driver.BrowserManager
 
 class DefaultBrowserManager(conf: ImmutableConfig) : BasicBrowserManager(DefaultBrowserFactory(conf), conf)
 

@@ -15,7 +15,7 @@ import ai.platon.pulsar.common.MultiSinkMessageWriter
 import ai.platon.pulsar.common.event.EventBus
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.external.ModelResponse
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.AbstractWebDriver
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver
 import com.fasterxml.jackson.databind.node.JsonNodeFactory
 import com.fasterxml.jackson.databind.node.ObjectNode
 import java.nio.file.Path
@@ -67,7 +67,7 @@ class InferenceEngine(
     private val auxLogger by lazy { MultiSinkMessageWriter(auxRunLogDir) }
 
     val snapshotService: SnapshotService
-        get() = (session.getOrCreateBoundDriver() as? AbstractWebDriver)?.snapshotService
+        get() = (session.getOrCreateBoundDriver() as? ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver)?.snapshotService
             ?: throw IllegalStateException("Bound driver is not AbstractWebDriver")
 
     suspend fun observe(params: ObserveParams, context: ExecutionContext): ActionDescription {
