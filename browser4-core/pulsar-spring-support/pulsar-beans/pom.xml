@@ -32,11 +32,6 @@
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-parse</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-resources</artifactId>
         </dependency>
         <dependency>
