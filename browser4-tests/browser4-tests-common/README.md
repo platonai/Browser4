@@ -44,16 +44,25 @@ System properties:
 ## MockSiteBoot (standalone main)
 Command line launcher with a main() entry point.
 
-Run via Maven (Windows cmd):
+Run from Browser4 root (`submodules/Browser4`).
+
+Run via Maven (single-line):
 ```
-mvnw.cmd -pl browser4-tests-common -am spring-boot:run -Dspring-boot.run.mainClass=ai.platon.pulsar.test.server.MockSiteBoot
+mvnw.cmd -pl browser4-tests/browser4-tests-common -am spring-boot:run -Dspring-boot.run.mainClass=ai.platon.pulsar.test.server.MockSiteBoot
 ```
-Custom port & wait seconds:
+Custom port & wait seconds (`cmd.exe`):
 ```
-mvnw.cmd -pl browser4-tests-common -am spring-boot:run ^
+mvnw.cmd -pl browser4-tests/browser4-tests-common -am spring-boot:run ^
   -Dspring-boot.run.mainClass=ai.platon.pulsar.test.server.MockSiteBoot ^
   -Dmock.site.port=9090 ^
   -Dmock.site.waitSec=10
+```
+Custom port & wait seconds (PowerShell):
+```powershell
+.\mvnw.cmd -pl browser4-tests/browser4-tests-common -am spring-boot:run `
+  -D"spring-boot.run.mainClass=ai.platon.pulsar.test.server.MockSiteBoot" `
+  -D"mock.site.port=9090" `
+  -D"mock.site.waitSec=10"
 ```
 
 Environment variable alternatives:

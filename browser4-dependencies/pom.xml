@@ -500,7 +500,7 @@
         <kotlin-statistics.version>1.2.1</kotlin-statistics.version>
         <mcp-sdk.version>0.8.1</mcp-sdk.version>
 
-        <spring-boot.version>4.0.1</spring-boot.version>
+        <spring-boot.version>4.0.5</spring-boot.version>
 
         <!-- Pulsar dependency -->
         <pulsar-h2.version>1.4.197</pulsar-h2.version>
