@@ -71,7 +71,7 @@ class PrivacyAgentGeneratorFactory(val conf: ImmutableConfig) {
      * The default class is `DefaultPageEvent`.
      *
      * Set the class:
-     * `System.setProperty(CapabilityTypes.PRIVACY_AGENT_GENERATOR_CLASS, "ai.platon.pulsar.skeleton.workflow.privacy.DefaultPrivacyAgentGenerator")`
+     * `System.setProperty(CapabilityTypes.PRIVACY_AGENT_GENERATOR_CLASS, "ai.platon.pulsar.skeleton.workflow.fetch.privacy.DefaultPrivacyAgentGenerator")`
      * */
     private fun forName(conf: ImmutableConfig, className: String): PrivacyAgentGenerator {
         val defaultClazz = DefaultPrivacyAgentGenerator::class.java
