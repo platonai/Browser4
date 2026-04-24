@@ -8,7 +8,7 @@ import ai.platon.pulsar.common.proxy.impl.ProxyHubLoader
 import ai.platon.pulsar.skeleton.PulsarSettings
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver
 import ai.platon.pulsar.common.printlnPro
-import ai.platon.pulsar.skeleton.workflow.privacy.BrowserId
+import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.apache.commons.io.FileUtils

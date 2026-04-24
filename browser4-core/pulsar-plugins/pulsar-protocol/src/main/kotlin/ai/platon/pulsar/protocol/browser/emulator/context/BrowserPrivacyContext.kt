@@ -29,7 +29,7 @@ import ai.platon.pulsar.skeleton.workflow.FetchResult
 import ai.platon.pulsar.skeleton.workflow.FetchTask
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 import ai.platon.pulsar.skeleton.workflow.privacy.AbstractPrivacyContext
-import ai.platon.pulsar.skeleton.workflow.privacy.BrowserId
+import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 import ai.platon.pulsar.skeleton.workflow.privacy.BrowserProfile
 import com.google.common.annotations.Beta
 

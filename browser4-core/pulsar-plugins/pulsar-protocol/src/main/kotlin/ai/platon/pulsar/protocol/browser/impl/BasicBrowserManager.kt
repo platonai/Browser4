@@ -5,7 +5,7 @@ import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.warnForClose
 import ai.platon.pulsar.common.warnInterruptible
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.*
-import ai.platon.pulsar.skeleton.workflow.privacy.BrowserId
+import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedDeque
 import java.util.concurrent.atomic.AtomicBoolean

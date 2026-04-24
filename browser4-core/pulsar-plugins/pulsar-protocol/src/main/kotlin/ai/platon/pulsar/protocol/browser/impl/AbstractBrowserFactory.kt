@@ -8,7 +8,7 @@ import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.Browser
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserFactory
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserLaunchException
-import ai.platon.pulsar.skeleton.workflow.privacy.BrowserId
+import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 
 abstract class AbstractBrowserFactory(
     override val conf: ImmutableConfig,

@@ -13,7 +13,7 @@ import ai.platon.pulsar.protocol.browser.impl.DefaultBrowserFactory
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.Browser
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserFactory
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
-import ai.platon.pulsar.skeleton.workflow.privacy.BrowserId
+import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 import ai.platon.pulsar.util.server.EnableMockServerApplication
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.BeforeEach

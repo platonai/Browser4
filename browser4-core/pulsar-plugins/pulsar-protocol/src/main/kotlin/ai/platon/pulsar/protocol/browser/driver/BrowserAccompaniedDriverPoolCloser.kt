@@ -5,7 +5,7 @@ import ai.platon.pulsar.common.warnInterruptible
 import ai.platon.pulsar.skeleton.common.AppSystemInfo
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractBrowser
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.Browser
-import ai.platon.pulsar.skeleton.workflow.privacy.BrowserId
+import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 import kotlinx.coroutines.runBlocking
 
 /**

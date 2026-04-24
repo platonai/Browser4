@@ -5,7 +5,7 @@ import ai.platon.pulsar.protocol.browser.DefaultWebDriverPoolManager
 import ai.platon.pulsar.skeleton.common.AppSystemInfo
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
-import ai.platon.pulsar.skeleton.workflow.privacy.BrowserId
+import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 import org.slf4j.LoggerFactory
 import java.util.*
 import java.util.concurrent.ArrayBlockingQueue

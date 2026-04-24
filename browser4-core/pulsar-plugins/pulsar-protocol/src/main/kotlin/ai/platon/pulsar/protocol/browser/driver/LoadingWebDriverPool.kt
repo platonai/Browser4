@@ -17,7 +17,7 @@ import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import ai.platon.pulsar.skeleton.event.BrowseEventHandlers
 import ai.platon.pulsar.skeleton.event.PulsarEventBus
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.*
-import ai.platon.pulsar.skeleton.workflow.privacy.BrowserId
+import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 import org.slf4j.LoggerFactory
 import java.time.Duration
 import java.time.Instant

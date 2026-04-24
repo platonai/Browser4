@@ -9,7 +9,7 @@ import ai.platon.pulsar.protocol.browser.driver.cdt.PulsarBrowser
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.Browser
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserLaunchException
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserLauncher
-import ai.platon.pulsar.skeleton.workflow.privacy.BrowserId
+import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 
 /**
  * A factory implementation to create browser instances.

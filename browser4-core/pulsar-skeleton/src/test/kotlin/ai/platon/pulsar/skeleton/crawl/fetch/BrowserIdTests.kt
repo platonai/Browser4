@@ -2,8 +2,8 @@ package ai.platon.pulsar.skeleton.crawl.fetch
 
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.browser.BrowserType
-import ai.platon.pulsar.skeleton.workflow.privacy.BrowserId
-import ai.platon.pulsar.skeleton.workflow.privacy.BrowserId.Companion.SYSTEM_DEFAULT
+import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
+import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId.Companion.SYSTEM_DEFAULT
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.skeleton.workflow.privacy.PrivacyContext
 import java.nio.file.Files
