@@ -337,29 +337,10 @@ fn prepare_unix_maven_wrapper_launcher(
 }
 
 fn find_browser4_root() -> Option<PathBuf> {
-    for candidate in browser4_root_candidates() {
-        if let Some(root) = find_browser4_root_from(&candidate, true) {
-            return Some(root);
-        }
-    }
-    None
-}
-
-fn browser4_root_candidates() -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-
-    if let Ok(current_dir) = env::current_dir() {
-        candidates.push(current_dir);
-    }
-
-    if let Ok(current_exe) = env::current_exe() {
-        if let Some(parent) = current_exe.parent() {
-            candidates.push(parent.to_path_buf());
-        }
-    }
-
-    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")));
-    candidates
+    // Prefer Maven only when the caller is already inside a Browser4 checkout.
+    // Global installs should not infer repo roots from executable or build paths.
+    let current_dir = env::current_dir().ok()?;
+    find_browser4_root_from(&current_dir, false)
 }
 
 fn find_browser4_root_from(start: &Path, deep_search: bool) -> Option<PathBuf> {

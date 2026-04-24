@@ -20,9 +20,10 @@
 //! 1. `BROWSER4_E2E_SERVICE_URL` environment variable – connect to an already-running
 //!    service (Docker-friendly; no JAR is needed).
 //! 2. `BROWSER4_E2E_SERVER_URL` environment variable – alias for the above.
-//! 3. Otherwise, each local run lets `browser4-cli` auto-start the backend from
-//!    the Browser4 source checkout via Maven `spring-boot:run`, so E2E always
-//!    exercises the latest server code instead of a stale packaged JAR.
+//! 3. Otherwise, each local run lets `browser4-cli` auto-start the backend.
+//!    Startup uses Maven `spring-boot:run` only when the CLI current directory
+//!    is inside a Browser4 source checkout; all other directories use the jar
+//!    fallback path.
 //!
 //! When running against an external Docker service, also set:
 //! - `BROWSER4_E2E_FIXTURE_HOST` – hostname/IP the Browser4 container uses to
@@ -1077,6 +1078,7 @@ impl E2ETestResources {
         let startup_result = run_cli_process_with_live_output(&self.ctx, &["list"]);
         let startup_log_hint = format_browser4_startup_log_hint(&startup_result.stderr);
         let started_via_maven = startup_result.stderr.contains("Starting server via Maven spring-boot:run");
+        let expect_maven_startup = is_browser4_repo_or_child(&self.ctx.workspace_dir);
         assert_eq!(
             startup_result.exit_code,
             0,
@@ -1087,13 +1089,23 @@ impl E2ETestResources {
         );
         if !self.local_browser4_started {
             if !was_healthy_before {
-                assert!(
-                    started_via_maven,
-                    "Expected local e2e startup to use Maven spring-boot:run so tests run against latest backend code.{}\nstdout:\n{}\nstderr:\n{}",
-                    startup_log_hint,
-                    startup_result.stdout,
-                    startup_result.stderr,
-                );
+                if expect_maven_startup {
+                    assert!(
+                        started_via_maven,
+                        "Expected local e2e startup to use Maven spring-boot:run when current directory is inside a Browser4 checkout.{}\nstdout:\n{}\nstderr:\n{}",
+                        startup_log_hint,
+                        startup_result.stdout,
+                        startup_result.stderr,
+                    );
+                } else {
+                    assert!(
+                        !started_via_maven,
+                        "Expected local e2e startup outside a Browser4 checkout to use jar fallback instead of Maven.{}\nstdout:\n{}\nstderr:\n{}",
+                        startup_log_hint,
+                        startup_result.stdout,
+                        startup_result.stderr,
+                    );
+                }
                 assert!(
                     startup_result.stderr.contains("Browser4 startup log:"),
                     "Expected startup diagnostics to include the Browser4 startup log path.{}\nstdout:\n{}\nstderr:\n{}",
@@ -1186,6 +1198,28 @@ fn format_browser4_startup_log_hint(stderr: &str) -> String {
     extract_browser4_startup_log_path(stderr)
         .map(|path| format!("\nStartup log: {path}"))
         .unwrap_or_default()
+}
+
+fn is_browser4_repo_or_child(path: &Path) -> bool {
+    let mut current = if path.is_dir() { Some(path) } else { path.parent() };
+    while let Some(dir) = current {
+        if is_browser4_repo_root(dir) {
+            return true;
+        }
+        current = dir.parent();
+    }
+    false
+}
+
+fn is_browser4_repo_root(path: &Path) -> bool {
+    path.join("VERSION").is_file()
+        && path.join("pom.xml").is_file()
+        && path.join("browser4").join("browser4-agents").join("pom.xml").is_file()
+        && path
+            .join("sdks")
+            .join("browser4-cli")
+            .join("Cargo.toml")
+            .is_file()
 }
 
 fn run_cli_process_with_live_output(ctx: &E2ECtx, args: &[&str]) -> CliRunResult {
