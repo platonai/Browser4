@@ -15,12 +15,12 @@ import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.skeleton.common.AppSystemInfo
 import ai.platon.pulsar.skeleton.common.message.MiscMessageWriter
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
+import ai.platon.pulsar.skeleton.session.AbstractPulsarSession
 import ai.platon.pulsar.skeleton.workflow.common.InternalURLUtil
 import ai.platon.pulsar.skeleton.workflow.component.LoadComponent
 import ai.platon.pulsar.skeleton.workflow.component.ParseComponent
-import ai.platon.pulsar.skeleton.workflow.UrlStat
+import ai.platon.pulsar.skeleton.workflow.fetch.UrlStat
 import ai.platon.pulsar.skeleton.workflow.parse.html.JsoupParser
-import ai.platon.pulsar.skeleton.session.AbstractPulsarSession
 import com.codahale.metrics.Gauge
 import com.google.common.collect.ConcurrentHashMultiset
 import org.slf4j.LoggerFactory
@@ -89,14 +89,17 @@ class CoreMetrics(
      * The start time of the program process
      */
     val startTime = Instant.now()
+
     /**
      * The elapsed time since the program process starts
      */
     val elapsedTime get() = Duration.between(startTime, Instant.now())
+
     /**
      * The elapsed time in seconds since the program process starts
      */
     val elapsedSeconds get() = elapsedTime.seconds.coerceAtLeast(1)
+
     /**
      * Tracking statistics for each host
      */
