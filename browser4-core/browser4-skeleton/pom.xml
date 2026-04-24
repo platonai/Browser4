@@ -18,7 +18,7 @@
         <relativePath>../../pom.xml</relativePath>
     </parent>
 
-    <artifactId>pulsar-skeleton</artifactId>
+    <artifactId>browser4-skeleton</artifactId>
     <name>Browser4 Skeleton</name>
 
     <dependencies>

@@ -31,7 +31,7 @@
         <module>browser4-resources</module>
         <module>pulsar-plugins</module>
         <module>pulsar-third</module>
-        <module>pulsar-skeleton</module>
+        <module>browser4-skeleton</module>
         <module>pulsar-browser</module>
         <module>pulsar-spring-support</module>
     </modules>

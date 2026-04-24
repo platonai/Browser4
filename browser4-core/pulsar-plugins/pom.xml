@@ -39,7 +39,7 @@
             </dependency>
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-skeleton</artifactId>
+                <artifactId>browser4-skeleton</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
