@@ -2,7 +2,7 @@
 # http ai.platon.pulsar.protocol.http.Http
 # https ai.platon.pulsar.protocol.http.Http
 # file ai.platon.pulsar.protocol.file.File
-# crowd ai.platon.pulsar.protocol.crowd.ForwardingProtocol custom=true
+# crowd ai.platon.browser4.protocol.crowd.ForwardingProtocol custom=true
 
 # Custom protocols
-browser ai.platon.pulsar.protocol.browser.BrowserEmulatorProtocol custom=true
+browser ai.platon.browser4.protocol.browser.BrowserEmulatorProtocol custom=true

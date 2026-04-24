@@ -1,3 +1,12 @@
+package ai.platon.browser4.protocol.browser
+
+import ai.platon.browser4.protocol.crowd.ForwardingProtocol
+import ai.platon.pulsar.persist.WebPage
+import ai.platon.pulsar.protocol.browser.emulator.IncognitoBrowserFetcher
+import ai.platon.pulsar.skeleton.context.PulsarContexts
+import ai.platon.pulsar.skeleton.workflow.protocol.ForwardingResponse
+import ai.platon.pulsar.skeleton.workflow.protocol.Response
+
 /**
  * Copyright (c) Vincent Zhang, ivincent.zhang@gmail.com, Platon.AI.
  *
@@ -13,15 +22,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package ai.platon.pulsar.protocol.browser
-
-import ai.platon.pulsar.persist.WebPage
-import ai.platon.pulsar.protocol.browser.emulator.IncognitoBrowserFetcher
-import ai.platon.pulsar.protocol.crowd.ForwardingProtocol
-import ai.platon.pulsar.skeleton.context.PulsarContexts
-import ai.platon.pulsar.skeleton.workflow.protocol.ForwardingResponse
-import ai.platon.pulsar.skeleton.workflow.protocol.Response
-
 class BrowserEmulatorProtocol : ForwardingProtocol() {
     private val defaults by lazy { DefaultBrowserComponents(conf) }
     private val context get() = PulsarContexts.create()

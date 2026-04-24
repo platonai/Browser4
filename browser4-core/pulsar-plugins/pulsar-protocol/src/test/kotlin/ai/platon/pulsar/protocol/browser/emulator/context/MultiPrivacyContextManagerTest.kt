@@ -1,7 +1,7 @@
 package ai.platon.pulsar.protocol.browser.emulator.context
 
 import ai.platon.pulsar.common.config.ImmutableConfig
-import ai.platon.pulsar.protocol.browser.DefaultWebDriverPoolManager
+import ai.platon.browser4.protocol.browser.DefaultWebDriverPoolManager
 import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserProfile
 import org.apache.commons.io.FileUtils
 import org.junit.jupiter.api.AfterEach
