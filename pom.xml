@@ -414,7 +414,7 @@
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-protocol</artifactId>
+                <artifactId>browser4-protocol</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
