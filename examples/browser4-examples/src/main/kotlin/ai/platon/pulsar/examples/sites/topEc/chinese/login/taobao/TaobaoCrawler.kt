@@ -1,7 +1,7 @@
 package ai.platon.pulsar.examples.sites.topEc.chinese.login.taobao
 
 import ai.platon.pulsar.skeleton.context.PulsarContexts
-import ai.platon.pulsar.skeleton.crawl.event.impl.LoginHandler
+import ai.platon.pulsar.skeleton.workflow.event.impl.LoginHandler
 import ai.platon.pulsar.skeleton.session.PulsarSession
 
 class TaobaoLoginHandler(

@@ -5,7 +5,7 @@ import ai.platon.pulsar.common.LinkExtractors
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.skeleton.PulsarSettings
-import ai.platon.pulsar.skeleton.crawl.common.url.ParsableHyperlink
+import ai.platon.pulsar.skeleton.workflow.common.url.ParsableHyperlink
 import kotlinx.coroutines.runBlocking
 
 /**

@@ -1,1 +1,1 @@
-package ai.platon.pulsar.skeleton.crawl.component
+package ai.platon.pulsar.skeleton.workflow.component

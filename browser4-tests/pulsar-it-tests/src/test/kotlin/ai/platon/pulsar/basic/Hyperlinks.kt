@@ -7,7 +7,7 @@ import ai.platon.pulsar.persist.AbstractWebPage
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.skeleton.common.persist.ext.loadEventHandlers
 import ai.platon.pulsar.skeleton.event.PageEventHandlers
-import ai.platon.pulsar.skeleton.crawl.common.url.ListenableHyperlink
+import ai.platon.pulsar.skeleton.workflow.common.url.ListenableHyperlink
 import ai.platon.pulsar.skeleton.event.AbstractCrawlEventHandlers
 import ai.platon.pulsar.skeleton.event.AbstractLoadEventHandlers
 import ai.platon.pulsar.common.printlnPro

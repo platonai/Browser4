@@ -6,7 +6,7 @@ import ai.platon.pulsar.common.NetUtil
 import ai.platon.pulsar.common.config.CapabilityTypes.PROXY_ROTATION_URL
 import ai.platon.pulsar.skeleton.PulsarSettings
 import ai.platon.pulsar.skeleton.context.PulsarContexts
-import ai.platon.pulsar.skeleton.crawl.common.url.ListenableHyperlink
+import ai.platon.pulsar.skeleton.workflow.common.url.ListenableHyperlink
 
 class HighPerformanceCrawler {
     private val session = PulsarContexts.createSession()

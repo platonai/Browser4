@@ -1,2 +1,2 @@
-package ai.platon.pulsar.skeleton.crawl.common.collect
+package ai.platon.pulsar.skeleton.workflow.common.collect
 

@@ -3,7 +3,7 @@ package ai.platon.pulsar.examples.sites.topEc.english.amazon.rpa
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.sql.ResultSetFormatter
 import ai.platon.pulsar.common.sql.SQLTemplate
-import ai.platon.pulsar.skeleton.crawl.common.url.ListenableHyperlink
+import ai.platon.pulsar.skeleton.workflow.common.url.ListenableHyperlink
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.persist.AbstractWebPage

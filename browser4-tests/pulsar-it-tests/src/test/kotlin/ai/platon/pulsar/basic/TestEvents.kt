@@ -1,8 +1,8 @@
 package ai.platon.pulsar.basic
 
 import ai.platon.pulsar.skeleton.common.persist.ext.options
-import ai.platon.pulsar.skeleton.crawl.common.url.StatefulListenableHyperlink
-import ai.platon.pulsar.skeleton.crawl.component.FetchComponent
+import ai.platon.pulsar.skeleton.workflow.common.url.StatefulListenableHyperlink
+import ai.platon.pulsar.skeleton.workflow.component.FetchComponent
 import org.junit.jupiter.api.DisplayName
 import org.springframework.beans.factory.annotation.Autowired
 import kotlin.test.*

@@ -3,7 +3,7 @@ package ai.platon.pulsar.heavy
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.skeleton.PulsarSettings
-import ai.platon.pulsar.skeleton.crawl.common.url.ListenableHyperlink
+import ai.platon.pulsar.skeleton.workflow.common.url.ListenableHyperlink
 import org.junit.jupiter.api.Assumptions
 import org.junit.jupiter.api.Tag
 import kotlin.test.Test

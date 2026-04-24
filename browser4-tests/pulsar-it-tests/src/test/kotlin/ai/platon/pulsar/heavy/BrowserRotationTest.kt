@@ -8,7 +8,7 @@ import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.persist.ProtocolStatus
 import ai.platon.pulsar.skeleton.PulsarSettings
 import ai.platon.pulsar.skeleton.TaskLoop
-import ai.platon.pulsar.skeleton.crawl.common.url.ListenableHyperlink
+import ai.platon.pulsar.skeleton.workflow.common.url.ListenableHyperlink
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver
 import kotlinx.coroutines.delay
 import org.junit.jupiter.api.AfterEach

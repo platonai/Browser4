@@ -5,8 +5,8 @@ import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.skeleton.PulsarSettings
 import ai.platon.pulsar.skeleton.context.PulsarContexts
-import ai.platon.pulsar.skeleton.crawl.common.url.ListenableHyperlink
-import ai.platon.pulsar.skeleton.crawl.event.impl.DefaultPageEventHandlers
+import ai.platon.pulsar.skeleton.event.impl.DefaultPageEventHandlers
+import ai.platon.pulsar.skeleton.workflow.common.url.ListenableHyperlink
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 import java.util.concurrent.atomic.AtomicInteger
 
