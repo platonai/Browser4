@@ -11,11 +11,11 @@ import ai.platon.pulsar.common.readable
 import ai.platon.pulsar.persist.RetryScope
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
-import ai.platon.pulsar.skeleton.workflow.FetchResult
-import ai.platon.pulsar.skeleton.workflow.FetchTask
-import ai.platon.pulsar.skeleton.workflow.WebDriverFetcher
-import ai.platon.pulsar.skeleton.workflow.driver.BrowserErrorPageException
-import ai.platon.pulsar.skeleton.workflow.driver.WebDriver
+import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
+import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
+import ai.platon.pulsar.skeleton.workflow.fetch.WebDriverFetcher
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserErrorPageException
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 import com.google.common.annotations.Beta
 import org.slf4j.LoggerFactory
 import java.time.Duration

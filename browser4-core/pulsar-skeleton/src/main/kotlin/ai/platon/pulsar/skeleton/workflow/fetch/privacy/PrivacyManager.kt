@@ -3,10 +3,10 @@ package ai.platon.pulsar.skeleton.workflow.fetch.privacy
 import ai.platon.pulsar.common.browser.fingerprint.Fingerprint
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.persist.WebPage
-import ai.platon.pulsar.skeleton.workflow.FetchResult
-import ai.platon.pulsar.skeleton.workflow.FetchTask
-import ai.platon.pulsar.skeleton.workflow.WebDriverFetcher
-import ai.platon.pulsar.skeleton.workflow.driver.WebDriver
+import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
+import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
+import ai.platon.pulsar.skeleton.workflow.fetch.WebDriverFetcher
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 
 /**
  * Manages the lifecycle of privacy contexts, including permanent and temporary contexts.

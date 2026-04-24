@@ -4,10 +4,10 @@ import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.proxy.ProxyPoolManager
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager
 import ai.platon.pulsar.protocol.browser.impl.BasicBrowserManager
-import ai.platon.pulsar.skeleton.workflow.driver.BrowserFactory
-import ai.platon.pulsar.skeleton.workflow.driver.BrowserManager
-import ai.platon.pulsar.skeleton.workflow.privacy.AbstractPrivacyManager
-import ai.platon.pulsar.skeleton.workflow.privacy.PrivacyManager
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserFactory
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserManager
+import ai.platon.pulsar.skeleton.workflow.fetch.privacy.AbstractPrivacyManager
+import ai.platon.pulsar.skeleton.workflow.fetch.privacy.PrivacyManager
 
 interface BrowserPrivacyManager: PrivacyManager {
     val browserManager: BrowserManager
