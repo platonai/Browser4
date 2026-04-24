@@ -25,6 +25,17 @@
         <!-- Internal Dependencies -->
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
+            <artifactId>pulsar-browser</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>pulsar-llm</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-common</artifactId>
         </dependency>
         <dependency>
@@ -37,19 +48,11 @@
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-browser</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-ql-common</artifactId>
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-h2</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-llm</artifactId>
         </dependency>
 
         <dependency>

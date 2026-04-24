@@ -70,6 +70,12 @@
                     <mainClass>ai.platon.pulsar.examples.agent.Browser4AgentKt</mainClass>
                 </configuration>
             </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+            </plugin>
+
         </plugins>
     </build>
 
@@ -94,6 +100,11 @@
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-skeleton</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>pulsar-protocol</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

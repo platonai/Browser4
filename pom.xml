@@ -428,7 +428,11 @@
                 <artifactId>pulsar-browser</artifactId>
                 <version>${project.version}</version>
             </dependency>
-
+            <dependency>
+                <groupId>ai.platon.pulsar</groupId>
+                <artifactId>pulsar-llm</artifactId>
+                <version>${project.version}</version>
+            </dependency>
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-beans</artifactId>
