@@ -233,7 +233,9 @@ fn merge_shutdown_with_fallback_server_kill(
     shutdown: &mut ShutdownResult,
     fallback: &ServerKillResult,
 ) {
-    shutdown.stopped_pids.extend(fallback.killed_pids.iter().copied());
+    shutdown
+        .stopped_pids
+        .extend(fallback.killed_pids.iter().copied());
     shutdown.forced_pids.extend(
         fallback
             .killed_pids
@@ -242,7 +244,9 @@ fn merge_shutdown_with_fallback_server_kill(
             .copied(),
     );
 
-    shutdown.remaining_pids.extend(fallback.remaining_pids.iter().copied());
+    shutdown
+        .remaining_pids
+        .extend(fallback.remaining_pids.iter().copied());
     shutdown
         .remaining_pids
         .retain(|pid| !fallback.killed_pids.contains(pid));
@@ -273,17 +277,15 @@ where
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(notify_close_all));
 
     // Pre-sweep catches already-orphaned browser processes before server shutdown.
-    let pre_browser_kill =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(&kill_browsers))
-            .unwrap_or_else(|_| BrowserKillResult::default());
+    let pre_browser_kill = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&kill_browsers))
+        .unwrap_or_else(|_| BrowserKillResult::default());
 
     let shutdown = std::panic::catch_unwind(std::panic::AssertUnwindSafe(stop_server))
         .unwrap_or_else(|_| ShutdownResult::default());
 
     // Post-sweep catches browsers that spawn late during shutdown.
-    let post_browser_kill =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(kill_browsers))
-            .unwrap_or_else(|_| BrowserKillResult::default());
+    let post_browser_kill = std::panic::catch_unwind(std::panic::AssertUnwindSafe(kill_browsers))
+        .unwrap_or_else(|_| BrowserKillResult::default());
     let browser_kill = merge_browser_kill_results(pre_browser_kill, post_browser_kill);
 
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(sleep_after));
@@ -563,8 +565,7 @@ fn normalize_process_text(value: &str) -> String {
 
 fn command_line_matches_browser4_server(command_line: &str) -> bool {
     let normalized = normalize_process_text(command_line);
-    normalized.contains("browser4.jar")
-        || normalized.contains("browser4launcherkt")
+    normalized.contains("browser4.jar") || normalized.contains("browser4launcherkt")
 }
 
 fn find_browser4_server_processes() -> Vec<u32> {
@@ -637,7 +638,10 @@ fn is_browser4_server_process(pid: u32) -> bool {
     process_name(pid)
         .map(|name| {
             let normalized = normalize_process_text(&name);
-            normalized == "java" || normalized == "java.exe" || normalized == "javaw" || normalized == "javaw.exe"
+            normalized == "java"
+                || normalized == "java.exe"
+                || normalized == "javaw"
+                || normalized == "javaw.exe"
         })
         .unwrap_or(false)
         && process_command_line(pid)
@@ -1029,7 +1033,8 @@ mod tests {
 
     #[test]
     fn test_command_line_matches_browser4_server_rejects_non_browser4_java() {
-        let non_browser4 = r#""C:/Java/bin/java.exe" -jar D:/apps/another-service.jar --server.port=8080"#;
+        let non_browser4 =
+            r#""C:/Java/bin/java.exe" -jar D:/apps/another-service.jar --server.port=8080"#;
 
         assert!(!command_line_matches_browser4_server(non_browser4));
     }
@@ -1122,7 +1127,10 @@ mod tests {
                 }
             },
             move || {
-                stop_events.lock().unwrap().push("shutdown-panic".to_string());
+                stop_events
+                    .lock()
+                    .unwrap()
+                    .push("shutdown-panic".to_string());
                 panic!("shutdown failed");
             },
             move || sleep_events.lock().unwrap().push("sleep".to_string()),

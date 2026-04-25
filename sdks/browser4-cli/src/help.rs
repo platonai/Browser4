@@ -101,9 +101,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  - Use --json to read command arrays from stdin JSON payload.".to_string());
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push(
-            "  browser4-cli batch \"open https://playwright.dev\" \"snapshot\"".to_string(),
-        );
+        lines.push("  browser4-cli batch \"open https://playwright.dev\" \"snapshot\"".to_string());
         lines.push(
             "  browser4-cli batch --bail \"open https://playwright.dev\" \"click e1\" \"screenshot\""
                 .to_string(),

@@ -39,8 +39,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::thread::JoinHandle;
 use std::thread::sleep;
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use browser4_cli::commands::all_commands;
@@ -1077,15 +1077,14 @@ impl E2ETestResources {
         let started_at = Instant::now();
         let startup_result = run_cli_process_with_live_output(&self.ctx, &["list"]);
         let startup_log_hint = format_browser4_startup_log_hint(&startup_result.stderr);
-        let started_via_maven = startup_result.stderr.contains("Starting server via Maven spring-boot:run");
+        let started_via_maven = startup_result
+            .stderr
+            .contains("Starting server via Maven spring-boot:run");
         let expect_maven_startup = is_browser4_repo_or_child(&self.ctx.workspace_dir);
         assert_eq!(
-            startup_result.exit_code,
-            0,
+            startup_result.exit_code, 0,
             "Expected CLI-managed Browser4 startup to succeed.{}\nstdout:\n{}\nstderr:\n{}",
-            startup_log_hint,
-            startup_result.stdout,
-            startup_result.stderr,
+            startup_log_hint, startup_result.stdout, startup_result.stderr,
         );
         if !self.local_browser4_started {
             if !was_healthy_before {
@@ -1201,7 +1200,11 @@ fn format_browser4_startup_log_hint(stderr: &str) -> String {
 }
 
 fn is_browser4_repo_or_child(path: &Path) -> bool {
-    let mut current = if path.is_dir() { Some(path) } else { path.parent() };
+    let mut current = if path.is_dir() {
+        Some(path)
+    } else {
+        path.parent()
+    };
     while let Some(dir) = current {
         if is_browser4_repo_root(dir) {
             return true;
@@ -1214,7 +1217,11 @@ fn is_browser4_repo_or_child(path: &Path) -> bool {
 fn is_browser4_repo_root(path: &Path) -> bool {
     path.join("VERSION").is_file()
         && path.join("pom.xml").is_file()
-        && path.join("browser4").join("browser4-agents").join("pom.xml").is_file()
+        && path
+            .join("browser4")
+            .join("browser4-agents")
+            .join("pom.xml")
+            .is_file()
         && path
             .join("sdks")
             .join("browser4-cli")
@@ -1282,14 +1289,24 @@ fn run_cli_process_internal(
 
 const OUTPUT_COLLECTOR_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
-fn wait_for_cli_output(mut child: Child, full_args: &[&str], stream_output: bool) -> std::process::Output {
+fn wait_for_cli_output(
+    mut child: Child,
+    full_args: &[&str],
+    stream_output: bool,
+) -> std::process::Output {
     let stdout_handle = spawn_output_collector(
-        child.stdout.take().expect("stdout pipe should be available"),
+        child
+            .stdout
+            .take()
+            .expect("stdout pipe should be available"),
         "stdout",
         stream_output,
     );
     let stderr_handle = spawn_output_collector(
-        child.stderr.take().expect("stderr pipe should be available"),
+        child
+            .stderr
+            .take()
+            .expect("stderr pipe should be available"),
         "stderr",
         stream_output,
     );
@@ -1308,7 +1325,9 @@ fn wait_for_cli_output(mut child: Child, full_args: &[&str], stream_output: bool
         let elapsed = started_at.elapsed();
         if elapsed >= timeout {
             let _ = child.kill();
-            let status = child.wait().expect("failed to wait for timed out browser4-cli process");
+            let status = child
+                .wait()
+                .expect("failed to wait for timed out browser4-cli process");
             let mut stdout = finish_output_collector(stdout_handle, "stdout", full_args);
             let mut stderr = finish_output_collector(stderr_handle, "stderr", full_args);
             if !stderr.ends_with('\n') && !stderr.is_empty() {
@@ -1338,7 +1357,8 @@ fn wait_for_cli_output(mut child: Child, full_args: &[&str], stream_output: bool
         thread::sleep(Duration::from_millis(200));
     };
 
-    println!("browser4-cli command completed in {}s with exit code {}: {}",
+    println!(
+        "browser4-cli command completed in {}s with exit code {}: {}",
         started_at.elapsed().as_secs(),
         status.code().unwrap_or(-1),
         full_args.join(" ")
@@ -1359,7 +1379,11 @@ struct OutputCollector {
     buffer: Arc<Mutex<String>>,
 }
 
-fn spawn_output_collector<R>(reader: R, stream_name: &'static str, stream_output: bool) -> OutputCollector
+fn spawn_output_collector<R>(
+    reader: R,
+    stream_name: &'static str,
+    stream_output: bool,
+) -> OutputCollector
 where
     R: Read + Send + 'static,
 {
@@ -1391,13 +1415,16 @@ where
                 .expect("output collector buffer lock poisoned")
                 .push_str(&line);
         }
-
     });
 
     OutputCollector { handle, buffer }
 }
 
-fn finish_output_collector(collector: OutputCollector, stream_name: &str, full_args: &[&str]) -> String {
+fn finish_output_collector(
+    collector: OutputCollector,
+    stream_name: &str,
+    full_args: &[&str],
+) -> String {
     let started_at = Instant::now();
     while !collector.handle.is_finished() && started_at.elapsed() < OUTPUT_COLLECTOR_DRAIN_TIMEOUT {
         thread::sleep(Duration::from_millis(25));
@@ -1452,7 +1479,10 @@ fn truncate_timing_label(text: &str, max_chars: usize) -> String {
         return text.to_string();
     }
 
-    let mut truncated = text.chars().take(max_chars.saturating_sub(1)).collect::<String>();
+    let mut truncated = text
+        .chars()
+        .take(max_chars.saturating_sub(1))
+        .collect::<String>();
     truncated.push('…');
     truncated
 }
@@ -1483,10 +1513,7 @@ fn format_cli_step_label(args: &[&str], stdin_payload: bool, expects_failure: bo
 }
 
 fn format_eval_step_label(expression: &str) -> String {
-    format!(
-        "cli eval {}",
-        truncate_timing_label(expression.trim(), 96)
-    )
+    format!("cli eval {}", truncate_timing_label(expression.trim(), 96))
 }
 
 fn run_checked_cli_process(ctx: &E2ECtx, args: &[&str]) -> CliRunResult {
@@ -1536,14 +1563,20 @@ fn run_checked_cli_process_expecting_failure(
 fn run_command<'a>(ctx: &mut E2ECtx, args: &[&'a str]) -> CliRunResult {
     let started_at = Instant::now();
     let result = run_checked_cli_process(ctx, args);
-    ctx.record_step(format_cli_step_label(args, false, false), started_at.elapsed());
+    ctx.record_step(
+        format_cli_step_label(args, false, false),
+        started_at.elapsed(),
+    );
     result
 }
 
 fn run_command_with_stdin(ctx: &mut E2ECtx, args: &[&str], stdin_payload: &str) -> CliRunResult {
     let started_at = Instant::now();
     let result = run_checked_cli_process_with_stdin(ctx, args, stdin_payload);
-    ctx.record_step(format_cli_step_label(args, true, false), started_at.elapsed());
+    ctx.record_step(
+        format_cli_step_label(args, true, false),
+        started_at.elapsed(),
+    );
     result
 }
 
@@ -1552,7 +1585,10 @@ fn run_command_with_stdin(ctx: &mut E2ECtx, args: &[&str], stdin_payload: &str) 
 fn run_command_expecting_failure(ctx: &mut E2ECtx, args: &[&str], pattern: &str) -> CliRunResult {
     let started_at = Instant::now();
     let result = run_checked_cli_process_expecting_failure(ctx, args, pattern);
-    ctx.record_step(format_cli_step_label(args, false, true), started_at.elapsed());
+    ctx.record_step(
+        format_cli_step_label(args, false, true),
+        started_at.elapsed(),
+    );
     result
 }
 
@@ -1675,7 +1711,10 @@ fn eval_text(ctx: &mut E2ECtx, expression: &str) -> String {
 }
 
 fn read_interactive_state(ctx: &mut E2ECtx) -> serde_json::Value {
-    let text = run_checked_cli_process(ctx, &["eval", "document.getElementById('state-log').textContent"]);
+    let text = run_checked_cli_process(
+        ctx,
+        &["eval", "document.getElementById('state-log').textContent"],
+    );
     let text = strip_snapshot_output(&text.stdout);
     serde_json::from_str(text.trim()).unwrap_or(serde_json::Value::Null)
 }
@@ -1737,7 +1776,10 @@ fn wait_for_eval_text(
     while Instant::now() < deadline {
         let result = run_checked_cli_process(ctx, &["eval", expression]);
         last_value = strip_snapshot_output(&result.stdout);
-        println!("eval expression: {} \nlast_value:\n>>>{}<<<", expression, last_value);
+        println!(
+            "eval expression: {} \nlast_value:\n>>>{}<<<",
+            expression, last_value
+        );
         if last_value == expected {
             ctx.record_step(
                 format!(
@@ -1922,7 +1964,9 @@ fn test_open_uses_temporary_profile_mode(ctx: &mut E2ECtx) {
 
     let open_result = run_open_command(ctx);
     assert!(
-        open_result.stdout.contains("Session opened: collective-session-1"),
+        open_result
+            .stdout
+            .contains("Session opened: collective-session-1"),
         "Expected mocked session open output in:\n{}",
         open_result.stdout
     );
@@ -2453,7 +2497,8 @@ fn test_batch_form_submission_from_json_file(ctx: &mut E2ECtx) {
             "comments": "loaded from json file"
         }),
     );
-    let form_input_raw = fs::read_to_string(&form_input_path).expect("read batch form input JSON failed");
+    let form_input_raw =
+        fs::read_to_string(&form_input_path).expect("read batch form input JSON failed");
     let form_input: serde_json::Value =
         serde_json::from_str(&form_input_raw).expect("batch form input JSON is invalid");
 

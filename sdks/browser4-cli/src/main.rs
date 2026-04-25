@@ -41,9 +41,8 @@ use http::{
     submit_batch_commands, submit_plain_command,
 };
 use managed_processes::{
-    read_managed_server_processes, stop_browser4_server_forcibly,
-    ManagedServerProcess,
-    stop_browser4_server_gracefully, ShutdownResult,
+    read_managed_server_processes, stop_browser4_server_forcibly, stop_browser4_server_gracefully,
+    ManagedServerProcess, ShutdownResult,
 };
 use snapshot::{resolve_output_path, save_binary, save_snapshot};
 use state::{
@@ -477,7 +476,10 @@ struct CloseAllSummary {
     errors: Vec<String>,
 }
 
-fn known_server_base_urls(base_url: &str, managed_processes: &[ManagedServerProcess]) -> Vec<String> {
+fn known_server_base_urls(
+    base_url: &str,
+    managed_processes: &[ManagedServerProcess],
+) -> Vec<String> {
     let mut base_urls: Vec<String> = managed_processes
         .iter()
         .map(|proc| proc.base_url.trim_end_matches('/').to_string())
@@ -511,7 +513,10 @@ async fn close_all_sessions_across_servers(client: &Client, base_url: &str) -> C
 
 fn log_close_all_summary(summary: &CloseAllSummary, command_name: &str) {
     if summary.results.is_empty() {
-        println!("No reachable Browser4 servers responded to {}.", command_name);
+        println!(
+            "No reachable Browser4 servers responded to {}.",
+            command_name
+        );
     } else {
         for result in &summary.results {
             println!("{}", result);
@@ -1501,7 +1506,8 @@ fn compile_batch_request(
             continue;
         }
 
-        let (nested_command, effective_nested_global) = normalize_command_invocation(&nested_global);
+        let (nested_command, effective_nested_global) =
+            normalize_command_invocation(&nested_global);
         if nested_command.is_empty() {
             if push_batch_local_failure(
                 &mut entries,
@@ -1731,16 +1737,22 @@ fn compile_batch_request(
                 });
 
                 if matches!(nested_command.as_str(), "keydown" | "keyup") {
-                    if let Some(selector) = active_selector
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|selector| !selector.is_empty() && !selector.starts_with("backend:"))
+                    if let Some(selector) =
+                        active_selector
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|selector| {
+                                !selector.is_empty() && !selector.starts_with("backend:")
+                            })
                     {
                         step["preFocusSelector"] = json!(selector);
                     }
                 }
 
-                if matches!(nested_command.as_str(), "mousedown" | "mouseup" | "mousewheel") {
+                if matches!(
+                    nested_command.as_str(),
+                    "mousedown" | "mouseup" | "mousewheel"
+                ) {
                     if let Some(position) = &last_mouse_position {
                         step["preMousePosition"] = json!({
                             "x": position.x,
@@ -1786,19 +1798,29 @@ fn render_batch_result(
 ) -> Result<(), String> {
     match output {
         PlannedBatchOutput::Text => {
-            if let Some(text) = result.text.as_deref().map(str::trim).filter(|text| !text.is_empty()) {
+            if let Some(text) = result
+                .text
+                .as_deref()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+            {
                 println!("{}", text);
             }
         }
         PlannedBatchOutput::Snapshot { path } => {
-            let snapshot = result
-                .snapshot
-                .as_deref()
-                .ok_or_else(|| "Batch snapshot response was missing snapshot content.".to_string())?;
+            let snapshot = result.snapshot.as_deref().ok_or_else(|| {
+                "Batch snapshot response was missing snapshot content.".to_string()
+            })?;
             save_snapshot(path, snapshot).map_err(|e| e.to_string())?;
             println!("### Page");
-            println!("- Page URL: {}", result.page_url.as_deref().unwrap_or_default());
-            println!("- Page Title: {}", result.page_title.as_deref().unwrap_or_default());
+            println!(
+                "- Page URL: {}",
+                result.page_url.as_deref().unwrap_or_default()
+            );
+            println!(
+                "- Page Title: {}",
+                result.page_title.as_deref().unwrap_or_default()
+            );
             println!("### Snapshot");
             println!("[Snapshot]({})", path.display());
         }
@@ -1862,20 +1884,14 @@ async fn handle_batch(global: &args::GlobalFlags) -> Result<(), String> {
 
     ensure_server_running(&base_url).await?;
     let client = make_client();
-    let compiled = compile_batch_request(
-        &commands,
-        bail,
-        &base_url,
-        global.session_name.as_deref(),
-    )?;
+    let compiled =
+        compile_batch_request(&commands, bail, &base_url, global.session_name.as_deref())?;
 
     let backend_response = if compiled.steps.is_empty() {
         None
     } else {
         let initial_state = read_state(None, global.session_name.as_deref());
-        let initial_session_id = initial_state
-            .session_id
-            .filter(|id| !id.trim().is_empty());
+        let initial_session_id = initial_state.session_id.filter(|id| !id.trim().is_empty());
         let payload = json!({
             "bail": bail,
             "sessionId": initial_session_id,
@@ -1896,8 +1912,9 @@ async fn handle_batch(global: &args::GlobalFlags) -> Result<(), String> {
             raw_trimmed.to_string()
         };
         Some(
-            serde_json::from_str::<BatchExecutionResponse>(&raw)
-                .map_err(|e| format!("Failed to parse batch response JSON: {e}. Response preview: {preview}"))?,
+            serde_json::from_str::<BatchExecutionResponse>(&raw).map_err(|e| {
+                format!("Failed to parse batch response JSON: {e}. Response preview: {preview}")
+            })?,
         )
     };
 
@@ -1923,7 +1940,12 @@ async fn handle_batch(global: &args::GlobalFlags) -> Result<(), String> {
 
         match entry {
             PlannedBatchEntry::LocalFailure { display, error } => {
-                let failure = format!("Batch command {} failed ({}): {}", index + 1, display, error);
+                let failure = format!(
+                    "Batch command {} failed ({}): {}",
+                    index + 1,
+                    display,
+                    error
+                );
                 if bail {
                     stop_processing = true;
                 }
@@ -2333,9 +2355,12 @@ mod tests {
 
     #[test]
     fn build_open_session_capabilities_does_not_force_temporary_when_persistent() {
-        let caps = build_open_session_capabilities_with_test_mode(&json!({
-            "persistent": true,
-        }), true);
+        let caps = build_open_session_capabilities_with_test_mode(
+            &json!({
+                "persistent": true,
+            }),
+            true,
+        );
 
         assert_eq!(caps["persistent"], json!(true));
         assert!(caps.get("profileMode").is_none());
@@ -2343,9 +2368,12 @@ mod tests {
 
     #[test]
     fn build_open_session_capabilities_does_not_force_temporary_when_profile_path_is_set() {
-        let caps = build_open_session_capabilities_with_test_mode(&json!({
-            "profilePath": "C:/tmp/browser-profile",
-        }), true);
+        let caps = build_open_session_capabilities_with_test_mode(
+            &json!({
+                "profilePath": "C:/tmp/browser-profile",
+            }),
+            true,
+        );
 
         assert_eq!(caps["profilePath"], json!("C:/tmp/browser-profile"));
         assert!(caps.get("profileMode").is_none());
@@ -2353,9 +2381,12 @@ mod tests {
 
     #[test]
     fn build_open_session_capabilities_keeps_explicit_profile_mode() {
-        let caps = build_open_session_capabilities_with_test_mode(&json!({
-            "profileMode": "TEMPORARY",
-        }), false);
+        let caps = build_open_session_capabilities_with_test_mode(
+            &json!({
+                "profileMode": "TEMPORARY",
+            }),
+            false,
+        );
 
         assert_eq!(caps["profileMode"], json!("TEMPORARY"));
     }

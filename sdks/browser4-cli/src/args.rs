@@ -581,10 +581,7 @@ mod tests {
     #[test]
     fn test_parse_command_string_trailing_backslash_rejects() {
         let err = parse_command_string(r"type hello\").unwrap_err();
-        assert!(
-            err.contains("escape"),
-            "Expected 'escape' in error: {err}"
-        );
+        assert!(err.contains("escape"), "Expected 'escape' in error: {err}");
     }
 
     #[test]
@@ -595,10 +592,9 @@ mod tests {
 
     #[test]
     fn test_parse_command_string_url_with_query_params() {
-        let parsed = parse_command_string(
-            r#"open "https://example.com/search?q=hello+world&lang=en""#,
-        )
-        .unwrap();
+        let parsed =
+            parse_command_string(r#"open "https://example.com/search?q=hello+world&lang=en""#)
+                .unwrap();
         assert_eq!(
             parsed,
             vec!["open", "https://example.com/search?q=hello+world&lang=en"]
@@ -700,10 +696,7 @@ mod tests {
             parsed[0],
             vec!["open".to_string(), "https://example.com".to_string()]
         );
-        assert_eq!(
-            parsed[1],
-            vec!["click".to_string(), "#btn".to_string()]
-        );
+        assert_eq!(parsed[1], vec!["click".to_string(), "#btn".to_string()]);
         assert_eq!(parsed[2], vec!["snapshot".to_string()]);
     }
 
@@ -715,10 +708,9 @@ mod tests {
 
     #[test]
     fn test_parse_batch_json_commands_special_chars_in_values() {
-        let parsed = parse_batch_json_commands(
-            r##"[["fill", "#email", "user+test@example.com"]]"##,
-        )
-        .unwrap();
+        let parsed =
+            parse_batch_json_commands(r##"[["fill", "#email", "user+test@example.com"]]"##)
+                .unwrap();
         assert_eq!(
             parsed[0],
             vec![
@@ -731,10 +723,7 @@ mod tests {
 
     #[test]
     fn test_parse_batch_json_commands_unicode_values() {
-        let parsed = parse_batch_json_commands(
-            r##"[["fill", "#name", "日本語テスト"]]"##,
-        )
-        .unwrap();
+        let parsed = parse_batch_json_commands(r##"[["fill", "#name", "日本語テスト"]]"##).unwrap();
         assert_eq!(parsed[0][2], "日本語テスト");
     }
 
