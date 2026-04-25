@@ -5,11 +5,11 @@ This module provides reusable test/demo infrastructure for Browser4 / Pulsar exa
 ## MockSiteApplication
 A lightweight Spring Boot application that serves static deterministic pages under:
 ```
-/generated/tta/instructions/
+/src/main/resources/static/
 ```
 Key demo page:
 ```
-http://localhost:8080/generated/tta/instructions/instructions-demo.html
+http://localhost:18080/generated/interactive-1.html
 ```
 Pages emulate: search box, link list, infinite scroll, comment threads, and predictable anchors for agent action instructions.
 
@@ -42,40 +42,7 @@ System properties:
 - `mock.site.healthPath` : Custom health probe path for launcher (default `/actuator/health`)
 
 ## MockSiteBoot (standalone main)
-Command line launcher with a main() entry point.
-
-Run from Browser4 root (`submodules/Browser4`).
-
-Run via Maven (single-line):
-```
-mvnw.cmd -pl browser4-tests/browser4-tests-common -am spring-boot:run -Dspring-boot.run.mainClass=ai.platon.pulsar.test.server.MockSiteBoot
-```
-Custom port & wait seconds (`cmd.exe`):
-```
-mvnw.cmd -pl browser4-tests/browser4-tests-common -am spring-boot:run ^
-  -Dspring-boot.run.mainClass=ai.platon.pulsar.test.server.MockSiteBoot ^
-  -Dmock.site.port=9090 ^
-  -Dmock.site.waitSec=10
-```
-Custom port & wait seconds (PowerShell):
-```powershell
-.\mvnw.cmd -pl browser4-tests/browser4-tests-common -am spring-boot:run `
-  -D"spring-boot.run.mainClass=ai.platon.pulsar.test.server.MockSiteBoot" `
-  -D"mock.site.port=9090" `
-  -D"mock.site.waitSec=10"
-```
-
-Environment variable alternatives:
-- `MOCK_SITE_PORT`
-- `MOCK_SITE_WAIT_SEC`
-
-Pass `--block` (program args) to keep the process alive if needed.
-
-### Key points
-- Tries health endpoint first (default `/actuator/health` or overridden by `mock.site.healthPath` JVM property)
-- Falls back to `/` if health path fails (unless disabled)
-- Configurable timeout, interval, verbosity, connect/read timeouts
-- Returns `true` on first 2xx/3xx response
+Moved to `browser4-rest-tests` to avoid pulling Spring Boot into `browser4-common-tests`. See `browser4-rest-tests/README.md` for details.
 
 ## Integration Notes
 - Include this module as a dependency to access `MockSiteLauncher`.
