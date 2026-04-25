@@ -52,7 +52,6 @@
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-tests-common</artifactId>
-            <scope>test</scope>
         </dependency>
 
         <dependency>
@@ -64,10 +63,6 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>ai.platon.pulsar</groupId>
-            <artifactId>browser4-tests-common</artifactId>
         </dependency>
     </dependencies>
 </project>
