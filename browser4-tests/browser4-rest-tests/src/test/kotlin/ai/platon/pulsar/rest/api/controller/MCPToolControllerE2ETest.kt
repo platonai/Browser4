@@ -1,15 +1,20 @@
 package ai.platon.pulsar.rest.api.controller
 
-import ai.platon.pulsar.common.printlnPro
-import ai.platon.pulsar.rest.api.TestHelper.MOCK_PRODUCT_LIST_URL
+import ai.platon.pulsar.common.config.ImmutableConfig
+import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.rest.api.TestHelper.MOCK_PRODUCT_DETAIL_URL
 import ai.platon.pulsar.rest.mcp.controller.MCPToolCallResponse
 import ai.platon.pulsar.rest.mcp.controller.MCPToolController
 import ai.platon.pulsar.rest.mcp.service.SessionManager
 import com.fasterxml.jackson.databind.DeserializationFeature
+import com.fasterxml.jackson.databind.JsonNode
+import com.fasterxml.jackson.databind.node.ArrayNode
 import com.fasterxml.jackson.databind.node.ObjectNode
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.sun.net.httpserver.HttpServer
 import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assumptions
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
@@ -17,33 +22,22 @@ import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.http.MediaType
 import org.springframework.test.web.servlet.client.expectBody
+import java.net.InetSocketAddress
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.nio.file.Path
+import java.time.Duration
+import java.time.Instant
+import java.util.concurrent.Executors
+import kotlin.io.path.writeText
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
- * Comprehensive E2E tests for [MCPToolController] covering all commands supported by browser4-cli.
- *
- * Each test opens a session against the mock EC server, exercises the corresponding MCP tool,
- * and validates the response. Tests are organized by the CLI command categories defined in
- * `sdks/browser4-cli/src/cli.ts`.
- *
- * CLI command → MCP tool mapping:
- * - Core: open→open_session, goto→browser_navigate, click/dblclick→browser_click,
- *         fill→browser_type, drag→browser_drag, hover→browser_hover,
- *         select→browser_select_option, upload→browser_file_upload,
- *         check→browser_check, uncheck→browser_uncheck, type→browser_press_sequentially,
- *         snapshot→browser_snapshot, eval→browser_evaluate,
- *         dialog-accept/dialog-dismiss→browser_handle_dialog, resize→browser_resize,
- *         close→close_session
- * - Navigation: go-back→browser_navigate_back, go-forward→browser_navigate_forward, reload→browser_reload
- * - Keyboard: press→browser_press_key, keydown→browser_keydown, keyup→browser_keyup
- * - Mouse: mousemove→browser_mouse_move_xy, mousedown→browser_mouse_down,
- *         mouseup→browser_mouse_up, mousewheel→browser_mouse_wheel
- * - Save as: screenshot→browser_take_screenshot
- * - Tabs: tab-list/tab-new/tab-close/tab-select→browser_tabs
- * - Session management: list→list_sessions, close-all→close_all_sessions,
- *                       kill-all→kill_all_sessions, delete-data→delete_session_data
+ * Scenario-level E2E tests for [MCPToolController] that mirror the browser
+ * behaviors covered by `sdks/browser4-cli/tests/e2e.rs`.
  */
 @Tag("E2ETest")
 class MCPToolControllerE2ETest : RestAPITestBase() {
@@ -53,77 +47,552 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         .configure(DeserializationFeature.FAIL_ON_NULL_FOR_PRIMITIVES, false)
 
     @Autowired
+    private lateinit var conf: ImmutableConfig
+
+    @Autowired
     lateinit var sessionManager: SessionManager
 
-    /**
-     * Complete mapping from browser4-cli commands to MCP tool names.
-     * Every CLI command must resolve to a recognized MCP tool.
-     */
+    private lateinit var fixtureServer: FixtureServer
+    private lateinit var tempDir: Path
+    private lateinit var uploadFile: Path
+
     private val cliCommandToMcpTool = mapOf(
-        // Core
         "open" to "open_session",
         "goto" to "browser_navigate",
+        "close" to "close_session",
+        "list" to "list_sessions",
+        "close-all" to "close_all_sessions",
+        "kill-all" to "kill_all_sessions",
+        "delete-data" to "delete_session_data",
         "click" to "browser_click",
         "dblclick" to "browser_click",
         "fill" to "browser_type",
-        "drag" to "browser_drag",
+        "type" to "browser_press_sequentially",
         "hover" to "browser_hover",
+        "drag" to "browser_drag",
         "select" to "browser_select_option",
         "upload" to "browser_file_upload",
         "check" to "browser_check",
         "uncheck" to "browser_uncheck",
-        "type" to "browser_press_sequentially",
         "snapshot" to "browser_snapshot",
         "eval" to "browser_evaluate",
-        "dialog-accept" to "browser_handle_dialog",
-        "dialog-dismiss" to "browser_handle_dialog",
-        "resize" to "browser_resize",
-        "close" to "close_session",
-        // Navigation
-        "go-back" to "browser_navigate_back",
-        "go-forward" to "browser_navigate_forward",
-        "reload" to "browser_reload",
-        // Keyboard
         "press" to "browser_press_key",
         "keydown" to "browser_keydown",
         "keyup" to "browser_keyup",
-        // Mouse
         "mousemove" to "browser_mouse_move_xy",
         "mousedown" to "browser_mouse_down",
         "mouseup" to "browser_mouse_up",
         "mousewheel" to "browser_mouse_wheel",
-        // Save as
+        "dialog-accept" to "browser_handle_dialog",
+        "dialog-dismiss" to "browser_handle_dialog",
+        "resize" to "browser_resize",
         "screenshot" to "browser_take_screenshot",
-        // Tabs
         "tab-list" to "browser_tabs",
         "tab-new" to "browser_tabs",
         "tab-close" to "browser_tabs",
         "tab-select" to "browser_tabs",
-        // Session management
-        "list" to "list_sessions",
-        "close-all" to "close_all_sessions",
-        "kill-all" to "kill_all_sessions",
-        "delete-data" to "delete_session_data"
+        "agent-run" to "command_run",
+        "agent-status" to "command_status",
+        "agent-result" to "command_result"
     )
 
-    /** Track sessions created during a test so we can clean up. */
     private val createdSessions = mutableListOf<String>()
 
-    @AfterEach
-    fun cleanUpSessions() {
-        // Best-effort cleanup of any sessions left open by the test
-        try {
-            // sessionManager.deleteAllSessions()
-            callTool("kill_all_sessions")
-        } catch (e: Exception) {
-            logger.debug("Cleanup kill_all_sessions failed (may be expected): {}", e.message)
-        }
-        createdSessions.clear()
+    @BeforeEach
+    fun setUpFixture() {
+        tempDir = Files.createTempDirectory("mcp-tool-controller-e2e")
+        uploadFile = tempDir.resolve("upload.txt")
+        uploadFile.writeText("browser4 rest mcp e2e upload payload", StandardCharsets.UTF_8)
+        fixtureServer = FixtureServer.start()
     }
 
-    // =========================================================================
-    // Helpers
-    // =========================================================================
+    @AfterEach
+    fun cleanUp() {
+        try {
+            callTool("kill_all_sessions")
+        } catch (e: Exception) {
+            logger.debug("Cleanup kill_all_sessions failed: {}", e.message)
+        }
+        createdSessions.clear()
+        if (::fixtureServer.isInitialized) {
+            fixtureServer.close()
+        }
+        if (::tempDir.isInitialized) {
+            tempDir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    @DisplayName("GET /mcp/tools lists all tools required by browser4-cli")
+    fun testToolsEndpointCoversAllCliCommands() {
+        val payload = client.get().uri("/mcp/tools")
+            .exchange()
+            .expectStatus().is2xxSuccessful
+            .expectBody<Map<String, Any>>()
+            .returnResult()
+            .responseBody
+        assertNotNull(payload)
+
+        @Suppress("UNCHECKED_CAST")
+        val tools = (payload["tools"] as List<String>).toSet()
+        val missingTools = cliCommandToMcpTool.values.filter { it !in tools }
+        assertTrue(missingTools.isEmpty(), "Missing MCP tools for browser4-cli commands: $missingTools")
+    }
+
+    @Test
+    @DisplayName("open_session preserves requested TEMPORARY profile mode")
+    fun testOpenUsesTemporaryProfileMode() {
+        val sessionId = openSession(capabilities = mapOf("profileMode" to "TEMPORARY"))
+        assertEquals(
+            "TEMPORARY",
+            sessionManager.getSession(sessionId)?.capabilities?.get("profileMode")?.toString()
+        )
+    }
+
+    @Test
+    @DisplayName("session lifecycle matches browser4-cli open/list/close flow")
+    fun testSessionLifecycle() {
+        val sessionId = openTemporarySession()
+
+        val listResponse = callTool("list_sessions")
+        assertNotError(listResponse)
+        assertTrue(textContent(listResponse).contains(sessionId))
+
+        val closeResponse = callTool("close_session", mapOf("sessionId" to sessionId))
+        assertNotError(closeResponse)
+        assertTrue(textContent(closeResponse).contains("Session closed"))
+        createdSessions.remove(sessionId)
+
+        val listAfterClose = callTool("list_sessions")
+        assertNotError(listAfterClose)
+        assertFalse(textContent(listAfterClose).contains(sessionId))
+    }
+
+    @Test
+    @DisplayName("navigation and storage tools match the CLI navigation scenario")
+    fun testNavigationAndStorage() {
+        val sessionId = openTemporarySession()
+
+        navigate(sessionId, fixtureServer.interactiveUrl())
+        waitForEvalText(
+            sessionId,
+            "window.location.pathname",
+            "/interactive",
+            "Expected to be on the interactive fixture"
+        )
+
+        navigate(sessionId, fixtureServer.otherUrl())
+        waitForEvalText(
+            sessionId,
+            "document.title",
+            FixtureServer.OTHER_TITLE,
+            "Expected the other fixture title after navigate"
+        )
+
+        assertNotError(callTool("browser_navigate_back", mapOf("sessionId" to sessionId)))
+        waitForEvalText(
+            sessionId,
+            "window.location.pathname",
+            "/interactive",
+            "Expected go-back to return to the interactive fixture"
+        )
+
+        assertNotError(callTool("browser_navigate_forward", mapOf("sessionId" to sessionId)))
+        waitForEvalText(
+            sessionId,
+            "window.location.pathname",
+            "/other",
+            "Expected go-forward to return to the other fixture"
+        )
+
+        assertNotError(callTool("browser_reload", mapOf("sessionId" to sessionId)))
+        waitForEvalText(
+            sessionId,
+            "document.title",
+            FixtureServer.OTHER_TITLE,
+            "Expected reload to keep the other fixture loaded"
+        )
+
+        val deleteResponse = callTool("delete_session_data", mapOf("sessionId" to sessionId))
+        assertNotError(deleteResponse)
+        assertTrue(textContent(deleteResponse).contains("User data deleted"))
+    }
+
+    @Test
+    @DisplayName("interaction tools update the interactive fixture state like the CLI scenario")
+    fun testInteractionCommands() {
+        val sessionId = openResizedInteractiveSession()
+
+        assertNotError(callTool("type", mapOf("sessionId" to sessionId, "selector" to "#type-target", "text" to "hello world")))
+        waitForState(sessionId, "Expected type to update typeValue") {
+            it["typeValue"].asText() == "hello world"
+        }
+
+        assertNotError(callTool("fill", mapOf("sessionId" to sessionId, "selector" to "#fill-target", "text" to "filled text")))
+        waitForState(sessionId, "Expected fill to update fillValue") {
+            it["fillValue"].asText() == "filled text"
+        }
+
+        val pressBeforeEvents = keyEventCount(readState(sessionId))
+        assertNotError(callTool("press", mapOf("sessionId" to sessionId, "selector" to "#type-target", "key" to "!")))
+        waitForState(sessionId, "Expected press to append ! and emit a key event") {
+            it["typeValue"].asText() == "hello world!" && keyEventCount(it) > pressBeforeEvents
+        }
+
+        assertNotError(callTool("click", mapOf("sessionId" to sessionId, "selector" to "#type-target")))
+        val keydownBefore = keyEventCount(readState(sessionId))
+        assertNotError(callTool("keydown", mapOf("sessionId" to sessionId, "key" to "Shift")))
+        waitForState(sessionId, "Expected keydown to record down:Shift") {
+            keyEventCount(it) > keydownBefore && lastKeyEvent(it) == "down:Shift"
+        }
+
+        val keyupBefore = keyEventCount(readState(sessionId))
+        assertNotError(callTool("keyup", mapOf("sessionId" to sessionId, "key" to "Shift")))
+        waitForState(sessionId, "Expected keyup to record up:Shift") {
+            keyEventCount(it) > keyupBefore && lastKeyEvent(it) == "up:Shift"
+        }
+
+        assertNotError(callTool("browser_click", mapOf("sessionId" to sessionId, "selector" to "#click-target")))
+        waitForState(sessionId, "Expected click to increment clickCount") {
+            it["clickCount"].asInt() == 1
+        }
+
+        assertNotError(callTool("browser_click", mapOf("sessionId" to sessionId, "selector" to "#dblclick-target", "doubleClick" to true)))
+        waitForState(sessionId, "Expected dblclick to increment doubleClickCount") {
+            it["doubleClickCount"].asInt() == 1
+        }
+
+        assertNotError(callTool("hover", mapOf("sessionId" to sessionId, "selector" to "#hover-target")))
+        waitForState(sessionId, "Expected hover to set hovered=true") {
+            it["hovered"].asBoolean()
+        }
+
+        assertNotError(
+            callTool(
+                "drag",
+                mapOf(
+                    "sessionId" to sessionId,
+                    "sourceSelector" to "#drag-source",
+                    "targetSelector" to "#drag-target"
+                )
+            )
+        )
+        waitForState(sessionId, "Expected drag to set dragStarted and dragDropped") {
+            it["dragStarted"].asBoolean() && it["dragDropped"].asText() == "drag-source"
+        }
+    }
+
+    @Test
+    @DisplayName("form controls and export tools match the CLI fixture scenario")
+    fun testFormControlsAndExports() {
+        val sessionId = openAndNavigate(fixtureServer.interactiveUrl())
+
+        assertNotError(callTool("select_option", mapOf("sessionId" to sessionId, "selector" to "#select-target", "values" to listOf("green"))))
+        waitForState(sessionId, "Expected select to update selectValue") {
+            it["selectValue"].asText() == "green"
+        }
+
+        assertNotError(callTool("check", mapOf("sessionId" to sessionId, "selector" to "#check-target")))
+        waitForState(sessionId, "Expected check to tick the checkbox") {
+            it["checkbox"].asBoolean()
+        }
+
+        assertNotError(callTool("uncheck", mapOf("sessionId" to sessionId, "selector" to "#check-target")))
+        waitForState(sessionId, "Expected uncheck to clear the checkbox") {
+            !it["checkbox"].asBoolean()
+        }
+
+        assertNotError(
+            callTool(
+                "upload",
+                mapOf(
+                    "sessionId" to sessionId,
+                    "selector" to "#file-input",
+                    "paths" to listOf(uploadFile.toAbsolutePath().toString())
+                )
+            )
+        )
+        waitForState(sessionId, "Expected upload to set uploadName") {
+            it["uploadName"].asText() == "upload.txt" && it["uploadCount"].asInt() == 1
+        }
+
+        val snapshotResponse = callTool("browser_snapshot", mapOf("sessionId" to sessionId))
+        assertNotError(snapshotResponse)
+        assertTrue(textContent(snapshotResponse).isNotBlank(), "Expected browser_snapshot to return snapshot text")
+
+        val screenshotResponse = callTool("browser_take_screenshot", mapOf("sessionId" to sessionId))
+        assertNotError(screenshotResponse)
+        assertTrue(textContent(screenshotResponse).length > 100, "Expected screenshot payload to be non-trivial")
+
+        val pageUrl = callTool("page_url", mapOf("sessionId" to sessionId))
+        assertNotError(pageUrl)
+        assertEquals(fixtureServer.interactiveUrl(), textContent(pageUrl))
+
+        val pageTitle = callTool("page_title", mapOf("sessionId" to sessionId))
+        assertNotError(pageTitle)
+        assertEquals(FixtureServer.INTERACTIVE_TITLE, textContent(pageTitle))
+    }
+
+    @Test
+    @DisplayName("command_batch executes interactive and export flows like compiled CLI batches")
+    fun testCommandBatchInteractiveFlow() {
+        val batchResponse = callCommandBatch(
+            listOf(
+                mapOf("op" to "open", "capabilities" to mapOf("profileMode" to "TEMPORARY")),
+                mapOf("op" to "tool", "tool" to "browser_navigate", "arguments" to mapOf("url" to fixtureServer.interactiveUrl())),
+                mapOf("op" to "tool", "tool" to "browser_press_sequentially", "arguments" to mapOf("ref" to "#type-target", "text" to "hello batch")),
+                mapOf("op" to "tool", "tool" to "browser_type", "arguments" to mapOf("ref" to "#fill-target", "text" to "from batch")),
+                mapOf("op" to "tool", "tool" to "browser_click", "arguments" to mapOf("ref" to "#click-target")),
+                mapOf("op" to "snapshot", "tool" to "browser_snapshot", "arguments" to emptyMap<String, Any?>()),
+                mapOf("op" to "screenshot", "tool" to "browser_take_screenshot", "arguments" to emptyMap<String, Any?>())
+            )
+        )
+
+        assertEquals(0, batchResponse.failureCount)
+        val sessionId = requireNotNull(batchResponse.sessionId)
+        createdSessions.add(sessionId)
+
+        waitForState(sessionId, "Expected batch interaction flow to update the fixture state") {
+            it["typeValue"].asText() == "hello batch" &&
+                    it["fillValue"].asText() == "from batch" &&
+                    it["clickCount"].asInt() == 1
+        }
+
+        assertTrue(batchResponse.results.any { it.snapshot?.isNotBlank() == true }, "Expected a snapshot result")
+        assertTrue(batchResponse.results.any { (it.screenshot?.length ?: 0) > 100 }, "Expected a screenshot result")
+    }
+
+    @Test
+    @DisplayName("command_batch submits and resets the form fixture like the CLI batch scenarios")
+    fun testCommandBatchFormSubmission() {
+        val firstBatch = callCommandBatch(
+            listOf(
+                mapOf("op" to "open", "capabilities" to mapOf("profileMode" to "TEMPORARY")),
+                mapOf("op" to "tool", "tool" to "browser_navigate", "arguments" to mapOf("url" to fixtureServer.formUrl())),
+                mapOf("op" to "tool", "tool" to "browser_type", "arguments" to mapOf("ref" to "#first-name", "text" to "Alice")),
+                mapOf("op" to "tool", "tool" to "browser_type", "arguments" to mapOf("ref" to "#last-name", "text" to "Johnson")),
+                mapOf("op" to "tool", "tool" to "browser_type", "arguments" to mapOf("ref" to "#email", "text" to "alice@example.com")),
+                mapOf("op" to "tool", "tool" to "browser_select_option", "arguments" to mapOf("ref" to "#country", "values" to listOf("us"))),
+                mapOf("op" to "tool", "tool" to "browser_check", "arguments" to mapOf("ref" to "#agree-terms")),
+                mapOf("op" to "tool", "tool" to "browser_type", "arguments" to mapOf("ref" to "#comments", "text" to "batch test comment")),
+                mapOf("op" to "tool", "tool" to "browser_click", "arguments" to mapOf("ref" to "#submit-btn"))
+            )
+        )
+
+        val sessionId = requireNotNull(firstBatch.sessionId)
+        createdSessions.add(sessionId)
+        waitForState(sessionId, "Expected first batch submission to populate the form") {
+            it["submitCount"].asInt() == 1 &&
+                    it["firstName"].asText() == "Alice" &&
+                    it["lastName"].asText() == "Johnson" &&
+                    it["email"].asText() == "alice@example.com" &&
+                    it["country"].asText() == "us" &&
+                    it["agreeTerms"].asBoolean() &&
+                    it["comments"].asText() == "batch test comment" &&
+                    it["validationError"].asText().isEmpty()
+        }
+
+        val secondBatch = callCommandBatch(
+            listOf(
+                mapOf("op" to "tool", "tool" to "browser_click", "arguments" to mapOf("ref" to "#reset-btn")),
+                mapOf("op" to "tool", "tool" to "browser_type", "arguments" to mapOf("ref" to "#first-name", "text" to "Bob")),
+                mapOf("op" to "tool", "tool" to "browser_type", "arguments" to mapOf("ref" to "#last-name", "text" to "Smith")),
+                mapOf("op" to "tool", "tool" to "browser_type", "arguments" to mapOf("ref" to "#email", "text" to "bob@example.com")),
+                mapOf("op" to "tool", "tool" to "browser_select_option", "arguments" to mapOf("ref" to "#country", "values" to listOf("uk"))),
+                mapOf("op" to "tool", "tool" to "browser_check", "arguments" to mapOf("ref" to "#agree-terms")),
+                mapOf("op" to "tool", "tool" to "browser_click", "arguments" to mapOf("ref" to "#submit-btn"))
+            ),
+            sessionId = sessionId
+        )
+
+        assertEquals(sessionId, secondBatch.sessionId)
+        waitForState(sessionId, "Expected second batch submission to reset and submit Bob") {
+            it["submitCount"].asInt() == 2 &&
+                    it["resetCount"].asInt() == 1 &&
+                    it["firstName"].asText() == "Bob" &&
+                    it["lastName"].asText() == "Smith" &&
+                    it["country"].asText() == "uk"
+        }
+    }
+
+    @Test
+    @DisplayName("command_batch continue and bail behavior matches CLI error handling")
+    fun testCommandBatchErrorHandling() {
+        val initialBatch = callCommandBatch(
+            listOf(
+                mapOf("op" to "open", "capabilities" to mapOf("profileMode" to "TEMPORARY")),
+                mapOf("op" to "tool", "tool" to "browser_navigate", "arguments" to mapOf("url" to fixtureServer.interactiveUrl()))
+            )
+        )
+        val sessionId = requireNotNull(initialBatch.sessionId)
+        createdSessions.add(sessionId)
+
+        val continueResponse = callCommandBatch(
+            listOf(
+                mapOf("op" to "tool", "tool" to "browser_press_sequentially", "arguments" to mapOf("ref" to "#type-target", "text" to "before error")),
+                mapOf("op" to "tool", "tool" to "not_a_real_tool", "arguments" to emptyMap<String, Any?>()),
+                mapOf("op" to "tool", "tool" to "browser_type", "arguments" to mapOf("ref" to "#fill-target", "text" to "after error"))
+            ),
+            sessionId = sessionId
+        )
+        assertEquals(1, continueResponse.failureCount)
+        assertFalse(continueResponse.stoppedOnError)
+        waitForState(sessionId, "Expected non-bailing batch to keep running after an error") {
+            it["fillValue"].asText() == "after error"
+        }
+
+        val bailResponse = callCommandBatch(
+            listOf(
+                mapOf("op" to "tool", "tool" to "browser_press_sequentially", "arguments" to mapOf("ref" to "#type-target", "text" to " bail test")),
+                mapOf("op" to "tool", "tool" to "still_not_real", "arguments" to emptyMap<String, Any?>()),
+                mapOf("op" to "tool", "tool" to "browser_type", "arguments" to mapOf("ref" to "#fill-target", "text" to "should not execute"))
+            ),
+            bail = true,
+            sessionId = sessionId
+        )
+        assertEquals(1, bailResponse.failureCount)
+        assertTrue(bailResponse.stoppedOnError)
+        waitForState(sessionId, "Expected batch text to contain the pre-error typed value") {
+            it["typeValue"].asText().contains("bail test")
+        }
+        assertEquals("after error", readState(sessionId)["fillValue"].asText())
+    }
+
+    @Test
+    @DisplayName("mouse, dialog, and tab tools match the interactive CLI scenarios")
+    fun testMouseDialogAndTabCommands() {
+        val sessionId = openResizedInteractiveSession()
+
+        assertNotError(callTool("mousemove", mapOf("sessionId" to sessionId, "x" to 120, "y" to 120)))
+        waitForState(sessionId, "Expected mousemove to update lastMouse") {
+            it["lastMouse"][0].asInt() == 120 && it["lastMouse"][1].asInt() == 120
+        }
+
+        val mouseDownBefore = readState(sessionId)["mouseDownCount"].asInt()
+        assertNotError(callTool("mousedown", mapOf("sessionId" to sessionId, "button" to "left")))
+        waitForState(sessionId, "Expected mousedown to increment mouseDownCount") {
+            it["mouseDownCount"].asInt() == mouseDownBefore + 1
+        }
+
+        val mouseUpBefore = readState(sessionId)["mouseUpCount"].asInt()
+        assertNotError(callTool("mouseup", mapOf("sessionId" to sessionId, "button" to "left")))
+        waitForState(sessionId, "Expected mouseup to increment mouseUpCount") {
+            it["mouseUpCount"].asInt() == mouseUpBefore + 1
+        }
+
+        assertNotError(callTool("mousewheel", mapOf("sessionId" to sessionId, "deltaX" to 0, "deltaY" to 160)))
+        waitForState(sessionId, "Expected mousewheel to update lastWheel") {
+            it["lastWheel"][0].asInt() == 160 && it["lastWheel"][1].asInt() == 0
+        }
+
+        evalText(
+            sessionId,
+            "(() => { setTimeout(() => document.getElementById('prompt-target').click(), 100); return 'scheduled'; })()"
+        )
+        Thread.sleep(500)
+        assertNotError(
+            callTool(
+                "browser_handle_dialog",
+                mapOf("sessionId" to sessionId, "accept" to true, "promptText" to "accepted by mcp")
+            )
+        )
+        waitForState(sessionId, "Expected dialog accept to set promptResult") {
+            it["promptResult"].asText() == "accepted by mcp"
+        }
+
+        evalText(
+            sessionId,
+            "(() => { setTimeout(() => document.getElementById('confirm-target').click(), 100); return 'scheduled'; })()"
+        )
+        Thread.sleep(500)
+        assertNotError(callTool("browser_handle_dialog", mapOf("sessionId" to sessionId, "accept" to false)))
+        waitForState(sessionId, "Expected dialog dismiss to set confirmResult") {
+            it["confirmResult"].asText() == "dismissed"
+        }
+
+        val tabList = callTool("browser_tabs", mapOf("sessionId" to sessionId, "action" to "list"))
+        assertNotError(tabList)
+        val initialTabOutput = textContent(tabList)
+        assertTrue(initialTabOutput.contains(fixtureServer.interactiveUrl()))
+
+        assertNotError(
+            callTool(
+                "browser_tabs",
+                mapOf("sessionId" to sessionId, "action" to "new", "url" to fixtureServer.otherUrl())
+            )
+        )
+        val updatedTabs = callTool("browser_tabs", mapOf("sessionId" to sessionId, "action" to "list"))
+        assertNotError(updatedTabs)
+        val updatedOutput = textContent(updatedTabs)
+        assertTrue(updatedOutput.contains(fixtureServer.interactiveUrl()))
+        assertTrue(updatedOutput.contains(fixtureServer.otherUrl()))
+
+        val otherTabId = extractTabId(updatedOutput, fixtureServer.otherUrl())
+        assertNotError(callTool("browser_tabs", mapOf("sessionId" to sessionId, "action" to "select", "tabId" to otherTabId)))
+        assertNotError(callTool("browser_tabs", mapOf("sessionId" to sessionId, "action" to "close", "tabId" to otherTabId)))
+    }
+
+    @Test
+    @DisplayName("agent extract/summarize and command run/status/result work through MCP")
+    fun testAgentAndCommandTools() {
+        Assumptions.assumeTrue(ChatModelFactory.isModelConfigured(conf))
+
+        val sessionId = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
+
+        val summarizeResponse = callTool(
+            "agent_summarize",
+            mapOf("sessionId" to sessionId, "instruction" to "Summarize the product page", "selector" to "#productTitle")
+        )
+        assertNotError(summarizeResponse)
+        assertTrue(textContent(summarizeResponse).isNotBlank(), "Expected agent_summarize to return text")
+
+        val extractResponse = callTool(
+            "agent_extract",
+            mapOf(
+                "sessionId" to sessionId,
+                "instruction" to "product name, price",
+                "schema" to """{"type":"object"}"""
+            )
+        )
+        assertNotError(extractResponse)
+        assertTrue(textContent(extractResponse).isNotBlank(), "Expected agent_extract to return extracted content")
+
+        val commandRun = callTool(
+            "command_run",
+            mapOf("command" to MOCK_PRODUCT_DETAIL_URL, "async" to true)
+        )
+        assertNotError(commandRun)
+        val taskId = textContent(commandRun).removePrefix("\"").removeSuffix("\"").trim()
+        assertTrue(taskId.isNotBlank(), "Expected command_run to return a task id")
+
+        val status = waitForCommandDone(taskId)
+        assertEquals(taskId, status["id"].asText())
+        assertTrue(status["processState"].asText() == "done" || status["isDone"].asBoolean())
+
+        val result = callTool("command_result", mapOf("id" to taskId))
+        assertNotError(result)
+        assertTrue(textContent(result).isNotBlank(), "Expected command_result to return the completed result")
+    }
+
+    @Test
+    @DisplayName("invalid requests still surface meaningful MCP errors")
+    fun testErrorHandling() {
+        val missingSession = callTool("browser_navigate", mapOf("url" to fixtureServer.interactiveUrl()))
+        assertIsError(missingSession)
+        assertTrue(textContent(missingSession).contains("sessionId"))
+
+        val sessionId = openTemporarySession()
+        val unknownTool = callTool("nonexistent_tool_xyz", mapOf("sessionId" to sessionId))
+        assertIsError(unknownTool)
+        assertTrue(textContent(unknownTool).contains("Unknown tool"))
+
+        val invalidSession = callTool(
+            "browser_navigate",
+            mapOf("sessionId" to "does-not-exist", "url" to fixtureServer.interactiveUrl())
+        )
+        assertIsError(invalidSession)
+        assertTrue(textContent(invalidSession).contains("Session not found"))
+    }
 
     private fun callTool(tool: String, arguments: Map<String, Any?> = emptyMap()): MCPToolCallResponse {
         val request = mapOf("tool" to tool, "arguments" to arguments)
@@ -155,488 +624,227 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         assertTrue(response.isError, "Expected error MCP response but got: $response")
     }
 
-    private fun assertToolRecognized(tool: String, arguments: Map<String, Any?> = emptyMap()) {
-        val response = callTool(tool, arguments)
-        val text = textContent(response)
-
-        printlnPro(this, "Tool '$tool' response: $response")
-
-        assertFalse(text.contains("Unknown tool:"), "Tool '$tool' should be recognized, response: $response")
-    }
-
-    private fun openSession(url: String = MOCK_PRODUCT_DETAIL_URL): String {
-        val openResponse = callTool("open_session", mapOf("url" to url))
-        assertNotError(openResponse)
-        val sessionId = objectMapper.readTree(textContent(openResponse)).path("sessionId").asText()
+    private fun openSession(capabilities: Map<String, Any?>? = null): String {
+        val arguments = buildMap<String, Any?> {
+            if (capabilities != null) {
+                put("capabilities", capabilities)
+            }
+        }
+        val response = callTool("open_session", arguments)
+        assertNotError(response)
+        val sessionId = objectMapper.readTree(textContent(response)).path("sessionId").asText()
         assertTrue(sessionId.isNotBlank(), "open_session must return a non-blank sessionId")
         createdSessions.add(sessionId)
         return sessionId
     }
 
-    private fun closeSession(sessionId: String) {
-        val response = callTool("close_session", mapOf("sessionId" to sessionId))
-        assertNotError(response)
-        assertTrue(textContent(response).contains("Session closed"))
-        createdSessions.remove(sessionId)
-    }
+    private fun openTemporarySession(): String = openSession(mapOf("profileMode" to "TEMPORARY"))
 
-    /** Shorthand: open a session, navigate to the given URL, and return the sessionId. */
-    private fun openAndNavigate(url: String = MOCK_PRODUCT_DETAIL_URL): String {
-        val sid = openSession()
-        val navResponse = callTool("browser_navigate", mapOf("sessionId" to sid, "url" to url))
-        assertNotError(navResponse)
-        return sid
-    }
-
-    // =========================================================================
-    // 1. Tool listing & CLI coverage
-    // =========================================================================
-
-    @Test
-    @DisplayName("GET /mcp/tools lists all tools required by browser4-cli")
-    fun testToolsEndpointCoversAllCliCommands() {
-        val payload = client.get().uri("/mcp/tools")
-            .exchange()
-            .expectStatus().is2xxSuccessful
-            .expectBody<Map<String, Any>>()
-            .returnResult()
-            .responseBody
-        assertNotNull(payload)
-
-        @Suppress("UNCHECKED_CAST")
-        val tools = (payload["tools"] as List<String>).toSet()
-        printlnPro(this, tools)
-        val missingTools = cliCommandToMcpTool.values.filter { it !in tools }
-        assertTrue(missingTools.isEmpty(), "Missing MCP tools for cli commands: $missingTools")
-    }
-
-    @Test
-    @DisplayName("POST /mcp/call-tool accepts frontend-declared Browser4 CLI tool names")
-    fun testFrontendToolNamesAreRecognized() {
-        val sid = openSession()
-
-        assertToolRecognized("browser_navigate", mapOf("sessionId" to sid, "url" to MOCK_PRODUCT_DETAIL_URL))
-        assertToolRecognized("browser_snapshot", mapOf("sessionId" to sid))
-        assertToolRecognized("browser_tabs", mapOf("sessionId" to sid, "action" to "list"))
-    }
-
-    // =========================================================================
-    // 2. Session management — cli: open, close, list, close-all, kill-all, delete-data
-    // =========================================================================
-
-    @Test
-    @DisplayName("open_session returns a valid sessionId (cli: open)")
-    fun testOpenSession() {
-        val sessionId = openSession()
-        assertTrue(sessionId.isNotBlank())
-    }
-
-    @Test
-    @DisplayName("close_session closes a previously opened session (cli: close)")
-    fun testCloseSession() {
-        val sessionId = openSession()
-        closeSession(sessionId)
-
-        // After closing, the session should not appear in list
-        val listResponse = callTool("list_sessions")
-        assertNotError(listResponse)
-        assertFalse(textContent(listResponse).contains(sessionId))
-    }
-
-    @Test
-    @DisplayName("close_session returns error for unknown sessionId")
-    fun testCloseSessionNotFound() {
-        val response = callTool("close_session", mapOf("sessionId" to "non-existent-id"))
-        assertIsError(response)
-        assertTrue(textContent(response).contains("Session not found"))
-    }
-
-    @Test
-    @DisplayName("list_sessions shows all active sessions (cli: list)")
-    fun testListSessions() {
-        val sid1 = openSession(MOCK_PRODUCT_DETAIL_URL)
-        val sid2 = openSession(MOCK_PRODUCT_LIST_URL)
-
-        val listResponse = callTool("list_sessions")
-        assertNotError(listResponse)
-        val text = textContent(listResponse)
-        assertTrue(text.contains(sid1), "list_sessions should contain session $sid1")
-        assertTrue(text.contains(sid2), "list_sessions should contain session $sid2")
-    }
-
-    @Test
-    @DisplayName("close_all_sessions closes every session (cli: close-all)")
-    fun testCloseAllSessions() {
-        val sid1 = openSession(MOCK_PRODUCT_DETAIL_URL)
-        val sid2 = openSession(MOCK_PRODUCT_LIST_URL)
-
-        val closeAllResponse = callTool("close_all_sessions")
-        assertNotError(closeAllResponse)
-        assertTrue(textContent(closeAllResponse).contains("Closed"))
-
-        val listResponse = callTool("list_sessions")
-        assertNotError(listResponse)
-        val text = textContent(listResponse)
-        assertFalse(text.contains(sid1))
-        assertFalse(text.contains(sid2))
-        createdSessions.clear()
-    }
-
-    @Test
-    @DisplayName("kill_all_sessions kills every session (cli: kill-all)")
-    fun testKillAllSessions() {
-        val sid = openSession(MOCK_PRODUCT_DETAIL_URL)
-
-        val killResponse = callTool("kill_all_sessions")
-        assertNotError(killResponse)
-        assertTrue(textContent(killResponse).contains("Killed"))
-
-        val listResponse = callTool("list_sessions")
-        assertNotError(listResponse)
-        assertFalse(textContent(listResponse).contains(sid))
-        createdSessions.clear()
-    }
-
-    @Test
-    @DisplayName("delete_session_data clears cookies and storage (cli: delete-data)")
-    fun testDeleteSessionData() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-
-        val response = callTool("delete_session_data", mapOf("sessionId" to sid))
-        assertNotError(response)
-        assertTrue(textContent(response).contains("User data deleted"))
-    }
-
-    // =========================================================================
-    // 3. Navigation — cli: goto, go-back, go-forward, reload
-    // =========================================================================
-
-    @Test
-    @DisplayName("navigate loads a URL in the session browser (cli: goto)")
-    fun testNavigate() {
-        val sid = openSession()
-        val response = callTool("navigate", mapOf("sessionId" to sid, "url" to MOCK_PRODUCT_DETAIL_URL))
+    private fun navigate(sessionId: String, url: String) {
+        val response = callTool("browser_navigate", mapOf("sessionId" to sessionId, "url" to url))
         assertNotError(response)
     }
 
-    @Test
-    @DisplayName("go_back navigates the browser back (cli: go-back)")
-    fun testGoBack() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-        callTool("navigate", mapOf("sessionId" to sid, "url" to MOCK_PRODUCT_LIST_URL))
-
-        assertToolRecognized("go_back", mapOf("sessionId" to sid))
+    private fun openAndNavigate(url: String): String {
+        val sessionId = openTemporarySession()
+        navigate(sessionId, url)
+        return sessionId
     }
 
-    @Test
-    @DisplayName("go_forward navigates the browser forward (cli: go-forward)")
-    fun testGoForward() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-
-        assertToolRecognized("go_forward", mapOf("sessionId" to sid))
+    private fun openResizedInteractiveSession(): String {
+        val sessionId = openAndNavigate(fixtureServer.interactiveUrl())
+        val resize = callTool("resize", mapOf("sessionId" to sessionId, "width" to 1280, "height" to 900))
+        assertNotError(resize)
+        waitForCondition("Expected resize to make innerWidth at least 1000") {
+            evalText(sessionId, "window.innerWidth.toString()").toIntOrNull()?.let { it >= 1000 } == true
+        }
+        return sessionId
     }
 
-    @Test
-    @DisplayName("reload refreshes the current page (cli: reload)")
-    fun testReload() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-
-        assertToolRecognized("reload", mapOf("sessionId" to sid))
+    private fun evalText(sessionId: String, expression: String): String {
+        val response = callTool("browser_evaluate", mapOf("sessionId" to sessionId, "expression" to expression))
+        assertNotError(response)
+        return textContent(response)
     }
 
-    // =========================================================================
-    // 4. Element interaction — cli: click, dblclick, fill, hover, drag,
-    //    select, upload, check, uncheck, type
-    // =========================================================================
-
-    @Test
-    @DisplayName("click dispatches a click on an element (cli: click)")
-    fun testClick() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-        assertToolRecognized("click", mapOf("sessionId" to sid, "selector" to "body"))
+    private fun readState(sessionId: String): JsonNode {
+        val raw = evalText(sessionId, "document.getElementById('state-log').textContent")
+        return objectMapper.readTree(raw.ifBlank { "null" })
     }
 
-    @Test
-    @DisplayName("dblclick dispatches a double-click on an element (cli: dblclick)")
-    fun testDblclick() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-        assertToolRecognized("dblclick", mapOf("sessionId" to sid, "selector" to "body"))
+    private fun keyEventCount(state: JsonNode): Int = (state["keyEvents"] as? ArrayNode)?.size() ?: 0
+
+    private fun lastKeyEvent(state: JsonNode): String? {
+        val events = state["keyEvents"] as? ArrayNode ?: return null
+        return if (events.size() == 0) null else events.get(events.size() - 1).asText()
     }
 
-    @Test
-    @DisplayName("fill types text into an input (cli: fill)")
-    fun testFill() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-        assertToolRecognized("fill", mapOf("sessionId" to sid, "selector" to "#productTitle", "text" to "Browser4"))
+    private fun waitForState(
+        sessionId: String,
+        failureMessage: String,
+        timeout: Duration = Duration.ofSeconds(20),
+        predicate: (JsonNode) -> Boolean,
+    ): JsonNode {
+        val deadline = Instant.now().plus(timeout)
+        var lastState: JsonNode = objectMapper.readTree("null")
+        while (Instant.now().isBefore(deadline)) {
+            lastState = readState(sessionId)
+            if (predicate(lastState)) {
+                return lastState
+            }
+            Thread.sleep(300)
+        }
+        throw AssertionError("$failureMessage\nLast state: $lastState")
     }
 
-    @Test
-    @DisplayName("type appends text into an input (cli: type)")
-    fun testType() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-        assertToolRecognized("type", mapOf("sessionId" to sid, "selector" to "#productTitle", "text" to "Browser4"))
+    private fun waitForEvalText(
+        sessionId: String,
+        expression: String,
+        expected: String,
+        failureMessage: String,
+        timeout: Duration = Duration.ofSeconds(20),
+    ) {
+        val deadline = Instant.now().plus(timeout)
+        var lastValue = ""
+        while (Instant.now().isBefore(deadline)) {
+            lastValue = evalText(sessionId, expression)
+            if (lastValue == expected) {
+                return
+            }
+            Thread.sleep(300)
+        }
+        throw AssertionError("$failureMessage. Expected <$expected> but got <$lastValue>")
     }
 
-    @Test
-    @DisplayName("hover moves the pointer over an element (cli: hover)")
-    fun testHover() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-        assertToolRecognized("hover", mapOf("sessionId" to sid, "selector" to "body"))
+    private fun waitForCondition(
+        failureMessage: String,
+        timeout: Duration = Duration.ofSeconds(20),
+        predicate: () -> Boolean,
+    ) {
+        val deadline = Instant.now().plus(timeout)
+        while (Instant.now().isBefore(deadline)) {
+            if (predicate()) {
+                return
+            }
+            Thread.sleep(300)
+        }
+        throw AssertionError(failureMessage)
     }
 
-    @Test
-    @DisplayName("drag drags from one element to another (cli: drag)")
-    fun testDrag() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-        assertToolRecognized(
-            "drag",
-            mapOf("sessionId" to sid, "sourceSelector" to "body", "targetSelector" to "body")
+    private fun callCommandBatch(
+        steps: List<Map<String, Any?>>,
+        bail: Boolean = false,
+        sessionId: String? = null,
+    ): BatchExecutionResponse {
+        val arguments = linkedMapOf<String, Any?>(
+            "steps" to steps,
+            "bail" to bail,
         )
+        if (sessionId != null) {
+            arguments["sessionId"] = sessionId
+        }
+        val response = callTool("command_batch", arguments)
+        assertNotError(response)
+        return objectMapper.readValue(textContent(response), BatchExecutionResponse::class.java)
     }
 
-    @Test
-    @DisplayName("select_option selects a dropdown value (cli: select)")
-    fun testSelectOption() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-        assertToolRecognized("select_option", mapOf("sessionId" to sid, "selector" to "body", "values" to listOf("1")))
+    private fun waitForCommandDone(taskId: String, timeout: Duration = Duration.ofMinutes(3)): JsonNode {
+        val deadline = Instant.now().plus(timeout)
+        var lastStatus: JsonNode = objectMapper.readTree("null")
+        while (Instant.now().isBefore(deadline)) {
+            val response = callTool("command_status", mapOf("id" to taskId))
+            assertNotError(response)
+            lastStatus = objectMapper.readTree(textContent(response))
+            if (lastStatus["processState"]?.asText() == "done" || lastStatus["isDone"]?.asBoolean() == true) {
+                return lastStatus
+            }
+            Thread.sleep(1000)
+        }
+        throw AssertionError("Timed out waiting for command $taskId to finish. Last status: $lastStatus")
     }
 
-    @Test
-    @DisplayName("upload attaches files to an input (cli: upload)")
-    fun testUpload() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-        assertToolRecognized(
-            "upload",
-            mapOf("sessionId" to sid, "selector" to "body", "paths" to listOf("README.md"))
-        )
+    private fun extractTabId(output: String, url: String): String {
+        val regex = Regex("""id[:=]"?([^",}\s]+)"?""")
+        val ids = regex.findAll(output)
+            .map { it.groupValues[1] to it.range.first }
+            .toList()
+        val urlPos = output.indexOf(url)
+        check(urlPos >= 0) { "URL '$url' not found in tab output:\n$output" }
+        return ids.lastOrNull { it.second < urlPos }?.first
+            ?: error("Could not find tab id for '$url' in:\n$output")
     }
 
-    @Test
-    @DisplayName("check ticks a checkbox (cli: check)")
-    fun testCheck() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-        assertToolRecognized("check", mapOf("sessionId" to sid, "selector" to "body"))
-    }
+    private data class BatchExecutionResponse(
+        val sessionId: String?,
+        val failureCount: Int,
+        val stoppedOnError: Boolean,
+        val results: List<BatchExecutionResult>,
+    )
 
-    @Test
-    @DisplayName("uncheck clears a checkbox (cli: uncheck)")
-    fun testUncheck() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-        assertToolRecognized("uncheck", mapOf("sessionId" to sid, "selector" to "body"))
-    }
+    private data class BatchExecutionResult(
+        val index: Int,
+        val ok: Boolean,
+        val sessionId: String? = null,
+        val text: String? = null,
+        val error: String? = null,
+        val pageUrl: String? = null,
+        val pageTitle: String? = null,
+        val snapshot: String? = null,
+        val screenshot: String? = null,
+    )
 
-    // =========================================================================
-    // 5. Content & state — cli: snapshot, eval, screenshot
-    // =========================================================================
+    private class FixtureServer private constructor(
+        private val server: HttpServer,
+        private val executor: java.util.concurrent.ExecutorService,
+    ) : AutoCloseable {
+        val baseUrl: String = "http://127.0.0.1:${server.address.port}"
 
-    @Test
-    @DisplayName("aria_snapshot returns accessibility snapshot (cli: snapshot)")
-    fun testAriaSnapshot() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-        assertToolRecognized("aria_snapshot", mapOf("sessionId" to sid))
-    }
+        fun interactiveUrl(): String = "$baseUrl/interactive"
+        fun otherUrl(): String = "$baseUrl/other"
+        fun formUrl(): String = "$baseUrl/form"
 
-    @Test
-    @DisplayName("evaluate runs JavaScript and returns the result (cli: eval)")
-    fun testEvaluate() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-        assertToolRecognized("evaluate", mapOf("sessionId" to sid, "expression" to "document.title"))
-    }
+        override fun close() {
+            server.stop(0)
+            executor.shutdownNow()
+        }
 
-    @Test
-    @DisplayName("screenshot captures the page (cli: screenshot)")
-    fun testScreenshot() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-        assertToolRecognized("screenshot", mapOf("sessionId" to sid))
-    }
+        companion object {
+            const val INTERACTIVE_TITLE = "Browser4 CLI Interactive Fixture"
+            const val OTHER_TITLE = "Browser4 CLI Other Fixture"
+            const val FORM_TITLE = "Browser4 CLI Form Fixture"
+            private const val INTERACTIVE_FIXTURE_RESOURCE = "static/b4/mcp-tool-controller-interactive-fixture.html"
+            private const val OTHER_FIXTURE_RESOURCE = "static/b4/mcp-tool-controller-other-fixture.html"
+            private const val FORM_FIXTURE_RESOURCE = "static/b4/mcp-tool-controller-form-fixture.html"
 
-    @Test
-    @DisplayName("page_url returns the current URL")
-    fun testPageUrl() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-        assertToolRecognized("page_url", mapOf("sessionId" to sid))
-    }
+            fun start(): FixtureServer {
+                val executor = Executors.newCachedThreadPool()
+                val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+                val interactiveHtml = loadFixture(INTERACTIVE_FIXTURE_RESOURCE)
+                val otherHtml = loadFixture(OTHER_FIXTURE_RESOURCE)
+                val formHtml = loadFixture(FORM_FIXTURE_RESOURCE)
+                server.executor = executor
+                server.createContext("/") { exchange ->
+                    val path = exchange.requestURI.path
+                    val (status, contentType, body) = when (path) {
+                        "/", "/interactive" -> Triple(200, "text/html; charset=utf-8", interactiveHtml)
+                        "/other" -> Triple(200, "text/html; charset=utf-8", otherHtml)
+                        "/form" -> Triple(200, "text/html; charset=utf-8", formHtml)
+                        else -> Triple(404, "text/plain; charset=utf-8", "not found")
+                    }
+                    val bytes = body.toByteArray(StandardCharsets.UTF_8)
+                    exchange.responseHeaders.add("Content-Type", contentType)
+                    exchange.sendResponseHeaders(status, bytes.size.toLong())
+                    exchange.responseBody.use { it.write(bytes) }
+                }
+                server.start()
+                return FixtureServer(server, executor)
+            }
 
-    @Test
-    @DisplayName("page_title returns the current page title")
-    fun testPageTitle() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-        assertToolRecognized("page_title", mapOf("sessionId" to sid))
-    }
-
-    // =========================================================================
-    // 6. Keyboard — cli: press, keydown, keyup
-    // =========================================================================
-
-    @Test
-    @DisplayName("press dispatches a key press event (cli: press)")
-    fun testPress() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-        assertToolRecognized("press", mapOf("sessionId" to sid, "selector" to "body", "key" to "Enter"))
-    }
-
-    @Test
-    @DisplayName("keydown dispatches a keydown event (cli: keydown)")
-    fun testKeydown() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-        assertToolRecognized("keydown", mapOf("sessionId" to sid, "key" to "A"))
-    }
-
-    @Test
-    @DisplayName("keyup dispatches a keyup event (cli: keyup)")
-    fun testKeyup() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-        assertToolRecognized("keyup", mapOf("sessionId" to sid, "key" to "A"))
-    }
-
-    // =========================================================================
-    // 7. Mouse — cli: mousemove, mousedown, mouseup, mousewheel
-    // =========================================================================
-
-    @Test
-    @DisplayName("mousemove moves the pointer to coordinates (cli: mousemove)")
-    fun testMousemove() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-        assertToolRecognized("mousemove", mapOf("sessionId" to sid, "x" to 100, "y" to 200))
-    }
-
-    @Test
-    @DisplayName("mousedown dispatches a mousedown event (cli: mousedown)")
-    fun testMousedown() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-        assertToolRecognized("mousedown", mapOf("sessionId" to sid, "button" to "left"))
-    }
-
-    @Test
-    @DisplayName("mouseup dispatches a mouseup event (cli: mouseup)")
-    fun testMouseup() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-        assertToolRecognized("mouseup", mapOf("sessionId" to sid, "button" to "left"))
-    }
-
-    @Test
-    @DisplayName("mousewheel dispatches a mouse wheel event (cli: mousewheel)")
-    fun testMousewheel() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-        assertToolRecognized("mousewheel", mapOf("sessionId" to sid, "deltaX" to 0, "deltaY" to 120))
-    }
-
-    // =========================================================================
-    // 8. Dialogs — cli: dialog-accept, dialog-dismiss
-    // =========================================================================
-
-    @Test
-    @DisplayName("dialog_accept accepts the current dialog (cli: dialog-accept)")
-    fun testDialogAccept() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-        assertToolRecognized("dialog_accept", mapOf("sessionId" to sid, "promptText" to "ok"))
-    }
-
-    @Test
-    @DisplayName("dialog_dismiss dismisses the current dialog (cli: dialog-dismiss)")
-    fun testDialogDismiss() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-        assertToolRecognized("dialog_dismiss", mapOf("sessionId" to sid))
-    }
-
-    // =========================================================================
-    // 9. Viewport — cli: resize
-    // =========================================================================
-
-    @Test
-    @DisplayName("resize changes the browser viewport (cli: resize)")
-    fun testResize() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-        assertToolRecognized("resize", mapOf("sessionId" to sid, "width" to 1200, "height" to 900))
-    }
-
-    // =========================================================================
-    // 10. Tab management — cli: tab-list, tab-new, tab-close, tab-select
-    // =========================================================================
-
-    @Test
-    @DisplayName("tab_list lists open tabs (cli: tab-list)")
-    fun testTabList() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-        assertToolRecognized("tab_list", mapOf("sessionId" to sid))
-    }
-
-    @Test
-    @DisplayName("tab_new opens a new tab (cli: tab-new)")
-    fun testTabNew() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-        assertToolRecognized("tab_new", mapOf("sessionId" to sid, "url" to MOCK_PRODUCT_LIST_URL))
-    }
-
-    @Test
-    @DisplayName("tab_close closes a tab (cli: tab-close)")
-    fun testTabClose() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-        assertToolRecognized("tab_close", mapOf("sessionId" to sid, "tabId" to "0"))
-    }
-
-    @Test
-    @DisplayName("tab_select switches to a tab by id (cli: tab-select)")
-    fun testTabSelect() {
-        val sid = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-        assertToolRecognized("tab_select", mapOf("sessionId" to sid, "tabId" to "0"))
-    }
-
-    // =========================================================================
-    // 11. Error handling
-    // =========================================================================
-
-    @Test
-    @DisplayName("Calling a tool without sessionId returns an error")
-    fun testMissingSessionIdReturnsError() {
-        // navigate requires sessionId
-        val response = callTool("navigate", mapOf("url" to MOCK_PRODUCT_DETAIL_URL))
-        assertIsError(response)
-        assertTrue(textContent(response).contains("sessionId"))
-    }
-
-    @Test
-    @DisplayName("Calling an unknown tool returns an error")
-    fun testUnknownToolReturnsError() {
-        val sid = openSession()
-        val response = callTool("nonexistent_tool_xyz", mapOf("sessionId" to sid))
-        assertIsError(response)
-        assertTrue(textContent(response).contains("Unknown tool"))
-    }
-
-    @Test
-    @DisplayName("Calling a tool with an invalid sessionId returns an error")
-    fun testInvalidSessionIdReturnsError() {
-        val response = callTool("navigate", mapOf("sessionId" to "does-not-exist", "url" to MOCK_PRODUCT_DETAIL_URL))
-        assertIsError(response)
-        assertTrue(textContent(response).contains("Session not found"))
-    }
-
-    // =========================================================================
-    // 12. Multi-session workflow
-    // =========================================================================
-
-    @Test
-    @DisplayName("Multiple sessions can coexist and be managed independently")
-    fun testMultiSessionWorkflow() {
-        val sid1 = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
-        val sid2 = openAndNavigate(MOCK_PRODUCT_LIST_URL)
-
-        // Both sessions should appear in list_sessions
-        val listResponse = callTool("list_sessions")
-        assertNotError(listResponse)
-        val text = textContent(listResponse)
-        assertTrue(text.contains(sid1), "list_sessions should contain session $sid1")
-        assertTrue(text.contains(sid2), "list_sessions should contain session $sid2")
-
-        // Close only the first session
-        closeSession(sid1)
-
-        // sid1 gone, sid2 still present
-        val listAfter = callTool("list_sessions")
-        assertNotError(listAfter)
-        val textAfter = textContent(listAfter)
-        assertFalse(textAfter.contains(sid1))
-        assertTrue(textAfter.contains(sid2))
+            private fun loadFixture(resourcePath: String): String {
+                return FixtureServer::class.java.classLoader.getResourceAsStream(resourcePath)?.use { input ->
+                    String(input.readAllBytes(), StandardCharsets.UTF_8)
+                } ?: error("Fixture resource not found: $resourcePath")
+            }
+        }
     }
 }

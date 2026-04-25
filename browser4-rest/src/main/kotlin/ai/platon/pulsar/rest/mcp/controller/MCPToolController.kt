@@ -768,6 +768,7 @@ class MCPToolController(
         }
 
         val tabMethods = toolSpecs["tab"].orEmpty().keys
+        val tabMcpNames = tabMethods.map { toMcpToolName("tab", it) }.toSet()
         val browserMethods = toolSpecs["browser"].orEmpty().keys
 
         val legacyTabMappings = mapOf(
@@ -809,10 +810,10 @@ class MCPToolController(
             }
         }
 
-        if ("click" in tabMethods || "dblclick" in tabMethods) {
+        if ("click" in tabMcpNames || "dblclick" in tabMcpNames) {
             tools.add("browser_click")
         }
-        if ("dialog_accept" in tabMethods || "dialog_dismiss" in tabMethods) {
+        if ("dialog_accept" in tabMcpNames || "dialog_dismiss" in tabMcpNames) {
             tools.add("browser_handle_dialog")
         }
         if (browserMethods.any { it in browserTabAliases.keys }) {

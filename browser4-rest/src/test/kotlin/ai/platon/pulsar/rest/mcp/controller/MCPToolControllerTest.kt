@@ -205,8 +205,8 @@ class MCPToolControllerTest {
                     "mouseMove" to ToolSpec(domain = "tab", method = "mouseMove", description = "desc"),
                     "click" to ToolSpec(domain = "tab", method = "click", description = "desc"),
                     "dblclick" to ToolSpec(domain = "tab", method = "dblclick", description = "desc"),
-                    "dialog_accept" to ToolSpec(domain = "tab", method = "dialog_accept", description = "desc"),
-                    "dialog_dismiss" to ToolSpec(domain = "tab", method = "dialog_dismiss", description = "desc"),
+                    "dialogAccept" to ToolSpec(domain = "tab", method = "dialogAccept", description = "desc"),
+                    "dialogDismiss" to ToolSpec(domain = "tab", method = "dialogDismiss", description = "desc"),
                 ),
                 "browser" to mapOf(
                     "switchTab" to ToolSpec(domain = "browser", method = "switchTab", description = "desc"),
@@ -222,6 +222,7 @@ class MCPToolControllerTest {
         assertEquals(HttpStatus.OK, result.statusCode)
         @Suppress("UNCHECKED_CAST")
         val tools = ((result.body as Map<String, Any>)["tools"] as List<String>).toSet()
+
 
         assertTrue(tools.contains("open_session"))
         assertTrue(tools.contains("command_batch"))
