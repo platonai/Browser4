@@ -145,7 +145,7 @@ interface WebDriver : Closeable {
      * The browser of the driver.
      * The browser defines methods and events to manipulate a real browser.
      * */
-    val browser: Browser
+    val browser: AbstractBrowser
 
     /**
      * Web pages for the page open from the current page, via window.open(), link click, form submission, etc.
