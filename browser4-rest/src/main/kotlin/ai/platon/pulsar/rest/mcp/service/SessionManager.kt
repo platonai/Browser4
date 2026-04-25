@@ -57,17 +57,18 @@ class SessionManager(
     private val sessions = ConcurrentHashMap<String, ManagedSession>()
 
     // Coroutine scope for periodic cleanup of idle sessions
-    private val cleanupScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-
-    init {
-        // Schedule periodic cleanup of idle sessions (every 5 minutes)
-        cleanupScope.launch {
-            while (isActive) {
-                delay(5.minutes)
-                cleanupIdleSessions()
-            }
-        }
-    }
+    // TODO: review this feature
+//    private val cleanupScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+//
+//    init {
+//        // Schedule periodic cleanup of idle sessions (every 5 minutes)
+//        cleanupScope.launch {
+//            while (isActive) {
+//                delay(5.minutes)
+//                cleanupIdleSessions()
+//            }
+//        }
+//    }
 
     /**
      * Creates a new browser session with the specified capabilities.
@@ -179,6 +180,6 @@ class SessionManager(
         sessions.keys.toList().forEach { sessionId ->
             deleteSession(sessionId)
         }
-        cleanupScope.cancel()
+        // cleanupScope.cancel()
     }
 }
