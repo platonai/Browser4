@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Browser4 CLI Interactive Fixture</title>
+  <style>
+    body { margin: 0; font-family: sans-serif; min-height: 2400px; }
+    #mouse-area {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 480px;
+      height: 320px;
+      background: rgba(0, 128, 255, 0.08);
+      border: 1px solid #08f;
+    }
+    #drag-source, #drag-target {
+      width: 160px;
+      height: 48px;
+      margin-top: 16px;
+      border: 1px solid #555;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+  </style>
+</head>
+<body>
+  <div id="mouse-area">mouse area</div>
+  <main style="padding: 360px 24px 24px;">
+    <input id="type-target" type="text" />
+    <input id="fill-target" type="text" />
+    <input id="file-input" type="file" />
+    <input id="check-target" type="checkbox" />
+    <select id="select-target">
+      <option value="">-- choose --</option>
+      <option value="green">Green</option>
+      <option value="blue">Blue</option>
+    </select>
+    <button id="click-target" type="button">Click</button>
+    <button id="dblclick-target" type="button">Double Click</button>
+    <button id="hover-target" type="button">Hover</button>
+    <button id="prompt-target" type="button">Prompt</button>
+    <button id="confirm-target" type="button">Confirm</button>
+    <div id="drag-source" draggable="true">drag source</div>
+    <div id="drag-target">drag target</div>
+    <pre id="state-log"></pre>
+  </main>
+  <script>
+    window.__browser4State = {
+      clickCount: 0,
+      doubleClickCount: 0,
+      hovered: false,
+      dragStarted: false,
+      dragDropped: '',
+      promptResult: '',
+      confirmResult: '',
+      keyEvents: [],
+      mouseDownCount: 0,
+      mouseUpCount: 0,
+      lastMouse: null,
+      lastWheel: null,
+      typeValue: '',
+      fillValue: '',
+      checkbox: false,
+      selectValue: '',
+      uploadCount: 0,
+      uploadName: '',
+      submitCount: 0
+    };
+
+    function syncState() {
+      const state = window.__browser4State;
+      state.typeValue = document.getElementById('type-target').value;
+      state.fillValue = document.getElementById('fill-target').value;
+      state.checkbox = document.getElementById('check-target').checked;
+      state.selectValue = document.getElementById('select-target').value;
+      const files = document.getElementById('file-input').files;
+      state.uploadCount = files ? files.length : 0;
+      state.uploadName = files && files[0] ? files[0].name : '';
+      document.getElementById('state-log').textContent = JSON.stringify(state);
+    }
+
+    document.getElementById('click-target').addEventListener('click', () => {
+      window.__browser4State.clickCount += 1;
+      syncState();
+    });
+
+    document.getElementById('dblclick-target').addEventListener('dblclick', () => {
+      window.__browser4State.doubleClickCount += 1;
+      syncState();
+    });
+
+    document.getElementById('hover-target').addEventListener('mouseenter', () => {
+      window.__browser4State.hovered = true;
+      syncState();
+    });
+
+    document.getElementById('drag-source').addEventListener('dragstart', (event) => {
+      window.__browser4State.dragStarted = true;
+      event.dataTransfer.setData('text/plain', 'drag-source');
+      syncState();
+    });
+
+    document.getElementById('drag-target').addEventListener('dragover', (event) => {
+      event.preventDefault();
+    });
+
+    document.getElementById('drag-target').addEventListener('drop', (event) => {
+      event.preventDefault();
+      window.__browser4State.dragDropped = event.dataTransfer.getData('text/plain');
+      syncState();
+    });
+
+    document.getElementById('prompt-target').addEventListener('click', () => {
+      setTimeout(() => {
+        const value = window.prompt('Enter prompt text', 'seed');
+        window.__browser4State.promptResult = value === null ? '__dismissed__' : value;
+        syncState();
+      }, 0);
+    });
+
+    document.getElementById('confirm-target').addEventListener('click', () => {
+      setTimeout(() => {
+        const accepted = window.confirm('Confirm action');
+        window.__browser4State.confirmResult = accepted ? 'accepted' : 'dismissed';
+        syncState();
+      }, 0);
+    });
+
+    document.getElementById('fill-target').addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        window.__browser4State.submitCount += 1;
+        syncState();
+      }
+    });
+
+    document.addEventListener('keydown', (event) => {
+      window.__browser4State.keyEvents.push('down:' + event.key);
+      syncState();
+    });
+
+    document.addEventListener('keyup', (event) => {
+      window.__browser4State.keyEvents.push('up:' + event.key);
+      syncState();
+    });
+
+    document.getElementById('type-target').addEventListener('input', syncState);
+    document.getElementById('fill-target').addEventListener('input', syncState);
+    document.getElementById('check-target').addEventListener('change', syncState);
+    document.getElementById('select-target').addEventListener('change', syncState);
+    document.getElementById('file-input').addEventListener('change', syncState);
+
+    const mouseArea = document.getElementById('mouse-area');
+    mouseArea.addEventListener('mousemove', (event) => {
+      window.__browser4State.lastMouse = [Math.round(event.clientX), Math.round(event.clientY)];
+      syncState();
+    });
+    mouseArea.addEventListener('mousedown', () => {
+      window.__browser4State.mouseDownCount += 1;
+      syncState();
+    });
+    mouseArea.addEventListener('mouseup', () => {
+      window.__browser4State.mouseUpCount += 1;
+      syncState();
+    });
+    mouseArea.addEventListener('wheel', (event) => {
+      window.__browser4State.lastWheel = [Math.round(event.deltaY), Math.round(event.deltaX)];
+      syncState();
+    });
+
+    syncState();
+  </script>
+</body>
+</html>

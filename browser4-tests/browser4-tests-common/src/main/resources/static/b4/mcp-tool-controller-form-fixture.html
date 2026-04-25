@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Browser4 CLI Form Fixture</title>
+  <style>
+    body { margin: 0; font-family: sans-serif; padding: 24px; }
+    .form-group { margin-bottom: 12px; }
+    label { display: block; margin-bottom: 4px; font-weight: bold; }
+    input, select, textarea { padding: 4px 8px; width: 300px; }
+    button { padding: 8px 24px; margin-top: 8px; }
+    #result-panel { margin-top: 24px; padding: 12px; border: 1px solid #ccc; display: none; }
+    #error-panel { margin-top: 12px; padding: 12px; border: 1px solid #c00; color: #c00; display: none; }
+  </style>
+</head>
+<body>
+  <h1>Registration Form</h1>
+  <form id="registration-form">
+    <div class="form-group">
+      <label for="first-name">First Name</label>
+      <input id="first-name" type="text" required />
+    </div>
+    <div class="form-group">
+      <label for="last-name">Last Name</label>
+      <input id="last-name" type="text" required />
+    </div>
+    <div class="form-group">
+      <label for="email">Email</label>
+      <input id="email" type="email" required />
+    </div>
+    <div class="form-group">
+      <label for="country">Country</label>
+      <select id="country">
+        <option value="">-- select --</option>
+        <option value="us">United States</option>
+        <option value="uk">United Kingdom</option>
+        <option value="jp">Japan</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>
+        <input id="agree-terms" type="checkbox" />
+        I agree to the terms
+      </label>
+    </div>
+    <div class="form-group">
+      <label for="comments">Comments</label>
+      <textarea id="comments" rows="3"></textarea>
+    </div>
+    <button id="submit-btn" type="button">Submit</button>
+    <button id="reset-btn" type="button">Reset</button>
+  </form>
+  <div id="result-panel">
+    <h2>Submission Result</h2>
+    <pre id="result-data"></pre>
+  </div>
+  <div id="error-panel"></div>
+  <pre id="state-log"></pre>
+  <script>
+    window.__browser4State = {
+      firstName: '',
+      lastName: '',
+      email: '',
+      country: '',
+      agreeTerms: false,
+      comments: '',
+      submitCount: 0,
+      resetCount: 0,
+      lastSubmission: null,
+      validationError: ''
+    };
+
+    function syncState() {
+      const s = window.__browser4State;
+      s.firstName = document.getElementById('first-name').value;
+      s.lastName = document.getElementById('last-name').value;
+      s.email = document.getElementById('email').value;
+      s.country = document.getElementById('country').value;
+      s.agreeTerms = document.getElementById('agree-terms').checked;
+      s.comments = document.getElementById('comments').value;
+      document.getElementById('state-log').textContent = JSON.stringify(s);
+    }
+
+    document.getElementById('submit-btn').addEventListener('click', () => {
+      const s = window.__browser4State;
+      syncState();
+      const firstName = s.firstName.trim();
+      const lastName = s.lastName.trim();
+      const email = s.email.trim();
+      if (!firstName || !lastName || !email) {
+        s.validationError = 'All fields are required';
+        document.getElementById('error-panel').textContent = s.validationError;
+        document.getElementById('error-panel').style.display = 'block';
+        document.getElementById('result-panel').style.display = 'none';
+        syncState();
+        return;
+      }
+      if (!s.agreeTerms) {
+        s.validationError = 'You must agree to the terms';
+        document.getElementById('error-panel').textContent = s.validationError;
+        document.getElementById('error-panel').style.display = 'block';
+        document.getElementById('result-panel').style.display = 'none';
+        syncState();
+        return;
+      }
+      s.validationError = '';
+      s.submitCount += 1;
+      s.lastSubmission = {
+        firstName: firstName,
+        lastName: lastName,
+        email: email,
+        country: s.country,
+        comments: s.comments
+      };
+      document.getElementById('error-panel').style.display = 'none';
+      document.getElementById('result-panel').style.display = 'block';
+      document.getElementById('result-data').textContent = JSON.stringify(s.lastSubmission, null, 2);
+      syncState();
+    });
+
+    document.getElementById('reset-btn').addEventListener('click', () => {
+      document.getElementById('first-name').value = '';
+      document.getElementById('last-name').value = '';
+      document.getElementById('email').value = '';
+      document.getElementById('country').value = '';
+      document.getElementById('agree-terms').checked = false;
+      document.getElementById('comments').value = '';
+      document.getElementById('result-panel').style.display = 'none';
+      document.getElementById('error-panel').style.display = 'none';
+      window.__browser4State.resetCount += 1;
+      syncState();
+    });
+
+    ['first-name', 'last-name', 'email', 'comments'].forEach(id => {
+      document.getElementById(id).addEventListener('input', syncState);
+    });
+    document.getElementById('country').addEventListener('change', syncState);
+    document.getElementById('agree-terms').addEventListener('change', syncState);
+
+    syncState();
+  </script>
+</body>
+</html>
