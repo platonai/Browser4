@@ -2,4 +2,4 @@
 
 pub mod commands;
 pub mod managed_processes;
-mod state;
+pub mod state;
