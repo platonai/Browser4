@@ -19,14 +19,14 @@ use std::time::{Duration, Instant};
 use reqwest::Client;
 
 use crate::managed_processes::{register_managed_server_process, ManagedServerProcess};
-use crate::state::read_state;
-#[cfg(not(windows))]
-use crate::state::resolve_default_state_dir;
+use crate::state::{read_state, resolve_default_state_dir};
 
 const EXISTING_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(120);
 const JAR_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(60);
 const MAVEN_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(180);
 const CLI_TEMP_DIR_COMPONENTS: [&str; 2] = ["tmp", "cli"];
+const CLI_LIB_DIR_COMPONENT: &str = "lib";
+const BROWSER4_JAR_FILE_NAME: &str = "Browser4.jar";
 const ROOT_SEARCH_START_DIR_ENV: &str = "BROWSER4_CLI_INVOKE_DIR";
 
 /// Ensure the Browser4 server is running, starting it if necessary.
@@ -160,12 +160,8 @@ fn build_maven_launch_spec(repo_root: &Path, port: u16) -> Result<ServerLaunchSp
     Ok(ServerLaunchSpec {
         kind: ServerLaunchKind::Maven,
         program: program.clone(),
-        args: vec![
-            "-am".to_string(),
-            "spring-boot:run".to_string(),
-            format!("-Dspring-boot.run.arguments=--server.port={port}"),
-        ],
-        working_dir: module_dir.clone(),
+        args: vec![format!("-Dspring-boot.run.arguments=--server.port={port}")],
+        working_dir: repo_root.to_path_buf(),
         registry_target: program,
         description: format!(
             "Starting server via Maven spring-boot:run from {} on port {}...",
@@ -187,7 +183,7 @@ fn build_jar_launch_spec(jar_path: &Path, port: u16) -> ServerLaunchSpec {
         working_dir: jar_path
             .parent()
             .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from(".")),
+            .unwrap_or_else(default_server_working_dir),
         registry_target: jar_path.to_path_buf(),
         description: format!(
             "Starting server from Browser4.jar at {} on port {}...",
@@ -195,6 +191,10 @@ fn build_jar_launch_spec(jar_path: &Path, port: u16) -> ServerLaunchSpec {
             port
         ),
     }
+}
+
+fn default_server_working_dir() -> PathBuf {
+    env::current_dir().unwrap_or_else(|_| resolve_default_state_dir())
 }
 
 fn command_for_launch_spec(
@@ -350,7 +350,37 @@ fn prepare_unix_maven_wrapper_launcher(
         )
     })?;
 
-    Ok((launcher_wrapper_path, Some(launcher_dir)))
+    // Create a two-phase launcher script:
+    // 1. Install all required modules (so sibling SNAPSHOT JARs are available)
+    // 2. Start browser4-agents via spring-boot:run, forwarding any extra args
+    let mvnw_abs = launcher_wrapper_path
+        .to_string_lossy()
+        .replace('\'', "'\\''");
+    let launcher_script_content = [
+        "#!/bin/sh",
+        "set -e",
+        &format!("'{mvnw_abs}' -pl browser4/browser4-agents -am -DskipTests install -q"),
+        &format!("'{mvnw_abs}' -pl browser4/browser4-agents spring-boot:run \"$@\""),
+        "",
+    ]
+    .join("\n");
+    let launcher_script_path = launcher_dir.join("browser4-start.sh");
+    fs::write(&launcher_script_path, launcher_script_content.as_bytes()).map_err(|e| {
+        format!(
+            "Failed to write Browser4 launcher script {}: {e}",
+            launcher_script_path.display()
+        )
+    })?;
+    fs::set_permissions(&launcher_script_path, fs::Permissions::from_mode(0o755)).map_err(
+        |e| {
+            format!(
+                "Failed to set executable permissions on Browser4 launcher script {}: {e}",
+                launcher_script_path.display()
+            )
+        },
+    )?;
+
+    Ok((launcher_script_path, Some(launcher_dir)))
 }
 
 fn find_browser4_root() -> Option<PathBuf> {
@@ -439,32 +469,14 @@ fn should_skip_browser4_root_search(path: &Path) -> bool {
 }
 
 async fn find_or_download_jar() -> Result<PathBuf, String> {
-    // Check environment variable
-    if let Ok(env_path) = std::env::var("BROWSER4_JAR_PATH") {
-        let p = PathBuf::from(&env_path);
-        if p.exists() {
-            return Ok(p);
-        }
+    if let Some(configured_path) = browser4_jar_override_path() {
+        return Ok(configured_path);
     }
 
-    // Common candidate locations
     let project_root = find_browser4_root();
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    let mut candidates = Vec::new();
+    let candidates = browser4_jar_candidates(project_root.as_deref());
 
     eprintln!("Project root: {:?}", project_root);
-
-    if let Some(root) = project_root {
-        candidates.push(
-            root.join("browser4")
-                .join("browser4-agents")
-                .join("target")
-                .join("Browser4.jar"),
-        );
-        candidates.push(root.join("target").join("Browser4.jar"));
-    }
-
-    candidates.extend([home.join(".browser4").join("lib").join("Browser4.jar")]);
 
     for candidate in candidates {
         eprintln!("Checking for Browser4.jar at {}...", candidate.display());
@@ -474,10 +486,43 @@ async fn find_or_download_jar() -> Result<PathBuf, String> {
         }
     }
 
-    // Download if not found
-    let download_path = home.join(".browser4").join("lib").join("Browser4.jar");
+    let download_path = default_browser4_jar_path();
     download_jar(&download_path).await?;
     Ok(download_path)
+}
+
+fn browser4_jar_override_path() -> Option<PathBuf> {
+    let override_path = env::var("BROWSER4_JAR_PATH").ok()?;
+    let trimmed = override_path.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let path = PathBuf::from(trimmed);
+    path.exists().then_some(path)
+}
+
+fn browser4_jar_candidates(project_root: Option<&Path>) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Some(root) = project_root {
+        candidates.push(
+            root.join("browser4")
+                .join("browser4-agents")
+                .join("target")
+                .join(BROWSER4_JAR_FILE_NAME),
+        );
+        candidates.push(root.join("target").join(BROWSER4_JAR_FILE_NAME));
+    }
+
+    candidates.push(default_browser4_jar_path());
+    candidates
+}
+
+fn default_browser4_jar_path() -> PathBuf {
+    resolve_default_state_dir()
+        .join(CLI_LIB_DIR_COMPONENT)
+        .join(BROWSER4_JAR_FILE_NAME)
 }
 
 async fn download_jar(target_path: &Path) -> Result<(), String> {
@@ -1057,6 +1102,35 @@ mod tests {
     }
 
     #[test]
+    fn test_default_browser4_jar_path_uses_state_dir_override() {
+        let tmp = TempDir::new().unwrap();
+        let expected = tmp.path().canonicalize().unwrap().join("lib").join("Browser4.jar");
+
+        unsafe {
+            env::set_var("BROWSER4_CLI_STATE_DIR", tmp.path().as_os_str());
+        }
+        let actual = default_browser4_jar_path();
+        unsafe {
+            env::remove_var("BROWSER4_CLI_STATE_DIR");
+        }
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_browser4_jar_override_path_ignores_blank_values() {
+        unsafe {
+            env::set_var("BROWSER4_JAR_PATH", "   ");
+        }
+        let actual = browser4_jar_override_path();
+        unsafe {
+            env::remove_var("BROWSER4_JAR_PATH");
+        }
+
+        assert_eq!(actual, None);
+    }
+
+    #[test]
     fn test_server_startup_log_dir_uses_provided_log_dir() {
         let tmp = TempDir::new().unwrap();
 
@@ -1197,40 +1271,43 @@ mod tests {
         let root = create_browser4_root(&tmp);
         let wrapper = root.join("mvnw.cmd");
         write(&wrapper, "@echo off\r\n").unwrap();
+        let port_arg = "-Dspring-boot.run.arguments=--server.port=8199".to_string();
 
         let spec = build_maven_launch_spec(&root, 8199).unwrap();
 
         assert_eq!(spec.kind, ServerLaunchKind::Maven);
         assert_eq!(spec.program, wrapper);
+        assert_eq!(spec.working_dir, root);
+        assert_eq!(spec.args, vec![port_arg.clone()]);
+        let invocation = build_powershell_batch_invocation(&spec.program, &spec.args);
+        let expected_program = spec.program.to_string_lossy().replace('\'', "''");
+        let expected_arg = port_arg.replace('\'', "''");
+
         assert_eq!(
-            spec.working_dir,
-            root.join("browser4").join("browser4-agents")
-        );
-        assert_eq!(
-            spec.args,
-            vec![
-                "-am",
-                "spring-boot:run",
-                "-Dspring-boot.run.arguments=--server.port=8199",
-            ]
+            invocation,
+            format!("& '{expected_program}' '{expected_arg}'")
         );
     }
 
     #[cfg(windows)]
     #[test]
-    fn test_build_powershell_batch_invocation_quotes_windows_maven_property() {
-        let invocation = build_powershell_batch_invocation(
-            Path::new(r"D:\workspace\Browser4Team\submodules\Browser4\mvnw.cmd"),
-            &[
-                "-am".to_string(),
-                "spring-boot:run".to_string(),
-                "-Dspring-boot.run.arguments=--server.port=8199".to_string(),
-            ],
-        );
+    fn test_build_powershell_batch_invocation_escapes_dynamic_windows_paths() {
+        let tmp = TempDir::new().unwrap();
+        let wrapper_dir = tmp.path().join("team's tools");
+        create_dir_all(&wrapper_dir).unwrap();
+        let wrapper = wrapper_dir.join("mvnw.cmd");
+        write(&wrapper, "@echo off\r\n").unwrap();
+        let args = ["-Dflag=team's-value".to_string()];
+
+        let invocation = build_powershell_batch_invocation(&wrapper, &args);
 
         assert_eq!(
             invocation,
-            "& 'D:\\workspace\\Browser4Team\\submodules\\Browser4\\mvnw.cmd' '-am' 'spring-boot:run' '-Dspring-boot.run.arguments=--server.port=8199'"
+            format!(
+                "& '{}' '{}'",
+                wrapper.to_string_lossy().replace('\'', "''"),
+                args[0].replace('\'', "''")
+            )
         );
     }
 
@@ -1246,17 +1323,10 @@ mod tests {
 
         assert_eq!(spec.kind, ServerLaunchKind::Maven);
         assert_eq!(spec.program, wrapper);
-        assert_eq!(
-            spec.working_dir,
-            root.join("browser4").join("browser4-agents")
-        );
+        assert_eq!(spec.working_dir, root);
         assert_eq!(
             spec.args,
-            vec![
-                "-am",
-                "spring-boot:run",
-                "-Dspring-boot.run.arguments=--server.port=8199",
-            ]
+            vec!["-Dspring-boot.run.arguments=--server.port=8199"]
         );
     }
 
@@ -1282,10 +1352,11 @@ mod tests {
             .expect("Unix wrapper launch should stage a normalized temp wrapper");
         let prepared_program = PathBuf::from(Path::new(prepared.command.get_program()));
 
+        // The launcher script (not mvnw) is returned as the program
         assert_ne!(prepared_program, wrapper);
         assert_eq!(
             prepared_program.file_name().and_then(|name| name.to_str()),
-            Some("mvnw")
+            Some("browser4-start.sh")
         );
         assert_eq!(
             prepared.command.get_current_dir(),
@@ -1299,11 +1370,26 @@ mod tests {
                 .collect::<Vec<_>>(),
             spec.args
         );
+
+        // The normalized mvnw and .mvn symlink are staged in the same cleanup dir
+        let staged_mvnw = cleanup_dir.join("mvnw");
+        assert!(staged_mvnw.exists(), "normalized mvnw should be staged");
         assert_eq!(
-            fs::read_to_string(&prepared_program).unwrap(),
+            fs::read_to_string(&staged_mvnw).unwrap(),
             "#!/bin/sh\nset -eu\n"
         );
         assert!(cleanup_dir.join(".mvn").exists());
+
+        // The launcher script should reference mvnw and both Maven phases
+        let script_content = fs::read_to_string(&prepared_program).unwrap();
+        assert!(
+            script_content.contains("-am -DskipTests install"),
+            "launcher script should contain install phase"
+        );
+        assert!(
+            script_content.contains("spring-boot:run"),
+            "launcher script should contain spring-boot:run"
+        );
 
         cleanup_prepared_launch_dir(Some(cleanup_dir));
     }
