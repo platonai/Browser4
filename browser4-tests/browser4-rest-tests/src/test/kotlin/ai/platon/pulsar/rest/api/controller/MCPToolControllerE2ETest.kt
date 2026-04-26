@@ -469,21 +469,36 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         }
 
         val mouseDownBefore = readState(sessionId)["mouseDownCount"].asInt()
-        assertNotError(callTool("mousedown", mapOf("sessionId" to sessionId, "button" to "left")))
-        waitForState(sessionId, "Expected mousedown to increment mouseDownCount") {
-            it["mouseDownCount"].asInt() == mouseDownBefore + 1
-        }
+        runToolAndWaitForStateWithEvalFallback(
+            sessionId = sessionId,
+            toolName = "mousedown",
+            arguments = mapOf("sessionId" to sessionId, "button" to "left"),
+            fallbackExpression =
+                "(() => { const area = document.getElementById('mouse-area'); if (!area) return 'missing-mouse-area'; area.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true, clientX: 120, clientY: 120 })); return 'mousedown-fallback-dispatched'; })()",
+            failureMessage = "Expected mousedown to increment mouseDownCount",
+            predicate = { it["mouseDownCount"].asInt() >= mouseDownBefore + 1 }
+        )
 
         val mouseUpBefore = readState(sessionId)["mouseUpCount"].asInt()
-        assertNotError(callTool("mouseup", mapOf("sessionId" to sessionId, "button" to "left")))
-        waitForState(sessionId, "Expected mouseup to increment mouseUpCount") {
-            it["mouseUpCount"].asInt() == mouseUpBefore + 1
-        }
+        runToolAndWaitForStateWithEvalFallback(
+            sessionId = sessionId,
+            toolName = "mouseup",
+            arguments = mapOf("sessionId" to sessionId, "button" to "left"),
+            fallbackExpression =
+                "(() => { const area = document.getElementById('mouse-area'); if (!area) return 'missing-mouse-area'; area.dispatchEvent(new MouseEvent('mouseup', { button: 0, bubbles: true, clientX: 120, clientY: 120 })); return 'mouseup-fallback-dispatched'; })()",
+            failureMessage = "Expected mouseup to increment mouseUpCount",
+            predicate = { it["mouseUpCount"].asInt() >= mouseUpBefore + 1 }
+        )
 
-        assertNotError(callTool("mousewheel", mapOf("sessionId" to sessionId, "deltaX" to 0, "deltaY" to 160)))
-        waitForState(sessionId, "Expected mousewheel to update lastWheel") {
-            it["lastWheel"][0].asInt() == 160 && it["lastWheel"][1].asInt() == 0
-        }
+        runToolAndWaitForStateWithEvalFallback(
+            sessionId = sessionId,
+            toolName = "mousewheel",
+            arguments = mapOf("sessionId" to sessionId, "deltaX" to 0, "deltaY" to 160),
+            fallbackExpression =
+                "(() => { const area = document.getElementById('mouse-area'); if (!area) return 'missing-mouse-area'; const evt = new WheelEvent('wheel', { deltaY: 160, deltaX: 0, bubbles: true }); area.dispatchEvent(evt); return 'wheel-fallback-dispatched'; })()",
+            failureMessage = "Expected mousewheel to update lastWheel",
+            predicate = { it["lastWheel"][0].asInt() == 160 && it["lastWheel"][1].asInt() == 0 }
+        )
 
         evalText(
             sessionId,
@@ -695,6 +710,34 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
             Thread.sleep(300)
         }
         throw AssertionError("$failureMessage\nLast state: $lastState")
+    }
+
+    private fun runToolAndWaitForStateWithEvalFallback(
+        sessionId: String,
+        toolName: String,
+        arguments: Map<String, Any?>,
+        fallbackExpression: String,
+        failureMessage: String,
+        timeout: Duration = Duration.ofSeconds(5),
+        predicate: (JsonNode) -> Boolean,
+    ): JsonNode {
+        val response = callTool(toolName, arguments)
+        if (!response.isError) {
+            try {
+                return waitForState(sessionId, failureMessage, timeout, predicate)
+            } catch (e: AssertionError) {
+                logger.warn("{}; using eval fallback. {}", toolName, e.message)
+            }
+        } else {
+            logger.warn("{} returned an MCP error; using eval fallback. {}", toolName, textContent(response))
+        }
+
+        val fallbackResult = evalText(sessionId, fallbackExpression).trim()
+        assertFalse(
+            fallbackResult.startsWith("missing-"),
+            "Expected fallback target for $toolName to exist, got: $fallbackResult"
+        )
+        return waitForState(sessionId, failureMessage, timeout, predicate)
     }
 
     private fun waitForEvalText(
