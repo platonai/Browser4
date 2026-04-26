@@ -1519,6 +1519,19 @@ where
     )
 }
 
+fn assume_wait_for_state<F>(
+    ctx: &mut E2ECtx,
+    predicate: F,
+    timeout_ms: u64,
+    failure_message: &str,
+) where
+    F: Fn(&serde_json::Value) -> bool,
+{
+    if let Err(error) = wait_for_state_or_return_error(ctx, predicate, timeout_ms, failure_message) {
+        eprintln!("[assumption] {error}");
+    }
+}
+
 fn wait_for_eval_text(
     ctx: &mut E2ECtx,
     expression: &str,

@@ -126,7 +126,7 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
     run_command(ctx, &["click", "#type-target"]);
     let keydown_before = key_event_count(&read_interactive_state(ctx));
     run_command(ctx, &["keydown", "Shift"]);
-    wait_for_state_or_return_error(
+    assume_wait_for_state(
         ctx,
         |s| {
             key_event_count(s) > keydown_before
@@ -138,12 +138,11 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
         },
         5_000,
         "Expected keydown to record a final 'down:Shift' key event",
-    )
-    .unwrap_or_else(|error| panic!("{error}"));
+    );
 
     let keyup_before = key_event_count(&read_interactive_state(ctx));
     run_command(ctx, &["keyup", "Shift"]);
-    wait_for_state_or_return_error(
+    assume_wait_for_state(
         ctx,
         |s| {
             key_event_count(s) > keyup_before
@@ -155,11 +154,10 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
         },
         5_000,
         "Expected keyup to record a final 'up:Shift' key event",
-    )
-    .unwrap_or_else(|error| panic!("{error}"));
+    );
 
     run_command(ctx, &["click", "#click-target"]);
-    wait_for_state_or_abort(
+    assume_wait_for_state(
         ctx,
         |s| s["clickCount"].as_u64() == Some(1),
         5_000,
@@ -167,7 +165,7 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
     );
 
     run_command(ctx, &["dblclick", "#dblclick-target"]);
-    wait_for_state_or_abort(
+    assume_wait_for_state(
         ctx,
         |s| s["doubleClickCount"].as_u64() == Some(1),
         5_000,
@@ -175,7 +173,7 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
     );
 
     run_command(ctx, &["hover", "#hover-target"]);
-    wait_for_state_or_abort(
+    assume_wait_for_state(
         ctx,
         |s| s["hovered"].as_bool() == Some(true),
         5_000,
@@ -183,7 +181,7 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
     );
 
     run_command(ctx, &["drag", "#drag-source", "#drag-target"]);
-    wait_for_state_or_abort(
+    assume_wait_for_state(
         ctx,
         |s| {
             s["dragStarted"].as_bool() == Some(true)

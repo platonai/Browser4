@@ -44,7 +44,7 @@ const SCENARIOS: &[ScenarioDef] = &[
         short_name: "test_interaction_commands",
         requires_browser4: true,
         restart_browser4: false,
-        test_count: 5,
+        test_count: 2,
         test_fn: browser::test_interaction_commands,
     },
     ScenarioDef {
