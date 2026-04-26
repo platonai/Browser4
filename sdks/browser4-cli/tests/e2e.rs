@@ -60,6 +60,7 @@ const FORM_PATH: &str = "/form";
 const INTERACTIVE_TITLE: &str = "Browser4 CLI Interactive Fixture";
 const OTHER_TITLE: &str = "Browser4 CLI Other Fixture";
 const FORM_TITLE: &str = "Browser4 CLI Form Fixture";
+const ROOT_SEARCH_START_DIR_ENV: &str = "BROWSER4_CLI_INVOKE_DIR";
 
 // ---------------------------------------------------------------------------
 // Environment helpers
@@ -713,6 +714,7 @@ impl TimingReport {
 struct E2ECtx {
     fixture_base_url: String,
     browser4_base_url: String,
+    invocation_dir: PathBuf,
     workspace_dir: PathBuf,
     state_dir: PathBuf,
     upload_file_path: PathBuf,
@@ -781,7 +783,7 @@ impl E2ETestResources {
         let started_via_maven = startup_result
             .stderr
             .contains("Starting server via Maven spring-boot:run");
-        let expect_maven_startup = is_browser4_repo_or_child(&self.ctx.workspace_dir);
+        let expect_maven_startup = is_browser4_repo_or_child(&self.ctx.invocation_dir);
         assert_eq!(
             startup_result.exit_code, 0,
             "Expected CLI-managed Browser4 startup to succeed.{}\nstdout:\n{}\nstderr:\n{}",
@@ -956,6 +958,7 @@ fn run_cli_process_internal(
     command
         .args(&full_args)
         .current_dir(&ctx.workspace_dir)
+        .env(ROOT_SEARCH_START_DIR_ENV, &ctx.invocation_dir)
         .env("BROWSER4_CLI_STATE_DIR", &ctx.state_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -1602,6 +1605,7 @@ fn create_e2e_test_resources() -> E2ETestResources {
 
     let browser4_base_url =
         service_url.unwrap_or_else(|| format!("http://127.0.0.1:{}", find_free_port()));
+    let invocation_dir = std::env::current_dir().expect("failed to read e2e invocation directory");
 
     let temp_dir = tempfile::TempDir::new().expect("tempdir creation failed");
     let workspace_dir = temp_dir.path().join("workspace");
@@ -1621,6 +1625,7 @@ fn create_e2e_test_resources() -> E2ETestResources {
         ctx: E2ECtx {
             fixture_base_url,
             browser4_base_url,
+            invocation_dir,
             workspace_dir,
             state_dir,
             upload_file_path,

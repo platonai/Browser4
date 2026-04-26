@@ -129,7 +129,10 @@ pub(super) fn test_batch_commands(ctx: &mut E2ECtx) {
         .as_str()
         .unwrap_or_default()
         .to_string();
-    assert_eq!(fill_value, "from json");
+    assert_eq!(
+        fill_value, "json string only",
+        "Expected fill value unchanged after --bail failure"
+    );
 
     run_command(ctx, &["close"]);
 }

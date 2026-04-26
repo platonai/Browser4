@@ -27,6 +27,7 @@ const EXISTING_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(120);
 const JAR_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(60);
 const MAVEN_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(180);
 const CLI_TEMP_DIR_COMPONENTS: [&str; 2] = ["tmp", "cli"];
+const ROOT_SEARCH_START_DIR_ENV: &str = "BROWSER4_CLI_INVOKE_DIR";
 
 /// Ensure the Browser4 server is running, starting it if necessary.
 ///
@@ -114,10 +115,17 @@ struct PreparedLaunchCommand {
 }
 
 async fn resolve_server_launch_spec(port: u16) -> Result<ServerLaunchSpec, String> {
-    // TODO: `cargo test` executes from a temporary directory while `cargo run` executes from the calling directory, so it causes confusing
-    // if let Some(repo_root) = find_browser4_root() {
-    //     return build_maven_launch_spec(&repo_root, port);
-    // }
+    if let Some(repo_root) = find_browser4_root() {
+        match build_maven_launch_spec(&repo_root, port) {
+            Ok(spec) => return Ok(spec),
+            Err(error) => {
+                eprintln!(
+                    "Falling back to Browser4.jar startup because Maven launch spec failed: {}",
+                    error
+                );
+            }
+        }
+    }
 
     let jar_path = find_or_download_jar().await?;
     Ok(build_jar_launch_spec(&jar_path, port))
@@ -153,6 +161,7 @@ fn build_maven_launch_spec(repo_root: &Path, port: u16) -> Result<ServerLaunchSp
         kind: ServerLaunchKind::Maven,
         program: program.clone(),
         args: vec![
+            "-am".to_string(),
             "spring-boot:run".to_string(),
             format!("-Dspring-boot.run.arguments=--server.port={port}"),
         ],
@@ -345,10 +354,23 @@ fn prepare_unix_maven_wrapper_launcher(
 }
 
 fn find_browser4_root() -> Option<PathBuf> {
-    // Prefer Maven only when the caller is already inside a Browser4 checkout.
-    // Global installs should not infer repo roots from executable or build paths.
+    if let Some(invocation_dir) = browser4_root_search_start_dir_from_env() {
+        if let Some(root) = find_browser4_root_from(&invocation_dir, false) {
+            return Some(root);
+        }
+    }
+
     let current_dir = env::current_dir().ok()?;
     find_browser4_root_from(&current_dir, false)
+}
+
+fn browser4_root_search_start_dir_from_env() -> Option<PathBuf> {
+    let value = env::var(ROOT_SEARCH_START_DIR_ENV).ok()?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(trimmed))
 }
 
 fn find_browser4_root_from(start: &Path, deep_search: bool) -> Option<PathBuf> {
@@ -944,6 +966,23 @@ mod tests {
     }
 
     #[test]
+    fn test_find_browser4_root_prefers_invocation_env_dir() {
+        let tmp = TempDir::new().unwrap();
+        let root = create_browser4_root(&tmp);
+        let nested = root.join("sdks").join("browser4-cli");
+
+        unsafe {
+            env::set_var(ROOT_SEARCH_START_DIR_ENV, nested.as_os_str());
+        }
+        let detected = find_browser4_root();
+        unsafe {
+            env::remove_var(ROOT_SEARCH_START_DIR_ENV);
+        }
+
+        assert_eq!(detected, Some(root));
+    }
+
+    #[test]
     fn test_find_browser4_root_from_nested_cli_dir() {
         let tmp = TempDir::new().unwrap();
         let root = create_browser4_root(&tmp);
@@ -1170,6 +1209,7 @@ mod tests {
         assert_eq!(
             spec.args,
             vec![
+                "-am",
                 "spring-boot:run",
                 "-Dspring-boot.run.arguments=--server.port=8199",
             ]
@@ -1182,6 +1222,7 @@ mod tests {
         let invocation = build_powershell_batch_invocation(
             Path::new(r"D:\workspace\Browser4Team\submodules\Browser4\mvnw.cmd"),
             &[
+                "-am".to_string(),
                 "spring-boot:run".to_string(),
                 "-Dspring-boot.run.arguments=--server.port=8199".to_string(),
             ],
@@ -1189,7 +1230,7 @@ mod tests {
 
         assert_eq!(
             invocation,
-            "& 'D:\\workspace\\Browser4Team\\submodules\\Browser4\\mvnw.cmd' 'spring-boot:run' '-Dspring-boot.run.arguments=--server.port=8199'"
+            "& 'D:\\workspace\\Browser4Team\\submodules\\Browser4\\mvnw.cmd' '-am' 'spring-boot:run' '-Dspring-boot.run.arguments=--server.port=8199'"
         );
     }
 
@@ -1212,6 +1253,7 @@ mod tests {
         assert_eq!(
             spec.args,
             vec![
+                "-am",
                 "spring-boot:run",
                 "-Dspring-boot.run.arguments=--server.port=8199",
             ]
