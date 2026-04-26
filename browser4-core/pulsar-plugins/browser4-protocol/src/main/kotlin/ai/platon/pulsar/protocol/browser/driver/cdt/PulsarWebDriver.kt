@@ -291,6 +291,18 @@ class PulsarWebDriver(
         return page.isVisible(safeSelector)
     }
 
+    @Throws(WebDriverException::class)
+    override suspend fun check(selector: String) {
+        val safeSelector = normalizeCSSSelector(selector) ?: return
+        evaluate("__pulsar_utils__.check('$safeSelector')")
+    }
+
+    @Throws(WebDriverException::class)
+    override suspend fun uncheck(selector: String) {
+        val safeSelector = normalizeCSSSelector(selector) ?: return
+        evaluate("__pulsar_utils__.uncheck('$safeSelector')")
+    }
+
     override suspend fun isChecked(selector: String): Boolean {
         val safeSelector = normalizeCSSSelector(selector) ?: return false
         return page.isChecked(safeSelector)
