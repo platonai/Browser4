@@ -1725,12 +1725,34 @@ fn key_event_count(state: &serde_json::Value) -> usize {
         .map_or(0, |events| events.len())
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WaitForStateFailureMode {
+    ReturnError,
+    AbortScenario,
+}
+
+fn format_wait_for_state_timeout_failure(
+    timeout_ms: u64,
+    failure_message: &str,
+    state: &serde_json::Value,
+) -> String {
+    let parse_hint = if state.is_null() {
+        "\nLast state could not be parsed from #state-log and was read as JSON null."
+    } else {
+        ""
+    };
+    format!(
+        "{failure_message}. Timed out after {timeout_ms}ms waiting for interactive state.{parse_hint}\nLast state:\n{state:#?}"
+    )
+}
+
 fn wait_for_state<F>(
     ctx: &mut E2ECtx,
     predicate: F,
     timeout_ms: u64,
     failure_message: &str,
-) -> serde_json::Value
+    failure_mode: WaitForStateFailureMode,
+) -> Result<serde_json::Value, String>
 where
     F: Fn(&serde_json::Value) -> bool,
 {
@@ -1747,19 +1769,35 @@ where
                 ),
                 started_at.elapsed(),
             );
-            return state;
+            return Ok(state);
         }
         thread::sleep(Duration::from_millis(300));
     }
     let state = read_interactive_state(ctx);
-    let parse_hint = if state.is_null() {
-        "\nLast state could not be parsed from #state-log and was read as JSON null."
-    } else {
-        ""
-    };
-    panic!(
-        "{failure_message}. Timed out after {timeout_ms}ms waiting for interactive state.{parse_hint}\nLast state:\n{state:#?}"
-    );
+    let error = format_wait_for_state_timeout_failure(timeout_ms, failure_message, &state);
+    match failure_mode {
+        WaitForStateFailureMode::ReturnError => Err(error),
+        WaitForStateFailureMode::AbortScenario => panic!("{error}"),
+    }
+}
+
+fn wait_for_state_or_abort<F>(
+    ctx: &mut E2ECtx,
+    predicate: F,
+    timeout_ms: u64,
+    failure_message: &str,
+) -> serde_json::Value
+where
+    F: Fn(&serde_json::Value) -> bool,
+{
+    wait_for_state(
+        ctx,
+        predicate,
+        timeout_ms,
+        failure_message,
+        WaitForStateFailureMode::AbortScenario,
+    )
+    .unwrap_or_else(|error| panic!("{error}"))
 }
 
 fn wait_for_eval_text(
@@ -2077,7 +2115,7 @@ fn test_interaction_commands(ctx: &mut E2ECtx) {
     open_resized_interactive_page(ctx);
 
     run_command(ctx, &["type", "#type-target", "hello world"]);
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| s["typeValue"].as_str() == Some("hello world"),
         15_000,
@@ -2086,7 +2124,7 @@ fn test_interaction_commands(ctx: &mut E2ECtx) {
 
     // fill
     run_command(ctx, &["fill", "#fill-target", "filled text"]);
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| s["fillValue"].as_str() == Some("filled text"),
         15_000,
@@ -2096,7 +2134,7 @@ fn test_interaction_commands(ctx: &mut E2ECtx) {
     let press_before = read_interactive_state(ctx);
     let press_before_events = key_event_count(&press_before);
     run_command(ctx, &["press", "#type-target", "!"]);
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| {
             s["typeValue"].as_str() == Some("hello world!")
@@ -2109,7 +2147,7 @@ fn test_interaction_commands(ctx: &mut E2ECtx) {
     run_command(ctx, &["click", "#type-target"]);
     let keydown_before = key_event_count(&read_interactive_state(ctx));
     run_command(ctx, &["keydown", "Shift"]);
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| {
             key_event_count(s) > keydown_before
@@ -2125,7 +2163,7 @@ fn test_interaction_commands(ctx: &mut E2ECtx) {
 
     let keyup_before = key_event_count(&read_interactive_state(ctx));
     run_command(ctx, &["keyup", "Shift"]);
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| {
             key_event_count(s) > keyup_before
@@ -2140,7 +2178,7 @@ fn test_interaction_commands(ctx: &mut E2ECtx) {
     );
 
     run_command(ctx, &["click", "#click-target"]);
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| s["clickCount"].as_u64() == Some(1),
         15_000,
@@ -2148,7 +2186,7 @@ fn test_interaction_commands(ctx: &mut E2ECtx) {
     );
 
     run_command(ctx, &["dblclick", "#dblclick-target"]);
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| s["doubleClickCount"].as_u64() == Some(1),
         15_000,
@@ -2156,7 +2194,7 @@ fn test_interaction_commands(ctx: &mut E2ECtx) {
     );
 
     run_command(ctx, &["hover", "#hover-target"]);
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| s["hovered"].as_bool() == Some(true),
         15_000,
@@ -2164,7 +2202,7 @@ fn test_interaction_commands(ctx: &mut E2ECtx) {
     );
 
     run_command(ctx, &["drag", "#drag-source", "#drag-target"]);
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| {
             s["dragStarted"].as_bool() == Some(true)
@@ -2177,12 +2215,52 @@ fn test_interaction_commands(ctx: &mut E2ECtx) {
     run_command(ctx, &["close"]);
 }
 
+fn test_wait_for_state_failure_modes(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    open_interactive_page(ctx);
+
+    let error = wait_for_state(
+        ctx,
+        |s| s["clickCount"].as_u64() == Some(999),
+        700,
+        "Expected ReturnError mode to report a timeout without aborting the scenario",
+        WaitForStateFailureMode::ReturnError,
+    )
+    .expect_err("wait_for_state should return Err in ReturnError mode when the predicate never matches");
+
+    assert!(
+        error.contains("Expected ReturnError mode to report a timeout without aborting the scenario"),
+        "Expected original failure message in wait_for_state error:\n{}",
+        error
+    );
+    assert!(
+        error.contains("Timed out after 700ms waiting for interactive state"),
+        "Expected timeout details in wait_for_state error:\n{}",
+        error
+    );
+    assert!(
+        error.contains("Last state:"),
+        "Expected last state dump in wait_for_state error:\n{}",
+        error
+    );
+
+    run_command(ctx, &["fill", "#fill-target", "continued after error"]);
+    wait_for_state_or_abort(
+        ctx,
+        |s| s["fillValue"].as_str() == Some("continued after error"),
+        15_000,
+        "Expected scenario to continue after ReturnError mode and update fillValue",
+    );
+
+    run_command(ctx, &["close"]);
+}
+
 fn test_form_controls_and_exports(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
     open_interactive_page(ctx);
 
     run_command(ctx, &["select", "#select-target", "green"]);
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| s["selectValue"].as_str() == Some("green"),
         15_000,
@@ -2190,7 +2268,7 @@ fn test_form_controls_and_exports(ctx: &mut E2ECtx) {
     );
 
     run_command(ctx, &["check", "#check-target"]);
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| s["checkbox"].as_bool() == Some(true),
         15_000,
@@ -2198,7 +2276,7 @@ fn test_form_controls_and_exports(ctx: &mut E2ECtx) {
     );
 
     run_command(ctx, &["uncheck", "#check-target"]);
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| s["checkbox"].as_bool() == Some(false),
         15_000,
@@ -2208,7 +2286,7 @@ fn test_form_controls_and_exports(ctx: &mut E2ECtx) {
     // upload
     let upload_path = ctx.upload_file_path.to_string_lossy().into_owned();
     run_command(ctx, &["upload", "#file-input", &upload_path]);
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| s["uploadName"].as_str() == Some("upload.txt"),
         15_000,
@@ -2275,7 +2353,7 @@ fn test_batch_commands(ctx: &mut E2ECtx) {
             click_command.as_str(),
         ],
     );
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| s["typeValue"].as_str() == Some("hello batch") && s["clickCount"].as_u64() == Some(1),
         15_000,
@@ -2294,7 +2372,7 @@ fn test_batch_commands(ctx: &mut E2ECtx) {
 ]
 "##,
     );
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| {
             s["fillValue"].as_str() == Some("from json")
@@ -2326,7 +2404,7 @@ fn test_batch_commands(ctx: &mut E2ECtx) {
             interactive_url = interactive_url,
         ),
     );
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| {
             s["typeValue"].as_str() == Some("json string input")
@@ -2347,7 +2425,7 @@ fn test_batch_commands(ctx: &mut E2ECtx) {
 ]
 "##,
     );
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| {
             s["fillValue"].as_str() == Some("json string only")
@@ -2416,7 +2494,7 @@ fn test_batch_form_submission(ctx: &mut E2ECtx) {
     );
 
     // Verify the form state reflects our inputs and submission
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| {
             s["firstName"].as_str() == Some("Alice")
@@ -2461,7 +2539,7 @@ fn test_batch_form_submission(ctx: &mut E2ECtx) {
 ]"##,
     );
 
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| {
             s["submitCount"].as_u64() == Some(2)
@@ -2543,7 +2621,7 @@ fn test_batch_form_submission_from_json_file(ctx: &mut E2ECtx) {
             .expect("serialize batch commands from JSON fixture failed"),
     );
 
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| {
             s["firstName"].as_str() == Some(first_name)
@@ -2592,7 +2670,7 @@ fn test_batch_multi_interaction(ctx: &mut E2ECtx) {
         ],
     );
 
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| {
             s["typeValue"].as_str() == Some("batch multi")
@@ -2650,7 +2728,7 @@ fn test_batch_multi_interaction(ctx: &mut E2ECtx) {
 
     // Uncheck and verify via batch to test state reversal
     run_command(ctx, &["batch", "uncheck #check-target"]);
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| s["checkbox"].as_bool() == Some(false),
         15_000,
@@ -2681,7 +2759,7 @@ fn test_batch_error_handling(ctx: &mut E2ECtx) {
         "1 batch command(s) failed.",
     );
     // Fill should have executed despite the error in the middle
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| s["fillValue"].as_str() == Some("after error"),
         15_000,
@@ -2703,7 +2781,7 @@ fn test_batch_error_handling(ctx: &mut E2ECtx) {
     // Type should have executed (before the error).
     // `type` simulates keystrokes and appends to existing input, so check
     // that the value ends with the typed text rather than expecting an exact match.
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| {
             s["typeValue"]
@@ -2737,7 +2815,7 @@ fn test_batch_error_handling(ctx: &mut E2ECtx) {
     );
     // `type` simulates keystrokes and appends to existing input, so check
     // that the value ends with the typed text rather than expecting an exact match.
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| {
             s["typeValue"]
@@ -2771,7 +2849,7 @@ fn test_batch_json_edge_cases(ctx: &mut E2ECtx) {
   "click #click-target"
 ]"##,
     );
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| {
             s["typeValue"].as_str() == Some("json mixed")
@@ -2793,7 +2871,7 @@ fn test_batch_json_edge_cases(ctx: &mut E2ECtx) {
   ["fill", "#fill-target", "special: @#$%&*"]
 ]"##,
     );
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| s["fillValue"].as_str() == Some("special: @#$%&*"),
         15_000,
@@ -2828,7 +2906,7 @@ fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
     open_resized_interactive_page(ctx);
 
     run_command(ctx, &["mousemove", "120", "120"]);
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| s["lastMouse"][0].as_i64() == Some(120) && s["lastMouse"][1].as_i64() == Some(120),
         15_000,
@@ -2839,7 +2917,7 @@ fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
         .as_u64()
         .unwrap_or(0);
     run_command(ctx, &["mousedown", "left"]);
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| s["mouseDownCount"].as_u64() == Some(before_mouse_down + 1),
         15_000,
@@ -2850,7 +2928,7 @@ fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
         .as_u64()
         .unwrap_or(0);
     run_command(ctx, &["mouseup", "left"]);
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| s["mouseUpCount"].as_u64() == Some(before_mouse_up + 1),
         15_000,
@@ -2858,7 +2936,7 @@ fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
     );
 
     run_command(ctx, &["mousewheel", "0", "160"]);
-    let wheel_state = wait_for_state(
+    let wheel_state = wait_for_state_or_abort(
         ctx,
         |s| s["lastWheel"][0].as_i64() == Some(160) && s["lastWheel"][1].as_i64() == Some(0),
         15_000,
@@ -2876,7 +2954,7 @@ fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
     );
     thread::sleep(Duration::from_millis(500));
     run_command(ctx, &["dialog-accept", "accepted by cli"]);
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| s["promptResult"].as_str() == Some("accepted by cli"),
         15_000,
@@ -2889,7 +2967,7 @@ fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
     );
     thread::sleep(Duration::from_millis(500));
     run_command(ctx, &["dialog-dismiss"]);
-    wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| s["confirmResult"].as_str() == Some("dismissed"),
         15_000,
@@ -3409,8 +3487,16 @@ const SCENARIOS: &[ScenarioDef] = &[
         short_name: "test_interaction_commands",
         requires_browser4: true,
         restart_browser4: false,
-        test_count: 1,
+        test_count: 5,
         test_fn: test_interaction_commands,
+    },
+    ScenarioDef {
+        name: "test_e2e_wait_for_state_failure_modes",
+        short_name: "test_wait_for_state_failure_modes",
+        requires_browser4: true,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: test_wait_for_state_failure_modes,
     },
     ScenarioDef {
         name: "test_e2e_batch_commands",

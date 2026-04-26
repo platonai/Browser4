@@ -114,9 +114,10 @@ struct PreparedLaunchCommand {
 }
 
 async fn resolve_server_launch_spec(port: u16) -> Result<ServerLaunchSpec, String> {
-    if let Some(repo_root) = find_browser4_root() {
-        return build_maven_launch_spec(&repo_root, port);
-    }
+    // TODO: `cargo test` executes from a temporary directory while `cargo run` executes from the calling directory, so it causes confusing
+    // if let Some(repo_root) = find_browser4_root() {
+    //     return build_maven_launch_spec(&repo_root, port);
+    // }
 
     let jar_path = find_or_download_jar().await?;
     Ok(build_jar_launch_spec(&jar_path, port))
@@ -351,6 +352,8 @@ fn find_browser4_root() -> Option<PathBuf> {
 }
 
 fn find_browser4_root_from(start: &Path, deep_search: bool) -> Option<PathBuf> {
+    eprintln!("Finding browser4 root from {:?}", start.display());
+
     let start_dir = if start.is_dir() {
         start
     } else {
@@ -374,14 +377,8 @@ fn find_browser4_root_from(start: &Path, deep_search: bool) -> Option<PathBuf> {
 }
 
 fn is_browser4_root(path: &Path) -> bool {
-    path.join("VERSION").is_file()
+    path.join("ROOT.md").is_file()
         && path.join("pom.xml").is_file()
-        && path.join("browser4").join("browser4-agents").join("pom.xml").is_file()
-        && path
-            .join("sdks")
-            .join("browser4-cli")
-            .join("Cargo.toml")
-            .is_file()
 }
 
 fn find_browser4_cli_module_dir(start: &Path) -> Option<PathBuf> {
@@ -433,6 +430,8 @@ async fn find_or_download_jar() -> Result<PathBuf, String> {
     let project_root = find_browser4_root();
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     let mut candidates = Vec::new();
+
+    eprintln!("Project root: {:?}", project_root);
 
     if let Some(root) = project_root {
         candidates.push(
@@ -936,6 +935,13 @@ mod tests {
         )
         .unwrap();
         root
+    }
+
+    #[test]
+    fn test_find_browser4_root() {
+        let root = find_browser4_root().unwrap();
+        // println!("{:?}", root);
+        assert!(root.join("ROOT.md").exists());
     }
 
     #[test]
