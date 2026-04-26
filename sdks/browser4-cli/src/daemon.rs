@@ -160,9 +160,7 @@ fn build_maven_launch_spec(repo_root: &Path, port: u16) -> Result<ServerLaunchSp
     Ok(ServerLaunchSpec {
         kind: ServerLaunchKind::Maven,
         program: program.clone(),
-        args: vec![
-            format!("-Dspring-boot.run.arguments=--server.port={port}"),
-        ],
+        args: vec![format!("-Dspring-boot.run.arguments=--server.port={port}")],
         working_dir: repo_root.to_path_buf(),
         registry_target: program,
         description: format!(
@@ -351,11 +349,17 @@ fn prepare_unix_maven_wrapper_launcher(
     // Create a two-phase launcher script:
     // 1. Install all required modules (so sibling SNAPSHOT JARs are available)
     // 2. Start browser4-agents via spring-boot:run, forwarding any extra args
-    let mvnw_abs = launcher_wrapper_path.to_string_lossy();
-    let launcher_script_content = format!(
-        "#!/bin/sh\nset -e\n'{mvnw_abs}' -pl browser4/browser4-agents -am -DskipTests install -q\n'{mvnw_abs}' -pl browser4/browser4-agents spring-boot:run \"$@\"\n",
-        mvnw_abs = mvnw_abs.replace('\'', "'\\''"),
-    );
+    let mvnw_abs = launcher_wrapper_path
+        .to_string_lossy()
+        .replace('\'', "'\\''");
+    let launcher_script_content = [
+        "#!/bin/sh",
+        "set -e",
+        &format!("'{mvnw_abs}' -pl browser4/browser4-agents -am -DskipTests install -q"),
+        &format!("'{mvnw_abs}' -pl browser4/browser4-agents spring-boot:run \"$@\""),
+        "",
+    ]
+    .join("\n");
     let launcher_script_path = launcher_dir.join("browser4-start.sh");
     fs::write(&launcher_script_path, launcher_script_content.as_bytes()).map_err(|e| {
         format!(
