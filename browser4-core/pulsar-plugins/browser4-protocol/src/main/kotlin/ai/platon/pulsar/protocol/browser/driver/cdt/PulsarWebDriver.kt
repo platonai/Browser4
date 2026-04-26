@@ -43,10 +43,10 @@ import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.random.Random
 
-class PulsarWebDriver(
+class PulsarWebDriver constructor(
     uniqueID: String,
     val chromeTab: ChromeTab,
-    val devTools: RemoteDevTools,
+    val cdp: CDP,
     override val browser: PulsarBrowser
 ) : AbstractWebDriver(uniqueID, browser) {
 
@@ -56,7 +56,8 @@ class PulsarWebDriver(
 
     override val browserType: BrowserType = BrowserType.PULSAR_CHROME
 
-    private val cdp = CDP(devTools)
+    @Deprecated("Use CDP facade (cdp) instead of direct devTools access")
+    val devTools: RemoteDevTools get() = cdp.remoteDevTools
     private val browserAPI get() = cdp.browser.takeIf { isActive }
     private val pageAPI get() = cdp.page.takeIf { isActive }
     private val targetAPI get() = cdp.target.takeIf { isActive }
@@ -98,7 +99,7 @@ class PulsarWebDriver(
     /**
      * Expose the underlying implementation, used for diagnosis purpose
      * */
-    override val implementation: Any get() = devTools
+    override val implementation: Any get() = cdp.remoteDevTools
 
     override val snapshotService: SnapshotService get() = page.snapshotService
 
