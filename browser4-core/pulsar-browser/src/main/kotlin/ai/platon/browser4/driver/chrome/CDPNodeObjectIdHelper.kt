@@ -47,4 +47,21 @@ suspend fun releaseNodeObjectIfNeeded(devTools: RemoteDevTools, resolved: Resolv
     runCatching { devTools.runtime.releaseObject(resolved.objectId) }
 }
 
+/**
+ * Resolves a node to a runtime object id, executes [block], and releases temporary objects automatically.
+ */
+suspend inline fun <T> withNodeObjectId(
+    devTools: RemoteDevTools,
+    node: NodeRef,
+    block: suspend (String) -> T,
+): T? {
+    val resolved = resolveNodeObjectId(devTools, node) ?: return null
+
+    return try {
+        block(resolved.objectId)
+    } finally {
+        releaseNodeObjectIfNeeded(devTools, resolved)
+    }
+}
+
 

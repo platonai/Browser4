@@ -444,20 +444,16 @@ class PageHandler(
             return false
         }
 
-        val resolved = resolveNodeObjectId(devTools, node) ?: return false
-
-        return try {
+        return withNodeObjectId(devTools, node) { objectId ->
             val result = runtimeAPI?.callFunctionOn(
                 CheckableElementJs.IS_CHECKED_FUNCTION_DECLARATION,
-                objectId = resolved.objectId,
+                objectId = objectId,
                 returnByValue = true,
                 awaitPromise = true
             )
 
             result?.result?.value as? Boolean ?: false
-        } finally {
-            releaseNodeObjectIfNeeded(devTools, resolved)
-        }
+        } ?: false
     }
 
     /**
@@ -579,8 +575,7 @@ class PageHandler(
      */
     private suspend fun trySmoothScroll(nodeRef: NodeRef): Boolean {
         return try {
-            val resolved = resolveNodeObjectId(devTools, nodeRef) ?: return false
-            try {
+            withNodeObjectId(devTools, nodeRef) { objectId ->
                 // Execute on the element itself to avoid selector issues; center for stability
                 val functionDeclaration = """
                     function() {
@@ -591,13 +586,11 @@ class PageHandler(
                     }
                 """.trimIndent()
                 runtimeAPI?.callFunctionOn(
-                    functionDeclaration, objectId = resolved.objectId, returnByValue = true,
+                    functionDeclaration, objectId = objectId, returnByValue = true,
                     userGesture = true, awaitPromise = true
                 )
                 true
-            } finally {
-                releaseNodeObjectIfNeeded(devTools, resolved)
-            }
+            } ?: false
         } catch (e: Exception) {
             // swallow and indicate failure; caller will fallback
             false

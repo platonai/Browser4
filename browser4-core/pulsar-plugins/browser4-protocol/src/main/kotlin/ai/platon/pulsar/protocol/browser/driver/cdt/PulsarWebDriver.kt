@@ -309,12 +309,10 @@ class PulsarWebDriver(
     private suspend fun setChecked(selector: String, shouldCheck: Boolean) {
         val actionName = if (shouldCheck) "check" else "uncheck"
         driverHelper.invokeOnElement(selector, actionName, scrollIntoView = true) { node ->
-            val resolved = resolveNodeObjectId(devTools, node) ?: return@invokeOnElement false
-
-            try {
+            withNodeObjectId(devTools, node) { objectId ->
                 val result = runtimeAPI?.callFunctionOn(
                     CheckableElementJs.SET_CHECKED_FUNCTION_DECLARATION,
-                    objectId = resolved.objectId,
+                    objectId = objectId,
                     arguments = listOf(CallArgument(value = shouldCheck)),
                     returnByValue = true,
                     userGesture = true,
@@ -326,9 +324,7 @@ class PulsarWebDriver(
                 }
 
                 result?.result?.value as? Boolean ?: false
-            } finally {
-                releaseNodeObjectIfNeeded(devTools, resolved)
-            }
+            } ?: false
         }
     }
 
@@ -550,16 +546,14 @@ class PulsarWebDriver(
         """.trimIndent()
 
         val result = driverHelper.invokeOnElement(selector, "selectOption") { node ->
-            val resolved = resolveNodeObjectId(devTools, node) ?: return@invokeOnElement listOf<String>()
-
             if (runtimeAPI == null) {
                 throw WebDriverException("runtimeAPI is null")
             }
 
-            try {
+            withNodeObjectId(devTools, node) { objectId ->
                 val res = runtimeAPI?.callFunctionOn(
                     functionDeclaration,
-                    objectId = resolved.objectId,
+                    objectId = objectId,
                     arguments = listOf(CallArgument(value = jsonValues)),
                     returnByValue = true
                 )
@@ -575,9 +569,7 @@ class PulsarWebDriver(
                 } else {
                     listOf()
                 }
-            } finally {
-                releaseNodeObjectIfNeeded(devTools, resolved)
-            }
+            } ?: listOf()
         }
 
         return result ?: listOf()
@@ -666,16 +658,13 @@ class PulsarWebDriver(
         //| attribute | HTML 初始声明 | ❌ 不变（除非手动 setAttribute） |
         //| property  | DOM 当前状态  | ✅ 会变（用户交互 / JS 修改）      |
 
-        val resolved = resolveNodeObjectId(devTools, node) ?: return ""
-        return try {
+        return withNodeObjectId(devTools, node) { objectId ->
             runtimeAPI?.callFunctionOn(
                 "function() { return this && typeof this.value !== 'undefined' ? this.value : null; }",
-                objectId = resolved.objectId,
+                objectId = objectId,
                 returnByValue = true
             )?.result?.value?.toString() ?: ""
-        } finally {
-            releaseNodeObjectIfNeeded(devTools, resolved)
-        }
+        } ?: ""
     }
 
     @Throws(WebDriverException::class)
@@ -877,20 +866,15 @@ function() {
   }
 }
                     """.trimIndent()
-                    val resolved = resolveNodeObjectId(devTools, node)
-                    if (resolved != null) {
-                        try {
+                    withNodeObjectId(devTools, node) { objectId ->
                             val remoteObject = runtimeAPI?.callFunctionOn(
                                 functionDeclaration,
-                                objectId = resolved.objectId,
+                                objectId = objectId,
                                 returnByValue = true
                             )
                             // TODO: performance issue for large text (memory copy)
                             remoteObject?.result?.value?.toString()
-                        } finally {
-                            releaseNodeObjectIfNeeded(devTools, resolved)
-                        }
-                    } else null
+                    }
                 }
             }
         }
