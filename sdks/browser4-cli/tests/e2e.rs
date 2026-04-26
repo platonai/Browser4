@@ -14,6 +14,7 @@
 //! ```bash
 //! cargo test --test e2e -- --nocapture
 //! cargo test --test e2e -- --nocapture --scenario=test_e2e_agent_task_commands
+//! cargo test --test e2e -- --nocapture --scenario-from=test_e2e_mouse_and_dialog
 //! ```
 //!
 //! The Browser4 service is resolved in this order:
@@ -2125,17 +2126,50 @@ fn run_named_scenario(
     }
 }
 
-fn parse_scenario_filter() -> Option<String> {
+#[derive(Debug)]
+enum ScenarioFilter {
+    Exact(String),
+    From(String),
+}
+
+fn parse_named_flag_value(args: &mut impl Iterator<Item = String>, flag: &str) -> String {
+    args.next().unwrap_or_else(|| {
+        panic!("Missing value for {flag}. Use {flag}=<scenario-name> or {flag} <scenario-name>")
+    })
+}
+
+fn parse_scenario_filter() -> Option<ScenarioFilter> {
     let mut args = std::env::args().skip(1);
+    let mut scenario = None;
+    let mut scenario_from = None;
+
     while let Some(arg) = args.next() {
         if let Some(value) = arg.strip_prefix("--scenario=") {
-            return Some(value.to_string());
+            scenario = Some(value.to_string());
+            continue;
         }
         if arg == "--scenario" {
-            return args.next();
+            scenario = Some(parse_named_flag_value(&mut args, "--scenario"));
+            continue;
+        }
+
+        if let Some(value) = arg.strip_prefix("--scenario-from=") {
+            scenario_from = Some(value.to_string());
+            continue;
+        }
+        if arg == "--scenario-from" {
+            scenario_from = Some(parse_named_flag_value(&mut args, "--scenario-from"));
         }
     }
-    None
+
+    match (scenario, scenario_from) {
+        (Some(_), Some(_)) => {
+            panic!("--scenario and --scenario-from cannot be used together")
+        }
+        (Some(value), None) => Some(ScenarioFilter::Exact(value)),
+        (None, Some(value)) => Some(ScenarioFilter::From(value)),
+        (None, None) => None,
+    }
 }
 
 fn resolve_scenario(name: &str) -> Option<scenarios::ScenarioDef> {
@@ -2145,24 +2179,38 @@ fn resolve_scenario(name: &str) -> Option<scenarios::ScenarioDef> {
         .find(|scenario| scenario.name == name || scenario.short_name == name)
 }
 
+fn resolve_scenario_index(name: &str) -> Option<usize> {
+    scenarios::all_scenarios()
+        .iter()
+        .position(|scenario| scenario.name == name || scenario.short_name == name)
+}
+
 fn main() {
     let scenario_filter = parse_scenario_filter();
     let all_scenarios = scenarios::all_scenarios();
-    let selected_scenarios: Vec<scenarios::ScenarioDef> = if let Some(filter) = scenario_filter {
-        let scenario = resolve_scenario(&filter).unwrap_or_else(|| {
-            let names = all_scenarios
-                .iter()
-                .map(|s| format!("{} ({})", s.name, s.short_name))
-                .collect::<Vec<_>>()
-                .join(", ");
-            panic!("Unknown scenario '{filter}'. Available scenarios: {names}");
-        });
-        vec![scenario]
-    } else {
-        all_scenarios.to_vec()
-    };
+    let available_names = all_scenarios
+        .iter()
+        .map(|s| format!("{} ({})", s.name, s.short_name))
+        .collect::<Vec<_>>()
+        .join(", ");
 
-    let run_coverage = selected_scenarios.len() == all_scenarios.len();
+    let (selected_scenarios, run_coverage): (Vec<scenarios::ScenarioDef>, bool) =
+        match scenario_filter {
+            Some(ScenarioFilter::Exact(filter)) => {
+                let scenario = resolve_scenario(&filter).unwrap_or_else(|| {
+                    panic!("Unknown scenario '{filter}'. Available scenarios: {available_names}");
+                });
+                (vec![scenario], false)
+            }
+            Some(ScenarioFilter::From(filter)) => {
+                let start_index = resolve_scenario_index(&filter).unwrap_or_else(|| {
+                    panic!("Unknown scenario '{filter}'. Available scenarios: {available_names}");
+                });
+                (all_scenarios[start_index..].to_vec(), false)
+            }
+            None => (all_scenarios.to_vec(), true),
+        };
+
     let scenario_runs: usize = selected_scenarios
         .iter()
         .map(|scenario| scenario.effective_test_count())

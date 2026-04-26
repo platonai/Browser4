@@ -203,13 +203,14 @@ fn command_for_launch_spec(
     #[cfg(windows)]
     if launch_spec.kind == ServerLaunchKind::Maven && is_windows_batch_program(&launch_spec.program)
     {
+        let invocation = build_powershell_maven_invocation(&launch_spec.program, &launch_spec.args);
         let mut command = Command::new("powershell.exe");
         command
             .args([
                 "-NoProfile",
                 "-NonInteractive",
                 "-Command",
-                &build_powershell_batch_invocation(&launch_spec.program, &launch_spec.args),
+                &invocation,
             ])
             .current_dir(&launch_spec.working_dir)
             .stdin(Stdio::null())
@@ -268,13 +269,43 @@ fn is_windows_batch_program(program: &Path) -> bool {
 }
 
 #[cfg(windows)]
+fn escape_powershell_single_quoted(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
+#[cfg(windows)]
 fn build_powershell_batch_invocation(program: &Path, args: &[String]) -> String {
     std::iter::once(program.to_string_lossy().to_string())
         .chain(args.iter().cloned())
-        .map(|value| format!("'{}'", value.replace('\'', "''")))
+        .map(|value| format!("'{}'", escape_powershell_single_quoted(&value)))
         .collect::<Vec<_>>()
         .join(" ")
         .pipe(|command| format!("& {command}"))
+}
+
+#[cfg(windows)]
+fn build_powershell_maven_invocation(program: &Path, runtime_args: &[String]) -> String {
+    let install_args = vec![
+        "-pl".to_string(),
+        "browser4/browser4-agents".to_string(),
+        "-am".to_string(),
+        "-DskipTests".to_string(),
+        "install".to_string(),
+        "-q".to_string(),
+    ];
+    let mut run_args = vec![
+        "-pl".to_string(),
+        "browser4/browser4-agents".to_string(),
+        "spring-boot:run".to_string(),
+    ];
+    run_args.extend_from_slice(runtime_args);
+
+    let install_command = build_powershell_batch_invocation(program, &install_args);
+    let run_command = build_powershell_batch_invocation(program, &run_args);
+
+    format!(
+        "{install_command}; if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}; {run_command}"
+    )
 }
 
 #[cfg(not(windows))]
@@ -1279,13 +1310,26 @@ mod tests {
         assert_eq!(spec.program, wrapper);
         assert_eq!(spec.working_dir, root);
         assert_eq!(spec.args, vec![port_arg.clone()]);
-        let invocation = build_powershell_batch_invocation(&spec.program, &spec.args);
-        let expected_program = spec.program.to_string_lossy().replace('\'', "''");
-        let expected_arg = port_arg.replace('\'', "''");
 
-        assert_eq!(
-            invocation,
-            format!("& '{expected_program}' '{expected_arg}'")
+        let invocation = build_powershell_maven_invocation(&spec.program, &spec.args);
+        let escaped_program = escape_powershell_single_quoted(&spec.program.to_string_lossy());
+        let escaped_port_arg = escape_powershell_single_quoted(&port_arg);
+
+        assert!(
+            invocation.contains(&format!(
+                "& '{escaped_program}' '-pl' 'browser4/browser4-agents' '-am' '-DskipTests' 'install' '-q'"
+            )),
+            "expected Maven preinstall phase in invocation: {invocation}"
+        );
+        assert!(
+            invocation.contains("if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }"),
+            "expected explicit Maven failure guard in invocation: {invocation}"
+        );
+        assert!(
+            invocation.contains(&format!(
+                "& '{escaped_program}' '-pl' 'browser4/browser4-agents' 'spring-boot:run' '{escaped_port_arg}'"
+            )),
+            "expected module-scoped spring-boot:run phase in invocation: {invocation}"
         );
     }
 
