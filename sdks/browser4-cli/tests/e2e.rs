@@ -86,357 +86,32 @@ fn fixture_host() -> String {
 }
 
 // ---------------------------------------------------------------------------
-// HTML fixtures (matching the TypeScript tests verbatim)
+// HTML fixtures
 // ---------------------------------------------------------------------------
 
-fn interactive_html() -> String {
-    format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <title>{title}</title>
-  <style>
-    body {{ margin: 0; font-family: sans-serif; min-height: 2400px; }}
-    #mouse-area {{
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 480px;
-      height: 320px;
-      background: rgba(0, 128, 255, 0.08);
-      border: 1px solid #08f;
-    }}
-    #drag-source, #drag-target {{
-      width: 160px;
-      height: 48px;
-      margin-top: 16px;
-      border: 1px solid #555;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }}
-  </style>
-</head>
-<body>
-  <div id="mouse-area">mouse area</div>
-  <main style="padding: 360px 24px 24px;">
-    <input id="type-target" type="text" />
-    <input id="fill-target" type="text" />
-    <input id="file-input" type="file" />
-    <input id="check-target" type="checkbox" />
-    <select id="select-target">
-      <option value="">-- choose --</option>
-      <option value="green">Green</option>
-      <option value="blue">Blue</option>
-    </select>
-    <button id="click-target" type="button">Click</button>
-    <button id="dblclick-target" type="button">Double Click</button>
-    <button id="hover-target" type="button">Hover</button>
-    <button id="prompt-target" type="button">Prompt</button>
-    <button id="confirm-target" type="button">Confirm</button>
-    <div id="drag-source" draggable="true">drag source</div>
-    <div id="drag-target">drag target</div>
-    <pre id="state-log"></pre>
-  </main>
-  <script>
-    window.__browser4State = {{
-      clickCount: 0,
-      doubleClickCount: 0,
-      hovered: false,
-      dragStarted: false,
-      dragDropped: '',
-      promptResult: '',
-      confirmResult: '',
-      keyEvents: [],
-      mouseDownCount: 0,
-      mouseUpCount: 0,
-      lastMouse: null,
-      lastWheel: null,
-      typeValue: '',
-      fillValue: '',
-      checkbox: false,
-      selectValue: '',
-      uploadCount: 0,
-      uploadName: '',
-      submitCount: 0
-    }};
+const INTERACTIVE_FIXTURE_FILE: &str = "mcp-tool-controller-interactive-fixture.html";
+const OTHER_FIXTURE_FILE: &str = "mcp-tool-controller-other-fixture.html";
+const FORM_FIXTURE_FILE: &str = "mcp-tool-controller-form-fixture.html";
 
-    function syncState() {{
-      const state = window.__browser4State;
-      state.typeValue = document.getElementById('type-target').value;
-      state.fillValue = document.getElementById('fill-target').value;
-      state.checkbox = document.getElementById('check-target').checked;
-      state.selectValue = document.getElementById('select-target').value;
-      const files = document.getElementById('file-input').files;
-      state.uploadCount = files ? files.length : 0;
-      state.uploadName = files && files[0] ? files[0].name : '';
-      document.getElementById('state-log').textContent = JSON.stringify(state);
-    }}
+fn load_html_fixture(file_name: &str) -> String {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("browser4-tests")
+        .join("browser4-tests-common")
+        .join("src")
+        .join("main")
+        .join("resources")
+        .join("static")
+        .join("b4")
+        .join(file_name);
 
-    document.getElementById('click-target').addEventListener('click', () => {{
-      window.__browser4State.clickCount += 1;
-      console.info('click-target clicked');
-      syncState();
-    }});
-
-    document.getElementById('dblclick-target').addEventListener('dblclick', () => {{
-      window.__browser4State.doubleClickCount += 1;
-      syncState();
-    }});
-
-    document.getElementById('hover-target').addEventListener('mouseenter', () => {{
-      window.__browser4State.hovered = true;
-      syncState();
-    }});
-
-    document.getElementById('drag-source').addEventListener('dragstart', (event) => {{
-      window.__browser4State.dragStarted = true;
-      event.dataTransfer.setData('text/plain', 'drag-source');
-      syncState();
-    }});
-
-    document.getElementById('drag-target').addEventListener('dragover', (event) => {{
-      event.preventDefault();
-    }});
-
-    document.getElementById('drag-target').addEventListener('drop', (event) => {{
-      event.preventDefault();
-      window.__browser4State.dragDropped = event.dataTransfer.getData('text/plain');
-      syncState();
-    }});
-
-    document.getElementById('prompt-target').addEventListener('click', () => {{
-      setTimeout(() => {{
-        const value = window.prompt('Enter prompt text', 'seed');
-        window.__browser4State.promptResult = value === null ? '__dismissed__' : value;
-        syncState();
-      }}, 0);
-    }});
-
-    document.getElementById('confirm-target').addEventListener('click', () => {{
-      setTimeout(() => {{
-        const accepted = window.confirm('Confirm action');
-        window.__browser4State.confirmResult = accepted ? 'accepted' : 'dismissed';
-        syncState();
-      }}, 0);
-    }});
-
-    document.getElementById('fill-target').addEventListener('keydown', (event) => {{
-      if (event.key === 'Enter') {{
-        window.__browser4State.submitCount += 1;
-        syncState();
-      }}
-    }});
-
-    document.addEventListener('keydown', (event) => {{
-      window.__browser4State.keyEvents.push('down:' + event.key);
-      syncState();
-    }});
-
-    document.addEventListener('keyup', (event) => {{
-      window.__browser4State.keyEvents.push('up:' + event.key);
-      syncState();
-    }});
-
-    document.getElementById('type-target').addEventListener('input', syncState);
-    document.getElementById('fill-target').addEventListener('input', syncState);
-    document.getElementById('check-target').addEventListener('change', syncState);
-    document.getElementById('select-target').addEventListener('change', syncState);
-    document.getElementById('file-input').addEventListener('change', syncState);
-
-    const mouseArea = document.getElementById('mouse-area');
-    mouseArea.addEventListener('mousemove', (event) => {{
-      window.__browser4State.lastMouse = [Math.round(event.clientX), Math.round(event.clientY)];
-      syncState();
-    }});
-    mouseArea.addEventListener('mousedown', () => {{
-      window.__browser4State.mouseDownCount += 1;
-      syncState();
-    }});
-    mouseArea.addEventListener('mouseup', () => {{
-      window.__browser4State.mouseUpCount += 1;
-      syncState();
-    }});
-    mouseArea.addEventListener('wheel', (event) => {{
-      window.__browser4State.lastWheel = [Math.round(event.deltaX), Math.round(event.deltaY)];
-      syncState();
-    }});
-
-    console.info('interactive fixture ready');
-    syncState();
-  </script>
-</body>
-</html>"#,
-        title = INTERACTIVE_TITLE
-    )
-}
-
-fn other_html() -> String {
-    format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <title>{title}</title>
-</head>
-<body>
-  <h1 id="page-marker">other page</h1>
-  <script>console.info('other fixture ready');</script>
-</body>
-</html>"#,
-        title = OTHER_TITLE
-    )
-}
-
-fn form_html() -> String {
-    format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <title>{title}</title>
-  <style>
-    body {{ margin: 0; font-family: sans-serif; padding: 24px; }}
-    .form-group {{ margin-bottom: 12px; }}
-    label {{ display: block; margin-bottom: 4px; font-weight: bold; }}
-    input, select, textarea {{ padding: 4px 8px; width: 300px; }}
-    button {{ padding: 8px 24px; margin-top: 8px; }}
-    #result-panel {{ margin-top: 24px; padding: 12px; border: 1px solid #ccc; display: none; }}
-    #error-panel {{ margin-top: 12px; padding: 12px; border: 1px solid #c00; color: #c00; display: none; }}
-  </style>
-</head>
-<body>
-  <h1>Registration Form</h1>
-  <form id="registration-form">
-    <div class="form-group">
-      <label for="first-name">First Name</label>
-      <input id="first-name" type="text" required />
-    </div>
-    <div class="form-group">
-      <label for="last-name">Last Name</label>
-      <input id="last-name" type="text" required />
-    </div>
-    <div class="form-group">
-      <label for="email">Email</label>
-      <input id="email" type="email" required />
-    </div>
-    <div class="form-group">
-      <label for="country">Country</label>
-      <select id="country">
-        <option value="">-- select --</option>
-        <option value="us">United States</option>
-        <option value="uk">United Kingdom</option>
-        <option value="jp">Japan</option>
-      </select>
-    </div>
-    <div class="form-group">
-      <label>
-        <input id="agree-terms" type="checkbox" />
-        I agree to the terms
-      </label>
-    </div>
-    <div class="form-group">
-      <label for="comments">Comments</label>
-      <textarea id="comments" rows="3"></textarea>
-    </div>
-    <button id="submit-btn" type="button">Submit</button>
-    <button id="reset-btn" type="button">Reset</button>
-  </form>
-  <div id="result-panel">
-    <h2>Submission Result</h2>
-    <pre id="result-data"></pre>
-  </div>
-  <div id="error-panel"></div>
-  <pre id="state-log"></pre>
-  <script>
-    window.__browser4State = {{
-      firstName: '',
-      lastName: '',
-      email: '',
-      country: '',
-      agreeTerms: false,
-      comments: '',
-      submitCount: 0,
-      resetCount: 0,
-      lastSubmission: null,
-      validationError: ''
-    }};
-
-    function syncState() {{
-      const s = window.__browser4State;
-      s.firstName = document.getElementById('first-name').value;
-      s.lastName = document.getElementById('last-name').value;
-      s.email = document.getElementById('email').value;
-      s.country = document.getElementById('country').value;
-      s.agreeTerms = document.getElementById('agree-terms').checked;
-      s.comments = document.getElementById('comments').value;
-      document.getElementById('state-log').textContent = JSON.stringify(s);
-    }}
-
-    document.getElementById('submit-btn').addEventListener('click', () => {{
-      const s = window.__browser4State;
-      syncState();
-      const firstName = s.firstName.trim();
-      const lastName = s.lastName.trim();
-      const email = s.email.trim();
-      if (!firstName || !lastName || !email) {{
-        s.validationError = 'All fields are required';
-        document.getElementById('error-panel').textContent = s.validationError;
-        document.getElementById('error-panel').style.display = 'block';
-        document.getElementById('result-panel').style.display = 'none';
-        syncState();
-        return;
-      }}
-      if (!s.agreeTerms) {{
-        s.validationError = 'You must agree to the terms';
-        document.getElementById('error-panel').textContent = s.validationError;
-        document.getElementById('error-panel').style.display = 'block';
-        document.getElementById('result-panel').style.display = 'none';
-        syncState();
-        return;
-      }}
-      s.validationError = '';
-      s.submitCount += 1;
-      s.lastSubmission = {{
-        firstName: firstName,
-        lastName: lastName,
-        email: email,
-        country: s.country,
-        comments: s.comments
-      }};
-      document.getElementById('error-panel').style.display = 'none';
-      document.getElementById('result-panel').style.display = 'block';
-      document.getElementById('result-data').textContent = JSON.stringify(s.lastSubmission, null, 2);
-      syncState();
-    }});
-
-    document.getElementById('reset-btn').addEventListener('click', () => {{
-      document.getElementById('first-name').value = '';
-      document.getElementById('last-name').value = '';
-      document.getElementById('email').value = '';
-      document.getElementById('country').value = '';
-      document.getElementById('agree-terms').checked = false;
-      document.getElementById('comments').value = '';
-      document.getElementById('result-panel').style.display = 'none';
-      document.getElementById('error-panel').style.display = 'none';
-      window.__browser4State.resetCount += 1;
-      syncState();
-    }});
-
-    ['first-name', 'last-name', 'email', 'comments'].forEach(id => {{
-      document.getElementById(id).addEventListener('input', syncState);
-    }});
-    document.getElementById('country').addEventListener('change', syncState);
-    document.getElementById('agree-terms').addEventListener('change', syncState);
-
-    console.info('form fixture ready');
-    syncState();
-  </script>
-</body>
-</html>"#,
-        title = FORM_TITLE
-    )
+    fs::read_to_string(&path).unwrap_or_else(|error| {
+        panic!(
+            "failed to load HTML fixture {file_name} from {}: {error}",
+            path.display()
+        )
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -461,6 +136,12 @@ struct FixtureServer {
     shutdown: Arc<AtomicBool>,
 }
 
+struct FixturePages {
+    interactive_html: String,
+    other_html: String,
+    form_html: String,
+}
+
 impl FixtureServer {
     /// Start the fixture HTTP server.
     ///
@@ -474,6 +155,11 @@ impl FixtureServer {
         let port = listener.local_addr().unwrap().port();
         let shutdown = Arc::new(AtomicBool::new(false));
         let flag = shutdown.clone();
+        let pages = Arc::new(FixturePages {
+            interactive_html: load_html_fixture(INTERACTIVE_FIXTURE_FILE),
+            other_html: load_html_fixture(OTHER_FIXTURE_FILE),
+            form_html: load_html_fixture(FORM_FIXTURE_FILE),
+        });
 
         thread::spawn(move || {
             listener.set_nonblocking(true).ok();
@@ -483,7 +169,8 @@ impl FixtureServer {
                 }
                 match listener.accept() {
                     Ok((stream, _)) => {
-                        thread::spawn(move || serve_fixture_request(stream));
+                        let request_pages = pages.clone();
+                        thread::spawn(move || serve_fixture_request(stream, request_pages));
                     }
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(5));
@@ -511,7 +198,7 @@ impl Drop for FixtureServer {
     }
 }
 
-fn serve_fixture_request(mut stream: std::net::TcpStream) {
+fn serve_fixture_request(mut stream: std::net::TcpStream, pages: Arc<FixturePages>) {
     let mut buf = vec![0u8; 8192];
     let n = match stream.read(&mut buf) {
         Ok(n) => n,
@@ -526,11 +213,23 @@ fn serve_fixture_request(mut stream: std::net::TcpStream) {
         .unwrap_or("/");
 
     let (status, content_type, body) = if path == INTERACTIVE_PATH || path == "/" {
-        ("200 OK", "text/html; charset=utf-8", interactive_html())
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            pages.interactive_html.clone(),
+        )
     } else if path == OTHER_PATH {
-        ("200 OK", "text/html; charset=utf-8", other_html())
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            pages.other_html.clone(),
+        )
     } else if path == FORM_PATH {
-        ("200 OK", "text/html; charset=utf-8", form_html())
+        (
+            "200 OK",
+            "text/html; charset=utf-8",
+            pages.form_html.clone(),
+        )
     } else {
         (
             "404 Not Found",
@@ -1800,6 +1499,24 @@ where
     .unwrap_or_else(|error| panic!("{error}"))
 }
 
+fn wait_for_state_or_return_error<F>(
+    ctx: &mut E2ECtx,
+    predicate: F,
+    timeout_ms: u64,
+    failure_message: &str,
+) -> Result<serde_json::Value, String>
+where
+    F: Fn(&serde_json::Value) -> bool,
+{
+    wait_for_state(
+        ctx,
+        predicate,
+        timeout_ms,
+        failure_message,
+        WaitForStateFailureMode::ReturnError,
+    )
+}
+
 fn wait_for_eval_text(
     ctx: &mut E2ECtx,
     expression: &str,
@@ -2059,7 +1776,7 @@ fn test_navigation_and_storage(ctx: &mut E2ECtx) {
         ctx,
         "window.location.pathname",
         INTERACTIVE_PATH,
-        15_000,
+        5_000,
         "Expected to be on interactive path",
     );
 
@@ -2068,7 +1785,7 @@ fn test_navigation_and_storage(ctx: &mut E2ECtx) {
         ctx,
         "document.title",
         OTHER_TITLE,
-        15_000,
+        5_000,
         "Expected other page title",
     );
 
@@ -2077,7 +1794,7 @@ fn test_navigation_and_storage(ctx: &mut E2ECtx) {
         ctx,
         "window.location.pathname",
         INTERACTIVE_PATH,
-        15_000,
+        5_000,
         "Expected to be back on interactive path after go-back",
     );
 
@@ -2086,7 +1803,7 @@ fn test_navigation_and_storage(ctx: &mut E2ECtx) {
         ctx,
         "window.location.pathname",
         OTHER_PATH,
-        15_000,
+        5_000,
         "Expected to be on other path after go-forward",
     );
 
@@ -2095,7 +1812,7 @@ fn test_navigation_and_storage(ctx: &mut E2ECtx) {
         ctx,
         "document.title",
         OTHER_TITLE,
-        15_000,
+        5_000,
         "Expected other page title after reload",
     );
 
@@ -2118,7 +1835,7 @@ fn test_interaction_commands(ctx: &mut E2ECtx) {
     wait_for_state_or_abort(
         ctx,
         |s| s["typeValue"].as_str() == Some("hello world"),
-        15_000,
+        5_000,
         "Expected typeValue to become 'hello world' after type",
     );
 
@@ -2127,7 +1844,7 @@ fn test_interaction_commands(ctx: &mut E2ECtx) {
     wait_for_state_or_abort(
         ctx,
         |s| s["fillValue"].as_str() == Some("filled text"),
-        15_000,
+        5_000,
         "Expected fillValue to become 'filled text' after fill",
     );
 
@@ -2140,14 +1857,14 @@ fn test_interaction_commands(ctx: &mut E2ECtx) {
             s["typeValue"].as_str() == Some("hello world!")
                 && key_event_count(s) > press_before_events
         },
-        15_000,
+        5_000,
         "Expected press to append '!' to typeValue and emit a key event",
     );
 
     run_command(ctx, &["click", "#type-target"]);
     let keydown_before = key_event_count(&read_interactive_state(ctx));
     run_command(ctx, &["keydown", "Shift"]);
-    wait_for_state_or_abort(
+    wait_for_state_or_return_error(
         ctx,
         |s| {
             key_event_count(s) > keydown_before
@@ -2157,13 +1874,13 @@ fn test_interaction_commands(ctx: &mut E2ECtx) {
                     .and_then(|event| event.as_str())
                     == Some("down:Shift")
         },
-        15_000,
+        5_000,
         "Expected keydown to record a final 'down:Shift' key event",
     );
 
     let keyup_before = key_event_count(&read_interactive_state(ctx));
     run_command(ctx, &["keyup", "Shift"]);
-    wait_for_state_or_abort(
+    wait_for_state_or_return_error(
         ctx,
         |s| {
             key_event_count(s) > keyup_before
@@ -2173,7 +1890,7 @@ fn test_interaction_commands(ctx: &mut E2ECtx) {
                     .and_then(|event| event.as_str())
                     == Some("up:Shift")
         },
-        15_000,
+        5_000,
         "Expected keyup to record a final 'up:Shift' key event",
     );
 
@@ -2181,7 +1898,7 @@ fn test_interaction_commands(ctx: &mut E2ECtx) {
     wait_for_state_or_abort(
         ctx,
         |s| s["clickCount"].as_u64() == Some(1),
-        15_000,
+        5_000,
         "Expected clickCount to become 1 after click",
     );
 
@@ -2189,7 +1906,7 @@ fn test_interaction_commands(ctx: &mut E2ECtx) {
     wait_for_state_or_abort(
         ctx,
         |s| s["doubleClickCount"].as_u64() == Some(1),
-        15_000,
+        5_000,
         "Expected doubleClickCount to become 1 after dblclick",
     );
 
@@ -2197,7 +1914,7 @@ fn test_interaction_commands(ctx: &mut E2ECtx) {
     wait_for_state_or_abort(
         ctx,
         |s| s["hovered"].as_bool() == Some(true),
-        15_000,
+        5_000,
         "Expected hovered to become true after hover",
     );
 
@@ -2208,7 +1925,7 @@ fn test_interaction_commands(ctx: &mut E2ECtx) {
             s["dragStarted"].as_bool() == Some(true)
                 && s["dragDropped"].as_str() == Some("drag-source")
         },
-        15_000,
+        5_000,
         "Expected drag to start and drop drag-source onto the target",
     );
 
@@ -2226,10 +1943,14 @@ fn test_wait_for_state_failure_modes(ctx: &mut E2ECtx) {
         "Expected ReturnError mode to report a timeout without aborting the scenario",
         WaitForStateFailureMode::ReturnError,
     )
-    .expect_err("wait_for_state should return Err in ReturnError mode when the predicate never matches");
+    .expect_err(
+        "wait_for_state should return Err in ReturnError mode when the predicate never matches",
+    );
 
     assert!(
-        error.contains("Expected ReturnError mode to report a timeout without aborting the scenario"),
+        error.contains(
+            "Expected ReturnError mode to report a timeout without aborting the scenario"
+        ),
         "Expected original failure message in wait_for_state error:\n{}",
         error
     );
@@ -2248,7 +1969,7 @@ fn test_wait_for_state_failure_modes(ctx: &mut E2ECtx) {
     wait_for_state_or_abort(
         ctx,
         |s| s["fillValue"].as_str() == Some("continued after error"),
-        15_000,
+        5_000,
         "Expected scenario to continue after ReturnError mode and update fillValue",
     );
 
@@ -2263,7 +1984,7 @@ fn test_form_controls_and_exports(ctx: &mut E2ECtx) {
     wait_for_state_or_abort(
         ctx,
         |s| s["selectValue"].as_str() == Some("green"),
-        15_000,
+        5_000,
         "Expected selectValue to become 'green' after select",
     );
 
@@ -2271,7 +1992,7 @@ fn test_form_controls_and_exports(ctx: &mut E2ECtx) {
     wait_for_state_or_abort(
         ctx,
         |s| s["checkbox"].as_bool() == Some(true),
-        15_000,
+        5_000,
         "Expected checkbox to become true after check",
     );
 
@@ -2279,7 +2000,7 @@ fn test_form_controls_and_exports(ctx: &mut E2ECtx) {
     wait_for_state_or_abort(
         ctx,
         |s| s["checkbox"].as_bool() == Some(false),
-        15_000,
+        5_000,
         "Expected checkbox to become false after uncheck",
     );
 
@@ -2289,7 +2010,7 @@ fn test_form_controls_and_exports(ctx: &mut E2ECtx) {
     wait_for_state_or_abort(
         ctx,
         |s| s["uploadName"].as_str() == Some("upload.txt"),
-        15_000,
+        5_000,
         "Expected uploadName to become 'upload.txt' after upload",
     );
 
@@ -2356,7 +2077,7 @@ fn test_batch_commands(ctx: &mut E2ECtx) {
     wait_for_state_or_abort(
         ctx,
         |s| s["typeValue"].as_str() == Some("hello batch") && s["clickCount"].as_u64() == Some(1),
-        15_000,
+        5_000,
         "Expected batch commands to set typeValue to 'hello batch' and clickCount to 1",
     );
 
@@ -2383,7 +2104,7 @@ fn test_batch_commands(ctx: &mut E2ECtx) {
                     .and_then(|event| event.as_str())
                     == Some("up:Shift")
         },
-        15_000,
+        5_000,
         "Expected JSON batch to fill text and finish with an 'up:Shift' key event",
     );
 
@@ -2411,7 +2132,7 @@ fn test_batch_commands(ctx: &mut E2ECtx) {
                 && s["fillValue"].as_str() == Some("json opened session")
                 && s["clickCount"].as_u64() == Some(1)
         },
-        15_000,
+        5_000,
         "Expected full JSON batch input to open the page and execute string and array commands",
     );
 
@@ -2431,7 +2152,7 @@ fn test_batch_commands(ctx: &mut E2ECtx) {
             s["fillValue"].as_str() == Some("json string only")
                 && s["clickCount"].as_u64() == Some(2)
         },
-        15_000,
+        5_000,
         "Expected JSON batch string entries to run against the active session",
     );
 
@@ -2506,7 +2227,7 @@ fn test_batch_form_submission(ctx: &mut E2ECtx) {
                 && s["submitCount"].as_u64() == Some(1)
                 && s["validationError"].as_str() == Some("")
         },
-        15_000,
+        5_000,
         "Expected batch submission to populate the form and submit successfully for Alice",
     );
 
@@ -2546,7 +2267,7 @@ fn test_batch_form_submission(ctx: &mut E2ECtx) {
                 && s["resetCount"].as_u64() == Some(1)
                 && s["firstName"].as_str() == Some("Bob")
         },
-        15_000,
+        5_000,
         "Expected JSON batch reset flow to submit Bob as the second submission",
     );
 
@@ -2633,7 +2354,7 @@ fn test_batch_form_submission_from_json_file(ctx: &mut E2ECtx) {
                 && s["submitCount"].as_u64() == Some(1)
                 && s["validationError"].as_str() == Some("")
         },
-        15_000,
+        5_000,
         "Expected JSON file-backed batch submission to populate the form and submit successfully",
     );
 
@@ -2679,7 +2400,7 @@ fn test_batch_multi_interaction(ctx: &mut E2ECtx) {
                 && s["selectValue"].as_str() == Some("blue")
                 && s["clickCount"].as_u64() == Some(2)
         },
-        15_000,
+        5_000,
         "Expected multi-interaction batch to update text, fill, checkbox, select, and clickCount",
     );
 
@@ -2731,7 +2452,7 @@ fn test_batch_multi_interaction(ctx: &mut E2ECtx) {
     wait_for_state_or_abort(
         ctx,
         |s| s["checkbox"].as_bool() == Some(false),
-        15_000,
+        5_000,
         "Expected batch uncheck to clear the checkbox",
     );
 
@@ -2762,7 +2483,7 @@ fn test_batch_error_handling(ctx: &mut E2ECtx) {
     wait_for_state_or_abort(
         ctx,
         |s| s["fillValue"].as_str() == Some("after error"),
-        15_000,
+        5_000,
         "Expected fill command after a non-bailing batch error to still run",
     );
 
@@ -2789,7 +2510,7 @@ fn test_batch_error_handling(ctx: &mut E2ECtx) {
                 .map(|v| v.contains("bail test"))
                 .unwrap_or(false)
         },
-        15_000,
+        5_000,
         "Expected typeValue to contain 'bail test' after the pre-error batch command",
     );
     // Fill should NOT have executed
@@ -2823,7 +2544,7 @@ fn test_batch_error_handling(ctx: &mut E2ECtx) {
                 .map(|v| v.contains("still works"))
                 .unwrap_or(false)
         },
-        15_000,
+        5_000,
         "Expected typeValue to contain 'still works' despite earlier batch errors",
     );
 
@@ -2856,7 +2577,7 @@ fn test_batch_json_edge_cases(ctx: &mut E2ECtx) {
                 && s["fillValue"].as_str() == Some("json array fill")
                 && s["clickCount"].as_u64() == Some(1)
         },
-        15_000,
+        5_000,
         "Expected mixed JSON batch commands to type, fill, and click once",
     );
 
@@ -2874,7 +2595,7 @@ fn test_batch_json_edge_cases(ctx: &mut E2ECtx) {
     wait_for_state_or_abort(
         ctx,
         |s| s["fillValue"].as_str() == Some("special: @#$%&*"),
-        15_000,
+        5_000,
         "Expected JSON batch to preserve special characters in fillValue",
     );
 
@@ -2909,7 +2630,7 @@ fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
     wait_for_state_or_abort(
         ctx,
         |s| s["lastMouse"][0].as_i64() == Some(120) && s["lastMouse"][1].as_i64() == Some(120),
-        15_000,
+        5_000,
         "Expected mousemove to update lastMouse to [120, 120]",
     );
 
@@ -2920,7 +2641,7 @@ fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
     wait_for_state_or_abort(
         ctx,
         |s| s["mouseDownCount"].as_u64() == Some(before_mouse_down + 1),
-        15_000,
+        5_000,
         "Expected mousedown to increment mouseDownCount",
     );
 
@@ -2931,7 +2652,7 @@ fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
     wait_for_state_or_abort(
         ctx,
         |s| s["mouseUpCount"].as_u64() == Some(before_mouse_up + 1),
-        15_000,
+        5_000,
         "Expected mouseup to increment mouseUpCount",
     );
 
@@ -2939,7 +2660,7 @@ fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
     let wheel_state = wait_for_state_or_abort(
         ctx,
         |s| s["lastWheel"][0].as_i64() == Some(160) && s["lastWheel"][1].as_i64() == Some(0),
-        15_000,
+        5_000,
         "Expected mousewheel to update lastWheel to [160, 0]",
     );
     assert!(
@@ -2957,7 +2678,7 @@ fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
     wait_for_state_or_abort(
         ctx,
         |s| s["promptResult"].as_str() == Some("accepted by cli"),
-        15_000,
+        5_000,
         "Expected dialog-accept to set promptResult to 'accepted by cli'",
     );
 
@@ -2970,7 +2691,7 @@ fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
     wait_for_state_or_abort(
         ctx,
         |s| s["confirmResult"].as_str() == Some("dismissed"),
-        15_000,
+        5_000,
         "Expected dialog-dismiss to set confirmResult to 'dismissed'",
     );
 
@@ -3649,7 +3370,7 @@ fn main() {
     println!("running {total_tests} tests");
     let mut timings: Vec<TimingReport> = Vec::with_capacity(total_tests);
 
-    stop_browser4_server_forcibly();
+    // stop_browser4_server_forcibly();
 
     if run_coverage {
         let report = run_named_test("test_e2e_command_coverage", verify_e2e_command_coverage);
