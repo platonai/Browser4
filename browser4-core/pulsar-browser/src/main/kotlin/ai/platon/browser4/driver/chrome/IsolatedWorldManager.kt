@@ -1,5 +1,6 @@
 package ai.platon.browser4.driver.chrome
 
+import ai.platon.browser4.driver.chrome.experimental.CDP
 import ai.platon.browser4.driver.common.BrowserSettings
 import ai.platon.pulsar.common.getLogger
 import org.apache.commons.lang3.StringUtils
@@ -40,7 +41,7 @@ class IsolatedWorldManager(
     }
 
     private val logger = getLogger(this)
-    private val pageAPI get() = devTools.page
+    private val cdp = CDP(devTools)
     private val confuser get() = settings.confuser
 
     /**
@@ -57,7 +58,7 @@ class IsolatedWorldManager(
      * @return The execution context ID of the created isolated world
      */
     suspend fun createIsolatedWorld(frameId: String? = null): Int {
-        val resolvedFrameId: String? = frameId ?: runCatching { pageAPI.getFrameTree().frame.id }.getOrNull()
+        val resolvedFrameId: String? = frameId ?: runCatching { cdp.mainFrame().id }.getOrNull()
 
         logger.debug(
             "Creating isolated world '{}' for frame: {}",
@@ -68,11 +69,11 @@ class IsolatedWorldManager(
         var lastError: Exception? = null
         repeat(DEFAULT_CREATE_WORLD_RETRIES) { attempt ->
             try {
-                val executionContextId = pageAPI.createIsolatedWorld(
-                        frameId = resolvedFrameId ?: "main",
-                        worldName = RUNTIME_WORLD_NAME,
-                        grantUniveralAccess = true,
-                    )
+                val executionContextId = cdp.createIsolatedWorld(
+                    frameId = resolvedFrameId ?: "main",
+                    worldName = RUNTIME_WORLD_NAME,
+                    grantUniveralAccess = true,
+                )
 
                 if (executionContextId <= 0) {
                     throw IllegalStateException(
@@ -114,31 +115,20 @@ class IsolatedWorldManager(
      * @return The result of the evaluation
      */
     suspend fun evaluateInIsolatedWorld(script: String, contextId: Int? = null): Any? {
-        val params = mutableMapOf<String, Any?>(
-            "expression" to confuser.confuse(script),
-            "returnByValue" to true,
-            "awaitPromise" to true
+        val result = cdp.evaluate(
+            expression = confuser.confuse(script),
+            contextId = contextId,
+            returnByValue = true,
+            awaitPromise = true,
         )
 
-        if (contextId != null) {
-            // CDP expects executionContextId, but some driver code historically used contextId.
-            params["executionContextId"] = contextId
-            params["contextId"] = contextId
-        }
-
-        val result = devTools.invoke<Map<String, Any>>(
-            "Runtime.evaluate",
-            params,
-            null
-        )
-
-        val exception = result?.get("exceptionDetails")
+        val exception = result.exceptionDetails
         if (exception != null) {
             val abbreviation = StringUtils.abbreviateMiddle(script, "...", 200)
             logger.warn("Exception during isolated world evaluation: {} \n>>>$abbreviation<<<", exception)
         }
 
-        return result?.get("result")
+        return result.result
     }
 
     /**

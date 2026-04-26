@@ -2,6 +2,7 @@ package ai.platon.browser4.driver.chrome.dom
 
 import ai.platon.cdt.kt.protocol.types.accessibility.AXNode
 import ai.platon.browser4.driver.chrome.RemoteDevTools
+import ai.platon.browser4.driver.chrome.experimental.CDP
 import ai.platon.browser4.driver.chrome.dom.AccessibilityHandler.AccessibilityTreeResult
 import ai.platon.browser4.driver.chrome.dom.model.*
 import ai.platon.browser4.driver.chrome.dom.util.DomDebug
@@ -76,10 +77,11 @@ import java.util.*
  * ```
  */
 class CDPSnapshotService(
-    private val devTools: RemoteDevTools,
+    devTools: RemoteDevTools,
 ) : SnapshotService {
     private val logger = getLogger(this)
     private val tracer get() = logger.takeIf { it.isTraceEnabled }
+    private val cdp = CDP(devTools)
 
     private val accessibility = AccessibilityHandler(devTools)
     private val domTree = DomTreeHandler(devTools)
@@ -446,7 +448,7 @@ class CDPSnapshotService(
      */
     private suspend fun evalDouble(expr: String): Double? {
         return try {
-            val result = devTools.runtime.evaluate(expr).result
+            val result = cdp.evaluate(expr).result
             result.value?.toString()?.toDoubleOrNull() ?: result.unserializableValue?.toDoubleOrNull()
         } catch (e: Exception) {
             tracer?.trace("Evaluation error | expr={} | err={}", expr, e.toString())
@@ -463,7 +465,7 @@ class CDPSnapshotService(
      * Safely evaluate a JS expression and return the result as a String.
      */
     private suspend fun evalString(expr: String): String? = try {
-        devTools.runtime.evaluate(expr).result.value?.toString()
+        cdp.evaluate(expr).result.value?.toString()
     } catch (e: Exception) {
         tracer?.trace("Evaluation error | expr={} | err={}", expr, e.toString())
         null
@@ -473,7 +475,7 @@ class CDPSnapshotService(
      * Safely evaluate a JS expression and return the result as a Boolean.
      */
     private suspend fun evalBoolean(expr: String): Boolean? = try {
-        val v = devTools.runtime.evaluate(expr).result.value
+        val v = cdp.evaluate(expr).result.value
         when (v) {
             is Boolean -> v
             is String -> v.equals("true", true)
@@ -487,12 +489,12 @@ class CDPSnapshotService(
 
     private suspend fun buildBrowserState(domState: DOMState): BrowserUseState {
         // URL from DOM domain (resilient)
-        val url: String = runCatching { devTools.dom.getDocument().documentURL }.getOrNull() ?: ""
+        val url: String = runCatching { cdp.getDocument().documentURL }.getOrNull() ?: ""
 
         // Navigation history for back/forward URLs (resilient)
 
         val (goBackUrl, goForwardUrl) = runCatching {
-            val history = devTools.page.getNavigationHistory()
+            val history = cdp.getNavigationHistory()
             val currentIndex = history.currentIndex
             val entries = history.entries
 
@@ -535,13 +537,13 @@ class CDPSnapshotService(
 
         // Client info from browser (fallback to system defaults)
         val tzId = runCatching {
-            devTools.runtime.evaluate("Intl.DateTimeFormat().resolvedOptions().timeZone").result.value?.toString()
+            cdp.evaluate("Intl.DateTimeFormat().resolvedOptions().timeZone").result.value?.toString()
         }.getOrNull()?.takeIf { it.isNotBlank() }
         val timeZone = runCatching { if (tzId != null) TimeZone.getTimeZone(tzId) else TimeZone.getDefault() }
             .getOrDefault(TimeZone.getDefault())
 
         val langTag = runCatching {
-            devTools.runtime.evaluate("navigator.language || (navigator.languages && navigator.languages[0]) || ''").result.value?.toString()
+            cdp.evaluate("navigator.language || (navigator.languages && navigator.languages[0]) || ''").result.value?.toString()
         }.getOrNull()?.takeIf { it.isNotBlank() }
         val locale = runCatching { if (langTag != null) Locale.forLanguageTag(langTag) else Locale.getDefault() }
             .getOrDefault(Locale.getDefault())
@@ -700,7 +702,7 @@ class CDPSnapshotService(
 
     private suspend fun getDevicePixelRatio(): Double {
         return try {
-            val evaluation = devTools.runtime.evaluate("window.devicePixelRatio")
+            val evaluation = cdp.evaluate("window.devicePixelRatio")
             val result = evaluation.result
             val numeric = result.value?.toString()?.toDoubleOrNull()
             numeric ?: result.unserializableValue?.toDoubleOrNull() ?: 1.0

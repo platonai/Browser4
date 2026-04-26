@@ -1,6 +1,6 @@
 package ai.platon.browser4.driver.chrome
 
-import ai.platon.cdt.kt.protocol.ChromeDevTools
+import ai.platon.browser4.driver.chrome.experimental.CDP
 import ai.platon.cdt.kt.protocol.commands.DOM
 import ai.platon.cdt.kt.protocol.commands.Page
 import ai.platon.cdt.kt.protocol.types.input.*
@@ -178,8 +178,8 @@ class ClickableDOM(
  *
  * @author Vincent Zhang, ivincent.zhang@gmail.com, platon.ai
  */
-class Mouse(private val devTools: ChromeDevTools) {
-    private val input get() = devTools.input
+class Mouse(private val cdp: CDP) {
+    private val input get() = cdp.input
 
     var currentX = 0.0
     var currentY = 0.0
@@ -237,21 +237,7 @@ class Mouse(private val devTools: ChromeDevTools) {
     }
 
     private suspend fun cdpMoveTo(x: Double, y: Double) {
-        input.dispatchMouseEvent(
-            type = DispatchMouseEventType.MOUSE_MOVED, x = x, y = y,
-            modifiers = null, timestamp = null,
-            button = null, // button
-            buttons = buttonsState, // buttons
-            clickCount = null,
-            force = null, // force
-            tangentialPressure = null,
-            tiltX = null,
-            tiltY = null,
-            twist = null, // twist
-            deltaX = null,
-            deltaY = null,
-            pointerType = null
-        )
+        cdp.dispatchMouseMoved(x, y, buttonsState)
     }
 
     /**
@@ -279,21 +265,7 @@ class Mouse(private val devTools: ChromeDevTools) {
     suspend fun down(x: Double, y: Double, clickCount: Int = 1, modifiers: Int? = null) {
         // Update buttons bitfield to include left button (1)
         buttonsState = buttonsState or 1
-        input.dispatchMouseEvent(
-            type = DispatchMouseEventType.MOUSE_PRESSED, x = x, y = y,
-            button = MouseButton.LEFT,
-            modifiers = modifiers, timestamp = null,
-            buttons = buttonsState, // buttons after press
-            clickCount = clickCount,
-            force = 0.5, // force
-            tangentialPressure = null,
-            tiltX = null,
-            tiltY = null,
-            twist = null, // twist
-            deltaX = null,
-            deltaY = null,
-            pointerType = null
-        )
+        cdp.dispatchMousePressed(x, y, clickCount, modifiers, buttonsState)
     }
 
     suspend fun up() {
@@ -307,31 +279,11 @@ class Mouse(private val devTools: ChromeDevTools) {
     suspend fun up(x: Double, y: Double, clickCount: Int = 1, modifiers: Int? = null) {
         // Update buttons bitfield to reflect release of left button
         buttonsState = buttonsState and 1.inv()
-        input.dispatchMouseEvent(
-            type = DispatchMouseEventType.MOUSE_RELEASED, x = x, y = y,
-            button = MouseButton.LEFT,
-            clickCount = clickCount,
-            modifiers = modifiers,
-            buttons = buttonsState
-        )
+        cdp.dispatchMouseReleased(x, y, clickCount, modifiers, buttonsState)
     }
 
     suspend fun scroll(deltaX: Double = 0.0, deltaY: Double = 10.0) {
-        input.dispatchMouseEvent(
-            type = DispatchMouseEventType.MOUSE_WHEEL, x = currentX, y = currentY,
-            modifiers = null, timestamp = null,
-            button = null, // button
-            buttons = null, // buttons
-            clickCount = null,
-            force = null, // force
-            tangentialPressure = null,
-            tiltX = null, // tiltX
-            tiltY = null, // tiltY
-            twist = null, // twist
-            deltaX = deltaX, // deltaX
-            deltaY = deltaY, // deltaY
-            pointerType = null
-        )
+        cdp.dispatchMouseWheel(currentX, currentY, deltaX, deltaY)
     }
 
     /**
@@ -394,21 +346,7 @@ class Mouse(private val devTools: ChromeDevTools) {
      * @param y Y coordinate
      */
     suspend fun wheel(x: Double, y: Double, deltaX: Double, deltaY: Double) {
-        input.dispatchMouseEvent(
-            type = DispatchMouseEventType.MOUSE_WHEEL, x = x, y = y,
-            modifiers = null, timestamp = null,
-            button = null, // button
-            buttons = null, // buttons
-            clickCount = null,
-            force = null, // force
-            tangentialPressure = null,
-            tiltX = null, // tiltX
-            tiltY = null, // tiltY
-            twist = null, // twist
-            deltaX = deltaX, // deltaX
-            deltaY = deltaY, // deltaY
-            pointerType = null
-        )
+        cdp.dispatchMouseWheel(x, y, deltaX, deltaY)
     }
 
     /**
@@ -420,7 +358,7 @@ class Mouse(private val devTools: ChromeDevTools) {
     suspend fun drag(start: PointD, target: PointD): DragData? {
         var dragData: DragData? = null
 
-        input.setInterceptDrags(true)
+        cdp.setInterceptDrags(true)
         input.onDragIntercepted {
             dragData = it.data
         }
@@ -439,7 +377,7 @@ class Mouse(private val devTools: ChromeDevTools) {
         } finally {
             // Always release button and disable interception
             runCatching { up() }
-            runCatching { input.setInterceptDrags(false) }
+            runCatching { cdp.setInterceptDrags(false) }
         }
 
         return dragData
@@ -451,7 +389,7 @@ class Mouse(private val devTools: ChromeDevTools) {
      * @param data - drag data containing items and operations mask
      */
     suspend fun dragEnter(target: PointD, data: DragData) {
-        input.dispatchDragEvent(
+        cdp.dispatchDragEvent(
             DispatchDragEventType.DRAG_ENTER, target.x, target.y,
             data
         )
@@ -463,7 +401,7 @@ class Mouse(private val devTools: ChromeDevTools) {
      * @param data - drag data containing items and operations mask
      */
     suspend fun dragOver(target: PointD, data: DragData) {
-        input.dispatchDragEvent(
+        cdp.dispatchDragEvent(
             DispatchDragEventType.DRAG_OVER, target.x, target.y,
             data
         )
@@ -475,7 +413,7 @@ class Mouse(private val devTools: ChromeDevTools) {
      * @param data - drag data containing items and operations mask
      */
     suspend fun drop(target: PointD, data: DragData) {
-        input.dispatchDragEvent(
+        cdp.dispatchDragEvent(
             DispatchDragEventType.DROP, target.x, target.y,
             data
         )
@@ -511,8 +449,7 @@ class Mouse(private val devTools: ChromeDevTools) {
 /**
  * Keyboard provides an api for managing a virtual keyboard.
  * */
-class Keyboard(private val devTools: ChromeDevTools) {
-    private val input get() = devTools.input
+class Keyboard(private val cdp: CDP) {
     private val pressedModifiers = mutableSetOf<String>()
     private val pressedKeys = mutableSetOf<String>()
 
@@ -521,7 +458,7 @@ class Keyboard(private val devTools: ChromeDevTools) {
             if (Character.isISOControl(char)) {
                 press("$char", delayMillis)
             } else {
-                input.insertText("$char")
+                cdp.insertText("$char")
             }
 
             if (delayMillis > 0) {
@@ -675,8 +612,8 @@ class Keyboard(private val devTools: ChromeDevTools) {
 
         val type = if (key.text.isEmpty()) DispatchKeyEventType.RAW_KEY_DOWN else DispatchKeyEventType.KEY_DOWN
         val commands = emptyList<String>()
-        input.dispatchKeyEvent(
-            type,
+        cdp.dispatchKeyEvent(
+            type = type,
             modifiers = toModifiersMask(modifiers),
             windowsVirtualKeyCode = key.keyCodeWithoutLocation,
             code = key.code,
@@ -699,7 +636,7 @@ class Keyboard(private val devTools: ChromeDevTools) {
         }
         pressedKeys.remove(key.code)
 
-        input.dispatchKeyEvent(
+        cdp.dispatchKeyEvent(
             type = DispatchKeyEventType.KEY_UP,
             modifiers = toModifiersMask(modifiers),
             key = key.key,

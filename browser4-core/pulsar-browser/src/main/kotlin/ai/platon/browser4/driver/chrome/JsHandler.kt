@@ -1,5 +1,6 @@
 package ai.platon.browser4.driver.chrome
 
+import ai.platon.browser4.driver.chrome.experimental.CDP
 import ai.platon.browser4.driver.chrome.util.ChromeDriverException
 import ai.platon.cdt.kt.protocol.types.runtime.CallFunctionOn
 import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
@@ -15,12 +16,9 @@ class JsHandler(
     private val isolatedWorldManager: IsolatedWorldManager,
 ) {
     private val logger = getLogger(this)
+    private val cdp = CDP(devTools)
 
     private val isActive get() = AppContext.isActive && devTools.isOpen
-    private val pageAPI get() = devTools.page.takeIf { isActive }
-    private val domAPI get() = devTools.dom.takeIf { isActive }
-    private val cssAPI get() = devTools.css.takeIf { isActive }
-    private val runtimeAPI get() = devTools.runtime.takeIf { isActive }
 
     private val confuser get() = isolatedWorldManager.settings.confuser
 
@@ -38,7 +36,7 @@ class JsHandler(
         val confusedExpr = confuser.confuse(expression)
 
         val isolatedContextId = isolatedWorldManager
-            .getContextId(runCatching { pageAPI?.getFrameTree()?.frame?.id }.getOrNull())
+            .getContextId(runCatching { cdp.mainFrame().id }.getOrNull())
         if (isolatedContextId != null && isolatedContextId > 0) {
             val isolatedResult = evaluateInContext(confusedExpr, isolatedContextId, returnByValue = false)
             if (isolatedResult != null) {
@@ -47,7 +45,7 @@ class JsHandler(
         }
 
         return try {
-            runtimeAPI?.evaluate(confusedExpr)
+            cdp.evaluate(confusedExpr)
         } catch (e: Exception) {
             logger.warn("Failed to evaluate $expression", e)
             null
@@ -59,7 +57,7 @@ class JsHandler(
         val node = pageHandler.querySelector(selector) ?: return null
         val resolved = resolveNodeObjectId(devTools, node) ?: return null
         return try {
-            runtimeAPI?.callFunctionOn(functionDeclaration, objectId = resolved.objectId, returnByValue = true)
+            cdp.callFunctionOn(functionDeclaration, objectId = resolved.objectId, returnByValue = true)
         } finally {
             releaseNodeObjectIfNeeded(devTools, resolved)
         }
@@ -108,7 +106,7 @@ class JsHandler(
         val confusedExpr = confuser.confuse(expression)
 
         val isolatedContextId = isolatedWorldManager
-            .getContextId(runCatching { pageAPI?.getFrameTree()?.frame?.id }.getOrNull())
+            .getContextId(runCatching { cdp.mainFrame().id }.getOrNull())
         if (isolatedContextId != null && isolatedContextId > 0) {
             val isolatedResult = evaluateInContext(confusedExpr, isolatedContextId, returnByValue = true)
             if (isolatedResult != null) {
@@ -117,7 +115,7 @@ class JsHandler(
         }
 
         return try {
-            runtimeAPI?.evaluate(confusedExpr, returnByValue = true)
+            cdp.evaluate(confusedExpr, returnByValue = true)
         } catch (e: Exception) {
             logger.warn("Failed to evaluate $script", e)
             null
@@ -177,7 +175,7 @@ class JsHandler(
      * @return Detailed evaluation result, or null if evaluation fails
      * */
     private suspend fun evaluateInContext(expression: String, contextId: Int, returnByValue: Boolean): Evaluate? {
-        return runtimeAPI?.evaluate(expression = expression, contextId = contextId, returnByValue = returnByValue)
+        return cdp.evaluate(expression = expression, contextId = contextId, returnByValue = returnByValue)
     }
 
     private suspend fun evaluateInContext2(expression: String, contextId: Int, returnByValue: Boolean): Evaluate? {
@@ -188,7 +186,7 @@ class JsHandler(
             "awaitPromise" to true,
         )
 
-        // runtimeAPI.evaluate()
+        // Runtime.evaluate via raw invoke is kept for compatibility with legacy protocol payload shape.
         val raw = devTools.invoke<Map<String, Any?>>("Runtime.evaluate", params, null) ?: return null
         return runCatching {
             pulsarObjectMapper().convertValue<Evaluate>(raw)

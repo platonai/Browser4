@@ -1,6 +1,7 @@
 package ai.platon.browser4.driver.chrome.dom
 
 import ai.platon.browser4.driver.chrome.RemoteDevTools
+import ai.platon.browser4.driver.chrome.experimental.CDP
 import ai.platon.browser4.driver.chrome.dom.model.MergedDOMTreeNode
 import ai.platon.browser4.driver.chrome.dom.model.NodeType
 import ai.platon.browser4.driver.chrome.dom.model.PageTarget
@@ -13,9 +14,10 @@ typealias CdpNode = ai.platon.cdt.kt.protocol.types.dom.Node
  * Handler for DOM tree operations.
  * Fetches and converts CDP DOM tree to enhanced representation.
  */
-class DomTreeHandler(private val devTools: RemoteDevTools) {
+class DomTreeHandler(devTools: RemoteDevTools) {
     private val logger = getLogger(this)
     private val tracer get() = logger.takeIf { it.isTraceEnabled }
+    private val cdp = CDP(devTools)
 
     @Volatile
     private var lastBackendLookup: Map<Int, MergedDOMTreeNode> = emptyMap()
@@ -34,12 +36,11 @@ class DomTreeHandler(private val devTools: RemoteDevTools) {
      */
     suspend fun getDocument(target: PageTarget?, maxDepth: Int = 0): MergedDOMTreeNode {
         val maxDepth = if (maxDepth > 0) maxDepth else 999999
-        val dom = devTools.dom
         val depth = maxDepth.takeIf { it > 0 }
         val document = try {
             when {
-                depth != null -> dom.getDocument(depth, pierce = true)
-                else -> dom.getDocument(null, pierce = true)
+                depth != null -> cdp.getDocument(depth, pierce = true)
+                else -> cdp.getDocument(null, pierce = true)
             }
         } catch (e: Exception) {
             logger.warn("DOM.getDocument failed | frameId={} | err={}", target?.frameId, e.toString())

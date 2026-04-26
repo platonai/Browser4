@@ -1,5 +1,6 @@
 package ai.platon.browser4.driver.chrome
 
+import ai.platon.browser4.driver.chrome.experimental.CDP
 import ai.platon.browser4.driver.common.BrowserSettings
 import ai.platon.cdt.kt.protocol.types.page.CaptureScreenshotFormat
 import ai.platon.cdt.kt.protocol.types.page.Viewport
@@ -14,9 +15,10 @@ class ScreenshotHandler(
     private val devTools: RemoteDevTools,
 ) {
     private val logger = getLogger(this)
+    private val cdp = CDP(devTools)
     private val isActive get() = AppContext.isActive && devTools.isOpen
-    private val page get() = devTools.page.takeIf { isActive }
-    private val dom get() = devTools.dom.takeIf { isActive }
+    private val page get() = cdp.page.takeIf { isActive }
+    private val dom get() = cdp.dom.takeIf { isActive }
     private val debugLevel = System.getProperty("browser.additionalDebugLevel")?.toIntOrNull() ?: 0
 
     /**
@@ -28,29 +30,28 @@ class ScreenshotHandler(
         }
 
         val metrics = page?.getLayoutMetrics() ?: return null
-        val emulation = devTools.emulation.takeIf { isActive }
-        val rect = metrics.cssContentSize
+        val rect = metrics.contentSize
         val width = rect.width.toInt()
         val height = rect.height.toInt()
 
-        emulation?.setDeviceMetricsOverride(
+        cdp.setDeviceMetricsOverride(
             mobile = false,
             width = width,
             height = height,
             deviceScaleFactor = 1.0,
             screenWidth = width,
             screenHeight = height,
-        ) ?: return null
+        )
 
         // PNG = Crisp, precise, lossless, and supports transparency (ideal for testing and UI design)
         // JPEG = Compact, softly detailed, lossy, and opaque (suitable for presentation and archiving)
         val format = CaptureScreenshotFormat.JPEG
-        val result = page?.captureScreenshot(
+        val result = cdp.captureScreenshot(
             format = format,
             captureBeyondViewport = true,
         )
 
-        emulation.clearDeviceMetricsOverride()
+        cdp.clearDeviceMetricsOverride()
 
         return result
     }
@@ -114,10 +115,12 @@ class ScreenshotHandler(
             return null
         }
 
-        return page?.captureScreenshot(
-            format, quality, viewport,
+        return cdp.captureScreenshot(
+            format = format,
+            quality = quality,
+            clip = viewport,
             fromSurface = true,
-            captureBeyondViewport = false
+            captureBeyondViewport = false,
         )
     }
 
@@ -132,7 +135,6 @@ class ScreenshotHandler(
         val rect = calculateNodeClip0(node, selector)
 
         val p = page ?: return null
-//        val d = dom ?: return null
 
         val viewport = p.getLayoutMetrics().cssLayoutViewport
         val pageX = viewport.pageX
@@ -186,7 +188,6 @@ class ScreenshotHandler(
         println(clickableDOM.clickablePoint())
 
         val p = page ?: return
-//        val d = dom ?: return null
 
         val viewport = p.getLayoutMetrics().cssLayoutViewport
         val pageX = viewport.pageX

@@ -1,5 +1,6 @@
 package ai.platon.browser4.driver.chrome
 
+import ai.platon.browser4.driver.chrome.experimental.CDP
 import ai.platon.pulsar.common.AppContext
 
 /**
@@ -26,10 +27,10 @@ suspend fun resolveNodeObjectId(devTools: RemoteDevTools, node: NodeRef): Resolv
         return null
     }
 
-    val domAPI = devTools.dom
+    val cdp = CDP(devTools)
     val objectId = when {
-        node.nodeId > 0 -> domAPI.resolveNode(nodeId = node.nodeId).objectId
-        node.backendNodeId > 0 -> domAPI.resolveNode(backendNodeId = node.backendNodeId).objectId
+        node.nodeId > 0 -> cdp.resolveNodeByNodeId(node.nodeId).objectId
+        node.backendNodeId > 0 -> cdp.resolveNodeByBackendNodeId(node.backendNodeId).objectId
         else -> null
     }
 
@@ -44,7 +45,8 @@ suspend fun releaseNodeObjectIfNeeded(devTools: RemoteDevTools, resolved: Resolv
         return
     }
 
-    runCatching { devTools.runtime.releaseObject(resolved.objectId) }
+    val cdp = CDP(devTools)
+    runCatching { cdp.releaseObject(resolved.objectId) }
 }
 
 /**

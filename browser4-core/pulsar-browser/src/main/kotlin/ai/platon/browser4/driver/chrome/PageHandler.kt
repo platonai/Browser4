@@ -1,5 +1,6 @@
 package ai.platon.browser4.driver.chrome
 
+import ai.platon.browser4.driver.chrome.experimental.CDP
 import ai.platon.browser4.driver.chrome.dom.CDPSnapshotService
 import ai.platon.browser4.driver.chrome.dom.SnapshotService
 import ai.platon.browser4.driver.chrome.dom.Locator
@@ -32,11 +33,14 @@ class PageHandler(
 
     private val logger = getLogger(this)
 
+    /** Single access point for all CDP domain APIs. */
+    private val cdp = CDP(devTools)
+
     private val isActive get() = AppContext.isActive && devTools.isOpen
-    private val pageAPI get() = devTools.page.takeIf { isActive }
-    private val domAPI get() = devTools.dom.takeIf { isActive }
-    private val cssAPI get() = devTools.css.takeIf { isActive }
-    private val runtimeAPI get() = devTools.runtime.takeIf { isActive }
+    private val pageAPI get() = cdp.page.takeIf { isActive }
+    private val domAPI get() = cdp.dom.takeIf { isActive }
+    private val cssAPI get() = cdp.css.takeIf { isActive }
+    private val runtimeAPI get() = cdp.runtime.takeIf { isActive }
 
     private var lastBrowserUseState: BrowserUseState? = null
 
@@ -44,8 +48,8 @@ class PageHandler(
 
     val jsHandler: JsHandler = JsHandler(devTools, this, isolatedWorldManager)
 
-    val mouse = Mouse(devTools)
-    val keyboard = Keyboard(devTools)
+    val mouse = Mouse(cdp)
+    val keyboard = Keyboard(cdp)
 
     @Throws(ChromeDriverException::class)
     suspend fun navigate(@ParamName("url") url: String): Navigate? {

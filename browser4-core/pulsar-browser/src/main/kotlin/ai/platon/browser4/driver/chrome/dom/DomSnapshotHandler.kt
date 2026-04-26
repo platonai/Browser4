@@ -1,10 +1,10 @@
 package ai.platon.browser4.driver.chrome.dom
 
 import ai.platon.browser4.driver.chrome.RemoteDevTools
+import ai.platon.browser4.driver.chrome.experimental.CDP
 import ai.platon.browser4.driver.chrome.dom.model.DOMRect
 import ai.platon.browser4.driver.chrome.dom.model.SnapshotNodeEx
 import ai.platon.browser4.driver.chrome.dom.util.DomDebug
-import ai.platon.cdt.kt.protocol.commands.DOMSnapshot
 import ai.platon.cdt.kt.protocol.support.annotations.Experimental
 import ai.platon.cdt.kt.protocol.support.annotations.Optional
 import ai.platon.cdt.kt.protocol.support.annotations.ParamName
@@ -15,11 +15,10 @@ import ai.platon.pulsar.common.getLogger
  * Handler for DOMSnapshot domain operations.
  * Captures and processes layout snapshots with style and rect information.
  */
-class DomSnapshotHandler(private val devTools: RemoteDevTools) {
+class DomSnapshotHandler(devTools: RemoteDevTools) {
     private val logger = getLogger(this)
     private val tracer get() = logger.takeIf { it.isTraceEnabled }
-
-    private val cdpDOMSnapshot: DOMSnapshot get() = devTools.domSnapshot
+    private val cdp = CDP(devTools)
 
     /**
      * Enhanced capture with absolute coordinates and stacking context analysis.
@@ -180,7 +179,7 @@ class DomSnapshotHandler(private val devTools: RemoteDevTools) {
         @ParamName("includeTextColorOpacities") @Optional @Experimental includeTextColorOpacities: Boolean? = null,
     ): CaptureSnapshot {
         return try {
-            cdpDOMSnapshot.captureSnapshot(
+            cdp.domSnapshotCaptureSnapshot(
                 computedStyles,
                 includePaintOrder = includePaintOrder,
                 includeDOMRects = includeDOMRects,

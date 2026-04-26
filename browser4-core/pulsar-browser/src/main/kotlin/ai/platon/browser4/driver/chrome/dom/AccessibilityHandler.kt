@@ -1,8 +1,9 @@
 package ai.platon.browser4.driver.chrome.dom
 
+import ai.platon.browser4.driver.chrome.RemoteDevTools
+import ai.platon.browser4.driver.chrome.experimental.CDP
 import ai.platon.cdt.kt.protocol.types.accessibility.AXNode
 import ai.platon.cdt.kt.protocol.types.page.FrameTree
-import ai.platon.browser4.driver.chrome.RemoteDevTools
 import ai.platon.pulsar.common.getLogger
 
 class AccessibilityHandler(
@@ -10,10 +11,11 @@ class AccessibilityHandler(
 ) {
     private val logger = getLogger(this)
     private val tracer get() = logger.takeIf { it.isTraceEnabled }
+    private val cdp = CDP(devTools)
 
     private val isActive get() = devTools.isOpen
-    private val pageAPI get() = devTools.page.takeIf { isActive }
-    private val accessibilityAPI get() = devTools.accessibility.takeIf { isActive }
+    private val pageAPI get() = cdp.page.takeIf { isActive }
+    private val accessibilityAPI get() = cdp.accessibility.takeIf { isActive }
 
     @Volatile
     private var accessibilityEnabled = false
@@ -123,7 +125,7 @@ class AccessibilityHandler(
         while (queue.isNotEmpty()) {
             val current = queue.removeFirst()
             val frame = current.frame
-            val frameId = frame?.id
+            val frameId = frame.id
             if (!frameId.isNullOrBlank()) {
                 acc.putIfAbsent(frameId, current)
             }
@@ -152,12 +154,12 @@ class AccessibilityHandler(
     private suspend fun ensureEnabled() {
         if (!isActive) return
         // Enable Page/DOM domains to stabilize frame tree & AX associations
-        runCatching { devTools.page.enable() }
-        runCatching { devTools.dom.enable() }
+        runCatching { cdp.pageEnable() }
+        runCatching { cdp.domEnable() }
 
-        val a11y = accessibilityAPI ?: return
+        accessibilityAPI ?: return
         if (!accessibilityEnabled) {
-            runCatching { a11y.enable() }
+            runCatching { cdp.accessibilityEnable() }
                 .onFailure { e -> logger.warn("Accessibility.enable failed | err={}", e.toString()) }
             accessibilityEnabled = true
         }
