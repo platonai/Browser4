@@ -39,12 +39,14 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::thread::sleep;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use browser4_cli::commands::all_commands;
 use browser4_cli::managed_processes::stop_browser4_server_forcibly;
+
+#[path = "e2e/scenarios/mod.rs"]
+mod scenarios;
 
 const OPEN_TEMPORARY_PROFILE_ARG: &str = "--profile-mode=TEMPORARY";
 
@@ -1615,7 +1617,7 @@ fn create_e2e_test_resources() -> E2ETestResources {
 }
 
 // ---------------------------------------------------------------------------
-// Test scenarios
+// Scenario helpers
 // ---------------------------------------------------------------------------
 
 fn open_interactive_page(ctx: &mut E2ECtx) {
@@ -1711,1233 +1713,47 @@ fn assert_collective_session_call(mock_server: &MockBrowser4Server) {
     );
 }
 
-fn test_open_uses_temporary_profile_mode(ctx: &mut E2ECtx) {
-    reset_cli_artifacts(ctx);
-
-    let mock_server = MockBrowser4Server::start();
-    ctx.browser4_base_url = mock_server.base_url();
-
-    let open_result = run_open_command(ctx);
-    assert!(
-        open_result
-            .stdout
-            .contains("Session opened: collective-session-1"),
-        "Expected mocked session open output in:\n{}",
-        open_result.stdout
-    );
-
-    let tool_calls = mock_server.snapshot().tool_calls;
-    let open_session_call = tool_calls
-        .iter()
-        .find(|call| call.tool == "open_session")
-        .expect("expected open_session call");
-    assert_eq!(
-        open_session_call.arguments["capabilities"]["profileMode"],
-        "TEMPORARY"
-    );
-}
-
-fn test_session_lifecycle(ctx: &mut E2ECtx) {
-    reset_cli_artifacts(ctx);
-
-    let open_result = run_open_command(ctx);
-    assert!(
-        open_result.stdout.contains("Session opened:"),
-        "Expected 'Session opened:' in:\n{}",
-        open_result.stdout
-    );
-
-    let session_id = read_persisted_session_id(&ctx.state_dir);
-    let list_result = run_command(ctx, &["list"]);
-    assert!(
-        list_result.stdout.contains(&session_id),
-        "Expected session id '{session_id}' in list output:\n{}",
-        list_result.stdout
-    );
-
-    let close_result = run_command(ctx, &["close"]);
-    assert!(
-        close_result.stdout.contains("Session closed."),
-        "Expected 'Session closed.' in:\n{}",
-        close_result.stdout
-    );
-}
-
-fn test_navigation_and_storage(ctx: &mut E2ECtx) {
-    reset_cli_artifacts(ctx);
-
-    run_open_command(ctx);
-
-    let interactive_url = ctx.interactive_url();
-    let other_url = ctx.other_url();
-
-    run_command(ctx, &["goto", &interactive_url]);
-    wait_for_eval_text(
-        ctx,
-        "window.location.pathname",
-        INTERACTIVE_PATH,
-        5_000,
-        "Expected to be on interactive path",
-    );
-
-    run_command(ctx, &["goto", &other_url]);
-    wait_for_eval_text(
-        ctx,
-        "document.title",
-        OTHER_TITLE,
-        5_000,
-        "Expected other page title",
-    );
-
-    run_command(ctx, &["go-back"]);
-    wait_for_eval_text(
-        ctx,
-        "window.location.pathname",
-        INTERACTIVE_PATH,
-        5_000,
-        "Expected to be back on interactive path after go-back",
-    );
-
-    run_command(ctx, &["go-forward"]);
-    wait_for_eval_text(
-        ctx,
-        "window.location.pathname",
-        OTHER_PATH,
-        5_000,
-        "Expected to be on other path after go-forward",
-    );
-
-    run_command(ctx, &["reload"]);
-    wait_for_eval_text(
-        ctx,
-        "document.title",
-        OTHER_TITLE,
-        5_000,
-        "Expected other page title after reload",
-    );
-
-    let delete_result = run_command(ctx, &["delete-data"]);
-    let stripped = strip_snapshot_output(&delete_result.stdout).to_lowercase();
-    assert!(
-        stripped.contains("deleted"),
-        "Expected 'deleted' in delete-data output:\n{}",
-        stripped
-    );
-
-    run_command(ctx, &["close"]);
-}
-
-fn test_interaction_commands(ctx: &mut E2ECtx) {
-    reset_cli_artifacts(ctx);
-    open_resized_interactive_page(ctx);
-
-    run_command(ctx, &["type", "#type-target", "hello world"]);
-    wait_for_state_or_abort(
-        ctx,
-        |s| s["typeValue"].as_str() == Some("hello world"),
-        5_000,
-        "Expected typeValue to become 'hello world' after type",
-    );
-
-    // fill
-    run_command(ctx, &["fill", "#fill-target", "filled text"]);
-    wait_for_state_or_abort(
-        ctx,
-        |s| s["fillValue"].as_str() == Some("filled text"),
-        5_000,
-        "Expected fillValue to become 'filled text' after fill",
-    );
-
-    let press_before = read_interactive_state(ctx);
-    let press_before_events = key_event_count(&press_before);
-    run_command(ctx, &["press", "#type-target", "!"]);
-    wait_for_state_or_abort(
-        ctx,
-        |s| {
-            s["typeValue"].as_str() == Some("hello world!")
-                && key_event_count(s) > press_before_events
-        },
-        5_000,
-        "Expected press to append '!' to typeValue and emit a key event",
-    );
-
-    run_command(ctx, &["click", "#type-target"]);
-    let keydown_before = key_event_count(&read_interactive_state(ctx));
-    run_command(ctx, &["keydown", "Shift"]);
-    wait_for_state_or_return_error(
-        ctx,
-        |s| {
-            key_event_count(s) > keydown_before
-                && s["keyEvents"]
-                    .as_array()
-                    .and_then(|events| events.last())
-                    .and_then(|event| event.as_str())
-                    == Some("down:Shift")
-        },
-        5_000,
-        "Expected keydown to record a final 'down:Shift' key event",
-    );
-
-    let keyup_before = key_event_count(&read_interactive_state(ctx));
-    run_command(ctx, &["keyup", "Shift"]);
-    wait_for_state_or_return_error(
-        ctx,
-        |s| {
-            key_event_count(s) > keyup_before
-                && s["keyEvents"]
-                    .as_array()
-                    .and_then(|events| events.last())
-                    .and_then(|event| event.as_str())
-                    == Some("up:Shift")
-        },
-        5_000,
-        "Expected keyup to record a final 'up:Shift' key event",
-    );
-
-    run_command(ctx, &["click", "#click-target"]);
-    wait_for_state_or_abort(
-        ctx,
-        |s| s["clickCount"].as_u64() == Some(1),
-        5_000,
-        "Expected clickCount to become 1 after click",
-    );
-
-    run_command(ctx, &["dblclick", "#dblclick-target"]);
-    wait_for_state_or_abort(
-        ctx,
-        |s| s["doubleClickCount"].as_u64() == Some(1),
-        5_000,
-        "Expected doubleClickCount to become 1 after dblclick",
-    );
-
-    run_command(ctx, &["hover", "#hover-target"]);
-    wait_for_state_or_abort(
-        ctx,
-        |s| s["hovered"].as_bool() == Some(true),
-        5_000,
-        "Expected hovered to become true after hover",
-    );
-
-    run_command(ctx, &["drag", "#drag-source", "#drag-target"]);
-    wait_for_state_or_abort(
-        ctx,
-        |s| {
-            s["dragStarted"].as_bool() == Some(true)
-                && s["dragDropped"].as_str() == Some("drag-source")
-        },
-        5_000,
-        "Expected drag to start and drop drag-source onto the target",
-    );
-
-    run_command(ctx, &["close"]);
-}
-
-fn test_wait_for_state_failure_modes(ctx: &mut E2ECtx) {
-    reset_cli_artifacts(ctx);
-    open_interactive_page(ctx);
-
-    let error = wait_for_state(
-        ctx,
-        |s| s["clickCount"].as_u64() == Some(999),
-        700,
-        "Expected ReturnError mode to report a timeout without aborting the scenario",
-        WaitForStateFailureMode::ReturnError,
-    )
-    .expect_err(
-        "wait_for_state should return Err in ReturnError mode when the predicate never matches",
-    );
-
-    assert!(
-        error.contains(
-            "Expected ReturnError mode to report a timeout without aborting the scenario"
-        ),
-        "Expected original failure message in wait_for_state error:\n{}",
-        error
-    );
-    assert!(
-        error.contains("Timed out after 700ms waiting for interactive state"),
-        "Expected timeout details in wait_for_state error:\n{}",
-        error
-    );
-    assert!(
-        error.contains("Last state:"),
-        "Expected last state dump in wait_for_state error:\n{}",
-        error
-    );
-
-    run_command(ctx, &["fill", "#fill-target", "continued after error"]);
-    wait_for_state_or_abort(
-        ctx,
-        |s| s["fillValue"].as_str() == Some("continued after error"),
-        5_000,
-        "Expected scenario to continue after ReturnError mode and update fillValue",
-    );
-
-    run_command(ctx, &["close"]);
-}
-
-fn test_form_controls_and_exports(ctx: &mut E2ECtx) {
-    reset_cli_artifacts(ctx);
-    open_interactive_page(ctx);
-
-    run_command(ctx, &["select", "#select-target", "green"]);
-    wait_for_state_or_abort(
-        ctx,
-        |s| s["selectValue"].as_str() == Some("green"),
-        5_000,
-        "Expected selectValue to become 'green' after select",
-    );
-
-    run_command(ctx, &["check", "#check-target"]);
-    wait_for_state_or_abort(
-        ctx,
-        |s| s["checkbox"].as_bool() == Some(true),
-        5_000,
-        "Expected checkbox to become true after check",
-    );
-
-    run_command(ctx, &["uncheck", "#check-target"]);
-    wait_for_state_or_abort(
-        ctx,
-        |s| s["checkbox"].as_bool() == Some(false),
-        5_000,
-        "Expected checkbox to become false after uncheck",
-    );
-
-    // upload
-    let upload_path = ctx.upload_file_path.to_string_lossy().into_owned();
-    run_command(ctx, &["upload", "#file-input", &upload_path]);
-    wait_for_state_or_abort(
-        ctx,
-        |s| s["uploadName"].as_str() == Some("upload.txt"),
-        5_000,
-        "Expected uploadName to become 'upload.txt' after upload",
-    );
-
-    run_command_expecting_failure(
-        ctx,
-        &["console", "info"],
-        "Unknown tool: browser_console_messages",
-    );
-
-    let snapshot_result = run_command(ctx, &["snapshot", "--filename=interactive.yml"]);
-    assert!(
-        snapshot_result.stdout.contains("[Snapshot]("),
-        "Expected '[Snapshot](' in snapshot output:\n{}",
-        snapshot_result.stdout
-    );
-    let snapshot_path = ctx
-        .workspace_dir
-        .join(".browser4-cli")
-        .join("snapshot")
-        .join("interactive.yml");
-    assert!(
-        snapshot_path.exists(),
-        "Snapshot file not found at {snapshot_path:?}"
-    );
-
-    run_command(ctx, &["screenshot", "--filename=interactive.png"]);
-    let screenshot_path = ctx
-        .workspace_dir
-        .join(".browser4-cli")
-        .join("snapshot")
-        .join("interactive.png");
-    assert!(screenshot_path.exists(), "Screenshot file not found");
-    assert!(
-        fs::metadata(&screenshot_path).unwrap().len() > 0,
-        "Screenshot file is empty"
-    );
-
-    run_command_expecting_failure(
-        ctx,
-        &["pdf", "--filename=interactive.pdf"],
-        "Unknown tool: browser_pdf_save",
-    );
-
-    run_command(ctx, &["close"]);
-}
-
-fn test_batch_commands(ctx: &mut E2ECtx) {
-    reset_cli_artifacts(ctx);
-
-    let interactive_url = ctx.interactive_url();
-    let open_command = batch_open_command(&interactive_url);
-    let type_command = "type #type-target 'hello batch'".to_string();
-    let click_command = "click #click-target".to_string();
-
-    run_command(
-        ctx,
-        &[
-            "batch",
-            open_command.as_str(),
-            type_command.as_str(),
-            click_command.as_str(),
-        ],
-    );
-    wait_for_state_or_abort(
-        ctx,
-        |s| s["typeValue"].as_str() == Some("hello batch") && s["clickCount"].as_u64() == Some(1),
-        5_000,
-        "Expected batch commands to set typeValue to 'hello batch' and clickCount to 1",
-    );
-
-    let key_events_before = key_event_count(&read_interactive_state(ctx));
-    run_command_with_stdin(
-        ctx,
-        &["batch", "--json"],
-        r##"
-[
-  ["fill", "#fill-target", "from json"],
-  ["keydown", "Shift"],
-  ["keyup", "Shift"]
-]
-"##,
-    );
-    wait_for_state_or_abort(
-        ctx,
-        |s| {
-            s["fillValue"].as_str() == Some("from json")
-                && key_event_count(s) > key_events_before
-                && s["keyEvents"]
-                    .as_array()
-                    .and_then(|events| events.last())
-                    .and_then(|event| event.as_str())
-                    == Some("up:Shift")
-        },
-        5_000,
-        "Expected JSON batch to fill text and finish with an 'up:Shift' key event",
-    );
-
-    run_command(ctx, &["close"]);
-    run_command_with_stdin(
-        ctx,
-        &["batch", "--json"],
-        &format!(
-            r##"
-[
-  ["open", "{profile_arg}", "{interactive_url}"],
-  "type #type-target 'json string input'",
-  ["fill", "#fill-target", "json opened session"],
-  "click #click-target"
-]
-"##,
-            profile_arg = OPEN_TEMPORARY_PROFILE_ARG,
-            interactive_url = interactive_url,
-        ),
-    );
-    wait_for_state_or_abort(
-        ctx,
-        |s| {
-            s["typeValue"].as_str() == Some("json string input")
-                && s["fillValue"].as_str() == Some("json opened session")
-                && s["clickCount"].as_u64() == Some(1)
-        },
-        5_000,
-        "Expected full JSON batch input to open the page and execute string and array commands",
-    );
-
-    run_command_with_stdin(
-        ctx,
-        &["batch", "--json"],
-        r##"
-[
-  "fill #fill-target 'json string only'",
-  "click #click-target"
-]
-"##,
-    );
-    wait_for_state_or_abort(
-        ctx,
-        |s| {
-            s["fillValue"].as_str() == Some("json string only")
-                && s["clickCount"].as_u64() == Some(2)
-        },
-        5_000,
-        "Expected JSON batch string entries to run against the active session",
-    );
-
-    let continue_failure = run_command_expecting_failure(
-        ctx,
-        &["batch", "not-a-command", "snapshot"],
-        "1 batch command(s) failed.",
-    );
-    assert!(
-        continue_failure.stdout.contains("[Snapshot]("),
-        "Expected later batch command output after a non-bailing failure:\n{}",
-        continue_failure.stdout
-    );
-
-    let bail_failure = run_command_expecting_failure(
-        ctx,
-        &[
-            "batch",
-            "--bail",
-            "not-a-command",
-            "fill #fill-target 'should not run'",
-        ],
-        "Batch command 1 failed",
-    );
-    assert!(
-        !bail_failure.stdout.contains("should not run"),
-        "Expected --bail to stop before the second command:\n{}",
-        bail_failure.stdout
-    );
-    let fill_value = read_interactive_state(ctx)["fillValue"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    assert_eq!(fill_value, "from json");
-
-    run_command(ctx, &["close"]);
-}
-
-fn test_batch_form_submission(ctx: &mut E2ECtx) {
-    reset_cli_artifacts(ctx);
-
-    // Use batch to open page, navigate to form, fill it out, and submit — all
-    // in a single invocation.
-    let form_url = ctx.form_url();
-    let open_command = batch_open_command(&form_url);
-
-    run_command(
-        ctx,
-        &[
-            "batch",
-            open_command.as_str(),
-            "fill #first-name 'Alice'",
-            "fill #last-name 'Johnson'",
-            "fill #email 'alice@example.com'",
-            "select #country us",
-            "check #agree-terms",
-            "fill #comments 'batch test comment'",
-            "click #submit-btn",
-        ],
-    );
-
-    // Verify the form state reflects our inputs and submission
-    wait_for_state_or_abort(
-        ctx,
-        |s| {
-            s["firstName"].as_str() == Some("Alice")
-                && s["lastName"].as_str() == Some("Johnson")
-                && s["email"].as_str() == Some("alice@example.com")
-                && s["country"].as_str() == Some("us")
-                && s["agreeTerms"].as_bool() == Some(true)
-                && s["comments"].as_str() == Some("batch test comment")
-                && s["submitCount"].as_u64() == Some(1)
-                && s["validationError"].as_str() == Some("")
-        },
-        5_000,
-        "Expected batch submission to populate the form and submit successfully for Alice",
-    );
-
-    // Verify lastSubmission has the correct data
-    let state = read_interactive_state(ctx);
-    let submission = &state["lastSubmission"];
-    assert_eq!(
-        submission["firstName"].as_str(),
-        Some("Alice"),
-        "Expected firstName in submission"
-    );
-    assert_eq!(
-        submission["email"].as_str(),
-        Some("alice@example.com"),
-        "Expected email in submission"
-    );
-
-    // Test reset and re-submit via batch --json
-    run_command_with_stdin(
-        ctx,
-        &["batch", "--json"],
-        r##"[
-  ["click", "#reset-btn"],
-  ["fill", "#first-name", "Bob"],
-  ["fill", "#last-name", "Smith"],
-  ["fill", "#email", "bob@example.com"],
-  ["select", "#country", "uk"],
-  ["check", "#agree-terms"],
-  ["click", "#submit-btn"]
-]"##,
-    );
-
-    wait_for_state_or_abort(
-        ctx,
-        |s| {
-            s["submitCount"].as_u64() == Some(2)
-                && s["resetCount"].as_u64() == Some(1)
-                && s["firstName"].as_str() == Some("Bob")
-        },
-        5_000,
-        "Expected JSON batch reset flow to submit Bob as the second submission",
-    );
-
-    // Verify second submission data
-    let state = read_interactive_state(ctx);
-    let submission = &state["lastSubmission"];
-    assert_eq!(submission["firstName"].as_str(), Some("Bob"));
-    assert_eq!(submission["lastName"].as_str(), Some("Smith"));
-    assert_eq!(submission["country"].as_str(), Some("uk"));
-
-    run_command(ctx, &["close"]);
-}
-
-fn test_batch_form_submission_from_json_file(ctx: &mut E2ECtx) {
-    reset_cli_artifacts(ctx);
-
-    let form_input_path = write_json_fixture(
-        ctx,
-        "batch-form-input.json",
-        &serde_json::json!({
-            "firstName": "Carol",
-            "lastName": "Nguyen",
-            "email": "carol@example.com",
-            "country": "jp",
-            "agreeTerms": true,
-            "comments": "loaded from json file"
-        }),
-    );
-    let form_input_raw =
-        fs::read_to_string(&form_input_path).expect("read batch form input JSON failed");
-    let form_input: serde_json::Value =
-        serde_json::from_str(&form_input_raw).expect("batch form input JSON is invalid");
-
-    let first_name = form_input["firstName"]
-        .as_str()
-        .expect("batch form input must include firstName");
-    let last_name = form_input["lastName"]
-        .as_str()
-        .expect("batch form input must include lastName");
-    let email = form_input["email"]
-        .as_str()
-        .expect("batch form input must include email");
-    let country = form_input["country"]
-        .as_str()
-        .expect("batch form input must include country");
-    let comments = form_input["comments"]
-        .as_str()
-        .expect("batch form input must include comments");
-    let agree_terms = form_input["agreeTerms"]
-        .as_bool()
-        .expect("batch form input must include agreeTerms");
-    assert!(
-        agree_terms,
-        "Expected batch form input JSON to enable the agreeTerms checkbox"
-    );
-
-    let form_url = ctx.form_url();
-    let batch_commands = serde_json::json!([
-        ["open", OPEN_TEMPORARY_PROFILE_ARG, form_url],
-        ["fill", "#first-name", first_name],
-        ["fill", "#last-name", last_name],
-        ["fill", "#email", email],
-        ["select", "#country", country],
-        ["check", "#agree-terms"],
-        ["fill", "#comments", comments],
-        ["click", "#submit-btn"]
-    ]);
-    run_command_with_stdin(
-        ctx,
-        &["batch", "--json"],
-        &serde_json::to_string_pretty(&batch_commands)
-            .expect("serialize batch commands from JSON fixture failed"),
-    );
-
-    wait_for_state_or_abort(
-        ctx,
-        |s| {
-            s["firstName"].as_str() == Some(first_name)
-                && s["lastName"].as_str() == Some(last_name)
-                && s["email"].as_str() == Some(email)
-                && s["country"].as_str() == Some(country)
-                && s["agreeTerms"].as_bool() == Some(true)
-                && s["comments"].as_str() == Some(comments)
-                && s["submitCount"].as_u64() == Some(1)
-                && s["validationError"].as_str() == Some("")
-        },
-        5_000,
-        "Expected JSON file-backed batch submission to populate the form and submit successfully",
-    );
-
-    let state = read_interactive_state(ctx);
-    let submission = &state["lastSubmission"];
-    assert_eq!(submission["firstName"].as_str(), Some(first_name));
-    assert_eq!(submission["lastName"].as_str(), Some(last_name));
-    assert_eq!(submission["email"].as_str(), Some(email));
-    assert_eq!(submission["country"].as_str(), Some(country));
-    assert_eq!(submission["comments"].as_str(), Some(comments));
-
-    run_command(ctx, &["close"]);
-}
-
-fn test_batch_multi_interaction(ctx: &mut E2ECtx) {
-    reset_cli_artifacts(ctx);
-
-    // Test a complex batch with multiple interaction types on the interactive page
-    let interactive_url = ctx.interactive_url();
-    let open_command = batch_open_command(&interactive_url);
-
-    // Batch: open, type, fill, check, select, click — all in one call
-    run_command(
-        ctx,
-        &[
-            "batch",
-            open_command.as_str(),
-            "type #type-target 'batch multi'",
-            "fill #fill-target 'batch fill'",
-            "check #check-target",
-            "select #select-target blue",
-            "click #click-target",
-            "click #click-target",
-        ],
-    );
-
-    wait_for_state_or_abort(
-        ctx,
-        |s| {
-            s["typeValue"].as_str() == Some("batch multi")
-                && s["fillValue"].as_str() == Some("batch fill")
-                && s["checkbox"].as_bool() == Some(true)
-                && s["selectValue"].as_str() == Some("blue")
-                && s["clickCount"].as_u64() == Some(2)
-        },
-        5_000,
-        "Expected multi-interaction batch to update text, fill, checkbox, select, and clickCount",
-    );
-
-    // Test batch with snapshot and screenshot outputs
-    let batch_result = run_command(
-        ctx,
-        &[
-            "batch",
-            "snapshot --filename=batch-snap.yml",
-            "screenshot --filename=batch-screen.png",
-        ],
-    );
-
-    // Verify snapshot file was created
-    let snapshot_path = ctx
-        .workspace_dir
-        .join(".browser4-cli")
-        .join("snapshot")
-        .join("batch-snap.yml");
-    assert!(
-        snapshot_path.exists(),
-        "Batch snapshot file not found at {snapshot_path:?}"
-    );
-
-    // Verify screenshot file was created
-    let screenshot_path = ctx
-        .workspace_dir
-        .join(".browser4-cli")
-        .join("snapshot")
-        .join("batch-screen.png");
-    assert!(
-        screenshot_path.exists(),
-        "Batch screenshot file not found at {screenshot_path:?}"
-    );
-    assert!(
-        fs::metadata(&screenshot_path).unwrap().len() > 0,
-        "Batch screenshot file is empty"
-    );
-
-    // Verify batch output contains references to both outputs
-    assert!(
-        batch_result.stdout.contains("[Snapshot]("),
-        "Expected snapshot link in batch output:\n{}",
-        batch_result.stdout
-    );
-
-    // Uncheck and verify via batch to test state reversal
-    run_command(ctx, &["batch", "uncheck #check-target"]);
-    wait_for_state_or_abort(
-        ctx,
-        |s| s["checkbox"].as_bool() == Some(false),
-        5_000,
-        "Expected batch uncheck to clear the checkbox",
-    );
-
-    run_command(ctx, &["close"]);
-}
-
-fn test_batch_error_handling(ctx: &mut E2ECtx) {
-    reset_cli_artifacts(ctx);
-
-    let interactive_url = ctx.interactive_url();
-    let open_command = batch_open_command(&interactive_url);
-
-    // First open a session for subsequent tests
-    run_command(ctx, &["batch", open_command.as_str()]);
-
-    // Test: invalid command in the middle without --bail should continue
-    let _result = run_command_expecting_failure(
-        ctx,
-        &[
-            "batch",
-            "type #type-target 'before error'",
-            "this-is-not-a-valid-command",
-            "fill #fill-target 'after error'",
-        ],
-        "1 batch command(s) failed.",
-    );
-    // Fill should have executed despite the error in the middle
-    wait_for_state_or_abort(
-        ctx,
-        |s| s["fillValue"].as_str() == Some("after error"),
-        5_000,
-        "Expected fill command after a non-bailing batch error to still run",
-    );
-
-    // Test: --bail stops at the first error
-    let _bail_result = run_command_expecting_failure(
-        ctx,
-        &[
-            "batch",
-            "--bail",
-            "type #type-target 'bail test'",
-            "unknown-command-xyz",
-            "fill #fill-target 'should not execute'",
-        ],
-        "Batch command 2 failed",
-    );
-    // Type should have executed (before the error).
-    // `type` simulates keystrokes and appends to existing input, so check
-    // that the value ends with the typed text rather than expecting an exact match.
-    wait_for_state_or_abort(
-        ctx,
-        |s| {
-            s["typeValue"]
-                .as_str()
-                .map(|v| v.contains("bail test"))
-                .unwrap_or(false)
-        },
-        5_000,
-        "Expected typeValue to contain 'bail test' after the pre-error batch command",
-    );
-    // Fill should NOT have executed
-    let fill_value = read_interactive_state(ctx)["fillValue"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    assert_eq!(
-        fill_value, "after error",
-        "Expected fill value unchanged after bail"
-    );
-
-    // Test: multiple errors without bail accumulates failure count
-    let _multi_error = run_command_expecting_failure(
-        ctx,
-        &[
-            "batch",
-            "bad-cmd-1",
-            "bad-cmd-2",
-            "type #type-target 'still works'",
-        ],
-        "2 batch command(s) failed.",
-    );
-    // `type` simulates keystrokes and appends to existing input, so check
-    // that the value ends with the typed text rather than expecting an exact match.
-    wait_for_state_or_abort(
-        ctx,
-        |s| {
-            s["typeValue"]
-                .as_str()
-                .map(|v| v.contains("still works"))
-                .unwrap_or(false)
-        },
-        5_000,
-        "Expected typeValue to contain 'still works' despite earlier batch errors",
-    );
-
-    run_command(ctx, &["close"]);
-}
-
-fn test_batch_json_edge_cases(ctx: &mut E2ECtx) {
-    reset_cli_artifacts(ctx);
-
-    let interactive_url = ctx.interactive_url();
-    let open_command = batch_open_command(&interactive_url);
-
-    // Open a session first
-    run_command(ctx, &["batch", open_command.as_str()]);
-
-    // Test: JSON with mixed string and array entries
-    run_command_with_stdin(
-        ctx,
-        &["batch", "--json"],
-        r##"[
-  "type #type-target 'json mixed'",
-  ["fill", "#fill-target", "json array fill"],
-  "click #click-target"
-]"##,
-    );
-    wait_for_state_or_abort(
-        ctx,
-        |s| {
-            s["typeValue"].as_str() == Some("json mixed")
-                && s["fillValue"].as_str() == Some("json array fill")
-                && s["clickCount"].as_u64() == Some(1)
-        },
-        5_000,
-        "Expected mixed JSON batch commands to type, fill, and click once",
-    );
-
-    // Open again to avoid dirty data
-    run_command(ctx, &["batch", open_command.as_str()]);
-
-    // Test: JSON with special characters in values
-    run_command_with_stdin(
-        ctx,
-        &["batch", "--json"],
-        r##"[
-  ["fill", "#fill-target", "special: @#$%&*"]
-]"##,
-    );
-    wait_for_state_or_abort(
-        ctx,
-        |s| s["fillValue"].as_str() == Some("special: @#$%&*"),
-        5_000,
-        "Expected JSON batch to preserve special characters in fillValue",
-    );
-
-    // Open again to avoid dirty data
-    run_command(ctx, &["batch", open_command.as_str()]);
-
-    // Test: JSON with --bail (validate that --bail + --json are combinable)
-    // Run with stdin containing an unknown command to trigger failure
-    let bail_json_result = run_cli_process_with_stdin(
-        ctx,
-        &["batch", "--bail", "--json"],
-        Some(r##"["unknown-cmd", "fill #fill-target 'unreachable'"]"##),
-    );
-    assert_ne!(
-        bail_json_result.exit_code, 0,
-        "Expected batch --bail --json with unknown command to fail"
-    );
-    let combined = format!("{}\n{}", bail_json_result.stdout, bail_json_result.stderr);
-    assert!(
-        !combined.contains("unreachable"),
-        "Expected --bail to prevent 'unreachable' command from running:\n{combined}"
-    );
-
-    run_command(ctx, &["close"]);
-}
-
-fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
-    reset_cli_artifacts(ctx);
-    open_resized_interactive_page(ctx);
-
-    run_command(ctx, &["mousemove", "120", "120"]);
-    wait_for_state_or_abort(
-        ctx,
-        |s| s["lastMouse"][0].as_i64() == Some(120) && s["lastMouse"][1].as_i64() == Some(120),
-        5_000,
-        "Expected mousemove to update lastMouse to [120, 120]",
-    );
-
-    let before_mouse_down = read_interactive_state(ctx)["mouseDownCount"]
-        .as_u64()
-        .unwrap_or(0);
-    run_command(ctx, &["mousedown", "left"]);
-    wait_for_state_or_abort(
-        ctx,
-        |s| s["mouseDownCount"].as_u64() == Some(before_mouse_down + 1),
-        5_000,
-        "Expected mousedown to increment mouseDownCount",
-    );
-
-    let before_mouse_up = read_interactive_state(ctx)["mouseUpCount"]
-        .as_u64()
-        .unwrap_or(0);
-    run_command(ctx, &["mouseup", "left"]);
-    wait_for_state_or_abort(
-        ctx,
-        |s| s["mouseUpCount"].as_u64() == Some(before_mouse_up + 1),
-        5_000,
-        "Expected mouseup to increment mouseUpCount",
-    );
-
-    run_command(ctx, &["mousewheel", "0", "160"]);
-    let wheel_state = wait_for_state_or_abort(
-        ctx,
-        |s| s["lastWheel"][0].as_i64() == Some(160) && s["lastWheel"][1].as_i64() == Some(0),
-        5_000,
-        "Expected mousewheel to update lastWheel to [160, 0]",
-    );
-    assert!(
-        wheel_state["lastWheel"][0].as_i64() == Some(160)
-            && wheel_state["lastWheel"][1].as_i64() == Some(0),
-        "Expected lastWheel to equal [160, 0], got {wheel_state:#?}"
-    );
-
-    eval_text(
-        ctx,
-        "(() => { setTimeout(() => document.getElementById('prompt-target').click(), 100); return 'scheduled'; })()",
-    );
-    thread::sleep(Duration::from_millis(500));
-    run_command(ctx, &["dialog-accept", "accepted by cli"]);
-    wait_for_state_or_abort(
-        ctx,
-        |s| s["promptResult"].as_str() == Some("accepted by cli"),
-        5_000,
-        "Expected dialog-accept to set promptResult to 'accepted by cli'",
-    );
-
-    eval_text(
-        ctx,
-        "(() => { setTimeout(() => document.getElementById('confirm-target').click(), 100); return 'scheduled'; })()",
-    );
-    thread::sleep(Duration::from_millis(500));
-    run_command(ctx, &["dialog-dismiss"]);
-    wait_for_state_or_abort(
-        ctx,
-        |s| s["confirmResult"].as_str() == Some("dismissed"),
-        5_000,
-        "Expected dialog-dismiss to set confirmResult to 'dismissed'",
-    );
-
-    run_command(ctx, &["close"]);
-}
-
-fn test_tab_commands(ctx: &mut E2ECtx) {
-    reset_cli_artifacts(ctx);
-
-    open_interactive_page(ctx);
-    let interactive_url = ctx.interactive_url();
-    let other_url = ctx.other_url();
-
-    let initial_tabs = run_command(ctx, &["tab-list"]);
-    let tab_output = strip_snapshot_output(&initial_tabs.stdout);
-    assert!(
-        tab_output.contains(&interactive_url),
-        "Expected interactive URL in tab-list output:\n{tab_output}"
-    );
-
-    run_command(ctx, &["tab-new", &other_url]);
-    let updated_tabs = run_command(ctx, &["tab-list"]);
-    let tab_output = strip_snapshot_output(&updated_tabs.stdout);
-    assert!(
-        tab_output.contains(&interactive_url),
-        "Expected interactive URL in updated tab-list"
-    );
-    assert!(
-        tab_output.contains(&other_url),
-        "Expected other URL in updated tab-list"
-    );
-
-    let other_tab_id = extract_tab_id(&tab_output, &other_url);
-
-    run_command(ctx, &["tab-select", &other_tab_id]);
-    run_command(ctx, &["tab-close", &other_tab_id]);
-    run_command(ctx, &["close"]);
-}
-
-// ---------------------------------------------------------------------------
-// Agent / Collective scenario
-// ---------------------------------------------------------------------------
-
-fn test_collective_session_and_agent_tools(ctx: &mut E2ECtx) {
-    reset_cli_artifacts(ctx);
-    let mock_server = start_mock_collective_session(ctx);
-    assert_collective_session_call(&mock_server);
-
-    let extract_result = run_command(
-        ctx,
-        &[
-            "extract",
-            "product name, price",
-            "--schema={\"type\":\"object\"}",
-        ],
-    );
-    let extracted = strip_snapshot_output(&extract_result.stdout);
-    assert!(
-        extracted.contains("\"Mock Product\"") && extract_result.stdout.contains("### Page"),
-        "Expected extract output with snapshot block in:\n{}",
-        extract_result.stdout
-    );
-
-    let summarize_result = run_command(
-        ctx,
-        &[
-            "summarize",
-            "summarize the page marker",
-            "--selector=#page-marker",
-        ],
-    );
-    let summary = strip_snapshot_output(&summarize_result.stdout);
-    assert_eq!(summary, "Mock summary for #page-marker");
-    assert!(
-        summarize_result.stdout.contains("### Page"),
-        "Expected summarize output to include a snapshot block:\n{}",
-        summarize_result.stdout
-    );
-
-    let tool_calls = mock_server.snapshot().tool_calls;
-    let extract_call = tool_calls
-        .iter()
-        .find(|call| call.tool == "agent_extract")
-        .expect("expected agent_extract call");
-    assert_eq!(extract_call.arguments["sessionId"], "collective-session-1");
-    assert_eq!(extract_call.arguments["instruction"], "product name, price");
-    assert_eq!(extract_call.arguments["schema"], "{\"type\":\"object\"}");
-
-    let summarize_call = tool_calls
-        .iter()
-        .find(|call| call.tool == "agent_summarize")
-        .expect("expected agent_summarize call");
-    assert_eq!(
-        summarize_call.arguments["sessionId"],
-        "collective-session-1"
-    );
-    assert_eq!(
-        summarize_call.arguments["instruction"],
-        "summarize the page marker"
-    );
-    assert_eq!(summarize_call.arguments["selector"], "#page-marker");
-}
-
-fn test_agent_task_commands(ctx: &mut E2ECtx) {
-    reset_cli_artifacts(ctx);
+fn cleanup_browser4_sessions(resources: &mut E2ETestResources) -> Result<Vec<TimedStep>, String> {
     let started_at = Instant::now();
-    let mock_server = MockBrowser4Server::start();
-    ctx.record_step("mock Browser4 server start", started_at.elapsed());
-    ctx.browser4_base_url = mock_server.base_url();
+    let result = run_cli_process(&resources.ctx, &["close-all"]);
+    let duration = started_at.elapsed();
+    resources.local_browser4_started = false;
 
-    let agent_run_result = run_command(ctx, &["agent-run", "collect the latest updates"]);
-    assert!(
-        agent_run_result
-            .stdout
-            .contains("Task submitted: agent-task-1"),
-        "Expected task submission output in:\n{}",
-        agent_run_result.stdout
-    );
-    assert!(
-        agent_run_result
-            .stdout
-            .contains("browser4-cli agent-status agent-task-1"),
-        "Expected agent status hint in:\n{}",
-        agent_run_result.stdout
-    );
+    let mut steps = vec![TimedStep::new(
+        "browser4 session cleanup (close-all)",
+        duration,
+    )];
+    if result.exit_code == 0 {
+        return Ok(steps);
+    }
 
-    let agent_status_result = run_command(ctx, &["agent-status", "agent-task-1"]);
-    assert_eq!(
-        strip_snapshot_output(&agent_status_result.stdout),
-        r#"{"id":"agent-task-1","status":"RUNNING"}"#
-    );
-
-    let agent_result_result = run_command(ctx, &["agent-result", "agent-task-1"]);
-    assert_eq!(
-        strip_snapshot_output(&agent_result_result.stdout),
-        "result for agent-task-1"
-    );
-    assert_eq!(
-        mock_server.snapshot().plain_commands,
-        vec!["collect the latest updates".to_string()]
-    );
-    assert_eq!(
-        mock_server.snapshot().status_queries,
-        vec!["agent-task-1".to_string()]
-    );
-    assert_eq!(
-        mock_server.snapshot().result_queries,
-        vec!["agent-task-1".to_string()]
-    );
+    let fallback_started_at = Instant::now();
+    stop_browser4_server_forcibly();
+    steps.push(TimedStep::new(
+        "browser4 forced cleanup fallback",
+        fallback_started_at.elapsed(),
+    ));
+    Err(format!(
+        "browser4-cli close-all failed (exit={}):\nstdout:\n{}\nstderr:\n{}",
+        result.exit_code, result.stdout, result.stderr
+    ))
 }
 
-fn test_collective_submission_commands(ctx: &mut E2ECtx) {
-    reset_cli_artifacts(ctx);
-    let mock_server = start_mock_collective_session(ctx);
-    assert_collective_session_call(&mock_server);
+fn cleanup_after_scenario(
+    resources: &mut E2ETestResources,
+    requires_browser4: bool,
+) -> Result<Vec<TimedStep>, String> {
+    if !requires_browser4 {
+        return Ok(Vec::new());
+    }
 
-    let seed_file = ctx.workspace_dir.join("collective-seeds.txt");
-    fs::write(
-        &seed_file,
-        b"# seed urls\nhttps://example.com/seed-1\n\nhttps://example.com/seed-2\n",
-    )
-    .expect("write seed file failed");
-    let seed_file_arg = format!("--seed-file={}", seed_file.to_string_lossy());
+    cleanup_browser4_sessions(resources)
+}
 
-    let co_submit_result = run_command(
-        ctx,
-        &[
-            "co",
-            "submit",
-            "https://example.com/direct",
-            &seed_file_arg,
-            "--deadline=2026-03-30T00:00:00Z",
-            "--expires=1d",
-            "--refresh",
-            "--parse",
-            "--store-content",
-        ],
-    );
-    assert!(
-        co_submit_result.stdout.contains("3 URL(s) submitted."),
-        "Expected aggregate co submit output in:\n{}",
-        co_submit_result.stdout
-    );
-    assert!(
-        co_submit_result
-            .stdout
-            .contains("Submitted: https://example.com/direct → task co-task-1"),
-        "Expected direct URL submission output in:\n{}",
-        co_submit_result.stdout
-    );
-
-    let co_scrape_result = run_command(
-        ctx,
-        &[
-            "co",
-            "scrape",
-            "https://example.com/scrape-source",
-            "--selector=.item",
-            "--attribute=textContent",
-            "--output=items.json",
-            "--deadline=2026-03-30T00:00:00Z",
-            "--expires=6h",
-            "--refresh",
-        ],
-    );
-    assert!(
-        co_scrape_result
-            .stdout
-            .contains("Scrape submitted: https://example.com/scrape-source → task co-task-4"),
-        "Expected scrape submission output in:\n{}",
-        co_scrape_result.stdout
-    );
-    assert!(co_scrape_result.stdout.contains("selector: .item"));
-    assert!(co_scrape_result.stdout.contains("attribute: textContent"));
-    assert!(co_scrape_result.stdout.contains("output: items.json"));
-
-    let co_status_result = run_command(ctx, &["co", "status", "collective-job-42"]);
-    assert_eq!(
-        strip_snapshot_output(&co_status_result.stdout),
-        r#"{"id":"collective-job-42","status":"RUNNING"}"#
-    );
-
-    let co_result_result = run_command(ctx, &["co", "result", "collective-job-42"]);
-    assert_eq!(
-        strip_snapshot_output(&co_result_result.stdout),
-        "result for collective-job-42"
-    );
-
-    let snapshot = mock_server.snapshot();
-    assert_eq!(
-        snapshot.plain_commands,
-        vec![
-            "https://example.com/direct -deadline 2026-03-30T00:00:00Z -expires 1d -refresh -parse -storeContent".to_string(),
-            "https://example.com/seed-1 -deadline 2026-03-30T00:00:00Z -expires 1d -refresh -parse -storeContent".to_string(),
-            "https://example.com/seed-2 -deadline 2026-03-30T00:00:00Z -expires 1d -refresh -parse -storeContent".to_string(),
-            "https://example.com/scrape-source -deadline 2026-03-30T00:00:00Z -expires 6h -refresh".to_string(),
-        ]
-    );
-    assert_eq!(
-        snapshot.status_queries,
-        vec!["collective-job-42".to_string()]
-    );
-    assert_eq!(
-        snapshot.result_queries,
-        vec!["collective-job-42".to_string()]
-    );
+fn run_final_cleanup() -> Duration {
+    let started_at = Instant::now();
+    stop_browser4_server_forcibly();
+    started_at.elapsed()
 }
 
 // ---------------------------------------------------------------------------
@@ -3111,18 +1927,9 @@ fn run_named_scenario(
     resources: &mut E2ETestResources,
     requires_browser4: bool,
     restart_browser4: bool,
-    cleanup_browser4: bool,
     test_fn: fn(&mut E2ECtx),
 ) -> TimingReport {
     println!("testing {name} ... ");
-
-    // Forcibly stop server and Chrome regardless of success or failure.
-    let cleanup_started_at = Instant::now();
-    if cleanup_browser4 {
-        stop_browser4_server_forcibly();
-        resources.local_browser4_started = false;
-    }
-    let cleanup_step = TimedStep::new("browser4 service cleanup", cleanup_started_at.elapsed());
 
     std::io::stdout().flush().expect("stdout flush failed");
     resources.ctx.clear_step_timings();
@@ -3144,14 +1951,36 @@ fn run_named_scenario(
         test_fn(&mut resources.ctx);
     }));
 
-    let total_duration = total_started_at.elapsed();
+    let cleanup_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        cleanup_after_scenario(resources, requires_browser4)
+    }));
+
     let mut steps = harness_steps;
     steps.extend(resources.ctx.take_step_timings());
-    steps.push(cleanup_step);
-    let report = TimingReport::new(name, total_duration, steps);
+
+    let cleanup_error = match cleanup_result {
+        Ok(Ok(cleanup_steps)) => {
+            steps.extend(cleanup_steps);
+            None
+        }
+        Ok(Err(error)) => Some(error),
+        Err(payload) => Some(
+            payload
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "<non-string panic during cleanup>".to_string()),
+        ),
+    };
+    let report = TimingReport::new(name, total_started_at.elapsed(), steps);
 
     match result {
         Ok(()) => {
+            if let Some(error) = cleanup_error {
+                println!("FAILED ({}) - {}", format_duration(report.total), error);
+                print_timing_steps(&report.steps);
+                panic!("{error}");
+            }
             println!("ok ({})", format_duration(report.total));
             report
         }
@@ -3162,168 +1991,14 @@ fn run_named_scenario(
                 .or_else(|| payload.downcast_ref::<String>().cloned())
                 .unwrap_or_else(|| "<non-string panic>".to_string());
             println!("FAILED ({}) - {}", format_duration(report.total), msg);
+            if let Some(error) = cleanup_error {
+                println!("cleanup FAILED - {error}");
+            }
             print_timing_steps(&report.steps);
             std::panic::resume_unwind(payload);
         }
     }
 }
-
-type ScenarioFn = fn(&mut E2ECtx);
-
-#[derive(Clone, Copy)]
-struct ScenarioDef {
-    name: &'static str,
-    short_name: &'static str,
-    requires_browser4: bool,
-    restart_browser4: bool,
-    test_count: usize,
-    test_fn: ScenarioFn,
-}
-
-impl ScenarioDef {
-    fn effective_test_count(self) -> usize {
-        self.test_count.max(1)
-    }
-}
-
-const SCENARIOS: &[ScenarioDef] = &[
-    ScenarioDef {
-        name: "test_e2e_session_lifecycle",
-        short_name: "test_session_lifecycle",
-        requires_browser4: true,
-        restart_browser4: false,
-        test_count: 1,
-        test_fn: test_session_lifecycle,
-    },
-    ScenarioDef {
-        name: "test_e2e_navigation_and_storage",
-        short_name: "test_navigation_and_storage",
-        requires_browser4: true,
-        restart_browser4: false,
-        test_count: 1,
-        test_fn: test_navigation_and_storage,
-    },
-    ScenarioDef {
-        name: "test_e2e_interaction_commands",
-        short_name: "test_interaction_commands",
-        requires_browser4: true,
-        restart_browser4: false,
-        test_count: 5,
-        test_fn: test_interaction_commands,
-    },
-    ScenarioDef {
-        name: "test_e2e_wait_for_state_failure_modes",
-        short_name: "test_wait_for_state_failure_modes",
-        requires_browser4: true,
-        restart_browser4: false,
-        test_count: 1,
-        test_fn: test_wait_for_state_failure_modes,
-    },
-    ScenarioDef {
-        name: "test_e2e_batch_commands",
-        short_name: "test_batch_commands",
-        requires_browser4: true,
-        restart_browser4: false,
-        test_count: 1,
-        test_fn: test_batch_commands,
-    },
-    ScenarioDef {
-        name: "test_e2e_batch_form_submission",
-        short_name: "test_batch_form_submission",
-        requires_browser4: true,
-        restart_browser4: false,
-        test_count: 1,
-        test_fn: test_batch_form_submission,
-    },
-    ScenarioDef {
-        name: "test_e2e_batch_form_submission_from_json_file",
-        short_name: "test_batch_form_submission_from_json_file",
-        requires_browser4: true,
-        restart_browser4: false,
-        test_count: 1,
-        test_fn: test_batch_form_submission_from_json_file,
-    },
-    ScenarioDef {
-        name: "test_e2e_batch_multi_interaction",
-        short_name: "test_batch_multi_interaction",
-        requires_browser4: true,
-        restart_browser4: false,
-        test_count: 1,
-        test_fn: test_batch_multi_interaction,
-    },
-    ScenarioDef {
-        name: "test_e2e_batch_error_handling",
-        short_name: "test_batch_error_handling",
-        requires_browser4: true,
-        restart_browser4: false,
-        test_count: 1,
-        test_fn: test_batch_error_handling,
-    },
-    ScenarioDef {
-        name: "test_e2e_batch_json_edge_cases",
-        short_name: "test_batch_json_edge_cases",
-        requires_browser4: true,
-        restart_browser4: false,
-        test_count: 1,
-        test_fn: test_batch_json_edge_cases,
-    },
-    ScenarioDef {
-        name: "test_e2e_form_controls_and_exports",
-        short_name: "test_form_controls_and_exports",
-        requires_browser4: true,
-        restart_browser4: false,
-        test_count: 1,
-        test_fn: test_form_controls_and_exports,
-    },
-    ScenarioDef {
-        name: "test_e2e_mouse_and_dialog",
-        short_name: "test_mouse_and_dialog",
-        requires_browser4: true,
-        restart_browser4: false,
-        test_count: 3,
-        test_fn: test_mouse_and_dialog,
-    },
-    ScenarioDef {
-        name: "test_e2e_tab_commands",
-        short_name: "test_tab_commands",
-        requires_browser4: true,
-        restart_browser4: false,
-        test_count: 1,
-        test_fn: test_tab_commands,
-    },
-    ScenarioDef {
-        name: "test_e2e_collective_session_and_agent_tools",
-        short_name: "test_collective_session_and_agent_tools",
-        requires_browser4: false,
-        restart_browser4: false,
-        test_count: 1,
-        test_fn: test_collective_session_and_agent_tools,
-    },
-    ScenarioDef {
-        name: "test_e2e_open_uses_temporary_profile_mode",
-        short_name: "test_open_uses_temporary_profile_mode",
-        requires_browser4: false,
-        restart_browser4: false,
-        test_count: 1,
-        test_fn: test_open_uses_temporary_profile_mode,
-    },
-    ScenarioDef {
-        name: "test_e2e_agent_task_commands",
-        short_name: "test_agent_task_commands",
-        requires_browser4: false,
-        restart_browser4: false,
-        test_count: 1,
-        test_fn: test_agent_task_commands,
-    },
-    ScenarioDef {
-        name: "test_e2e_collective_submission_commands",
-        short_name: "test_collective_submission_commands",
-        requires_browser4: false,
-        restart_browser4: false,
-        test_count: 1,
-        test_fn: test_collective_submission_commands,
-    },
-];
 
 fn parse_scenario_filter() -> Option<String> {
     let mut args = std::env::args().skip(1);
@@ -3338,8 +2013,8 @@ fn parse_scenario_filter() -> Option<String> {
     None
 }
 
-fn resolve_scenario(name: &str) -> Option<ScenarioDef> {
-    SCENARIOS
+fn resolve_scenario(name: &str) -> Option<scenarios::ScenarioDef> {
+    scenarios::all_scenarios()
         .iter()
         .copied()
         .find(|scenario| scenario.name == name || scenario.short_name == name)
@@ -3347,9 +2022,10 @@ fn resolve_scenario(name: &str) -> Option<ScenarioDef> {
 
 fn main() {
     let scenario_filter = parse_scenario_filter();
-    let selected_scenarios: Vec<ScenarioDef> = if let Some(filter) = scenario_filter {
+    let all_scenarios = scenarios::all_scenarios();
+    let selected_scenarios: Vec<scenarios::ScenarioDef> = if let Some(filter) = scenario_filter {
         let scenario = resolve_scenario(&filter).unwrap_or_else(|| {
-            let names = SCENARIOS
+            let names = all_scenarios
                 .iter()
                 .map(|s| format!("{} ({})", s.name, s.short_name))
                 .collect::<Vec<_>>()
@@ -3358,68 +2034,72 @@ fn main() {
         });
         vec![scenario]
     } else {
-        SCENARIOS.to_vec()
+        all_scenarios.to_vec()
     };
 
-    let run_coverage = selected_scenarios.len() == SCENARIOS.len();
+    let run_coverage = selected_scenarios.len() == all_scenarios.len();
     let scenario_runs: usize = selected_scenarios
         .iter()
         .map(|scenario| scenario.effective_test_count())
         .sum();
     let total_tests = scenario_runs + usize::from(run_coverage);
     println!("running {total_tests} tests");
-    let mut timings: Vec<TimingReport> = Vec::with_capacity(total_tests);
-
-    // stop_browser4_server_forcibly();
-
-    if run_coverage {
-        let report = run_named_test("test_e2e_command_coverage", verify_e2e_command_coverage);
-        timings.push(report);
-    }
-
     let mut resources = create_e2e_test_resources();
-    // let cleanup_browser4 = !cfg!(target_os = "windows");
-    let cleanup_browser4 = false;
-    for scenario in selected_scenarios {
-        let test_count = scenario.effective_test_count();
-        for run_index in 0..test_count {
-            let display_name = if test_count == 1 {
-                scenario.name.to_string()
-            } else {
-                format!("{} [{}/{}]", scenario.name, run_index + 1, test_count)
-            };
-            let report = run_named_scenario(
-                &display_name,
-                &mut resources,
-                scenario.requires_browser4,
-                scenario.restart_browser4,
-                cleanup_browser4,
-                scenario.test_fn,
-            );
+    let run_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut timings: Vec<TimingReport> = Vec::with_capacity(total_tests);
+
+        if run_coverage {
+            let report = run_named_test("test_e2e_command_coverage", verify_e2e_command_coverage);
             timings.push(report);
         }
+
+        for scenario in selected_scenarios {
+            let test_count = scenario.effective_test_count();
+            for run_index in 0..test_count {
+                let display_name = if test_count == 1 {
+                    scenario.name.to_string()
+                } else {
+                    format!("{} [{}/{}]", scenario.name, run_index + 1, test_count)
+                };
+                let report = run_named_scenario(
+                    &display_name,
+                    &mut resources,
+                    scenario.requires_browser4,
+                    scenario.restart_browser4,
+                    scenario.test_fn,
+                );
+                timings.push(report);
+            }
+        }
+
+        println!("All scenarios complete!");
+        timings
+    }));
+
+    let final_cleanup_duration = run_final_cleanup();
+
+    match run_result {
+        Ok(timings) => {
+            println!(
+                "test result: ok. {} passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+                total_tests
+            );
+            println!("per-test timing:");
+            for report in timings {
+                println!("  {}: {}", report.name, format_duration(report.total));
+                print_timing_steps(&report.steps);
+            }
+            println!(
+                "final service cleanup: {}",
+                format_duration(final_cleanup_duration)
+            );
+        }
+        Err(payload) => {
+            eprintln!(
+                "final service cleanup: {}",
+                format_duration(final_cleanup_duration)
+            );
+            std::panic::resume_unwind(payload);
+        }
     }
-
-    println!("All scenarios complete!");
-
-    sleep(Duration::from_secs(5));
-
-    // Final safety net: ensure nothing lingers after all scenarios.
-    let final_cleanup_started_at = Instant::now();
-    stop_browser4_server_forcibly();
-    let final_cleanup_duration = final_cleanup_started_at.elapsed();
-
-    println!(
-        "test result: ok. {} passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
-        total_tests
-    );
-    println!("per-test timing:");
-    for report in timings {
-        println!("  {}: {}", report.name, format_duration(report.total));
-        print_timing_steps(&report.steps);
-    }
-    println!(
-        "final service cleanup: {}",
-        format_duration(final_cleanup_duration)
-    );
 }

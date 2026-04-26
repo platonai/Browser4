@@ -377,8 +377,7 @@ fn find_browser4_root_from(start: &Path, deep_search: bool) -> Option<PathBuf> {
 }
 
 fn is_browser4_root(path: &Path) -> bool {
-    path.join("ROOT.md").is_file()
-        && path.join("pom.xml").is_file()
+    path.join("ROOT.md").is_file() && path.join("pom.xml").is_file()
 }
 
 fn find_browser4_cli_module_dir(start: &Path) -> Option<PathBuf> {
