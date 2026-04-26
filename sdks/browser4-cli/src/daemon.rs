@@ -161,11 +161,9 @@ fn build_maven_launch_spec(repo_root: &Path, port: u16) -> Result<ServerLaunchSp
         kind: ServerLaunchKind::Maven,
         program: program.clone(),
         args: vec![
-            "-am".to_string(),
-            "spring-boot:run".to_string(),
             format!("-Dspring-boot.run.arguments=--server.port={port}"),
         ],
-        working_dir: module_dir.clone(),
+        working_dir: repo_root.to_path_buf(),
         registry_target: program,
         description: format!(
             "Starting server via Maven spring-boot:run from {} on port {}...",
@@ -350,7 +348,31 @@ fn prepare_unix_maven_wrapper_launcher(
         )
     })?;
 
-    Ok((launcher_wrapper_path, Some(launcher_dir)))
+    // Create a two-phase launcher script:
+    // 1. Install all required modules (so sibling SNAPSHOT JARs are available)
+    // 2. Start browser4-agents via spring-boot:run, forwarding any extra args
+    let mvnw_abs = launcher_wrapper_path.to_string_lossy();
+    let launcher_script_content = format!(
+        "#!/bin/sh\nset -e\n'{mvnw_abs}' -pl browser4/browser4-agents -am -DskipTests install -q\n'{mvnw_abs}' -pl browser4/browser4-agents spring-boot:run \"$@\"\n",
+        mvnw_abs = mvnw_abs.replace('\'', "'\\''"),
+    );
+    let launcher_script_path = launcher_dir.join("browser4-start.sh");
+    fs::write(&launcher_script_path, launcher_script_content.as_bytes()).map_err(|e| {
+        format!(
+            "Failed to write Browser4 launcher script {}: {e}",
+            launcher_script_path.display()
+        )
+    })?;
+    fs::set_permissions(&launcher_script_path, fs::Permissions::from_mode(0o755)).map_err(
+        |e| {
+            format!(
+                "Failed to set executable permissions on Browser4 launcher script {}: {e}",
+                launcher_script_path.display()
+            )
+        },
+    )?;
+
+    Ok((launcher_script_path, Some(launcher_dir)))
 }
 
 fn find_browser4_root() -> Option<PathBuf> {
@@ -1202,35 +1224,19 @@ mod tests {
 
         assert_eq!(spec.kind, ServerLaunchKind::Maven);
         assert_eq!(spec.program, wrapper);
-        assert_eq!(
-            spec.working_dir,
-            root.join("browser4").join("browser4-agents")
-        );
+        assert_eq!(spec.working_dir, root);
         assert_eq!(
             spec.args,
-            vec![
-                "-am",
-                "spring-boot:run",
-                "-Dspring-boot.run.arguments=--server.port=8199",
-            ]
+            vec!["-Dspring-boot.run.arguments=--server.port=8199"]
         );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn test_build_powershell_batch_invocation_quotes_windows_maven_property() {
         let invocation = build_powershell_batch_invocation(
             Path::new(r"D:\workspace\Browser4Team\submodules\Browser4\mvnw.cmd"),
-            &[
-                "-am".to_string(),
-                "spring-boot:run".to_string(),
-                "-Dspring-boot.run.arguments=--server.port=8199".to_string(),
-            ],
+            &["-Dspring-boot.run.arguments=--server.port=8199".to_string()],
         );
 
         assert_eq!(
             invocation,
-            "& 'D:\\workspace\\Browser4Team\\submodules\\Browser4\\mvnw.cmd' '-am' 'spring-boot:run' '-Dspring-boot.run.arguments=--server.port=8199'"
+            "& 'D:\\workspace\\Browser4Team\\submodules\\Browser4\\mvnw.cmd' '-Dspring-boot.run.arguments=--server.port=8199'"
         );
     }
 
@@ -1246,17 +1252,10 @@ mod tests {
 
         assert_eq!(spec.kind, ServerLaunchKind::Maven);
         assert_eq!(spec.program, wrapper);
-        assert_eq!(
-            spec.working_dir,
-            root.join("browser4").join("browser4-agents")
-        );
+        assert_eq!(spec.working_dir, root);
         assert_eq!(
             spec.args,
-            vec![
-                "-am",
-                "spring-boot:run",
-                "-Dspring-boot.run.arguments=--server.port=8199",
-            ]
+            vec!["-Dspring-boot.run.arguments=--server.port=8199"]
         );
     }
 
@@ -1282,10 +1281,11 @@ mod tests {
             .expect("Unix wrapper launch should stage a normalized temp wrapper");
         let prepared_program = PathBuf::from(Path::new(prepared.command.get_program()));
 
+        // The launcher script (not mvnw) is returned as the program
         assert_ne!(prepared_program, wrapper);
         assert_eq!(
             prepared_program.file_name().and_then(|name| name.to_str()),
-            Some("mvnw")
+            Some("browser4-start.sh")
         );
         assert_eq!(
             prepared.command.get_current_dir(),
@@ -1299,11 +1299,26 @@ mod tests {
                 .collect::<Vec<_>>(),
             spec.args
         );
+
+        // The normalized mvnw and .mvn symlink are staged in the same cleanup dir
+        let staged_mvnw = cleanup_dir.join("mvnw");
+        assert!(staged_mvnw.exists(), "normalized mvnw should be staged");
         assert_eq!(
-            fs::read_to_string(&prepared_program).unwrap(),
+            fs::read_to_string(&staged_mvnw).unwrap(),
             "#!/bin/sh\nset -eu\n"
         );
         assert!(cleanup_dir.join(".mvn").exists());
+
+        // The launcher script should reference mvnw and both Maven phases
+        let script_content = fs::read_to_string(&prepared_program).unwrap();
+        assert!(
+            script_content.contains("-am -DskipTests install"),
+            "launcher script should contain install phase"
+        );
+        assert!(
+            script_content.contains("spring-boot:run"),
+            "launcher script should contain spring-boot:run"
+        );
 
         cleanup_prepared_launch_dir(Some(cleanup_dir));
     }
