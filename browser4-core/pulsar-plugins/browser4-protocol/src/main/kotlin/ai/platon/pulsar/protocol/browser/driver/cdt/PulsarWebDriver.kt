@@ -293,19 +293,43 @@ class PulsarWebDriver(
 
     @Throws(WebDriverException::class)
     override suspend fun check(selector: String) {
-        val safeSelector = normalizeCSSSelector(selector) ?: return
-        evaluate("__pulsar_utils__.check('$safeSelector')")
+        setChecked(selector, true)
     }
 
     @Throws(WebDriverException::class)
     override suspend fun uncheck(selector: String) {
-        val safeSelector = normalizeCSSSelector(selector) ?: return
-        evaluate("__pulsar_utils__.uncheck('$safeSelector')")
+        setChecked(selector, false)
     }
 
     override suspend fun isChecked(selector: String): Boolean {
-        val safeSelector = normalizeCSSSelector(selector) ?: return false
-        return page.isChecked(safeSelector)
+        return page.isChecked(selector)
+    }
+
+    @Throws(WebDriverException::class)
+    private suspend fun setChecked(selector: String, shouldCheck: Boolean) {
+        val actionName = if (shouldCheck) "check" else "uncheck"
+        driverHelper.invokeOnElement(selector, actionName, scrollIntoView = true) { node ->
+            val resolved = resolveNodeObjectId(devTools, node) ?: return@invokeOnElement false
+
+            try {
+                val result = runtimeAPI?.callFunctionOn(
+                    CheckableElementJs.SET_CHECKED_FUNCTION_DECLARATION,
+                    objectId = resolved.objectId,
+                    arguments = listOf(CallArgument(value = shouldCheck)),
+                    returnByValue = true,
+                    userGesture = true,
+                    awaitPromise = true
+                )
+
+                if (result?.exceptionDetails != null) {
+                    throw WebDriverException("JS Error in $actionName: " + result.exceptionDetails?.exception?.description)
+                }
+
+                result?.result?.value as? Boolean ?: false
+            } finally {
+                releaseNodeObjectIfNeeded(devTools, resolved)
+            }
+        }
     }
 
     @Throws(WebDriverException::class)
@@ -526,36 +550,33 @@ class PulsarWebDriver(
         """.trimIndent()
 
         val result = driverHelper.invokeOnElement(selector, "selectOption") { node ->
-            // node.objectId is likely null here because querySelector doesn't resolve object.
-            // We must resolve it manually.
-            val remoteObject = domAPI?.resolveNode(nodeId = node.nodeId)
-            val objectId = remoteObject?.objectId ?: node.objectId
-
-            if (objectId == null) {
-                return@invokeOnElement listOf<String>()
-            }
+            val resolved = resolveNodeObjectId(devTools, node) ?: return@invokeOnElement listOf<String>()
 
             if (runtimeAPI == null) {
                 throw WebDriverException("runtimeAPI is null")
             }
 
-            val res = runtimeAPI?.callFunctionOn(
-                functionDeclaration,
-                objectId = objectId,
-                arguments = listOf(CallArgument(value = jsonValues)),
-                returnByValue = true
-            )
+            try {
+                val res = runtimeAPI?.callFunctionOn(
+                    functionDeclaration,
+                    objectId = resolved.objectId,
+                    arguments = listOf(CallArgument(value = jsonValues)),
+                    returnByValue = true
+                )
 
-            if (res?.exceptionDetails != null) {
-                throw WebDriverException("JS Error in selectOption: " + res.exceptionDetails?.exception?.description)
-            }
+                if (res?.exceptionDetails != null) {
+                    throw WebDriverException("JS Error in selectOption: " + res.exceptionDetails?.exception?.description)
+                }
 
-            val resultValue = res?.result?.value
+                val resultValue = res?.result?.value
 
-            if (resultValue is List<*>) {
-                resultValue.filterIsInstance<String>()
-            } else {
-                listOf()
+                if (resultValue is List<*>) {
+                    resultValue.filterIsInstance<String>()
+                } else {
+                    listOf()
+                }
+            } finally {
+                releaseNodeObjectIfNeeded(devTools, resolved)
             }
         }
 
@@ -645,14 +666,16 @@ class PulsarWebDriver(
         //| attribute | HTML 初始声明 | ❌ 不变（除非手动 setAttribute） |
         //| property  | DOM 当前状态  | ✅ 会变（用户交互 / JS 修改）      |
 
-        val objectId = node.objectId ?: domAPI?.resolveNode(nodeId = node.nodeId)?.objectId
-        return objectId?.let {
+        val resolved = resolveNodeObjectId(devTools, node) ?: return ""
+        return try {
             runtimeAPI?.callFunctionOn(
                 "function() { return this && typeof this.value !== 'undefined' ? this.value : null; }",
-                objectId = it,
+                objectId = resolved.objectId,
                 returnByValue = true
-            )?.result?.value?.toString()
-        } ?: ""
+            )?.result?.value?.toString() ?: ""
+        } finally {
+            releaseNodeObjectIfNeeded(devTools, resolved)
+        }
     }
 
     @Throws(WebDriverException::class)
@@ -854,15 +877,19 @@ function() {
   }
 }
                     """.trimIndent()
-                    val nd = domAPI?.resolveNode(null, node.backendNodeId)
-                    if (nd?.objectId != null) {
-                        val remoteObject = runtimeAPI?.callFunctionOn(
-                            functionDeclaration,
-                            objectId = nd.objectId,
-                            returnByValue = true
-                        )
-                        // TODO: performance issue for large text (memory copy)
-                        remoteObject?.result?.value?.toString()
+                    val resolved = resolveNodeObjectId(devTools, node)
+                    if (resolved != null) {
+                        try {
+                            val remoteObject = runtimeAPI?.callFunctionOn(
+                                functionDeclaration,
+                                objectId = resolved.objectId,
+                                returnByValue = true
+                            )
+                            // TODO: performance issue for large text (memory copy)
+                            remoteObject?.result?.value?.toString()
+                        } finally {
+                            releaseNodeObjectIfNeeded(devTools, resolved)
+                        }
                     } else null
                 }
             }

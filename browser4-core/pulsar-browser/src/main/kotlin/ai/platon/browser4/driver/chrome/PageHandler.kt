@@ -435,37 +435,29 @@ class PageHandler(
 
     @Throws(ChromeDriverException::class)
     suspend fun isChecked(selector: String): Boolean {
-        val safeSelector = normalizeCSSSelector(selector)
-        val expression = java.lang.String.format(
-            """
-((selector) => {
-  const el = document.querySelector(selector);
-  if (!el) return null;
-  const role = el.getAttribute('role');
-  const ariaChecked = el.getAttribute('aria-checked');
+        return predicateOnElement(selector) { isChecked(it) }
+    }
 
-  // 原生 input[type=checkbox|radio]
-  if (el.tagName === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio')) {
-    return !!el.checked;
-  }
+    @Throws(ChromeDriverException::class)
+    suspend fun isChecked(node: NodeRef): Boolean {
+        if (node.isNull()) {
+            return false
+        }
 
-  // ARIA 控件
-  if (role === 'checkbox' || role === 'radio' || role === 'switch') {
-    if (ariaChecked === 'true') return true;
-    if (ariaChecked === 'mixed') return 'mixed';
-    return false;
-  }
+        val resolved = resolveNodeObjectId(devTools, node) ?: return false
 
-  return null;
-})('%s')
-            """.trimIndent(), safeSelector
-        )
+        return try {
+            val result = runtimeAPI?.callFunctionOn(
+                CheckableElementJs.IS_CHECKED_FUNCTION_DECLARATION,
+                objectId = resolved.objectId,
+                returnByValue = true,
+                awaitPromise = true
+            )
 
-        val result = jsHandler.evaluateValue(expression)
-
-        if (result is Boolean) return result
-        // if ("mixed" == result) return null // 可按需返回 tri-state
-        return false
+            result?.result?.value as? Boolean ?: false
+        } finally {
+            releaseNodeObjectIfNeeded(devTools, resolved)
+        }
     }
 
     /**
@@ -587,13 +579,7 @@ class PageHandler(
      */
     private suspend fun trySmoothScroll(nodeRef: NodeRef): Boolean {
         return try {
-            // Resolve a fresh objectId every time; it's ephemeral and must not be cached
-            val resolved = when {
-                nodeRef.nodeId > 0 -> domAPI?.resolveNode(nodeRef.nodeId, null, null, null)
-                nodeRef.backendNodeId > 0 -> domAPI?.resolveNode(null, nodeRef.backendNodeId, null, null)
-                else -> null
-            }
-            val objectId = resolved?.objectId ?: return false
+            val resolved = resolveNodeObjectId(devTools, nodeRef) ?: return false
             try {
                 // Execute on the element itself to avoid selector issues; center for stability
                 val functionDeclaration = """
@@ -605,16 +591,12 @@ class PageHandler(
                     }
                 """.trimIndent()
                 runtimeAPI?.callFunctionOn(
-                    functionDeclaration, objectId = objectId, returnByValue = true,
+                    functionDeclaration, objectId = resolved.objectId, returnByValue = true,
                     userGesture = true, awaitPromise = true
                 )
                 true
             } finally {
-                // Always release to avoid leaks
-                try {
-                    runtimeAPI?.releaseObject(objectId)
-                } catch (_: Exception) {
-                }
+                releaseNodeObjectIfNeeded(devTools, resolved)
             }
         } catch (e: Exception) {
             // swallow and indicate failure; caller will fallback
