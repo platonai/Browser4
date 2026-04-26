@@ -38,24 +38,22 @@ data class NodeClip(
  * @author Vincent Zhang, ivincent.zhang@gmail.com, platon.ai
  */
 class ClickableDOM(
-    val page: Page,
-    val dom: DOM,
+    val cdp: CDP,
     val node: NodeRef,
     val offset: OffsetD? = null
 ) {
     companion object {
-        fun create(page: Page?, dom: DOM?, node: NodeRef?, offset: OffsetD? = null): ClickableDOM? {
+        fun create(cdp: CDP?, node: NodeRef?, offset: OffsetD? = null): ClickableDOM? {
             if (node == null) return null
-            if (page == null) return null
-            if (dom == null) return null
-            return ClickableDOM(page, dom, node, offset)
+            if (cdp == null) return null
+            return ClickableDOM(cdp, node, offset)
         }
     }
 
     suspend fun clickablePoint(): DescriptiveResult<PointD> {
         val contentQuads = runCatching {
             // dom.getContentQuads(node.nodeId, node.backendNodeId, node.objectId)
-            dom.getContentQuads(node.nodeId)
+            cdp.getContentQuads(node.nodeId)
         }
             .onFailure { getLogger(this).warn("Failed to get content quads for node ${node.nodeId}", it) }
             .getOrNull()
@@ -65,7 +63,7 @@ class ClickableDOM(
             return DescriptiveResult("error:notvisible")
         }
 
-        val layoutMetrics = page.getLayoutMetrics()
+        val layoutMetrics = cdp.getLayoutMetrics()
 
         val viewport = layoutMetrics.cssLayoutViewport
 
@@ -119,7 +117,7 @@ class ClickableDOM(
 
     suspend fun boundingBox(): RectD? {
         // Only provide nodeId to satisfy the "exactly one id" requirement
-        val box = dom.getBoxModel(node.nodeId, null, null)
+        val box = cdp.getBoxModel(node.nodeId)
 
         val quad = box.border.takeIf { it.isNotEmpty() } ?: return null
 
@@ -655,6 +653,7 @@ class EmulationHandler(
     private val devTools: RemoteDevTools? = null
 ) {
     private val logger = getLogger(this)
+    private val cdp = devTools?.let { CDP(it) }
 
     suspend fun click(
         node: NodeRef, count: Int, position: String = "center", modifier: String? = null, delayMillis: Long = 100
@@ -687,7 +686,7 @@ class EmulationHandler(
         val point = getInteractPoint(node, position, useRandomOffset = false) ?: return
 
         // Get bounding box to calculate a point outside the element
-        val clickableDOM = ClickableDOM(p, d, node, null)
+        val clickableDOM = ClickableDOM.create(cdp, node, null) ?: return
         val box = runCatching { clickableDOM.boundingBox() }
             .onFailure { logger.warn("Failed to get bounding box for hover", it) }
             .getOrNull()
@@ -732,7 +731,7 @@ class EmulationHandler(
             return null
         }
 
-        val clickableDOM = ClickableDOM(p, d, node, offset)
+        val clickableDOM = ClickableDOM.create(cdp, node, offset) ?: return null
         val point = clickableDOM.clickablePoint().value ?: return null
 
         val box = runCatching { clickableDOM.boundingBox() }

@@ -1,7 +1,9 @@
 package ai.platon.browser4.driver.chrome.experimental
 
+import ai.platon.browser4.driver.chrome.RemoteDevTools
 import ai.platon.cdt.kt.protocol.ChromeDevTools
 import ai.platon.cdt.kt.protocol.types.domsnapshot.CaptureSnapshot
+import ai.platon.cdt.kt.protocol.types.dom.Rect
 import ai.platon.cdt.kt.protocol.types.input.DispatchDragEventType
 import ai.platon.cdt.kt.protocol.types.input.DispatchKeyEventType
 import ai.platon.cdt.kt.protocol.types.input.DispatchMouseEventType
@@ -11,6 +13,9 @@ import ai.platon.cdt.kt.protocol.types.page.Viewport
 import ai.platon.cdt.kt.protocol.types.runtime.CallArgument
 import ai.platon.cdt.kt.protocol.types.runtime.CallFunctionOn
 import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
+import ai.platon.cdt.kt.protocol.types.page.Navigate
+import ai.platon.cdt.kt.protocol.types.page.ReferrerPolicy
+import ai.platon.cdt.kt.protocol.types.page.TransitionType
 
 /**
  * CDP is the single access point for all Chrome DevTools Protocol (CDP) domain APIs.
@@ -21,6 +26,12 @@ import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
 class CDP(
     private val devTools: ChromeDevTools
 ) {
+    val remoteDevTools: RemoteDevTools =
+        (devTools as? RemoteDevTools) ?: error("CDP requires RemoteDevTools for this runtime")
+
+    val remoteDevToolsOrNull: RemoteDevTools? get() = devTools as? RemoteDevTools
+    val isOpen: Boolean get() = remoteDevToolsOrNull?.isOpen ?: true
+
     val browser get() = devTools.browser
     val page get() = devTools.page
     val target get() = devTools.target
@@ -40,6 +51,17 @@ class CDP(
     suspend fun pageEnable() = page.enable()
     suspend fun domEnable() = dom.enable()
     suspend fun accessibilityEnable() = accessibility.enable()
+    suspend fun getFrameTree() = page.getFrameTree()
+
+    suspend fun navigate(url: String): Navigate = page.navigate(url)
+
+    suspend fun navigate(
+        url: String,
+        referrer: String? = null,
+        transitionType: TransitionType? = null,
+        frameId: String? = null,
+        referrerPolicy: ReferrerPolicy? = null,
+    ): Navigate = page.navigate(url, referrer, transitionType, frameId, referrerPolicy)
 
     suspend fun evaluate(
         expression: String,
@@ -131,9 +153,45 @@ class CDP(
 
     suspend fun getDocument(depth: Int? = null, pierce: Boolean? = null) = dom.getDocument(depth, pierce)
 
+    suspend fun getContentQuads(nodeId: Int) = dom.getContentQuads(nodeId)
+
+    suspend fun getBoxModel(nodeId: Int) = dom.getBoxModel(nodeId, null, null)
+
+    suspend fun querySelector(nodeId: Int, selector: String) = dom.querySelector(nodeId, selector)
+
+    suspend fun querySelectorAll(nodeId: Int, selector: String) = dom.querySelectorAll(nodeId, selector)
+
+    suspend fun performSearch(query: String, includeUserAgentShadowDOM: Boolean? = null) =
+        dom.performSearch(query, includeUserAgentShadowDOM)
+
+    suspend fun getSearchResults(searchId: String, fromIndex: Int, toIndex: Int) =
+        dom.getSearchResults(searchId, fromIndex, toIndex)
+
+    suspend fun discardSearchResults(searchId: String) = dom.discardSearchResults(searchId)
+
+    suspend fun getAttributes(nodeId: Int) = dom.getAttributes(nodeId)
+
+    suspend fun focus(nodeId: Int) = dom.focus(nodeId)
+
+    suspend fun describeNode(
+        nodeId: Int? = null,
+        backendNodeId: Int? = null,
+        objectId: String? = null,
+        depth: Int? = null,
+        pierce: Boolean? = null,
+    ) = dom.describeNode(nodeId, backendNodeId, objectId, depth, pierce)
+
+    suspend fun scrollIntoViewIfNeeded(nodeId: Int, rect: Rect? = null) = dom.scrollIntoViewIfNeeded(nodeId, rect = rect)
+
     suspend fun resolveNodeByNodeId(nodeId: Int) = dom.resolveNode(nodeId = nodeId)
 
     suspend fun resolveNodeByBackendNodeId(backendNodeId: Int) = dom.resolveNode(backendNodeId = backendNodeId)
+
+    suspend fun requestNode(objectId: String) = dom.requestNode(objectId)
+
+    suspend fun getComputedStyleForNode(nodeId: Int) = css.getComputedStyleForNode(nodeId)
+
+    suspend fun getFullAXTree(depth: Int? = null) = accessibility.getFullAXTree(depth)
 
     suspend fun dispatchMouseMoved(x: Double, y: Double, buttons: Int?) {
         input.dispatchMouseEvent(
@@ -261,5 +319,13 @@ class CDP(
             includeBlendedBackgroundColors = includeBlendedBackgroundColors,
             includeTextColorOpacities = includeTextColorOpacities,
         )
+    }
+
+    fun awaitTermination() {
+        remoteDevToolsOrNull?.awaitTermination()
+    }
+
+    fun close() {
+        remoteDevToolsOrNull?.close()
     }
 }

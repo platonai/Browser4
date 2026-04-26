@@ -14,8 +14,6 @@ class AccessibilityHandler(
     private val cdp = CDP(devTools)
 
     private val isActive get() = devTools.isOpen
-    private val pageAPI get() = cdp.page.takeIf { isActive }
-    private val accessibilityAPI get() = cdp.accessibility.takeIf { isActive }
 
     @Volatile
     private var accessibilityEnabled = false
@@ -29,16 +27,15 @@ class AccessibilityHandler(
         // Ensure the Accessibility domain is enabled
         ensureEnabled()
 
-        val page = pageAPI ?: return AccessibilityTreeResult.EMPTY
-        val accessibility = accessibilityAPI ?: return AccessibilityTreeResult.EMPTY
+        if (!isActive) return AccessibilityTreeResult.EMPTY
 
         // Small retry loop to wait for AX cache to populate on dynamic pages
         repeat(5) { attempt ->
             val frameTree = try {
-                page.getFrameTree()
+                cdp.getFrameTree()
             } catch (e: Exception) {
                 tracer?.debug("Page.getFrameTree failed, using last known tree | err={}", e.toString())
-                page.getFrameTree()
+                cdp.getFrameTree()
             }
 
             val frameById = linkedMapOf<String, FrameTree>()
@@ -52,14 +49,14 @@ class AccessibilityHandler(
 
             if (frameIds.isEmpty()) {
                 // Fallback: try fetching AX tree without specifying a frameId (root document)
-                val nodes = runCatching { accessibility.getFullAXTree(depth) }.getOrElse { emptyList() }
+                val nodes = runCatching { cdp.getFullAXTree(depth) }.getOrElse { emptyList() }
                 if (nodes.isNotEmpty()) {
                     val rootFrameId = frameTree.frame.id
                     return singleFrameResult(nodes, rootFrameId)
                 }
                 // If a specific target frame was requested, try that directly as well
                 if (targetFrameId != null) {
-                    val targeted = runCatching { accessibility.getFullAXTree(depth) }.getOrElse { emptyList() }
+                    val targeted = runCatching { cdp.getFullAXTree(depth) }.getOrElse { emptyList() }
                     if (targeted.isNotEmpty()) return singleFrameResult(targeted, targetFrameId)
                 }
                 // Wait a bit and retry
@@ -71,7 +68,7 @@ class AccessibilityHandler(
                 val byBackend = LinkedHashMap<Int, MutableList<AXNode>>()
 
                 frameIds.forEach { frameId ->
-                    val nodes = runCatching { accessibility.getFullAXTree(depth) }
+                    val nodes = runCatching { cdp.getFullAXTree(depth) }
                         .onFailure { e -> logger.warn("Accessibility.getFullAXTree failed | frameId={} err={}", frameId, e.toString()) }
                         .getOrElse { emptyList() }
                     if (nodes.isEmpty()) {
@@ -157,7 +154,7 @@ class AccessibilityHandler(
         runCatching { cdp.pageEnable() }
         runCatching { cdp.domEnable() }
 
-        accessibilityAPI ?: return
+        if (!isActive) return
         if (!accessibilityEnabled) {
             runCatching { cdp.accessibilityEnable() }
                 .onFailure { e -> logger.warn("Accessibility.enable failed | err={}", e.toString()) }

@@ -37,6 +37,11 @@ suspend fun resolveNodeObjectId(devTools: RemoteDevTools, node: NodeRef): Resolv
     return objectId?.let { ResolvedNodeObjectId(it, true) }
 }
 
+suspend fun resolveNodeObjectId(cdp: CDP, node: NodeRef): ResolvedNodeObjectId? {
+    val devTools = cdp.remoteDevToolsOrNull ?: return null
+    return resolveNodeObjectId(devTools, node)
+}
+
 /**
  * Releases a temporary runtime object id previously returned by [resolveNodeObjectId].
  */
@@ -47,6 +52,11 @@ suspend fun releaseNodeObjectIfNeeded(devTools: RemoteDevTools, resolved: Resolv
 
     val cdp = CDP(devTools)
     runCatching { cdp.releaseObject(resolved.objectId) }
+}
+
+suspend fun releaseNodeObjectIfNeeded(cdp: CDP, resolved: ResolvedNodeObjectId?) {
+    val devTools = cdp.remoteDevToolsOrNull ?: return
+    releaseNodeObjectIfNeeded(devTools, resolved)
 }
 
 /**
@@ -64,6 +74,15 @@ suspend inline fun <T> withNodeObjectId(
     } finally {
         releaseNodeObjectIfNeeded(devTools, resolved)
     }
+}
+
+suspend inline fun <T> withNodeObjectId(
+    cdp: CDP,
+    node: NodeRef,
+    block: suspend (String) -> T,
+): T? {
+    val devTools = cdp.remoteDevToolsOrNull ?: return null
+    return withNodeObjectId(devTools, node, block)
 }
 
 

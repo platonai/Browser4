@@ -1,6 +1,7 @@
 package ai.platon.pulsar.protocol.browser.driver.cdt
 
 import ai.platon.browser4.driver.chrome.*
+import ai.platon.browser4.driver.chrome.experimental.CDP
 import ai.platon.browser4.driver.chrome.dom.Locator
 import ai.platon.browser4.driver.chrome.dom.SnapshotService
 import ai.platon.browser4.driver.chrome.dom.model.NanoDOMTree
@@ -55,25 +56,26 @@ class PulsarWebDriver(
 
     override val browserType: BrowserType = BrowserType.PULSAR_CHROME
 
-    private val browserAPI get() = devTools.browser.takeIf { isActive }
-    private val pageAPI get() = devTools.page.takeIf { isActive }
-    private val targetAPI get() = devTools.target.takeIf { isActive }
-    private val domAPI get() = devTools.dom.takeIf { isActive }
-    private val cssAPI get() = devTools.css.takeIf { isActive }
-    private val inputAPI get() = devTools.input.takeIf { isActive }
+    private val cdp = CDP(devTools)
+    private val browserAPI get() = cdp.browser.takeIf { isActive }
+    private val pageAPI get() = cdp.page.takeIf { isActive }
+    private val targetAPI get() = cdp.target.takeIf { isActive }
+    private val domAPI get() = cdp.dom.takeIf { isActive }
+    private val cssAPI get() = cdp.css.takeIf { isActive }
+    private val inputAPI get() = cdp.input.takeIf { isActive }
     private val mainFrameAPI get() = runBlocking { pageAPI?.getFrameTree()?.frame }
-    private val networkAPI get() = devTools.network.takeIf { isActive }
-    private val fetchAPI get() = devTools.fetch.takeIf { isActive }
-    private val runtimeAPI get() = devTools.runtime.takeIf { isActive }
-    private val emulationAPI get() = devTools.emulation.takeIf { isActive }
+    private val networkAPI get() = cdp.network.takeIf { isActive }
+    private val fetchAPI get() = cdp.fetch.takeIf { isActive }
+    private val runtimeAPI get() = cdp.runtime.takeIf { isActive }
+    private val emulationAPI get() = cdp.emulation.takeIf { isActive }
 
-    private val isolatedWorldManager = IsolatedWorldManager(devTools, settings)
-    private val page = PageHandler(devTools, isolatedWorldManager)
+    private val isolatedWorldManager = IsolatedWorldManager(cdp.remoteDevTools, settings)
+    private val page = PageHandler(cdp.remoteDevTools, isolatedWorldManager)
     private val jsHandler get() = page.jsHandler
     private val mouse get() = page.mouse.takeIf { isActive }
     private val keyboard get() = page.keyboard.takeIf { isActive }
-    private val screenshot = ScreenshotHandler(page, devTools)
-    private val emulator get() = EmulationHandler(pageAPI, domAPI, keyboard, mouse, devTools)
+    private val screenshot = ScreenshotHandler(page, cdp.remoteDevTools)
+    private val emulator get() = EmulationHandler(pageAPI, domAPI, keyboard, mouse, cdp.remoteDevTools)
 
     private val rpc = RobustRPC(this)
     private val networkManager by lazy { NetworkManager(this, rpc) }
@@ -83,7 +85,7 @@ class PulsarWebDriver(
 
     private val closed = AtomicBoolean()
 
-    private val isGone get() = closed.get() || isQuit || !AppContext.isActive || !devTools.isOpen
+    private val isGone get() = closed.get() || isQuit || !AppContext.isActive || !cdp.isOpen
 
     var userTypedUrl: String? = null
     var navigateUrl: String? = chromeTab.url
@@ -309,7 +311,7 @@ class PulsarWebDriver(
     private suspend fun setChecked(selector: String, shouldCheck: Boolean) {
         val actionName = if (shouldCheck) "check" else "uncheck"
         driverHelper.invokeOnElement(selector, actionName, scrollIntoView = true) { node ->
-            withNodeObjectId(devTools, node) { objectId ->
+            withNodeObjectId(cdp, node) { objectId ->
                 val result = runtimeAPI?.callFunctionOn(
                     CheckableElementJs.SET_CHECKED_FUNCTION_DECLARATION,
                     objectId = objectId,
@@ -445,11 +447,10 @@ class PulsarWebDriver(
             } ?: return
 
             val offset = OffsetD(4.0, 4.0)
-            val p = pageAPI ?: return
-            val d = domAPI ?: return
+            if (!isActive) return
 
             rpc.invokeWithRetry("moveMouseTo") {
-                val point = ClickableDOM(p, d, node, offset).clickablePoint().value
+                val point = ClickableDOM(cdp, node, offset).clickablePoint().value
                 if (point != null) {
                     val point2 = PointD(point.x + deltaX, point.y + deltaY)
                     mouse?.moveTo(point2)
@@ -550,7 +551,7 @@ class PulsarWebDriver(
                 throw WebDriverException("runtimeAPI is null")
             }
 
-            withNodeObjectId(devTools, node) { objectId ->
+            withNodeObjectId(cdp, node) { objectId ->
                 val res = runtimeAPI?.callFunctionOn(
                     functionDeclaration,
                     objectId = objectId,
@@ -658,7 +659,7 @@ class PulsarWebDriver(
         //| attribute | HTML 初始声明 | ❌ 不变（除非手动 setAttribute） |
         //| property  | DOM 当前状态  | ✅ 会变（用户交互 / JS 修改）      |
 
-        return withNodeObjectId(devTools, node) { objectId ->
+        return withNodeObjectId(cdp, node) { objectId ->
             runtimeAPI?.callFunctionOn(
                 "function() { return this && typeof this.value !== 'undefined' ? this.value : null; }",
                 objectId = objectId,
@@ -747,12 +748,11 @@ class PulsarWebDriver(
             val deltaOffsetY = 4.0 + Random.nextInt(4)  // Add randomization to Y offset
             val offset = OffsetD(deltaOffsetX, deltaOffsetY)
 
-            val p = pageAPI ?: throw IllegalWebDriverStateException("Page API not available", driver = this)
-            val d = domAPI ?: throw IllegalWebDriverStateException("DOM API not available", driver = this)
+            if (!isActive) throw IllegalWebDriverStateException("CDP is not active", driver = this)
             val m = mouse ?: throw IllegalWebDriverStateException("Mouse not available", driver = this)
 
             rpc.invokeWithRetry("dragAndDrop") {
-                val clickableDOM = ClickableDOM(p, d, node, offset)
+                val clickableDOM = ClickableDOM(cdp, node, offset)
                 val clickableResult = clickableDOM.clickablePoint()
                 val startPoint = clickableResult.value
 
@@ -866,7 +866,7 @@ function() {
   }
 }
                     """.trimIndent()
-                    withNodeObjectId(devTools, node) { objectId ->
+                    withNodeObjectId(cdp, node) { objectId ->
                             val remoteObject = runtimeAPI?.callFunctionOn(
                                 functionDeclaration,
                                 objectId = objectId,
@@ -885,7 +885,7 @@ function() {
         try {
             return rpc.invokeWithRetry("clickablePoint") {
                 val node = page.scrollIntoViewIfNeeded(selector)
-                ClickableDOM.create(pageAPI, domAPI, node)?.clickablePoint()?.value
+                ClickableDOM.create(cdp, node)?.clickablePoint()?.value
             }
         } catch (e: ChromeDriverException) {
             rpc.handleChromeException(e, "clickablePoint")
@@ -899,7 +899,7 @@ function() {
         try {
             return rpc.invokeWithRetry("boundingBox") {
                 val node = page.scrollIntoViewIfNeeded(selector)
-                ClickableDOM.create(pageAPI, domAPI, node)?.boundingBox()
+                ClickableDOM.create(cdp, node)?.boundingBox()
             }
         } catch (e: ChromeDriverException) {
             rpc.handleChromeException(e, "boundingBox")
@@ -980,7 +980,7 @@ function() {
     }
 
     override fun awaitTermination() {
-        devTools.awaitTermination()
+        cdp.awaitTermination()
     }
 
     override suspend fun loadResource(url: String): NetworkResourceResponse {
@@ -1009,7 +1009,7 @@ function() {
         super.close()
 
         if (closed.compareAndSet(false, true)) {
-            devTools.runCatching { close() }.onFailure { warnForClose(this, it) }
+            runCatching { cdp.close() }.onFailure { warnForClose(this, it) }
         }
     }
 
@@ -1036,11 +1036,11 @@ function() {
                 navigate(ChromeImpl.ABOUT_BLANK_PAGE)
             }
         } catch (e: ChromeIOException) {
-            if (!e.isOpen || !devTools.isOpen) {
+            if (!e.isOpen || !cdp.isOpen) {
                 // intentionally ignored: the chrome is closed
             }
         } catch (e: ChromeDriverException) {
-            if (devTools.isOpen) {
+            if (cdp.isOpen) {
                 try {
                     rpc.handleChromeException(e, "terminate")
                 } catch (e: Exception) {

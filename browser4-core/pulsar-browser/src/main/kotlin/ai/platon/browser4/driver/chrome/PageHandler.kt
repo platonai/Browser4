@@ -37,10 +37,6 @@ class PageHandler(
     private val cdp = CDP(devTools)
 
     private val isActive get() = AppContext.isActive && devTools.isOpen
-    private val pageAPI get() = cdp.page.takeIf { isActive }
-    private val domAPI get() = cdp.dom.takeIf { isActive }
-    private val cssAPI get() = cdp.css.takeIf { isActive }
-    private val runtimeAPI get() = cdp.runtime.takeIf { isActive }
 
     private var lastBrowserUseState: BrowserUseState? = null
 
@@ -53,7 +49,7 @@ class PageHandler(
 
     @Throws(ChromeDriverException::class)
     suspend fun navigate(@ParamName("url") url: String): Navigate? {
-        return pageAPI?.navigate(url)
+        return if (isActive) cdp.navigate(url) else null
     }
 
     @Throws(ChromeDriverException::class)
@@ -64,7 +60,7 @@ class PageHandler(
         frameId: String? = null,
         referrerPolicy: ReferrerPolicy? = null
     ): Navigate? {
-        return pageAPI?.navigate(url, referrer, transitionType, frameId, referrerPolicy)
+        return if (isActive) cdp.navigate(url, referrer, transitionType, frameId, referrerPolicy) else null
     }
 
     suspend fun exists(selector: String): Boolean {
@@ -238,10 +234,11 @@ class PageHandler(
 
     @Throws(ChromeDriverException::class)
     private suspend fun resolveCSSSelectorAll0(selector: String): List<NodeRef>? {
-        val rootId = domAPI?.getDocument()?.nodeId ?: return null
+        if (!isActive) return null
+        val rootId = cdp.getDocument()?.nodeId ?: return null
 
         val nodeIds = try {
-            domAPI?.querySelectorAll(rootId, selector)
+            cdp.querySelectorAll(rootId, selector)
         } catch (e: CDPReturnError) {
             if (e.errorCode != -32000L) {
                 logger.warn(
@@ -269,15 +266,16 @@ class PageHandler(
         require(xpath.startsWith("//"))
 
         return try {
-            domAPI?.getDocument()?.nodeId ?: return null
+            if (!isActive) return null
+            cdp.getDocument()?.nodeId ?: return null
 
-            val searchResult = domAPI?.performSearch(xpath, true) ?: return null
+            val searchResult = cdp.performSearch(xpath, true) ?: return null
             val nodeIds = if (searchResult.resultCount > 0) {
                 // Retrieve all matching nodes
-                val results = domAPI?.getSearchResults(searchResult.searchId, fromIndex = 0, toIndex = searchResult.resultCount)
+                val results = cdp.getSearchResults(searchResult.searchId, fromIndex = 0, toIndex = searchResult.resultCount)
                 // Clean up search results to avoid resource leak
                 try {
-                    domAPI?.discardSearchResults(searchResult.searchId)
+                    cdp.discardSearchResults(searchResult.searchId)
                 } catch (_: Exception) {
                 }
                 results
@@ -395,7 +393,8 @@ class PageHandler(
         }
 
         // `attributes`: n1, v1, n2, v2, n3, v3, ...
-        val attributes = domAPI?.getAttributes(node.nodeId) ?: return null
+        if (!isActive) return null
+        val attributes = cdp.getAttributes(node.nodeId) ?: return null
         val nameIndex = attributes.indexOf(attrName)
         if (nameIndex < 0) {
             return null
@@ -421,7 +420,7 @@ class PageHandler(
 
         var isVisible = true
 
-        val properties = cssAPI?.getComputedStyleForNode(node.nodeId)
+        val properties = if (isActive) cdp.getComputedStyleForNode(node.nodeId) else null
         properties?.forEach { prop ->
             when (prop.name) {
                 "display" if prop.value == "none" -> isVisible = false
@@ -431,7 +430,11 @@ class PageHandler(
         }
 
         if (isVisible) {
-            isVisible = ClickableDOM.create(pageAPI, domAPI, node)?.isVisible() ?: false
+            isVisible = if (!isActive) {
+                false
+            } else {
+                ClickableDOM.create(cdp, node)?.isVisible() ?: false
+            }
         }
 
         return isVisible
@@ -449,12 +452,12 @@ class PageHandler(
         }
 
         return withNodeObjectId(devTools, node) { objectId ->
-            val result = runtimeAPI?.callFunctionOn(
+            val result = if (isActive) cdp.callFunctionOn(
                 CheckableElementJs.IS_CHECKED_FUNCTION_DECLARATION,
                 objectId = objectId,
                 returnByValue = true,
                 awaitPromise = true
-            )
+            ) else null
 
             result?.result?.value as? Boolean ?: false
         } ?: false
@@ -478,7 +481,7 @@ class PageHandler(
         val nodeRef = querySelector(selector) ?: return null
 
         // Fix: Only use nodeId parameter, others should be null
-        domAPI?.focus(nodeRef.nodeId)
+        if (isActive) cdp.focus(nodeRef.nodeId)
 
         return nodeRef
     }
@@ -529,7 +532,7 @@ class PageHandler(
      */
     @Throws(ChromeDriverException::class)
     suspend fun scrollIntoViewIfNeeded(nodeRef: NodeRef, selector: String? = null, rect: Rect? = null): NodeRef? {
-        val node = domAPI?.describeNode(nodeRef.nodeId, nodeRef.backendNodeId, nodeRef.objectId, null, false)
+        val node = if (isActive) cdp.describeNode(nodeRef.nodeId, nodeRef.backendNodeId, nodeRef.objectId, null, false) else null
         if (node?.nodeType != ELEMENT_NODE) {
             logger.info("Node is not of type HTMLElement | {}", selector ?: node)
             return null
@@ -538,11 +541,11 @@ class PageHandler(
         // If a rect is provided, honor it via CDP; otherwise prefer smooth behavior via JS
         return try {
             if (rect != null) {
-                domAPI?.scrollIntoViewIfNeeded(node.nodeId, rect = rect)
+                cdp.scrollIntoViewIfNeeded(node.nodeId, rect = rect)
                 nodeRef
             } else {
                 if (trySmoothScroll(nodeRef)) nodeRef else {
-                    domAPI?.scrollIntoViewIfNeeded(node.nodeId, rect = null)
+                    cdp.scrollIntoViewIfNeeded(node.nodeId, rect = null)
                     nodeRef
                 }
             }
@@ -589,7 +592,7 @@ class PageHandler(
                         } catch (e) { return false; }
                     }
                 """.trimIndent()
-                runtimeAPI?.callFunctionOn(
+                cdp.callFunctionOn(
                     functionDeclaration, objectId = objectId, returnByValue = true,
                     userGesture = true, awaitPromise = true
                 )
@@ -603,10 +606,11 @@ class PageHandler(
 
     @Throws(ChromeDriverException::class)
     private suspend fun resolveCSSSelector0(selector: String): NodeRef? {
-        val rootId = domAPI?.getDocument()?.nodeId ?: return null
+        if (!isActive) return null
+        val rootId = cdp.getDocument()?.nodeId ?: return null
 
         val nodeId = try {
-            domAPI?.querySelector(rootId, selector)
+            cdp.querySelector(rootId, selector)
         } catch (e: CDPReturnError) {
             // code: -32000 message: "Could not find node with given id"
             // This exception is expected, will change this log to debug
@@ -644,15 +648,16 @@ class PageHandler(
         require(xpath.startsWith("//"))
 
         val nodeId = try {
-            domAPI?.getDocument()?.nodeId ?: return null
+            if (!isActive) return null
+            cdp.getDocument()?.nodeId ?: return null
 
-            val searchResult = domAPI?.performSearch(xpath, true) ?: return null
+            val searchResult = cdp.performSearch(xpath, true) ?: return null
             val nodeId = if (searchResult.resultCount > 0) {
                 // Only retrieve the first matching node if results exist
-                val results = domAPI?.getSearchResults(searchResult.searchId, fromIndex = 0, toIndex = 1)
+                val results = cdp.getSearchResults(searchResult.searchId, fromIndex = 0, toIndex = 1)
                 // Clean up search results to avoid resource leak
                 try {
-                    domAPI?.discardSearchResults(searchResult.searchId)
+                    cdp.discardSearchResults(searchResult.searchId)
                 } catch (_: Exception) {
                 }
                 results?.firstOrNull()
@@ -706,9 +711,9 @@ class PageHandler(
                 // If nodeId is provided, we might not need to resolve it again unless we want to verify it exists
                 // But the original code resolved it. Let's keep the behavior but check if it's necessary.
                 // Resolving a nodeId returns a RemoteObject.
-                domAPI?.resolveNode(nodeId, null, null, null)
+                cdp.resolveNodeByNodeId(nodeId)
             } else if (backendNodeId != null && backendNodeId > 0) {
-                domAPI?.resolveNode(null, backendNodeId, null, null)
+                cdp.resolveNodeByBackendNodeId(backendNodeId)
             } else {
                 return null
             }
@@ -722,11 +727,11 @@ class PageHandler(
             // Use DOM.requestNode to get the nodeId from the runtime object.
             // This is crucial when we started with a backendNodeId.
             // When started with nodeId, it should return the same nodeId.
-            val resolvedNodeId = domAPI?.requestNode(tempObjectId) ?: 0
+            val resolvedNodeId = cdp.requestNode(tempObjectId) ?: 0
 
             // Release the remote object to avoid memory leaks
             try {
-                runtimeAPI?.releaseObject(tempObjectId)
+                cdp.releaseObject(tempObjectId)
             } catch (_: Exception) {
             }
 
