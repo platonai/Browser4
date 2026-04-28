@@ -10,10 +10,11 @@
 
 use std::env;
 use std::fs;
+use std::io;
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 use reqwest::Client;
@@ -23,7 +24,7 @@ use crate::state::{read_state, resolve_default_state_dir};
 
 const EXISTING_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(120);
 const JAR_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(60);
-const MAVEN_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(180);
+const MAVEN_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(300);
 const CLI_TEMP_DIR_COMPONENTS: [&str; 2] = ["tmp", "cli"];
 const CLI_LIB_DIR_COMPONENT: &str = "lib";
 const BROWSER4_JAR_FILE_NAME: &str = "Browser4.jar";
@@ -381,9 +382,8 @@ fn prepare_unix_maven_wrapper_launcher(
         )
     })?;
 
-    // Create a two-phase launcher script:
-    // 1. Install all required modules (so sibling SNAPSHOT JARs are available)
-    // 2. Start browser4-agents via spring-boot:run, forwarding any extra args
+    // Use a single reactor spring-boot:run so Maven resolves sibling modules
+    // from the current checkout instead of falling back to stale installed jars.
     let mvnw_abs = launcher_wrapper_path
         .to_string_lossy()
         .replace('\'', "'\\''");
@@ -637,14 +637,13 @@ async fn start_server(
     );
 
     if let Err(error) = wait_for_server_ready(&client, base_url, ready_timeout).await {
-        cleanup_prepared_launch_dir(cleanup_dir.take());
-        let exit_context = match child.try_wait() {
-            Ok(Some(status)) => format!(" Process exited early with status {status}."),
-            Ok(None) => String::new(),
-            Err(wait_error) => format!(" Failed to inspect launcher process: {wait_error}."),
-        };
+        let (preserve_cleanup_dir, exit_context, cleanup_context) =
+            readiness_failure_context(child.try_wait(), cleanup_dir.as_deref());
+        if !preserve_cleanup_dir {
+            cleanup_prepared_launch_dir(cleanup_dir.take());
+        }
         let error_message = format!(
-            "{error}{exit_context} Inspect startup log: {}",
+            "{error}{exit_context}{cleanup_context} Inspect startup log: {}",
             startup_log.path.display()
         );
         append_startup_log_message(&startup_log.path, &error_message);
@@ -684,6 +683,43 @@ async fn start_server(
 fn cleanup_prepared_launch_dir(path: Option<PathBuf>) {
     if let Some(path) = path {
         let _ = fs::remove_dir_all(path);
+    }
+}
+
+fn readiness_failure_context(
+    launch_process_state: Result<Option<ExitStatus>, io::Error>,
+    cleanup_dir: Option<&Path>,
+) -> (bool, String, String) {
+    match launch_process_state {
+        Ok(Some(status)) => (
+            false,
+            format!(" Process exited early with status {status}."),
+            String::new(),
+        ),
+        Ok(None) => (
+            true,
+            String::new(),
+            cleanup_dir
+                .map(|path| {
+                    format!(
+                        " Preserving staged Browser4 launcher files at {} because the startup process is still running.",
+                        path.display()
+                    )
+                })
+                .unwrap_or_default(),
+        ),
+        Err(wait_error) => (
+            true,
+            format!(" Failed to inspect launcher process: {wait_error}."),
+            cleanup_dir
+                .map(|path| {
+                    format!(
+                        " Preserving staged Browser4 launcher files at {} because the startup process is still running.",
+                        path.display()
+                    )
+                })
+                .unwrap_or_default(),
+        ),
     }
 }
 
@@ -1130,6 +1166,54 @@ mod tests {
             MAVEN_SERVER_READY_TIMEOUT
         );
         assert_eq!(launch_ready_timeout(&jar_spec), JAR_SERVER_READY_TIMEOUT);
+    }
+
+    #[test]
+    fn test_readiness_failure_context_preserves_cleanup_for_running_process() {
+        let cleanup_dir = Path::new("/tmp/browser4-launcher");
+
+        let (preserve_cleanup_dir, exit_context, cleanup_context) =
+            readiness_failure_context(Ok(None), Some(cleanup_dir));
+
+        assert!(preserve_cleanup_dir);
+        assert!(exit_context.is_empty());
+        assert!(cleanup_context.contains(cleanup_dir.to_string_lossy().as_ref()));
+    }
+
+    #[test]
+    fn test_readiness_failure_context_cleans_up_after_exited_process() {
+        let exited_status = if cfg!(windows) {
+            Command::new("cmd")
+                .args(["/C", "exit 7"])
+                .status()
+                .expect("cmd exit status should be available")
+        } else {
+            Command::new("sh")
+                .args(["-c", "exit 7"])
+                .status()
+                .expect("sh exit status should be available")
+        };
+
+        let (preserve_cleanup_dir, exit_context, cleanup_context) =
+            readiness_failure_context(Ok(Some(exited_status)), Some(Path::new("/tmp/browser4-launcher")));
+
+        assert!(!preserve_cleanup_dir);
+        assert!(exit_context.contains("Process exited early with status"));
+        assert!(cleanup_context.is_empty());
+    }
+
+    #[test]
+    fn test_readiness_failure_context_preserves_cleanup_when_inspection_fails() {
+        let cleanup_dir = Path::new("/tmp/browser4-launcher");
+
+        let (preserve_cleanup_dir, exit_context, cleanup_context) = readiness_failure_context(
+            Err(io::Error::other("permission denied")),
+            Some(cleanup_dir),
+        );
+
+        assert!(preserve_cleanup_dir);
+        assert!(exit_context.contains("Failed to inspect launcher process"));
+        assert!(cleanup_context.contains(cleanup_dir.to_string_lossy().as_ref()));
     }
 
     #[test]
