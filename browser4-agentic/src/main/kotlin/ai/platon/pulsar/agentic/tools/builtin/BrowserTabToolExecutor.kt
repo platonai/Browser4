@@ -9,7 +9,7 @@ import kotlin.reflect.KClass
 class BrowserTabToolExecutor: AbstractToolExecutor() {
     override val domain = "tab"
 
-    override val receiverClass: KClass<*> = _root_ide_package_.ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver::class
+    override val receiverClass: KClass<*> = WebDriver::class
 
     init {
         ToolSpecGenerator.apply {
@@ -35,7 +35,7 @@ class BrowserTabToolExecutor: AbstractToolExecutor() {
     override suspend fun callFunctionOn(
         domain: String, functionName: String, args: Map<String, Any?>, receiver: Any
     ): Any? {
-        val driver = requireNotNull(receiver as? ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver) { "The target must be a WebDriver" }
+        val driver = requireNotNull(receiver as? WebDriver) { "The target must be a WebDriver" }
 
         fun allowed(vararg names: String) = names.toSet()
 
@@ -44,11 +44,11 @@ class BrowserTabToolExecutor: AbstractToolExecutor() {
             "open" -> { validateArgs(args, allowed("url"), setOf("url"), functionName); driver.open(paramString(args, "url", functionName)!!) }
             "navigate" -> {
                 when {
-                    args.containsKey("url") -> { validateArgs(args, allowed("url"), setOf("url"), functionName); driver.navigate(paramString(args, "url", functionName)!!) }
-                    args.containsKey("rawUrl") || args.containsKey("pageUrl") -> {
-                        validateArgs(args, allowed("rawUrl", "pageUrl"), setOf("rawUrl", "pageUrl"), functionName)
+                    args.containsKey("url") || args.containsKey("rawUrl") || args.containsKey("pageUrl") -> {
+                        validateArgs(args, allowed("url", "rawUrl", "pageUrl"),
+                            setOf("url", "rawUrl", "pageUrl"), functionName)
                         driver.navigate(
-                            _root_ide_package_.ai.platon.pulsar.skeleton.workflow.fetch.driver.NavigateEntry(
+                            NavigateEntry(
                                 paramString(args, "rawUrl", functionName)!!,
                                 pageUrl = paramString(args, "pageUrl", functionName)!!
                             )

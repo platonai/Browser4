@@ -11,7 +11,7 @@ class WebDriverExToolExecutor: AbstractToolExecutor() {
     override val domain = "driverEx"
 
     // target must be AbstractWebDriver (was Browser before, incorrect)
-    override val receiverClass: KClass<*> = _root_ide_package_.ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver::class
+    override val receiverClass: KClass<*> = AbstractWebDriver::class
 
     init {
         toolSpec["extract"] = ToolSpec(
