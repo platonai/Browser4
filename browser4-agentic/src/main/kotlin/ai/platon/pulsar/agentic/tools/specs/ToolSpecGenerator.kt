@@ -63,7 +63,7 @@ object ToolSpecGenerator {
             toolSpec += ToolSpec(domain, method, canonicalizeArguments(arguments), returnType, description, help)
         }
 
-        return toolSpec
+        return canonicalizeToolSpecs(toolSpec)
     }
 
     private fun canonicalizeArguments(arguments: List<ToolSpec.Arg>): List<ToolSpec.Arg> {
@@ -72,6 +72,16 @@ object ToolSpecGenerator {
             compareBy<ToolSpec.Arg> { it.name }
                 .thenBy { it.type }
                 .thenBy { it.defaultValue }
+        )
+    }
+
+    private fun canonicalizeToolSpecs(toolSpecs: List<ToolSpec>): List<ToolSpec> {
+        // Keep method/member order stable for WebDriver and PerceptiveAgent snapshots.
+        return toolSpecs.sortedWith(
+            compareBy<ToolSpec> { it.domain }
+                .thenBy { it.method }
+                .thenBy { it.returnType }
+                .thenBy { it.arguments.joinToString("|") { arg -> "${arg.name}:${arg.type}:${arg.defaultValue}" } }
         )
     }
 

@@ -26,6 +26,26 @@ class SourceCodeToToolCallTest {
     }
 
     @Test
+    @DisplayName("extractInterface generates method specs in deterministic order")
+    fun extractInterfaceGeneratesMethodSpecsInDeterministicOrder() {
+        val sourceCode = """
+            interface Demo {
+                @MCP
+                fun zebra(): Unit
+
+                @MCP
+                fun alpha(): Unit
+
+                @MCP
+                fun middle(): Unit
+            }
+        """.trimIndent()
+
+        val tools = ToolSpecGenerator.extractInterface("agent", sourceCode, "Demo")
+        assertEquals(listOf("alpha", "middle", "zebra"), tools.map { it.method })
+    }
+
+    @Test
     @DisplayName("extract methods from WebDriver resource")
     fun extractMethodsFromWebdriverResource() {
         val sourceCode =
