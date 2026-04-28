@@ -10,8 +10,8 @@ import org.junit.jupiter.api.Test
 
 class SourceCodeToToolCallTest {
     @Test
-    @DisplayName("extractInterface generates arguments in deterministic order")
-    fun extractInterfaceGeneratesArgumentsInDeterministicOrder() {
+    @DisplayName("extractInterface keeps argument order from source")
+    fun extractInterfaceKeepsArgumentOrderFromSource() {
         val sourceCode = """
             interface Demo {
                 @MCP
@@ -22,12 +22,12 @@ class SourceCodeToToolCallTest {
         val tools = ToolSpecGenerator.extractInterface("tab", sourceCode, "Demo")
         val stableArgs = tools.first { it.method == "stableArgs" }
 
-        assertEquals(listOf("alpha", "beta", "zeta"), stableArgs.arguments.map { it.name })
+        assertEquals(listOf("zeta", "alpha", "beta"), stableArgs.arguments.map { it.name })
     }
 
     @Test
-    @DisplayName("extractInterface generates method specs in deterministic order")
-    fun extractInterfaceGeneratesMethodSpecsInDeterministicOrder() {
+    @DisplayName("extractInterface keeps method order from source")
+    fun extractInterfaceKeepsMethodOrderFromSource() {
         val sourceCode = """
             interface Demo {
                 @MCP
@@ -42,7 +42,24 @@ class SourceCodeToToolCallTest {
         """.trimIndent()
 
         val tools = ToolSpecGenerator.extractInterface("agent", sourceCode, "Demo")
-        assertEquals(listOf("alpha", "middle", "zebra"), tools.map { it.method })
+        assertEquals(listOf("zebra", "alpha", "middle"), tools.map { it.method })
+    }
+
+    @Test
+    @DisplayName("extractInterface keeps overloaded methods in source order")
+    fun extractInterfaceKeepsOverloadedMethodsInSourceOrder() {
+        val sourceCode = """
+            interface Demo {
+                @MCP
+                fun ping(id: String): Unit
+
+                @MCP
+                fun ping(id: String, retry: Int = 1): Unit
+            }
+        """.trimIndent()
+
+        val tools = ToolSpecGenerator.extractInterface("agent", sourceCode, "Demo")
+        assertEquals(listOf(1, 2), tools.filter { it.method == "ping" }.map { it.arguments.size })
     }
 
     @Test

@@ -60,29 +60,12 @@ object ToolSpecGenerator {
             val returnType = m.returnType.ifBlank { "Unit" }
             val description = m.kdoc ?: methodNameToDescription(method)
             val help = m.fullKDoc
-            toolSpec += ToolSpec(domain, method, canonicalizeArguments(arguments), returnType, description, help)
+            // Keep argument order exactly as declared in source signatures.
+            toolSpec += ToolSpec(domain, method, arguments, returnType, description, help)
         }
 
-        return canonicalizeToolSpecs(toolSpec)
-    }
-
-    private fun canonicalizeArguments(arguments: List<ToolSpec.Arg>): List<ToolSpec.Arg> {
-        // Keep JSON snapshots stable even when upstream parsing order changes.
-        return arguments.sortedWith(
-            compareBy<ToolSpec.Arg> { it.name }
-                .thenBy { it.type }
-                .thenBy { it.defaultValue }
-        )
-    }
-
-    private fun canonicalizeToolSpecs(toolSpecs: List<ToolSpec>): List<ToolSpec> {
-        // Keep method/member order stable for WebDriver and PerceptiveAgent snapshots.
-        return toolSpecs.sortedWith(
-            compareBy<ToolSpec> { it.domain }
-                .thenBy { it.method }
-                .thenBy { it.returnType }
-                .thenBy { it.arguments.joinToString("|") { arg -> "${arg.name}:${arg.type}:${arg.defaultValue}" } }
-        )
+        // Keep method order exactly as declared in source interfaces.
+        return toolSpec
     }
 
     // Helper types and parsers for SourceCodeToToolCall
