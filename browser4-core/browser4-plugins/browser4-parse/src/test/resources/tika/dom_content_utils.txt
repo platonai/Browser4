@@ -1,0 +1,30 @@
+<html><head><title> title </title><script> script </script></head><body> body <a href="http://www.pulsar.org"> anchor </a><!--comment--></body></html>
+<html><head><title> title </title><script> script </script></head><body> body <a href="/"> home </a><!--comment--><style> style </style> <a href="bot.html"> bots </a></body></html>
+<html><head><title> </title></head><body> <a href="/"> separate this <a href="ok"> from this</a></a></body></html>
+<html><head><title> my title </title></head><body> body <ul><li> <a href="/"> home<li> <a href="1"> 1<li> <a href="2"> 2</ul></body></html>
+<html><head><title> my title </title></head><frameset rows="20,*"> <frame src="top.html"></frame><frameset cols="20,*"><frame src="left.html"></frame><frame src="invalid.html"/></frame><frame src="right.html"></frame></frameset></frameset></body></html>
+<html><head><title> my title </title></head><body><img src="logo.gif" usemap="#green" border="0"><map name="green"><area shape="polygon" coords="19,44,45,11,87" href="../index.html"><area shape="rect" coords="128,132,241,179" href="#bottom"><area shape="circle" coords="68,211,35" href="../bot.html"></map><a name="bottom"/><h1> the bottom </h1> <iframe src="../docs/index.html"/></body></html>
+<html><head>
+ <title> my
+  title
+ </title>
+ </head>
+ <body>
+    <h1> Whitespace	test  </h1>
+	<a href="../index.html">
+  	whitespace  test
+	</a>
+    <p> This is<span> a whitespace<span></span> test</span>. Newlines
+should appear as space too.</p><p>Tabs	are spaces too.
+</p>    This	<b>is a</b> break -&gt;<br>and the line after<i> break</i>.<br>
+<table>    <tr><td>one</td><td>two</td><td>three</td></tr>
+    <tr><td>space here </td><td> space there</td><td>no space</td></tr>	<tr><td>one
+	four</td></tr>
+madness
+!</h2>
+         .        .        .         .</body>  </html>
+<html><head></head><body><a href="http://www.pulsar.org" rel="nofollow"> ignore </a><a rel="nofollow" href="http://www.pulsar.org"> ignore </a></body></html>
+<html><head></head><body><form method='POST' action='/search.jsp'><input type=text><input type=submit><p>test1</p></form><form method='GET' action='/dummy.jsp'><input type=text><input type=submit><p>test2</p></form></body></html>
+<html><head></head><body><form method='POST' action='/search.jsp'><input type=text><input type=submit><p>test1</p></form><form method='GET' action='/dummy.jsp'><input type=text><input type=submit><p>test2</p></form></body></html>
+<html><head><title> title </title></head><body><a href=";x">anchor1</a><a href="g;x">anchor2</a><a href="g;x?y#s">anchor3</a></body></html>
+<html><head><title> title </title></head><body><a href="g">anchor1</a><a href="g?y#s">anchor2</a><a href="?y=1">anchor3</a><a href="?y=1#s">anchor4</a><a href="?y=1;somethingelse">anchor5</a></body></html>

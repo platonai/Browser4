@@ -20,7 +20,7 @@
     </parent>
 
     <groupId>ai.platon.pulsar</groupId>
-    <artifactId>pulsar</artifactId>
+    <artifactId>browser4</artifactId>
     <version>4.8.0-SNAPSHOT</version>
     <packaging>pom</packaging>
 
@@ -401,7 +401,7 @@
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-plugins</artifactId>
+                <artifactId>browser4-plugins</artifactId>
                 <type>pom</type>
                 <version>${project.version}</version>
             </dependency>
@@ -420,7 +420,7 @@
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-browser</artifactId>
+                <artifactId>browser4-browser</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

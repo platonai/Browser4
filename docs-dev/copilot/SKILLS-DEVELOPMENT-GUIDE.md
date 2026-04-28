@@ -321,7 +321,7 @@ The `BrowserTabToolExecutor` auto-discovers methods via `ToolSpecGenerator`.
 
 2. **Implement in concrete driver classes**:
 
-   **File**: `browser4-core/pulsar-plugins/.../PulsarWebDriver.kt`
+   **File**: `browser4-core/browser4-plugins/.../PulsarWebDriver.kt`
 
    ```kotlin
    override suspend fun myTool(arg1: String): String {

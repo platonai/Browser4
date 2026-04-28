@@ -178,7 +178,7 @@
                 </exclusion>
                 <exclusion>
                     <groupId>ai.platon.pulsar</groupId>
-                    <artifactId>pulsar-browser</artifactId>
+                    <artifactId>browser4-browser</artifactId>
                 </exclusion>
                 <exclusion>
                     <groupId>ai.platon.pulsar</groupId>

@@ -254,9 +254,14 @@ The Rust CLI is structured as follows:
 ## Testing
 
 ```bash
+## Run all tests (unit + end-to-end):
 cargo test
+
+## Run only the end-to-end tests and print their output:
+cargo test --test e2e -- --nocapture
+
+## Run a specific end-to-end test scenario:
 cargo test --test e2e -- --nocapture --scenario=test_e2e_batch_form_submission
-cargo test --test e2e -- --nocapture --scenario-from=test_e2e_mouse_and_dialog
 ```
 
 ## License

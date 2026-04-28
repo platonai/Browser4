@@ -39,12 +39,12 @@ class ToolFormatComparisonTest {
         var current = File(System.getProperty("user.dir"))
         while (current.parentFile != null) {
             val pomFile = File(current, "pom.xml")
-            if (pomFile.exists() && pomFile.readText().contains("<artifactId>pulsar</artifactId>")) {
+            if (pomFile.exists() && pomFile.readText().contains("<artifactId>browser4</artifactId>")) {
                 return@lazy File(current, DEFAULT_OUTPUT_SUBDIR).also { it.mkdirs() }
             }
             // Check parent's pom.xml (for when running from module directory)
             val parentPom = File(current.parentFile, "pom.xml")
-            if (parentPom.exists() && parentPom.readText().contains("<artifactId>pulsar</artifactId>")) {
+            if (parentPom.exists() && parentPom.readText().contains("<artifactId>browser4</artifactId>")) {
                 return@lazy File(current.parentFile, DEFAULT_OUTPUT_SUBDIR).also { it.mkdirs() }
             }
             current = current.parentFile

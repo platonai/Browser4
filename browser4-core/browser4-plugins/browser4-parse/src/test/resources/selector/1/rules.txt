@@ -1,0 +1,1 @@
+http://news.example.com/html_example_3_news.html -e news -ed body -Ftitle=.art_tit! -Fcontent=.art_txt! -Finfo=.art_info! -Fauthor=.editer! -Fnobody=.not-exist

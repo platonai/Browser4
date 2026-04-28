@@ -1,0 +1,486 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html><head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+  <title>Pulsar UI</title>
+  
+	<link rel="stylesheet" type="text/css" href="pulsar_ui_crawls_view_files/default.css">
+  
+	<link rel="stylesheet" type="text/css" href="pulsar_ui_crawls_view_files/jquery-ui.css">
+
+  <script type="text/javascript">
+  	var globalPageData = {
+  	  "webroot" : "/",
+  		"controller" : "crawls",
+  		"action" : "view"
+  	};
+  </script>
+<link id="skinlayercss" href="pulsar_ui_crawls_view_files/layer.css" rel="stylesheet" type="text/css"></head>
+
+<body id="crawlsView">
+  <div id="container">
+
+  <div id="nav">
+    <h1 class="logo">
+      <a href="http://localhost/" title="Pulsar UI">Pulsar UI</a>
+    </h1>
+    <div class="user">vincent</div>
+    <ul id="menu" class="clearfix">
+      <li class="item">
+        <a href="http://localhost/">dashboard</a>
+      </li>
+      <li class="item3">
+        <a href="http://localhost/crawls">crawls</a>
+      </li>
+      <li class="item2">
+        <a href="http://localhost/extractions">extractions</a>
+      </li>
+      <li class="item5">
+        <a href="http://localhost/page_entities">page entities</a>
+      </li>
+      <!-- 
+      <li class="item4">
+        <a href="/settings">settings</a>
+      </li>
+      <li class="item6">
+        <a href="/schedulings">scheduling</a>
+      </li>
+      <li class="item7">
+        <a href="/searches">search</a>
+      </li>
+       -->
+      <li class="lgo">
+        <a href="http://localhost/users/logout" class="lbOn" title="Logout!">退出</a>
+      </li>
+    </ul>
+  </div><!--nav-->
+
+  <div id="stage">
+        <script type="text/x-jsrender" id="jobInfoTemplate">
+        <!--
+	<h4>任务配置</h4>
+	<dl>
+		{{props}}
+		<dt>{{>key}}</dt>
+		<dd>
+			{{>prop}}			&nbsp;
+		</dd>
+		{{/props}}
+	</dl>
+	<hr/>
+
+	<h4>任务参数</h4>
+	<dl>
+		{{props args}}
+		<dt>{{>key}}</dt>
+		<dd>
+			{{>prop}}			&nbsp;
+		</dd>
+		{{/props}}
+	</dl>
+	<hr/>
+
+	<h4>任务结果</h4>
+	<dl>
+		{{props result}}
+		<dt>{{>key}}</dt>
+		<dd>
+			{{>prop}}			&nbsp;
+		</dd>
+		{{/props}}
+
+	</dl>
+	-->
+</script>
+
+<div class="message crawls-view-tip hidden">
+说明：
+<br>I.   本页面提供基本爬虫控制，主要目标是采集、抽取和分析单个站点内的详细页，如电子商务、酒店、房产、旅游线路、票务等等
+<br>II.  任务创建完毕后，可以通过编辑界面深度控制爬虫行为以满足其他需求
+<br>III. 一个爬虫任务对应一个"弹性分布式网页集(RDW)"，基于Spark的"弹性分布式数据集(RDD)"，后续数据分析均以RDD为核心模型
+</div>
+
+<div class="view">
+	<h1>网络实体集概要</h1>
+</div>
+<div class="crawls view">
+	<h2><span>爬虫配置</span></h2>
+	<dl>		<dt class="altrow">Id</dt>
+		<dd class="altrow">
+			<span class="model-id">39</span>
+			&nbsp;
+		</dd>
+		<dt>Name</dt>
+		<dd>
+			vincent-crawl-20150224130601-294			&nbsp;
+		</dd>
+		<dt class="altrow">Config Id</dt>
+		<dd class="altrow">
+						&nbsp;
+		</dd>
+		<dt>Rounds</dt>
+		<dd>
+			100			&nbsp;
+		</dd>
+		<dt class="altrow">Finished Rounds</dt>
+		<dd class="altrow">
+			0			&nbsp;
+		</dd>
+		<dt>Created</dt>
+		<dd>
+			2015-02-24 13:26:25			&nbsp;
+		</dd>
+		<dt class="altrow">Modified</dt>
+		<dd class="altrow">
+			2015-02-27 12:02:02			&nbsp;
+		</dd>
+		<!-- 
+		<dt>Finished</dt>
+		<dd>
+						&nbsp;
+		</dd>
+		 -->
+		<dt class="altrow">Description</dt>
+		<dd class="altrow">
+						&nbsp;
+		</dd>
+	</dl>
+</div>
+
+<div class="actions">
+	<ul>
+		<li><a href="http://localhost/crawls/status/39">View Crawl Status</a> </li>
+		<li><a href="http://localhost/crawls/edit/39">Edit Crawl</a> </li>
+		<li><a href="http://localhost/crawls/resetCrawl/39" target="_blank">Reset Crawl Jobs (For Test Mode Only)</a> </li>
+		<li><a href="http://localhost/crawls/add_wes" target="_blank">New Wes</a> </li>
+		<li><a href="http://localhost/crawls/add" target="_blank">New Crawl</a> </li>
+	</ul>
+</div>
+
+<div class="crawls view">
+	<h3>爬虫服务器最后消息</h3>
+
+	<div id="jobInfo"></div>
+</div>
+
+<div class="related seeds">
+	<h3>
+		<span>Seeds</span>
+		<p class="m hidden">抓取任务从种子网页开始</p>
+	</h3>
+		<table cellpadding="0" cellspacing="0">
+		<tbody><tr>
+			<th>Id</th>
+			<th>Url</th>
+			<th class="actions">操作</th>
+		</tr>
+			<tr class="altrow">
+			<td class="model-id">60</td>
+			<td><pre>http://shouji.jd.com/</pre></td>
+			<td class="actions">
+				<a href="http://localhost/seeds/delete/60" onclick="return confirm('Are you sure you want to delete # 60?');">删除</a>			</td>
+		</tr>
+			<tr>
+			<td class="model-id">69</td>
+			<td><pre>http://shouji.jd.com/</pre></td>
+			<td class="actions">
+				<a href="http://localhost/seeds/delete/69" onclick="return confirm('Are you sure you want to delete # 69?');">删除</a>			</td>
+		</tr>
+		</tbody></table>
+
+	<div class="actions">
+		<ul>
+			<li><a href="http://localhost/seeds/add/crawl_id:39">New Seed</a> </li>
+			<li><a href="http://localhost/seeds/index/crawl_id:39" target="_blank">List Seeds For This Crawl</a> </li>
+		</ul>
+	</div>
+</div>
+
+<!-- **************************************************************
+	Begin Crawl Filter
+ **************************************************************-->
+<div class="related crawl-filter">
+	<h3>
+		<span>Crawl Filters</span>
+		<p class="m hidden">抓取过滤器定义哪些网页需要被抓取。多个Url Filter按逻辑或计算结果。
+    		<br>单个Crawl Filter定义为：
+    		<br>链接模式满足Url Filter，且文本内容满足Text Filter的网页中，
+    		网页转换为文档对象模型DOM后，Parse Block Filter规定的区域内的链接需要被抓取
+    </p>
+	</h3>
+		<table cellpadding="0" cellspacing="0">
+		<tbody><tr>
+			<th>Id</th>
+			<th>Url Filter</th>
+			<th>Text Filter</th>
+			<th>Parse Block Filter</th>
+			<th class="actions">操作</th>
+		</tr>
+			<tr class="altrow">
+			<td class="model-id">1</td>
+			<td><pre>list.jd.com/list.html?cat=9987,653,655</pre></td>
+			<td><pre>{
+   containsAll:"手机,平板,超级本",
+   containsAny:"数码相机,超级本,小米手机",
+   notContainsAll:"电脑,一体机,相机",
+   notContainsAny:"雅虎,谷歌,华为"
+}
+</pre></td>
+			<td><pre>{
+   allow : ["#content &gt; div", "#paginate"],
+   disallow : [".relative", ".shop"]
+}
+</pre></td>
+			<td class="actions">
+			  <a href="http://localhost/crawl_filters/view/1">查看</a>			  <a href="http://localhost/crawl_filters/edit/1">编辑</a>				<a href="http://localhost/crawl_filters/delete/1" onclick="return confirm('Are you sure you want to delete # 1?');">删除</a>			</td>
+		</tr>
+			<tr>
+			<td class="model-id">3</td>
+			<td><pre>+http://item.jd.com/.+.html
+-http://item.jd.com/[1-2000000].html</pre></td>
+			<td><pre>{
+    containsAll:"手机,平板,超级本",
+    containsAny:"数码相机,超级本,小米手机",
+    notContainsAll:"电脑,一体机,相机",
+    notContainsAny:"雅虎,谷歌,华为"
+}</pre></td>
+			<td><pre>{
+    allow : ["#content &gt; div", "#paginate"],
+    disallow : [".relative", ".shop"]
+}</pre></td>
+			<td class="actions">
+			  <a href="http://localhost/crawl_filters/view/3">查看</a>			  <a href="http://localhost/crawl_filters/edit/3">编辑</a>				<a href="http://localhost/crawl_filters/delete/3" onclick="return confirm('Are you sure you want to delete # 3?');">删除</a>			</td>
+		</tr>
+			<tr class="altrow">
+			<td class="model-id">8</td>
+			<td><pre>+http://item.jd.com/.+.html
+-http://item.jd.com/[1-2000000].html</pre></td>
+			<td><pre>{
+    "containsAll": "三星，手机",
+    "containsAny": "galaxy",
+    "notContainsAll": "三星，平板",
+    "notContainsAny": "索尼，夏普"
+}</pre></td>
+			<td><pre>{
+    "allow": ["#content"],
+    "disallow": ["#comment"]
+}</pre></td>
+			<td class="actions">
+			  <a href="http://localhost/crawl_filters/view/8">查看</a>			  <a href="http://localhost/crawl_filters/edit/8">编辑</a>				<a href="http://localhost/crawl_filters/delete/8" onclick="return confirm('Are you sure you want to delete # 8?');">删除</a>			</td>
+		</tr>
+			<tr>
+			<td class="model-id">9</td>
+			<td><pre>+http://item.example.com/.+.html
+-http://item.example.com/[1-2000000].html</pre></td>
+			<td><pre>{
+    containsAll:"Example,手机,平板,超级本",
+    containsAny:"Example,数码相机,超级本,小米手机",
+    notContainsAll:"Example,电脑,一体机,相机",
+    notContainsAny:"Example,雅虎,谷歌,华为"
+}</pre></td>
+			<td><pre>{
+    "allow": ["#exampleId .content &gt; div", "#paginate"],
+    "disallow": ["#exampleId #comment", ".shopDetail"]
+}</pre></td>
+			<td class="actions">
+			  <a href="http://localhost/crawl_filters/view/9">查看</a>			  <a href="http://localhost/crawl_filters/edit/9">编辑</a>				<a href="http://localhost/crawl_filters/delete/9" onclick="return confirm('Are you sure you want to delete # 9?');">删除</a>			</td>
+		</tr>
+		</tbody></table>
+
+	<div class="actions">
+		<ul>
+			<li>
+				<a href="http://localhost/crawl_filters/add/crawl_id:39" target="_blank">New Crawl Filter</a>			</li>
+		</ul>
+	</div>
+</div>
+<!-- **************************************************************
+	End Crawl Filter
+ **************************************************************-->
+
+<!-- **************************************************************
+	Begin Web Authorization
+ **************************************************************-->
+<div class="related web-authorization">
+	<h3>
+		<span>Web Authorizations</span>
+		<p class="m hidden">如果需要抓取登录后的网页，需要提供用户名和密码。多个用户名将随机选择使用</p>
+  </h3>
+		<table cellpadding="0" cellspacing="0">
+		<tbody><tr>
+			<th>Id</th>
+			<th>Login Url</th>
+			<th>AccountCssSelector</th>
+			<th>Account</th>
+			<th>PasswordText</th>
+			<th>PasswordCssSelector</th>
+			<th class="actions">操作</th>
+		</tr>
+			<tr class="altrow">
+			<td class="model-id">10&nbsp;</td>
+			<td>https://passport.jd.com/new/login.aspx&nbsp;</td>
+			<td>#loginname&nbsp;</td>
+			<td>galaxyeye&nbsp;</td>
+			<td>#nloginpwd&nbsp;</td>
+			<td>abc123&nbsp;</td>
+			<td class="actions">
+				<a href="http://localhost/web_authorizations/view/10">查看</a>				<a href="http://localhost/web_authorizations/delete/10" onclick="return confirm('Are you sure you want to delete # 10?');">删除</a>			</td>
+		</tr>
+		</tbody></table>
+
+	<div class="actions">
+		<ul>
+			<li><a href="http://localhost/web_authorizations/add/crawl_id:39" class="add-web-authorization">New Web Authorization</a> </li>
+		</ul>
+	</div>
+</div>
+<!-- **************************************************************
+	End Web Authorization
+ **************************************************************-->
+
+<!-- **************************************************************
+	Begin Human Action
+ **************************************************************-->
+<div class="related human-action">
+	<h3>
+		<span>Human Actions</span>
+		<p class="m hidden">浏览器打开网页后的行为。模拟真人操作，譬如滚轮滚动、鼠标点击、鼠标移动等行为</p>
+	</h3>
+		<table cellpadding="0" cellspacing="0">
+		<tbody><tr>
+			<th>Id</th>
+			<th>执行顺序</th>
+			<th>执行对象路径</th>
+			<th>动作</th>
+			<th class="actions">操作</th>
+		</tr>
+			<tr class="altrow">
+			<td class="model-id">4</td>
+			<td>1</td>
+			<td>:root &gt; div[0]</td>
+			<td>click</td>
+			<td class="actions">
+			  <a href="http://localhost/human_actions/view/4">查看</a>				<a href="http://localhost/human_actions/delete/4" onclick="return confirm('Are you sure you want to delete # 4?');">删除</a>			</td>
+		</tr>
+		</tbody></table>
+
+	<div class="actions">
+		<ul>
+			<li>
+				<a href="http://localhost/human_actions/add/crawl_id:39">New Human Action</a>			</li>
+		</ul>
+	</div>
+</div>
+<!-- **************************************************************
+	End Human Action
+ **************************************************************-->
+
+<!-- **************************************************************
+	Begin Page Entity
+ **************************************************************-->
+<div class="related fieldGroup view">
+	<h3>
+		<span>主要实体</span>
+		<p class="m hidden">定义网页主实体。如果要定义网页的关联实体，点击View Extraction。本体系统上线后将允许从本体系统中选择实体</p>
+	</h3>
+	<dl>		<dt class="altrow">Id</dt>
+		<dd class="altrow">
+			<span class="page-entity-id">8</span>
+			&nbsp;
+		</dd>
+		<dt>Name</dt>
+		<dd>
+			<span class="model-id">smart phone</span>
+			&nbsp;
+		</dd>
+  </dl>
+</div>
+
+<div class="actions">
+	<ul>
+		<li><a href="http://localhost/extractions/view/15">View Extraction</a> </li>
+		<li><a href="http://localhost/page_entities/view/8">View Page Entity</a> </li>
+	</ul>
+</div>
+
+<div class="related page-entity-field">
+	<h3>
+		<span>主要实体字段</span>
+		<p class="m hidden">定义网页主实体字段的抽取规则。可以抓取一批网页后定义，系统将在网页集上执行机器学习，并给出建议的抽取规则</p>
+	</h3>
+		<table cellpadding="0" cellspacing="0">
+		<tbody><tr>
+			<th>Id</th>
+			<th>字段名</th>
+			<th>Css Path</th>
+			<th>抽取器</th>
+			<th>文本抽取表达式</th>
+			<th>文本验证表达式</th>
+			<th>SQL数据类型</th>
+			<th class="actions">操作</th>
+		</tr>
+			<tr class="altrow">
+			<td class="model-id">18</td>
+			<td>description</td>
+			<td>.content &gt; ul:nth-child(2) &gt; li:nth-child(3) &gt; span:nth-child(2)</td>
+			<td>TextExtractor</td>
+			<td>.+</td>
+			<td>.+</td>
+			<td>varchar(256) default ""</td>
+			<td class="actions">
+				<a href="http://localhost/page_entity_fields/view/18">查看</a>				<a href="http://localhost/page_entity_fields/edit/18/crawl_id:39">编辑</a>				<a href="http://localhost/page_entity_fields/delete/18" onclick="return confirm('Are you sure you want to delete # 18?');">删除</a>			</td>
+		</tr>
+			<tr>
+			<td class="model-id">20</td>
+			<td>notice</td>
+			<td>.active &gt; p:nth-child(2) &gt; strong:nth-child(1)</td>
+			<td>TextExtractor</td>
+			<td>.+</td>
+			<td>.+</td>
+			<td>varchar(256) default ""</td>
+			<td class="actions">
+				<a href="http://localhost/page_entity_fields/view/20">查看</a>				<a href="http://localhost/page_entity_fields/edit/20/crawl_id:39">编辑</a>				<a href="http://localhost/page_entity_fields/delete/20" onclick="return confirm('Are you sure you want to delete # 20?');">删除</a>			</td>
+		</tr>
+			<tr class="altrow">
+			<td class="model-id">24</td>
+			<td>title</td>
+			<td>.active &gt; p:nth-child(2) &gt; span:nth-child(2) &gt; b:nth-child(1)</td>
+			<td>TextExtractor</td>
+			<td>.+</td>
+			<td>.+</td>
+			<td>varchar(256) default ""</td>
+			<td class="actions">
+				<a href="http://localhost/page_entity_fields/view/24">查看</a>				<a href="http://localhost/page_entity_fields/edit/24/crawl_id:39">编辑</a>				<a href="http://localhost/page_entity_fields/delete/24" onclick="return confirm('Are you sure you want to delete # 24?');">删除</a>			</td>
+		</tr>
+		</tbody></table>
+
+	<div class="actions">
+		<ul>
+			<li>
+				<a href="http://localhost/page_entity_fields/add/page_entity_id:8/crawl_id:39">New Page Entity Field</a>			</li>
+		</ul>
+	</div>
+</div>
+<!-- **************************************************************
+	End Page Entity
+ **************************************************************-->
+
+<div class="crawls form">
+<form id="CrawlStartCrawlForm" method="post" action="/crawls/startCrawl" accept-charset="utf-8"><div style="display:none;"><input name="_method" value="POST" type="hidden"></div>	<fieldset>
+		<legend>Start This Crawl</legend>
+	<input name="data[Crawl][id]" value="39" id="CrawlId" type="hidden">	<div class="submit"><input value="Start Crawl" type="submit"></div>	</fieldset></form>
+</div>
+  </div><!--stage-->
+
+  </div><!--container-->
+
+  <img id="bottom" src="pulsar_ui_crawls_view_files/bottom.png" alt="">
+  <div id="footer">
+    <h1 class="logo"><a href="http://localhost/">奇点驱动</a></h1>
+    <p> · <strong>奇点驱动</strong> · 上海奇点驱动网络科技有限公司 ·</p>
+  </div><!--footer-->
+
+<!-- JavaScript -->
+<script type="text/javascript" src="pulsar_ui_crawls_view_files/jquery-1.js"></script><script type="text/javascript" src="pulsar_ui_crawls_view_files/jquery-ui.js"></script><script type="text/javascript" src="pulsar_ui_crawls_view_files/jsrender.js"></script><script type="text/javascript" src="pulsar_ui_crawls_view_files/common.js"></script><script type="text/javascript" src="pulsar_ui_crawls_view_files/layer.js"></script><script type="text/javascript" src="pulsar_ui_crawls_view_files/dump.js"></script><script type="text/javascript" src="pulsar_ui_crawls_view_files/view.js"></script>
+
+
+<div type="tips" times="1" showtime="60" style="z-index: 19891015; width: auto; height: auto; position: absolute; margin-left: 0px; left: 363.1px; top: 592px; display: none;" id="xubox_layer1" class="xubox_layer"><div style="background-color:; z-index:19891015" class="xubox_main"><div class="xubox_tips" style="background-color:#613D08; color:#FFDA68; text-align:left; font-size:120%"><div class="xubox_tipsMsg">抓取任务从种子网页开始</div><i style="border-bottom-color: rgb(97, 61, 8);" class="layerTipsG layerTipsR"></i></div><span class="xubox_setwin"><a class="xubox_close xulayer_png32 xubox_close0" href="javascript:;" style="position:absolute; right:-3px; _right:7px; top:-4px;"></a></span><span class="xubox_botton"></span></div></div></body></html>

@@ -1,0 +1,5 @@
+http://bbs.example.com/html_example_4_bbs.html \
+    -e bbs -ed body \
+    -Ftitle=.atl-title! -Fcontent=.atl-content! -Finfo=.atl-menu%.atl-info:eq(1)! -Fauthor=.atl-menu%.atl-info:eq(1)%span:eq(0)%a! -Fnobody=.not-exist \
+    -cn reviews -cr .atl-main -ci .atl-item \
+    -FFauthor=.atl-info%span:eq(0)>a! -FFcreated=.atl-info%span:eq(1)! -FFcontent=.bbs-content
