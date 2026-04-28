@@ -40,7 +40,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::thread::JoinHandle;
+use std::thread::{sleep, JoinHandle};
 use std::time::{Duration, Instant};
 
 use browser4_cli::commands::all_commands;
@@ -1697,10 +1697,13 @@ fn open_interactive_page(ctx: &mut E2ECtx) {
     run_open_command(ctx);
     let interactive_url = ctx.interactive_url();
     run_command(ctx, &["goto", &interactive_url]);
+    sleep(Duration::from_secs(2));
 }
 
 fn run_open_command(ctx: &mut E2ECtx) -> CliRunResult {
-    run_command(ctx, &["open", OPEN_TEMPORARY_PROFILE_ARG])
+    let result = run_command(ctx, &["open", OPEN_TEMPORARY_PROFILE_ARG]);
+    sleep(Duration::from_secs(2));
+    return result;
 }
 
 fn batch_open_command(url: &str) -> String {
