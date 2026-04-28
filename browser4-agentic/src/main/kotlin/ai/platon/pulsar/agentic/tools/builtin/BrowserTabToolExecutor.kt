@@ -44,9 +44,15 @@ class BrowserTabToolExecutor: AbstractToolExecutor() {
             "open" -> { validateArgs(args, allowed("url"), setOf("url"), functionName); driver.open(paramString(args, "url", functionName)!!) }
             "navigate" -> {
                 when {
-                    args.containsKey("url") || args.containsKey("rawUrl") || args.containsKey("pageUrl") -> {
-                        validateArgs(args, allowed("url", "rawUrl", "pageUrl"),
-                            setOf("url", "rawUrl", "pageUrl"), functionName)
+                    args.containsKey("url") -> {
+                        validateArgs(args, allowed("url"), setOf("url"), functionName);
+                        driver.navigate(paramString(args, "url", functionName)!!)
+                        // After navigation, wait for the page to load by waiting for the body element to be present
+                        driver.waitForNavigation()
+                        driver.waitForSelector("body", timeoutMillis = 10_000)
+                    }
+                    args.containsKey("rawUrl") || args.containsKey("pageUrl") -> {
+                        validateArgs(args, allowed("rawUrl", "pageUrl"), setOf("rawUrl", "pageUrl"), functionName)
                         driver.navigate(
                             NavigateEntry(
                                 paramString(args, "rawUrl", functionName)!!,
