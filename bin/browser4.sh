@@ -19,7 +19,7 @@ fi
 mkdir -p "$repoRoot/target/"
 UBERJAR="$repoRoot"/target/Browser4.jar
 if [ ! -f "$UBERJAR" ]; then
-  SERVER_HOME=$repoRoot/browser4/browser4-agents
+  SERVER_HOME=$repoRoot/browser4-app/browser4-agents
   cp "$SERVER_HOME"/target/Browser4.jar "$UBERJAR"
 fi
 

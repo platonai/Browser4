@@ -959,7 +959,7 @@ fn is_browser4_repo_root(path: &Path) -> bool {
     path.join("VERSION").is_file()
         && path.join("pom.xml").is_file()
         && path
-            .join("browser4")
+            .join("browser4-app")
             .join("browser4-agents")
             .join("pom.xml")
             .is_file()

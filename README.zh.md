@@ -131,7 +131,7 @@ browser4-cli close
 
 Docker 部署见 [Docker Hub repository](https://hub.docker.com/r/galaxyeye88/browser4)。
 
-**Windows 用户**：你也可以将 Browser4 构建为独立 Windows 安装包。详见 [Windows Installer Guide](browser4/browser4-agents/README.md)。
+**Windows 用户**：你也可以将 Browser4 构建为独立 Windows 安装包。详见 [Windows Installer Guide](browser4-app/browser4-agents/README.md)。
 
 ---
 

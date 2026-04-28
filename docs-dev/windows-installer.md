@@ -32,12 +32,12 @@ Build from the repository root:
 
 **Portable App-Image** (no installation required):
 ```shell
-mvnw clean package -pl browser4/browser4-agents -am -Pwin-jpackage -DskipTests
+mvnw clean package -pl browser4-app/browser4-agents -am -Pwin-jpackage -DskipTests
 ```
 
 **Windows Installer** (requires WiX Toolset):
 ```shell
-mvnw clean package -pl browser4/browser4-agents -am -Pwin-jpackage -Djpackage.installer.skip=false -DskipTests
+mvnw clean package -pl browser4-app/browser4-agents -am -Pwin-jpackage -Djpackage.installer.skip=false -DskipTests
 ```
 
 ## Prerequisites
@@ -72,7 +72,7 @@ Properties:
 
 To add a custom icon:
 
-1. Create directory: `browser4/browser4-agents/packaging/windows/`
+1. Create directory: `browser4-app/browser4-agents/packaging/windows/`
 2. Add icon file: `Browser4.ico` (256x256 recommended)
 3. Add icon arguments to pom.xml executions (see comments in pom.xml)
 
@@ -124,7 +124,7 @@ MSI format is an alternative to EXE, better suited for enterprise deployment:
 
 **To build MSI instead of EXE:**
 
-Add a new execution in `browser4/browser4-agents/pom.xml` under the `win-jpackage` profile:
+Add a new execution in `browser4-app/browser4-agents/pom.xml` under the `win-jpackage` profile:
 
 ```xml
 <execution>
@@ -203,18 +203,18 @@ jobs:
 
       - name: Build Installer
         run: |
-          mvnw clean package -pl browser4/browser4-agents -am -Pwin-jpackage -Djpackage.installer.skip=false -DskipTests
+          mvnw clean package -pl browser4-app/browser4-agents -am -Pwin-jpackage -Djpackage.installer.skip=false -DskipTests
 
       - name: Upload Installer
         uses: actions/upload-artifact@v3
         with:
           name: Browser4-Installer
-          path: browser4/browser4-agents/target/jpackage/dist/*.exe
+          path: browser4-app/browser4-agents/target/jpackage/dist/*.exe
 ```
 
 ## Related Resources
 
-- [browser4-agents/README.md](../browser4/browser4-agents/README.md) - Module-specific documentation
+- [browser4-agents/README.md](../browser4-app/browser4-agents/README.md) - Module-specific documentation
 - [JPackage Documentation](https://docs.oracle.com/en/java/javase/17/jpackage/)
 - [WiX Toolset](https://wixtoolset.org/)
 - [Spring Boot Documentation](https://docs.spring.io/spring-boot/docs/current/reference/html/)

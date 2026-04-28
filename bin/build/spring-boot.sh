@@ -12,7 +12,7 @@ MVNW="$repoRoot"/mvnw
 
 "$BIN"/build.sh "$@"
 
-SERVER_HOME=$repoRoot/browser4/browser4-agents
+SERVER_HOME=$repoRoot/browser4-app/browser4-agents
 cd "$SERVER_HOME" || exit
 
 "$BIN"/tools/install-depends.sh

@@ -72,17 +72,17 @@ mvnw.cmd -q -DskipTests
 
 ## Project Structure
 
-| Module | Description |
-|--------|-------------|
-| `browser4-core` | Core engine: sessions, scheduling, DOM, browser control |
-| `browser4-agentic` | AI agents implementation, MCP, skills registration |
-| `browser4-rest` | Spring Boot REST layer & command endpoints |
-| `sdks/*` | Browser4 CLI + skill assets (`sdks/browser4-cli`, `sdks/skill`) |
-| `browser4/*` | Product packaging (`browser4/browser4-agents`) |
-| `examples/*` | Runnable examples (`examples/browser4-examples`) |
-| `browser4-tests` | E2E & heavy integration & scenario tests |
+| Module                  | Description |
+|-------------------------|-------------|
+| `browser4-core`         | Core engine: sessions, scheduling, DOM, browser control |
+| `browser4-agentic`      | AI agents implementation, MCP, skills registration |
+| `browser4-rest`         | Spring Boot REST layer & command endpoints |
+| `sdks/*`                | Browser4 CLI + skill assets (`sdks/browser4-cli`, `sdks/skill`) |
+| `browser4-app/*`        | Product packaging (`browser4-app/browser4-agents`) |
+| `examples/*`            | Runnable examples (`examples/browser4-examples`) |
+| `browser4-tests`        | E2E & heavy integration & scenario tests |
 | `browser4-tests-common` | Shared test base classes and utilities |
-| `pulsar-benchmarks` | JMH benchmarks |
+| `pulsar-benchmarks`     | JMH benchmarks |
 
 ## Key APIs and Concepts
 

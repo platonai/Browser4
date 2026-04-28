@@ -26,7 +26,7 @@ mvnw.cmd clean package -DskipTests
 .\mvnw.cmd clean package -DskipTests
 ```
 
-构建完成后，JAR 文件将位于 `browser4/browser4-agents/target/Browser4.jar`
+构建完成后，JAR 文件将位于 `browser4-app/browser4-agents/target/Browser4.jar`
 
 ### 第二步：构建 Docker 镜像
 
@@ -48,7 +48,7 @@ docker build -f Dockerfile.fast -t browser4:latest .
 `Dockerfile.fast` 的关键特点：
 
 1. **单阶段构建**：不包含 Maven 构建阶段，只有运行时阶段
-2. **直接复制 JAR**：使用 `COPY browser4/browser4-agents/target/Browser4.jar app.jar`
+2. **直接复制 JAR**：使用 `COPY browser4-app/browser4-agents/target/Browser4.jar app.jar`
 3. **相同的运行时环境**：与原始 Dockerfile 使用相同的基础镜像和配置
 
 ## 🔧 运行镜像
@@ -65,7 +65,7 @@ docker run -d -p 8182:8182 \
 ## ⚠️ 注意事项
 
 1. **必须先构建 JAR**：确保在构建 Docker 镜像之前已经生成了 `Browser4.jar` 文件
-2. **文件路径**：JAR 文件必须位于 `browser4/browser4-agents/target/Browser4.jar`
+2. **文件路径**：JAR 文件必须位于 `browser4-app/browser4-agents/target/Browser4.jar`
 3. **版本一致性**：确保使用的 JAR 文件版本与预期一致
 
 ## 🔍 故障排查
@@ -75,7 +75,7 @@ docker run -d -p 8182:8182 \
 **解决方案：**
 ```bash
 # 检查 JAR 文件是否存在
-ls -lh browser4/browser4-agents/target/Browser4.jar
+ls -lh browser4-app/browser4-agents/target/Browser4.jar
 
 # 如果不存在，先构建 JAR
 ./mvnw clean package -DskipTests

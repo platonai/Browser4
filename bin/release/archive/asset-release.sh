@@ -32,8 +32,8 @@ cd "$repoRoot" || exit 1
 
 VERSION=$(head -n 1 "$repoRoot/VERSION" | sed 's/-SNAPSHOT//')
 
-# If browser4/browser4-agents/target/Browser4.jar exists, copy it to remote
-PULSAR_RPA_PATH="$repoRoot/browser4/browser4-agents/target/Browser4.jar"
+# If browser4-app/browser4-agents/target/Browser4.jar exists, copy it to remote
+PULSAR_RPA_PATH="$repoRoot/browser4-app/browser4-agents/target/Browser4.jar"
 if [[ -f "$PULSAR_RPA_PATH" ]]; then
   DESTINATION_PATH="${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_PATH}Browser4-${VERSION}.jar"
 

@@ -6,7 +6,7 @@ Set-Location $repoRoot
 $buildScript = Join-Path $repoRoot "bin/build/build.ps1"
 & $buildScript @args
 
-$SERVER_HOME = Join-Path $repoRoot "browser4/browser4-agents"
+$SERVER_HOME = Join-Path $repoRoot "browser4-app/browser4-agents"
 Set-Location $SERVER_HOME
 
 ../../mvnw spring-boot:run

@@ -129,7 +129,7 @@ browser4-cli close
 
 For Docker deployment, see our [Docker Hub repository](https://hub.docker.com/r/galaxyeye88/browser4).
 
-**Windows Users**: You can also build Browser4 as a standalone Windows installer. See the [Windows Installer Guide](browser4/browser4-agents/README.md) for details.
+**Windows Users**: You can also build Browser4 as a standalone Windows installer. See the [Windows Installer Guide](browser4-app/browser4-agents/README.md) for details.
 
 ---
 

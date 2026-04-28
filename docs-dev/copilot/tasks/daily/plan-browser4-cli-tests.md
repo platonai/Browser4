@@ -8,7 +8,7 @@ The current `browser4-cli` E2E harness still assumes it can launch its own local
 
 When `ci.yml`, `nightly.yml`, and `release.yml` run, the `browser4-cli` tests need to pass before the pipeline can proceed. The current setup has two coupled problems:
 
-1. `sdks/browser4-cli/tests/e2e.rs` always resolves a local jar from `BROWSER4_E2E_JAR_PATH` or `browser4/browser4-agents/target/Browser4.jar`, then restarts a fresh Browser4 instance for each browser-backed scenario.
+1. `sdks/browser4-cli/tests/e2e.rs` always resolves a local jar from `BROWSER4_E2E_JAR_PATH` or `browser4-app/browser4-agents/target/Browser4.jar`, then restarts a fresh Browser4 instance for each browser-backed scenario.
 2. The fixture server binds to `127.0.0.1`, and the tests hand Browser4 URLs like `http://127.0.0.1:<port>/interactive`. That is only reachable from the host itself, not from a Browser4 service running inside a Docker container.
 3. The current workflow ordering still runs the CLI E2E step before the Docker image is started and health-checked, so CI is not yet validating the intended containerized service path.
 
@@ -147,6 +147,6 @@ After implementation, verify the two supported paths explicitly:
 
 ---
 
-**Plan Date**: 2026-04-06  
-**Prepared By**: Copilot CLI  
+**Plan Date**: 2026-04-06
+**Prepared By**: Copilot CLI
 **Status**: Ready for implementation

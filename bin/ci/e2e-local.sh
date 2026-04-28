@@ -11,7 +11,7 @@ done
 cd "$repoRoot"
 
 API_BASE="${API_BASE:-http://localhost:8182}"
-JAR_PATH="${JAR_PATH:-$repoRoot/browser4/browser4-agents/target/Browser4.jar}"
+JAR_PATH="${JAR_PATH:-$repoRoot/browser4-app/browser4-agents/target/Browser4.jar}"
 JAVA_OPTS="${JAVA_OPTS:-}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-120}"
 SKIP_BUILD="${SKIP_BUILD:-false}"
@@ -76,7 +76,7 @@ build_browser4() {
   fi
 
   log "Building Browser4 agents..."
-  local build_cmd=(./bin/build.sh -pl browser4/browser4-agents -am)
+  local build_cmd=(./bin/build.sh -pl browser4-app/browser4-agents -am)
   if [[ -n "$BUILD_ARGS" ]]; then
     # shellcheck disable=SC2206
     build_cmd+=($BUILD_ARGS)

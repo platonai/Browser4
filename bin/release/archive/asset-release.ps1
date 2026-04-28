@@ -13,17 +13,17 @@ $MvnCmd = Join-Path $repoRoot '.\mvnw.cmd'
 
 $Version=(Get-Content "$repoRoot/VERSION" -TotalCount 1) -replace "-SNAPSHOT", ""
 
-# If browser4/browser4-agents/target/Browser4.jar exists, copy it to remote
-$PulsarRPAPath = "$repoRoot/browser4/browser4-agents/target/Browser4.jar"
+# If browser4-app/browser4-agents/target/Browser4.jar exists, copy it to remote
+$PulsarRPAPath = "$repoRoot/browser4-app/browser4-agents/target/Browser4.jar"
 
 if (Test-Path $PulsarRPAPath) {
     Write-Host "Browser4.jar exists"
 } else {
     Write-Warning "Browser4.jar does not exist"
 
-    # Build browser4/browser4-agents/
+    # Build browser4-app/browser4-agents/
     Set-Location $repoRoot/pulsar-app
-    & $MvnCmd -pl browser4/browser4-agents/ clean package -DskipTests
+    & $MvnCmd -pl browser4-app/browser4-agents/ clean package -DskipTests
     Set-Location $repoRoot
 }
 

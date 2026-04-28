@@ -121,7 +121,7 @@ jobs:
           ls
           ROOT_DIR=$(git rev-parse --show-toplevel)
 
-          JAR_PATH="$ROOT_DIR/browser4/browser4-agents/target/Browser4.jar"
+          JAR_PATH="$ROOT_DIR/browser4-app/browser4-agents/target/Browser4.jar"
           if [ ! -f "$JAR_PATH" ]; then
             echo "❌ Browser4 jar not found at $JAR_PATH"
             exit 1
