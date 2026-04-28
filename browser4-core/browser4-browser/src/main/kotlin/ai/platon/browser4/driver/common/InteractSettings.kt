@@ -78,7 +78,7 @@ data class InteractSettings constructor(
         "click" to 500..1500,
         "delete" to 50..100,
         "keyUpDown" to 50..150,
-        "press" to 100..400,
+        "press" to 200..400,
         "type" to 50..200,
         "fill" to 50..100,
         "mouseWheel" to 800..1000,

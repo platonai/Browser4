@@ -710,6 +710,7 @@ class PulsarWebDriver constructor(
     override suspend fun press(selector: String, key: String) {
         driverHelper.invokeOnElement(selector, "press", focus = true) { _ ->
             keyboard?.press(key, randomDelayMillis("press"))
+            gap("press")
         }
     }
 
