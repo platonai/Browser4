@@ -58,7 +58,6 @@ data class DetailedActResult constructor(
     }
 }
 
-@JsonPropertyOrder(value = ["domain", "method", "arguments", "returnType", "description", "help", "expression", "cli"])
 data class ToolSpec constructor(
     val domain: String,
     val method: String,
@@ -67,7 +66,6 @@ data class ToolSpec constructor(
     val description: String? = null,
     val help: String? = null,
 ) {
-    @JsonPropertyOrder(value = ["name", "type", "defaultValue", "expression", "cliOptions"])
     data class Arg(
         val name: String,
         val type: String,
