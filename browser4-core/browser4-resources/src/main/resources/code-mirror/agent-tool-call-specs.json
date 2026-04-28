@@ -4,8 +4,8 @@
   "arguments" : [ {
     "name" : "task",
     "type" : "String",
-    "cliOptions" : "--task=<String>, default=",
-    "expression" : "task: String = "
+    "expression" : "task: String = ",
+    "cliOptions" : "--task=<String>, default="
   } ],
   "returnType" : "AgentHistory",
   "description" : "High-level problem resolution entry. Implementations should construct an [ActionOptions] from the raw problem string and delegate to [run] with the options.",
@@ -18,8 +18,8 @@
   "arguments" : [ {
     "name" : "instruction",
     "type" : "String",
-    "cliOptions" : "--instruction=<String>, default=",
-    "expression" : "instruction: String = "
+    "expression" : "instruction: String = ",
+    "cliOptions" : "--instruction=<String>, default="
   } ],
   "returnType" : "List<ObserveResult>",
   "description" : "Convenience overload to observe by instruction string. Implementations typically create an [ObserveOptions] from the instruction and delegate to [observe].",
@@ -33,14 +33,14 @@
     "name" : "instruction",
     "type" : "String?",
     "defaultValue" : "null",
-    "cliOptions" : "--instruction=<String?>, default=null",
-    "expression" : "instruction: String? = null"
+    "expression" : "instruction: String? = null",
+    "cliOptions" : "--instruction=<String?>, default=null"
   }, {
     "name" : "selector",
     "type" : "String?",
     "defaultValue" : "null",
-    "cliOptions" : "--selector=<String?>, default=null",
-    "expression" : "selector: String? = null"
+    "expression" : "selector: String? = null",
+    "cliOptions" : "--selector=<String?>, default=null"
   } ],
   "returnType" : "String",
   "description" : "Summarize text captured from the current page or a specific element and return a natural-language synopsis.\n\nPassing an [instruction] tailors the tone or focus of the summary; when null, the agent relies on a default summarization prompt. Supplying a [selector] scopes the extraction to a particular DOM element; leaving it null lets the implementation infer a sensible region (for example, the main article body).",
@@ -53,8 +53,8 @@
   "arguments" : [ {
     "name" : "action",
     "type" : "String",
-    "cliOptions" : "--action=<String>, default=",
-    "expression" : "action: String = "
+    "expression" : "action: String = ",
+    "cliOptions" : "--action=<String>, default="
   } ],
   "returnType" : "ActResult",
   "description" : "Convenience wrapper building [ActionOptions] from a raw action string and delegating to [act].",
@@ -67,8 +67,8 @@
   "arguments" : [ {
     "name" : "instruction",
     "type" : "String",
-    "cliOptions" : "--instruction=<String>, default=",
-    "expression" : "instruction: String = "
+    "expression" : "instruction: String = ",
+    "cliOptions" : "--instruction=<String>, default="
   } ],
   "returnType" : "ExtractResult",
   "description" : "Convenience overload for structured extraction. When only an instruction string is provided, the implementation should use [ExtractionSchema.DEFAULT].",
@@ -81,13 +81,13 @@
   "arguments" : [ {
     "name" : "instruction",
     "type" : "String",
-    "cliOptions" : "--instruction=<String>, default=",
-    "expression" : "instruction: String = "
+    "expression" : "instruction: String = ",
+    "cliOptions" : "--instruction=<String>, default="
   }, {
     "name" : "schema",
     "type" : "ExtractionSchema",
-    "cliOptions" : "--schema=<ExtractionSchema>, default=",
-    "expression" : "schema: ExtractionSchema = "
+    "expression" : "schema: ExtractionSchema = ",
+    "cliOptions" : "--schema=<ExtractionSchema>, default="
   } ],
   "returnType" : "ExtractResult",
   "description" : "Convenience overload for structured extraction that constrains the result with a JSON schema.",
