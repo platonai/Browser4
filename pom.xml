@@ -175,7 +175,7 @@
                 <module>browser4-agentic</module>
                 <module>browser4-rest</module>
 
-                <module>browser4</module>
+                <module>browser4-app</module>
 
                 <module>examples</module>
                 <module>browser4-tests</module>
@@ -189,7 +189,7 @@
                 <activeByDefault>true</activeByDefault>
             </activation>
             <modules>
-                <module>browser4/browser4-agents</module>
+                <module>browser4-app/browser4-agents</module>
                 <module>examples/browser4-examples</module>
             </modules>
         </profile>

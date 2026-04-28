@@ -21,9 +21,9 @@ import ai.platon.pulsar.common.config.CapabilityTypes
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.metadata.ParseStatusCodes
-import ai.platon.pulsar.skeleton.crawl.parse.ParseFilters
-import ai.platon.pulsar.skeleton.crawl.parse.ParseResult
-import ai.platon.pulsar.skeleton.crawl.parse.Parser
+import ai.platon.pulsar.skeleton.workflow.parse.ParseFilters
+import ai.platon.pulsar.skeleton.workflow.parse.ParseResult
+import ai.platon.pulsar.skeleton.workflow.parse.Parser
 import org.apache.tika.metadata.Metadata
 import org.apache.tika.parser.AutoDetectParser
 import org.apache.tika.parser.ParseContext
