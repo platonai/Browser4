@@ -74,7 +74,7 @@ data class InteractSettings constructor(
      * The delay policy is a map from action to a range of delay time in milliseconds.
      * */
     var delayPolicy = mutableMapOf(
-        "gap" to 200..700,
+        "gap" to 800..1200,
         "click" to 500..1500,
         "delete" to 0..30,
         "keyUpDown" to 50..150,
