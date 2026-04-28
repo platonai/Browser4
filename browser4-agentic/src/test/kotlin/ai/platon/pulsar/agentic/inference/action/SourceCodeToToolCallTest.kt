@@ -2,12 +2,66 @@ package ai.platon.pulsar.agentic.inference.action
 
 import ai.platon.browser4.common.B4LLMUtils
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecGenerator
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 
 class SourceCodeToToolCallTest {
+    @Test
+    @DisplayName("extractInterface keeps argument order from source")
+    fun extractInterfaceKeepsArgumentOrderFromSource() {
+        val sourceCode = """
+            interface Demo {
+                @MCP
+                fun stableArgs(zeta: Int = 1, alpha: String = "x", beta: Long): Unit
+            }
+        """.trimIndent()
+
+        val tools = ToolSpecGenerator.extractInterface("tab", sourceCode, "Demo")
+        val stableArgs = tools.first { it.method == "stableArgs" }
+
+        assertEquals(listOf("zeta", "alpha", "beta"), stableArgs.arguments.map { it.name })
+    }
+
+    @Test
+    @DisplayName("extractInterface keeps method order from source")
+    fun extractInterfaceKeepsMethodOrderFromSource() {
+        val sourceCode = """
+            interface Demo {
+                @MCP
+                fun zebra(): Unit
+
+                @MCP
+                fun alpha(): Unit
+
+                @MCP
+                fun middle(): Unit
+            }
+        """.trimIndent()
+
+        val tools = ToolSpecGenerator.extractInterface("agent", sourceCode, "Demo")
+        assertEquals(listOf("zebra", "alpha", "middle"), tools.map { it.method })
+    }
+
+    @Test
+    @DisplayName("extractInterface keeps overloaded methods in source order")
+    fun extractInterfaceKeepsOverloadedMethodsInSourceOrder() {
+        val sourceCode = """
+            interface Demo {
+                @MCP
+                fun ping(id: String): Unit
+
+                @MCP
+                fun ping(id: String, retry: Int = 1): Unit
+            }
+        """.trimIndent()
+
+        val tools = ToolSpecGenerator.extractInterface("agent", sourceCode, "Demo")
+        assertEquals(listOf(1, 2), tools.filter { it.method == "ping" }.map { it.arguments.size })
+    }
+
     @Test
     @DisplayName("extract methods from WebDriver resource")
     fun extractMethodsFromWebdriverResource() {

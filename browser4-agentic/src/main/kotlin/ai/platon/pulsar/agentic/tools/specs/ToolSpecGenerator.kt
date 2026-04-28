@@ -60,9 +60,11 @@ object ToolSpecGenerator {
             val returnType = m.returnType.ifBlank { "Unit" }
             val description = m.kdoc ?: methodNameToDescription(method)
             val help = m.fullKDoc
+            // Keep argument order exactly as declared in source signatures.
             toolSpec += ToolSpec(domain, method, arguments, returnType, description, help)
         }
 
+        // Keep method order exactly as declared in source interfaces.
         return toolSpec
     }
 

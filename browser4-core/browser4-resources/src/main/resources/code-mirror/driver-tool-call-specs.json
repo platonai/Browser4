@@ -4,8 +4,8 @@
   "arguments" : [ {
     "name" : "url",
     "type" : "String",
-    "cliOptions" : "--url=<String>, default=",
-    "expression" : "url: String = "
+    "expression" : "url: String = ",
+    "cliOptions" : "--url=<String>, default="
   } ],
   "returnType" : "Unit",
   "description" : "Opens the specified URL in the web driver.",
@@ -18,8 +18,8 @@
   "arguments" : [ {
     "name" : "url",
     "type" : "String",
-    "cliOptions" : "--url=<String>, default=",
-    "expression" : "url: String = "
+    "expression" : "url: String = ",
+    "cliOptions" : "--url=<String>, default="
   } ],
   "returnType" : "Unit",
   "description" : "Navigates current page to the given URL.",
@@ -32,8 +32,8 @@
   "arguments" : [ {
     "name" : "entry",
     "type" : "NavigateEntry",
-    "cliOptions" : "--entry=<NavigateEntry>, default=",
-    "expression" : "entry: NavigateEntry = "
+    "expression" : "entry: NavigateEntry = ",
+    "cliOptions" : "--entry=<NavigateEntry>, default="
   } ],
   "returnType" : "Unit",
   "description" : "Navigates current page to the given URL.",
@@ -134,13 +134,13 @@
   "arguments" : [ {
     "name" : "prompt",
     "type" : "String",
-    "cliOptions" : "--prompt=<String>, default=",
-    "expression" : "prompt: String = "
+    "expression" : "prompt: String = ",
+    "cliOptions" : "--prompt=<String>, default="
   }, {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   } ],
   "returnType" : "ModelResponse",
   "description" : "Interact with an AI model using the context of the element selected by [selector].",
@@ -161,26 +161,26 @@
   "arguments" : [ {
     "name" : "name",
     "type" : "String",
-    "cliOptions" : "--name=<String>, default=",
-    "expression" : "name: String = "
+    "expression" : "name: String = ",
+    "cliOptions" : "--name=<String>, default="
   }, {
     "name" : "url",
     "type" : "String?",
     "defaultValue" : "null",
-    "cliOptions" : "--url=<String?>, default=null",
-    "expression" : "url: String? = null"
+    "expression" : "url: String? = null",
+    "cliOptions" : "--url=<String?>, default=null"
   }, {
     "name" : "domain",
     "type" : "String?",
     "defaultValue" : "null",
-    "cliOptions" : "--domain=<String?>, default=null",
-    "expression" : "domain: String? = null"
+    "expression" : "domain: String? = null",
+    "cliOptions" : "--domain=<String?>, default=null"
   }, {
     "name" : "path",
     "type" : "String?",
     "defaultValue" : "null",
-    "cliOptions" : "--path=<String?>, default=null",
-    "expression" : "path: String? = null"
+    "expression" : "path: String? = null",
+    "cliOptions" : "--path=<String?>, default=null"
   } ],
   "returnType" : "Unit",
   "description" : "Deletes browser cookies with matching name and url or domain/path pair.",
@@ -201,8 +201,8 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   } ],
   "returnType" : "Duration",
   "description" : "Wait until the element identified by the selector becomes present in the DOM or timeout.",
@@ -215,13 +215,13 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   }, {
     "name" : "timeoutMillis",
     "type" : "Long",
-    "cliOptions" : "--timeoutMillis=<Long>, default=",
-    "expression" : "timeoutMillis: Long = "
+    "expression" : "timeoutMillis: Long = ",
+    "cliOptions" : "--timeoutMillis=<Long>, default="
   } ],
   "returnType" : "Long",
   "description" : "Wait until the element identified by the selector becomes present in the DOM or timeout.",
@@ -234,13 +234,13 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   }, {
     "name" : "timeout",
     "type" : "Duration",
-    "cliOptions" : "--timeout=<Duration>, default=",
-    "expression" : "timeout: Duration = "
+    "expression" : "timeout: Duration = ",
+    "cliOptions" : "--timeout=<Duration>, default="
   } ],
   "returnType" : "Duration",
   "description" : "Wait for the element identified by the selector to become present in the DOM, or until timeout.",
@@ -253,13 +253,13 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   }, {
     "name" : "action",
     "type" : "suspend (",
-    "cliOptions" : "--action=<suspend (>, default=",
-    "expression" : "action: suspend ( = "
+    "expression" : "action: suspend ( = ",
+    "cliOptions" : "--action=<suspend (>, default="
   } ],
   "returnType" : "Unit",
   "description" : "Wait for the element identified by the selector to become present in the DOM, or until timeout.",
@@ -272,18 +272,18 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   }, {
     "name" : "timeoutMillis",
     "type" : "Long",
-    "cliOptions" : "--timeoutMillis=<Long>, default=",
-    "expression" : "timeoutMillis: Long = "
+    "expression" : "timeoutMillis: Long = ",
+    "cliOptions" : "--timeoutMillis=<Long>, default="
   }, {
     "name" : "action",
     "type" : "suspend (",
-    "cliOptions" : "--action=<suspend (>, default=",
-    "expression" : "action: suspend ( = "
+    "expression" : "action: suspend ( = ",
+    "cliOptions" : "--action=<suspend (>, default="
   } ],
   "returnType" : "Unit",
   "description" : "Wait for the element identified by the selector to become present in the DOM, or until timeout.",
@@ -296,18 +296,18 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   }, {
     "name" : "timeout",
     "type" : "Duration",
-    "cliOptions" : "--timeout=<Duration>, default=",
-    "expression" : "timeout: Duration = "
+    "expression" : "timeout: Duration = ",
+    "cliOptions" : "--timeout=<Duration>, default="
   }, {
     "name" : "action",
     "type" : "suspend (",
-    "cliOptions" : "--action=<suspend (>, default=",
-    "expression" : "action: suspend ( = "
+    "expression" : "action: suspend ( = ",
+    "cliOptions" : "--action=<suspend (>, default="
   } ],
   "returnType" : "Unit",
   "description" : "Wait for the element identified by the selector to become present in the DOM, or until timeout.",
@@ -320,8 +320,8 @@
   "arguments" : [ {
     "name" : "oldUrl",
     "type" : "String",
-    "cliOptions" : "--oldUrl=<String>, default=",
-    "expression" : "oldUrl: String = "
+    "expression" : "oldUrl: String = ",
+    "cliOptions" : "--oldUrl=<String>, default="
   } ],
   "returnType" : "Duration",
   "description" : "Wait until the current url changes or timeout.",
@@ -334,13 +334,13 @@
   "arguments" : [ {
     "name" : "oldUrl",
     "type" : "String",
-    "cliOptions" : "--oldUrl=<String>, default=",
-    "expression" : "oldUrl: String = "
+    "expression" : "oldUrl: String = ",
+    "cliOptions" : "--oldUrl=<String>, default="
   }, {
     "name" : "timeoutMillis",
     "type" : "Long",
-    "cliOptions" : "--timeoutMillis=<Long>, default=",
-    "expression" : "timeoutMillis: Long = "
+    "expression" : "timeoutMillis: Long = ",
+    "cliOptions" : "--timeoutMillis=<Long>, default="
   } ],
   "returnType" : "Long",
   "description" : "Wait until the current url changes or timeout.",
@@ -353,13 +353,13 @@
   "arguments" : [ {
     "name" : "oldUrl",
     "type" : "String",
-    "cliOptions" : "--oldUrl=<String>, default=",
-    "expression" : "oldUrl: String = "
+    "expression" : "oldUrl: String = ",
+    "cliOptions" : "--oldUrl=<String>, default="
   }, {
     "name" : "timeout",
     "type" : "Duration",
-    "cliOptions" : "--timeout=<Duration>, default=",
-    "expression" : "timeout: Duration = "
+    "expression" : "timeout: Duration = ",
+    "cliOptions" : "--timeout=<Duration>, default="
   } ],
   "returnType" : "Duration",
   "description" : "Wait until the current url changes or timeout.",
@@ -372,13 +372,13 @@
   "arguments" : [ {
     "name" : "url",
     "type" : "String",
-    "cliOptions" : "--url=<String>, default=",
-    "expression" : "url: String = "
+    "expression" : "url: String = ",
+    "cliOptions" : "--url=<String>, default="
   }, {
     "name" : "timeout",
     "type" : "Duration",
-    "cliOptions" : "--timeout=<Duration>, default=",
-    "expression" : "timeout: Duration = "
+    "expression" : "timeout: Duration = ",
+    "cliOptions" : "--timeout=<Duration>, default="
   } ],
   "returnType" : "WebDriver?",
   "description" : "Await navigation to the specified URL page or timeout if necessary.",
@@ -391,13 +391,13 @@
   "arguments" : [ {
     "name" : "pageFunction",
     "type" : "String",
-    "cliOptions" : "--pageFunction=<String>, default=",
-    "expression" : "pageFunction: String = "
+    "expression" : "pageFunction: String = ",
+    "cliOptions" : "--pageFunction=<String>, default="
   }, {
     "name" : "timeout",
     "type" : "Duration",
-    "cliOptions" : "--timeout=<Duration>, default=",
-    "expression" : "timeout: Duration = "
+    "expression" : "timeout: Duration = ",
+    "cliOptions" : "--timeout=<Duration>, default="
   } ],
   "returnType" : "WebDriver?",
   "description" : "Returns when the pageFunction returns a truthy value.",
@@ -410,8 +410,8 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   } ],
   "returnType" : "Boolean",
   "description" : "Returns whether the element exists.",
@@ -424,8 +424,8 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   } ],
   "returnType" : "Boolean",
   "description" : "Returns whether the element is hidden.",
@@ -438,8 +438,8 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   } ],
   "returnType" : "Boolean",
   "description" : "Returns whether the element is visible.",
@@ -452,8 +452,8 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   } ],
   "returnType" : "Boolean",
   "description" : "Returns whether the element is checked.",
@@ -474,8 +474,8 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   } ],
   "returnType" : "Unit",
   "description" : "This method hovers over the element.",
@@ -488,8 +488,8 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   } ],
   "returnType" : "Unit",
   "description" : "This method fetches an element with `selector` and focuses it.",
@@ -502,13 +502,13 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   }, {
     "name" : "text",
     "type" : "String",
-    "cliOptions" : "--text=<String>, default=",
-    "expression" : "text: String = "
+    "expression" : "text: String = ",
+    "cliOptions" : "--text=<String>, default="
   } ],
   "returnType" : "Unit",
   "description" : "This method emulates inserting text that doesn't come from a key press.",
@@ -521,13 +521,13 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   }, {
     "name" : "text",
     "type" : "String",
-    "cliOptions" : "--text=<String>, default=",
-    "expression" : "text: String = "
+    "expression" : "text: String = ",
+    "cliOptions" : "--text=<String>, default="
   } ],
   "returnType" : "Unit",
   "description" : "This method emulates inserting text that doesn't come from a key press.",
@@ -540,13 +540,13 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   }, {
     "name" : "key",
     "type" : "String",
-    "cliOptions" : "--key=<String>, default=",
-    "expression" : "key: String = "
+    "expression" : "key: String = ",
+    "cliOptions" : "--key=<String>, default="
   } ],
   "returnType" : "Unit",
   "description" : "Shortcut for keyboard down and keyboard up.",
@@ -559,8 +559,8 @@
   "arguments" : [ {
     "name" : "key",
     "type" : "String",
-    "cliOptions" : "--key=<String>, default=",
-    "expression" : "key: String = "
+    "expression" : "key: String = ",
+    "cliOptions" : "--key=<String>, default="
   } ],
   "returnType" : "Unit",
   "description" : "Presses and holds a keyboard key on the currently focused element.",
@@ -573,8 +573,8 @@
   "arguments" : [ {
     "name" : "key",
     "type" : "String",
-    "cliOptions" : "--key=<String>, default=",
-    "expression" : "key: String = "
+    "expression" : "key: String = ",
+    "cliOptions" : "--key=<String>, default="
   } ],
   "returnType" : "Unit",
   "description" : "Releases a previously pressed keyboard key on the currently focused element.",
@@ -587,14 +587,14 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   }, {
     "name" : "count",
     "type" : "Int",
     "defaultValue" : "1",
-    "cliOptions" : "--count=<Int>, default=1",
-    "expression" : "count: Int = 1"
+    "expression" : "count: Int = 1",
+    "cliOptions" : "--count=<Int>, default=1"
   } ],
   "returnType" : "Unit",
   "description" : "Focus on an element with [selector] and click it.",
@@ -607,13 +607,13 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   }, {
     "name" : "modifier",
     "type" : "String",
-    "cliOptions" : "--modifier=<String>, default=",
-    "expression" : "modifier: String = "
+    "expression" : "modifier: String = ",
+    "cliOptions" : "--modifier=<String>, default="
   } ],
   "returnType" : "Unit",
   "description" : "Focus on an element with [selector] and click it with [modifier] pressed.",
@@ -626,8 +626,8 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   } ],
   "returnType" : "Unit",
   "description" : "Focus on an element with [selector] and double-click it.",
@@ -640,13 +640,13 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   }, {
     "name" : "modifier",
     "type" : "String",
-    "cliOptions" : "--modifier=<String>, default=",
-    "expression" : "modifier: String = "
+    "expression" : "modifier: String = ",
+    "cliOptions" : "--modifier=<String>, default="
   } ],
   "returnType" : "Unit",
   "description" : "Focus on an element with [selector] and double-click it with [modifier] pressed.",
@@ -659,13 +659,13 @@
   "arguments" : [ {
     "name" : "width",
     "type" : "Int",
-    "cliOptions" : "--width=<Int>, default=",
-    "expression" : "width: Int = "
+    "expression" : "width: Int = ",
+    "cliOptions" : "--width=<Int>, default="
   }, {
     "name" : "height",
     "type" : "Int",
-    "cliOptions" : "--height=<Int>, default=",
-    "expression" : "height: Int = "
+    "expression" : "height: Int = ",
+    "cliOptions" : "--height=<Int>, default="
   } ],
   "returnType" : "Unit",
   "description" : "Resizes the viewport to the specified width and height.",
@@ -679,8 +679,8 @@
     "name" : "promptText",
     "type" : "String?",
     "defaultValue" : "null",
-    "cliOptions" : "--promptText=<String?>, default=null",
-    "expression" : "promptText: String? = null"
+    "expression" : "promptText: String? = null",
+    "cliOptions" : "--promptText=<String?>, default=null"
   } ],
   "returnType" : "Unit",
   "description" : "Accepts the dialog.",
@@ -701,19 +701,19 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   }, {
     "name" : "pattern",
     "type" : "String",
-    "cliOptions" : "--pattern=<String>, default=",
-    "expression" : "pattern: String = "
+    "expression" : "pattern: String = ",
+    "cliOptions" : "--pattern=<String>, default="
   }, {
     "name" : "count",
     "type" : "Int",
     "defaultValue" : "1",
-    "cliOptions" : "--count=<Int>, default=1",
-    "expression" : "count: Int = 1"
+    "expression" : "count: Int = 1",
+    "cliOptions" : "--count=<Int>, default=1"
   } ],
   "returnType" : "Unit",
   "description" : "This method clicks an element with [selector] whose text content matches [pattern], and then focuses it.",
@@ -726,24 +726,24 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   }, {
     "name" : "attrName",
     "type" : "String",
-    "cliOptions" : "--attrName=<String>, default=",
-    "expression" : "attrName: String = "
+    "expression" : "attrName: String = ",
+    "cliOptions" : "--attrName=<String>, default="
   }, {
     "name" : "pattern",
     "type" : "String",
-    "cliOptions" : "--pattern=<String>, default=",
-    "expression" : "pattern: String = "
+    "expression" : "pattern: String = ",
+    "cliOptions" : "--pattern=<String>, default="
   }, {
     "name" : "count",
     "type" : "Int",
     "defaultValue" : "1",
-    "cliOptions" : "--count=<Int>, default=1",
-    "expression" : "count: Int = 1"
+    "expression" : "count: Int = 1",
+    "cliOptions" : "--count=<Int>, default=1"
   } ],
   "returnType" : "Unit",
   "description" : "This method clicks an element with [selector] whose attribute name is [attrName] and value matches [pattern], and then focuses it.",
@@ -756,13 +756,13 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   }, {
     "name" : "values",
     "type" : "List<String>",
-    "cliOptions" : "--values=<List<String>>, default=",
-    "expression" : "values: List<String> = "
+    "expression" : "values: List<String> = ",
+    "cliOptions" : "--values=<List<String>>, default="
   } ],
   "returnType" : "List<String>",
   "description" : "Selects one or more options in a <select> element.",
@@ -775,13 +775,13 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   }, {
     "name" : "value",
     "type" : "String",
-    "cliOptions" : "--value=<String>, default=",
-    "expression" : "value: String = "
+    "expression" : "value: String = ",
+    "cliOptions" : "--value=<String>, default="
   } ],
   "returnType" : "String?",
   "description" : "Selects an option in a <select> element.",
@@ -794,8 +794,8 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   } ],
   "returnType" : "Unit",
   "description" : "This method check an element with [selector]. If there's no element matching [selector], nothing to do.",
@@ -808,8 +808,8 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   } ],
   "returnType" : "Unit",
   "description" : "This method uncheck an element with [selector]. If there's no element matching [selector], nothing to do.",
@@ -822,8 +822,8 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   } ],
   "returnType" : "Double",
   "description" : "This method fetches an element with [selector], scrolls it into view if needed.",
@@ -837,8 +837,8 @@
     "name" : "count",
     "type" : "Int",
     "defaultValue" : "1",
-    "cliOptions" : "--count=<Int>, default=1",
-    "expression" : "count: Int = 1"
+    "expression" : "count: Int = 1",
+    "cliOptions" : "--count=<Int>, default=1"
   } ],
   "returnType" : "Double",
   "description" : "The current page frame scrolls down for [count] times.",
@@ -852,8 +852,8 @@
     "name" : "count",
     "type" : "Int",
     "defaultValue" : "1",
-    "cliOptions" : "--count=<Int>, default=1",
-    "expression" : "count: Int = 1"
+    "expression" : "count: Int = 1",
+    "cliOptions" : "--count=<Int>, default=1"
   } ],
   "returnType" : "Double",
   "description" : "The current page frame scrolls up for [count] times.",
@@ -867,14 +867,14 @@
     "name" : "pixels",
     "type" : "Double",
     "defaultValue" : "200.0",
-    "cliOptions" : "--pixels=<Double>, default=200.0",
-    "expression" : "pixels: Double = 200.0"
+    "expression" : "pixels: Double = 200.0",
+    "cliOptions" : "--pixels=<Double>, default=200.0"
   }, {
     "name" : "smooth",
     "type" : "Boolean",
     "defaultValue" : "true",
-    "cliOptions" : "--smooth=<Boolean>, default=true",
-    "expression" : "smooth: Boolean = true"
+    "expression" : "smooth: Boolean = true",
+    "cliOptions" : "--smooth=<Boolean>, default=true"
   } ],
   "returnType" : "Double",
   "description" : "Scrolls the current page frame vertically by the given number of pixels.",
@@ -903,8 +903,8 @@
   "arguments" : [ {
     "name" : "ratio",
     "type" : "Double",
-    "cliOptions" : "--ratio=<Double>, default=",
-    "expression" : "ratio: Double = "
+    "expression" : "ratio: Double = ",
+    "cliOptions" : "--ratio=<Double>, default="
   } ],
   "returnType" : "Double",
   "description" : "The current page frame scrolls to the middle.",
@@ -917,14 +917,14 @@
   "arguments" : [ {
     "name" : "n",
     "type" : "Double",
-    "cliOptions" : "--n=<Double>, default=",
-    "expression" : "n: Double = "
+    "expression" : "n: Double = ",
+    "cliOptions" : "--n=<Double>, default="
   }, {
     "name" : "smooth",
     "type" : "Boolean",
     "defaultValue" : "true",
-    "cliOptions" : "--smooth=<Boolean>, default=true",
-    "expression" : "smooth: Boolean = true"
+    "expression" : "smooth: Boolean = true",
+    "cliOptions" : "--smooth=<Boolean>, default=true"
   } ],
   "returnType" : "Double",
   "description" : "Scroll to the 2.5th viewport position.",
@@ -938,26 +938,26 @@
     "name" : "count",
     "type" : "Int",
     "defaultValue" : "1",
-    "cliOptions" : "--count=<Int>, default=1",
-    "expression" : "count: Int = 1"
+    "expression" : "count: Int = 1",
+    "cliOptions" : "--count=<Int>, default=1"
   }, {
     "name" : "deltaX",
     "type" : "Double",
     "defaultValue" : "0.0",
-    "cliOptions" : "--deltaX=<Double>, default=0.0",
-    "expression" : "deltaX: Double = 0.0"
+    "expression" : "deltaX: Double = 0.0",
+    "cliOptions" : "--deltaX=<Double>, default=0.0"
   }, {
     "name" : "deltaY",
     "type" : "Double",
     "defaultValue" : "150.0",
-    "cliOptions" : "--deltaY=<Double>, default=150.0",
-    "expression" : "deltaY: Double = 150.0"
+    "expression" : "deltaY: Double = 150.0",
+    "cliOptions" : "--deltaY=<Double>, default=150.0"
   }, {
     "name" : "delayMillis",
     "type" : "Long",
     "defaultValue" : "0",
-    "cliOptions" : "--delayMillis=<Long>, default=0",
-    "expression" : "delayMillis: Long = 0"
+    "expression" : "delayMillis: Long = 0",
+    "cliOptions" : "--delayMillis=<Long>, default=0"
   } ],
   "returnType" : "Unit",
   "description" : "The mouse wheels down for [count] times.",
@@ -971,26 +971,26 @@
     "name" : "count",
     "type" : "Int",
     "defaultValue" : "1",
-    "cliOptions" : "--count=<Int>, default=1",
-    "expression" : "count: Int = 1"
+    "expression" : "count: Int = 1",
+    "cliOptions" : "--count=<Int>, default=1"
   }, {
     "name" : "deltaX",
     "type" : "Double",
     "defaultValue" : "0.0",
-    "cliOptions" : "--deltaX=<Double>, default=0.0",
-    "expression" : "deltaX: Double = 0.0"
+    "expression" : "deltaX: Double = 0.0",
+    "cliOptions" : "--deltaX=<Double>, default=0.0"
   }, {
     "name" : "deltaY",
     "type" : "Double",
     "defaultValue" : "-150.0",
-    "cliOptions" : "--deltaY=<Double>, default=-150.0",
-    "expression" : "deltaY: Double = -150.0"
+    "expression" : "deltaY: Double = -150.0",
+    "cliOptions" : "--deltaY=<Double>, default=-150.0"
   }, {
     "name" : "delayMillis",
     "type" : "Long",
     "defaultValue" : "0",
-    "cliOptions" : "--delayMillis=<Long>, default=0",
-    "expression" : "delayMillis: Long = 0"
+    "expression" : "delayMillis: Long = 0",
+    "cliOptions" : "--delayMillis=<Long>, default=0"
   } ],
   "returnType" : "Unit",
   "description" : "The mouse wheels up for [count] times.",
@@ -1004,14 +1004,14 @@
     "name" : "deltaX",
     "type" : "Double",
     "defaultValue" : "0.0",
-    "cliOptions" : "--deltaX=<Double>, default=0.0",
-    "expression" : "deltaX: Double = 0.0"
+    "expression" : "deltaX: Double = 0.0",
+    "cliOptions" : "--deltaX=<Double>, default=0.0"
   }, {
     "name" : "deltaY",
     "type" : "Double",
     "defaultValue" : "150.0",
-    "cliOptions" : "--deltaY=<Double>, default=150.0",
-    "expression" : "deltaY: Double = 150.0"
+    "expression" : "deltaY: Double = 150.0",
+    "cliOptions" : "--deltaY=<Double>, default=150.0"
   } ],
   "returnType" : "Unit",
   "description" : "Scrolls the mouse wheel by the provided deltas.",
@@ -1024,13 +1024,13 @@
   "arguments" : [ {
     "name" : "x",
     "type" : "Double",
-    "cliOptions" : "--x=<Double>, default=",
-    "expression" : "x: Double = "
+    "expression" : "x: Double = ",
+    "cliOptions" : "--x=<Double>, default="
   }, {
     "name" : "y",
     "type" : "Double",
-    "cliOptions" : "--y=<Double>, default=",
-    "expression" : "y: Double = "
+    "expression" : "y: Double = ",
+    "cliOptions" : "--y=<Double>, default="
   } ],
   "returnType" : "Unit",
   "description" : "The mouse moves to the position specified by [x] and [y].",
@@ -1043,13 +1043,13 @@
   "arguments" : [ {
     "name" : "x",
     "type" : "Double",
-    "cliOptions" : "--x=<Double>, default=",
-    "expression" : "x: Double = "
+    "expression" : "x: Double = ",
+    "cliOptions" : "--x=<Double>, default="
   }, {
     "name" : "y",
     "type" : "Double",
-    "cliOptions" : "--y=<Double>, default=",
-    "expression" : "y: Double = "
+    "expression" : "y: Double = ",
+    "cliOptions" : "--y=<Double>, default="
   } ],
   "returnType" : "Unit",
   "description" : "Moves the mouse to the position specified by [x] and [y].",
@@ -1063,14 +1063,14 @@
     "name" : "button",
     "type" : "String",
     "defaultValue" : "left",
-    "cliOptions" : "--button=<String>, default=left",
-    "expression" : "button: String = left"
+    "expression" : "button: String = left",
+    "cliOptions" : "--button=<String>, default=left"
   }, {
     "name" : "clickCount",
     "type" : "Int",
     "defaultValue" : "1",
-    "cliOptions" : "--clickCount=<Int>, default=1",
-    "expression" : "clickCount: Int = 1"
+    "expression" : "clickCount: Int = 1",
+    "cliOptions" : "--clickCount=<Int>, default=1"
   } ],
   "returnType" : "Unit",
   "description" : "Presses a mouse button at the current mouse position.",
@@ -1084,14 +1084,14 @@
     "name" : "button",
     "type" : "String",
     "defaultValue" : "left",
-    "cliOptions" : "--button=<String>, default=left",
-    "expression" : "button: String = left"
+    "expression" : "button: String = left",
+    "cliOptions" : "--button=<String>, default=left"
   }, {
     "name" : "clickCount",
     "type" : "Int",
     "defaultValue" : "1",
-    "cliOptions" : "--clickCount=<Int>, default=1",
-    "expression" : "clickCount: Int = 1"
+    "expression" : "clickCount: Int = 1",
+    "cliOptions" : "--clickCount=<Int>, default=1"
   } ],
   "returnType" : "Unit",
   "description" : "Releases a mouse button at the current mouse position.",
@@ -1104,19 +1104,19 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   }, {
     "name" : "deltaX",
     "type" : "Int",
-    "cliOptions" : "--deltaX=<Int>, default=",
-    "expression" : "deltaX: Int = "
+    "expression" : "deltaX: Int = ",
+    "cliOptions" : "--deltaX=<Int>, default="
   }, {
     "name" : "deltaY",
     "type" : "Int",
     "defaultValue" : "0",
-    "cliOptions" : "--deltaY=<Int>, default=0",
-    "expression" : "deltaY: Int = 0"
+    "expression" : "deltaY: Int = 0",
+    "cliOptions" : "--deltaY=<Int>, default=0"
   } ],
   "returnType" : "Unit",
   "description" : "The mouse moves to the element with [selector].",
@@ -1129,19 +1129,19 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   }, {
     "name" : "deltaX",
     "type" : "Int",
-    "cliOptions" : "--deltaX=<Int>, default=",
-    "expression" : "deltaX: Int = "
+    "expression" : "deltaX: Int = ",
+    "cliOptions" : "--deltaX=<Int>, default="
   }, {
     "name" : "deltaY",
     "type" : "Int",
     "defaultValue" : "0",
-    "cliOptions" : "--deltaY=<Int>, default=0",
-    "expression" : "deltaY: Int = 0"
+    "expression" : "deltaY: Int = 0",
+    "cliOptions" : "--deltaY=<Int>, default=0"
   } ],
   "returnType" : "Unit",
   "description" : "Performs a drag, dragenter, dragover, and drop in sequence.",
@@ -1154,13 +1154,13 @@
   "arguments" : [ {
     "name" : "sourceSelector",
     "type" : "String",
-    "cliOptions" : "--sourceSelector=<String>, default=",
-    "expression" : "sourceSelector: String = "
+    "expression" : "sourceSelector: String = ",
+    "cliOptions" : "--sourceSelector=<String>, default="
   }, {
     "name" : "targetSelector",
     "type" : "String",
-    "cliOptions" : "--targetSelector=<String>, default=",
-    "expression" : "targetSelector: String = "
+    "expression" : "targetSelector: String = ",
+    "cliOptions" : "--targetSelector=<String>, default="
   } ],
   "returnType" : "Unit",
   "description" : "Drags the element identified by [sourceSelector] onto the element identified by [targetSelector].",
@@ -1181,8 +1181,8 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   } ],
   "returnType" : "String?",
   "description" : "Returns the node's HTML markup, the node is located by [selector].",
@@ -1196,8 +1196,8 @@
     "name" : "selector",
     "type" : "String?",
     "defaultValue" : "null",
-    "cliOptions" : "--selector=<String?>, default=null",
-    "expression" : "selector: String? = null"
+    "expression" : "selector: String? = null",
+    "cliOptions" : "--selector=<String?>, default=null"
   } ],
   "returnType" : "String?",
   "description" : "Returns the text content of the document or a specific element.",
@@ -1210,8 +1210,8 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   } ],
   "returnType" : "String?",
   "description" : "Returns the node's text content, the node is located by [selector].",
@@ -1224,8 +1224,8 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   } ],
   "returnType" : "List<String>",
   "description" : "Returns a list of text contents of all the elements matching the specified selector within the page.",
@@ -1238,13 +1238,13 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   }, {
     "name" : "attrName",
     "type" : "String",
-    "cliOptions" : "--attrName=<String>, default=",
-    "expression" : "attrName: String = "
+    "expression" : "attrName: String = ",
+    "cliOptions" : "--attrName=<String>, default="
   } ],
   "returnType" : "String?",
   "description" : "Returns the node's attribute value, the node is located by [selector], the attribute is [attrName].",
@@ -1257,8 +1257,8 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   } ],
   "returnType" : "Map<String, String>",
   "description" : "Returns the node's attribute values, the node is located by [selector].",
@@ -1271,25 +1271,25 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   }, {
     "name" : "attrName",
     "type" : "String",
-    "cliOptions" : "--attrName=<String>, default=",
-    "expression" : "attrName: String = "
+    "expression" : "attrName: String = ",
+    "cliOptions" : "--attrName=<String>, default="
   }, {
     "name" : "start",
     "type" : "Int",
     "defaultValue" : "0",
-    "cliOptions" : "--start=<Int>, default=0",
-    "expression" : "start: Int = 0"
+    "expression" : "start: Int = 0",
+    "cliOptions" : "--start=<Int>, default=0"
   }, {
     "name" : "limit",
     "type" : "Int",
     "defaultValue" : "10000",
-    "cliOptions" : "--limit=<Int>, default=10000",
-    "expression" : "limit: Int = 10000"
+    "expression" : "limit: Int = 10000",
+    "cliOptions" : "--limit=<Int>, default=10000"
   } ],
   "returnType" : "List<String>",
   "description" : "Returns the nodes' attribute values, the nodes are located by [selector], the attribute is [attrName].",
@@ -1302,18 +1302,18 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   }, {
     "name" : "attrName",
     "type" : "String",
-    "cliOptions" : "--attrName=<String>, default=",
-    "expression" : "attrName: String = "
+    "expression" : "attrName: String = ",
+    "cliOptions" : "--attrName=<String>, default="
   }, {
     "name" : "attrValue",
     "type" : "String",
-    "cliOptions" : "--attrValue=<String>, default=",
-    "expression" : "attrValue: String = "
+    "expression" : "attrValue: String = ",
+    "cliOptions" : "--attrValue=<String>, default="
   } ],
   "returnType" : "Unit",
   "description" : "Set the attribute of an element located by [selector].",
@@ -1326,18 +1326,18 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   }, {
     "name" : "attrName",
     "type" : "String",
-    "cliOptions" : "--attrName=<String>, default=",
-    "expression" : "attrName: String = "
+    "expression" : "attrName: String = ",
+    "cliOptions" : "--attrName=<String>, default="
   }, {
     "name" : "attrValue",
     "type" : "String",
-    "cliOptions" : "--attrValue=<String>, default=",
-    "expression" : "attrValue: String = "
+    "expression" : "attrValue: String = ",
+    "cliOptions" : "--attrValue=<String>, default="
   } ],
   "returnType" : "Unit",
   "description" : "Set the attribute of all elements matching the CSS query.",
@@ -1350,13 +1350,13 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   }, {
     "name" : "propName",
     "type" : "String",
-    "cliOptions" : "--propName=<String>, default=",
-    "expression" : "propName: String = "
+    "expression" : "propName: String = ",
+    "cliOptions" : "--propName=<String>, default="
   } ],
   "returnType" : "String?",
   "description" : "Returns the node's property value, the node is located by [selector], the property is [propName].",
@@ -1369,25 +1369,25 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   }, {
     "name" : "propName",
     "type" : "String",
-    "cliOptions" : "--propName=<String>, default=",
-    "expression" : "propName: String = "
+    "expression" : "propName: String = ",
+    "cliOptions" : "--propName=<String>, default="
   }, {
     "name" : "start",
     "type" : "Int",
     "defaultValue" : "0",
-    "cliOptions" : "--start=<Int>, default=0",
-    "expression" : "start: Int = 0"
+    "expression" : "start: Int = 0",
+    "cliOptions" : "--start=<Int>, default=0"
   }, {
     "name" : "limit",
     "type" : "Int",
     "defaultValue" : "10000",
-    "cliOptions" : "--limit=<Int>, default=10000",
-    "expression" : "limit: Int = 10000"
+    "expression" : "limit: Int = 10000",
+    "cliOptions" : "--limit=<Int>, default=10000"
   } ],
   "returnType" : "List<String>",
   "description" : "Returns the nodes' property values, the nodes are located by [selector], the property is [propName].",
@@ -1400,18 +1400,18 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   }, {
     "name" : "propName",
     "type" : "String",
-    "cliOptions" : "--propName=<String>, default=",
-    "expression" : "propName: String = "
+    "expression" : "propName: String = ",
+    "cliOptions" : "--propName=<String>, default="
   }, {
     "name" : "propValue",
     "type" : "String",
-    "cliOptions" : "--propValue=<String>, default=",
-    "expression" : "propValue: String = "
+    "expression" : "propValue: String = ",
+    "cliOptions" : "--propValue=<String>, default="
   } ],
   "returnType" : "Unit",
   "description" : "Set the property of an element located by [selector].",
@@ -1424,18 +1424,18 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   }, {
     "name" : "propName",
     "type" : "String",
-    "cliOptions" : "--propName=<String>, default=",
-    "expression" : "propName: String = "
+    "expression" : "propName: String = ",
+    "cliOptions" : "--propName=<String>, default="
   }, {
     "name" : "propValue",
     "type" : "String",
-    "cliOptions" : "--propValue=<String>, default=",
-    "expression" : "propValue: String = "
+    "expression" : "propValue: String = ",
+    "cliOptions" : "--propValue=<String>, default="
   } ],
   "returnType" : "Unit",
   "description" : "Set the property of all elements matching the CSS query.",
@@ -1448,8 +1448,8 @@
   "arguments" : [ {
     "name" : "expression",
     "type" : "String",
-    "cliOptions" : "--expression=<String>, default=",
-    "expression" : "expression: String = "
+    "expression" : "expression: String = ",
+    "cliOptions" : "--expression=<String>, default="
   } ],
   "returnType" : "Any?",
   "description" : "Executes JavaScript in the context of the currently selected frame or window.",
@@ -1462,8 +1462,8 @@
   "arguments" : [ {
     "name" : "expression",
     "type" : "String",
-    "cliOptions" : "--expression=<String>, default=",
-    "expression" : "expression: String = "
+    "expression" : "expression: String = ",
+    "cliOptions" : "--expression=<String>, default="
   } ],
   "returnType" : "JsEvaluation?",
   "description" : "returns detailed evaluation metadata (beta).",
@@ -1476,8 +1476,8 @@
   "arguments" : [ {
     "name" : "expression",
     "type" : "String",
-    "cliOptions" : "--expression=<String>, default=",
-    "expression" : "expression: String = "
+    "expression" : "expression: String = ",
+    "cliOptions" : "--expression=<String>, default="
   } ],
   "returnType" : "Any?",
   "description" : "Executes JavaScript and returns the result as a JSON-serializable value.",
@@ -1490,8 +1490,8 @@
   "arguments" : [ {
     "name" : "expression",
     "type" : "String",
-    "cliOptions" : "--expression=<String>, default=",
-    "expression" : "expression: String = "
+    "expression" : "expression: String = ",
+    "cliOptions" : "--expression=<String>, default="
   } ],
   "returnType" : "JsEvaluation?",
   "description" : "Returns detailed value evaluation metadata (beta).",
@@ -1504,13 +1504,13 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   }, {
     "name" : "functionDeclaration",
     "type" : "String",
-    "cliOptions" : "--functionDeclaration=<String>, default=",
-    "expression" : "functionDeclaration: String = "
+    "expression" : "functionDeclaration: String = ",
+    "cliOptions" : "--functionDeclaration=<String>, default="
   } ],
   "returnType" : "Any?",
   "description" : "Evaluate Value",
@@ -1522,13 +1522,13 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   }, {
     "name" : "functionDeclaration",
     "type" : "String",
-    "cliOptions" : "--functionDeclaration=<String>, default=",
-    "expression" : "functionDeclaration: String = "
+    "expression" : "functionDeclaration: String = ",
+    "cliOptions" : "--functionDeclaration=<String>, default="
   } ],
   "returnType" : "JsEvaluation?",
   "description" : "Evaluate Value Detail",
@@ -1541,8 +1541,8 @@
     "name" : "fullPage",
     "type" : "Boolean",
     "defaultValue" : "false",
-    "cliOptions" : "--fullPage=<Boolean>, default=false",
-    "expression" : "fullPage: Boolean = false"
+    "expression" : "fullPage: Boolean = false",
+    "cliOptions" : "--fullPage=<Boolean>, default=false"
   } ],
   "returnType" : "String?",
   "description" : "Capture a screenshot of the current viewport (or primary browsing context) after ensuring any pending layout.",
@@ -1555,8 +1555,8 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   } ],
   "returnType" : "String?",
   "description" : "Scroll the element matched by [selector] into view (if needed) then take a screenshot of that element's bounding box.",
@@ -1569,8 +1569,8 @@
   "arguments" : [ {
     "name" : "rect",
     "type" : "RectD",
-    "cliOptions" : "--rect=<RectD>, default=",
-    "expression" : "rect: RectD = "
+    "expression" : "rect: RectD = ",
+    "cliOptions" : "--rect=<RectD>, default="
   } ],
   "returnType" : "String?",
   "description" : "Take a screenshot of the rectangle specified by [rect] in the current page coordinate space.",
@@ -1590,8 +1590,8 @@
   "arguments" : [ {
     "name" : "viewports",
     "type" : "String",
-    "cliOptions" : "--viewports=<String>, default=",
-    "expression" : "viewports: String = "
+    "expression" : "viewports: String = ",
+    "cliOptions" : "--viewports=<String>, default="
   } ],
   "returnType" : "String",
   "description" : "Return the ARIA snapshot (accessibility tree in YAML format) for the specified viewports.",
@@ -1604,8 +1604,8 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   } ],
   "returnType" : "PointD?",
   "description" : "Calculate the clickable point of an element located by [selector].",
@@ -1618,8 +1618,8 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   } ],
   "returnType" : "RectD?",
   "description" : "Return the bounding box of an element located by [selector].",
@@ -1640,8 +1640,8 @@
   "arguments" : [ {
     "name" : "url",
     "type" : "String",
-    "cliOptions" : "--url=<String>, default=",
-    "expression" : "url: String = "
+    "expression" : "url: String = ",
+    "cliOptions" : "--url=<String>, default="
   } ],
   "returnType" : "Connection.Response",
   "description" : "Load the url as a resource with Jsoup rather than browser rendering, with the last page's context.",
@@ -1654,8 +1654,8 @@
   "arguments" : [ {
     "name" : "url",
     "type" : "String",
-    "cliOptions" : "--url=<String>, default=",
-    "expression" : "url: String = "
+    "expression" : "url: String = ",
+    "cliOptions" : "--url=<String>, default="
   } ],
   "returnType" : "NetworkResourceResponse",
   "description" : "Load the url as a resource without browser rendering, with the last page's context.",
@@ -1669,8 +1669,8 @@
     "name" : "millis",
     "type" : "Long",
     "defaultValue" : "1000",
-    "cliOptions" : "--millis=<Long>, default=1000",
-    "expression" : "millis: Long = 1000"
+    "expression" : "millis: Long = 1000",
+    "cliOptions" : "--millis=<Long>, default=1000"
   } ],
   "returnType" : "Unit",
   "description" : "Delay for a given amount of time.",
@@ -1683,8 +1683,8 @@
   "arguments" : [ {
     "name" : "duration",
     "type" : "Duration",
-    "cliOptions" : "--duration=<Duration>, default=",
-    "expression" : "duration: Duration = "
+    "expression" : "duration: Duration = ",
+    "cliOptions" : "--duration=<Duration>, default="
   } ],
   "returnType" : "Unit",
   "description" : "Delay for a given amount of time.",
@@ -1697,8 +1697,8 @@
   "arguments" : [ {
     "name" : "duration",
     "type" : "kotlin.time.Duration",
-    "cliOptions" : "--duration=<kotlin.time.Duration>, default=",
-    "expression" : "duration: kotlin.time.Duration = "
+    "expression" : "duration: kotlin.time.Duration = ",
+    "cliOptions" : "--duration=<kotlin.time.Duration>, default="
   } ],
   "returnType" : "Unit",
   "description" : "Delay for a given amount of time.",
@@ -1711,13 +1711,13 @@
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
-    "cliOptions" : "--selector=<String>, default=",
-    "expression" : "selector: String = "
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
   }, {
     "name" : "paths",
     "type" : "List<String>",
-    "cliOptions" : "--paths=<List<String>>, default=",
-    "expression" : "paths: List<String> = "
+    "expression" : "paths: List<String> = ",
+    "cliOptions" : "--paths=<List<String>>, default="
   } ],
   "returnType" : "Unit",
   "description" : "Upload files to the element located by [selector].",

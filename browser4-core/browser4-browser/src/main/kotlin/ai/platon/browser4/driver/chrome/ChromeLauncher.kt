@@ -4,6 +4,7 @@ import ai.platon.browser4.common.B4ResourceLoader
 import ai.platon.browser4.driver.chrome.common.ChromeOptions
 import ai.platon.browser4.driver.chrome.common.LauncherOptions
 import ai.platon.browser4.driver.chrome.impl.ChromeImpl
+import ai.platon.browser4.driver.chrome.patch.BrowserFilesPatch
 import ai.platon.browser4.driver.chrome.util.ChromeLaunchException
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.browser.BrowserFiles
@@ -97,7 +98,7 @@ class ChromeLauncher constructor(
     private val portPath get() = userDataDir.resolveSibling(PORT_FILE_NAME)
     private val cdpUrlPath get() = userDataDir.resolveSibling(CDP_URL_FILE_NAME)
     private val lastOutputPath get() = userDataDir.resolveSibling("chrome-launch-output.log")
-    private val temporaryUddExpiry = Duration.ofHours(1) // BrowserFiles.TEMPORARY_UDD_EXPIRY
+    private val temporaryUddExpiry = Duration.ofMinutes(30) // BrowserFiles.TEMPORARY_UDD_EXPIRY
 
     // The number of recent temporary user data directories to keep, the browser has to be closed
     private val recentNToKeep = 10
@@ -260,14 +261,7 @@ class ChromeLauncher constructor(
             clearProcessMarkers()
         }
 
-        try {
-            BrowserFiles.runCatching {
-                cleanUpContextTmpDir(temporaryUddExpiry)
-                cleanOldestContextTmpDirs(Duration.ofMinutes(2), recentNToKeep)
-            }.onFailure { warnForClose(this, it) }
-        } catch (t: Throwable) {
-            // ignored
-        }
+        cleanUpContextFiles()
     }
 
     /**
@@ -813,6 +807,9 @@ ${scriptPath.toUri()}
     @Throws(IOException::class)
     private fun prepareUserDataDir() {
         try {
+            // Make sure there are enough disk space before launching the browser, otherwise it might cause the browser to crash immediately after launch.
+            cleanUpContextFiles()
+
             prepareUserDataDir0()
         } catch (e: OverlappingFileLockException) {
             logger.warn("OverlappingFileLockException, rethrow | {} | \n{}", userDataDir, e.brief())
@@ -821,6 +818,17 @@ ${scriptPath.toUri()}
             logger.warn("FileLockInterruptionException, rethrow | {} | \n{}", userDataDir, e.brief())
             Thread.currentThread().interrupt()
             throw ChromeLaunchException("Failed to prepare user data dir", e)
+        }
+    }
+
+    private fun cleanUpContextFiles() {
+        try {
+            BrowserFilesPatch.runCatching {
+                BrowserFilesPatch.cleanUpContextTmpDir(temporaryUddExpiry)
+                BrowserFilesPatch.cleanOldestContextTmpDirs(Duration.ofMinutes(2), recentNToKeep)
+            }.onFailure { warnForClose(this, it) }
+        } catch (t: Throwable) {
+            // ignored
         }
     }
 

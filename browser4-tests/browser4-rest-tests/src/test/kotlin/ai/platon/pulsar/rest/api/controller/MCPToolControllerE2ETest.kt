@@ -709,7 +709,12 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
             }
             Thread.sleep(300)
         }
-        throw AssertionError("$failureMessage\nLast state: $lastState")
+        throw AssertionError(
+            "$failureMessage\n" +
+                    "Expected: predicate(state) == true\n" +
+                    "Actual: predicate(state) == false\n" +
+                    "Last state: $lastState"
+        )
     }
 
     private fun runToolAndWaitForStateWithEvalFallback(
