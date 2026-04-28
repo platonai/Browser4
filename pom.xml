@@ -401,17 +401,21 @@
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
-                <artifactId>browser4-plugins</artifactId>
-                <type>pom</type>
+                <artifactId>browser4-skeleton</artifactId>
                 <version>${project.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
-                <artifactId>browser4-skeleton</artifactId>
+                <artifactId>browser4-plugins</artifactId>
+                <type>pom</type>
                 <version>${project.version}</version>
             </dependency>
-
+            <dependency>
+                <groupId>ai.platon.pulsar</groupId>
+                <artifactId>browser4-parse</artifactId>
+                <version>${project.version}</version>
+            </dependency>
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>browser4-protocol</artifactId>

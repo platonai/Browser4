@@ -28,6 +28,10 @@
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
+            <artifactId>browser4-parse</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-protocol</artifactId>
         </dependency>
         <dependency>
