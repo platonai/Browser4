@@ -748,6 +748,26 @@ impl TimingReport {
     }
 }
 
+#[derive(Clone, Debug)]
+struct FailureDetail {
+    phase: String,
+    expected: String,
+    actual: String,
+    message: String,
+}
+
+#[derive(Clone, Debug)]
+struct ScenarioOutcome {
+    report: TimingReport,
+    failures: Vec<FailureDetail>,
+}
+
+impl ScenarioOutcome {
+    fn passed(&self) -> bool {
+        self.failures.is_empty()
+    }
+}
+
 /// Context for running CLI commands in isolation.
 struct E2ECtx {
     fixture_base_url: String,
@@ -2048,13 +2068,86 @@ fn run_named_test(name: &str, test_fn: fn()) -> TimingReport {
     TimingReport::new(name, duration, vec![TimedStep::new("test body", duration)])
 }
 
+fn panic_payload_to_string(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "<non-string panic>".to_string())
+}
+
+fn parse_expected_actual_from_message(message: &str) -> Option<(String, String)> {
+    let mut left: Option<String> = None;
+    let mut right: Option<String> = None;
+
+    for line in message.lines() {
+        let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix("left:") {
+            left = Some(value.trim().to_string());
+        }
+        if let Some(value) = trimmed.strip_prefix("right:") {
+            right = Some(value.trim().to_string());
+        }
+    }
+
+    if let (Some(actual), Some(expected)) = (left, right) {
+        return Some((expected, actual));
+    }
+
+    let expected_marker = "Expected '";
+    let got_marker = "', got '";
+    if let Some(expected_start) = message.find(expected_marker) {
+        let expected_value_start = expected_start + expected_marker.len();
+        if let Some(got_start_rel) = message[expected_value_start..].find(got_marker) {
+            let got_start = expected_value_start + got_start_rel;
+            let expected = message[expected_value_start..got_start].to_string();
+            let actual_start = got_start + got_marker.len();
+            if let Some(actual_end_rel) = message[actual_start..].find('"') {
+                let actual = message[actual_start..actual_start + actual_end_rel].to_string();
+                return Some((expected, actual));
+            }
+            if let Some(actual_end_rel) = message[actual_start..].find('\'') {
+                let actual = message[actual_start..actual_start + actual_end_rel].to_string();
+                return Some((expected, actual));
+            }
+        }
+    }
+
+    None
+}
+
+fn failure_from_panic(phase: &str, message: String) -> FailureDetail {
+    let (expected, actual) = parse_expected_actual_from_message(&message).unwrap_or_else(|| {
+        (
+            "assertion condition is satisfied".to_string(),
+            message.lines().next().unwrap_or_default().trim().to_string(),
+        )
+    });
+
+    FailureDetail {
+        phase: phase.to_string(),
+        expected,
+        actual,
+        message,
+    }
+}
+
+fn failure_from_cleanup_error(error: String) -> FailureDetail {
+    FailureDetail {
+        phase: "cleanup".to_string(),
+        expected: "scenario cleanup succeeds".to_string(),
+        actual: error.clone(),
+        message: error,
+    }
+}
+
 fn run_named_scenario(
     name: &str,
     resources: &mut E2ETestResources,
     requires_browser4: bool,
     restart_browser4: bool,
     test_fn: fn(&mut E2ECtx),
-) -> TimingReport {
+) -> ScenarioOutcome {
     println!("testing {name} ... ");
 
     std::io::stdout().flush().expect("stdout flush failed");
@@ -2090,38 +2183,32 @@ fn run_named_scenario(
             None
         }
         Ok(Err(error)) => Some(error),
-        Err(payload) => Some(
-            payload
-                .downcast_ref::<&str>()
-                .map(|s| s.to_string())
-                .or_else(|| payload.downcast_ref::<String>().cloned())
-                .unwrap_or_else(|| "<non-string panic during cleanup>".to_string()),
-        ),
+        Err(payload) => Some(panic_payload_to_string(payload.as_ref())),
     };
     let report = TimingReport::new(name, total_started_at.elapsed(), steps);
+    let mut failures = Vec::new();
 
     match result {
         Ok(()) => {
             if let Some(error) = cleanup_error {
                 println!("FAILED ({}) - {}", format_duration(report.total), error);
                 print_timing_steps(&report.steps);
-                panic!("{error}");
+                failures.push(failure_from_cleanup_error(error));
+                return ScenarioOutcome { report, failures };
             }
             println!("ok ({})", format_duration(report.total));
-            report
+            ScenarioOutcome { report, failures }
         }
         Err(payload) => {
-            let msg = payload
-                .downcast_ref::<&str>()
-                .map(|s| s.to_string())
-                .or_else(|| payload.downcast_ref::<String>().cloned())
-                .unwrap_or_else(|| "<non-string panic>".to_string());
+            let msg = panic_payload_to_string(payload.as_ref());
             println!("FAILED ({}) - {}", format_duration(report.total), msg);
             if let Some(error) = cleanup_error {
                 println!("cleanup FAILED - {error}");
+                failures.push(failure_from_cleanup_error(error));
             }
             print_timing_steps(&report.steps);
-            std::panic::resume_unwind(payload);
+            failures.push(failure_from_panic("scenario", msg));
+            ScenarioOutcome { report, failures }
         }
     }
 }
@@ -2220,53 +2307,109 @@ fn main() {
     let mut resources = create_e2e_test_resources();
     let run_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut timings: Vec<TimingReport> = Vec::with_capacity(total_tests);
+        let mut scenario_failures: Vec<(String, FailureDetail)> = Vec::new();
 
         if run_coverage {
             let report = run_named_test("test_e2e_command_coverage", verify_e2e_command_coverage);
             timings.push(report);
         }
 
+        let mut scenario_progress = 0usize;
         for scenario in selected_scenarios {
             let test_count = scenario.effective_test_count();
             for run_index in 0..test_count {
+                scenario_progress += 1;
                 let display_name = if test_count == 1 {
                     scenario.name.to_string()
                 } else {
                     format!("{} [{}/{}]", scenario.name, run_index + 1, test_count)
                 };
-                let report = run_named_scenario(
+                let outcome = run_named_scenario(
                     &display_name,
                     &mut resources,
                     scenario.requires_browser4,
                     scenario.restart_browser4,
                     scenario.test_fn,
                 );
-                timings.push(report);
+                let status = if outcome.passed() { "ok" } else { "FAILED" };
+                println!(
+                    "progress [{}/{}] {} => {}",
+                    scenario_progress, scenario_runs, display_name, status
+                );
+                for failure in &outcome.failures {
+                    scenario_failures.push((display_name.clone(), failure.clone()));
+                }
+                timings.push(outcome.report);
             }
         }
 
         println!("All scenarios complete!");
-        timings
+        (timings, scenario_failures)
     }));
 
     let final_cleanup_result = run_final_cleanup();
 
     match run_result {
-        Ok(timings) => {
+        Ok((timings, scenario_failures)) => {
             let final_cleanup_steps = final_cleanup_result.unwrap_or_else(|error| {
                 panic!("{error}");
             });
-            println!(
-                "test result: ok. {} passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
-                total_tests
-            );
+            let mut failed_scenarios: Vec<String> = Vec::new();
+            for (scenario_name, _) in &scenario_failures {
+                if !failed_scenarios.iter().any(|name| name == scenario_name) {
+                    failed_scenarios.push(scenario_name.clone());
+                }
+            }
+            let failed_scenario_count = failed_scenarios.len();
+            let passed = total_tests.saturating_sub(failed_scenario_count);
+            if failed_scenario_count == 0 {
+                println!(
+                    "test result: ok. {} passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
+                    total_tests
+                );
+            } else {
+                println!(
+                    "test result: FAILED. {} passed; {} failed; 0 ignored; 0 measured; 0 filtered out ({} failure entries)",
+                    passed,
+                    failed_scenario_count,
+                    scenario_failures.len()
+                );
+            }
             println!("per-test timing:");
             for report in timings {
                 println!("  {}: {}", report.name, format_duration(report.total));
                 print_timing_steps(&report.steps);
             }
+            if !scenario_failures.is_empty() {
+                println!("failure summary (grouped by scenario):");
+                let mut global_index = 0usize;
+                for scenario_name in failed_scenarios {
+                    let grouped_failures: Vec<&FailureDetail> = scenario_failures
+                        .iter()
+                        .filter_map(|(name, failure)| (name == &scenario_name).then_some(failure))
+                        .collect();
+                    println!(
+                        "  scenario={} failures={}",
+                        scenario_name,
+                        grouped_failures.len()
+                    );
+                    for failure in grouped_failures {
+                        global_index += 1;
+                        println!("    {}. phase={}", global_index, failure.phase);
+                        println!("       expected: {}", failure.expected);
+                        println!("       actual:   {}", failure.actual);
+                        println!("       message:  {}", failure.message);
+                    }
+                }
+            }
             println!("final cleanup:");
             print_timing_steps(&final_cleanup_steps);
+            if !scenario_failures.is_empty() {
+                panic!(
+                    "{} scenario assertion/cleanup failure(s) were aggregated. See failure summary above.",
+                    scenario_failures.len()
+                );
+            }
         }
         Err(payload) => {
             match final_cleanup_result {
