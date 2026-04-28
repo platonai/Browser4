@@ -2,6 +2,7 @@ package ai.platon.pulsar.agentic.inference.action
 
 import ai.platon.browser4.common.B4LLMUtils
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecGenerator
+import ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -9,6 +10,39 @@ import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 
 class SourceCodeToToolCallTest {
+    private fun assertSnapshotJsonDeterministic(
+        domain: String,
+        moduleName: String,
+        fileName: String,
+        interfaceName: String,
+    ) {
+        val sourceCode = B4LLMUtils.readSourceFileFromResource(moduleName, fileName)
+
+        val first = ToolSpecGenerator.toSnapshotJson(
+            ToolSpecGenerator.extractInterface(domain, sourceCode, interfaceName)
+        )
+        val second = ToolSpecGenerator.toSnapshotJson(
+            ToolSpecGenerator.extractInterface(domain, sourceCode, interfaceName)
+        )
+
+        assertEquals(first, second, "Snapshot JSON should be byte-for-byte stable for $interfaceName")
+    }
+
+    private fun assertIndentedFieldOrder(json: String, indent: String, vararg fields: String) {
+        val actualFields = json.lineSequence()
+            .map { it.trimEnd() }
+            .filter { it.startsWith("$indent\"") }
+            .map { it.substringAfter('"').substringBefore('"') }
+            .toList()
+
+        for (field in fields) {
+            assertTrue(actualFields.contains(field), "Section should contain field '$field'")
+        }
+
+        val actualIndexes = fields.map(actualFields::indexOf)
+        assertEquals(actualIndexes.sorted(), actualIndexes, "Fields should appear in order: ${fields.joinToString(", ")}")
+    }
+
     @Test
     @DisplayName("extractInterface keeps argument order from source")
     fun extractInterfaceKeepsArgumentOrderFromSource() {
@@ -60,6 +94,60 @@ class SourceCodeToToolCallTest {
 
         val tools = ToolSpecGenerator.extractInterface("agent", sourceCode, "Demo")
         assertEquals(listOf(1, 2), tools.filter { it.method == "ping" }.map { it.arguments.size })
+    }
+
+    @Test
+    @DisplayName("ToolSpec serialization keeps expression before cli")
+    fun toolSpecSerializationKeepsExpressionBeforeCli() {
+        val sourceCode = """
+            interface Demo {
+                @MCP
+                fun run(task: String): Unit
+            }
+        """.trimIndent()
+
+        val tool = ToolSpecGenerator.extractInterface("agent", sourceCode, "Demo").first()
+        val json = prettyPulsarObjectMapper().writeValueAsString(tool)
+
+        val expressionIndex = json.indexOf("\"expression\"")
+        val cliIndex = json.indexOf("\"cli\"")
+        assertTrue(expressionIndex >= 0, "Serialized ToolSpec should contain expression field")
+        assertTrue(cliIndex >= 0, "Serialized ToolSpec should contain cli field")
+        assertTrue(expressionIndex < cliIndex, "expression should be serialized before cli")
+    }
+
+    @Test
+    @DisplayName("ToolSpecGenerator snapshot json keeps deterministic field order")
+    fun toolSpecGeneratorSnapshotJsonKeepsDeterministicFieldOrder() {
+        val sourceCode = """
+            interface Demo {
+                /**
+                 * Run a task. @mcp
+                 *
+                 * Extra help for run.
+                 */
+                @MCP
+                fun run(task: String = "x"): Unit
+            }
+        """.trimIndent()
+
+        val tool = ToolSpecGenerator.extractInterface("agent", sourceCode, "Demo").first()
+        val json = ToolSpecGenerator.toSnapshotJson(listOf(tool))
+
+        assertIndentedFieldOrder(json, "    ", "name", "type", "defaultValue", "expression", "cliOptions")
+        assertIndentedFieldOrder(json, "  ", "domain", "method", "arguments", "returnType", "description", "help", "expression", "cli")
+    }
+
+    @Test
+    @DisplayName("WebDriver snapshot json is stable across repeated generation")
+    fun webDriverSnapshotJsonIsStableAcrossRepeatedGeneration() {
+        assertSnapshotJsonDeterministic("tab", "browser4-core", "WebDriver.kt", "WebDriver")
+    }
+
+    @Test
+    @DisplayName("PerceptiveAgent snapshot json is stable across repeated generation")
+    fun perceptiveAgentSnapshotJsonIsStableAcrossRepeatedGeneration() {
+        assertSnapshotJsonDeterministic("agent", "browser4-agentic", "PerceptiveAgent.kt", "PerceptiveAgent")
     }
 
     @Test

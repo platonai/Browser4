@@ -28,14 +28,43 @@ object ToolSpecGenerator {
 
             if (!B4ProjectUtils.isInJar()) {
                 var fileName = "driver-tool-call-specs.json"
-                var content = prettyPulsarObjectMapper().writeValueAsString(webDriverToolSpecs)
+                var content = toSnapshotJson(webDriverToolSpecs)
                 B4LLMUtils.writeAsResource(fileName, content)
 
                 fileName = "agent-tool-call-specs.json"
-                content = prettyPulsarObjectMapper().writeValueAsString(agentToolSpecs)
+                content = toSnapshotJson(agentToolSpecs)
                 B4LLMUtils.writeAsResource(fileName, content)
             }
         }
+    }
+
+    internal fun toSnapshotJson(toolSpecs: List<ToolSpec>): String {
+        return serializeToolSpecs(toolSpecs)
+    }
+
+    private fun serializeToolSpecs(toolSpecs: List<ToolSpec>): String {
+        // Use explicit LinkedHashMap field insertion order to keep snapshot JSON deterministic.
+        val payload = toolSpecs.map { spec ->
+            linkedMapOf<String, Any?>(
+                "domain" to spec.domain,
+                "method" to spec.method,
+                "arguments" to spec.arguments.map { arg ->
+                    linkedMapOf<String, Any?>(
+                        "name" to arg.name,
+                        "type" to arg.type,
+                        "defaultValue" to arg.defaultValue,
+                        "expression" to arg.expression,
+                        "cliOptions" to arg.cliOptions,
+                    )
+                },
+                "returnType" to spec.returnType,
+                "description" to spec.description,
+                "help" to spec.help,
+                "expression" to spec.expression,
+                "cli" to spec.cli,
+            )
+        }
+        return prettyPulsarObjectMapper().writeValueAsString(payload)
     }
 
     fun extractInterface(domain: String, sourceCode: String, interfaceName: String): List<ToolSpec> {

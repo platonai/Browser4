@@ -13,6 +13,7 @@ import ai.platon.pulsar.common.serialize.json.Pson
 import ai.platon.pulsar.external.ModelResponse
 import com.fasterxml.jackson.annotation.JsonIgnore
 import com.fasterxml.jackson.annotation.JsonIncludeProperties
+import com.fasterxml.jackson.annotation.JsonPropertyOrder
 import org.apache.commons.lang3.StringUtils
 import java.nio.file.Path
 import java.time.Instant
@@ -57,6 +58,7 @@ data class DetailedActResult constructor(
     }
 }
 
+@JsonPropertyOrder(value = ["domain", "method", "arguments", "returnType", "description", "help", "expression", "cli"])
 data class ToolSpec constructor(
     val domain: String,
     val method: String,
@@ -65,6 +67,7 @@ data class ToolSpec constructor(
     val description: String? = null,
     val help: String? = null,
 ) {
+    @JsonPropertyOrder(value = ["name", "type", "defaultValue", "expression", "cliOptions"])
     data class Arg(
         val name: String,
         val type: String,
