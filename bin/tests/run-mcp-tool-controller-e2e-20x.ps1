@@ -10,7 +10,12 @@ Set-StrictMode -Version Latest
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = (Resolve-Path (Join-Path $scriptDir "..\..")).Path
-$mvnCmd = Join-Path $repoRoot "mvnw.cmd"
+$mvnCmd = if ($IsWindows) {
+    Join-Path $repoRoot "mvnw.cmd"
+}
+else {
+    Join-Path $repoRoot "mvnw"
+}
 
 if (-not (Test-Path $mvnCmd)) {
     Write-Error "Maven wrapper not found: $mvnCmd"
@@ -38,7 +43,8 @@ try {
         Write-Host "========== Round $i/$RepeatCount =========="
 
         & $mvnCmd @mvnArgs
-        $exitCode = $LASTEXITCODE
+        $lastExitCodeVar = Get-Variable -Name LASTEXITCODE -ErrorAction SilentlyContinue
+        $exitCode = if ($null -ne $lastExitCodeVar) { $lastExitCodeVar.Value } else { 1 }
 
         if ($exitCode -eq 0) {
             $successCount++
