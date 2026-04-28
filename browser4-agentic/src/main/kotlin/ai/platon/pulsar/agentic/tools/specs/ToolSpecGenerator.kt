@@ -60,10 +60,19 @@ object ToolSpecGenerator {
             val returnType = m.returnType.ifBlank { "Unit" }
             val description = m.kdoc ?: methodNameToDescription(method)
             val help = m.fullKDoc
-            toolSpec += ToolSpec(domain, method, arguments, returnType, description, help)
+            toolSpec += ToolSpec(domain, method, canonicalizeArguments(arguments), returnType, description, help)
         }
 
         return toolSpec
+    }
+
+    private fun canonicalizeArguments(arguments: List<ToolSpec.Arg>): List<ToolSpec.Arg> {
+        // Keep JSON snapshots stable even when upstream parsing order changes.
+        return arguments.sortedWith(
+            compareBy<ToolSpec.Arg> { it.name }
+                .thenBy { it.type }
+                .thenBy { it.defaultValue }
+        )
     }
 
     // Helper types and parsers for SourceCodeToToolCall

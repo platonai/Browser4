@@ -2,12 +2,29 @@ package ai.platon.pulsar.agentic.inference.action
 
 import ai.platon.browser4.common.B4LLMUtils
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecGenerator
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 
 class SourceCodeToToolCallTest {
+    @Test
+    @DisplayName("extractInterface generates arguments in deterministic order")
+    fun extractInterfaceGeneratesArgumentsInDeterministicOrder() {
+        val sourceCode = """
+            interface Demo {
+                @MCP
+                fun stableArgs(zeta: Int = 1, alpha: String = "x", beta: Long): Unit
+            }
+        """.trimIndent()
+
+        val tools = ToolSpecGenerator.extractInterface("tab", sourceCode, "Demo")
+        val stableArgs = tools.first { it.method == "stableArgs" }
+
+        assertEquals(listOf("alpha", "beta", "zeta"), stableArgs.arguments.map { it.name })
+    }
+
     @Test
     @DisplayName("extract methods from WebDriver resource")
     fun extractMethodsFromWebdriverResource() {
