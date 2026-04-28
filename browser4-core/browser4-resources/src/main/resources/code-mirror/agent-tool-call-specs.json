@@ -1,54 +1,5 @@
 [ {
   "domain" : "agent",
-  "method" : "run",
-  "arguments" : [ {
-    "name" : "task",
-    "type" : "String",
-    "expression" : "task: String = ",
-    "cliOptions" : "--task=<String>, default="
-  } ],
-  "returnType" : "AgentHistory",
-  "description" : "High-level problem resolution entry. Implementations should construct an [ActionOptions] from the raw problem string and delegate to [run] with the options.",
-  "help" : "High-level problem resolution entry. Implementations should construct an [ActionOptions] from the raw problem string and delegate to [run] with the options.",
-  "expression" : "agent.run(Arg(name=task, type=String, defaultValue=))",
-  "cli" : "browser4-cli agent run --task=<String>, default="
-}, {
-  "domain" : "agent",
-  "method" : "observe",
-  "arguments" : [ {
-    "name" : "instruction",
-    "type" : "String",
-    "expression" : "instruction: String = ",
-    "cliOptions" : "--instruction=<String>, default="
-  } ],
-  "returnType" : "List<ObserveResult>",
-  "description" : "Convenience overload to observe by instruction string. Implementations typically create an [ObserveOptions] from the instruction and delegate to [observe].",
-  "help" : "Convenience overload to observe by instruction string. Implementations typically create an [ObserveOptions] from the instruction and delegate to [observe].",
-  "expression" : "agent.observe(Arg(name=instruction, type=String, defaultValue=))",
-  "cli" : "browser4-cli agent observe --instruction=<String>, default="
-}, {
-  "domain" : "agent",
-  "method" : "summarize",
-  "arguments" : [ {
-    "name" : "instruction",
-    "type" : "String?",
-    "defaultValue" : "null",
-    "expression" : "instruction: String? = null",
-    "cliOptions" : "--instruction=<String?>, default=null"
-  }, {
-    "name" : "selector",
-    "type" : "String?",
-    "defaultValue" : "null",
-    "expression" : "selector: String? = null",
-    "cliOptions" : "--selector=<String?>, default=null"
-  } ],
-  "returnType" : "String",
-  "description" : "Summarize text captured from the current page or a specific element and return a natural-language synopsis.\n\nPassing an [instruction] tailors the tone or focus of the summary; when null, the agent relies on a default summarization prompt. Supplying a [selector] scopes the extraction to a particular DOM element; leaving it null lets the implementation infer a sensible region (for example, the main article body).",
-  "help" : "Summarize text captured from the current page or a specific element and return a natural-language synopsis.\n\nPassing an [instruction] tailors the tone or focus of the summary; when null, the agent relies on a default summarization prompt. Supplying a [selector] scopes the extraction to a particular DOM element; leaving it null lets the implementation infer a sensible region (for example, the main article body).",
-  "expression" : "agent.summarize(Arg(name=instruction, type=String?, defaultValue=null), Arg(name=selector, type=String?, defaultValue=null))",
-  "cli" : "browser4-cli agent summarize --instruction=<String?>, default=null --selector=<String?>, default=null"
-}, {
-  "domain" : "agent",
   "method" : "act",
   "arguments" : [ {
     "name" : "action",
@@ -94,4 +45,53 @@
   "help" : "Convenience overload for structured extraction that constrains the result with a JSON schema.",
   "expression" : "agent.extract(Arg(name=instruction, type=String, defaultValue=), Arg(name=schema, type=ExtractionSchema, defaultValue=))",
   "cli" : "browser4-cli agent extract --instruction=<String>, default= --schema=<ExtractionSchema>, default="
+}, {
+  "domain" : "agent",
+  "method" : "observe",
+  "arguments" : [ {
+    "name" : "instruction",
+    "type" : "String",
+    "expression" : "instruction: String = ",
+    "cliOptions" : "--instruction=<String>, default="
+  } ],
+  "returnType" : "List<ObserveResult>",
+  "description" : "Convenience overload to observe by instruction string. Implementations typically create an [ObserveOptions] from the instruction and delegate to [observe].",
+  "help" : "Convenience overload to observe by instruction string. Implementations typically create an [ObserveOptions] from the instruction and delegate to [observe].",
+  "expression" : "agent.observe(Arg(name=instruction, type=String, defaultValue=))",
+  "cli" : "browser4-cli agent observe --instruction=<String>, default="
+}, {
+  "domain" : "agent",
+  "method" : "run",
+  "arguments" : [ {
+    "name" : "task",
+    "type" : "String",
+    "expression" : "task: String = ",
+    "cliOptions" : "--task=<String>, default="
+  } ],
+  "returnType" : "AgentHistory",
+  "description" : "High-level problem resolution entry. Implementations should construct an [ActionOptions] from the raw problem string and delegate to [run] with the options.",
+  "help" : "High-level problem resolution entry. Implementations should construct an [ActionOptions] from the raw problem string and delegate to [run] with the options.",
+  "expression" : "agent.run(Arg(name=task, type=String, defaultValue=))",
+  "cli" : "browser4-cli agent run --task=<String>, default="
+}, {
+  "domain" : "agent",
+  "method" : "summarize",
+  "arguments" : [ {
+    "name" : "instruction",
+    "type" : "String?",
+    "defaultValue" : "null",
+    "expression" : "instruction: String? = null",
+    "cliOptions" : "--instruction=<String?>, default=null"
+  }, {
+    "name" : "selector",
+    "type" : "String?",
+    "defaultValue" : "null",
+    "expression" : "selector: String? = null",
+    "cliOptions" : "--selector=<String?>, default=null"
+  } ],
+  "returnType" : "String",
+  "description" : "Summarize text captured from the current page or a specific element and return a natural-language synopsis.\n\nPassing an [instruction] tailors the tone or focus of the summary; when null, the agent relies on a default summarization prompt. Supplying a [selector] scopes the extraction to a particular DOM element; leaving it null lets the implementation infer a sensible region (for example, the main article body).",
+  "help" : "Summarize text captured from the current page or a specific element and return a natural-language synopsis.\n\nPassing an [instruction] tailors the tone or focus of the summary; when null, the agent relies on a default summarization prompt. Supplying a [selector] scopes the extraction to a particular DOM element; leaving it null lets the implementation infer a sensible region (for example, the main article body).",
+  "expression" : "agent.summarize(Arg(name=instruction, type=String?, defaultValue=null), Arg(name=selector, type=String?, defaultValue=null))",
+  "cli" : "browser4-cli agent summarize --instruction=<String?>, default=null --selector=<String?>, default=null"
 } ]
