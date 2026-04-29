@@ -50,9 +50,6 @@ use browser4_cli::managed_processes::stop_browser4_server_forcibly;
 mod scenarios;
 
 const OPEN_TEMPORARY_PROFILE_ARG: &str = "--profile-mode=TEMPORARY";
-const TEMP_BROWSER_CONTEXT_GROUP: &str = "rand";
-const TEMP_BROWSER_CONTEXT_CLEANUP_TIMEOUT_MS: u64 = 5_000;
-const TEMP_BROWSER_CONTEXT_CLEANUP_RETRY_DELAY_MS: u64 = 200;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -90,40 +87,6 @@ fn external_service_url() -> Option<String> {
 /// Defaults to `127.0.0.1` (loopback, suitable for local runs).
 fn fixture_host() -> String {
     std::env::var("BROWSER4_E2E_FIXTURE_HOST").unwrap_or_else(|_| "127.0.0.1".to_string())
-}
-
-fn current_user_for_temp_dir() -> String {
-    ["BROWSER4_CLI_USER", "USERNAME", "USER", "LOGNAME"]
-        .into_iter()
-        .filter_map(|name| std::env::var(name).ok())
-        .map(|value| sanitize_user_for_temp_dir(&value))
-        .find(|value| !value.is_empty())
-        .unwrap_or_else(|| "user".to_string())
-}
-
-fn sanitize_user_for_temp_dir(value: &str) -> String {
-    value
-        .trim()
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
-                ch
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>()
-        .trim_matches('-')
-        .to_string()
-}
-
-fn temp_browser_context_group_dir() -> PathBuf {
-    std::env::temp_dir()
-        .join(format!("browser4-{}", current_user_for_temp_dir()))
-        .join("context")
-        .join("tmp")
-        .join("groups")
-        .join(TEMP_BROWSER_CONTEXT_GROUP)
 }
 
 // ---------------------------------------------------------------------------
@@ -1800,7 +1763,6 @@ fn cleanup_browser4_sessions(resources: &mut E2ETestResources) -> Result<Vec<Tim
         duration,
     )];
     if result.exit_code == 0 {
-        steps.push(cleanup_temp_browser_contexts()?);
         return Ok(steps);
     }
 
@@ -1810,14 +1772,10 @@ fn cleanup_browser4_sessions(resources: &mut E2ETestResources) -> Result<Vec<Tim
         "browser4 forced cleanup fallback",
         fallback_started_at.elapsed(),
     ));
-    let mut errors = vec![format!(
+    let errors = vec![format!(
         "browser4-cli close-all failed (exit={}):\nstdout:\n{}\nstderr:\n{}",
         result.exit_code, result.stdout, result.stderr
     )];
-    match cleanup_temp_browser_contexts() {
-        Ok(step) => steps.push(step),
-        Err(error) => errors.push(error),
-    }
     Err(errors.join("\n\n"))
 }
 
@@ -1832,76 +1790,13 @@ fn cleanup_after_scenario(
     cleanup_browser4_sessions(resources)
 }
 
-fn cleanup_temp_browser_contexts() -> Result<TimedStep, String> {
-    let started_at = Instant::now();
-    let context_group_dir = temp_browser_context_group_dir();
-    if !context_group_dir.exists() {
-        return Ok(TimedStep::new(
-            "browser4 temp context cleanup",
-            started_at.elapsed(),
-        ));
-    }
-
-    let deadline = Instant::now() + Duration::from_millis(TEMP_BROWSER_CONTEXT_CLEANUP_TIMEOUT_MS);
-    let mut last_error = String::new();
-    loop {
-        match clear_directory_contents(&context_group_dir) {
-            Ok(()) => {
-                return Ok(TimedStep::new(
-                    "browser4 temp context cleanup",
-                    started_at.elapsed(),
-                ));
-            }
-            Err(error) if Instant::now() < deadline => {
-                thread::sleep(Duration::from_millis(
-                    TEMP_BROWSER_CONTEXT_CLEANUP_RETRY_DELAY_MS,
-                ));
-                if !context_group_dir.exists() {
-                    return Ok(TimedStep::new(
-                        "browser4 temp context cleanup",
-                        started_at.elapsed(),
-                    ));
-                }
-                last_error = error;
-            }
-            Err(error) => {
-                let detail = if error.is_empty() { last_error } else { error };
-                return Err(format!(
-                    "failed to delete temporary Browser4 contexts under {}: {}",
-                    context_group_dir.display(),
-                    detail
-                ));
-            }
-        }
-    }
-}
-
-fn clear_directory_contents(dir: &Path) -> Result<(), String> {
-    let entries =
-        fs::read_dir(dir).map_err(|error| format!("failed to read {}: {error}", dir.display()))?;
-    for entry in entries {
-        let entry =
-            entry.map_err(|error| format!("failed to enumerate {}: {error}", dir.display()))?;
-        let path = entry.path();
-        if path.is_dir() {
-            fs::remove_dir_all(&path)
-                .map_err(|error| format!("failed to remove {}: {error}", path.display()))?;
-        } else {
-            fs::remove_file(&path)
-                .map_err(|error| format!("failed to remove {}: {error}", path.display()))?;
-        }
-    }
-    Ok(())
-}
-
 fn run_final_cleanup() -> Result<Vec<TimedStep>, String> {
     let started_at = Instant::now();
     stop_browser4_server_forcibly();
-    let mut steps = vec![TimedStep::new(
+    let steps = vec![TimedStep::new(
         "browser4 final service cleanup",
         started_at.elapsed(),
     )];
-    steps.push(cleanup_temp_browser_contexts()?);
     Ok(steps)
 }
 
