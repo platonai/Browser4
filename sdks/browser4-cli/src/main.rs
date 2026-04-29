@@ -569,18 +569,30 @@ fn log_shutdown_result(action: &str, result: &ShutdownResult) {
 }
 
 async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
-    let result = call_tool(client, base_url, "list_sessions", json!({})).await?;
-
-    let active_ids: Vec<String> = serde_json::from_str::<Value>(&result)
-        .ok()
-        .and_then(|v| {
-            v.as_array().map(|arr| {
-                arr.iter()
-                    .filter_map(|x| x.as_str().map(String::from))
-                    .collect()
-            })
-        })
-        .unwrap_or_default();
+    let (active_ids, backend_note): (Vec<String>, Option<String>) =
+        match call_tool(client, base_url, "list_sessions", json!({})).await {
+            Ok(result) => {
+                let active_ids = serde_json::from_str::<Value>(&result)
+                    .ok()
+                    .and_then(|v| {
+                        v.as_array().map(|arr| {
+                            arr.iter()
+                                .filter_map(|x| x.as_str().map(String::from))
+                                .collect()
+                        })
+                    })
+                    .unwrap_or_default();
+                (active_ids, None)
+            }
+            Err(error) if is_backend_unreachable_error(&error) => (
+                Vec::new(),
+                Some(format!(
+                    "Note: Browser4 backend is not started or unreachable at {}. Showing local persisted sessions only.",
+                    base_url
+                )),
+            ),
+            Err(error) => return Err(error),
+        };
 
     println!("{:<20} | {:<40} | {}", "Name", "Session ID", "Status");
     println!("{:-<20}-+-{:-<40}-+-{:-<10}", "", "", "");
@@ -621,7 +633,25 @@ async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
         println!("{:<20} | {:<40} | {}", "(default)", sid, status);
     }
 
+    if let Some(note) = backend_note {
+        println!("\n{}", note);
+    }
+
     Ok(())
+}
+
+fn is_backend_unreachable_error(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    [
+        "connection refused",
+        "error sending request",
+        "tcp connect error",
+        "failed to connect",
+        "dns error",
+        "timed out",
+    ]
+    .iter()
+    .any(|pattern| lower.contains(pattern))
 }
 
 async fn handle_delete_data(
@@ -1316,7 +1346,7 @@ async fn handle_co_result(
 }
 
 fn should_ensure_server_running(command: &str) -> bool {
-    command != "close-all" && command != "kill-all"
+    command != "close-all" && command != "kill-all" && command != "list"
 }
 
 // ---------------------------------------------------------------------------
@@ -2389,5 +2419,23 @@ mod tests {
         );
 
         assert_eq!(caps["profileMode"], json!("TEMPORARY"));
+    }
+
+    #[test]
+    fn should_not_ensure_server_for_list() {
+        assert!(!should_ensure_server_running("list"));
+    }
+
+    #[test]
+    fn should_ensure_server_for_open() {
+        assert!(should_ensure_server_running("open"));
+    }
+
+    #[test]
+    fn unreachable_backend_error_detection_matches_connection_failures() {
+        assert!(is_backend_unreachable_error(
+            "HTTP request failed: error sending request for url: tcp connect error: Connection refused"
+        ));
+        assert!(!is_backend_unreachable_error("Tool execution failed: invalid arguments"));
     }
 }

@@ -799,7 +799,8 @@ impl E2ETestResources {
 
         let was_healthy_before = is_browser4_healthy_now(&self.ctx.browser4_base_url);
         let started_at = Instant::now();
-        let startup_result = run_cli_process_with_live_output(&self.ctx, &["list"]);
+        let startup_result =
+            run_cli_process_with_live_output(&self.ctx, &["open", OPEN_TEMPORARY_PROFILE_ARG]);
         let startup_log_hint = format_browser4_startup_log_hint(&startup_result.stderr);
         let started_via_maven = startup_result
             .stderr
