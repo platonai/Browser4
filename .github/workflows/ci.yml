@@ -78,41 +78,41 @@ jobs:
         with:
           workspaces: sdks/browser4-cli
 
-      - name: Cleanup Docker system to free space
-        run: |
-          docker system prune -af
-          docker volume prune -f
-          rm -rf ~/.m2/repository  # If you no longer need Maven cache
-          sudo apt-get clean
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-          sudo df -h
-
-      - name: Build Docker Image
-        id: build
-        uses: ./.github/actions/docker-build
-        with:
-          image_name: ${{ env.IMAGE_NAME }}
-          version: ${{ github.sha }}
-          timeout_minutes: '20'
-
-      - name: Start Application
-        id: app
-        uses: ./.github/actions/start-application
-        with:
-          image_name: ${{ env.IMAGE_NAME }}
-          version: ${{ github.sha }}
-          container_name: ${{ env.CONTAINER_NAME }}
-          network_name: ${{ env.NETWORK_NAME }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          proxy_rotation_url: ${{ secrets.PROXY_ROTATION_URL }}
-
-      - name: Health Check
-        id: health
-        uses: ./.github/actions/health-check
-        with:
-          service_port: '8182'
-          timeout_minutes: '5'
-          container_name: ${{ env.CONTAINER_NAME }}
+#      - name: Cleanup Docker system to free space
+#        run: |
+#          docker system prune -af
+#          docker volume prune -f
+#          rm -rf ~/.m2/repository  # If you no longer need Maven cache
+#          sudo apt-get clean
+#          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+#          sudo df -h
+#
+#      - name: Build Docker Image
+#        id: build
+#        uses: ./.github/actions/docker-build
+#        with:
+#          image_name: ${{ env.IMAGE_NAME }}
+#          version: ${{ github.sha }}
+#          timeout_minutes: '20'
+#
+#      - name: Start Application
+#        id: app
+#        uses: ./.github/actions/start-application
+#        with:
+#          image_name: ${{ env.IMAGE_NAME }}
+#          version: ${{ github.sha }}
+#          container_name: ${{ env.CONTAINER_NAME }}
+#          network_name: ${{ env.NETWORK_NAME }}
+#          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+#          proxy_rotation_url: ${{ secrets.PROXY_ROTATION_URL }}
+#
+#      - name: Health Check
+#        id: health
+#        uses: ./.github/actions/health-check
+#        with:
+#          service_port: '8182'
+#          timeout_minutes: '5'
+#          container_name: ${{ env.CONTAINER_NAME }}
 
       - name: Run browser4-cli E2E Tests
         id: e2e-cli
