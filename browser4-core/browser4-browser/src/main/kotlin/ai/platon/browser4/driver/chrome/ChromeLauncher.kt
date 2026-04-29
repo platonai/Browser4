@@ -98,7 +98,7 @@ class ChromeLauncher constructor(
     private val portPath get() = userDataDir.resolveSibling(PORT_FILE_NAME)
     private val cdpUrlPath get() = userDataDir.resolveSibling(CDP_URL_FILE_NAME)
     private val lastOutputPath get() = userDataDir.resolveSibling("chrome-launch-output.log")
-    private val temporaryUddExpiry = Duration.ofMinutes(30) // BrowserFiles.TEMPORARY_UDD_EXPIRY
+    private val temporaryUddExpiry = Duration.ofMinutes(60) // BrowserFiles.TEMPORARY_UDD_EXPIRY
 
     // The number of recent temporary user data directories to keep, the browser has to be closed
     private val recentNToKeep = 10

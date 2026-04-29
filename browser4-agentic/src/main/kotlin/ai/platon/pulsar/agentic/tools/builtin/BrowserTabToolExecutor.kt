@@ -72,7 +72,9 @@ class BrowserTabToolExecutor: AbstractToolExecutor() {
                     else -> throw IllegalArgumentException("navigate requires 'url' or ('rawUrl','pageUrl')")
                 }
             }
-            "reload" -> { validateArgs(args, emptySet(), emptySet(), functionName); driver.reload() }
+            "reload" -> {
+                validateArgs(args, emptySet(), emptySet(), functionName); driver.reload()
+            }
             "goBack" -> { validateArgs(args, emptySet(), emptySet(), functionName); driver.goBack() }
             "goForward" -> { validateArgs(args, emptySet(), emptySet(), functionName); driver.goForward() }
 
