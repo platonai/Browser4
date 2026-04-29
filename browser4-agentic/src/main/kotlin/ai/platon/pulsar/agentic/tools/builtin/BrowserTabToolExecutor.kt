@@ -3,8 +3,10 @@ package ai.platon.pulsar.agentic.tools.builtin
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecGenerator
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.NavigateEntry
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
+import kotlinx.coroutines.delay
 import java.time.Duration
 import kotlin.reflect.KClass
+import kotlin.time.Duration.Companion.seconds
 
 class BrowserTabToolExecutor: AbstractToolExecutor() {
     override val domain = "tab"
@@ -50,6 +52,8 @@ class BrowserTabToolExecutor: AbstractToolExecutor() {
                         // After navigation, wait for the page to load by waiting for the body element to be present
                         driver.waitForNavigation()
                         driver.waitForSelector("body", timeoutMillis = 10_000)
+                        // TODO: add a delay parameter to the navigation options.
+                        delay(1000.seconds)
                     }
                     args.containsKey("rawUrl") || args.containsKey("pageUrl") -> {
                         validateArgs(args, allowed("rawUrl", "pageUrl"), setOf("rawUrl", "pageUrl"), functionName)
@@ -62,6 +66,8 @@ class BrowserTabToolExecutor: AbstractToolExecutor() {
                         // After navigation, wait for the page to load by waiting for the body element to be present
                         driver.waitForNavigation()
                         driver.waitForSelector("body", timeoutMillis = 10_000)
+                        // TODO: add a delay parameter to the navigation options.
+                        delay(1000.seconds)
                     }
                     else -> throw IllegalArgumentException("navigate requires 'url' or ('rawUrl','pageUrl')")
                 }

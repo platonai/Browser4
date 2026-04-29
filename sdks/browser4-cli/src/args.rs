@@ -608,6 +608,15 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_command_string_form_filling_regression_quotes() {
+        let first_name = parse_command_string(r##"fill \"input#first-name\" Lin"##).unwrap();
+        assert_eq!(first_name, vec!["fill", "\"input#first-name\"", "Lin"]);
+
+        let email = parse_command_string("fill input#email 'lin.qiao@example.com'").unwrap();
+        assert_eq!(email, vec!["fill", "input#email", "lin.qiao@example.com"]);
+    }
+
+    #[test]
     fn test_parse_command_string_escaped_characters() {
         // Backslash removes the special meaning of the next character rather than
         // interpreting C-style escape sequences (e.g. `\n` → `n`, not newline).
