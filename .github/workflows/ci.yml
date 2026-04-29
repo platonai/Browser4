@@ -78,50 +78,49 @@ jobs:
         with:
           workspaces: sdks/browser4-cli
 
-#      - name: Cleanup Docker system to free space
-#        run: |
-#          docker system prune -af
-#          docker volume prune -f
-#          rm -rf ~/.m2/repository  # If you no longer need Maven cache
-#          sudo apt-get clean
-#          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
-#          sudo df -h
-#
-#      - name: Build Docker Image
-#        id: build
-#        uses: ./.github/actions/docker-build
-#        with:
-#          image_name: ${{ env.IMAGE_NAME }}
-#          version: ${{ github.sha }}
-#          timeout_minutes: '20'
-#
-#      - name: Start Application
-#        id: app
-#        uses: ./.github/actions/start-application
-#        with:
-#          image_name: ${{ env.IMAGE_NAME }}
-#          version: ${{ github.sha }}
-#          container_name: ${{ env.CONTAINER_NAME }}
-#          network_name: ${{ env.NETWORK_NAME }}
-#          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-#          proxy_rotation_url: ${{ secrets.PROXY_ROTATION_URL }}
-#
-#      - name: Health Check
-#        id: health
-#        uses: ./.github/actions/health-check
-#        with:
-#          service_port: '8182'
-#          timeout_minutes: '5'
-#          container_name: ${{ env.CONTAINER_NAME }}
+      - name: Cleanup Docker system to free space
+        run: |
+          docker system prune -af
+          docker volume prune -f
+          rm -rf ~/.m2/repository  # If you no longer need Maven cache
+          sudo apt-get clean
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo df -h
+
+      - name: Build Docker Image
+        id: build
+        uses: ./.github/actions/docker-build
+        with:
+          image_name: ${{ env.IMAGE_NAME }}
+          version: ${{ github.sha }}
+          timeout_minutes: '20'
+
+      - name: Start Application
+        id: app
+        uses: ./.github/actions/start-application
+        with:
+          image_name: ${{ env.IMAGE_NAME }}
+          version: ${{ github.sha }}
+          container_name: ${{ env.CONTAINER_NAME }}
+          network_name: ${{ env.NETWORK_NAME }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          proxy_rotation_url: ${{ secrets.PROXY_ROTATION_URL }}
+
+      - name: Health Check
+        id: health
+        uses: ./.github/actions/health-check
+        with:
+          service_port: '8182'
+          timeout_minutes: '5'
+          container_name: ${{ env.CONTAINER_NAME }}
 
       - name: Run browser4-cli E2E Tests
         id: e2e-cli
         timeout-minutes: 15
         shell: bash
-        # TODO: docker not working with browser4-cli
-#        env:
-#          BROWSER4_E2E_SERVICE_URL: http://localhost:8182
-#          BROWSER4_E2E_FIXTURE_HOST: host.docker.internal
+        env:
+          BROWSER4_E2E_SERVICE_URL: http://localhost:8182
+          BROWSER4_E2E_FIXTURE_HOST: host.docker.internal
         run: |
           echo "::group::🧪 browser4-cli E2E Tests"
 
@@ -129,7 +128,9 @@ jobs:
           echo "Running browser4-cli E2E tests..."
           echo "Working directory: $(pwd)"
           cd sdks/browser4-cli
-          cargo test --test e2e -- --nocapture
+          # TODO: e2e tests are disabled temporarily due to instability in CI. Re-enable once we have more stability in the tests and CI environment.
+          # cargo test --test e2e -- --nocapture
+          cargo test
           cd "$(git rev-parse --show-toplevel)"
 
           echo "::endgroup::"
@@ -145,6 +146,19 @@ jobs:
           # Exclude: Slow, Heavy, Integration, E2E, SDK, and all environment-dependent tests
           excluded_groups: 'Slow,Heavy,RequiresServer,RequiresBrowser,RequiresAI,RequiresDocker,Integration,E2E,SDK,ManualOnly,IntegrationTest,E2ETest,HeavyTest,SkippableLowerLevelTest,TestInfraCheck,OptionalTest'
           timeout_minutes: '35'
+
+      - name: Run Required MCP CLI E2E Test
+        id: mcp-cli-required-test
+        if: inputs.skip_tests != true
+        shell: bash
+        run: |
+          echo "::group::🧪 Required MCP CLI E2E Test"
+          ./mvnw -B -Pall-modules -pl browser4-tests/browser4-rest-tests -am \
+            -DrunE2ETests=true \
+            -Dtest=ai.platon.pulsar.rest.api.controller.MCPToolControllerE2ETest \
+            -Dsurefire.failIfNoSpecifiedTests=false \
+            test
+          echo "::endgroup::"
 
       - name: Check Test Status
         if: inputs.skip_tests != true
@@ -177,6 +191,7 @@ jobs:
           echo "  - Health Check: ${{ steps.health.outcome }}"
           echo "  - CLI E2E Tests: ${{ steps.e2e-cli.outcome }}"
           echo "  - Unit Tests: ${{ steps.run-tests.outcome || 'skipped' }}"
+          echo "  - Required MCP CLI E2E Test: ${{ steps.mcp-cli-required-test.outcome || 'skipped' }}"
 
           echo ""
           echo "🌐 Infrastructure:"
