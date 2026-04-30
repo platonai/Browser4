@@ -5,13 +5,81 @@ import ai.platon.pulsar.skeleton.workflow.fetch.driver.NavigateEntry
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 import kotlinx.coroutines.delay
 import java.time.Duration
+import java.util.concurrent.atomic.AtomicLong
+import java.util.logging.Logger
 import kotlin.reflect.KClass
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 class BrowserTabToolExecutor: AbstractToolExecutor() {
+    companion object {
+        private const val MIN_READ_INTERVAL_MILLIS = 1_000L
+        private const val READ_ACTIONS_WHITELIST_PROPERTY = "browser4.tab.read.actions.whitelist"
+        private const val READ_ACTIONS_WHITELIST_ENV = "BROWSER4_TAB_READ_ACTIONS_WHITELIST"
+        private val logger: Logger = Logger.getLogger(BrowserTabToolExecutor::class.java.name)
+
+        // Actions that read page state and can become flaky if executed too soon after mutations/navigation.
+        private val DEFAULT_READ_PAGE_STATE_ACTIONS = setOf(
+            "waitForSelector", "waitForNavigation", "waitForPage",
+            "exists", "isVisible", "visible", "isHidden", "isChecked",
+            "ariaSnapshot", "title", "screenshot",
+            "outerHTML", "textContent", "nanoDOMTree",
+            "selectFirstTextOrNull", "selectTextAll",
+            "selectFirstAttributeOrNull", "selectAttributes", "selectAttributeAll",
+            "selectFirstPropertyValueOrNull", "selectPropertyValueAll",
+            "clickablePoint", "boundingBox",
+            "getCookies",
+            "currentUrl", "url", "documentURI", "baseURI", "referrer", "pageSource"
+        )
+
+        private val READ_PAGE_STATE_ACTIONS = resolveReadPageStateActions()
+
+        private fun resolveReadPageStateActions(): Set<String> {
+            val configuredValue = System.getProperty(READ_ACTIONS_WHITELIST_PROPERTY)?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?: System.getenv(READ_ACTIONS_WHITELIST_ENV)?.trim()?.takeIf { it.isNotEmpty() }
+                ?: return DEFAULT_READ_PAGE_STATE_ACTIONS
+
+            val configuredActions = configuredValue
+                .split(',', ';', ' ', '\n', '\r', '\t')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .toSet()
+
+            if (configuredActions.isEmpty()) {
+                return DEFAULT_READ_PAGE_STATE_ACTIONS
+            }
+
+            val unknownActions = configuredActions - DEFAULT_READ_PAGE_STATE_ACTIONS
+            if (unknownActions.isNotEmpty()) {
+                logger.warning(
+                    "Ignoring unknown read-action names from whitelist config: ${unknownActions.joinToString(",")}" +
+                            " (supported: ${DEFAULT_READ_PAGE_STATE_ACTIONS.joinToString(",")})"
+                )
+            }
+
+            val effectiveActions = configuredActions intersect DEFAULT_READ_PAGE_STATE_ACTIONS
+            if (effectiveActions.isEmpty()) {
+                logger.warning(
+                    "Read-action whitelist config contains no supported actions, fallback to defaults. " +
+                            "property=$READ_ACTIONS_WHITELIST_PROPERTY env=$READ_ACTIONS_WHITELIST_ENV"
+                )
+                return DEFAULT_READ_PAGE_STATE_ACTIONS
+            }
+
+            logger.info(
+                "Configured read-action whitelist: ${effectiveActions.joinToString(",")}" +
+                        " (property=$READ_ACTIONS_WHITELIST_PROPERTY env=$READ_ACTIONS_WHITELIST_ENV)"
+            )
+            return effectiveActions
+        }
+    }
+
     override val domain = "tab"
 
     override val receiverClass: KClass<*> = WebDriver::class
+
+    private val lastActionAtMillis = AtomicLong(0L)
 
     init {
         ToolSpecGenerator.apply {
@@ -29,6 +97,22 @@ class BrowserTabToolExecutor: AbstractToolExecutor() {
         """.trimIndent()
     }
 
+    private suspend fun waitBeforeReadIfNeeded(functionName: String) {
+        if (functionName !in READ_PAGE_STATE_ACTIONS) {
+            return
+        }
+
+        val lastActionAt = lastActionAtMillis.get()
+        if (lastActionAt <= 0L) {
+            return
+        }
+
+        val elapsed = System.currentTimeMillis() - lastActionAt
+        if (elapsed < MIN_READ_INTERVAL_MILLIS) {
+            delay((MIN_READ_INTERVAL_MILLIS - elapsed).milliseconds)
+        }
+    }
+
     /**
      * Execute a WebDriver function by name with named arguments.
      * args: (parameterName -> value). If provided names don't match a supported signature, throw IllegalArgumentException.
@@ -41,7 +125,9 @@ class BrowserTabToolExecutor: AbstractToolExecutor() {
 
         fun allowed(vararg names: String) = names.toSet()
 
-        return when (functionName) {
+        waitBeforeReadIfNeeded(functionName)
+
+        val result = when (functionName) {
             // Navigation
             "open" -> { validateArgs(args, allowed("url"), setOf("url"), functionName); driver.open(paramString(args, "url", functionName)!!) }
             "navigate" -> {
@@ -52,7 +138,7 @@ class BrowserTabToolExecutor: AbstractToolExecutor() {
                         // After navigation, wait for the page to load by waiting for the body element to be present
                         driver.waitForNavigation()
                         driver.waitForSelector("body", timeoutMillis = 10_000)
-                        // TODO: add a delay parameter to the navigation options.
+                        // wait for another seconds for DOM ready
                         delay(1.seconds)
                     }
                     args.containsKey("rawUrl") || args.containsKey("pageUrl") -> {
@@ -66,7 +152,7 @@ class BrowserTabToolExecutor: AbstractToolExecutor() {
                         // After navigation, wait for the page to load by waiting for the body element to be present
                         driver.waitForNavigation()
                         driver.waitForSelector("body", timeoutMillis = 10_000)
-                        // TODO: add a delay parameter to the navigation options.
+                        // wait for another seconds for DOM ready
                         delay(1.seconds)
                     }
                     else -> throw IllegalArgumentException("navigate requires 'url' or ('rawUrl','pageUrl')")
@@ -392,5 +478,8 @@ class BrowserTabToolExecutor: AbstractToolExecutor() {
 
             else -> throw IllegalArgumentException("Unsupported WebDriver tool function: $functionName, call $domain.help() for more details")
         }
+
+        lastActionAtMillis.set(System.currentTimeMillis())
+        return result
     }
 }

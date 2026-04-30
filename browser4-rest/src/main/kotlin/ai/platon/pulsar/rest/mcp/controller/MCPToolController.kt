@@ -13,6 +13,7 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.annotation.JsonSetter
 import com.fasterxml.jackson.annotation.Nulls
 import jakarta.servlet.http.HttpServletResponse
+import kotlinx.coroutines.delay
 import org.slf4j.LoggerFactory
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
 import org.springframework.http.MediaType
@@ -22,6 +23,7 @@ import java.util.*
 import kotlin.collections.component1
 import kotlin.collections.component2
 import kotlin.collections.iterator
+import kotlin.time.Duration.Companion.seconds
 
 // ---------------------------------------------------------------------------
 // DTOs
@@ -660,6 +662,7 @@ class MCPToolController(
             ?: throw IllegalArgumentException("Unknown tool: $toolName")
 
         val result = agent.toolExtractor.execute(toolCall)
+
         val evaluate = result.evaluate
         evaluate.exception?.let { exception ->
             throw IllegalArgumentException("$toolName failed: ${exception.message} help: ${exception.help}")
