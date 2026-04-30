@@ -1,4 +1,4 @@
-package ai.platon.pulsar.parse.html
+package ai.platon.browser4.parse.html
 
 import ai.platon.pulsar.skeleton.workflow.parse.PageParser
 import ai.platon.pulsar.skeleton.workflow.parse.ParseException
