@@ -22,9 +22,9 @@
 //!    service (Docker-friendly; no JAR is needed).
 //! 2. `BROWSER4_E2E_SERVER_URL` environment variable – alias for the above.
 //! 3. Otherwise, each local run lets `browser4-cli` auto-start the backend.
-//!    Startup uses Maven `spring-boot:run` only when the CLI current directory
-//!    is inside a Browser4 source checkout; all other directories use the jar
-//!    fallback path.
+//!    By default, e2e forces the jar startup path (faster than Maven
+//!    `spring-boot:run`). Set `BROWSER4_E2E_USE_MAVEN_STARTUP=true` to opt in to
+//!    Maven startup checks.
 //!
 //! When running against an external Docker service, also set:
 //! - `BROWSER4_E2E_FIXTURE_HOST` – hostname/IP the Browser4 container uses to
@@ -62,6 +62,7 @@ const INTERACTIVE_TITLE: &str = "Browser4 CLI Interactive Fixture";
 const OTHER_TITLE: &str = "Browser4 CLI Other Fixture";
 const FORM_TITLE: &str = "Browser4 CLI Form Fixture";
 const ROOT_SEARCH_START_DIR_ENV: &str = "BROWSER4_CLI_INVOKE_DIR";
+const USE_MAVEN_STARTUP_ENV: &str = "BROWSER4_E2E_USE_MAVEN_STARTUP";
 
 // ---------------------------------------------------------------------------
 // Environment helpers
@@ -87,6 +88,18 @@ fn external_service_url() -> Option<String> {
 /// Defaults to `127.0.0.1` (loopback, suitable for local runs).
 fn fixture_host() -> String {
     std::env::var("BROWSER4_E2E_FIXTURE_HOST").unwrap_or_else(|_| "127.0.0.1".to_string())
+}
+
+fn use_maven_startup_for_local_server() -> bool {
+    std::env::var(USE_MAVEN_STARTUP_ENV)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
 }
 
 // ---------------------------------------------------------------------------
@@ -736,6 +749,7 @@ struct E2ECtx {
     fixture_base_url: String,
     browser4_base_url: String,
     invocation_dir: PathBuf,
+    use_maven_startup: bool,
     workspace_dir: PathBuf,
     state_dir: PathBuf,
     upload_file_path: PathBuf,
@@ -805,7 +819,7 @@ impl E2ETestResources {
         let started_via_maven = startup_result
             .stderr
             .contains("Starting server via Maven spring-boot:run");
-        let expect_maven_startup = is_browser4_repo_or_child(&self.ctx.invocation_dir);
+        let expect_maven_startup = self.ctx.use_maven_startup;
         assert_eq!(
             startup_result.exit_code, 0,
             "Expected CLI-managed Browser4 startup to succeed.{}\nstdout:\n{}\nstderr:\n{}",
@@ -816,7 +830,7 @@ impl E2ETestResources {
                 if expect_maven_startup {
                     assert!(
                         started_via_maven,
-                        "Expected local e2e startup to use Maven spring-boot:run when current directory is inside a Browser4 checkout.{}\nstdout:\n{}\nstderr:\n{}",
+                        "Expected local e2e startup to use Maven spring-boot:run when {USE_MAVEN_STARTUP_ENV}=true.{}\nstdout:\n{}\nstderr:\n{}",
                         startup_log_hint,
                         startup_result.stdout,
                         startup_result.stderr,
@@ -824,7 +838,7 @@ impl E2ETestResources {
                 } else {
                     assert!(
                         !started_via_maven,
-                        "Expected local e2e startup outside a Browser4 checkout to use jar fallback instead of Maven.{}\nstdout:\n{}\nstderr:\n{}",
+                        "Expected local e2e startup to default to jar fallback (set {USE_MAVEN_STARTUP_ENV}=true to opt in to Maven).{}\nstdout:\n{}\nstderr:\n{}",
                         startup_log_hint,
                         startup_result.stdout,
                         startup_result.stderr,
@@ -924,36 +938,6 @@ fn format_browser4_startup_log_hint(stderr: &str) -> String {
         .unwrap_or_default()
 }
 
-fn is_browser4_repo_or_child(path: &Path) -> bool {
-    let mut current = if path.is_dir() {
-        Some(path)
-    } else {
-        path.parent()
-    };
-    while let Some(dir) = current {
-        if is_browser4_repo_root(dir) {
-            return true;
-        }
-        current = dir.parent();
-    }
-    false
-}
-
-fn is_browser4_repo_root(path: &Path) -> bool {
-    path.join("VERSION").is_file()
-        && path.join("pom.xml").is_file()
-        && path
-            .join("browser4-app")
-            .join("browser4-agents")
-            .join("pom.xml")
-            .is_file()
-        && path
-            .join("sdks")
-            .join("browser4-cli")
-            .join("Cargo.toml")
-            .is_file()
-}
-
 fn run_cli_process_with_live_output(ctx: &E2ECtx, args: &[&str]) -> CliRunResult {
     run_cli_process_internal(ctx, args, None, true)
 }
@@ -980,10 +964,16 @@ fn run_cli_process_internal(
     command
         .args(&full_args)
         .current_dir(&ctx.workspace_dir)
-        .env(ROOT_SEARCH_START_DIR_ENV, &ctx.invocation_dir)
         .env("BROWSER4_CLI_STATE_DIR", &ctx.state_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+
+    if ctx.use_maven_startup {
+        command.env(ROOT_SEARCH_START_DIR_ENV, &ctx.invocation_dir);
+    } else {
+        // Keep e2e deterministic: ignore inherited root-search env and use jar startup by default.
+        command.env_remove(ROOT_SEARCH_START_DIR_ENV);
+    }
 
     let output = if let Some(payload) = stdin_payload {
         let mut child = command
@@ -1605,6 +1595,7 @@ fn reset_cli_artifacts(ctx: &mut E2ECtx) {
 fn create_e2e_test_resources() -> E2ETestResources {
     let service_url = external_service_url();
     let is_external = service_url.is_some();
+    let use_maven_startup = use_maven_startup_for_local_server();
     assert!(
         cli_binary().exists(),
         "CLI binary not found at {:?}. Run `cargo build` first.",
@@ -1624,13 +1615,18 @@ fn create_e2e_test_resources() -> E2ETestResources {
 
     let browser4_base_url =
         service_url.unwrap_or_else(|| format!("http://127.0.0.1:{}", find_free_port()));
-    let invocation_dir = std::env::current_dir().expect("failed to read e2e invocation directory");
 
     let temp_dir = tempfile::TempDir::new().expect("tempdir creation failed");
     let workspace_dir = temp_dir.path().join("workspace");
     let state_dir = temp_dir.path().join("state");
     fs::create_dir_all(&workspace_dir).unwrap();
     fs::create_dir_all(&state_dir).unwrap();
+
+    let invocation_dir = if use_maven_startup {
+        std::env::current_dir().expect("failed to read e2e invocation directory")
+    } else {
+        workspace_dir.clone()
+    };
 
     let upload_file_path = temp_dir.path().join("upload.txt");
     fs::write(&upload_file_path, b"browser4-cli e2e upload payload")
@@ -1645,6 +1641,7 @@ fn create_e2e_test_resources() -> E2ETestResources {
             fixture_base_url,
             browser4_base_url,
             invocation_dir,
+            use_maven_startup,
             workspace_dir,
             state_dir,
             upload_file_path,
