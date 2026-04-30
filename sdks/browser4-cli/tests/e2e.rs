@@ -1593,7 +1593,10 @@ fn reset_cli_artifacts(ctx: &mut E2ECtx) {
 }
 
 fn e2e_temp_root_dir() -> PathBuf {
-    std::env::temp_dir().join("browser4")
+    std::env::temp_dir()
+        .join(".browser4")
+        .join("browser4-cli")
+        .join("e2e")
 }
 
 fn create_e2e_test_resources() -> E2ETestResources {

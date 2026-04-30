@@ -181,6 +181,35 @@ The active session ID and server URL are kept in `~/.browser4/cli-state.json`
 between invocations. Override the directory with the `BROWSER4_CLI_STATE_DIR`
 environment variable.
 
+## Runtime Temp Files
+
+`browser4-cli` keeps ephemeral runtime artifacts under the system temp directory:
+
+- Windows: `%TEMP%\.browser4\browser4-cli`
+- Linux/macOS: `${TMPDIR:-/tmp}/.browser4/browser4-cli`
+
+This temp subtree contains items such as:
+
+- startup logs for auto-started Browser4 servers
+- staged Maven wrapper launchers
+- Rust test scratch directories used by `browser4-cli` tests
+
+Persistent CLI state and the fallback `Browser4.jar` remain under `~/.browser4` by default.
+
+### Clean browser4-cli temp artifacts
+
+On Windows PowerShell:
+
+```powershell
+.\bin\cleanup-temp.ps1
+```
+
+Preview only:
+
+```powershell
+.\bin\cleanup-temp.ps1 -WhatIf
+```
+
 ## Snapshots
 
 After each command that modifies browser state, the CLI automatically:

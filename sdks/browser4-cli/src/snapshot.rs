@@ -55,6 +55,18 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    fn test_temp_dir() -> TempDir {
+        let root = std::env::temp_dir()
+            .join(".browser4")
+            .join("browser4-cli")
+            .join("snapshot-tests");
+        fs::create_dir_all(&root).unwrap();
+        tempfile::Builder::new()
+            .prefix("snapshot-")
+            .tempdir_in(&root)
+            .unwrap()
+    }
+
     #[test]
     fn test_timestamped_filename_format() {
         let name = timestamped_filename("page", "yml");
@@ -76,7 +88,7 @@ mod tests {
 
     #[test]
     fn test_save_snapshot() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = test_temp_dir();
         let path = tmp.path().join("sub").join("snap.yml");
         save_snapshot(&path, "content: here").unwrap();
         let content = fs::read_to_string(&path).unwrap();

@@ -919,9 +919,21 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    fn test_temp_dir() -> TempDir {
+        let root = std::env::temp_dir()
+            .join(".browser4")
+            .join("browser4-cli")
+            .join("managed-processes-tests");
+        fs::create_dir_all(&root).unwrap();
+        tempfile::Builder::new()
+            .prefix("managed-")
+            .tempdir_in(&root)
+            .unwrap()
+    }
+
     #[test]
     fn test_register_and_remove() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = test_temp_dir();
         let reg_path = tmp.path().join("reg.json");
 
         let proc = ManagedServerProcess {
@@ -944,7 +956,7 @@ mod tests {
 
     #[test]
     fn test_read_missing_registry() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = test_temp_dir();
         let reg_path = tmp.path().join("missing.json");
         let procs = read_managed_server_processes(Some(&reg_path));
         assert!(procs.is_empty());
@@ -952,7 +964,7 @@ mod tests {
 
     #[test]
     fn test_clear_registry() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = test_temp_dir();
         let reg_path = tmp.path().join("reg.json");
 
         let proc = ManagedServerProcess {
@@ -977,7 +989,7 @@ mod tests {
 
     #[test]
     fn test_collect_browser_marker_pid_entries_discovers_nested_markers() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = test_temp_dir();
         let root = tmp
             .path()
             .join("browser4-user")
@@ -1004,7 +1016,7 @@ mod tests {
 
     #[test]
     fn test_collect_browser_marker_pid_entries_ignores_invalid_marker_contents() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = test_temp_dir();
         let root = tmp.path().join("browser").join("chrome").join("default");
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join(BROWSER_PID_MARKER_FILE_NAME), "not-a-pid").unwrap();
@@ -1041,7 +1053,7 @@ mod tests {
 
     #[test]
     fn test_close_all_base_urls_for_force_stop_include_registry_and_state() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = test_temp_dir();
         let state_dir = tmp.path().join("state");
         fs::create_dir_all(&state_dir).unwrap();
         let reg_path = state_dir.join("managed.json");

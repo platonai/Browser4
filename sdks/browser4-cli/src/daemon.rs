@@ -348,7 +348,7 @@ fn prepare_unix_maven_wrapper_launcher(
         return Ok((launch_spec.program.clone(), None));
     }
 
-    let launcher_base_dir = resolve_default_state_dir().join("launchers");
+    let launcher_base_dir = browser4_cli_temp_root_dir().join("launchers");
     fs::create_dir_all(&launcher_base_dir).map_err(|e| {
         format!(
             "Failed to create Browser4 launcher directory {}: {e}",
@@ -910,38 +910,16 @@ fn server_startup_log_path(
         .join(format!("browser4-server-{kind}-port{port}-{timestamp}.log"))
 }
 
+fn browser4_cli_temp_root_dir() -> PathBuf {
+    env::temp_dir().join(".browser4").join("browser4-cli")
+}
+
 fn default_cli_temp_dir() -> PathBuf {
-    let user = current_user_for_temp_dir();
-    let mut path = env::temp_dir().join(format!("browser4-{user}"));
+    let mut path = browser4_cli_temp_root_dir();
     for component in CLI_TEMP_DIR_COMPONENTS {
         path.push(component);
     }
     path
-}
-
-fn current_user_for_temp_dir() -> String {
-    ["BROWSER4_CLI_USER", "USERNAME", "USER", "LOGNAME"]
-        .into_iter()
-        .filter_map(|name| env::var(name).ok())
-        .map(|value| sanitize_user_for_temp_dir(&value))
-        .find(|value| !value.is_empty())
-        .unwrap_or_else(|| "user".to_string())
-}
-
-fn sanitize_user_for_temp_dir(value: &str) -> String {
-    value
-        .trim()
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
-                ch
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>()
-        .trim_matches('-')
-        .to_string()
 }
 
 fn resolve_managed_server_pid(launcher_pid: u32) -> u32 {
@@ -1093,6 +1071,18 @@ mod tests {
     use std::fs::{create_dir_all, write};
     use tempfile::TempDir;
 
+    fn test_temp_dir() -> TempDir {
+        let root = std::env::temp_dir()
+            .join(".browser4")
+            .join("browser4-cli")
+            .join("daemon-tests");
+        create_dir_all(&root).unwrap();
+        tempfile::Builder::new()
+            .prefix("daemon-")
+            .tempdir_in(&root)
+            .unwrap()
+    }
+
     fn sample_launch_spec(kind: ServerLaunchKind) -> ServerLaunchSpec {
         ServerLaunchSpec {
             kind,
@@ -1135,7 +1125,7 @@ mod tests {
 
     #[test]
     fn test_find_browser4_root_prefers_invocation_env_dir() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = test_temp_dir();
         let root = create_browser4_root(&tmp);
         let nested = root.join("sdks").join("browser4-cli");
 
@@ -1152,7 +1142,7 @@ mod tests {
 
     #[test]
     fn test_find_browser4_root_from_nested_cli_dir() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = test_temp_dir();
         let root = create_browser4_root(&tmp);
         let nested = root.join("sdks").join("browser4-cli").join("src");
         create_dir_all(&nested).unwrap();
@@ -1162,7 +1152,7 @@ mod tests {
 
     #[test]
     fn test_find_browser4_root_from_workspace_parent_with_deep_search() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = test_temp_dir();
         let workspace = tmp.path().join("Browser4Team");
         let submodules = workspace.join("submodules");
         create_dir_all(&submodules).unwrap();
@@ -1174,7 +1164,7 @@ mod tests {
 
     #[test]
     fn test_find_browser4_root_from_workspace_parent_without_deep_search() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = test_temp_dir();
         let workspace = tmp.path().join("Browser4Team");
         create_dir_all(workspace.join("submodules")).unwrap();
         let root = create_browser4_root_in(&workspace.join("submodules"));
@@ -1185,7 +1175,7 @@ mod tests {
 
     #[test]
     fn test_find_browser4_root_from_non_repo_path() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = test_temp_dir();
         let outside = tmp.path().join("not-browser4");
         create_dir_all(&outside).unwrap();
 
@@ -1274,7 +1264,7 @@ mod tests {
 
     #[test]
     fn test_default_browser4_jar_path_uses_state_dir_override() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = test_temp_dir();
         let expected = tmp.path().canonicalize().unwrap().join("lib").join("Browser4.jar");
 
         unsafe {
@@ -1303,7 +1293,7 @@ mod tests {
 
     #[test]
     fn test_server_startup_log_dir_uses_provided_log_dir() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = test_temp_dir();
 
         assert_eq!(server_startup_log_dir(Some(tmp.path())), tmp.path());
     }
@@ -1311,24 +1301,18 @@ mod tests {
     #[test]
     fn test_server_startup_log_dir_defaults_to_temp_cli_dir() {
         let expected = env::temp_dir()
-            .join("browser4-test-user")
+            .join(".browser4")
+            .join("browser4-cli")
             .join("tmp")
             .join("cli");
-
-        unsafe {
-            env::set_var("BROWSER4_CLI_USER", "test-user");
-        }
         let actual = server_startup_log_dir(None);
-        unsafe {
-            env::remove_var("BROWSER4_CLI_USER");
-        }
 
         assert_eq!(actual, expected);
     }
 
     #[test]
     fn test_server_startup_log_path_includes_launch_kind_and_port() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = test_temp_dir();
         let maven_path = server_startup_log_path(
             Some(tmp.path()),
             &sample_launch_spec(ServerLaunchKind::Maven),
@@ -1353,7 +1337,7 @@ mod tests {
 
     #[test]
     fn test_create_server_startup_log_writes_header() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = test_temp_dir();
         let log = create_server_startup_log_in(
             Some(tmp.path()),
             &sample_launch_spec(ServerLaunchKind::Maven),
@@ -1372,7 +1356,7 @@ mod tests {
 
     #[test]
     fn test_append_startup_log_message_writes_status_line() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = test_temp_dir();
         let log = create_server_startup_log_in(
             Some(tmp.path()),
             &sample_launch_spec(ServerLaunchKind::Jar),
@@ -1391,7 +1375,7 @@ mod tests {
 
     #[test]
     fn test_is_browser4_root_rejects_missing_root_marker() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = test_temp_dir();
         let root = tmp.path().join("Browser4");
         create_dir_all(root.join("browser4-app").join("browser4-agents")).unwrap();
         create_dir_all(root.join("sdks").join("browser4-cli")).unwrap();
@@ -1438,7 +1422,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn test_build_maven_launch_spec_prefers_windows_wrapper() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = test_temp_dir();
         let root = create_browser4_root(&tmp);
         let wrapper = root.join("mvnw.cmd");
         write(&wrapper, "@echo off\r\n").unwrap();
@@ -1476,7 +1460,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn test_build_powershell_batch_invocation_escapes_dynamic_windows_paths() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = test_temp_dir();
         let wrapper_dir = tmp.path().join("team's tools");
         create_dir_all(&wrapper_dir).unwrap();
         let wrapper = wrapper_dir.join("mvnw.cmd");
@@ -1518,7 +1502,7 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn test_build_maven_launch_spec_prefers_unix_wrapper() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = test_temp_dir();
         let root = create_browser4_root(&tmp);
         let wrapper = root.join("mvnw");
         write(&wrapper, "#!/usr/bin/env sh\n").unwrap();
@@ -1537,7 +1521,7 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn test_command_for_launch_spec_normalizes_unix_maven_wrapper() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = test_temp_dir();
         let root = create_browser4_root(&tmp);
         create_dir_all(root.join(".mvn").join("wrapper")).unwrap();
         let wrapper = root.join("mvnw");

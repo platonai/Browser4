@@ -149,7 +149,20 @@ pub fn resolve_ref(raw_ref: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::TempDir;
+
+    fn test_temp_dir() -> TempDir {
+        let root = std::env::temp_dir()
+            .join(".browser4")
+            .join("browser4-cli")
+            .join("state-tests");
+        fs::create_dir_all(&root).unwrap();
+        tempfile::Builder::new()
+            .prefix("state-")
+            .tempdir_in(&root)
+            .unwrap()
+    }
 
     #[test]
     fn test_resolve_ref_e_notation() {
@@ -167,7 +180,7 @@ mod tests {
 
     #[test]
     fn test_read_write_state() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = test_temp_dir();
         let state = CliState {
             session_id: Some("abc123".to_string()),
             base_url: "http://localhost:8182".to_string(),
@@ -187,7 +200,7 @@ mod tests {
 
     #[test]
     fn test_read_state_missing_file() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = test_temp_dir();
         let state = read_state(Some(tmp.path()), None);
         assert_eq!(state.base_url, "http://localhost:8182");
         assert!(state.session_id.is_none());
@@ -195,7 +208,7 @@ mod tests {
 
     #[test]
     fn test_clear_state() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = test_temp_dir();
         let state = CliState::default();
         write_state(&state, Some(tmp.path()), None).unwrap();
         assert!(state_file(tmp.path(), None).exists());
@@ -205,7 +218,7 @@ mod tests {
 
     #[test]
     fn test_named_session_state() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = test_temp_dir();
         let state_auth = CliState {
             session_id: Some("auth123".to_string()),
             base_url: "http://localhost:8182".to_string(),
@@ -248,7 +261,7 @@ mod tests {
 
     #[test]
     fn test_clear_all_state_removes_default_and_named_sessions() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = test_temp_dir();
         let default_state = CliState {
             session_id: Some("default123".to_string()),
             ..CliState::default()
