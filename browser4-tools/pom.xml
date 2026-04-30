@@ -27,6 +27,10 @@
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-skeleton</artifactId>
         </dependency>
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>browser4-parse</artifactId>
+        </dependency>
 
         <dependency>
             <groupId>ai.platon.pulsar</groupId>

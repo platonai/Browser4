@@ -86,7 +86,7 @@
 	ids described in each parser's parser.xml file -->
 	<aliases>
         <alias name="parse-html" class="ai.platon.pulsar.skeleton.workflow.parse.html.PrimerHtmlParser"/>
-        <alias name="parse-tika" class="ai.platon.pulsar.tools.TikaParser"/>
+        <alias name="parse-tika" class="ai.platon.browser4.tools.TikaParser"/>
 	</aliases>
 
 </parse-plugins>
