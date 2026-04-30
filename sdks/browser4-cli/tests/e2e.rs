@@ -968,12 +968,9 @@ fn run_cli_process_internal(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    if ctx.use_maven_startup {
-        command.env(ROOT_SEARCH_START_DIR_ENV, &ctx.invocation_dir);
-    } else {
-        // Keep e2e deterministic: ignore inherited root-search env and use jar startup by default.
-        command.env_remove(ROOT_SEARCH_START_DIR_ENV);
-    }
+    // Always anchor Browser4.jar root search to the CLI launch directory,
+    // not the isolated temporary workspace used for test artifacts.
+    command.env(ROOT_SEARCH_START_DIR_ENV, &ctx.invocation_dir);
 
     let output = if let Some(payload) = stdin_payload {
         let mut child = command
@@ -1644,11 +1641,8 @@ fn create_e2e_test_resources() -> E2ETestResources {
     fs::create_dir_all(&workspace_dir).unwrap();
     fs::create_dir_all(&state_dir).unwrap();
 
-    let invocation_dir = if use_maven_startup {
-        std::env::current_dir().expect("failed to read e2e invocation directory")
-    } else {
-        workspace_dir.clone()
-    };
+    let invocation_dir =
+        std::env::current_dir().expect("failed to read e2e invocation directory");
 
     let upload_file_path = temp_dir.path().join("upload.txt");
     fs::write(&upload_file_path, b"browser4-cli e2e upload payload")

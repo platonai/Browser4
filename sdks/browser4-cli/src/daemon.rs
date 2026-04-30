@@ -30,6 +30,23 @@ const CLI_LIB_DIR_COMPONENT: &str = "lib";
 const BROWSER4_JAR_FILE_NAME: &str = "Browser4.jar";
 const ROOT_SEARCH_START_DIR_ENV: &str = "BROWSER4_CLI_INVOKE_DIR";
 
+/// Capture process startup cwd once for Browser4 root discovery.
+///
+/// We only set this when the caller did not already provide an override,
+/// so tests and advanced invocations can keep explicit control.
+pub fn init_root_search_start_dir_from_startup() {
+    if env::var_os(ROOT_SEARCH_START_DIR_ENV).is_some() {
+        return;
+    }
+
+    if let Ok(current_dir) = env::current_dir() {
+        // Rust 2024 marks process-wide env mutation as unsafe.
+        unsafe {
+            env::set_var(ROOT_SEARCH_START_DIR_ENV, current_dir);
+        }
+    }
+}
+
 /// Ensure the Browser4 server is running, starting it if necessary.
 ///
 /// Only acts on `localhost` / `127.0.0.1` URLs.
@@ -116,7 +133,7 @@ struct PreparedLaunchCommand {
 }
 
 async fn resolve_server_launch_spec(port: u16) -> Result<ServerLaunchSpec, String> {
-    if let Some(repo_root) = find_browser4_root() {
+    if let Some(repo_root) = find_browser4_root_for_maven_launch() {
         match build_maven_launch_spec(&repo_root, port) {
             Ok(spec) => return Ok(spec),
             Err(error) => {
@@ -445,6 +462,11 @@ fn find_browser4_root() -> Option<PathBuf> {
         }
     }
 
+    let current_dir = env::current_dir().ok()?;
+    find_browser4_root_from(&current_dir, false)
+}
+
+fn find_browser4_root_for_maven_launch() -> Option<PathBuf> {
     let current_dir = env::current_dir().ok()?;
     find_browser4_root_from(&current_dir, false)
 }

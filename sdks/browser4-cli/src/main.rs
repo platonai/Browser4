@@ -34,7 +34,7 @@ use args::{
     parse_global_flags, parse_raw_args,
 };
 use commands::commands_map;
-use daemon::{ensure_server_running, resolve_base_url};
+use daemon::{ensure_server_running, init_root_search_start_dir_from_startup, resolve_base_url};
 use help::{generate_command_help, generate_help};
 use http::{
     call_tool, get_command_result, get_command_status, is_stale_session_error, make_client,
@@ -2055,6 +2055,8 @@ async fn handle_batch(global: &args::GlobalFlags) -> Result<(), String> {
 
 #[tokio::main]
 async fn main() {
+    init_root_search_start_dir_from_startup();
+
     let raw_args: Vec<String> = std::env::args().skip(1).collect();
     let global = parse_global_flags(&raw_args);
     let (command, effective_global) = normalize_command_invocation(&global);
