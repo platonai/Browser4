@@ -1592,6 +1592,10 @@ fn reset_cli_artifacts(ctx: &mut E2ECtx) {
     ctx.record_step("reset CLI artifacts", started_at.elapsed());
 }
 
+fn e2e_temp_root_dir() -> PathBuf {
+    std::env::temp_dir().join("browser4")
+}
+
 fn create_e2e_test_resources() -> E2ETestResources {
     let service_url = external_service_url();
     let is_external = service_url.is_some();
@@ -1616,7 +1620,22 @@ fn create_e2e_test_resources() -> E2ETestResources {
     let browser4_base_url =
         service_url.unwrap_or_else(|| format!("http://127.0.0.1:{}", find_free_port()));
 
-    let temp_dir = tempfile::TempDir::new().expect("tempdir creation failed");
+    let temp_root = e2e_temp_root_dir();
+    fs::create_dir_all(&temp_root).unwrap_or_else(|error| {
+        panic!(
+            "failed to create e2e temp root {}: {error}",
+            temp_root.display()
+        )
+    });
+    let temp_dir = tempfile::Builder::new()
+        .prefix("e2e-")
+        .tempdir_in(&temp_root)
+        .unwrap_or_else(|error| {
+            panic!(
+                "tempdir creation failed under {}: {error}",
+                temp_root.display()
+            )
+        });
     let workspace_dir = temp_dir.path().join("workspace");
     let state_dir = temp_dir.path().join("state");
     fs::create_dir_all(&workspace_dir).unwrap();

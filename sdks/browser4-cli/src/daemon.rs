@@ -178,7 +178,7 @@ fn build_jar_launch_spec(jar_path: &Path, port: u16) -> ServerLaunchSpec {
         program: PathBuf::from("java"),
         args: vec![
             "-jar".to_string(),
-            jar_path.to_string_lossy().to_string(),
+            java_jar_argument_path(jar_path),
             format!("--server.port={port}"),
         ],
         working_dir: jar_path
@@ -192,6 +192,30 @@ fn build_jar_launch_spec(jar_path: &Path, port: u16) -> ServerLaunchSpec {
             port
         ),
     }
+}
+
+fn java_jar_argument_path(jar_path: &Path) -> String {
+    #[cfg(windows)]
+    {
+        normalize_windows_verbatim_path_for_java(jar_path)
+    }
+
+    #[cfg(not(windows))]
+    {
+        jar_path.to_string_lossy().to_string()
+    }
+}
+
+#[cfg(windows)]
+fn normalize_windows_verbatim_path_for_java(path: &Path) -> String {
+    let raw = path.to_string_lossy();
+    if let Some(without_prefix) = raw.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{without_prefix}");
+    }
+    if let Some(without_prefix) = raw.strip_prefix(r"\\?\") {
+        return without_prefix.to_string();
+    }
+    raw.to_string()
 }
 
 fn default_server_working_dir() -> PathBuf {
@@ -1468,6 +1492,26 @@ mod tests {
                 wrapper.to_string_lossy().replace('\'', "''"),
                 args[0].replace('\'', "''")
             )
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_normalize_windows_verbatim_path_for_java_drive_path() {
+        let path = PathBuf::from(r"\\?\C:\temp\Browser4.jar");
+        assert_eq!(
+            normalize_windows_verbatim_path_for_java(&path),
+            r"C:\temp\Browser4.jar"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_normalize_windows_verbatim_path_for_java_unc_path() {
+        let path = PathBuf::from(r"\\?\UNC\server\share\Browser4.jar");
+        assert_eq!(
+            normalize_windows_verbatim_path_for_java(&path),
+            r"\\server\share\Browser4.jar"
         );
     }
 
