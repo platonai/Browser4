@@ -29,6 +29,7 @@ print_usage() {
   echo "  skills      Run skills-focused agentic tests"
   echo "  mcp         Run MCP-focused agentic tests"
   echo "  browser4    Run all Browser4 main tests (fast, rest, it, e2e)"
+  echo "  b4          Alias for browser4"
   echo ""
   echo "Examples:"
   echo "  test.sh fast                       # Run fast unit tests"
@@ -39,13 +40,14 @@ print_usage() {
   echo "  test.sh skills                     # Run skills-focused agentic tests"
   echo "  test.sh mcp                        # Run MCP-focused agentic tests"
   echo "  test.sh browser4                   # Run all Browser4 main tests"
+  echo "  test.sh b4                         # Alias for browser4"
   echo "  test.sh it -pl browser4-core       # Pass additional Maven args through"
   exit 1
 }
 
 exit_unknown_test_type() {
   local test_type=$1
-  echo "Error: Unknown test type '$test_type'. Valid test types: fast, it, e2e, cli, rest, skills, mcp, browser4." >&2
+  echo "Error: Unknown test type '$test_type'. Valid test types: fast, it, e2e, cli, rest, skills, mcp, browser4, b4." >&2
   exit 1
 }
 
@@ -165,7 +167,7 @@ run_browser4_cli_tests() {
   echo "=========================================="
 }
 
-KnownTestTypes=(fast it e2e cli browser4-cli rest skills mcp browser4)
+KnownTestTypes=(fast it e2e cli browser4-cli rest skills mcp browser4 b4)
 TestTypes=()
 MavenTests=()
 CLITests=()
@@ -181,7 +183,7 @@ while [[ $# -gt 0 ]]; do
     -h|-help|--help)
       print_usage
       ;;
-    fast|it|e2e|cli|browser4-cli|rest|skills|mcp|browser4)
+    fast|it|e2e|cli|browser4-cli|rest|skills|mcp|browser4|b4)
       if [[ "$ParsingTestTypes" == "true" ]]; then
         TestTypes+=("$1")
       else
@@ -204,7 +206,7 @@ if [[ ${#TestTypes[@]} -eq 0 ]]; then
 fi
 
 for type in "${TestTypes[@]}"; do
-  if [[ "$type" == "browser4" ]]; then
+  if [[ "$type" == "browser4" || "$type" == "b4" ]]; then
     MavenTests+=(fast it e2e rest)
   elif [[ "$type" == "cli" || "$type" == "browser4-cli" ]]; then
     CLITests+=("$type")

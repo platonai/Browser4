@@ -34,6 +34,7 @@ function Print-Usage {
     Write-Host "  skills      Run skills-focused agentic tests"
     Write-Host "  mcp         Run MCP-focused agentic tests"
     Write-Host "  browser4    Run all Browser4 main tests (fast, rest, it, e2e)"
+    Write-Host "  b4          Alias for browser4"
     Write-Host ""
     Write-Host "Examples:"
     Write-Host "  test.ps1 fast                       # Run fast unit tests"
@@ -44,12 +45,13 @@ function Print-Usage {
     Write-Host "  test.ps1 skills                     # Run skills-focused agentic tests"
     Write-Host "  test.ps1 mcp                        # Run MCP-focused agentic tests"
     Write-Host "  test.ps1 browser4                   # Run all Browser4 main tests"
+    Write-Host "  test.ps1 b4                         # Alias for browser4"
     Write-Host '  test.ps1 it -pl browser4-core       # Pass additional Maven args through'
     exit 1
 }
 
 function Exit-UnknownTestType([string]$testType) {
-    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, rest, skills, mcp, browser4."
+    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, rest, skills, mcp, browser4, b4."
     exit 1
 }
 
@@ -178,7 +180,7 @@ function Invoke-Browser4CliTests([string[]]$additionalArgs) {
     }
 }
 
-$knownTestTypes = @('fast', 'it', 'e2e', 'cli', 'browser4-cli', 'rest', 'skills', 'mcp', 'browser4')
+$knownTestTypes = @('fast', 'it', 'e2e', 'cli', 'browser4-cli', 'rest', 'skills', 'mcp', 'browser4', 'b4')
 $testTypes = @()
 $additionalArgs = @()
 $parsingTestTypes = $true
@@ -213,7 +215,7 @@ $mavenTests = @()
 $cliTests = @()
 
 foreach ($type in $testTypes) {
-    if ($type -eq 'browser4') {
+    if ($type -in @('browser4', 'b4')) {
         $mavenTests += 'fast', 'it', 'e2e', 'rest'
         continue
     }
