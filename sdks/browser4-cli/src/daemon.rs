@@ -608,6 +608,20 @@ async fn start_server(
         &startup_log.path,
         format!("Prepared command launch for {base_url}"),
     );
+
+    let launch_working_dir = command
+        .get_current_dir()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| launch_spec.working_dir.clone());
+    append_startup_log_message(
+        &startup_log.path,
+        format!("Launch working directory: {}", launch_working_dir.display()),
+    );
+    append_startup_log_message(
+        &startup_log.path,
+        format!("Launch command: {}", format_command_for_log(&command)),
+    );
+
     command
         .stdout(startup_log.stdout)
         .stderr(startup_log.stderr);
@@ -678,6 +692,24 @@ async fn start_server(
         startup_log.path.display()
     );
     Ok(())
+}
+
+fn format_command_for_log(command: &Command) -> String {
+    let mut parts = vec![shell_quote_for_log(&command.get_program().to_string_lossy())];
+    parts.extend(
+        command
+            .get_args()
+            .map(|arg| shell_quote_for_log(&arg.to_string_lossy())),
+    );
+    parts.join(" ")
+}
+
+fn shell_quote_for_log(value: &str) -> String {
+    if value.is_empty() || value.chars().any(|ch| ch.is_whitespace() || ch == '"' || ch == '\'') {
+        format!("{value:?}")
+    } else {
+        value.to_string()
+    }
 }
 
 fn cleanup_prepared_launch_dir(path: Option<PathBuf>) {
