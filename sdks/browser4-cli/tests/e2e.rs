@@ -843,6 +843,10 @@ impl E2ETestResources {
                         startup_result.stdout,
                         startup_result.stderr,
                     );
+                    assert_root_search_log_contains_invocation_dir(
+                        &startup_result.stderr,
+                        &self.ctx.invocation_dir,
+                    );
                 }
                 assert!(
                     startup_result.stderr.contains("Browser4 startup log:"),
@@ -936,6 +940,29 @@ fn format_browser4_startup_log_hint(stderr: &str) -> String {
     extract_browser4_startup_log_path(stderr)
         .map(|path| format!("\nStartup log: {path}"))
         .unwrap_or_default()
+}
+
+fn assert_root_search_log_contains_invocation_dir(stderr: &str, invocation_dir: &Path) {
+    let normalized_stderr = stderr.replace("\\\\", "/").replace('\\', "/");
+    let invocation_dir_text = invocation_dir
+        .to_string_lossy()
+        .replace("\\\\", "/")
+        .replace('\\', "/");
+    let invocation_dir_suffix = "sdks/browser4-cli";
+
+    assert!(
+        normalized_stderr.contains("Finding browser4 root from"),
+        "Expected Browser4 root-search diagnostics in stderr.\nstderr:\n{}",
+        stderr
+    );
+    assert!(
+        normalized_stderr.contains(&invocation_dir_text)
+            || normalized_stderr.contains(invocation_dir_suffix),
+        "Expected Browser4 root-search to include invocation dir '{}' (or suffix '{}').\nstderr:\n{}",
+        invocation_dir.display(),
+        invocation_dir_suffix,
+        stderr
+    );
 }
 
 fn run_cli_process_with_live_output(ctx: &E2ECtx, args: &[&str]) -> CliRunResult {
