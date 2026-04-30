@@ -53,7 +53,7 @@ class BrowserTabToolExecutor: AbstractToolExecutor() {
                         driver.waitForNavigation()
                         driver.waitForSelector("body", timeoutMillis = 10_000)
                         // TODO: add a delay parameter to the navigation options.
-                        delay(1000.seconds)
+                        delay(1.seconds)
                     }
                     args.containsKey("rawUrl") || args.containsKey("pageUrl") -> {
                         validateArgs(args, allowed("rawUrl", "pageUrl"), setOf("rawUrl", "pageUrl"), functionName)
@@ -67,7 +67,7 @@ class BrowserTabToolExecutor: AbstractToolExecutor() {
                         driver.waitForNavigation()
                         driver.waitForSelector("body", timeoutMillis = 10_000)
                         // TODO: add a delay parameter to the navigation options.
-                        delay(1000.seconds)
+                        delay(1.seconds)
                     }
                     else -> throw IllegalArgumentException("navigate requires 'url' or ('rawUrl','pageUrl')")
                 }
