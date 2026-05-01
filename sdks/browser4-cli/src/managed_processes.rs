@@ -450,7 +450,7 @@ fn browser_marker_search_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
 
     if let Some(home) = dirs::home_dir() {
-        roots.push(home.join(".browser4").join("browser").join("chrome"));
+        roots.push(home.join("browser4").join("browser").join("chrome"));
     }
 
     let temp_dir = std::env::temp_dir();
@@ -921,7 +921,7 @@ mod tests {
 
     fn test_temp_dir() -> TempDir {
         let root = std::env::temp_dir()
-            .join(".browser4")
+            .join("browser4")
             .join("browser4-cli")
             .join("managed-processes-tests");
         fs::create_dir_all(&root).unwrap();

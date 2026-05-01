@@ -57,7 +57,7 @@ mod tests {
 
     fn test_temp_dir() -> TempDir {
         let root = std::env::temp_dir()
-            .join(".browser4")
+            .join("browser4")
             .join("browser4-cli")
             .join("snapshot-tests");
         fs::create_dir_all(&root).unwrap();

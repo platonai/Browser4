@@ -933,7 +933,7 @@ fn server_startup_log_path(
 }
 
 fn browser4_cli_temp_root_dir() -> PathBuf {
-    env::temp_dir().join(".browser4").join("browser4-cli")
+    env::temp_dir().join("browser4").join("browser4-cli")
 }
 
 fn default_cli_temp_dir() -> PathBuf {
@@ -1095,7 +1095,7 @@ mod tests {
 
     fn test_temp_dir() -> TempDir {
         let root = std::env::temp_dir()
-            .join(".browser4")
+            .join("browser4")
             .join("browser4-cli")
             .join("daemon-tests");
         create_dir_all(&root).unwrap();
@@ -1323,7 +1323,7 @@ mod tests {
     #[test]
     fn test_server_startup_log_dir_defaults_to_temp_cli_dir() {
         let expected = env::temp_dir()
-            .join(".browser4")
+            .join("browser4")
             .join("browser4-cli")
             .join("tmp")
             .join("cli");

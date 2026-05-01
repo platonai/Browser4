@@ -15,7 +15,11 @@
 //! cargo test --test e2e -- --nocapture
 //! cargo test --test e2e -- --nocapture --scenario=test_e2e_agent_task_commands
 //! cargo test --test e2e -- --nocapture --scenario-from=test_e2e_mouse_and_dialog
+//! cargo test --test e2e -- --nocapture --failed
 //! ```
+//!
+//! The `--failed` selector reruns scenario names stored by the previous run in
+//! `%TEMP%/browser4/browser4-cli/e2e/last-failed-scenarios.json`.
 //!
 //! The Browser4 service is resolved in this order:
 //! 1. `BROWSER4_E2E_SERVICE_URL` environment variable – connect to an already-running
@@ -31,7 +35,7 @@
 //!   reach the fixture HTTP server on the host (e.g. `host.docker.internal` or
 //!   the Docker bridge gateway IP such as `172.17.0.1`). Defaults to `127.0.0.1`.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -42,7 +46,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::thread::{sleep, JoinHandle};
 use std::time::{Duration, Instant};
-
+use chrono::Local;
 use browser4_cli::commands::all_commands;
 use browser4_cli::managed_processes::stop_browser4_server_forcibly;
 
@@ -63,6 +67,7 @@ const OTHER_TITLE: &str = "Browser4 CLI Other Fixture";
 const FORM_TITLE: &str = "Browser4 CLI Form Fixture";
 const ROOT_SEARCH_START_DIR_ENV: &str = "BROWSER4_CLI_INVOKE_DIR";
 const USE_MAVEN_STARTUP_ENV: &str = "BROWSER4_E2E_USE_MAVEN_STARTUP";
+const LAST_FAILED_SCENARIOS_FILE: &str = "last-failed-scenarios.json";
 
 // ---------------------------------------------------------------------------
 // Environment helpers
@@ -1618,9 +1623,73 @@ fn reset_cli_artifacts(ctx: &mut E2ECtx) {
 
 fn e2e_temp_root_dir() -> PathBuf {
     std::env::temp_dir()
-        .join(".browser4")
+        .join("browser4")
         .join("browser4-cli")
         .join("e2e")
+}
+
+fn last_failed_scenarios_file_path() -> PathBuf {
+    e2e_temp_root_dir().join(LAST_FAILED_SCENARIOS_FILE)
+}
+
+fn save_last_failed_scenarios(names: impl IntoIterator<Item = String>) {
+    let path = last_failed_scenarios_file_path();
+    let parent = path
+        .parent()
+        .expect("failed-scenarios path should always have a parent directory");
+    fs::create_dir_all(parent).unwrap_or_else(|error| {
+        panic!(
+            "failed to create failed-scenarios directory {}: {error}",
+            parent.display()
+        )
+    });
+
+    let unique_sorted: BTreeSet<String> = names
+        .into_iter()
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .collect();
+    let payload = serde_json::to_string_pretty(&unique_sorted.into_iter().collect::<Vec<_>>())
+        .expect("failed to serialize failed-scenarios JSON");
+    fs::write(&path, format!("{payload}\n")).unwrap_or_else(|error| {
+        panic!(
+            "failed to write failed scenarios to {}: {error}",
+            path.display()
+        )
+    });
+}
+
+fn load_last_failed_scenarios() -> Vec<String> {
+    let path = last_failed_scenarios_file_path();
+    if !path.exists() {
+        return Vec::new();
+    }
+
+    let raw = match fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(error) => {
+            eprintln!(
+                "[warn] failed to read last failed scenarios from {}: {error}",
+                path.display()
+            );
+            return Vec::new();
+        }
+    };
+
+    match serde_json::from_str::<Vec<String>>(&raw) {
+        Ok(entries) => entries
+            .into_iter()
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .collect(),
+        Err(error) => {
+            eprintln!(
+                "[warn] failed to parse last failed scenarios JSON from {}: {error}",
+                path.display()
+            );
+            Vec::new()
+        }
+    }
 }
 
 fn create_e2e_test_resources() -> E2ETestResources {
@@ -1998,7 +2067,8 @@ fn print_timing_steps(steps: &[TimedStep]) {
 }
 
 fn run_named_test(name: &str, test_fn: fn()) -> TimingReport {
-    print!("test {name} ... ");
+    print!("{} test {name} ... ", Local::now());
+
     std::io::stdout().flush().expect("stdout flush failed");
     let started_at = Instant::now();
     test_fn();
@@ -2087,7 +2157,7 @@ fn run_named_scenario(
     restart_browser4: bool,
     test_fn: fn(&mut E2ECtx),
 ) -> ScenarioOutcome {
-    println!("testing {name} ... ");
+    println!("{} testing {name} ... ", Local::now());
 
     std::io::stdout().flush().expect("stdout flush failed");
     resources.ctx.clear_step_timings();
@@ -2156,6 +2226,7 @@ fn run_named_scenario(
 enum ScenarioFilter {
     Exact(String),
     From(String),
+    Failed,
 }
 
 fn parse_named_flag_value(args: &mut impl Iterator<Item = String>, flag: &str) -> String {
@@ -2168,6 +2239,7 @@ fn parse_scenario_filter() -> Option<ScenarioFilter> {
     let mut args = std::env::args().skip(1);
     let mut scenario = None;
     let mut scenario_from = None;
+    let mut rerun_failed = false;
 
     while let Some(arg) = args.next() {
         if let Some(value) = arg.strip_prefix("--scenario=") {
@@ -2185,16 +2257,27 @@ fn parse_scenario_filter() -> Option<ScenarioFilter> {
         }
         if arg == "--scenario-from" {
             scenario_from = Some(parse_named_flag_value(&mut args, "--scenario-from"));
+            continue;
+        }
+
+        if arg == "--failed" {
+            rerun_failed = true;
         }
     }
 
-    match (scenario, scenario_from) {
-        (Some(_), Some(_)) => {
+    if rerun_failed && (scenario.is_some() || scenario_from.is_some()) {
+        panic!("--failed cannot be used together with --scenario or --scenario-from");
+    }
+
+    match (scenario, scenario_from, rerun_failed) {
+        (Some(_), Some(_), _) => {
             panic!("--scenario and --scenario-from cannot be used together")
         }
-        (Some(value), None) => Some(ScenarioFilter::Exact(value)),
-        (None, Some(value)) => Some(ScenarioFilter::From(value)),
-        (None, None) => None,
+        (Some(value), None, false) => Some(ScenarioFilter::Exact(value)),
+        (None, Some(value), false) => Some(ScenarioFilter::From(value)),
+        (None, None, true) => Some(ScenarioFilter::Failed),
+        (None, None, false) => None,
+        _ => unreachable!("unexpected scenario filter argument combination"),
     }
 }
 
@@ -2236,6 +2319,49 @@ fn main() {
                 });
                 (all_scenarios[start_index..].to_vec(), false)
             }
+            Some(ScenarioFilter::Failed) => {
+                let failed = load_last_failed_scenarios();
+                assert!(
+                    !failed.is_empty(),
+                    "No failed scenarios were recorded in the previous run (file: {}).",
+                    last_failed_scenarios_file_path().display()
+                );
+
+                let failed_set: HashSet<&str> = failed.iter().map(String::as_str).collect();
+                let selected = all_scenarios
+                    .iter()
+                    .copied()
+                    .filter(|scenario| failed_set.contains(scenario.name))
+                    .collect::<Vec<_>>();
+
+                let missing = failed
+                    .iter()
+                    .filter(|name| resolve_scenario(name).is_none())
+                    .cloned()
+                    .collect::<Vec<_>>();
+                assert!(
+                    missing.is_empty(),
+                    "Recorded failed scenarios are no longer available: {:?}. Available scenarios: {}",
+                    missing,
+                    available_names
+                );
+                assert!(
+                    !selected.is_empty(),
+                    "No selectable scenarios were resolved from the previous failed list: {:?}",
+                    failed
+                );
+
+                println!(
+                    "rerunning {} scenario(s) from previous failures: {}",
+                    selected.len(),
+                    selected
+                        .iter()
+                        .map(|scenario| scenario.name)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                (selected, false)
+            }
             None => (all_scenarios.to_vec(), true),
         };
 
@@ -2249,6 +2375,7 @@ fn main() {
     let run_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut timings: Vec<TimingReport> = Vec::with_capacity(total_tests);
         let mut scenario_failures: Vec<(String, FailureDetail)> = Vec::new();
+        let mut failed_scenario_names: HashSet<String> = HashSet::new();
 
         if run_coverage {
             let report = run_named_test("test_e2e_command_coverage", verify_e2e_command_coverage);
@@ -2277,9 +2404,13 @@ fn main() {
                     "progress [{}/{}] {} => {}",
                     scenario_progress, scenario_runs, display_name, status
                 );
+                if !outcome.passed() {
+                    failed_scenario_names.insert(scenario.name.to_string());
+                }
                 for failure in &outcome.failures {
                     scenario_failures.push((display_name.clone(), failure.clone()));
                 }
+                save_last_failed_scenarios(failed_scenario_names.iter().cloned());
                 timings.push(outcome.report);
             }
         }
