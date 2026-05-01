@@ -36,6 +36,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import org.apache.commons.lang3.SystemUtils
 import org.apache.commons.lang3.StringUtils
 import java.nio.file.Files
 import java.time.Duration
@@ -385,11 +386,6 @@ class PulsarWebDriver constructor(
      * */
     @Throws(WebDriverException::class)
     override suspend fun mouseDown(button: String, clickCount: Int) {
-        if (button == "left") {
-            driverHelper.invokeOnPage("mouseDown") { mouse?.down(clickCount = clickCount) }
-            return
-        }
-
         val btnIndex = when (button) {
             "right" -> 2
             "middle" -> 1
@@ -414,13 +410,6 @@ class PulsarWebDriver constructor(
      * */
     @Throws(WebDriverException::class)
     override suspend fun mouseUp(button: String, clickCount: Int) {
-        if (button == "left") {
-            driverHelper.invokeOnPage("mouseUp") {
-                mouse?.up(mouse?.currentX ?: 0.0, mouse?.currentY ?: 0.0, clickCount = clickCount)
-            }
-            return
-        }
-
         val btnIndex = when (button) {
             "right" -> 2
             "middle" -> 1
@@ -625,6 +614,7 @@ class PulsarWebDriver constructor(
         rpc.invokeDeferredSilently("focus") { page.focusOnSelector(selector) }
     }
 
+
     @Throws(WebDriverException::class)
     override suspend fun type(selector: String, text: String) {
         driverHelper.invokeOnElement(selector, "type") {
@@ -717,14 +707,22 @@ class PulsarWebDriver constructor(
     @Throws(WebDriverException::class)
     override suspend fun keyDown(key: String) {
         driverHelper.invokeOnPage("keyDown") {
-            keyboard?.down(key)
+            if (SystemUtils.IS_OS_WINDOWS) {
+                dispatchDomKeyboardEvent("keydown", key)
+            } else {
+                keyboard?.down(key)
+            }
         }
     }
 
     @Throws(WebDriverException::class)
     override suspend fun keyUp(key: String) {
         driverHelper.invokeOnPage("keyUp") {
-            keyboard?.up(key)
+            if (SystemUtils.IS_OS_WINDOWS) {
+                dispatchDomKeyboardEvent("keyup", key)
+            } else {
+                keyboard?.up(key)
+            }
         }
     }
 
@@ -1429,5 +1427,25 @@ function() {
                 )
             }
         }
+    }
+
+    private suspend fun dispatchDomKeyboardEvent(type: String, key: String) {
+        val safeKey = jacksonObjectMapper().writeValueAsString(key)
+        evaluate(
+            """
+                (() => {
+                  const target = document.activeElement || document.body || document.documentElement;
+                  if (!target) return false;
+                  const event = new KeyboardEvent('$type', {
+                    key: $safeKey,
+                    bubbles: true,
+                    cancelable: true,
+                    composed: true
+                  });
+                  target.dispatchEvent(event);
+                  return true;
+                })()
+            """.trimIndent()
+        )
     }
 }

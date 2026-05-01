@@ -157,7 +157,7 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
     );
 
     run_command(ctx, &["click", "#click-target"]);
-    assume_wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| s["clickCount"].as_u64() == Some(1),
         5_000,
@@ -165,7 +165,7 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
     );
 
     run_command(ctx, &["dblclick", "#dblclick-target"]);
-    assume_wait_for_state(
+    wait_for_state_or_abort(
         ctx,
         |s| s["doubleClickCount"].as_u64() == Some(1),
         5_000,
@@ -334,55 +334,23 @@ pub(super) fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
         .as_u64()
         .unwrap_or(0);
     run_command(ctx, &["mousedown", "left"]);
-    if let Err(error) = wait_for_state_or_return_error(
+    wait_for_state_or_abort(
         ctx,
         |s| s["mouseDownCount"].as_u64().is_some_and(|value| value >= before_mouse_down + 1),
         5_000,
         "Expected mousedown to increment mouseDownCount",
-    ) {
-        eprintln!(
-            "mousedown command did not update state in time; using eval fallback. {error}"
-        );
-        run_command(
-            ctx,
-            &[
-                "eval",
-                "(() => { const area = document.getElementById('mouse-area'); if (!area) return 'missing-mouse-area'; area.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true, clientX: 120, clientY: 120 })); return 'mousedown-fallback-dispatched'; })()",
-            ],
-        );
-        wait_for_state_or_abort(
-            ctx,
-            |s| s["mouseDownCount"].as_u64().is_some_and(|value| value >= before_mouse_down + 1),
-            5_000,
-            "Expected mousedown to increment mouseDownCount",
-        );
-    }
+    );
 
     let before_mouse_up = read_interactive_state(ctx)["mouseUpCount"]
         .as_u64()
         .unwrap_or(0);
     run_command(ctx, &["mouseup", "left"]);
-    if let Err(error) = wait_for_state_or_return_error(
+    wait_for_state_or_abort(
         ctx,
         |s| s["mouseUpCount"].as_u64().is_some_and(|value| value >= before_mouse_up + 1),
         5_000,
         "Expected mouseup to increment mouseUpCount",
-    ) {
-        eprintln!("mouseup command did not update state in time; using eval fallback. {error}");
-        run_command(
-            ctx,
-            &[
-                "eval",
-                "(() => { const area = document.getElementById('mouse-area'); if (!area) return 'missing-mouse-area'; area.dispatchEvent(new MouseEvent('mouseup', { button: 0, bubbles: true, clientX: 120, clientY: 120 })); return 'mouseup-fallback-dispatched'; })()",
-            ],
-        );
-        wait_for_state_or_abort(
-            ctx,
-            |s| s["mouseUpCount"].as_u64().is_some_and(|value| value >= before_mouse_up + 1),
-            5_000,
-            "Expected mouseup to increment mouseUpCount",
-        );
-    }
+    );
 
     let wheel_args = ["mousewheel", "160", "0"];
     let wheel_started_at = std::time::Instant::now();

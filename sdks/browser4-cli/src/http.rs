@@ -5,10 +5,13 @@ use serde_json::{json, Value};
 
 use crate::state::resolve_ref;
 
+const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
+const BATCH_REQUEST_TIMEOUT_SECS: u64 = 120;
+
 /// Build a `reqwest::Client` configured for Browser4 MCP calls.
 pub fn make_client() -> Client {
     Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS))
         .build()
         .expect("HTTP client construction should not fail")
 }
@@ -63,17 +66,34 @@ pub async fn call_tool(
     client: &Client,
     base_url: &str,
     tool: &str,
+    args: Value,
+) -> Result<String, String> {
+    call_tool_with_timeout(client, base_url, tool, args, None).await
+}
+
+async fn call_tool_with_timeout(
+    client: &Client,
+    base_url: &str,
+    tool: &str,
     mut args: Value,
+    timeout: Option<std::time::Duration>,
 ) -> Result<String, String> {
     normalize_refs(&mut args);
 
     let url = format!("{}/mcp/call-tool", base_url.trim_end_matches('/'));
     let body = json!({ "tool": tool, "arguments": args });
 
-    let response = client
+    let request = client
         .post(&url)
         .header("Content-Type", "application/json")
-        .json(&body)
+        .json(&body);
+    let request = if let Some(timeout) = timeout {
+        request.timeout(timeout)
+    } else {
+        request
+    };
+
+    let response = request
         .send()
         .await
         .map_err(|e| format!("HTTP request failed: {e}"))?;
@@ -184,7 +204,14 @@ pub async fn submit_batch_commands(
     base_url: &str,
     args: Value,
 ) -> Result<String, String> {
-    call_tool(client, base_url, "command_batch", args).await
+    call_tool_with_timeout(
+        client,
+        base_url,
+        "command_batch",
+        args,
+        Some(std::time::Duration::from_secs(BATCH_REQUEST_TIMEOUT_SECS)),
+    )
+    .await
 }
 
 #[cfg(test)]

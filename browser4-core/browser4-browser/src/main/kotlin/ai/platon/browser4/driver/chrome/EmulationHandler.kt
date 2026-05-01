@@ -32,6 +32,7 @@ data class NodeClip(
     var rect: RectD? = null,
 )
 
+
 /**
  * ClickableDOM provides a set of methods to help users to click on a specified DOM correctly.
  *
@@ -661,6 +662,10 @@ class EmulationHandler(
     ) {
         val point = getInteractPoint(node, position, useRandomOffset = true) ?: return
 
+        if (SystemUtils.IS_OS_WINDOWS && dispatchWindowsDomClick(node, point, count, modifier, delayMillis)) {
+            return
+        }
+
         if (modifier != null) {
             clickWithModifiers(point, modifier, count, delayMillis = delayMillis)
         } else {
@@ -819,6 +824,104 @@ class EmulationHandler(
             "shift" -> 8
             else -> 0
         }
+    }
+
+    private suspend fun dispatchWindowsDomClick(
+        node: NodeRef,
+        point: PointD,
+        count: Int,
+        modifier: String?,
+        delayMillis: Long,
+    ): Boolean {
+        val localCdp = cdp ?: return false
+        val m = mouse ?: return false
+        val clickCount = max(1, count)
+        val modifierState = buildMouseModifierState(modifier)
+
+        return withNodeObjectId(localCdp, node) { objectId ->
+            m.moveTo(point)
+            if (delayMillis > 0) {
+                delay(delayMillis.milliseconds)
+            }
+
+            val script = """
+                function() {
+                    const target = this instanceof Element ? this : null;
+                    if (!target) return false;
+                    if (target instanceof HTMLElement) {
+                        target.focus({ preventScroll: true });
+                    }
+
+                    const createInit = (detail, buttons) => ({
+                        bubbles: true,
+                        cancelable: true,
+                        composed: true,
+                        button: 0,
+                        buttons,
+                        clientX: ${point.x},
+                        clientY: ${point.y},
+                        screenX: ${point.x},
+                        screenY: ${point.y},
+                        detail,
+                        altKey: ${modifierState.altKey},
+                        ctrlKey: ${modifierState.ctrlKey},
+                        metaKey: ${modifierState.metaKey},
+                        shiftKey: ${modifierState.shiftKey},
+                    });
+
+                    for (let detail = 1; detail <= $clickCount; detail += 1) {
+                        target.dispatchEvent(new MouseEvent('mousedown', createInit(detail, 1)));
+                        target.dispatchEvent(new MouseEvent('mouseup', createInit(detail, 0)));
+                        setTimeout(() => {
+                            if (!${modifierState.hasModifier} && target instanceof HTMLElement) {
+                                target.click();
+                            } else {
+                                target.dispatchEvent(new MouseEvent('click', createInit(detail, 0)));
+                            }
+                        }, 0);
+                    }
+
+                    if ($clickCount >= 2) {
+                        setTimeout(() => {
+                            target.dispatchEvent(new MouseEvent('dblclick', createInit($clickCount, 0)));
+                        }, 0);
+                    }
+
+                    return true;
+                }
+            """.trimIndent()
+
+            localCdp.callFunctionOn(
+                script,
+                objectId = objectId,
+                returnByValue = true,
+                userGesture = true,
+                awaitPromise = true,
+            ).result.value as? Boolean ?: false
+        } ?: false
+    }
+
+    private fun buildMouseModifierState(modifier: String?): MouseModifierState {
+        if (modifier.isNullOrBlank()) {
+            return MouseModifierState()
+        }
+
+        return when (mapModifierForOS(modifier).trim().lowercase()) {
+            "alt" -> MouseModifierState(altKey = true)
+            "control", "ctrl" -> MouseModifierState(ctrlKey = true)
+            "meta", "command", "cmd", "win", "super" -> MouseModifierState(metaKey = true)
+            "shift" -> MouseModifierState(shiftKey = true)
+            else -> MouseModifierState()
+        }
+    }
+
+    private data class MouseModifierState(
+        val altKey: Boolean = false,
+        val ctrlKey: Boolean = false,
+        val metaKey: Boolean = false,
+        val shiftKey: Boolean = false,
+    ) {
+        val hasModifier: Boolean get() = altKey || ctrlKey || metaKey || shiftKey
     }
 
     // Map Ctrl->Meta on macOS for consistency with platform conventions.

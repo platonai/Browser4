@@ -118,6 +118,7 @@ data class InteractSettings constructor(
 
     private val defaultDelayPolicyTemplate = delayPolicy.toMap()
 
+
     /**
      * Apply a predefined delay profile for different crawling scenarios.
      * */

@@ -743,6 +743,8 @@ struct ScenarioOutcome {
     failures: Vec<FailureDetail>,
 }
 
+type CleanupJoinHandle = JoinHandle<Result<Vec<TimedStep>, String>>;
+
 impl ScenarioOutcome {
     fn passed(&self) -> bool {
         self.failures.is_empty()
@@ -750,6 +752,7 @@ impl ScenarioOutcome {
 }
 
 /// Context for running CLI commands in isolation.
+#[derive(Clone)]
 struct E2ECtx {
     fixture_base_url: String,
     browser4_base_url: String,
@@ -799,6 +802,8 @@ struct E2ETestResources {
     /// legitimately reuse the same healthy process without reprinting startup
     /// diagnostics.
     local_browser4_started: bool,
+    /// Deferred Browser4 cleanup running in the background, if any.
+    pending_cleanup: Option<(String, CleanupJoinHandle)>,
     ctx: E2ECtx,
 }
 
@@ -924,6 +929,33 @@ impl E2ETestResources {
         ));
         steps.extend(self.ensure_browser4());
         steps
+    }
+
+    fn join_pending_cleanup_if_any(&mut self) -> Result<Vec<TimedStep>, String> {
+        let Some((origin, handle)) = self.pending_cleanup.take() else {
+            return Ok(Vec::new());
+        };
+
+        let started_at = Instant::now();
+        let mut steps = vec![TimedStep::new(
+            format!("wait for async cleanup from {origin}"),
+            started_at.elapsed(),
+        )];
+
+        let cleanup_result = handle
+            .join()
+            .map_err(|payload| panic_payload_to_string(payload.as_ref()))
+            .map_err(|error| format!("Async Browser4 cleanup from '{origin}' panicked: {error}"))?;
+
+        match cleanup_result {
+            Ok(mut cleanup_steps) => {
+                steps.append(&mut cleanup_steps);
+                Ok(steps)
+            }
+            Err(error) => Err(format!(
+                "Async Browser4 cleanup from '{origin}' failed:\n{error}"
+            )),
+        }
     }
 }
 
@@ -1749,6 +1781,7 @@ fn create_e2e_test_resources() -> E2ETestResources {
         _fixture: fixture,
         external_service: is_external,
         local_browser4_started: false,
+        pending_cleanup: None,
         ctx: E2ECtx {
             fixture_base_url,
             browser4_base_url,
@@ -1862,11 +1895,10 @@ fn assert_collective_session_call(mock_server: &MockBrowser4Server) {
     );
 }
 
-fn cleanup_browser4_sessions(resources: &mut E2ETestResources) -> Result<Vec<TimedStep>, String> {
+fn cleanup_browser4_sessions_with_ctx(ctx: &E2ECtx) -> Result<Vec<TimedStep>, String> {
     let started_at = Instant::now();
-    let result = run_cli_process(&resources.ctx, &["close-all"]);
+    let result = run_cli_process(ctx, &["close-all"]);
     let duration = started_at.elapsed();
-    resources.local_browser4_started = false;
 
     let mut steps = vec![TimedStep::new(
         "browser4 session cleanup (close-all)",
@@ -1889,15 +1921,53 @@ fn cleanup_browser4_sessions(resources: &mut E2ETestResources) -> Result<Vec<Tim
     Err(errors.join("\n\n"))
 }
 
+fn cleanup_browser4_sessions(resources: &mut E2ETestResources) -> Result<Vec<TimedStep>, String> {
+    resources.local_browser4_started = false;
+    cleanup_browser4_sessions_with_ctx(&resources.ctx)
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ScenarioCleanupMode {
+    Synchronous,
+    Deferred,
+    None,
+}
+
 fn cleanup_after_scenario(
     resources: &mut E2ETestResources,
+    scenario_name: &str,
     requires_browser4: bool,
+    cleanup_mode: ScenarioCleanupMode,
 ) -> Result<Vec<TimedStep>, String> {
     if !requires_browser4 {
         return Ok(Vec::new());
     }
 
-    cleanup_browser4_sessions(resources)
+    match cleanup_mode {
+        ScenarioCleanupMode::Synchronous => cleanup_browser4_sessions(resources),
+        ScenarioCleanupMode::Deferred => {
+            assert!(
+                resources.pending_cleanup.is_none(),
+                "pending Browser4 cleanup already exists"
+            );
+            resources.local_browser4_started = false;
+
+            let started_at = Instant::now();
+            let ctx = resources.ctx.clone();
+            resources.pending_cleanup = Some((
+                scenario_name.to_string(),
+                thread::spawn(move || cleanup_browser4_sessions_with_ctx(&ctx)),
+            ));
+
+            Ok(vec![TimedStep::new(
+                "browser4 session cleanup scheduled (async)",
+                started_at.elapsed(),
+            )])
+        },
+        ScenarioCleanupMode::None => {
+            Ok(Vec::new())
+        }
+    }
 }
 
 fn run_final_cleanup() -> Result<Vec<TimedStep>, String> {
@@ -2155,6 +2225,7 @@ fn run_named_scenario(
     resources: &mut E2ETestResources,
     requires_browser4: bool,
     restart_browser4: bool,
+    cleanup_mode: ScenarioCleanupMode,
     test_fn: fn(&mut E2ECtx),
 ) -> ScenarioOutcome {
     println!("{} testing {name} ... ", Local::now());
@@ -2168,6 +2239,11 @@ fn run_named_scenario(
     // from contaminating later scenarios.
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if requires_browser4 {
+            let pending_steps = resources
+                .join_pending_cleanup_if_any()
+                .unwrap_or_else(|error| panic!("{error}"));
+            harness_steps.extend(pending_steps);
+
             let setup_steps = if restart_browser4 {
                 println!("restarting browser4 ...");
                 resources.restart_browser4()
@@ -2180,7 +2256,7 @@ fn run_named_scenario(
     }));
 
     let cleanup_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        cleanup_after_scenario(resources, requires_browser4)
+        cleanup_after_scenario(resources, name, requires_browser4, cleanup_mode)
     }));
 
     let mut steps = harness_steps;
@@ -2296,6 +2372,28 @@ fn resolve_scenario_index(name: &str) -> Option<usize> {
 
 const MAX_ALLOWED_FAILED_SCENARIOS: usize = 3;
 
+#[derive(Clone, Copy)]
+struct PlannedScenarioRun {
+    scenario: scenarios::ScenarioDef,
+    run_index: usize,
+    test_count: usize,
+}
+
+impl PlannedScenarioRun {
+    fn display_name(&self) -> String {
+        if self.test_count == 1 {
+            self.scenario.name.to_string()
+        } else {
+            format!(
+                "{} [{}/{}]",
+                self.scenario.name,
+                self.run_index + 1,
+                self.test_count
+            )
+        }
+    }
+}
+
 fn main() {
     let scenario_filter = parse_scenario_filter();
     let all_scenarios = scenarios::all_scenarios();
@@ -2365,10 +2463,20 @@ fn main() {
             None => (all_scenarios.to_vec(), true),
         };
 
-    let scenario_runs: usize = selected_scenarios
+    let planned_runs: Vec<PlannedScenarioRun> = selected_scenarios
         .iter()
-        .map(|scenario| scenario.effective_test_count())
-        .sum();
+        .copied()
+        .flat_map(|scenario| {
+            let test_count = scenario.effective_test_count();
+            (0..test_count).map(move |run_index| PlannedScenarioRun {
+                scenario,
+                run_index,
+                test_count,
+            })
+        })
+        .collect();
+
+    let scenario_runs = planned_runs.len();
     let total_tests = scenario_runs + usize::from(run_coverage);
     println!("running {total_tests} tests");
     let mut resources = create_e2e_test_resources();
@@ -2383,49 +2491,54 @@ fn main() {
         }
 
         let mut scenario_progress = 0usize;
-        for scenario in selected_scenarios {
-            let test_count = scenario.effective_test_count();
-            for run_index in 0..test_count {
-                scenario_progress += 1;
-                let display_name = if test_count == 1 {
-                    scenario.name.to_string()
-                } else {
-                    format!("{} [{}/{}]", scenario.name, run_index + 1, test_count)
-                };
-                let outcome = run_named_scenario(
-                    &display_name,
-                    &mut resources,
-                    scenario.requires_browser4,
-                    scenario.restart_browser4,
-                    scenario.test_fn,
-                );
-                let status = if outcome.passed() { "ok" } else { "FAILED" };
-                println!(
-                    "progress [{}/{}] {} => {}",
-                    scenario_progress, scenario_runs, display_name, status
-                );
-                if !outcome.passed() {
-                    failed_scenario_names.insert(scenario.name.to_string());
-                }
-                for failure in &outcome.failures {
-                    scenario_failures.push((display_name.clone(), failure.clone()));
-                }
-                save_last_failed_scenarios(failed_scenario_names.iter().cloned());
-                timings.push(outcome.report);
+        for (_, planned_run) in planned_runs.iter().enumerate() {
+            scenario_progress += 1;
+            let display_name = planned_run.display_name();
+
+            let cleanup_mode = if planned_run.scenario.requires_browser4 {
+                ScenarioCleanupMode::Deferred
+            } else {
+                ScenarioCleanupMode::None
+            };
+
+            let outcome = run_named_scenario(
+                &display_name,
+                &mut resources,
+                planned_run.scenario.requires_browser4,
+                planned_run.scenario.restart_browser4,
+                cleanup_mode,
+                planned_run.scenario.test_fn,
+            );
+            let status = if outcome.passed() { "ok" } else { "FAILED" };
+            println!(
+                "progress [{}/{}] {} => {}",
+                scenario_progress, scenario_runs, display_name, status
+            );
+            if !outcome.passed() {
+                failed_scenario_names.insert(planned_run.scenario.name.to_string());
             }
+            for failure in &outcome.failures {
+                scenario_failures.push((display_name.clone(), failure.clone()));
+            }
+            save_last_failed_scenarios(failed_scenario_names.iter().cloned());
+            timings.push(outcome.report);
         }
 
         println!("All scenarios complete!");
         (timings, scenario_failures)
     }));
 
+    let pending_cleanup_result = resources.join_pending_cleanup_if_any();
     let final_cleanup_result = run_final_cleanup();
 
-    match run_result {
-        Ok((timings, scenario_failures)) => {
-            let final_cleanup_steps = final_cleanup_result.unwrap_or_else(|error| {
+    match (run_result, pending_cleanup_result, final_cleanup_result) {
+        (Ok((timings, scenario_failures)), pending_cleanup_result, final_cleanup_result) => {
+            let mut final_cleanup_steps = pending_cleanup_result.unwrap_or_else(|error| {
                 panic!("{error}");
             });
+            final_cleanup_steps.extend(final_cleanup_result.unwrap_or_else(|error| {
+                panic!("{error}");
+            }));
             let mut failed_scenarios: Vec<String> = Vec::new();
             for (scenario_name, _) in &scenario_failures {
                 if !failed_scenarios.iter().any(|name| name == scenario_name) {
@@ -2493,7 +2606,15 @@ fn main() {
                 );
             }
         }
-        Err(payload) => {
+        (Err(payload), pending_cleanup_result, final_cleanup_result) => {
+            match pending_cleanup_result {
+                Ok(pending_steps) if !pending_steps.is_empty() => {
+                    eprintln!("pending async cleanup:");
+                    print_timing_steps(&pending_steps);
+                }
+                Ok(_) => {}
+                Err(error) => eprintln!("pending async cleanup FAILED - {error}"),
+            }
             match final_cleanup_result {
                 Ok(final_cleanup_steps) => {
                     eprintln!("final cleanup:");
