@@ -5,6 +5,7 @@ import ai.platon.pulsar.skeleton.workflow.fetch.driver.NavigateEntry
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 import kotlinx.coroutines.delay
 import java.time.Duration
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.logging.Logger
 import kotlin.reflect.KClass
@@ -33,6 +34,18 @@ class BrowserTabToolExecutor: AbstractToolExecutor() {
         )
 
         private val READ_PAGE_STATE_ACTIONS = resolveReadPageStateActions()
+
+        // Commands that may change DOM/content and can make immediate reads flaky.
+        private val DOM_AFFECTING_ACTIONS = setOf(
+            "open", "navigate", "reload", "goBack", "goForward",
+            "focus", "hover", "type", "fill", "press", "click", "dblclick",
+            "upload", "selectOption", "dialogAccept", "dialogDismiss",
+            "keydown", "keyDown", "keyup", "keyUp",
+            "mousedown", "mouseDown", "mouseup", "mouseUp",
+            "dragAndDrop", "drag", "clickTextMatches", "clickMatches",
+            "check", "uncheck", "setAttribute", "setAttributeAll", "setProperty", "setPropertyAll",
+            "evaluate", "evaluateDetail", "evaluateValue", "evaluateValueDetail"
+        )
 
         private fun resolveReadPageStateActions(): Set<String> {
             val configuredValue = System.getProperty(READ_ACTIONS_WHITELIST_PROPERTY)?.trim()
@@ -80,6 +93,7 @@ class BrowserTabToolExecutor: AbstractToolExecutor() {
     override val receiverClass: KClass<*> = WebDriver::class
 
     private val lastActionAtMillis = AtomicLong(0L)
+    private val lastActionAffectsDom = AtomicBoolean(false)
 
     init {
         ToolSpecGenerator.apply {
@@ -99,6 +113,9 @@ class BrowserTabToolExecutor: AbstractToolExecutor() {
 
     private suspend fun waitBeforeReadIfNeeded(functionName: String) {
         if (functionName !in READ_PAGE_STATE_ACTIONS) {
+            return
+        }
+        if (!lastActionAffectsDom.get()) {
             return
         }
 
@@ -480,6 +497,7 @@ class BrowserTabToolExecutor: AbstractToolExecutor() {
         }
 
         lastActionAtMillis.set(System.currentTimeMillis())
+        lastActionAffectsDom.set(functionName in DOM_AFFECTING_ACTIONS)
         return result
     }
 }
