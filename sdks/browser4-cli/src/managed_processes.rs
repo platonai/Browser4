@@ -836,18 +836,29 @@ fn graceful_stop(pid: u32) {
     }
     #[cfg(windows)]
     {
-        // Try jcmd first (graceful JVM exit), fallback to Stop-Process
-        let jcmd_result = std::process::Command::new("jcmd")
-            .args([&pid.to_string(), "VM.exit", "0"])
+        let stop_status = std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                &format!("Stop-Process -Id {} -ErrorAction SilentlyContinue", pid),
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status();
-        if jcmd_result.is_err() || jcmd_result.map(|s| !s.success()).unwrap_or(true) {
+        if stop_status.is_err() || stop_status.map(|s| !s.success()).unwrap_or(true) {
             let _ = std::process::Command::new("powershell")
                 .args([
                     "-NoProfile",
                     "-NonInteractive",
                     "-Command",
-                    &format!("Stop-Process -Id {}", pid),
+                    &format!(
+                        "Stop-Process -Id {} -Force -ErrorAction SilentlyContinue",
+                        pid
+                    ),
                 ])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
                 .status();
         }
     }

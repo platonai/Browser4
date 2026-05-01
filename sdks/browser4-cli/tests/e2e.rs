@@ -35,6 +35,9 @@
 //!   reach the fixture HTTP server on the host (e.g. `host.docker.internal` or
 //!   the Docker bridge gateway IP such as `172.17.0.1`). Defaults to `127.0.0.1`.
 
+use browser4_cli::commands::all_commands;
+use browser4_cli::managed_processes::stop_browser4_server_forcibly;
+use chrono::Local;
 use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -46,9 +49,6 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::thread::{sleep, JoinHandle};
 use std::time::{Duration, Instant};
-use chrono::Local;
-use browser4_cli::commands::all_commands;
-use browser4_cli::managed_processes::stop_browser4_server_forcibly;
 
 #[path = "e2e/scenarios/mod.rs"]
 mod scenarios;
@@ -1769,8 +1769,7 @@ fn create_e2e_test_resources() -> E2ETestResources {
     fs::create_dir_all(&workspace_dir).unwrap();
     fs::create_dir_all(&state_dir).unwrap();
 
-    let invocation_dir =
-        std::env::current_dir().expect("failed to read e2e invocation directory");
+    let invocation_dir = std::env::current_dir().expect("failed to read e2e invocation directory");
 
     let upload_file_path = temp_dir.path().join("upload.txt");
     fs::write(&upload_file_path, b"browser4-cli e2e upload payload")
@@ -1905,6 +1904,12 @@ fn cleanup_browser4_sessions_with_ctx(ctx: &E2ECtx) -> Result<Vec<TimedStep>, St
         duration,
     )];
     if result.exit_code == 0 {
+        assert!(
+            !result.stderr.contains("Unknown diagnostic command"),
+            "browser4-cli close-all should not emit JVM diagnostic errors.\nstdout:\n{}\nstderr:\n{}",
+            result.stdout,
+            result.stderr
+        );
         return Ok(steps);
     }
 
@@ -1963,10 +1968,8 @@ fn cleanup_after_scenario(
                 "browser4 session cleanup scheduled (async)",
                 started_at.elapsed(),
             )])
-        },
-        ScenarioCleanupMode::None => {
-            Ok(Vec::new())
         }
+        ScenarioCleanupMode::None => Ok(Vec::new()),
     }
 }
 
@@ -2199,7 +2202,12 @@ fn failure_from_panic(phase: &str, message: String) -> FailureDetail {
     let (expected, actual) = parse_expected_actual_from_message(&message).unwrap_or_else(|| {
         (
             "assertion condition is satisfied".to_string(),
-            message.lines().next().unwrap_or_default().trim().to_string(),
+            message
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_string(),
         )
     });
 
