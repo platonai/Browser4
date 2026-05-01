@@ -706,7 +706,8 @@ class PulsarWebDriver constructor(
     @Throws(WebDriverException::class)
     override suspend fun keyDown(key: String) {
         driverHelper.invokeOnPage("keyDown") {
-            if (SystemUtils.IS_OS_WINDOWS) {
+            if (alwaysTrue() || SystemUtils.IS_OS_WINDOWS) {
+                // TODO: keydown 事件不太可靠，先用 DOM 事件模拟，后续优化
                 dispatchDomKeyboardEvent("keydown", key)
             } else {
                 keyboard?.down(key)
@@ -717,7 +718,8 @@ class PulsarWebDriver constructor(
     @Throws(WebDriverException::class)
     override suspend fun keyUp(key: String) {
         driverHelper.invokeOnPage("keyUp") {
-            if (SystemUtils.IS_OS_WINDOWS) {
+            if (alwaysTrue() || SystemUtils.IS_OS_WINDOWS) {
+                // TODO: keyup 事件不太可靠，先用 DOM 事件模拟，后续优化
                 dispatchDomKeyboardEvent("keyup", key)
             } else {
                 keyboard?.up(key)

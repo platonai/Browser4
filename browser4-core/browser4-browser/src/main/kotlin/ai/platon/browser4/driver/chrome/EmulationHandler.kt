@@ -662,7 +662,8 @@ class EmulationHandler(
     ) {
         val point = getInteractPoint(node, position, useRandomOffset = true) ?: return
 
-        if (SystemUtils.IS_OS_WINDOWS && dispatchWindowsDomClick(node, point, count, modifier, delayMillis)) {
+        if (dispatchDomClick(node, point, count, modifier, delayMillis)) {
+            // TODO: click/dblclick 事件不太可靠，先用 DOM 事件模拟，后续优化
             return
         }
 
@@ -826,7 +827,7 @@ class EmulationHandler(
         }
     }
 
-    private suspend fun dispatchWindowsDomClick(
+    private suspend fun dispatchDomClick(
         node: NodeRef,
         point: PointD,
         count: Int,
