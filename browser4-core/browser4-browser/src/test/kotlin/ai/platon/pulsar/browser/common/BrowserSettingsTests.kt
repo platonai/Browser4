@@ -1,6 +1,8 @@
 package ai.platon.pulsar.browser.common
 
 import ai.platon.browser4.driver.common.InteractSettings
+import ai.platon.browser4.driver.common.DelayPreset
+import ai.platon.pulsar.common.browser.InteractLevel
 import ai.platon.pulsar.common.config.CapabilityTypes
 import ai.platon.pulsar.common.config.MutableConfig
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
@@ -34,6 +36,37 @@ class BrowserSettingsTests {
         assertNotNull(delayPolicy["default"])
         delayPolicy.values.forEach { assertTrue(it.first >= 50, "range: $it") }
         delayPolicy.values.forEach { assertTrue(it.last <= 2000, "range: $it") }
+    }
+
+    @Test
+    fun testDelayPreset() {
+        val settings = InteractSettings()
+        val defaultPolicy = settings.generateRestrictedDelayPolicy().toMap()
+
+        val fastPolicy = settings.applyDelayPreset(DelayPreset.FAST).generateRestrictedDelayPolicy()
+        assertTrue((fastPolicy["type"]?.last ?: Int.MAX_VALUE) < (defaultPolicy["type"]?.last ?: Int.MIN_VALUE))
+        assertEquals(fastPolicy["default"], fastPolicy[""])
+
+        val stealthPolicy = settings.applyDelayPreset(DelayPreset.STEALTH).generateRestrictedDelayPolicy()
+        assertTrue((stealthPolicy["gap"]?.first ?: Int.MIN_VALUE) > (defaultPolicy["gap"]?.first ?: Int.MAX_VALUE))
+        assertEquals(stealthPolicy["default"], stealthPolicy[""])
+
+        settings.applyDelayPreset(DelayPreset.DEFAULT)
+        assertEquals(defaultPolicy["type"], settings.delayPolicy["type"])
+        assertEquals(settings.delayPolicy["default"], settings.delayPolicy[""])
+    }
+
+    @Test
+    fun testCreateLevelDelayPresetMapping() {
+        val fast = InteractSettings.create(InteractLevel.FASTEST).delayPolicy
+        val normal = InteractSettings.create(InteractLevel.DEFAULT).delayPolicy
+        val stealth = InteractSettings.create(InteractLevel.BEST_DATA).delayPolicy
+
+        assertTrue((fast["type"]?.last ?: Int.MAX_VALUE) < (normal["type"]?.last ?: Int.MIN_VALUE))
+        assertTrue((normal["type"]?.last ?: Int.MAX_VALUE) < (stealth["type"]?.last ?: Int.MIN_VALUE))
+        assertEquals(fast["default"], fast[""])
+        assertEquals(normal["default"], normal[""])
+        assertEquals(stealth["default"], stealth[""])
     }
 
     @Test

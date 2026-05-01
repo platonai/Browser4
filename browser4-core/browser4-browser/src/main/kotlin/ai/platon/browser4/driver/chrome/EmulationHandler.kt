@@ -3,7 +3,9 @@ package ai.platon.browser4.driver.chrome
 import ai.platon.browser4.driver.chrome.experimental.CDP
 import ai.platon.cdt.kt.protocol.commands.DOM
 import ai.platon.cdt.kt.protocol.commands.Page
-import ai.platon.cdt.kt.protocol.types.input.*
+import ai.platon.cdt.kt.protocol.types.input.DispatchDragEventType
+import ai.platon.cdt.kt.protocol.types.input.DispatchKeyEventType
+import ai.platon.cdt.kt.protocol.types.input.DragData
 import ai.platon.pulsar.common.DescriptiveResult
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.io.KeyboardModifier
@@ -14,16 +16,14 @@ import ai.platon.pulsar.common.math.geometric.DimD
 import ai.platon.pulsar.common.math.geometric.OffsetD
 import ai.platon.pulsar.common.math.geometric.PointD
 import ai.platon.pulsar.common.math.geometric.RectD
-import ai.platon.pulsar.common.printlnPro
-import ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper
 import kotlinx.coroutines.delay
 import org.apache.commons.lang3.SystemUtils
 import org.apache.commons.math3.util.Precision
-import org.checkerframework.checker.units.qual.Length
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.random.Random
+import kotlin.time.Duration.Companion.milliseconds
 
 data class NodeClip(
     var node: NodeRef? = null,
@@ -181,6 +181,7 @@ class Mouse(private val cdp: CDP) {
 
     var currentX = 0.0
     var currentY = 0.0
+
     // Track current pressed buttons bitfield. For left button only, we use 1 as Chromium does.
     private var buttonsState: Int = 0
 
@@ -196,11 +197,11 @@ class Mouse(private val cdp: CDP) {
         for (cc in 1..max(1, clickCount)) {
             down(x, y, cc, modifiers)
             if (delayMillis > 0) {
-                delay(delayMillis)
+                delay(delayMillis.milliseconds)
             }
             up(x, y, cc, modifiers)
             if (cc < clickCount && delayMillis > 0) {
-                delay(delayMillis)
+                delay(delayMillis.milliseconds)
             }
         }
     }
@@ -491,7 +492,7 @@ class Keyboard(private val cdp: CDP) {
 
         try {
             down(key)
-            delay(delayMillis)
+            delay(delayMillis.coerceAtLeast(60).milliseconds)
         } finally {
             up(key)
         }
@@ -504,7 +505,7 @@ class Keyboard(private val cdp: CDP) {
     suspend fun press(key: VirtualKey, delayMillis: Long) {
         try {
             down(key)
-            delay(delayMillis.coerceAtLeast(20))
+            delay(delayMillis.coerceAtLeast(60).milliseconds)
         } finally {
             up(key)
         }
@@ -791,7 +792,12 @@ class EmulationHandler(
                 // Use CDP-compliant modifier bitmask for mouse events
                 cdpModifiers = modifierMaskForKeyString(normModifier.name)
                 if (!modifier.equals(mappedModifierName, true)) {
-                    logger.info("OS mapped modifier {} -> {} (macOS={})", modifier, mappedModifierName, SystemUtils.IS_OS_MAC)
+                    logger.info(
+                        "OS mapped modifier {} -> {} (macOS={})",
+                        modifier,
+                        mappedModifierName,
+                        SystemUtils.IS_OS_MAC
+                    )
                 }
                 logger.info("Clicking with virtual key: {}, modifiers: {}", virtualKey, cdpModifiers)
             }
