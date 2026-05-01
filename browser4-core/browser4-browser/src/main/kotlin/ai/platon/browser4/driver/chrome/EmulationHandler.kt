@@ -229,7 +229,7 @@ class Mouse(private val cdp: CDP) {
             cdpMoveTo(x1, y1)
 
             if (delayMillis > 0) {
-                delay(delayMillis)
+                delay(delayMillis.milliseconds)
             }
 
             ++i
@@ -372,7 +372,7 @@ class Mouse(private val cdp: CDP) {
             // The event should fire during the moveTo operations, but add a small buffer
             // to account for CDP event delivery latency
             if (dragData == null) {
-                delay(100)
+                delay(100.milliseconds)
             }
         } finally {
             // Always release button and disable interception
@@ -436,7 +436,7 @@ class Mouse(private val cdp: CDP) {
             dragEnter(target, data)
             dragOver(target, data)
             if (delayMillis > 0) {
-                delay(delayMillis)
+                delay(delayMillis.milliseconds)
             }
             drop(target, data)
         } finally {
@@ -462,7 +462,7 @@ class Keyboard(private val cdp: CDP) {
             }
 
             if (delayMillis > 0) {
-                delay(delayMillis)
+                delay(delayMillis.milliseconds)
             }
         }
     }

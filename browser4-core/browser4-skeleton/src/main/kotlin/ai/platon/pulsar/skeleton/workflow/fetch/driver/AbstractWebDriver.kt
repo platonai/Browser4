@@ -28,6 +28,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.random.Random
 import kotlin.random.nextInt
+import kotlin.time.Duration.Companion.milliseconds
 
 @Suppress("unused")
 abstract class AbstractWebDriver(
@@ -393,10 +394,10 @@ abstract class AbstractWebDriver(
             while (kotlin.math.abs(((evaluate("window.scrollY") as? Number)?.toDouble() ?: y) - y) > 2 &&
                 Duration.between(stepStart, Instant.now()).toMillis() < 400 && isActive && !isCanceled
             ) {
-                kotlinx.coroutines.delay(25)
+                kotlinx.coroutines.delay(25.milliseconds)
             }
             // Minor buffer to allow lazy loading or layout jitter to settle
-            kotlinx.coroutines.delay(10)
+            kotlinx.coroutines.delay(10.milliseconds)
         }
 
         // Final alignment to targetY, ensure precise last position
@@ -405,7 +406,7 @@ abstract class AbstractWebDriver(
         while (kotlin.math.abs(((evaluate("window.scrollY") as? Number)?.toDouble() ?: targetY) - targetY) > 1 &&
             Duration.between(finalStart, Instant.now()).toMillis() < 1000 && isActive && !isCanceled
         ) {
-            kotlinx.coroutines.delay(30)
+            kotlinx.coroutines.delay(30.milliseconds)
         }
 
         // Return final scroll position
@@ -641,7 +642,7 @@ abstract class AbstractWebDriver(
 
     protected suspend fun waitUntil(timeMillis: Long, timeout: Duration, predicate: suspend () -> Boolean): Duration {
         val startTime = Instant.now()
-        withTimeoutOrNull(timeout.toMillis()) {
+        withTimeoutOrNull(timeout.toMillis().milliseconds) {
             while (!predicate()) {
                 delay(timeMillis)
             }
@@ -650,7 +651,7 @@ abstract class AbstractWebDriver(
     }
 
     protected suspend fun <T> waitFor(type: String, timeout: Duration, supplier: suspend () -> T): T? {
-        return withTimeoutOrNull(timeout.toMillis()) {
+        return withTimeoutOrNull(timeout.toMillis().milliseconds) {
             var result: T? = supplier()
             while (result == null) {
                 gap(type)
@@ -792,7 +793,7 @@ abstract class AbstractWebDriver(
         }
         val proxy = browser.id.fingerprint.proxyURI?.toString() ?: System.getenv("http_proxy")
         if (proxy != null && URLUtils.isStandard(proxy)) {
-            val u = URLUtils.getURLOrNull(proxy)
+            val u = URLUtils.getURLOrNull2(proxy)
             if (u != null) {
                 session.proxy(u.host, u.port)
             }

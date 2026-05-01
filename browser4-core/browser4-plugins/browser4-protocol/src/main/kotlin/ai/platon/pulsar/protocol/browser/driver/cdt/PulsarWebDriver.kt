@@ -614,7 +614,6 @@ class PulsarWebDriver constructor(
         rpc.invokeDeferredSilently("focus") { page.focusOnSelector(selector) }
     }
 
-
     @Throws(WebDriverException::class)
     override suspend fun type(selector: String, text: String) {
         driverHelper.invokeOnElement(selector, "type") {
