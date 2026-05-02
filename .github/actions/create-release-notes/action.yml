@@ -74,37 +74,51 @@ runs:
 
         ## 🚀 Quick Start
 
-        ### 📥 Download & Run
+        ### CLI & SKILLS
 
-        #### 🧩 Download
+        ```shell
+        # Open a new browser window
+        browser4-cli open
 
+        # Navigate to a page
+        browser4-cli goto https://playwright.dev
 
-        \`\`\`bash
-        curl -L -o ${{ inputs.jar_name }} https://github.com/${{ github.repository }}/releases/download/v${{ inputs.version }}/${{ inputs.jar_name }}
-        \`\`\`
+        # Inspect the page — note the eN labels on interactive nodes
+        browser4-cli snapshot
 
-        #### 🚀 Run
+        # Interact using refs from the snapshot
+        browser4-cli click e15
+        browser4-cli type e15 "Hello World"
+        browser4-cli press e15 Enter
+        browser4-cli keydown Shift
+        browser4-cli mousemove 150 300
+        browser4-cli mousewheel 0 100
+        browser4-cli keyup Shift
 
-        \`\`\`shell
-        echo \$OPENROUTER_API_KEY # make sure LLM api key is set. Also supported: OPENROUTER_API_KEY/OPENAI_API_KEY/DASHSCOPE_API_KEY/VOLCENGINE_API_KEY.
-        java -D"OPENROUTER_API_KEY=\${OPENROUTER_API_KEY}" -jar Browser4.jar
-        \`\`\`
+        # Take a screenshot and save it to disk
+        browser4-cli screenshot
 
-        > 🔍 **Tip:** Make sure \`OPENROUTER_API_KEY\` or other LLM API key is set in your environment, or AI features will not be available.
+        # Use a custom server URL
+        browser4-cli open --server http://localhost:9090
 
-        > 🔍 **Tip:** Windows PowerShell syntax: \`\$env:OPENROUTER_API_KEY\` (environment variable) vs \`\$OPENROUTER_API_KEY\` (script variable).
-        ### 🐳 Docker
+        # Execute multiple commands in one process
+        browser4-cli batch "open https://playwright.dev" "snapshot"
 
-        \`\`\`shell
-        # make sure LLM api key is set. Also supported: OPENROUTER_API_KEY/OPENAI_API_KEY/DASHSCOPE_API_KEY/VOLCENGINE_API_KEY.
-        echo \$OPENROUTER_API_KEY
-        docker run -d -p 8182:8182 -e OPENROUTER_API_KEY=\${OPENROUTER_API_KEY} galaxyeye88/browser4:${{ inputs.version }}
-        \`\`\`
+        # Stop on the first batch failure
+        browser4-cli batch --bail "open https://playwright.dev" "click e1" "screenshot"
 
-        GitHub Container Registry:
-        \`\`\`shell
-        docker pull ghcr.io/${{ github.repository_owner }}/browser4:${{ inputs.version }}
-        \`\`\`
+        # Pipe batch commands as JSON via stdin
+        echo '[
+        ["open", "https://playwright.dev"],
+        ["snapshot"],
+        ["click", "e1"],
+        ["screenshot", "--filename=result.png"]
+        ]' | browser4-cli batch --json
+
+        # Close the session when done
+        browser4-cli close
+        ```
+
         ---
 
         ## 📄 Full Changelog
