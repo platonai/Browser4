@@ -376,19 +376,20 @@ async fn handle_open(
     let session_id =
         create_session(client, base_url, &state, session_name, Some(capabilities)).await?;
 
+    println!("Session opened: {}", session_id);
+
     let url = tool_params
         .get("url")
         .and_then(|u| u.as_str())
         .unwrap_or("about:blank");
     if !url.is_empty() && url != "about:blank" {
         let mut params = tool_params.clone();
-        params["sessionId"] = json!(session_id);
+        params["sessionId"] = json!(session_id.clone());
         let result = call_tool(client, base_url, tool_name, params).await?;
         if !result.is_empty() {
             println!("{}", result);
         }
-    } else {
-        println!("Session opened: {}", session_id);
+        post_command_snapshot(client, base_url, &session_id).await;
     }
     Ok(())
 }

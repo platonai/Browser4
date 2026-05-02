@@ -26,6 +26,83 @@ pub(super) fn test_open_uses_temporary_profile_mode(ctx: &mut E2ECtx) {
     );
 }
 
+pub(super) fn test_open_with_url_prints_page_state(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let open_result = run_command(
+        ctx,
+        &[
+            "open",
+            OPEN_TEMPORARY_PROFILE_ARG,
+            "https://example.com/opened-from-open-command",
+        ],
+    );
+    assert!(
+        open_result
+            .stdout
+            .contains("Session opened: collective-session-1"),
+        "Expected session output in:\n{}",
+        open_result.stdout
+    );
+    assert!(
+        open_result.stdout.contains("### Page"),
+        "Expected page block in:\n{}",
+        open_result.stdout
+    );
+    assert!(
+        open_result
+            .stdout
+            .contains("- Page URL: https://mock.browser4.local/current"),
+        "Expected page URL in:\n{}",
+        open_result.stdout
+    );
+    assert!(
+        open_result
+            .stdout
+            .contains("- Page Title: Mock Browser4 Page"),
+        "Expected page title in:\n{}",
+        open_result.stdout
+    );
+    assert!(
+        open_result.stdout.contains("[Snapshot]("),
+        "Expected snapshot link in:\n{}",
+        open_result.stdout
+    );
+    assert!(
+        open_result.stdout.find("Session opened:") < open_result.stdout.find("### Page"),
+        "Expected session output before page block in:\n{}",
+        open_result.stdout
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let navigate_call = tool_calls
+        .iter()
+        .find(|call| call.tool == "browser_navigate")
+        .expect("expected browser_navigate call");
+    assert_eq!(navigate_call.arguments["sessionId"], "collective-session-1");
+    assert_eq!(
+        navigate_call.arguments["url"],
+        "https://example.com/opened-from-open-command"
+    );
+    assert!(
+        tool_calls.iter().any(|call| call.tool == "page_url"),
+        "expected page_url call"
+    );
+    assert!(
+        tool_calls.iter().any(|call| call.tool == "page_title"),
+        "expected page_title call"
+    );
+    assert!(
+        tool_calls
+            .iter()
+            .any(|call| call.tool == "browser_snapshot"),
+        "expected browser_snapshot call"
+    );
+}
+
 pub(super) fn test_collective_session_and_agent_tools(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
     let mock_server = start_mock_collective_session(ctx);
