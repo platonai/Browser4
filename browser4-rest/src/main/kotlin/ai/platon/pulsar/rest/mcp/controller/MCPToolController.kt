@@ -433,7 +433,6 @@ class MCPToolController(
     private fun getCommandAgentToolExecutor(): AgentToolExecutor {
         val commandAgent = commandService.session.companionAgent as? BasicBrowserAgent
             ?: throw IllegalStateException("CommandService session agent does not support tools")
-        // TODO: a native CommandService is required in browser4-agentic module for better maintainability and testing
         return commandAgent.toolExtractor.also { it.registerCustomTarget("command", commandService) }
     }
 
@@ -511,6 +510,9 @@ class MCPToolController(
                     ?: throw IllegalArgumentException("Batch press step is missing 'selector'.")
                 val key = step["key"]?.toString()
                     ?: throw IllegalArgumentException("Batch press step is missing 'key'.")
+
+                // TODO: use executeAgentToolText with a "browser_press" tool instead of a custom implementation here
+
                 val text = executeBatchPress(sessionId, selector, key)
                 BatchExecutionResult(index = index, ok = true, text = text.ifBlank { null })
             }
