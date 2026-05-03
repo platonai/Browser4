@@ -2128,6 +2128,43 @@ fn format_duration(duration: Duration) -> String {
     format!("{:.2}s", duration.as_secs_f64())
 }
 
+fn format_duration_human(duration: Duration) -> String {
+    let secs = duration.as_secs();
+    if secs == 0 {
+        return "<1s".to_string();
+    }
+
+    let hours = secs / 3600;
+    let minutes = (secs % 3600) / 60;
+    let seconds = secs % 60;
+
+    if hours > 0 {
+        format!("{}h {}m", hours, minutes)
+    } else if minutes > 0 {
+        format!("{}m {}s", minutes, seconds)
+    } else {
+        format!("{}s", seconds)
+    }
+}
+
+fn render_progress_bar(done: usize, total: usize, width: usize) -> String {
+    if total == 0 {
+        return "-".repeat(width);
+    }
+
+    let filled = ((done * width) + (total / 2)) / total;
+    let filled = filled.min(width);
+    format!("{}{}", "#".repeat(filled), "-".repeat(width - filled))
+}
+
+fn render_progress_percent(done: usize, total: usize) -> usize {
+    if total == 0 {
+        100
+    } else {
+        (done * 100) / total
+    }
+}
+
 fn print_timing_steps(steps: &[TimedStep]) {
     for (index, step) in steps.iter().enumerate() {
         println!(
@@ -2502,6 +2539,8 @@ fn main() {
         for (_, planned_run) in planned_runs.iter().enumerate() {
             scenario_progress += 1;
             let display_name = planned_run.display_name();
+            let scenario_started_at = Local::now();
+            let scenario_started_instant = Instant::now();
 
             let cleanup_mode = if planned_run.scenario.requires_browser4 {
                 ScenarioCleanupMode::Deferred
@@ -2517,10 +2556,23 @@ fn main() {
                 cleanup_mode,
                 planned_run.scenario.test_fn,
             );
+            let scenario_finished_at = Local::now();
+            let scenario_elapsed = scenario_started_instant.elapsed();
             let status = if outcome.passed() { "ok" } else { "FAILED" };
+            let progress_bar = render_progress_bar(scenario_progress, scenario_runs, 24);
+            let progress_percent = render_progress_percent(scenario_progress, scenario_runs);
             println!(
-                "progress [{}/{}] {} => {}",
-                scenario_progress, scenario_runs, display_name, status
+                "{} progress [{}] {}/{} ({}%) {} => {} | start={} | end={} | elapsed={}",
+                scenario_finished_at,
+                progress_bar,
+                scenario_progress,
+                scenario_runs,
+                progress_percent,
+                display_name,
+                status,
+                scenario_started_at.format("%H:%M:%S"),
+                scenario_finished_at.format("%H:%M:%S"),
+                format_duration_human(scenario_elapsed)
             );
             if !outcome.passed() {
                 failed_scenario_names.insert(planned_run.scenario.name.to_string());
@@ -2532,7 +2584,7 @@ fn main() {
             timings.push(outcome.report);
         }
 
-        println!("All scenarios complete!");
+        println!("All scenarios complete at {}!", Local::now());
         (timings, scenario_failures)
     }));
 
