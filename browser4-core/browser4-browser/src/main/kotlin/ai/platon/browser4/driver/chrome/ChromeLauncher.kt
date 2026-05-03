@@ -118,7 +118,7 @@ class ChromeLauncher constructor(
     }
 
     private fun clearProcessMarkers() {
-        BrowserFiles.clearProcessMarkers(userDataDir)
+        BrowserFilesPatch.clearProcessMarkers(userDataDir)
     }
 
     /**
@@ -386,15 +386,14 @@ class ChromeLauncher constructor(
         try {
             logger.info("Attempting to find and kill process holding lock on {}", userDataDir)
             val killedByProcessHandle = ProcessHandle.allProcesses()
-                .toList()
-                .asSequence()
                 .filter { isBrowserProcess(it) }
                 .filter { isCommandLineMatch(it.info().commandLine().orElse("") ?: "") }
                 .map { it.pid() }
                 .distinct()
-                .count { pid -> killProcessByPid(pid, "ProcessHandle") }
+                .map { pid -> killProcessByPid(pid, "ProcessHandle") }
+                .count()
 
-            val killedByFallback = if (killedByProcessHandle == 0) {
+            val killedByFallback = if (killedByProcessHandle == 0L) {
                 when {
                     SystemUtils.IS_OS_WINDOWS -> killLockingProcessWindows()
                     SystemUtils.IS_OS_MAC || SystemUtils.IS_OS_LINUX -> killLockingProcessPosix()
@@ -435,15 +434,15 @@ class ChromeLauncher constructor(
         try {
             logger.info("Trying PowerShell fallback to kill locking process")
             val normalizedPath = normalizeCommandText(userDataDir.toAbsolutePath().toString()).replace("'", "''")
-            val command = """
-                ${'$'}path = '$normalizedPath'
+            val command = $$"""
+                $path = '$$normalizedPath'
                 Get-CimInstance Win32_Process |
                     Where-Object {
-                        ${'$'}_.Name -match '^(chrome|chromium)\.exe$' -and
-                        ${'$'}_.CommandLine -and
-                        ${'$'}_.CommandLine.Replace('\', '/') -like "*${'$'}path*"
+                        $_.Name -match '^(chrome|chromium)\.exe$' -and
+                        $_.CommandLine -and
+                        $_.CommandLine.Replace('\', '/') -like "*$path*"
                     } |
-                    ForEach-Object { "{0}`t{1}" -f ${'$'}_.ProcessId, ${'$'}_.CommandLine }
+                    ForEach-Object { "{0}`t{1}" -f $_.ProcessId, $_.CommandLine }
             """.trimIndent()
 
             val output = runCommandAndCollectOutput("powershell.exe", "-NoProfile", "-Command", command)
@@ -821,7 +820,8 @@ ${scriptPath.toUri()}
 
     private fun cleanUpContextFiles() {
         try {
-            BrowserFilesPatch.runCatching {
+            kotlin.runCatching {
+                clearProcessMarkers()
                 BrowserFilesPatch.cleanUpContextTmpDir(temporaryUddExpiry)
                 BrowserFilesPatch.cleanOldestContextTmpDirs(Duration.ofMinutes(2), recentNToKeep)
             }.onFailure { warnForClose(this, it) }
@@ -876,6 +876,7 @@ ${scriptPath.toUri()}
 //                        // Copy only the default profile directory
 //                        && f.name == "Default"
 //                    }
+                    // Copy data from prototype user data dir to inherit the user data
                     FileUtils.copyDirectory(prototypeUserDataDir.toFile(), userDataDir.toFile(), fileFilter)
                 } else {
                     handleExistUserDataDir(prototypeUserDataDir)

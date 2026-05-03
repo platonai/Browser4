@@ -17,6 +17,7 @@ import java.time.Duration
 import java.time.MonthDay
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentSkipListSet
+import java.util.stream.Stream
 import kotlin.io.path.exists
 import kotlin.io.path.notExists
 
@@ -143,13 +144,7 @@ object BrowserFilesPatch {
     @Throws(IOException::class)
     fun cleanOldestContextTmpDirs(expiry: Duration, recentNToKeep: Int = 10) {
         // Remove directories that have too many context directories
-        val files = Files.walk(AppPaths.CONTEXT_TMP_DIR, 3)
-            .filter { it !in cleanedUserDataDirs } // not processed
-            .filter { it.toString().contains("cx.") } // context dir
-            .filter { it.resolve("$PID_FILE_NAME.bak").exists() } // already launched and closed
-            .filter { it.resolve("$PORT_FILE_NAME.bak").exists() } // already launched and closed
-            .toList()
-            .toSet()
+        val files = findAllClosedContextTmpDirs().toList().toSet()
 
         try {
             files.sortedByDescending { Files.getLastModifiedTime(it) }  // newest first
@@ -169,12 +164,15 @@ object BrowserFilesPatch {
      * */
     @Throws(IOException::class)
     fun cleanUpContextTmpDir(expiry: Duration) {
-        Files.walk(AppPaths.CONTEXT_TMP_DIR, 3)
+        findAllClosedContextTmpDirs().forEach { path -> cleanUpContextDir(path, expiry) } // clean the rest
+    }
+
+    private fun findAllClosedContextTmpDirs(): Stream<Path> {
+        return Files.walk(AppPaths.CONTEXT_TMP_DIR, 5)
             .filter { it !in cleanedUserDataDirs }
             .filter { it.fileName.toString().startsWith("cx.") }
-            .filter { it.resolve(PID_FILE_NAME).exists() } // already launched
-            .filter { it.resolve(PORT_FILE_NAME).notExists() } // already closed
-            .forEach { path -> cleanUpContextDir(path, expiry) } // clean the rest
+            .filter { it.resolve("$PID_FILE_NAME.bak").exists() } // already launched and closed
+            .filter { it.resolve("$PORT_FILE_NAME.bak").exists() } // already launched and closed
     }
 
     /**
