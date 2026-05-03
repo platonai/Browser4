@@ -804,9 +804,6 @@ ${scriptPath.toUri()}
     @Throws(IOException::class)
     private fun prepareUserDataDir() {
         try {
-            // Make sure there are enough disk space before launching the browser, otherwise it might cause the browser to crash immediately after launch.
-            cleanUpContextFiles()
-
             prepareUserDataDir0()
         } catch (e: OverlappingFileLockException) {
             logger.warn("OverlappingFileLockException, rethrow | {} | \n{}", userDataDir, e.brief())
