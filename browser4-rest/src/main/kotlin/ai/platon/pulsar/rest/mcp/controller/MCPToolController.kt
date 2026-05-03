@@ -511,7 +511,7 @@ class MCPToolController(
                 val key = step["key"]?.toString()
                     ?: throw IllegalArgumentException("Batch press step is missing 'key'.")
 
-                // TODO: use executeAgentToolText with a "browser_press" tool instead of a custom implementation here
+                // TODO: DO NOT REWRITE PRESS IMPLEMENTATION, dispatch to AgentToolExecutor instead
 
                 val text = executeBatchPress(sessionId, selector, key)
                 BatchExecutionResult(index = index, ok = true, text = text.ifBlank { null })
@@ -527,17 +527,17 @@ class MCPToolController(
         }
 
         val selectorLiteral = jacksonObjectMapper().writeValueAsString(selector)
-        val focusExpression = """
+        val focusExpression = $$"""
             (() => {
                 try {
-                    const el = document.querySelector($selectorLiteral);
+                    const el = document.querySelector($$selectorLiteral);
                     if (!el) return 'missing';
                     if (typeof el.focus === 'function') {
                         el.focus();
                     }
                     return document.activeElement === el ? 'focused' : 'unfocused';
                 } catch (error) {
-                    return `invalid:${'$'}{error}`;
+                    return `invalid:${error}`;
                 }
             })()
         """.trimIndent()
