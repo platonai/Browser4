@@ -75,14 +75,15 @@ mvnw.cmd -q -DskipTests
 | Module                  | Description |
 |-------------------------|-------------|
 | `browser4-core`         | Core engine: sessions, scheduling, DOM, browser control |
+| `browser4-dependencies` | BOM and dependency alignment |
+| `browser4-tools`        | Operational tools and launch helpers |
 | `browser4-agentic`      | AI agents implementation, MCP, skills registration |
 | `browser4-rest`         | Spring Boot REST layer & command endpoints |
 | `sdks/*`                | Browser4 CLI + skill assets (`sdks/browser4-cli`, `sdks/skill`) |
 | `browser4-app/*`        | Product packaging (`browser4-app/browser4-agents`) |
 | `examples/*`            | Runnable examples (`examples/browser4-examples`) |
 | `browser4-tests`        | E2E & heavy integration & scenario tests |
-| `browser4-tests-common` | Shared test base classes and utilities |
-| `pulsar-benchmarks`     | JMH benchmarks |
+| `browser4-tests/browser4-tests-common` | Shared test base classes and utilities |
 
 ## Key APIs and Concepts
 
@@ -149,7 +150,7 @@ logger.info("Task {} finished in {} ms", taskId, cost)
 
 To keep iteration fast, **don’t run full test suites by default**.
 
-- Default: `mvnw` compile with tests skipped
+- Default: `./mvnw` compile with tests skipped
 - Then: run the **smallest relevant** test scope (module/class) when logic changes
 - Upgrade scope when risk increases (cross-module, public API/DTO/serialization, Spring wiring, dependency bumps,
   concurrency/I/O, browser/CDP lifecycle)
@@ -160,11 +161,12 @@ See [TESTING.md](docs/TESTING.md) for details and trade-offs.
 - Use `bin/test.ps1` on Windows for scoped runs: `fast`, `it`, `e2e`, `rest`, `skills`, `mcp`, `cli`, `browser4`
 - Maven profile switches in root `pom.xml` are property-driven: `-DrunITs=true`, `-DrunE2ETests=true`, `-DrunSDKTests=true`, `-DrunCoreTests=true`, `-DrunRestTests=true`
 - `sdks/browser4-cli/tests/e2e.rs`: all e2e scenarios must start and depend on Browser4.jar; this includes single-scenario runs via `--scenario`.
+- `.github/workflows/ci.yml` additionally enforces `MCPToolControllerE2ETest` as a required E2E safety check.
 
 ### Test Location
 - Module unit tests: `src/test/kotlin/...`
 - Centralized integration/E2E: `browser4-tests/`
-- Shared utilities: `browser4-tests-common/`
+- Shared utilities: `browser4-tests/browser4-tests-common/`
 
 ### Naming Conventions
 - Unit tests: `<ClassName>Test.kt`
@@ -238,14 +240,10 @@ browser.display.mode=GUI  # GUI | HEADLESS | SUPERVISED
 ## Documentation References
 
 - [Configuration Guide](docs/config.md)
-- [Build Guide](docs/build.md)
 - [Testing Taxonomy](docs/TESTING.md)
+- [Test Strategy](docs/test-strategy.md)
 - [Browser4 CLI Skills Development Guide](docs-dev/copilot/SKILLS-DEVELOPMENT-GUIDE.md)
-- [Advanced Guide](docs/advanced-guides.md)
-- [REST API Examples](docs/rest-api-examples.md)
-- [Concepts](docs/concepts.md)
-- [X-SQL](docs/x-sql.md)
-- [AI Products Guidance](docs/ai-products-guidance.md)
+- [ARIA Snapshots](docs/aria-snapshots.md)
 
 ## Claude-Specific Guidance
 
