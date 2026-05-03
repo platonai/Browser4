@@ -50,7 +50,7 @@ class ChromeImplLauncherTest {
             val chrome = launcher.launch(launchOptions)
 
             val version = chrome.version
-            val tab = chrome.createTab("https://www.baidu.com")
+            val tab = chrome.createTab("https://www.example.com/")
             val versionString = Gson().toJson(chrome.version)
             assertTrue(!chrome.version.browser.isNullOrBlank())
             assertTrue(versionString.contains("Mozilla"))
@@ -66,7 +66,7 @@ class ChromeImplLauncherTest {
             val devTools = chrome.createDevTools(tab)
             runBlocking {
                 devTools.page.enable()
-                devTools.page.navigate("https://www.xiaohongshu.com/")
+                devTools.page.navigate("https://vercel.com/")
             }
 
             sleepSeconds(2)

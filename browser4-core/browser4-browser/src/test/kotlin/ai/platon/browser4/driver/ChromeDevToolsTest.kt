@@ -48,10 +48,10 @@ class ChromeDevToolsTest {
     @Test
     fun testDevTools() {
         runBlocking {
-            devTools.page.navigate("https://www.xiaohongshu.com/")
+            devTools.page.navigate("https://vercel.com/")
             // ▶ Send {"id":1,"method":"Page.navigate","params":{"url":"https://www.aliyun.com","id":"4"}}
             //  Accept {"id":1,"result":{"frameId":"5209F155E679677705D979C8F6DBF6A5","loaderId":"CEEE5FEC31BD255B9ECBB55CB75FB172","isDownload":false}}
-            val navigate: Navigate? = devTools.invoke("Page.navigate", mapOf("url" to "https://www.aliyun.com"))
+            val navigate: Navigate? = devTools.invoke("Page.navigate", mapOf("url" to "https://www.example.com/"))
             assertNotNull(navigate)
         }
 
