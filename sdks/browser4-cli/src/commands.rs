@@ -522,13 +522,13 @@ pub fn all_commands() -> Vec<CommandDef> {
             category: Category::Core,
             hidden: false,
             args: &[
-                ArgDef { name: "func", description: "JavaScript expression to evaluate on the page", optional: false },
-                ArgDef { name: "ref", description: "Exact target element reference from the page snapshot", optional: true },
+                ArgDef { name: "expression", description: "JavaScript expression or function to evaluate", optional: false },
+                ArgDef { name: "ref", description: "Optional CSS selector or snapshot ref (for example e5)", optional: true },
             ],
             options: &[],
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |args| {
-                let mut p = json!({ "expression": get_str(args, "func").unwrap_or_default() });
+                let mut p = json!({ "expression": get_str(args, "expression").unwrap_or_default() });
                 if let Some(r) = get_opt_str(args, "ref") { p["ref"] = json!(r); }
                 p
             },
@@ -1193,6 +1193,36 @@ mod tests {
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["width"], json!(1280));
         assert_eq!(params["height"], json!(900));
+    }
+
+    #[test]
+    fn test_eval_params_without_ref() {
+        let map = commands_map();
+        let cmd = map.get("eval").unwrap();
+        let mut args = HashMap::new();
+        args.insert("expression".to_string(), json!("document.title"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_evaluate");
+        assert_eq!(params["expression"], json!("document.title"));
+        assert!(params.get("ref").is_none());
+    }
+
+    #[test]
+    fn test_eval_params_with_ref() {
+        let map = commands_map();
+        let cmd = map.get("eval").unwrap();
+        let mut args = HashMap::new();
+        args.insert(
+            "expression".to_string(),
+            json!("element => element.textContent"),
+        );
+        args.insert("ref".to_string(), json!("e5"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(
+            params["expression"],
+            json!("element => element.textContent")
+        );
+        assert_eq!(params["ref"], json!("e5"));
     }
 
     #[test]

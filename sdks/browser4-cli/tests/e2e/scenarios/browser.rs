@@ -194,6 +194,31 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
     run_command(ctx, &["close"]);
 }
 
+pub(super) fn test_eval_command(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    open_resized_interactive_page(ctx);
+
+    let title = eval_text(ctx, "document.title");
+    assert_eq!(title.trim(), INTERACTIVE_TITLE);
+
+    let button_text = eval_text_for_target(
+        ctx,
+        "element => element.textContent.trim()",
+        "#click-target",
+    );
+    assert_eq!(button_text.trim(), "Click");
+
+    let state_text = eval_text(
+        ctx,
+        "(() => { document.getElementById('click-target').click(); return document.getElementById('state-log').textContent; })()",
+    );
+    let state: serde_json::Value =
+        serde_json::from_str(state_text.trim()).expect("eval should return JSON state text");
+    assert_eq!(state["clickCount"].as_u64(), Some(1));
+
+    run_command(ctx, &["close"]);
+}
+
 pub(super) fn test_wait_for_state_failure_modes(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
     open_interactive_page(ctx);

@@ -103,6 +103,55 @@ pub(super) fn test_open_with_url_prints_page_state(ctx: &mut E2ECtx) {
     );
 }
 
+pub(super) fn test_eval_command(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let open_result = run_open_command(ctx);
+    assert!(
+        open_result
+            .stdout
+            .contains("Session opened: collective-session-1"),
+        "Expected mocked session open output in:\n{}",
+        open_result.stdout
+    );
+
+    let page_eval = run_command(ctx, &["eval", "document.title"]);
+    assert_eq!(
+        strip_snapshot_output(&page_eval.stdout),
+        "Mock Browser4 Page"
+    );
+    assert!(
+        !page_eval.stdout.contains("### Page"),
+        "eval should not print a post-command snapshot block:\n{}",
+        page_eval.stdout
+    );
+
+    let element_eval = run_command(ctx, &["eval", "element => element.textContent", "e5"]);
+    assert_eq!(
+        strip_snapshot_output(&element_eval.stdout),
+        "Mock element text for backend:5"
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let eval_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_evaluate")
+        .collect();
+    assert_eq!(eval_calls.len(), 2, "expected two browser_evaluate calls");
+    assert_eq!(eval_calls[0].arguments["sessionId"], "collective-session-1");
+    assert_eq!(eval_calls[0].arguments["expression"], "document.title");
+    assert!(eval_calls[0].arguments.get("ref").is_none());
+    assert_eq!(eval_calls[1].arguments["sessionId"], "collective-session-1");
+    assert_eq!(
+        eval_calls[1].arguments["expression"],
+        "element => element.textContent"
+    );
+    assert_eq!(eval_calls[1].arguments["ref"], "backend:5");
+}
+
 pub(super) fn test_collective_session_and_agent_tools(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
     let mock_server = start_mock_collective_session(ctx);

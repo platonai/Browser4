@@ -47,6 +47,7 @@ browser4-cli uncheck e12
 browser4-cli snapshot
 browser4-cli snapshot --filename=after-click.yaml
 browser4-cli eval "document.title"
+browser4-cli eval "element => element.textContent" e12
 browser4-cli resize 1920 1080
 browser4-cli close
 ```

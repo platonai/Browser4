@@ -55,6 +55,8 @@ browser4-cli snapshot
 browser4-cli click e15
 browser4-cli type e15 "Hello World"
 browser4-cli press e15 Enter
+browser4-cli eval "document.title"
+browser4-cli eval "element => element.textContent.trim()" e15
 browser4-cli keydown Shift
 browser4-cli mousemove 150 300
 browser4-cli mousewheel 0 100

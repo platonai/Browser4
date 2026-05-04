@@ -446,6 +446,20 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                     r#"{"items":[{"title":"Mock Product","price":"$19.99"}]}"#.to_string()
                 }
                 "agent_summarize" => "Mock summary for #page-marker".to_string(),
+                "browser_evaluate" => {
+                    let expression = arguments
+                        .get("expression")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default();
+                    let target_ref = arguments.get("ref").and_then(|v| v.as_str());
+                    match (expression, target_ref) {
+                        ("document.title", None) => "Mock Browser4 Page".to_string(),
+                        ("element => element.textContent", Some(target)) => {
+                            format!("Mock element text for {target}")
+                        }
+                        _ => "mock evaluation result".to_string(),
+                    }
+                }
                 "page_url" => "https://mock.browser4.local/current".to_string(),
                 "page_title" => "Mock Browser4 Page".to_string(),
                 "browser_snapshot" => "mock snapshot".to_string(),
@@ -1487,6 +1501,20 @@ fn eval_text(ctx: &mut E2ECtx, expression: &str) -> String {
     strip_snapshot_output(&result.stdout)
 }
 
+fn eval_text_for_target(ctx: &mut E2ECtx, expression: &str, target: &str) -> String {
+    let started_at = Instant::now();
+    let result = run_checked_cli_process(ctx, &["eval", expression, target]);
+    ctx.record_step(
+        format!(
+            "{} [{}]",
+            format_eval_step_label(expression),
+            truncate_timing_label(target.trim(), 32)
+        ),
+        started_at.elapsed(),
+    );
+    strip_snapshot_output(&result.stdout)
+}
+
 fn read_interactive_state(ctx: &mut E2ECtx) -> serde_json::Value {
     let text = run_checked_cli_process(
         ctx,
@@ -2064,7 +2092,7 @@ fn tested_commands() -> HashSet<&'static str> {
         "tab-new",
         "tab-select",
         "tab-close",
-        // eval is exercised indirectly by the eval_text helper
+        // eval is exercised directly by dedicated scenarios and shared helpers
         "eval",
     ]
     .into()
