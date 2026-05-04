@@ -2,6 +2,7 @@ package ai.platon.browser4.driver.chrome
 
 import ai.platon.browser4.driver.chrome.experimental.CDP
 import ai.platon.browser4.driver.chrome.util.ChromeDriverException
+import ai.platon.browser4.driver.common.B4JsUtils
 import ai.platon.cdt.kt.protocol.types.runtime.CallFunctionOn
 import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
 import ai.platon.pulsar.common.AppContext
@@ -101,7 +102,7 @@ class JsHandler(
      * */
     @Throws(ChromeDriverException::class)
     suspend fun evaluateValueDetail(script: String): Evaluate? {
-        val expression: String = JsUtils.toCDPCompatibleExpression(script)
+        val expression: String = B4JsUtils.toCDPCompatibleExpression(script)
 
         val confusedExpr = confuser.confuse(expression)
 
