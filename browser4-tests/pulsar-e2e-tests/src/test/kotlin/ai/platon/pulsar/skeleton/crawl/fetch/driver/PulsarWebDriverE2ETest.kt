@@ -17,6 +17,7 @@ import java.nio.file.Path
 import java.text.MessageFormat
 import java.util.*
 import kotlin.test.*
+import kotlin.time.Duration.Companion.milliseconds
 
 @Tag("Slow")
 @Tag("E2ETest")
@@ -220,7 +221,7 @@ open class PulsarWebDriverE2ETest : WebDriverTestBase() {
 
             driver.moveMouseTo(x, y)
 
-            delay(500)
+            delay(500.milliseconds)
         }
     }
 
@@ -231,7 +232,7 @@ open class PulsarWebDriverE2ETest : WebDriverTestBase() {
         printlnPro(box)
         assertNotNull(box)
 
-        delay(3000)
+        delay(3000.milliseconds)
 
         driver.mouseWheelUp(5)
 
@@ -244,7 +245,7 @@ open class PulsarWebDriverE2ETest : WebDriverTestBase() {
     @Test
     fun testKeyPress() = runEnhancedWebDriverTest(browser) { driver ->
         driver.navigate(e2eProductUrl)
-        delay(1000)
+        delay(1000.milliseconds)
 
         val navbarMain = driver.selectFirstTextOrNull("#navbar-main")
         val title = driver.selectFirstTextOrNull("#productTitle")
@@ -272,7 +273,7 @@ open class PulsarWebDriverE2ETest : WebDriverTestBase() {
         driver.press(selector, "Digit6")
         driver.press(selector, "0")
 
-        delay(1000)
+        delay(1000.milliseconds)
 
         text = driver.selectFirstPropertyValueOrNull(selector, "value")
         printlnPro("Search bar value (should not be empty) - 1: <$text>")
@@ -385,7 +386,7 @@ open class PulsarWebDriverE2ETest : WebDriverTestBase() {
             if (screenshot != null) {
                 val path = exportScreenshot("$name.jpg", screenshot)
                 paths.add(path)
-                delay(1000)
+                delay(1000.milliseconds)
             }
         }
 
