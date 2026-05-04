@@ -144,12 +144,12 @@ pub(super) fn test_eval_command(ctx: &mut E2ECtx) {
     assert_eq!(eval_calls[0].arguments["sessionId"], "collective-session-1");
     assert_eq!(eval_calls[0].arguments["expression"], "document.title");
     assert!(eval_calls[0].arguments.get("ref").is_none());
-    assert_eq!(eval_calls[1].arguments["sessionId"], "collective-session-1");
-    assert_eq!(
-        eval_calls[1].arguments["expression"],
+        assert_eq!(eval_calls[1].arguments["sessionId"], "collective-session-1");
+        assert_eq!(
+            eval_calls[1].arguments["expression"],
         "element => element.textContent"
-    );
-    assert_eq!(eval_calls[1].arguments["ref"], "backend:5");
+        );
+        assert_eq!(eval_calls[1].arguments["ref"], "backend:5");
 }
 
 pub(super) fn test_collective_session_and_agent_tools(ctx: &mut E2ECtx) {

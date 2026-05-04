@@ -16,6 +16,7 @@
 //! cargo test --test e2e -- --nocapture --scenario=test_e2e_agent_task_commands
 //! cargo test --test e2e -- --nocapture --scenario-from=test_e2e_mouse_and_dialog
 //! cargo test --test e2e -- --nocapture --failed
+//! cargo test --test e2e -- --nocapture --scenario=test_e2e_eval_command --fail-fast
 //! ```
 //!
 //! The `--failed` selector reruns scenario names stored by the previous run in
@@ -2337,6 +2338,7 @@ fn run_named_scenario(
     requires_browser4: bool,
     restart_browser4: bool,
     cleanup_mode: ScenarioCleanupMode,
+    fail_fast: bool,
     test_fn: fn(&mut E2ECtx),
 ) -> ScenarioOutcome {
     println!("{} testing {name} ... ", Local::now());
@@ -2345,6 +2347,35 @@ fn run_named_scenario(
     resources.ctx.clear_step_timings();
     let total_started_at = Instant::now();
     let mut harness_steps = Vec::new();
+    if fail_fast {
+        if requires_browser4 {
+            let pending_steps = resources
+                .join_pending_cleanup_if_any()
+                .unwrap_or_else(|error| panic!("{error}"));
+            harness_steps.extend(pending_steps);
+
+            let setup_steps = if restart_browser4 {
+                println!("restarting browser4 ...");
+                resources.restart_browser4()
+            } else {
+                resources.ensure_browser4()
+            };
+            harness_steps.extend(setup_steps);
+        }
+        test_fn(&mut resources.ctx);
+        let mut steps = harness_steps;
+        steps.extend(resources.ctx.take_step_timings());
+        let cleanup_steps = cleanup_after_scenario(resources, name, requires_browser4, cleanup_mode)
+            .unwrap_or_else(|error| panic!("{error}"));
+        steps.extend(cleanup_steps);
+        let report = TimingReport::new(name, total_started_at.elapsed(), steps);
+        println!("ok ({})", format_duration(report.total));
+        return ScenarioOutcome {
+            report,
+            failures: Vec::new(),
+        };
+    }
+
     // Wrap the test in catch_unwind so that Browser4 and Chrome are always
     // force-stopped even when the test panics, preventing leaked processes
     // from contaminating later scenarios.
@@ -2416,17 +2447,24 @@ enum ScenarioFilter {
     Failed,
 }
 
+#[derive(Debug)]
+struct RunOptions {
+    scenario_filter: Option<ScenarioFilter>,
+    fail_fast: bool,
+}
+
 fn parse_named_flag_value(args: &mut impl Iterator<Item = String>, flag: &str) -> String {
     args.next().unwrap_or_else(|| {
         panic!("Missing value for {flag}. Use {flag}=<scenario-name> or {flag} <scenario-name>")
     })
 }
 
-fn parse_scenario_filter() -> Option<ScenarioFilter> {
+fn parse_run_options() -> RunOptions {
     let mut args = std::env::args().skip(1);
     let mut scenario = None;
     let mut scenario_from = None;
     let mut rerun_failed = false;
+    let mut fail_fast = false;
 
     while let Some(arg) = args.next() {
         if let Some(value) = arg.strip_prefix("--scenario=") {
@@ -2449,6 +2487,11 @@ fn parse_scenario_filter() -> Option<ScenarioFilter> {
 
         if arg == "--failed" {
             rerun_failed = true;
+            continue;
+        }
+
+        if arg == "--fail-fast" {
+            fail_fast = true;
         }
     }
 
@@ -2456,7 +2499,7 @@ fn parse_scenario_filter() -> Option<ScenarioFilter> {
         panic!("--failed cannot be used together with --scenario or --scenario-from");
     }
 
-    match (scenario, scenario_from, rerun_failed) {
+    let scenario_filter = match (scenario, scenario_from, rerun_failed) {
         (Some(_), Some(_), _) => {
             panic!("--scenario and --scenario-from cannot be used together")
         }
@@ -2465,6 +2508,11 @@ fn parse_scenario_filter() -> Option<ScenarioFilter> {
         (None, None, true) => Some(ScenarioFilter::Failed),
         (None, None, false) => None,
         _ => unreachable!("unexpected scenario filter argument combination"),
+    };
+
+    RunOptions {
+        scenario_filter,
+        fail_fast,
     }
 }
 
@@ -2506,7 +2554,7 @@ impl PlannedScenarioRun {
 }
 
 fn main() {
-    let scenario_filter = parse_scenario_filter();
+    let run_options = parse_run_options();
     let all_scenarios = scenarios::all_scenarios();
     let available_names = all_scenarios
         .iter()
@@ -2515,7 +2563,7 @@ fn main() {
         .join(", ");
 
     let (selected_scenarios, run_coverage): (Vec<scenarios::ScenarioDef>, bool) =
-        match scenario_filter {
+        match run_options.scenario_filter {
             Some(ScenarioFilter::Exact(filter)) => {
                 let scenario = resolve_scenario(&filter).unwrap_or_else(|| {
                     panic!("Unknown scenario '{filter}'. Available scenarios: {available_names}");
@@ -2620,6 +2668,7 @@ fn main() {
                 planned_run.scenario.requires_browser4,
                 planned_run.scenario.restart_browser4,
                 cleanup_mode,
+                run_options.fail_fast,
                 planned_run.scenario.test_fn,
             );
             let scenario_finished_at = Local::now();

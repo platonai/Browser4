@@ -218,4 +218,23 @@ class PulsarWebDriverEvaluateJSTests : WebDriverTestBase() {
             result = driver.evaluate(JsUtils.toExpression(funcIife))
             assertEquals(6, result)
         }
+
+    @Test
+    fun testElementTargetedEvaluateSupportsArrowAndFunctionArgumentSyntax() =
+        runEnhancedWebDriverTest(interactiveUrl, browser) { driver ->
+            val selector = "#pageHeader h1"
+            val expected = "Welcome to the Interactive Page"
+
+            val arrowResult = driver.evaluateValue(selector, "element => element.textContent")
+            assertEquals(expected, arrowResult?.toString()?.trim())
+
+            val functionResult = driver.evaluateValue(
+                selector,
+                "function(element) { return element.textContent; }"
+            )
+            assertEquals(expected, functionResult?.toString()?.trim())
+
+            val thisResult = driver.evaluateValue(selector, "function() { return this.textContent; }")
+            assertEquals(expected, thisResult?.toString()?.trim())
+        }
 }
