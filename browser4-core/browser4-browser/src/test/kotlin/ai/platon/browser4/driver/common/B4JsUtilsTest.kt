@@ -56,6 +56,13 @@ class B4JsUtilsTest {
         assertEquals("const fn = x => x", result)
     }
 
+    @Test
+    @DisplayName("toCDPCompatibleExpression keeps async-prefixed calls as plain calls")
+    fun toCdpCompatibleExpressionKeepsAsyncPrefixedCallsAsPlainCalls() {
+        val result = B4JsUtils.toCDPCompatibleExpression("asyncOperation()")
+        assertEquals("asyncOperation()", result)
+    }
+
     // ── toExpression ─────────────────────────────────────────────────────────
 
     @Test
@@ -148,6 +155,12 @@ class B4JsUtilsTest {
     }
 
     @Test
+    @DisplayName("toIIFEOrNull does not wrap async-prefixed calls")
+    fun toIifeOrNullDoesNotWrapAsyncPrefixedCalls() {
+        assertNull(B4JsUtils.toIIFEOrNull("asyncOperation()"))
+    }
+
+    @Test
     @DisplayName("toIIFEOrNull wraps raw object literal as expression")
     fun toIifeOrNullWrapsObjectLiteralAsExpression() {
         val obj = "{ answer: 42, label: 'ok' }"
@@ -174,6 +187,14 @@ class B4JsUtilsTest {
         val result = B4JsUtils.toIIFEOrNull("async () => { return 1 }")
         assertNotNull(result)
         assertTrue(result!!.startsWith("(async () => { return 1 })"))
+    }
+
+    @Test
+    @DisplayName("toIIFEOrNull wraps async function declaration as IIFE")
+    fun toIifeOrNullWrapsAsyncFunctionDeclaration() {
+        val result = B4JsUtils.toIIFEOrNull("async function() { return 1 }")
+        assertNotNull(result)
+        assertEquals("(async function() { return 1 })();", result)
     }
 
     @Test

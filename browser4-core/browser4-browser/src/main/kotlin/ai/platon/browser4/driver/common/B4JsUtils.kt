@@ -5,6 +5,7 @@ import ai.platon.pulsar.common.getLogger
 object B4JsUtils {
     private val logger = getLogger(this)
 
+
     /**
      * Convert any given JS snippet to an evaluable expression compatible with Chrome DevTools Protocol.
      *
@@ -88,7 +89,7 @@ object B4JsUtils {
         // Function expressions or groupings that should be invoked.
         // Only invoke `(expr)` when the content looks callable (contains a function, arrow, or async expression).
         // Plain parenthesised expressions like `(document.title)` must not be invoked.
-        if (trimmed.startsWith("function") || trimmed.startsWith("async")) {
+        if (trimmed.startsWith("function") || ASYNC_CALLABLE_REGEX.containsMatchIn(trimmed)) {
             return "(${trimmed})(${args});"
         }
         if (trimmed.startsWith("(") &&
@@ -154,6 +155,10 @@ object B4JsUtils {
     // Matches a bare single-identifier arrow function at the start of the expression, e.g. `x =>`.
     // This deliberately excludes `const fn = x => x` because it starts with `const`, not `x =>`.
     private val SIMPLE_ARROW_REGEX = Regex("^\\w+\\s*=>")
+
+    // Matches real async callable syntax, such as `async () => ...`, `async x => ...`,
+    // or `async function() { ... }`, while excluding async-prefixed identifiers like `asyncOperation()`.
+    private val ASYNC_CALLABLE_REGEX = Regex("^async(?:\\s+function\\b|\\s+\\([^)]*\\)\\s*=>|\\s+\\w+\\s*=>|\\s+\\()")
 
     private val PAREN_OBJECT_REGEX = Regex("^\\s*\\(\\s*\\{.*}\\s*\\)\\s*;?\\s*$", RegexOption.DOT_MATCHES_ALL)
 
