@@ -7,8 +7,6 @@ import ai.platon.cdt.kt.protocol.types.runtime.CallFunctionOn
 import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
-import com.fasterxml.jackson.module.kotlin.convertValue
 
 class JsHandler(
     private val devTools: RemoteDevTools,
@@ -47,7 +45,7 @@ class JsHandler(
         return try {
             cdp.evaluate(confusedExpr)
         } catch (e: Exception) {
-            logger.warn("Failed to evaluate $expression", e)
+            logger.warn("Failed to evaluate $script", e)
             null
         }
     }
@@ -171,22 +169,5 @@ class JsHandler(
      * */
     private suspend fun evaluateInContext(expression: String, contextId: Int, returnByValue: Boolean): Evaluate? {
         return cdp.evaluate(expression = expression, contextId = contextId, returnByValue = returnByValue)
-    }
-
-    private suspend fun evaluateInContext2(expression: String, contextId: Int, returnByValue: Boolean): Evaluate? {
-        val params = mutableMapOf<String, Any?>(
-            "expression" to expression,
-            "contextId" to contextId,
-            "returnByValue" to returnByValue,
-            "awaitPromise" to true,
-        )
-
-        // Runtime.evaluate via raw invoke is kept for compatibility with legacy protocol payload shape.
-        val raw = devTools.invoke<Map<String, Any?>>("Runtime.evaluate", params, null) ?: return null
-        return runCatching {
-            pulsarObjectMapper().convertValue<Evaluate>(raw)
-        }.onFailure { e ->
-            logger.warn("Failed to convert evaluation result to Evaluate type", e)
-        }.getOrNull()
     }
 }
