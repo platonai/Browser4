@@ -57,7 +57,7 @@ object B4JsUtils {
         }
 
         // Arrow function
-        if ("=>" in trimmed) {
+        if (isArrowFunction(trimmed)) {
             return "(${trimmed})(${args});"
         }
 
@@ -73,9 +73,8 @@ object B4JsUtils {
 
         // Function expressions or groupings that should be invoked
         if (
-            trimmed.startsWith("function") ||
-            trimmed.startsWith("(") ||
-            trimmed.startsWith("async")
+            isFunctionExpression(trimmed) ||
+            isParenWrappedCallable(trimmed)
         ) {
             return "(${trimmed})(${args});"
         }
@@ -86,7 +85,19 @@ object B4JsUtils {
     // Heuristic: detect an already-invoked IIFE like: ( ... ) ( ... ) with optional trailing semicolon
     private fun isAlreadyInvokedIIFE(code: String): Boolean {
         if (!code.startsWith("(")) return false
-        return ")(" in code || IIFE_REGEX.matches(code)
+        return IIFE_REGEX.matches(code)
+    }
+
+    private fun isArrowFunction(code: String): Boolean {
+        return ARROW_FUNCTION_REGEX.matches(code)
+    }
+
+    private fun isFunctionExpression(code: String): Boolean {
+        return FUNCTION_EXPRESSION_REGEX.matches(code)
+    }
+
+    private fun isParenWrappedCallable(code: String): Boolean {
+        return PAREN_WRAPPED_FUNCTION_REGEX.matches(code) || PAREN_WRAPPED_ARROW_REGEX.matches(code)
     }
 
     private fun isParenWrappedObjectLiteral(code: String): Boolean {
@@ -95,6 +106,14 @@ object B4JsUtils {
 
     private fun ensureSemicolon(s: String): String = if (s.trimEnd().endsWith(';')) s else "$s;"
 
-    private val IIFE_REGEX = Regex("^\\s*\\(.*\\)\\s*\\([^)]*\\)\\s*;?\\s*$", RegexOption.DOT_MATCHES_ALL)
+    private val IIFE_REGEX = Regex("^\\s*\\([\\s\\S]*\\)\\s*\\([^)]*\\)\\s*;?\\s*$")
+    private val ARROW_FUNCTION_REGEX = Regex(
+        "^\\s*(?:async\\s+)?(?:[A-Za-z_$][\\w$]*|\\([^)]*\\))\\s*=>[\\s\\S]*$"
+    )
+    private val FUNCTION_EXPRESSION_REGEX = Regex("^\\s*(?:async\\s+)?function\\b[\\s\\S]*$")
+    private val PAREN_WRAPPED_FUNCTION_REGEX = Regex("^\\s*\\(\\s*(?:async\\s+)?function\\b[\\s\\S]*\\)\\s*$")
+    private val PAREN_WRAPPED_ARROW_REGEX = Regex(
+        "^\\s*\\(\\s*(?:async\\s+)?(?:[A-Za-z_$][\\w$]*|\\([^)]*\\))\\s*=>[\\s\\S]*\\)\\s*$"
+    )
     private val PAREN_OBJECT_REGEX = Regex("^\\s*\\(\\s*\\{.*}\\s*\\)\\s*;?\\s*$", RegexOption.DOT_MATCHES_ALL)
 }

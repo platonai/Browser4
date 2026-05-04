@@ -7,7 +7,6 @@ import ai.platon.cdt.kt.protocol.types.runtime.CallFunctionOn
 import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.common.js.JsUtils
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import com.fasterxml.jackson.module.kotlin.convertValue
 
@@ -32,7 +31,7 @@ class JsHandler(
      * */
     @Throws(ChromeDriverException::class)
     suspend fun evaluateDetail(script: String): Evaluate? {
-        val expression: String = JsUtils.toCDPCompatibleExpression(script)
+        val expression: String = B4JsUtils.toCDPCompatibleExpression(script)
 
         val confusedExpr = confuser.confuse(expression)
 
@@ -74,12 +73,7 @@ class JsHandler(
     @Throws(ChromeDriverException::class)
     suspend fun evaluate(script: String): Any? {
         require(script.isNotBlank()) { "Script must not be blank" }
-        val evaluate = if (script.contains("__pulsar_utils__")) {
-            // Just for debugging purpose
-            evaluateDetail(script)
-        } else {
-            evaluateDetail(script.trim())
-        }
+        val evaluate = evaluateDetail(script.trim())
 
         val exception = evaluate?.exceptionDetails?.exception
         if (exception != null) {
