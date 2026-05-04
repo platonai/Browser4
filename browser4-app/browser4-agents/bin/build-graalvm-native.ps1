@@ -86,9 +86,9 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$repoRoot = Join-Path $scriptDir "..\.."
+$repoRoot = (git rev-parse --show-toplevel 2>$null)
 $mvnWrapper = Join-Path $repoRoot "mvnw.cmd"
-$pomPath = Join-Path $scriptDir "pom.xml"
+$pomPath = Join-Path $scriptDir "../pom.xml"
 
 if (-not (Test-Path $mvnWrapper)) {
     Write-Err "Maven wrapper not found at: $mvnWrapper"
