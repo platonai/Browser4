@@ -156,6 +156,7 @@ class MCPToolController(
     private data class BatchExecutionResult(
         val index: Int,
         val ok: Boolean,
+        val durationMillis: Long = 0,
         val sessionId: String? = null,
         val text: String? = null,
         val error: String? = null,
@@ -362,13 +363,15 @@ class MCPToolController(
         var stoppedOnError = false
 
         for ((index, step) in stepMaps) {
+            val startedAt = System.nanoTime()
             val result = try {
                 executeBatchStep(index, step, currentSessionId)
             } catch (e: Exception) {
                 BatchExecutionResult(index = index, ok = false, error = e.message ?: "Unknown batch execution error")
             }
+            val durationMillis = (System.nanoTime() - startedAt) / 1_000_000
 
-            results += result
+            results += result.copy(durationMillis = durationMillis)
             if (result.ok) {
                 currentSessionId = when (step["op"]?.toString()) {
                     "open" -> result.sessionId
