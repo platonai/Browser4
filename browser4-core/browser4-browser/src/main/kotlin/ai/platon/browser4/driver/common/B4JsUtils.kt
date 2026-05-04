@@ -50,7 +50,7 @@ object B4JsUtils {
         val result = toIIFEOrNull(jsFunctionCode, args)
         if (result == null) {
             logger.warn("Cannot convert to IIFE, not a recognizable function/arrow/object literal: {}",
-                jsFunctionCode.take(80))
+                jsFunctionCode.take(MAX_LOG_SNIPPET_LENGTH))
         }
         return result ?: ""
     }
@@ -103,11 +103,25 @@ object B4JsUtils {
     }
 
     // Heuristic: detect an already-invoked IIFE like: ( ... ) ( ... ) with optional trailing semicolon.
-    // Uses the regex directly; the fast-path `")(" in code` substring check is avoided because it
-    // can false-positive on code that contains `)(` inside string literals.
+    // Uses a balanced-parenthesis scan instead of a regex to avoid catastrophic backtracking on
+    // deeply nested or malformed input.
     private fun isAlreadyInvokedIIFE(code: String): Boolean {
         if (!code.startsWith("(")) return false
-        return IIFE_REGEX.matches(code)
+        var depth = 0
+        for (i in code.indices) {
+            when (code[i]) {
+                '(' -> depth++
+                ')' -> {
+                    depth--
+                    if (depth == 0) {
+                        // The main group closed — check that what follows (ignoring whitespace) is `(`
+                        val rest = code.substring(i + 1).trimStart()
+                        return rest.startsWith("(")
+                    }
+                }
+            }
+        }
+        return false
     }
 
     private fun isParenWrappedObjectLiteral(code: String): Boolean {
@@ -130,6 +144,9 @@ object B4JsUtils {
 
     private fun ensureSemicolon(s: String): String = if (s.trimEnd().endsWith(';')) s else "$s;"
 
+    // Maximum number of characters from a code snippet included in warning log messages.
+    private const val MAX_LOG_SNIPPET_LENGTH = 80
+
     // Matches a leading `return` keyword followed by optional whitespace (handles both `return expr`
     // and `return(expr)` without consuming the opening parenthesis).
     private val RETURN_PREFIX_REGEX = Regex("^\\s*return\\b\\s*")
@@ -137,10 +154,6 @@ object B4JsUtils {
     // Matches a bare single-identifier arrow function at the start of the expression, e.g. `x =>`.
     // This deliberately excludes `const fn = x => x` because it starts with `const`, not `x =>`.
     private val SIMPLE_ARROW_REGEX = Regex("^\\w+\\s*=>")
-
-    // Matches an already-invoked IIFE: ( body ) ( args ) with optional trailing semicolon.
-    // The args group uses `.*` (with DOT_MATCHES_ALL) so nested parentheses in arguments are allowed.
-    private val IIFE_REGEX = Regex("^\\s*\\(.*\\)\\s*\\(.*\\)\\s*;?\\s*$", RegexOption.DOT_MATCHES_ALL)
 
     private val PAREN_OBJECT_REGEX = Regex("^\\s*\\(\\s*\\{.*}\\s*\\)\\s*;?\\s*$", RegexOption.DOT_MATCHES_ALL)
 
