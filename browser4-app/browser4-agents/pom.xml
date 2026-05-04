@@ -81,6 +81,13 @@
                         <goals>
                             <goal>repackage</goal>
                         </goals>
+                        <configuration>
+                            <!-- Keep the original thin JAR as the project artifact so that
+                                 GraalVM native-image can resolve classes from the root of
+                                 Browser4.jar.  The fat/executable JAR is written as
+                                 Browser4-exec.jar and can still be run directly. -->
+                            <classifier>exec</classifier>
+                        </configuration>
                     </execution>
                 </executions>
                 <configuration>
@@ -357,6 +364,35 @@
                 <jpackage.installer.skip>true</jpackage.installer.skip>
             </properties>
         </profile>
+
+        <!-- Build native executable with GraalVM (Windows/Linux/macOS) -->
+        <profile>
+            <id>graalvm-native</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.graalvm.buildtools</groupId>
+                        <artifactId>native-maven-plugin</artifactId>
+                        <version>${native-maven-plugin.version}</version>
+                        <extensions>true</extensions>
+                        <executions>
+                            <execution>
+                                <id>build-native</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>compile-no-fork</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                        <configuration>
+                            <mainClass>ai.platon.pulsar.app.Browser4LauncherKt</mainClass>
+                            <fallback>true</fallback>
+                            <verbose>true</verbose>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
     </profiles>
 
     <properties>
@@ -377,5 +413,7 @@
 
         <!-- jpackage requires a numeric/strict version; snapshots are not accepted -->
         <jpackage.appVersion>4.4.0</jpackage.appVersion>
+
+        <native-maven-plugin.version>0.10.6</native-maven-plugin.version>
     </properties>
 </project>
