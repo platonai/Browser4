@@ -250,13 +250,55 @@ pub(super) fn test_agent_task_commands(ctx: &mut E2ECtx) {
         mock_server.snapshot().plain_commands,
         vec!["collect the latest updates".to_string()]
     );
-    assert_eq!(
-        mock_server.snapshot().status_queries,
-        vec!["agent-task-1".to_string()]
+    assert!(
+        mock_server
+            .snapshot()
+            .status_queries
+            .iter()
+            .all(|query| query == "agent-task-1"),
+        "Expected all status queries to target agent-task-1, got {:?}",
+        mock_server.snapshot().status_queries
+    );
+    assert!(
+        mock_server.snapshot().status_queries.len() >= 2,
+        "Expected at least one agent-run probe and one explicit agent-status lookup, got {:?}",
+        mock_server.snapshot().status_queries
     );
     assert_eq!(
         mock_server.snapshot().result_queries,
         vec!["agent-task-1".to_string()]
+    );
+}
+
+pub(super) fn test_agent_run_missing_llm_key(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let failure = run_command_expecting_failure(
+        ctx,
+        &["agent-run", "task missing llm key"],
+        "Agent task requires an LLM key and cannot execute",
+    );
+    let combined = format!("{}\n{}", failure.stdout, failure.stderr);
+    assert!(
+        combined.contains("The LLM is not configured"),
+        "Expected missing-LLM detail in:\n{combined}"
+    );
+
+    let snapshot = mock_server.snapshot();
+    assert_eq!(
+        snapshot.plain_commands,
+        vec!["task missing llm key".to_string()]
+    );
+    assert!(
+        snapshot
+            .status_queries
+            .contains(&"agent-task-missing-llm".to_string()),
+        "Expected agent-run to probe status for the missing-LLM task, got {:?}",
+        snapshot.status_queries
     );
 }
 

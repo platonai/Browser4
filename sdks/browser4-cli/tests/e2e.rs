@@ -400,7 +400,14 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                         .unwrap_or_default()
                         .trim()
                         .to_string();
-                    let task_id = {
+                    let task_id = if command == "task missing llm key" {
+                        state
+                            .lock()
+                            .expect("mock Browser4 state mutex poisoned")
+                            .plain_commands
+                            .push(command);
+                        "agent-task-missing-llm".to_string()
+                    } else {
                         let mut guard = state.lock().expect("mock Browser4 state mutex poisoned");
                         guard.plain_commands.push(command.clone());
                         if command.starts_with("http://") || command.starts_with("https://") {
@@ -424,11 +431,22 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                         .expect("mock Browser4 state mutex poisoned")
                         .status_queries
                         .push(task_id.clone());
-                    serde_json::json!({
-                        "id": task_id,
-                        "status": "RUNNING",
-                    })
-                    .to_string()
+                    if task_id == "agent-task-missing-llm" {
+                        serde_json::json!({
+                            "id": task_id,
+                            "status": "EXPECTATION_FAILED",
+                            "statusCode": 417,
+                            "processState": "done",
+                            "message": "The LLM is not configured, see docs/config/llm/llm-config.md",
+                        })
+                        .to_string()
+                    } else {
+                        serde_json::json!({
+                            "id": task_id,
+                            "status": "RUNNING",
+                        })
+                        .to_string()
+                    }
                 }
                 "command_result" => {
                     let task_id = arguments
@@ -1383,6 +1401,16 @@ fn run_command_expecting_failure(ctx: &mut E2ECtx, args: &[&str], pattern: &str)
     result
 }
 
+fn run_command_allowing_failure<'a>(ctx: &mut E2ECtx, args: &[&'a str]) -> CliRunResult {
+    let started_at = Instant::now();
+    let result = run_cli_process_with_retry(ctx, args);
+    ctx.record_step(
+        format_cli_step_label(args, false, result.exit_code != 0),
+        started_at.elapsed(),
+    );
+    result
+}
+
 fn run_cli_process_with_retry(ctx: &E2ECtx, args: &[&str]) -> CliRunResult {
     run_cli_process_with_retry_and_stdin(ctx, args, "")
 }
@@ -1442,6 +1470,16 @@ fn strip_snapshot_output(stdout: &str) -> String {
         .filter(|l| !l.is_empty() && *l != "ensuring server...")
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn extract_submitted_task_id(output: &str) -> String {
+    output
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("Task submitted:"))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| panic!("Expected 'Task submitted:' line in output:\n{output}"))
+        .to_string()
 }
 
 /// Extract a tab ID for the given URL from `tab-list` output.
