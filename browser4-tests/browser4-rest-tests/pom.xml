@@ -15,7 +15,7 @@
     <parent>
         <groupId>ai.platon.pulsar</groupId>
         <artifactId>browser4</artifactId>
-        <version>4.8.1-SNAPSHOT</version>
+        <version>4.8.1-install</version>
         <relativePath>../../pom.xml</relativePath>
     </parent>
 

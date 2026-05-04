@@ -29,7 +29,7 @@ export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 export OTEL_SERVICE_NAME=browser4-agentic
 
 # 服务版本 / Service version
-export OTEL_SERVICE_VERSION=4.8.1-SNAPSHOT
+export OTEL_SERVICE_VERSION=4.8.1-install
 ```
 
 #### 使用示例 / Usage Example
