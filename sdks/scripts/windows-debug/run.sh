@@ -13,9 +13,9 @@ if [[ $# -eq 0 ]]; then
   echo "Usage: ./scripts/windows-debug/run.sh \"<powershell-command>\""
   echo ""
   echo "Examples:"
-  echo "  ./scripts/windows-debug/run.sh \"cd C:\\agent-browser && cargo test\""
+  echo "  ./scripts/windows-debug/run.sh \"cd C:\\browser4 && cargo test\""
   echo "  ./scripts/windows-debug/run.sh \"Get-Content C:\\bootstrap.log\""
-  echo "  ./scripts/windows-debug/run.sh \"cd C:\\agent-browser && cargo test e2e -- --ignored --test-threads=1\""
+  echo "  ./scripts/windows-debug/run.sh \"cd C:\\browser4 && cargo test e2e -- --ignored --test-threads=1\""
   exit 1
 fi
 

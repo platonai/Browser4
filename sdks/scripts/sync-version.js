@@ -34,13 +34,13 @@ if (cargoVersionRegex.test(cargoToml)) {
   if (oldMatch !== newCargoVersion) {
     cargoToml = cargoToml.replace(cargoVersionRegex, newCargoVersion);
     writeFileSync(cargoTomlPath, cargoToml);
-    console.log(`  Updated cli/Cargo.toml: ${oldMatch} -> ${newCargoVersion}`);
+    console.log(`  Updated browser4-cli/Cargo.toml: ${oldMatch} -> ${newCargoVersion}`);
     cargoTomlUpdated = true;
   } else {
     console.log(`  cli/Cargo.toml already up to date`);
   }
 } else {
-  console.error("  Could not find version field in cli/Cargo.toml");
+  console.error("  Could not find version field in browser4-cli/Cargo.toml");
   process.exit(1);
 }
 
@@ -59,7 +59,7 @@ if (dashboardPkg.version !== version) {
 // Update Cargo.lock to match Cargo.toml
 if (cargoTomlUpdated) {
   try {
-    execSync("cargo update -p agent-browser --offline", {
+    execSync("cargo update -p browser4 --offline", {
       cwd: cliDir,
       stdio: "pipe",
     });
@@ -67,7 +67,7 @@ if (cargoTomlUpdated) {
   } catch {
     // --offline may fail if package not in cache, try without it
     try {
-      execSync("cargo update -p agent-browser", {
+      execSync("cargo update -p browser4", {
         cwd: cliDir,
         stdio: "pipe",
       });

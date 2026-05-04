@@ -13,18 +13,18 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const projectRoot = join(__dirname, '..');
 
 const sourceExt = platform() === 'win32' ? '.exe' : '';
-const sourcePath = join(projectRoot, `cli/target/release/agent-browser${sourceExt}`);
+const sourcePath = join(projectRoot, `browser4-cli/target/release/agent-browser${sourceExt}`);
 const binDir = join(projectRoot, 'bin');
 
 // Determine platform suffix
 const platformKey = `${platform()}-${arch()}`;
 const ext = platform() === 'win32' ? '.exe' : '';
-const targetName = `agent-browser-${platformKey}${ext}`;
+const targetName = `browser4-${platformKey}${ext}`;
 const targetPath = join(binDir, targetName);
 
 if (!existsSync(sourcePath)) {
   console.error(`Error: Native binary not found at ${sourcePath}`);
-  console.error('Run "cargo build --release --manifest-path cli/Cargo.toml" first');
+  console.error('Run "cargo build --release --manifest-path browser4-cli/Cargo.toml" first');
   process.exit(1);
 }
 

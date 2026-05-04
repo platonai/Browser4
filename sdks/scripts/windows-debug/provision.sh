@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 INSTANCE_FILE="$SCRIPT_DIR/.instance"
-NAME_PREFIX="agent-browser-debug"
+NAME_PREFIX="browser4-debug"
 INSTANCE_TYPE="${INSTANCE_TYPE:-t3.xlarge}"
 
 if [[ -f "$INSTANCE_FILE" ]]; then
@@ -103,7 +103,7 @@ if [[ "$SG_ID" == "None" || -z "$SG_ID" ]]; then
   echo "Creating security group: $SG_NAME"
   SG_ID=$(aws ec2 create-security-group \
     --group-name "$SG_NAME" \
-    --description "agent-browser Windows debug instance (SSM only, no inbound)" \
+    --description "browser4 Windows debug instance (SSM only, no inbound)" \
     --vpc-id "$VPC_ID" \
     --query "GroupId" --output text)
 
@@ -161,19 +161,19 @@ Start-Process -FilePath $vsInstaller -ArgumentList "--quiet --wait --norestart -
 Log "Build tools installed."
 
 # Clone repo
-Log "Cloning agent-browser..."
-git clone https://github.com/vercel-labs/agent-browser.git C:\agent-browser
-Set-Location C:\agent-browser
+Log "Cloning browser4..."
+git clone https://github.com/platonai/browser4.git C:\browser4
+Set-Location C:\browser4
 Log "Repo cloned."
 
 # Build CLI
-Log "Building agent-browser CLI..."
+Log "Building browser4 CLI..."
 cargo build --release --manifest-path cli\Cargo.toml
 Log "Build complete."
 
 # Install Chrome
-Log "Installing Chrome via agent-browser..."
-.\cli\target\release\agent-browser.exe install
+Log "Installing Chrome via browser4..."
+.\cli\target\release\browser4.exe install
 Log "Chrome installed."
 
 Log "--- Bootstrap complete ---"
@@ -214,7 +214,7 @@ echo "  ./scripts/windows-debug/run.sh \"Get-Content C:\\bootstrap.log\""
 echo ""
 echo "Once ready, sync your branch and start debugging:"
 echo "  ./scripts/windows-debug/sync.sh"
-echo "  ./scripts/windows-debug/run.sh \"cd C:\\agent-browser && cargo test\""
+echo "  ./scripts/windows-debug/run.sh \"cd C:\\browser4 && cargo test\""
 echo ""
 echo "Stop when done to save costs:"
 echo "  ./scripts/windows-debug/stop.sh"
