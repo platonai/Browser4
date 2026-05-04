@@ -5,6 +5,7 @@ import ai.platon.pulsar.FastWebDriverService
 import ai.platon.pulsar.WebDriverTestBase
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver
+import ai.platon.pulsar.skeleton.workflow.fetch.driver.JsEvaluation
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 import org.junit.jupiter.api.assertNull
 import kotlin.test.Test
@@ -43,6 +44,20 @@ class PulsarWebDriverEvaluateJSTests : WebDriverTestBase() {
         }
     }
 
+    private fun assertPrimitiveDetail(detail: JsEvaluation?, expected: Any?) {
+        assertNotNull(detail)
+        assertNull(detail.exception)
+        assertEquals(expected, detail.value)
+    }
+
+    private fun assertObjectDetail(detail: JsEvaluation?) {
+        assertNotNull(detail)
+        assertNull(detail.exception)
+        assertNull(detail.value)
+        assertEquals("Object", detail.className)
+        assertEquals("Object", detail.description)
+    }
+
     @Test
     fun testEvaluateThatReturnsPrimitiveValues() =
         runEnhancedWebDriverTest("$assetsBaseURL/dom.html", browser) { driver ->
@@ -50,6 +65,8 @@ class PulsarWebDriverEvaluateJSTests : WebDriverTestBase() {
 
             val result = driver.evaluate(code)
             assertEquals(2, result)
+
+            assertPrimitiveDetail(driver.evaluateDetail(code), 2)
         }
 
     @Test
@@ -104,6 +121,68 @@ class PulsarWebDriverEvaluateJSTests : WebDriverTestBase() {
 
             val result = driver.evaluate(code)
             assertEquals(3, result)
+
+            assertPrimitiveDetail(driver.evaluateDetail(code), 3)
+        }
+
+    @Test
+    fun testEvaluateAndEvaluateDetailKeepGroupedExpressionsAsExpressions() =
+        runEnhancedWebDriverTest("$assetsBaseURL/dom.html", browser) { driver ->
+            val code = "(1 + 2)"
+
+            assertEquals(3, driver.evaluate(code))
+            assertPrimitiveDetail(driver.evaluateDetail(code), 3)
+        }
+
+    @Test
+    fun testEvaluateAndEvaluateDetailKeepAsyncPrefixedCallsAsCalls() =
+        runEnhancedWebDriverTest("$assetsBaseURL/dom.html", browser) { driver ->
+            val setup = """
+                (() => {
+                    window.asyncOperation = () => 7;
+                    return true;
+                })()
+            """.trimIndent()
+            assertEquals(true, driver.evaluate(setup))
+
+            val code = "asyncOperation()"
+            assertEquals(7, driver.evaluate(code))
+            assertPrimitiveDetail(driver.evaluateDetail(code), 7)
+        }
+
+    @Test
+    fun testEvaluateAndEvaluateDetailNormalizeReturnedObjectLiterals() =
+        runEnhancedWebDriverTest("$assetsBaseURL/dom.html", browser) { driver ->
+            val code = "return { answer: 42, nested: { ok: true } }"
+
+            assertNull(driver.evaluate(code))
+            assertObjectDetail(driver.evaluateDetail(code))
+
+            val valueDetail = driver.evaluateValueDetail(code)
+            assertNotNull(valueDetail)
+            assertNull(valueDetail.exception)
+            val value = valueDetail.value
+            assertNotNull(value)
+            assertTrue(value is Map<*, *>)
+            value as Map<*, *>
+            assertEquals(42, value["answer"])
+            val nested = value["nested"]
+            assertNotNull(nested)
+            assertTrue(nested is Map<*, *>)
+            assertEquals(true, (nested as Map<*, *>) ["ok"])
+        }
+
+    @Test
+    fun testEvaluateAndEvaluateDetailInvokeCallableRawInputs() =
+        runEnhancedWebDriverTest("$assetsBaseURL/dom.html", browser) { driver ->
+            assertEquals(5, driver.evaluate("() => 5"))
+            assertPrimitiveDetail(driver.evaluateDetail("() => 5"), 5)
+
+            assertEquals(6, driver.evaluate("function() { return 6; }"))
+            assertPrimitiveDetail(driver.evaluateDetail("function() { return 6; }"), 6)
+
+            assertEquals(7, driver.evaluate("(() => 7)()"))
+            assertPrimitiveDetail(driver.evaluateDetail("(() => 7)()"), 7)
         }
 
     @Test
