@@ -1,6 +1,6 @@
-mod batch;
-mod browser;
-mod mock_server;
+pub(crate) mod batch;
+pub(crate) mod browser;
+pub(crate) mod mock_server;
 
 use super::*;
 
@@ -22,7 +22,7 @@ impl ScenarioDef {
     }
 }
 
-const SCENARIOS: &[ScenarioDef] = &[
+pub(crate) const SCENARIOS: &[ScenarioDef] = &[
     ScenarioDef {
         name: "test_e2e_session_lifecycle",
         short_name: "test_session_lifecycle",
