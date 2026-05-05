@@ -72,7 +72,8 @@ pub async fn ensure_server_running(base_url: &str) -> Result<(), String> {
     match probe_server_state(&client, base_url).await {
         ServerState::Ready => return Ok(()),
         ServerState::Starting(_) => {
-            return wait_for_server_ready(&client, base_url, EXISTING_SERVER_READY_TIMEOUT).await;
+            return wait_for_server_ready(&client, base_url, EXISTING_SERVER_READY_TIMEOUT, None)
+                .await;
         }
         ServerState::Unreachable(_) => {}
     }
@@ -248,12 +249,7 @@ fn command_for_launch_spec(
         let invocation = build_powershell_maven_invocation(&launch_spec.program, &launch_spec.args);
         let mut command = Command::new("powershell.exe");
         command
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                &invocation,
-            ])
+            .args(["-NoProfile", "-NonInteractive", "-Command", &invocation])
             .current_dir(&launch_spec.working_dir)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -345,9 +341,7 @@ fn build_powershell_maven_invocation(program: &Path, runtime_args: &[String]) ->
     let install_command = build_powershell_batch_invocation(program, &install_args);
     let run_command = build_powershell_batch_invocation(program, &run_args);
 
-    format!(
-        "{install_command}; if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}; {run_command}"
-    )
+    format!("{install_command}; if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}; {run_command}")
 }
 
 #[cfg(not(windows))]
@@ -443,14 +437,12 @@ fn prepare_unix_maven_wrapper_launcher(
             launcher_script_path.display()
         )
     })?;
-    fs::set_permissions(&launcher_script_path, fs::Permissions::from_mode(0o755)).map_err(
-        |e| {
-            format!(
-                "Failed to set executable permissions on Browser4 launcher script {}: {e}",
-                launcher_script_path.display()
-            )
-        },
-    )?;
+    fs::set_permissions(&launcher_script_path, fs::Permissions::from_mode(0o755)).map_err(|e| {
+        format!(
+            "Failed to set executable permissions on Browser4 launcher script {}: {e}",
+            launcher_script_path.display()
+        )
+    })?;
 
     Ok((launcher_script_path, Some(launcher_dir)))
 }
@@ -696,16 +688,20 @@ async fn start_server(
         ),
     );
 
-    if let Err(error) = wait_for_server_ready(&client, base_url, ready_timeout).await {
+    if let Err(error) = wait_for_server_ready(
+        &client,
+        base_url,
+        ready_timeout,
+        Some(startup_log.path.as_path()),
+    )
+    .await
+    {
         let (preserve_cleanup_dir, exit_context, cleanup_context) =
             readiness_failure_context(child.try_wait(), cleanup_dir.as_deref());
         if !preserve_cleanup_dir {
             cleanup_prepared_launch_dir(cleanup_dir.take());
         }
-        let error_message = format!(
-            "{error}{exit_context}{cleanup_context} Inspect startup log: {}",
-            startup_log.path.display()
-        );
+        let error_message = format!("{error}{exit_context}{cleanup_context}");
         append_startup_log_message(&startup_log.path, &error_message);
         return Err(error_message);
     }
@@ -741,7 +737,9 @@ async fn start_server(
 }
 
 fn format_command_for_log(command: &Command) -> String {
-    let mut parts = vec![shell_quote_for_log(&command.get_program().to_string_lossy())];
+    let mut parts = vec![shell_quote_for_log(
+        &command.get_program().to_string_lossy(),
+    )];
     parts.extend(
         command
             .get_args()
@@ -751,7 +749,11 @@ fn format_command_for_log(command: &Command) -> String {
 }
 
 fn shell_quote_for_log(value: &str) -> String {
-    if value.is_empty() || value.chars().any(|ch| ch.is_whitespace() || ch == '"' || ch == '\'') {
+    if value.is_empty()
+        || value
+            .chars()
+            .any(|ch| ch.is_whitespace() || ch == '"' || ch == '\'')
+    {
         format!("{value:?}")
     } else {
         value.to_string()
@@ -1037,18 +1039,24 @@ async fn wait_for_server_ready(
     client: &Client,
     base_url: &str,
     timeout: Duration,
+    startup_log_path: Option<&Path>,
 ) -> Result<(), String> {
     let start = Instant::now();
     let mut last_error = String::from("unknown");
     let mut last_progress_log_at = Instant::now() - Duration::from_secs(10);
 
     while start.elapsed() <= timeout {
-        match probe_server_state(client, base_url).await {
+        let progress_status = match probe_server_state(client, base_url).await {
             ServerState::Ready => return Ok(()),
-            ServerState::Starting(error) | ServerState::Unreachable(error) => {
+            ServerState::Starting(error) => {
                 last_error = error;
+                format_server_wait_progress(&ServerState::Starting(last_error.clone()))
             }
-        }
+            ServerState::Unreachable(error) => {
+                last_error = error;
+                format_server_wait_progress(&ServerState::Unreachable(last_error.clone()))
+            }
+        };
 
         if last_progress_log_at.elapsed() >= Duration::from_secs(10) {
             eprintln!(
@@ -1056,7 +1064,7 @@ async fn wait_for_server_ready(
                 base_url,
                 start.elapsed().as_secs(),
                 timeout.as_secs(),
-                truncate_status_for_log(&last_error)
+                progress_status
             );
             last_progress_log_at = Instant::now();
         }
@@ -1065,10 +1073,22 @@ async fn wait_for_server_ready(
     }
 
     Err(format!(
-        "Server failed to become MCP-ready within {}s: {}",
+        "Server failed to become MCP-ready within {}s: {}{}",
         timeout.as_secs(),
-        last_error
+        last_error,
+        format_startup_log_timeout_details(startup_log_path)
     ))
+}
+
+fn format_server_wait_progress(state: &ServerState) -> String {
+    match state {
+        ServerState::Ready => "ready".to_string(),
+        ServerState::Starting(status) => match truncate_status_for_log(status) {
+            message if message.is_empty() => "still starting".to_string(),
+            message => format!("still starting ({message})"),
+        },
+        ServerState::Unreachable(_) => "not reachable yet".to_string(),
+    }
 }
 
 fn truncate_status_for_log(message: &str) -> String {
@@ -1085,6 +1105,46 @@ fn truncate_status_for_log(message: &str) -> String {
         .collect::<String>();
     truncated.push('…');
     truncated
+}
+
+fn format_startup_log_timeout_details(startup_log_path: Option<&Path>) -> String {
+    let Some(startup_log_path) = startup_log_path else {
+        return String::new();
+    };
+
+    format!(
+        "\nBrowser4 startup log: {}\nStartup log tail:\n{}",
+        startup_log_path.display(),
+        read_startup_log_tail(startup_log_path)
+    )
+}
+
+fn read_startup_log_tail(path: &Path) -> String {
+    const MAX_LINES: usize = 40;
+    const MAX_CHARS: usize = 8_000;
+
+    let contents = match fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(error) => return format!("(failed to read startup log: {error})"),
+    };
+    let lines: Vec<&str> = contents.lines().collect();
+    if lines.is_empty() {
+        return "(startup log is empty)".to_string();
+    }
+
+    let start = lines.len().saturating_sub(MAX_LINES);
+    let mut tail = lines[start..].join("\n");
+    let tail_char_count = tail.chars().count();
+    if tail_char_count > MAX_CHARS {
+        tail = format!(
+            "...{}",
+            tail.chars()
+                .skip(tail_char_count - MAX_CHARS)
+                .collect::<String>()
+        );
+    }
+
+    tail
 }
 
 #[cfg(test)]
@@ -1262,8 +1322,10 @@ mod tests {
                 .expect("sh exit status should be available")
         };
 
-        let (preserve_cleanup_dir, exit_context, cleanup_context) =
-            readiness_failure_context(Ok(Some(exited_status)), Some(Path::new("/tmp/browser4-launcher")));
+        let (preserve_cleanup_dir, exit_context, cleanup_context) = readiness_failure_context(
+            Ok(Some(exited_status)),
+            Some(Path::new("/tmp/browser4-launcher")),
+        );
 
         assert!(!preserve_cleanup_dir);
         assert!(exit_context.contains("Process exited early with status"));
@@ -1287,7 +1349,12 @@ mod tests {
     #[test]
     fn test_default_browser4_jar_path_uses_state_dir_override() {
         let tmp = test_temp_dir();
-        let expected = tmp.path().canonicalize().unwrap().join("lib").join("Browser4.jar");
+        let expected = tmp
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("lib")
+            .join("Browser4.jar");
 
         unsafe {
             env::set_var("BROWSER4_CLI_STATE_DIR", tmp.path().as_os_str());
@@ -1355,6 +1422,40 @@ mod tests {
         assert!(maven_name.ends_with(".log"));
         assert!(jar_name.starts_with("browser4-server-jar-port9292-"));
         assert!(jar_name.ends_with(".log"));
+    }
+
+    #[test]
+    fn test_format_server_wait_progress_unreachable_is_not_reported_as_error() {
+        let progress = format_server_wait_progress(&ServerState::Unreachable(
+            "error sending request for url (http://localhost:8182/actuator/health)".to_string(),
+        ));
+
+        assert_eq!(progress, "not reachable yet");
+    }
+
+    #[test]
+    fn test_format_server_wait_progress_starting_includes_status() {
+        let progress =
+            format_server_wait_progress(&ServerState::Starting("{\"status\":\"STARTING\"}".into()));
+
+        assert_eq!(progress, "still starting ({\"status\":\"STARTING\"})");
+    }
+
+    #[test]
+    fn test_format_startup_log_timeout_details_includes_log_tail() {
+        let tmp = test_temp_dir();
+        let log_path = tmp.path().join("startup.log");
+        write(
+            &log_path,
+            "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n",
+        )
+        .unwrap();
+
+        let details = format_startup_log_timeout_details(Some(&log_path));
+
+        assert!(details.contains(&format!("Browser4 startup log: {}", log_path.display())));
+        assert!(details.contains("Startup log tail:"));
+        assert!(details.contains("line10"));
     }
 
     #[test]

@@ -16,6 +16,7 @@ import java.text.MessageFormat
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.time.Duration.Companion.milliseconds
 
 class RobustRPC(
     private val driver: PulsarWebDriver
@@ -85,7 +86,7 @@ class RobustRPC(
                 logger.warn("Encountered non-retryable exception: [$action], aborting retries | {}", exception.message)
                 break
             }
-            delay(200)
+            delay(200.milliseconds)
             result = kotlin.runCatching { invokeDeferred0(action, url, block) }
                 .onFailure { logger.warn("Exception to execute action: [$action], retrying $i/$maxRetry times", it) }
         }

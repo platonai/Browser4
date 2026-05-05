@@ -1,6 +1,6 @@
-mod batch;
-mod browser;
-mod mock_server;
+pub(crate) mod batch;
+pub(crate) mod browser;
+pub(crate) mod mock_server;
 
 use super::*;
 
@@ -22,7 +22,7 @@ impl ScenarioDef {
     }
 }
 
-const SCENARIOS: &[ScenarioDef] = &[
+pub(crate) const SCENARIOS: &[ScenarioDef] = &[
     ScenarioDef {
         name: "test_e2e_session_lifecycle",
         short_name: "test_session_lifecycle",
@@ -46,6 +46,22 @@ const SCENARIOS: &[ScenarioDef] = &[
         restart_browser4: false,
         test_count: 1,
         test_fn: browser::test_interaction_commands,
+    },
+    ScenarioDef {
+        name: "test_e2e_eval_command",
+        short_name: "test_eval_command",
+        requires_browser4: true,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: browser::test_eval_command,
+    },
+    ScenarioDef {
+        name: "test_e2e_agent_run_live_or_missing_llm_key",
+        short_name: "test_agent_run_live_or_missing_llm_key",
+        requires_browser4: true,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: browser::test_agent_run_live_or_missing_llm_key,
     },
     ScenarioDef {
         name: "test_e2e_wait_for_state_failure_modes",
@@ -144,12 +160,36 @@ const SCENARIOS: &[ScenarioDef] = &[
         test_fn: mock_server::test_open_uses_temporary_profile_mode,
     },
     ScenarioDef {
+        name: "test_e2e_open_with_url_prints_page_state",
+        short_name: "test_open_with_url_prints_page_state",
+        requires_browser4: false,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: mock_server::test_open_with_url_prints_page_state,
+    },
+    ScenarioDef {
+        name: "test_e2e_mock_eval_command",
+        short_name: "test_mock_eval_command",
+        requires_browser4: false,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: mock_server::test_eval_command,
+    },
+    ScenarioDef {
         name: "test_e2e_agent_task_commands",
         short_name: "test_agent_task_commands",
         requires_browser4: false,
         restart_browser4: false,
         test_count: 1,
         test_fn: mock_server::test_agent_task_commands,
+    },
+    ScenarioDef {
+        name: "test_e2e_agent_run_missing_llm_key",
+        short_name: "test_agent_run_missing_llm_key",
+        requires_browser4: false,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: mock_server::test_agent_run_missing_llm_key,
     },
     ScenarioDef {
         name: "test_e2e_collective_submission_commands",

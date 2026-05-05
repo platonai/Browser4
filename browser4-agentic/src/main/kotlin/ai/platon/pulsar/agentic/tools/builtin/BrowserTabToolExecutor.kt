@@ -14,7 +14,7 @@ import kotlin.time.Duration.Companion.seconds
 
 class BrowserTabToolExecutor: AbstractToolExecutor() {
     companion object {
-        private const val MIN_READ_INTERVAL_MILLIS = 1_000L
+        private const val MIN_READ_INTERVAL_MILLIS = 50L // 50 milliseconds is enough for a DOM to update the state
         private const val READ_ACTIONS_WHITELIST_PROPERTY = "browser4.tab.read.actions.whitelist"
         private const val READ_ACTIONS_WHITELIST_ENV = "BROWSER4_TAB_READ_ACTIONS_WHITELIST"
         private val logger: Logger = Logger.getLogger(BrowserTabToolExecutor::class.java.name)

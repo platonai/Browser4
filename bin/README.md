@@ -112,7 +112,6 @@ Release management scripts.
 - `bump-version.ps1/sh`: Bump project version (minor/major).
 - `bump-version-patch.ps1/sh`: Bump project version (patch).
 - `update-versions.ps1/sh`: Update version strings across files.
-- `maven-deploy.ps1/sh`: Deploy artifacts to Maven Central.
 - `create-release-notes.sh`: Generate release notes.
 - `update-documentation.ps1/sh`: Update documentation version references.
 

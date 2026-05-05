@@ -1,8 +1,12 @@
 package ai.platon.browser4.driver.chrome.patch
 
-import ai.platon.pulsar.common.*
+import ai.platon.browser4.driver.chrome.patch.BrowserFilesPatch.PID_FILE_NAME
+import ai.platon.pulsar.common.AppPaths
+import ai.platon.pulsar.common.DateTimes
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.browser.fingerprint.Fingerprint
+import ai.platon.pulsar.common.getLogger
+import ai.platon.pulsar.common.sleepSeconds
 import com.google.common.collect.Iterators
 import org.apache.commons.io.FileUtils
 import org.apache.commons.lang3.RandomStringUtils
@@ -17,6 +21,7 @@ import java.time.Duration
 import java.time.MonthDay
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentSkipListSet
+import java.util.stream.Stream
 import kotlin.io.path.exists
 import kotlin.io.path.notExists
 
@@ -114,7 +119,13 @@ object BrowserFilesPatch {
         // val lockFile = AppPaths.BROWSER_TMP_DIR_LOCK
         // return computeRandomContextDir0(group)
         val lockFile = getTempContextGroupDirLockFile(group)
-        return runWithFileLockWithRetry(lockFile) { channel -> computeRandomContextDir0(group, browserType, channel = channel) }
+        return runWithFileLockWithRetry(lockFile) { channel ->
+            computeRandomContextDir0(
+                group,
+                browserType,
+                channel = channel
+            )
+        }
     }
 
     fun clearProcessMarkers(userDataDir: Path) {
@@ -143,13 +154,7 @@ object BrowserFilesPatch {
     @Throws(IOException::class)
     fun cleanOldestContextTmpDirs(expiry: Duration, recentNToKeep: Int = 10) {
         // Remove directories that have too many context directories
-        val files = Files.walk(AppPaths.CONTEXT_TMP_DIR, 3)
-            .filter { it !in cleanedUserDataDirs } // not processed
-            .filter { it.toString().contains("cx.") } // context dir
-            .filter { it.resolve("$PID_FILE_NAME.bak").exists() } // already launched and closed
-            .filter { it.resolve("$PORT_FILE_NAME.bak").exists() } // already launched and closed
-            .toList()
-            .toSet()
+        val files = findAllClosedContextTmpDirs().toList().toSet()
 
         try {
             files.sortedByDescending { Files.getLastModifiedTime(it) }  // newest first
@@ -169,12 +174,15 @@ object BrowserFilesPatch {
      * */
     @Throws(IOException::class)
     fun cleanUpContextTmpDir(expiry: Duration) {
-        Files.walk(AppPaths.CONTEXT_TMP_DIR, 3)
+        findAllClosedContextTmpDirs().forEach { path -> cleanUpContextDir(path, expiry) } // clean the rest
+    }
+
+    private fun findAllClosedContextTmpDirs(): Stream<Path> {
+        return Files.walk(AppPaths.CONTEXT_TMP_DIR, 5)
             .filter { it !in cleanedUserDataDirs }
             .filter { it.fileName.toString().startsWith("cx.") }
-            .filter { it.resolve(PID_FILE_NAME).exists() } // already launched
-            .filter { it.resolve(PORT_FILE_NAME).notExists() } // already closed
-            .forEach { path -> cleanUpContextDir(path, expiry) } // clean the rest
+            .filter { it.resolve("$PID_FILE_NAME.bak").exists() } // already launched and closed
+            .filter { it.resolve("$PORT_FILE_NAME.bak").exists() } // already launched and closed
     }
 
     /**
@@ -411,16 +419,17 @@ object BrowserFilesPatch {
             require(channel.isOpen) { "The lock file channel is closed" }
         }
 
+        val monthDay = MonthDay.now()
+        val monthValue = monthDay.monthValue
+        val dayOfMonth = monthDay.dayOfMonth
+
         // build the base dir
-        val baseDir = AppPaths.getTmpContextGroupDir(group)
+        val baseDir = AppPaths.getTmpContextGroupDir(group).resolve(dayOfMonth.toString())
         // .resolve(browserType.name) // when create the user data dir, the dir with browserType will be created
         Files.createDirectories(baseDir)
 
         // build the file name
         val prefix = CONTEXT_DIR_PREFIX
-        val monthDay = MonthDay.now()
-        val monthValue = monthDay.monthValue
-        val dayOfMonth = monthDay.dayOfMonth
         val rand = RandomStringUtils.secure().nextAlphanumeric(5)
         val contextCount = computeContextCount(baseDir, prefix, channel)
         val fileName = String.format("%s%02d%02d%s%s", prefix, monthValue, dayOfMonth, rand, contextCount)

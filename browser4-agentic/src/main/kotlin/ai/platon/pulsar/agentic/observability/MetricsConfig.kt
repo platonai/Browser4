@@ -56,7 +56,7 @@ object MetricsConfig {
         if (tagsEnv.isBlank()) {
             mapOf(
                 "service" to "browser4-agentic",
-                "version" to "4.8.0-SNAPSHOT"
+                "version" to "4.8.1-SNAPSHOT"
             )
         } else {
             tagsEnv.split(",")

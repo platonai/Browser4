@@ -2,7 +2,6 @@
 
 set -e
 
-
 repoRoot=$(cd "$(dirname "$0")">/dev/null || exit; pwd)
 while [[ ! -f "$repoRoot/VERSION" && "$repoRoot" != "/" ]]; do
   repoRoot=$(dirname "$repoRoot")

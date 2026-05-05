@@ -26,6 +26,132 @@ pub(super) fn test_open_uses_temporary_profile_mode(ctx: &mut E2ECtx) {
     );
 }
 
+pub(super) fn test_open_with_url_prints_page_state(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let open_result = run_command(
+        ctx,
+        &[
+            "open",
+            OPEN_TEMPORARY_PROFILE_ARG,
+            "https://example.com/opened-from-open-command",
+        ],
+    );
+    assert!(
+        open_result
+            .stdout
+            .contains("Session opened: collective-session-1"),
+        "Expected session output in:\n{}",
+        open_result.stdout
+    );
+    assert!(
+        open_result.stdout.contains("### Page"),
+        "Expected page block in:\n{}",
+        open_result.stdout
+    );
+    assert!(
+        open_result
+            .stdout
+            .contains("- Page URL: https://mock.browser4.local/current"),
+        "Expected page URL in:\n{}",
+        open_result.stdout
+    );
+    assert!(
+        open_result
+            .stdout
+            .contains("- Page Title: Mock Browser4 Page"),
+        "Expected page title in:\n{}",
+        open_result.stdout
+    );
+    assert!(
+        open_result.stdout.contains("[Snapshot]("),
+        "Expected snapshot link in:\n{}",
+        open_result.stdout
+    );
+    assert!(
+        open_result.stdout.find("Session opened:") < open_result.stdout.find("### Page"),
+        "Expected session output before page block in:\n{}",
+        open_result.stdout
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let navigate_call = tool_calls
+        .iter()
+        .find(|call| call.tool == "browser_navigate")
+        .expect("expected browser_navigate call");
+    assert_eq!(navigate_call.arguments["sessionId"], "collective-session-1");
+    assert_eq!(
+        navigate_call.arguments["url"],
+        "https://example.com/opened-from-open-command"
+    );
+    assert!(
+        tool_calls.iter().any(|call| call.tool == "page_url"),
+        "expected page_url call"
+    );
+    assert!(
+        tool_calls.iter().any(|call| call.tool == "page_title"),
+        "expected page_title call"
+    );
+    assert!(
+        tool_calls
+            .iter()
+            .any(|call| call.tool == "browser_snapshot"),
+        "expected browser_snapshot call"
+    );
+}
+
+pub(super) fn test_eval_command(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let open_result = run_open_command(ctx);
+    assert!(
+        open_result
+            .stdout
+            .contains("Session opened: collective-session-1"),
+        "Expected mocked session open output in:\n{}",
+        open_result.stdout
+    );
+
+    let page_eval = run_command(ctx, &["eval", "document.title"]);
+    assert_eq!(
+        strip_snapshot_output(&page_eval.stdout),
+        "Mock Browser4 Page"
+    );
+    assert!(
+        !page_eval.stdout.contains("### Page"),
+        "eval should not print a post-command snapshot block:\n{}",
+        page_eval.stdout
+    );
+
+    let element_eval = run_command(ctx, &["eval", "element => element.textContent", "e5"]);
+    assert_eq!(
+        strip_snapshot_output(&element_eval.stdout),
+        "Mock element text for backend:5"
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let eval_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_evaluate")
+        .collect();
+    assert_eq!(eval_calls.len(), 2, "expected two browser_evaluate calls");
+    assert_eq!(eval_calls[0].arguments["sessionId"], "collective-session-1");
+    assert_eq!(eval_calls[0].arguments["expression"], "document.title");
+    assert!(eval_calls[0].arguments.get("ref").is_none());
+        assert_eq!(eval_calls[1].arguments["sessionId"], "collective-session-1");
+        assert_eq!(
+            eval_calls[1].arguments["expression"],
+        "element => element.textContent"
+        );
+        assert_eq!(eval_calls[1].arguments["ref"], "backend:5");
+}
+
 pub(super) fn test_collective_session_and_agent_tools(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
     let mock_server = start_mock_collective_session(ctx);
@@ -124,13 +250,55 @@ pub(super) fn test_agent_task_commands(ctx: &mut E2ECtx) {
         mock_server.snapshot().plain_commands,
         vec!["collect the latest updates".to_string()]
     );
-    assert_eq!(
-        mock_server.snapshot().status_queries,
-        vec!["agent-task-1".to_string()]
+    assert!(
+        mock_server
+            .snapshot()
+            .status_queries
+            .iter()
+            .all(|query| query == "agent-task-1"),
+        "Expected all status queries to target agent-task-1, got {:?}",
+        mock_server.snapshot().status_queries
+    );
+    assert!(
+        mock_server.snapshot().status_queries.len() >= 2,
+        "Expected at least one agent-run probe and one explicit agent-status lookup, got {:?}",
+        mock_server.snapshot().status_queries
     );
     assert_eq!(
         mock_server.snapshot().result_queries,
         vec!["agent-task-1".to_string()]
+    );
+}
+
+pub(super) fn test_agent_run_missing_llm_key(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let started_at = Instant::now();
+    let mock_server = MockBrowser4Server::start();
+    ctx.record_step("mock Browser4 server start", started_at.elapsed());
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let failure = run_command_expecting_failure(
+        ctx,
+        &["agent-run", "task missing llm key"],
+        "Agent task requires an LLM key and cannot execute",
+    );
+    let combined = format!("{}\n{}", failure.stdout, failure.stderr);
+    assert!(
+        combined.contains("The LLM is not configured"),
+        "Expected missing-LLM detail in:\n{combined}"
+    );
+
+    let snapshot = mock_server.snapshot();
+    assert_eq!(
+        snapshot.plain_commands,
+        vec!["task missing llm key".to_string()]
+    );
+    assert!(
+        snapshot
+            .status_queries
+            .contains(&"agent-task-missing-llm".to_string()),
+        "Expected agent-run to probe status for the missing-LLM task, got {:?}",
+        snapshot.status_queries
     );
 }
 

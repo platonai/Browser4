@@ -1,16 +1,13 @@
 package ai.platon.pulsar.skeleton.session
 
-import ai.platon.pulsar.common.AppFiles
-import ai.platon.pulsar.common.AppPaths
+import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.AppPaths.WEB_CACHE_DIR
-import ai.platon.pulsar.common.IllegalApplicationStateException
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_CONTEXT_MODE
 import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.common.urls.PlainUrl
 import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.common.urls.UrlAware
-import ai.platon.pulsar.common.warnForClose
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.dom.select.firstTextOrNull
 import ai.platon.pulsar.dom.select.selectFirstOrNull
@@ -586,11 +583,18 @@ abstract class AbstractPulsarSession(
 
     override fun close() {
         if (closed.compareAndSet(false, true)) {
+            val startTime = Instant.now()
+
+            boundBrowser?.let { unbindBrowser(it) }
+            boundDriver?.let { unbindDriver(it) }
+
             closableObjects.forEach {
                 runCatching { it.close() }.onFailure { warnForClose(this, it) }
             }
             closableObjects.clear()
-            logger.info("PulsarSession is closed | #{} | {}#{}", display, this.javaClass.name, hashCode())
+
+            val elapsed = DateTimes.elapsedTime(startTime)
+            logger.info("PulsarSession is closed in {} | #{} | {}#{}", elapsed, display, this.javaClass.name, hashCode())
         }
     }
 

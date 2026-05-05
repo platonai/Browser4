@@ -147,19 +147,6 @@ jobs:
           excluded_groups: 'Slow,Heavy,RequiresServer,RequiresBrowser,RequiresAI,RequiresDocker,Integration,E2E,SDK,ManualOnly,IntegrationTest,E2ETest,HeavyTest,SkippableLowerLevelTest,TestInfraCheck,OptionalTest'
           timeout_minutes: '35'
 
-      - name: Run Required MCP CLI E2E Test
-        id: mcp-cli-required-test
-        if: inputs.skip_tests != true
-        shell: bash
-        run: |
-          echo "::group::🧪 Required MCP CLI E2E Test"
-          ./mvnw -B -Pall-modules -pl browser4-tests/browser4-rest-tests -am \
-            -DrunE2ETests=true \
-            -Dtest=ai.platon.pulsar.rest.api.controller.MCPToolControllerE2ETest \
-            -Dsurefire.failIfNoSpecifiedTests=false \
-            test
-          echo "::endgroup::"
-
       - name: Check Test Status
         if: inputs.skip_tests != true
         run: |

@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import java.io.Closeable
 import java.time.Instant
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * General-purpose command execution service for page visit and agent commands.
@@ -162,7 +163,7 @@ class CommandService(
     fun commandStatusFlow(id: String): Flow<CommandStatus> = flow {
         var lastModifiedTime = Instant.EPOCH
         do {
-            delay(FLOW_POLLING_INTERVAL)
+            delay(FLOW_POLLING_INTERVAL.milliseconds)
 
             val status = getStatus(id) ?: CommandStatus.notFound(id)
             if (status.refreshed(lastModifiedTime)) {

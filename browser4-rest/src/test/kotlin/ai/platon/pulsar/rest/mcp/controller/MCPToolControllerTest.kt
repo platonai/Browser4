@@ -881,6 +881,8 @@ class MCPToolControllerTest {
         assertEquals(2, results.size, "Expected bail to stop after first error, got: $results")
         assertEquals(true, results[0]["ok"])
         assertEquals(false, results[1]["ok"])
+        assertTrue((results[0]["durationMillis"] as Number).toLong() >= 0)
+        assertTrue((results[1]["durationMillis"] as Number).toLong() >= 0)
     }
 
     @Test
@@ -925,6 +927,7 @@ class MCPToolControllerTest {
         assertEquals(true, results[0]["ok"])
         assertEquals(false, results[1]["ok"])
         assertEquals(true, results[2]["ok"])
+        assertTrue(results.all { ((it["durationMillis"] as Number).toLong()) >= 0 })
     }
 
     @Test
@@ -1047,6 +1050,7 @@ class MCPToolControllerTest {
         val results = payload["results"] as List<Map<String, Any?>>
         assertEquals(4, results.size)
         assertTrue(results.all { it["ok"] == true }, "Expected all steps to succeed")
+        assertTrue(results.all { ((it["durationMillis"] as Number).toLong()) >= 0 })
         assertEquals("Result 1", results[1]["text"])
         assertEquals("Result 2", results[2]["text"])
         assertEquals("Result 3", results[3]["text"])

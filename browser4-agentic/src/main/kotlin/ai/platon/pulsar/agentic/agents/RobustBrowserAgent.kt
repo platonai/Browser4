@@ -27,6 +27,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.min
 import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
 
 /**
@@ -311,7 +312,7 @@ open class RobustBrowserAgent(
         val effectiveTimeout = config.resolveTimeoutMs + maxPossibleDelays
 
         return try {
-            val result = withTimeout(effectiveTimeout) {
+            val result = withTimeout(effectiveTimeout.milliseconds) {
                 resolveProblemWithRetry(action, baseContext)
             }
 
@@ -554,7 +555,7 @@ open class RobustBrowserAgent(
             }
         }
 
-        delay(calculateAdaptiveDelay())
+        delay(calculateAdaptiveDelay().milliseconds)
         return StepProcessingResult(context, consecutiveNoOps, false)
     }
 
@@ -672,7 +673,7 @@ open class RobustBrowserAgent(
             return true
         }
         val delayMs = calculateConsecutiveNoOpDelay(consecutiveNoOps)
-        delay(delayMs)
+        delay(delayMs.milliseconds)
         val job = currentCoroutineContext()[Job]
         if (job == null || !job.isActive) {
             logger.info("🕒 noop cancelled sid={} step={}", context.sid, step)

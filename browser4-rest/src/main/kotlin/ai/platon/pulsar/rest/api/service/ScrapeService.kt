@@ -25,6 +25,7 @@ import java.time.Instant
 import java.util.concurrent.ConcurrentSkipListMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
+import kotlin.time.Duration.Companion.milliseconds
 
 @Service
 class ScrapeService(
@@ -113,7 +114,7 @@ class ScrapeService(
     fun commandStatusFlow(uuid: String): Flow<ScrapeResponse> = flow {
         var lastModifiedTime = Instant.EPOCH
         do {
-            delay(FLOW_POLLING_INTERVAL)
+            delay(FLOW_POLLING_INTERVAL.milliseconds)
 
             val status = responseCache[uuid] ?: ScrapeResponse.notFound(uuid)
             if (status.isDone) {
@@ -127,7 +128,6 @@ class ScrapeService(
             }
         } while (!status.isDone)
     }
-
 
     /**
      * Get the response count by status code

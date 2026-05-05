@@ -11,6 +11,7 @@ import java.util.*
 import kotlin.test.Test
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
 
 class PulsarWebDriverScreenshotTests : WebDriverTestBase() {
     private val screenshotDir = AppPaths.TEST_DIR.resolve("screenshot")
@@ -36,7 +37,7 @@ class PulsarWebDriverScreenshotTests : WebDriverTestBase() {
             if (screenshot != null) {
                 val path = exportScreenshot("$name.jpg", screenshot)
                 paths.add(path)
-                delay(1000)
+                delay(1000.milliseconds)
             }
         }
 
@@ -44,13 +45,6 @@ class PulsarWebDriverScreenshotTests : WebDriverTestBase() {
             printlnPro(String.format("%d screenshots are saved | %s", paths.size, paths[0].parent))
         }
     }
-
-//    @Test
-//    fun testDragAndHold() = runWebDriverTest(walmartUrl, browser) { driver ->
-//        // TODO: FIXME: dragAndHold not working on walmart.com
-//        val result = driver.evaluate("__pulsar_utils__.doForAllFrames('HOLD', 'ME')")
-//        logPrintln(result)
-//    }
 
     @Throws(IOException::class)
     private fun exportScreenshot(filename: String, screenshot: String): Path {

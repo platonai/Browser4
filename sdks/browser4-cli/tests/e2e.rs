@@ -14,8 +14,10 @@
 //! ```bash
 //! cargo test --test e2e -- --nocapture
 //! cargo test --test e2e -- --nocapture --scenario=test_e2e_agent_task_commands
+//! cargo test --test e2e -- --nocapture --scenario=test_e2e_batch_*
 //! cargo test --test e2e -- --nocapture --scenario-from=test_e2e_mouse_and_dialog
 //! cargo test --test e2e -- --nocapture --failed
+//! cargo test --test e2e -- --nocapture --scenario=test_e2e_eval_command --fail-fast
 //! ```
 //!
 //! The `--failed` selector reruns scenario names stored by the previous run in
@@ -35,6 +37,9 @@
 //!   reach the fixture HTTP server on the host (e.g. `host.docker.internal` or
 //!   the Docker bridge gateway IP such as `172.17.0.1`). Defaults to `127.0.0.1`.
 
+use browser4_cli::commands::all_commands;
+use browser4_cli::managed_processes::stop_browser4_server_forcibly;
+use chrono::Local;
 use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -46,9 +51,6 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::thread::{sleep, JoinHandle};
 use std::time::{Duration, Instant};
-use chrono::Local;
-use browser4_cli::commands::all_commands;
-use browser4_cli::managed_processes::stop_browser4_server_forcibly;
 
 #[path = "e2e/scenarios/mod.rs"]
 mod scenarios;
@@ -400,7 +402,14 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                         .unwrap_or_default()
                         .trim()
                         .to_string();
-                    let task_id = {
+                    let task_id = if command == "task missing llm key" {
+                        state
+                            .lock()
+                            .expect("mock Browser4 state mutex poisoned")
+                            .plain_commands
+                            .push(command);
+                        "agent-task-missing-llm".to_string()
+                    } else {
                         let mut guard = state.lock().expect("mock Browser4 state mutex poisoned");
                         guard.plain_commands.push(command.clone());
                         if command.starts_with("http://") || command.starts_with("https://") {
@@ -424,11 +433,22 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                         .expect("mock Browser4 state mutex poisoned")
                         .status_queries
                         .push(task_id.clone());
-                    serde_json::json!({
-                        "id": task_id,
-                        "status": "RUNNING",
-                    })
-                    .to_string()
+                    if task_id == "agent-task-missing-llm" {
+                        serde_json::json!({
+                            "id": task_id,
+                            "status": "EXPECTATION_FAILED",
+                            "statusCode": 417,
+                            "processState": "done",
+                            "message": "The LLM is not configured, see docs/config/llm/llm-config.md",
+                        })
+                        .to_string()
+                    } else {
+                        serde_json::json!({
+                            "id": task_id,
+                            "status": "RUNNING",
+                        })
+                        .to_string()
+                    }
                 }
                 "command_result" => {
                     let task_id = arguments
@@ -446,6 +466,20 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                     r#"{"items":[{"title":"Mock Product","price":"$19.99"}]}"#.to_string()
                 }
                 "agent_summarize" => "Mock summary for #page-marker".to_string(),
+                "browser_evaluate" => {
+                    let expression = arguments
+                        .get("expression")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default();
+                    let target_ref = arguments.get("ref").and_then(|v| v.as_str());
+                    match (expression, target_ref) {
+                        ("document.title", None) => "Mock Browser4 Page".to_string(),
+                        ("element => element.textContent", Some(target)) => {
+                            format!("Mock element text for {target}")
+                        }
+                        _ => "mock evaluation result".to_string(),
+                    }
+                }
                 "page_url" => "https://mock.browser4.local/current".to_string(),
                 "page_title" => "Mock Browser4 Page".to_string(),
                 "browser_snapshot" => "mock snapshot".to_string(),
@@ -1369,6 +1403,16 @@ fn run_command_expecting_failure(ctx: &mut E2ECtx, args: &[&str], pattern: &str)
     result
 }
 
+fn run_command_allowing_failure<'a>(ctx: &mut E2ECtx, args: &[&'a str]) -> CliRunResult {
+    let started_at = Instant::now();
+    let result = run_cli_process_with_retry(ctx, args);
+    ctx.record_step(
+        format_cli_step_label(args, false, result.exit_code != 0),
+        started_at.elapsed(),
+    );
+    result
+}
+
 fn run_cli_process_with_retry(ctx: &E2ECtx, args: &[&str]) -> CliRunResult {
     run_cli_process_with_retry_and_stdin(ctx, args, "")
 }
@@ -1409,6 +1453,11 @@ fn is_transient_retryable_failure(result: &CliRunResult) -> bool {
         || combined.contains("failed to launch browser")
         || combined.contains("createtab")
         || combined.contains("cannot find context")
+        || combined.contains("createdevtools")
+        || combined.contains("browser connection lost")
+        || combined.contains("browser unavailable")
+        || combined.contains("enableapiagents")
+        || combined.contains("failed to enable cdt agents")
 }
 
 // ---------------------------------------------------------------------------
@@ -1428,6 +1477,16 @@ fn strip_snapshot_output(stdout: &str) -> String {
         .filter(|l| !l.is_empty() && *l != "ensuring server...")
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn extract_submitted_task_id(output: &str) -> String {
+    output
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("Task submitted:"))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| panic!("Expected 'Task submitted:' line in output:\n{output}"))
+        .to_string()
 }
 
 /// Extract a tab ID for the given URL from `tab-list` output.
@@ -1484,6 +1543,20 @@ fn eval_text(ctx: &mut E2ECtx, expression: &str) -> String {
     let started_at = Instant::now();
     let result = run_checked_cli_process(ctx, &["eval", expression]);
     ctx.record_step(format_eval_step_label(expression), started_at.elapsed());
+    strip_snapshot_output(&result.stdout)
+}
+
+fn eval_text_for_target(ctx: &mut E2ECtx, expression: &str, target: &str) -> String {
+    let started_at = Instant::now();
+    let result = run_checked_cli_process(ctx, &["eval", expression, target]);
+    ctx.record_step(
+        format!(
+            "{} [{}]",
+            format_eval_step_label(expression),
+            truncate_timing_label(target.trim(), 32)
+        ),
+        started_at.elapsed(),
+    );
     strip_snapshot_output(&result.stdout)
 }
 
@@ -1769,8 +1842,7 @@ fn create_e2e_test_resources() -> E2ETestResources {
     fs::create_dir_all(&workspace_dir).unwrap();
     fs::create_dir_all(&state_dir).unwrap();
 
-    let invocation_dir =
-        std::env::current_dir().expect("failed to read e2e invocation directory");
+    let invocation_dir = std::env::current_dir().expect("failed to read e2e invocation directory");
 
     let upload_file_path = temp_dir.path().join("upload.txt");
     fs::write(&upload_file_path, b"browser4-cli e2e upload payload")
@@ -1905,6 +1977,12 @@ fn cleanup_browser4_sessions_with_ctx(ctx: &E2ECtx) -> Result<Vec<TimedStep>, St
         duration,
     )];
     if result.exit_code == 0 {
+        assert!(
+            !result.stderr.contains("Unknown diagnostic command"),
+            "browser4-cli close-all should not emit JVM diagnostic errors.\nstdout:\n{}\nstderr:\n{}",
+            result.stdout,
+            result.stderr
+        );
         return Ok(steps);
     }
 
@@ -1963,10 +2041,8 @@ fn cleanup_after_scenario(
                 "browser4 session cleanup scheduled (async)",
                 started_at.elapsed(),
             )])
-        },
-        ScenarioCleanupMode::None => {
-            Ok(Vec::new())
         }
+        ScenarioCleanupMode::None => Ok(Vec::new()),
     }
 }
 
@@ -2061,7 +2137,7 @@ fn tested_commands() -> HashSet<&'static str> {
         "tab-new",
         "tab-select",
         "tab-close",
-        // eval is exercised indirectly by the eval_text helper
+        // eval is exercised directly by dedicated scenarios and shared helpers
         "eval",
     ]
     .into()
@@ -2123,6 +2199,43 @@ fn verify_e2e_command_coverage() {
 
 fn format_duration(duration: Duration) -> String {
     format!("{:.2}s", duration.as_secs_f64())
+}
+
+fn format_duration_human(duration: Duration) -> String {
+    let secs = duration.as_secs();
+    if secs == 0 {
+        return "<1s".to_string();
+    }
+
+    let hours = secs / 3600;
+    let minutes = (secs % 3600) / 60;
+    let seconds = secs % 60;
+
+    if hours > 0 {
+        format!("{}h {}m", hours, minutes)
+    } else if minutes > 0 {
+        format!("{}m {}s", minutes, seconds)
+    } else {
+        format!("{}s", seconds)
+    }
+}
+
+fn render_progress_bar(done: usize, total: usize, width: usize) -> String {
+    if total == 0 {
+        return "-".repeat(width);
+    }
+
+    let filled = ((done * width) + (total / 2)) / total;
+    let filled = filled.min(width);
+    format!("{}{}", "#".repeat(filled), "-".repeat(width - filled))
+}
+
+fn render_progress_percent(done: usize, total: usize) -> usize {
+    if total == 0 {
+        100
+    } else {
+        (done * 100) / total
+    }
 }
 
 fn print_timing_steps(steps: &[TimedStep]) {
@@ -2199,7 +2312,12 @@ fn failure_from_panic(phase: &str, message: String) -> FailureDetail {
     let (expected, actual) = parse_expected_actual_from_message(&message).unwrap_or_else(|| {
         (
             "assertion condition is satisfied".to_string(),
-            message.lines().next().unwrap_or_default().trim().to_string(),
+            message
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_string(),
         )
     });
 
@@ -2226,6 +2344,7 @@ fn run_named_scenario(
     requires_browser4: bool,
     restart_browser4: bool,
     cleanup_mode: ScenarioCleanupMode,
+    fail_fast: bool,
     test_fn: fn(&mut E2ECtx),
 ) -> ScenarioOutcome {
     println!("{} testing {name} ... ", Local::now());
@@ -2234,6 +2353,35 @@ fn run_named_scenario(
     resources.ctx.clear_step_timings();
     let total_started_at = Instant::now();
     let mut harness_steps = Vec::new();
+    if fail_fast {
+        if requires_browser4 {
+            let pending_steps = resources
+                .join_pending_cleanup_if_any()
+                .unwrap_or_else(|error| panic!("{error}"));
+            harness_steps.extend(pending_steps);
+
+            let setup_steps = if restart_browser4 {
+                println!("restarting browser4 ...");
+                resources.restart_browser4()
+            } else {
+                resources.ensure_browser4()
+            };
+            harness_steps.extend(setup_steps);
+        }
+        test_fn(&mut resources.ctx);
+        let mut steps = harness_steps;
+        steps.extend(resources.ctx.take_step_timings());
+        let cleanup_steps = cleanup_after_scenario(resources, name, requires_browser4, cleanup_mode)
+            .unwrap_or_else(|error| panic!("{error}"));
+        steps.extend(cleanup_steps);
+        let report = TimingReport::new(name, total_started_at.elapsed(), steps);
+        println!("ok ({})", format_duration(report.total));
+        return ScenarioOutcome {
+            report,
+            failures: Vec::new(),
+        };
+    }
+
     // Wrap the test in catch_unwind so that Browser4 and Chrome are always
     // force-stopped even when the test panics, preventing leaked processes
     // from contaminating later scenarios.
@@ -2300,9 +2448,15 @@ fn run_named_scenario(
 
 #[derive(Debug)]
 enum ScenarioFilter {
-    Exact(String),
+    Scenario(String),
     From(String),
     Failed,
+}
+
+#[derive(Debug)]
+struct RunOptions {
+    scenario_filter: Option<ScenarioFilter>,
+    fail_fast: bool,
 }
 
 fn parse_named_flag_value(args: &mut impl Iterator<Item = String>, flag: &str) -> String {
@@ -2311,11 +2465,12 @@ fn parse_named_flag_value(args: &mut impl Iterator<Item = String>, flag: &str) -
     })
 }
 
-fn parse_scenario_filter() -> Option<ScenarioFilter> {
+fn parse_run_options() -> RunOptions {
     let mut args = std::env::args().skip(1);
     let mut scenario = None;
     let mut scenario_from = None;
     let mut rerun_failed = false;
+    let mut fail_fast = false;
 
     while let Some(arg) = args.next() {
         if let Some(value) = arg.strip_prefix("--scenario=") {
@@ -2338,6 +2493,11 @@ fn parse_scenario_filter() -> Option<ScenarioFilter> {
 
         if arg == "--failed" {
             rerun_failed = true;
+            continue;
+        }
+
+        if arg == "--fail-fast" {
+            fail_fast = true;
         }
     }
 
@@ -2345,15 +2505,20 @@ fn parse_scenario_filter() -> Option<ScenarioFilter> {
         panic!("--failed cannot be used together with --scenario or --scenario-from");
     }
 
-    match (scenario, scenario_from, rerun_failed) {
+    let scenario_filter = match (scenario, scenario_from, rerun_failed) {
         (Some(_), Some(_), _) => {
             panic!("--scenario and --scenario-from cannot be used together")
         }
-        (Some(value), None, false) => Some(ScenarioFilter::Exact(value)),
+        (Some(value), None, false) => Some(ScenarioFilter::Scenario(value)),
         (None, Some(value), false) => Some(ScenarioFilter::From(value)),
         (None, None, true) => Some(ScenarioFilter::Failed),
         (None, None, false) => None,
         _ => unreachable!("unexpected scenario filter argument combination"),
+    };
+
+    RunOptions {
+        scenario_filter,
+        fail_fast,
     }
 }
 
@@ -2368,6 +2533,41 @@ fn resolve_scenario_index(name: &str) -> Option<usize> {
     scenarios::all_scenarios()
         .iter()
         .position(|scenario| scenario.name == name || scenario.short_name == name)
+}
+
+fn scenario_filter_uses_pattern(filter: &str) -> bool {
+    filter.contains('*') || filter.contains('?')
+}
+
+fn compile_scenario_pattern(filter: &str) -> regex::Regex {
+    let mut pattern = String::from("^");
+    for ch in filter.chars() {
+        match ch {
+            '*' => pattern.push_str(".*"),
+            '?' => pattern.push('.'),
+            _ => pattern.push_str(&regex::escape(&ch.to_string())),
+        }
+    }
+    pattern.push('$');
+
+    regex::Regex::new(&pattern)
+        .unwrap_or_else(|error| panic!("Invalid scenario pattern '{filter}': {error}"))
+}
+
+fn resolve_scenarios_by_filter(filter: &str) -> Vec<scenarios::ScenarioDef> {
+    if !scenario_filter_uses_pattern(filter) {
+        return resolve_scenario(filter).into_iter().collect();
+    }
+
+    let pattern = compile_scenario_pattern(filter);
+
+    scenarios::all_scenarios()
+        .iter()
+        .copied()
+        .filter(|scenario| {
+            pattern.is_match(scenario.name) || pattern.is_match(scenario.short_name)
+        })
+        .collect()
 }
 
 const MAX_ALLOWED_FAILED_SCENARIOS: usize = 3;
@@ -2395,7 +2595,8 @@ impl PlannedScenarioRun {
 }
 
 fn main() {
-    let scenario_filter = parse_scenario_filter();
+    let suite_started_at = Instant::now();
+    let run_options = parse_run_options();
     let all_scenarios = scenarios::all_scenarios();
     let available_names = all_scenarios
         .iter()
@@ -2404,12 +2605,24 @@ fn main() {
         .join(", ");
 
     let (selected_scenarios, run_coverage): (Vec<scenarios::ScenarioDef>, bool) =
-        match scenario_filter {
-            Some(ScenarioFilter::Exact(filter)) => {
-                let scenario = resolve_scenario(&filter).unwrap_or_else(|| {
-                    panic!("Unknown scenario '{filter}'. Available scenarios: {available_names}");
-                });
-                (vec![scenario], false)
+        match run_options.scenario_filter {
+            Some(ScenarioFilter::Scenario(filter)) => {
+                let selected = resolve_scenarios_by_filter(&filter);
+                assert!(
+                    !selected.is_empty(),
+                    "Unknown scenario or pattern '{filter}'. Available scenarios: {available_names}"
+                );
+                println!(
+                    "selected {} scenario(s) via --scenario={}: {}",
+                    selected.len(),
+                    filter,
+                    selected
+                        .iter()
+                        .map(|scenario| scenario.name)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                (selected, false)
             }
             Some(ScenarioFilter::From(filter)) => {
                 let start_index = resolve_scenario_index(&filter).unwrap_or_else(|| {
@@ -2494,6 +2707,8 @@ fn main() {
         for (_, planned_run) in planned_runs.iter().enumerate() {
             scenario_progress += 1;
             let display_name = planned_run.display_name();
+            let scenario_started_at = Local::now();
+            let scenario_started_instant = Instant::now();
 
             let cleanup_mode = if planned_run.scenario.requires_browser4 {
                 ScenarioCleanupMode::Deferred
@@ -2507,12 +2722,26 @@ fn main() {
                 planned_run.scenario.requires_browser4,
                 planned_run.scenario.restart_browser4,
                 cleanup_mode,
+                run_options.fail_fast,
                 planned_run.scenario.test_fn,
             );
+            let scenario_finished_at = Local::now();
+            let scenario_elapsed = scenario_started_instant.elapsed();
             let status = if outcome.passed() { "ok" } else { "FAILED" };
+            let progress_bar = render_progress_bar(scenario_progress, scenario_runs, 24);
+            let progress_percent = render_progress_percent(scenario_progress, scenario_runs);
             println!(
-                "progress [{}/{}] {} => {}",
-                scenario_progress, scenario_runs, display_name, status
+                "{} progress [{}] {}/{} ({}%) {} => {} | start={} | end={} | elapsed={}",
+                scenario_finished_at,
+                progress_bar,
+                scenario_progress,
+                scenario_runs,
+                progress_percent,
+                display_name,
+                status,
+                scenario_started_at.format("%H:%M:%S"),
+                scenario_finished_at.format("%H:%M:%S"),
+                format_duration_human(scenario_elapsed)
             );
             if !outcome.passed() {
                 failed_scenario_names.insert(planned_run.scenario.name.to_string());
@@ -2524,7 +2753,13 @@ fn main() {
             timings.push(outcome.report);
         }
 
-        println!("All scenarios complete!");
+        let suite_elapsed = suite_started_at.elapsed();
+        println!(
+            "All scenarios complete at {}! total elapsed={} ({})",
+            Local::now(),
+            format_duration_human(suite_elapsed),
+            format_duration(suite_elapsed)
+        );
         (timings, scenario_failures)
     }));
 

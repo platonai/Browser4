@@ -194,6 +194,71 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
     run_command(ctx, &["close"]);
 }
 
+pub(super) fn test_eval_command(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    open_resized_interactive_page(ctx);
+
+    let title = eval_text(ctx, "document.title");
+    assert_eq!(title.trim(), INTERACTIVE_TITLE);
+
+    let button_text = eval_text_for_target(
+        ctx,
+        "element => element.textContent.trim()",
+        "#click-target",
+    );
+    assert_eq!(button_text.trim(), "Click");
+
+    let state_text = eval_text(
+        ctx,
+        "(() => { document.getElementById('click-target').click(); return document.getElementById('state-log').textContent; })()",
+    );
+    let state: serde_json::Value =
+        serde_json::from_str(state_text.trim()).expect("eval should return JSON state text");
+    assert_eq!(state["clickCount"].as_u64(), Some(1));
+
+    run_command(ctx, &["close"]);
+}
+
+pub(super) fn test_agent_run_live_or_missing_llm_key(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let task = format!(
+        "Navigate to {} and report the page title.",
+        ctx.interactive_url()
+    );
+    let result = run_command_allowing_failure(ctx, &["agent-run", &task]);
+
+    if result.exit_code == 0 {
+        assert!(
+            result.stdout.contains("Task submitted:"),
+            "Expected task submission output in:\n{}",
+            result.stdout
+        );
+        let task_id = extract_submitted_task_id(&result.stdout);
+        let status_result = run_command(ctx, &["agent-status", &task_id]);
+        let status = strip_snapshot_output(&status_result.stdout);
+        assert!(
+            status.contains(&task_id),
+            "Expected task status to mention submitted task id '{task_id}', got:\n{status}"
+        );
+        assert!(
+            status.contains("\"status\""),
+            "Expected JSON status payload in:\n{status}"
+        );
+    } else {
+        let combined = format!("{}\n{}", result.stdout, result.stderr);
+        assert!(
+            combined.contains("Agent task requires an LLM key and cannot execute"),
+            "Expected missing-LLM message in:\n{combined}"
+        );
+        assert!(
+            combined.contains("The LLM is not configured")
+                || combined.to_ascii_lowercase().contains("api key"),
+            "Expected specific LLM configuration detail in:\n{combined}"
+        );
+    }
+}
+
 pub(super) fn test_wait_for_state_failure_modes(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
     open_interactive_page(ctx);
@@ -336,7 +401,11 @@ pub(super) fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
     run_command(ctx, &["mousedown", "left"]);
     wait_for_state_or_abort(
         ctx,
-        |s| s["mouseDownCount"].as_u64().is_some_and(|value| value >= before_mouse_down + 1),
+        |s| {
+            s["mouseDownCount"]
+                .as_u64()
+                .is_some_and(|value| value >= before_mouse_down + 1)
+        },
         5_000,
         "Expected mousedown to increment mouseDownCount",
     );
@@ -347,7 +416,11 @@ pub(super) fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
     run_command(ctx, &["mouseup", "left"]);
     wait_for_state_or_abort(
         ctx,
-        |s| s["mouseUpCount"].as_u64().is_some_and(|value| value >= before_mouse_up + 1),
+        |s| {
+            s["mouseUpCount"]
+                .as_u64()
+                .is_some_and(|value| value >= before_mouse_up + 1)
+        },
         5_000,
         "Expected mouseup to increment mouseUpCount",
     );

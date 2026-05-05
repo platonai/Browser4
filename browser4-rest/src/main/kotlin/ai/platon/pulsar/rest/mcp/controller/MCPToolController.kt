@@ -156,6 +156,7 @@ class MCPToolController(
     private data class BatchExecutionResult(
         val index: Int,
         val ok: Boolean,
+        val durationMillis: Long = 0,
         val sessionId: String? = null,
         val text: String? = null,
         val error: String? = null,
@@ -362,13 +363,15 @@ class MCPToolController(
         var stoppedOnError = false
 
         for ((index, step) in stepMaps) {
+            val startedAt = System.nanoTime()
             val result = try {
                 executeBatchStep(index, step, currentSessionId)
             } catch (e: Exception) {
                 BatchExecutionResult(index = index, ok = false, error = e.message ?: "Unknown batch execution error")
             }
+            val durationMillis = (System.nanoTime() - startedAt) / 1_000_000
 
-            results += result
+            results += result.copy(durationMillis = durationMillis)
             if (result.ok) {
                 currentSessionId = when (step["op"]?.toString()) {
                     "open" -> result.sessionId
@@ -433,7 +436,6 @@ class MCPToolController(
     private fun getCommandAgentToolExecutor(): AgentToolExecutor {
         val commandAgent = commandService.session.companionAgent as? BasicBrowserAgent
             ?: throw IllegalStateException("CommandService session agent does not support tools")
-        // TODO: a native CommandService is required in browser4-agentic module for better maintainability and testing
         return commandAgent.toolExtractor.also { it.registerCustomTarget("command", commandService) }
     }
 
@@ -511,6 +513,9 @@ class MCPToolController(
                     ?: throw IllegalArgumentException("Batch press step is missing 'selector'.")
                 val key = step["key"]?.toString()
                     ?: throw IllegalArgumentException("Batch press step is missing 'key'.")
+
+                // TODO: DO NOT REWRITE PRESS IMPLEMENTATION, dispatch to AgentToolExecutor instead
+
                 val text = executeBatchPress(sessionId, selector, key)
                 BatchExecutionResult(index = index, ok = true, text = text.ifBlank { null })
             }
@@ -525,17 +530,17 @@ class MCPToolController(
         }
 
         val selectorLiteral = jacksonObjectMapper().writeValueAsString(selector)
-        val focusExpression = """
+        val focusExpression = $$"""
             (() => {
                 try {
-                    const el = document.querySelector($selectorLiteral);
+                    const el = document.querySelector($$selectorLiteral);
                     if (!el) return 'missing';
                     if (typeof el.focus === 'function') {
                         el.focus();
                     }
                     return document.activeElement === el ? 'focused' : 'unfocused';
                 } catch (error) {
-                    return `invalid:${'$'}{error}`;
+                    return `invalid:${error}`;
                 }
             })()
         """.trimIndent()

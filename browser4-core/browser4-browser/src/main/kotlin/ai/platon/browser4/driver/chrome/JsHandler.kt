@@ -2,13 +2,11 @@ package ai.platon.browser4.driver.chrome
 
 import ai.platon.browser4.driver.chrome.experimental.CDP
 import ai.platon.browser4.driver.chrome.util.ChromeDriverException
+import ai.platon.browser4.driver.common.B4JsUtils
 import ai.platon.cdt.kt.protocol.types.runtime.CallFunctionOn
 import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.common.js.JsUtils
-import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
-import com.fasterxml.jackson.module.kotlin.convertValue
 
 class JsHandler(
     private val devTools: RemoteDevTools,
@@ -31,7 +29,7 @@ class JsHandler(
      * */
     @Throws(ChromeDriverException::class)
     suspend fun evaluateDetail(script: String): Evaluate? {
-        val expression: String = JsUtils.toCDPCompatibleExpression(script)
+        val expression: String = B4JsUtils.toCDPCompatibleExpression(script)
 
         val confusedExpr = confuser.confuse(expression)
 
@@ -47,7 +45,7 @@ class JsHandler(
         return try {
             cdp.evaluate(confusedExpr)
         } catch (e: Exception) {
-            logger.warn("Failed to evaluate $expression", e)
+            logger.warn("Failed to evaluate $script", e)
             null
         }
     }
@@ -73,12 +71,7 @@ class JsHandler(
     @Throws(ChromeDriverException::class)
     suspend fun evaluate(script: String): Any? {
         require(script.isNotBlank()) { "Script must not be blank" }
-        val evaluate = if (script.contains("__pulsar_utils__")) {
-            // Just for debugging purpose
-            evaluateDetail(script)
-        } else {
-            evaluateDetail(script.trim())
-        }
+        val evaluate = evaluateDetail(script.trim())
 
         val exception = evaluate?.exceptionDetails?.exception
         if (exception != null) {
@@ -101,7 +94,7 @@ class JsHandler(
      * */
     @Throws(ChromeDriverException::class)
     suspend fun evaluateValueDetail(script: String): Evaluate? {
-        val expression: String = JsUtils.toCDPCompatibleExpression(script)
+        val expression: String = B4JsUtils.toCDPCompatibleExpression(script)
 
         val confusedExpr = confuser.confuse(expression)
 
@@ -176,22 +169,5 @@ class JsHandler(
      * */
     private suspend fun evaluateInContext(expression: String, contextId: Int, returnByValue: Boolean): Evaluate? {
         return cdp.evaluate(expression = expression, contextId = contextId, returnByValue = returnByValue)
-    }
-
-    private suspend fun evaluateInContext2(expression: String, contextId: Int, returnByValue: Boolean): Evaluate? {
-        val params = mutableMapOf<String, Any?>(
-            "expression" to expression,
-            "contextId" to contextId,
-            "returnByValue" to returnByValue,
-            "awaitPromise" to true,
-        )
-
-        // Runtime.evaluate via raw invoke is kept for compatibility with legacy protocol payload shape.
-        val raw = devTools.invoke<Map<String, Any?>>("Runtime.evaluate", params, null) ?: return null
-        return runCatching {
-            pulsarObjectMapper().convertValue<Evaluate>(raw)
-        }.onFailure { e ->
-            logger.warn("Failed to convert evaluation result to Evaluate type", e)
-        }.getOrNull()
     }
 }

@@ -171,9 +171,7 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
     @Test
     @DisplayName("navigation and storage tools match the CLI navigation scenario")
     fun testNavigationAndStorage() {
-        val sessionId = openTemporarySession()
-
-        navigate(sessionId, fixtureServer.interactiveUrl())
+        val sessionId = openAndNavigate(fixtureServer.interactiveUrl())
         waitForEvalText(
             sessionId,
             "window.location.pathname",
@@ -345,7 +343,8 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
                 mapOf("op" to "tool", "tool" to "browser_click", "arguments" to mapOf("ref" to "#click-target")),
                 mapOf("op" to "snapshot", "tool" to "browser_snapshot", "arguments" to emptyMap<String, Any?>()),
                 mapOf("op" to "screenshot", "tool" to "browser_take_screenshot", "arguments" to emptyMap<String, Any?>())
-            )
+            ),
+            batchLabel = "interactive flow"
         )
 
         assertEquals(0, batchResponse.failureCount)
@@ -376,7 +375,8 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
                 mapOf("op" to "tool", "tool" to "browser_check", "arguments" to mapOf("ref" to "#agree-terms")),
                 mapOf("op" to "tool", "tool" to "browser_type", "arguments" to mapOf("ref" to "#comments", "text" to "batch test comment")),
                 mapOf("op" to "tool", "tool" to "browser_click", "arguments" to mapOf("ref" to "#submit-btn"))
-            )
+            ),
+            batchLabel = "form submission 1"
         )
 
         val sessionId = requireNotNull(firstBatch.sessionId)
@@ -402,7 +402,8 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
                 mapOf("op" to "tool", "tool" to "browser_check", "arguments" to mapOf("ref" to "#agree-terms")),
                 mapOf("op" to "tool", "tool" to "browser_click", "arguments" to mapOf("ref" to "#submit-btn"))
             ),
-            sessionId = sessionId
+            sessionId = sessionId,
+            batchLabel = "form submission 2"
         )
 
         assertEquals(sessionId, secondBatch.sessionId)
@@ -422,7 +423,8 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
             listOf(
                 mapOf("op" to "open", "capabilities" to mapOf("profileMode" to "TEMPORARY")),
                 mapOf("op" to "tool", "tool" to "browser_navigate", "arguments" to mapOf("url" to fixtureServer.interactiveUrl()))
-            )
+            ),
+            batchLabel = "error handling bootstrap"
         )
         val sessionId = requireNotNull(initialBatch.sessionId)
         createdSessions.add(sessionId)
@@ -433,7 +435,8 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
                 mapOf("op" to "tool", "tool" to "not_a_real_tool", "arguments" to emptyMap<String, Any?>()),
                 mapOf("op" to "tool", "tool" to "browser_type", "arguments" to mapOf("ref" to "#fill-target", "text" to "after error"))
             ),
-            sessionId = sessionId
+            sessionId = sessionId,
+            batchLabel = "error handling continue"
         )
         assertEquals(1, continueResponse.failureCount)
         assertFalse(continueResponse.stoppedOnError)
@@ -448,7 +451,8 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
                 mapOf("op" to "tool", "tool" to "browser_type", "arguments" to mapOf("ref" to "#fill-target", "text" to "should not execute"))
             ),
             bail = true,
-            sessionId = sessionId
+            sessionId = sessionId,
+            batchLabel = "error handling bail"
         )
         assertEquals(1, bailResponse.failureCount)
         assertTrue(bailResponse.stoppedOnError)
@@ -469,33 +473,27 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         }
 
         val mouseDownBefore = readState(sessionId)["mouseDownCount"].asInt()
-        runToolAndWaitForStateWithEvalFallback(
+        runToolAndWaitForState(
             sessionId = sessionId,
             toolName = "mousedown",
             arguments = mapOf("sessionId" to sessionId, "button" to "left"),
-            fallbackExpression =
-                "(() => { const area = document.getElementById('mouse-area'); if (!area) return 'missing-mouse-area'; area.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true, clientX: 120, clientY: 120 })); return 'mousedown-fallback-dispatched'; })()",
             failureMessage = "Expected mousedown to increment mouseDownCount",
             predicate = { it["mouseDownCount"].asInt() >= mouseDownBefore + 1 }
         )
 
         val mouseUpBefore = readState(sessionId)["mouseUpCount"].asInt()
-        runToolAndWaitForStateWithEvalFallback(
+        runToolAndWaitForState(
             sessionId = sessionId,
             toolName = "mouseup",
             arguments = mapOf("sessionId" to sessionId, "button" to "left"),
-            fallbackExpression =
-                "(() => { const area = document.getElementById('mouse-area'); if (!area) return 'missing-mouse-area'; area.dispatchEvent(new MouseEvent('mouseup', { button: 0, bubbles: true, clientX: 120, clientY: 120 })); return 'mouseup-fallback-dispatched'; })()",
             failureMessage = "Expected mouseup to increment mouseUpCount",
             predicate = { it["mouseUpCount"].asInt() >= mouseUpBefore + 1 }
         )
 
-        runToolAndWaitForStateWithEvalFallback(
+        runToolAndWaitForState(
             sessionId = sessionId,
             toolName = "mousewheel",
             arguments = mapOf("sessionId" to sessionId, "deltaX" to 0, "deltaY" to 160),
-            fallbackExpression =
-                "(() => { const area = document.getElementById('mouse-area'); if (!area) return 'missing-mouse-area'; const evt = new WheelEvent('wheel', { deltaY: 160, deltaX: 0, bubbles: true }); area.dispatchEvent(evt); return 'wheel-fallback-dispatched'; })()",
             failureMessage = "Expected mousewheel to update lastWheel",
             predicate = { it["lastWheel"][0].asInt() == 160 && it["lastWheel"][1].asInt() == 0 }
         )
@@ -662,8 +660,22 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
 
     private fun openAndNavigate(url: String): String {
         val sessionId = openTemporarySession()
-        navigate(sessionId, url)
-        return sessionId
+        val response = callTool("browser_navigate", mapOf("sessionId" to sessionId, "url" to url))
+        if (!response.isError) {
+            return sessionId
+        }
+        if (!textContent(response).contains("Cannot find context with specified id")) {
+            assertNotError(response)
+        }
+
+        logger.info("Retrying initial browser_navigate with a fresh session after missing browser context")
+        callTool("close_session", mapOf("sessionId" to sessionId))
+        createdSessions.remove(sessionId)
+
+        val retrySessionId = openTemporarySession()
+        val retryResponse = callTool("browser_navigate", mapOf("sessionId" to retrySessionId, "url" to url))
+        assertNotError(retryResponse)
+        return retrySessionId
     }
 
     private fun openResizedInteractiveSession(): String {
@@ -717,31 +729,16 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         )
     }
 
-    private fun runToolAndWaitForStateWithEvalFallback(
+    private fun runToolAndWaitForState(
         sessionId: String,
         toolName: String,
         arguments: Map<String, Any?>,
-        fallbackExpression: String,
         failureMessage: String,
         timeout: Duration = Duration.ofSeconds(5),
         predicate: (JsonNode) -> Boolean,
     ): JsonNode {
         val response = callTool(toolName, arguments)
-        if (!response.isError) {
-            try {
-                return waitForState(sessionId, failureMessage, timeout, predicate)
-            } catch (e: AssertionError) {
-                logger.warn("{}; using eval fallback. {}", toolName, e.message)
-            }
-        } else {
-            logger.warn("{} returned an MCP error; using eval fallback. {}", toolName, textContent(response))
-        }
-
-        val fallbackResult = evalText(sessionId, fallbackExpression).trim()
-        assertFalse(
-            fallbackResult.startsWith("missing-"),
-            "Expected fallback target for $toolName to exist, got: $fallbackResult"
-        )
+        assertNotError(response)
         return waitForState(sessionId, failureMessage, timeout, predicate)
     }
 
@@ -783,6 +780,7 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         steps: List<Map<String, Any?>>,
         bail: Boolean = false,
         sessionId: String? = null,
+        batchLabel: String = "command_batch",
     ): BatchExecutionResponse {
         val arguments = linkedMapOf<String, Any?>(
             "steps" to steps,
@@ -791,9 +789,79 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         if (sessionId != null) {
             arguments["sessionId"] = sessionId
         }
+        val startedAt = System.nanoTime()
         val response = callTool("command_batch", arguments)
+        val wallDurationMillis = (System.nanoTime() - startedAt) / 1_000_000
         assertNotError(response)
-        return objectMapper.readValue(textContent(response), BatchExecutionResponse::class.java)
+        return objectMapper.readValue(textContent(response), BatchExecutionResponse::class.java).also {
+            logBatchCommandTimings(batchLabel, steps, it, wallDurationMillis)
+        }
+    }
+
+    private fun logBatchCommandTimings(
+        batchLabel: String,
+        steps: List<Map<String, Any?>>,
+        response: BatchExecutionResponse,
+        wallDurationMillis: Long,
+    ) {
+        if (response.results.isEmpty()) {
+            logger.info("Batch command timings [{}] wall={} ms | no steps executed", batchLabel, wallDurationMillis)
+            return
+        }
+
+        val timings = response.results.map { result ->
+            val stepDescription = describeBatchStep(steps.getOrNull(result.index))
+            BatchStepTiming(
+                index = result.index,
+                description = stepDescription,
+                durationMillis = result.durationMillis,
+                ok = result.ok,
+                error = result.error,
+            )
+        }
+        val totalStepDurationMillis = timings.sumOf { it.durationMillis }
+        val summary = timings.joinToString(" | ") { timing ->
+            buildString {
+                append("#")
+                append(timing.index)
+                append(" ")
+                append(timing.description)
+                append("=")
+                append(timing.durationMillis)
+                append("ms")
+                if (!timing.ok) {
+                    append(" ERROR")
+                }
+            }
+        }
+        val slowest = timings.maxByOrNull { it.durationMillis }
+
+        logger.info(
+            "Batch command timings [{}] wall={} ms stepSum={} ms | {}",
+            batchLabel,
+            wallDurationMillis,
+            totalStepDurationMillis,
+            summary
+        )
+        if (slowest != null) {
+            logger.info(
+                "Slowest batch command [{}] #{} {} took {} ms{}",
+                batchLabel,
+                slowest.index,
+                slowest.description,
+                slowest.durationMillis,
+                slowest.error?.let { " | error=$it" }.orEmpty()
+            )
+        }
+    }
+
+    private fun describeBatchStep(step: Map<String, Any?>?): String {
+        val op = step?.get("op")?.toString() ?: return "unknown"
+        return when (op) {
+            "tool", "snapshot", "screenshot" -> step["tool"]?.toString() ?: op
+            "press" -> "press:${step["key"]}"
+            else -> op
+        }
     }
 
     private fun waitForCommandDone(taskId: String, timeout: Duration = Duration.ofMinutes(3)): JsonNode {
@@ -832,6 +900,7 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
     private data class BatchExecutionResult(
         val index: Int,
         val ok: Boolean,
+        val durationMillis: Long = 0,
         val sessionId: String? = null,
         val text: String? = null,
         val error: String? = null,
@@ -839,6 +908,14 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         val pageTitle: String? = null,
         val snapshot: String? = null,
         val screenshot: String? = null,
+    )
+
+    private data class BatchStepTiming(
+        val index: Int,
+        val description: String,
+        val durationMillis: Long,
+        val ok: Boolean,
+        val error: String?,
     )
 
     private class FixtureServer private constructor(

@@ -6,6 +6,7 @@ import ai.platon.pulsar.skeleton.event.impl.DefaultPageEventHandlers
 import ai.platon.pulsar.test.TestUrls
 import kotlinx.coroutines.delay
 import java.time.OffsetDateTime
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Demonstrates talking to the active webpage.
@@ -47,7 +48,7 @@ get the text of the element with id 'productTitle'
                         }
                     }
                 }
-                delay(1000)
+                delay(1000.milliseconds)
             }
 
             println("All done.")

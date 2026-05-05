@@ -104,7 +104,7 @@ browser4-cli -s=<session> <command> [args] [options]
 | `uncheck <ref>` | Uncheck a checkbox or radio button |
 | `drag <startRef> <endRef>` | Drag and drop between two elements |
 | `snapshot` | Capture accessibility snapshot |
-| `eval <func> [ref]` | Evaluate JavaScript expression |
+| `eval <expression> [ref]` | Evaluate JavaScript on the page or a target element |
 | `dialog-accept [prompt]` | Accept a dialog |
 | `dialog-dismiss` | Dismiss a dialog |
 | `resize <w> <h>` | Resize the browser window |
@@ -235,6 +235,8 @@ browser4-cli snapshot
 browser4-cli click e15
 browser4-cli type e15 "Hello World"
 browser4-cli press e15 Enter
+browser4-cli eval "document.title"
+browser4-cli eval "element => element.textContent.trim()" e15
 browser4-cli keydown Shift
 browser4-cli mousemove 150 300
 browser4-cli mousewheel 0 100

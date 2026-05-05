@@ -52,6 +52,8 @@ use state::{
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const TEST_TEMPORARY_PROFILE_ENV: &str = "BROWSER4_CLI_TEST_TEMPORARY_PROFILE";
+const AGENT_RUN_FAILURE_POLL_ATTEMPTS: usize = 5;
+const AGENT_RUN_FAILURE_POLL_INTERVAL_MS: u64 = 250;
 
 /// Commands that should NOT trigger a post-command snapshot.
 fn no_snapshot_commands() -> HashSet<&'static str> {
@@ -376,19 +378,20 @@ async fn handle_open(
     let session_id =
         create_session(client, base_url, &state, session_name, Some(capabilities)).await?;
 
+    println!("Session opened: {}", session_id);
+
     let url = tool_params
         .get("url")
         .and_then(|u| u.as_str())
         .unwrap_or("about:blank");
     if !url.is_empty() && url != "about:blank" {
         let mut params = tool_params.clone();
-        params["sessionId"] = json!(session_id);
+        params["sessionId"] = json!(session_id.clone());
         let result = call_tool(client, base_url, tool_name, params).await?;
         if !result.is_empty() {
             println!("{}", result);
         }
-    } else {
-        println!("Session opened: {}", session_id);
+        post_command_snapshot(client, base_url, &session_id).await;
     }
     Ok(())
 }
@@ -1065,12 +1068,80 @@ async fn handle_agent_run(
 
     // The async response is a task ID (possibly JSON-quoted)
     let task_id = result.trim().trim_matches('"').to_string();
+    if let Some(message) =
+        detect_missing_llm_error_for_submitted_agent_task(client, base_url, &task_id).await?
+    {
+        return Err(format!(
+            "Agent task requires an LLM key and cannot execute: {}",
+            message
+        ));
+    }
     println!("Task submitted: {}", task_id);
     println!(
         "Use 'browser4-cli agent-status {}' to check progress.",
         task_id
     );
     Ok(())
+}
+
+async fn detect_missing_llm_error_for_submitted_agent_task(
+    client: &Client,
+    base_url: &str,
+    task_id: &str,
+) -> Result<Option<String>, String> {
+    for _ in 0..AGENT_RUN_FAILURE_POLL_ATTEMPTS {
+        tokio::time::sleep(std::time::Duration::from_millis(
+            AGENT_RUN_FAILURE_POLL_INTERVAL_MS,
+        ))
+        .await;
+
+        let status = get_command_status(client, base_url, task_id).await?;
+        if let Some(message) = extract_missing_llm_configuration_message(&status) {
+            return Ok(Some(message));
+        }
+
+        let Some(parsed) = serde_json::from_str::<Value>(&status).ok() else {
+            return Ok(None);
+        };
+        let Some(process_state) = parsed.get("processState").and_then(|value| value.as_str())
+        else {
+            return Ok(None);
+        };
+        if process_state == "done" {
+            return Ok(None);
+        }
+    }
+
+    Ok(None)
+}
+
+fn extract_missing_llm_configuration_message(status_payload: &str) -> Option<String> {
+    let parsed = serde_json::from_str::<Value>(status_payload).ok()?;
+    let process_state = parsed
+        .get("processState")
+        .and_then(|value| value.as_str())?;
+    let status_code = parsed.get("statusCode").and_then(|value| value.as_i64())?;
+    if process_state != "done" || status_code < 400 {
+        return None;
+    }
+
+    let message = parsed
+        .get("message")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    if is_missing_llm_configuration_message(message) {
+        return Some(message.to_string());
+    }
+
+    None
+}
+
+fn is_missing_llm_configuration_message(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("llm is not configured")
+        || lower.contains("llm.api.key is not set")
+        || (lower.contains("llm") && lower.contains("api key") && lower.contains("not set"))
 }
 
 async fn handle_agent_status(
@@ -2438,6 +2509,50 @@ mod tests {
         assert!(is_backend_unreachable_error(
             "HTTP request failed: error sending request for url: tcp connect error: Connection refused"
         ));
-        assert!(!is_backend_unreachable_error("Tool execution failed: invalid arguments"));
+        assert!(!is_backend_unreachable_error(
+            "Tool execution failed: invalid arguments"
+        ));
+    }
+
+    #[test]
+    fn extract_missing_llm_configuration_message_matches_done_failures() {
+        let status = json!({
+            "id": "agent-task-1",
+            "statusCode": 417,
+            "processState": "done",
+            "message": "The LLM is not configured, see docs/config/llm/llm-config.md"
+        })
+        .to_string();
+
+        assert_eq!(
+            extract_missing_llm_configuration_message(&status),
+            Some("The LLM is not configured, see docs/config/llm/llm-config.md".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_missing_llm_configuration_message_ignores_non_llm_failures() {
+        let status = json!({
+            "id": "agent-task-1",
+            "statusCode": 417,
+            "processState": "done",
+            "message": "Browser crashed before agent execution started"
+        })
+        .to_string();
+
+        assert_eq!(extract_missing_llm_configuration_message(&status), None);
+    }
+
+    #[test]
+    fn extract_missing_llm_configuration_message_ignores_in_progress_status() {
+        let status = json!({
+            "id": "agent-task-1",
+            "statusCode": 102,
+            "processState": "in_progress",
+            "message": "The LLM is not configured, see docs/config/llm/llm-config.md"
+        })
+        .to_string();
+
+        assert_eq!(extract_missing_llm_configuration_message(&status), None);
     }
 }
