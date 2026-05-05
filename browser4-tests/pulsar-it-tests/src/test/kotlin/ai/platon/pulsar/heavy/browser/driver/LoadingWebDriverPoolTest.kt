@@ -52,6 +52,7 @@ class LoadingWebDriverPoolTest {
     }
 
     @Tag("Slow")
+    @Tag("Heavy")
     @Test
     fun test_pollWebDrivers() {
         runBlocking {
@@ -68,34 +69,37 @@ class LoadingWebDriverPoolTest {
     }
 
     @Tag("Slow")
+    @Tag("Heavy")
     @Test
     fun test_pollAndPutWebDrivers() {
-        val drivers = mutableListOf<WebDriver>()
         val executor = Executors.newFixedThreadPool(pool.numDriverSlots)
+        val futures = mutableListOf<java.util.concurrent.Future<*>>()
 
-        var i = 0
-        while(i++ < 60) {
-            if (pool.numDriverSlots == 0) {
-                sleepSeconds(1)
-                continue
-            }
-
-            printlnPro("$i. Round $i polling a driver")
+        repeat(60) { round ->
             val driver = pool.poll()
-            drivers += driver
 
+            printlnPro("${round + 1}. Round ${round + 1} polling a driver")
             printlnPro("Created WebDriver #${driver.id} | ${pool.takeSnapshot()} | ${driver::class.qualifiedName}")
 
-            executor.submit {
+            val future = executor.submit {
                 val url = seeds.random()
-                navigate(url, driver)
+                try {
+                    navigate(url, driver)
+                    printlnPro("Navigated, put driver #${driver.id} | $url")
+                } finally {
+                    pool.put(driver)
+                }
+            }
 
-                printlnPro("Navigated, put driver #${driver.id} | $url")
-                pool.put(driver)
+            futures += future
+
+            if (futures.size >= pool.numDriverSlots) {
+                futures.removeAt(0).get()
             }
         }
 
-        drivers.forEach { it.close() }
+        futures.forEach { it.get() }
+        executor.shutdown()
     }
 
     private fun navigate(url: String, driver: WebDriver) {
