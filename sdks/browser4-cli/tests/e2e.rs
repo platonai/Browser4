@@ -2554,6 +2554,7 @@ impl PlannedScenarioRun {
 }
 
 fn main() {
+    let suite_started_at = Instant::now();
     let run_options = parse_run_options();
     let all_scenarios = scenarios::all_scenarios();
     let available_names = all_scenarios
@@ -2699,7 +2700,13 @@ fn main() {
             timings.push(outcome.report);
         }
 
-        println!("All scenarios complete at {}!", Local::now());
+        let suite_elapsed = suite_started_at.elapsed();
+        println!(
+            "All scenarios complete at {}! total elapsed={} ({})",
+            Local::now(),
+            format_duration_human(suite_elapsed),
+            format_duration(suite_elapsed)
+        );
         (timings, scenario_failures)
     }));
 
