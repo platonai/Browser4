@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<configuration scan="true" scanPeriod="30 seconds" debug="false">
+    <property name="logging.dir" value="${logging.dir:-logs}" />
+    <property name="logging.file" value="${logging.file:-pulsar.log}" />
+    <property name="logging.m.file" value="${logging.m.file:-pulsar.m.log}" />
+    <property name="logging.sql.file" value="${logging.sql.file:-pulsar.sql.log}" />
+
+    <appender name="DRFA" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <File>${logging.dir}/${logging.file}</File>
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%.10thread] %-5level %logger{26} - %msg%n</pattern>
+        </encoder>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>${logging.dir}/${logging.file}.%d{.yyyy-MM-dd}</fileNamePattern>
+        </rollingPolicy>
+    </appender>
+    <appender name="METRICS" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <File>${logging.dir}/${logging.m.file}</File>
+        <encoder>
+            <pattern>%d{ISO8601} - %m%n</pattern>
+        </encoder>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>${logging.dir}/${logging.m.file}.%d{.yyyy-MM-dd}</fileNamePattern>
+        </rollingPolicy>
+    </appender>
+    <appender name="stdout" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%.10thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+    <appender name="SQL" class="ch.qos.logback.core.FileAppender">
+        <File>${logging.dir}/${logging.sql.file}</File>
+        <encoder>
+            <pattern>%m%n</pattern>
+        </encoder>
+    </appender>
+
+    <root level="${log.level:-INFO}">
+        <appender-ref ref="DRFA"/>
+        <appender-ref ref="stdout"/>
+    </root>
+
+    <!-- Stop logback status INFO at the start -->
+    <statusListener class="ch.qos.logback.core.status.NopStatusListener" />
+
+    <logger name="ai.platon.pulsar.skeleton.common.metrics.AppMetrics" level="INFO" additivity="false">
+        <appender-ref ref="METRICS"/>
+    </logger>
+
+    <logger name="ai.platon.pulsar.common.sql.log" level="INFO" additivity="false">
+        <appender-ref ref="SQL"/>
+    </logger>
+
+    <logger name="ai.platon.pulsar" level="INFO"/>
+    <logger name="ai.platon.pulsar.ql" level="INFO"/>
+    <logger name="ai.platon.pulsar.net" level="INFO"/>
+    <logger name="ai.platon.pulsar.browser" level="INFO"/>
+    <logger name="ai.platon.pulsar.parse.html" level="INFO"/>
+    <logger name="ai.platon.pulsar.skeleton.crawl.parse" level="INFO"/>
+    <logger name="ai.platon.pulsar.cli.shell" level="INFO"/>
+    <logger name="ai.platon.pulsar.skeleton.crawl" level="INFO"/>
+    <logger name="ai.platon.pulsar.skeleton.crawl.protocol" level="INFO"/>
+    <logger name="ai.platon.pulsar.protocol.browser" level="INFO"/>
+    <logger name="ai.platon.pulsar.protocol.browser.driver" level="INFO"/>
+
+    <logger name="ai.platon.pulsar.skeleton.crawl.component" level="INFO"/>
+    <logger name="ai.platon.pulsar.protocol.browser.emulator.BrowserEmulateEventHandler" level="INFO"/>
+
+    <logger name="ai.platon.pulsar.protocol.browser.emulator.context" level="INFO"/>
+
+    <logger name="ai.platon.pulsar.examples" level="INFO"/>
+
+    <logger name="org.springframework.core" level="INFO"/>
+    <logger name="org.springframework.core.env" level="INFO"/>
+
+    <logger name="org.apache.gora.mongodb.store" level="INFO"/>
+
+    <logger name="org.apache.hadoop.conf.Configuration" level="WARN"/>
+    <logger name="org.apache.gora" level="ERROR"/>
+
+</configuration>
