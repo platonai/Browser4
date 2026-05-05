@@ -94,14 +94,25 @@ if ($NEXT_SNAPSHOT_VERSION -notmatch "^\d+\.\d+\.\d+-SNAPSHOT$") {
 Write-Host "Current version: $SNAPSHOT_VERSION"
 Write-Host "New version: $NEXT_SNAPSHOT_VERSION"
 
+$isWindowsHost = $PSVersionTable.PSEdition -eq 'Desktop' -or $IsWindows
 
 
 # Update VERSION file
 $NEXT_SNAPSHOT_VERSION | Set-Content "$repoRoot\VERSION"
 
 # Update pom.xml files using Maven
-$mvnCmd = if ($IsWindows) { "$repoRoot\mvnw.cmd" } else { "$repoRoot\mvnw" }
-$mvnCmd versions:set -DnewVersion="$NEXT_SNAPSHOT_VERSION" -DprocessAllModules -DgenerateBackupPoms=false
+$mvnCmd = if ($isWindowsHost) { Join-Path $repoRoot "mvnw.cmd" } else { Join-Path $repoRoot "mvnw" }
+$mvnArgs = @(
+    'versions:set'
+    "-DnewVersion=$NEXT_SNAPSHOT_VERSION"
+    '-DprocessAllModules'
+    '-DgenerateBackupPoms=false'
+)
+if ($isWindowsHost) {
+    & cmd /c $mvnCmd @mvnArgs
+} else {
+    & $mvnCmd @mvnArgs
+}
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Maven versions:set command failed. Reverting VERSION file."
     $SNAPSHOT_VERSION | Set-Content "$repoRoot\VERSION"
