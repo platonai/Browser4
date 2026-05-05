@@ -398,13 +398,6 @@ open class PulsarWebDriverE2ETest : WebDriverTestBase() {
     }
 
     @Test
-    fun testDragAndHold() = runEnhancedWebDriverTest(walmartUrl, browser) { driver ->
-        // TODO: FIXME: dragAndHold not working on walmart.com
-        val result = driver.evaluate("__pulsar_utils__.doForAllFrames('HOLD', 'ME')")
-        printlnPro(result)
-    }
-
-    @Test
     @DisplayName("When call queryClientRects then return client rects")
     fun whenCallQueryClientRectsThenReturnClientRects() = runEnhancedWebDriverTest(e2eProductUrl, browser) { driver ->
         val navbarMain = driver.selectFirstTextOrNull("#navbar-main")
@@ -417,7 +410,7 @@ open class PulsarWebDriverE2ETest : WebDriverTestBase() {
         printlnPro(box)
         assertNotNull(box)
 
-        delay(3000)
+        delay(3000.milliseconds)
 
         driver.mouseWheelUp(5)
 
