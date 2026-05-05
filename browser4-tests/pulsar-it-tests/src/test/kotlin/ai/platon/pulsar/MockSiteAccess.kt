@@ -68,34 +68,16 @@ class MockSiteAccess {
     protected val mockAmazonListUrl get() = "$generatedMockAmazonBaseURL/list/index.html"
     protected val mockAmazonProductUrl get() = "$generatedMockAmazonBaseURL/product/index.html"
 
-    /**
-     * @see [ai.platon.pulsar.test.mock2.server.MockSiteController.text]
-     * */
     protected val plainTextUrl get() = "$baseURL/text"
 
-    /**
-     * @see [ai.platon.pulsar.test.mock2.server.MockSiteController.csv]
-     * */
     protected val csvTextUrl get() = "$baseURL/csv"
 
-    /**
-     * @see [ai.platon.pulsar.test.mock2.server.MockSiteController.json]
-     * */
     protected val jsonUrl get() = "$baseURL/json"
 
-    /**
-     * @see [ai.platon.pulsar.test.mock2.server.MockSiteController.robots]
-     * */
     protected val robotsUrl get() = "$baseURL/robots.txt"
 
-    /**
-     * @see [ai.platon.pulsar.test.mock2.server.MockSiteController.amazonHome]
-     * */
     protected val amazonHomeCopyUrl get() = "$baseURL/amazon/home.htm"
 
-    /**
-     * @see [ai.platon.pulsar.test.mock2.server.MockSiteController.amazonProduct]
-     * */
     protected val amazonProductCopyUrl get() = "$baseURL/amazon/product.htm"
 
     protected val walmartUrl = "https://www.walmart.com/ip/584284401"
