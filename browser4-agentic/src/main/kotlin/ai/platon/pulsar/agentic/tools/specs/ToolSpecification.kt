@@ -29,6 +29,8 @@ tab.scrollBy(pixels: Double = 200.0): Double
 tab.ariaSnapshot(viewports: String = "all")      // Returns the accessibility tree. viewports: "all", "3", "1,3,5", "2-4"
 tab.textContent(): String?                            // Returns the document's text content.
 tab.selectFirstTextOrNull(selector: String): String?  // Returns the first node's text content (descendants included). Returns null if no node.
+tab.eval(expression: String)
+tab.eval(expression: String, selector: String)
 tab.delay(millis: Long)
 
 // domain: browser

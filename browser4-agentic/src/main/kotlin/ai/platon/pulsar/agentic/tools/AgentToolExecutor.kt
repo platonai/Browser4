@@ -124,7 +124,7 @@ class AgentToolExecutor constructor(
     fun normalizeToolCall(tc: ToolCall): ToolCall {
         val normalizedDomain = normalizeDomain(tc.domain)
         val spec = getToolSpec(normalizedDomain, tc.method) ?: getToolSpec(tc.domain, tc.method)
-        val normalizedArguments = normalizeArguments(tc.arguments, spec)
+        val normalizedArguments = normalizeArguments(normalizedDomain, tc.method, tc.arguments, spec)
 
         if (normalizedDomain == tc.domain && normalizedArguments == tc.arguments) {
             return tc
@@ -261,9 +261,21 @@ class AgentToolExecutor constructor(
         return if (parts.size == 1) topDomain else listOf(topDomain).plus(parts.drop(1)).joinToString(".")
     }
 
-    private fun normalizeArguments(arguments: Map<String, Any?>, spec: ToolSpec?): MutableMap<String, Any?> {
+    private fun normalizeArguments(
+        domain: String,
+        method: String,
+        arguments: Map<String, Any?>,
+        spec: ToolSpec?
+    ): MutableMap<String, Any?> {
         if (arguments.isEmpty() || spec == null) {
+            if (domain == "tab" && method in setOf("eval", "evaluateValue", "evaluateValueDetail")) {
+                return normalizeTabEvaluationArguments(method, arguments)
+            }
             return arguments.toMutableMap()
+        }
+
+        if (domain == "tab" && method in setOf("eval", "evaluateValue", "evaluateValueDetail")) {
+            return normalizeTabEvaluationArguments(method, arguments)
         }
 
         val normalized = linkedMapOf<String, Any?>()
@@ -279,6 +291,29 @@ class AgentToolExecutor constructor(
                 val targetName = spec.arguments.getOrNull(index)?.name ?: index.toString()
                 normalized.putIfAbsent(targetName, value)
             }
+
+        return normalized.toMutableMap()
+    }
+
+    private fun normalizeTabEvaluationArguments(method: String, arguments: Map<String, Any?>): MutableMap<String, Any?> {
+        val normalized = linkedMapOf<String, Any?>()
+
+        arguments.entries
+            .filter { it.key.toIntOrNull() == null }
+            .forEach { (key, value) -> normalized[key] = value }
+
+        val positional = arguments.entries
+            .mapNotNull { entry -> entry.key.toIntOrNull()?.let { it to entry.value } }
+            .sortedBy { it.first }
+
+        positional.forEach { (index, value) ->
+            val targetName = when (index) {
+                0 -> "expression"
+                1 -> if (method == "eval") "selector" else "functionDeclaration"
+                else -> index.toString()
+            }
+            normalized.putIfAbsent(targetName, value)
+        }
 
         return normalized.toMutableMap()
     }

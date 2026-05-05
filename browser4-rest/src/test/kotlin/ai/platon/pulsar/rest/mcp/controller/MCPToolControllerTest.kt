@@ -421,6 +421,37 @@ class MCPToolControllerTest {
     }
 
     @Test
+    fun `test eval tool name resolves to tab eval and preserves selector and expression`() = runBlocking {
+        mockTool("tab", "eval")
+
+        val request = MCPToolCallRequest(
+            tool = "eval",
+            arguments = mapOf(
+                "sessionId" to sessionId,
+                "selector" to "#page-marker",
+                "expression" to "(element) => element.textContent"
+            )
+        )
+
+        `when`(agentToolExecutor.execute(anyToolCall())).thenReturn(toolCallResult("other page"))
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        assertEquals("other page", result.body!!.content[0].text)
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolExecutor).execute(capture(captor))
+        val toolCall = captor.value
+
+        assertEquals("tab", toolCall.domain)
+        assertEquals("eval", toolCall.method)
+        assertEquals("#page-marker", toolCall.arguments["selector"])
+        assertEquals("(element) => element.textContent", toolCall.arguments["expression"])
+        assertFalse("functionDeclaration" in toolCall.arguments)
+    }
+
+    @Test
     fun `test frontend tab select maps to browser switchTab`() = runBlocking {
         val request = MCPToolCallRequest(
             tool = "browser_tabs",

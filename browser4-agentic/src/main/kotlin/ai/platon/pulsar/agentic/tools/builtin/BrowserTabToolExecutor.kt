@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
+import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecGenerator
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.NavigateEntry
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
@@ -44,7 +45,7 @@ class BrowserTabToolExecutor: AbstractToolExecutor() {
             "mousedown", "mouseDown", "mouseup", "mouseUp",
             "dragAndDrop", "drag", "clickTextMatches", "clickMatches",
             "check", "uncheck", "setAttribute", "setAttributeAll", "setProperty", "setPropertyAll",
-            "evaluate", "evaluateDetail", "evaluateValue", "evaluateValueDetail"
+            "evaluate", "evaluateDetail", "eval", "evaluateValue", "evaluateValueDetail"
         )
 
         private fun resolveReadPageStateActions(): Set<String> {
@@ -100,6 +101,20 @@ class BrowserTabToolExecutor: AbstractToolExecutor() {
             generateAllOnce()
             webDriverToolSpecs.associateByTo(toolSpec) { it.method }
         }
+        toolSpec["eval"] = ToolSpec(
+            domain = domain,
+            method = "eval",
+            arguments = listOf(ToolSpec.Arg("expression", "String")),
+            returnType = "Any?",
+            description = "Alias of evaluateValue for page or element-scoped JavaScript evaluation.",
+            help = """
+                tab.eval(expression: String)
+                tab.eval(expression: String, selector: String)
+
+                Alias of tab.evaluateValue(...).
+                When both selector and expression are provided, expression is forwarded as functionDeclaration.
+            """.trimIndent()
+        )
     }
 
     override fun help(method: String): String {
@@ -109,6 +124,26 @@ class BrowserTabToolExecutor: AbstractToolExecutor() {
             ${spec.expression}
             ${spec.description}
         """.trimIndent()
+    }
+
+    private fun normalizeEvaluateValueArgs(args: Map<String, Any?>): Map<String, Any?> {
+        val normalized = args.toMutableMap()
+        val selector = normalized["selector"]?.toString()?.takeIf { it.isNotBlank() }
+        val expression = normalized["expression"]?.toString()?.takeIf { it.isNotBlank() }
+
+        if (selector != null && expression != null && !normalized.containsKey("functionDeclaration")) {
+            normalized.remove("expression")
+            normalized["functionDeclaration"] = expression
+        }
+
+        return normalized
+    }
+
+    private fun evaluationValueUsage(functionName: String): String {
+        return when (functionName) {
+            "eval" -> "eval requires 'expression' or ('expression','selector')"
+            else -> "evaluateValue requires 'expression' or ('selector','functionDeclaration')"
+        }
     }
 
     private suspend fun waitBeforeReadIfNeeded(functionName: String) {
@@ -431,20 +466,21 @@ class BrowserTabToolExecutor: AbstractToolExecutor() {
             // JavaScript evaluation
             "evaluate" -> { validateArgs(args, allowed("expression"), setOf("expression"), functionName); driver.evaluate(paramString(args, "expression", functionName)!!) }
             "evaluateDetail" -> { validateArgs(args, allowed("expression"), setOf("expression"), functionName); driver.evaluateDetail(paramString(args, "expression", functionName)!!) }
-            "evaluateValue" -> {
+            "eval", "evaluateValue" -> {
+                val normalizedArgs = normalizeEvaluateValueArgs(args)
                 when {
-                    args.containsKey("selector") && args.containsKey("functionDeclaration") -> {
-                        validateArgs(args, allowed("selector", "functionDeclaration"), setOf("selector", "functionDeclaration"), functionName)
+                    normalizedArgs.containsKey("selector") && normalizedArgs.containsKey("functionDeclaration") -> {
+                        validateArgs(normalizedArgs, allowed("selector", "functionDeclaration"), setOf("selector", "functionDeclaration"), functionName)
                         driver.evaluateValue(
-                            paramString(args, "selector", functionName)!!,
-                            paramString(args, "functionDeclaration", functionName)!!
+                            paramString(normalizedArgs, "selector", functionName)!!,
+                            paramString(normalizedArgs, "functionDeclaration", functionName)!!
                         )
                     }
-                    args.containsKey("expression") -> {
-                        validateArgs(args, allowed("expression"), setOf("expression"), functionName)
-                        driver.evaluateValue(paramString(args, "expression", functionName)!!)
+                    normalizedArgs.containsKey("expression") -> {
+                        validateArgs(normalizedArgs, allowed("expression"), setOf("expression"), functionName)
+                        driver.evaluateValue(paramString(normalizedArgs, "expression", functionName)!!)
                     }
-                    else -> throw IllegalArgumentException("evaluateValue requires 'expression' or ('selector','functionDeclaration')")
+                    else -> throw IllegalArgumentException(evaluationValueUsage(functionName))
                 }
             }
             "evaluateValueDetail" -> {
