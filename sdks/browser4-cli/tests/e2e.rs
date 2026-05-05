@@ -1453,6 +1453,11 @@ fn is_transient_retryable_failure(result: &CliRunResult) -> bool {
         || combined.contains("failed to launch browser")
         || combined.contains("createtab")
         || combined.contains("cannot find context")
+        || combined.contains("createdevtools")
+        || combined.contains("browser connection lost")
+        || combined.contains("browser unavailable")
+        || combined.contains("enableapiagents")
+        || combined.contains("failed to enable cdt agents")
 }
 
 // ---------------------------------------------------------------------------
