@@ -18,6 +18,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.*
 import java.util.concurrent.CopyOnWriteArrayList
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Unit tests for AgentEventBus.
@@ -79,7 +80,7 @@ class AgentEventBusTest {
         }
 
         // Give the collector time to start
-        delay(50)
+        delay(50.milliseconds)
 
         // Emit an event
         AgentEventBus.emitAgentEvent(
@@ -89,7 +90,7 @@ class AgentEventBusTest {
         )
 
         // Wait for the event to be received
-        val event = withTimeout(1000) { eventDeferred.await() }
+        val event = withTimeout(1000.milliseconds) { eventDeferred.await() }
 
         assertEquals("onWillObserve", event.eventType)
         assertEquals("agent", event.eventPhase)
@@ -107,7 +108,7 @@ class AgentEventBusTest {
             handlers.eventFlow.first()
         }
 
-        delay(50)
+        delay(50.milliseconds)
 
         AgentEventBus.emitInferenceEvent(
             eventType = "onInferenceComplete",
@@ -115,7 +116,7 @@ class AgentEventBusTest {
             metadata = mapOf("tokens" to 100)
         )
 
-        val event = withTimeout(1000) { eventDeferred.await() }
+        val event = withTimeout(1000.milliseconds) { eventDeferred.await() }
 
         assertEquals("onInferenceComplete", event.eventType)
         assertEquals("inference", event.eventPhase)
@@ -133,7 +134,7 @@ class AgentEventBusTest {
             handlers.eventFlow.first()
         }
 
-        delay(50)
+        delay(50.milliseconds)
 
         AgentEventBus.emitToolEvent(
             eventType = "onToolCall",
@@ -141,7 +142,7 @@ class AgentEventBusTest {
             message = "Calling click tool"
         )
 
-        val event = withTimeout(1000) { eventDeferred.await() }
+        val event = withTimeout(1000.milliseconds) { eventDeferred.await() }
         assertEquals("tool", event.eventPhase)
     }
 
@@ -155,11 +156,11 @@ class AgentEventBusTest {
             handlers.eventFlow.first()
         }
 
-        delay(50)
+        delay(50.milliseconds)
 
         AgentEventBus.emitMCPEvent(eventType = "onMCPRequest")
 
-        val event = withTimeout(1000) { eventDeferred.await() }
+        val event = withTimeout(1000.milliseconds) { eventDeferred.await() }
         assertEquals("mcp", event.eventPhase)
     }
 
@@ -173,11 +174,11 @@ class AgentEventBusTest {
             handlers.eventFlow.first()
         }
 
-        delay(50)
+        delay(50.milliseconds)
 
         AgentEventBus.emitSkillEvent(eventType = "onSkillInvoke")
 
-        val event = withTimeout(1000) { eventDeferred.await() }
+        val event = withTimeout(1000.milliseconds) { eventDeferred.await() }
         assertEquals("skill", event.eventPhase)
     }
 
@@ -191,7 +192,7 @@ class AgentEventBusTest {
             handlers.eventFlow.first()
         }
 
-        delay(50)
+        delay(50.milliseconds)
 
         AgentEventBus.emitEvent(
             eventType = "customEvent",
@@ -199,7 +200,7 @@ class AgentEventBusTest {
             agentId = "test"
         )
 
-        val event = withTimeout(1000) { eventDeferred.await() }
+        val event = withTimeout(1000.milliseconds) { eventDeferred.await() }
         assertEquals("customEvent", event.eventType)
         assertEquals("custom", event.eventPhase)
     }
@@ -229,7 +230,7 @@ class AgentEventBusTest {
             localHandlers.eventFlow.first()
         }
 
-        delay(50)
+        delay(50.milliseconds)
 
         // Emit event using local handlers within context
         AgentEventBus.withServerSideAgentEventHandlers(localHandlers) {
@@ -237,7 +238,7 @@ class AgentEventBusTest {
         }
 
         // Wait for local event
-        val localEvent = withTimeout(1000) { localEventDeferred.await() }
+        val localEvent = withTimeout(1000.milliseconds) { localEventDeferred.await() }
         assertEquals("localEvent", localEvent.eventType)
 
         // Start collector for global events
@@ -245,12 +246,12 @@ class AgentEventBusTest {
             globalHandlers.eventFlow.first()
         }
 
-        delay(50)
+        delay(50.milliseconds)
 
         // Emit event using global handlers
         AgentEventBus.emitAgentEvent("globalEvent", "global-agent")
 
-        val globalEvent = withTimeout(1000) { globalEventDeferred.await() }
+        val globalEvent = withTimeout(1000.milliseconds) { globalEventDeferred.await() }
         assertEquals("globalEvent", globalEvent.eventType)
     }
 }
@@ -360,7 +361,7 @@ class DefaultServerSideAgentEventHandlersTest {
         }
 
         // Give the collector time to start
-        delay(50)
+        delay(50.milliseconds)
 
         // Emit different types of events
         handlers.onAgentEvent("test1", "agent1")
@@ -370,7 +371,7 @@ class DefaultServerSideAgentEventHandlersTest {
         handlers.onSkillEvent("test5", "agent5")
 
         // Wait for events to be processed
-        delay(100)
+        delay(100.milliseconds)
 
         assertEquals(5, events.size)
         assertEquals("agent", events[0].eventPhase)
@@ -392,11 +393,11 @@ class DefaultServerSideAgentEventHandlersTest {
             handlers.eventFlow.first()
         }
 
-        delay(50)
+        delay(50.milliseconds)
 
         handlers.onAgentEvent("test", "agent")
 
-        val event = withTimeout(1000) { eventDeferred.await() }
+        val event = withTimeout(1000.milliseconds) { eventDeferred.await() }
         val afterEmit = java.time.Instant.now()
 
         assertTrue(event.timestamp >= beforeEmit)

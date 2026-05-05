@@ -14,6 +14,7 @@ import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 import kotlinx.coroutines.delay
 import java.nio.file.Path
+import kotlin.time.Duration.Companion.milliseconds
 
 class AgentToolExecutor constructor(
     val baseDir: Path,
@@ -240,10 +241,10 @@ class AgentToolExecutor constructor(
      * TODO: add an option to driver.navigate() to wait
      * */
     @Suppress("UNUSED_PARAMETER")
-    private suspend fun onDidNavigate(driver: ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver, toolCall: ToolCall, evaluate: TcEvaluate) {
+    private suspend fun onDidNavigate(driver: WebDriver, toolCall: ToolCall, evaluate: TcEvaluate) {
         driver.waitForNavigation()
         driver.waitForSelector("body")
-        delay(3000)
+        delay(3000.milliseconds)
     }
 
     /**

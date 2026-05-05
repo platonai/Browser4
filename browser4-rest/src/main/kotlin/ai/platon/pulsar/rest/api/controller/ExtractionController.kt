@@ -9,6 +9,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentSkipListMap
+import kotlin.time.Duration.Companion.milliseconds
 
 @RestController
 @CrossOrigin
@@ -81,7 +82,7 @@ class ExtractionController(
 
                     // Send a heartbeat/status update while processing
                     emitter.send(SseEmitter.event().name("status").data("Processing").reconnectTime(1000))
-                    delay(1000)
+                    delay(1000.milliseconds)
                 }
             } catch (e: Exception) {
                 try {
