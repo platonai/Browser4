@@ -101,7 +101,7 @@ $NEXT_SNAPSHOT_VERSION | Set-Content "$repoRoot\VERSION"
 
 # Update pom.xml files using Maven
 $mvnCmd = if ($IsWindows) { "$repoRoot\mvnw.cmd" } else { "$repoRoot\mvnw" }
-& $mvnCmd versions:set -DnewVersion=$NEXT_SNAPSHOT_VERSION -DprocessAllModules -DgenerateBackupPoms=false
+& $mvnCmd versions:set -DnewVersion="$NEXT_SNAPSHOT_VERSION" -DprocessAllModules -DgenerateBackupPoms=false
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Maven versions:set command failed. Reverting VERSION file."
     $SNAPSHOT_VERSION | Set-Content "$repoRoot\VERSION"
