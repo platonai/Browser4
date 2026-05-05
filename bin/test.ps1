@@ -1,5 +1,10 @@
 #!/usr/bin/env pwsh
 
+param(
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$ScriptArgs
+)
+
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = (git rev-parse --show-toplevel 2>$null)
 
@@ -30,6 +35,7 @@ function Print-Usage {
     Write-Host "  it          Run integration tests"
     Write-Host "  e2e         Run end-to-end tests"
     Write-Host "  cli         Run Rust Browser4 CLI tests from sdks\browser4-cli"
+    Write-Host "  mocksite Launch MockSiteBoot from browser4-tests\browser4-rest-tests"
     Write-Host "  rest        Run REST module tests"
     Write-Host "  skills      Run skills-focused agentic tests"
     Write-Host "  mcp         Run MCP-focused agentic tests"
@@ -42,6 +48,7 @@ function Print-Usage {
     Write-Host "  test.ps1 e2e                        # Run end-to-end tests"
     Write-Host "  test.ps1 cli                        # Run Browser4 CLI tests"
     Write-Host "  test.ps1 cli -- --nocapture         # Pass extra cargo test args"
+    Write-Host "  test.ps1 mocksite -Dmock.site.port=18080"
     Write-Host "  test.ps1 skills                     # Run skills-focused agentic tests"
     Write-Host "  test.ps1 mcp                        # Run MCP-focused agentic tests"
     Write-Host "  test.ps1 browser4                   # Run all Browser4 main tests"
@@ -51,8 +58,23 @@ function Print-Usage {
 }
 
 function Exit-UnknownTestType([string]$testType) {
-    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, rest, skills, mcp, browser4, b4."
+    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, mocksite, rest, skills, mcp, browser4, b4."
     exit 1
+}
+
+function Normalize-ArgumentTokens([string[]]$tokens) {
+    $normalized = @()
+    for ($i = 0; $i -lt $tokens.Count; $i++) {
+        $token = $tokens[$i]
+        while ($token.StartsWith('-D') -and ($i + 1) -lt $tokens.Count -and $tokens[$i + 1].StartsWith('.')) {
+            $i++
+            $token += $tokens[$i]
+        }
+
+        $normalized += $token
+    }
+
+    return $normalized
 }
 
 function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
@@ -180,16 +202,80 @@ function Invoke-Browser4CliTests([string[]]$additionalArgs) {
     }
 }
 
-$knownTestTypes = @('fast', 'it', 'e2e', 'cli', 'browser4-cli', 'rest', 'skills', 'mcp', 'browser4', 'b4')
+function Invoke-MockSiteBoot([string[]]$additionalArgs) {
+    $mvnCmd = Join-Path $repoRoot 'mvnw.cmd'
+    $mockSiteModuleDir = Join-Path $repoRoot 'browser4-tests\browser4-rest-tests'
+    $passThroughArgs = @()
+    $mockSiteJvmArgs = @()
+    if (-not (Test-Path $mvnCmd)) {
+        Write-Error "Maven wrapper not found at $mvnCmd"
+        exit 1
+    }
+    if (-not (Test-Path $mockSiteModuleDir)) {
+        Write-Error "Mock site module not found at $mockSiteModuleDir"
+        exit 1
+    }
+
+    Write-Host "=========================================="
+    Write-Host "Launching MockSiteBoot..."
+    Write-Host "=========================================="
+
+    foreach ($arg in $additionalArgs) {
+        if ($arg -like '-Dmock.site.*') {
+            $mockSiteJvmArgs += $arg
+        }
+        else {
+            $passThroughArgs += $arg
+        }
+    }
+
+    $mvnArgs = @(
+        '-DskipTests',
+        '-P=-examples'
+    ) + $passThroughArgs
+
+    if ($mockSiteJvmArgs.Count -gt 0 -and -not ($passThroughArgs | Where-Object { $_ -like '-Dspring-boot.run.jvmArguments=*' })) {
+        $mvnArgs += "-Dspring-boot.run.jvmArguments=$($mockSiteJvmArgs -join ' ')"
+    }
+
+    $mvnArgs += @(
+        'package',
+        'spring-boot:run'
+    )
+
+    try {
+        Push-Location $mockSiteModuleDir
+        & $mvnCmd @mvnArgs
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -ne 0) {
+            Write-Host ""
+            Write-Host "=========================================="
+            Write-Host "❌ MockSiteBoot failed with exit code $exitCode"
+            Write-Host "=========================================="
+            exit $exitCode
+        }
+    }
+    catch {
+        Write-Error "Failed to launch MockSiteBoot: $_"
+        exit 1
+    }
+    finally {
+        Pop-Location
+    }
+}
+
+$knownTestTypes = @('fast', 'it', 'e2e', 'cli', 'browser4-cli', 'mocksite', 'rest', 'skills', 'mcp', 'browser4', 'b4')
 $testTypes = @()
 $additionalArgs = @()
 $parsingTestTypes = $true
 
-if ($args.Count -eq 0) {
+$normalizedScriptArgs = Normalize-ArgumentTokens $ScriptArgs
+
+if ($normalizedScriptArgs.Count -eq 0) {
     Print-Usage
 }
 
-foreach ($arg in $args) {
+foreach ($arg in $normalizedScriptArgs) {
     if ($arg -in '-h', '-help', '--help') {
         Print-Usage
     }
@@ -213,6 +299,7 @@ if ($testTypes.Count -eq 0) {
 
 $mavenTests = @()
 $cliTests = @()
+$launchTargets = @()
 
 foreach ($type in $testTypes) {
     if ($type -in @('browser4', 'b4')) {
@@ -225,11 +312,22 @@ foreach ($type in $testTypes) {
         continue
     }
 
+    if ($type -eq 'mocksite') {
+        $launchTargets += $type
+        continue
+    }
+
     $mavenTests += $type
 }
 
 $mavenTests = $mavenTests | Select-Object -Unique
 $cliTests = $cliTests | Select-Object -Unique
+$launchTargets = $launchTargets | Select-Object -Unique
+
+if ($launchTargets.Count -gt 0 -and (($mavenTests.Count -gt 0) -or ($cliTests.Count -gt 0) -or ($launchTargets.Count -gt 1))) {
+    Write-Error "mocksite must be run by itself. Pass any Maven properties after it, for example: test.ps1 mocksite -Dmock.site.port=18080"
+    exit 1
+}
 
 if ($mavenTests.Count -gt 0) {
     Invoke-MavenTests -testTypes $mavenTests -additionalMvnArgs $additionalArgs
@@ -237,6 +335,10 @@ if ($mavenTests.Count -gt 0) {
 
 if (($cliTests | Where-Object { $_ -in @('cli', 'browser4-cli') }).Count -gt 0) {
     Invoke-Browser4CliTests -additionalArgs $additionalArgs
+}
+
+if ($launchTargets -contains 'mocksite') {
+    Invoke-MockSiteBoot -additionalArgs $additionalArgs
 }
 
 exit 0

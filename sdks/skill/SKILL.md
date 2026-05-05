@@ -17,6 +17,8 @@ browser4-cli goto https://browser4.io/
 browser4-cli snapshot
 # interact with the page using refs from the snapshot
 browser4-cli click e15
+# interact with the page using selectors
+browser4-cli click #search
 browser4-cli type "page.click"
 browser4-cli press Enter
 # take a screenshot
@@ -123,13 +125,13 @@ If `--filename` is not provided, a new snapshot file is created with a timestamp
 browser4-cli batch "open https://example.com" "snapshot"
 
 # Stop on the first batch failure
-browser4-cli batch --bail "open https://example.com" "click e1" "screenshot"
+browser4-cli batch --bail "open https://example.com" "click #search" "screenshot"
 
 # Pipe batch commands as JSON via stdin
 echo '[
   ["open", "https://example.com"],
   ["snapshot"],
-  ["click", "e1"],
+  ["click", "#search"],
   ["screenshot", "--filename=result.png"]
 ]' | browser4-cli batch --json
 ```
