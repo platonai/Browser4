@@ -120,7 +120,7 @@ jobs:
         shell: bash
         env:
           BROWSER4_E2E_SERVICE_URL: http://localhost:8182
-          BROWSER4_E2E_FIXTURE_HOST: localhost # host.docker.internal
+          BROWSER4_E2E_FIXTURE_HOST: host.docker.internal
         run: |
           echo "::group::🧪 browser4-cli E2E Tests"
 
