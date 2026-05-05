@@ -14,6 +14,7 @@
 //! ```bash
 //! cargo test --test e2e -- --nocapture
 //! cargo test --test e2e -- --nocapture --scenario=test_e2e_agent_task_commands
+//! cargo test --test e2e -- --nocapture --scenario=test_e2e_batch_*
 //! cargo test --test e2e -- --nocapture --scenario-from=test_e2e_mouse_and_dialog
 //! cargo test --test e2e -- --nocapture --failed
 //! cargo test --test e2e -- --nocapture --scenario=test_e2e_eval_command --fail-fast
@@ -2442,7 +2443,7 @@ fn run_named_scenario(
 
 #[derive(Debug)]
 enum ScenarioFilter {
-    Exact(String),
+    Scenario(String),
     From(String),
     Failed,
 }
@@ -2503,7 +2504,7 @@ fn parse_run_options() -> RunOptions {
         (Some(_), Some(_), _) => {
             panic!("--scenario and --scenario-from cannot be used together")
         }
-        (Some(value), None, false) => Some(ScenarioFilter::Exact(value)),
+        (Some(value), None, false) => Some(ScenarioFilter::Scenario(value)),
         (None, Some(value), false) => Some(ScenarioFilter::From(value)),
         (None, None, true) => Some(ScenarioFilter::Failed),
         (None, None, false) => None,
@@ -2527,6 +2528,41 @@ fn resolve_scenario_index(name: &str) -> Option<usize> {
     scenarios::all_scenarios()
         .iter()
         .position(|scenario| scenario.name == name || scenario.short_name == name)
+}
+
+fn scenario_filter_uses_pattern(filter: &str) -> bool {
+    filter.contains('*') || filter.contains('?')
+}
+
+fn compile_scenario_pattern(filter: &str) -> regex::Regex {
+    let mut pattern = String::from("^");
+    for ch in filter.chars() {
+        match ch {
+            '*' => pattern.push_str(".*"),
+            '?' => pattern.push('.'),
+            _ => pattern.push_str(&regex::escape(&ch.to_string())),
+        }
+    }
+    pattern.push('$');
+
+    regex::Regex::new(&pattern)
+        .unwrap_or_else(|error| panic!("Invalid scenario pattern '{filter}': {error}"))
+}
+
+fn resolve_scenarios_by_filter(filter: &str) -> Vec<scenarios::ScenarioDef> {
+    if !scenario_filter_uses_pattern(filter) {
+        return resolve_scenario(filter).into_iter().collect();
+    }
+
+    let pattern = compile_scenario_pattern(filter);
+
+    scenarios::all_scenarios()
+        .iter()
+        .copied()
+        .filter(|scenario| {
+            pattern.is_match(scenario.name) || pattern.is_match(scenario.short_name)
+        })
+        .collect()
 }
 
 const MAX_ALLOWED_FAILED_SCENARIOS: usize = 3;
@@ -2565,11 +2601,23 @@ fn main() {
 
     let (selected_scenarios, run_coverage): (Vec<scenarios::ScenarioDef>, bool) =
         match run_options.scenario_filter {
-            Some(ScenarioFilter::Exact(filter)) => {
-                let scenario = resolve_scenario(&filter).unwrap_or_else(|| {
-                    panic!("Unknown scenario '{filter}'. Available scenarios: {available_names}");
-                });
-                (vec![scenario], false)
+            Some(ScenarioFilter::Scenario(filter)) => {
+                let selected = resolve_scenarios_by_filter(&filter);
+                assert!(
+                    !selected.is_empty(),
+                    "Unknown scenario or pattern '{filter}'. Available scenarios: {available_names}"
+                );
+                println!(
+                    "selected {} scenario(s) via --scenario={}: {}",
+                    selected.len(),
+                    filter,
+                    selected
+                        .iter()
+                        .map(|scenario| scenario.name)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                (selected, false)
             }
             Some(ScenarioFilter::From(filter)) => {
                 let start_index = resolve_scenario_index(&filter).unwrap_or_else(|| {
