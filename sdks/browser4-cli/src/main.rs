@@ -346,7 +346,7 @@ async fn post_command_snapshot(client: &Client, base_url: &str, session_id: &str
         _ => return, // silently ignore failures (e.g. session just closed)
     };
 
-    let out_path = resolve_output_path(None, "page", "yml");
+    let out_path = resolve_output_path(None, "snapshot", "yml");
     if let Err(e) = save_snapshot(&out_path, &snap_result) {
         eprintln!("Warning: failed to save snapshot: {e}");
         return;
