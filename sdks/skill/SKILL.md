@@ -136,6 +136,13 @@ echo '[
 ]' | browser4-cli batch --json
 ```
 
+In batch mode, `open` is idempotent with respect to the current session:
+
+- if there is no active session, `open` creates one;
+- if a session is already active, `open` reuses it and returns `Session already open: <sessionId>`;
+- if `capabilities` are provided while reusing an existing session, they are ignored;
+- if the supplied session has already been deleted, the batch returns `Session not found: <sessionId>`.
+
 ## Browser Sessions
 
 ```bash

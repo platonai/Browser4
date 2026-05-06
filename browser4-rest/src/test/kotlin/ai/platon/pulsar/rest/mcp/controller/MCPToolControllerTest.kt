@@ -1119,6 +1119,76 @@ class MCPToolControllerTest {
     }
 
     @Test
+    fun testCommandBatchOpenReusesExistingSessionId() {
+        runBlocking {
+            `when`(sessionManager.getSession("existing-session")).thenReturn(managedSession)
+            `when`(managedSession.sessionId).thenReturn("existing-session")
+            `when`(managedSession.agenticSession).thenReturn(agenticSession)
+            `when`(agenticSession.companionAgent).thenReturn(basicBrowserAgent)
+            `when`(basicBrowserAgent.toolExtractor).thenReturn(agentToolExecutor)
+            `when`(agentToolExecutor.execute(anyToolCall())).thenReturn(toolCallResult("Existing session result"))
+
+            val request = MCPToolCallRequest(
+                tool = "command_batch",
+                arguments = mapOf(
+                    "sessionId" to "existing-session",
+                    "steps" to listOf(
+                        mapOf("op" to "open", "capabilities" to mapOf("profileMode" to "TEMPORARY")),
+                        mapOf("op" to "tool", "tool" to "page_title", "arguments" to emptyMap<String, Any?>()),
+                    )
+                )
+            )
+
+            val result = controller.callTool(request, response)
+
+            assertEquals(HttpStatus.OK, result.statusCode)
+            @Suppress("UNCHECKED_CAST")
+            val payload = objectMapper.readValue(result.body!!.content[0].text, Map::class.java) as Map<String, Any?>
+            assertEquals("existing-session", payload["sessionId"])
+            @Suppress("UNCHECKED_CAST")
+            val results = payload["results"] as List<Map<String, Any?>>
+            assertEquals(2, results.size)
+            assertEquals(true, results[0]["ok"])
+            assertEquals("existing-session", results[0]["sessionId"])
+            assertEquals("Session already open: existing-session", results[0]["text"])
+            assertEquals(true, results[1]["ok"])
+            assertEquals("Existing session result", results[1]["text"])
+            Mockito.verify(sessionManager, Mockito.never()).createSession(any())
+        }
+    }
+
+    @Test
+    fun testCommandBatchOpenWithMissingExistingSessionReturnsError() {
+        runBlocking {
+            `when`(sessionManager.getSession("missing-session")).thenReturn(null)
+
+            val request = MCPToolCallRequest(
+                tool = "command_batch",
+                arguments = mapOf(
+                    "sessionId" to "missing-session",
+                    "steps" to listOf(
+                        mapOf("op" to "open")
+                    )
+                )
+            )
+
+            val result = controller.callTool(request, response)
+
+            assertEquals(HttpStatus.OK, result.statusCode)
+            @Suppress("UNCHECKED_CAST")
+            val payload = objectMapper.readValue(result.body!!.content[0].text, Map::class.java) as Map<String, Any?>
+            assertEquals("missing-session", payload["sessionId"])
+            assertEquals(1, payload["failureCount"])
+            @Suppress("UNCHECKED_CAST")
+            val results = payload["results"] as List<Map<String, Any?>>
+            assertEquals(1, results.size)
+            assertEquals(false, results[0]["ok"])
+            assertTrue(results[0]["error"].toString().contains("Session not found: missing-session"))
+            Mockito.verify(sessionManager, Mockito.never()).createSession(any())
+        }
+    }
+
+    @Test
     fun testCommandBatchToolStepMissingToolName() = runBlocking {
         `when`(managedSession.sessionId).thenReturn("missing-tool-session")
         `when`(sessionManager.createSession(any())).thenReturn(managedSession)

@@ -448,6 +448,23 @@ class MCPToolController(
         return when (val op = step["op"]?.toString()) {
             "open" -> {
                 val capabilities = step["capabilities"].toAnyMap().takeIf { !it.isNullOrEmpty() }
+                currentSessionId?.let { sessionId ->
+                    val existingSession = sessionManager.getSession(sessionId)
+                        ?: throw IllegalArgumentException("Session not found: $sessionId")
+                    if (capabilities != null && capabilities != existingSession.capabilities) {
+                        logger.info(
+                            "Batch open reusing existing session {} and ignoring requested capabilities {}",
+                            sessionId,
+                            capabilities,
+                        )
+                    }
+                    return BatchExecutionResult(
+                        index = index,
+                        ok = true,
+                        sessionId = sessionId,
+                        text = "Session already open: $sessionId",
+                    )
+                }
                 val managedSession = sessionManager.createSession(capabilities)
                 val sessionId = managedSession.sessionId
                 BatchExecutionResult(index = index, ok = true, sessionId = sessionId, text = "Session opened: $sessionId")

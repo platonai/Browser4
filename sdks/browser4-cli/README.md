@@ -266,6 +266,15 @@ echo '[
 browser4-cli close
 ```
 
+### Batch `open` session reuse behavior
+
+When `browser4-cli batch` runs against an already active session (for example via persisted CLI state or an explicit `sessionId` carried into `command_batch`), the batch `open` step reuses that session instead of creating a new one.
+
+- If no active session exists, `open` creates a new session as before.
+- If an active session already exists, `open` returns `Session already open: <sessionId>` and keeps using that session.
+- If the batch `open` step also provides `capabilities`, they are ignored while reusing the existing session.
+- If the supplied session no longer exists on the server, the batch fails with `Session not found: <sessionId>`.
+
 ## Architecture
 
 The Rust CLI is structured as follows:

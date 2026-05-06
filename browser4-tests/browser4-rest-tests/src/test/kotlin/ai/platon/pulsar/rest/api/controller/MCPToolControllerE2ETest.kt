@@ -417,6 +417,29 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
     }
 
     @Test
+    @DisplayName("command_batch open reuses an explicit sessionId instead of creating a new session")
+    fun testCommandBatchOpenReusesExistingSession() {
+        val sessionId = openAndNavigate(fixtureServer.interactiveUrl())
+        val sessionCountBefore = sessionManager.getAllSessions().size
+
+        val batchResponse = callCommandBatch(
+            listOf(
+                mapOf("op" to "open", "capabilities" to mapOf("profileMode" to "TEMPORARY")),
+                mapOf("op" to "tool", "tool" to "page_title", "arguments" to emptyMap<String, Any?>())
+            ),
+            sessionId = sessionId,
+            batchLabel = "reuse existing session"
+        )
+
+        assertEquals(sessionId, batchResponse.sessionId)
+        assertEquals(sessionCountBefore, sessionManager.getAllSessions().size)
+        assertEquals(0, batchResponse.failureCount)
+        assertEquals("Session already open: $sessionId", batchResponse.results[0].text)
+        assertEquals(sessionId, batchResponse.results[0].sessionId)
+        assertEquals(FixtureServer.INTERACTIVE_TITLE, batchResponse.results[1].text)
+    }
+
+    @Test
     @DisplayName("command_batch continue and bail behavior matches CLI error handling")
     fun testCommandBatchErrorHandling() {
         val initialBatch = callCommandBatch(
