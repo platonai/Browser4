@@ -56,6 +56,7 @@ use std::time::{Duration, Instant};
 mod scenarios;
 
 const OPEN_TEMPORARY_PROFILE_ARG: &str = "--profile-mode=TEMPORARY";
+const USE_MAVEN_STARTUP_FLAG: &str = "--use-maven-startup";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -1056,6 +1057,9 @@ fn run_cli_process_internal(
 ) -> CliRunResult {
     let server_arg = format!("--server={}", ctx.browser4_base_url);
     let mut full_args: Vec<&str> = vec![server_arg.as_str()];
+    if ctx.use_maven_startup {
+        full_args.push(USE_MAVEN_STARTUP_FLAG);
+    }
     full_args.extend_from_slice(args);
 
     let mut command = Command::new(cli_binary());

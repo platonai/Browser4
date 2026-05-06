@@ -45,6 +45,11 @@ pub fn generate_help() -> String {
     lines.push("\nGlobal options:".to_string());
     lines.push(format_with_gap("  --help [command]", "print help", 30));
     lines.push(format_with_gap("  --version", "print version", 30));
+    lines.push(format_with_gap(
+        "  --use-maven-startup",
+        "opt in to local maven spring-boot:run startup",
+        30,
+    ));
 
     lines.join("\n")
 }
@@ -163,6 +168,7 @@ mod tests {
         assert!(help.contains("batch"));
         assert!(help.contains("click"));
         assert!(help.contains("snapshot"));
+        assert!(help.contains("--use-maven-startup"));
         assert!(help.contains("Core:"));
         // assert!(help.contains("Agent:"));
         // assert!(help.contains("Collective:"));

@@ -1445,6 +1445,7 @@ fn normalize_command_invocation(global: &args::GlobalFlags) -> (String, args::Gl
         let new_global = args::GlobalFlags {
             session_name: global.session_name.clone(),
             server_url: global.server_url.clone(),
+            use_maven_startup: global.use_maven_startup,
             args: rewritten,
         };
         (cmd, new_global)
@@ -1600,6 +1601,17 @@ fn compile_batch_request(
                 &mut entries,
                 spec,
                 "Batch subcommands cannot override -s/--session.".to_string(),
+                bail,
+            ) {
+                break;
+            }
+            continue;
+        }
+        if nested_global.use_maven_startup {
+            if push_batch_local_failure(
+                &mut entries,
+                spec,
+                "Batch subcommands cannot override --use-maven-startup.".to_string(),
                 bail,
             ) {
                 break;
@@ -1983,7 +1995,7 @@ async fn handle_batch(global: &args::GlobalFlags) -> Result<(), String> {
         }
     }
 
-    ensure_server_running(&base_url).await?;
+    ensure_server_running(&base_url, global.use_maven_startup).await?;
     let client = make_client();
     let compiled =
         compile_batch_request(&commands, bail, &base_url, global.session_name.as_deref())?;
@@ -2178,7 +2190,7 @@ async fn run(command: &str, global: &args::GlobalFlags) -> Result<(), String> {
 
     // Ensure the Browser4 server is running (for relevant commands)
     if should_ensure_server_running(command) {
-        ensure_server_running(&base_url).await?;
+        ensure_server_running(&base_url, global.use_maven_startup).await?;
     }
 
     let client = make_client();
@@ -2502,6 +2514,44 @@ mod tests {
     #[test]
     fn should_ensure_server_for_open() {
         assert!(should_ensure_server_running("open"));
+    }
+
+    #[test]
+    fn normalize_command_invocation_preserves_use_maven_startup() {
+        let global = args::GlobalFlags {
+            session_name: Some("team".to_string()),
+            server_url: Some("http://127.0.0.1:8182".to_string()),
+            use_maven_startup: true,
+            args: vec!["co".to_string(), "create".to_string()],
+        };
+
+        let (command, normalized) = normalize_command_invocation(&global);
+
+        assert_eq!(command, "co-create");
+        assert!(normalized.use_maven_startup);
+    }
+
+    #[test]
+    fn compile_batch_request_rejects_nested_use_maven_startup_override() {
+        let commands = vec![BatchCommandSpec {
+            display: "--use-maven-startup open https://example.com".to_string(),
+            tokens: vec![
+                "--use-maven-startup".to_string(),
+                "open".to_string(),
+                "https://example.com".to_string(),
+            ],
+        }];
+
+        let compiled =
+            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+
+        assert_eq!(compiled.entries.len(), 1);
+        match &compiled.entries[0] {
+            PlannedBatchEntry::LocalFailure { error, .. } => {
+                assert_eq!(error, "Batch subcommands cannot override --use-maven-startup.");
+            }
+            other => panic!("expected local failure entry, got {other:?}"),
+        }
     }
 
     #[test]
