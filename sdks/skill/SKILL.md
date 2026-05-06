@@ -118,31 +118,6 @@ You can also take a snapshot on demand using `browser4-cli snapshot` command.
 
 If `--filename` is not provided, a new snapshot file is created with a timestamp. Default to automatic file naming, use `--filename=` when artifact is a part of the workflow result.
 
-## Batch Mode
-
-```bash
-# Execute multiple commands in one process
-browser4-cli batch "open https://example.com" "snapshot"
-
-# Stop on the first batch failure
-browser4-cli batch --bail "open https://example.com" "click #search" "screenshot"
-
-# Pipe batch commands as JSON via stdin
-echo '[
-  ["open", "https://example.com"],
-  ["snapshot"],
-  ["click", "#search"],
-  ["screenshot", "--filename=result.png"]
-]' | browser4-cli batch --json
-```
-
-In batch mode, `open` is idempotent with respect to the current session:
-
-- if there is no active session, `open` creates one;
-- if a session is already active, `open` reuses it and returns `Session already open: <sessionId>`;
-- if `capabilities` are provided while reusing an existing session, they are ignored;
-- if the supplied session has already been deleted, the batch returns `Session not found: <sessionId>`.
-
 ## Browser Sessions
 
 ```bash
