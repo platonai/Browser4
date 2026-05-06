@@ -4,8 +4,8 @@ import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.PerceptiveAgent
 import ai.platon.pulsar.agentic.context.AgenticContext
 import ai.platon.pulsar.core.api.PulsarSettings
+import ai.platon.pulsar.skeleton.session.AbstractPulsarSession
 import jakarta.annotation.PreDestroy
-import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
@@ -107,8 +107,13 @@ class SessionManager(
             // Close the agent to release browser resources
             session.agent.close()
 
-            // Close sessions
-            session.agenticSession.close()
+            val pulsarSession = session.agenticSession as AbstractPulsarSession
+            val browser = pulsarSession.boundBrowser
+
+            // Close session
+            pulsarSession.close()
+            // Close the companion browser
+            browser?.close()
 
             logger.info("Deleted session {} and released resources", sessionId)
         } catch (e: Exception) {
