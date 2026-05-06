@@ -228,6 +228,10 @@ fn build_open_session_capabilities(tool_params: &Value) -> Value {
     build_open_session_capabilities_with_test_mode(tool_params, should_use_test_temporary_profile())
 }
 
+fn should_navigate_after_open(url: &str) -> bool {
+    !url.is_empty() && url != "about:blank"
+}
+
 fn should_use_test_temporary_profile() -> bool {
     matches!(
         std::env::var(TEST_TEMPORARY_PROFILE_ENV).ok().as_deref(),
@@ -384,7 +388,7 @@ async fn handle_open(
         .get("url")
         .and_then(|u| u.as_str())
         .unwrap_or("about:blank");
-    if !url.is_empty() && url != "about:blank" {
+    if should_navigate_after_open(url) {
         let mut params = tool_params.clone();
         params["sessionId"] = json!(session_id.clone());
         let result = call_tool(client, base_url, tool_name, params).await?;
@@ -1694,7 +1698,7 @@ fn compile_batch_request(
                 }));
                 let mut request_indices = vec![request_index];
                 let mut outputs = vec![PlannedBatchOutput::Text];
-                if url != "about:blank" {
+                if should_navigate_after_open(url) {
                     let navigate_request_index = steps.len();
                     steps.push(json!({
                         "op": "tool",
@@ -2507,6 +2511,21 @@ mod tests {
     }
 
     #[test]
+    fn should_not_navigate_after_open_for_empty_url() {
+        assert!(!should_navigate_after_open(""));
+    }
+
+    #[test]
+    fn should_not_navigate_after_open_for_about_blank() {
+        assert!(!should_navigate_after_open("about:blank"));
+    }
+
+    #[test]
+    fn should_navigate_after_open_for_non_empty_url() {
+        assert!(should_navigate_after_open("https://example.com"));
+    }
+
+    #[test]
     fn should_not_ensure_server_for_list() {
         assert!(!should_ensure_server_running("list"));
     }
@@ -2551,6 +2570,34 @@ mod tests {
                 assert_eq!(error, "Batch subcommands cannot override --use-maven-startup.");
             }
             other => panic!("expected local failure entry, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn compile_batch_request_open_with_empty_url_skips_browser_navigate() {
+        let commands = vec![BatchCommandSpec {
+            display: "open \"\"".to_string(),
+            tokens: vec!["open".to_string(), "".to_string()],
+        }];
+
+        let compiled =
+            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+
+        assert_eq!(compiled.steps.len(), 1);
+        assert_eq!(compiled.steps[0]["op"], json!("open"));
+        assert!(compiled.steps.iter().all(|step| step["tool"] != json!("browser_navigate")));
+
+        assert_eq!(compiled.entries.len(), 1);
+        match &compiled.entries[0] {
+            PlannedBatchEntry::Backend {
+                request_indices,
+                outputs,
+                ..
+            } => {
+                assert_eq!(request_indices, &vec![0]);
+                assert_eq!(outputs.len(), 1);
+            }
+            other => panic!("expected backend entry, got {other:?}"),
         }
     }
 

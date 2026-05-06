@@ -281,6 +281,7 @@ class MCPToolController(
 
         // Navigate to initial URL if provided
         val url = request.arguments?.get("url")?.toString()
+        // Navigate operation is handled in the client side
 
         logger.info("MCP open_session: created session {}", session.sessionId)
         return ResponseEntity.ok(
