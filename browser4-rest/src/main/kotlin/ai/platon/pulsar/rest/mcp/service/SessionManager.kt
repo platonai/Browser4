@@ -112,8 +112,10 @@ class SessionManager(
 
             // Close session
             pulsarSession.close()
-            // Close the companion browser
-            browser?.close()
+            // Close the companion browser if it exists
+            if (browser != null) {
+                pulsarSession.context.browserManager.closeBrowser(browser)
+            }
 
             logger.info("Deleted session {} and released resources", sessionId)
         } catch (e: Exception) {

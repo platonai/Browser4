@@ -1,5 +1,7 @@
 package ai.platon.pulsar.protocol.browser.impl
 
+import ai.platon.browser4.driver.common.BrowserSettings
+import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.warnForClose
@@ -12,7 +14,7 @@ import java.util.concurrent.ConcurrentLinkedDeque
 import java.util.concurrent.atomic.AtomicBoolean
 
 open class BasicBrowserManager(
-    val browserFactory: BrowserFactory,
+    override val browserFactory: BrowserFactory,
     val conf: ImmutableConfig
 ) : BrowserManager {
     private val logger = getLogger(this)
@@ -20,6 +22,8 @@ open class BasicBrowserManager(
     private val _browsers = ConcurrentHashMap<BrowserId, Browser>()
     private val historicalBrowsers = ConcurrentLinkedDeque<Browser>()
     private val closedBrowsers = ConcurrentLinkedDeque<Browser>()
+
+    override val settings: BrowserSettings get() = browserFactory.settings
 
     /**
      * The active browsers
@@ -32,6 +36,52 @@ open class BasicBrowserManager(
     fun isActive(browserId: BrowserId): Boolean {
         val browser = findBrowserOrNull(browserId) as? AbstractBrowser
         return browser != null && browser.isActive
+    }
+
+    @Throws(BrowserLaunchException::class)
+    override fun launch(profileMode: BrowserProfileMode): Browser = browserFactory.launch(profileMode).also { browser ->
+        _browsers[browser.id] = browser
+    }
+
+    /**
+     * Launch the system default browser, the system default browser is your daily used browser.
+     * */
+    @Throws(BrowserLaunchException::class)
+    override fun launch(browserId: BrowserId, settings: BrowserSettings): Browser =
+        browserFactory.launch(browserId, settings).also { browser ->
+            _browsers[browser.id] = browser
+        }
+
+    /**
+     * Launch the system default browser, the system default browser is your daily used browser.
+     * */
+    @Throws(BrowserLaunchException::class)
+    override fun launchSystemDefaultBrowser(): Browser = browserFactory.launchSystemDefaultBrowser().also { browser ->
+        _browsers[browser.id] = browser
+    }
+
+    /**
+     * Launch the default browser, notice, the default browser is not the one you used daily.
+     * */
+    @Throws(BrowserLaunchException::class)
+    override fun launchDefaultBrowser(): Browser = browserFactory.launchDefaultBrowser().also { browser ->
+        _browsers[browser.id] = browser
+    }
+
+    /**
+     * Launch the prototype browser, the prototype browser is a browser instance with default settings.
+     * */
+    @Throws(BrowserLaunchException::class)
+    override fun launchPrototypeBrowser(): Browser = browserFactory.launchPrototypeBrowser().also { browser ->
+        _browsers[browser.id] = browser
+    }
+
+    /**
+     * Launch a random temporary browser, the browser's user data dir is a random temporary dir.
+     * */
+    @Throws(BrowserLaunchException::class)
+    override fun launchRandomTempBrowser(): Browser = browserFactory.launchRandomTempBrowser().also { browser ->
+        _browsers[browser.id] = browser
     }
 
     /**
@@ -50,10 +100,14 @@ open class BasicBrowserManager(
     @Synchronized
     override fun closeBrowser(browserId: BrowserId) {
         val browser = _browsers.remove(browserId)
-        if (browser is AbstractBrowser) {
-            kotlin.runCatching { browser.close() }.onFailure { warnForClose(this, it) }
-            closedBrowsers.add(browser)
-        }
+        browser?.let { closeBrowser(browser) }
+    }
+
+    @Synchronized
+    override fun closeBrowser(browser: Browser) {
+        _browsers.remove(browser.id)
+        kotlin.runCatching { browser.close() }.onFailure { warnForClose(this, it) }
+        closedBrowsers.add(browser)
     }
 
     @Synchronized
@@ -62,11 +116,6 @@ open class BasicBrowserManager(
             kotlin.runCatching { browser.destroyForcibly() }.onFailure { warnInterruptible(this, it) }
             closedBrowsers.add(browser)
         }
-    }
-
-    @Synchronized
-    override fun closeBrowser(browser: Browser) {
-        closeBrowser(browser.id)
     }
 
     @Synchronized
