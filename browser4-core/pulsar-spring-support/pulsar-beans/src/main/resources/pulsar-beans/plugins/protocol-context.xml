@@ -26,7 +26,6 @@
           destroy-method="close"
     >
         <constructor-arg ref="browserManager"/>
-        <constructor-arg ref="browserFactory"/>
         <constructor-arg ref="conf"/>
         <constructor-arg name="suppressMetrics" value="false"/>
     </bean>
@@ -60,7 +59,6 @@
 
     <bean id="browserFetcher" class="ai.platon.pulsar.protocol.browser.emulator.impl.PrivacyManagedBrowserFetcher" destroy-method="close">
         <constructor-arg ref="browserManager"/>
-        <constructor-arg ref="browserFactory"/>
         <constructor-arg ref="privacyManager"/>
         <constructor-arg ref="browserEmulator"/>
         <constructor-arg ref="conf"/>
