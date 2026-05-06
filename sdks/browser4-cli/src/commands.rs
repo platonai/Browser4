@@ -156,7 +156,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "batch",
             description: "Execute multiple commands in one invocation",
             category: Category::Core,
-            hidden: false,
+            hidden: true,
             args: &[ArgDef {
                 name: "command...",
                 description: "Quoted command strings to execute sequentially",
