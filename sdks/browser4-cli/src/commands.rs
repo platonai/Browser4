@@ -604,7 +604,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "console",
             description: "List console messages",
             category: Category::DevTools,
-            hidden: false,
+            hidden: true,
             args: &[
                 ArgDef { name: "min-level", description: "Level of the console messages to return. Defaults to \"info\"", optional: true },
             ],
@@ -808,7 +808,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "extract",
             description: "Extract structured data from the current page",
             category: Category::Agent,
-            hidden: false,
+            hidden: true,
             args: &[ArgDef { name: "instruction", description: "What data to extract, e.g. 'product name, price, ratings'", optional: false }],
             options: &[
                 OptionDef { name: "schema", description: "JSON schema to constrain the extracted data structure", is_bool: false },
@@ -824,7 +824,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "summarize",
             description: "Summarize page content using AI",
             category: Category::Agent,
-            hidden: false,
+            hidden: true,
             args: &[ArgDef { name: "instruction", description: "Summarization instruction, e.g. 'summarize the product reviews'", optional: true }],
             options: &[
                 OptionDef { name: "selector", description: "CSS selector to limit the scope of summarization", is_bool: false },
@@ -841,7 +841,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "agent-run",
             description: "Run an autonomous agent task (async, returns task ID)",
             category: Category::Agent,
-            hidden: false,
+            hidden: true,
             args: &[ArgDef { name: "task", description: "Natural language task for the agent to execute", optional: false }],
             options: &[],
             tool_name_fn: |_| "command_run".to_string(),
@@ -853,7 +853,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "agent-status",
             description: "Check the status of a running agent task",
             category: Category::Agent,
-            hidden: false,
+            hidden: true,
             args: &[ArgDef { name: "id", description: "Task ID returned by agent-run", optional: false }],
             options: &[],
             tool_name_fn: |_| "command_status".to_string(),
@@ -865,7 +865,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "agent-result",
             description: "Get the result of a completed agent task",
             category: Category::Agent,
-            hidden: false,
+            hidden: true,
             args: &[ArgDef { name: "id", description: "Task ID returned by agent-run", optional: false }],
             options: &[],
             tool_name_fn: |_| "command_result".to_string(),
@@ -878,7 +878,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "co-create",
             description: "Create a collective session with parallel browser contexts",
             category: Category::Collective,
-            hidden: false,
+            hidden: true,
             args: &[],
             options: &[
                 OptionDef { name: "profile-mode", description: "Browser profile mode (temporary, default, system_default, prototype)", is_bool: false },
@@ -900,7 +900,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "co-submit",
             description: "Submit URL(s) or tasks to the active collective session",
             category: Category::Collective,
-            hidden: false,
+            hidden: true,
             args: &[ArgDef { name: "url", description: "URL or task to submit", optional: true }],
             options: &[
                 OptionDef { name: "seed-file", description: "File containing URLs to submit, one per line", is_bool: false },
@@ -927,7 +927,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "co-scrape",
             description: "Scrape data from a URL using CSS selectors",
             category: Category::Collective,
-            hidden: false,
+            hidden: true,
             args: &[ArgDef { name: "url", description: "URL to scrape", optional: false }],
             options: &[
                 OptionDef { name: "selector", description: "CSS selector to extract elements", is_bool: false },
@@ -953,7 +953,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "co-status",
             description: "Check the status of a collective task",
             category: Category::Collective,
-            hidden: false,
+            hidden: true,
             args: &[ArgDef { name: "id", description: "Task ID returned by co submit or co scrape", optional: false }],
             options: &[],
             tool_name_fn: |_| "command_status".to_string(),
@@ -965,7 +965,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "co-result",
             description: "Get the result of a completed collective task",
             category: Category::Collective,
-            hidden: false,
+            hidden: true,
             args: &[ArgDef { name: "id", description: "Task ID returned by co submit or co scrape", optional: false }],
             options: &[],
             tool_name_fn: |_| "command_result".to_string(),
@@ -1389,5 +1389,25 @@ mod tests {
         assert!(collective_cmds.contains(&"co-scrape"));
         assert!(collective_cmds.contains(&"co-status"));
         assert!(collective_cmds.contains(&"co-result"));
+    }
+
+    #[test]
+    fn test_advanced_commands_are_hidden_from_global_help() {
+        let map = commands_map();
+        for name in [
+            "console",
+            "extract",
+            "summarize",
+            "agent-run",
+            "agent-status",
+            "agent-result",
+            "co-create",
+            "co-submit",
+            "co-scrape",
+            "co-status",
+            "co-result",
+        ] {
+            assert!(map.get(name).unwrap().hidden, "{name} should stay hidden");
+        }
     }
 }

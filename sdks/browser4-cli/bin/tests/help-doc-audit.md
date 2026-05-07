@@ -1,5 +1,13 @@
 # `help.rs` 文档核对清单（基于 2026-05-08 最新代码）
 
+## 已按审核意见处理的事项（2026-05-08）
+
+- 已移除 `help.rs` 中对描述、参数说明、选项说明的统一小写化，帮助输出现在保留 `ArrowLeft`、`JavaScript`、`GUI` 等原始大小写。
+- `batch` 继续保持 hidden，不再要求它出现在全局帮助中；对应测试与 README 已同步为“高级命令 / 显式查询帮助”的定位。
+- `console`、`extract`、`summarize`、`agent-*`、`co-*` 已统一标记为 hidden，仅通过 `browser4-cli help <command>` 暴露单命令帮助。
+- `README.md` 与 `SKILL.md` 已统一改为 `tabId` 语义，并补充“先 `tab-list` 再操作具体 tabId”的说明。
+- `SKILL.md` 的 snapshot 文案已收敛为“修改浏览器状态的命令通常会自动附带 snapshot”。
+
 本次核对以**当前实现与运行时输出**为准，不再把 `SKILL.md` 视为唯一真值源。
 
 ## 核对范围

@@ -85,13 +85,14 @@ browser4-cli -s=<session> <command> [args] [options]
 
 ### Commands
 
+The tables below mirror the commands surfaced by the global `browser4-cli help` overview.
+
 #### Core
 
 | Command | Description |
 |---|---|
 | `open [url]` | Open a new browser session (optionally navigate to URL) |
 | `close` | Close the active session |
-| `batch [command...]` | Execute multiple commands in one invocation |
 | `goto <url>` | Navigate to a URL |
 | `click <ref> [button]` | Click an element |
 | `dblclick <ref> [button]` | Double-click an element |
@@ -148,8 +149,8 @@ browser4-cli -s=<session> <command> [args] [options]
 |---|---|
 | `tab-list` | List all tabs |
 | `tab-new [url]` | Create a new tab |
-| `tab-close [index]` | Close a browser tab |
-| `tab-select <index>` | Select a browser tab |
+| `tab-close [tabId]` | Close a browser tab by tab ID |
+| `tab-select <tabId>` | Select a browser tab by tab ID |
 
 #### Browser sessions
 
@@ -159,11 +160,27 @@ browser4-cli -s=<session> <command> [args] [options]
 | `close-all` | Close all browser sessions |
 | `kill-all` | Forcefully kill all browser sessions |
 
-#### DevTools
+Use `tab-list` first to obtain the tab ID you want to select or close.
+
+### Advanced commands
+
+These commands are intentionally omitted from the global `browser4-cli help` overview.
+Query `browser4-cli help <command>` for the exact syntax when you need them.
 
 | Command | Description |
 |---|---|
+| `batch [command...]` | Execute multiple commands in one invocation |
 | `console [min-level]` | List console messages |
+| `extract <instruction>` | Extract structured data from the current page |
+| `summarize [instruction]` | Summarize page content using AI |
+| `agent-run <task>` | Run an autonomous agent task |
+| `agent-status <id>` | Check the status of a running agent task |
+| `agent-result <id>` | Get the result of a completed agent task |
+| `co-create` | Create a collective session with parallel browser contexts |
+| `co-submit [url]` | Submit URL(s) or tasks to the active collective session |
+| `co-scrape <url>` | Scrape data from a URL using CSS selectors |
+| `co-status <id>` | Check the status of a collective task |
+| `co-result <id>` | Get the result of a completed collective task |
 
 ## Element References
 
@@ -245,16 +262,21 @@ browser4-cli keyup Shift
 # Take a screenshot and save it to disk
 browser4-cli screenshot
 
+# Inspect tab IDs before switching tabs
+browser4-cli tab-list
+browser4-cli tab-select <tabId-from-tab-list>
+browser4-cli tab-close <tabId-from-tab-list>
+
 # Use a custom server URL
 browser4-cli open --server http://localhost:9090
 
-# Execute multiple commands in one process
+# Advanced: execute multiple commands in one process
 browser4-cli batch "open https://playwright.dev" "snapshot"
 
-# Stop on the first batch failure
+# Advanced: stop on the first batch failure
 browser4-cli batch --bail "open https://playwright.dev" "click e1" "screenshot"
 
-# Pipe batch commands as JSON via stdin
+# Advanced: pipe batch commands as JSON via stdin
 echo '[
   ["open", "https://playwright.dev"],
   ["snapshot"],

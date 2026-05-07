@@ -27,6 +27,8 @@ browser4-cli close
 
 ## Commands
 
+The sections below cover the standard browser workflow commands that are surfaced in the global `browser4-cli help` overview.
+
 ### Core
 
 ```bash
@@ -93,13 +95,16 @@ browser4-cli tab-list
 browser4-cli tab-new
 browser4-cli tab-new https://example.com/page
 browser4-cli tab-close
-browser4-cli tab-close 2
-browser4-cli tab-select 0
+browser4-cli tab-list
+browser4-cli tab-select tab-123
+browser4-cli tab-close tab-123
 ```
+
+Use `browser4-cli tab-list` to obtain the current tab IDs before calling `tab-select` or `tab-close` with a specific target.
 
 ## Snapshots
 
-After each command, browser4-cli provides a snapshot of the current browser state.
+After commands that modify browser state, browser4-cli usually provides a snapshot of the current browser state.
 
 ```bash
 > browser4-cli goto https://example.com
@@ -124,6 +129,20 @@ browser4-cli close-all
 browser4-cli kill-all
 ```
 
+## Advanced commands
+
+Some advanced commands are intentionally omitted from the global `browser4-cli help` summary.
+Query them explicitly when needed:
+
+```bash
+browser4-cli help batch
+browser4-cli help console
+browser4-cli help extract
+browser4-cli help summarize
+browser4-cli help agent-run
+browser4-cli help co-create
+```
+
 ## Example: Form submission
 
 ```bash
@@ -143,7 +162,7 @@ browser4-cli close
 browser4-cli open https://example.com
 browser4-cli tab-new https://example.com/other
 browser4-cli tab-list
-browser4-cli tab-select 0
+browser4-cli tab-select tab-123
 browser4-cli snapshot
 browser4-cli close
 ```
