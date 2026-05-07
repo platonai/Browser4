@@ -42,11 +42,14 @@ class TestClassPathXmlPulsarContext {
 
         session.close()
 
-        Thread.sleep(2000)
+        Thread.sleep(1000)
 
         assertNotNull(context.getBeanOrNull(BrowserManager::class))
 
         val managedBrowsers = context.browserManager.browsers
+        assertEquals(1, managedBrowsers.size)
+
+        context.browserManager.close()
         assertEquals(0, managedBrowsers.size)
     }
 }

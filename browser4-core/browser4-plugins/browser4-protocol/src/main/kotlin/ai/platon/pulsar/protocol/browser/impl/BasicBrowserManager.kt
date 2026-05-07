@@ -28,7 +28,7 @@ open class BasicBrowserManager(
     /**
      * The active browsers
      * */
-    override val browsers: Map<BrowserId, Browser> = _browsers
+    override val browsers: Map<BrowserId, Browser> get() = _browsers
 
     /**
      * Check if the browser is active.
