@@ -37,6 +37,7 @@
 //!   reach the fixture HTTP server on the host (e.g. `host.docker.internal` or
 //!   the Docker bridge gateway IP such as `172.17.0.1`). Defaults to `127.0.0.1`.
 
+use base64::Engine as _;
 use browser4_cli::commands::all_commands;
 use browser4_cli::managed_processes::stop_browser4_server_forcibly;
 use chrono::Local;
@@ -463,28 +464,12 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                         .push(task_id.to_string());
                     format!("result for {task_id}")
                 }
+                "command_batch" => mock_command_batch_response(&arguments),
                 "agent_extract" => {
                     r#"{"items":[{"title":"Mock Product","price":"$19.99"}]}"#.to_string()
                 }
                 "agent_summarize" => "Mock summary for #page-marker".to_string(),
-                "browser_evaluate" => {
-                    let expression = arguments
-                        .get("expression")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default();
-                    let target_ref = arguments.get("ref").and_then(|v| v.as_str());
-                    match (expression, target_ref) {
-                        ("document.title", None) => "Mock Browser4 Page".to_string(),
-                        ("element => element.textContent", Some(target)) => {
-                            format!("Mock element text for {target}")
-                        }
-                        _ => "mock evaluation result".to_string(),
-                    }
-                }
-                "page_url" => "https://mock.browser4.local/current".to_string(),
-                "page_title" => "Mock Browser4 Page".to_string(),
-                "browser_snapshot" => "mock snapshot".to_string(),
-                other => format!("mock response for {other}"),
+                other => mock_browser_tool_text(other, &arguments),
             };
 
             let response = serde_json::json!({
@@ -577,6 +562,123 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
             "not found",
         ),
     }
+}
+
+fn mock_browser_tool_text(tool: &str, arguments: &serde_json::Value) -> String {
+    match tool {
+        "browser_evaluate" => {
+            let expression = arguments
+                .get("expression")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let target_ref = arguments.get("ref").and_then(|v| v.as_str());
+            match (expression, target_ref) {
+                ("document.title", None) => "Mock Browser4 Page".to_string(),
+                ("element => element.textContent", Some(target)) => {
+                    format!("Mock element text for {target}")
+                }
+                _ => "mock evaluation result".to_string(),
+            }
+        }
+        "page_url" => "https://mock.browser4.local/current".to_string(),
+        "page_title" => "Mock Browser4 Page".to_string(),
+        "browser_snapshot" => "mock snapshot".to_string(),
+        other => format!("mock response for {other}"),
+    }
+}
+
+fn mock_command_batch_response(arguments: &serde_json::Value) -> String {
+    let mut current_session_id = arguments
+        .get("sessionId")
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
+    let mut results = Vec::new();
+
+    for (index, step) in arguments
+        .get("steps")
+        .and_then(|value| value.as_array())
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let op = step
+            .get("op")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        let result = match op {
+            "open" => {
+                let session_id = current_session_id
+                    .clone()
+                    .unwrap_or_else(|| "collective-session-1".to_string());
+                let text = if current_session_id.is_some() {
+                    format!("Session already open: {session_id}")
+                } else {
+                    format!("Session opened: {session_id}")
+                };
+                current_session_id = Some(session_id.clone());
+                serde_json::json!({
+                    "index": index,
+                    "ok": true,
+                    "sessionId": session_id,
+                    "text": text,
+                })
+            }
+            "close" => {
+                current_session_id = None;
+                serde_json::json!({
+                    "index": index,
+                    "ok": true,
+                    "text": "Session closed.",
+                })
+            }
+            "tool" => {
+                let tool = step
+                    .get("tool")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default();
+                let step_arguments = step
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!({}));
+                serde_json::json!({
+                    "index": index,
+                    "ok": true,
+                    "text": mock_browser_tool_text(tool, &step_arguments),
+                })
+            }
+            "press" => serde_json::json!({
+                "index": index,
+                "ok": true,
+                "text": "mock response for browser_press_key",
+            }),
+            "snapshot" => serde_json::json!({
+                "index": index,
+                "ok": true,
+                "pageUrl": "https://mock.browser4.local/current",
+                "pageTitle": "Mock Browser4 Page",
+                "snapshot": "mock snapshot",
+            }),
+            "screenshot" => serde_json::json!({
+                "index": index,
+                "ok": true,
+                "screenshot": base64::engine::general_purpose::STANDARD.encode(b"mock screenshot"),
+            }),
+            _ => serde_json::json!({
+                "index": index,
+                "ok": false,
+                "error": format!("Unsupported batch step op: {op}"),
+            }),
+        };
+        results.push(result);
+    }
+
+    serde_json::json!({
+        "sessionId": current_session_id,
+        "failureCount": results.iter().filter(|result| result["ok"] != serde_json::json!(true)).count(),
+        "stoppedOnError": false,
+        "results": results,
+    })
+    .to_string()
 }
 
 fn read_http_request(stream: &mut TcpStream) -> Option<(String, String, Vec<u8>)> {

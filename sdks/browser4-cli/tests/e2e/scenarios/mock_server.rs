@@ -168,6 +168,102 @@ pub(super) fn test_named_session_reuses_opened_session(ctx: &mut E2ECtx) {
     assert_eq!(navigate_calls[0].arguments["url"], "https://example.com/");
 }
 
+pub(super) fn test_batch_reduces_transport_round_trips(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let workflow_url = "https://example.com/batch-performance";
+    let individual_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = individual_server.base_url();
+
+    run_command(ctx, &["open", OPEN_TEMPORARY_PROFILE_ARG, workflow_url]);
+    let eval_result = run_command(ctx, &["eval", "document.title"]);
+    let press_result = run_command(ctx, &["press", "#type-target", "!"]);
+
+    assert_eq!(
+        strip_snapshot_output(&eval_result.stdout),
+        "Mock Browser4 Page"
+    );
+    assert_eq!(
+        strip_snapshot_output(&press_result.stdout),
+        "mock response for browser_press_key"
+    );
+
+    let individual_snapshot = individual_server.snapshot();
+    assert!(
+        individual_snapshot.tool_calls.len() >= 7,
+        "Expected individual commands to make multiple backend tool calls, got {:?}",
+        individual_snapshot.tool_calls
+    );
+    assert!(
+        individual_snapshot
+            .tool_calls
+            .iter()
+            .all(|call| call.tool != "command_batch"),
+        "Expected individual commands to avoid command_batch transport: {:?}",
+        individual_snapshot.tool_calls
+    );
+
+    reset_cli_artifacts(ctx);
+
+    let batch_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = batch_server.base_url();
+    let batch_open_command = format!("open {OPEN_TEMPORARY_PROFILE_ARG} {workflow_url}");
+
+    let batch_result = run_command(
+        ctx,
+        &[
+            "batch",
+            batch_open_command.as_str(),
+            "eval document.title",
+            "press #type-target !",
+        ],
+    );
+
+    let batch_output = strip_snapshot_output(&batch_result.stdout);
+    assert!(
+        batch_output.contains("Session opened: collective-session-1"),
+        "Expected batch output to include the open result:\n{}",
+        batch_result.stdout
+    );
+    assert!(
+        batch_output.contains("Mock Browser4 Page"),
+        "Expected batch output to include the eval result:\n{}",
+        batch_result.stdout
+    );
+    assert!(
+        batch_output.contains("mock response for browser_press_key"),
+        "Expected batch output to include the press result:\n{}",
+        batch_result.stdout
+    );
+
+    let batch_snapshot = batch_server.snapshot();
+    assert_eq!(
+        batch_snapshot.tool_calls.len(),
+        1,
+        "Expected batched workflow to collapse into one backend transport call: {:?}",
+        batch_snapshot.tool_calls
+    );
+    assert_eq!(batch_snapshot.tool_calls[0].tool, "command_batch");
+
+    let steps = batch_snapshot.tool_calls[0].arguments["steps"]
+        .as_array()
+        .expect("expected command_batch steps array");
+    assert_eq!(
+        steps.len(),
+        4,
+        "Expected open, navigate, eval, and press batch steps"
+    );
+    assert_eq!(steps[0]["op"], "open");
+    assert_eq!(steps[1]["tool"], "browser_navigate");
+    assert_eq!(steps[2]["tool"], "browser_evaluate");
+    assert_eq!(steps[3]["op"], "press");
+
+    assert!(
+        batch_snapshot.tool_calls.len() < individual_snapshot.tool_calls.len(),
+        "Expected batch transport to require fewer backend calls than individual commands"
+    );
+}
+
 pub(super) fn test_eval_command(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 
