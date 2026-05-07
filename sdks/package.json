@@ -10,7 +10,7 @@
     "skills"
   ],
   "bin": {
-    "browser4": "./bin/browser4.js"
+    "browser4": "./bin/browser4-cli.js"
   },
   "scripts": {
     "version:sync": "node scripts/sync-version.js",
@@ -22,8 +22,7 @@
     "build:all-platforms": "npm run version:sync && (npm run build:linux & npm run build:windows & wait) && npm run build:macos",
     "build:docker": "docker build -t browser4-builder -f docker/Dockerfile.build .",
     "release": "npm run version:sync && npm run build:all-platforms && npm publish",
-    "postinstall": "node scripts/postinstall.js",
-    "build:dashboard": "cd packages/dashboard && pnpm build"
+    "postinstall": "node scripts/postinstall.js"
   },
   "keywords": [
     "browser",
@@ -33,6 +32,7 @@
     "chrome",
     "cdp",
     "cli",
+    "browser4-cli",
     "agent"
   ],
   "license": "Apache-2.0",

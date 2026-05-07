@@ -35,7 +35,7 @@ build_target() {
         -v "$PROJECT_ROOT/cli:/build" \
         -v "$OUTPUT_DIR:/output" \
         browser4-builder \
-        -c "cargo zigbuild --release --target ${target} && cp /build/target/${target}/release/browser4* /output/${output_name} && chmod +x /output/${output_name} 2>/dev/null || true"
+        -c "cargo zigbuild --release --target ${target} && cp /build/target/${target}/release/browser4-cli* /output/${output_name} && chmod +x /output/${output_name} 2>/dev/null || true"
 
     if [ -f "$OUTPUT_DIR/$output_name" ]; then
         echo -e "${GREEN}✓ Built ${output_name}${NC}"
@@ -47,28 +47,28 @@ build_target() {
 
 # Build for each platform
 # Linux x64
-build_target "x86_64-unknown-linux-gnu" "browser4-linux-x64"
+build_target "x86_64-unknown-linux-gnu" "browser4-cli-linux-x64"
 
 # Linux ARM64
-build_target "aarch64-unknown-linux-gnu" "browser4-linux-arm64"
+build_target "aarch64-unknown-linux-gnu" "browser4-cli-linux-arm64"
 
 # Windows x64
-build_target "x86_64-pc-windows-gnu" "browser4-win32-x64.exe"
+build_target "x86_64-pc-windows-gnu" "browser4-cli-win32-x64.exe"
 
 # macOS x64 (via zig for cross-compilation)
-build_target "x86_64-apple-darwin" "browser4-darwin-x64"
+build_target "x86_64-apple-darwin" "browser4-cli-darwin-x64"
 
 # macOS ARM64 (via zig for cross-compilation)
-build_target "aarch64-apple-darwin" "browser4-darwin-arm64"
+build_target "aarch64-apple-darwin" "browser4-cli-darwin-arm64"
 
 # Linux musl x64 (Alpine)
-build_target "x86_64-unknown-linux-musl" "browser4-linux-musl-x64"
+build_target "x86_64-unknown-linux-musl" "browser4-cli-linux-musl-x64"
 
 # Linux musl ARM64 (Alpine)
-build_target "aarch64-unknown-linux-musl" "browser4-linux-musl-arm64"
+build_target "aarch64-unknown-linux-musl" "browser4-cli-linux-musl-arm64"
 
 echo ""
 echo -e "${GREEN}Build complete!${NC}"
 echo ""
 echo "Binaries are in: $OUTPUT_DIR"
-ls -la "$OUTPUT_DIR"/browser4-*
+ls -la "$OUTPUT_DIR"/browser4-cli-*
