@@ -12,7 +12,7 @@ import { fileURLToPath } from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, "..");
-const cliDir = join(rootDir, "cli");
+const cliDir = join(rootDir, "browser4-cli");
 
 // Read version from package.json (single source of truth)
 const packageJson = JSON.parse(

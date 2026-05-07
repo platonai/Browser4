@@ -10,7 +10,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $OutputDir = Join-Path $ProjectRoot "bin"
-$CliDir = Join-Path $ProjectRoot "cli"
+$CliDir = Join-Path $ProjectRoot "browser4-cli"
 $DockerfilePath = Join-Path $ProjectRoot "docker/Dockerfile.build"
 
 $Targets = @(
@@ -102,4 +102,3 @@ if ($DryRun) {
 else {
     Get-ChildItem -Path $OutputDir -Filter "browser4-*" | Select-Object Name, Length, LastWriteTime
 }
-

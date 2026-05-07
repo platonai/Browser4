@@ -11,7 +11,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.build
     volumes:
-      - ../cli:/build
+      - ../browser4-cli:/build
       - ../bin:/output
     command: |
       -c '
@@ -39,7 +39,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.build
     volumes:
-      - ../cli:/build
+      - ../browser4-cli:/build
       - ../bin:/output
     command: |
       -c '
@@ -60,7 +60,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.build
     volumes:
-      - ../cli:/build
+      - ../browser4-cli:/build
       - ../bin:/output
     environment:
       - TARGET=${TARGET:-x86_64-unknown-linux-gnu}
