@@ -21,7 +21,7 @@
 
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>browser4</artifactId>
-    <version>4.8.1-install</version>
+    <version>4.8.2-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <name>Browser4</name>
@@ -108,7 +108,7 @@
                 <!-- Integration tests can be Slow/Heavy - this is expected behavior
                      Integration tests CAN require Browser/AI/Docker for service collaboration
                      Only exclude E2E, SDK, and ManualOnly tests -->
-                <surefire.excludedGroups>E2E,SDK,ManualOnly,E2ETest</surefire.excludedGroups>
+                <surefire.excludedGroups>E2E,E2ETest,SDK,ManualOnly</surefire.excludedGroups>
             </properties>
         </profile>
 
@@ -586,3 +586,6 @@
     </properties>
 
 </project>
+
+
+

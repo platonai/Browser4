@@ -85,6 +85,8 @@ Write-Host "Current version: $SNAPSHOT_VERSION"
 Write-Host "Creating branch: $newBranchName"
 Write-Host "Next snapshot version: $NEXT_SNAPSHOT_VERSION"
 
+$isWindowsHost = $PSVersionTable.PSEdition -eq 'Desktop' -or $IsWindows
+
 # Create and switch to the new branch
 & git checkout -b $newBranchName
 if ($LASTEXITCODE -ne 0) {
@@ -96,8 +98,18 @@ if ($LASTEXITCODE -ne 0) {
 $NEXT_SNAPSHOT_VERSION | Set-Content "$repoRoot\VERSION"
 
 # Update pom.xml files using Maven
-$mvnCmd = if ($IsWindows) { Join-Path $repoRoot "mvnw.cmd" } else { Join-Path $repoRoot "mvnw" }
-& $mvnCmd versions:set -DnewVersion=$NEXT_SNAPSHOT_VERSION -DprocessAllModules -DgenerateBackupPoms=false
+$mvnCmd = if ($isWindowsHost) { Join-Path $repoRoot "mvnw.cmd" } else { Join-Path $repoRoot "mvnw" }
+$mvnArgs = @(
+    'versions:set'
+    "-DnewVersion=$NEXT_SNAPSHOT_VERSION"
+    '-DprocessAllModules'
+    '-DgenerateBackupPoms=false'
+)
+if ($isWindowsHost) {
+    & cmd /c $mvnCmd @mvnArgs
+} else {
+    & $mvnCmd @mvnArgs
+}
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Maven versions:set command failed. Reverting VERSION file and branch."
     $SNAPSHOT_VERSION | Set-Content "$repoRoot\VERSION"

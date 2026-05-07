@@ -28,6 +28,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.random.Random
 import kotlin.test.*
 import org.junit.jupiter.api.DisplayName
+import kotlin.time.Duration.Companion.milliseconds
 
 class PrivacyContextManagerTests {
     private val logger = getLogger(this)
@@ -191,7 +192,7 @@ class PrivacyContextManagerTests {
             manager.run(task) { _, driver -> mockFetch(task, driver) }
             var n = 3600
             while (n-- > 0 && manager.maintainCount.get() <= 0) {
-                delay(1000)
+                delay(1000.milliseconds)
             }
 
             assertTrue { n > 0 }

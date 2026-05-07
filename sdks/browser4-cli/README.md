@@ -104,7 +104,7 @@ browser4-cli -s=<session> <command> [args] [options]
 | `uncheck <ref>` | Uncheck a checkbox or radio button |
 | `drag <startRef> <endRef>` | Drag and drop between two elements |
 | `snapshot` | Capture accessibility snapshot |
-| `eval <func> [ref]` | Evaluate JavaScript expression |
+| `eval <expression> [ref]` | Evaluate JavaScript on the page or a target element |
 | `dialog-accept [prompt]` | Accept a dialog |
 | `dialog-dismiss` | Dismiss a dialog |
 | `resize <w> <h>` | Resize the browser window |
@@ -235,6 +235,8 @@ browser4-cli snapshot
 browser4-cli click e15
 browser4-cli type e15 "Hello World"
 browser4-cli press e15 Enter
+browser4-cli eval "document.title"
+browser4-cli eval "element => element.textContent.trim()" e15
 browser4-cli keydown Shift
 browser4-cli mousemove 150 300
 browser4-cli mousewheel 0 100
@@ -263,6 +265,15 @@ echo '[
 # Close the session when done
 browser4-cli close
 ```
+
+### Batch `open` session reuse behavior
+
+When `browser4-cli batch` runs against an already active session (for example via persisted CLI state or an explicit `sessionId` carried into `command_batch`), the batch `open` step reuses that session instead of creating a new one.
+
+- If no active session exists, `open` creates a new session as before.
+- If an active session already exists, `open` returns `Session already open: <sessionId>` and keeps using that session.
+- If the batch `open` step also provides `capabilities`, they are ignored while reusing the existing session.
+- If the supplied session no longer exists on the server, the batch fails with `Session not found: <sessionId>`.
 
 ## Architecture
 

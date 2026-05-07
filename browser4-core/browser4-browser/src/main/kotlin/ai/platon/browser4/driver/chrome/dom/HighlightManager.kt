@@ -5,6 +5,7 @@ import ai.platon.browser4.driver.chrome.experimental.CDP
 import ai.platon.browser4.driver.chrome.dom.model.InteractiveDOMTreeNodeList
 import ai.platon.pulsar.common.getLogger
 import kotlinx.coroutines.delay
+import kotlin.time.Duration.Companion.milliseconds
 
 class HighlightManager(
     devTools: RemoteDevTools,
@@ -35,7 +36,7 @@ class HighlightManager(
             val hasHighlights = eval?.result?.value == true
             if (!hasHighlights) break
             removeHighlights0()
-            if (attempts > 0) delay(200)
+            if (attempts > 0) delay(200.milliseconds)
         }
     }
 

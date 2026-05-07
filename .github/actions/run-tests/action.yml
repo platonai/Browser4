@@ -127,7 +127,7 @@ runs:
 
         # Add excluded groups/tags
         if [ -n "${{ inputs.excluded_groups }}" ]; then
-          test_cmd="$test_cmd -DexcludedGroups=${{ inputs.excluded_groups }}"
+          test_cmd="$test_cmd -Dsurefire.excludedGroups=${{ inputs.excluded_groups }}"
         fi
 
         # Add fail fast

@@ -52,6 +52,8 @@ use state::{
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const TEST_TEMPORARY_PROFILE_ENV: &str = "BROWSER4_CLI_TEST_TEMPORARY_PROFILE";
+const AGENT_RUN_FAILURE_POLL_ATTEMPTS: usize = 5;
+const AGENT_RUN_FAILURE_POLL_INTERVAL_MS: u64 = 250;
 
 /// Commands that should NOT trigger a post-command snapshot.
 fn no_snapshot_commands() -> HashSet<&'static str> {
@@ -226,6 +228,10 @@ fn build_open_session_capabilities(tool_params: &Value) -> Value {
     build_open_session_capabilities_with_test_mode(tool_params, should_use_test_temporary_profile())
 }
 
+fn should_navigate_after_open(url: &str) -> bool {
+    !url.is_empty() && url != "about:blank"
+}
+
 fn should_use_test_temporary_profile() -> bool {
     matches!(
         std::env::var(TEST_TEMPORARY_PROFILE_ENV).ok().as_deref(),
@@ -344,7 +350,7 @@ async fn post_command_snapshot(client: &Client, base_url: &str, session_id: &str
         _ => return, // silently ignore failures (e.g. session just closed)
     };
 
-    let out_path = resolve_output_path(None, "page", "yml");
+    let out_path = resolve_output_path(None, "snapshot", "yml");
     if let Err(e) = save_snapshot(&out_path, &snap_result) {
         eprintln!("Warning: failed to save snapshot: {e}");
         return;
@@ -382,7 +388,7 @@ async fn handle_open(
         .get("url")
         .and_then(|u| u.as_str())
         .unwrap_or("about:blank");
-    if !url.is_empty() && url != "about:blank" {
+    if should_navigate_after_open(url) {
         let mut params = tool_params.clone();
         params["sessionId"] = json!(session_id.clone());
         let result = call_tool(client, base_url, tool_name, params).await?;
@@ -1066,12 +1072,80 @@ async fn handle_agent_run(
 
     // The async response is a task ID (possibly JSON-quoted)
     let task_id = result.trim().trim_matches('"').to_string();
+    if let Some(message) =
+        detect_missing_llm_error_for_submitted_agent_task(client, base_url, &task_id).await?
+    {
+        return Err(format!(
+            "Agent task requires an LLM key and cannot execute: {}",
+            message
+        ));
+    }
     println!("Task submitted: {}", task_id);
     println!(
         "Use 'browser4-cli agent-status {}' to check progress.",
         task_id
     );
     Ok(())
+}
+
+async fn detect_missing_llm_error_for_submitted_agent_task(
+    client: &Client,
+    base_url: &str,
+    task_id: &str,
+) -> Result<Option<String>, String> {
+    for _ in 0..AGENT_RUN_FAILURE_POLL_ATTEMPTS {
+        tokio::time::sleep(std::time::Duration::from_millis(
+            AGENT_RUN_FAILURE_POLL_INTERVAL_MS,
+        ))
+        .await;
+
+        let status = get_command_status(client, base_url, task_id).await?;
+        if let Some(message) = extract_missing_llm_configuration_message(&status) {
+            return Ok(Some(message));
+        }
+
+        let Some(parsed) = serde_json::from_str::<Value>(&status).ok() else {
+            return Ok(None);
+        };
+        let Some(process_state) = parsed.get("processState").and_then(|value| value.as_str())
+        else {
+            return Ok(None);
+        };
+        if process_state == "done" {
+            return Ok(None);
+        }
+    }
+
+    Ok(None)
+}
+
+fn extract_missing_llm_configuration_message(status_payload: &str) -> Option<String> {
+    let parsed = serde_json::from_str::<Value>(status_payload).ok()?;
+    let process_state = parsed
+        .get("processState")
+        .and_then(|value| value.as_str())?;
+    let status_code = parsed.get("statusCode").and_then(|value| value.as_i64())?;
+    if process_state != "done" || status_code < 400 {
+        return None;
+    }
+
+    let message = parsed
+        .get("message")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    if is_missing_llm_configuration_message(message) {
+        return Some(message.to_string());
+    }
+
+    None
+}
+
+fn is_missing_llm_configuration_message(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("llm is not configured")
+        || lower.contains("llm.api.key is not set")
+        || (lower.contains("llm") && lower.contains("api key") && lower.contains("not set"))
 }
 
 async fn handle_agent_status(
@@ -1375,6 +1449,7 @@ fn normalize_command_invocation(global: &args::GlobalFlags) -> (String, args::Gl
         let new_global = args::GlobalFlags {
             session_name: global.session_name.clone(),
             server_url: global.server_url.clone(),
+            use_maven_startup: global.use_maven_startup,
             args: rewritten,
         };
         (cmd, new_global)
@@ -1536,6 +1611,17 @@ fn compile_batch_request(
             }
             continue;
         }
+        if nested_global.use_maven_startup {
+            if push_batch_local_failure(
+                &mut entries,
+                spec,
+                "Batch subcommands cannot override --use-maven-startup.".to_string(),
+                bail,
+            ) {
+                break;
+            }
+            continue;
+        }
 
         let (nested_command, effective_nested_global) =
             normalize_command_invocation(&nested_global);
@@ -1612,7 +1698,7 @@ fn compile_batch_request(
                 }));
                 let mut request_indices = vec![request_index];
                 let mut outputs = vec![PlannedBatchOutput::Text];
-                if url != "about:blank" {
+                if should_navigate_after_open(url) {
                     let navigate_request_index = steps.len();
                     steps.push(json!({
                         "op": "tool",
@@ -1913,7 +1999,7 @@ async fn handle_batch(global: &args::GlobalFlags) -> Result<(), String> {
         }
     }
 
-    ensure_server_running(&base_url).await?;
+    ensure_server_running(&base_url, global.use_maven_startup).await?;
     let client = make_client();
     let compiled =
         compile_batch_request(&commands, bail, &base_url, global.session_name.as_deref())?;
@@ -2108,7 +2194,7 @@ async fn run(command: &str, global: &args::GlobalFlags) -> Result<(), String> {
 
     // Ensure the Browser4 server is running (for relevant commands)
     if should_ensure_server_running(command) {
-        ensure_server_running(&base_url).await?;
+        ensure_server_running(&base_url, global.use_maven_startup).await?;
     }
 
     let client = make_client();
@@ -2425,6 +2511,21 @@ mod tests {
     }
 
     #[test]
+    fn should_not_navigate_after_open_for_empty_url() {
+        assert!(!should_navigate_after_open(""));
+    }
+
+    #[test]
+    fn should_not_navigate_after_open_for_about_blank() {
+        assert!(!should_navigate_after_open("about:blank"));
+    }
+
+    #[test]
+    fn should_navigate_after_open_for_non_empty_url() {
+        assert!(should_navigate_after_open("https://example.com"));
+    }
+
+    #[test]
     fn should_not_ensure_server_for_list() {
         assert!(!should_ensure_server_running("list"));
     }
@@ -2435,10 +2536,120 @@ mod tests {
     }
 
     #[test]
+    fn normalize_command_invocation_preserves_use_maven_startup() {
+        let global = args::GlobalFlags {
+            session_name: Some("team".to_string()),
+            server_url: Some("http://127.0.0.1:8182".to_string()),
+            use_maven_startup: true,
+            args: vec!["co".to_string(), "create".to_string()],
+        };
+
+        let (command, normalized) = normalize_command_invocation(&global);
+
+        assert_eq!(command, "co-create");
+        assert!(normalized.use_maven_startup);
+    }
+
+    #[test]
+    fn compile_batch_request_rejects_nested_use_maven_startup_override() {
+        let commands = vec![BatchCommandSpec {
+            display: "--use-maven-startup open https://example.com".to_string(),
+            tokens: vec![
+                "--use-maven-startup".to_string(),
+                "open".to_string(),
+                "https://example.com".to_string(),
+            ],
+        }];
+
+        let compiled =
+            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+
+        assert_eq!(compiled.entries.len(), 1);
+        match &compiled.entries[0] {
+            PlannedBatchEntry::LocalFailure { error, .. } => {
+                assert_eq!(error, "Batch subcommands cannot override --use-maven-startup.");
+            }
+            other => panic!("expected local failure entry, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn compile_batch_request_open_with_empty_url_skips_browser_navigate() {
+        let commands = vec![BatchCommandSpec {
+            display: "open \"\"".to_string(),
+            tokens: vec!["open".to_string(), "".to_string()],
+        }];
+
+        let compiled =
+            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+
+        assert_eq!(compiled.steps.len(), 1);
+        assert_eq!(compiled.steps[0]["op"], json!("open"));
+        assert!(compiled.steps.iter().all(|step| step["tool"] != json!("browser_navigate")));
+
+        assert_eq!(compiled.entries.len(), 1);
+        match &compiled.entries[0] {
+            PlannedBatchEntry::Backend {
+                request_indices,
+                outputs,
+                ..
+            } => {
+                assert_eq!(request_indices, &vec![0]);
+                assert_eq!(outputs.len(), 1);
+            }
+            other => panic!("expected backend entry, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn unreachable_backend_error_detection_matches_connection_failures() {
         assert!(is_backend_unreachable_error(
             "HTTP request failed: error sending request for url: tcp connect error: Connection refused"
         ));
-        assert!(!is_backend_unreachable_error("Tool execution failed: invalid arguments"));
+        assert!(!is_backend_unreachable_error(
+            "Tool execution failed: invalid arguments"
+        ));
+    }
+
+    #[test]
+    fn extract_missing_llm_configuration_message_matches_done_failures() {
+        let status = json!({
+            "id": "agent-task-1",
+            "statusCode": 417,
+            "processState": "done",
+            "message": "The LLM is not configured, see docs/config/llm/llm-config.md"
+        })
+        .to_string();
+
+        assert_eq!(
+            extract_missing_llm_configuration_message(&status),
+            Some("The LLM is not configured, see docs/config/llm/llm-config.md".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_missing_llm_configuration_message_ignores_non_llm_failures() {
+        let status = json!({
+            "id": "agent-task-1",
+            "statusCode": 417,
+            "processState": "done",
+            "message": "Browser crashed before agent execution started"
+        })
+        .to_string();
+
+        assert_eq!(extract_missing_llm_configuration_message(&status), None);
+    }
+
+    #[test]
+    fn extract_missing_llm_configuration_message_ignores_in_progress_status() {
+        let status = json!({
+            "id": "agent-task-1",
+            "statusCode": 102,
+            "processState": "in_progress",
+            "message": "The LLM is not configured, see docs/config/llm/llm-config.md"
+        })
+        .to_string();
+
+        assert_eq!(extract_missing_llm_configuration_message(&status), None);
     }
 }

@@ -51,6 +51,7 @@ Comprehensive test runner for the current Maven reactors plus the Browser4 CLI p
 - `fast`: Run fast unit tests (default)
 - `it`: Run integration tests
 - `e2e`: Run end-to-end tests
+- `mocksiteboot`: Launch `browser4-rest-tests`' standalone mock site server via `spring-boot:run`
 - `rest`: Run REST module tests
 - `skills`: Run skills module tests
 - `mcp`: Run MCP module tests
@@ -64,6 +65,7 @@ Comprehensive test runner for the current Maven reactors plus the Browser4 CLI p
 ./bin/test.sh browser4                   # Run all main tests
 ./bin/test.sh cli                        # Run Browser4 CLI tests
 ./bin/test.sh cli -- --nocapture         # Pass extra cargo test args
+./bin/test.sh mocksiteboot -Dmock.site.port=18080
 ```
 
 ### `version.ps1`, `version.sh`

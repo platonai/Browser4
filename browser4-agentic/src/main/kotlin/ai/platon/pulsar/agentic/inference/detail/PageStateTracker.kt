@@ -9,6 +9,7 @@ import kotlinx.coroutines.delay
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.collections.ArrayDeque
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Tracks page state changes to detect loops and ensure DOM stability.
@@ -209,10 +210,10 @@ class PageStateTracker(
                     stableCount = 0
                 }
 
-                delay(checkIntervalMs)
+                delay(checkIntervalMs.milliseconds)
             } catch (e: Exception) {
                 logger.warn("Error checking DOM stability: ${e.message}")
-                delay(checkIntervalMs)
+                delay(checkIntervalMs.milliseconds)
             }
         }
 

@@ -25,6 +25,8 @@ import org.jsoup.nodes.Element
 import java.io.IOException
 import java.io.InterruptedIOException
 import java.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 open class CachedBrowserChatModel(
     val langchainModel: dev.langchain4j.model.chat.ChatModel,
@@ -268,7 +270,8 @@ open class CachedBrowserChatModel(
             try {
                 if (i > 1) {
                     // the underlying layer seems cached the last state, so delay to invalidate the cache
-                    delay(1000L * i)
+                    // TODO: check the behavior of the underlying langchain4j model and remove this if not needed
+                    delay(i.seconds)
                 }
                 return sendChatMessageInIOThread(*messages)
             } catch (e: IOException) {

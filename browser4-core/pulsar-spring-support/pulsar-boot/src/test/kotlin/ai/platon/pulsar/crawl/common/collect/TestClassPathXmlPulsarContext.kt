@@ -5,13 +5,8 @@ import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager
 import ai.platon.pulsar.protocol.browser.emulator.context.MultiPrivacyContextManager
 import ai.platon.pulsar.protocol.browser.emulator.impl.PrivacyManagedBrowserFetcher
 import ai.platon.pulsar.skeleton.context.support.AbstractPulsarContext
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserFactory
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserManager
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertNotNull
-import kotlin.test.assertTrue
+import kotlin.test.*
 
 class TestClassPathXmlPulsarContext {
 
@@ -28,10 +23,9 @@ class TestClassPathXmlPulsarContext {
         val globalCache = context.globalCache
         assertFalse(globalCache.urlPool.hasMore())
 
-        assertNotNull(context.getBeanOrNull(BrowserFactory::class))
-        val browserFactory = context.getBeanOrNull(BrowserFactory::class)
-        assertNotNull(browserFactory)
-        assertNotNull(browserFactory.conf)
+        assertNotNull(context.getBeanOrNull(BrowserManager::class))
+        val browserManager = context.getBeanOrNull(BrowserManager::class)
+        assertNotNull(browserManager)
 
         assertNotNull(context.browserFetcher)
 
@@ -50,7 +44,6 @@ class TestClassPathXmlPulsarContext {
 
         Thread.sleep(2000)
 
-        assertNotNull(context.getBeanOrNull(BrowserFactory::class))
         assertNotNull(context.getBeanOrNull(BrowserManager::class))
 
         val managedBrowsers = context.browserManager.browsers

@@ -421,6 +421,37 @@ class MCPToolControllerTest {
     }
 
     @Test
+    fun `test eval tool name resolves to tab eval and preserves selector and expression`() = runBlocking {
+        mockTool("tab", "eval")
+
+        val request = MCPToolCallRequest(
+            tool = "eval",
+            arguments = mapOf(
+                "sessionId" to sessionId,
+                "selector" to "#page-marker",
+                "expression" to "(element) => element.textContent"
+            )
+        )
+
+        `when`(agentToolExecutor.execute(anyToolCall())).thenReturn(toolCallResult("other page"))
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        assertEquals("other page", result.body!!.content[0].text)
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolExecutor).execute(capture(captor))
+        val toolCall = captor.value
+
+        assertEquals("tab", toolCall.domain)
+        assertEquals("eval", toolCall.method)
+        assertEquals("#page-marker", toolCall.arguments["selector"])
+        assertEquals("(element) => element.textContent", toolCall.arguments["expression"])
+        assertFalse("functionDeclaration" in toolCall.arguments)
+    }
+
+    @Test
     fun `test frontend tab select maps to browser switchTab`() = runBlocking {
         val request = MCPToolCallRequest(
             tool = "browser_tabs",
@@ -881,6 +912,8 @@ class MCPToolControllerTest {
         assertEquals(2, results.size, "Expected bail to stop after first error, got: $results")
         assertEquals(true, results[0]["ok"])
         assertEquals(false, results[1]["ok"])
+        assertTrue((results[0]["durationMillis"] as Number).toLong() >= 0)
+        assertTrue((results[1]["durationMillis"] as Number).toLong() >= 0)
     }
 
     @Test
@@ -925,6 +958,7 @@ class MCPToolControllerTest {
         assertEquals(true, results[0]["ok"])
         assertEquals(false, results[1]["ok"])
         assertEquals(true, results[2]["ok"])
+        assertTrue(results.all { ((it["durationMillis"] as Number).toLong()) >= 0 })
     }
 
     @Test
@@ -1047,6 +1081,7 @@ class MCPToolControllerTest {
         val results = payload["results"] as List<Map<String, Any?>>
         assertEquals(4, results.size)
         assertTrue(results.all { it["ok"] == true }, "Expected all steps to succeed")
+        assertTrue(results.all { ((it["durationMillis"] as Number).toLong()) >= 0 })
         assertEquals("Result 1", results[1]["text"])
         assertEquals("Result 2", results[2]["text"])
         assertEquals("Result 3", results[3]["text"])
@@ -1081,6 +1116,76 @@ class MCPToolControllerTest {
         assertEquals(1, results.size)
         assertEquals(true, results[0]["ok"])
         assertEquals("Existing session result", results[0]["text"])
+    }
+
+    @Test
+    fun testCommandBatchOpenReusesExistingSessionId() {
+        runBlocking {
+            `when`(sessionManager.getSession("existing-session")).thenReturn(managedSession)
+            `when`(managedSession.sessionId).thenReturn("existing-session")
+            `when`(managedSession.agenticSession).thenReturn(agenticSession)
+            `when`(agenticSession.companionAgent).thenReturn(basicBrowserAgent)
+            `when`(basicBrowserAgent.toolExtractor).thenReturn(agentToolExecutor)
+            `when`(agentToolExecutor.execute(anyToolCall())).thenReturn(toolCallResult("Existing session result"))
+
+            val request = MCPToolCallRequest(
+                tool = "command_batch",
+                arguments = mapOf(
+                    "sessionId" to "existing-session",
+                    "steps" to listOf(
+                        mapOf("op" to "open", "capabilities" to mapOf("profileMode" to "TEMPORARY")),
+                        mapOf("op" to "tool", "tool" to "page_title", "arguments" to emptyMap<String, Any?>()),
+                    )
+                )
+            )
+
+            val result = controller.callTool(request, response)
+
+            assertEquals(HttpStatus.OK, result.statusCode)
+            @Suppress("UNCHECKED_CAST")
+            val payload = objectMapper.readValue(result.body!!.content[0].text, Map::class.java) as Map<String, Any?>
+            assertEquals("existing-session", payload["sessionId"])
+            @Suppress("UNCHECKED_CAST")
+            val results = payload["results"] as List<Map<String, Any?>>
+            assertEquals(2, results.size)
+            assertEquals(true, results[0]["ok"])
+            assertEquals("existing-session", results[0]["sessionId"])
+            assertEquals("Session already open: existing-session", results[0]["text"])
+            assertEquals(true, results[1]["ok"])
+            assertEquals("Existing session result", results[1]["text"])
+            Mockito.verify(sessionManager, Mockito.never()).createSession(any())
+        }
+    }
+
+    @Test
+    fun testCommandBatchOpenWithMissingExistingSessionReturnsError() {
+        runBlocking {
+            `when`(sessionManager.getSession("missing-session")).thenReturn(null)
+
+            val request = MCPToolCallRequest(
+                tool = "command_batch",
+                arguments = mapOf(
+                    "sessionId" to "missing-session",
+                    "steps" to listOf(
+                        mapOf("op" to "open")
+                    )
+                )
+            )
+
+            val result = controller.callTool(request, response)
+
+            assertEquals(HttpStatus.OK, result.statusCode)
+            @Suppress("UNCHECKED_CAST")
+            val payload = objectMapper.readValue(result.body!!.content[0].text, Map::class.java) as Map<String, Any?>
+            assertEquals("missing-session", payload["sessionId"])
+            assertEquals(1, payload["failureCount"])
+            @Suppress("UNCHECKED_CAST")
+            val results = payload["results"] as List<Map<String, Any?>>
+            assertEquals(1, results.size)
+            assertEquals(false, results[0]["ok"])
+            assertTrue(results[0]["error"].toString().contains("Session not found: missing-session"))
+            Mockito.verify(sessionManager, Mockito.never()).createSession(any())
+        }
     }
 
     @Test

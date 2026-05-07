@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Unit tests verifying that WebDriver operations are properly serialized using the mutex.
@@ -40,7 +41,7 @@ class WebDriverSerializationTest {
                     executionOrder.add(i)
 
                     // Simulate some work
-                    delay(10)
+                    delay(10.milliseconds)
 
                     concurrentCount.decrementAndGet()
                 }
@@ -74,7 +75,7 @@ class WebDriverSerializationTest {
                 mutex1.withLock {
                     val current = concurrentCount.incrementAndGet()
                     maxConcurrent.updateAndGet { max -> maxOf(max, current) }
-                    delay(100) // Simulate work
+                    delay(100.milliseconds) // Simulate work
                     concurrentCount.decrementAndGet()
                 }
             },
@@ -82,7 +83,7 @@ class WebDriverSerializationTest {
                 mutex2.withLock {
                     val current = concurrentCount.incrementAndGet()
                     maxConcurrent.updateAndGet { max -> maxOf(max, current) }
-                    delay(100) // Simulate work
+                    delay(100.milliseconds) // Simulate work
                     concurrentCount.decrementAndGet()
                 }
             },
@@ -90,7 +91,7 @@ class WebDriverSerializationTest {
                 mutex3.withLock {
                     val current = concurrentCount.incrementAndGet()
                     maxConcurrent.updateAndGet { max -> maxOf(max, current) }
-                    delay(100) // Simulate work
+                    delay(100.milliseconds) // Simulate work
                     concurrentCount.decrementAndGet()
                 }
             }
@@ -116,7 +117,7 @@ class WebDriverSerializationTest {
                 mutex.withLock {
                     // Read-modify-write without additional synchronization
                     val temp = counter
-                    delay(1) // Increase chance of race condition without mutex
+                    delay(1.milliseconds) // Increase chance of race condition without mutex
                     counter = temp + 1
                 }
             }
@@ -139,19 +140,19 @@ class WebDriverSerializationTest {
         val job1 = launch {
             mutex.withLock {
                 executionLog.add("job1-start")
-                delay(50)
+                delay(50.milliseconds)
                 executionLog.add("job1-end")
             }
         }
 
         // Wait a bit to ensure job1 acquires the lock first
-        delay(10)
+        delay(10.milliseconds)
 
         // Start second operation (should be queued)
         val job2 = launch {
             mutex.withLock {
                 executionLog.add("job2-start")
-                delay(50)
+                delay(50.milliseconds)
                 executionLog.add("job2-end")
             }
         }

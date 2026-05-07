@@ -68,7 +68,7 @@ jobs:
           maven_profiles: 'all-modules,browser4-tests,integration-tests'
           # Include: Unit (Fast + Slow) + Integration
           # Exclude: E2E (manual only), SDK (separate workflows), ManualOnly
-          excluded_groups: 'E2E,SDK,ManualOnly,E2ETest,RequiresBrowser,RequiresAI'
+          excluded_groups: 'E2E,E2ETest,SDK,ManualOnly,RequiresAI'
           run_pulsar_tests: 'true'
           timeout_minutes: '60'
 

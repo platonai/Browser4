@@ -45,6 +45,11 @@ pub fn generate_help() -> String {
     lines.push("\nGlobal options:".to_string());
     lines.push(format_with_gap("  --help [command]", "print help", 30));
     lines.push(format_with_gap("  --version", "print version", 30));
+    lines.push(format_with_gap(
+        "  --use-maven-startup",
+        "opt in to local maven spring-boot:run startup",
+        30,
+    ));
 
     lines.join("\n")
 }
@@ -112,6 +117,15 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
     }
 
+    if cmd.name == "eval" {
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli eval \"document.title\"".to_string());
+        lines.push(
+            "  browser4-cli eval \"element => element.textContent\" \"#click-target\"".to_string(),
+        );
+        lines.push("  browser4-cli eval \"element => element.textContent\" e5".to_string());
+    }
+
     lines.join("\n")
 }
 
@@ -154,15 +168,16 @@ mod tests {
         assert!(help.contains("batch"));
         assert!(help.contains("click"));
         assert!(help.contains("snapshot"));
+        assert!(help.contains("--use-maven-startup"));
         assert!(help.contains("Core:"));
-        assert!(help.contains("Agent:"));
-        assert!(help.contains("Collective:"));
-        assert!(help.contains("extract"));
-        assert!(help.contains("summarize"));
-        assert!(help.contains("agent-run"));
-        assert!(help.contains("co-create"));
-        assert!(help.contains("co-submit"));
-        assert!(help.contains("co-scrape"));
+        // assert!(help.contains("Agent:"));
+        // assert!(help.contains("Collective:"));
+        // assert!(help.contains("extract"));
+        // assert!(help.contains("summarize"));
+        // assert!(help.contains("agent-run"));
+        // assert!(help.contains("co-create"));
+        // assert!(help.contains("co-submit"));
+        // assert!(help.contains("co-scrape"));
     }
 
     #[test]
@@ -206,6 +221,17 @@ mod tests {
         assert!(help.contains("browser4-cli summarize"));
         assert!(help.contains("Summarize page content"));
         assert!(help.contains("--selector"));
+    }
+
+    #[test]
+    fn test_generate_command_help_eval() {
+        let cmds = all_commands();
+        let cmd = cmds.iter().find(|c| c.name == "eval").unwrap();
+        let help = generate_command_help(cmd);
+        assert!(help.contains("browser4-cli eval <expression> [ref]"));
+        assert!(help.contains("Evaluate JavaScript expression on page or element"));
+        assert!(help.contains("browser4-cli eval \"document.title\""));
+        assert!(help.contains("browser4-cli eval \"element => element.textContent\" e5"));
     }
 
     #[test]

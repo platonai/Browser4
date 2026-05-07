@@ -156,6 +156,7 @@ class MCPToolController(
     private data class BatchExecutionResult(
         val index: Int,
         val ok: Boolean,
+        val durationMillis: Long = 0,
         val sessionId: String? = null,
         val text: String? = null,
         val error: String? = null,
@@ -280,6 +281,7 @@ class MCPToolController(
 
         // Navigate to initial URL if provided
         val url = request.arguments?.get("url")?.toString()
+        // Navigate operation is handled in the client side
 
         logger.info("MCP open_session: created session {}", session.sessionId)
         return ResponseEntity.ok(
@@ -362,13 +364,15 @@ class MCPToolController(
         var stoppedOnError = false
 
         for ((index, step) in stepMaps) {
+            val startedAt = System.nanoTime()
             val result = try {
                 executeBatchStep(index, step, currentSessionId)
             } catch (e: Exception) {
                 BatchExecutionResult(index = index, ok = false, error = e.message ?: "Unknown batch execution error")
             }
+            val durationMillis = (System.nanoTime() - startedAt) / 1_000_000
 
-            results += result
+            results += result.copy(durationMillis = durationMillis)
             if (result.ok) {
                 currentSessionId = when (step["op"]?.toString()) {
                     "open" -> result.sessionId
@@ -444,6 +448,23 @@ class MCPToolController(
         return when (val op = step["op"]?.toString()) {
             "open" -> {
                 val capabilities = step["capabilities"].toAnyMap().takeIf { !it.isNullOrEmpty() }
+                currentSessionId?.let { sessionId ->
+                    val existingSession = sessionManager.getSession(sessionId)
+                        ?: throw IllegalArgumentException("Session not found: $sessionId")
+                    if (capabilities != null && capabilities != existingSession.capabilities) {
+                        logger.info(
+                            "Batch open reusing existing session {} and ignoring requested capabilities {}",
+                            sessionId,
+                            capabilities,
+                        )
+                    }
+                    return BatchExecutionResult(
+                        index = index,
+                        ok = true,
+                        sessionId = sessionId,
+                        text = "Session already open: $sessionId",
+                    )
+                }
                 val managedSession = sessionManager.createSession(capabilities)
                 val sessionId = managedSession.sessionId
                 BatchExecutionResult(index = index, ok = true, sessionId = sessionId, text = "Session opened: $sessionId")

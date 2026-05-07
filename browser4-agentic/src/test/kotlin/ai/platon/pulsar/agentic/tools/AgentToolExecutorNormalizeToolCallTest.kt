@@ -41,6 +41,36 @@ class AgentToolExecutorNormalizeToolCallTest {
     }
 
     @Test
+    fun normalizeToolCallMapsEvalExpressionPositionalArgToNamedArg() {
+        val executor = AgentToolExecutor(Files.createTempDirectory("agent-tool-normalize"), agent)
+        val toolCall = ToolCall("tab", "eval", mutableMapOf("0" to "document.title"))
+
+        val normalized = executor.normalizeToolCall(toolCall)
+
+        assertEquals("tab", normalized.domain)
+        assertEquals("document.title", normalized.arguments["expression"])
+    }
+
+    @Test
+    fun normalizeToolCallMapsEvalExpressionAndSelectorPositionalArgsToNamedArgs() {
+        val executor = AgentToolExecutor(Files.createTempDirectory("agent-tool-normalize"), agent)
+        val toolCall = ToolCall(
+            "tab",
+            "eval",
+            mutableMapOf(
+                "0" to "(element) => element.textContent",
+                "1" to "#page-marker"
+            )
+        )
+
+        val normalized = executor.normalizeToolCall(toolCall)
+
+        assertEquals("tab", normalized.domain)
+        assertEquals("#page-marker", normalized.arguments["selector"])
+        assertEquals("(element) => element.textContent", normalized.arguments["expression"])
+    }
+
+    @Test
     fun executeDispatchesCommandToolsThroughRegisteredCommandService() {
         val executor = AgentToolExecutor(Files.createTempDirectory("agent-tool-command"), agent)
         val commandService = mockk<CommandService>()

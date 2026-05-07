@@ -220,9 +220,20 @@ class PulsarWebDriver constructor(
     @Throws(WebDriverException::class)
     override suspend fun evaluateValueDetail(selector: String, functionDeclaration: String): JsEvaluation? {
         return driverHelper.invokeOnPage("evaluateValue") {
-            val callFunctionOn = jsHandler.callFunctionOn(selector, functionDeclaration)
+            val normalizedFunctionDeclaration = normalizeElementFunctionDeclaration(functionDeclaration)
+            val callFunctionOn = jsHandler.callFunctionOn(selector, normalizedFunctionDeclaration)
             driverHelper.createJsEvaluate(callFunctionOn)
         }
+    }
+
+    private fun normalizeElementFunctionDeclaration(functionDeclaration: String): String {
+        val callable = functionDeclaration.trim().removeSuffix(";").trim()
+        return """
+            function() {
+                const __browser4Element = this;
+                return ($callable).call(__browser4Element, __browser4Element);
+            }
+        """.trimIndent()
     }
 
     override suspend fun currentUrl(): String {

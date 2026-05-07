@@ -104,7 +104,6 @@ open class BrowserWebDriverFetcher(
  */
 open class PrivacyManagedBrowserFetcher constructor(
     val browserManager: BrowserManager,
-    val browserFactory: BrowserFactory,
     override val privacyManager: BrowserPrivacyManager,
     override val browserEmulator: BrowserEmulator,
     override val conf: ImmutableConfig,
