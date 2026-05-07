@@ -35,7 +35,7 @@ function Print-Usage {
     Write-Host "  it          Run integration tests"
     Write-Host "  e2e         Run end-to-end tests"
     Write-Host "  cli         Run Rust Browser4 CLI tests from sdks\browser4-cli"
-    Write-Host "  mocksite Launch MockSiteBoot from browser4-tests\browser4-rest-tests"
+    Write-Host "  mocksite    Launch MockSiteBoot from browser4-tests\browser4-rest-tests"
     Write-Host "  rest        Run REST module tests"
     Write-Host "  skills      Run skills-focused agentic tests"
     Write-Host "  mcp         Run MCP-focused agentic tests"

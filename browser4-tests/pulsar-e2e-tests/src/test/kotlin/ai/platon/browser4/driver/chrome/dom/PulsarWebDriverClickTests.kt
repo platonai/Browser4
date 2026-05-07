@@ -15,7 +15,7 @@ import kotlin.test.assertTrue
 @Tag("E2ETest")
 class PulsarWebDriverClickTests : WebDriverTestBase() {
 
-    override val webDriverService get() = FastWebDriverService(browserFactory)
+    override val webDriverService get() = FastWebDriverService(browserManager)
 
     companion object {
         private const val SHORT_TIMEOUT = 1_000L

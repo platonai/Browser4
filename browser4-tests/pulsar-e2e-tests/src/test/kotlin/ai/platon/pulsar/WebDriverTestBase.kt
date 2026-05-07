@@ -42,16 +42,15 @@ open class WebDriverTestBase : MockSiteAccess() {
     fun initBrowser() {
         synchronized(isInitialized) {
             if (isInitialized.compareAndSet(false, true)) {
-                browser = browserFactory.launchRandomTempBrowser()
+                browser = browserManager.launchRandomTempBrowser()
                 browser.newDriver()
             }
         }
     }
 
-    val browserFactory
-        get() = context.getBeanOrNull(BrowserFactory::class) ?: DefaultBrowserFactory(session.configuration)
+    val browserManager get() = context.browserManager
 
-    open val webDriverService get() = FastWebDriverService(browserFactory)
+    open val webDriverService get() = FastWebDriverService(browserManager)
 
     val settings get() = BrowserSettings(session.sessionConfig)
     val confuser get() = settings.confuser as SimpleScriptConfuser

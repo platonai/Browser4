@@ -15,7 +15,7 @@ import kotlin.test.assertTrue
 
 class PulsarWebDriverEvaluateJSTests : WebDriverTestBase() {
 
-    override val webDriverService get() = FastWebDriverService(browserFactory)
+    override val webDriverService get() = FastWebDriverService(browserManager)
 
     val text = "awesome AI enabled Browser4!"
 
