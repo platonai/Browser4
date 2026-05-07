@@ -107,7 +107,7 @@ class SessionManager(
             // Close the agent to release browser resources
             session.agent.close()
 
-            val pulsarSession = session.agenticSession as AbstractPulsarSession
+            val pulsarSession = session.agenticSession
             val browser = pulsarSession.boundBrowser
 
             // Close session
@@ -145,23 +145,6 @@ class SessionManager(
             deleteSession(sessionId)
         }
         return count
-    }
-
-    /**
-     * Cleans up idle sessions that haven't been accessed for more than 30 minutes.
-     */
-    private fun cleanupIdleSessions() {
-        val idleThreshold = System.currentTimeMillis() - 30.minutes.inWholeMilliseconds
-        val idleSessions = sessions.entries.filter { (_, session) ->
-            session.lastAccessedAt < idleThreshold
-        }
-
-        if (idleSessions.isNotEmpty()) {
-            logger.info("Cleaning up {} idle sessions", idleSessions.size)
-            idleSessions.forEach { (sessionId, _) ->
-                deleteSession(sessionId)
-            }
-        }
     }
 
     /**

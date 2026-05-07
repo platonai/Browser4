@@ -453,7 +453,7 @@ interface WebDriver : Closeable {
      * The AI model receives the element's content and structure as context along with the provided prompt.
      *
      * @param prompt The question or instruction for the AI model.
-     * @param selector The CSS selector of the element to use as context.
+     * @param selector The selector of the element, multiple formats supported. Used as the context element.
      * @return A [ModelResponse] containing the model's answer.
      */
     @MCP
@@ -511,7 +511,7 @@ interface WebDriver : Closeable {
      * val remainingTime = driver.waitForSelector("h2.title")
      * ```
      *
-     * @param selector The selector of the element to wait for.
+     * @param selector The selector of the element, multiple formats supported. The element is waited for until it becomes present.
      * @return The remaining time until timeout when the element becomes present.
      * */
     @Throws(WebDriverException::class)
@@ -525,6 +525,7 @@ interface WebDriver : Closeable {
      * val remainingTime = driver.waitForSelector("h2.title", 30000)
      * ```
      *
+     * @param selector The selector of the element, multiple formats supported. The element is waited for until it becomes present.
      * @param timeoutMillis The maximum time to wait for the element to become present.
      * @return The remaining time until timeout when the element becomes present.
      * */
@@ -540,6 +541,7 @@ interface WebDriver : Closeable {
      * val remainingTime = driver.waitForSelector("h2.title", Duration.ofSeconds(30))
      * ```
      *
+     * @param selector The selector of the element, multiple formats supported. The element is waited for until it becomes present.
      * @param timeout The maximum time to wait for the element to become present.
      * @return The remaining time until timeout when the element becomes present.
      * */
@@ -559,6 +561,7 @@ interface WebDriver : Closeable {
      * }
      * ```
      *
+     * @param selector The selector of the element, multiple formats supported. The element is waited for until it becomes present.
      * @param action The action to execute when the element is not found.
      * */
     @Throws(WebDriverException::class)
@@ -577,6 +580,7 @@ interface WebDriver : Closeable {
      * }
      * ```
      *
+     * @param selector The selector of the element, multiple formats supported. The element is waited for until it becomes present.
      * @param timeoutMillis The maximum time to wait for the element to become present.
      * @param action The action to execute when the element is not found.
      * @return The remaining time until timeout when the element becomes present.
@@ -598,6 +602,7 @@ interface WebDriver : Closeable {
      * }
      * ```
      *
+     * @param selector The selector of the element, multiple formats supported. The element is waited for until it becomes present.
      * @param timeout The maximum time to wait for the element to become present.
      * @param action The action to execute when the element is not found.
      * @return The remaining time until timeout when the element becomes present.
@@ -747,7 +752,7 @@ interface WebDriver : Closeable {
      * driver.exists("h2.title")
      * ```
      *
-     * @param selector - The selector of the element to check.
+     * @param selector The selector of the element, multiple formats supported. The element is checked for existence.
      * @return Whether the element exists.
      * */
     @Throws(WebDriverException::class)
@@ -761,7 +766,7 @@ interface WebDriver : Closeable {
      * driver.isHidden("input[name='q']")
      * ```
      *
-     * @param selector - The selector of the element to check.
+     * @param selector The selector of the element, multiple formats supported. The element is checked for visibility state.
      * @return Whether the element is hidden.
      * */
     @Throws(WebDriverException::class)
@@ -775,7 +780,7 @@ interface WebDriver : Closeable {
      * driver.isVisible("input[name='q']")
      * ```
      *
-     * @param selector - The selector of the element to check.
+     * @param selector The selector of the element, multiple formats supported. The element is checked for visibility state.
      * @return Whether the element is visible.
      * */
     @Throws(WebDriverException::class)
@@ -789,7 +794,7 @@ interface WebDriver : Closeable {
      * driver.isChecked("input[name='agree']")
      * ```
      *
-     * @param selector - The selector of the element to check.
+     * @param selector The selector of the element, multiple formats supported. The element is checked for checked state.
      * @return Whether the element is checked.
      * */
     @Throws(WebDriverException::class)
@@ -819,6 +824,8 @@ interface WebDriver : Closeable {
      * ```kotlin
      * driver.hover("h1")
      * ```
+     *
+     * @param selector The selector of the element, multiple formats supported.
      */
     @Throws(WebDriverException::class)
     @MCP
@@ -833,8 +840,8 @@ interface WebDriver : Closeable {
      * driver.focus("input[name='q']")
      * ```
      *
-     * @param selector - A [selector](https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_Selectors)
-     * of an element to focus. If there are multiple elements satisfying the selector, the first will be focused.
+     * @param selector The selector of the element, multiple formats supported. If there are multiple matching
+     * elements, the first will be focused.
      */
     @Throws(WebDriverException::class)
     @MCP
@@ -852,8 +859,8 @@ interface WebDriver : Closeable {
      * When [selector] is provided, the matching element is focused first and then receives the text.
      *
      * @param text The text to insert.
-     * @param selector Optional [selector](https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_Selectors)
-     * of an element to focus before typing. If there are multiple matching elements, the first is used.
+     * @param selector The selector of the element, multiple formats supported. Optional. If provided, the matching
+     * element is focused before typing. If there are multiple matching elements, the first is used.
      */
     @Throws(WebDriverException::class)
     @MCP
@@ -875,8 +882,8 @@ interface WebDriver : Closeable {
      *
      * @param key A key to press. The key can be a single character, a key name, or a combination of both.
      *      See [Code values for keyboard events](https://developer.mozilla.org/en-US/docs/Web/API/UI_Events/Keyboard_event_code_values)
-     * @param selector Optional [selector](https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_Selectors)
-     * of an element to focus before pressing the key. If there are multiple matching elements, the first is used.
+     * @param selector The selector of the element, multiple formats supported. Optional. If provided, the matching
+     * element is focused before pressing the key. If there are multiple matching elements, the first is used.
      */
     @Throws(WebDriverException::class)
     @MCP
@@ -891,9 +898,8 @@ interface WebDriver : Closeable {
      * driver.fill("input[name='q']", "Hello, World!")
      * ```
      *
-     * @param selector - A [selector](https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_Selectors)
-     * of an element to focus, and then fill text into it. If there are multiple elements satisfying the
-     * selector, the first will be focused.
+     * @param selector The selector of the element, multiple formats supported. The matching element is focused and
+     * then filled with text. If there are multiple matching elements, the first will be focused.
      * @param text The text to fill.
      */
     @Throws(WebDriverException::class)
@@ -939,9 +945,8 @@ interface WebDriver : Closeable {
      * driver.click("button[type='submit']")
      * ```
      *
-     * @param selector - A [selector](https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_Selectors)
-     * of an element to focus. If there are multiple elements satisfying the
-     * selector, the first will be focused.
+     * @param selector The selector of the element, multiple formats supported. If there are multiple matching
+     * elements, the first will be focused.
      * @param count The number of times to click.
      * */
     @Throws(WebDriverException::class)
@@ -951,7 +956,7 @@ interface WebDriver : Closeable {
     /**
      * Focus on an element with [selector] and click it with [modifier] pressed. @mcp
      *
-     * @param selector The selector of the element to click.
+     * @param selector The selector of the element, multiple formats supported. The matching element is clicked.
      * @param modifier The keyboard modifier to press while clicking (e.g., "Shift", "Control", "Alt").
      * */
     @Throws(WebDriverException::class)
@@ -961,7 +966,7 @@ interface WebDriver : Closeable {
     /**
      * Focus on an element with [selector] and double-click it. @mcp
      *
-     * @param selector The selector of the element to double-click.
+     * @param selector The selector of the element, multiple formats supported. The matching element is double-clicked.
      * */
     @Throws(WebDriverException::class)
     @MCP
@@ -970,7 +975,7 @@ interface WebDriver : Closeable {
     /**
      * Focus on an element with [selector] and double-click it with [modifier] pressed. @mcp
      *
-     * @param selector The selector of the element to double-click.
+     * @param selector The selector of the element, multiple formats supported. The matching element is double-clicked.
      * @param modifier The keyboard modifier to press while double-clicking.
      * */
     @Throws(WebDriverException::class)
@@ -1006,9 +1011,8 @@ interface WebDriver : Closeable {
      *
      * TODO: use playwright style selector which supports text matching, for example: `button:has-text("submit")`
      *
-     * @param selector - A [selector](https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_Selectors)
-     * of an element to focus. If there are multiple elements satisfying the
-     * selector, the first will be focused.
+     * @param selector The selector of the element, multiple formats supported. If there are multiple matching
+     * elements, the first will be focused.
      * @param pattern The pattern to match the text content.
      * @param count The number of times to click.
      * */
@@ -1026,9 +1030,8 @@ interface WebDriver : Closeable {
      * driver.clickMatches("button", "type", "submit")
      * ```
      *
-     * @param selector - A [selector](https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_Selectors)
-     * of an element to focus. If there are multiple elements satisfying the
-     * selector, the first will be focused.
+     * @param selector The selector of the element, multiple formats supported. If there are multiple matching
+     * elements, the first will be focused.
      * @param attrName The attribute name to match.
      * @param pattern The pattern to match the attribute value.
      * @param count The number of times to click.
@@ -1040,7 +1043,7 @@ interface WebDriver : Closeable {
     /**
      * Selects one or more options in a <select> element. @mcp
      *
-     * @param selector A selector to query the element
+     * @param selector The selector of the element, multiple formats supported.
      * @param values The values or labels of the options to select
      * @return The list of selected option values
      */
@@ -1050,7 +1053,7 @@ interface WebDriver : Closeable {
     /**
      * Selects an option in a <select> element. @mcp
      *
-     * @param selector A selector to query the element
+     * @param selector The selector of the element, multiple formats supported.
      * @param value The value or label of the option to select
      * @return The selected option value, or null if not found
      */
@@ -1063,10 +1066,8 @@ interface WebDriver : Closeable {
     /**
      * This method check an element with [selector]. If there's no element matching [selector], nothing to do. @mcp
      *
-     * @param selector - A
-     * [selector](https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_Selectors)
-     * of an element to check. If there are multiple elements satisfying the
-     * selector, the first will be checked.
+     * @param selector The selector of the element, multiple formats supported. If there are multiple matching
+     * elements, the first will be checked.
      * */
     @Throws(WebDriverException::class)
     @MCP
@@ -1075,10 +1076,8 @@ interface WebDriver : Closeable {
     /**
      * This method uncheck an element with [selector]. If there's no element matching [selector], nothing to do. @mcp
      *
-     * @param selector - A
-     * [selector](https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_Selectors)
-     * of an element to uncheck. If there are multiple elements satisfying the
-     * selector, the first will be focused.
+     * @param selector The selector of the element, multiple formats supported. If there are multiple matching
+     * elements, the first will be unchecked.
      * */
     @Throws(WebDriverException::class)
     @MCP
@@ -1093,8 +1092,8 @@ interface WebDriver : Closeable {
      * driver.scrollTo("h2.title")
      * ```
      *
-     * @param selector - A selector to search for element to scroll to. If there are multiple elements satisfying
-     * the [selector], the first will be selected.
+     * @param selector The selector of the element, multiple formats supported. If there are multiple matching
+     * elements, the first will be scrolled into view.
      */
     @Throws(WebDriverException::class)
     @MCP
@@ -1341,6 +1340,7 @@ interface WebDriver : Closeable {
      * driver.moveMouseTo("h2.title")
      * ```
      *
+     * @param selector The selector of the element, multiple formats supported.
      * @param deltaX The distance to the left of the element.
      * @param deltaY The distance to the top of the element.
      */
@@ -1351,7 +1351,7 @@ interface WebDriver : Closeable {
     /**
      * Performs a drag, dragenter, dragover, and drop in sequence. @mcp
      *
-     * @param selector - selector of the element to drag from.
+     * @param selector The selector of the element, multiple formats supported. The matching element is dragged from.
      * @param deltaX The distance to drag horizontally.
      * @param deltaY The distance to drag vertically.
      */
@@ -1366,8 +1366,8 @@ interface WebDriver : Closeable {
      * The implementation dispatches an HTML5 drag sequence between the source and target elements using a shared
      * `DataTransfer` payload so selector-to-selector drag flows can be asserted reliably by automation clients.
      *
-     * @param sourceSelector The selector of the element to drag.
-     * @param targetSelector The selector of the element to drop onto.
+     * @param sourceSelector The selector of the element, multiple formats supported. Identifies the drag source.
+     * @param targetSelector The selector of the element, multiple formats supported. Identifies the drop target.
      */
     @MCP
     suspend fun drag(sourceSelector: String, targetSelector: String) {
@@ -1459,7 +1459,7 @@ interface WebDriver : Closeable {
      * val html = driver.outerHTML("h2.title")
      * ```
      *
-     * @param selector The selector to locate the node.
+     * @param selector The selector of the element, multiple formats supported.
      * @return The HTML markup of the node.
      * */
     @Throws(WebDriverException::class)
@@ -1479,7 +1479,7 @@ interface WebDriver : Closeable {
      * val titleText = driver.textContent("h1.title")
      * ```
      *
-     * @param selector The CSS selector of the element. If null, targets the document body.
+     * @param selector The selector of the element, multiple formats supported. If null, targets the document body.
      * @return The text content, or null if not found.
      * */
     @MCP
@@ -1494,13 +1494,14 @@ interface WebDriver : Closeable {
     suspend fun extract(fields: Map<String, String>): Map<String, String?>
 
     /**
-     * Use querySelectorAll to get all matched elements, and then return their NodeRefs. @mcp
+     * Use querySelectorAll to get all elements matched by [selector], and then return their NodeRefs. @mcp
      *
      * Note that the NodeRefs may become stale after certain operations, so they should be used immediately after selection.
      *
-     * @param selector selector string, supported selector types include CSS selector, XPath, and backend node id.
-     * The type is determined by the prefix of the selector string, e.g. "css:div" for CSS selector, "xpath://div" for XPath,
-     * "e123" for backendNodeId. If no prefix is provided, CSS selector is used by default.
+     * @param selector The selector of the element, multiple formats supported. Supported selector types include CSS
+     * selector, XPath, and backend node id. The type is determined by the selector prefix, e.g. "css:div" for CSS
+     * selector, "xpath://div" for XPath, and "e123" for backendNodeId. If no prefix is provided, CSS selector is
+     * used by default.
      * @return a list of NodeRefs for the matched elements, or an empty list if no elements are matched or an error occurs.
      * */
     @Beta
@@ -1516,7 +1517,7 @@ interface WebDriver : Closeable {
      * val text = driver.selectFirstTextOrNull("h2.title")
      * ```
      *
-     * @param selector The selector to locate the node.
+     * @param selector The selector of the element, multiple formats supported.
      * @return The text content of the node.
      * */
     @Throws(WebDriverException::class)
@@ -1532,7 +1533,7 @@ interface WebDriver : Closeable {
      * val texts = driver.selectTextAll("h2")
      * ```
      *
-     * @param selector The selector to locate the nodes.
+     * @param selector The selector of the element, multiple formats supported.
      * @return The text contents of the nodes.
      * */
     @Throws(WebDriverException::class)
@@ -1548,7 +1549,7 @@ interface WebDriver : Closeable {
      * val classes = driver.selectFirstAttributeOrNull("h2.title", "class")
      * ```
      *
-     * @param selector The selector to locate the node.
+     * @param selector The selector of the element, multiple formats supported.
      * @param attrName The attribute name to retrieve.
      * @return The attribute value of the node.
      * */
@@ -1565,7 +1566,7 @@ interface WebDriver : Closeable {
      * val classes = driver.selectAttributes("h2.title", "class")
      * ```
      *
-     * @param selector The selector to locate the nodes.
+     * @param selector The selector of the element, multiple formats supported.
      * @return The attribute pairs of the nodes.
      * */
     @Throws(WebDriverException::class)
@@ -1581,7 +1582,7 @@ interface WebDriver : Closeable {
      * val classes = driver.selectAttributeAll("h2.title", "class")
      * ```
      *
-     * @param selector The selector to locate the nodes.
+     * @param selector The selector of the element, multiple formats supported.
      * @param attrName The attribute name to retrieve.
      * @param start The offset of the first node to select.
      * @param limit The maximum number of nodes to select.
@@ -1598,7 +1599,7 @@ interface WebDriver : Closeable {
      * driver.setAttribute("h2.title", "class", "header")
      * ```
      *
-     * @param selector The CSS query to select an element.
+     * @param selector The selector of the element, multiple formats supported.
      * @param attrName The attribute name to set.
      * @param attrValue The attribute value to set.
      * */
@@ -1607,13 +1608,13 @@ interface WebDriver : Closeable {
     suspend fun setAttribute(selector: String, attrName: String, attrValue: String)
 
     /**
-     * Set the attribute of all elements matching the CSS query. @mcp
+     * Set the attribute of all elements matching [selector]. @mcp
      *
      * ```kotlin
      * driver.setAttributeAll("h2.title", "class", "header")
      * ```
      *
-     * @param selector The CSS query to select elements.
+     * @param selector The selector of the element, multiple formats supported.
      * @param attrName The attribute name to set.
      * @param attrValue The attribute value to set.
      * */
@@ -1631,7 +1632,7 @@ interface WebDriver : Closeable {
      * val classes = driver.selectFirstPropertyOrNull("input#input", "value")
      * ```
      *
-     * @param selector The selector to locate the node.
+     * @param selector The selector of the element, multiple formats supported.
      * @param propName The property name to retrieve.
      * @return The property value of the node.
      * */
@@ -1648,7 +1649,7 @@ interface WebDriver : Closeable {
      * val classes = driver.selectPropertyAll("input#input", "value")
      * ```
      *
-     * @param selector The selector to locate the nodes.
+     * @param selector The selector of the element, multiple formats supported.
      * @param propName The property name to retrieve.
      * @param start The offset of the first node to select.
      * @param limit The maximum number of nodes to select.
@@ -1670,7 +1671,7 @@ interface WebDriver : Closeable {
      * driver.setProperty("input#input", "value")
      * ```
      *
-     * @param selector The CSS query to select an element.
+     * @param selector The selector of the element, multiple formats supported.
      * @param propName The property name to set.
      * @param propValue The property value to set.
      * */
@@ -1679,13 +1680,13 @@ interface WebDriver : Closeable {
     suspend fun setProperty(selector: String, propName: String, propValue: String)
 
     /**
-     * Set the property of all elements matching the CSS query. @mcp
+     * Set the property of all elements matching [selector]. @mcp
      *
      * ```kotlin
      * driver.setPropertyAll("input#input", "value")
      * ```
      *
-     * @param selector The CSS query to select elements.
+     * @param selector The selector of the element, multiple formats supported.
      * @param propName The property name to set.
      * @param propValue The property value to set.
      * */
@@ -1694,13 +1695,13 @@ interface WebDriver : Closeable {
     suspend fun setPropertyAll(selector: String, propName: String, propValue: String)
 
     /**
-     * Find hyperlinks in elements matching the CSS query.
+     * Find hyperlinks in elements matching [selector].
      *
      * ```kotlin
      * val hyperlinks = driver.selectHyperlinks("a.product-link")
      * ```
      *
-     * @param selector The CSS query to select elements.
+     * @param selector The selector of the element, multiple formats supported.
      * @param offset The offset of the first element to select.
      * @param limit The maximum number of elements to select.
      * @return The hyperlinks in the elements.
@@ -1709,13 +1710,13 @@ interface WebDriver : Closeable {
     suspend fun selectHyperlinks(selector: String, offset: Int = 1, limit: Int = Int.MAX_VALUE): List<Hyperlink>
 
     /**
-     * Find anchor elements matching the CSS query.
+     * Find anchor elements matching [selector].
      *
      * ```kotlin
      * val anchors = driver.selectAnchors("a.product-link")
      * ```
      *
-     * @param selector The CSS query to select elements.
+     * @param selector The selector of the element, multiple formats supported.
      * @param offset The offset of the first element to select.
      * @param limit The maximum number of elements to select.
      * @return The anchors.
@@ -1724,13 +1725,13 @@ interface WebDriver : Closeable {
     suspend fun selectAnchors(selector: String, offset: Int = 1, limit: Int = Int.MAX_VALUE): List<GeoAnchor>
 
     /**
-     * Find image elements matching the CSS query.
+     * Find image elements matching [selector].
      *
      * ```kotlin
      * val images = driver.selectImages("img.product-image")
      * ```
      *
-     * @param selector The CSS query to select elements.
+     * @param selector The selector of the element, multiple formats supported.
      * @param offset The offset of the first element to select.
      * @param limit The maximum number of elements to select.
      * @return The image URLs.
@@ -1828,10 +1829,24 @@ interface WebDriver : Closeable {
     @MCP
     suspend fun evaluateValueDetail(expression: String): JsEvaluation?
 
+    /**
+     * Executes JavaScript for the element located by [selector] and returns the result as a JSON-serializable value. @mcp
+     *
+     * @param selector The selector of the element, multiple formats supported.
+     * @param functionDeclaration The JavaScript function declaration to execute against the matched element.
+     * @return The result as a JSON-compatible object (Map, List, String, Number, Boolean, or null).
+     */
     @Throws(WebDriverException::class)
     @MCP
     suspend fun evaluateValue(selector: String, functionDeclaration: String): Any?
 
+    /**
+     * Returns detailed value evaluation metadata for the element located by [selector]. @mcp
+     *
+     * @param selector The selector of the element, multiple formats supported.
+     * @param functionDeclaration The JavaScript function declaration to execute against the matched element.
+     * @return A [JsEvaluation] object containing the result value and metadata.
+     */
     @Throws(WebDriverException::class)
     @MCP
     suspend fun evaluateValueDetail(selector: String, functionDeclaration: String): JsEvaluation?
@@ -1856,6 +1871,8 @@ interface WebDriver : Closeable {
      * Scroll the element matched by [selector] into view (if needed) then take a screenshot of that element's bounding box. @mcp
      *
      * Returns a Base64 encoded image (implementation usually PNG/JPEG), PNG by default.
+     *
+     * @param selector The selector of the element, multiple formats supported.
      */
     @Throws(WebDriverException::class)
     @MCP
@@ -1907,7 +1924,7 @@ interface WebDriver : Closeable {
      *
      * If the element does not exist, or is not clickable, returns null.
      *
-     * @param selector The selector of the element to calculate the clickable point.
+     * @param selector The selector of the element, multiple formats supported. Used to calculate the clickable point.
      * @return The clickable point of the element.
      * */
     @Throws(WebDriverException::class)
@@ -1919,7 +1936,7 @@ interface WebDriver : Closeable {
      *
      * If the element does not exist, returns null.
      *
-     * @param selector The selector of the element to calculate the bounding box.
+     * @param selector The selector of the element, multiple formats supported. Used to calculate the bounding box.
      * @return The bounding box of the element.
      * */
     @Throws(WebDriverException::class)
@@ -1986,7 +2003,7 @@ interface WebDriver : Closeable {
     /**
      * Upload files to the element located by [selector]. @mcp
      *
-     * @param selector The selector of the file input element.
+     * @param selector The selector of the element, multiple formats supported. It should resolve to the file input element.
      * @param paths The list of file paths to upload.
      */
     @Throws(WebDriverException::class)

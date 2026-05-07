@@ -493,7 +493,7 @@
   } ],
   "returnType" : "Unit",
   "description" : "This method fetches an element with `selector` and focuses it.",
-  "help" : "This method fetches an element with `selector` and focuses it.\n\nIf there's no element matching `selector`, nothing to do.\n\n```kotlin driver.focus(\"input[name='q']\") ```\n\nof an element to focus. If there are multiple elements satisfying the selector, the first will be focused.",
+  "help" : "This method fetches an element with `selector` and focuses it.\n\nIf there's no element matching `selector`, nothing to do.\n\n```kotlin driver.focus(\"input[name='q']\") ```\n\nelements, the first will be focused.",
   "expression" : "tab.focus(Arg(name=selector, type=String, defaultValue=))",
   "cli" : "browser4-cli tab focus --selector=<String>, default="
 }, {
@@ -504,31 +504,38 @@
     "type" : "String",
     "expression" : "text: String = ",
     "cliOptions" : "--text=<String>, default="
+  }, {
+    "name" : "selector",
+    "type" : "String?",
+    "defaultValue" : "null",
+    "expression" : "selector: String? = null",
+    "cliOptions" : "--selector=<String?>, default=null"
   } ],
   "returnType" : "Unit",
   "description" : "This method emulates inserting text that doesn't come from a key press.",
-  "help" : "This method emulates inserting text that doesn't come from a key press.\n\n```kotlin driver.type(\"Hello, World!\") ```",
-  "expression" : "tab.type(Arg(name=text, type=String, defaultValue=))",
-  "cli" : "browser4-cli tab type --text=<String>, default="
+  "help" : "This method emulates inserting text that doesn't come from a key press.\n\n```kotlin driver.type(\"Hello, World!\") driver.type(\"Hello, World!\", \"input[name='q']\") ```\n\nWhen [selector] is omitted, text is typed into the currently focused element. When [selector] is provided, the matching element is focused first and then receives the text.\n\nelement is focused before typing. If there are multiple matching elements, the first is used.",
+  "expression" : "tab.type(Arg(name=text, type=String, defaultValue=), Arg(name=selector, type=String?, defaultValue=null))",
+  "cli" : "browser4-cli tab type --text=<String>, default= --selector=<String?>, default=null"
 }, {
   "domain" : "tab",
-  "method" : "type",
+  "method" : "press",
   "arguments" : [ {
-    "name" : "selector",
+    "name" : "key",
     "type" : "String",
-    "expression" : "selector: String = ",
-    "cliOptions" : "--selector=<String>, default="
+    "expression" : "key: String = ",
+    "cliOptions" : "--key=<String>, default="
   }, {
-    "name" : "text",
-    "type" : "String",
-    "expression" : "text: String = ",
-    "cliOptions" : "--text=<String>, default="
+    "name" : "selector",
+    "type" : "String?",
+    "defaultValue" : "null",
+    "expression" : "selector: String? = null",
+    "cliOptions" : "--selector=<String?>, default=null"
   } ],
   "returnType" : "Unit",
-  "description" : "This method emulates inserting text that doesn't come from a key press.",
-  "help" : "This method emulates inserting text that doesn't come from a key press.\n\n```kotlin driver.type(\"input[name='q']\", \"Hello, World!\") ```\n\nof an element to focus. If there are multiple elements satisfying the selector, the first will be focused.",
-  "expression" : "tab.type(Arg(name=selector, type=String, defaultValue=), Arg(name=text, type=String, defaultValue=))",
-  "cli" : "browser4-cli tab type --selector=<String>, default= --text=<String>, default="
+  "description" : "Shortcut for keyboard down and keyboard up.",
+  "help" : "Shortcut for keyboard down and keyboard up.\n\nThe key is specified as a string, which can be a single character, a key name, or a combination of both. For example, 'a', 'A', 'KeyA', 'Enter', 'Shift+A', and 'Control+Shift+Tab' are all valid keys.\n\n```kotlin driver.press(\"Enter\") driver.press(\"Enter\", \"input[name='q']\") ```\n\nWhen [selector] is omitted, the key is pressed on the currently focused element. When [selector] is provided, the matching element is focused first and then receives the key press.\n\nSee [Code values for keyboard events](https://developer.mozilla.org/en-US/docs/Web/API/UI_Events/Keyboard_event_code_values) element is focused before pressing the key. If there are multiple matching elements, the first is used.",
+  "expression" : "tab.press(Arg(name=key, type=String, defaultValue=), Arg(name=selector, type=String?, defaultValue=null))",
+  "cli" : "browser4-cli tab press --key=<String>, default= --selector=<String?>, default=null"
 }, {
   "domain" : "tab",
   "method" : "fill",
@@ -545,42 +552,9 @@
   } ],
   "returnType" : "Unit",
   "description" : "This method emulates inserting text that doesn't come from a key press.",
-  "help" : "This method emulates inserting text that doesn't come from a key press.\n\nUnlike [type], this method clears the existing value before typing.\n\n```kotlin driver.fill(\"input[name='q']\", \"Hello, World!\") ```\n\nof an element to focus, and then fill text into it. If there are multiple elements satisfying the selector, the first will be focused.",
+  "help" : "This method emulates inserting text that doesn't come from a key press.\n\nUnlike [type], this method clears the existing value before typing.\n\n```kotlin driver.fill(\"input[name='q']\", \"Hello, World!\") ```\n\nthen filled with text. If there are multiple matching elements, the first will be focused.",
   "expression" : "tab.fill(Arg(name=selector, type=String, defaultValue=), Arg(name=text, type=String, defaultValue=))",
   "cli" : "browser4-cli tab fill --selector=<String>, default= --text=<String>, default="
-}, {
-  "domain" : "tab",
-  "method" : "press",
-  "arguments" : [ {
-    "name" : "key",
-    "type" : "String",
-    "expression" : "key: String = ",
-    "cliOptions" : "--key=<String>, default="
-  } ],
-  "returnType" : "Unit",
-  "description" : "Shortcut for keyboard down and keyboard up.",
-  "help" : "Shortcut for keyboard down and keyboard up.\n\nThe key is specified as a string, which can be a single character, a key name, or a combination of both. For example, 'a', 'A', 'KeyA', 'Enter', 'Shift+A', and 'Control+Shift+Tab' are all valid keys.\n\n```kotlin driver.press(\"Enter\") ```\n\nSee [Code values for keyboard events](https://developer.mozilla.org/en-US/docs/Web/API/UI_Events/Keyboard_event_code_values)",
-  "expression" : "tab.press(Arg(name=key, type=String, defaultValue=))",
-  "cli" : "browser4-cli tab press --key=<String>, default="
-}, {
-  "domain" : "tab",
-  "method" : "press",
-  "arguments" : [ {
-    "name" : "selector",
-    "type" : "String",
-    "expression" : "selector: String = ",
-    "cliOptions" : "--selector=<String>, default="
-  }, {
-    "name" : "key",
-    "type" : "String",
-    "expression" : "key: String = ",
-    "cliOptions" : "--key=<String>, default="
-  } ],
-  "returnType" : "Unit",
-  "description" : "Shortcut for keyboard down and keyboard up.",
-  "help" : "Shortcut for keyboard down and keyboard up.\n\nThe key is specified as a string, which can be a single character, a key name, or a combination of both. For example, 'a', 'A', 'KeyA', 'Enter', 'Shift+A', and 'Control+Shift+Tab' are all valid keys.\n\n```kotlin driver.press(\"input[name='q']\", \"Enter\") ```\n\nof an element to focus, and then press a key. If there are multiple elements satisfying the selector, the first will be focused. See [Code values for keyboard events](https://developer.mozilla.org/en-US/docs/Web/API/UI_Events/Keyboard_event_code_values)",
-  "expression" : "tab.press(Arg(name=selector, type=String, defaultValue=), Arg(name=key, type=String, defaultValue=))",
-  "cli" : "browser4-cli tab press --selector=<String>, default= --key=<String>, default="
 }, {
   "domain" : "tab",
   "method" : "keyDown",
@@ -626,7 +600,7 @@
   } ],
   "returnType" : "Unit",
   "description" : "Focus on an element with [selector] and click it.",
-  "help" : "Focus on an element with [selector] and click it.\n\nIf there's no element matching `selector`, nothing to do.\n\n```kotlin driver.click(\"button[type='submit']\") ```\n\nof an element to focus. If there are multiple elements satisfying the selector, the first will be focused.",
+  "help" : "Focus on an element with [selector] and click it.\n\nIf there's no element matching `selector`, nothing to do.\n\n```kotlin driver.click(\"button[type='submit']\") ```\n\nelements, the first will be focused.",
   "expression" : "tab.click(Arg(name=selector, type=String, defaultValue=), Arg(name=count, type=Int, defaultValue=1))",
   "cli" : "browser4-cli tab click --selector=<String>, default= --count=<Int>, default=1"
 }, {
@@ -745,7 +719,7 @@
   } ],
   "returnType" : "Unit",
   "description" : "This method clicks an element with [selector] whose text content matches [pattern], and then focuses it.",
-  "help" : "This method clicks an element with [selector] whose text content matches [pattern], and then focuses it.\n\nIf there's no element matching [selector], or the element's text content doesn't match [pattern], nothing to do.\n\n```kotlin driver.clickTextMatches(\"button\", \"submit\") ```\n\nTODO: use playwright style selector which supports text matching, for example: `button:has-text(\"submit\")`\n\nof an element to focus. If there are multiple elements satisfying the selector, the first will be focused.",
+  "help" : "This method clicks an element with [selector] whose text content matches [pattern], and then focuses it.\n\nIf there's no element matching [selector], or the element's text content doesn't match [pattern], nothing to do.\n\n```kotlin driver.clickTextMatches(\"button\", \"submit\") ```\n\nTODO: use playwright style selector which supports text matching, for example: `button:has-text(\"submit\")`\n\nelements, the first will be focused.",
   "expression" : "tab.clickTextMatches(Arg(name=selector, type=String, defaultValue=), Arg(name=pattern, type=String, defaultValue=), Arg(name=count, type=Int, defaultValue=1))",
   "cli" : "browser4-cli tab clickTextMatches --selector=<String>, default= --pattern=<String>, default= --count=<Int>, default=1"
 }, {
@@ -775,7 +749,7 @@
   } ],
   "returnType" : "Unit",
   "description" : "This method clicks an element with [selector] whose attribute name is [attrName] and value matches [pattern], and then focuses it.",
-  "help" : "This method clicks an element with [selector] whose attribute name is [attrName] and value matches [pattern], and then focuses it.\n\nIf there's no element matching [selector], or the element has no attribute [attrName], or the element's attribute value doesn't match [pattern], nothing to do.\n\n```kotlin driver.clickMatches(\"button\", \"type\", \"submit\") ```\n\nof an element to focus. If there are multiple elements satisfying the selector, the first will be focused.",
+  "help" : "This method clicks an element with [selector] whose attribute name is [attrName] and value matches [pattern], and then focuses it.\n\nIf there's no element matching [selector], or the element has no attribute [attrName], or the element's attribute value doesn't match [pattern], nothing to do.\n\n```kotlin driver.clickMatches(\"button\", \"type\", \"submit\") ```\n\nelements, the first will be focused.",
   "expression" : "tab.clickMatches(Arg(name=selector, type=String, defaultValue=), Arg(name=attrName, type=String, defaultValue=), Arg(name=pattern, type=String, defaultValue=), Arg(name=count, type=Int, defaultValue=1))",
   "cli" : "browser4-cli tab clickMatches --selector=<String>, default= --attrName=<String>, default= --pattern=<String>, default= --count=<Int>, default=1"
 }, {
@@ -827,7 +801,7 @@
   } ],
   "returnType" : "Unit",
   "description" : "This method check an element with [selector]. If there's no element matching [selector], nothing to do.",
-  "help" : "This method check an element with [selector]. If there's no element matching [selector], nothing to do.\n\n[selector](https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_Selectors) of an element to check. If there are multiple elements satisfying the selector, the first will be checked.",
+  "help" : "This method check an element with [selector]. If there's no element matching [selector], nothing to do.\n\nelements, the first will be checked.",
   "expression" : "tab.check(Arg(name=selector, type=String, defaultValue=))",
   "cli" : "browser4-cli tab check --selector=<String>, default="
 }, {
@@ -841,7 +815,7 @@
   } ],
   "returnType" : "Unit",
   "description" : "This method uncheck an element with [selector]. If there's no element matching [selector], nothing to do.",
-  "help" : "This method uncheck an element with [selector]. If there's no element matching [selector], nothing to do.\n\n[selector](https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_Selectors) of an element to uncheck. If there are multiple elements satisfying the selector, the first will be focused.",
+  "help" : "This method uncheck an element with [selector]. If there's no element matching [selector], nothing to do.\n\nelements, the first will be unchecked.",
   "expression" : "tab.uncheck(Arg(name=selector, type=String, defaultValue=))",
   "cli" : "browser4-cli tab uncheck --selector=<String>, default="
 }, {
@@ -855,7 +829,7 @@
   } ],
   "returnType" : "Double",
   "description" : "This method fetches an element with [selector], scrolls it into view if needed.",
-  "help" : "This method fetches an element with [selector], scrolls it into view if needed.\n\nIf there's no element matching [selector], the method does nothing.\n\n```kotlin driver.scrollTo(\"h2.title\") ```\n\nthe [selector], the first will be selected.",
+  "help" : "This method fetches an element with [selector], scrolls it into view if needed.\n\nIf there's no element matching [selector], the method does nothing.\n\n```kotlin driver.scrollTo(\"h2.title\") ```\n\nelements, the first will be scrolled into view.",
   "expression" : "tab.scrollTo(Arg(name=selector, type=String, defaultValue=))",
   "cli" : "browser4-cli tab scrollTo --selector=<String>, default="
 }, {
@@ -1368,8 +1342,8 @@
     "cliOptions" : "--attrValue=<String>, default="
   } ],
   "returnType" : "Unit",
-  "description" : "Set the attribute of all elements matching the CSS query.",
-  "help" : "Set the attribute of all elements matching the CSS query.\n\n```kotlin driver.setAttributeAll(\"h2.title\", \"class\", \"header\") ```",
+  "description" : "Set the attribute of all elements matching [selector].",
+  "help" : "Set the attribute of all elements matching [selector].\n\n```kotlin driver.setAttributeAll(\"h2.title\", \"class\", \"header\") ```",
   "expression" : "tab.setAttributeAll(Arg(name=selector, type=String, defaultValue=), Arg(name=attrName, type=String, defaultValue=), Arg(name=attrValue, type=String, defaultValue=))",
   "cli" : "browser4-cli tab setAttributeAll --selector=<String>, default= --attrName=<String>, default= --attrValue=<String>, default="
 }, {
@@ -1466,8 +1440,8 @@
     "cliOptions" : "--propValue=<String>, default="
   } ],
   "returnType" : "Unit",
-  "description" : "Set the property of all elements matching the CSS query.",
-  "help" : "Set the property of all elements matching the CSS query.\n\n```kotlin driver.setPropertyAll(\"input#input\", \"value\") ```",
+  "description" : "Set the property of all elements matching [selector].",
+  "help" : "Set the property of all elements matching [selector].\n\n```kotlin driver.setPropertyAll(\"input#input\", \"value\") ```",
   "expression" : "tab.setPropertyAll(Arg(name=selector, type=String, defaultValue=), Arg(name=propName, type=String, defaultValue=), Arg(name=propValue, type=String, defaultValue=))",
   "cli" : "browser4-cli tab setPropertyAll --selector=<String>, default= --propName=<String>, default= --propValue=<String>, default="
 }, {
@@ -1541,7 +1515,8 @@
     "cliOptions" : "--functionDeclaration=<String>, default="
   } ],
   "returnType" : "Any?",
-  "description" : "Evaluate Value",
+  "description" : "Executes JavaScript for the element located by [selector] and returns the result as a JSON-serializable value.",
+  "help" : "Executes JavaScript for the element located by [selector] and returns the result as a JSON-serializable value.",
   "expression" : "tab.evaluateValue(Arg(name=selector, type=String, defaultValue=), Arg(name=functionDeclaration, type=String, defaultValue=))",
   "cli" : "browser4-cli tab evaluateValue --selector=<String>, default= --functionDeclaration=<String>, default="
 }, {
@@ -1559,7 +1534,8 @@
     "cliOptions" : "--functionDeclaration=<String>, default="
   } ],
   "returnType" : "JsEvaluation?",
-  "description" : "Evaluate Value Detail",
+  "description" : "Returns detailed value evaluation metadata for the element located by [selector].",
+  "help" : "Returns detailed value evaluation metadata for the element located by [selector].",
   "expression" : "tab.evaluateValueDetail(Arg(name=selector, type=String, defaultValue=), Arg(name=functionDeclaration, type=String, defaultValue=))",
   "cli" : "browser4-cli tab evaluateValueDetail --selector=<String>, default= --functionDeclaration=<String>, default="
 }, {

@@ -287,10 +287,6 @@ interface WebDriver : Closeable {
     @MCP
     suspend fun navigate(entry: NavigateEntry)
 
-    @Deprecated("Use navigate(entry: NavigateEntry) instead", ReplaceWith("navigate(entry)"))
-    @Throws(WebDriverException::class)
-    suspend fun navigateTo(entry: NavigateEntry) = navigate(entry)
-
     /**
      * Reloads the current page. @mcp
      *

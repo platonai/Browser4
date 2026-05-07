@@ -605,6 +605,7 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
     }
 
     @Test
+    @Tag("RequiresAI")
     @DisplayName("agent extract/summarize and command run/status/result work through MCP")
     fun testAgentAndCommandTools() {
         Assumptions.assumeTrue(ChatModelFactory.isModelConfigured(conf))
