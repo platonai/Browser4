@@ -52,7 +52,7 @@ class JsHandler(
 
     @Throws(ChromeDriverException::class)
     suspend fun callFunctionOn(selector: String, functionDeclaration: String): CallFunctionOn? {
-        val node = pageHandler.querySelector(selector) ?: return null
+        val node = pageHandler.queryLocator(selector) ?: return null
         val resolved = resolveNodeObjectId(devTools, node) ?: return null
         return try {
             cdp.callFunctionOn(functionDeclaration, objectId = resolved.objectId, returnByValue = true)

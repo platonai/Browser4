@@ -1,17 +1,16 @@
 package ai.platon.browser4.driver.chrome
 
-import ai.platon.browser4.driver.chrome.experimental.CDP
 import ai.platon.browser4.driver.chrome.dom.CDPSnapshotService
-import ai.platon.browser4.driver.chrome.dom.SnapshotService
 import ai.platon.browser4.driver.chrome.dom.Locator
+import ai.platon.browser4.driver.chrome.dom.SnapshotService
 import ai.platon.browser4.driver.chrome.dom.model.BrowserUseState
 import ai.platon.browser4.driver.chrome.dom.model.ElementRefCriteria
 import ai.platon.browser4.driver.chrome.dom.model.PageTarget
 import ai.platon.browser4.driver.chrome.dom.model.SnapshotOptions
+import ai.platon.browser4.driver.chrome.experimental.CDP
 import ai.platon.browser4.driver.chrome.util.CDPReturnError
 import ai.platon.browser4.driver.chrome.util.ChromeDriverException
 import ai.platon.browser4.driver.chrome.util.ChromeRPCException
-import ai.platon.cdt.kt.protocol.support.annotations.ParamName
 import ai.platon.cdt.kt.protocol.types.dom.Rect
 import ai.platon.cdt.kt.protocol.types.page.Navigate
 import ai.platon.cdt.kt.protocol.types.page.ReferrerPolicy
@@ -20,7 +19,11 @@ import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.Strings
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
+
+data class LocatorAndCssSelector(
+    val locator: Locator,
+    val cssSelector: String?,
+)
 
 class PageHandler(
     private val devTools: RemoteDevTools,
@@ -48,7 +51,7 @@ class PageHandler(
     val keyboard = Keyboard(cdp)
 
     @Throws(ChromeDriverException::class)
-    suspend fun navigate(@ParamName("url") url: String): Navigate? {
+    suspend fun navigate(url: String): Navigate? {
         return if (isActive) cdp.navigate(url) else null
     }
 
@@ -63,44 +66,27 @@ class PageHandler(
         return if (isActive) cdp.navigate(url, referrer, transitionType, frameId, referrerPolicy) else null
     }
 
-    suspend fun exists(selector: String): Boolean {
-        val node = resolveSelector(selector)
+    suspend fun exists(locator: String): Boolean {
+        val node = resolveLocator(locator)
         val nodeId = node?.nodeId
-
-//        val rootId = domAPI?.getDocument()?.nodeId ?: return false
-//        val nodeId = try {
-//            // Executes `querySelector` on a given node.
-//            domAPI?.querySelector(rootId, selector)
-//        } catch (e: CDPReturnError) {
-//            // code: -32000 message: "Could not find node with given id"
-//            // This exception is expected, will change this log to debug
-//            if (e.errorCode != -32000L) {
-//                logger.warn("Exception from domAPI?.querySelector | {} {} | {}", e.errorCode, e.errorMessage, e.brief())
-//            }
-//            null
-//        } catch (e: Exception) {
-//            logger.warn("Exception executing `querySelector` on node $rootId.", e)
-//            null
-//        }
-
         return nodeId != null && nodeId > 0
     }
 
     /**
      * Queries for an element using a selector.
      *
-     * Supports two selector formats:
+     * Supports locator formats:
      * - CSS selector: "div.class", "#id", etc.
      * - XPath selector: "//div[@class='class']", etc.
      * - Backend node ID: "backend:123", "e1233"
      * - Frame backend node ID: "fbn:FRAMExID,123"
      *
-     * @param selector CSS selector or "backend:nodeId" format
+     * @param locator The element locator, multiple formats are supported.
      * @return nodeId or null if not found
      */
     @Throws(ChromeDriverException::class)
-    suspend fun querySelector(selector: String): NodeRef? {
-        return resolveSelector(selector)
+    suspend fun queryLocator(locator: String): NodeRef? {
+        return resolveLocator(locator)
     }
 
     /**
@@ -112,12 +98,12 @@ class PageHandler(
      * - Backend node ID: "backend:123", "e1233"
      * - Frame backend node ID: "fbn:FRAMExID,123"
      *
-     * @param selector CSS selector or "backend:nodeId" format
+     * @param locator The element locator, multiple formats are supported.
      * @return nodeId or null if not found
      */
     @Throws(ChromeDriverException::class)
-    suspend fun querySelectorAll(selector: String): List<NodeRef>? {
-        return resolveSelectorAll(selector)
+    suspend fun queryLocatorAll(locator: String): List<NodeRef>? {
+        return resolveLocatorAll(locator)
     }
 
     /**
@@ -179,15 +165,17 @@ class PageHandler(
     }
 
     @Throws(ChromeDriverException::class)
-    private suspend fun resolveSelectorAll(selector: String): List<NodeRef>? {
+    private suspend fun resolveLocatorAll(locator: String): List<NodeRef>? {
         return try {
-            resolveSelectorAll0(selector)
+            doResolveLocatorAll(locator)
         } catch (e: CDPReturnError) {
             // code: -32000 message: "Could not find node with given id"
             // This exception is expected, will change this log to debug
             if (e.errorCode != -32000L) {
                 // -32000L is expected, no log needed
                 logger.warn("Exception resolveSelectorAll | {} {} | {}", e.errorCode, e.errorMessage, e.brief())
+            } else {
+                logger.debug("Element not found for selector '{}'", locator)
             }
             null
         } catch (e: Exception) {
@@ -197,24 +185,24 @@ class PageHandler(
     }
 
     @Throws(ChromeDriverException::class)
-    private suspend fun resolveSelectorAll0(selector: String): List<NodeRef>? {
+    private suspend fun doResolveLocatorAll(locator: String): List<NodeRef>? {
         // Parse the selector into a Locator object. If parsing fails, return null.
-        val locator = Locator.parse(selector) ?: return null
+        val (l, cssSelector) = normalizeLocatorForNonJs(locator) ?: return null
 
         require(Locator.Type.CSS_PATH.text.isEmpty())
 
         // Determine the type of the locator and resolve accordingly.
-        return when (locator.type) {
+        return when {
             // For CSS_PATH type, use resolveCSSSelectorAll0 to resolve the selector.
-            Locator.Type.CSS_PATH -> resolveCSSSelectorAll0(selector)
+            cssSelector != null -> resolveCSSSelectorAll(cssSelector)
 
-            Locator.Type.XPATH -> resolveXPathAll(locator.selector)
+            l.type == Locator.Type.XPATH -> resolveXPathAll(l.selector)
 
             // For BACKEND_NODE_ID and FRAME_BACKEND_NODE_ID types, use the single resolver and wrap in list.
-            Locator.Type.BACKEND_NODE_ID, Locator.Type.FRAME_BACKEND_NODE_ID -> {
+            l.type == Locator.Type.BACKEND_NODE_ID || l.type == Locator.Type.FRAME_BACKEND_NODE_ID -> {
                 // Optimized: handle BACKEND_NODE_ID directly to avoid re-parsing in resolveSelector0
-                if (locator.type == Locator.Type.BACKEND_NODE_ID) {
-                    val backendNodeId = locator.selector.toIntOrNull()
+                if (l.type == Locator.Type.BACKEND_NODE_ID) {
+                    val backendNodeId = l.selector.toIntOrNull()
                     if (backendNodeId != null) {
                         val node = resolveByBackendNodeId(backendNodeId)
                         if (node != null) listOf(node) else null
@@ -223,19 +211,19 @@ class PageHandler(
                     }
                 } else {
                     // Fallback to resolveSelector0 for complex types like FRAME_BACKEND_NODE_ID
-                    val nodeRef = resolveSelector0(selector)
+                    val nodeRef = doResolveLocator(l.selector)
                     if (nodeRef != null) listOf(nodeRef) else null
                 }
             }
 
-            else -> throw UnsupportedOperationException("Unsupported selector $selector")
+            else -> throw UnsupportedOperationException("Unsupported selector $locator")
         }
     }
 
     @Throws(ChromeDriverException::class)
-    private suspend fun resolveCSSSelectorAll0(selector: String): List<NodeRef>? {
+    private suspend fun resolveCSSSelectorAll(selector: String): List<NodeRef>? {
         if (!isActive) return null
-        val rootId = cdp.getDocument()?.nodeId ?: return null
+        val rootId = cdp.getDocument().nodeId ?: return null
 
         val nodeIds = try {
             cdp.querySelectorAll(rootId, selector)
@@ -272,7 +260,8 @@ class PageHandler(
             val searchResult = cdp.performSearch(xpath, true) ?: return null
             val nodeIds = if (searchResult.resultCount > 0) {
                 // Retrieve all matching nodes
-                val results = cdp.getSearchResults(searchResult.searchId, fromIndex = 0, toIndex = searchResult.resultCount)
+                val results =
+                    cdp.getSearchResults(searchResult.searchId, fromIndex = 0, toIndex = searchResult.resultCount)
                 // Clean up search results to avoid resource leak
                 try {
                     cdp.discardSearchResults(searchResult.searchId)
@@ -304,15 +293,17 @@ class PageHandler(
     }
 
     @Throws(ChromeDriverException::class)
-    private suspend fun resolveSelector(selector: String): NodeRef? {
+    private suspend fun resolveLocator(locator: String): NodeRef? {
         return try {
-            resolveSelector0(selector)
+            doResolveLocator(locator)
         } catch (e: CDPReturnError) {
             // code: -32000 message: "Could not find node with given id"
             // This exception is expected, will change this log to debug
             if (e.errorCode != -32000L) {
                 // -32000L is expected, no log needed
                 logger.warn("Exception resolveSelector | {} {} | {}", e.errorCode, e.errorMessage, e.brief())
+            } else {
+                logger.debug("Element not found for selector '{}'", locator)
             }
             null
         } catch (e: Exception) {
@@ -327,7 +318,7 @@ class PageHandler(
      * 1. Regular CSS selector: Resolves to a `NodeRef` using `querySelectorOrNull`.
      * 2. Backend node ID selector: Resolves to a `NodeRef` using `resolveByBackendNodeId`.
      *
-     * @param selector A string representing the selector. It can be:
+     * @param locator A string representing the locator. It can be:
      * - A CSS selector (e.g., "div.class", "#id").
      * - A backend node ID in the format "backend:123".
      * - A frame-backendNode int the format "fbn:FRAMExID,123"
@@ -337,38 +328,36 @@ class PageHandler(
      * @throws ChromeDriverException If an error occurs during the resolution process.
      */
     @Throws(ChromeDriverException::class)
-    private suspend fun resolveSelector0(selector: String): NodeRef? {
-        val selector = normalizeCSSSelector(selector)
+    private suspend fun doResolveLocator(locator: String): NodeRef? {
+        val (l, cssSelector) = normalizeLocatorForNonJs(locator) ?: return null
 
-        // Parse the selector into a Locator object. If parsing fails, return null.
-        val locator = Locator.parse(selector) ?: return null
-
+        // Ensure that the default locator type, CSS_PATH, has no prefix
         require(Locator.Type.CSS_PATH.text.isEmpty())
 
         // Determine the type of the locator and resolve accordingly.
-        val nodeRef = when (locator.type) {
+        val nodeRef = when {
             // For CSS_PATH type, use querySelectorOrNull to resolve the selector.
-            Locator.Type.CSS_PATH -> resolveCSSSelector0(selector)
+            cssSelector != null -> resolveCSSSelector(cssSelector)
 
-            Locator.Type.XPATH -> resolveXPath(locator.selector)
+            l.type == Locator.Type.XPATH -> resolveXPath(l.selector)
 
             // For BACKEND_NODE_ID type, parse the backend node ID and resolve it.
-            Locator.Type.BACKEND_NODE_ID -> {
-                val backendNodeId = locator.selector.toIntOrNull()
+            l.type == Locator.Type.BACKEND_NODE_ID -> {
+                val backendNodeId = l.selector.toIntOrNull()
                 if (backendNodeId == null) {
-                    logger.warn("Invalid backend node ID format: '{}'", selector)
+                    logger.warn("Invalid backend node ID format: '{}'", l.selector)
                     return null
                 }
                 resolveByBackendNodeId(backendNodeId)
             }
 
             // For FRAME_BACKEND_NODE_ID type, extract the backend node ID and resolve it.
-            Locator.Type.FRAME_BACKEND_NODE_ID -> {
-                val backendNodeId = selector.substringAfterLast(",").toIntOrNull() ?: return null
+            l.type == Locator.Type.FRAME_BACKEND_NODE_ID -> {
+                val backendNodeId = l.selector.substringAfterLast(",").toIntOrNull() ?: return null
                 resolveByBackendNodeId(backendNodeId)
             }
 
-            else -> throw UnsupportedOperationException("Unsupported selector $selector")
+            else -> throw UnsupportedOperationException("Unsupported selector ${l.selector}")
         }
 
         // Return the resolved NodeRef or null if resolution failed.
@@ -378,7 +367,7 @@ class PageHandler(
     /**
      * Gets a specific attribute value for the element matching the selector.
      *
-     * @param selector CSS selector or "backend:nodeId" format
+     * @param locator The element locator, multiple formats are supported.
      * @param attrName Attribute name to retrieve
      * @return Attribute value or null if not found
      */
@@ -406,11 +395,11 @@ class PageHandler(
     /**
      * Checks if the element matching the selector is visible.
      *
-     * @param selector CSS selector or "backend:nodeId" format
+     * @param locator The element locator, multiple formats are supported.
      * @return true if visible, false otherwise
      */
     @Throws(ChromeDriverException::class)
-    suspend fun isVisible(selector: String) = predicateOnElement(selector) { isVisible(it) }
+    suspend fun isVisible(locator: String) = predicateOnElement(locator) { isVisible(it) }
 
     @Throws(ChromeDriverException::class)
     suspend fun isVisible(node: NodeRef): Boolean {
@@ -471,14 +460,14 @@ class PageHandler(
      * 1. CSS selector: "input#username"
      * 2. Backend node ID: "backend:123"
      *
-     * @param selector - A CSS selector or "backend:nodeId" format of an element to focus.
+     * @param locator - A CSS selector or "backend:nodeId" format of an element to focus.
      * If there are multiple elements satisfying the selector, the first will be focused.
      * @returns NodeId which resolves when the element matching selector is
      * successfully focused. Returns 0 if there is no element matching selector.
      */
     @Throws(ChromeDriverException::class)
-    suspend fun focusOnSelector(selector: String): NodeRef? {
-        val nodeRef = querySelector(selector) ?: return null
+    suspend fun focusOnSelector(locator: String): NodeRef? {
+        val nodeRef = queryLocator(locator) ?: return null
 
         // Fix: Only use nodeId parameter, others should be null
         if (isActive) cdp.focus(nodeRef.nodeId)
@@ -489,13 +478,13 @@ class PageHandler(
     /**
      * Scrolls the element into view if needed.
      *
-     * @param selector CSS selector or "backend:nodeId" format
+     * @param locator CSS selector or "backend:nodeId" format
      * @param rect Optional rectangle to scroll into view
      * @return nodeId of the element, or null if not found
      */
     @Throws(ChromeDriverException::class)
-    suspend fun scrollIntoViewIfNeeded(selector: String, rect: Rect? = null): NodeRef? {
-        val node = resolveSelector(selector) ?: return null
+    suspend fun scrollIntoViewIfNeeded(locator: String, rect: Rect? = null): NodeRef? {
+        val node = resolveLocator(locator) ?: return null
 
         // Prefer smooth behavior when rect is not specified; otherwise honor rect via CDP first
         return try {
@@ -504,18 +493,18 @@ class PageHandler(
                 if (trySmoothScroll(node)) return node
             }
             // Fallback or rect path: use CDP DOM API
-            scrollIntoViewIfNeeded(node, selector, rect)
+            scrollIntoViewIfNeeded(node, locator, rect)
         } catch (e: ChromeRPCException) {
             logger.warn(
                 "DOM.scrollIntoViewIfNeeded is not supported, fallback to Element.scrollIntoView | {} | {} | {}",
-                node, e.message, selector
+                node, e.message, locator
             )
             // Fallback to legacy helper (CSS-only); safe stringify to avoid quoting issues
-            val safeSelector = normalizeCSSSelector(selector)
+            val safeSelector = normalizeLocatorForJs(locator)
             jsHandler.evaluate("__pulsar_utils__.scrollIntoView($safeSelector)")
             node
         } catch (e: Exception) {
-            logger.warn("scrollIntoViewIfNeeded failed | {} | {}", selector, e.brief())
+            logger.warn("scrollIntoViewIfNeeded failed | {} | {}", locator, e.brief())
             node
         }
     }
@@ -532,7 +521,13 @@ class PageHandler(
      */
     @Throws(ChromeDriverException::class)
     suspend fun scrollIntoViewIfNeeded(nodeRef: NodeRef, selector: String? = null, rect: Rect? = null): NodeRef? {
-        val node = if (isActive) cdp.describeNode(nodeRef.nodeId, nodeRef.backendNodeId, nodeRef.objectId, null, false) else null
+        val node = if (isActive) cdp.describeNode(
+            nodeRef.nodeId,
+            nodeRef.backendNodeId,
+            nodeRef.objectId,
+            null,
+            false
+        ) else null
         if (node?.nodeType != ELEMENT_NODE) {
             logger.info("Node is not of type HTMLElement | {}", selector ?: node)
             return null
@@ -552,25 +547,50 @@ class PageHandler(
         } catch (e: ChromeRPCException) {
             // As a last resort, attempt legacy JS utility when a CSS selector is available
             if (!selector.isNullOrBlank()) {
-                val safeSelector = normalizeCSSSelector(selector)
+                val safeSelector = normalizeLocatorForJs(selector)
                 jsHandler.evaluate("__pulsar_utils__.scrollIntoView($safeSelector)")
             }
             nodeRef
         }
     }
 
-    fun convertSelectorIfNecessary(selector: String): String {
-        val nodeId = if (selector.startsWith("e")) selector.substring(1).toIntOrNull() else null
-        if (nodeId != null) {
-            val ref = ElementRefCriteria(backendNodeId = nodeId)
-            return snapshotService.findElement(ref)?.cssSelector() ?: selector
+    fun findCssSelectorFromLocator(locator: String): LocatorAndCssSelector? {
+        val l = Locator.parse(locator) ?: return null
+
+        if (l.type == Locator.Type.CSS_PATH) {
+            return LocatorAndCssSelector(l, l.selector)
         }
-        return selector
+
+        val backendNodeId = when (l.type) {
+            Locator.Type.FRAME_BACKEND_NODE_ID -> l.selector.toIntOrNull()
+            else -> null
+        }
+
+        if (backendNodeId != null) {
+            val ref = ElementRefCriteria(backendNodeId = backendNodeId)
+            val selector = snapshotService.findElement(ref)?.cssSelector()
+            return LocatorAndCssSelector(l, selector)
+        }
+
+        return LocatorAndCssSelector(l, null)
     }
 
-    fun normalizeCSSSelector(selector: String): String {
-        val cssSelector = convertSelectorIfNecessary(selector)
-        val safeSelector = Strings.escapeJsString(cssSelector)
+    /**
+     * Normalize an element locator for use in non-JS contexts (e.g. CDP DOM APIs) by extracting a CSS selector if possible.
+     * */
+    fun normalizeLocatorForNonJs(locator: String): LocatorAndCssSelector? {
+        return findCssSelectorFromLocator(locator)
+    }
+
+    /**
+     * Normalize an element locator for use in JavaScript contexts by extracting a CSS selector if possible and escaping it for safe embedding in JS code.
+     * */
+    fun normalizeLocatorForJs(locator: String): String {
+        val cssSelector = findCssSelectorFromLocator(locator)?.cssSelector
+
+        // consider xpath
+        val selector = cssSelector ?: locator
+        val safeSelector = Strings.escapeJsString(selector)
         return safeSelector
     }
 
@@ -605,19 +625,19 @@ class PageHandler(
     }
 
     @Throws(ChromeDriverException::class)
-    private suspend fun resolveCSSSelector0(selector: String): NodeRef? {
+    private suspend fun resolveCSSSelector(cssSelector: String): NodeRef? {
         if (!isActive) return null
-        val rootId = cdp.getDocument()?.nodeId ?: return null
+        val rootId = cdp.getDocument().nodeId
 
         val nodeId = try {
-            cdp.querySelector(rootId, selector)
+            cdp.querySelector(rootId, cssSelector)
         } catch (e: CDPReturnError) {
             // code: -32000 message: "Could not find node with given id"
             // This exception is expected, will change this log to debug
             if (e.errorCode != -32000L) {
                 logger.warn(
                     "Exception from domAPI?.querySelector | selector={}, errorCode={}, errorMessage={} | {}",
-                    selector, e.errorCode, e.errorMessage, e.brief()
+                    cssSelector, e.errorCode, e.errorMessage, e.brief()
                 )
             }
             null
@@ -748,17 +768,15 @@ class PageHandler(
     }
 
     @Throws(ChromeDriverException::class)
-    private suspend fun <T> invokeOnElement(selector: String, action: suspend (NodeRef) -> T): T? {
-        val safeSelector = normalizeCSSSelector(selector)
-        val node = querySelector(safeSelector) ?: return null
+    private suspend fun <T> invokeOnElement(locator: String, action: suspend (NodeRef) -> T): T? {
+        val node = queryLocator(locator) ?: return null
 
         return action(node)
     }
 
     @Throws(ChromeDriverException::class)
-    private suspend fun predicateOnElement(selector: String, action: suspend (NodeRef) -> Boolean): Boolean {
-        val safeSelector = normalizeCSSSelector(selector)
-        val node = querySelector(safeSelector) ?: return false
+    private suspend fun predicateOnElement(locator: String, action: suspend (NodeRef) -> Boolean): Boolean {
+        val node = queryLocator(locator) ?: return false
 
         if (node.nodeId > 0) {
             return action(node)

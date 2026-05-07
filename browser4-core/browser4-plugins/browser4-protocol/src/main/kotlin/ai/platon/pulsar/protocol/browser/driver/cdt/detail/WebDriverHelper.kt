@@ -131,7 +131,7 @@ class WebDriverHelper(
                 } else if (scrollIntoView) {
                     page.scrollIntoViewIfNeeded(selector)
                 } else {
-                    page.querySelector(selector)
+                    page.queryLocator(selector)
                 }
 
                 if (node != null) {

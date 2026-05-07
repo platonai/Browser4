@@ -2,7 +2,6 @@ package ai.platon.pulsar.protocol.browser.driver.cdt
 
 import ai.platon.browser4.driver.chrome.*
 import ai.platon.browser4.driver.chrome.experimental.CDP
-import ai.platon.browser4.driver.chrome.dom.Locator
 import ai.platon.browser4.driver.chrome.dom.SnapshotService
 import ai.platon.browser4.driver.chrome.dom.model.NanoDOMTree
 import ai.platon.browser4.driver.chrome.dom.model.SnapshotOptions
@@ -302,8 +301,7 @@ class PulsarWebDriver constructor(
 
     @Throws(WebDriverException::class)
     override suspend fun isVisible(selector: String): Boolean {
-        val safeSelector = normalizeCSSSelector(selector) ?: return false
-        return page.isVisible(safeSelector)
+        return page.isVisible(selector)
     }
 
     @Throws(WebDriverException::class)
@@ -853,16 +851,11 @@ class PulsarWebDriver constructor(
     @Beta
     @Throws(WebDriverException::class)
     override suspend fun querySelectorAll(selector: String): List<NodeRef> {
-        return driverHelper.invokeOnPage("select") { page.querySelectorAll(selector) } ?: listOf()
+        return driverHelper.invokeOnPage("select") { page.queryLocatorAll(selector) } ?: listOf()
     }
 
     @Throws(WebDriverException::class)
     override suspend fun selectFirstTextOrNull(selector: String): String? {
-        val locator = Locator.parse(selector)
-        if (locator?.type == Locator.Type.CSS_PATH) {
-            return super.selectFirstTextOrNull(selector)
-        }
-
         return driverHelper.invokeOnElement(selector, "selectFirstTextOrNull") { node ->
             when {
                 node.isNull() -> null
@@ -908,6 +901,97 @@ function() {
             }
         }
     }
+
+    @Throws(WebDriverException::class)
+    override suspend fun selectTextAll(selector: String): List<String> {
+        val safeSelector = page.normalizeLocatorForJs(selector) ?: return emptyList()
+        val json = evaluate("__pulsar_utils__.selectTextAll('$safeSelector')")?.toString() ?: "[]"
+        return jacksonObjectMapper().readValue(json)
+    }
+
+    override suspend fun selectAttributes(selector: String): Map<String, String> {
+        val safeSelector = page.normalizeLocatorForJs(selector) ?: return mapOf()
+        val json = evaluate("__pulsar_utils__.selectAttributes('$safeSelector')")?.toString() ?: return mapOf()
+        val attributes: List<String> = jacksonObjectMapper().readValue(json)
+        return attributes.zipWithNext().associate { it }
+    }
+
+    @Throws(WebDriverException::class)
+    override suspend fun selectAttributeAll(selector: String, attrName: String, start: Int, limit: Int): List<String> {
+        val end = start + limit
+        val safeSelector = page.normalizeLocatorForJs(selector) ?: return listOf()
+
+        val expression = "__pulsar_utils__.selectAttributeAll('$safeSelector', '$attrName', $start, $end)"
+        val json = evaluate(expression)?.toString() ?: return listOf()
+        return jacksonObjectMapper().readValue(json)
+    }
+
+    @Throws(WebDriverException::class)
+    override suspend fun setAttribute(selector: String, attrName: String, attrValue: String) {
+        val safeSelector = page.normalizeLocatorForJs(selector) ?: return
+        evaluate("__pulsar_utils__.setAttribute('$safeSelector', '$attrName', '$attrValue')")
+    }
+
+    @Throws(WebDriverException::class)
+    override suspend fun setAttributeAll(selector: String, attrName: String, attrValue: String) {
+        val safeSelector = page.normalizeLocatorForJs(selector) ?: return
+        evaluate("__pulsar_utils__.setAttributeAll('$safeSelector', '$attrName', '$attrValue')")
+    }
+
+    // --------------------------- Property helpers ---------------------------
+    @Throws(WebDriverException::class)
+    override suspend fun selectFirstPropertyValueOrNull(selector: String, propName: String): String? {
+        val safeSelector = page.normalizeLocatorForJs(selector) ?: return null
+        return evaluateValue("__pulsar_utils__.selectFirstPropertyValue('$safeSelector', '$propName')")?.toString()
+//        val safePropName = Strings.escapeForJsString(propName)
+        // return evaluateValue(selector, "function() { return this['$safePropName']; }")?.toString()
+    }
+
+    @Throws(WebDriverException::class)
+    override suspend fun selectPropertyValueAll(
+        selector: String, propName: String, start: Int, limit: Int
+    ): List<String> {
+        val end = start + limit
+        val safeSelector = page.normalizeLocatorForJs(selector) ?: return listOf()
+        val expression = "__pulsar_utils__.selectPropertyValueAll('$safeSelector', '$propName', $start, $end)"
+        val json = evaluate(expression)?.toString() ?: return listOf()
+        return jacksonObjectMapper().readValue(json)
+    }
+
+    @Throws(WebDriverException::class)
+    override suspend fun setProperty(selector: String, propName: String, propValue: String) {
+        val safeSelector = page.normalizeLocatorForJs(selector) ?: return
+        evaluate("__pulsar_utils__.setProperty('$safeSelector', '$propName', '$propValue')")
+    }
+
+    @Throws(WebDriverException::class)
+    override suspend fun setPropertyAll(selector: String, propName: String, propValue: String) {
+        val safeSelector = page.normalizeLocatorForJs(selector) ?: return
+        evaluate("__pulsar_utils__.setPropertyAll('$safeSelector', '$propName', '$propValue')")
+    }
+
+    @Throws(WebDriverException::class)
+    override suspend fun clickTextMatches(selector: String, pattern: String, count: Int) {
+        val safeSelector = page.normalizeLocatorForJs(selector) ?: return
+        evaluate("__pulsar_utils__.clickTextMatches('$safeSelector', '$pattern')")
+    }
+
+    @Throws(WebDriverException::class)
+    override suspend fun clickMatches(selector: String, attrName: String, pattern: String, count: Int) {
+        val safeSelector = page.normalizeLocatorForJs(selector) ?: return
+        evaluate("__pulsar_utils__.clickMatches('$safeSelector', '$attrName', '$pattern')")
+    }
+
+
+
+
+
+
+
+
+
+
+
 
     @Throws(WebDriverException::class)
     override suspend fun clickablePoint(selector: String): PointD? {
@@ -1410,7 +1494,7 @@ function() {
     }
 
     private suspend fun waitForScrollSettled(selector: String, timeout: Duration = Duration.ofMillis(5_000)) {
-        val safeSelector = page.convertSelectorIfNecessary(selector)
+        val safeSelector = page.normalizeLocatorForJs(selector)
         val stateKey = "__ps_scroll_${Random.nextLong(Long.MAX_VALUE).toString(16)}"
         val expression = """
 (() => {
