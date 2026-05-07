@@ -49,7 +49,7 @@ After filling all fields:
 **Element**: `<input type="text">`, `<input type="email">`, `<input type="password">`, `<textarea>`
 
 **How to fill**:
-- Use `browser.fill(selector, value)` or `browser.type(selector, value)`
+- Use `browser.fill(selector, value)` or `browser.type(value, selector)`
 - `fill` is faster (sets value directly)
 - `type` simulates keyboard typing (triggers keystroke events)
 
@@ -260,7 +260,7 @@ Option A: Click search button
 browser.click("button[type='submit']")
 
 Option B: Press Enter key
-browser.type("input[name='q']", "{ENTER}")
+browser.press("Enter", "input[name='q']")
 
 3. Wait for results
 browser.wait_for_element(".search-results")
@@ -419,7 +419,7 @@ The following Browser4 tools are commonly used with this skill:
 
 - `browser.navigate(url)` - Navigate to form page
 - `browser.fill(selector, value)` - Fill text fields
-- `browser.type(selector, value)` - Type into fields (triggers events)
+- `browser.type(value, selector)` - Type into fields (triggers events)
 - `browser.click(selector)` - Click buttons, checkboxes, radio buttons
 - `browser.check(selector)` - Check checkboxes
 - `browser.uncheck(selector)` - Uncheck checkboxes

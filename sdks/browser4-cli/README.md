@@ -95,7 +95,7 @@ browser4-cli -s=<session> <command> [args] [options]
 | `goto <url>` | Navigate to a URL |
 | `click <ref> [button]` | Click an element |
 | `dblclick <ref> [button]` | Double-click an element |
-| `type <ref> <text>` | Type text into an element |
+| `type <text> [ref]` | Type text into the focused element or an optional target element |
 | `fill <ref> <text>` | Fill text into an editable element |
 | `hover <ref>` | Hover over an element |
 | `select <ref> <val>` | Select an option in a dropdown |
@@ -122,7 +122,7 @@ browser4-cli -s=<session> <command> [args] [options]
 
 | Command | Description |
 |---|---|
-| `press <ref> <key>` | Press a key on the keyboard |
+| `press <key> [ref]` | Press a key on the focused element or an optional target element |
 | `keydown <key>` | Press and hold a key |
 | `keyup <key>` | Release a key |
 
@@ -233,8 +233,8 @@ browser4-cli snapshot
 
 # Interact using refs from the snapshot
 browser4-cli click e15
-browser4-cli type e15 "Hello World"
-browser4-cli press e15 Enter
+browser4-cli type "Hello World" e15
+browser4-cli press Enter e15
 browser4-cli eval "document.title"
 browser4-cli eval "element => element.textContent.trim()" e15
 browser4-cli keydown Shift

@@ -22,7 +22,7 @@ import org.slf4j.LoggerFactory
  * ## Common WebDriver Operations:
  * - `exists(selector)` - Check if an element exists
  * - `click(selector)` - Click an element
- * - `type(selector, text)` - Type text into an input field
+ * - `type(text, selector)` - Type text into an input field
  * - `selectFirstTextOrNull(selector)` - Get text content of an element
  * - `scrollToTop/Middle/Bottom()` - Scroll the page
  *
@@ -132,7 +132,7 @@ internal class RPACrawler(private val session: PulsarSession = createSession()) 
 
             // Step 3: Use extracted text in search box (first 3 chars)
             // AI Note: substring(1, 4) takes chars at index 1, 2, 3
-            driver.type(searchBoxSelector, text.substring(1, 4))
+            driver.type(text.substring(1, 4), searchBoxSelector)
 
             // Log the interaction
             logger.info("{} clicked", selector)

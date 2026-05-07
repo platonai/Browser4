@@ -115,6 +115,40 @@ class BrowserTabToolExecutor: AbstractToolExecutor() {
                 When both selector and expression are provided, expression is forwarded as functionDeclaration.
             """.trimIndent()
         )
+        toolSpec["type"] = ToolSpec(
+            domain = domain,
+            method = "type",
+            arguments = listOf(
+                ToolSpec.Arg("text", "String"),
+                ToolSpec.Arg("selector", "String?", "null")
+            ),
+            returnType = "Unit",
+            description = "Insert text into the currently focused element or the element matched by selector.",
+            help = """
+                tab.type(text: String)
+                tab.type(text: String, selector: String?)
+
+                Types text into the currently focused element when selector is omitted.
+                When selector is provided, the executor focuses the matched element first and then types text.
+            """.trimIndent()
+        )
+        toolSpec["press"] = ToolSpec(
+            domain = domain,
+            method = "press",
+            arguments = listOf(
+                ToolSpec.Arg("key", "String"),
+                ToolSpec.Arg("selector", "String?", "null")
+            ),
+            returnType = "Unit",
+            description = "Press a key on the currently focused element or the element matched by selector.",
+            help = """
+                tab.press(key: String)
+                tab.press(key: String, selector: String?)
+
+                Presses the key on the currently focused element when selector is omitted.
+                When selector is provided, the executor focuses the matched element first and then presses the key.
+            """.trimIndent()
+        )
     }
 
     override fun help(method: String): String {
@@ -185,7 +219,7 @@ class BrowserTabToolExecutor: AbstractToolExecutor() {
             "navigate" -> {
                 when {
                     args.containsKey("url") -> {
-                        validateArgs(args, allowed("url"), setOf("url"), functionName);
+                        validateArgs(args, allowed("url"), setOf("url"), functionName)
                         driver.navigate(paramString(args, "url", functionName)!!)
                         // After navigation, wait for the page to load by waiting for the body element to be present
                         driver.waitForNavigation()
@@ -269,9 +303,39 @@ class BrowserTabToolExecutor: AbstractToolExecutor() {
             // Interactions
             "focus" -> { validateArgs(args, allowed("selector"), setOf("selector"), functionName); driver.focus(paramString(args, "selector", functionName)!!) }
             "hover" -> { validateArgs(args, allowed("selector"), setOf("selector"), functionName); driver.hover(paramString(args, "selector", functionName)!!) }
-            "type" -> { validateArgs(args, allowed("selector", "text"), setOf("selector", "text"), functionName); driver.type(paramString(args, "selector", functionName)!!, paramString(args, "text", functionName)!!) }
+            "press" -> {
+                when {
+                    args.containsKey("selector") && args.containsKey("key") -> {
+                        validateArgs(args, allowed("selector", "key"), setOf("selector", "key"), functionName)
+                        driver.press(
+                            paramString(args, "key", functionName)!!,
+                            paramString(args, "selector", functionName)!!
+                        )
+                    }
+                    args.containsKey("key") -> {
+                        validateArgs(args, allowed("key"), setOf("key"), functionName)
+                        driver.press(paramString(args, "key", functionName)!!)
+                    }
+                    else -> throw IllegalArgumentException("press requires 'key' and optionally 'selector'")
+                }
+            }
+            "type" -> {
+                when {
+                    args.containsKey("selector") && args.containsKey("text") -> {
+                        validateArgs(args, allowed("selector", "text"), setOf("selector", "text"), functionName)
+                        driver.type(
+                            paramString(args, "text", functionName)!!,
+                            paramString(args, "selector", functionName)!!
+                        )
+                    }
+                    args.containsKey("text") -> {
+                        validateArgs(args, allowed("text"), setOf("text"), functionName)
+                        driver.type(paramString(args, "text", functionName)!!)
+                    }
+                    else -> throw IllegalArgumentException("type requires 'text' and optionally 'selector'")
+                }
+            }
             "fill" -> { validateArgs(args, allowed("selector", "text"), setOf("selector", "text"), functionName); driver.fill(paramString(args, "selector", functionName)!!, paramString(args, "text", functionName)!!) }
-            "press" -> { validateArgs(args, allowed("selector", "key"), setOf("selector", "key"), functionName); driver.press(paramString(args, "selector", functionName)!!, paramString(args, "key", functionName)!!) }
             "click" -> {
                 when {
                     args.containsKey("selector") && args.containsKey("count") && !args.containsKey("modifier") -> {

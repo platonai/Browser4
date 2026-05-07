@@ -98,6 +98,70 @@ fn get_number_value(map: &HashMap<String, Value>, key: &str) -> Option<Value> {
     map.get(key).filter(|v| v.is_number()).cloned()
 }
 
+fn raw_positionals(map: &HashMap<String, Value>) -> Vec<String> {
+    match map.get("_") {
+        Some(Value::Array(values)) => values
+            .iter()
+            .skip(1)
+            .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn looks_like_selector_or_ref(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    trimmed.starts_with('#')
+        || trimmed.starts_with('.')
+        || trimmed.starts_with('[')
+        || trimmed.starts_with("//")
+        || trimmed.starts_with("xpath:")
+        || trimmed.starts_with("css:")
+        || trimmed.starts_with("backend:")
+        || trimmed.starts_with("text=")
+        || (trimmed.starts_with('e') && trimmed[1..].chars().all(|ch| ch.is_ascii_digit()))
+}
+
+fn resolve_key_and_ref(map: &HashMap<String, Value>) -> (String, Option<String>) {
+    let positionals = raw_positionals(map);
+    match positionals.as_slice() {
+        [single] => (single.clone(), get_opt_str(map, "ref").map(ToOwned::to_owned)),
+        [first, second, ..] => {
+            if looks_like_selector_or_ref(first) && !looks_like_selector_or_ref(second) {
+                (second.clone(), Some(first.clone()))
+            } else {
+                (first.clone(), Some(second.clone()))
+            }
+        }
+        _ => (
+            get_str(map, "key").unwrap_or_default().to_string(),
+            get_opt_str(map, "ref").map(ToOwned::to_owned),
+        ),
+    }
+}
+
+fn resolve_text_and_ref(map: &HashMap<String, Value>) -> (String, Option<String>) {
+    let positionals = raw_positionals(map);
+    match positionals.as_slice() {
+        [single] => (single.clone(), get_opt_str(map, "ref").map(ToOwned::to_owned)),
+        [first, second, ..] => {
+            if looks_like_selector_or_ref(first) && !looks_like_selector_or_ref(second) {
+                (second.clone(), Some(first.clone()))
+            } else {
+                (first.clone(), Some(second.clone()))
+            }
+        }
+        _ => (
+            get_str(map, "text").unwrap_or_default().to_string(),
+            get_opt_str(map, "ref").map(ToOwned::to_owned),
+        ),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Command definitions (static)
 // ---------------------------------------------------------------------------
@@ -223,40 +287,43 @@ pub fn all_commands() -> Vec<CommandDef> {
         // ---- Keyboard ----
         CommandDef {
             name: "press",
-            description: "Press a key on the keyboard, `a`, `ArrowLeft`",
+            description: "Press a key on the focused element or an optional target ref, `a`, `ArrowLeft`",
             category: Category::Keyboard,
             hidden: false,
             args: &[
-                ArgDef { name: "ref", description: "CSS selector or element reference to receive the key press", optional: false },
                 ArgDef { name: "key", description: "Name of the key to press or a character to generate, such as `ArrowLeft` or `a`", optional: false },
+                ArgDef { name: "ref", description: "Optional CSS selector or element reference to receive the key press", optional: true },
             ],
             options: &[],
             tool_name_fn: |_| "browser_press_key".to_string(),
             tool_params_fn: |args| {
-                json!({
-                    "ref": get_str(args, "ref").unwrap_or_default(),
-                    "key": get_str(args, "key").unwrap_or_default(),
-                })
+                let (key, reference) = resolve_key_and_ref(args);
+                let mut params = json!({ "key": key });
+                if let Some(reference) = reference {
+                    params["ref"] = json!(reference);
+                }
+                params
             },
         },
         CommandDef {
             name: "type",
-            description: "Type text into editable element",
+            description: "Type text into the focused element or an optional target ref",
             category: Category::Core,
             hidden: false,
             args: &[
-                ArgDef { name: "ref", description: "CSS selector or element reference to type into", optional: false },
                 ArgDef { name: "text", description: "Text to type into the element", optional: false },
+                ArgDef { name: "ref", description: "Optional CSS selector or element reference to type into", optional: true },
             ],
             options: &[
                 OptionDef { name: "submit", description: "Whether to submit entered text (press Enter after)", is_bool: true },
             ],
             tool_name_fn: |_| "browser_press_sequentially".to_string(),
             tool_params_fn: |args| {
-                let mut p = json!({
-                    "ref": get_str(args, "ref").unwrap_or_default(),
-                    "text": get_str(args, "text").unwrap_or_default(),
-                });
+                let (text, reference) = resolve_text_and_ref(args);
+                let mut p = json!({ "text": text });
+                if let Some(reference) = reference {
+                    p["ref"] = json!(reference);
+                }
                 if let Some(submit) = get_bool(args, "submit") {
                     p["submit"] = json!(submit);
                 }
@@ -986,6 +1053,54 @@ mod tests {
         let args = HashMap::new();
         assert!((cmd.tool_name_fn)(&args).is_empty());
         assert_eq!((cmd.tool_params_fn)(&args), json!({}));
+    }
+
+    #[test]
+    fn test_press_params_use_key_first_order() {
+        let map = commands_map();
+        let cmd = map.get("press").unwrap();
+        let mut args = HashMap::new();
+        args.insert("_".to_string(), json!(["press", "Enter", "#search"]));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["key"], "Enter");
+        assert_eq!(params["ref"], "#search");
+    }
+
+    #[test]
+    fn test_press_params_keep_legacy_ref_first_order() {
+        let map = commands_map();
+        let cmd = map.get("press").unwrap();
+        let mut args = HashMap::new();
+        args.insert("_".to_string(), json!(["press", "#search", "Enter"]));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["key"], "Enter");
+        assert_eq!(params["ref"], "#search");
+    }
+
+    #[test]
+    fn test_type_params_use_text_first_order() {
+        let map = commands_map();
+        let cmd = map.get("type").unwrap();
+        let mut args = HashMap::new();
+        args.insert("_".to_string(), json!(["type", "hello world", "#search"]));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["text"], "hello world");
+        assert_eq!(params["ref"], "#search");
+    }
+
+    #[test]
+    fn test_type_params_keep_legacy_ref_first_order() {
+        let map = commands_map();
+        let cmd = map.get("type").unwrap();
+        let mut args = HashMap::new();
+        args.insert("_".to_string(), json!(["type", "#search", "hello world"]));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["text"], "hello world");
+        assert_eq!(params["ref"], "#search");
     }
 
     #[test]

@@ -500,6 +500,20 @@
   "domain" : "tab",
   "method" : "type",
   "arguments" : [ {
+    "name" : "text",
+    "type" : "String",
+    "expression" : "text: String = ",
+    "cliOptions" : "--text=<String>, default="
+  } ],
+  "returnType" : "Unit",
+  "description" : "This method emulates inserting text that doesn't come from a key press.",
+  "help" : "This method emulates inserting text that doesn't come from a key press.\n\n```kotlin driver.type(\"Hello, World!\") ```",
+  "expression" : "tab.type(Arg(name=text, type=String, defaultValue=))",
+  "cli" : "browser4-cli tab type --text=<String>, default="
+}, {
+  "domain" : "tab",
+  "method" : "type",
+  "arguments" : [ {
     "name" : "selector",
     "type" : "String",
     "expression" : "selector: String = ",
@@ -534,6 +548,20 @@
   "help" : "This method emulates inserting text that doesn't come from a key press.\n\nUnlike [type], this method clears the existing value before typing.\n\n```kotlin driver.fill(\"input[name='q']\", \"Hello, World!\") ```\n\nof an element to focus, and then fill text into it. If there are multiple elements satisfying the selector, the first will be focused.",
   "expression" : "tab.fill(Arg(name=selector, type=String, defaultValue=), Arg(name=text, type=String, defaultValue=))",
   "cli" : "browser4-cli tab fill --selector=<String>, default= --text=<String>, default="
+}, {
+  "domain" : "tab",
+  "method" : "press",
+  "arguments" : [ {
+    "name" : "key",
+    "type" : "String",
+    "expression" : "key: String = ",
+    "cliOptions" : "--key=<String>, default="
+  } ],
+  "returnType" : "Unit",
+  "description" : "Shortcut for keyboard down and keyboard up.",
+  "help" : "Shortcut for keyboard down and keyboard up.\n\nThe key is specified as a string, which can be a single character, a key name, or a combination of both. For example, 'a', 'A', 'KeyA', 'Enter', 'Shift+A', and 'Control+Shift+Tab' are all valid keys.\n\n```kotlin driver.press(\"Enter\") ```\n\nSee [Code values for keyboard events](https://developer.mozilla.org/en-US/docs/Web/API/UI_Events/Keyboard_event_code_values)",
+  "expression" : "tab.press(Arg(name=key, type=String, defaultValue=))",
+  "cli" : "browser4-cli tab press --key=<String>, default="
 }, {
   "domain" : "tab",
   "method" : "press",

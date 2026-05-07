@@ -525,14 +525,22 @@ class MCPToolController(
             "press" -> {
                 val sessionId = currentSessionId
                     ?: throw IllegalArgumentException("""No active session. Run "browser4-cli open" first.""")
-                val selector = step["selector"]?.toString()
-                    ?: throw IllegalArgumentException("Batch press step is missing 'selector'.")
                 val key = step["key"]?.toString()
                     ?: throw IllegalArgumentException("Batch press step is missing 'key'.")
 
+                val selector = step["selector"]?.toString()?.takeIf { it.isNotBlank() }
+
+                val arguments = mutableMapOf<String, Any?>(
+                    "sessionId" to sessionId,
+                    "key" to key,
+                )
+                if (selector != null) {
+                    arguments["selector"] = selector
+                }
+
                 val text = executeAgentToolText(
                     "press",
-                    mapOf("sessionId" to sessionId, "selector" to selector, "key" to key),
+                    arguments,
                 )
                 BatchExecutionResult(index = index, ok = true, text = text.ifBlank { null })
             }

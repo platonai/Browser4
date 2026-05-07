@@ -5,7 +5,7 @@ pub(super) fn test_batch_commands(ctx: &mut E2ECtx) {
 
     let interactive_url = ctx.interactive_url();
     let open_command = batch_open_command(&interactive_url);
-    let type_command = "type #type-target 'hello batch'".to_string();
+    let type_command = "type 'hello batch' #type-target".to_string();
     let click_command = "click #click-target".to_string();
 
     run_command(
@@ -39,7 +39,7 @@ pub(super) fn test_batch_commands(ctx: &mut E2ECtx) {
             &format!(
                 r##"
 [
-  ["press", "#type-target", "{key}"]
+  ["press", "{key}", "#type-target"]
 ]
 "##,
                 key = key,
@@ -105,7 +105,7 @@ pub(super) fn test_batch_commands(ctx: &mut E2ECtx) {
             r##"
 [
   ["open", "{profile_arg}", "{interactive_url}"],
-  "type #type-target 'json string input'",
+  "type 'json string input' #type-target",
   ["fill", "#fill-target", "json opened session"],
   "click #click-target"
 ]
@@ -366,7 +366,7 @@ pub(super) fn test_batch_multi_interaction(ctx: &mut E2ECtx) {
         &[
             "batch",
             open_command.as_str(),
-            "type #type-target 'batch multi'",
+            "type 'batch multi' #type-target",
             "fill #fill-target 'batch fill'",
             "check #check-target",
             "select #select-target blue",
@@ -450,7 +450,7 @@ pub(super) fn test_batch_error_handling(ctx: &mut E2ECtx) {
         ctx,
         &[
             "batch",
-            "type #type-target 'before error'",
+            "type 'before error' #type-target",
             "this-is-not-a-valid-command",
             "fill #fill-target 'after error'",
         ],
@@ -468,7 +468,7 @@ pub(super) fn test_batch_error_handling(ctx: &mut E2ECtx) {
         &[
             "batch",
             "--bail",
-            "type #type-target 'bail test'",
+            "type 'bail test' #type-target",
             "unknown-command-xyz",
             "fill #fill-target 'should not execute'",
         ],
@@ -500,7 +500,7 @@ pub(super) fn test_batch_error_handling(ctx: &mut E2ECtx) {
             "batch",
             "bad-cmd-1",
             "bad-cmd-2",
-            "type #type-target 'still works'",
+            "type 'still works' #type-target",
         ],
         "2 batch command(s) failed.",
     );
@@ -531,7 +531,7 @@ pub(super) fn test_batch_json_edge_cases(ctx: &mut E2ECtx) {
         ctx,
         &["batch", "--json"],
         r##"[
-  "type #type-target 'json mixed'",
+  "type 'json mixed' #type-target",
   ["fill", "#fill-target", "json array fill"],
   "click #click-target"
 ]"##,

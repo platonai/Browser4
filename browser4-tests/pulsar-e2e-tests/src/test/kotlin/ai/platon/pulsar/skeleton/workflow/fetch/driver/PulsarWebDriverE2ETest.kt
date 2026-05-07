@@ -268,10 +268,10 @@ open class PulsarWebDriverE2ETest : WebDriverTestBase() {
         assertTrue("Placeholder should not be empty") { !text.isNullOrBlank() }
 
         "iphone".forEach { ch ->
-            driver.press(selector, "$ch")
+            driver.press("$ch", selector)
         }
-        driver.press(selector, "Digit6")
-        driver.press(selector, "0")
+        driver.press("Digit6", selector)
+        driver.press("0", selector)
 
         delay(1000.milliseconds)
 
@@ -301,7 +301,7 @@ open class PulsarWebDriverE2ETest : WebDriverTestBase() {
         // assertEquals("Mate60", evaluate?.value)
 
         // TODO: FIXME: enter seems not working
-        driver.press(selector, "Enter")
+        driver.press("Enter", selector)
         driver.waitForNavigation()
         assertTrue { driver.currentUrl() != e2eProductUrl }
     }
@@ -330,7 +330,7 @@ open class PulsarWebDriverE2ETest : WebDriverTestBase() {
         printlnPro("Search bar value (should be empty) - 1: <$text>")
         assertEquals("", text)
 
-        driver.type(selector, "Mate60")
+        driver.type("Mate60", selector)
 
         MessageFormat.format("{0} text typed {0}", PopularEmoji.SPARKLES).also { printlnPro(it) }
 
@@ -356,7 +356,7 @@ open class PulsarWebDriverE2ETest : WebDriverTestBase() {
         val lastUrl = driver.currentUrl()
 
         // TODO: FIXME: enter seems not working
-        driver.press(selector, "Enter")
+        driver.press("Enter", selector)
         driver.waitForNavigation(oldUrl = lastUrl)
         // assertTrue { driver.currentUrl() != lastUrl }
         val currentUrl = driver.currentUrl()

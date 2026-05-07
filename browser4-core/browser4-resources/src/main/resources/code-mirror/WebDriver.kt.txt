@@ -109,9 +109,9 @@ import java.time.Duration
  *      val selector = "input[placeholder*=搜索], input[placeholder*=Search]"
  *      driver.waitForSelector(selector)
  *      driver.fill(selector, "Facebook")
- *      driver.press(selector, "Space")
- *      "Email".forEach { driver.press(selector, "$it") }
- *      driver.press(selector, "Enter")
+ *      driver.press("Space", selector)
+ *      "Email".forEach { driver.press("$it", selector) }
+ *      driver.press("Enter", selector)
  *  }
  * ```
  *
@@ -844,17 +844,43 @@ interface WebDriver : Closeable {
      * This method emulates inserting text that doesn't come from a key press. @mcp
      *
      * ```kotlin
-     * driver.type("input[name='q']", "Hello, World!")
+     * driver.type("Hello, World!")
+     * driver.type("Hello, World!", "input[name='q']")
      * ```
      *
-     * @param selector - A [selector](https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_Selectors)
-     * of an element to focus. If there are multiple elements satisfying the
-     * selector, the first will be focused.
+     * When [selector] is omitted, text is typed into the currently focused element.
+     * When [selector] is provided, the matching element is focused first and then receives the text.
+     *
      * @param text The text to insert.
+     * @param selector Optional [selector](https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_Selectors)
+     * of an element to focus before typing. If there are multiple matching elements, the first is used.
      */
     @Throws(WebDriverException::class)
     @MCP
-    suspend fun type(selector: String, text: String)
+    suspend fun type(text: String, selector: String? = null)
+
+    /**
+     * Shortcut for keyboard down and keyboard up. @mcp
+     *
+     * The key is specified as a string, which can be a single character, a key name, or a combination of both.
+     * For example, 'a', 'A', 'KeyA', 'Enter', 'Shift+A', and 'Control+Shift+Tab' are all valid keys.
+     *
+     * ```kotlin
+     * driver.press("Enter")
+     * driver.press("Enter", "input[name='q']")
+     * ```
+     *
+     * When [selector] is omitted, the key is pressed on the currently focused element.
+     * When [selector] is provided, the matching element is focused first and then receives the key press.
+     *
+     * @param key A key to press. The key can be a single character, a key name, or a combination of both.
+     *      See [Code values for keyboard events](https://developer.mozilla.org/en-US/docs/Web/API/UI_Events/Keyboard_event_code_values)
+     * @param selector Optional [selector](https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_Selectors)
+     * of an element to focus before pressing the key. If there are multiple matching elements, the first is used.
+     */
+    @Throws(WebDriverException::class)
+    @MCP
+    suspend fun press(key: String, selector: String? = null)
 
     /**
      * This method emulates inserting text that doesn't come from a key press. @mcp
@@ -873,26 +899,6 @@ interface WebDriver : Closeable {
     @Throws(WebDriverException::class)
     @MCP
     suspend fun fill(selector: String, text: String)
-
-    /**
-     * Shortcut for keyboard down and keyboard up. @mcp
-     *
-     * The key is specified as a string, which can be a single character, a key name, or a combination of both.
-     * For example, 'a', 'A', 'KeyA', 'Enter', 'Shift+A', and 'Control+Shift+Tab' are all valid keys.
-     *
-     * ```kotlin
-     * driver.press("input[name='q']", "Enter")
-     * ```
-     *
-     * @param selector - A [selector](https://developer.mozilla.org/en-US/docs/Web/CSS/CSS_Selectors)
-     * of an element to focus, and then press a key. If there are multiple elements satisfying the
-     * selector, the first will be focused.
-     * @param key - A key to press. The key can be a single character, a key name, or a combination of both.
-     *      See [Code values for keyboard events](https://developer.mozilla.org/en-US/docs/Web/API/UI_Events/Keyboard_event_code_values)
-     */
-    @Throws(WebDriverException::class)
-    @MCP
-    suspend fun press(selector: String, key: String)
 
     /**
      * Presses and holds a keyboard key on the currently focused element. @mcp

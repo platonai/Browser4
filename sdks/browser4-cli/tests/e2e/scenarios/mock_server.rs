@@ -177,7 +177,7 @@ pub(super) fn test_batch_reduces_transport_round_trips(ctx: &mut E2ECtx) {
 
     run_command(ctx, &["open", OPEN_TEMPORARY_PROFILE_ARG, workflow_url]);
     let eval_result = run_command(ctx, &["eval", "document.title"]);
-    let press_result = run_command(ctx, &["press", "#type-target", "!"]);
+    let press_result = run_command(ctx, &["press", "!", "#type-target"]);
 
     assert_eq!(
         strip_snapshot_output(&eval_result.stdout),
@@ -215,7 +215,7 @@ pub(super) fn test_batch_reduces_transport_round_trips(ctx: &mut E2ECtx) {
             "batch",
             batch_open_command.as_str(),
             "eval document.title",
-            "press #type-target !",
+            "press ! #type-target",
         ],
     );
 
@@ -328,7 +328,7 @@ pub(super) fn test_press_command_uses_direct_tool_dispatch(ctx: &mut E2ECtx) {
         open_result.stdout
     );
 
-    let press_result = run_command(ctx, &["press", "#type-target", "!"]);
+    let press_result = run_command(ctx, &["press", "!", "#type-target"]);
     assert_eq!(
         strip_snapshot_output(&press_result.stdout),
         "mock response for browser_press_key"

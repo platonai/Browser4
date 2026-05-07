@@ -131,7 +131,7 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
     open_resized_interactive_page(ctx);
 
-    run_command(ctx, &["type", "#type-target", "hello world"]);
+    run_command(ctx, &["type", "hello world", "#type-target"]);
     wait_for_state_or_abort(
         ctx,
         |s| s["typeValue"].as_str() == Some("hello world"),
@@ -156,7 +156,7 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
     ] {
         let press_before = read_interactive_state(ctx);
         let press_before_events = key_event_count(&press_before);
-        run_command(ctx, &["press", "#type-target", key]);
+        run_command(ctx, &["press", key, "#type-target"]);
         wait_for_state_or_abort(
             ctx,
             |s| {

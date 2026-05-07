@@ -64,7 +64,7 @@ class DOMInteractiveDynamicE2ETest : WebDriverTestBase() {
         driver.click("[data-testid='tta-edit-1']")
         driver.waitForSelector("#itemList [data-id='1'] input[type='text']")
         driver.fill("#itemList [data-id='1'] input[type='text']", "Edited Item 1")
-        driver.press("#itemList [data-id='1'] input[type='text']", "Enter")
+        driver.press("Enter", "#itemList [data-id='1'] input[type='text']")
         driver.waitUntil(2000) {
             val txt = driver.selectFirstTextOrNull("#itemList [data-id='1'] span")
             txt?.contains("Edited Item 1") == true

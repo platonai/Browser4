@@ -1692,13 +1692,13 @@ fn compile_batch_request(
                     .or_else(|| tool_params.get("selector").and_then(|value| value.as_str()));
                 let key = tool_params.get("key").and_then(|value| value.as_str());
 
-                let (selector, key) = match (selector, key) {
-                    (Some(selector), Some(key)) => (selector.to_string(), key.to_string()),
-                    _ => {
+                let key = match key {
+                    Some(key) => key.to_string(),
+                    None => {
                         if push_batch_local_failure(
                             &mut entries,
                             spec,
-                            "Press requires both a target selector and a key.".to_string(),
+                            "Press requires a key.".to_string(),
                             bail,
                         ) {
                             break;
@@ -1707,21 +1707,27 @@ fn compile_batch_request(
                     }
                 };
 
+                let selector = selector.map(ToOwned::to_owned);
                 let request_index = steps.len();
-                steps.push(json!({
+                let mut step = json!({
                     "op": "press",
                     "command": spec.display,
-                    "selector": selector,
                     "key": key,
-                }));
+                });
+                if let Some(selector) = selector.as_deref() {
+                    step["selector"] = json!(selector);
+                }
+                steps.push(step);
                 entries.push(PlannedBatchEntry::Backend {
                     display: spec.display.clone(),
                     request_indices: vec![request_index],
                     outputs: vec![PlannedBatchOutput::Text],
                 });
 
-                active_selector = Some(selector);
-                final_state.active_selector = active_selector.clone();
+                if let Some(selector) = selector {
+                    active_selector = Some(selector);
+                    final_state.active_selector = active_selector.clone();
+                }
             }
             "list" | "close-all" | "kill-all" | "delete-data" | "agent-run" | "agent-status"
             | "agent-result" | "co-create" | "co-submit" | "co-scrape" | "co-status"
@@ -2513,11 +2519,11 @@ mod tests {
     #[test]
     fn compile_batch_request_press_uses_browser_press_key_tool_step() {
         let commands = vec![BatchCommandSpec {
-            display: "press #type-target !".to_string(),
+            display: "press ! #type-target".to_string(),
             tokens: vec![
                 "press".to_string(),
-                "#type-target".to_string(),
                 "!".to_string(),
+                "#type-target".to_string(),
             ],
         }];
 
@@ -2528,6 +2534,22 @@ mod tests {
         assert_eq!(compiled.steps[0]["op"], json!("press"));
         assert_eq!(compiled.steps[0]["selector"], json!("#type-target"));
         assert_eq!(compiled.steps[0]["key"], json!("!"));
+    }
+
+    #[test]
+    fn compile_batch_request_press_without_selector_uses_focused_element() {
+        let commands = vec![BatchCommandSpec {
+            display: "press Enter".to_string(),
+            tokens: vec!["press".to_string(), "Enter".to_string()],
+        }];
+
+        let compiled =
+            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+
+        assert_eq!(compiled.steps.len(), 1);
+        assert_eq!(compiled.steps[0]["op"], json!("press"));
+        assert_eq!(compiled.steps[0]["key"], json!("Enter"));
+        assert!(compiled.steps[0].get("selector").is_none());
     }
 
     #[test]

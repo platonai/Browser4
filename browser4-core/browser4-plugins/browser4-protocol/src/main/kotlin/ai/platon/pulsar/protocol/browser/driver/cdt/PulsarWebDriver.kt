@@ -626,15 +626,15 @@ class PulsarWebDriver constructor(
     }
 
     @Throws(WebDriverException::class)
-    override suspend fun type(text: String) {
-        driverHelper.invokeOnPage("type") {
-            keyboard?.type(text, randomDelayMillis("type"))
-            gap("type")
+    override suspend fun type(text: String, selector: String?) {
+        if (selector.isNullOrBlank()) {
+            driverHelper.invokeOnPage("type") {
+                keyboard?.type(text, randomDelayMillis("type"))
+                gap("type")
+            }
+            return
         }
-    }
 
-    @Throws(WebDriverException::class)
-    override suspend fun type(selector: String, text: String) {
         driverHelper.invokeOnElement(selector, "type") {
             val node = page.focusOnSelector(selector) ?: return@invokeOnElement
             emulator.click(node, 1, position = "right")
@@ -715,16 +715,16 @@ class PulsarWebDriver constructor(
     }
 
     @Throws(WebDriverException::class)
-    override suspend fun press(selector: String, key: String) {
-        driverHelper.invokeOnElement(selector, "press", focus = true) { _ ->
-            keyboard?.press(key, randomDelayMillis("press"))
-            gap("press")
+    override suspend fun press(key: String, selector: String?) {
+        if (selector.isNullOrBlank()) {
+            driverHelper.invokeOnPage("press") {
+                keyboard?.press(key, randomDelayMillis("press"))
+                gap("press")
+            }
+            return
         }
-    }
 
-    @Throws(WebDriverException::class)
-    override suspend fun press(key: String) {
-        driverHelper.invokeOnPage("press") {
+        driverHelper.invokeOnElement(selector, "press", focus = true) { _ ->
             keyboard?.press(key, randomDelayMillis("press"))
             gap("press")
         }

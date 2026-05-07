@@ -21,6 +21,8 @@ browser4-cli click e15
 browser4-cli click #search
 browser4-cli type "page.click"
 browser4-cli press Enter
+browser4-cli type "search query" "#search"
+browser4-cli press Enter "#search"
 # take a screenshot
 browser4-cli screenshot
 # close the browser
@@ -37,6 +39,7 @@ browser4-cli open
 browser4-cli open https://example.com/
 browser4-cli goto https://browser4.io/
 browser4-cli type "search query"
+browser4-cli type "search query" e3
 browser4-cli click e3
 browser4-cli dblclick e7
 browser4-cli fill e5 "user@example.com"
@@ -67,6 +70,7 @@ browser4-cli reload
 ```bash
 browser4-cli press Enter
 browser4-cli press ArrowDown
+browser4-cli press Enter e12
 browser4-cli keydown Shift
 browser4-cli keyup Shift
 ```

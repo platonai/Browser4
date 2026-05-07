@@ -19,8 +19,8 @@ tab.hover(selector: String)
 tab.click(selector: String)                         // focus on an element with [selector] and click it
 tab.click(selector: String, modifier: String)       // focus on an element with [selector] and click it with modifier pressed
 tab.fill(selector: String, text: String)
-tab.type(selector: String, text: String)
-tab.press(selector: String, key: String)
+tab.type(text: String, selector: String? = null)
+tab.press(key: String, selector: String? = null)
 tab.check(selector: String)
 tab.uncheck(selector: String)
 tab.scrollTo(selector: String)
