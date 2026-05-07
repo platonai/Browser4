@@ -724,7 +724,8 @@ class PulsarWebDriver constructor(
             return
         }
 
-        driverHelper.invokeOnElement(selector, "press", focus = true) { _ ->
+        driverHelper.invokeOnElement(selector, "press", scrollIntoView = true) { node ->
+            emulator.click(node, 1, position = "right")
             keyboard?.press(key, randomDelayMillis("press"))
             gap("press")
         }

@@ -101,6 +101,27 @@ class DOMInteractiveDynamicE2ETest : WebDriverTestBase() {
     }
 
     @Test
+    @DisplayName("test selector-targeted Enter press saves inline edit")
+    fun testSelectorPressEnterOnInlineEdit() = runEnhancedWebDriverTest(testURL) { driver ->
+        driver.waitForSelector("#itemList [data-testid='tta-edit-1']")
+
+        driver.bringToFront()
+        driver.click("[data-testid='tta-edit-1']")
+
+        val editorSelector = "#itemList [data-id='1'] input[type='text']"
+        driver.waitForSelector(editorSelector)
+        driver.fill(editorSelector, "Edited via Enter")
+        driver.press("Enter", editorSelector)
+
+        driver.waitUntil(2000) {
+            val txt = driver.selectFirstTextOrNull("#itemList [data-id='1'] span")
+            txt == "Edited via Enter"
+        }
+
+        assertEquals("Edited via Enter", driver.selectFirstTextOrNull("#itemList [data-id='1'] span"))
+    }
+
+    @Test
     @DisplayName("test exercise layz images on dynamic content")
     fun testExerciseLazyImages() = runEnhancedWebDriverTest(testURL) { driver ->
         // Basic smoke: title and hero content present
