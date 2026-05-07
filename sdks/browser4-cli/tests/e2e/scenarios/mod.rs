@@ -168,6 +168,14 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_fn: mock_server::test_open_with_url_prints_page_state,
     },
     ScenarioDef {
+        name: "test_e2e_named_session_reuses_opened_session",
+        short_name: "test_named_session_reuses_opened_session",
+        requires_browser4: false,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: mock_server::test_named_session_reuses_opened_session,
+    },
+    ScenarioDef {
         name: "test_e2e_mock_eval_command",
         short_name: "test_mock_eval_command",
         requires_browser4: false,

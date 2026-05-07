@@ -103,6 +103,69 @@ pub(super) fn test_open_with_url_prints_page_state(ctx: &mut E2ECtx) {
     );
 }
 
+pub(super) fn test_named_session_reuses_opened_session(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let session_name = "amazon";
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let open_result = run_command(ctx, &["-s=amazon", "open", OPEN_TEMPORARY_PROFILE_ARG]);
+    assert!(
+        open_result.stdout.contains("Session opened: collective-session-1"),
+        "Expected named-session open output in:\n{}",
+        open_result.stdout
+    );
+
+    let named_state_path = state_file_path(&ctx.state_dir, Some(session_name));
+    assert!(
+        named_state_path.exists(),
+        "Expected named-session state file at {}",
+        named_state_path.display()
+    );
+    assert!(
+        !state_file_path(&ctx.state_dir, None).exists(),
+        "Expected the default state file to remain unused for named sessions"
+    );
+
+    let persisted_session_id =
+        read_persisted_session_id_for_session(&ctx.state_dir, Some(session_name));
+    assert_eq!(persisted_session_id, "collective-session-1");
+
+    let goto_result = run_command(ctx, &["-s=amazon", "goto", "https://example.com/"]);
+    let combined_output = format!("{}\n{}", goto_result.stdout, goto_result.stderr);
+    assert!(
+        !combined_output.contains("No active session"),
+        "Expected named-session goto to reuse the opened session:\n{combined_output}"
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let open_session_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "open_session")
+        .collect();
+    assert_eq!(
+        open_session_calls.len(),
+        1,
+        "Expected exactly one open_session call when reusing a named session"
+    );
+
+    let navigate_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_navigate")
+        .collect();
+    assert_eq!(
+        navigate_calls.len(),
+        1,
+        "Expected goto to make exactly one browser_navigate call"
+    );
+    assert_eq!(
+        navigate_calls[0].arguments["sessionId"],
+        persisted_session_id
+    );
+    assert_eq!(navigate_calls[0].arguments["url"], "https://example.com/");
+}
+
 pub(super) fn test_eval_command(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 

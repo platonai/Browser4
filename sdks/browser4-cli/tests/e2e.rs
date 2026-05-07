@@ -1532,15 +1532,27 @@ fn extract_tab_id(output: &str, url: &str) -> String {
 // State helpers
 // ---------------------------------------------------------------------------
 
-fn read_persisted_session_id(state_dir: &Path) -> String {
-    let path = state_dir.join("cli-state.json");
-    let raw = fs::read_to_string(&path).expect("cli-state.json not found");
+fn state_file_path(state_dir: &Path, session_name: Option<&str>) -> PathBuf {
+    match session_name {
+        Some(name) => state_dir.join("sessions").join(format!("{name}.json")),
+        None => state_dir.join("cli-state.json"),
+    }
+}
+
+fn read_persisted_session_id_for_session(state_dir: &Path, session_name: Option<&str>) -> String {
+    let path = state_file_path(state_dir, session_name);
+    let raw = fs::read_to_string(&path)
+        .unwrap_or_else(|_| panic!("persisted state file not found: {}", path.display()));
     let parsed: serde_json::Value =
-        serde_json::from_str(&raw).expect("cli-state.json is not valid JSON");
+        serde_json::from_str(&raw).expect("persisted state file is not valid JSON");
     parsed["sessionId"]
         .as_str()
-        .expect("no sessionId in cli-state.json")
+        .expect("no sessionId in persisted state file")
         .to_string()
+}
+
+fn read_persisted_session_id(state_dir: &Path) -> String {
+    read_persisted_session_id_for_session(state_dir, None)
 }
 
 fn eval_text(ctx: &mut E2ECtx, expression: &str) -> String {
