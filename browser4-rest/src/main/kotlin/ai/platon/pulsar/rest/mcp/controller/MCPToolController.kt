@@ -13,7 +13,6 @@ import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.annotation.JsonSetter
 import com.fasterxml.jackson.annotation.Nulls
 import jakarta.servlet.http.HttpServletResponse
-import kotlinx.coroutines.delay
 import org.slf4j.LoggerFactory
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
 import org.springframework.http.MediaType
@@ -23,7 +22,6 @@ import java.util.*
 import kotlin.collections.component1
 import kotlin.collections.component2
 import kotlin.collections.iterator
-import kotlin.time.Duration.Companion.seconds
 
 // ---------------------------------------------------------------------------
 // DTOs
@@ -532,9 +530,10 @@ class MCPToolController(
                 val key = step["key"]?.toString()
                     ?: throw IllegalArgumentException("Batch press step is missing 'key'.")
 
-                // TODO: DO NOT REWRITE PRESS IMPLEMENTATION, dispatch to AgentToolExecutor instead
-
-                val text = executeBatchPress(sessionId, selector, key)
+                val text = executeAgentToolText(
+                    "press",
+                    mapOf("sessionId" to sessionId, "selector" to selector, "key" to key),
+                )
                 BatchExecutionResult(index = index, ok = true, text = text.ifBlank { null })
             }
 
@@ -596,70 +595,6 @@ class MCPToolController(
         )
     }
 
-    /**
-     * TODO: DO NOT REWRITE PRESS IMPLEMENTATION, dispatch to AgentToolExecutor instead
-     * */
-    private suspend fun executeBatchPress(sessionId: String, selector: String, key: String): String {
-        val selectorLiteral = jacksonObjectMapper().writeValueAsString(selector)
-        val keyLiteral = jacksonObjectMapper().writeValueAsString(key)
-        val focusExpression =
-            "(() => { const el = document.querySelector($selectorLiteral); if (!el) return 'missing'; el.focus(); return document.activeElement === el ? 'focused' : 'unfocused'; })()"
-        val printableKeyExpression = """
-            (() => {
-                const el = document.querySelector($selectorLiteral);
-                if (!el) return 'missing';
-                const key = $keyLiteral;
-                el.focus();
-                const editable = el.isContentEditable || el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && !['checkbox','radio','file','submit','button','reset','range','color'].includes((el.type || '').toLowerCase()));
-                el.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
-                if (editable) {
-                    if (typeof el.value === 'string') {
-                        const start = typeof el.selectionStart === 'number' ? el.selectionStart : el.value.length;
-                        const end = typeof el.selectionEnd === 'number' ? el.selectionEnd : el.value.length;
-                        const nextValue = el.value.slice(0, start) + key + el.value.slice(end);
-                        el.value = nextValue;
-                        if (typeof el.setSelectionRange === 'function') {
-                            const caret = start + key.length;
-                            el.setSelectionRange(caret, caret);
-                        }
-                    } else if (el.isContentEditable) {
-                        el.textContent = (el.textContent || '') + key;
-                    }
-                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                }
-                el.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true }));
-                return editable ? 'typed' : 'dispatched';
-            })()
-        """.trimIndent()
-
-        val usePrintableCharPath = !key.contains('+') && key.length == 1
-        if (usePrintableCharPath) {
-            val typedResult = executeAgentToolText(
-                "browser_evaluate",
-                mapOf("sessionId" to sessionId, "expression" to printableKeyExpression),
-            )
-            if (typedResult.trim() != "typed" && typedResult.trim() != "dispatched") {
-                throw IllegalArgumentException(
-                    "Failed to synthesize printable key press. Result: ${typedResult.trim()}"
-                )
-            }
-            return typedResult
-        }
-
-        val focusResult = executeAgentToolText(
-            "browser_evaluate",
-            mapOf("sessionId" to sessionId, "expression" to focusExpression),
-        )
-        if (focusResult.trim() != "focused") {
-            throw IllegalArgumentException(
-                "Failed to focus target before pressing key. Focus result: ${focusResult.trim()}"
-            )
-        }
-        return executeAgentToolText(
-            "browser_press_key",
-            mapOf("sessionId" to sessionId, "ref" to selector, "key" to key),
-        )
-    }
 
     private suspend fun executeAgentToolText(toolName: String, args: Map<String, Any?>): String {
         val normalizedRequest = normalizeFrontendToolCall(toolName, args)

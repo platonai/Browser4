@@ -24,6 +24,52 @@ pub(super) fn test_batch_commands(ctx: &mut E2ECtx) {
         "Expected batch commands to set typeValue to 'hello batch' and clickCount to 1",
     );
 
+    for (key, expected_value) in [
+        ("!", "hello batch!"),
+        ("?", "hello batch!?"),
+        (":", "hello batch!?:"),
+        ("+", "hello batch!?:+"),
+        (")", "hello batch!?:+)"),
+    ] {
+        let batch_press_before = read_interactive_state(ctx);
+        let batch_press_before_events = key_event_count(&batch_press_before);
+        run_command_with_stdin(
+            ctx,
+            &["batch", "--json"],
+            &format!(
+                r##"
+[
+  ["press", "#type-target", "{key}"]
+]
+"##,
+                key = key,
+            ),
+        );
+        wait_for_state_or_abort(
+            ctx,
+            |s| {
+                s["typeValue"].as_str() == Some(expected_value)
+                    && key_event_count(s) >= batch_press_before_events + 2
+                    && s["keyEvents"]
+                        .as_array()
+                        .map(|events| {
+                            let new_events: Vec<_> = events
+                                .iter()
+                                .skip(batch_press_before_events)
+                                .filter_map(|event| event.as_str())
+                                .collect();
+                            new_events.contains(&format!("down:{key}").as_str())
+                                && new_events.contains(&format!("up:{key}").as_str())
+                        })
+                        .unwrap_or(false)
+            },
+            5_000,
+            &format!(
+                "Expected JSON batch press to append '{key}' and emit down/up key events for '{key}'"
+            ),
+        );
+    }
+
     let key_events_before = key_event_count(&read_interactive_state(ctx));
     run_command_with_stdin(
         ctx,

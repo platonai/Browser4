@@ -152,6 +152,42 @@ pub(super) fn test_eval_command(ctx: &mut E2ECtx) {
         assert_eq!(eval_calls[1].arguments["ref"], "backend:5");
 }
 
+pub(super) fn test_press_command_uses_direct_tool_dispatch(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let open_result = run_open_command(ctx);
+    assert!(
+        open_result
+            .stdout
+            .contains("Session opened: collective-session-1"),
+        "Expected mocked session open output in:\n{}",
+        open_result.stdout
+    );
+
+    let press_result = run_command(ctx, &["press", "#type-target", "!"]);
+    assert_eq!(
+        strip_snapshot_output(&press_result.stdout),
+        "mock response for browser_press_key"
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let press_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_press_key")
+        .collect();
+    assert_eq!(press_calls.len(), 1, "expected one browser_press_key call");
+    assert_eq!(press_calls[0].arguments["sessionId"], "collective-session-1");
+    assert_eq!(press_calls[0].arguments["ref"], "#type-target");
+    assert_eq!(press_calls[0].arguments["key"], "!");
+    assert!(
+        tool_calls.iter().all(|call| call.tool != "browser_evaluate"),
+        "press should not synthesize browser_evaluate calls: {tool_calls:?}"
+    );
+}
+
 pub(super) fn test_collective_session_and_agent_tools(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
     let mock_server = start_mock_collective_session(ctx);

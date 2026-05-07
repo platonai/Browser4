@@ -12,6 +12,20 @@ Since we are testing non-batch-mode commands, you should ignore browser4-cli's b
 Find out as many issues as possible in the following task, and write the issues in a markdown file.
 The issues can be about the correctness of the results, the efficiency of the commands, or any other aspect you think is relevant.
 
+Very Important:
+
+- Every interaction command outputs a page snapshot, which contains the latest state of the page, including the element refs.
+- You must read the page snapshot after each interaction command to get the latest element refs, and use the latest element refs for the next interaction command.
+- Never use element refs from previous page snapshots, as they may be outdated and lead to incorrect results.
+- use `goto` instead of `open` if you do not want to create a new session.
+
+Bad cases:
+
+```
+# You must read the page snapshot after open command to get the latest element refs, `e183` can not be right.
+browser4-cli open https://www.amazon.com/; browser4-cli click e183;
+```
+
 Task:
 
 1. go to https://www.amazon.com/

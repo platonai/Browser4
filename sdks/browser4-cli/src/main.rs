@@ -918,117 +918,6 @@ async fn handle_mouse_positioned_command(
     .await
 }
 
-async fn handle_press(
-    client: &Client,
-    base_url: &str,
-    tool_name: &str,
-    tool_params: &Value,
-    session_name: Option<&str>,
-) -> Result<(), String> {
-    let selector = tool_params
-        .get("ref")
-        .and_then(|value| value.as_str())
-        .or_else(|| tool_params.get("selector").and_then(|value| value.as_str()))
-        .ok_or_else(|| "Press requires a target selector.".to_string())?;
-    let key = tool_params
-        .get("key")
-        .and_then(|value| value.as_str())
-        .ok_or_else(|| "Press requires a key.".to_string())?;
-    let selector_literal =
-        serde_json::to_string(selector).map_err(|e| format!("Failed to encode selector: {e}"))?;
-    let key_literal =
-        serde_json::to_string(key).map_err(|e| format!("Failed to encode key: {e}"))?;
-    let focus_expression = format!(
-        "(() => {{ const el = document.querySelector({selector_literal}); if (!el) return 'missing'; el.focus(); return document.activeElement === el ? 'focused' : 'unfocused'; }})()"
-    );
-    let printable_key_expression = format!(
-        "(() => {{ \
-            const el = document.querySelector({selector_literal}); \
-            if (!el) return 'missing'; \
-            const key = {key_literal}; \
-            el.focus(); \
-            const editable = el.isContentEditable || el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && !['checkbox','radio','file','submit','button','reset','range','color'].includes((el.type || '').toLowerCase())); \
-            el.dispatchEvent(new KeyboardEvent('keydown', {{ key, bubbles: true }})); \
-            if (editable) {{ \
-                if (typeof el.value === 'string') {{ \
-                    const start = typeof el.selectionStart === 'number' ? el.selectionStart : el.value.length; \
-                    const end = typeof el.selectionEnd === 'number' ? el.selectionEnd : el.value.length; \
-                    const nextValue = el.value.slice(0, start) + key + el.value.slice(end); \
-                    el.value = nextValue; \
-                    if (typeof el.setSelectionRange === 'function') {{ \
-                        const caret = start + key.length; \
-                        el.setSelectionRange(caret, caret); \
-                    }} \
-                }} else if (el.isContentEditable) {{ \
-                    el.textContent = (el.textContent || '') + key; \
-                }} \
-                el.dispatchEvent(new Event('input', {{ bubbles: true }})); \
-            }} \
-            el.dispatchEvent(new KeyboardEvent('keyup', {{ key, bubbles: true }})); \
-            return editable ? 'typed' : 'dispatched'; \
-        }})()"
-    );
-    let use_printable_char_path = !key.contains('+') && key.chars().count() == 1;
-
-    let result = with_session(client, base_url, session_name, false, |session_id| {
-        let client = client.clone();
-        let base_url = base_url.to_string();
-        let tool_name = tool_name.to_string();
-        let focus_expression = focus_expression.clone();
-        let printable_key_expression = printable_key_expression.clone();
-        let mut press_params = tool_params.clone();
-        press_params["sessionId"] = json!(session_id.clone());
-
-        async move {
-            if use_printable_char_path {
-                let typed_result = call_tool(
-                    &client,
-                    &base_url,
-                    "browser_evaluate",
-                    json!({
-                        "sessionId": session_id,
-                        "expression": printable_key_expression,
-                    }),
-                )
-                .await?;
-                if typed_result.trim() != "typed" && typed_result.trim() != "dispatched" {
-                    return Err(format!(
-                        "Failed to synthesize printable key press. Result: {}",
-                        typed_result.trim()
-                    ));
-                }
-                return Ok(typed_result);
-            }
-
-            let focus_result = call_tool(
-                &client,
-                &base_url,
-                "browser_evaluate",
-                json!({
-                    "sessionId": session_id,
-                    "expression": focus_expression,
-                }),
-            )
-            .await?;
-
-            if focus_result.trim() != "focused" {
-                return Err(format!(
-                    "Failed to focus target before pressing key. Focus result: {}",
-                    focus_result.trim()
-                ));
-            }
-            call_tool(&client, &base_url, &tool_name, press_params).await
-        }
-    })
-    .await?;
-
-    if !result.is_empty() {
-        println!("{}", result);
-    }
-    persist_active_selector(base_url, session_name, Some(selector))?;
-    Ok(())
-}
-
 async fn handle_key_command(
     client: &Client,
     base_url: &str,
@@ -2268,11 +2157,12 @@ async fn run(command: &str, global: &args::GlobalFlags) -> Result<(), String> {
             .await?;
         }
         "press" => {
-            handle_press(
+            handle_tool_command(
                 &client,
                 &base_url,
                 &tool_name,
                 &tool_params,
+                false,
                 global.session_name.as_deref(),
             )
             .await?;
@@ -2599,6 +2489,26 @@ mod tests {
             }
             other => panic!("expected backend entry, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn compile_batch_request_press_uses_browser_press_key_tool_step() {
+        let commands = vec![BatchCommandSpec {
+            display: "press #type-target !".to_string(),
+            tokens: vec![
+                "press".to_string(),
+                "#type-target".to_string(),
+                "!".to_string(),
+            ],
+        }];
+
+        let compiled =
+            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+
+        assert_eq!(compiled.steps.len(), 1);
+        assert_eq!(compiled.steps[0]["op"], json!("press"));
+        assert_eq!(compiled.steps[0]["selector"], json!("#type-target"));
+        assert_eq!(compiled.steps[0]["key"], json!("!"));
     }
 
     #[test]

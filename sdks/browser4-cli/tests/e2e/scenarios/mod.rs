@@ -176,6 +176,14 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_fn: mock_server::test_eval_command,
     },
     ScenarioDef {
+        name: "test_e2e_mock_press_command_uses_direct_tool_dispatch",
+        short_name: "test_mock_press_command_uses_direct_tool_dispatch",
+        requires_browser4: false,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: mock_server::test_press_command_uses_direct_tool_dispatch,
+    },
+    ScenarioDef {
         name: "test_e2e_agent_task_commands",
         short_name: "test_agent_task_commands",
         requires_browser4: false,

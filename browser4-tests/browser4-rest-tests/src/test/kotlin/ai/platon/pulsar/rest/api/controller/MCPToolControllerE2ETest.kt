@@ -231,10 +231,19 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
             it["fillValue"].asText() == "filled text"
         }
 
-        val pressBeforeEvents = keyEventCount(readState(sessionId))
-        assertNotError(callTool("press", mapOf("sessionId" to sessionId, "selector" to "#type-target", "key" to "!")))
-        waitForState(sessionId, "Expected press to append ! and emit a key event") {
-            it["typeValue"].asText() == "hello world!" && keyEventCount(it) > pressBeforeEvents
+        listOf(
+            "!" to "hello world!",
+            "?" to "hello world!?",
+            ":" to "hello world!?:",
+            "+" to "hello world!?:+",
+            ")" to "hello world!?:+)"
+        ).forEach { (key, expectedValue) ->
+            val pressBeforeEvents = keyEventCount(readState(sessionId))
+            assertNotError(callTool("press", mapOf("sessionId" to sessionId, "selector" to "#type-target", "key" to key)))
+            waitForState(sessionId, "Expected press to append $key and emit down/up key events") {
+                val newEvents = keyEventsSince(it, pressBeforeEvents)
+                it["typeValue"].asText() == expectedValue && "down:$key" in newEvents && "up:$key" in newEvents
+            }
         }
 
         assertNotError(callTool("click", mapOf("sessionId" to sessionId, "selector" to "#type-target")))
@@ -355,6 +364,33 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
             it["typeValue"].asText() == "hello batch" &&
                     it["fillValue"].asText() == "from batch" &&
                     it["clickCount"].asInt() == 1
+        }
+
+        listOf(
+            "!" to "hello batch!",
+            "?" to "hello batch!?",
+            ":" to "hello batch!?:",
+            "+" to "hello batch!?:+",
+            ")" to "hello batch!?:+)"
+        ).forEach { (key, expectedValue) ->
+            val pressBeforeEvents = keyEventCount(readState(sessionId))
+            val pressBatchResponse = callCommandBatch(
+                listOf(
+                    mapOf(
+                        "op" to "tool",
+                        "tool" to "browser_press_key",
+                        "arguments" to mapOf("ref" to "#type-target", "key" to key)
+                    )
+                ),
+                sessionId = sessionId,
+                batchLabel = "interactive flow press $key"
+            )
+            assertEquals(0, pressBatchResponse.failureCount)
+            assertEquals(sessionId, pressBatchResponse.sessionId)
+            waitForState(sessionId, "Expected batch press to append $key and emit down/up key events") {
+                val newEvents = keyEventsSince(it, pressBeforeEvents)
+                it["typeValue"].asText() == expectedValue && "down:$key" in newEvents && "up:$key" in newEvents
+            }
         }
 
         assertTrue(batchResponse.results.any { it.snapshot?.isNotBlank() == true }, "Expected a snapshot result")
@@ -723,6 +759,11 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
     }
 
     private fun keyEventCount(state: JsonNode): Int = (state["keyEvents"] as? ArrayNode)?.size() ?: 0
+
+    private fun keyEventsSince(state: JsonNode, startIndex: Int): List<String> {
+        val events = state["keyEvents"] as? ArrayNode ?: return emptyList()
+        return (startIndex until events.size()).map { index -> events.get(index).asText() }
+    }
 
     private fun lastKeyEvent(state: JsonNode): String? {
         val events = state["keyEvents"] as? ArrayNode ?: return null

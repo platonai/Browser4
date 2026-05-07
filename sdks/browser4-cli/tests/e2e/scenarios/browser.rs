@@ -110,18 +110,40 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
         "Expected fillValue to become 'filled text' after fill",
     );
 
-    let press_before = read_interactive_state(ctx);
-    let press_before_events = key_event_count(&press_before);
-    run_command(ctx, &["press", "#type-target", "!"]);
-    wait_for_state_or_abort(
-        ctx,
-        |s| {
-            s["typeValue"].as_str() == Some("hello world!")
-                && key_event_count(s) > press_before_events
-        },
-        5_000,
-        "Expected press to append '!' to typeValue and emit a key event",
-    );
+    for (key, expected_value) in [
+        ("!", "hello world!"),
+        ("?", "hello world!?"),
+        (":", "hello world!?:"),
+        ("+", "hello world!?:+"),
+        (")", "hello world!?:+)"),
+    ] {
+        let press_before = read_interactive_state(ctx);
+        let press_before_events = key_event_count(&press_before);
+        run_command(ctx, &["press", "#type-target", key]);
+        wait_for_state_or_abort(
+            ctx,
+            |s| {
+                s["typeValue"].as_str() == Some(expected_value)
+                    && key_event_count(s) >= press_before_events + 2
+                    && s["keyEvents"]
+                        .as_array()
+                        .map(|events| {
+                            let new_events: Vec<_> = events
+                                .iter()
+                                .skip(press_before_events)
+                                .filter_map(|event| event.as_str())
+                                .collect();
+                            new_events.contains(&format!("down:{key}").as_str())
+                                && new_events.contains(&format!("up:{key}").as_str())
+                        })
+                        .unwrap_or(false)
+            },
+            5_000,
+            &format!(
+                "Expected press to append '{key}' to typeValue and emit down/up key events for '{key}'"
+            ),
+        );
+    }
 
     run_command(ctx, &["click", "#type-target"]);
     let keydown_before = key_event_count(&read_interactive_state(ctx));

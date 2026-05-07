@@ -25,6 +25,7 @@ use crate::state::{read_state, resolve_default_state_dir};
 const EXISTING_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(120);
 const JAR_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(60);
 const MAVEN_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(300);
+const SERVER_READY_INITIAL_QUIET_WAIT: Duration = Duration::from_secs(5);
 const CLI_TEMP_DIR_COMPONENTS: [&str; 2] = ["tmp", "cli"];
 const CLI_LIB_DIR_COMPONENT: &str = "lib";
 const BROWSER4_JAR_FILE_NAME: &str = "Browser4.jar";
@@ -1055,6 +1056,17 @@ async fn wait_for_server_ready(
     let start = Instant::now();
     let mut last_error = String::from("unknown");
     let mut last_progress_log_at = Instant::now() - Duration::from_secs(10);
+    let initial_quiet_wait = initial_server_ready_quiet_wait(timeout);
+
+    if !initial_quiet_wait.is_zero() {
+        tokio::time::sleep(initial_quiet_wait).await;
+        if start.elapsed() >= timeout {
+            last_error = format!(
+                "readiness checks were deferred during the initial {}s startup grace period",
+                initial_quiet_wait.as_secs()
+            );
+        }
+    }
 
     while start.elapsed() <= timeout {
         let progress_status = match probe_server_state(client, base_url).await {
@@ -1089,6 +1101,10 @@ async fn wait_for_server_ready(
         last_error,
         format_startup_log_timeout_details(startup_log_path)
     ))
+}
+
+fn initial_server_ready_quiet_wait(timeout: Duration) -> Duration {
+    SERVER_READY_INITIAL_QUIET_WAIT.min(timeout)
 }
 
 fn format_server_wait_progress(state: &ServerState) -> String {
@@ -1459,6 +1475,22 @@ mod tests {
             format_server_wait_progress(&ServerState::Starting("{\"status\":\"STARTING\"}".into()));
 
         assert_eq!(progress, "still starting ({\"status\":\"STARTING\"})");
+    }
+
+    #[test]
+    fn test_initial_server_ready_quiet_wait_uses_five_second_grace_period() {
+        assert_eq!(
+            initial_server_ready_quiet_wait(Duration::from_secs(60)),
+            Duration::from_secs(5)
+        );
+    }
+
+    #[test]
+    fn test_initial_server_ready_quiet_wait_is_capped_by_timeout() {
+        assert_eq!(
+            initial_server_ready_quiet_wait(Duration::from_secs(3)),
+            Duration::from_secs(3)
+        );
     }
 
     #[test]
