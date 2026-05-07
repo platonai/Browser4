@@ -844,6 +844,19 @@ interface WebDriver : Closeable {
      * This method emulates inserting text that doesn't come from a key press. @mcp
      *
      * ```kotlin
+     * driver.type("Hello, World!")
+     * ```
+     *
+     * @param text The text to insert.
+     */
+    @Throws(WebDriverException::class)
+    @MCP
+    suspend fun type(text: String)
+
+    /**
+     * This method emulates inserting text that doesn't come from a key press. @mcp
+     *
+     * ```kotlin
      * driver.type("input[name='q']", "Hello, World!")
      * ```
      *
@@ -854,6 +867,7 @@ interface WebDriver : Closeable {
      */
     @Throws(WebDriverException::class)
     @MCP
+    @Deprecated("Use type(text) instead", ReplaceWith("type(text)"))
     suspend fun type(selector: String, text: String)
 
     /**
@@ -881,6 +895,23 @@ interface WebDriver : Closeable {
      * For example, 'a', 'A', 'KeyA', 'Enter', 'Shift+A', and 'Control+Shift+Tab' are all valid keys.
      *
      * ```kotlin
+     * driver.press("Enter")
+     * ```
+     *
+     * @param key - A key to press. The key can be a single character, a key name, or a combination of both.
+     *      See [Code values for keyboard events](https://developer.mozilla.org/en-US/docs/Web/API/UI_Events/Keyboard_event_code_values)
+     */
+    @Throws(WebDriverException::class)
+    @MCP
+    suspend fun press(key: String)
+
+    /**
+     * Shortcut for keyboard down and keyboard up. @mcp
+     *
+     * The key is specified as a string, which can be a single character, a key name, or a combination of both.
+     * For example, 'a', 'A', 'KeyA', 'Enter', 'Shift+A', and 'Control+Shift+Tab' are all valid keys.
+     *
+     * ```kotlin
      * driver.press("input[name='q']", "Enter")
      * ```
      *
@@ -892,6 +923,7 @@ interface WebDriver : Closeable {
      */
     @Throws(WebDriverException::class)
     @MCP
+    @Deprecated("Use press(key) instead", ReplaceWith("press(key)"))
     suspend fun press(selector: String, key: String)
 
     /**
