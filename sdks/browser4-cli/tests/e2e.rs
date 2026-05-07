@@ -2387,8 +2387,9 @@ fn run_named_scenario(
         test_fn(&mut resources.ctx);
         let mut steps = harness_steps;
         steps.extend(resources.ctx.take_step_timings());
-        let cleanup_steps = cleanup_after_scenario(resources, name, requires_browser4, cleanup_mode)
-            .unwrap_or_else(|error| panic!("{error}"));
+        let cleanup_steps =
+            cleanup_after_scenario(resources, name, requires_browser4, cleanup_mode)
+                .unwrap_or_else(|error| panic!("{error}"));
         steps.extend(cleanup_steps);
         let report = TimingReport::new(name, total_started_at.elapsed(), steps);
         println!("ok ({})", format_duration(report.total));
@@ -2580,9 +2581,7 @@ fn resolve_scenarios_by_filter(filter: &str) -> Vec<scenarios::ScenarioDef> {
     scenarios::all_scenarios()
         .iter()
         .copied()
-        .filter(|scenario| {
-            pattern.is_match(scenario.name) || pattern.is_match(scenario.short_name)
-        })
+        .filter(|scenario| pattern.is_match(scenario.name) || pattern.is_match(scenario.short_name))
         .collect()
 }
 
@@ -2620,77 +2619,78 @@ fn main() {
         .collect::<Vec<_>>()
         .join(", ");
 
-    let (selected_scenarios, run_coverage): (Vec<scenarios::ScenarioDef>, bool) =
-        match run_options.scenario_filter {
-            Some(ScenarioFilter::Scenario(filter)) => {
-                let selected = resolve_scenarios_by_filter(&filter);
-                assert!(
-                    !selected.is_empty(),
-                    "Unknown scenario or pattern '{filter}'. Available scenarios: {available_names}"
-                );
-                println!(
-                    "selected {} scenario(s) via --scenario={}: {}",
-                    selected.len(),
-                    filter,
-                    selected
-                        .iter()
-                        .map(|scenario| scenario.name)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
-                (selected, false)
-            }
-            Some(ScenarioFilter::From(filter)) => {
-                let start_index = resolve_scenario_index(&filter).unwrap_or_else(|| {
-                    panic!("Unknown scenario '{filter}'. Available scenarios: {available_names}");
-                });
-                (all_scenarios[start_index..].to_vec(), false)
-            }
-            Some(ScenarioFilter::Failed) => {
-                let failed = load_last_failed_scenarios();
-                assert!(
-                    !failed.is_empty(),
-                    "No failed scenarios were recorded in the previous run (file: {}).",
-                    last_failed_scenarios_file_path().display()
-                );
-
-                let failed_set: HashSet<&str> = failed.iter().map(String::as_str).collect();
-                let selected = all_scenarios
+    let (selected_scenarios, run_coverage): (Vec<scenarios::ScenarioDef>, bool) = match run_options
+        .scenario_filter
+    {
+        Some(ScenarioFilter::Scenario(filter)) => {
+            let selected = resolve_scenarios_by_filter(&filter);
+            assert!(
+                !selected.is_empty(),
+                "Unknown scenario or pattern '{filter}'. Available scenarios: {available_names}"
+            );
+            println!(
+                "selected {} scenario(s) via --scenario={}: {}",
+                selected.len(),
+                filter,
+                selected
                     .iter()
-                    .copied()
-                    .filter(|scenario| failed_set.contains(scenario.name))
-                    .collect::<Vec<_>>();
+                    .map(|scenario| scenario.name)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            (selected, false)
+        }
+        Some(ScenarioFilter::From(filter)) => {
+            let start_index = resolve_scenario_index(&filter).unwrap_or_else(|| {
+                panic!("Unknown scenario '{filter}'. Available scenarios: {available_names}");
+            });
+            (all_scenarios[start_index..].to_vec(), false)
+        }
+        Some(ScenarioFilter::Failed) => {
+            let failed = load_last_failed_scenarios();
+            assert!(
+                !failed.is_empty(),
+                "No failed scenarios were recorded in the previous run (file: {}).",
+                last_failed_scenarios_file_path().display()
+            );
 
-                let missing = failed
+            let failed_set: HashSet<&str> = failed.iter().map(String::as_str).collect();
+            let selected = all_scenarios
+                .iter()
+                .copied()
+                .filter(|scenario| failed_set.contains(scenario.name))
+                .collect::<Vec<_>>();
+
+            let missing = failed
+                .iter()
+                .filter(|name| resolve_scenario(name).is_none())
+                .cloned()
+                .collect::<Vec<_>>();
+            assert!(
+                missing.is_empty(),
+                "Recorded failed scenarios are no longer available: {:?}. Available scenarios: {}",
+                missing,
+                available_names
+            );
+            assert!(
+                !selected.is_empty(),
+                "No selectable scenarios were resolved from the previous failed list: {:?}",
+                failed
+            );
+
+            println!(
+                "rerunning {} scenario(s) from previous failures: {}",
+                selected.len(),
+                selected
                     .iter()
-                    .filter(|name| resolve_scenario(name).is_none())
-                    .cloned()
-                    .collect::<Vec<_>>();
-                assert!(
-                    missing.is_empty(),
-                    "Recorded failed scenarios are no longer available: {:?}. Available scenarios: {}",
-                    missing,
-                    available_names
-                );
-                assert!(
-                    !selected.is_empty(),
-                    "No selectable scenarios were resolved from the previous failed list: {:?}",
-                    failed
-                );
-
-                println!(
-                    "rerunning {} scenario(s) from previous failures: {}",
-                    selected.len(),
-                    selected
-                        .iter()
-                        .map(|scenario| scenario.name)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
-                (selected, false)
-            }
-            None => (all_scenarios.to_vec(), true),
-        };
+                    .map(|scenario| scenario.name)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            (selected, false)
+        }
+        None => (all_scenarios.to_vec(), true),
+    };
 
     let planned_runs: Vec<PlannedScenarioRun> = selected_scenarios
         .iter()

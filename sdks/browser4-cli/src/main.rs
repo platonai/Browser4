@@ -578,19 +578,7 @@ fn log_shutdown_result(action: &str, result: &ShutdownResult) {
 async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
     let (active_ids, backend_note): (Vec<String>, Option<String>) =
         match call_tool(client, base_url, "list_sessions", json!({})).await {
-            Ok(result) => {
-                let active_ids = serde_json::from_str::<Value>(&result)
-                    .ok()
-                    .and_then(|v| {
-                        v.as_array().map(|arr| {
-                            arr.iter()
-                                .filter_map(|x| x.as_str().map(String::from))
-                                .collect()
-                        })
-                    })
-                    .unwrap_or_default();
-                (active_ids, None)
-            }
+            Ok(result) => (parse_active_session_ids(&result), None),
             Err(error) if is_backend_unreachable_error(&error) => (
                 Vec::new(),
                 Some(format!(
@@ -645,6 +633,31 @@ async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn parse_active_session_ids(result: &str) -> Vec<String> {
+    serde_json::from_str::<Value>(result)
+        .ok()
+        .and_then(|value| {
+            value.as_array().map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(|entry| {
+                        entry
+                            .as_str()
+                            .map(str::to_string)
+                            .or_else(|| {
+                                entry
+                                    .get("sessionId")
+                                    .and_then(|value| value.as_str())
+                                    .map(str::to_string)
+                            })
+                            .filter(|session_id| !session_id.is_empty())
+                    })
+                    .collect()
+            })
+        })
+        .unwrap_or_default()
 }
 
 fn is_backend_unreachable_error(error: &str) -> bool {
@@ -2457,7 +2470,10 @@ mod tests {
         assert_eq!(compiled.entries.len(), 1);
         match &compiled.entries[0] {
             PlannedBatchEntry::LocalFailure { error, .. } => {
-                assert_eq!(error, "Batch subcommands cannot override --use-maven-startup.");
+                assert_eq!(
+                    error,
+                    "Batch subcommands cannot override --use-maven-startup."
+                );
             }
             other => panic!("expected local failure entry, got {other:?}"),
         }
@@ -2475,7 +2491,10 @@ mod tests {
 
         assert_eq!(compiled.steps.len(), 1);
         assert_eq!(compiled.steps[0]["op"], json!("open"));
-        assert!(compiled.steps.iter().all(|step| step["tool"] != json!("browser_navigate")));
+        assert!(compiled
+            .steps
+            .iter()
+            .all(|step| step["tool"] != json!("browser_navigate")));
 
         assert_eq!(compiled.entries.len(), 1);
         match &compiled.entries[0] {
@@ -2519,6 +2538,22 @@ mod tests {
         assert!(!is_backend_unreachable_error(
             "Tool execution failed: invalid arguments"
         ));
+    }
+
+    #[test]
+    fn parse_active_session_ids_supports_backend_object_payloads() {
+        let ids = parse_active_session_ids(
+            r#"[{"sessionId":"session-1","url":"https://example.com","status":"active"},{"sessionId":"session-2","url":"","status":"active"}]"#,
+        );
+
+        assert_eq!(ids, vec!["session-1".to_string(), "session-2".to_string()]);
+    }
+
+    #[test]
+    fn parse_active_session_ids_keeps_legacy_string_payloads() {
+        let ids = parse_active_session_ids(r#"["session-1","session-2"]"#);
+
+        assert_eq!(ids, vec!["session-1".to_string(), "session-2".to_string()]);
     }
 
     #[test]

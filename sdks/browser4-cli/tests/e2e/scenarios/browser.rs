@@ -26,6 +26,43 @@ pub(super) fn test_session_lifecycle(ctx: &mut E2ECtx) {
     );
 }
 
+pub(super) fn test_newly_opened_session_shows_active(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let open_result = run_open_command(ctx);
+    assert!(
+        open_result.stdout.contains("Session opened:"),
+        "Expected 'Session opened:' in:\n{}",
+        open_result.stdout
+    );
+
+    let session_id = read_persisted_session_id(&ctx.state_dir);
+    let list_result = run_command(ctx, &["list"]);
+    let list_output = strip_snapshot_output(&list_result.stdout);
+    let session_line = list_output
+        .lines()
+        .find(|line| line.contains(&session_id))
+        .unwrap_or_else(|| {
+            panic!(
+                "Expected session id '{session_id}' in list output:\n{}",
+                list_output
+            )
+        });
+
+    assert!(
+        session_line.contains("Active"),
+        "Expected session line to contain 'Active':\n{}",
+        session_line
+    );
+    assert!(
+        !session_line.contains("Stale"),
+        "Expected session line not to contain 'Stale':\n{}",
+        session_line
+    );
+
+    run_command(ctx, &["close"]);
+}
+
 pub(super) fn test_navigation_and_storage(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 

@@ -112,7 +112,9 @@ pub(super) fn test_named_session_reuses_opened_session(ctx: &mut E2ECtx) {
 
     let open_result = run_command(ctx, &["-s=amazon", "open", OPEN_TEMPORARY_PROFILE_ARG]);
     assert!(
-        open_result.stdout.contains("Session opened: collective-session-1"),
+        open_result
+            .stdout
+            .contains("Session opened: collective-session-1"),
         "Expected named-session open output in:\n{}",
         open_result.stdout
     );
@@ -207,12 +209,12 @@ pub(super) fn test_eval_command(ctx: &mut E2ECtx) {
     assert_eq!(eval_calls[0].arguments["sessionId"], "collective-session-1");
     assert_eq!(eval_calls[0].arguments["expression"], "document.title");
     assert!(eval_calls[0].arguments.get("ref").is_none());
-        assert_eq!(eval_calls[1].arguments["sessionId"], "collective-session-1");
-        assert_eq!(
-            eval_calls[1].arguments["expression"],
+    assert_eq!(eval_calls[1].arguments["sessionId"], "collective-session-1");
+    assert_eq!(
+        eval_calls[1].arguments["expression"],
         "element => element.textContent"
-        );
-        assert_eq!(eval_calls[1].arguments["ref"], "backend:5");
+    );
+    assert_eq!(eval_calls[1].arguments["ref"], "backend:5");
 }
 
 pub(super) fn test_press_command_uses_direct_tool_dispatch(ctx: &mut E2ECtx) {
@@ -242,11 +244,16 @@ pub(super) fn test_press_command_uses_direct_tool_dispatch(ctx: &mut E2ECtx) {
         .filter(|call| call.tool == "browser_press_key")
         .collect();
     assert_eq!(press_calls.len(), 1, "expected one browser_press_key call");
-    assert_eq!(press_calls[0].arguments["sessionId"], "collective-session-1");
+    assert_eq!(
+        press_calls[0].arguments["sessionId"],
+        "collective-session-1"
+    );
     assert_eq!(press_calls[0].arguments["ref"], "#type-target");
     assert_eq!(press_calls[0].arguments["key"], "!");
     assert!(
-        tool_calls.iter().all(|call| call.tool != "browser_evaluate"),
+        tool_calls
+            .iter()
+            .all(|call| call.tool != "browser_evaluate"),
         "press should not synthesize browser_evaluate calls: {tool_calls:?}"
     );
 }

@@ -32,6 +32,14 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_fn: browser::test_session_lifecycle,
     },
     ScenarioDef {
+        name: "test_e2e_newly_opened_session_shows_active",
+        short_name: "test_newly_opened_session_shows_active",
+        requires_browser4: true,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: browser::test_newly_opened_session_shows_active,
+    },
+    ScenarioDef {
         name: "test_e2e_navigation_and_storage",
         short_name: "test_navigation_and_storage",
         requires_browser4: true,
