@@ -149,8 +149,10 @@ The tables below mirror the commands surfaced by the global `browser4-cli help` 
 |---|---|
 | `tab-list` | List all tabs |
 | `tab-new [url]` | Create a new tab |
-| `tab-close [tabId]` | Close a browser tab by tab ID |
-| `tab-select <tabId>` | Select a browser tab by tab ID |
+| `tab-close [index]` | Close a browser tab by zero-based index |
+| `tab-select <index>` | Select a browser tab by zero-based index |
+
+Use `tab-list` first to find the zero-based tab index you want to select or close.
 
 #### Browser sessions
 
@@ -160,7 +162,6 @@ The tables below mirror the commands surfaced by the global `browser4-cli help` 
 | `close-all` | Close all browser sessions |
 | `kill-all` | Forcefully kill all browser sessions |
 
-Use `tab-list` first to obtain the tab ID you want to select or close.
 
 ### Advanced commands
 
@@ -262,10 +263,10 @@ browser4-cli keyup Shift
 # Take a screenshot and save it to disk
 browser4-cli screenshot
 
-# Inspect tab IDs before switching tabs
+# Inspect tab indices before switching tabs
 browser4-cli tab-list
-browser4-cli tab-select <tabId-from-tab-list>
-browser4-cli tab-close <tabId-from-tab-list>
+browser4-cli tab-select 1
+browser4-cli tab-close 1
 
 # Use a custom server URL
 browser4-cli open --server http://localhost:9090

@@ -746,12 +746,12 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "Close a browser tab",
             category: Category::Tabs,
             hidden: false,
-            args: &[ArgDef { name: "tabId", description: "Tab ID. If omitted, current tab is closed.", optional: true }],
+            args: &[ArgDef { name: "index", description: "Zero-based tab index. If omitted, current tab is closed.", optional: true }],
             options: &[],
             tool_name_fn: |_| "browser_tabs".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({ "action": "close" });
-                if let Some(tab_id) = get_opt_str(args, "tabId") { p["tabId"] = json!(tab_id); }
+                if let Some(index) = args.get("index") { p["index"] = index.clone(); }
                 p
             },
         },
@@ -760,13 +760,13 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "Select a browser tab",
             category: Category::Tabs,
             hidden: false,
-            args: &[ArgDef { name: "tabId", description: "Tab ID", optional: false }],
+            args: &[ArgDef { name: "index", description: "Zero-based tab index", optional: false }],
             options: &[],
             tool_name_fn: |_| "browser_tabs".to_string(),
             tool_params_fn: |args| {
                 json!({
                     "action": "select",
-                    "tabId": get_str(args, "tabId").unwrap_or_default(),
+                    "index": args.get("index").cloned().unwrap_or_default(),
                 })
             },
         },
@@ -1353,27 +1353,27 @@ mod tests {
     }
 
     #[test]
-    fn test_tab_select_uses_tab_id_parameter() {
+    fn test_tab_select_uses_index_parameter() {
         let map = commands_map();
         let cmd = map.get("tab-select").unwrap();
         let mut args = HashMap::new();
-        args.insert("tabId".to_string(), json!("tab-123"));
+        args.insert("index".to_string(), json!(1));
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["action"], json!("select"));
-        assert_eq!(params["tabId"], json!("tab-123"));
-        assert!(params.get("index").is_none());
+        assert_eq!(params["index"], json!(1));
+        assert!(params.get("tabId").is_none());
     }
 
     #[test]
-    fn test_tab_close_uses_optional_tab_id_parameter() {
+    fn test_tab_close_uses_optional_index_parameter() {
         let map = commands_map();
         let cmd = map.get("tab-close").unwrap();
         let mut args = HashMap::new();
-        args.insert("tabId".to_string(), json!("tab-123"));
+        args.insert("index".to_string(), json!(1));
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["action"], json!("close"));
-        assert_eq!(params["tabId"], json!("tab-123"));
-        assert!(params.get("index").is_none());
+        assert_eq!(params["index"], json!(1));
+        assert!(params.get("tabId").is_none());
     }
 
     #[test]

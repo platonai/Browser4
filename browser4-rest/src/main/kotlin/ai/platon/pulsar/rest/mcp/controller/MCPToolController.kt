@@ -868,7 +868,7 @@ class MCPToolController(
 
         when (toolName) {
             "switch_tab", "tab_select", "close_tab", "tab_close" -> {
-                val legacyTabId = normalized.remove("index") ?: normalized.remove("id")
+                val legacyTabId = normalized.remove("id")
                 if (!normalized.containsKey("tabId") && legacyTabId != null) {
                     normalized["tabId"] = legacyTabId.toString()
                 }

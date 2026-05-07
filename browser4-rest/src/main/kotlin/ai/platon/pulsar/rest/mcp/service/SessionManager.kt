@@ -4,7 +4,6 @@ import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.PerceptiveAgent
 import ai.platon.pulsar.agentic.context.AgenticContext
 import ai.platon.pulsar.core.api.PulsarSettings
-import ai.platon.pulsar.skeleton.session.AbstractPulsarSession
 import jakarta.annotation.PreDestroy
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -13,7 +12,6 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
 import org.springframework.stereotype.Service
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
-import kotlin.time.Duration.Companion.minutes
 
 /**
  * Manages WebDriver sessions with real AgenticContext instances.

@@ -5,7 +5,7 @@
 - 已移除 `help.rs` 中对描述、参数说明、选项说明的统一小写化，帮助输出现在保留 `ArrowLeft`、`JavaScript`、`GUI` 等原始大小写。
 - `batch` 继续保持 hidden，不再要求它出现在全局帮助中；对应测试与 README 已同步为“高级命令 / 显式查询帮助”的定位。
 - `console`、`extract`、`summarize`、`agent-*`、`co-*` 已统一标记为 hidden，仅通过 `browser4-cli help <command>` 暴露单命令帮助。
-- `README.md` 与 `SKILL.md` 已统一改为 `tabId` 语义，并补充“先 `tab-list` 再操作具体 tabId”的说明。
+- `README.md` 与 `SKILL.md` 已统一改为 `index` 语义，并补充“先 `tab-list` 再按当前顺序选择零基索引”的说明。
 - `SKILL.md` 的 snapshot 文案已收敛为“修改浏览器状态的命令通常会自动附带 snapshot”。
 
 本次核对以**当前实现与运行时输出**为准，不再把 `SKILL.md` 视为唯一真值源。
@@ -33,7 +33,7 @@
 - `help.rs` 的**单命令帮助**基本跟 `commands.rs` 当前签名一致。
 - `press` / `type` 已统一为“值在前，目标 ref 在后”的帮助语法，同时保留旧式参数顺序兼容。
 - `upload` 当前真实契约仍是 `browser4-cli upload <ref> <file>`；这里不再是 `SKILL.md` 的旧冲突，而是 **`SKILL.md` 目前完全没有覆盖 `upload`**。
-- `README.md` 已与 `press` / `type` / `upload` 当前契约对齐，但 `tab-close` / `tab-select` 仍写成 `index`，与代码里的 `tabId` 不一致。
+- `README.md` 与 `SKILL.md` 已与 `tab-close` / `tab-select` 当前的 `index` 契约对齐。
 - `help.rs` 的**全局帮助**仍然漏掉 `console`、`extract`、`summarize`、`agent-*`、`co-*`，因为 `CATEGORIES` 没有启用 `devtools` / `agent` / `collective`。
 - `batch` 仍然是**单命令帮助可见、全局帮助隐藏**的状态；相应测试仍然失败。
 - `help.rs` 仍会把描述和参数说明统一转小写，导致 `ArrowLeft` / `JavaScript` / `GUI` 等专有写法失真。
@@ -101,25 +101,17 @@
 
 ---
 
-### 5. `tab-close` / `tab-select` 当前到底是“索引”还是 `tabId`？
+### 5. `tab-close` / `tab-select` 当前使用“索引”
 - 当前 `commands.rs` / `help.rs` / 运行时帮助统一使用：
-  - `browser4-cli tab-close [tabId]`
-  - `browser4-cli tab-select <tabId>`
-- `commands.rs` 单测也明确断言只使用 `tabId`，而不是 `index`
-- `README.md` 仍写：
-  - `tab-close [index]`
-  - `tab-select <index>`
-- `SKILL.md` 示例仍使用纯数字：
-  - `browser4-cli tab-close 2`
-  - `browser4-cli tab-select 0`
+  - `browser4-cli tab-close [index]`
+  - `browser4-cli tab-select <index>`
+- `commands.rs` 单测已改为断言只传递 `index`，不再生成 `tabId`
+- `README.md` 与 `SKILL.md` 都已同步为零基索引语义
+- 后端执行层保留 `tabId` 兜底兼容，但 CLI 对外契约以 index 为准
 
-**风险：**
-- 读 `README.md` / `SKILL.md` 的用户会自然理解成“按索引切换 tab”
-- 读 CLI 运行时帮助的用户会理解成“传真实 tabId”
-
-**需要选择：**
-- [✔] A. 正式文档统一为 `tabId`，并把 `README.md` / `SKILL.md` 示例改成“先 `tab-list`，再传真实 id”
-- [ ] B. 如果产品真想兼容“索引”，应在 CLI 契约层明确支持并把帮助文案改成 `index-or-tabId`
+**当前状态：**
+- 该项已按产品要求切换为“索引”语义
+- `tab-close` 不传参时仍保持“关闭当前 tab”的行为
 
 ---
 
@@ -206,8 +198,8 @@
 - `press <key> [ref]`
 - `type <text> [ref]`
 - `upload <ref> <file>`
-- `tab-close [tabId]`
-- `tab-select <tabId>`
+- `tab-close [index]`
+- `tab-select <index>`
 - `Browser sessions` 分类
 
 ### `browser4-cli help` 当前不会显示

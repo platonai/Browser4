@@ -571,9 +571,21 @@ pub(super) fn test_tab_commands(ctx: &mut E2ECtx) {
         "Expected other URL in updated tab-list"
     );
 
-    let other_tab_id = extract_tab_id(&tab_output, &other_url);
+    let other_tab_index = extract_tab_index(&tab_output, &other_url).to_string();
 
-    run_command(ctx, &["tab-select", &other_tab_id]);
-    run_command(ctx, &["tab-close", &other_tab_id]);
+    run_command(ctx, &["tab-select", &other_tab_index]);
+    let current_url = eval_text(ctx, "document.location.href");
+    assert!(
+        current_url.contains(&other_url),
+        "Expected tab-select {other_tab_index} to activate '{other_url}', got:\n{current_url}"
+    );
+
+    run_command(ctx, &["tab-close", &other_tab_index]);
+    let final_tabs = run_command(ctx, &["tab-list"]);
+    let final_tab_output = strip_snapshot_output(&final_tabs.stdout);
+    assert!(
+        !final_tab_output.contains(&other_url),
+        "Expected tab-close {other_tab_index} to remove '{other_url}' from tab-list:\n{final_tab_output}"
+    );
     run_command(ctx, &["close"]);
 }

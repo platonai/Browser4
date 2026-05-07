@@ -515,7 +515,8 @@ class MCPToolControllerTest {
 
         assertEquals("browser", toolCall.domain)
         assertEquals("switchTab", toolCall.method)
-        assertEquals("1", toolCall.arguments["tabId"])
+        assertEquals(1, toolCall.arguments["index"])
+        assertFalse(toolCall.arguments.containsKey("tabId"))
     }
 
     @Test
@@ -686,6 +687,28 @@ class MCPToolControllerTest {
 
         assertEquals("browser", toolCall.domain)
         assertEquals("closeTab", toolCall.method)
+    }
+
+    @Test
+    fun `test frontend tab close with index maps to browser closeTab`() = runBlocking {
+        val request = MCPToolCallRequest(
+            tool = "browser_tabs",
+            arguments = mapOf("sessionId" to sessionId, "action" to "close", "index" to 1)
+        )
+
+        `when`(agentToolExecutor.execute(anyToolCall())).thenReturn(toolCallResult("ok"))
+
+        val result = controller.callTool(request, response)
+        assertEquals(HttpStatus.OK, result.statusCode)
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolExecutor).execute(capture(captor))
+        val toolCall = captor.value
+
+        assertEquals("browser", toolCall.domain)
+        assertEquals("closeTab", toolCall.method)
+        assertEquals(1, toolCall.arguments["index"])
+        assertFalse(toolCall.arguments.containsKey("tabId"))
     }
 
     @Test

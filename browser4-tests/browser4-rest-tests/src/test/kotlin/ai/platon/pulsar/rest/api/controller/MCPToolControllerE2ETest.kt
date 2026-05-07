@@ -1001,7 +1001,6 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         companion object {
             const val INTERACTIVE_TITLE = "Browser4 CLI Interactive Fixture"
             const val OTHER_TITLE = "Browser4 CLI Other Fixture"
-            const val FORM_TITLE = "Browser4 CLI Form Fixture"
             private const val INTERACTIVE_FIXTURE_RESOURCE = "static/b4/mcp-tool-controller-interactive-fixture.html"
             private const val OTHER_FIXTURE_RESOURCE = "static/b4/mcp-tool-controller-other-fixture.html"
             private const val FORM_FIXTURE_RESOURCE = "static/b4/mcp-tool-controller-form-fixture.html"

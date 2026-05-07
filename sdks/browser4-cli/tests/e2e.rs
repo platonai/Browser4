@@ -1595,39 +1595,21 @@ fn extract_submitted_task_id(output: &str) -> String {
         .to_string()
 }
 
-/// Extract a tab ID for the given URL from `tab-list` output.
-///
-/// Looks for a pattern like `id:<VALUE>` (or `id="<VALUE>"`) followed — on the
-/// same or a later line — by the URL, similar to the TypeScript `extractTabId`.
-fn extract_tab_id(output: &str, url: &str) -> String {
-    // Match "id" followed by ":" or "=" then an optional quote, then the value,
-    // somewhere before the URL on the same block.  We iterate over lines/chunks
-    // because the backend may format as YAML / JSON / plaintext.
+/// Extract the zero-based tab index for the given URL from `tab-list` output.
+fn extract_tab_index(output: &str, url: &str) -> usize {
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let re = RE.get_or_init(|| {
-        regex::Regex::new(r#"id[:=]"?([^",}\s]+)"?"#).expect("tab id regex compile")
+        regex::Regex::new(r#"url\s*[:=]\s*"?([^",}\s]+)"?"#).expect("tab url regex compile")
     });
 
-    // Collect all (id_value, byte_position) pairs.
-    let ids: Vec<(String, usize)> = re
+    let urls: Vec<String> = re
         .captures_iter(output)
-        .filter_map(|cap| {
-            let m = cap.get(0)?;
-            Some((cap[1].to_string(), m.start()))
-        })
+        .map(|cap| cap[1].to_string())
         .collect();
 
-    // Find the position of our target URL in the output.
-    let url_pos = output
-        .find(url)
-        .unwrap_or_else(|| panic!("URL '{}' not found in tab list output:\n{}", url, output));
-
-    // Pick the id that appears immediately before the URL.
-    ids.iter()
-        .filter(|(_, pos)| *pos < url_pos)
-        .last()
-        .map(|(id, _)| id.clone())
-        .unwrap_or_else(|| panic!("Could not find tab id for '{}' in:\n{}", url, output))
+    urls.iter()
+        .position(|candidate| candidate == url)
+        .unwrap_or_else(|| panic!("Could not find tab index for '{}' in:\n{}", url, output))
 }
 
 // ---------------------------------------------------------------------------

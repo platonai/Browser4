@@ -95,12 +95,13 @@ browser4-cli tab-list
 browser4-cli tab-new
 browser4-cli tab-new https://example.com/page
 browser4-cli tab-close
+# inspect indices before targeting a specific tab
 browser4-cli tab-list
-browser4-cli tab-select tab-123
-browser4-cli tab-close tab-123
+browser4-cli tab-select 1
+browser4-cli tab-close 1
 ```
 
-Use `browser4-cli tab-list` to obtain the current tab IDs before calling `tab-select` or `tab-close` with a specific target.
+Use `browser4-cli tab-list` to obtain the current zero-based tab index before calling `tab-select` or `tab-close` with a specific target.
 
 ## Snapshots
 
@@ -162,7 +163,7 @@ browser4-cli close
 browser4-cli open https://example.com
 browser4-cli tab-new https://example.com/other
 browser4-cli tab-list
-browser4-cli tab-select tab-123
+browser4-cli tab-select 1
 browser4-cli snapshot
 browser4-cli close
 ```
