@@ -15,16 +15,10 @@ import dev.langchain4j.model.output.FinishReason
 import kotlinx.coroutines.*
 import org.apache.commons.codec.digest.DigestUtils
 import org.apache.commons.lang3.StringUtils
-import org.ehcache.Cache
-import org.ehcache.CacheManager
-import org.ehcache.config.builders.CacheConfigurationBuilder
-import org.ehcache.config.builders.CacheManagerBuilder
-import org.ehcache.config.builders.ExpiryPolicyBuilder
-import org.ehcache.config.builders.ResourcePoolsBuilder
 import org.jsoup.nodes.Element
 import java.io.IOException
 import java.io.InterruptedIOException
-import java.time.Duration
+import java.util.concurrent.ConcurrentHashMap
 
 open class CachedBrowserChatModel(
     val langchainModel: dev.langchain4j.model.chat.ChatModel,
@@ -33,21 +27,8 @@ open class CachedBrowserChatModel(
     private val logger = getLogger(CachedBrowserChatModel::class)
 
     private val llmResponseCacheTTL = conf.getLong("llm.response.cache.ttl", 600L) // Default to 10 minutes if not set
-
-    private val cacheManager: CacheManager = CacheManagerBuilder.newCacheManagerBuilder()
-        .withCache(
-            "modelResponses",
-            CacheConfigurationBuilder.newCacheConfigurationBuilder(
-                String::class.java,
-                ModelResponse::class.java,
-                ResourcePoolsBuilder.heap(1000) // Maximum entries in cache
-            )
-                .withExpiry(ExpiryPolicyBuilder.timeToLiveExpiration(Duration.ofSeconds(llmResponseCacheTTL))) // TTL: 60 minutes
-        )
-        .build(true)
-
-    private val responseCache: Cache<String, ModelResponse> =
-        cacheManager.getCache("modelResponses", String::class.java, ModelResponse::class.java)
+    private val maxCacheEntries = 1000
+    private val responseCache = ConcurrentHashMap<String, CacheEntry>()
 
     private val llmLogger = ChatModelLogger()
 
@@ -138,6 +119,38 @@ open class CachedBrowserChatModel(
         llmLogger.close()
     }
 
+    private data class CacheEntry(
+        val response: ModelResponse,
+        val expiresAtMillis: Long
+    )
+
+    private fun getCachedResponse(cacheKey: String): ModelResponse? {
+        val now = System.currentTimeMillis()
+        val entry = responseCache[cacheKey] ?: return null
+        if (entry.expiresAtMillis <= now) {
+            responseCache.remove(cacheKey, entry)
+            return null
+        }
+        return entry.response
+    }
+
+    private fun putCachedResponse(cacheKey: String, response: ModelResponse) {
+        val ttlMillis = llmResponseCacheTTL.coerceAtLeast(1L) * 1000L
+        responseCache[cacheKey] = CacheEntry(response, System.currentTimeMillis() + ttlMillis)
+
+        if (responseCache.size <= maxCacheEntries) {
+            return
+        }
+
+        val now = System.currentTimeMillis()
+        responseCache.entries.removeIf { it.value.expiresAtMillis <= now }
+
+        val overflow = responseCache.size - maxCacheEntries
+        if (overflow > 0) {
+            responseCache.keys.take(overflow).forEach { responseCache.remove(it) }
+        }
+    }
+
     private suspend fun callUmSmWithCache(
         userMessage: String, systemMessage: String,
         imageUrl: String? = null,
@@ -178,9 +191,8 @@ open class CachedBrowserChatModel(
         val cacheKey = DigestUtils.md5Hex("$trimmedUserMessage|$systemMessage$attachmentKeyPart")
 
         // Check if the response is already cached
-        responseCache.get(cacheKey)?.let {
+        getCachedResponse(cacheKey)?.let {
             logger.debug("Returning cached response for key: $cacheKey")
-            it.content
             return it
         }
 
@@ -254,7 +266,7 @@ open class CachedBrowserChatModel(
         llmLogger.logResponse(requestId, modelResponse, category)
 
         // Cache the response
-        responseCache.put(cacheKey, modelResponse)
+        putCachedResponse(cacheKey, modelResponse)
         logger.debug("Cached response for key: {}", cacheKey)
 
         return modelResponse

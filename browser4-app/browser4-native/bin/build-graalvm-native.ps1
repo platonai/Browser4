@@ -1,5 +1,5 @@
 #!/usr/bin/env pwsh
-# Build Browser4 Agents as a GraalVM native executable on Windows.
+# Build Browser4 Native as a GraalVM native executable on Windows.
 
 param(
     [switch]$WithTests = $false,
@@ -81,14 +81,14 @@ function Import-VsBuildToolsEnvironment {
 }
 
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "Browser4 Agents - GraalVM Native Builder" -ForegroundColor Cyan
+Write-Host "Browser4 Native - GraalVM Native Builder" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$repoRoot = Join-Path $scriptDir "..\.."
+$repoRoot = Join-Path $scriptDir "..\..\.."
 $mvnWrapper = Join-Path $repoRoot "mvnw.cmd"
-$pomPath = Join-Path $scriptDir "pom.xml"
+$pomPath = Join-Path $scriptDir "..\pom.xml"
 
 if (-not (Test-Path $mvnWrapper)) {
     Write-Err "Maven wrapper not found at: $mvnWrapper"
@@ -132,7 +132,7 @@ Import-VsBuildToolsEnvironment
 
 Write-Host ""
 Write-Host "Build Configuration:" -ForegroundColor Yellow
-Write-Host "  - Module: browser4-app/browser4-agents" -ForegroundColor White
+Write-Host "  - Module: browser4-app/browser4-native" -ForegroundColor White
 Write-Host "  - Profile: graalvm-native" -ForegroundColor White
 Write-Host "  - Skip Tests: $(!$WithTests)" -ForegroundColor White
 Write-Host "  - Check Only: $CheckOnly" -ForegroundColor White
@@ -146,7 +146,7 @@ if ($CheckOnly) {
 $mvnArgs = @(
     "clean",
     "package",
-    "-pl", "browser4-app/browser4-agents",
+    "-pl", "browser4-app/browser4-native",
     "-am",
     "-Pgraalvm-native"
 )
@@ -170,7 +170,7 @@ try {
 }
 
 $duration = (Get-Date) - $startTime
-$targetDir = Join-Path $scriptDir "target"
+$targetDir = Join-Path $scriptDir "..\target"
 $exeCandidates = Get-ChildItem -Path $targetDir -Filter "*.exe" -ErrorAction SilentlyContinue
 
 Write-Host ""

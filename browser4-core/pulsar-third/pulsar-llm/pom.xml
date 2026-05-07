@@ -43,10 +43,6 @@
             <artifactId>langchain4j-open-ai</artifactId>
         </dependency>
 
-        <dependency>
-            <groupId>org.ehcache</groupId>
-            <artifactId>ehcache</artifactId>
-        </dependency>
 
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
