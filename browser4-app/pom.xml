@@ -22,5 +22,6 @@
 
     <modules>
         <module>browser4-agents</module>
+        <module>browser4-native</module>
     </modules>
 </project>

@@ -190,6 +190,7 @@
             </activation>
             <modules>
                 <module>browser4-app/browser4-agents</module>
+                <module>browser4-app/browser4-native</module>
                 <module>examples/browser4-examples</module>
             </modules>
         </profile>
