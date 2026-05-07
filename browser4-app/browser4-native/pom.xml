@@ -170,7 +170,10 @@
                         </executions>
                         <configuration>
                             <mainClass>ai.platon.pulsar.app.Browser4NativeImageApplicationKt</mainClass>
-                            <fallback>true</fallback>
+                            <fallback>false</fallback>
+                            <buildArgs>
+                                <buildArg>--no-fallback</buildArg>
+                            </buildArgs>
                             <verbose>true</verbose>
                         </configuration>
                     </plugin>
