@@ -1,71 +1,77 @@
 # Browser4 CLI
 
-A command-line interface for controlling a [Browser4](https://github.com/platonai/Browser4)
-server. Designed for use by AI agents through SKILLS + CLI.
+A command-line interface for controlling a [Browser4](https://github.com/platonai/Browser4) server. Designed for use by AI agents through SKILLS + CLI.
 
-## Install
+## Installation
 
-### macOS / Linux installer
+### Global Installation (recommended)
 
-The repository now includes an installer that:
-
-- checks the required build/runtime dependencies
-- installs Java 17+, Google Chrome, and Rust when they are missing
-- downloads the latest released `Browser4.jar` to `~/.browser4/lib/Browser4.jar` as a fallback runtime
-- downloads the latest tagged Browser4 source and installs `browser4-cli` to `~/.local/bin`
+Installs the native Rust binary:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/platonai/Browser4/master/sdks/browser4-cli/install.sh | bash
+npm install -g browser4-cli
+browser4-cli install  # Download Chrome from Chrome for Testing (first time only)
 ```
 
-Optional environment overrides:
+### Project Installation (local dependency)
 
-| Variable | Description |
-|---|---|
-| `BROWSER4_INSTALL_VERSION` | Install a specific release tag instead of the latest one |
-| `BROWSER4_INSTALL_ROOT` | Override the Cargo install root (default: `~/.local`) |
-| `BROWSER4_LIB_DIR` | Override where `Browser4.jar` is stored (default: `~/.browser4/lib`) |
-
-### Windows manual install
-
-`install.sh` is only supported on macOS and Linux. On Windows, install the CLI manually:
-
-1. Install Java 17+, Google Chrome, Rust, and the MSVC C++ build tools.
-2. Download the latest `Browser4.jar` release asset to `%USERPROFILE%\.browser4\lib\Browser4.jar`.
-3. Build and install `browser4-cli.exe` from source into Cargo's bin directory:
-
-```powershell
-New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.browser4\lib" | Out-Null
-Invoke-WebRequest 'https://github.com/platonai/Browser4/releases/latest/download/Browser4.jar' -OutFile "$env:USERPROFILE\.browser4\lib\Browser4.jar"
-
-git clone https://github.com/platonai/Browser4.git
-cd Browser4\sdks\browser4-cli
-cargo install --path . --locked
-```
-
-By default, Cargo installs the executable to `%USERPROFILE%\.cargo\bin`. Ensure that directory is on `PATH`.
-
-## Prerequisites
-
-- For localhost auto-start, prefer running the CLI from a Browser4 source checkout with Java 17+ and Maven available
-- Or point the CLI at an already-running Browser4 server (default port **8182**)
-- Rust 1.70+ (to build from source manually)
-
-## Build
+For projects that want to pin the version in `package.json`:
 
 ```bash
-cd sdks/browser4-cli
-cargo build --release
-# Binary is at target/release/browser4-cli
-# Or install to Cargo bin directory (%USERPROFILE%\.cargo\bin on Windows, ~/.cargo/bin on Unix):
-cargo install --path .
+npm install browser4-cli
+browser4-cli install
 ```
 
-Or run directly:
+Then use via `package.json` scripts or by invoking `browser4-cli` directly.
+
+### Homebrew (macOS)
 
 ```bash
-cargo run -- <command> [args] [options]
+brew install browser4-cli
+browser4-cli install  # Download Chrome from Chrome for Testing (first time only)
 ```
+
+### Cargo (Rust)
+
+```bash
+cargo install browser4-cli
+browser4-cli install  # Download Chrome from Chrome for Testing (first time only)
+```
+
+### From Source
+
+```bash
+git clone https://github.com/platonai/Browser4
+cd browser4-cli
+pnpm install
+pnpm build
+pnpm build:native   # Requires Rust (https://rustup.rs)
+pnpm link --global  # Makes browser4-cli available globally
+browser4-cli install
+```
+
+### Linux Dependencies
+
+On Linux, install system dependencies:
+
+```bash
+browser4-cli install --with-deps
+```
+
+### Updating
+
+Upgrade to the latest version:
+
+```bash
+browser4-cli upgrade
+```
+
+Detects your installation method (npm, Homebrew, or Cargo) and runs the appropriate update command automatically.
+
+### Requirements
+
+- **Chrome** - Run `browser4-cli install` to download Chrome from [Chrome for Testing](https://developer.chrome.com/blog/chrome-for-testing/) (Google's official automation channel). Existing Chrome, Brave, Playwright, and Puppeteer installations are detected automatically. No Playwright or Node.js required for the daemon.
+- **Rust** - Only needed when building from source (see From Source above).
 
 ## Usage
 
