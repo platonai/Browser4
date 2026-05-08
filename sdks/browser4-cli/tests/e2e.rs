@@ -57,7 +57,7 @@ use std::time::{Duration, Instant};
 #[path = "e2e/scenarios/mod.rs"]
 mod scenarios;
 
-const OPEN_TEMPORARY_PROFILE_ARG: &str = "--profile-mode=SEQUENTIAL";
+const OPEN_PROFILE_MODE_ARG: &str = "--profile-mode=SEQUENTIAL";
 // const OPEN_TEMPORARY_PROFILE_ARG: &str = "";
 const USE_MAVEN_STARTUP_FLAG: &str = "--use-maven-startup";
 
@@ -963,7 +963,7 @@ impl E2ETestResources {
         let was_healthy_before = is_browser4_healthy_now(&self.ctx.browser4_base_url);
         let started_at = Instant::now();
         let startup_result =
-            run_cli_process_with_live_output(&self.ctx, &["open", OPEN_TEMPORARY_PROFILE_ARG]);
+            run_cli_process_with_live_output(&self.ctx, &["open", OPEN_PROFILE_MODE_ARG]);
         let startup_log_hint = format_browser4_startup_log_hint(&startup_result.stderr);
         let started_via_maven = startup_result
             .stderr
@@ -2001,13 +2001,13 @@ fn goto_interactive_page(ctx: &mut E2ECtx) {
 }
 
 fn run_open_command(ctx: &mut E2ECtx) -> CliRunResult {
-    let result = run_command(ctx, &["open", OPEN_TEMPORARY_PROFILE_ARG]);
+    let result = run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
     sleep(Duration::from_secs(2));
     return result;
 }
 
 fn batch_open_command(url: &str) -> String {
-    format!("open {OPEN_TEMPORARY_PROFILE_ARG} {url}")
+    format!("open {OPEN_PROFILE_MODE_ARG} {url}")
 }
 
 fn write_json_fixture(ctx: &E2ECtx, file_name: &str, value: &serde_json::Value) -> PathBuf {

@@ -36,7 +36,7 @@ pub(super) fn test_open_with_url_prints_page_state(ctx: &mut E2ECtx) {
         ctx,
         &[
             "open",
-            OPEN_TEMPORARY_PROFILE_ARG,
+            OPEN_PROFILE_MODE_ARG,
             "https://example.com/opened-from-open-command",
         ],
     );
@@ -110,7 +110,7 @@ pub(super) fn test_named_session_reuses_opened_session(ctx: &mut E2ECtx) {
     let mock_server = MockBrowser4Server::start();
     ctx.browser4_base_url = mock_server.base_url();
 
-    let open_result = run_command(ctx, &["-s=amazon", "open", OPEN_TEMPORARY_PROFILE_ARG]);
+    let open_result = run_command(ctx, &["-s=amazon", "open", OPEN_PROFILE_MODE_ARG]);
     assert!(
         open_result
             .stdout
@@ -175,7 +175,7 @@ pub(super) fn test_batch_reduces_transport_round_trips(ctx: &mut E2ECtx) {
     let individual_server = MockBrowser4Server::start();
     ctx.browser4_base_url = individual_server.base_url();
 
-    run_command(ctx, &["open", OPEN_TEMPORARY_PROFILE_ARG, workflow_url]);
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, workflow_url]);
     let eval_result = run_command(ctx, &["eval", "document.title"]);
     let press_result = run_command(ctx, &["press", "!", "#type-target"]);
 
@@ -207,7 +207,7 @@ pub(super) fn test_batch_reduces_transport_round_trips(ctx: &mut E2ECtx) {
 
     let batch_server = MockBrowser4Server::start();
     ctx.browser4_base_url = batch_server.base_url();
-    let batch_open_command = format!("open {OPEN_TEMPORARY_PROFILE_ARG} {workflow_url}");
+    let batch_open_command = format!("open {OPEN_PROFILE_MODE_ARG} {workflow_url}");
 
     let batch_result = run_command(
         ctx,

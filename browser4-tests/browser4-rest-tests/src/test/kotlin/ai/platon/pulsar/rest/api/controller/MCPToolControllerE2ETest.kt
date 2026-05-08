@@ -41,6 +41,10 @@ import kotlin.test.assertTrue
  */
 @Tag("E2ETest")
 class MCPToolControllerE2ETest : RestAPITestBase() {
+    companion object {
+        const val OPEN_PROFILE_MODE = "SEQUENTIAL"
+    }
+    
     private val logger = LoggerFactory.getLogger(MCPToolControllerE2ETest::class.java)
     private val objectMapper = jacksonObjectMapper()
         .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
@@ -51,11 +55,11 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
 
     @Autowired
     lateinit var sessionManager: SessionManager
-
+    
     private lateinit var fixtureServer: FixtureServer
     private lateinit var tempDir: Path
     private lateinit var uploadFile: Path
-
+    
     private val cliCommandToMcpTool = mapOf(
         "open" to "open_session",
         "goto" to "browser_navigate",
@@ -142,9 +146,9 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
     @Test
     @DisplayName("open_session preserves requested TEMPORARY profile mode")
     fun testOpenUsesTemporaryProfileMode() {
-        val sessionId = openSession(capabilities = mapOf("profileMode" to "TEMPORARY"))
+        val sessionId = openSession(capabilities = mapOf("profileMode" to OPEN_PROFILE_MODE))
         assertEquals(
-            "TEMPORARY",
+            OPEN_PROFILE_MODE,
             sessionManager.getSession(sessionId)?.capabilities?.get("profileMode")?.toString()
         )
     }
@@ -345,7 +349,7 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
     fun testCommandBatchInteractiveFlow() {
         val batchResponse = callCommandBatch(
             listOf(
-                mapOf("op" to "open", "capabilities" to mapOf("profileMode" to "TEMPORARY")),
+                mapOf("op" to "open", "capabilities" to mapOf("profileMode" to OPEN_PROFILE_MODE)),
                 mapOf("op" to "tool", "tool" to "browser_navigate", "arguments" to mapOf("url" to fixtureServer.interactiveUrl())),
                 mapOf("op" to "tool", "tool" to "browser_press_sequentially", "arguments" to mapOf("ref" to "#type-target", "text" to "hello batch")),
                 mapOf("op" to "tool", "tool" to "browser_type", "arguments" to mapOf("ref" to "#fill-target", "text" to "from batch")),
@@ -402,7 +406,7 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
     fun testCommandBatchFormSubmission() {
         val firstBatch = callCommandBatch(
             listOf(
-                mapOf("op" to "open", "capabilities" to mapOf("profileMode" to "TEMPORARY")),
+                mapOf("op" to "open", "capabilities" to mapOf("profileMode" to OPEN_PROFILE_MODE)),
                 mapOf("op" to "tool", "tool" to "browser_navigate", "arguments" to mapOf("url" to fixtureServer.formUrl())),
                 mapOf("op" to "tool", "tool" to "browser_type", "arguments" to mapOf("ref" to "#first-name", "text" to "Alice")),
                 mapOf("op" to "tool", "tool" to "browser_type", "arguments" to mapOf("ref" to "#last-name", "text" to "Johnson")),
@@ -460,7 +464,7 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
 
         val batchResponse = callCommandBatch(
             listOf(
-                mapOf("op" to "open", "capabilities" to mapOf("profileMode" to "TEMPORARY")),
+                mapOf("op" to "open", "capabilities" to mapOf("profileMode" to OPEN_PROFILE_MODE)),
                 mapOf("op" to "tool", "tool" to "page_title", "arguments" to emptyMap<String, Any?>())
             ),
             sessionId = sessionId,
@@ -480,7 +484,7 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
     fun testCommandBatchErrorHandling() {
         val initialBatch = callCommandBatch(
             listOf(
-                mapOf("op" to "open", "capabilities" to mapOf("profileMode" to "TEMPORARY")),
+                mapOf("op" to "open", "capabilities" to mapOf("profileMode" to OPEN_PROFILE_MODE)),
                 mapOf("op" to "tool", "tool" to "browser_navigate", "arguments" to mapOf("url" to fixtureServer.interactiveUrl()))
             ),
             batchLabel = "error handling bootstrap"
@@ -711,7 +715,7 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         return sessionId
     }
 
-    private fun openTemporarySession(): String = openSession(mapOf("profileMode" to "TEMPORARY"))
+    private fun openTemporarySession(): String = openSession(mapOf("profileMode" to OPEN_PROFILE_MODE))
 
     private fun navigate(sessionId: String, url: String) {
         val response = callTool("browser_navigate", mapOf("sessionId" to sessionId, "url" to url))

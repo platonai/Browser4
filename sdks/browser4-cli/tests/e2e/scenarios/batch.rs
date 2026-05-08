@@ -110,7 +110,7 @@ pub(super) fn test_batch_commands(ctx: &mut E2ECtx) {
   "click #click-target"
 ]
 "##,
-            profile_arg = OPEN_TEMPORARY_PROFILE_ARG,
+            profile_arg = OPEN_PROFILE_MODE_ARG,
             interactive_url = interactive_url,
         ),
     );
@@ -312,7 +312,7 @@ pub(super) fn test_batch_form_submission_from_json_file(ctx: &mut E2ECtx) {
 
     let form_url = ctx.form_url();
     let batch_commands = serde_json::json!([
-        ["open", OPEN_TEMPORARY_PROFILE_ARG, form_url],
+        ["open", OPEN_PROFILE_MODE_ARG, form_url],
         ["fill", "#first-name", first_name],
         ["fill", "#last-name", last_name],
         ["fill", "#email", email],
