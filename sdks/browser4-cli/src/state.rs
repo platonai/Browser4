@@ -1,7 +1,7 @@
 //! Persistent state management for the Browser4 CLI.
 //!
-//! State is stored in `~/.browser4/cli-state.json` and shared across all
-//! `browser4-cli` invocations in the same session.
+//! State is stored under `~/.browser4` by default. The unnamed session uses
+//! `cli-state.json`, while named sessions use `sessions/<name>.json`.
 
 use serde::{Deserialize, Serialize};
 use std::fs;

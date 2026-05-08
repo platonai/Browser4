@@ -131,13 +131,23 @@ _ => {
 
 ### 2.5 Session Management & HTTP Call
 
-**File**: `sdks/browser4-cli/src/main.rs` (lines 489–513)
+**File**: `sdks/browser4-cli/src/main.rs` (`with_session`, `create_session`, `invalidate_session`)
 
 `handle_tool_command()` calls `with_session()` which:
-1. Reads the persisted session ID from `~/.browser4/cli-state.json`
-2. Injects `sessionId` into the tool params
-3. Calls `call_tool()` from `http.rs`
-4. If the session is stale and `recover_stale=true`, auto-creates a new session and retries
+1. Reads persisted state from `~/.browser4/cli-state.json` for the default session, or `~/.browser4/sessions/<name>.json` for `-s=<name>`
+2. Requires a non-empty `sessionId`, otherwise it fails with `No active session. Run "browser4-cli open" first.`
+3. Injects `sessionId` into the tool params and calls `call_tool()` from `http.rs`
+4. If the backend reports a stale / expired session, `invalidate_session()` clears `sessionId`, `activeSelector`, and `lastMousePosition` in the persisted state
+5. If `recover_stale=true`, `create_session()` opens a new session, persists the fresh `sessionId`, and retries the action once
+6. If `recover_stale=false`, the command fails with `Saved session expired. Run "browser4-cli open" first.`
+
+This gives the CLI a simple persisted state machine:
+
+- `open` → creates and persists a fresh active session
+- normal command success → keeps the same persisted `sessionId`
+- stale session without recovery → clears the persisted session binding
+- stale session with recovery → clears stale state, recreates the session, retries
+- `close` / `close-all` / `kill-all` → remove persisted session files
 
 ### 2.6 HTTP Request
 

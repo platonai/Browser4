@@ -4,8 +4,9 @@
 //! via `POST /mcp/call-tool`.
 //!
 //! # State persistence
-//! The active session ID and server URL are kept in `~/.browser4/cli-state.json`
-//! between invocations.
+//! CLI state is persisted between invocations under `~/.browser4` by default.
+//! The default session uses `~/.browser4/cli-state.json`; named sessions use
+//! `~/.browser4/sessions/<name>.json`.
 //!
 //! # Element selectors
 //! Use the short `e<N>` form from `snapshot` output; the CLI automatically

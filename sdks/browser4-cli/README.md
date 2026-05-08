@@ -197,9 +197,43 @@ fully-qualified `backend:<N>` refs directly.
 
 ## State Persistence
 
-The active session ID and server URL are kept in `~/.browser4/cli-state.json`
-between invocations. Override the directory with the `BROWSER4_CLI_STATE_DIR`
+`browser4-cli` persists CLI state between invocations under `~/.browser4` by
+default. Override the root directory with the `BROWSER4_CLI_STATE_DIR`
 environment variable.
+
+- Default session state: `~/.browser4/cli-state.json`
+- Named session state (`-s=<name>`): `~/.browser4/sessions/<name>.json`
+
+Each state file stores the current Browser4 server URL plus session-scoped
+fields such as:
+
+- `sessionId` — active Browser4 session ID
+- `baseUrl` — Browser4 backend URL used by the CLI
+- `activeSelector` — last selector tracked for keyboard restore flows
+- `lastMousePosition` — last pointer coordinates tracked for mouse restore flows
+
+### Session state transitions
+
+The `with_session()` helper in `src/main.rs` is the central session lifecycle
+gate for commands that require an active Browser4 session.
+
+| Situation | Persisted state transition | Result |
+|---|---|---|
+| No persisted session | No state change | `require_session()` fails with `No active session. Run "browser4-cli open" first.` |
+| `open` succeeds | `create_session()` writes a fresh state file with new `sessionId`, current `baseUrl`, and clears `activeSelector` / `lastMousePosition` | A new active session becomes the current CLI session |
+| Command succeeds through `with_session()` | `sessionId` stays unchanged | The command uses the persisted session normally |
+| Command fails because the server reports a stale / expired session and `recover_stale = false` | `invalidate_session()` clears `sessionId`, `activeSelector`, and `lastMousePosition`, while keeping `baseUrl` | The command fails with `Saved session expired. Run "browser4-cli open" first.` |
+| Command fails because the session is stale and `recover_stale = true` | `invalidate_session()` clears the stale session first, then `create_session()` writes a brand-new `sessionId` and retries the action | The command transparently continues on the recreated session if the retry succeeds |
+| `close` | `clear_state()` removes only the current session state file after best-effort remote close | The selected default or named session is fully cleared |
+| `close-all` / `kill-all` | `clear_all_state()` removes the default state file and all named session files | All persisted CLI session files are cleared |
+
+Notes:
+
+- Today, normal single-command stale-session recovery is enabled only for flows
+  that dispatch with `recover_stale = true` (currently `goto`).
+- `open` always starts a new session and resets tracked selector/mouse state.
+- `list` reads persisted session files and compares them with live backend
+  sessions to label entries as `Active` or `Stale`.
 
 ## Runtime Temp Files
 
@@ -302,7 +336,7 @@ The Rust CLI is structured as follows:
 | `args.rs` | CLI argument parsing (global flags, positional args, options) |
 | `commands.rs` | Command definitions mapping to MCP tool names and parameters |
 | `http.rs` | HTTP client for calling `/mcp/call-tool` |
-| `state.rs` | Persistent state management (`~/.browser4/cli-state.json`) |
+| `state.rs` | Persistent state management for the default state file and named session files under `~/.browser4/` |
 | `daemon.rs` | Local server auto-start (prefer Maven from repo root, fall back to jar) and health checking |
 | `managed_processes.rs` | Registry for browser4 server processes |
 | `snapshot.rs` | Snapshot and screenshot file helpers |

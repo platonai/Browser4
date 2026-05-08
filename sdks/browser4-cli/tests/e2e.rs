@@ -2573,7 +2573,9 @@ enum ScenarioFilter {
 #[derive(Debug)]
 struct RunOptions {
     scenario_filter: Option<ScenarioFilter>,
+    has_positional_filter: bool,
     fail_fast: bool,
+    list_only: bool,
 }
 
 fn parse_named_flag_value(args: &mut impl Iterator<Item = String>, flag: &str) -> String {
@@ -2588,6 +2590,8 @@ fn parse_run_options() -> RunOptions {
     let mut scenario_from = None;
     let mut rerun_failed = false;
     let mut fail_fast = false;
+    let mut has_positional_filter = false;
+    let mut list_only = false;
 
     while let Some(arg) = args.next() {
         if let Some(value) = arg.strip_prefix("--scenario=") {
@@ -2615,6 +2619,16 @@ fn parse_run_options() -> RunOptions {
 
         if arg == "--fail-fast" {
             fail_fast = true;
+            continue;
+        }
+
+        if arg == "--list" {
+            list_only = true;
+            continue;
+        }
+
+        if !arg.starts_with('-') {
+            has_positional_filter = true;
         }
     }
 
@@ -2635,7 +2649,9 @@ fn parse_run_options() -> RunOptions {
 
     RunOptions {
         scenario_filter,
+        has_positional_filter,
         fail_fast,
+        list_only,
     }
 }
 
@@ -2707,11 +2723,23 @@ impl PlannedScenarioRun {
             )
         }
     }
+
+}
+
+const COVERAGE_TEST_NAME: &str = "test_e2e_command_coverage";
+
+fn total_declared_e2e_tests() -> usize {
+    scenarios::all_scenarios()
+        .iter()
+        .map(|scenario| scenario.effective_test_count())
+        .sum::<usize>()
+        + 1
 }
 
 fn main() {
     let suite_started_at = Instant::now();
     let run_options = parse_run_options();
+    let has_explicit_scenario_filter = run_options.scenario_filter.is_some();
     let all_scenarios = scenarios::all_scenarios();
     let available_names = all_scenarios
         .iter()
@@ -2805,9 +2833,36 @@ fn main() {
         })
         .collect();
 
+    let filtered_out = if run_options.has_positional_filter && !has_explicit_scenario_filter {
+        total_declared_e2e_tests()
+    } else {
+        0
+    };
+
+    if run_options.list_only {
+        if run_coverage {
+            println!("{COVERAGE_TEST_NAME}: test");
+        }
+        for planned_run in &planned_runs {
+            println!("{}: test", planned_run.display_name());
+        }
+        println!("\n{} tests, 0 benchmarks", planned_runs.len() + usize::from(run_coverage));
+        return;
+    }
+
     let scenario_runs = planned_runs.len();
     let total_tests = scenario_runs + usize::from(run_coverage);
+
+    if filtered_out > 0 {
+        println!("running 0 tests");
+        println!(
+            "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; {filtered_out} filtered out"
+        );
+        return;
+    }
+
     println!("running {total_tests} tests");
+
     let mut resources = create_e2e_test_resources();
     let run_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut timings: Vec<TimingReport> = Vec::with_capacity(total_tests);
@@ -2815,7 +2870,7 @@ fn main() {
         let mut failed_scenario_names: HashSet<String> = HashSet::new();
 
         if run_coverage {
-            let report = run_named_test("test_e2e_command_coverage", verify_e2e_command_coverage);
+            let report = run_named_test(COVERAGE_TEST_NAME, verify_e2e_command_coverage);
             timings.push(report);
         }
 
@@ -2900,22 +2955,25 @@ fn main() {
             let passed = total_tests.saturating_sub(failed_scenario_count);
             if failed_scenario_count == 0 {
                 println!(
-                    "test result: ok. {} passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
-                    total_tests
+                    "test result: ok. {} passed; 0 failed; 0 ignored; 0 measured; {} filtered out",
+                    total_tests,
+                    filtered_out
                 );
             } else if failed_scenario_count <= MAX_ALLOWED_FAILED_SCENARIOS {
                 println!(
-                    "test result: ok (tolerated). {} passed; {} failed; 0 ignored; 0 measured; 0 filtered out ({} failure entries; tolerated <= {})",
+                    "test result: ok (tolerated). {} passed; {} failed; 0 ignored; 0 measured; {} filtered out ({} failure entries; tolerated <= {})",
                     passed,
                     failed_scenario_count,
+                    filtered_out,
                     scenario_failures.len(),
                     MAX_ALLOWED_FAILED_SCENARIOS
                 );
             } else {
                 println!(
-                    "test result: FAILED. {} passed; {} failed; 0 ignored; 0 measured; 0 filtered out ({} failure entries; allowed <= {})",
+                    "test result: FAILED. {} passed; {} failed; 0 ignored; 0 measured; {} filtered out ({} failure entries; allowed <= {})",
                     passed,
                     failed_scenario_count,
+                    filtered_out,
                     scenario_failures.len(),
                     MAX_ALLOWED_FAILED_SCENARIOS
                 );
