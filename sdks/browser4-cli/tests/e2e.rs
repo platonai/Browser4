@@ -57,7 +57,8 @@ use std::time::{Duration, Instant};
 #[path = "e2e/scenarios/mod.rs"]
 mod scenarios;
 
-const OPEN_TEMPORARY_PROFILE_ARG: &str = "--profile-mode=TEMPORARY";
+const OPEN_TEMPORARY_PROFILE_ARG: &str = "--profile-mode=DEFAULT";
+// const OPEN_TEMPORARY_PROFILE_ARG: &str = "";
 const USE_MAVEN_STARTUP_FLAG: &str = "--use-maven-startup";
 
 // ---------------------------------------------------------------------------
