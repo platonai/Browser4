@@ -57,7 +57,7 @@ use std::time::{Duration, Instant};
 #[path = "e2e/scenarios/mod.rs"]
 mod scenarios;
 
-const OPEN_TEMPORARY_PROFILE_ARG: &str = "--profile-mode=DEFAULT";
+const OPEN_TEMPORARY_PROFILE_ARG: &str = "--profile-mode=SEQUENTIAL";
 // const OPEN_TEMPORARY_PROFILE_ARG: &str = "";
 const USE_MAVEN_STARTUP_FLAG: &str = "--use-maven-startup";
 
@@ -1993,8 +1993,8 @@ fn create_e2e_test_resources() -> E2ETestResources {
 // Scenario helpers
 // ---------------------------------------------------------------------------
 
-fn open_interactive_page(ctx: &mut E2ECtx) {
-    run_open_command(ctx);
+fn goto_interactive_page(ctx: &mut E2ECtx) {
+    // run_open_command(ctx);
     let interactive_url = ctx.interactive_url();
     run_command(ctx, &["goto", &interactive_url]);
     sleep(Duration::from_secs(2));
@@ -2018,7 +2018,7 @@ fn write_json_fixture(ctx: &E2ECtx, file_name: &str, value: &serde_json::Value) 
 }
 
 fn open_resized_interactive_page(ctx: &mut E2ECtx) {
-    open_interactive_page(ctx);
+    goto_interactive_page(ctx);
 
     let resize_result = run_command(ctx, &["resize", "1280", "900"]);
     assert!(
