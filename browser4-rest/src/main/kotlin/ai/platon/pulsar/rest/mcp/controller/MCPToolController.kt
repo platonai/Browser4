@@ -6,12 +6,12 @@ import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.AgentToolExecutor
 import ai.platon.pulsar.agentic.tools.high.command.CommandService
 import ai.platon.pulsar.common.brief
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import ai.platon.pulsar.rest.mcp.service.SessionManager
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.annotation.JsonSetter
 import com.fasterxml.jackson.annotation.Nulls
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import jakarta.servlet.http.HttpServletResponse
 import org.slf4j.LoggerFactory
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
@@ -19,9 +19,6 @@ import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
 import java.util.*
-import kotlin.collections.component1
-import kotlin.collections.component2
-import kotlin.collections.iterator
 
 // ---------------------------------------------------------------------------
 // DTOs
@@ -465,7 +462,12 @@ class MCPToolController(
                 }
                 val managedSession = sessionManager.createSession(capabilities)
                 val sessionId = managedSession.sessionId
-                BatchExecutionResult(index = index, ok = true, sessionId = sessionId, text = "Session opened: $sessionId")
+                BatchExecutionResult(
+                    index = index,
+                    ok = true,
+                    sessionId = sessionId,
+                    text = "Session opened: $sessionId"
+                )
             }
 
             "close" -> {
@@ -603,7 +605,6 @@ class MCPToolController(
         )
     }
 
-
     private suspend fun executeAgentToolText(toolName: String, args: Map<String, Any?>): String {
         val normalizedRequest = normalizeFrontendToolCall(toolName, args)
         val sessionId = requireSessionId(normalizedRequest.arguments)
@@ -686,7 +687,12 @@ class MCPToolController(
                 ResponseEntity.ok(textResponse(evaluate.value?.toString() ?: ""))
             }
         } catch (e: Exception) {
-            logger.warn("MCP tool execution failed | tool={} | normalizedTool={} | {}", request.tool, toolName, e.brief())
+            logger.warn(
+                "MCP tool execution failed | tool={} | normalizedTool={} | {}",
+                request.tool,
+                toolName,
+                e.brief()
+            )
             ResponseEntity.ok(errorResponse("${request.tool} failed: ${e.brief()}"))
         }
     }
