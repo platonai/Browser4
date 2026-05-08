@@ -16,6 +16,7 @@
 //! cargo test --test e2e -- --nocapture --scenario=test_e2e_agent_task_commands
 //! cargo test --test e2e -- --nocapture --scenario=test_e2e_batch_*
 //! cargo test --test e2e -- --nocapture --scenario-from=test_e2e_mouse_and_dialog
+//! cargo test --test e2e -- --nocapture --scenario-from=test_e2e_navigation_and_storage --scenario-limit=5
 //! cargo test --test e2e -- --nocapture --failed
 //! cargo test --test e2e -- --nocapture --scenario=test_e2e_eval_command --fail-fast
 //! ```
@@ -1277,21 +1278,38 @@ fn wait_for_cli_output(
         thread::sleep(Duration::from_millis(200));
     };
 
-    println!(
-        "browser4-cli command completed in {}s with exit code {}: {}",
-        started_at.elapsed().as_secs(),
-        status.code().unwrap_or(-1),
-        full_args.join(" ")
-    );
-
     let stdout = finish_output_collector(stdout_handle, "stdout", full_args);
     let stderr = finish_output_collector(stderr_handle, "stderr", full_args);
+    let session_suffix = extract_session_id_from_cli_output(&stdout)
+        .map(|session_id| format!(" | sessionId={session_id}"))
+        .unwrap_or_default();
+
+    println!(
+        "browser4-cli command completed in {}s with exit code {}: {}{}",
+        started_at.elapsed().as_secs(),
+        status.code().unwrap_or(-1),
+        full_args.join(" "),
+        session_suffix
+    );
 
     std::process::Output {
         status,
         stdout: stdout.into_bytes(),
         stderr: stderr.into_bytes(),
     }
+}
+
+fn extract_session_id_from_cli_output(stdout: &str) -> Option<String> {
+    ["Session opened:", "Session already open:"]
+        .into_iter()
+        .find_map(|prefix| {
+            stdout
+                .lines()
+                .find_map(|line| line.trim().strip_prefix(prefix))
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
 }
 
 struct OutputCollector {
@@ -2573,9 +2591,43 @@ enum ScenarioFilter {
 #[derive(Debug)]
 struct RunOptions {
     scenario_filter: Option<ScenarioFilter>,
+    scenario_limit: Option<usize>,
     has_positional_filter: bool,
     fail_fast: bool,
     list_only: bool,
+}
+
+fn parse_scenario_limit(raw: &str) -> usize {
+    let normalized = raw.trim();
+    assert!(
+        !normalized.is_empty(),
+        "Missing value for --scenario-limit. Use --scenario-limit=<count>"
+    );
+
+    let limit = normalized.parse::<usize>().unwrap_or_else(|_| {
+        panic!(
+            "Invalid --scenario-limit '{}'. Expected a positive integer.",
+            normalized
+        )
+    });
+    assert!(
+        limit >= 1,
+        "Invalid --scenario-limit '{}'. Value must be >= 1.",
+        normalized
+    );
+
+    limit
+}
+
+fn apply_scenario_limit_filter(
+    selected_scenarios: Vec<scenarios::ScenarioDef>,
+    scenario_limit: Option<usize>,
+) -> Vec<scenarios::ScenarioDef> {
+    let Some(limit) = scenario_limit else {
+        return selected_scenarios;
+    };
+
+    selected_scenarios.into_iter().take(limit).collect()
 }
 
 fn parse_named_flag_value(args: &mut impl Iterator<Item = String>, flag: &str) -> String {
@@ -2588,6 +2640,7 @@ fn parse_run_options() -> RunOptions {
     let mut args = std::env::args().skip(1);
     let mut scenario = None;
     let mut scenario_from = None;
+    let mut scenario_limit = None;
     let mut rerun_failed = false;
     let mut fail_fast = false;
     let mut has_positional_filter = false;
@@ -2610,6 +2663,24 @@ fn parse_run_options() -> RunOptions {
         if arg == "--scenario-from" {
             scenario_from = Some(parse_named_flag_value(&mut args, "--scenario-from"));
             continue;
+        }
+
+        if let Some(value) = arg.strip_prefix("--scenario-limit=") {
+            scenario_limit = Some(parse_scenario_limit(value));
+            continue;
+        }
+        if arg == "--scenario-limit" {
+            scenario_limit = Some(parse_scenario_limit(&parse_named_flag_value(
+                &mut args,
+                "--scenario-limit",
+            )));
+            continue;
+        }
+
+        if arg == "--scenario-range" || arg.starts_with("--scenario-range=") {
+            panic!(
+                "--scenario-range has been removed. Use --scenario-limit=<count> together with existing selectors (for example --scenario-from=... --scenario-limit=5)."
+            );
         }
 
         if arg == "--failed" {
@@ -2649,6 +2720,7 @@ fn parse_run_options() -> RunOptions {
 
     RunOptions {
         scenario_filter,
+        scenario_limit,
         has_positional_filter,
         fail_fast,
         list_only,
@@ -2819,6 +2891,15 @@ fn main() {
         }
         None => (all_scenarios.to_vec(), true),
     };
+
+    let selected_scenarios = apply_scenario_limit_filter(selected_scenarios, run_options.scenario_limit);
+
+    if let Some(limit) = run_options.scenario_limit {
+        println!(
+            "applied scenario limit: first {} selected scenario(s)",
+            limit
+        );
+    }
 
     let planned_runs: Vec<PlannedScenarioRun> = selected_scenarios
         .iter()
