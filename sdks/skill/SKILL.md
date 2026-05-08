@@ -124,9 +124,9 @@ If `--filename` is not provided, a new snapshot file is created with a timestamp
 
 ```bash
 browser4-cli list
-# Close all browsers
+# Close all sessions, but keep Browser4.jar / the Browser4 backend running
 browser4-cli close-all
-# Forcefully kill all browser processes
+# Explicitly stop Browser4.jar / the Browser4 backend and kill Browser4 browser processes
 browser4-cli kill-all
 ```
 

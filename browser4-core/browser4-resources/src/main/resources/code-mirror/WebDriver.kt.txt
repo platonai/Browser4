@@ -4,13 +4,12 @@ import ai.platon.browser4.driver.chrome.NetworkResourceResponse
 import ai.platon.browser4.driver.chrome.NodeRef
 import ai.platon.browser4.driver.chrome.dom.model.NanoDOMTree
 import ai.platon.browser4.driver.common.BrowserSettings
-import ai.platon.pulsar.common.ExperimentalApi
 import ai.platon.pulsar.common.ai.llm.MCP
-import ai.platon.pulsar.common.serialize.json.Pson
-import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.math.geometric.PointD
 import ai.platon.pulsar.common.math.geometric.RectD
+import ai.platon.pulsar.common.serialize.json.Pson
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.common.urls.Hyperlink
 import ai.platon.pulsar.dom.nodes.GeoAnchor
 import ai.platon.pulsar.external.ModelResponse
@@ -18,6 +17,7 @@ import com.google.common.annotations.Beta
 import org.jsoup.Connection
 import java.io.Closeable
 import java.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * [WebDriver] defines a concise interface to visit and manipulate webpages. @mcp
@@ -287,10 +287,6 @@ interface WebDriver : Closeable {
     @MCP
     suspend fun navigate(entry: NavigateEntry)
 
-    @Deprecated("Use navigate(entry: NavigateEntry) instead", ReplaceWith("navigate(entry)"))
-    @Throws(WebDriverException::class)
-    suspend fun navigateTo(entry: NavigateEntry) = navigate(entry)
-
     /**
      * Reloads the current page. @mcp
      *
@@ -498,7 +494,6 @@ interface WebDriver : Closeable {
      * driver.clearBrowserCookies()
      * ```
      *
-     * @see Browser.clearCookies
      * */
     @Throws(WebDriverException::class)
     @MCP
@@ -1982,7 +1977,7 @@ interface WebDriver : Closeable {
      * @param millis The amount of time to delay, in milliseconds.
      * */
     @MCP
-    suspend fun delay(millis: Long = 1000) = kotlinx.coroutines.delay(millis)
+    suspend fun delay(millis: Long = 1000) = kotlinx.coroutines.delay(millis.milliseconds)
 
     /**
      * Delay for a given amount of time. @mcp
@@ -1990,7 +1985,7 @@ interface WebDriver : Closeable {
      * @param duration The amount of time to delay.
      * */
     @MCP
-    suspend fun delay(duration: Duration) = kotlinx.coroutines.delay(duration.toMillis())
+    suspend fun delay(duration: Duration) = kotlinx.coroutines.delay(duration.toMillis().milliseconds)
 
     /**
      * Delay for a given amount of time. @mcp
@@ -1998,7 +1993,7 @@ interface WebDriver : Closeable {
      * @param duration The amount of time to delay.
      * */
     @MCP
-    suspend fun delay(duration: kotlin.time.Duration) = kotlinx.coroutines.delay(duration.inWholeMilliseconds)
+    suspend fun delay(duration: kotlin.time.Duration) = kotlinx.coroutines.delay(duration.inWholeMilliseconds.milliseconds)
 
     /**
      * Upload files to the element located by [selector]. @mcp

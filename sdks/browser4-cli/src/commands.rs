@@ -785,7 +785,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "close-all",
-            description: "Close all browser sessions",
+            description: "Close all browser sessions without stopping the Browser4 backend",
             category: Category::Browsers,
             hidden: false,
             args: &[],
@@ -795,7 +795,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "kill-all",
-            description: "Forcefully kill all browser sessions (for stale/zombie processes)",
+            description: "Forcefully stop the Browser4 backend and kill Browser4 browser processes",
             category: Category::Browsers,
             hidden: false,
             args: &[],

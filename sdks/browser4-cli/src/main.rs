@@ -41,8 +41,8 @@ use http::{
     submit_batch_commands, submit_plain_command,
 };
 use managed_processes::{
-    read_managed_server_processes, stop_browser4_server_forcibly, stop_browser4_server_gracefully,
-    ManagedServerProcess, ShutdownResult,
+    read_managed_server_processes, stop_browser4_server_forcibly, ManagedServerProcess,
+    ShutdownResult,
 };
 use snapshot::{resolve_output_path, save_binary, save_snapshot};
 use state::{
@@ -425,8 +425,10 @@ async fn handle_close(
 async fn handle_close_all(client: &Client, base_url: &str) -> Result<(), String> {
     let close_summary = close_all_sessions_across_servers(client, base_url).await;
 
-    let shutdown_result = stop_browser4_server_gracefully();
-    finalize_global_cleanup("Stopped", &shutdown_result);
+    // `close-all` is intentionally session-scoped. Keep any tracked Browser4
+    // backend process alive so callers can continue using the same service and
+    // reserve JVM shutdown for the explicit `kill-all` flow.
+    clear_all_state(None);
 
     log_close_all_summary(&close_summary, "close-all");
     Ok(())

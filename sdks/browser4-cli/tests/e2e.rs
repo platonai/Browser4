@@ -1086,6 +1086,9 @@ impl E2ETestResources {
 
         match cleanup_result {
             Ok(mut cleanup_steps) => {
+                if !self.external_service {
+                    self.local_browser4_started = true;
+                }
                 steps.append(&mut cleanup_steps);
                 Ok(steps)
             }
@@ -2083,6 +2086,17 @@ fn cleanup_browser4_sessions_with_ctx(ctx: &E2ECtx) -> Result<Vec<TimedStep>, St
             result.stdout,
             result.stderr
         );
+        let health_started_at = Instant::now();
+        wait_for_health(&ctx.browser4_base_url, 15_000).map_err(|error| {
+            format!(
+                "browser4-cli close-all should keep the Browser4 backend alive for subsequent commands:\n{}\nstdout:\n{}\nstderr:\n{}",
+                error, result.stdout, result.stderr
+            )
+        })?;
+        steps.push(TimedStep::new(
+            "browser4 service remains healthy after close-all",
+            health_started_at.elapsed(),
+        ));
         return Ok(steps);
     }
 
@@ -2100,8 +2114,11 @@ fn cleanup_browser4_sessions_with_ctx(ctx: &E2ECtx) -> Result<Vec<TimedStep>, St
 }
 
 fn cleanup_browser4_sessions(resources: &mut E2ETestResources) -> Result<Vec<TimedStep>, String> {
-    resources.local_browser4_started = false;
-    cleanup_browser4_sessions_with_ctx(&resources.ctx)
+    let steps = cleanup_browser4_sessions_with_ctx(&resources.ctx)?;
+    if !resources.external_service {
+        resources.local_browser4_started = true;
+    }
+    Ok(steps)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2128,7 +2145,6 @@ fn cleanup_after_scenario(
                 resources.pending_cleanup.is_none(),
                 "pending Browser4 cleanup already exists"
             );
-            resources.local_browser4_started = false;
 
             let started_at = Instant::now();
             let ctx = resources.ctx.clone();

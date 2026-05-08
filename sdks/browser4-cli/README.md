@@ -159,8 +159,10 @@ Use `tab-list` first to find the zero-based tab index you want to select or clos
 | Command | Description |
 |---|---|
 | `list` | List browser sessions |
-| `close-all` | Close all browser sessions |
-| `kill-all` | Forcefully kill all browser sessions |
+| `close-all` | Close all browser sessions without stopping `Browser4.jar` / the Browser4 backend |
+| `kill-all` | Forcefully stop `Browser4.jar` / the Browser4 backend and kill Browser4 browser processes |
+
+Use `close-all` for session cleanup when you want to keep the current Browser4 service running. Use `kill-all` only when you explicitly want to stop the backend and clean up tracked Browser4 processes.
 
 
 ### Advanced commands
@@ -213,20 +215,6 @@ This temp subtree contains items such as:
 - Rust test scratch directories used by `browser4-cli` tests
 
 Persistent CLI state and the fallback `Browser4.jar` remain under `~/.browser4` by default.
-
-### Clean browser4-cli temp artifacts
-
-On Windows PowerShell:
-
-```powershell
-.\bin\cleanup-temp.ps1
-```
-
-Preview only:
-
-```powershell
-.\bin\cleanup-temp.ps1 -WhatIf
-```
 
 ## Snapshots
 
@@ -287,6 +275,12 @@ echo '[
 
 # Close the session when done
 browser4-cli close
+
+# Close all sessions but keep the current Browser4 backend running
+browser4-cli close-all
+
+# Explicitly stop the Browser4 backend and clean up tracked Browser4 processes
+browser4-cli kill-all
 ```
 
 ### Batch `open` session reuse behavior
