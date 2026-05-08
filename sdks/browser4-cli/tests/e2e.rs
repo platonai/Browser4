@@ -2882,7 +2882,7 @@ fn main() {
             let scenario_started_instant = Instant::now();
 
             let cleanup_mode = if planned_run.scenario.requires_browser4 {
-                ScenarioCleanupMode::Deferred
+                ScenarioCleanupMode::Synchronous
             } else {
                 ScenarioCleanupMode::None
             };
