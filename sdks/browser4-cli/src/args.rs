@@ -484,11 +484,11 @@ mod tests {
     #[test]
     fn test_parse_batch_json_commands_array_entries() {
         let parsed =
-            parse_batch_json_commands(r#"[["open","https://example.com"],["snapshot"]]"#).unwrap();
+            parse_batch_json_commands(r#"[["goto","https://example.com"],["snapshot"]]"#).unwrap();
         assert_eq!(
             parsed,
             vec![
-                vec!["open".to_string(), "https://example.com".to_string()],
+                vec!["goto".to_string(), "https://example.com".to_string()],
                 vec!["snapshot".to_string()],
             ]
         );

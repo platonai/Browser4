@@ -4,7 +4,7 @@ pub(super) fn test_batch_commands(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 
     let interactive_url = ctx.interactive_url();
-    let open_command = batch_open_command(&interactive_url);
+    let navigate_command = batch_navigate_command(&interactive_url);
     let type_command = "type 'hello batch' #type-target".to_string();
     let click_command = "click #click-target".to_string();
 
@@ -12,7 +12,7 @@ pub(super) fn test_batch_commands(ctx: &mut E2ECtx) {
         ctx,
         &[
             "batch",
-            open_command.as_str(),
+            navigate_command.as_str(),
             type_command.as_str(),
             click_command.as_str(),
         ],
@@ -104,7 +104,7 @@ pub(super) fn test_batch_commands(ctx: &mut E2ECtx) {
         &format!(
             r##"
 [
-  ["open", "{profile_arg}", "{interactive_url}"],
+  ["goto", "{interactive_url}"],
   "type 'json string input' #type-target",
   ["fill", "#fill-target", "json opened session"],
   "click #click-target"
@@ -187,13 +187,13 @@ pub(super) fn test_batch_form_submission(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 
     let form_url = ctx.form_url();
-    let open_command = batch_open_command(&form_url);
+    let navigate_command = batch_navigate_command(&form_url);
 
     run_command(
         ctx,
         &[
             "batch",
-            open_command.as_str(),
+            navigate_command.as_str(),
             "fill #first-name 'Alice'",
             "fill #last-name 'Johnson'",
             "fill #email 'alice@example.com'",
@@ -312,7 +312,7 @@ pub(super) fn test_batch_form_submission_from_json_file(ctx: &mut E2ECtx) {
 
     let form_url = ctx.form_url();
     let batch_commands = serde_json::json!([
-        ["open", OPEN_PROFILE_MODE_ARG, form_url],
+        ["goto", form_url],
         ["fill", "#first-name", first_name],
         ["fill", "#last-name", last_name],
         ["fill", "#email", email],
@@ -359,13 +359,13 @@ pub(super) fn test_batch_multi_interaction(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 
     let interactive_url = ctx.interactive_url();
-    let open_command = batch_open_command(&interactive_url);
+    let navigate_command = batch_navigate_command(&interactive_url);
 
     run_command(
         ctx,
         &[
             "batch",
-            open_command.as_str(),
+            navigate_command.as_str(),
             "type 'batch multi' #type-target",
             "fill #fill-target 'batch fill'",
             "check #check-target",
@@ -442,9 +442,9 @@ pub(super) fn test_batch_error_handling(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 
     let interactive_url = ctx.interactive_url();
-    let open_command = batch_open_command(&interactive_url);
+    let navigate_command = batch_navigate_command(&interactive_url);
 
-    run_command(ctx, &["batch", open_command.as_str()]);
+    run_command(ctx, &["batch", navigate_command.as_str()]);
 
     let _result = run_command_expecting_failure(
         ctx,
@@ -523,9 +523,9 @@ pub(super) fn test_batch_json_edge_cases(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 
     let interactive_url = ctx.interactive_url();
-    let open_command = batch_open_command(&interactive_url);
+    let navigate_command = batch_navigate_command(&interactive_url);
 
-    run_command(ctx, &["batch", open_command.as_str()]);
+    run_command(ctx, &["batch", navigate_command.as_str()]);
 
     run_command_with_stdin(
         ctx,
@@ -547,7 +547,7 @@ pub(super) fn test_batch_json_edge_cases(ctx: &mut E2ECtx) {
         "Expected mixed JSON batch commands to type, fill, and click once",
     );
 
-    run_command(ctx, &["batch", open_command.as_str()]);
+    run_command(ctx, &["batch", navigate_command.as_str()]);
 
     run_command_with_stdin(
         ctx,
@@ -563,7 +563,7 @@ pub(super) fn test_batch_json_edge_cases(ctx: &mut E2ECtx) {
         "Expected JSON batch to preserve special characters in fillValue",
     );
 
-    run_command(ctx, &["batch", open_command.as_str()]);
+    run_command(ctx, &["batch", navigate_command.as_str()]);
 
     let bail_json_result = run_cli_process_with_stdin(
         ctx,

@@ -1712,14 +1712,16 @@ fn compile_batch_request(
 
                 let selector = selector.map(ToOwned::to_owned);
                 let request_index = steps.len();
-                let mut step = json!({
-                    "op": "press",
-                    "command": spec.display,
-                    "key": key,
-                });
+                let mut tool_params_json = json!({ "key": key });
                 if let Some(selector) = selector.as_deref() {
-                    step["selector"] = json!(selector);
+                    tool_params_json["ref"] = json!(selector);
                 }
+                let step = json!({
+                    "op": "tool",
+                    "command": spec.display,
+                    "tool": "browser_press_key",
+                    "arguments": normalize_batch_step_args(&tool_params_json),
+                });
                 steps.push(step);
                 entries.push(PlannedBatchEntry::Backend {
                     display: spec.display.clone(),
@@ -2534,9 +2536,13 @@ mod tests {
             compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
 
         assert_eq!(compiled.steps.len(), 1);
-        assert_eq!(compiled.steps[0]["op"], json!("press"));
-        assert_eq!(compiled.steps[0]["selector"], json!("#type-target"));
-        assert_eq!(compiled.steps[0]["key"], json!("!"));
+        assert_eq!(compiled.steps[0]["op"], json!("tool"));
+        assert_eq!(compiled.steps[0]["tool"], json!("browser_press_key"));
+        assert_eq!(
+            compiled.steps[0]["arguments"]["ref"],
+            json!("#type-target")
+        );
+        assert_eq!(compiled.steps[0]["arguments"]["key"], json!("!"));
     }
 
     #[test]
@@ -2550,9 +2556,10 @@ mod tests {
             compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
 
         assert_eq!(compiled.steps.len(), 1);
-        assert_eq!(compiled.steps[0]["op"], json!("press"));
-        assert_eq!(compiled.steps[0]["key"], json!("Enter"));
-        assert!(compiled.steps[0].get("selector").is_none());
+        assert_eq!(compiled.steps[0]["op"], json!("tool"));
+        assert_eq!(compiled.steps[0]["tool"], json!("browser_press_key"));
+        assert_eq!(compiled.steps[0]["arguments"]["key"], json!("Enter"));
+        assert!(compiled.steps[0]["arguments"].get("ref").is_none());
     }
 
     #[test]

@@ -648,11 +648,6 @@ fn mock_command_batch_response(arguments: &serde_json::Value) -> String {
                     "text": mock_browser_tool_text(tool, &step_arguments),
                 })
             }
-            "press" => serde_json::json!({
-                "index": index,
-                "ok": true,
-                "text": "mock response for browser_press_key",
-            }),
             "snapshot" => serde_json::json!({
                 "index": index,
                 "ok": true,
@@ -2006,8 +2001,8 @@ fn run_open_command(ctx: &mut E2ECtx) -> CliRunResult {
     return result;
 }
 
-fn batch_open_command(url: &str) -> String {
-    format!("open {OPEN_PROFILE_MODE_ARG} {url}")
+fn batch_navigate_command(url: &str) -> String {
+    format!("goto {url}")
 }
 
 fn write_json_fixture(ctx: &E2ECtx, file_name: &str, value: &serde_json::Value) -> PathBuf {

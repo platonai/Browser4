@@ -69,10 +69,10 @@ browser4-cli screenshot
 browser4-cli open --server http://localhost:9090
 
 # Execute multiple commands in one process
-browser4-cli batch "open https://playwright.dev" "snapshot"
+browser4-cli batch "goto https://playwright.dev" "snapshot"
 
 # Stop on the first batch failure
-browser4-cli batch --bail "open https://playwright.dev" "click e1" "screenshot"
+browser4-cli batch --bail "goto https://playwright.dev" "click e1" "screenshot"
 
 # Pipe batch commands as JSON via stdin
 echo '[
@@ -86,7 +86,7 @@ echo '[
 browser4-cli close
 ```
 
-In batch mode, `open` now reuses the current active session when one is already attached to the batch request, instead of always creating a second browser session. If no active session exists, `open` still creates one normally.
+In batch mode, use `goto` for navigation to avoid recreating sessions and maintain consistent page element locators. The `open` command creates a new session if none exists, or reuses the current active session if one is already attached to the batch request.
 
 ---
 
@@ -183,10 +183,10 @@ browser4-cli screenshot
 browser4-cli open --server http://localhost:9090
 
 # Execute multiple commands in one process
-browser4-cli batch "open https://playwright.dev" "snapshot"
+browser4-cli batch "goto https://playwright.dev" "snapshot"
 
 # Stop on the first batch failure
-browser4-cli batch --bail "open https://playwright.dev" "click e1" "screenshot"
+browser4-cli batch --bail "goto https://playwright.dev" "click e1" "screenshot"
 
 # Pipe batch commands as JSON via stdin
 echo '[
@@ -200,7 +200,7 @@ echo '[
 browser4-cli close
 ```
 
-For `browser4-cli batch`, the `open` step is idempotent relative to the active session: it creates a session only when none exists, otherwise it keeps using the current session, ignores any newly supplied `capabilities`, and reports `Session already open: <sessionId>`. If the referenced session no longer exists, the batch returns `Session not found: <sessionId>`.
+For `browser4-cli batch`, use `goto` for navigation to maintain consistent page element locators across batch commands. The `open` command creates a new session if none exists, or reuses the current active session if one is already attached, ignoring any newly supplied `capabilities`.
 
 Build CLI from source:
 

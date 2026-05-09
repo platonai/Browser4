@@ -524,29 +524,6 @@ class MCPToolController(
                 BatchExecutionResult(index = index, ok = true, screenshot = screenshot)
             }
 
-            "press" -> {
-                val sessionId = currentSessionId
-                    ?: throw IllegalArgumentException("""No active session. Run "browser4-cli open" first.""")
-                val key = step["key"]?.toString()
-                    ?: throw IllegalArgumentException("Batch press step is missing 'key'.")
-
-                val selector = step["selector"]?.toString()?.takeIf { it.isNotBlank() }
-
-                val arguments = mutableMapOf<String, Any?>(
-                    "sessionId" to sessionId,
-                    "key" to key,
-                )
-                if (selector != null) {
-                    arguments["selector"] = selector
-                }
-
-                val text = executeAgentToolText(
-                    "press",
-                    arguments,
-                )
-                BatchExecutionResult(index = index, ok = true, text = text.ifBlank { null })
-            }
-
             else -> throw IllegalArgumentException("Unsupported batch step op: $op")
         }
     }

@@ -69,10 +69,10 @@ browser4-cli screenshot
 browser4-cli open --server http://localhost:9090
 
 # ��ͬһ������ִ�ж�������
-browser4-cli batch "open https://playwright.dev" "snapshot"
+browser4-cli batch "goto https://playwright.dev" "snapshot"
 
 # ������һ��ʧ�����ֹͣ
-browser4-cli batch --bail "open https://playwright.dev" "click e1" "screenshot"
+browser4-cli batch --bail "goto https://playwright.dev" "click e1" "screenshot"
 
 # ͨ�� stdin �� JSON ��ʽ��������������
 echo '[
@@ -181,10 +181,10 @@ browser4-cli screenshot
 browser4-cli open --server http://localhost:9090
 
 # ��ͬһ������ִ�ж�������
-browser4-cli batch "open https://playwright.dev" "snapshot"
+browser4-cli batch "goto https://playwright.dev" "snapshot"
 
 # ������һ��ʧ�����ֹͣ
-browser4-cli batch --bail "open https://playwright.dev" "click e1" "screenshot"
+browser4-cli batch --bail "goto https://playwright.dev" "click e1" "screenshot"
 
 # ͨ�� stdin �� JSON ��ʽ��������������
 echo '[

@@ -1200,7 +1200,7 @@ class MCPToolControllerTest {
             arguments = mapOf(
                 "steps" to listOf(
                     mapOf("op" to "open"),
-                    mapOf("op" to "press", "selector" to "#search", "key" to "!"),
+                    mapOf("op" to "tool", "tool" to "browser_press_key", "arguments" to mapOf("ref" to "#search", "key" to "!")),
                 )
             )
         )
@@ -1238,7 +1238,7 @@ class MCPToolControllerTest {
             arguments = mapOf(
                 "steps" to listOf(
                     mapOf("op" to "open"),
-                    mapOf("op" to "press", "key" to "Enter"),
+                    mapOf("op" to "tool", "tool" to "browser_press_key", "arguments" to mapOf("key" to "Enter")),
                 )
             )
         )

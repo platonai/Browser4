@@ -207,13 +207,13 @@ pub(super) fn test_batch_reduces_transport_round_trips(ctx: &mut E2ECtx) {
 
     let batch_server = MockBrowser4Server::start();
     ctx.browser4_base_url = batch_server.base_url();
-    let batch_open_command = format!("open {OPEN_PROFILE_MODE_ARG} {workflow_url}");
+    let batch_navigate_command = format!("goto {workflow_url}");
 
     let batch_result = run_command(
         ctx,
         &[
             "batch",
-            batch_open_command.as_str(),
+            batch_navigate_command.as_str(),
             "eval document.title",
             "press ! #type-target",
         ],
