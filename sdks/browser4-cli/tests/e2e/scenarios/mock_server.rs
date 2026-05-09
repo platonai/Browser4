@@ -6,7 +6,7 @@ pub(super) fn test_open_uses_temporary_profile_mode(ctx: &mut E2ECtx) {
     let mock_server = MockBrowser4Server::start();
     ctx.browser4_base_url = mock_server.base_url();
 
-    let open_result = run_open_command(ctx);
+    let open_result = run_command(ctx, &["open"]);
     assert!(
         open_result
             .stdout
