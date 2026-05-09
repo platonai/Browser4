@@ -57,8 +57,8 @@ use std::time::{Duration, Instant};
 #[path = "e2e/scenarios/mod.rs"]
 mod scenarios;
 
+const BROWSER_PROFILE_MODE: &str = "SEQUENTIAL";
 const OPEN_PROFILE_MODE_ARG: &str = "--profile-mode=SEQUENTIAL";
-// const OPEN_TEMPORARY_PROFILE_ARG: &str = "";
 const USE_MAVEN_STARTUP_FLAG: &str = "--use-maven-startup";
 
 // ---------------------------------------------------------------------------
