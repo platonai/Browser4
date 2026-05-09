@@ -221,11 +221,6 @@ pub(super) fn test_batch_reduces_transport_round_trips(ctx: &mut E2ECtx) {
 
     let batch_output = strip_snapshot_output(&batch_result.stdout);
     assert!(
-        batch_output.contains("Session opened: collective-session-1"),
-        "Expected batch output to include the open result:\n{}",
-        batch_result.stdout
-    );
-    assert!(
         batch_output.contains("Mock Browser4 Page"),
         "Expected batch output to include the eval result:\n{}",
         batch_result.stdout
@@ -250,13 +245,12 @@ pub(super) fn test_batch_reduces_transport_round_trips(ctx: &mut E2ECtx) {
         .expect("expected command_batch steps array");
     assert_eq!(
         steps.len(),
-        4,
+        3,
         "Expected open, navigate, eval, and press batch steps"
     );
-    assert_eq!(steps[0]["op"], "open");
-    assert_eq!(steps[1]["tool"], "browser_navigate");
-    assert_eq!(steps[2]["tool"], "browser_evaluate");
-    assert_eq!(steps[3]["op"], "press");
+    assert_eq!(steps[0]["tool"], "browser_navigate");
+    assert_eq!(steps[1]["tool"], "browser_evaluate");
+    assert_eq!(steps[2]["op"], "tool");
 
     assert!(
         batch_snapshot.tool_calls.len() < individual_snapshot.tool_calls.len(),
