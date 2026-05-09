@@ -15,9 +15,10 @@
 |------|------|------|
 | **DTO 类** | 定义请求/响应结构 | 良好 |
 | **会话管理** | open/close/list sessions | 良好 |
-| **批处理执行** | executeBatchStep 处理多种操作类型 | 需要优化 |
+| **批处理执行** | executeBatchStep 处理多种操作类型 | ✅ 已优化 |
 | **工具名称映射** | FRONTEND_TOOL_NAME_ALIASES | 良好 |
-| **参数规范化** | normalizeFrontendToolCall/normalizeToolArguments | 需要优化 |
+| **参数规范化** | normalizeFrontendToolCall/normalizeToolArguments | ✅ 已优化 |
+| **批量命令限制** | 限制 batch 模式仅支持 DOM 操作 | ✅ 已实现 |
 
 ---
 
@@ -249,7 +250,53 @@ data class MCPToolCallRequest(
 
 ---
 
-## 七、总结
+## 七、已完成的优化
+
+### 7.1 批处理命令限制
+
+**背景**：batch 模式设计的首要目标是批量表单填写，不应支持会话管理操作。
+
+**修改内容**：
+
+1. **后端 (MCPToolController.kt)**：
+   - 在 `executeBatchStep` 中添加对 `open`/`close` 操作的验证
+   - 如果检测到非 DOM 操作，返回错误：`"Batch command only supports DOM operations. Op '%s' is not allowed."`
+   - 移除了 `handleBatchOpen` 和 `handleBatchClose` 方法
+
+2. **CLI (commands.rs)**：
+   - 为 `CommandDef` 添加 `batch_supported` 字段
+   - 仅以下类别的命令支持 batch 模式：
+     - **Core**: snapshot, eval, select, upload, check, uncheck, dialog-accept, dialog-dismiss, resize
+     - **Navigation**: goto, go-back, go-forward, reload
+     - **Keyboard**: press, type, keydown, keyup, fill
+     - **Mouse**: mousemove, mousedown, mouseup, mousewheel, click, dblclick, drag, hover
+     - **Export**: screenshot, pdf
+     - **Tabs**: tab-list, tab-new, tab-close, tab-select
+
+3. **CLI (main.rs)**：
+   - 在 `compile_batch_request` 中添加对 `batch_supported` 的检查
+   - 如果命令不支持 batch 模式，返回错误：`"Command 'xxx' is not supported in batch mode. Batch mode only supports DOM operations."`
+
+**预期收益**：
+- 防止用户在 batch 模式中使用不适合的命令
+- 确保 batch 命令专注于 DOM 操作（表单填写等）
+- 提供清晰的错误提示
+
+### 7.2 实施状态
+
+| 阶段 | 任务 | 状态 |
+|------|------|------|
+| 阶段 1 | 提取常量类 `MCPConstants` | ✅ 已完成 |
+| 阶段 1 | 提取公共会话检查方法 | ✅ 已完成 |
+| 阶段 1 | 替换代码中的魔法字符串 | ✅ 已完成 |
+| 阶段 2 | 重构 `executeBatchStep` 为函数式风格 | ✅ 已完成 |
+| 阶段 2 | 合并 `executeAgentToolText` 重载方法 | ✅ 已完成 |
+| 阶段 3 | 实现参数规范化策略模式 | ✅ 已完成 |
+| 阶段 4 | 更新单元测试 | ✅ 已完成 |
+| 阶段 4 | 运行集成测试 | ✅ 已完成 |
+| 新增 | 限制 batch 模式仅支持 DOM 操作 | ✅ 已完成 |
+
+## 八、总结
 
 `MCPToolController` 整体架构设计合理，但存在以下主要改进空间：
 
@@ -257,4 +304,13 @@ data class MCPToolCallRequest(
 2. **可维护性**：魔法字符串和复杂条件分支影响可读性
 3. **可扩展性**：参数规范化逻辑难以扩展
 
-建议按照上述分阶段方案逐步优化，优先实施低风险的基础重构，再进行核心逻辑的架构升级。
+**已完成的优化**：
+
+1. ✅ 创建了 `MCPConstants` 常量类，集中管理魔法字符串
+2. ✅ 提取了 `requireSessionId` 公共检查方法
+3. ✅ 重构了 `executeBatchStep` 为函数式风格，拆分多个独立方法
+4. ✅ 合并了 `executeAgentToolText` 重载方法
+5. ✅ 实现了参数规范化策略模式，创建了 `ArgumentNormalizers.kt`
+6. ✅ **新增**：限制 batch 模式仅支持 DOM 操作，提高了命令执行的安全性和专注度
+
+所有代码修改已通过测试验证，并提交到远程仓库。

@@ -172,7 +172,7 @@ Query `browser4-cli help <command>` for the exact syntax when you need them.
 
 | Command | Description |
 |---|---|
-| `batch [command...]` | Execute multiple commands in one invocation |
+| `batch [command...]` | Execute multiple commands in one invocation. Only DOM operations are supported (Core, Navigation, Keyboard, Mouse, Export, Tabs categories). Commands like `open`, `close`, `list`, `agent-run`, etc. are not allowed in batch mode. |
 | `console [min-level]` | List console messages |
 | `extract <instruction>` | Extract structured data from the current page |
 | `summarize [instruction]` | Summarize page content using AI |
@@ -293,11 +293,16 @@ browser4-cli tab-close 1
 # Use a custom server URL
 browser4-cli open --server http://localhost:9090
 
-# Advanced: execute multiple commands in one process
+# Advanced: execute multiple commands in one process (batch mode)
+# Batch mode only supports DOM operations. You must run `open` separately first.
+browser4-cli open
 browser4-cli batch "goto https://playwright.dev" "snapshot"
 
 # Advanced: stop on the first batch failure
 browser4-cli batch --bail "goto https://playwright.dev" "click e1" "screenshot"
+
+# Advanced: batch mode for form filling (recommended use case)
+browser4-cli batch "fill e1 'John Doe'" "fill e2 'john@example.com'" "click e3"
 
 # Advanced: pipe batch commands as JSON via stdin
 echo '[
