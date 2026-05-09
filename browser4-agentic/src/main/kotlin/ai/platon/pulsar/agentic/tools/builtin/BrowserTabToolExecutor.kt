@@ -191,6 +191,9 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
         }
     }
 
+    /**
+     * TODO: add an option for each WebDriver action to control the behaviour of the action including waiting.
+     * */
     private suspend fun waitBeforeReadIfNeeded(functionName: String) {
         if (functionName !in READ_PAGE_STATE_ACTIONS) {
             return
@@ -219,6 +222,8 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
      * 2. If the URL is unchanged, eval `document.readyState`. If "loading", the navigation is in flight —
      *    call `waitForNavigation` then settle.
      * 3. Otherwise no navigation occurred — return immediately (no unnecessary delay).
+     *
+     * TODO: add an option for each WebDriver action to control the behaviour of the action including waiting.
      */
     private suspend fun waitForPotentialNavigation(driver: WebDriver, urlBefore: String) {
         // wait for a while for the action effects
