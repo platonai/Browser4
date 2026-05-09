@@ -221,6 +221,9 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
      * 3. Otherwise no navigation occurred — return immediately (no unnecessary delay).
      */
     private suspend fun waitForPotentialNavigation(driver: WebDriver, urlBefore: String) {
+        // wait for a while for the action effects
+        delay(200.milliseconds)
+
         try {
             val urlAfter = driver.currentUrl()
             if (urlAfter != urlBefore) {
