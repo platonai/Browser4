@@ -65,8 +65,7 @@ pub(super) fn test_newly_opened_session_shows_active(ctx: &mut E2ECtx) {
 
 pub(super) fn test_navigation_and_storage(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-
-    // run_open_command(ctx);
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
 
     let interactive_url = ctx.interactive_url();
     let other_url = ctx.other_url();
@@ -129,6 +128,7 @@ pub(super) fn test_navigation_and_storage(ctx: &mut E2ECtx) {
 
 pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
     open_resized_interactive_page(ctx);
 
     run_command(ctx, &["type", "hello world", "#type-target"]);
@@ -255,6 +255,7 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
 
 pub(super) fn test_eval_command(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
     open_resized_interactive_page(ctx);
 
     let title = eval_text(ctx, "document.title");
@@ -320,6 +321,7 @@ pub(super) fn test_agent_run_live_or_missing_llm_key(ctx: &mut E2ECtx) {
 
 pub(super) fn test_wait_for_state_failure_modes(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
     goto_interactive_page(ctx);
 
     let error = wait_for_state(
@@ -364,6 +366,7 @@ pub(super) fn test_wait_for_state_failure_modes(ctx: &mut E2ECtx) {
 
 pub(super) fn test_form_controls_and_exports(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
     goto_interactive_page(ctx);
 
     run_command(ctx, &["select", "#select-target", "green"]);
@@ -444,6 +447,7 @@ pub(super) fn test_form_controls_and_exports(ctx: &mut E2ECtx) {
 
 pub(super) fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
     open_resized_interactive_page(ctx);
 
     run_command(ctx, &["mousemove", "120", "120"]);
@@ -547,6 +551,7 @@ pub(super) fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
 
 pub(super) fn test_tab_commands(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
 
     goto_interactive_page(ctx);
     let interactive_url = ctx.interactive_url();
