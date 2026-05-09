@@ -337,7 +337,6 @@ class MCPToolController(
 
     // =========================================================================
     // Command tool handlers
-    // TODO: simplify command tool handling
     // =========================================================================
 
     /**
@@ -372,13 +371,6 @@ class MCPToolController(
             val durationMillis = (System.nanoTime() - startedAt) / 1_000_000
 
             results += result.copy(durationMillis = durationMillis)
-            if (result.ok) {
-                currentSessionId = when (step["op"]?.toString()) {
-                    "open" -> result.sessionId
-                    "close" -> null
-                    else -> currentSessionId
-                }
-            }
             if (!result.ok && bail) {
                 stoppedOnError = true
                 break
@@ -447,9 +439,14 @@ class MCPToolController(
         val op = step[MCPConstants.KEY_OP]?.toString()
             ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_OP)
 
+        // Validate that only DOM operations are allowed in batch
+        when (op) {
+            MCPConstants.OP_OPEN, MCPConstants.OP_CLOSE -> {
+                throw IllegalArgumentException(String.format(MCPConstants.ERROR_BATCH_NON_DOM_OP, op))
+            }
+        }
+
         return when (op) {
-            MCPConstants.OP_OPEN -> handleBatchOpen(index, step, currentSessionId)
-            MCPConstants.OP_CLOSE -> handleBatchClose(index, currentSessionId)
             MCPConstants.OP_TOOL -> handleBatchTool(index, step, currentSessionId)
             MCPConstants.OP_SNAPSHOT -> handleBatchSnapshot(index, step, currentSessionId)
             MCPConstants.OP_SCREENSHOT -> handleBatchScreenshot(index, step, currentSessionId)
@@ -457,45 +454,7 @@ class MCPToolController(
         }
     }
 
-    private suspend fun handleBatchOpen(index: Int, step: Map<String, Any?>, currentSessionId: String?): BatchExecutionResult {
-        val capabilities = step["capabilities"].toAnyMap().takeIf { !it.isNullOrEmpty() }
-        
-        currentSessionId?.let { sessionId ->
-            val existingSession = sessionManager.getSession(sessionId)
-                ?: throw IllegalArgumentException("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId")
-            if (capabilities != null && capabilities != existingSession.capabilities) {
-                logger.info(
-                    "Batch open reusing existing session {} and ignoring requested capabilities {}",
-                    sessionId,
-                    capabilities,
-                )
-            }
-            return BatchExecutionResult(
-                index = index,
-                ok = true,
-                sessionId = sessionId,
-                text = "${MCPConstants.SESSION_ALREADY_OPEN_PREFIX}$sessionId",
-            )
-        }
-        
-        val managedSession = sessionManager.createSession(capabilities)
-        val sessionId = managedSession.sessionId
-        return BatchExecutionResult(
-            index = index,
-            ok = true,
-            sessionId = sessionId,
-            text = "${MCPConstants.SESSION_OPENED_PREFIX}$sessionId"
-        )
-    }
 
-    private suspend fun handleBatchClose(index: Int, currentSessionId: String?): BatchExecutionResult {
-        val sessionId = requireSessionId(currentSessionId)
-        val deleted = sessionManager.deleteSession(sessionId)
-        if (!deleted) {
-            throw IllegalArgumentException("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId")
-        }
-        return BatchExecutionResult(index = index, ok = true, text = MCPConstants.SESSION_CLOSED)
-    }
 
     private suspend fun handleBatchTool(index: Int, step: Map<String, Any?>, currentSessionId: String?): BatchExecutionResult {
         val sessionId = requireSessionId(currentSessionId)

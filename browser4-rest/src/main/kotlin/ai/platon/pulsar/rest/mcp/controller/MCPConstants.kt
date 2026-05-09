@@ -7,6 +7,7 @@ object MCPConstants {
     const val ERROR_MISSING_TOOL = "Batch tool step is missing 'tool'."
     const val ERROR_MISSING_KEY = "Batch press step is missing 'key'."
     const val ERROR_UNSUPPORTED_OP = "Unsupported batch step op: "
+    const val ERROR_BATCH_NON_DOM_OP = "Batch command only supports DOM operations. Op '%s' is not allowed. Please execute open/close operations separately."
     
     const val KEY_OP = "op"
     const val KEY_TOOL = "tool"

@@ -1487,7 +1487,7 @@ fn compile_batch_request(
 
     let mut active_selector = final_state.active_selector.clone();
     let mut last_mouse_position = final_state.last_mouse_position.clone();
-    let mut requires_response_session_id = false;
+    let requires_response_session_id = false;
     let mut steps: Vec<Value> = Vec::new();
     let mut entries: Vec<PlannedBatchEntry> = Vec::new();
     let command_map = commands_map();
@@ -1571,6 +1571,21 @@ fn compile_batch_request(
             }
         };
 
+        if !cmd_def.batch_supported {
+            if push_batch_local_failure(
+                &mut entries,
+                spec,
+                format!(
+                    "Command '{}' is not supported in batch mode. Batch mode only supports DOM operations.",
+                    nested_command
+                ),
+                bail,
+            ) {
+                break;
+            }
+            continue;
+        }
+
         let raw_parsed = parse_raw_args(&effective_nested_global.args);
         let arg_names: Vec<&str> = cmd_def.args.iter().map(|arg| arg.name).collect();
         let parsed = match build_command_args(&raw_parsed, &arg_names) {
@@ -1587,64 +1602,19 @@ fn compile_batch_request(
         let tool_params = (cmd_def.tool_params_fn)(&parsed);
 
         match nested_command.as_str() {
-            "open" => {
-                let capabilities = build_open_session_capabilities(&tool_params);
-
-                let url = tool_params
-                    .get("url")
-                    .and_then(|value| value.as_str())
-                    .unwrap_or("about:blank");
-
-                let request_index = steps.len();
-                steps.push(json!({
-                    "op": "open",
-                    "command": spec.display,
-                    "capabilities": capabilities,
-                }));
-                let mut request_indices = vec![request_index];
-                let mut outputs = vec![PlannedBatchOutput::Text];
-                if should_navigate_after_open(url) {
-                    let navigate_request_index = steps.len();
-                    steps.push(json!({
-                        "op": "tool",
-                        "command": spec.display,
-                        "tool": "browser_navigate",
-                        "arguments": { "url": url },
-                    }));
-                    request_indices.push(navigate_request_index);
-                    outputs.push(PlannedBatchOutput::Text);
+            "open" | "close" => {
+                if push_batch_local_failure(
+                    &mut entries,
+                    spec,
+                    format!(
+                        "Batch command only supports DOM operations. '{}' is not allowed. Please execute it separately.",
+                        nested_command
+                    ),
+                    bail,
+                ) {
+                    break;
                 }
-                entries.push(PlannedBatchEntry::Backend {
-                    display: spec.display.clone(),
-                    request_indices,
-                    outputs,
-                });
-
-                final_state.session_id = None;
-                final_state.active_selector = None;
-                final_state.last_mouse_position = None;
-                active_selector = None;
-                last_mouse_position = None;
-                requires_response_session_id = true;
-            }
-            "close" => {
-                let request_index = steps.len();
-                steps.push(json!({
-                    "op": "close",
-                    "command": spec.display,
-                }));
-                entries.push(PlannedBatchEntry::Backend {
-                    display: spec.display.clone(),
-                    request_indices: vec![request_index],
-                    outputs: vec![PlannedBatchOutput::Text],
-                });
-
-                final_state.session_id = None;
-                final_state.active_selector = None;
-                final_state.last_mouse_position = None;
-                active_selector = None;
-                last_mouse_position = None;
-                requires_response_session_id = false;
+                continue;
             }
             "snapshot" => {
                 let filename = tool_params.get("filename").and_then(|value| value.as_str());
