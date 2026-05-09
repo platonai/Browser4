@@ -294,14 +294,14 @@ browser4-cli tab-close 1
 browser4-cli open --server http://localhost:9090
 
 # Advanced: execute multiple commands in one process
-browser4-cli batch "open https://playwright.dev" "snapshot"
+browser4-cli batch "goto https://playwright.dev" "snapshot"
 
 # Advanced: stop on the first batch failure
-browser4-cli batch --bail "open https://playwright.dev" "click e1" "screenshot"
+browser4-cli batch --bail "goto https://playwright.dev" "click e1" "screenshot"
 
 # Advanced: pipe batch commands as JSON via stdin
 echo '[
-  ["open", "https://playwright.dev"],
+  ["goto", "https://playwright.dev"],
   ["snapshot"],
   ["click", "e1"],
   ["screenshot", "--filename=result.png"]
@@ -316,15 +316,6 @@ browser4-cli close-all
 # Explicitly stop the Browser4 backend and clean up tracked Browser4 processes
 browser4-cli kill-all
 ```
-
-### Batch `open` session reuse behavior
-
-When `browser4-cli batch` runs against an already active session (for example via persisted CLI state or an explicit `sessionId` carried into `command_batch`), the batch `open` step reuses that session instead of creating a new one.
-
-- If no active session exists, `open` creates a new session as before.
-- If an active session already exists, `open` returns `Session already open: <sessionId>` and keeps using that session.
-- If the batch `open` step also provides `capabilities`, they are ignored while reusing the existing session.
-- If the supplied session no longer exists on the server, the batch fails with `Session not found: <sessionId>`.
 
 ## Architecture
 
