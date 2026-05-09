@@ -1,7 +1,7 @@
 #!/usr/bin/env pwsh
 
 $prompt = @"
-Run `cargo run -- help` for help and read sdks/skill/SKILL.md to learn how to use.
+Enter directory `sdks/browser4-cli`, run `cargo run -- help` for help and read sdks/skill/SKILL.md to learn how to use.
 Note this is a development environment, commands in SKILL.md can be run with `cargo run -- <command>`.
 
 Ignore all your memories, do not assume you have any prior knowledge about this CLI tool and its capabilities.
@@ -35,4 +35,5 @@ Task:
 
 "@
 
-gh copilot --allow-all -p "$prompt" ## --silent
+# gh copilot --allow-all -p "$prompt" ## --silent
+claude --allow-dangerously-skip-permissions $prompt
