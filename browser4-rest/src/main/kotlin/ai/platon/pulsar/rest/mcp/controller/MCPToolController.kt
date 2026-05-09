@@ -129,6 +129,10 @@ class MCPToolController(
 
     private val logger = LoggerFactory.getLogger(MCPToolController::class.java)
 
+    private fun requireSessionId(sessionId: String?): String {
+        return sessionId ?: throw IllegalArgumentException(MCPConstants.ERROR_NO_ACTIVE_SESSION)
+    }
+
     /**
      * Cached tool names for the /tools endpoint.
      * Tool specs are static (determined by executor classes, not session state),
@@ -471,39 +475,36 @@ class MCPToolController(
             }
 
             "close" -> {
-                val sessionId = currentSessionId
-                    ?: throw IllegalArgumentException("""No active session. Run "browser4-cli open" first.""")
+                val sessionId = requireSessionId(currentSessionId)
                 val deleted = sessionManager.deleteSession(sessionId)
                 if (!deleted) {
-                    throw IllegalArgumentException("Session not found: $sessionId")
+                    throw IllegalArgumentException("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId")
                 }
-                BatchExecutionResult(index = index, ok = true, text = "Session closed.")
+                BatchExecutionResult(index = index, ok = true, text = MCPConstants.SESSION_CLOSED)
             }
 
             "tool" -> {
-                val sessionId = currentSessionId
-                    ?: throw IllegalArgumentException("""No active session. Run "browser4-cli open" first.""")
-                step["preFocusSelector"]?.toString()?.takeIf { it.isNotBlank() }?.let {
+                val sessionId = requireSessionId(currentSessionId)
+                step[MCPConstants.KEY_PRE_FOCUS_SELECTOR]?.toString()?.takeIf { it.isNotBlank() }?.let {
                     restoreBatchFocus(sessionId, it)
                 }
-                step["preMousePosition"].toBatchMousePosition()?.let {
+                step[MCPConstants.KEY_PRE_MOUSE_POSITION].toBatchMousePosition()?.let {
                     restoreBatchMousePosition(sessionId, it)
                 }
-                val tool = step["tool"]?.toString()
-                    ?: throw IllegalArgumentException("Batch tool step is missing 'tool'.")
-                val arguments = step["arguments"].toAnyMap().orEmpty() + ("sessionId" to sessionId)
+                val tool = step[MCPConstants.KEY_TOOL]?.toString()
+                    ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_TOOL)
+                val arguments = step[MCPConstants.KEY_ARGUMENTS].toAnyMap().orEmpty() + (MCPConstants.KEY_SESSION_ID to sessionId)
                 val text = executeAgentToolText(tool, arguments)
                 BatchExecutionResult(index = index, ok = true, text = text.ifBlank { null })
             }
 
             "snapshot" -> {
-                val sessionId = currentSessionId
-                    ?: throw IllegalArgumentException("""No active session. Run "browser4-cli open" first.""")
-                val tool = step["tool"]?.toString()
-                    ?: throw IllegalArgumentException("Batch snapshot step is missing 'tool'.")
-                val arguments = step["arguments"].toAnyMap().orEmpty() + ("sessionId" to sessionId)
-                val pageUrl = executeAgentToolText("page_url", mapOf("sessionId" to sessionId))
-                val pageTitle = executeAgentToolText("page_title", mapOf("sessionId" to sessionId))
+                val sessionId = requireSessionId(currentSessionId)
+                val tool = step[MCPConstants.KEY_TOOL]?.toString()
+                    ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_TOOL)
+                val arguments = step[MCPConstants.KEY_ARGUMENTS].toAnyMap().orEmpty() + (MCPConstants.KEY_SESSION_ID to sessionId)
+                val pageUrl = executeAgentToolText(MCPConstants.TOOL_PAGE_URL, mapOf(MCPConstants.KEY_SESSION_ID to sessionId))
+                val pageTitle = executeAgentToolText(MCPConstants.TOOL_PAGE_TITLE, mapOf(MCPConstants.KEY_SESSION_ID to sessionId))
                 val snapshot = executeAgentToolText(tool, arguments)
                 BatchExecutionResult(
                     index = index,
@@ -515,16 +516,15 @@ class MCPToolController(
             }
 
             "screenshot" -> {
-                val sessionId = currentSessionId
-                    ?: throw IllegalArgumentException("""No active session. Run "browser4-cli open" first.""")
-                val tool = step["tool"]?.toString()
-                    ?: throw IllegalArgumentException("Batch screenshot step is missing 'tool'.")
-                val arguments = step["arguments"].toAnyMap().orEmpty() + ("sessionId" to sessionId)
+                val sessionId = requireSessionId(currentSessionId)
+                val tool = step[MCPConstants.KEY_TOOL]?.toString()
+                    ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_TOOL)
+                val arguments = step[MCPConstants.KEY_ARGUMENTS].toAnyMap().orEmpty() + (MCPConstants.KEY_SESSION_ID to sessionId)
                 val screenshot = executeAgentToolText(tool, arguments)
                 BatchExecutionResult(index = index, ok = true, screenshot = screenshot)
             }
 
-            else -> throw IllegalArgumentException("Unsupported batch step op: $op")
+            else -> throw IllegalArgumentException("${MCPConstants.ERROR_UNSUPPORTED_OP}$op")
         }
     }
 
@@ -550,8 +550,8 @@ class MCPToolController(
         """.trimIndent()
 
         when (val result = executeAgentToolText(
-            "browser_evaluate",
-            mapOf("sessionId" to sessionId, "expression" to focusExpression),
+            MCPConstants.TOOL_BROWSER_EVALUATE,
+            mapOf(MCPConstants.KEY_SESSION_ID to sessionId, "expression" to focusExpression),
         ).trim()) {
             "focused" -> return
             "missing" -> throw IllegalArgumentException(
@@ -909,8 +909,8 @@ class MCPToolController(
     }
 
     private fun requireSessionId(arguments: Map<String, Any?>): String {
-        return arguments["sessionId"]?.toString()
-            ?: throw IllegalArgumentException("Missing required parameter: sessionId")
+        return arguments[MCPConstants.KEY_SESSION_ID]?.toString()
+            ?: throw IllegalArgumentException("Missing required parameter: ${MCPConstants.KEY_SESSION_ID}")
     }
 
     private fun requireArg(args: Map<String, Any?>, key: String): String {
