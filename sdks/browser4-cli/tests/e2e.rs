@@ -1989,7 +1989,7 @@ fn create_e2e_test_resources() -> E2ETestResources {
 // ---------------------------------------------------------------------------
 
 fn goto_interactive_page(ctx: &mut E2ECtx) {
-    // run_open_command(ctx);
+    run_open_command(ctx);
     let interactive_url = ctx.interactive_url();
     run_command(ctx, &["goto", &interactive_url]);
     sleep(Duration::from_secs(2));
