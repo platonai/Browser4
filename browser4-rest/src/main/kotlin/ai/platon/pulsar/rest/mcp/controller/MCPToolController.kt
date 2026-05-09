@@ -841,55 +841,7 @@ class MCPToolController(
     }
 
     private fun normalizeToolArguments(toolName: String, args: Map<String, Any?>): Map<String, Any?> {
-        val normalized = args.mapKeys { (key, _) -> snakeToCamel(key) }.toMutableMap()
-        normalized.remove("sessionId")
-
-        val ref = normalized.remove("ref")
-        if (!normalized.containsKey("selector") && ref != null) {
-            normalized["selector"] = ref
-        }
-
-        val startRef = normalized.remove("startRef")
-        if (!normalized.containsKey("sourceSelector") && startRef != null) {
-            normalized["sourceSelector"] = startRef
-        }
-
-        val endRef = normalized.remove("endRef")
-        if (!normalized.containsKey("targetSelector") && endRef != null) {
-            normalized["targetSelector"] = endRef
-        }
-
-        val modifiers = normalized.remove("modifiers")
-        if (!normalized.containsKey("modifier") && modifiers is List<*> && modifiers.isNotEmpty()) {
-            normalized["modifier"] = modifiers.first()?.toString()
-        }
-
-        when (toolName) {
-            "switch_tab", "tab_select", "close_tab", "tab_close" -> {
-                val legacyTabId = normalized.remove("id")
-                if (!normalized.containsKey("tabId") && legacyTabId != null) {
-                    normalized["tabId"] = legacyTabId.toString()
-                }
-            }
-
-            "select_option" -> {
-                val legacyValue = normalized.remove("value")
-                if (!normalized.containsKey("values") && legacyValue != null) {
-                    normalized["values"] = listOf(legacyValue.toString())
-                }
-            }
-
-            "evaluate_value", "evaluate_value_detail" -> {
-                val selector = normalized["selector"]?.toString()?.takeIf { it.isNotBlank() }
-                val expression = normalized["expression"]?.toString()?.takeIf { it.isNotBlank() }
-                if (selector != null && expression != null && !normalized.containsKey("functionDeclaration")) {
-                    normalized.remove("expression")
-                    normalized["functionDeclaration"] = expression
-                }
-            }
-        }
-
-        return normalized
+        return ArgumentNormalizerFactory.normalize(toolName, args)
     }
 
     private fun Any?.toBooleanValue(): Boolean? = when (this) {
