@@ -35,7 +35,7 @@ function isMusl() {
 const osKey = platform() === 'linux' && isMusl() ? 'linux-musl' : platform();
 const platformKey = `${osKey}-${arch()}`;
 const ext = platform() === 'win32' ? '.exe' : '';
-const binaryName = `browser4-${platformKey}${ext}`;
+const binaryName = `browser4-cli-${platformKey}${ext}`;
 const binaryPath = join(binDir, binaryName);
 
 // Package info
