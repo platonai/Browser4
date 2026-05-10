@@ -455,35 +455,45 @@ class MCPToolController(
     }
 
 
-
-    private suspend fun handleBatchTool(index: Int, step: Map<String, Any?>, currentSessionId: String?): BatchExecutionResult {
+    private suspend fun handleBatchTool(
+        index: Int,
+        step: Map<String, Any?>,
+        currentSessionId: String?
+    ): BatchExecutionResult {
         val sessionId = requireSessionId(currentSessionId)
-        
+
         step[MCPConstants.KEY_PRE_FOCUS_SELECTOR]?.toString()?.takeIf { it.isNotBlank() }?.let {
             restoreBatchFocus(sessionId, it)
         }
         step[MCPConstants.KEY_PRE_MOUSE_POSITION].toBatchMousePosition()?.let {
             restoreBatchMousePosition(sessionId, it)
         }
-        
+
         val tool = step[MCPConstants.KEY_TOOL]?.toString()
             ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_TOOL)
-        val arguments = step[MCPConstants.KEY_ARGUMENTS].toAnyMap().orEmpty() + (MCPConstants.KEY_SESSION_ID to sessionId)
+        val arguments =
+            step[MCPConstants.KEY_ARGUMENTS].toAnyMap().orEmpty() + (MCPConstants.KEY_SESSION_ID to sessionId)
         val text = executeAgentToolText(tool, arguments)
-        
+
         return BatchExecutionResult(index = index, ok = true, text = text.ifBlank { null })
     }
 
-    private suspend fun handleBatchSnapshot(index: Int, step: Map<String, Any?>, currentSessionId: String?): BatchExecutionResult {
+    private suspend fun handleBatchSnapshot(
+        index: Int,
+        step: Map<String, Any?>,
+        currentSessionId: String?
+    ): BatchExecutionResult {
         val sessionId = requireSessionId(currentSessionId)
         val tool = step[MCPConstants.KEY_TOOL]?.toString()
             ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_TOOL)
-        val arguments = step[MCPConstants.KEY_ARGUMENTS].toAnyMap().orEmpty() + (MCPConstants.KEY_SESSION_ID to sessionId)
-        
+        val arguments =
+            step[MCPConstants.KEY_ARGUMENTS].toAnyMap().orEmpty() + (MCPConstants.KEY_SESSION_ID to sessionId)
+
         val pageUrl = executeAgentToolText(MCPConstants.TOOL_PAGE_URL, mapOf(MCPConstants.KEY_SESSION_ID to sessionId))
-        val pageTitle = executeAgentToolText(MCPConstants.TOOL_PAGE_TITLE, mapOf(MCPConstants.KEY_SESSION_ID to sessionId))
+        val pageTitle =
+            executeAgentToolText(MCPConstants.TOOL_PAGE_TITLE, mapOf(MCPConstants.KEY_SESSION_ID to sessionId))
         val snapshot = executeAgentToolText(tool, arguments)
-        
+
         return BatchExecutionResult(
             index = index,
             ok = true,
@@ -493,13 +503,18 @@ class MCPToolController(
         )
     }
 
-    private suspend fun handleBatchScreenshot(index: Int, step: Map<String, Any?>, currentSessionId: String?): BatchExecutionResult {
+    private suspend fun handleBatchScreenshot(
+        index: Int,
+        step: Map<String, Any?>,
+        currentSessionId: String?
+    ): BatchExecutionResult {
         val sessionId = requireSessionId(currentSessionId)
         val tool = step[MCPConstants.KEY_TOOL]?.toString()
             ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_TOOL)
-        val arguments = step[MCPConstants.KEY_ARGUMENTS].toAnyMap().orEmpty() + (MCPConstants.KEY_SESSION_ID to sessionId)
+        val arguments =
+            step[MCPConstants.KEY_ARGUMENTS].toAnyMap().orEmpty() + (MCPConstants.KEY_SESSION_ID to sessionId)
         val screenshot = executeAgentToolText(tool, arguments)
-        
+
         return BatchExecutionResult(index = index, ok = true, screenshot = screenshot)
     }
 

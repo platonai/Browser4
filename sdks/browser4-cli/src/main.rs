@@ -379,12 +379,16 @@ async fn handle_open(
     let mut state = read_state(None, session_name);
     state.session_name = session_name.map(|s| s.to_string());
 
-    let capabilities = build_open_session_capabilities(tool_params);
-
-    let session_id =
-        create_session(client, base_url, &state, session_name, Some(capabilities)).await?;
-
-    println!("Session opened: {}", session_id);
+    let session_id = if let Some(ref existing_id) = state.session_id {
+        println!("Session already open: {}", existing_id);
+        existing_id.clone()
+    } else {
+        let capabilities = build_open_session_capabilities(tool_params);
+        let new_id =
+            create_session(client, base_url, &state, session_name, Some(capabilities)).await?;
+        println!("Session opened: {}", new_id);
+        new_id
+    };
 
     let url = tool_params
         .get("url")

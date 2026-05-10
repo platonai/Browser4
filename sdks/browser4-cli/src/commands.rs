@@ -176,7 +176,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         // ---- Core ----
         CommandDef {
             name: "open",
-            description: "Open the browser",
+            description: "Open or switch to a browser session",
             category: Category::Browsers,
             hidden: false,
             batch_supported: false,

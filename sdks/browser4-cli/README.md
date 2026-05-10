@@ -75,6 +75,12 @@ browser4-cli -s=<session> <command> [args] [options]
 | `-s=<name>` | Named session label |
 | `--server=<url>` | Override Browser4 server URL |
 
+Sessions are persisted independently per name. Omitting `-s` uses the
+default session (`~/.browser4/cli-state.json`). With `-s=<name>`, a
+separate state file is stored under `~/.browser4/sessions/<name>.json`.
+`open` without `-s` reuses the default session if one exists; with
+`-s=<name>` it switches to or creates the named session.
+
 ### Commands
 
 The tables below mirror the commands surfaced by the global `browser4-cli help` overview.
@@ -83,7 +89,7 @@ The tables below mirror the commands surfaced by the global `browser4-cli help` 
 
 | Command | Description |
 |---|---|
-| `open [url]` | Open a new browser session (optionally navigate to URL) |
+| `open [url]` | Open or switch to a browser session (optionally navigate to URL) |
 | `close` | Close the active session |
 | `goto <url>` | Navigate to a URL |
 | `click <ref> [button]` | Click an element |
@@ -212,7 +218,9 @@ gate for commands that require an active Browser4 session.
 | Situation | Persisted state transition | Result |
 |---|---|---|
 | No persisted session | No state change | `require_session()` fails with `No active session. Run "browser4-cli open" first.` |
-| `open` succeeds | `create_session()` writes a fresh state file with new `sessionId`, current `baseUrl`, and clears `activeSelector` / `lastMousePosition` | A new active session becomes the current CLI session |
+| `open` succeeds (no existing session) | `create_session()` writes a fresh state file with new `sessionId`, current `baseUrl`, and clears `activeSelector` / `lastMousePosition` | A new active session becomes the current CLI session |
+| `open` when session already exists | No state change — reuses the existing `sessionId` | The existing session is reused; subsequent commands target the same session |
+| `open -s=<name>` | Reads/writes the named session state file | Opens or switches to the named session; subsequent `-s=<name>` commands use the same session |
 | Command succeeds through `with_session()` | `sessionId` stays unchanged | The command uses the persisted session normally |
 | Command fails because the server reports a stale / expired session and `recover_stale = false` | `invalidate_session()` clears `sessionId`, `activeSelector`, and `lastMousePosition`, while keeping `baseUrl` | The command fails with `Saved session expired. Run "browser4-cli open" first.` |
 | Command fails because the session is stale and `recover_stale = true` | `invalidate_session()` clears the stale session first, then `create_session()` writes a brand-new `sessionId` and retries the action | The command transparently continues on the recreated session if the retry succeeds |
@@ -223,7 +231,9 @@ Notes:
 
 - Today, normal single-command stale-session recovery is enabled only for flows
   that dispatch with `recover_stale = true` (currently `goto`).
-- `open` always starts a new session and resets tracked selector/mouse state.
+- `open` without `-s` reuses the default session if one already exists; it only creates
+  a new session when no default session is present. With `-s=<name>`, `open` switches
+  to or creates the named session.
 - `list` reads persisted session files and compares them with live backend
   sessions to label entries as `Active` or `Stale`.
 
@@ -298,10 +308,14 @@ browser4-cli batch "fill e1 'John Doe'" "fill e2 'john@example.com'" "click e3"
 
 # Advanced: pipe batch commands as JSON via stdin
 echo '[
-  ["goto", "https://playwright.dev"],
-  ["snapshot"],
-  ["click", "e1"],
-  ["screenshot", "--filename=result.png"]
+  ["goto", "https://example.com/form-filling"],
+  ["click", "#reset-btn"],
+  ["fill", "#first-name", "Bob"],
+  ["fill", "#last-name", "Smith"],
+  ["fill", "#email", "bob@example.com"],
+  ["select", "#country", "uk"],
+  ["check", "#agree-terms"],
+  ["click", "#submit-btn"]
 ]' | browser4-cli batch --json
 
 # Close the session when done

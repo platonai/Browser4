@@ -1,59 +1,73 @@
-# Whiteboard Pens Comparison
+# Whiteboard Pens Comparison - Amazon Search Results
 
-Comparison of the first 4 results from Amazon for "pens to draw on whiteboards".
+**Search query:** "pens to draw on whiteboards"
+**Date:** 2026-05-10
+**Source:** https://www.amazon.com/s?k=pens+to+draw+on+whiteboards
+**Total results:** 385
 
-*Search performed on: 2026-05-10*
-*Results page: 1-48 of 381 results*
+## Product Comparison (First 4 Organic Results)
 
-## Summary Table
+| Feature | #1 maxtek | #2 Volcanics | #3 Liquid Chalk Markers | #4 Shuttle Art |
+|---|---|---|---|---|---|
+| **Price** | $6.99 | $5.99 (List: $7.49) | $5.94 (Typical: $6.99) | $8.99 (List: $9.99) |
+| **Price per count** | $0.58 | $0.50 | $0.42 | $0.60 |
+| **Rating** | 4.4/5 | 4.5/5 | 4.6/5 | 4.4/5 |
+| **# of Ratings** | 12,273 | 10,605 | 1,671 | 14,802 |
+| **Count/Colors** | 12 colors | 12 pack, 10 colors | 14 pack, 12 colors | 15 colors |
+| **Monthly Sales** | 10K+ | 10K+ | 7K+ | 8K+ |
+| **Tip Type** | Fine tip (1-2mm) | Fine tip | Fine point (1mm) | Fine tip |
+| **Magnetic** | Yes (reinforced caps) | Yes (eraser caps) | No (liquid chalk) | Yes (caps with erasers) |
+| **Ink Type** | Dry erase (German ink) | Dry erase (water-based) | Wet erase (liquid chalk) | Dry erase (washable) |
+| **Low Odor** | Yes | Yes | Not specified | Yes |
+| **Built-in Eraser** | Yes (on cap) | Yes (on cap) | No | Yes (on cap) |
+| **Safety Cert** | ASTM D-4236 | Certified non-toxic | Not specified | ASTM D-4236, EN71 |
+| **Delivery** | $8.16 (May 21) | $8.42 (May 21) | $8.16 (May 21) | $7.42 (May 21) |
+| **Badge** | Amazon's Choice / Overall Pick | Top Reviewed for Color | — | — |
 
-| # | Product | Rating | Reviews | Price | Price/Count | Pen Count | Bought (past month) | Delivery |
-|---|---------|--------|---------|-------|-------------|-----------|---------------------|----------|
-| 1 | maxtek Magnetic Dry Erase Markers | 4.4 | 12,273 | $6.99 | $0.58 | 12 | 10K+ | $8.16 |
-| 2 | Volcanics Magnetic Dry Wipe Pens | 4.5 | 10,605 | $5.99 | $0.50 | 12 | 10K+ | $8.42 |
-| 3 | Liquid Chalk Markers (14 Pack) | 4.6 | 1,671 | $5.94 | $0.42 | 14 | 7K+ | $8.16 |
-| 4 | Shuttle Art Dry Erase Markers | 4.4 | 14,802 | $8.99 | $0.60 | 15 | 8K+ | $7.42 |
+### Detailed Features
 
-## Detailed Comparison
+**#1 maxtek Magnetic Dry Erase Markers ($6.99)**
+- Safe, low-odor ink certified to ASTM D-4236 standards
+- Reinforced magnetic caps with strong absorption
+- 1-2mm fine point for precise lines
+- 12 vibrant colors including Blue, Light green, orange, brown, yellow, red, aubergine, black, green, light blue, dark green, purple
+- Fast-drying German ink, easy to wipe
+- Best on standard porous whiteboards (less bold on glass/acrylic)
 
-### 1. maxtek Magnetic Dry Erase Markers with Eraser
-- **Type:** Fine Tip Dry Erase Markers
-- **Key feature:** Magnetic, includes eraser, 12 count colorful
-- **Rating:** 4.4 / 5 (12,273 ratings) — Amazon's Choice / Overall Pick
-- **Price:** $6.99 ($0.58/count)
-- **Delivery:** $8.16 to Japan
-- **Strengths:** Amazon's Choice badge, magnetic for board attachment, comes with eraser
+**#2 Volcanics Magnetic Dry Wipe Pens ($5.99)**
+- Certified non-toxic ink with special low odor formula
+- Bold and consistent, visible from long distance
+- Quick-drying and streak-free, water-based ink
+- Fine tip, rolls fluently on most smooth surfaces (not for chalkboards)
+- Works on whiteboards, mirror, glass, paper cards, ceramic tiles
+- Eraser cap included
 
-### 2. Volcanics Magnetic Dry Wipe Pens
-- **Type:** Fine Tip Dry Erase Markers
-- **Key feature:** Magnetic, eraser caps on each pen, 12 pack (10 colors)
-- **Rating:** 4.5 / 5 (10,605 ratings) — Top Reviewed for Color
-- **Price:** $5.99 ($0.50/count), List price: $7.49
-- **Delivery:** $8.42 to Japan
-- **Strengths:** Best rated among the four, lowest price per pen, eraser cap on each pen
+**#3 Liquid Chalk Markers ($5.94)**
+- Wet erase liquid chalk markers (different from dry erase!)
+- 1mm fine points, 14 markers with 12 vibrant colors
+- Designed for acrylic/glass boards, LED note boards, windows, mirrors
+- Easy to erase with wet tissue/cloth (no ghosting, no smudge)
+- NOT for porous surfaces (marks become permanent)
+- Only product that includes 2 of some colors (light blue, purple)
 
-### 3. Liquid Chalk Markers (14 Pack)
-- **Type:** Liquid Chalk Markers (1mm Fine Point)
-- **Key feature:** 12 vibrant colors, works on multiple surfaces (glass, acrylic, whiteboard)
-- **Rating:** 4.6 / 5 (1,671 ratings)
-- **Price:** $5.94 ($0.42/count), Typical: $6.99
-- **Delivery:** $8.16 to Japan
-- **Strengths:** Highest star rating, lowest price per count, versatile surface compatibility
-- **Note:** Different ink type — liquid chalk rather than standard dry erase
+**#4 Shuttle Art Dry Erase Markers ($8.99)**
+- 15 different colors - most color variety
+- Magnetic caps with built-in felt erasers on each marker
+- Low-odor, no xylene & toluene, eco-friendly
+- ASTM D-4236 and EN71 certified
+- Not suitable for children under 3 years
+- Recommended to store horizontally to avoid ink leakage
+- Satisfaction guarantee
 
-### 4. Shuttle Art Dry Erase Markers
-- **Type:** Fine Point Dry Erase Markers
-- **Key feature:** Magnetic, 15 colors
-- **Rating:** 4.4 / 5 (14,802 ratings)
-- **Price:** $8.99 ($0.60/count), List price: $9.99
-- **Delivery:** $7.42 to Japan (cheapest delivery)
-- **Strengths:** Most ratings (14.8K), most colors (15), cheapest delivery
+## Summary
 
-## Verdict
+| Criteria | Winner |
+|---|---|
+| **Lowest price per count** | #3 Liquid Chalk Markers ($0.42) |
+| **Most colors** | #4 Shuttle Art (15 colors) |
+| **Highest rating** | #3 Liquid Chalk Markers (4.6) |
+| **Most reviewed** | #4 Shuttle Art (14,802 ratings) |
+| **Most popular (monthly)** | #1 maxtek and #2 Volcanics (10K+ each) |
+| **Best all-around dry erase** | #2 Volcanics (best rating among dry erase + lowest price) |
 
-- **Best value:** Volcanics (#2) — lowest price per pen ($0.50) with high rating (4.5) and large review base
-- **Best rated:** Liquid Chalk Markers (#3) at 4.6 stars, but note it's a different ink type
-- **Most popular:** Shuttle Art (#4) with 14,802 ratings
-- **Overall pick (Amazon's Choice):** maxtek (#1) — good all-rounder with included eraser
-
-**Recommended:** Volcanics (#2) offers the best balance of price, rating, and number of reviews.
+**Note:** Product #3 (Liquid Chalk Markers) is a fundamentally different product type - it uses wet-erase liquid chalk ink rather than dry-erase ink. It is not technically a "pen" for whiteboards in the traditional sense, though it can be used on whiteboards.

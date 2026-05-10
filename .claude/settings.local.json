@@ -1,8 +1,7 @@
 {
   "permissions": {
     "allow": [
-      "Bash(*)",
-      "Write(*)"
+      "Bash(cargo test *)"
     ]
   }
 }
