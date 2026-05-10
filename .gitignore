@@ -124,3 +124,7 @@ application-private.properties
 */**/human-private/
 */**/.browser4-cli/
 /**/dist/**
+
+browser4-cli-linux-arm64
+browser4-cli-linux-x64
+browser4-cli-win32-x64.exe
