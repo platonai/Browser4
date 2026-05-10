@@ -6,7 +6,7 @@ This directory contains automation scripts for Continuous Integration and Contin
 
 ### 🔄 Local CI/CD Scripts
 
-#### `ci-local.ps1` / `ci-local.sh`
+#### `ci-local.ps1`
 **Continuous Integration Monitor**
 
 Automatically monitors Git repository for changes and triggers builds when updates are detected.
@@ -26,7 +26,7 @@ Automatically monitors Git repository for changes and triggers builds when updat
 ./ci-local.ps1 -intervalSeconds 30
 ```
 
-#### `ci-docker-local.ps1` / `ci-docker-local.sh`
+#### `ci-docker-local.ps1`
 **Docker-based Local CI**
 
 Runs CI/CD pipeline in Docker containers for consistent environment testing.
