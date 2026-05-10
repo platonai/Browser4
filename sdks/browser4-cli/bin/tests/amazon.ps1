@@ -36,4 +36,4 @@ Task:
 "@
 
 # gh copilot --allow-all -p "$prompt" ## --silent
-claude --allow-dangerously-skip-permissions $prompt
+claude --allow-dangerously-skip-permissions --permission-mode dontAsk $prompt

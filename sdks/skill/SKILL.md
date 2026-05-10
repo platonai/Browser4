@@ -11,7 +11,7 @@ allowed-tools: Bash(browser4-cli:*)
 ```bash
 # open new browser
 browser4-cli open
-# navigate to a page
+# navigate to a page (auto-creates a session if none exists)
 browser4-cli goto https://browser4.io/
 # take a snapshot
 browser4-cli snapshot
@@ -33,8 +33,9 @@ The sections below cover the standard browser workflow commands that are surface
 
 ```bash
 browser4-cli open
-# open and navigate right away
+# open and navigate right away in one step
 browser4-cli open https://example.com/
+# navigate to a URL (creates a session automatically if none is active)
 browser4-cli goto https://browser4.io/
 browser4-cli type "search query"
 browser4-cli click e3
@@ -55,6 +56,7 @@ browser4-cli close
 ### Navigation
 
 ```bash
+browser4-cli goto <url>         # Navigate to a URL (auto-creates session if needed)
 browser4-cli go-back
 browser4-cli go-forward
 browser4-cli reload

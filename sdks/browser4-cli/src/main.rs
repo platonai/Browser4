@@ -60,6 +60,7 @@ const AGENT_RUN_FAILURE_POLL_INTERVAL_MS: u64 = 250;
 fn no_snapshot_commands() -> HashSet<&'static str> {
     [
         "open",
+        "goto",
         "close",
         "close-all",
         "kill-all",
@@ -398,6 +399,34 @@ async fn handle_open(
         }
         post_command_snapshot(client, base_url, &session_id).await;
     }
+    Ok(())
+}
+
+async fn handle_goto(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let state = read_state(None, session_name);
+    let session_id = if let Some(ref existing_id) = state.session_id {
+        existing_id.clone()
+    } else {
+        let capabilities = build_open_session_capabilities(tool_params);
+        let new_id =
+            create_session(client, base_url, &state, session_name, Some(capabilities)).await?;
+        println!("Session opened: {}", new_id);
+        new_id
+    };
+
+    let mut params = tool_params.clone();
+    params["sessionId"] = json!(session_id);
+    let result = call_tool(client, base_url, tool_name, params).await?;
+    if !result.is_empty() {
+        println!("{}", result);
+    }
+    post_command_snapshot(client, base_url, &session_id).await;
     Ok(())
 }
 
@@ -2107,6 +2136,16 @@ async fn run(command: &str, global: &args::GlobalFlags) -> Result<(), String> {
     match command {
         "open" => {
             handle_open(
+                &client,
+                &base_url,
+                &tool_name,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
+        "goto" => {
+            handle_goto(
                 &client,
                 &base_url,
                 &tool_name,
