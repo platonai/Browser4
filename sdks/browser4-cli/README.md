@@ -5,34 +5,26 @@ server. Designed for use by AI agents through SKILLS + CLI.
 
 ## Install
 
-### macOS / Linux installer
+### Prerequisites
 
-The repository now includes an installer that:
+- Java 17+
+- Google Chrome
+- Rust 1.70+ (with MSVC C++ build tools on Windows)
 
-- checks the required build/runtime dependencies
-- installs Java 17+, Google Chrome, and Rust when they are missing
-- downloads the latest released `Browser4.jar` to `~/.browser4/lib/Browser4.jar` as a fallback runtime
-- downloads the latest tagged Browser4 source and installs `browser4-cli` to `~/.local/bin`
+### macOS / Linux
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/platonai/Browser4/master/sdks/browser4-cli/install.sh | bash
+mkdir -p ~/.browser4/lib
+curl -fsSL -o ~/.browser4/lib/Browser4.jar https://github.com/platonai/Browser4/releases/latest/download/Browser4.jar
+
+git clone https://github.com/platonai/Browser4.git
+cd Browser4/sdks/browser4-cli
+cargo install --path . --locked
 ```
 
-Optional environment overrides:
+By default, Cargo installs the executable to `~/.cargo/bin`. Ensure that directory is on `PATH`.
 
-| Variable | Description |
-|---|---|
-| `BROWSER4_INSTALL_VERSION` | Install a specific release tag instead of the latest one |
-| `BROWSER4_INSTALL_ROOT` | Override the Cargo install root (default: `~/.local`) |
-| `BROWSER4_LIB_DIR` | Override where `Browser4.jar` is stored (default: `~/.browser4/lib`) |
-
-### Windows manual install
-
-`install.sh` is only supported on macOS and Linux. On Windows, install the CLI manually:
-
-1. Install Java 17+, Google Chrome, Rust, and the MSVC C++ build tools.
-2. Download the latest `Browser4.jar` release asset to `%USERPROFILE%\.browser4\lib\Browser4.jar`.
-3. Build and install `browser4-cli.exe` from source into Cargo's bin directory:
+### Windows
 
 ```powershell
 New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.browser4\lib" | Out-Null
