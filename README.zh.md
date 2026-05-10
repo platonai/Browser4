@@ -203,11 +203,11 @@ browser4-cli close
 
 从源码构建 CLI：
 
-[README.md](sdks/browser4-cli/README.md)
+[README.md](cli/browser4-cli/README.md)
 
 Browser4 CLI 为 AI agents 通过 SKILLS + CLI 使用而设计。
 
-[SKILL.md](sdks/skill/SKILL.md)
+[SKILL.md](cli/skill/SKILL.md)
 
 ---
 
