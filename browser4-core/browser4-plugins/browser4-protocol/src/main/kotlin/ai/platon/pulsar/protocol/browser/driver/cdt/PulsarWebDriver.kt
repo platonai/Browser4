@@ -1,11 +1,11 @@
 package ai.platon.pulsar.protocol.browser.driver.cdt
 
 import ai.platon.browser4.driver.chrome.*
-import ai.platon.browser4.driver.chrome.experimental.CDP
 import ai.platon.browser4.driver.chrome.dom.SnapshotService
 import ai.platon.browser4.driver.chrome.dom.model.NanoDOMTree
 import ai.platon.browser4.driver.chrome.dom.model.SnapshotOptions
 import ai.platon.browser4.driver.chrome.dom.model.ViewportSpec
+import ai.platon.browser4.driver.chrome.experimental.CDP
 import ai.platon.browser4.driver.chrome.impl.ChromeImpl
 import ai.platon.browser4.driver.chrome.util.ChromeDriverException
 import ai.platon.browser4.driver.chrome.util.ChromeIOException
@@ -32,14 +32,11 @@ import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.google.common.annotations.Beta
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
-import org.apache.commons.lang3.SystemUtils
 import org.apache.commons.lang3.StringUtils
+import org.apache.commons.lang3.SystemUtils
 import java.nio.file.Files
 import java.time.Duration
-import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.random.Random
 
@@ -257,29 +254,6 @@ class PulsarWebDriver constructor(
     }
 
     @Throws(WebDriverException::class)
-    private suspend fun waitForNavigationExperimental(oldUrl: String, timeout: Duration): Duration {
-        val startTime = Instant.now()
-
-        try {
-            val channel = Channel<String>()
-
-            pageAPI?.onDocumentOpened {
-                // keep oldUrl check for debugging / future use
-                @Suppress("UNUSED_VARIABLE")
-                val navigated = it.frame.url != oldUrl
-                // emit(Navigation)
-                channel.trySend("navigated")
-            }
-
-            channel.receive()
-        } catch (e: ChromeDriverException) {
-            rpc.handleChromeException(e, "waitForNavigation $timeout")
-        }
-
-        return timeout - DateTimes.elapsedTime(startTime)
-    }
-
-    @Throws(WebDriverException::class)
     override suspend fun waitForPage(url: String, timeout: Duration): WebDriver? {
         return waitFor("waitForPage", timeout) { browser.findDriver(url) }
     }
@@ -336,47 +310,8 @@ class PulsarWebDriver constructor(
     }
 
     @Throws(WebDriverException::class)
-    override suspend fun mouseWheelDown(count: Int, deltaX: Double, deltaY: Double, delayMillis: Long) {
-        try {
-            rpc.invokeWithRetry("mouseWheelDown", 1) {
-                repeat(count) { i ->
-                    if (i > 0) {
-                        if (delayMillis > 0) gap(delayMillis) else gap("mouseWheel")
-                    }
-
-                    mouse?.wheel(deltaX, deltaY)
-                }
-            }
-        } catch (e: ChromeDriverException) {
-            rpc.handleChromeException(e, "mouseWheelDown")
-        }
-    }
-
-    @Throws(WebDriverException::class)
-    override suspend fun mouseWheelUp(count: Int, deltaX: Double, deltaY: Double, delayMillis: Long) {
-        try {
-            rpc.invokeWithRetry("mouseWheelUp", 1) {
-                repeat(count) { i ->
-                    if (i > 0) {
-                        if (delayMillis > 0) gap(delayMillis) else gap("mouseWheel")
-                    }
-
-                    mouse?.wheel(deltaX, deltaY)
-                }
-            }
-        } catch (e: ChromeDriverException) {
-            rpc.handleChromeException(e, "mouseWheelUp")
-        }
-    }
-
-    @Throws(WebDriverException::class)
     override suspend fun mouseWheel(deltaX: Double, deltaY: Double) {
         driverHelper.invokeOnPage("mouseWheel") { mouse?.wheel(deltaX, deltaY) }
-    }
-
-    @Throws(WebDriverException::class)
-    override suspend fun moveMouseTo(x: Double, y: Double) {
-        driverHelper.invokeOnPage("moveMouseTo") { mouse?.moveTo(x, y) }
     }
 
     @Throws(WebDriverException::class)
@@ -871,13 +806,13 @@ function() {
 }
                     """.trimIndent()
                     withNodeObjectId(cdp, node) { objectId ->
-                            val remoteObject = runtimeAPI?.callFunctionOn(
-                                functionDeclaration,
-                                objectId = objectId,
-                                returnByValue = true
-                            )
-                            // TODO: performance issue for large text (memory copy)
-                            remoteObject?.result?.value?.toString()
+                        val remoteObject = runtimeAPI?.callFunctionOn(
+                            functionDeclaration,
+                            objectId = objectId,
+                            returnByValue = true
+                        )
+                        // TODO: performance issue for large text (memory copy)
+                        remoteObject?.result?.value?.toString()
                     }
                 }
             }
@@ -961,16 +896,6 @@ function() {
         val safeSelector = page.normalizeLocatorForJs(selector)
         evaluate("__pulsar_utils__.clickMatches('$safeSelector', '$attrName', '$pattern')")
     }
-
-
-
-
-
-
-
-
-
-
 
 
     @Throws(WebDriverException::class)
@@ -1119,8 +1044,6 @@ function() {
         }
 
         try {
-            handleRedirect()
-
             if (browser.isGUI) {
                 // in gui mode, just stop the loading, so we can diagnose
                 pageAPI?.stopLoading()
@@ -1131,6 +1054,10 @@ function() {
         } catch (e: ChromeIOException) {
             if (!e.isOpen || !cdp.isOpen) {
                 // intentionally ignored: the chrome is closed
+                logger.debug(
+                    "Failed to stop the page, but it's likely because the browser is already closed | {}",
+                    e.message
+                )
             }
         } catch (e: ChromeDriverException) {
             if (cdp.isOpen) {
@@ -1313,7 +1240,6 @@ function() {
             val isolatedWorldJs = settings.dualWorldScriptLoader.getIsolatedWorldJs(false)
             if (isolatedWorldJs.isNotBlank()) {
                 val targetFrameId = pageAPI?.getFrameTree()?.frame?.id ?: event.frame.id
-                val contextId = isolatedWorldManager.ensureRuntime(targetFrameId, isolatedWorldJs)
                 logger.debug(
                     "Ensured Browser4 runtime in isolated world after main-frame navigation | frame={}",
                     targetFrameId
@@ -1344,6 +1270,7 @@ function() {
         )
         if (event.type !in resourceTypes) {
             // intentionally keep non-return for now (was used as filter in the past)
+            logger.debug("Unknown resource type {}", event)
         }
 
         // page url is normalized
@@ -1387,14 +1314,6 @@ function() {
                 path = reportDir.resolve(filename)
                 messageWriter.writeTo(body, path)
             }
-        }
-    }
-
-    private suspend fun handleRedirect() {
-        val finalUrl = currentUrl()
-        // redirect
-        if (finalUrl.isNotBlank() && finalUrl != navigateUrl) {
-            // browser.addHistory(NavigateEntry(finalUrl))
         }
     }
 
