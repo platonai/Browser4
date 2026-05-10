@@ -128,19 +128,6 @@
         </profile>
 
         <profile>
-            <id>sdk-tests</id>
-            <activation>
-                <property>
-                    <name>runSDKTests</name>
-                    <value>true</value>
-                </property>
-            </activation>
-            <properties>
-                <surefire.excludedGroups>ManualOnly</surefire.excludedGroups>
-            </properties>
-        </profile>
-
-        <profile>
             <id>core-tests</id>
             <activation>
                 <property>
@@ -179,7 +166,6 @@
 
                 <module>examples</module>
                 <module>browser4-tests</module>
-                <module>sdks</module>
             </modules>
         </profile>
 
@@ -205,16 +191,6 @@
             <properties>
                 <surefire.excludedGroups>None</surefire.excludedGroups>
             </properties>
-        </profile>
-
-        <profile>
-            <id>sdk</id>
-            <activation>
-                <activeByDefault>false</activeByDefault>
-            </activation>
-            <modules>
-                <module>sdks</module>
-            </modules>
         </profile>
 
         <!-- CI profile -->
@@ -565,7 +541,6 @@
         <!-- Test execution control properties -->
         <runITs>false</runITs>
         <runE2ETests>false</runE2ETests>
-        <runSDKTests>false</runSDKTests>
         <runCoreTests>false</runCoreTests>
         <runRestTests>false</runRestTests>
 

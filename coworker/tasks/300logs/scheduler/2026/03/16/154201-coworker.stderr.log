@@ -1,6 +1,0 @@
-[31;1mGet-RunningCoworkerProcesses: [0m/home/vincent/workspace/Browser4-4.6/coworker/scripts/process-coworker-queue.ps1:207[0m
-[31;1m[0m[36;1mLine |[0m
-[31;1m[0m[36;1m[36;1m 207 | [0m …  $running = [36;1mGet-RunningCoworkerProcesses -ScriptName $ScriptName -Wra[0m …[0m
-[31;1m[0m[36;1m[36;1m[0m[36;1m[0m[36;1m     | [31;1m               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
-[31;1m[0m[36;1m[36;1m[0m[36;1m[0m[36;1m[31;1m[31;1m[36;1m     | [31;1mThe term 'Get-CimInstance' is not recognized as a name of a cmdlet, function, script file, or executable program. Check the spelling of the name, or if a path was[0m
-[31;1m[0m[36;1m[36;1m[0m[36;1m[0m[36;1m[31;1m[31;1m[36;1m[31;1m[36;1m     | [31;1mincluded, verify that the path is correct and try again.[0m
