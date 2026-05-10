@@ -219,7 +219,7 @@ open class PulsarWebDriverE2ETest : WebDriverTestBase() {
             val x = 100.0 + 2 * i
             val y = 100.0 + 3 * i
 
-            driver.moveMouseTo(x, y)
+            driver.mouseMove(x, y)
 
             delay(500.milliseconds)
         }
@@ -227,7 +227,7 @@ open class PulsarWebDriverE2ETest : WebDriverTestBase() {
 
     @Test
     fun testMouseWheel() = runEnhancedWebDriverTest(mockAmazonProductUrl, browser) { driver ->
-        driver.mouseWheelDown(5)
+        driver.mouseWheel(5.0)
         val box = driver.boundingBox("body")
         printlnPro(box)
         assertNotNull(box)
