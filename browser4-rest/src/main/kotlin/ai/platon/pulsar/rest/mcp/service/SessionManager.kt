@@ -5,7 +5,6 @@ import ai.platon.pulsar.agentic.PerceptiveAgent
 import ai.platon.pulsar.agentic.context.AgenticContext
 import ai.platon.pulsar.core.api.PulsarSettings
 import jakarta.annotation.PreDestroy
-import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
@@ -13,7 +12,6 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
 import org.springframework.stereotype.Service
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
-import kotlin.time.Duration.Companion.minutes
 
 /**
  * Manages WebDriver sessions with real AgenticContext instances.
@@ -107,8 +105,15 @@ class SessionManager(
             // Close the agent to release browser resources
             session.agent.close()
 
-            // Close sessions
-            session.agenticSession.close()
+            val pulsarSession = session.agenticSession
+            val browser = pulsarSession.boundBrowser
+
+            // Close session
+            pulsarSession.close()
+            // Close the companion browser if it exists
+            if (browser != null) {
+                pulsarSession.context.browserManager.closeBrowser(browser)
+            }
 
             logger.info("Deleted session {} and released resources", sessionId)
         } catch (e: Exception) {
@@ -138,23 +143,6 @@ class SessionManager(
             deleteSession(sessionId)
         }
         return count
-    }
-
-    /**
-     * Cleans up idle sessions that haven't been accessed for more than 30 minutes.
-     */
-    private fun cleanupIdleSessions() {
-        val idleThreshold = System.currentTimeMillis() - 30.minutes.inWholeMilliseconds
-        val idleSessions = sessions.entries.filter { (_, session) ->
-            session.lastAccessedAt < idleThreshold
-        }
-
-        if (idleSessions.isNotEmpty()) {
-            logger.info("Cleaning up {} idle sessions", idleSessions.size)
-            idleSessions.forEach { (sessionId, _) ->
-                deleteSession(sessionId)
-            }
-        }
     }
 
     /**

@@ -11,7 +11,7 @@ allowed-tools: Bash(browser4-cli:*)
 ```bash
 # open new browser
 browser4-cli open
-# navigate to a page
+# navigate to a page (auto-creates a session if none exists)
 browser4-cli goto https://browser4.io/
 # take a snapshot
 browser4-cli snapshot
@@ -27,12 +27,15 @@ browser4-cli close
 
 ## Commands
 
+The sections below cover the standard browser workflow commands that are surfaced in the global `browser4-cli help` overview.
+
 ### Core
 
 ```bash
 browser4-cli open
-# open and navigate right away
+# open and navigate right away in one step
 browser4-cli open https://example.com/
+# navigate to a URL (creates a session automatically if none is active)
 browser4-cli goto https://browser4.io/
 browser4-cli type "search query"
 browser4-cli click e3
@@ -41,13 +44,11 @@ browser4-cli fill e5 "user@example.com"
 browser4-cli drag e2 e8
 browser4-cli hover e4
 browser4-cli select e9 "option-value"
-browser4-cli upload ./document.pdf
 browser4-cli check e12
 browser4-cli uncheck e12
 browser4-cli snapshot
 browser4-cli snapshot --filename=after-click.yaml
 browser4-cli eval "document.title"
-browser4-cli eval "element => element.textContent" e12
 browser4-cli resize 1920 1080
 browser4-cli close
 ```
@@ -55,6 +56,7 @@ browser4-cli close
 ### Navigation
 
 ```bash
+browser4-cli goto <url>         # Navigate to a URL (auto-creates session if needed)
 browser4-cli go-back
 browser4-cli go-forward
 browser4-cli reload
@@ -95,13 +97,17 @@ browser4-cli tab-list
 browser4-cli tab-new
 browser4-cli tab-new https://example.com/page
 browser4-cli tab-close
-browser4-cli tab-close 2
-browser4-cli tab-select 0
+# inspect indices before targeting a specific tab
+browser4-cli tab-list
+browser4-cli tab-select 1
+browser4-cli tab-close 1
 ```
+
+Use `browser4-cli tab-list` to obtain the current zero-based tab index before calling `tab-select` or `tab-close` with a specific target.
 
 ## Snapshots
 
-After each command, browser4-cli provides a snapshot of the current browser state.
+After commands that modify browser state, browser4-cli usually provides a snapshot of the current browser state.
 
 ```bash
 > browser4-cli goto https://example.com
@@ -116,32 +122,28 @@ You can also take a snapshot on demand using `browser4-cli snapshot` command.
 
 If `--filename` is not provided, a new snapshot file is created with a timestamp. Default to automatic file naming, use `--filename=` when artifact is a part of the workflow result.
 
-## Batch Mode
-
-```bash
-# Execute multiple commands in one process
-browser4-cli batch "open https://example.com" "snapshot"
-
-# Stop on the first batch failure
-browser4-cli batch --bail "open https://example.com" "click e1" "screenshot"
-
-# Pipe batch commands as JSON via stdin
-echo '[
-  ["open", "https://example.com"],
-  ["snapshot"],
-  ["click", "e1"],
-  ["screenshot", "--filename=result.png"]
-]' | browser4-cli batch --json
-```
-
 ## Browser Sessions
 
 ```bash
 browser4-cli list
-# Close all browsers
+# Close all sessions, but keep Browser4.jar / the Browser4 backend running
 browser4-cli close-all
-# Forcefully kill all browser processes
+# Explicitly stop Browser4.jar / the Browser4 backend and kill Browser4 browser processes
 browser4-cli kill-all
+```
+
+## Advanced commands
+
+Some advanced commands are intentionally omitted from the global `browser4-cli help` summary.
+Query them explicitly when needed:
+
+```bash
+browser4-cli help batch
+browser4-cli help console
+browser4-cli help extract
+browser4-cli help summarize
+browser4-cli help agent-run
+browser4-cli help co-create
 ```
 
 ## Example: Form submission
@@ -163,7 +165,7 @@ browser4-cli close
 browser4-cli open https://example.com
 browser4-cli tab-new https://example.com/other
 browser4-cli tab-list
-browser4-cli tab-select 0
+browser4-cli tab-select 1
 browser4-cli snapshot
 browser4-cli close
 ```

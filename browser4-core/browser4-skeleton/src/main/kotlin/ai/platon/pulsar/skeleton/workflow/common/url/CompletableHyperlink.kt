@@ -71,7 +71,7 @@ open class CompletableHyperlink<T>(
     @get: Throws(MalformedURLException::class)
     override val toURL get() = URI.create(url).toURL()
 
-    override val toURLOrNull get() = URLUtils.getURLOrNull(url)
+    override val toURLOrNull get() = URLUtils.getURLOrNull2(url)
 
     override val isNil: Boolean get() = url == AppConstants.NIL_PAGE_URL
 

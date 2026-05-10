@@ -25,6 +25,12 @@ cd browser4-tests/browser4-rest-tests
 ./../../mvnw package -DskipTests -am spring-boot:run -D"spring-boot.run.mainClass=ai.platon.pulsar.test.server.MockSiteBoot"
 ```
 
+Or from the repo root via the shared helper:
+
+```shell
+./bin/test.sh mocksiteboot -Dmock.site.port=18080
+```
+
 Environment variable alternatives:
 - `MOCK_SITE_PORT`
 - `MOCK_SITE_WAIT_SEC`

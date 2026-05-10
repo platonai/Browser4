@@ -205,6 +205,7 @@ pub fn shutdown_managed_server_processes(
 }
 
 /// Gracefully stop all managed Browser4 server processes.
+#[allow(dead_code)]
 pub fn stop_browser4_server_gracefully() -> ShutdownResult {
     stop_browser4_server(false)
 }

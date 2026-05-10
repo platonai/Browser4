@@ -68,6 +68,9 @@ pub struct CommandDef {
     pub description: &'static str,
     pub category: Category,
     pub hidden: bool,
+    /// Whether this command can be used in batch mode.
+    /// Only commands in Core, Navigation, Keyboard, Export, and Tabs categories are supported.
+    pub batch_supported: bool,
     /// Ordered list of positional argument definitions.
     pub args: &'static [ArgDef],
     /// Named option definitions.
@@ -77,6 +80,8 @@ pub struct CommandDef {
     /// Function that builds the JSON parameters for the MCP call.
     pub tool_params_fn: fn(&HashMap<String, Value>) -> Value,
 }
+
+
 
 // ---------------------------------------------------------------------------
 // Helper macros and builders
@@ -98,6 +103,70 @@ fn get_number_value(map: &HashMap<String, Value>, key: &str) -> Option<Value> {
     map.get(key).filter(|v| v.is_number()).cloned()
 }
 
+fn raw_positionals(map: &HashMap<String, Value>) -> Vec<String> {
+    match map.get("_") {
+        Some(Value::Array(values)) => values
+            .iter()
+            .skip(1)
+            .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn looks_like_selector_or_ref(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    trimmed.starts_with('#')
+        || trimmed.starts_with('.')
+        || trimmed.starts_with('[')
+        || trimmed.starts_with("//")
+        || trimmed.starts_with("xpath:")
+        || trimmed.starts_with("css:")
+        || trimmed.starts_with("backend:")
+        || trimmed.starts_with("text=")
+        || (trimmed.starts_with('e') && trimmed[1..].chars().all(|ch| ch.is_ascii_digit()))
+}
+
+fn resolve_key_and_ref(map: &HashMap<String, Value>) -> (String, Option<String>) {
+    let positionals = raw_positionals(map);
+    match positionals.as_slice() {
+        [single] => (single.clone(), get_opt_str(map, "ref").map(ToOwned::to_owned)),
+        [first, second, ..] => {
+            if looks_like_selector_or_ref(first) && !looks_like_selector_or_ref(second) {
+                (second.clone(), Some(first.clone()))
+            } else {
+                (first.clone(), Some(second.clone()))
+            }
+        }
+        _ => (
+            get_str(map, "key").unwrap_or_default().to_string(),
+            get_opt_str(map, "ref").map(ToOwned::to_owned),
+        ),
+    }
+}
+
+fn resolve_text_and_ref(map: &HashMap<String, Value>) -> (String, Option<String>) {
+    let positionals = raw_positionals(map);
+    match positionals.as_slice() {
+        [single] => (single.clone(), get_opt_str(map, "ref").map(ToOwned::to_owned)),
+        [first, second, ..] => {
+            if looks_like_selector_or_ref(first) && !looks_like_selector_or_ref(second) {
+                (second.clone(), Some(first.clone()))
+            } else {
+                (first.clone(), Some(second.clone()))
+            }
+        }
+        _ => (
+            get_str(map, "text").unwrap_or_default().to_string(),
+            get_opt_str(map, "ref").map(ToOwned::to_owned),
+        ),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Command definitions (static)
 // ---------------------------------------------------------------------------
@@ -107,9 +176,10 @@ pub fn all_commands() -> Vec<CommandDef> {
         // ---- Core ----
         CommandDef {
             name: "open",
-            description: "Open the browser",
-            category: Category::Core,
+            description: "Open or switch to a browser session",
+            category: Category::Browsers,
             hidden: false,
+            batch_supported: false,
             args: &[ArgDef { name: "url", description: "The URL to navigate to", optional: true }],
             options: &[
                 OptionDef { name: "headed", description: "Run browser in headed mode", is_bool: true },
@@ -145,8 +215,9 @@ pub fn all_commands() -> Vec<CommandDef> {
         CommandDef {
             name: "close",
             description: "Close the browser",
-            category: Category::Core,
+            category: Category::Browsers,
             hidden: false,
+            batch_supported: false,
             args: &[],
             options: &[],
             tool_name_fn: |_| String::new(),
@@ -156,7 +227,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "batch",
             description: "Execute multiple commands in one invocation",
             category: Category::Core,
-            hidden: false,
+            hidden: true,
+            batch_supported: false,
             args: &[ArgDef {
                 name: "command...",
                 description: "Quoted command strings to execute sequentially",
@@ -180,8 +252,9 @@ pub fn all_commands() -> Vec<CommandDef> {
         CommandDef {
             name: "goto",
             description: "Navigate to a URL",
-            category: Category::Core,
+            category: Category::Navigation,
             hidden: false,
+            batch_supported: true,
             args: &[ArgDef { name: "url", description: "The URL to navigate to", optional: false }],
             options: &[],
             tool_name_fn: |_| "browser_navigate".to_string(),
@@ -195,6 +268,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "Go back to the previous page",
             category: Category::Navigation,
             hidden: false,
+            batch_supported: true,
             args: &[],
             options: &[],
             tool_name_fn: |_| "browser_navigate_back".to_string(),
@@ -205,6 +279,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "Go forward to the next page",
             category: Category::Navigation,
             hidden: false,
+            batch_supported: true,
             args: &[],
             options: &[],
             tool_name_fn: |_| "browser_navigate_forward".to_string(),
@@ -215,6 +290,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "Reload the current page",
             category: Category::Navigation,
             hidden: false,
+            batch_supported: true,
             args: &[],
             options: &[],
             tool_name_fn: |_| "browser_reload".to_string(),
@@ -223,40 +299,45 @@ pub fn all_commands() -> Vec<CommandDef> {
         // ---- Keyboard ----
         CommandDef {
             name: "press",
-            description: "Press a key on the keyboard, `a`, `ArrowLeft`",
+            description: "Press a key on the focused element or an optional target ref, `a`, `ArrowLeft`",
             category: Category::Keyboard,
             hidden: false,
+            batch_supported: true,
             args: &[
-                ArgDef { name: "ref", description: "CSS selector or element reference to receive the key press", optional: false },
                 ArgDef { name: "key", description: "Name of the key to press or a character to generate, such as `ArrowLeft` or `a`", optional: false },
+                ArgDef { name: "ref", description: "Optional CSS selector or element reference to receive the key press", optional: true },
             ],
             options: &[],
             tool_name_fn: |_| "browser_press_key".to_string(),
             tool_params_fn: |args| {
-                json!({
-                    "ref": get_str(args, "ref").unwrap_or_default(),
-                    "key": get_str(args, "key").unwrap_or_default(),
-                })
+                let (key, reference) = resolve_key_and_ref(args);
+                let mut params = json!({ "key": key });
+                if let Some(reference) = reference {
+                    params["ref"] = json!(reference);
+                }
+                params
             },
         },
         CommandDef {
             name: "type",
-            description: "Type text into editable element",
-            category: Category::Core,
+            description: "Type text into the focused element or an optional target ref",
+            category: Category::Keyboard,
             hidden: false,
+            batch_supported: true,
             args: &[
-                ArgDef { name: "ref", description: "CSS selector or element reference to type into", optional: false },
                 ArgDef { name: "text", description: "Text to type into the element", optional: false },
+                ArgDef { name: "ref", description: "Optional CSS selector or element reference to type into", optional: true },
             ],
             options: &[
                 OptionDef { name: "submit", description: "Whether to submit entered text (press Enter after)", is_bool: true },
             ],
             tool_name_fn: |_| "browser_press_sequentially".to_string(),
             tool_params_fn: |args| {
-                let mut p = json!({
-                    "ref": get_str(args, "ref").unwrap_or_default(),
-                    "text": get_str(args, "text").unwrap_or_default(),
-                });
+                let (text, reference) = resolve_text_and_ref(args);
+                let mut p = json!({ "text": text });
+                if let Some(reference) = reference {
+                    p["ref"] = json!(reference);
+                }
                 if let Some(submit) = get_bool(args, "submit") {
                     p["submit"] = json!(submit);
                 }
@@ -268,6 +349,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "Press a key down on the keyboard",
             category: Category::Keyboard,
             hidden: false,
+            batch_supported: true,
             args: &[ArgDef { name: "key", description: "Name of the key to press", optional: false }],
             options: &[],
             tool_name_fn: |_| "browser_keydown".to_string(),
@@ -278,6 +360,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "Press a key up on the keyboard",
             category: Category::Keyboard,
             hidden: false,
+            batch_supported: true,
             args: &[ArgDef { name: "key", description: "Name of the key to press", optional: false }],
             options: &[],
             tool_name_fn: |_| "browser_keyup".to_string(),
@@ -289,6 +372,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "Move mouse to a given position",
             category: Category::Mouse,
             hidden: false,
+            batch_supported: true,
             args: &[
                 ArgDef { name: "x", description: "X coordinate", optional: false },
                 ArgDef { name: "y", description: "Y coordinate", optional: false },
@@ -307,6 +391,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "Press mouse down",
             category: Category::Mouse,
             hidden: false,
+            batch_supported: true,
             args: &[ArgDef { name: "button", description: "Button to press, defaults to left", optional: true }],
             options: &[],
             tool_name_fn: |_| "browser_mouse_down".to_string(),
@@ -321,6 +406,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "Press mouse up",
             category: Category::Mouse,
             hidden: false,
+            batch_supported: true,
             args: &[ArgDef { name: "button", description: "Button to press, defaults to left", optional: true }],
             options: &[],
             tool_name_fn: |_| "browser_mouse_up".to_string(),
@@ -335,6 +421,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "Scroll mouse wheel",
             category: Category::Mouse,
             hidden: false,
+            batch_supported: true,
             args: &[
                 // Note: the argument names and server parameter names are intentionally
                 // cross-mapped to match the behaviour of the TypeScript browser4-cli:
@@ -356,8 +443,9 @@ pub fn all_commands() -> Vec<CommandDef> {
         CommandDef {
             name: "click",
             description: "Perform click on a web page",
-            category: Category::Core,
+            category: Category::Mouse,
             hidden: false,
+            batch_supported: true,
             args: &[
                 ArgDef { name: "ref", description: "Exact target element reference from the page snapshot", optional: false },
                 ArgDef { name: "button", description: "Button to click, defaults to left", optional: true },
@@ -376,8 +464,9 @@ pub fn all_commands() -> Vec<CommandDef> {
         CommandDef {
             name: "dblclick",
             description: "Perform double click on a web page",
-            category: Category::Core,
+            category: Category::Mouse,
             hidden: false,
+            batch_supported: true,
             args: &[
                 ArgDef { name: "ref", description: "Exact target element reference from the page snapshot", optional: false },
                 ArgDef { name: "button", description: "Button to click, defaults to left", optional: true },
@@ -399,8 +488,9 @@ pub fn all_commands() -> Vec<CommandDef> {
         CommandDef {
             name: "drag",
             description: "Perform drag and drop between two elements",
-            category: Category::Core,
+            category: Category::Mouse,
             hidden: false,
+            batch_supported: true,
             args: &[
                 ArgDef { name: "startRef", description: "Exact source element reference from the page snapshot", optional: false },
                 ArgDef { name: "endRef", description: "Exact target element reference from the page snapshot", optional: false },
@@ -417,8 +507,9 @@ pub fn all_commands() -> Vec<CommandDef> {
         CommandDef {
             name: "fill",
             description: "Fill text into editable element",
-            category: Category::Core,
+            category: Category::Keyboard,
             hidden: false,
+            batch_supported: true,
             args: &[
                 ArgDef { name: "ref", description: "Exact target element reference from the page snapshot", optional: false },
                 ArgDef { name: "text", description: "Text to fill into the element", optional: false },
@@ -441,8 +532,9 @@ pub fn all_commands() -> Vec<CommandDef> {
         CommandDef {
             name: "hover",
             description: "Hover over element on page",
-            category: Category::Core,
+            category: Category::Mouse,
             hidden: false,
+            batch_supported: true,
             args: &[ArgDef { name: "ref", description: "Exact target element reference from the page snapshot", optional: false }],
             options: &[],
             tool_name_fn: |_| "browser_hover".to_string(),
@@ -453,6 +545,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "Select an option in a dropdown",
             category: Category::Core,
             hidden: false,
+            batch_supported: true,
             args: &[
                 ArgDef { name: "ref", description: "Exact target element reference from the page snapshot", optional: false },
                 ArgDef { name: "val", description: "Value to select in the dropdown", optional: false },
@@ -469,6 +562,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "Upload one or multiple files",
             category: Category::Core,
             hidden: false,
+            batch_supported: true,
             args: &[
                 ArgDef { name: "ref", description: "CSS selector or element reference for the file input", optional: false },
                 ArgDef { name: "file", description: "The absolute paths to the files to upload", optional: false },
@@ -485,6 +579,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "Check a checkbox or radio button",
             category: Category::Core,
             hidden: false,
+            batch_supported: true,
             args: &[ArgDef { name: "ref", description: "Exact target element reference from the page snapshot", optional: false }],
             options: &[],
             tool_name_fn: |_| "browser_check".to_string(),
@@ -495,6 +590,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "Uncheck a checkbox or radio button",
             category: Category::Core,
             hidden: false,
+            batch_supported: true,
             args: &[ArgDef { name: "ref", description: "Exact target element reference from the page snapshot", optional: false }],
             options: &[],
             tool_name_fn: |_| "browser_uncheck".to_string(),
@@ -505,6 +601,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "Capture page snapshot to obtain element ref",
             category: Category::Core,
             hidden: false,
+            batch_supported: true,
             args: &[],
             options: &[
                 OptionDef { name: "filename", description: "Save snapshot to file instead of returning it in the response", is_bool: false },
@@ -521,6 +618,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "Evaluate JavaScript expression on page or element",
             category: Category::Core,
             hidden: false,
+            batch_supported: true,
             args: &[
                 ArgDef { name: "expression", description: "JavaScript expression or function to evaluate", optional: false },
                 ArgDef { name: "ref", description: "Optional CSS selector or snapshot ref (for example e5)", optional: true },
@@ -537,7 +635,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "console",
             description: "List console messages",
             category: Category::DevTools,
-            hidden: false,
+            hidden: true,
+            batch_supported: false,
             args: &[
                 ArgDef { name: "min-level", description: "Level of the console messages to return. Defaults to \"info\"", optional: true },
             ],
@@ -566,6 +665,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "Accept a dialog",
             category: Category::Core,
             hidden: false,
+            batch_supported: true,
             args: &[ArgDef { name: "prompt", description: "The text of the prompt in case of a prompt dialog", optional: true }],
             options: &[],
             tool_name_fn: |_| "browser_handle_dialog".to_string(),
@@ -580,6 +680,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "Dismiss a dialog",
             category: Category::Core,
             hidden: false,
+            batch_supported: true,
             args: &[],
             options: &[],
             tool_name_fn: |_| "browser_handle_dialog".to_string(),
@@ -590,6 +691,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "Resize the browser window",
             category: Category::Core,
             hidden: false,
+            batch_supported: true,
             args: &[
                 ArgDef { name: "w", description: "Width of the browser window", optional: false },
                 ArgDef { name: "h", description: "Height of the browser window", optional: false },
@@ -608,6 +710,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "Delete session data",
             category: Category::Core,
             hidden: false,
+            batch_supported: false,
             args: &[],
             options: &[],
             tool_name_fn: |_| String::new(),
@@ -619,6 +722,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "Screenshot of the current page or element",
             category: Category::Export,
             hidden: false,
+            batch_supported: true,
             args: &[ArgDef { name: "ref", description: "Exact target element reference from the page snapshot", optional: true }],
             options: &[
                 OptionDef { name: "filename", description: "File name to save the screenshot to", is_bool: false },
@@ -638,6 +742,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "Save page as PDF",
             category: Category::Export,
             hidden: false,
+            batch_supported: true,
             args: &[],
             options: &[
                 OptionDef { name: "filename", description: "File name to save the pdf to", is_bool: false },
@@ -655,6 +760,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "List all tabs",
             category: Category::Tabs,
             hidden: false,
+            batch_supported: true,
             args: &[],
             options: &[],
             tool_name_fn: |_| "browser_tabs".to_string(),
@@ -665,6 +771,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "Create a new tab",
             category: Category::Tabs,
             hidden: false,
+            batch_supported: true,
             args: &[ArgDef { name: "url", description: "The URL to navigate to in the new tab", optional: true }],
             options: &[],
             tool_name_fn: |_| "browser_tabs".to_string(),
@@ -679,12 +786,13 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "Close a browser tab",
             category: Category::Tabs,
             hidden: false,
-            args: &[ArgDef { name: "tabId", description: "Tab ID. If omitted, current tab is closed.", optional: true }],
+            batch_supported: true,
+            args: &[ArgDef { name: "index", description: "Zero-based tab index. If omitted, current tab is closed.", optional: true }],
             options: &[],
             tool_name_fn: |_| "browser_tabs".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({ "action": "close" });
-                if let Some(tab_id) = get_opt_str(args, "tabId") { p["tabId"] = json!(tab_id); }
+                if let Some(index) = args.get("index") { p["index"] = index.clone(); }
                 p
             },
         },
@@ -693,13 +801,14 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "Select a browser tab",
             category: Category::Tabs,
             hidden: false,
-            args: &[ArgDef { name: "tabId", description: "Tab ID", optional: false }],
+            batch_supported: true,
+            args: &[ArgDef { name: "index", description: "Zero-based tab index", optional: false }],
             options: &[],
             tool_name_fn: |_| "browser_tabs".to_string(),
             tool_params_fn: |args| {
                 json!({
                     "action": "select",
-                    "tabId": get_str(args, "tabId").unwrap_or_default(),
+                    "index": args.get("index").cloned().unwrap_or_default(),
                 })
             },
         },
@@ -709,6 +818,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             description: "List browser sessions",
             category: Category::Browsers,
             hidden: false,
+            batch_supported: false,
             args: &[],
             options: &[
                 OptionDef { name: "all", description: "List all browser sessions across all workspaces", is_bool: true },
@@ -718,9 +828,10 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "close-all",
-            description: "Close all browser sessions",
+            description: "Close all browser sessions without stopping the Browser4 backend",
             category: Category::Browsers,
             hidden: false,
+            batch_supported: false,
             args: &[],
             options: &[],
             tool_name_fn: |_| String::new(),
@@ -728,9 +839,10 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "kill-all",
-            description: "Forcefully kill all browser sessions (for stale/zombie processes)",
+            description: "Forcefully stop the Browser4 backend and kill Browser4 browser processes",
             category: Category::Browsers,
             hidden: false,
+            batch_supported: false,
             args: &[],
             options: &[],
             tool_name_fn: |_| String::new(),
@@ -741,7 +853,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "extract",
             description: "Extract structured data from the current page",
             category: Category::Agent,
-            hidden: false,
+            hidden: true,
+            batch_supported: false,
             args: &[ArgDef { name: "instruction", description: "What data to extract, e.g. 'product name, price, ratings'", optional: false }],
             options: &[
                 OptionDef { name: "schema", description: "JSON schema to constrain the extracted data structure", is_bool: false },
@@ -757,7 +870,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "summarize",
             description: "Summarize page content using AI",
             category: Category::Agent,
-            hidden: false,
+            hidden: true,
+            batch_supported: false,
             args: &[ArgDef { name: "instruction", description: "Summarization instruction, e.g. 'summarize the product reviews'", optional: true }],
             options: &[
                 OptionDef { name: "selector", description: "CSS selector to limit the scope of summarization", is_bool: false },
@@ -774,7 +888,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "agent-run",
             description: "Run an autonomous agent task (async, returns task ID)",
             category: Category::Agent,
-            hidden: false,
+            hidden: true,
+            batch_supported: false,
             args: &[ArgDef { name: "task", description: "Natural language task for the agent to execute", optional: false }],
             options: &[],
             tool_name_fn: |_| "command_run".to_string(),
@@ -786,7 +901,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "agent-status",
             description: "Check the status of a running agent task",
             category: Category::Agent,
-            hidden: false,
+            hidden: true,
+            batch_supported: false,
             args: &[ArgDef { name: "id", description: "Task ID returned by agent-run", optional: false }],
             options: &[],
             tool_name_fn: |_| "command_status".to_string(),
@@ -798,7 +914,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "agent-result",
             description: "Get the result of a completed agent task",
             category: Category::Agent,
-            hidden: false,
+            hidden: true,
+            batch_supported: false,
             args: &[ArgDef { name: "id", description: "Task ID returned by agent-run", optional: false }],
             options: &[],
             tool_name_fn: |_| "command_result".to_string(),
@@ -811,7 +928,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "co-create",
             description: "Create a collective session with parallel browser contexts",
             category: Category::Collective,
-            hidden: false,
+            hidden: true,
+            batch_supported: false,
             args: &[],
             options: &[
                 OptionDef { name: "profile-mode", description: "Browser profile mode (temporary, default, system_default, prototype)", is_bool: false },
@@ -833,7 +951,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "co-submit",
             description: "Submit URL(s) or tasks to the active collective session",
             category: Category::Collective,
-            hidden: false,
+            hidden: true,
+            batch_supported: false,
             args: &[ArgDef { name: "url", description: "URL or task to submit", optional: true }],
             options: &[
                 OptionDef { name: "seed-file", description: "File containing URLs to submit, one per line", is_bool: false },
@@ -860,7 +979,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "co-scrape",
             description: "Scrape data from a URL using CSS selectors",
             category: Category::Collective,
-            hidden: false,
+            hidden: true,
+            batch_supported: false,
             args: &[ArgDef { name: "url", description: "URL to scrape", optional: false }],
             options: &[
                 OptionDef { name: "selector", description: "CSS selector to extract elements", is_bool: false },
@@ -886,7 +1006,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "co-status",
             description: "Check the status of a collective task",
             category: Category::Collective,
-            hidden: false,
+            hidden: true,
+            batch_supported: false,
             args: &[ArgDef { name: "id", description: "Task ID returned by co submit or co scrape", optional: false }],
             options: &[],
             tool_name_fn: |_| "command_status".to_string(),
@@ -898,7 +1019,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "co-result",
             description: "Get the result of a completed collective task",
             category: Category::Collective,
-            hidden: false,
+            hidden: true,
+            batch_supported: false,
             args: &[ArgDef { name: "id", description: "Task ID returned by co submit or co scrape", optional: false }],
             options: &[],
             tool_name_fn: |_| "command_result".to_string(),
@@ -986,6 +1108,54 @@ mod tests {
         let args = HashMap::new();
         assert!((cmd.tool_name_fn)(&args).is_empty());
         assert_eq!((cmd.tool_params_fn)(&args), json!({}));
+    }
+
+    #[test]
+    fn test_press_params_use_key_first_order() {
+        let map = commands_map();
+        let cmd = map.get("press").unwrap();
+        let mut args = HashMap::new();
+        args.insert("_".to_string(), json!(["press", "Enter", "#search"]));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["key"], "Enter");
+        assert_eq!(params["ref"], "#search");
+    }
+
+    #[test]
+    fn test_press_params_keep_legacy_ref_first_order() {
+        let map = commands_map();
+        let cmd = map.get("press").unwrap();
+        let mut args = HashMap::new();
+        args.insert("_".to_string(), json!(["press", "#search", "Enter"]));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["key"], "Enter");
+        assert_eq!(params["ref"], "#search");
+    }
+
+    #[test]
+    fn test_type_params_use_text_first_order() {
+        let map = commands_map();
+        let cmd = map.get("type").unwrap();
+        let mut args = HashMap::new();
+        args.insert("_".to_string(), json!(["type", "hello world", "#search"]));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["text"], "hello world");
+        assert_eq!(params["ref"], "#search");
+    }
+
+    #[test]
+    fn test_type_params_keep_legacy_ref_first_order() {
+        let map = commands_map();
+        let cmd = map.get("type").unwrap();
+        let mut args = HashMap::new();
+        args.insert("_".to_string(), json!(["type", "#search", "hello world"]));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["text"], "hello world");
+        assert_eq!(params["ref"], "#search");
     }
 
     #[test]
@@ -1238,27 +1408,27 @@ mod tests {
     }
 
     #[test]
-    fn test_tab_select_uses_tab_id_parameter() {
+    fn test_tab_select_uses_index_parameter() {
         let map = commands_map();
         let cmd = map.get("tab-select").unwrap();
         let mut args = HashMap::new();
-        args.insert("tabId".to_string(), json!("tab-123"));
+        args.insert("index".to_string(), json!(1));
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["action"], json!("select"));
-        assert_eq!(params["tabId"], json!("tab-123"));
-        assert!(params.get("index").is_none());
+        assert_eq!(params["index"], json!(1));
+        assert!(params.get("tabId").is_none());
     }
 
     #[test]
-    fn test_tab_close_uses_optional_tab_id_parameter() {
+    fn test_tab_close_uses_optional_index_parameter() {
         let map = commands_map();
         let cmd = map.get("tab-close").unwrap();
         let mut args = HashMap::new();
-        args.insert("tabId".to_string(), json!("tab-123"));
+        args.insert("index".to_string(), json!(1));
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["action"], json!("close"));
-        assert_eq!(params["tabId"], json!("tab-123"));
-        assert!(params.get("index").is_none());
+        assert_eq!(params["index"], json!(1));
+        assert!(params.get("tabId").is_none());
     }
 
     #[test]
@@ -1274,5 +1444,25 @@ mod tests {
         assert!(collective_cmds.contains(&"co-scrape"));
         assert!(collective_cmds.contains(&"co-status"));
         assert!(collective_cmds.contains(&"co-result"));
+    }
+
+    #[test]
+    fn test_advanced_commands_are_hidden_from_global_help() {
+        let map = commands_map();
+        for name in [
+            "console",
+            "extract",
+            "summarize",
+            "agent-run",
+            "agent-status",
+            "agent-result",
+            "co-create",
+            "co-submit",
+            "co-scrape",
+            "co-status",
+            "co-result",
+        ] {
+            assert!(map.get(name).unwrap().hidden, "{name} should stay hidden");
+        }
     }
 }

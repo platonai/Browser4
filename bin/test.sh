@@ -25,6 +25,7 @@ print_usage() {
   echo "  it          Run integration tests"
   echo "  e2e         Run end-to-end tests"
   echo "  cli         Run Rust Browser4 CLI tests from sdks/browser4-cli"
+  echo "  mocksite    Launch MockSiteBoot from browser4-tests/browser4-rest-tests"
   echo "  rest        Run REST module tests"
   echo "  skills      Run skills-focused agentic tests"
   echo "  mcp         Run MCP-focused agentic tests"
@@ -37,6 +38,7 @@ print_usage() {
   echo "  test.sh e2e                        # Run end-to-end tests"
   echo "  test.sh cli                        # Run Browser4 CLI tests"
   echo "  test.sh cli -- --nocapture         # Pass extra cargo test args"
+  echo "  test.sh mocksite -Dmock.site.port=18080"
   echo "  test.sh skills                     # Run skills-focused agentic tests"
   echo "  test.sh mcp                        # Run MCP-focused agentic tests"
   echo "  test.sh browser4                   # Run all Browser4 main tests"
@@ -47,7 +49,7 @@ print_usage() {
 
 exit_unknown_test_type() {
   local test_type=$1
-  echo "Error: Unknown test type '$test_type'. Valid test types: fast, it, e2e, cli, rest, skills, mcp, browser4, b4." >&2
+  echo "Error: Unknown test type '$test_type'. Valid test types: fast, it, e2e, cli, mocksite, rest, skills, mcp, browser4, b4." >&2
   exit 1
 }
 
@@ -167,10 +169,70 @@ run_browser4_cli_tests() {
   echo "=========================================="
 }
 
-KnownTestTypes=(fast it e2e cli browser4-cli rest skills mcp browser4 b4)
+run_mocksiteboot() {
+  local mocksite_module_dir="$repo_root/browser4-tests/browser4-rest-tests"
+  local -a pass_through_args=()
+  local -a mocksite_jvm_args=()
+  local -a mvn_args=(
+    "-DskipTests"
+    "-P=-examples"
+  )
+
+  echo "=========================================="
+  echo "Launching MockSiteBoot..."
+  echo "=========================================="
+
+  if [[ ! -d "$mocksite_module_dir" ]]; then
+    echo "Error: Mock site module not found at $mocksite_module_dir" >&2
+    exit 1
+  fi
+
+  for arg in "${AdditionalMvnArgs[@]}"; do
+    if [[ "$arg" == -Dmock.site.* ]]; then
+      mocksite_jvm_args+=("$arg")
+    else
+      pass_through_args+=("$arg")
+    fi
+  done
+
+  mvn_args+=("${pass_through_args[@]}")
+  if [[ ${#mocksite_jvm_args[@]} -gt 0 ]]; then
+    has_jvm_args=false
+    for arg in "${pass_through_args[@]}"; do
+      if [[ "$arg" == -Dspring-boot.run.jvmArguments=* ]]; then
+        has_jvm_args=true
+        break
+      fi
+    done
+
+    if [[ "$has_jvm_args" == "false" ]]; then
+      local joined_jvm_args=""
+      printf -v joined_jvm_args '%s ' "${mocksite_jvm_args[@]}"
+      joined_jvm_args=${joined_jvm_args% }
+      mvn_args+=("-Dspring-boot.run.jvmArguments=$joined_jvm_args")
+    fi
+  fi
+
+  mvn_args+=("package" "spring-boot:run")
+
+  pushd "$mocksite_module_dir" > /dev/null || exit 1
+  "$repo_root/mvnw" "${mvn_args[@]}"
+  local exit_code=$?
+  popd > /dev/null || true
+  if [[ $exit_code -ne 0 ]]; then
+    echo ""
+    echo "=========================================="
+    echo "❌ MockSiteBoot failed with exit code $exit_code"
+    echo "=========================================="
+    exit $exit_code
+  fi
+}
+
+KnownTestTypes=(fast it e2e cli browser4-cli mocksite rest skills mcp browser4 b4)
 TestTypes=()
 MavenTests=()
 CLITests=()
+LaunchTargets=()
 AdditionalMvnArgs=()
 ParsingTestTypes=true
 
@@ -183,7 +245,7 @@ while [[ $# -gt 0 ]]; do
     -h|-help|--help)
       print_usage
       ;;
-    fast|it|e2e|cli|browser4-cli|rest|skills|mcp|browser4|b4)
+    fast|it|e2e|cli|browser4-cli|mocksite|rest|skills|mcp|browser4|b4)
       if [[ "$ParsingTestTypes" == "true" ]]; then
         TestTypes+=("$1")
       else
@@ -210,6 +272,8 @@ for type in "${TestTypes[@]}"; do
     MavenTests+=(fast it e2e rest)
   elif [[ "$type" == "cli" || "$type" == "browser4-cli" ]]; then
     CLITests+=("$type")
+  elif [[ "$type" == "mocksite" ]]; then
+    LaunchTargets+=("$type")
   else
     MavenTests+=("$type")
   fi
@@ -247,6 +311,27 @@ for type in "${CLITests[@]}"; do
 done
 CLITests=("${UniqueCLITests[@]}")
 
+UniqueLaunchTargets=()
+for type in "${LaunchTargets[@]}"; do
+  found=false
+  for known in "${UniqueLaunchTargets[@]}"; do
+    if [[ "$known" == "$type" ]]; then
+      found=true
+      break
+    fi
+  done
+
+  if [[ "$found" == "false" ]]; then
+    UniqueLaunchTargets+=("$type")
+  fi
+done
+LaunchTargets=("${UniqueLaunchTargets[@]}")
+
+if [[ ${#LaunchTargets[@]} -gt 0 && ( ${#MavenTests[@]} -gt 0 || ${#CLITests[@]} -gt 0 || ${#LaunchTargets[@]} -gt 1 ) ]]; then
+  echo "Error: mocksite must be run by itself. Pass any Maven properties after it, for example: test.sh mocksite -Dmock.site.port=18080" >&2
+  exit 1
+fi
+
 if [[ ${#MavenTests[@]} -gt 0 ]]; then
   run_maven_tests "${MavenTests[@]}"
 fi
@@ -255,6 +340,14 @@ for test_type in "${CLITests[@]}"; do
   case "$test_type" in
     cli|browser4-cli)
       run_browser4_cli_tests
+      ;;
+  esac
+done
+
+for launch_target in "${LaunchTargets[@]}"; do
+  case "$launch_target" in
+    mocksite)
+      run_mocksiteboot
       ;;
   esac
 done

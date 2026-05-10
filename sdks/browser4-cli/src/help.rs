@@ -45,6 +45,11 @@ pub fn generate_help() -> String {
     lines.push("\nGlobal options:".to_string());
     lines.push(format_with_gap("  --help [command]", "print help", 30));
     lines.push(format_with_gap("  --version", "print version", 30));
+    lines.push(format_with_gap(
+        "  --use-maven-startup",
+        "opt in to local maven spring-boot:run startup",
+        30,
+    ));
 
     lines.join("\n")
 }
@@ -81,7 +86,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             } else {
                 format!("  <{}>", arg.name)
             };
-            lines.push(format_with_gap(&label, &arg.description.to_lowercase(), 30));
+            lines.push(format_with_gap(&label, arg.description, 30));
         }
     }
 
@@ -89,7 +94,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("Options:".to_string());
         for opt in cmd.options {
             let label = format!("  --{}", opt.name);
-            lines.push(format_with_gap(&label, &opt.description.to_lowercase(), 30));
+            lines.push(format_with_gap(&label, opt.description, 30));
         }
     }
 
@@ -140,7 +145,7 @@ fn generate_help_entry(cmd: &CommandDef) -> String {
 
     let prefix = format!("  {} {}", cmd.name, args_text);
     let prefix = prefix.trim_end();
-    format_with_gap(prefix, &cmd.description.to_lowercase(), 30)
+    format_with_gap(prefix, cmd.description, 30)
 }
 
 fn format_with_gap(prefix: &str, text: &str, threshold: usize) -> String {
@@ -160,18 +165,17 @@ mod tests {
     fn test_generate_help_contains_commands() {
         let help = generate_help();
         assert!(help.contains("goto"));
-        assert!(help.contains("batch"));
         assert!(help.contains("click"));
         assert!(help.contains("snapshot"));
+        assert!(help.contains("ArrowLeft"));
+        assert!(help.contains("Evaluate JavaScript expression on page or element"));
+        assert!(help.contains("--use-maven-startup"));
         assert!(help.contains("Core:"));
-        // assert!(help.contains("Agent:"));
-        // assert!(help.contains("Collective:"));
-        // assert!(help.contains("extract"));
-        // assert!(help.contains("summarize"));
-        // assert!(help.contains("agent-run"));
-        // assert!(help.contains("co-create"));
-        // assert!(help.contains("co-submit"));
-        // assert!(help.contains("co-scrape"));
+        assert!(!help.contains("  batch "));
+        assert!(!help.contains("  console"));
+        assert!(!help.contains("  extract"));
+        assert!(!help.contains("  agent-run"));
+        assert!(!help.contains("  co-create"));
     }
 
     #[test]
@@ -248,6 +252,7 @@ mod tests {
         assert!(help.contains("--max-open-tabs"));
         assert!(help.contains("--max-browser-contexts"));
         assert!(help.contains("--display-mode"));
+        assert!(help.contains("Display mode: GUI, HEADLESS, SUPERVISED"));
     }
 
     #[test]
@@ -270,5 +275,18 @@ mod tests {
         assert!(help.contains("--selector"));
         assert!(help.contains("--attribute"));
         assert!(help.contains("--output"));
+    }
+
+    #[test]
+    fn test_generate_command_help_preserves_argument_casing() {
+        let cmds = all_commands();
+
+        let press = cmds.iter().find(|c| c.name == "press").unwrap();
+        let press_help = generate_command_help(press);
+        assert!(press_help.contains("`ArrowLeft`"));
+
+        let eval = cmds.iter().find(|c| c.name == "eval").unwrap();
+        let eval_help = generate_command_help(eval);
+        assert!(eval_help.contains("JavaScript expression or function to evaluate"));
     }
 }

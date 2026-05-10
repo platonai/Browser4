@@ -16,7 +16,7 @@ import kotlin.test.assertTrue
 @Tag("E2ETest")
 class PulsarWebDriverScrollTests : WebDriverTestBase() {
 
-    override val webDriverService get() = FastWebDriverService(browserFactory)
+    override val webDriverService get() = FastWebDriverService(browserManager)
 
     @Test
     @DisplayName("test scrollBy")

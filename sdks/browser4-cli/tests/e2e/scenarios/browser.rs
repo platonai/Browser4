@@ -26,10 +26,46 @@ pub(super) fn test_session_lifecycle(ctx: &mut E2ECtx) {
     );
 }
 
-pub(super) fn test_navigation_and_storage(ctx: &mut E2ECtx) {
+pub(super) fn test_newly_opened_session_shows_active(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 
-    run_open_command(ctx);
+    let open_result = run_open_command(ctx);
+    assert!(
+        open_result.stdout.contains("Session opened:"),
+        "Expected 'Session opened:' in:\n{}",
+        open_result.stdout
+    );
+
+    let session_id = read_persisted_session_id(&ctx.state_dir);
+    let list_result = run_command(ctx, &["list"]);
+    let list_output = strip_snapshot_output(&list_result.stdout);
+    let session_line = list_output
+        .lines()
+        .find(|line| line.contains(&session_id))
+        .unwrap_or_else(|| {
+            panic!(
+                "Expected session id '{session_id}' in list output:\n{}",
+                list_output
+            )
+        });
+
+    assert!(
+        session_line.contains("Active"),
+        "Expected session line to contain 'Active':\n{}",
+        session_line
+    );
+    assert!(
+        !session_line.contains("Stale"),
+        "Expected session line not to contain 'Stale':\n{}",
+        session_line
+    );
+
+    run_command(ctx, &["close"]);
+}
+
+pub(super) fn test_navigation_and_storage(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
 
     let interactive_url = ctx.interactive_url();
     let other_url = ctx.other_url();
@@ -39,7 +75,7 @@ pub(super) fn test_navigation_and_storage(ctx: &mut E2ECtx) {
         ctx,
         "window.location.pathname",
         INTERACTIVE_PATH,
-        5_000,
+        2_000,
         "Expected to be on interactive path",
     );
 
@@ -48,7 +84,7 @@ pub(super) fn test_navigation_and_storage(ctx: &mut E2ECtx) {
         ctx,
         "document.title",
         OTHER_TITLE,
-        5_000,
+        2_000,
         "Expected other page title",
     );
 
@@ -57,7 +93,7 @@ pub(super) fn test_navigation_and_storage(ctx: &mut E2ECtx) {
         ctx,
         "window.location.pathname",
         INTERACTIVE_PATH,
-        5_000,
+        2_000,
         "Expected to be back on interactive path after go-back",
     );
 
@@ -66,7 +102,7 @@ pub(super) fn test_navigation_and_storage(ctx: &mut E2ECtx) {
         ctx,
         "window.location.pathname",
         OTHER_PATH,
-        5_000,
+        2_000,
         "Expected to be on other path after go-forward",
     );
 
@@ -75,7 +111,7 @@ pub(super) fn test_navigation_and_storage(ctx: &mut E2ECtx) {
         ctx,
         "document.title",
         OTHER_TITLE,
-        5_000,
+        2_000,
         "Expected other page title after reload",
     );
 
@@ -92,13 +128,14 @@ pub(super) fn test_navigation_and_storage(ctx: &mut E2ECtx) {
 
 pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
     open_resized_interactive_page(ctx);
 
-    run_command(ctx, &["type", "#type-target", "hello world"]);
+    run_command(ctx, &["type", "hello world", "#type-target"]);
     wait_for_state_or_abort(
         ctx,
         |s| s["typeValue"].as_str() == Some("hello world"),
-        5_000,
+        2_000,
         "Expected typeValue to become 'hello world' after type",
     );
 
@@ -106,22 +143,44 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
     wait_for_state_or_abort(
         ctx,
         |s| s["fillValue"].as_str() == Some("filled text"),
-        5_000,
+        2_000,
         "Expected fillValue to become 'filled text' after fill",
     );
 
-    let press_before = read_interactive_state(ctx);
-    let press_before_events = key_event_count(&press_before);
-    run_command(ctx, &["press", "#type-target", "!"]);
-    wait_for_state_or_abort(
-        ctx,
-        |s| {
-            s["typeValue"].as_str() == Some("hello world!")
-                && key_event_count(s) > press_before_events
-        },
-        5_000,
-        "Expected press to append '!' to typeValue and emit a key event",
-    );
+    for (key, expected_value) in [
+        ("!", "hello world!"),
+        ("?", "hello world!?"),
+        (":", "hello world!?:"),
+        ("+", "hello world!?:+"),
+        (")", "hello world!?:+)"),
+    ] {
+        let press_before = read_interactive_state(ctx);
+        let press_before_events = key_event_count(&press_before);
+        run_command(ctx, &["press", key, "#type-target"]);
+        wait_for_state_or_abort(
+            ctx,
+            |s| {
+                s["typeValue"].as_str() == Some(expected_value)
+                    && key_event_count(s) >= press_before_events + 2
+                    && s["keyEvents"]
+                        .as_array()
+                        .map(|events| {
+                            let new_events: Vec<_> = events
+                                .iter()
+                                .skip(press_before_events)
+                                .filter_map(|event| event.as_str())
+                                .collect();
+                            new_events.contains(&format!("down:{key}").as_str())
+                                && new_events.contains(&format!("up:{key}").as_str())
+                        })
+                        .unwrap_or(false)
+            },
+            2_000,
+            &format!(
+                "Expected press to append '{key}' to typeValue and emit down/up key events for '{key}'"
+            ),
+        );
+    }
 
     run_command(ctx, &["click", "#type-target"]);
     let keydown_before = key_event_count(&read_interactive_state(ctx));
@@ -136,7 +195,7 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
                     .and_then(|event| event.as_str())
                     == Some("down:Shift")
         },
-        5_000,
+        2_000,
         "Expected keydown to record a final 'down:Shift' key event",
     );
 
@@ -152,7 +211,7 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
                     .and_then(|event| event.as_str())
                     == Some("up:Shift")
         },
-        5_000,
+        2_000,
         "Expected keyup to record a final 'up:Shift' key event",
     );
 
@@ -160,7 +219,7 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
     wait_for_state_or_abort(
         ctx,
         |s| s["clickCount"].as_u64() == Some(1),
-        5_000,
+        2_000,
         "Expected clickCount to become 1 after click",
     );
 
@@ -168,7 +227,7 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
     wait_for_state_or_abort(
         ctx,
         |s| s["doubleClickCount"].as_u64() == Some(1),
-        5_000,
+        2_000,
         "Expected doubleClickCount to become 1 after dblclick",
     );
 
@@ -176,7 +235,7 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
     assume_wait_for_state(
         ctx,
         |s| s["hovered"].as_bool() == Some(true),
-        5_000,
+        2_000,
         "Expected hovered to become true after hover",
     );
 
@@ -187,7 +246,7 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
             s["dragStarted"].as_bool() == Some(true)
                 && s["dragDropped"].as_str() == Some("drag-source")
         },
-        5_000,
+        2_000,
         "Expected drag to start and drop drag-source onto the target",
     );
 
@@ -196,6 +255,7 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
 
 pub(super) fn test_eval_command(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
     open_resized_interactive_page(ctx);
 
     let title = eval_text(ctx, "document.title");
@@ -261,7 +321,8 @@ pub(super) fn test_agent_run_live_or_missing_llm_key(ctx: &mut E2ECtx) {
 
 pub(super) fn test_wait_for_state_failure_modes(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    open_interactive_page(ctx);
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    goto_interactive_page(ctx);
 
     let error = wait_for_state(
         ctx,
@@ -296,7 +357,7 @@ pub(super) fn test_wait_for_state_failure_modes(ctx: &mut E2ECtx) {
     wait_for_state_or_abort(
         ctx,
         |s| s["fillValue"].as_str() == Some("continued after error"),
-        5_000,
+        2_000,
         "Expected scenario to continue after ReturnError mode and update fillValue",
     );
 
@@ -305,13 +366,14 @@ pub(super) fn test_wait_for_state_failure_modes(ctx: &mut E2ECtx) {
 
 pub(super) fn test_form_controls_and_exports(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    open_interactive_page(ctx);
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    goto_interactive_page(ctx);
 
     run_command(ctx, &["select", "#select-target", "green"]);
     wait_for_state_or_abort(
         ctx,
         |s| s["selectValue"].as_str() == Some("green"),
-        5_000,
+        2_000,
         "Expected selectValue to become 'green' after select",
     );
 
@@ -319,7 +381,7 @@ pub(super) fn test_form_controls_and_exports(ctx: &mut E2ECtx) {
     wait_for_state_or_abort(
         ctx,
         |s| s["checkbox"].as_bool() == Some(true),
-        5_000,
+        2_000,
         "Expected checkbox to become true after check",
     );
 
@@ -327,7 +389,7 @@ pub(super) fn test_form_controls_and_exports(ctx: &mut E2ECtx) {
     wait_for_state_or_abort(
         ctx,
         |s| s["checkbox"].as_bool() == Some(false),
-        5_000,
+        2_000,
         "Expected checkbox to become false after uncheck",
     );
 
@@ -336,7 +398,7 @@ pub(super) fn test_form_controls_and_exports(ctx: &mut E2ECtx) {
     wait_for_state_or_abort(
         ctx,
         |s| s["uploadName"].as_str() == Some("upload.txt"),
-        5_000,
+        2_000,
         "Expected uploadName to become 'upload.txt' after upload",
     );
 
@@ -385,13 +447,14 @@ pub(super) fn test_form_controls_and_exports(ctx: &mut E2ECtx) {
 
 pub(super) fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
     open_resized_interactive_page(ctx);
 
     run_command(ctx, &["mousemove", "120", "120"]);
     wait_for_state_or_abort(
         ctx,
         |s| s["lastMouse"][0].as_i64() == Some(120) && s["lastMouse"][1].as_i64() == Some(120),
-        5_000,
+        2_000,
         "Expected mousemove to update lastMouse to [120, 120]",
     );
 
@@ -406,7 +469,7 @@ pub(super) fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
                 .as_u64()
                 .is_some_and(|value| value >= before_mouse_down + 1)
         },
-        5_000,
+        2_000,
         "Expected mousedown to increment mouseDownCount",
     );
 
@@ -421,7 +484,7 @@ pub(super) fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
                 .as_u64()
                 .is_some_and(|value| value >= before_mouse_up + 1)
         },
-        5_000,
+        2_000,
         "Expected mouseup to increment mouseUpCount",
     );
 
@@ -448,7 +511,7 @@ pub(super) fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
     let wheel_state = wait_for_state_or_abort(
         ctx,
         |s| s["lastWheel"][0].as_i64() == Some(160) && s["lastWheel"][1].as_i64() == Some(0),
-        5_000,
+        2_000,
         "Expected mousewheel to update lastWheel to [160, 0]",
     );
     assert!(
@@ -466,7 +529,7 @@ pub(super) fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
     wait_for_state_or_abort(
         ctx,
         |s| s["promptResult"].as_str() == Some("accepted by cli"),
-        5_000,
+        2_000,
         "Expected dialog-accept to set promptResult to 'accepted by cli'",
     );
 
@@ -479,7 +542,7 @@ pub(super) fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
     wait_for_state_or_abort(
         ctx,
         |s| s["confirmResult"].as_str() == Some("dismissed"),
-        5_000,
+        2_000,
         "Expected dialog-dismiss to set confirmResult to 'dismissed'",
     );
 
@@ -488,8 +551,9 @@ pub(super) fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
 
 pub(super) fn test_tab_commands(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
 
-    open_interactive_page(ctx);
+    goto_interactive_page(ctx);
     let interactive_url = ctx.interactive_url();
     let other_url = ctx.other_url();
 
@@ -512,9 +576,21 @@ pub(super) fn test_tab_commands(ctx: &mut E2ECtx) {
         "Expected other URL in updated tab-list"
     );
 
-    let other_tab_id = extract_tab_id(&tab_output, &other_url);
+    let other_tab_index = extract_tab_index(&tab_output, &other_url).to_string();
 
-    run_command(ctx, &["tab-select", &other_tab_id]);
-    run_command(ctx, &["tab-close", &other_tab_id]);
+    run_command(ctx, &["tab-select", &other_tab_index]);
+    let current_url = eval_text(ctx, "document.location.href");
+    assert!(
+        current_url.contains(&other_url),
+        "Expected tab-select {other_tab_index} to activate '{other_url}', got:\n{current_url}"
+    );
+
+    run_command(ctx, &["tab-close", &other_tab_index]);
+    let final_tabs = run_command(ctx, &["tab-list"]);
+    let final_tab_output = strip_snapshot_output(&final_tabs.stdout);
+    assert!(
+        !final_tab_output.contains(&other_url),
+        "Expected tab-close {other_tab_index} to remove '{other_url}' from tab-list:\n{final_tab_output}"
+    );
     run_command(ctx, &["close"]);
 }

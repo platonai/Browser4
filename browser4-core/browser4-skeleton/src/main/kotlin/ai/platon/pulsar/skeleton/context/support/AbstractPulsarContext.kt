@@ -15,11 +15,13 @@ import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.gora.generated.GWebPage
 import ai.platon.pulsar.persist.model.GoraWebPage
 import ai.platon.pulsar.skeleton.PulsarSettings
+import ai.platon.pulsar.skeleton.TaskLoops
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.common.urls.CombinedUrlNormalizer
 import ai.platon.pulsar.skeleton.common.urls.NormURL
 import ai.platon.pulsar.skeleton.context.PulsarContext
-import ai.platon.pulsar.skeleton.TaskLoops
+import ai.platon.pulsar.skeleton.session.AbstractPulsarSession
+import ai.platon.pulsar.skeleton.session.PulsarSession
 import ai.platon.pulsar.skeleton.workflow.common.FetchState
 import ai.platon.pulsar.skeleton.workflow.common.GlobalCache
 import ai.platon.pulsar.skeleton.workflow.common.GlobalCacheFactory
@@ -27,13 +29,10 @@ import ai.platon.pulsar.skeleton.workflow.component.BatchFetchComponent
 import ai.platon.pulsar.skeleton.workflow.component.LoadComponent
 import ai.platon.pulsar.skeleton.workflow.component.ParseComponent
 import ai.platon.pulsar.skeleton.workflow.component.UpdateComponent
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserFactory
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserFetcher
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserManager
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 import ai.platon.pulsar.skeleton.workflow.filter.ChainedUrlNormalizer
-import ai.platon.pulsar.skeleton.session.AbstractPulsarSession
-import ai.platon.pulsar.skeleton.session.PulsarSession
 import org.slf4j.LoggerFactory
 import org.springframework.beans.BeansException
 import org.springframework.beans.factory.BeanCreationException
@@ -164,8 +163,6 @@ abstract class AbstractPulsarContext(
     open val browserFetcher: BrowserFetcher get() = getBean()
 
     override val globalCache: GlobalCache get() = globalCacheFactory.globalCache
-
-    override val browserFactory: BrowserFactory get() = getBean()
 
     override val browserManager: BrowserManager get() = getBean()
 
@@ -572,7 +569,7 @@ abstract class AbstractPulsarContext(
                 // When running via exec:java or other process starter,
                 // Pulsar-related classes are unloaded as the process exits.
                 // warnForClose("Exception while closing context | $this", e)
-            }  catch (ignored: LinkageError) {
+            } catch (ignored: LinkageError) {
                 // This prevents NoClassDefFoundError when classes have been unloaded
                 // (e.g., when running via maven exec:java)
                 // ignored
@@ -591,7 +588,8 @@ abstract class AbstractPulsarContext(
     }
 
     protected open fun doClose0() {
-        logger.info("Closing context #{} with {} sessions, {} additional closables | {}",
+        logger.info(
+            "Closing context #{} with {} sessions, {} additional closables | {}",
             id,
             sessions.size,
             closableObjects.size,

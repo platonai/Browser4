@@ -203,7 +203,7 @@ abstract class AbstractPulsarSession(
     override fun createBoundDriver(): WebDriver {
         synchronized(context) {
             val mode = BrowserProfileMode.fromString(sessionConfig[BROWSER_CONTEXT_MODE])
-            val driver = context.browserFactory.launch(mode).newDriver()
+            val driver = context.browserManager.launch(mode).newDriver()
             bindDriver(driver)
             return driver
         }

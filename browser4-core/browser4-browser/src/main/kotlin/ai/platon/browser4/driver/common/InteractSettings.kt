@@ -75,88 +75,16 @@ data class InteractSettings constructor(
      * */
     var maxDelayMillis = 2000
 
-    /**
-     * Delay buckets used by interaction actions.
-     *
-     * - Unit: milliseconds (`ms`).
-     * - Value type: [IntRange], inclusive bounds (`first..last`).
-     * - Resolution order in runtime: specific `action` key -> `default` -> caller fallback.
-     * - The empty key `""` is kept as a compatibility fallback and is normalized to `default`.
-     *
-     * Known keys:
-     * - `gap`: general pacing between high-level actions/retries.
-     * - `click`: mouse down/up gap for click operations.
-     * - `delete`: delay used while clearing text (delete/backspace/shortcut presses).
-     * - `keyUpDown`: reserved bucket for key-up/key-down style actions.
-     * - `press`: key hold duration for single key press actions.
-     * - `type`: inter-character delay when typing text.
-     * - `fill`: post-fill pause after paste-like input.
-     * - `mouseWheel`: delay between consecutive wheel ticks.
-     * - `dragAndDrop`: delay inside drag-and-drop sequence.
-     * - `waitForNavigation`: polling interval while waiting for URL change.
-     * - `waitForSelector`: polling interval while waiting for selector existence.
-     * - `waitUntil`: generic polling interval bucket.
-     * - `default`: primary fallback bucket for unknown/missing keys.
-     * - `""`: secondary compatibility fallback bucket.
-     * */
-    val delayPolicy = mutableMapOf(
-        "gap" to 650..1100, // Used by AbstractWebDriver.gap(): pacing between high-level actions and retry loops.
-        "click" to 90..180, // Used by PulsarWebDriver.click(): Mouse.click delay between mousedown/mouseup (and between multi-click cycles).
-        "delete" to 80..180, // Used by PulsarWebDriver.clear(): per delete/backspace or press("Control+A"/"Delete") key press delay.
-        "keyUpDown" to 70..170, // Reserved key-up/key-down bucket; currently not directly referenced by PulsarWebDriver actions.
-        "press" to 120..260, // Used by PulsarWebDriver.press(): key hold duration passed to Keyboard.press (which enforces >= 60 ms).
-        "type" to 90..240, // Used by PulsarWebDriver.type(): inter-character delay passed to Keyboard.type.
-        "fill" to 130..280, // Used by PulsarWebDriver.fill(): post-fill pause via gap("fill") after paste-like typing.
-        "mouseWheel" to 180..420, // Used by mouseWheelDown/mouseWheelUp: delay between repeated wheel ticks.
-        "dragAndDrop" to 260..650, // Used by dragAndDrop(): delay between dragOver and drop in Mouse.dragAndDrop.
-        "waitForNavigation" to 250..700, // Used by waitUntil("waitForNavigation", ...): polling interval while waiting URL change.
-        "waitForSelector" to 200..600, // Used by waitUntil("waitForSelector", ...): polling interval while waiting element existence.
-        "waitUntil" to 220..650, // Intended generic waitUntil polling bucket; current default overload uses key "waitUtil" and falls back.
-        "default" to 200..600, // Primary fallback for unknown/missing action keys in randomDelayMillis(action).
-        "" to 200..600 // Secondary fallback key, normalized to the same value as "default".
-    )
-
-    private val defaultDelayPolicyTemplate = delayPolicy.toMap()
-
+    val delayPolicy = DEFAULT_DELAY_POLICY.toMutableMap()
 
     /**
      * Apply a predefined delay profile for different crawling scenarios.
      * */
     fun applyDelayPreset(preset: DelayPreset): InteractSettings {
         val presetPolicy = when (preset) {
-            DelayPreset.FAST -> mapOf(
-                "gap" to 350..700,
-                "click" to 60..120,
-                "delete" to 50..120,
-                "keyUpDown" to 50..120,
-                "press" to 90..180,
-                "type" to 60..160,
-                "fill" to 80..180,
-                "mouseWheel" to 120..260,
-                "dragAndDrop" to 180..420,
-                "waitForNavigation" to 120..380,
-                "waitForSelector" to 100..320,
-                "waitUntil" to 120..360,
-                "default" to 120..320,
-                "" to 120..320
-            )
-            DelayPreset.DEFAULT -> defaultDelayPolicyTemplate
-            DelayPreset.STEALTH -> mapOf(
-                "gap" to 900..1600,
-                "click" to 120..260,
-                "delete" to 110..260,
-                "keyUpDown" to 90..220,
-                "press" to 180..360,
-                "type" to 140..320,
-                "fill" to 220..450,
-                "mouseWheel" to 260..700,
-                "dragAndDrop" to 420..1100,
-                "waitForNavigation" to 350..1100,
-                "waitForSelector" to 280..900,
-                "waitUntil" to 300..900,
-                "default" to 280..900,
-                "" to 280..900
-            )
+            DelayPreset.FAST -> FAST_DELAY_POLICY
+            DelayPreset.DEFAULT -> DEFAULT_DELAY_POLICY
+            DelayPreset.STEALTH -> STEALTH_DELAY_POLICY
         }
 
         delayPolicy.putAll(presetPolicy)
@@ -415,6 +343,81 @@ data class InteractSettings constructor(
         private val OBJECT_CACHE = ConcurrentHashMap<String, InteractSettings>()
 
         /**
+         * Delay buckets used by interaction actions.
+         *
+         * - Unit: milliseconds (`ms`).
+         * - Value type: [IntRange], inclusive bounds (`first..last`).
+         * - Resolution order in runtime: specific `action` key -> `default` -> caller fallback.
+         * - The empty key `""` is kept as a compatibility fallback and is normalized to `default`.
+         *
+         * Known keys:
+         * - `gap`: general pacing between high-level actions/retries.
+         * - `click`: mouse down/up gap for click operations.
+         * - `delete`: delay used while clearing text (delete/backspace/shortcut presses).
+         * - `keyUpDown`: reserved bucket for key-up/key-down style actions.
+         * - `press`: key hold duration for single key press actions.
+         * - `type`: inter-character delay when typing text.
+         * - `fill`: post-fill pause after paste-like input.
+         * - `mouseWheel`: delay between consecutive wheel ticks.
+         * - `dragAndDrop`: delay inside drag-and-drop sequence.
+         * - `waitForNavigation`: polling interval while waiting for URL change.
+         * - `waitForSelector`: polling interval while waiting for selector existence.
+         * - `waitUntil`: generic polling interval bucket.
+         * - `default`: primary fallback bucket for unknown/missing keys.
+         * - `""`: secondary compatibility fallback bucket.
+         * */
+        val DEFAULT_DELAY_POLICY = mapOf(
+            "gap" to 650..1100, // Used by AbstractWebDriver.gap(): pacing between high-level actions and retry loops.
+            "click" to 90..180, // Used by PulsarWebDriver.click(): Mouse.click delay between mousedown/mouseup (and between multi-click cycles).
+            "delete" to 80..180, // Used by PulsarWebDriver.clear(): per delete/backspace or press("Control+A"/"Delete") key press delay.
+            "keyUpDown" to 70..170, // Reserved key-up/key-down bucket; currently not directly referenced by PulsarWebDriver actions.
+            "press" to 120..260, // Used by PulsarWebDriver.press(): key hold duration passed to Keyboard.press (which enforces >= 60 ms).
+            "type" to 90..240, // Used by PulsarWebDriver.type(): inter-character delay passed to Keyboard.type.
+            "fill" to 130..280, // Used by PulsarWebDriver.fill(): post-fill pause via gap("fill") after paste-like typing.
+            "mouseWheel" to 180..420, // Used by mouseWheelDown/mouseWheelUp: delay between repeated wheel ticks.
+            "dragAndDrop" to 260..650, // Used by dragAndDrop(): delay between dragOver and drop in Mouse.dragAndDrop.
+            "waitForNavigation" to 250..700, // Used by waitUntil("waitForNavigation", ...): polling interval while waiting URL change.
+            "waitForSelector" to 200..600, // Used by waitUntil("waitForSelector", ...): polling interval while waiting element existence.
+            "waitUntil" to 220..650, // Intended generic waitUntil polling bucket; current default overload uses key "waitUtil" and falls back.
+            "default" to 200..600, // Primary fallback for unknown/missing action keys in randomDelayMillis(action).
+            "" to 200..600 // Secondary fallback key, normalized to the same value as "default".
+        )
+
+        val FAST_DELAY_POLICY = mapOf(
+            "gap" to 350..700,
+            "click" to 60..120,
+            "delete" to 50..120,
+            "keyUpDown" to 50..120,
+            "press" to 90..180,
+            "type" to 60..160,
+            "fill" to 80..180,
+            "mouseWheel" to 120..260,
+            "dragAndDrop" to 180..420,
+            "waitForNavigation" to 120..380,
+            "waitForSelector" to 100..320,
+            "waitUntil" to 120..360,
+            "default" to 120..320,
+            "" to 120..320
+        )
+
+        val STEALTH_DELAY_POLICY = mapOf(
+            "gap" to 900..1600,
+            "click" to 120..260,
+            "delete" to 110..260,
+            "keyUpDown" to 90..220,
+            "press" to 180..360,
+            "type" to 140..320,
+            "fill" to 220..450,
+            "mouseWheel" to 260..700,
+            "dragAndDrop" to 420..1100,
+            "waitForNavigation" to 350..1100,
+            "waitForSelector" to 280..900,
+            "waitUntil" to 300..900,
+            "default" to 280..900,
+            "" to 280..900
+        )
+
+        /**
          * Default interaction behavior.
          * */
         val DEFAULT get() = Builder.DEFAULT
@@ -481,10 +484,10 @@ data class InteractSettings constructor(
         }
 
         /**
-         * Parse the json string to an InteractSettings object.
+         * Parse the JSON string to an InteractSettings object.
          *
-         * @param json the json string
-         * @return an InteractSettings object, or null if the json string is null, or the json string is invalid
+         * @param json the JSON string
+         * @return an InteractSettings object, or null if the JSON string is null, or the JSON string is invalid
          * */
         fun fromJsonOrNull(json: String?): InteractSettings? = json?.runCatching { fromJson(json) }?.getOrNull()
     }

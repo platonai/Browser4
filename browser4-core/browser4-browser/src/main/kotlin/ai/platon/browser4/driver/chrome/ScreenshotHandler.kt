@@ -58,7 +58,7 @@ class ScreenshotHandler(
     }
 
     suspend fun screenshot(selector: String): String? {
-        val node = pageHandler.querySelector(selector)
+        val node = pageHandler.queryLocator(selector)
         if (node == null) {
             logger.info("No such element <{}>", selector)
             return null

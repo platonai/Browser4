@@ -4,8 +4,9 @@
 //! via `POST /mcp/call-tool`.
 //!
 //! # State persistence
-//! The active session ID and server URL are kept in `~/.browser4/cli-state.json`
-//! between invocations.
+//! CLI state is persisted between invocations under `~/.browser4` by default.
+//! The default session uses `~/.browser4/cli-state.json`; named sessions use
+//! `~/.browser4/sessions/<name>.json`.
 //!
 //! # Element selectors
 //! Use the short `e<N>` form from `snapshot` output; the CLI automatically
@@ -41,8 +42,8 @@ use http::{
     submit_batch_commands, submit_plain_command,
 };
 use managed_processes::{
-    read_managed_server_processes, stop_browser4_server_forcibly, stop_browser4_server_gracefully,
-    ManagedServerProcess, ShutdownResult,
+    read_managed_server_processes, stop_browser4_server_forcibly, ManagedServerProcess,
+    ShutdownResult,
 };
 use snapshot::{resolve_output_path, save_binary, save_snapshot};
 use state::{
@@ -59,6 +60,7 @@ const AGENT_RUN_FAILURE_POLL_INTERVAL_MS: u64 = 250;
 fn no_snapshot_commands() -> HashSet<&'static str> {
     [
         "open",
+        "goto",
         "close",
         "close-all",
         "kill-all",
@@ -228,6 +230,10 @@ fn build_open_session_capabilities(tool_params: &Value) -> Value {
     build_open_session_capabilities_with_test_mode(tool_params, should_use_test_temporary_profile())
 }
 
+fn should_navigate_after_open(url: &str) -> bool {
+    !url.is_empty() && url != "about:blank"
+}
+
 fn should_use_test_temporary_profile() -> bool {
     matches!(
         std::env::var(TEST_TEMPORARY_PROFILE_ENV).ok().as_deref(),
@@ -346,7 +352,7 @@ async fn post_command_snapshot(client: &Client, base_url: &str, session_id: &str
         _ => return, // silently ignore failures (e.g. session just closed)
     };
 
-    let out_path = resolve_output_path(None, "page", "yml");
+    let out_path = resolve_output_path(None, "snapshot", "yml");
     if let Err(e) = save_snapshot(&out_path, &snap_result) {
         eprintln!("Warning: failed to save snapshot: {e}");
         return;
@@ -373,26 +379,91 @@ async fn handle_open(
     let mut state = read_state(None, session_name);
     state.session_name = session_name.map(|s| s.to_string());
 
-    let capabilities = build_open_session_capabilities(tool_params);
-
-    let session_id =
-        create_session(client, base_url, &state, session_name, Some(capabilities)).await?;
-
-    println!("Session opened: {}", session_id);
+    let session_id = if let Some(ref existing_id) = state.session_id {
+        println!("Session already open: {}", existing_id);
+        existing_id.clone()
+    } else {
+        let capabilities = build_open_session_capabilities(tool_params);
+        let new_id =
+            create_session(client, base_url, &state, session_name, Some(capabilities)).await?;
+        println!("Session opened: {}", new_id);
+        new_id
+    };
 
     let url = tool_params
         .get("url")
         .and_then(|u| u.as_str())
         .unwrap_or("about:blank");
-    if !url.is_empty() && url != "about:blank" {
+    if should_navigate_after_open(url) {
         let mut params = tool_params.clone();
         params["sessionId"] = json!(session_id.clone());
-        let result = call_tool(client, base_url, tool_name, params).await?;
-        if !result.is_empty() {
-            println!("{}", result);
+        let navigate_result =
+            call_tool(client, base_url, tool_name, params.clone()).await;
+        match navigate_result {
+            Ok(result) => {
+                if !result.is_empty() {
+                    println!("{}", result);
+                }
+                post_command_snapshot(client, base_url, &session_id).await;
+            }
+            Err(err) => {
+                if !is_stale_session_error(&err) {
+                    return Err(err);
+                }
+                // The browser context was not ready yet (CDP initialization race).
+                // Close the failed session, create a fresh one, and retry navigation.
+                let _ = call_tool(
+                    client,
+                    base_url,
+                    "close_session",
+                    json!({ "sessionId": session_id }),
+                )
+                .await;
+                invalidate_session(&state, base_url, session_name);
+                let capabilities = build_open_session_capabilities(tool_params);
+                let retry_id = create_session(
+                    client, base_url, &state, session_name, Some(capabilities),
+                )
+                .await?;
+                println!("Session opened: {}", retry_id);
+                params["sessionId"] = json!(retry_id);
+                let retry_result =
+                    call_tool(client, base_url, tool_name, params).await?;
+                if !retry_result.is_empty() {
+                    println!("{}", retry_result);
+                }
+                post_command_snapshot(client, base_url, &retry_id).await;
+            }
         }
-        post_command_snapshot(client, base_url, &session_id).await;
     }
+    Ok(())
+}
+
+async fn handle_goto(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let state = read_state(None, session_name);
+    let session_id = if let Some(ref existing_id) = state.session_id {
+        existing_id.clone()
+    } else {
+        let capabilities = build_open_session_capabilities(tool_params);
+        let new_id =
+            create_session(client, base_url, &state, session_name, Some(capabilities)).await?;
+        println!("Session opened: {}", new_id);
+        new_id
+    };
+
+    let mut params = tool_params.clone();
+    params["sessionId"] = json!(session_id);
+    let result = call_tool(client, base_url, tool_name, params).await?;
+    if !result.is_empty() {
+        println!("{}", result);
+    }
+    post_command_snapshot(client, base_url, &session_id).await;
     Ok(())
 }
 
@@ -421,8 +492,10 @@ async fn handle_close(
 async fn handle_close_all(client: &Client, base_url: &str) -> Result<(), String> {
     let close_summary = close_all_sessions_across_servers(client, base_url).await;
 
-    let shutdown_result = stop_browser4_server_gracefully();
-    finalize_global_cleanup("Stopped", &shutdown_result);
+    // `close-all` is intentionally session-scoped. Keep any tracked Browser4
+    // backend process alive so callers can continue using the same service and
+    // reserve JVM shutdown for the explicit `kill-all` flow.
+    clear_all_state(None);
 
     log_close_all_summary(&close_summary, "close-all");
     Ok(())
@@ -574,19 +647,7 @@ fn log_shutdown_result(action: &str, result: &ShutdownResult) {
 async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
     let (active_ids, backend_note): (Vec<String>, Option<String>) =
         match call_tool(client, base_url, "list_sessions", json!({})).await {
-            Ok(result) => {
-                let active_ids = serde_json::from_str::<Value>(&result)
-                    .ok()
-                    .and_then(|v| {
-                        v.as_array().map(|arr| {
-                            arr.iter()
-                                .filter_map(|x| x.as_str().map(String::from))
-                                .collect()
-                        })
-                    })
-                    .unwrap_or_default();
-                (active_ids, None)
-            }
+            Ok(result) => (parse_active_session_ids(&result), None),
             Err(error) if is_backend_unreachable_error(&error) => (
                 Vec::new(),
                 Some(format!(
@@ -641,6 +702,31 @@ async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn parse_active_session_ids(result: &str) -> Vec<String> {
+    serde_json::from_str::<Value>(result)
+        .ok()
+        .and_then(|value| {
+            value.as_array().map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(|entry| {
+                        entry
+                            .as_str()
+                            .map(str::to_string)
+                            .or_else(|| {
+                                entry
+                                    .get("sessionId")
+                                    .and_then(|value| value.as_str())
+                                    .map(str::to_string)
+                            })
+                            .filter(|session_id| !session_id.is_empty())
+                    })
+                    .collect()
+            })
+        })
+        .unwrap_or_default()
 }
 
 fn is_backend_unreachable_error(error: &str) -> bool {
@@ -912,117 +998,6 @@ async fn handle_mouse_positioned_command(
         session_name,
     )
     .await
-}
-
-async fn handle_press(
-    client: &Client,
-    base_url: &str,
-    tool_name: &str,
-    tool_params: &Value,
-    session_name: Option<&str>,
-) -> Result<(), String> {
-    let selector = tool_params
-        .get("ref")
-        .and_then(|value| value.as_str())
-        .or_else(|| tool_params.get("selector").and_then(|value| value.as_str()))
-        .ok_or_else(|| "Press requires a target selector.".to_string())?;
-    let key = tool_params
-        .get("key")
-        .and_then(|value| value.as_str())
-        .ok_or_else(|| "Press requires a key.".to_string())?;
-    let selector_literal =
-        serde_json::to_string(selector).map_err(|e| format!("Failed to encode selector: {e}"))?;
-    let key_literal =
-        serde_json::to_string(key).map_err(|e| format!("Failed to encode key: {e}"))?;
-    let focus_expression = format!(
-        "(() => {{ const el = document.querySelector({selector_literal}); if (!el) return 'missing'; el.focus(); return document.activeElement === el ? 'focused' : 'unfocused'; }})()"
-    );
-    let printable_key_expression = format!(
-        "(() => {{ \
-            const el = document.querySelector({selector_literal}); \
-            if (!el) return 'missing'; \
-            const key = {key_literal}; \
-            el.focus(); \
-            const editable = el.isContentEditable || el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && !['checkbox','radio','file','submit','button','reset','range','color'].includes((el.type || '').toLowerCase())); \
-            el.dispatchEvent(new KeyboardEvent('keydown', {{ key, bubbles: true }})); \
-            if (editable) {{ \
-                if (typeof el.value === 'string') {{ \
-                    const start = typeof el.selectionStart === 'number' ? el.selectionStart : el.value.length; \
-                    const end = typeof el.selectionEnd === 'number' ? el.selectionEnd : el.value.length; \
-                    const nextValue = el.value.slice(0, start) + key + el.value.slice(end); \
-                    el.value = nextValue; \
-                    if (typeof el.setSelectionRange === 'function') {{ \
-                        const caret = start + key.length; \
-                        el.setSelectionRange(caret, caret); \
-                    }} \
-                }} else if (el.isContentEditable) {{ \
-                    el.textContent = (el.textContent || '') + key; \
-                }} \
-                el.dispatchEvent(new Event('input', {{ bubbles: true }})); \
-            }} \
-            el.dispatchEvent(new KeyboardEvent('keyup', {{ key, bubbles: true }})); \
-            return editable ? 'typed' : 'dispatched'; \
-        }})()"
-    );
-    let use_printable_char_path = !key.contains('+') && key.chars().count() == 1;
-
-    let result = with_session(client, base_url, session_name, false, |session_id| {
-        let client = client.clone();
-        let base_url = base_url.to_string();
-        let tool_name = tool_name.to_string();
-        let focus_expression = focus_expression.clone();
-        let printable_key_expression = printable_key_expression.clone();
-        let mut press_params = tool_params.clone();
-        press_params["sessionId"] = json!(session_id.clone());
-
-        async move {
-            if use_printable_char_path {
-                let typed_result = call_tool(
-                    &client,
-                    &base_url,
-                    "browser_evaluate",
-                    json!({
-                        "sessionId": session_id,
-                        "expression": printable_key_expression,
-                    }),
-                )
-                .await?;
-                if typed_result.trim() != "typed" && typed_result.trim() != "dispatched" {
-                    return Err(format!(
-                        "Failed to synthesize printable key press. Result: {}",
-                        typed_result.trim()
-                    ));
-                }
-                return Ok(typed_result);
-            }
-
-            let focus_result = call_tool(
-                &client,
-                &base_url,
-                "browser_evaluate",
-                json!({
-                    "sessionId": session_id,
-                    "expression": focus_expression,
-                }),
-            )
-            .await?;
-
-            if focus_result.trim() != "focused" {
-                return Err(format!(
-                    "Failed to focus target before pressing key. Focus result: {}",
-                    focus_result.trim()
-                ));
-            }
-            call_tool(&client, &base_url, &tool_name, press_params).await
-        }
-    })
-    .await?;
-
-    if !result.is_empty() {
-        println!("{}", result);
-    }
-    persist_active_selector(base_url, session_name, Some(selector))?;
-    Ok(())
 }
 
 async fn handle_key_command(
@@ -1445,6 +1420,7 @@ fn normalize_command_invocation(global: &args::GlobalFlags) -> (String, args::Gl
         let new_global = args::GlobalFlags {
             session_name: global.session_name.clone(),
             server_url: global.server_url.clone(),
+            use_maven_startup: global.use_maven_startup,
             args: rewritten,
         };
         (cmd, new_global)
@@ -1577,7 +1553,7 @@ fn compile_batch_request(
 
     let mut active_selector = final_state.active_selector.clone();
     let mut last_mouse_position = final_state.last_mouse_position.clone();
-    let mut requires_response_session_id = false;
+    let requires_response_session_id = false;
     let mut steps: Vec<Value> = Vec::new();
     let mut entries: Vec<PlannedBatchEntry> = Vec::new();
     let command_map = commands_map();
@@ -1600,6 +1576,17 @@ fn compile_batch_request(
                 &mut entries,
                 spec,
                 "Batch subcommands cannot override -s/--session.".to_string(),
+                bail,
+            ) {
+                break;
+            }
+            continue;
+        }
+        if nested_global.use_maven_startup {
+            if push_batch_local_failure(
+                &mut entries,
+                spec,
+                "Batch subcommands cannot override --use-maven-startup.".to_string(),
                 bail,
             ) {
                 break;
@@ -1650,6 +1637,21 @@ fn compile_batch_request(
             }
         };
 
+        if !cmd_def.batch_supported {
+            if push_batch_local_failure(
+                &mut entries,
+                spec,
+                format!(
+                    "Command '{}' is not supported in batch mode. Batch mode only supports DOM operations.",
+                    nested_command
+                ),
+                bail,
+            ) {
+                break;
+            }
+            continue;
+        }
+
         let raw_parsed = parse_raw_args(&effective_nested_global.args);
         let arg_names: Vec<&str> = cmd_def.args.iter().map(|arg| arg.name).collect();
         let parsed = match build_command_args(&raw_parsed, &arg_names) {
@@ -1666,64 +1668,19 @@ fn compile_batch_request(
         let tool_params = (cmd_def.tool_params_fn)(&parsed);
 
         match nested_command.as_str() {
-            "open" => {
-                let capabilities = build_open_session_capabilities(&tool_params);
-
-                let url = tool_params
-                    .get("url")
-                    .and_then(|value| value.as_str())
-                    .unwrap_or("about:blank");
-
-                let request_index = steps.len();
-                steps.push(json!({
-                    "op": "open",
-                    "command": spec.display,
-                    "capabilities": capabilities,
-                }));
-                let mut request_indices = vec![request_index];
-                let mut outputs = vec![PlannedBatchOutput::Text];
-                if url != "about:blank" {
-                    let navigate_request_index = steps.len();
-                    steps.push(json!({
-                        "op": "tool",
-                        "command": spec.display,
-                        "tool": "browser_navigate",
-                        "arguments": { "url": url },
-                    }));
-                    request_indices.push(navigate_request_index);
-                    outputs.push(PlannedBatchOutput::Text);
+            "open" | "close" => {
+                if push_batch_local_failure(
+                    &mut entries,
+                    spec,
+                    format!(
+                        "Batch command only supports DOM operations. '{}' is not allowed. Please execute it separately.",
+                        nested_command
+                    ),
+                    bail,
+                ) {
+                    break;
                 }
-                entries.push(PlannedBatchEntry::Backend {
-                    display: spec.display.clone(),
-                    request_indices,
-                    outputs,
-                });
-
-                final_state.session_id = None;
-                final_state.active_selector = None;
-                final_state.last_mouse_position = None;
-                active_selector = None;
-                last_mouse_position = None;
-                requires_response_session_id = true;
-            }
-            "close" => {
-                let request_index = steps.len();
-                steps.push(json!({
-                    "op": "close",
-                    "command": spec.display,
-                }));
-                entries.push(PlannedBatchEntry::Backend {
-                    display: spec.display.clone(),
-                    request_indices: vec![request_index],
-                    outputs: vec![PlannedBatchOutput::Text],
-                });
-
-                final_state.session_id = None;
-                final_state.active_selector = None;
-                final_state.last_mouse_position = None;
-                active_selector = None;
-                last_mouse_position = None;
-                requires_response_session_id = false;
+                continue;
             }
             "snapshot" => {
                 let filename = tool_params.get("filename").and_then(|value| value.as_str());
@@ -1774,13 +1731,13 @@ fn compile_batch_request(
                     .or_else(|| tool_params.get("selector").and_then(|value| value.as_str()));
                 let key = tool_params.get("key").and_then(|value| value.as_str());
 
-                let (selector, key) = match (selector, key) {
-                    (Some(selector), Some(key)) => (selector.to_string(), key.to_string()),
-                    _ => {
+                let key = match key {
+                    Some(key) => key.to_string(),
+                    None => {
                         if push_batch_local_failure(
                             &mut entries,
                             spec,
-                            "Press requires both a target selector and a key.".to_string(),
+                            "Press requires a key.".to_string(),
                             bail,
                         ) {
                             break;
@@ -1789,21 +1746,29 @@ fn compile_batch_request(
                     }
                 };
 
+                let selector = selector.map(ToOwned::to_owned);
                 let request_index = steps.len();
-                steps.push(json!({
-                    "op": "press",
+                let mut tool_params_json = json!({ "key": key });
+                if let Some(selector) = selector.as_deref() {
+                    tool_params_json["ref"] = json!(selector);
+                }
+                let step = json!({
+                    "op": "tool",
                     "command": spec.display,
-                    "selector": selector,
-                    "key": key,
-                }));
+                    "tool": "browser_press_key",
+                    "arguments": normalize_batch_step_args(&tool_params_json),
+                });
+                steps.push(step);
                 entries.push(PlannedBatchEntry::Backend {
                     display: spec.display.clone(),
                     request_indices: vec![request_index],
                     outputs: vec![PlannedBatchOutput::Text],
                 });
 
-                active_selector = Some(selector);
-                final_state.active_selector = active_selector.clone();
+                if let Some(selector) = selector {
+                    active_selector = Some(selector);
+                    final_state.active_selector = active_selector.clone();
+                }
             }
             "list" | "close-all" | "kill-all" | "delete-data" | "agent-run" | "agent-status"
             | "agent-result" | "co-create" | "co-submit" | "co-scrape" | "co-status"
@@ -1983,7 +1948,7 @@ async fn handle_batch(global: &args::GlobalFlags) -> Result<(), String> {
         }
     }
 
-    ensure_server_running(&base_url).await?;
+    ensure_server_running(&base_url, global.use_maven_startup).await?;
     let client = make_client();
     let compiled =
         compile_batch_request(&commands, bail, &base_url, global.session_name.as_deref())?;
@@ -2178,7 +2143,7 @@ async fn run(command: &str, global: &args::GlobalFlags) -> Result<(), String> {
 
     // Ensure the Browser4 server is running (for relevant commands)
     if should_ensure_server_running(command) {
-        ensure_server_running(&base_url).await?;
+        ensure_server_running(&base_url, global.use_maven_startup).await?;
     }
 
     let client = make_client();
@@ -2208,6 +2173,16 @@ async fn run(command: &str, global: &args::GlobalFlags) -> Result<(), String> {
     match command {
         "open" => {
             handle_open(
+                &client,
+                &base_url,
+                &tool_name,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
+        "goto" => {
+            handle_goto(
                 &client,
                 &base_url,
                 &tool_name,
@@ -2252,11 +2227,12 @@ async fn run(command: &str, global: &args::GlobalFlags) -> Result<(), String> {
             .await?;
         }
         "press" => {
-            handle_press(
+            handle_tool_command(
                 &client,
                 &base_url,
                 &tool_name,
                 &tool_params,
+                false,
                 global.session_name.as_deref(),
             )
             .await?;
@@ -2495,6 +2471,21 @@ mod tests {
     }
 
     #[test]
+    fn should_not_navigate_after_open_for_empty_url() {
+        assert!(!should_navigate_after_open(""));
+    }
+
+    #[test]
+    fn should_not_navigate_after_open_for_about_blank() {
+        assert!(!should_navigate_after_open("about:blank"));
+    }
+
+    #[test]
+    fn should_navigate_after_open_for_non_empty_url() {
+        assert!(should_navigate_after_open("https://example.com"));
+    }
+
+    #[test]
     fn should_not_ensure_server_for_list() {
         assert!(!should_ensure_server_running("list"));
     }
@@ -2505,6 +2496,88 @@ mod tests {
     }
 
     #[test]
+    fn normalize_command_invocation_preserves_use_maven_startup() {
+        let global = args::GlobalFlags {
+            session_name: Some("team".to_string()),
+            server_url: Some("http://127.0.0.1:8182".to_string()),
+            use_maven_startup: true,
+            args: vec!["co".to_string(), "create".to_string()],
+        };
+
+        let (command, normalized) = normalize_command_invocation(&global);
+
+        assert_eq!(command, "co-create");
+        assert!(normalized.use_maven_startup);
+    }
+
+    #[test]
+    fn compile_batch_request_rejects_nested_use_maven_startup_override() {
+        let commands = vec![BatchCommandSpec {
+            display: "--use-maven-startup open https://example.com".to_string(),
+            tokens: vec![
+                "--use-maven-startup".to_string(),
+                "open".to_string(),
+                "https://example.com".to_string(),
+            ],
+        }];
+
+        let compiled =
+            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+
+        assert_eq!(compiled.entries.len(), 1);
+        match &compiled.entries[0] {
+            PlannedBatchEntry::LocalFailure { error, .. } => {
+                assert_eq!(
+                    error,
+                    "Batch subcommands cannot override --use-maven-startup."
+                );
+            }
+            other => panic!("expected local failure entry, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn compile_batch_request_press_uses_browser_press_key_tool_step() {
+        let commands = vec![BatchCommandSpec {
+            display: "press ! #type-target".to_string(),
+            tokens: vec![
+                "press".to_string(),
+                "!".to_string(),
+                "#type-target".to_string(),
+            ],
+        }];
+
+        let compiled =
+            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+
+        assert_eq!(compiled.steps.len(), 1);
+        assert_eq!(compiled.steps[0]["op"], json!("tool"));
+        assert_eq!(compiled.steps[0]["tool"], json!("browser_press_key"));
+        assert_eq!(
+            compiled.steps[0]["arguments"]["ref"],
+            json!("#type-target")
+        );
+        assert_eq!(compiled.steps[0]["arguments"]["key"], json!("!"));
+    }
+
+    #[test]
+    fn compile_batch_request_press_without_selector_uses_focused_element() {
+        let commands = vec![BatchCommandSpec {
+            display: "press Enter".to_string(),
+            tokens: vec!["press".to_string(), "Enter".to_string()],
+        }];
+
+        let compiled =
+            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
+
+        assert_eq!(compiled.steps.len(), 1);
+        assert_eq!(compiled.steps[0]["op"], json!("tool"));
+        assert_eq!(compiled.steps[0]["tool"], json!("browser_press_key"));
+        assert_eq!(compiled.steps[0]["arguments"]["key"], json!("Enter"));
+        assert!(compiled.steps[0]["arguments"].get("ref").is_none());
+    }
+
+    #[test]
     fn unreachable_backend_error_detection_matches_connection_failures() {
         assert!(is_backend_unreachable_error(
             "HTTP request failed: error sending request for url: tcp connect error: Connection refused"
@@ -2512,6 +2585,22 @@ mod tests {
         assert!(!is_backend_unreachable_error(
             "Tool execution failed: invalid arguments"
         ));
+    }
+
+    #[test]
+    fn parse_active_session_ids_supports_backend_object_payloads() {
+        let ids = parse_active_session_ids(
+            r#"[{"sessionId":"session-1","url":"https://example.com","status":"active"},{"sessionId":"session-2","url":"","status":"active"}]"#,
+        );
+
+        assert_eq!(ids, vec!["session-1".to_string(), "session-2".to_string()]);
+    }
+
+    #[test]
+    fn parse_active_session_ids_keeps_legacy_string_payloads() {
+        let ids = parse_active_session_ids(r#"["session-1","session-2"]"#);
+
+        assert_eq!(ids, vec!["session-1".to_string(), "session-2".to_string()]);
     }
 
     #[test]

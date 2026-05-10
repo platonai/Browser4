@@ -341,6 +341,52 @@ class MCPToolControllerTest {
     }
 
     @Test
+    fun `test frontend press command without ref`() = runBlocking {
+        mockTool("tab", "press")
+
+        val request = MCPToolCallRequest(
+            tool = "browser_press_key",
+            arguments = mapOf("sessionId" to sessionId, "key" to "Enter")
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolExecutor).execute(capture(captor))
+        val toolCall = captor.value
+
+        assertEquals("tab", toolCall.domain)
+        assertEquals("press", toolCall.method)
+        assertEquals("Enter", toolCall.arguments["key"])
+        assertTrue(!toolCall.arguments.containsKey("selector"))
+    }
+
+    @Test
+    fun `test frontend type command without ref`() = runBlocking {
+        mockTool("tab", "type")
+
+        val request = MCPToolCallRequest(
+            tool = "browser_press_sequentially",
+            arguments = mapOf("sessionId" to sessionId, "text" to "hello")
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolExecutor).execute(capture(captor))
+        val toolCall = captor.value
+
+        assertEquals("tab", toolCall.domain)
+        assertEquals("type", toolCall.method)
+        assertEquals("hello", toolCall.arguments["text"])
+        assertTrue(!toolCall.arguments.containsKey("selector"))
+    }
+
+    @Test
     fun `test explicit mapping page_title`() = runBlocking {
         // page_title maps to driver.title explicitly in resolveToolCall
         val request = MCPToolCallRequest(
@@ -421,6 +467,37 @@ class MCPToolControllerTest {
     }
 
     @Test
+    fun `test eval tool name resolves to tab eval and preserves selector and expression`() = runBlocking {
+        mockTool("tab", "eval")
+
+        val request = MCPToolCallRequest(
+            tool = "eval",
+            arguments = mapOf(
+                "sessionId" to sessionId,
+                "selector" to "#page-marker",
+                "expression" to "(element) => element.textContent"
+            )
+        )
+
+        `when`(agentToolExecutor.execute(anyToolCall())).thenReturn(toolCallResult("other page"))
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        assertEquals("other page", result.body!!.content[0].text)
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolExecutor).execute(capture(captor))
+        val toolCall = captor.value
+
+        assertEquals("tab", toolCall.domain)
+        assertEquals("eval", toolCall.method)
+        assertEquals("#page-marker", toolCall.arguments["selector"])
+        assertEquals("(element) => element.textContent", toolCall.arguments["expression"])
+        assertFalse("functionDeclaration" in toolCall.arguments)
+    }
+
+    @Test
     fun `test frontend tab select maps to browser switchTab`() = runBlocking {
         val request = MCPToolCallRequest(
             tool = "browser_tabs",
@@ -438,7 +515,8 @@ class MCPToolControllerTest {
 
         assertEquals("browser", toolCall.domain)
         assertEquals("switchTab", toolCall.method)
-        assertEquals("1", toolCall.arguments["tabId"])
+        assertEquals(1, toolCall.arguments["index"])
+        assertFalse(toolCall.arguments.containsKey("tabId"))
     }
 
     @Test
@@ -609,6 +687,28 @@ class MCPToolControllerTest {
 
         assertEquals("browser", toolCall.domain)
         assertEquals("closeTab", toolCall.method)
+    }
+
+    @Test
+    fun `test frontend tab close with index maps to browser closeTab`() = runBlocking {
+        val request = MCPToolCallRequest(
+            tool = "browser_tabs",
+            arguments = mapOf("sessionId" to sessionId, "action" to "close", "index" to 1)
+        )
+
+        `when`(agentToolExecutor.execute(anyToolCall())).thenReturn(toolCallResult("ok"))
+
+        val result = controller.callTool(request, response)
+        assertEquals(HttpStatus.OK, result.statusCode)
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolExecutor).execute(capture(captor))
+        val toolCall = captor.value
+
+        assertEquals("browser", toolCall.domain)
+        assertEquals("closeTab", toolCall.method)
+        assertEquals(1, toolCall.arguments["index"])
+        assertFalse(toolCall.arguments.containsKey("tabId"))
     }
 
     @Test
@@ -1085,6 +1185,152 @@ class MCPToolControllerTest {
         assertEquals(1, results.size)
         assertEquals(true, results[0]["ok"])
         assertEquals("Existing session result", results[0]["text"])
+    }
+
+    @Test
+    fun testCommandBatchPressUsesDirectTabPressTool() = runBlocking {
+        mockTool("tab", "press")
+        `when`(managedSession.sessionId).thenReturn("press-session")
+        `when`(sessionManager.createSession(any())).thenReturn(managedSession)
+        `when`(sessionManager.getSession("press-session")).thenReturn(managedSession)
+        `when`(agentToolExecutor.execute(anyToolCall())).thenReturn(toolCallResult("pressed"))
+
+        val request = MCPToolCallRequest(
+            tool = "command_batch",
+            arguments = mapOf(
+                "steps" to listOf(
+                    mapOf("op" to "open"),
+                    mapOf("op" to "tool", "tool" to "browser_press_key", "arguments" to mapOf("ref" to "#search", "key" to "!")),
+                )
+            )
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        @Suppress("UNCHECKED_CAST")
+        val payload = objectMapper.readValue(result.body!!.content[0].text, Map::class.java) as Map<String, Any?>
+        @Suppress("UNCHECKED_CAST")
+        val results = payload["results"] as List<Map<String, Any?>>
+        assertEquals(2, results.size)
+        assertEquals(true, results[1]["ok"])
+        assertEquals("pressed", results[1]["text"])
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolExecutor, Mockito.times(1)).execute(capture(captor))
+        val toolCall = captor.value
+        assertEquals("tab", toolCall.domain)
+        assertEquals("press", toolCall.method)
+        assertEquals("#search", toolCall.arguments["selector"])
+        assertEquals("!", toolCall.arguments["key"])
+    }
+
+    @Test
+    fun testCommandBatchPressWithoutSelectorUsesFocusedElement() = runBlocking {
+        mockTool("tab", "press")
+        `when`(managedSession.sessionId).thenReturn("press-session")
+        `when`(sessionManager.createSession(any())).thenReturn(managedSession)
+        `when`(sessionManager.getSession("press-session")).thenReturn(managedSession)
+        `when`(agentToolExecutor.execute(anyToolCall())).thenReturn(toolCallResult("pressed"))
+
+        val request = MCPToolCallRequest(
+            tool = "command_batch",
+            arguments = mapOf(
+                "steps" to listOf(
+                    mapOf("op" to "open"),
+                    mapOf("op" to "tool", "tool" to "browser_press_key", "arguments" to mapOf("key" to "Enter")),
+                )
+            )
+        )
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        @Suppress("UNCHECKED_CAST")
+        val payload = objectMapper.readValue(result.body!!.content[0].text, Map::class.java) as Map<String, Any?>
+        @Suppress("UNCHECKED_CAST")
+        val results = payload["results"] as List<Map<String, Any?>>
+        assertEquals(2, results.size)
+        assertEquals(true, results[1]["ok"])
+        assertEquals("pressed", results[1]["text"])
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolExecutor, Mockito.times(1)).execute(capture(captor))
+        val toolCall = captor.value
+        assertEquals("tab", toolCall.domain)
+        assertEquals("press", toolCall.method)
+        assertEquals("Enter", toolCall.arguments["key"])
+        assertTrue(!toolCall.arguments.containsKey("selector"))
+    }
+
+    @Test
+    fun testCommandBatchOpenReusesExistingSessionId() {
+        runBlocking {
+            `when`(sessionManager.getSession("existing-session")).thenReturn(managedSession)
+            `when`(managedSession.sessionId).thenReturn("existing-session")
+            `when`(managedSession.agenticSession).thenReturn(agenticSession)
+            `when`(agenticSession.companionAgent).thenReturn(basicBrowserAgent)
+            `when`(basicBrowserAgent.toolExtractor).thenReturn(agentToolExecutor)
+            `when`(agentToolExecutor.execute(anyToolCall())).thenReturn(toolCallResult("Existing session result"))
+
+            val request = MCPToolCallRequest(
+                tool = "command_batch",
+                arguments = mapOf(
+                    "sessionId" to "existing-session",
+                    "steps" to listOf(
+                        mapOf("op" to "open", "capabilities" to mapOf("profileMode" to "TEMPORARY")),
+                        mapOf("op" to "tool", "tool" to "page_title", "arguments" to emptyMap<String, Any?>()),
+                    )
+                )
+            )
+
+            val result = controller.callTool(request, response)
+
+            assertEquals(HttpStatus.OK, result.statusCode)
+            @Suppress("UNCHECKED_CAST")
+            val payload = objectMapper.readValue(result.body!!.content[0].text, Map::class.java) as Map<String, Any?>
+            assertEquals("existing-session", payload["sessionId"])
+            @Suppress("UNCHECKED_CAST")
+            val results = payload["results"] as List<Map<String, Any?>>
+            assertEquals(2, results.size)
+            assertEquals(true, results[0]["ok"])
+            assertEquals("existing-session", results[0]["sessionId"])
+            assertEquals("Session already open: existing-session", results[0]["text"])
+            assertEquals(true, results[1]["ok"])
+            assertEquals("Existing session result", results[1]["text"])
+            Mockito.verify(sessionManager, Mockito.never()).createSession(any())
+        }
+    }
+
+    @Test
+    fun testCommandBatchOpenWithMissingExistingSessionReturnsError() {
+        runBlocking {
+            `when`(sessionManager.getSession("missing-session")).thenReturn(null)
+
+            val request = MCPToolCallRequest(
+                tool = "command_batch",
+                arguments = mapOf(
+                    "sessionId" to "missing-session",
+                    "steps" to listOf(
+                        mapOf("op" to "open")
+                    )
+                )
+            )
+
+            val result = controller.callTool(request, response)
+
+            assertEquals(HttpStatus.OK, result.statusCode)
+            @Suppress("UNCHECKED_CAST")
+            val payload = objectMapper.readValue(result.body!!.content[0].text, Map::class.java) as Map<String, Any?>
+            assertEquals("missing-session", payload["sessionId"])
+            assertEquals(1, payload["failureCount"])
+            @Suppress("UNCHECKED_CAST")
+            val results = payload["results"] as List<Map<String, Any?>>
+            assertEquals(1, results.size)
+            assertEquals(false, results[0]["ok"])
+            assertTrue(results[0]["error"].toString().contains("Session not found: missing-session"))
+            Mockito.verify(sessionManager, Mockito.never()).createSession(any())
+        }
     }
 
     @Test

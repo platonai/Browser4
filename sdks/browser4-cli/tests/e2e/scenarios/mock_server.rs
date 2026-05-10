@@ -6,7 +6,7 @@ pub(super) fn test_open_uses_temporary_profile_mode(ctx: &mut E2ECtx) {
     let mock_server = MockBrowser4Server::start();
     ctx.browser4_base_url = mock_server.base_url();
 
-    let open_result = run_open_command(ctx);
+    let open_result = run_command(ctx, &["open", "--profile-mode=TEMPORARY"]);
     assert!(
         open_result
             .stdout
@@ -36,7 +36,7 @@ pub(super) fn test_open_with_url_prints_page_state(ctx: &mut E2ECtx) {
         ctx,
         &[
             "open",
-            OPEN_TEMPORARY_PROFILE_ARG,
+            OPEN_PROFILE_MODE_ARG,
             "https://example.com/opened-from-open-command",
         ],
     );
@@ -103,6 +103,161 @@ pub(super) fn test_open_with_url_prints_page_state(ctx: &mut E2ECtx) {
     );
 }
 
+pub(super) fn test_named_session_reuses_opened_session(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let session_name = "amazon";
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let open_result = run_command(ctx, &["-s=amazon", "open", OPEN_PROFILE_MODE_ARG]);
+    assert!(
+        open_result
+            .stdout
+            .contains("Session opened: collective-session-1"),
+        "Expected named-session open output in:\n{}",
+        open_result.stdout
+    );
+
+    let named_state_path = state_file_path(&ctx.state_dir, Some(session_name));
+    assert!(
+        named_state_path.exists(),
+        "Expected named-session state file at {}",
+        named_state_path.display()
+    );
+    assert!(
+        !state_file_path(&ctx.state_dir, None).exists(),
+        "Expected the default state file to remain unused for named sessions"
+    );
+
+    let persisted_session_id =
+        read_persisted_session_id_for_session(&ctx.state_dir, Some(session_name));
+    assert_eq!(persisted_session_id, "collective-session-1");
+
+    let goto_result = run_command(ctx, &["-s=amazon", "goto", "https://example.com/"]);
+    let combined_output = format!("{}\n{}", goto_result.stdout, goto_result.stderr);
+    assert!(
+        !combined_output.contains("No active session"),
+        "Expected named-session goto to reuse the opened session:\n{combined_output}"
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let open_session_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "open_session")
+        .collect();
+    assert_eq!(
+        open_session_calls.len(),
+        1,
+        "Expected exactly one open_session call when reusing a named session"
+    );
+
+    let navigate_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_navigate")
+        .collect();
+    assert_eq!(
+        navigate_calls.len(),
+        1,
+        "Expected goto to make exactly one browser_navigate call"
+    );
+    assert_eq!(
+        navigate_calls[0].arguments["sessionId"],
+        persisted_session_id
+    );
+    assert_eq!(navigate_calls[0].arguments["url"], "https://example.com/");
+}
+
+pub(super) fn test_batch_reduces_transport_round_trips(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let workflow_url = "https://example.com/batch-performance";
+    let individual_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = individual_server.base_url();
+
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, workflow_url]);
+    let eval_result = run_command(ctx, &["eval", "document.title"]);
+    let press_result = run_command(ctx, &["press", "!", "#type-target"]);
+
+    assert_eq!(
+        strip_snapshot_output(&eval_result.stdout),
+        "Mock Browser4 Page"
+    );
+    assert_eq!(
+        strip_snapshot_output(&press_result.stdout),
+        "mock response for browser_press_key"
+    );
+
+    let individual_snapshot = individual_server.snapshot();
+    assert!(
+        individual_snapshot.tool_calls.len() >= 7,
+        "Expected individual commands to make multiple backend tool calls, got {:?}",
+        individual_snapshot.tool_calls
+    );
+    assert!(
+        individual_snapshot
+            .tool_calls
+            .iter()
+            .all(|call| call.tool != "command_batch"),
+        "Expected individual commands to avoid command_batch transport: {:?}",
+        individual_snapshot.tool_calls
+    );
+
+    reset_cli_artifacts(ctx);
+
+    let batch_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = batch_server.base_url();
+    let batch_navigate_command = format!("goto {workflow_url}");
+
+    let batch_result = run_command(
+        ctx,
+        &[
+            "batch",
+            batch_navigate_command.as_str(),
+            "eval document.title",
+            "press ! #type-target",
+        ],
+    );
+
+    let batch_output = strip_snapshot_output(&batch_result.stdout);
+    assert!(
+        batch_output.contains("Mock Browser4 Page"),
+        "Expected batch output to include the eval result:\n{}",
+        batch_result.stdout
+    );
+    assert!(
+        batch_output.contains("mock response for browser_press_key"),
+        "Expected batch output to include the press result:\n{}",
+        batch_result.stdout
+    );
+
+    let batch_snapshot = batch_server.snapshot();
+    assert_eq!(
+        batch_snapshot.tool_calls.len(),
+        1,
+        "Expected batched workflow to collapse into one backend transport call: {:?}",
+        batch_snapshot.tool_calls
+    );
+    assert_eq!(batch_snapshot.tool_calls[0].tool, "command_batch");
+
+    let steps = batch_snapshot.tool_calls[0].arguments["steps"]
+        .as_array()
+        .expect("expected command_batch steps array");
+    assert_eq!(
+        steps.len(),
+        3,
+        "Expected open, navigate, eval, and press batch steps"
+    );
+    assert_eq!(steps[0]["tool"], "browser_navigate");
+    assert_eq!(steps[1]["tool"], "browser_evaluate");
+    assert_eq!(steps[2]["op"], "tool");
+
+    assert!(
+        batch_snapshot.tool_calls.len() < individual_snapshot.tool_calls.len(),
+        "Expected batch transport to require fewer backend calls than individual commands"
+    );
+}
+
 pub(super) fn test_eval_command(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 
@@ -144,12 +299,53 @@ pub(super) fn test_eval_command(ctx: &mut E2ECtx) {
     assert_eq!(eval_calls[0].arguments["sessionId"], "collective-session-1");
     assert_eq!(eval_calls[0].arguments["expression"], "document.title");
     assert!(eval_calls[0].arguments.get("ref").is_none());
-        assert_eq!(eval_calls[1].arguments["sessionId"], "collective-session-1");
-        assert_eq!(
-            eval_calls[1].arguments["expression"],
+    assert_eq!(eval_calls[1].arguments["sessionId"], "collective-session-1");
+    assert_eq!(
+        eval_calls[1].arguments["expression"],
         "element => element.textContent"
-        );
-        assert_eq!(eval_calls[1].arguments["ref"], "backend:5");
+    );
+    assert_eq!(eval_calls[1].arguments["ref"], "backend:5");
+}
+
+pub(super) fn test_press_command_uses_direct_tool_dispatch(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let open_result = run_open_command(ctx);
+    assert!(
+        open_result
+            .stdout
+            .contains("Session opened: collective-session-1"),
+        "Expected mocked session open output in:\n{}",
+        open_result.stdout
+    );
+
+    let press_result = run_command(ctx, &["press", "!", "#type-target"]);
+    assert_eq!(
+        strip_snapshot_output(&press_result.stdout),
+        "mock response for browser_press_key"
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let press_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_press_key")
+        .collect();
+    assert_eq!(press_calls.len(), 1, "expected one browser_press_key call");
+    assert_eq!(
+        press_calls[0].arguments["sessionId"],
+        "collective-session-1"
+    );
+    assert_eq!(press_calls[0].arguments["ref"], "#type-target");
+    assert_eq!(press_calls[0].arguments["key"], "!");
+    assert!(
+        tool_calls
+            .iter()
+            .all(|call| call.tool != "browser_evaluate"),
+        "press should not synthesize browser_evaluate calls: {tool_calls:?}"
+    );
 }
 
 pub(super) fn test_collective_session_and_agent_tools(ctx: &mut E2ECtx) {

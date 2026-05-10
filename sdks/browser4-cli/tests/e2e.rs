@@ -16,6 +16,7 @@
 //! cargo test --test e2e -- --nocapture --scenario=test_e2e_agent_task_commands
 //! cargo test --test e2e -- --nocapture --scenario=test_e2e_batch_*
 //! cargo test --test e2e -- --nocapture --scenario-from=test_e2e_mouse_and_dialog
+//! cargo test --test e2e -- --nocapture --scenario-from=test_e2e_navigation_and_storage --scenario-limit=5
 //! cargo test --test e2e -- --nocapture --failed
 //! cargo test --test e2e -- --nocapture --scenario=test_e2e_eval_command --fail-fast
 //! ```
@@ -37,6 +38,7 @@
 //!   reach the fixture HTTP server on the host (e.g. `host.docker.internal` or
 //!   the Docker bridge gateway IP such as `172.17.0.1`). Defaults to `127.0.0.1`.
 
+use base64::Engine as _;
 use browser4_cli::commands::all_commands;
 use browser4_cli::managed_processes::stop_browser4_server_forcibly;
 use chrono::Local;
@@ -55,7 +57,9 @@ use std::time::{Duration, Instant};
 #[path = "e2e/scenarios/mod.rs"]
 mod scenarios;
 
-const OPEN_TEMPORARY_PROFILE_ARG: &str = "--profile-mode=TEMPORARY";
+const BROWSER_PROFILE_MODE: &str = "SEQUENTIAL";
+const OPEN_PROFILE_MODE_ARG: &str = "--profile-mode=SEQUENTIAL";
+const USE_MAVEN_STARTUP_FLAG: &str = "--use-maven-startup";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -462,28 +466,12 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                         .push(task_id.to_string());
                     format!("result for {task_id}")
                 }
+                "command_batch" => mock_command_batch_response(&arguments),
                 "agent_extract" => {
                     r#"{"items":[{"title":"Mock Product","price":"$19.99"}]}"#.to_string()
                 }
                 "agent_summarize" => "Mock summary for #page-marker".to_string(),
-                "browser_evaluate" => {
-                    let expression = arguments
-                        .get("expression")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default();
-                    let target_ref = arguments.get("ref").and_then(|v| v.as_str());
-                    match (expression, target_ref) {
-                        ("document.title", None) => "Mock Browser4 Page".to_string(),
-                        ("element => element.textContent", Some(target)) => {
-                            format!("Mock element text for {target}")
-                        }
-                        _ => "mock evaluation result".to_string(),
-                    }
-                }
-                "page_url" => "https://mock.browser4.local/current".to_string(),
-                "page_title" => "Mock Browser4 Page".to_string(),
-                "browser_snapshot" => "mock snapshot".to_string(),
-                other => format!("mock response for {other}"),
+                other => mock_browser_tool_text(other, &arguments),
             };
 
             let response = serde_json::json!({
@@ -576,6 +564,118 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
             "not found",
         ),
     }
+}
+
+fn mock_browser_tool_text(tool: &str, arguments: &serde_json::Value) -> String {
+    match tool {
+        "browser_evaluate" => {
+            let expression = arguments
+                .get("expression")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let target_ref = arguments.get("ref").and_then(|v| v.as_str());
+            match (expression, target_ref) {
+                ("document.title", None) => "Mock Browser4 Page".to_string(),
+                ("element => element.textContent", Some(target)) => {
+                    format!("Mock element text for {target}")
+                }
+                _ => "mock evaluation result".to_string(),
+            }
+        }
+        "page_url" => "https://mock.browser4.local/current".to_string(),
+        "page_title" => "Mock Browser4 Page".to_string(),
+        "browser_snapshot" => "mock snapshot".to_string(),
+        other => format!("mock response for {other}"),
+    }
+}
+
+fn mock_command_batch_response(arguments: &serde_json::Value) -> String {
+    let mut current_session_id = arguments
+        .get("sessionId")
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
+    let mut results = Vec::new();
+
+    for (index, step) in arguments
+        .get("steps")
+        .and_then(|value| value.as_array())
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let op = step
+            .get("op")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        let result = match op {
+            "open" => {
+                let session_id = current_session_id
+                    .clone()
+                    .unwrap_or_else(|| "collective-session-1".to_string());
+                let text = if current_session_id.is_some() {
+                    format!("Session already open: {session_id}")
+                } else {
+                    format!("Session opened: {session_id}")
+                };
+                current_session_id = Some(session_id.clone());
+                serde_json::json!({
+                    "index": index,
+                    "ok": true,
+                    "sessionId": session_id,
+                    "text": text,
+                })
+            }
+            "close" => {
+                current_session_id = None;
+                serde_json::json!({
+                    "index": index,
+                    "ok": true,
+                    "text": "Session closed.",
+                })
+            }
+            "tool" => {
+                let tool = step
+                    .get("tool")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default();
+                let step_arguments = step
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!({}));
+                serde_json::json!({
+                    "index": index,
+                    "ok": true,
+                    "text": mock_browser_tool_text(tool, &step_arguments),
+                })
+            }
+            "snapshot" => serde_json::json!({
+                "index": index,
+                "ok": true,
+                "pageUrl": "https://mock.browser4.local/current",
+                "pageTitle": "Mock Browser4 Page",
+                "snapshot": "mock snapshot",
+            }),
+            "screenshot" => serde_json::json!({
+                "index": index,
+                "ok": true,
+                "screenshot": base64::engine::general_purpose::STANDARD.encode(b"mock screenshot"),
+            }),
+            _ => serde_json::json!({
+                "index": index,
+                "ok": false,
+                "error": format!("Unsupported batch step op: {op}"),
+            }),
+        };
+        results.push(result);
+    }
+
+    serde_json::json!({
+        "sessionId": current_session_id,
+        "failureCount": results.iter().filter(|result| result["ok"] != serde_json::json!(true)).count(),
+        "stoppedOnError": false,
+        "results": results,
+    })
+    .to_string()
 }
 
 fn read_http_request(stream: &mut TcpStream) -> Option<(String, String, Vec<u8>)> {
@@ -858,7 +958,7 @@ impl E2ETestResources {
         let was_healthy_before = is_browser4_healthy_now(&self.ctx.browser4_base_url);
         let started_at = Instant::now();
         let startup_result =
-            run_cli_process_with_live_output(&self.ctx, &["open", OPEN_TEMPORARY_PROFILE_ARG]);
+            run_cli_process_with_live_output(&self.ctx, &["open", OPEN_PROFILE_MODE_ARG]);
         let startup_log_hint = format_browser4_startup_log_hint(&startup_result.stderr);
         let started_via_maven = startup_result
             .stderr
@@ -983,6 +1083,9 @@ impl E2ETestResources {
 
         match cleanup_result {
             Ok(mut cleanup_steps) => {
+                if !self.external_service {
+                    self.local_browser4_started = true;
+                }
                 steps.append(&mut cleanup_steps);
                 Ok(steps)
             }
@@ -1056,6 +1159,9 @@ fn run_cli_process_internal(
 ) -> CliRunResult {
     let server_arg = format!("--server={}", ctx.browser4_base_url);
     let mut full_args: Vec<&str> = vec![server_arg.as_str()];
+    if ctx.use_maven_startup {
+        full_args.push(USE_MAVEN_STARTUP_FLAG);
+    }
     full_args.extend_from_slice(args);
 
     let mut command = Command::new(cli_binary());
@@ -1168,21 +1274,38 @@ fn wait_for_cli_output(
         thread::sleep(Duration::from_millis(200));
     };
 
-    println!(
-        "browser4-cli command completed in {}s with exit code {}: {}",
-        started_at.elapsed().as_secs(),
-        status.code().unwrap_or(-1),
-        full_args.join(" ")
-    );
-
     let stdout = finish_output_collector(stdout_handle, "stdout", full_args);
     let stderr = finish_output_collector(stderr_handle, "stderr", full_args);
+    let session_suffix = extract_session_id_from_cli_output(&stdout)
+        .map(|session_id| format!(" | sessionId={session_id}"))
+        .unwrap_or_default();
+
+    println!(
+        "browser4-cli command completed in {}s with exit code {}: {}{}",
+        started_at.elapsed().as_secs(),
+        status.code().unwrap_or(-1),
+        full_args.join(" "),
+        session_suffix
+    );
 
     std::process::Output {
         status,
         stdout: stdout.into_bytes(),
         stderr: stderr.into_bytes(),
     }
+}
+
+fn extract_session_id_from_cli_output(stdout: &str) -> Option<String> {
+    ["Session opened:", "Session already open:"]
+        .into_iter()
+        .find_map(|prefix| {
+            stdout
+                .lines()
+                .find_map(|line| line.trim().strip_prefix(prefix))
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
 }
 
 struct OutputCollector {
@@ -1489,54 +1612,48 @@ fn extract_submitted_task_id(output: &str) -> String {
         .to_string()
 }
 
-/// Extract a tab ID for the given URL from `tab-list` output.
-///
-/// Looks for a pattern like `id:<VALUE>` (or `id="<VALUE>"`) followed — on the
-/// same or a later line — by the URL, similar to the TypeScript `extractTabId`.
-fn extract_tab_id(output: &str, url: &str) -> String {
-    // Match "id" followed by ":" or "=" then an optional quote, then the value,
-    // somewhere before the URL on the same block.  We iterate over lines/chunks
-    // because the backend may format as YAML / JSON / plaintext.
+/// Extract the zero-based tab index for the given URL from `tab-list` output.
+fn extract_tab_index(output: &str, url: &str) -> usize {
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let re = RE.get_or_init(|| {
-        regex::Regex::new(r#"id[:=]"?([^",}\s]+)"?"#).expect("tab id regex compile")
+        regex::Regex::new(r#"url\s*[:=]\s*"?([^",}\s]+)"?"#).expect("tab url regex compile")
     });
 
-    // Collect all (id_value, byte_position) pairs.
-    let ids: Vec<(String, usize)> = re
+    let urls: Vec<String> = re
         .captures_iter(output)
-        .filter_map(|cap| {
-            let m = cap.get(0)?;
-            Some((cap[1].to_string(), m.start()))
-        })
+        .map(|cap| cap[1].to_string())
         .collect();
 
-    // Find the position of our target URL in the output.
-    let url_pos = output
-        .find(url)
-        .unwrap_or_else(|| panic!("URL '{}' not found in tab list output:\n{}", url, output));
-
-    // Pick the id that appears immediately before the URL.
-    ids.iter()
-        .filter(|(_, pos)| *pos < url_pos)
-        .last()
-        .map(|(id, _)| id.clone())
-        .unwrap_or_else(|| panic!("Could not find tab id for '{}' in:\n{}", url, output))
+    urls.iter()
+        .position(|candidate| candidate == url)
+        .unwrap_or_else(|| panic!("Could not find tab index for '{}' in:\n{}", url, output))
 }
 
 // ---------------------------------------------------------------------------
 // State helpers
 // ---------------------------------------------------------------------------
 
-fn read_persisted_session_id(state_dir: &Path) -> String {
-    let path = state_dir.join("cli-state.json");
-    let raw = fs::read_to_string(&path).expect("cli-state.json not found");
+fn state_file_path(state_dir: &Path, session_name: Option<&str>) -> PathBuf {
+    match session_name {
+        Some(name) => state_dir.join("sessions").join(format!("{name}.json")),
+        None => state_dir.join("cli-state.json"),
+    }
+}
+
+fn read_persisted_session_id_for_session(state_dir: &Path, session_name: Option<&str>) -> String {
+    let path = state_file_path(state_dir, session_name);
+    let raw = fs::read_to_string(&path)
+        .unwrap_or_else(|_| panic!("persisted state file not found: {}", path.display()));
     let parsed: serde_json::Value =
-        serde_json::from_str(&raw).expect("cli-state.json is not valid JSON");
+        serde_json::from_str(&raw).expect("persisted state file is not valid JSON");
     parsed["sessionId"]
         .as_str()
-        .expect("no sessionId in cli-state.json")
+        .expect("no sessionId in persisted state file")
         .to_string()
+}
+
+fn read_persisted_session_id(state_dir: &Path) -> String {
+    read_persisted_session_id_for_session(state_dir, None)
 }
 
 fn eval_text(ctx: &mut E2ECtx, expression: &str) -> String {
@@ -1871,21 +1988,20 @@ fn create_e2e_test_resources() -> E2ETestResources {
 // Scenario helpers
 // ---------------------------------------------------------------------------
 
-fn open_interactive_page(ctx: &mut E2ECtx) {
-    run_open_command(ctx);
+fn goto_interactive_page(ctx: &mut E2ECtx) {
     let interactive_url = ctx.interactive_url();
     run_command(ctx, &["goto", &interactive_url]);
     sleep(Duration::from_secs(2));
 }
 
 fn run_open_command(ctx: &mut E2ECtx) -> CliRunResult {
-    let result = run_command(ctx, &["open", OPEN_TEMPORARY_PROFILE_ARG]);
+    let result = run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
     sleep(Duration::from_secs(2));
     return result;
 }
 
-fn batch_open_command(url: &str) -> String {
-    format!("open {OPEN_TEMPORARY_PROFILE_ARG} {url}")
+fn batch_navigate_command(url: &str) -> String {
+    format!("goto {url}")
 }
 
 fn write_json_fixture(ctx: &E2ECtx, file_name: &str, value: &serde_json::Value) -> PathBuf {
@@ -1896,7 +2012,7 @@ fn write_json_fixture(ctx: &E2ECtx, file_name: &str, value: &serde_json::Value) 
 }
 
 fn open_resized_interactive_page(ctx: &mut E2ECtx) {
-    open_interactive_page(ctx);
+    goto_interactive_page(ctx);
 
     let resize_result = run_command(ctx, &["resize", "1280", "900"]);
     assert!(
@@ -1983,6 +2099,17 @@ fn cleanup_browser4_sessions_with_ctx(ctx: &E2ECtx) -> Result<Vec<TimedStep>, St
             result.stdout,
             result.stderr
         );
+        let health_started_at = Instant::now();
+        wait_for_health(&ctx.browser4_base_url, 15_000).map_err(|error| {
+            format!(
+                "browser4-cli close-all should keep the Browser4 backend alive for subsequent commands:\n{}\nstdout:\n{}\nstderr:\n{}",
+                error, result.stdout, result.stderr
+            )
+        })?;
+        steps.push(TimedStep::new(
+            "browser4 service remains healthy after close-all",
+            health_started_at.elapsed(),
+        ));
         return Ok(steps);
     }
 
@@ -2000,8 +2127,11 @@ fn cleanup_browser4_sessions_with_ctx(ctx: &E2ECtx) -> Result<Vec<TimedStep>, St
 }
 
 fn cleanup_browser4_sessions(resources: &mut E2ETestResources) -> Result<Vec<TimedStep>, String> {
-    resources.local_browser4_started = false;
-    cleanup_browser4_sessions_with_ctx(&resources.ctx)
+    let steps = cleanup_browser4_sessions_with_ctx(&resources.ctx)?;
+    if !resources.external_service {
+        resources.local_browser4_started = true;
+    }
+    Ok(steps)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2028,7 +2158,6 @@ fn cleanup_after_scenario(
                 resources.pending_cleanup.is_none(),
                 "pending Browser4 cleanup already exists"
             );
-            resources.local_browser4_started = false;
 
             let started_at = Instant::now();
             let ctx = resources.ctx.clone();
@@ -2371,8 +2500,9 @@ fn run_named_scenario(
         test_fn(&mut resources.ctx);
         let mut steps = harness_steps;
         steps.extend(resources.ctx.take_step_timings());
-        let cleanup_steps = cleanup_after_scenario(resources, name, requires_browser4, cleanup_mode)
-            .unwrap_or_else(|error| panic!("{error}"));
+        let cleanup_steps =
+            cleanup_after_scenario(resources, name, requires_browser4, cleanup_mode)
+                .unwrap_or_else(|error| panic!("{error}"));
         steps.extend(cleanup_steps);
         let report = TimingReport::new(name, total_started_at.elapsed(), steps);
         println!("ok ({})", format_duration(report.total));
@@ -2456,7 +2586,43 @@ enum ScenarioFilter {
 #[derive(Debug)]
 struct RunOptions {
     scenario_filter: Option<ScenarioFilter>,
+    scenario_limit: Option<usize>,
+    has_positional_filter: bool,
     fail_fast: bool,
+    list_only: bool,
+}
+
+fn parse_scenario_limit(raw: &str) -> usize {
+    let normalized = raw.trim();
+    assert!(
+        !normalized.is_empty(),
+        "Missing value for --scenario-limit. Use --scenario-limit=<count>"
+    );
+
+    let limit = normalized.parse::<usize>().unwrap_or_else(|_| {
+        panic!(
+            "Invalid --scenario-limit '{}'. Expected a positive integer.",
+            normalized
+        )
+    });
+    assert!(
+        limit >= 1,
+        "Invalid --scenario-limit '{}'. Value must be >= 1.",
+        normalized
+    );
+
+    limit
+}
+
+fn apply_scenario_limit_filter(
+    selected_scenarios: Vec<scenarios::ScenarioDef>,
+    scenario_limit: Option<usize>,
+) -> Vec<scenarios::ScenarioDef> {
+    let Some(limit) = scenario_limit else {
+        return selected_scenarios;
+    };
+
+    selected_scenarios.into_iter().take(limit).collect()
 }
 
 fn parse_named_flag_value(args: &mut impl Iterator<Item = String>, flag: &str) -> String {
@@ -2469,8 +2635,11 @@ fn parse_run_options() -> RunOptions {
     let mut args = std::env::args().skip(1);
     let mut scenario = None;
     let mut scenario_from = None;
+    let mut scenario_limit = None;
     let mut rerun_failed = false;
     let mut fail_fast = false;
+    let mut has_positional_filter = false;
+    let mut list_only = false;
 
     while let Some(arg) = args.next() {
         if let Some(value) = arg.strip_prefix("--scenario=") {
@@ -2491,6 +2660,24 @@ fn parse_run_options() -> RunOptions {
             continue;
         }
 
+        if let Some(value) = arg.strip_prefix("--scenario-limit=") {
+            scenario_limit = Some(parse_scenario_limit(value));
+            continue;
+        }
+        if arg == "--scenario-limit" {
+            scenario_limit = Some(parse_scenario_limit(&parse_named_flag_value(
+                &mut args,
+                "--scenario-limit",
+            )));
+            continue;
+        }
+
+        if arg == "--scenario-range" || arg.starts_with("--scenario-range=") {
+            panic!(
+                "--scenario-range has been removed. Use --scenario-limit=<count> together with existing selectors (for example --scenario-from=... --scenario-limit=5)."
+            );
+        }
+
         if arg == "--failed" {
             rerun_failed = true;
             continue;
@@ -2498,6 +2685,16 @@ fn parse_run_options() -> RunOptions {
 
         if arg == "--fail-fast" {
             fail_fast = true;
+            continue;
+        }
+
+        if arg == "--list" {
+            list_only = true;
+            continue;
+        }
+
+        if !arg.starts_with('-') {
+            has_positional_filter = true;
         }
     }
 
@@ -2518,7 +2715,10 @@ fn parse_run_options() -> RunOptions {
 
     RunOptions {
         scenario_filter,
+        scenario_limit,
+        has_positional_filter,
         fail_fast,
+        list_only,
     }
 }
 
@@ -2564,13 +2764,11 @@ fn resolve_scenarios_by_filter(filter: &str) -> Vec<scenarios::ScenarioDef> {
     scenarios::all_scenarios()
         .iter()
         .copied()
-        .filter(|scenario| {
-            pattern.is_match(scenario.name) || pattern.is_match(scenario.short_name)
-        })
+        .filter(|scenario| pattern.is_match(scenario.name) || pattern.is_match(scenario.short_name))
         .collect()
 }
 
-const MAX_ALLOWED_FAILED_SCENARIOS: usize = 3;
+const MAX_ALLOWED_FAILED_SCENARIOS: usize = 5;
 
 #[derive(Clone, Copy)]
 struct PlannedScenarioRun {
@@ -2592,11 +2790,23 @@ impl PlannedScenarioRun {
             )
         }
     }
+
+}
+
+const COVERAGE_TEST_NAME: &str = "test_e2e_command_coverage";
+
+fn total_declared_e2e_tests() -> usize {
+    scenarios::all_scenarios()
+        .iter()
+        .map(|scenario| scenario.effective_test_count())
+        .sum::<usize>()
+        + 1
 }
 
 fn main() {
     let suite_started_at = Instant::now();
     let run_options = parse_run_options();
+    let has_explicit_scenario_filter = run_options.scenario_filter.is_some();
     let all_scenarios = scenarios::all_scenarios();
     let available_names = all_scenarios
         .iter()
@@ -2604,77 +2814,87 @@ fn main() {
         .collect::<Vec<_>>()
         .join(", ");
 
-    let (selected_scenarios, run_coverage): (Vec<scenarios::ScenarioDef>, bool) =
-        match run_options.scenario_filter {
-            Some(ScenarioFilter::Scenario(filter)) => {
-                let selected = resolve_scenarios_by_filter(&filter);
-                assert!(
-                    !selected.is_empty(),
-                    "Unknown scenario or pattern '{filter}'. Available scenarios: {available_names}"
-                );
-                println!(
-                    "selected {} scenario(s) via --scenario={}: {}",
-                    selected.len(),
-                    filter,
-                    selected
-                        .iter()
-                        .map(|scenario| scenario.name)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
-                (selected, false)
-            }
-            Some(ScenarioFilter::From(filter)) => {
-                let start_index = resolve_scenario_index(&filter).unwrap_or_else(|| {
-                    panic!("Unknown scenario '{filter}'. Available scenarios: {available_names}");
-                });
-                (all_scenarios[start_index..].to_vec(), false)
-            }
-            Some(ScenarioFilter::Failed) => {
-                let failed = load_last_failed_scenarios();
-                assert!(
-                    !failed.is_empty(),
-                    "No failed scenarios were recorded in the previous run (file: {}).",
-                    last_failed_scenarios_file_path().display()
-                );
-
-                let failed_set: HashSet<&str> = failed.iter().map(String::as_str).collect();
-                let selected = all_scenarios
+    let (selected_scenarios, run_coverage): (Vec<scenarios::ScenarioDef>, bool) = match run_options
+        .scenario_filter
+    {
+        Some(ScenarioFilter::Scenario(filter)) => {
+            let selected = resolve_scenarios_by_filter(&filter);
+            assert!(
+                !selected.is_empty(),
+                "Unknown scenario or pattern '{filter}'. Available scenarios: {available_names}"
+            );
+            println!(
+                "selected {} scenario(s) via --scenario={}: {}",
+                selected.len(),
+                filter,
+                selected
                     .iter()
-                    .copied()
-                    .filter(|scenario| failed_set.contains(scenario.name))
-                    .collect::<Vec<_>>();
+                    .map(|scenario| scenario.name)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            (selected, false)
+        }
+        Some(ScenarioFilter::From(filter)) => {
+            let start_index = resolve_scenario_index(&filter).unwrap_or_else(|| {
+                panic!("Unknown scenario '{filter}'. Available scenarios: {available_names}");
+            });
+            (all_scenarios[start_index..].to_vec(), false)
+        }
+        Some(ScenarioFilter::Failed) => {
+            let failed = load_last_failed_scenarios();
+            assert!(
+                !failed.is_empty(),
+                "No failed scenarios were recorded in the previous run (file: {}).",
+                last_failed_scenarios_file_path().display()
+            );
 
-                let missing = failed
+            let failed_set: HashSet<&str> = failed.iter().map(String::as_str).collect();
+            let selected = all_scenarios
+                .iter()
+                .copied()
+                .filter(|scenario| failed_set.contains(scenario.name))
+                .collect::<Vec<_>>();
+
+            let missing = failed
+                .iter()
+                .filter(|name| resolve_scenario(name).is_none())
+                .cloned()
+                .collect::<Vec<_>>();
+            assert!(
+                missing.is_empty(),
+                "Recorded failed scenarios are no longer available: {:?}. Available scenarios: {}",
+                missing,
+                available_names
+            );
+            assert!(
+                !selected.is_empty(),
+                "No selectable scenarios were resolved from the previous failed list: {:?}",
+                failed
+            );
+
+            println!(
+                "rerunning {} scenario(s) from previous failures: {}",
+                selected.len(),
+                selected
                     .iter()
-                    .filter(|name| resolve_scenario(name).is_none())
-                    .cloned()
-                    .collect::<Vec<_>>();
-                assert!(
-                    missing.is_empty(),
-                    "Recorded failed scenarios are no longer available: {:?}. Available scenarios: {}",
-                    missing,
-                    available_names
-                );
-                assert!(
-                    !selected.is_empty(),
-                    "No selectable scenarios were resolved from the previous failed list: {:?}",
-                    failed
-                );
+                    .map(|scenario| scenario.name)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            (selected, false)
+        }
+        None => (all_scenarios.to_vec(), true),
+    };
 
-                println!(
-                    "rerunning {} scenario(s) from previous failures: {}",
-                    selected.len(),
-                    selected
-                        .iter()
-                        .map(|scenario| scenario.name)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
-                (selected, false)
-            }
-            None => (all_scenarios.to_vec(), true),
-        };
+    let selected_scenarios = apply_scenario_limit_filter(selected_scenarios, run_options.scenario_limit);
+
+    if let Some(limit) = run_options.scenario_limit {
+        println!(
+            "applied scenario limit: first {} selected scenario(s)",
+            limit
+        );
+    }
 
     let planned_runs: Vec<PlannedScenarioRun> = selected_scenarios
         .iter()
@@ -2689,9 +2909,36 @@ fn main() {
         })
         .collect();
 
+    let filtered_out = if run_options.has_positional_filter && !has_explicit_scenario_filter {
+        total_declared_e2e_tests()
+    } else {
+        0
+    };
+
+    if run_options.list_only {
+        if run_coverage {
+            println!("{COVERAGE_TEST_NAME}: test");
+        }
+        for planned_run in &planned_runs {
+            println!("{}: test", planned_run.display_name());
+        }
+        println!("\n{} tests, 0 benchmarks", planned_runs.len() + usize::from(run_coverage));
+        return;
+    }
+
     let scenario_runs = planned_runs.len();
     let total_tests = scenario_runs + usize::from(run_coverage);
+
+    if filtered_out > 0 {
+        println!("running 0 tests");
+        println!(
+            "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; {filtered_out} filtered out"
+        );
+        return;
+    }
+
     println!("running {total_tests} tests");
+
     let mut resources = create_e2e_test_resources();
     let run_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut timings: Vec<TimingReport> = Vec::with_capacity(total_tests);
@@ -2699,7 +2946,7 @@ fn main() {
         let mut failed_scenario_names: HashSet<String> = HashSet::new();
 
         if run_coverage {
-            let report = run_named_test("test_e2e_command_coverage", verify_e2e_command_coverage);
+            let report = run_named_test(COVERAGE_TEST_NAME, verify_e2e_command_coverage);
             timings.push(report);
         }
 
@@ -2711,7 +2958,7 @@ fn main() {
             let scenario_started_instant = Instant::now();
 
             let cleanup_mode = if planned_run.scenario.requires_browser4 {
-                ScenarioCleanupMode::Deferred
+                ScenarioCleanupMode::Synchronous
             } else {
                 ScenarioCleanupMode::None
             };
@@ -2784,22 +3031,25 @@ fn main() {
             let passed = total_tests.saturating_sub(failed_scenario_count);
             if failed_scenario_count == 0 {
                 println!(
-                    "test result: ok. {} passed; 0 failed; 0 ignored; 0 measured; 0 filtered out",
-                    total_tests
+                    "test result: ok. {} passed; 0 failed; 0 ignored; 0 measured; {} filtered out",
+                    total_tests,
+                    filtered_out
                 );
             } else if failed_scenario_count <= MAX_ALLOWED_FAILED_SCENARIOS {
                 println!(
-                    "test result: ok (tolerated). {} passed; {} failed; 0 ignored; 0 measured; 0 filtered out ({} failure entries; tolerated <= {})",
+                    "test result: ok (tolerated). {} passed; {} failed; 0 ignored; 0 measured; {} filtered out ({} failure entries; tolerated <= {})",
                     passed,
                     failed_scenario_count,
+                    filtered_out,
                     scenario_failures.len(),
                     MAX_ALLOWED_FAILED_SCENARIOS
                 );
             } else {
                 println!(
-                    "test result: FAILED. {} passed; {} failed; 0 ignored; 0 measured; 0 filtered out ({} failure entries; allowed <= {})",
+                    "test result: FAILED. {} passed; {} failed; 0 ignored; 0 measured; {} filtered out ({} failure entries; allowed <= {})",
                     passed,
                     failed_scenario_count,
+                    filtered_out,
                     scenario_failures.len(),
                     MAX_ALLOWED_FAILED_SCENARIOS
                 );

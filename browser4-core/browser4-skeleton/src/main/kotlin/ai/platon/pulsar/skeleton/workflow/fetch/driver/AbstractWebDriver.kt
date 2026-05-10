@@ -484,86 +484,6 @@ abstract class AbstractWebDriver(
         return fields.entries.associate { it.key to selectFirstTextOrNull(it.value) }
     }
 
-    @Throws(WebDriverException::class)
-    override suspend fun selectFirstTextOrNull(selector: String): String? {
-        val safeSelector = normalizeCSSSelector(selector) ?: return null
-        val js = """
-((selector) => {
-    const element = document.querySelector(selector);
-    return element?.textContent ?? null;
-})('$safeSelector')
-        """.trimIndent()
-        return evaluateValue(js)?.toString()
-    }
-
-    @Throws(WebDriverException::class)
-    override suspend fun selectTextAll(selector: String): List<String> {
-        val safeSelector = normalizeCSSSelector(selector) ?: return emptyList()
-        val json = evaluate("__pulsar_utils__.selectTextAll('$safeSelector')")?.toString() ?: "[]"
-        return jacksonObjectMapper().readValue(json)
-    }
-
-    override suspend fun selectAttributes(selector: String): Map<String, String> {
-        val safeSelector = normalizeCSSSelector(selector) ?: return mapOf()
-        val json = evaluate("__pulsar_utils__.selectAttributes('$safeSelector')")?.toString() ?: return mapOf()
-        val attributes: List<String> = jacksonObjectMapper().readValue(json)
-        return attributes.zipWithNext().associate { it }
-    }
-
-    @Throws(WebDriverException::class)
-    override suspend fun selectAttributeAll(selector: String, attrName: String, start: Int, limit: Int): List<String> {
-        val end = start + limit
-        val safeSelector = normalizeCSSSelector(selector) ?: return listOf()
-
-        val expression = "__pulsar_utils__.selectAttributeAll('$safeSelector', '$attrName', $start, $end)"
-        val json = evaluate(expression)?.toString() ?: return listOf()
-        return jacksonObjectMapper().readValue(json)
-    }
-
-    @Throws(WebDriverException::class)
-    override suspend fun setAttribute(selector: String, attrName: String, attrValue: String) {
-        val safeSelector = normalizeCSSSelector(selector) ?: return
-        evaluate("__pulsar_utils__.setAttribute('$safeSelector', '$attrName', '$attrValue')")
-    }
-
-    @Throws(WebDriverException::class)
-    override suspend fun setAttributeAll(selector: String, attrName: String, attrValue: String) {
-        val safeSelector = normalizeCSSSelector(selector) ?: return
-        evaluate("__pulsar_utils__.setAttributeAll('$safeSelector', '$attrName', '$attrValue')")
-    }
-
-    // --------------------------- Property helpers ---------------------------
-    @Throws(WebDriverException::class)
-    override suspend fun selectFirstPropertyValueOrNull(selector: String, propName: String): String? {
-        val safeSelector = normalizeCSSSelector(selector) ?: return null
-        return evaluateValue("__pulsar_utils__.selectFirstPropertyValue('$safeSelector', '$propName')")?.toString()
-//        val safePropName = Strings.escapeForJsString(propName)
-        // return evaluateValue(selector, "function() { return this['$safePropName']; }")?.toString()
-    }
-
-    @Throws(WebDriverException::class)
-    override suspend fun selectPropertyValueAll(
-        selector: String, propName: String, start: Int, limit: Int
-    ): List<String> {
-        val end = start + limit
-        val safeSelector = normalizeCSSSelector(selector) ?: return listOf()
-        val expression = "__pulsar_utils__.selectPropertyValueAll('$safeSelector', '$propName', $start, $end)"
-        val json = evaluate(expression)?.toString() ?: return listOf()
-        return jacksonObjectMapper().readValue(json)
-    }
-
-    @Throws(WebDriverException::class)
-    override suspend fun setProperty(selector: String, propName: String, propValue: String) {
-        val safeSelector = normalizeCSSSelector(selector) ?: return
-        evaluate("__pulsar_utils__.setProperty('$safeSelector', '$propName', '$propValue')")
-    }
-
-    @Throws(WebDriverException::class)
-    override suspend fun setPropertyAll(selector: String, propName: String, propValue: String) {
-        val safeSelector = normalizeCSSSelector(selector) ?: return
-        evaluate("__pulsar_utils__.setPropertyAll('$safeSelector', '$propName', '$propValue')")
-    }
-
     /**
      * Find hyperlinks in elements matching the selector.
      * NOTE: Currently constructs absolute URLs by concatenating baseURI and raw href; TODO: robust resolution & abs: support.
@@ -584,18 +504,6 @@ abstract class AbstractWebDriver(
     @Throws(WebDriverException::class)
     override suspend fun selectImages(selector: String, offset: Int, limit: Int): List<String> {
         return selectAttributeAll(selector, "abs:src").drop(offset).take(limit)
-    }
-
-    @Throws(WebDriverException::class)
-    override suspend fun clickTextMatches(selector: String, pattern: String, count: Int) {
-        val safeSelector = normalizeCSSSelector(selector) ?: return
-        evaluate("__pulsar_utils__.clickTextMatches('$safeSelector', '$pattern')")
-    }
-
-    @Throws(WebDriverException::class)
-    override suspend fun clickMatches(selector: String, attrName: String, pattern: String, count: Int) {
-        val safeSelector = normalizeCSSSelector(selector) ?: return
-        evaluate("__pulsar_utils__.clickMatches('$safeSelector', '$attrName', '$pattern')")
     }
 
     @Throws(WebDriverException::class)
@@ -706,28 +614,6 @@ abstract class AbstractWebDriver(
         }
 
         delay(millis)
-    }
-
-    protected fun normalizeCSSSelector(selector: String): String? {
-        val cssSelector = convertSelectorIfNecessary(selector) ?: return null
-        val safeSelector = Strings.escapeJsString(cssSelector)
-        return safeSelector
-    }
-
-    private fun convertSelectorIfNecessary(selector: String): String? {
-        val locator = Locator.parse(selector) ?: return selector
-
-        val backendNodeId = when (locator.type) {
-            Locator.Type.FRAME_BACKEND_NODE_ID -> locator.selector.toIntOrNull()
-            else -> null
-        }
-
-        if (backendNodeId != null) {
-            val ref = ElementRefCriteria(backendNodeId = backendNodeId)
-            return snapshotService?.findElement(ref)?.cssSelector()
-        }
-
-        return selector
     }
 
     private fun getHeadersAndCookies(): Pair<Map<String, String>, List<Map<String, String>>> = runBlocking {

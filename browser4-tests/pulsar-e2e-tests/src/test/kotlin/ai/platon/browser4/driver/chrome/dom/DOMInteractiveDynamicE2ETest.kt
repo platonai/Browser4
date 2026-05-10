@@ -64,7 +64,7 @@ class DOMInteractiveDynamicE2ETest : WebDriverTestBase() {
         driver.click("[data-testid='tta-edit-1']")
         driver.waitForSelector("#itemList [data-id='1'] input[type='text']")
         driver.fill("#itemList [data-id='1'] input[type='text']", "Edited Item 1")
-        driver.press("#itemList [data-id='1'] input[type='text']", "Enter")
+        driver.press("Enter", "#itemList [data-id='1'] input[type='text']")
         driver.waitUntil(2000) {
             val txt = driver.selectFirstTextOrNull("#itemList [data-id='1'] span")
             txt?.contains("Edited Item 1") == true
@@ -98,6 +98,27 @@ class DOMInteractiveDynamicE2ETest : WebDriverTestBase() {
         }
         listStatus = driver.selectFirstTextOrNull("#listStatus span")
         assertTrue(listStatus?.contains("0 items in list") == true)
+    }
+
+    @Test
+    @DisplayName("test selector-targeted Enter press saves inline edit")
+    fun testSelectorPressEnterOnInlineEdit() = runEnhancedWebDriverTest(testURL) { driver ->
+        driver.waitForSelector("#itemList [data-testid='tta-edit-1']")
+
+        driver.bringToFront()
+        driver.click("[data-testid='tta-edit-1']")
+
+        val editorSelector = "#itemList [data-id='1'] input[type='text']"
+        driver.waitForSelector(editorSelector)
+        driver.fill(editorSelector, "Edited via Enter")
+        driver.press("Enter", editorSelector)
+
+        driver.waitUntil(2000) {
+            val txt = driver.selectFirstTextOrNull("#itemList [data-id='1'] span")
+            txt == "Edited via Enter"
+        }
+
+        assertEquals("Edited via Enter", driver.selectFirstTextOrNull("#itemList [data-id='1'] span"))
     }
 
     @Test

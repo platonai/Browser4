@@ -2,17 +2,18 @@ use crate::*;
 
 pub(super) fn test_batch_commands(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
 
     let interactive_url = ctx.interactive_url();
-    let open_command = batch_open_command(&interactive_url);
-    let type_command = "type #type-target 'hello batch'".to_string();
+    let navigate_command = batch_navigate_command(&interactive_url);
+    let type_command = "type 'hello batch' #type-target".to_string();
     let click_command = "click #click-target".to_string();
 
     run_command(
         ctx,
         &[
             "batch",
-            open_command.as_str(),
+            navigate_command.as_str(),
             type_command.as_str(),
             click_command.as_str(),
         ],
@@ -23,6 +24,52 @@ pub(super) fn test_batch_commands(ctx: &mut E2ECtx) {
         5_000,
         "Expected batch commands to set typeValue to 'hello batch' and clickCount to 1",
     );
+
+    for (key, expected_value) in [
+        ("!", "hello batch!"),
+        ("?", "hello batch!?"),
+        (":", "hello batch!?:"),
+        ("+", "hello batch!?:+"),
+        (")", "hello batch!?:+)"),
+    ] {
+        let batch_press_before = read_interactive_state(ctx);
+        let batch_press_before_events = key_event_count(&batch_press_before);
+        run_command_with_stdin(
+            ctx,
+            &["batch", "--json"],
+            &format!(
+                r##"
+[
+  ["press", "{key}", "#type-target"]
+]
+"##,
+                key = key,
+            ),
+        );
+        wait_for_state_or_abort(
+            ctx,
+            |s| {
+                s["typeValue"].as_str() == Some(expected_value)
+                    && key_event_count(s) >= batch_press_before_events + 2
+                    && s["keyEvents"]
+                        .as_array()
+                        .map(|events| {
+                            let new_events: Vec<_> = events
+                                .iter()
+                                .skip(batch_press_before_events)
+                                .filter_map(|event| event.as_str())
+                                .collect();
+                            new_events.contains(&format!("down:{key}").as_str())
+                                && new_events.contains(&format!("up:{key}").as_str())
+                        })
+                        .unwrap_or(false)
+            },
+            5_000,
+            &format!(
+                "Expected JSON batch press to append '{key}' and emit down/up key events for '{key}'"
+            ),
+        );
+    }
 
     let key_events_before = key_event_count(&read_interactive_state(ctx));
     run_command_with_stdin(
@@ -52,19 +99,19 @@ pub(super) fn test_batch_commands(ctx: &mut E2ECtx) {
     );
 
     run_command(ctx, &["close"]);
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
     run_command_with_stdin(
         ctx,
         &["batch", "--json"],
         &format!(
             r##"
 [
-  ["open", "{profile_arg}", "{interactive_url}"],
-  "type #type-target 'json string input'",
+  ["goto", "{interactive_url}"],
+  "type 'json string input' #type-target",
   ["fill", "#fill-target", "json opened session"],
   "click #click-target"
 ]
 "##,
-            profile_arg = OPEN_TEMPORARY_PROFILE_ARG,
             interactive_url = interactive_url,
         ),
     );
@@ -139,15 +186,16 @@ pub(super) fn test_batch_commands(ctx: &mut E2ECtx) {
 
 pub(super) fn test_batch_form_submission(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
 
     let form_url = ctx.form_url();
-    let open_command = batch_open_command(&form_url);
+    let navigate_command = batch_navigate_command(&form_url);
 
     run_command(
         ctx,
         &[
             "batch",
-            open_command.as_str(),
+            navigate_command.as_str(),
             "fill #first-name 'Alice'",
             "fill #last-name 'Johnson'",
             "fill #email 'alice@example.com'",
@@ -223,6 +271,7 @@ pub(super) fn test_batch_form_submission(ctx: &mut E2ECtx) {
 
 pub(super) fn test_batch_form_submission_from_json_file(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
 
     let form_input_path = write_json_fixture(
         ctx,
@@ -266,7 +315,7 @@ pub(super) fn test_batch_form_submission_from_json_file(ctx: &mut E2ECtx) {
 
     let form_url = ctx.form_url();
     let batch_commands = serde_json::json!([
-        ["open", OPEN_TEMPORARY_PROFILE_ARG, form_url],
+        ["goto", form_url],
         ["fill", "#first-name", first_name],
         ["fill", "#last-name", last_name],
         ["fill", "#email", email],
@@ -311,16 +360,17 @@ pub(super) fn test_batch_form_submission_from_json_file(ctx: &mut E2ECtx) {
 
 pub(super) fn test_batch_multi_interaction(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
 
     let interactive_url = ctx.interactive_url();
-    let open_command = batch_open_command(&interactive_url);
+    let navigate_command = batch_navigate_command(&interactive_url);
 
     run_command(
         ctx,
         &[
             "batch",
-            open_command.as_str(),
-            "type #type-target 'batch multi'",
+            navigate_command.as_str(),
+            "type 'batch multi' #type-target",
             "fill #fill-target 'batch fill'",
             "check #check-target",
             "select #select-target blue",
@@ -394,17 +444,18 @@ pub(super) fn test_batch_multi_interaction(ctx: &mut E2ECtx) {
 
 pub(super) fn test_batch_error_handling(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
 
     let interactive_url = ctx.interactive_url();
-    let open_command = batch_open_command(&interactive_url);
+    let navigate_command = batch_navigate_command(&interactive_url);
 
-    run_command(ctx, &["batch", open_command.as_str()]);
+    run_command(ctx, &["batch", navigate_command.as_str()]);
 
     let _result = run_command_expecting_failure(
         ctx,
         &[
             "batch",
-            "type #type-target 'before error'",
+            "type 'before error' #type-target",
             "this-is-not-a-valid-command",
             "fill #fill-target 'after error'",
         ],
@@ -422,7 +473,7 @@ pub(super) fn test_batch_error_handling(ctx: &mut E2ECtx) {
         &[
             "batch",
             "--bail",
-            "type #type-target 'bail test'",
+            "type 'bail test' #type-target",
             "unknown-command-xyz",
             "fill #fill-target 'should not execute'",
         ],
@@ -454,7 +505,7 @@ pub(super) fn test_batch_error_handling(ctx: &mut E2ECtx) {
             "batch",
             "bad-cmd-1",
             "bad-cmd-2",
-            "type #type-target 'still works'",
+            "type 'still works' #type-target",
         ],
         "2 batch command(s) failed.",
     );
@@ -475,17 +526,18 @@ pub(super) fn test_batch_error_handling(ctx: &mut E2ECtx) {
 
 pub(super) fn test_batch_json_edge_cases(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
 
     let interactive_url = ctx.interactive_url();
-    let open_command = batch_open_command(&interactive_url);
+    let navigate_command = batch_navigate_command(&interactive_url);
 
-    run_command(ctx, &["batch", open_command.as_str()]);
+    run_command(ctx, &["batch", navigate_command.as_str()]);
 
     run_command_with_stdin(
         ctx,
         &["batch", "--json"],
         r##"[
-  "type #type-target 'json mixed'",
+  "type 'json mixed' #type-target",
   ["fill", "#fill-target", "json array fill"],
   "click #click-target"
 ]"##,
@@ -501,7 +553,7 @@ pub(super) fn test_batch_json_edge_cases(ctx: &mut E2ECtx) {
         "Expected mixed JSON batch commands to type, fill, and click once",
     );
 
-    run_command(ctx, &["batch", open_command.as_str()]);
+    run_command(ctx, &["batch", navigate_command.as_str()]);
 
     run_command_with_stdin(
         ctx,
@@ -517,7 +569,7 @@ pub(super) fn test_batch_json_edge_cases(ctx: &mut E2ECtx) {
         "Expected JSON batch to preserve special characters in fillValue",
     );
 
-    run_command(ctx, &["batch", open_command.as_str()]);
+    run_command(ctx, &["batch", navigate_command.as_str()]);
 
     let bail_json_result = run_cli_process_with_stdin(
         ctx,

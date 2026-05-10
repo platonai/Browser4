@@ -35,7 +35,7 @@ import org.slf4j.LoggerFactory
  * ### Element Interaction
  * - `exists(selector)` - Check if element exists
  * - `click(selector)` - Click an element
- * - `type(selector, text)` - Type text into input
+ * - `type(text, selector)` - Type text into input
  * - `boundingBox(selector)` - Get element dimensions
  *
  * ### Data Extraction
@@ -137,7 +137,7 @@ internal class WebDriverDemo(private val session: AgenticSession = AgenticContex
 
             // Type extracted text into search box
             println("type `$text` in $searchBoxSelector ...")
-            driver.type(searchBoxSelector, text)
+            driver.type(text, searchBoxSelector)
         }
     }
 
@@ -189,7 +189,7 @@ internal class WebDriverDemo(private val session: AgenticSession = AgenticContex
         var text = driver.selectFirstTextOrNull(selector) ?: "no-text"
         text = text.substring(1, 4)
         println("type `$text` in $searchBoxSelector")
-        driver.type(searchBoxSelector, text)
+        driver.type(text, searchBoxSelector)
 
         // =====================================================================
         // Screenshot Capture
@@ -237,7 +237,7 @@ internal class WebDriverDemo(private val session: AgenticSession = AgenticContex
         println("search ...")
         text = "Vincent Willem van Gogh"
         println("type `$text` in $searchBoxSelector")
-        driver.type(searchBoxSelector, text)
+        driver.type(text, searchBoxSelector)
         driver.click(searchBoxSubmit)
         val url = driver.currentUrl()
         println("page navigated to $url")

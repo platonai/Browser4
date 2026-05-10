@@ -41,6 +41,10 @@ import kotlin.test.assertTrue
  */
 @Tag("E2ETest")
 class MCPToolControllerE2ETest : RestAPITestBase() {
+    companion object {
+        const val OPEN_PROFILE_MODE = "SEQUENTIAL"
+    }
+    
     private val logger = LoggerFactory.getLogger(MCPToolControllerE2ETest::class.java)
     private val objectMapper = jacksonObjectMapper()
         .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
@@ -51,11 +55,11 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
 
     @Autowired
     lateinit var sessionManager: SessionManager
-
+    
     private lateinit var fixtureServer: FixtureServer
     private lateinit var tempDir: Path
     private lateinit var uploadFile: Path
-
+    
     private val cliCommandToMcpTool = mapOf(
         "open" to "open_session",
         "goto" to "browser_navigate",
@@ -142,9 +146,9 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
     @Test
     @DisplayName("open_session preserves requested TEMPORARY profile mode")
     fun testOpenUsesTemporaryProfileMode() {
-        val sessionId = openSession(capabilities = mapOf("profileMode" to "TEMPORARY"))
+        val sessionId = openSession(capabilities = mapOf("profileMode" to OPEN_PROFILE_MODE))
         assertEquals(
-            "TEMPORARY",
+            OPEN_PROFILE_MODE,
             sessionManager.getSession(sessionId)?.capabilities?.get("profileMode")?.toString()
         )
     }
@@ -231,10 +235,19 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
             it["fillValue"].asText() == "filled text"
         }
 
-        val pressBeforeEvents = keyEventCount(readState(sessionId))
-        assertNotError(callTool("press", mapOf("sessionId" to sessionId, "selector" to "#type-target", "key" to "!")))
-        waitForState(sessionId, "Expected press to append ! and emit a key event") {
-            it["typeValue"].asText() == "hello world!" && keyEventCount(it) > pressBeforeEvents
+        listOf(
+            "!" to "hello world!",
+            "?" to "hello world!?",
+            ":" to "hello world!?:",
+            "+" to "hello world!?:+",
+            ")" to "hello world!?:+)"
+        ).forEach { (key, expectedValue) ->
+            val pressBeforeEvents = keyEventCount(readState(sessionId))
+            assertNotError(callTool("press", mapOf("sessionId" to sessionId, "selector" to "#type-target", "key" to key)))
+            waitForState(sessionId, "Expected press to append $key and emit down/up key events") {
+                val newEvents = keyEventsSince(it, pressBeforeEvents)
+                it["typeValue"].asText() == expectedValue && "down:$key" in newEvents && "up:$key" in newEvents
+            }
         }
 
         assertNotError(callTool("click", mapOf("sessionId" to sessionId, "selector" to "#type-target")))
@@ -336,7 +349,7 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
     fun testCommandBatchInteractiveFlow() {
         val batchResponse = callCommandBatch(
             listOf(
-                mapOf("op" to "open", "capabilities" to mapOf("profileMode" to "TEMPORARY")),
+                mapOf("op" to "open", "capabilities" to mapOf("profileMode" to OPEN_PROFILE_MODE)),
                 mapOf("op" to "tool", "tool" to "browser_navigate", "arguments" to mapOf("url" to fixtureServer.interactiveUrl())),
                 mapOf("op" to "tool", "tool" to "browser_press_sequentially", "arguments" to mapOf("ref" to "#type-target", "text" to "hello batch")),
                 mapOf("op" to "tool", "tool" to "browser_type", "arguments" to mapOf("ref" to "#fill-target", "text" to "from batch")),
@@ -357,6 +370,33 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
                     it["clickCount"].asInt() == 1
         }
 
+        listOf(
+            "!" to "hello batch!",
+            "?" to "hello batch!?",
+            ":" to "hello batch!?:",
+            "+" to "hello batch!?:+",
+            ")" to "hello batch!?:+)"
+        ).forEach { (key, expectedValue) ->
+            val pressBeforeEvents = keyEventCount(readState(sessionId))
+            val pressBatchResponse = callCommandBatch(
+                listOf(
+                    mapOf(
+                        "op" to "tool",
+                        "tool" to "browser_press_key",
+                        "arguments" to mapOf("ref" to "#type-target", "key" to key)
+                    )
+                ),
+                sessionId = sessionId,
+                batchLabel = "interactive flow press $key"
+            )
+            assertEquals(0, pressBatchResponse.failureCount)
+            assertEquals(sessionId, pressBatchResponse.sessionId)
+            waitForState(sessionId, "Expected batch press to append $key and emit down/up key events") {
+                val newEvents = keyEventsSince(it, pressBeforeEvents)
+                it["typeValue"].asText() == expectedValue && "down:$key" in newEvents && "up:$key" in newEvents
+            }
+        }
+
         assertTrue(batchResponse.results.any { it.snapshot?.isNotBlank() == true }, "Expected a snapshot result")
         assertTrue(batchResponse.results.any { (it.screenshot?.length ?: 0) > 100 }, "Expected a screenshot result")
     }
@@ -366,7 +406,7 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
     fun testCommandBatchFormSubmission() {
         val firstBatch = callCommandBatch(
             listOf(
-                mapOf("op" to "open", "capabilities" to mapOf("profileMode" to "TEMPORARY")),
+                mapOf("op" to "open", "capabilities" to mapOf("profileMode" to OPEN_PROFILE_MODE)),
                 mapOf("op" to "tool", "tool" to "browser_navigate", "arguments" to mapOf("url" to fixtureServer.formUrl())),
                 mapOf("op" to "tool", "tool" to "browser_type", "arguments" to mapOf("ref" to "#first-name", "text" to "Alice")),
                 mapOf("op" to "tool", "tool" to "browser_type", "arguments" to mapOf("ref" to "#last-name", "text" to "Johnson")),
@@ -417,11 +457,34 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
     }
 
     @Test
+    @DisplayName("command_batch open reuses an explicit sessionId instead of creating a new session")
+    fun testCommandBatchOpenReusesExistingSession() {
+        val sessionId = openAndNavigate(fixtureServer.interactiveUrl())
+        val sessionCountBefore = sessionManager.getAllSessions().size
+
+        val batchResponse = callCommandBatch(
+            listOf(
+                mapOf("op" to "open", "capabilities" to mapOf("profileMode" to OPEN_PROFILE_MODE)),
+                mapOf("op" to "tool", "tool" to "page_title", "arguments" to emptyMap<String, Any?>())
+            ),
+            sessionId = sessionId,
+            batchLabel = "reuse existing session"
+        )
+
+        assertEquals(sessionId, batchResponse.sessionId)
+        assertEquals(sessionCountBefore, sessionManager.getAllSessions().size)
+        assertEquals(0, batchResponse.failureCount)
+        assertEquals("Session already open: $sessionId", batchResponse.results[0].text)
+        assertEquals(sessionId, batchResponse.results[0].sessionId)
+        assertEquals(FixtureServer.INTERACTIVE_TITLE, batchResponse.results[1].text)
+    }
+
+    @Test
     @DisplayName("command_batch continue and bail behavior matches CLI error handling")
     fun testCommandBatchErrorHandling() {
         val initialBatch = callCommandBatch(
             listOf(
-                mapOf("op" to "open", "capabilities" to mapOf("profileMode" to "TEMPORARY")),
+                mapOf("op" to "open", "capabilities" to mapOf("profileMode" to OPEN_PROFILE_MODE)),
                 mapOf("op" to "tool", "tool" to "browser_navigate", "arguments" to mapOf("url" to fixtureServer.interactiveUrl()))
             ),
             batchLabel = "error handling bootstrap"
@@ -546,6 +609,7 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
     }
 
     @Test
+    @Tag("RequiresAI")
     @DisplayName("agent extract/summarize and command run/status/result work through MCP")
     fun testAgentAndCommandTools() {
         Assumptions.assumeTrue(ChatModelFactory.isModelConfigured(conf))
@@ -651,7 +715,7 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         return sessionId
     }
 
-    private fun openTemporarySession(): String = openSession(mapOf("profileMode" to "TEMPORARY"))
+    private fun openTemporarySession(): String = openSession(mapOf("profileMode" to OPEN_PROFILE_MODE))
 
     private fun navigate(sessionId: String, url: String) {
         val response = callTool("browser_navigate", mapOf("sessionId" to sessionId, "url" to url))
@@ -700,6 +764,11 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
     }
 
     private fun keyEventCount(state: JsonNode): Int = (state["keyEvents"] as? ArrayNode)?.size() ?: 0
+
+    private fun keyEventsSince(state: JsonNode, startIndex: Int): List<String> {
+        val events = state["keyEvents"] as? ArrayNode ?: return emptyList()
+        return (startIndex until events.size()).map { index -> events.get(index).asText() }
+    }
 
     private fun lastKeyEvent(state: JsonNode): String? {
         val events = state["keyEvents"] as? ArrayNode ?: return null
@@ -936,7 +1005,6 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         companion object {
             const val INTERACTIVE_TITLE = "Browser4 CLI Interactive Fixture"
             const val OTHER_TITLE = "Browser4 CLI Other Fixture"
-            const val FORM_TITLE = "Browser4 CLI Form Fixture"
             private const val INTERACTIVE_FIXTURE_RESOURCE = "static/b4/mcp-tool-controller-interactive-fixture.html"
             private const val OTHER_FIXTURE_RESOURCE = "static/b4/mcp-tool-controller-other-fixture.html"
             private const val FORM_FIXTURE_RESOURCE = "static/b4/mcp-tool-controller-form-fixture.html"

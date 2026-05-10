@@ -20,7 +20,7 @@ import kotlin.test.assertTrue
  * */
 class PulsarWebDriverInjectedJSTests : WebDriverTestBase() {
 
-    override val webDriverService get() = FastWebDriverService(browserFactory)
+    override val webDriverService get() = FastWebDriverService(browserManager)
 
     val testURL get() = "$generatedAssetsBaseURL/injected-js.test.html"
 

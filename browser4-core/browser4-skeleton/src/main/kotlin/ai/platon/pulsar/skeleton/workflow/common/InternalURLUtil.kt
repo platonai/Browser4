@@ -1,7 +1,6 @@
 package ai.platon.pulsar.skeleton.workflow.common
 
 import ai.platon.pulsar.common.urls.URLUtils
-import ai.platon.pulsar.common.urls.URLUtils.getURLOrNull
 import org.slf4j.LoggerFactory
 import java.net.InetAddress
 import java.net.URL
@@ -32,12 +31,12 @@ object InternalURLUtil {
     private val logger = LoggerFactory.getLogger(InternalURLUtil::class.java)
 
     fun getHost(url: String): String? {
-        val u = getURLOrNull(url) ?: return null
+        val u = URLUtils.getURLOrNull2(url) ?: return null
         return getHost(u, GroupMode.BY_HOST)
     }
 
     fun getHost(url: String, groupMode: GroupMode): String? {
-        val u = getURLOrNull(url) ?: return null
+        val u = URLUtils.getURLOrNull2(url) ?: return null
         return getHost(u, groupMode)
     }
 

@@ -6,24 +6,19 @@ import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.AgentToolExecutor
 import ai.platon.pulsar.agentic.tools.high.command.CommandService
 import ai.platon.pulsar.common.brief
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import ai.platon.pulsar.rest.mcp.service.SessionManager
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.annotation.JsonSetter
 import com.fasterxml.jackson.annotation.Nulls
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import jakarta.servlet.http.HttpServletResponse
-import kotlinx.coroutines.delay
 import org.slf4j.LoggerFactory
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
 import org.springframework.http.MediaType
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
 import java.util.*
-import kotlin.collections.component1
-import kotlin.collections.component2
-import kotlin.collections.iterator
-import kotlin.time.Duration.Companion.seconds
 
 // ---------------------------------------------------------------------------
 // DTOs
@@ -133,6 +128,10 @@ class MCPToolController(
     }
 
     private val logger = LoggerFactory.getLogger(MCPToolController::class.java)
+
+    private fun requireSessionId(sessionId: String?): String {
+        return sessionId ?: throw IllegalArgumentException(MCPConstants.ERROR_NO_ACTIVE_SESSION)
+    }
 
     /**
      * Cached tool names for the /tools endpoint.
@@ -281,6 +280,7 @@ class MCPToolController(
 
         // Navigate to initial URL if provided
         val url = request.arguments?.get("url")?.toString()
+        // Navigate operation is handled in the client side
 
         logger.info("MCP open_session: created session {}", session.sessionId)
         return ResponseEntity.ok(
@@ -337,7 +337,6 @@ class MCPToolController(
 
     // =========================================================================
     // Command tool handlers
-    // TODO: simplify command tool handling
     // =========================================================================
 
     /**
@@ -372,13 +371,6 @@ class MCPToolController(
             val durationMillis = (System.nanoTime() - startedAt) / 1_000_000
 
             results += result.copy(durationMillis = durationMillis)
-            if (result.ok) {
-                currentSessionId = when (step["op"]?.toString()) {
-                    "open" -> result.sessionId
-                    "close" -> null
-                    else -> currentSessionId
-                }
-            }
             if (!result.ok && bail) {
                 stoppedOnError = true
                 break
@@ -444,84 +436,86 @@ class MCPToolController(
         step: Map<String, Any?>,
         currentSessionId: String?,
     ): BatchExecutionResult {
-        return when (val op = step["op"]?.toString()) {
-            "open" -> {
-                val capabilities = step["capabilities"].toAnyMap().takeIf { !it.isNullOrEmpty() }
-                val managedSession = sessionManager.createSession(capabilities)
-                val sessionId = managedSession.sessionId
-                BatchExecutionResult(index = index, ok = true, sessionId = sessionId, text = "Session opened: $sessionId")
+        val op = step[MCPConstants.KEY_OP]?.toString()
+            ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_OP)
+
+        // Validate that only DOM operations are allowed in batch
+        when (op) {
+            MCPConstants.OP_OPEN, MCPConstants.OP_CLOSE -> {
+                throw IllegalArgumentException(String.format(MCPConstants.ERROR_BATCH_NON_DOM_OP, op))
             }
-
-            "close" -> {
-                val sessionId = currentSessionId
-                    ?: throw IllegalArgumentException("""No active session. Run "browser4-cli open" first.""")
-                val deleted = sessionManager.deleteSession(sessionId)
-                if (!deleted) {
-                    throw IllegalArgumentException("Session not found: $sessionId")
-                }
-                BatchExecutionResult(index = index, ok = true, text = "Session closed.")
-            }
-
-            "tool" -> {
-                val sessionId = currentSessionId
-                    ?: throw IllegalArgumentException("""No active session. Run "browser4-cli open" first.""")
-                step["preFocusSelector"]?.toString()?.takeIf { it.isNotBlank() }?.let {
-                    restoreBatchFocus(sessionId, it)
-                }
-                step["preMousePosition"].toBatchMousePosition()?.let {
-                    restoreBatchMousePosition(sessionId, it)
-                }
-                val tool = step["tool"]?.toString()
-                    ?: throw IllegalArgumentException("Batch tool step is missing 'tool'.")
-                val arguments = step["arguments"].toAnyMap().orEmpty() + ("sessionId" to sessionId)
-                val text = executeAgentToolText(tool, arguments)
-                BatchExecutionResult(index = index, ok = true, text = text.ifBlank { null })
-            }
-
-            "snapshot" -> {
-                val sessionId = currentSessionId
-                    ?: throw IllegalArgumentException("""No active session. Run "browser4-cli open" first.""")
-                val tool = step["tool"]?.toString()
-                    ?: throw IllegalArgumentException("Batch snapshot step is missing 'tool'.")
-                val arguments = step["arguments"].toAnyMap().orEmpty() + ("sessionId" to sessionId)
-                val pageUrl = executeAgentToolText("page_url", mapOf("sessionId" to sessionId))
-                val pageTitle = executeAgentToolText("page_title", mapOf("sessionId" to sessionId))
-                val snapshot = executeAgentToolText(tool, arguments)
-                BatchExecutionResult(
-                    index = index,
-                    ok = true,
-                    pageUrl = pageUrl,
-                    pageTitle = pageTitle,
-                    snapshot = snapshot,
-                )
-            }
-
-            "screenshot" -> {
-                val sessionId = currentSessionId
-                    ?: throw IllegalArgumentException("""No active session. Run "browser4-cli open" first.""")
-                val tool = step["tool"]?.toString()
-                    ?: throw IllegalArgumentException("Batch screenshot step is missing 'tool'.")
-                val arguments = step["arguments"].toAnyMap().orEmpty() + ("sessionId" to sessionId)
-                val screenshot = executeAgentToolText(tool, arguments)
-                BatchExecutionResult(index = index, ok = true, screenshot = screenshot)
-            }
-
-            "press" -> {
-                val sessionId = currentSessionId
-                    ?: throw IllegalArgumentException("""No active session. Run "browser4-cli open" first.""")
-                val selector = step["selector"]?.toString()
-                    ?: throw IllegalArgumentException("Batch press step is missing 'selector'.")
-                val key = step["key"]?.toString()
-                    ?: throw IllegalArgumentException("Batch press step is missing 'key'.")
-
-                // TODO: DO NOT REWRITE PRESS IMPLEMENTATION, dispatch to AgentToolExecutor instead
-
-                val text = executeBatchPress(sessionId, selector, key)
-                BatchExecutionResult(index = index, ok = true, text = text.ifBlank { null })
-            }
-
-            else -> throw IllegalArgumentException("Unsupported batch step op: $op")
         }
+
+        return when (op) {
+            MCPConstants.OP_TOOL -> handleBatchTool(index, step, currentSessionId)
+            MCPConstants.OP_SNAPSHOT -> handleBatchSnapshot(index, step, currentSessionId)
+            MCPConstants.OP_SCREENSHOT -> handleBatchScreenshot(index, step, currentSessionId)
+            else -> throw IllegalArgumentException("${MCPConstants.ERROR_UNSUPPORTED_OP}$op")
+        }
+    }
+
+
+    private suspend fun handleBatchTool(
+        index: Int,
+        step: Map<String, Any?>,
+        currentSessionId: String?
+    ): BatchExecutionResult {
+        val sessionId = requireSessionId(currentSessionId)
+
+        step[MCPConstants.KEY_PRE_FOCUS_SELECTOR]?.toString()?.takeIf { it.isNotBlank() }?.let {
+            restoreBatchFocus(sessionId, it)
+        }
+        step[MCPConstants.KEY_PRE_MOUSE_POSITION].toBatchMousePosition()?.let {
+            restoreBatchMousePosition(sessionId, it)
+        }
+
+        val tool = step[MCPConstants.KEY_TOOL]?.toString()
+            ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_TOOL)
+        val arguments =
+            step[MCPConstants.KEY_ARGUMENTS].toAnyMap().orEmpty() + (MCPConstants.KEY_SESSION_ID to sessionId)
+        val text = executeAgentToolText(tool, arguments)
+
+        return BatchExecutionResult(index = index, ok = true, text = text.ifBlank { null })
+    }
+
+    private suspend fun handleBatchSnapshot(
+        index: Int,
+        step: Map<String, Any?>,
+        currentSessionId: String?
+    ): BatchExecutionResult {
+        val sessionId = requireSessionId(currentSessionId)
+        val tool = step[MCPConstants.KEY_TOOL]?.toString()
+            ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_TOOL)
+        val arguments =
+            step[MCPConstants.KEY_ARGUMENTS].toAnyMap().orEmpty() + (MCPConstants.KEY_SESSION_ID to sessionId)
+
+        val pageUrl = executeAgentToolText(MCPConstants.TOOL_PAGE_URL, mapOf(MCPConstants.KEY_SESSION_ID to sessionId))
+        val pageTitle =
+            executeAgentToolText(MCPConstants.TOOL_PAGE_TITLE, mapOf(MCPConstants.KEY_SESSION_ID to sessionId))
+        val snapshot = executeAgentToolText(tool, arguments)
+
+        return BatchExecutionResult(
+            index = index,
+            ok = true,
+            pageUrl = pageUrl,
+            pageTitle = pageTitle,
+            snapshot = snapshot,
+        )
+    }
+
+    private suspend fun handleBatchScreenshot(
+        index: Int,
+        step: Map<String, Any?>,
+        currentSessionId: String?
+    ): BatchExecutionResult {
+        val sessionId = requireSessionId(currentSessionId)
+        val tool = step[MCPConstants.KEY_TOOL]?.toString()
+            ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_TOOL)
+        val arguments =
+            step[MCPConstants.KEY_ARGUMENTS].toAnyMap().orEmpty() + (MCPConstants.KEY_SESSION_ID to sessionId)
+        val screenshot = executeAgentToolText(tool, arguments)
+
+        return BatchExecutionResult(index = index, ok = true, screenshot = screenshot)
     }
 
     private suspend fun restoreBatchFocus(sessionId: String, selector: String) {
@@ -546,8 +540,8 @@ class MCPToolController(
         """.trimIndent()
 
         when (val result = executeAgentToolText(
-            "browser_evaluate",
-            mapOf("sessionId" to sessionId, "expression" to focusExpression),
+            MCPConstants.TOOL_BROWSER_EVALUATE,
+            mapOf(MCPConstants.KEY_SESSION_ID to sessionId, "expression" to focusExpression),
         ).trim()) {
             "focused" -> return
             "missing" -> throw IllegalArgumentException(
@@ -574,85 +568,19 @@ class MCPToolController(
     private suspend fun restoreBatchMousePosition(sessionId: String, position: BatchMousePosition) {
         executeAgentToolText(
             "browser_mouse_move_xy",
-            mapOf("sessionId" to sessionId, "x" to position.x, "y" to position.y),
-        )
-    }
-
-    /**
-     * TODO: DO NOT REWRITE PRESS IMPLEMENTATION, dispatch to AgentToolExecutor instead
-     * */
-    private suspend fun executeBatchPress(sessionId: String, selector: String, key: String): String {
-        val selectorLiteral = jacksonObjectMapper().writeValueAsString(selector)
-        val keyLiteral = jacksonObjectMapper().writeValueAsString(key)
-        val focusExpression =
-            "(() => { const el = document.querySelector($selectorLiteral); if (!el) return 'missing'; el.focus(); return document.activeElement === el ? 'focused' : 'unfocused'; })()"
-        val printableKeyExpression = """
-            (() => {
-                const el = document.querySelector($selectorLiteral);
-                if (!el) return 'missing';
-                const key = $keyLiteral;
-                el.focus();
-                const editable = el.isContentEditable || el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && !['checkbox','radio','file','submit','button','reset','range','color'].includes((el.type || '').toLowerCase()));
-                el.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
-                if (editable) {
-                    if (typeof el.value === 'string') {
-                        const start = typeof el.selectionStart === 'number' ? el.selectionStart : el.value.length;
-                        const end = typeof el.selectionEnd === 'number' ? el.selectionEnd : el.value.length;
-                        const nextValue = el.value.slice(0, start) + key + el.value.slice(end);
-                        el.value = nextValue;
-                        if (typeof el.setSelectionRange === 'function') {
-                            const caret = start + key.length;
-                            el.setSelectionRange(caret, caret);
-                        }
-                    } else if (el.isContentEditable) {
-                        el.textContent = (el.textContent || '') + key;
-                    }
-                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                }
-                el.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true }));
-                return editable ? 'typed' : 'dispatched';
-            })()
-        """.trimIndent()
-
-        val usePrintableCharPath = !key.contains('+') && key.length == 1
-        if (usePrintableCharPath) {
-            val typedResult = executeAgentToolText(
-                "browser_evaluate",
-                mapOf("sessionId" to sessionId, "expression" to printableKeyExpression),
-            )
-            if (typedResult.trim() != "typed" && typedResult.trim() != "dispatched") {
-                throw IllegalArgumentException(
-                    "Failed to synthesize printable key press. Result: ${typedResult.trim()}"
-                )
-            }
-            return typedResult
-        }
-
-        val focusResult = executeAgentToolText(
-            "browser_evaluate",
-            mapOf("sessionId" to sessionId, "expression" to focusExpression),
-        )
-        if (focusResult.trim() != "focused") {
-            throw IllegalArgumentException(
-                "Failed to focus target before pressing key. Focus result: ${focusResult.trim()}"
-            )
-        }
-        return executeAgentToolText(
-            "browser_press_key",
-            mapOf("sessionId" to sessionId, "ref" to selector, "key" to key),
+            mapOf(MCPConstants.KEY_SESSION_ID to sessionId, "x" to position.x, "y" to position.y),
         )
     }
 
     private suspend fun executeAgentToolText(toolName: String, args: Map<String, Any?>): String {
-        val normalizedRequest = normalizeFrontendToolCall(toolName, args)
-        val sessionId = requireSessionId(normalizedRequest.arguments)
+        val sessionId = requireSessionId(args)
         val managed = sessionManager.getSession(sessionId)
-            ?: throw IllegalArgumentException("Session not found: $sessionId")
+            ?: throw IllegalArgumentException("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId")
 
         val agent = managed.agenticSession.companionAgent as? BasicBrowserAgent
             ?: throw IllegalStateException("Session agent does not support tools")
 
-        return executeAgentToolText(agent, toolName, normalizedRequest.arguments)
+        return executeAgentToolText(agent, toolName, args)
     }
 
     private suspend fun executeAgentToolText(
@@ -725,7 +653,12 @@ class MCPToolController(
                 ResponseEntity.ok(textResponse(evaluate.value?.toString() ?: ""))
             }
         } catch (e: Exception) {
-            logger.warn("MCP tool execution failed | tool={} | normalizedTool={} | {}", request.tool, toolName, e.brief())
+            logger.warn(
+                "MCP tool execution failed | tool={} | normalizedTool={} | {}",
+                request.tool,
+                toolName,
+                e.brief()
+            )
             ResponseEntity.ok(errorResponse("${request.tool} failed: ${e.brief()}"))
         }
     }
@@ -882,55 +815,7 @@ class MCPToolController(
     }
 
     private fun normalizeToolArguments(toolName: String, args: Map<String, Any?>): Map<String, Any?> {
-        val normalized = args.mapKeys { (key, _) -> snakeToCamel(key) }.toMutableMap()
-        normalized.remove("sessionId")
-
-        val ref = normalized.remove("ref")
-        if (!normalized.containsKey("selector") && ref != null) {
-            normalized["selector"] = ref
-        }
-
-        val startRef = normalized.remove("startRef")
-        if (!normalized.containsKey("sourceSelector") && startRef != null) {
-            normalized["sourceSelector"] = startRef
-        }
-
-        val endRef = normalized.remove("endRef")
-        if (!normalized.containsKey("targetSelector") && endRef != null) {
-            normalized["targetSelector"] = endRef
-        }
-
-        val modifiers = normalized.remove("modifiers")
-        if (!normalized.containsKey("modifier") && modifiers is List<*> && modifiers.isNotEmpty()) {
-            normalized["modifier"] = modifiers.first()?.toString()
-        }
-
-        when (toolName) {
-            "switch_tab", "tab_select", "close_tab", "tab_close" -> {
-                val legacyTabId = normalized.remove("index") ?: normalized.remove("id")
-                if (!normalized.containsKey("tabId") && legacyTabId != null) {
-                    normalized["tabId"] = legacyTabId.toString()
-                }
-            }
-
-            "select_option" -> {
-                val legacyValue = normalized.remove("value")
-                if (!normalized.containsKey("values") && legacyValue != null) {
-                    normalized["values"] = listOf(legacyValue.toString())
-                }
-            }
-
-            "evaluate_value", "evaluate_value_detail" -> {
-                val selector = normalized["selector"]?.toString()?.takeIf { it.isNotBlank() }
-                val expression = normalized["expression"]?.toString()?.takeIf { it.isNotBlank() }
-                if (selector != null && expression != null && !normalized.containsKey("functionDeclaration")) {
-                    normalized.remove("expression")
-                    normalized["functionDeclaration"] = expression
-                }
-            }
-        }
-
-        return normalized
+        return ArgumentNormalizerFactory.normalize(toolName, args)
     }
 
     private fun Any?.toBooleanValue(): Boolean? = when (this) {
@@ -965,8 +850,8 @@ class MCPToolController(
     }
 
     private fun requireSessionId(arguments: Map<String, Any?>): String {
-        return arguments["sessionId"]?.toString()
-            ?: throw IllegalArgumentException("Missing required parameter: sessionId")
+        return arguments[MCPConstants.KEY_SESSION_ID]?.toString()
+            ?: throw IllegalArgumentException("Missing required parameter: ${MCPConstants.KEY_SESSION_ID}")
     }
 
     private fun requireArg(args: Map<String, Any?>, key: String): String {

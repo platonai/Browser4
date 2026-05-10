@@ -1,4 +1,4 @@
-﻿# 🤖 Browser4
+# 🤖 Browser4
 
 [![Docker Pulls](https://img.shields.io/docker/pulls/galaxyeye88/browser4?style=flat-square)](https://hub.docker.com/r/galaxyeye88/browser4)
 [![License: APACHE2](https://img.shields.io/badge/license-APACHE2-green?style=flat-square)](https://github.com/platonai/browser4/blob/main/LICENSE)
@@ -146,10 +146,14 @@ Browser4 CLI 与 Playwright 兼容，支持导航、交互、数据提取等广�
 它可以用于脚本、终端会话，或通过 SKILLS 集成进 AI agents。
 
 ```shell
-# 安装最新 Unix CLI（包含 Browser4.jar 兜底运行时）
-curl -fsSL https://raw.githubusercontent.com/platonai/Browser4/master/sdks/browser4-cli/install.sh | bash
+# macOS / Linux
+mkdir -p ~/.browser4/lib
+curl -fsSL -o ~/.browser4/lib/Browser4.jar https://github.com/platonai/Browser4/releases/latest/download/Browser4.jar
+git clone https://github.com/platonai/Browser4.git
+cd Browser4/sdks/browser4-cli
+cargo install --path . --locked
 
-# Windows：保留 Browser4 仓库以支持 localhost Maven 自动启动；Browser4.jar 仍是兜底运行时
+# Windows
 New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.browser4\lib" | Out-Null
 Invoke-WebRequest 'https://github.com/platonai/Browser4/releases/latest/download/Browser4.jar' -OutFile "$env:USERPROFILE\.browser4\lib\Browser4.jar"
 git clone https://github.com/platonai/Browser4.git

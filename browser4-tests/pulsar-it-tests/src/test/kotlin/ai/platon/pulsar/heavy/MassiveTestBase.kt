@@ -47,9 +47,7 @@ open class MassiveTestBase {
 
     @BeforeEach
     fun prepareContextDirs() {
-//        Files.createDirectories(contextBaseDir)
-//        assertTrue { Files.exists(contextBaseDir) }
-
+        Assumptions.assumeTrue { testFileCount > 0 }
         val tempContextBaseDir = AppPaths.CONTEXT_TMP_DIR
         Files.createDirectories(tempContextBaseDir)
         assertTrue { Files.exists(tempContextBaseDir) }
@@ -58,8 +56,16 @@ open class MassiveTestBase {
     @OptIn(ExperimentalPathApi::class)
     @AfterTest
     fun clearContextDirs() {
+        Assumptions.assumeTrue { testFileCount > 0 }
+        kotlin.runCatching { session.close() }
+
         val tempContextBaseDir = AppPaths.CONTEXT_TMP_DIR
-        tempContextBaseDir.deleteRecursively()
+        repeat(5) {
+            Thread.sleep(1000)
+            kotlin.runCatching { tempContextBaseDir.deleteRecursively() }
+            if (!Files.exists(tempContextBaseDir)) return
+        }
+
         assertTrue { !Files.exists(tempContextBaseDir) }
     }
 

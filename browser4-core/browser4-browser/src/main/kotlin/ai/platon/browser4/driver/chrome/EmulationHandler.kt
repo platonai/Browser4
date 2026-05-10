@@ -32,6 +32,42 @@ data class NodeClip(
     var rect: RectD? = null,
 )
 
+private val SHIFTED_CHARACTER_BASE_KEYS: Map<Char, String> = mapOf(
+    '~' to "`",
+    '!' to "1",
+    '@' to "2",
+    '#' to "3",
+    '$' to "4",
+    '%' to "5",
+    '^' to "6",
+    '&' to "7",
+    '*' to "8",
+    '(' to "9",
+    ')' to "0",
+    '_' to "-",
+    '+' to "=",
+    '{' to "[",
+    '}' to "]",
+    '|' to "\\",
+    ':' to ";",
+    '"' to "'",
+    '<' to ",",
+    '>' to ".",
+    '?' to "/",
+)
+
+internal fun normalizeKeyStringForPress(keyString: String): String {
+    if (keyString.length != 1) {
+        return keyString
+    }
+
+    val char = keyString.single()
+    return when {
+        char.isUpperCase() -> "Shift+${char.lowercaseChar()}"
+        char in SHIFTED_CHARACTER_BASE_KEYS -> "Shift+${SHIFTED_CHARACTER_BASE_KEYS.getValue(char)}"
+        else -> keyString
+    }
+}
 
 /**
  * ClickableDOM provides a set of methods to help users to click on a specified DOM correctly.
@@ -483,7 +519,16 @@ class Keyboard(private val cdp: CDP) {
             return
         }
 
-        val tokens = splitKeyString(keyString).ifEmpty { return@press }
+        if (keyString.length == 1) {
+            val char = keyString.single()
+            if (char.isUpperCase() || char in SHIFTED_CHARACTER_BASE_KEYS) {
+                pressShiftedPrintableChar(char, delayMillis)
+                return
+            }
+        }
+
+        val normalizedKeyString = normalizeKeyStringForPress(keyString)
+        val tokens = splitKeyString(normalizedKeyString).ifEmpty { return@press }
 
         val key = tokens.last()
 
@@ -500,6 +545,48 @@ class Keyboard(private val cdp: CDP) {
 
         for (i in tokens.size - 2 downTo 0) {
             up(tokens[i])
+        }
+    }
+
+    private suspend fun pressShiftedPrintableChar(char: Char, delayMillis: Long) {
+        val baseKey = when {
+            char.isUpperCase() -> char.lowercaseChar().toString()
+            else -> SHIFTED_CHARACTER_BASE_KEYS[char]
+        } ?: throw IllegalArgumentException("Unknown shifted key: >$char<")
+
+        val baseVirtualKey = VirtualKeyboard.KEYBOARD_LAYOUT[baseKey]
+            ?: throw IllegalArgumentException("Unknown base key for shifted key: >$char<")
+        val shiftKey = createVirtualKeyForSingleKeyString("Shift")
+
+        down(shiftKey)
+        try {
+            val autoRepeat = pressedKeys.contains(baseVirtualKey.code)
+            pressedKeys.add(baseVirtualKey.code)
+            cdp.dispatchKeyEvent(
+                type = DispatchKeyEventType.KEY_DOWN,
+                modifiers = toModifiersMask(pressedModifiers),
+                windowsVirtualKeyCode = baseVirtualKey.keyCodeWithoutLocation,
+                code = baseVirtualKey.code,
+                key = "$char",
+                text = "$char",
+                unmodifiedText = "$char",
+                location = baseVirtualKey.location,
+                isKeypad = baseVirtualKey.location == KEYPAD_LOCATION,
+                autoRepeat = autoRepeat,
+                commands = emptyList(),
+            )
+            delay(delayMillis.coerceAtLeast(60).milliseconds)
+            cdp.dispatchKeyEvent(
+                type = DispatchKeyEventType.KEY_UP,
+                modifiers = toModifiersMask(pressedModifiers),
+                windowsVirtualKeyCode = baseVirtualKey.keyCodeWithoutLocation,
+                code = baseVirtualKey.code,
+                key = "$char",
+                location = baseVirtualKey.location,
+            )
+        } finally {
+            pressedKeys.remove(baseVirtualKey.code)
+            up(shiftKey)
         }
     }
 

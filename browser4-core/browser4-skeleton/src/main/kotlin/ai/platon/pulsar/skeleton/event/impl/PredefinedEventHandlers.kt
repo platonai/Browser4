@@ -57,8 +57,8 @@ open class LoginHandler(
         }
 
         driver.bringToFront()
-        driver.type(usernameSelector, username)
-        driver.type(passwordSelector, password)
+        driver.type(username, usernameSelector)
+        driver.type(password, passwordSelector)
         driver.click(submitSelector, count = 2)
 
         logger.info("Cookies before login: {}", driver.getCookies())

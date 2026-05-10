@@ -146,10 +146,14 @@ Browser4 CLI is compatible with Playwright and supports a wide range of commands
 It can be used in scripts, terminal sessions, or integrated into AI agents through SKILLS.
 
 ```shell
-# install the latest Unix CLI (+ Browser4.jar fallback runtime)
-curl -fsSL https://raw.githubusercontent.com/platonai/Browser4/master/sdks/browser4-cli/install.sh | bash
+# macOS / Linux
+mkdir -p ~/.browser4/lib
+curl -fsSL -o ~/.browser4/lib/Browser4.jar https://github.com/platonai/Browser4/releases/latest/download/Browser4.jar
+git clone https://github.com/platonai/Browser4.git
+cd Browser4/sdks/browser4-cli
+cargo install --path . --locked
 
-# Windows: keep a Browser4 checkout for localhost Maven auto-start; Browser4.jar remains the fallback runtime
+# Windows
 New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.browser4\lib" | Out-Null
 Invoke-WebRequest 'https://github.com/platonai/Browser4/releases/latest/download/Browser4.jar' -OutFile "$env:USERPROFILE\.browser4\lib\Browser4.jar"
 git clone https://github.com/platonai/Browser4.git
@@ -181,14 +185,14 @@ browser4-cli screenshot
 browser4-cli open --server http://localhost:9090
 
 # Execute multiple commands in one process
-browser4-cli batch "open https://playwright.dev" "snapshot"
+browser4-cli batch "goto https://playwright.dev" "snapshot"
 
 # Stop on the first batch failure
-browser4-cli batch --bail "open https://playwright.dev" "click e1" "screenshot"
+browser4-cli batch --bail "goto https://playwright.dev" "click e1" "screenshot"
 
 # Pipe batch commands as JSON via stdin
 echo '[
-  ["open", "https://playwright.dev"],
+  ["goto", "https://playwright.dev"],
   ["snapshot"],
   ["click", "e1"],
   ["screenshot", "--filename=result.png"]

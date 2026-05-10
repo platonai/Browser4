@@ -25,6 +25,7 @@ use crate::state::{read_state, resolve_default_state_dir};
 const EXISTING_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(120);
 const JAR_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(60);
 const MAVEN_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(300);
+const SERVER_READY_INITIAL_QUIET_WAIT: Duration = Duration::from_secs(5);
 const CLI_TEMP_DIR_COMPONENTS: [&str; 2] = ["tmp", "cli"];
 const CLI_LIB_DIR_COMPONENT: &str = "lib";
 const BROWSER4_JAR_FILE_NAME: &str = "Browser4.jar";
@@ -50,7 +51,7 @@ pub fn init_root_search_start_dir_from_startup() {
 /// Ensure the Browser4 server is running, starting it if necessary.
 ///
 /// Only acts on `localhost` / `127.0.0.1` URLs.
-pub async fn ensure_server_running(base_url: &str) -> Result<(), String> {
+pub async fn ensure_server_running(base_url: &str, use_maven_startup: bool) -> Result<(), String> {
     // Skip remote servers
     if !base_url.contains("localhost") && !base_url.contains("127.0.0.1") {
         return Ok(());
@@ -59,7 +60,7 @@ pub async fn ensure_server_running(base_url: &str) -> Result<(), String> {
     let port = extract_port(base_url);
     if !is_local_port_open(base_url) {
         eprintln!("Browser4 server not running. Starting...");
-        let launch_spec = resolve_server_launch_spec(port).await?;
+        let launch_spec = resolve_server_launch_spec(port, use_maven_startup).await?;
         eprintln!("{}", launch_spec.description);
         return start_server(&launch_spec, base_url, port).await;
     }
@@ -80,7 +81,7 @@ pub async fn ensure_server_running(base_url: &str) -> Result<(), String> {
 
     eprintln!("Browser4 server not running. Starting...");
 
-    let launch_spec = resolve_server_launch_spec(port).await?;
+    let launch_spec = resolve_server_launch_spec(port, use_maven_startup).await?;
     eprintln!("{}", launch_spec.description);
 
     start_server(&launch_spec, base_url, port).await
@@ -133,8 +134,11 @@ struct PreparedLaunchCommand {
     cleanup_dir: Option<PathBuf>,
 }
 
-async fn resolve_server_launch_spec(port: u16) -> Result<ServerLaunchSpec, String> {
-    if let Some(repo_root) = find_browser4_root_for_maven_launch() {
+async fn resolve_server_launch_spec(
+    port: u16,
+    use_maven_startup: bool,
+) -> Result<ServerLaunchSpec, String> {
+    if let Some(repo_root) = find_browser4_root_for_enabled_maven_launch(use_maven_startup) {
         match build_maven_launch_spec(&repo_root, port) {
             Ok(spec) => return Ok(spec),
             Err(error) => {
@@ -461,6 +465,14 @@ fn find_browser4_root() -> Option<PathBuf> {
 fn find_browser4_root_for_maven_launch() -> Option<PathBuf> {
     let current_dir = env::current_dir().ok()?;
     find_browser4_root_from(&current_dir, false)
+}
+
+fn find_browser4_root_for_enabled_maven_launch(use_maven_startup: bool) -> Option<PathBuf> {
+    if !use_maven_startup {
+        return None;
+    }
+
+    find_browser4_root_for_maven_launch()
 }
 
 fn browser4_root_search_start_dir_from_env() -> Option<PathBuf> {
@@ -1044,6 +1056,17 @@ async fn wait_for_server_ready(
     let start = Instant::now();
     let mut last_error = String::from("unknown");
     let mut last_progress_log_at = Instant::now() - Duration::from_secs(10);
+    let initial_quiet_wait = initial_server_ready_quiet_wait(timeout);
+
+    if !initial_quiet_wait.is_zero() {
+        tokio::time::sleep(initial_quiet_wait).await;
+        if start.elapsed() >= timeout {
+            last_error = format!(
+                "readiness checks were deferred during the initial {}s startup grace period",
+                initial_quiet_wait.as_secs()
+            );
+        }
+    }
 
     while start.elapsed() <= timeout {
         let progress_status = match probe_server_state(client, base_url).await {
@@ -1078,6 +1101,10 @@ async fn wait_for_server_ready(
         last_error,
         format_startup_log_timeout_details(startup_log_path)
     ))
+}
+
+fn initial_server_ready_quiet_wait(timeout: Duration) -> Duration {
+    SERVER_READY_INITIAL_QUIET_WAIT.min(timeout)
 }
 
 fn format_server_wait_progress(state: &ServerState) -> String {
@@ -1265,6 +1292,15 @@ mod tests {
     }
 
     #[test]
+    fn test_find_browser4_root_for_enabled_maven_launch_requires_opt_in() {
+        assert_eq!(find_browser4_root_for_enabled_maven_launch(false), None);
+        assert_eq!(
+            find_browser4_root_for_enabled_maven_launch(true),
+            find_browser4_root_for_maven_launch()
+        );
+    }
+
+    #[test]
     fn test_is_local_port_open_detects_listener() {
         let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -1439,6 +1475,22 @@ mod tests {
             format_server_wait_progress(&ServerState::Starting("{\"status\":\"STARTING\"}".into()));
 
         assert_eq!(progress, "still starting ({\"status\":\"STARTING\"})");
+    }
+
+    #[test]
+    fn test_initial_server_ready_quiet_wait_uses_five_second_grace_period() {
+        assert_eq!(
+            initial_server_ready_quiet_wait(Duration::from_secs(60)),
+            Duration::from_secs(5)
+        );
+    }
+
+    #[test]
+    fn test_initial_server_ready_quiet_wait_is_capped_by_timeout() {
+        assert_eq!(
+            initial_server_ready_quiet_wait(Duration::from_secs(3)),
+            Duration::from_secs(3)
+        );
     }
 
     #[test]
