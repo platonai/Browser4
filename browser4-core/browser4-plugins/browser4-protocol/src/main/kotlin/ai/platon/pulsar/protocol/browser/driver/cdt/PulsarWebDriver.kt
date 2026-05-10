@@ -765,7 +765,6 @@ class PulsarWebDriver constructor(
         return rpc.invokeDeferredSilently("ariaSnapshot") { page.ariaSnapshot(viewportIndices) } ?: ""
     }
 
-    @Beta
     @Throws(WebDriverException::class)
     override suspend fun querySelectorAll(selector: String): List<NodeRef> {
         return driverHelper.invokeOnPage("select") { page.queryLocatorAll(selector) } ?: listOf()

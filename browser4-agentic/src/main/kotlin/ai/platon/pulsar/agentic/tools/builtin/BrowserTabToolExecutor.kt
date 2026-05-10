@@ -837,35 +837,6 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 ); driver.scrollToViewport(paramDouble(args, "screenNumber", functionName)!!)
             }
 
-            // Mouse wheel / movement
-            "mouseWheelDown" -> {
-                validateArgs(
-                    args,
-                    allowed("count", "deltaX", "deltaY", "delayMillis"),
-                    emptySet(),
-                    functionName
-                ); driver.mouseWheelDown(
-                    count = args["count"]?.toString()?.toIntOrNull() ?: 1,
-                    deltaX = args["deltaX"]?.toString()?.toDoubleOrNull() ?: 0.0,
-                    deltaY = args["deltaY"]?.toString()?.toDoubleOrNull() ?: 150.0,
-                    delayMillis = args["delayMillis"]?.toString()?.toLongOrNull() ?: 0L
-                )
-            }
-
-            "mouseWheelUp" -> {
-                validateArgs(
-                    args,
-                    allowed("count", "deltaX", "deltaY", "delayMillis"),
-                    emptySet(),
-                    functionName
-                ); driver.mouseWheelUp(
-                    count = args["count"]?.toString()?.toIntOrNull() ?: 1,
-                    deltaX = args["deltaX"]?.toString()?.toDoubleOrNull() ?: 0.0,
-                    deltaY = args["deltaY"]?.toString()?.toDoubleOrNull() ?: -150.0,
-                    delayMillis = args["delayMillis"]?.toString()?.toLongOrNull() ?: 0L
-                )
-            }
-
             "mouseWheel" -> {
                 validateArgs(args, allowed("deltaX", "deltaY"), emptySet(), functionName)
                 driver.mouseWheel(
@@ -874,21 +845,14 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 )
             }
 
-            "moveMouseTo", "mouseMove" -> {
+            "mouseMove" -> {
                 when {
                     args.containsKey("x") && args.containsKey("y") -> {
                         validateArgs(args, allowed("x", "y"), setOf("x", "y"), functionName)
-                        if (functionName == "mouseMove") {
-                            driver.mouseMove(
-                                paramDouble(args, "x", functionName)!!,
-                                paramDouble(args, "y", functionName)!!
-                            )
-                        } else {
-                            driver.moveMouseTo(
-                                paramDouble(args, "x", functionName)!!,
-                                paramDouble(args, "y", functionName)!!
-                            )
-                        }
+                        driver.mouseMove(
+                            paramDouble(args, "x", functionName)!!,
+                            paramDouble(args, "y", functionName)!!
+                        )
                     }
 
                     args.containsKey("selector") -> {

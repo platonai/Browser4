@@ -74,7 +74,7 @@ open class DefaultBrowseRPA: BrowseRPA {
         var n = 2 + Random.nextInt(5)
         while (n-- > 0 && isActive) {
             val deltaY = 100.0 + 20 * Random.nextInt(10)
-            driver.mouseWheelDown(deltaY = deltaY)
+            driver.mouseWheel(deltaY = deltaY)
             Runtimes.randomDelay(500, 500)
         }
 

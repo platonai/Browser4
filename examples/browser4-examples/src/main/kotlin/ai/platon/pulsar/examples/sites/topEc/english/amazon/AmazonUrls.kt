@@ -84,7 +84,7 @@ class AsinUrlNormalizer : AbstractUrlNormalizer() {
             return url
         }
 
-        val u = URLUtils.getURLOrNull(url) ?: return null
+        val u = URLUtils.getURLOrNull2(url) ?: return null
         val asin = AmazonUrls.findAsin(url) ?: return null
         return u.protocol + "://" + u.host + "/dp/" + asin
     }
