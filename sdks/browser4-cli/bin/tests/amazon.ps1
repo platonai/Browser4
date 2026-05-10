@@ -22,4 +22,4 @@ Task:
 "@
 
 # gh copilot --allow-all -p "$prompt" ## --silent
-claude --allow-dangerously-skip-permissions $prompt
+claude --dangerously-skip-permissions $prompt

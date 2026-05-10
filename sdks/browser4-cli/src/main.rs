@@ -397,11 +397,44 @@ async fn handle_open(
     if should_navigate_after_open(url) {
         let mut params = tool_params.clone();
         params["sessionId"] = json!(session_id.clone());
-        let result = call_tool(client, base_url, tool_name, params).await?;
-        if !result.is_empty() {
-            println!("{}", result);
+        let navigate_result =
+            call_tool(client, base_url, tool_name, params.clone()).await;
+        match navigate_result {
+            Ok(result) => {
+                if !result.is_empty() {
+                    println!("{}", result);
+                }
+                post_command_snapshot(client, base_url, &session_id).await;
+            }
+            Err(err) => {
+                if !is_stale_session_error(&err) {
+                    return Err(err);
+                }
+                // The browser context was not ready yet (CDP initialization race).
+                // Close the failed session, create a fresh one, and retry navigation.
+                let _ = call_tool(
+                    client,
+                    base_url,
+                    "close_session",
+                    json!({ "sessionId": session_id }),
+                )
+                .await;
+                invalidate_session(&state, base_url, session_name);
+                let capabilities = build_open_session_capabilities(tool_params);
+                let retry_id = create_session(
+                    client, base_url, &state, session_name, Some(capabilities),
+                )
+                .await?;
+                println!("Session opened: {}", retry_id);
+                params["sessionId"] = json!(retry_id);
+                let retry_result =
+                    call_tool(client, base_url, tool_name, params).await?;
+                if !retry_result.is_empty() {
+                    println!("{}", retry_result);
+                }
+                post_command_snapshot(client, base_url, &retry_id).await;
+            }
         }
-        post_command_snapshot(client, base_url, &session_id).await;
     }
     Ok(())
 }
