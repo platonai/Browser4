@@ -58,13 +58,9 @@ class PulsarWebDriver constructor(
 
     @Deprecated("Use CDP facade (cdp) instead of direct devTools access")
     val devTools: RemoteDevTools get() = cdp.remoteDevTools
-    private val browserAPI get() = cdp.browser.takeIf { isActive }
     private val pageAPI get() = cdp.page.takeIf { isActive }
-    private val targetAPI get() = cdp.target.takeIf { isActive }
     private val domAPI get() = cdp.dom.takeIf { isActive }
     private val cssAPI get() = cdp.css.takeIf { isActive }
-    private val inputAPI get() = cdp.input.takeIf { isActive }
-    private val mainFrameAPI get() = runBlocking { pageAPI?.getFrameTree()?.frame }
     private val networkAPI get() = cdp.network.takeIf { isActive }
     private val fetchAPI get() = cdp.fetch.takeIf { isActive }
     private val runtimeAPI get() = cdp.runtime.takeIf { isActive }
@@ -85,8 +81,6 @@ class PulsarWebDriver constructor(
     private val driverHelper get() = WebDriverHelper(this, rpc, page, fetchAPI, messageWriter)
 
     private val closed = AtomicBoolean()
-
-    private val isGone get() = closed.get() || isQuit || !AppContext.isActive || !cdp.isOpen
 
     var userTypedUrl: String? = null
     var navigateUrl: String? = chromeTab.url
