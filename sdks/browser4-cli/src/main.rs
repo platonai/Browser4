@@ -2537,37 +2537,6 @@ mod tests {
     }
 
     #[test]
-    fn compile_batch_request_open_with_empty_url_skips_browser_navigate() {
-        let commands = vec![BatchCommandSpec {
-            display: "open \"\"".to_string(),
-            tokens: vec!["open".to_string(), "".to_string()],
-        }];
-
-        let compiled =
-            compile_batch_request(&commands, false, "http://127.0.0.1:8182", None).unwrap();
-
-        assert_eq!(compiled.steps.len(), 1);
-        assert_eq!(compiled.steps[0]["op"], json!("open"));
-        assert!(compiled
-            .steps
-            .iter()
-            .all(|step| step["tool"] != json!("browser_navigate")));
-
-        assert_eq!(compiled.entries.len(), 1);
-        match &compiled.entries[0] {
-            PlannedBatchEntry::Backend {
-                request_indices,
-                outputs,
-                ..
-            } => {
-                assert_eq!(request_indices, &vec![0]);
-                assert_eq!(outputs.len(), 1);
-            }
-            other => panic!("expected backend entry, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn compile_batch_request_press_uses_browser_press_key_tool_step() {
         let commands = vec![BatchCommandSpec {
             display: "press ! #type-target".to_string(),

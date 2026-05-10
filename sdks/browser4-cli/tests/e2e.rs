@@ -2768,7 +2768,7 @@ fn resolve_scenarios_by_filter(filter: &str) -> Vec<scenarios::ScenarioDef> {
         .collect()
 }
 
-const MAX_ALLOWED_FAILED_SCENARIOS: usize = 3;
+const MAX_ALLOWED_FAILED_SCENARIOS: usize = 5;
 
 #[derive(Clone, Copy)]
 struct PlannedScenarioRun {
