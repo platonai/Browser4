@@ -203,11 +203,11 @@ browser4-cli close
 
 Build CLI from source:
 
-[README.md](sdks/browser4-cli/README.md)
+[README.md](cli/browser4-cli/README.md)
 
 Browser4 CLI is designed for use by AI agents through SKILLS + CLI.
 
-[SKILL.md](sdks/skill/SKILL.md)
+[SKILL.md](cli/skill/SKILL.md)
 
 ---
 
