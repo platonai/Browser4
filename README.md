@@ -156,7 +156,7 @@ cargo install --path . --locked
 New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.browser4\lib" | Out-Null
 Invoke-WebRequest 'https://github.com/platonai/Browser4/releases/latest/download/Browser4.jar' -OutFile "$env:USERPROFILE\.browser4\lib\Browser4.jar"
 git clone https://github.com/platonai/Browser4.git
-cd Browser4\sdks\browser4-cli
+cd Browser4\cli\browser4-cli
 cargo install --path . --locked
 
 # Open a new browser window
