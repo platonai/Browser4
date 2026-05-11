@@ -1122,7 +1122,7 @@ fn assert_root_search_log_contains_invocation_dir(stderr: &str, invocation_dir: 
         .to_string_lossy()
         .replace("\\\\", "/")
         .replace('\\', "/");
-    let invocation_dir_suffix = "sdks/browser4-cli";
+    let invocation_dir_suffix = "cli/browser4-cli";
 
     assert!(
         normalized_stderr.contains("Finding browser4 root from"),

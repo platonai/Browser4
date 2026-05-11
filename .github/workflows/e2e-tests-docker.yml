@@ -100,7 +100,7 @@ jobs:
       - name: Cache Rust Build Artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: sdks/browser4-cli
+          workspaces: cli/browser4-cli
 
       - name: Run browser4-cli E2E Tests
         id: e2e-cli
@@ -131,7 +131,7 @@ jobs:
           # Run the CLI tests
           echo "Running browser4-cli E2E tests..."
           echo "Working directory: $(pwd)"
-          cd sdks/browser4-cli
+          cd cli/browser4-cli
           # BROWSER4_CLI_E2E=true cargo test --test e2e -- --test-threads=1 --nocapture
           cargo test
           cd "$ROOT_DIR"

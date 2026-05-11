@@ -18,7 +18,7 @@ mkdir -p ~/.browser4/lib
 curl -fsSL -o ~/.browser4/lib/Browser4.jar https://github.com/platonai/Browser4/releases/latest/download/Browser4.jar
 
 git clone https://github.com/platonai/Browser4.git
-cd Browser4/sdks/browser4-cli
+cd Browser4/cli/browser4-cli
 cargo install --path . --locked
 ```
 
@@ -46,7 +46,7 @@ By default, Cargo installs the executable to `%USERPROFILE%\.cargo\bin`. Ensure 
 ## Build
 
 ```bash
-cd sdks/browser4-cli
+cd cli/browser4-cli
 cargo build --release
 # Binary is at target/release/browser4-cli
 # Or install to Cargo bin directory (%USERPROFILE%\.cargo\bin on Windows, ~/.cargo/bin on Unix):

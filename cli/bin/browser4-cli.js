@@ -13,7 +13,7 @@ const exePath = path.join(scriptDir, "target", "release", exeName);
 if (!fs.existsSync(exePath)) {
   const scriptName = path.basename(__filename);
   console.error(`[${scriptName}] ERROR: executable not found: "${exePath}"`);
-  console.error(`[${scriptName}] Run: cargo build --release (in sdks/browser4-cli)`);
+  console.error(`[${scriptName}] Run: cargo build --release (in cli/browser4-cli)`);
   process.exit(1);
 }
 

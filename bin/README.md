@@ -56,7 +56,7 @@ Comprehensive test runner for the current Maven reactors plus the Browser4 CLI p
 - `skills`: Run skills module tests
 - `mcp`: Run MCP module tests
 - `browser4`: Run all Browser4 main tests (`fast`, `rest`, `it`, `e2e`)
-- `cli`: Run Rust Browser4 CLI tests from `sdks/browser4-cli`
+- `cli`: Run Rust Browser4 CLI tests from `cli/browser4-cli`
 
 **Examples:**
 ```bash

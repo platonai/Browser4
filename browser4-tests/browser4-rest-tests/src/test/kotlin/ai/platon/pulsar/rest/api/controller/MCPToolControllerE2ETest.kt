@@ -37,14 +37,14 @@ import kotlin.test.assertTrue
 
 /**
  * Scenario-level E2E tests for [MCPToolController] that mirror the browser
- * behaviors covered by `sdks/browser4-cli/tests/e2e.rs`.
+ * behaviors covered by `cli/browser4-cli/tests/e2e.rs`.
  */
 @Tag("E2ETest")
 class MCPToolControllerE2ETest : RestAPITestBase() {
     companion object {
         const val OPEN_PROFILE_MODE = "SEQUENTIAL"
     }
-    
+
     private val logger = LoggerFactory.getLogger(MCPToolControllerE2ETest::class.java)
     private val objectMapper = jacksonObjectMapper()
         .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
@@ -55,11 +55,11 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
 
     @Autowired
     lateinit var sessionManager: SessionManager
-    
+
     private lateinit var fixtureServer: FixtureServer
     private lateinit var tempDir: Path
     private lateinit var uploadFile: Path
-    
+
     private val cliCommandToMcpTool = mapOf(
         "open" to "open_session",
         "goto" to "browser_navigate",

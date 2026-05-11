@@ -149,7 +149,7 @@ Browser4 CLI 与 Playwright 兼容，支持导航、交互、数据提取等广�
 mkdir -p ~/.browser4/lib
 curl -fsSL -o ~/.browser4/lib/Browser4.jar https://github.com/platonai/Browser4/releases/latest/download/Browser4.jar
 git clone https://github.com/platonai/Browser4.git
-cd Browser4/sdks/browser4-cli
+cd Browser4/cli/browser4-cli
 cargo install --path . --locked
 
 # Windows

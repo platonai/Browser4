@@ -134,7 +134,7 @@ jobs:
       - name: Cache Rust Build Artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: sdks/browser4-cli
+          workspaces: cli/browser4-cli
 
       - name: Run browser4-cli E2E Tests
         id: e2e-cli
@@ -150,7 +150,7 @@ jobs:
           # Run the CLI tests against the already-running Docker container
           echo "Running browser4-cli E2E tests..."
           echo "Working directory: $(pwd)"
-          cd sdks/browser4-cli
+          cd cli/browser4-cli
           cargo test --test e2e -- --nocapture
           cd "$(git rev-parse --show-toplevel)"
 

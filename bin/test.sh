@@ -24,7 +24,7 @@ print_usage() {
   echo "  fast        Run fast unit tests only"
   echo "  it          Run integration tests"
   echo "  e2e         Run end-to-end tests"
-  echo "  cli         Run Rust Browser4 CLI tests from sdks/browser4-cli"
+  echo "  cli         Run Rust Browser4 CLI tests from cli/browser4-cli"
   echo "  mocksite    Launch MockSiteBoot from browser4-tests/browser4-rest-tests"
   echo "  rest        Run REST module tests"
   echo "  skills      Run skills-focused agentic tests"
@@ -126,7 +126,7 @@ run_maven_tests() {
 }
 
 run_browser4_cli_tests() {
-  local browser4_cli_dir="$repo_root/sdks/browser4-cli"
+  local browser4_cli_dir="$repo_root/cli/browser4-cli"
 
   echo "=========================================="
   echo "Running Browser4 CLI tests..."

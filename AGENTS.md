@@ -72,17 +72,17 @@ mvnw.cmd -q -DskipTests
 
 ## Project Structure
 
-| Module                  | Description |
-|-------------------------|-------------|
-| `browser4-core`         | Core engine: sessions, scheduling, DOM, browser control |
-| `browser4-dependencies` | BOM and dependency alignment |
-| `browser4-tools`        | Operational tools and launch helpers |
-| `browser4-agentic`      | AI agents implementation, MCP, skills registration |
-| `browser4-rest`         | Spring Boot REST layer & command endpoints |
-| `sdks/*`                | Browser4 CLI + skill assets (`sdks/browser4-cli`, `sdks/skill`) |
-| `browser4-app/*`        | Product packaging (`browser4-app/browser4-agents`) |
-| `examples/*`            | Runnable examples (`examples/browser4-examples`) |
-| `browser4-tests`        | E2E & heavy integration & scenario tests |
+| Module                                 | Description |
+|----------------------------------------|-------------|
+| `browser4-core`                        | Core engine: sessions, scheduling, DOM, browser control |
+| `browser4-dependencies`                | BOM and dependency alignment |
+| `browser4-tools`                       | Operational tools and launch helpers |
+| `browser4-agentic`                     | AI agents implementation, MCP, skills registration |
+| `browser4-rest`                        | Spring Boot REST layer & command endpoints |
+| `cli/*`                                | Browser4 CLI + skill assets (`cli/browser4-cli`, `cli/skill`) |
+| `browser4-app/*`                       | Product packaging (`browser4-app/browser4-agents`) |
+| `examples/*`                           | Runnable examples (`examples/browser4-examples`) |
+| `browser4-tests`                       | E2E & heavy integration & scenario tests |
 | `browser4-tests/browser4-tests-common` | Shared test base classes and utilities |
 
 ## Key APIs and Concepts
@@ -160,7 +160,7 @@ See [TESTING.md](docs/TESTING.md) for details and trade-offs.
 ### Test Commands in This Repository
 - Use `bin/test.ps1` on Windows for scoped runs: `fast`, `it`, `e2e`, `rest`, `skills`, `mcp`, `cli`, `browser4`
 - Maven profile switches in root `pom.xml` are property-driven: `-DrunITs=true`, `-DrunE2ETests=true`, `-DrunSDKTests=true`, `-DrunCoreTests=true`, `-DrunRestTests=true`
-- `sdks/browser4-cli/tests/e2e.rs`: all e2e scenarios must start and depend on Browser4.jar; this includes single-scenario runs via `--scenario`.
+- `cli/browser4-cli/tests/e2e.rs`: all e2e scenarios must start and depend on Browser4.jar; this includes single-scenario runs via `--scenario`.
 - `.github/workflows/ci.yml` additionally enforces `MCPToolControllerE2ETest` as a required E2E safety check.
 
 ### Test Location
@@ -294,12 +294,12 @@ When given a task, Claude should:
 
 #### Adding a `browser4-cli` Command
 
-1. Add a `CommandDef` in `sdks/browser4-cli/src/commands.rs`; keep the CLI command name kebab-case, use a `browser_`-prefixed snake_case MCP tool name, and map args/options to JSON in `tool_params_fn`
+1. Add a `CommandDef` in `cli/browser4-cli/src/commands.rs`; keep the CLI command name kebab-case, use a `browser_`-prefixed snake_case MCP tool name, and map args/options to JSON in `tool_params_fn`
 2. Add the frontend alias in `browser4-rest/.../MCPToolController.kt` so names like `browser_my_tool` resolve to the internal tool name such as `my_tool`
 3. Reuse existing backend tools when possible; if a new browser capability is required, add an `@MCP` method in `WebDriver.kt`, implement it in the concrete driver, and only add an explicit `BrowserTabToolExecutor` case when parameter mapping is non-trivial
-4. Update `sdks/browser4-cli/src/main.rs` only when the command needs custom dispatch, dynamic tool-name selection, stale-session recovery, or inclusion in `no_snapshot_commands()` for read-only behavior
-5. Update `sdks/skill/SKILL.md` for user-facing command documentation; CLI help is generated from `CommandDef`, so avoid hand-editing help infrastructure
-6. Cover the change with the smallest relevant tests: `sdks/browser4-cli/src/commands.rs` unit tests, `browser4-rest` controller mapping tests, `sdks/browser4-cli/tests/e2e.rs`, and `browser4-tests/browser4-rest-tests/.../MCPToolControllerE2ETest.kt` when the command changes the end-to-end flow
+4. Update `cli/browser4-cli/src/main.rs` only when the command needs custom dispatch, dynamic tool-name selection, stale-session recovery, or inclusion in `no_snapshot_commands()` for read-only behavior
+5. Update `cli/skill/SKILL.md` for user-facing command documentation; CLI help is generated from `CommandDef`, so avoid hand-editing help infrastructure
+6. Cover the change with the smallest relevant tests: `cli/browser4-cli/src/commands.rs` unit tests, `browser4-rest` controller mapping tests, `cli/browser4-cli/tests/e2e.rs`, and `browser4-tests/browser4-rest-tests/.../MCPToolControllerE2ETest.kt` when the command changes the end-to-end flow
 7. Watch the common failure points: missing backend alias, omitted `sessionId` in custom handlers, forgetting `no_snapshot_commands()` for read-only commands, mismatched element-ref parameter names, and snake_case/camelCase argument normalization
 
 ### Browser Automation Specifics

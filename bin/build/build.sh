@@ -127,4 +127,4 @@ MvnOptions+=("install")
 MvnOptions+=("${AdditionalMvnArgs[@]}")
 invokeMavenBuild "$repoRoot" "${MvnOptions[@]}"
 copyBrowser4JarToTarget
-invokeCargoBuild "$repoRoot/sdks/browser4-cli" "$([[ "$SkipTests" == "true" ]] && echo false || echo true)"
+invokeCargoBuild "$repoRoot/cli/browser4-cli" "$([[ "$SkipTests" == "true" ]] && echo false || echo true)"
