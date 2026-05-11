@@ -32,6 +32,8 @@ if ($DryRun) {
 foreach ($tag in $nonVersionTags) {
     Write-Host "Deleting local tag: $tag"
     git tag -d $tag | Out-Null
+    Write-Host "Deleting remote tag: $tag"
+    git push origin --delete $tag | Out-Null
 }
 
 Write-Host "`nDone."
