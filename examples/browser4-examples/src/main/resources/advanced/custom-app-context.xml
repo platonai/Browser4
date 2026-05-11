@@ -6,11 +6,8 @@
        http://www.springframework.org/schema/beans/spring-beans-3.0.xsd" default-lazy-init="true">
 
     <import resource="classpath*:pulsar-beans/plugins/schedule-context.xml"/>
-    <import resource="classpath*:pulsar-beans/plugins/urlfilter-context.xml"/>
     <import resource="classpath*:pulsar-beans/plugins/protocol-context.xml"/>
     <import resource="classpath*:pulsar-beans/plugins/parse-context.xml"/>
-    <import resource="classpath*:pulsar-beans/plugins/indexing-context.xml"/>
-    <import resource="classpath*:pulsar-beans/plugins/scoring-context.xml"/>
 
     <import resource="classpath*:pulsar-beans/plugins/monitor-context.xml"/>
 
