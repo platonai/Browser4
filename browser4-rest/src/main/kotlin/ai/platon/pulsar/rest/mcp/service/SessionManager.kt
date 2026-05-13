@@ -10,7 +10,7 @@ import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
 import org.springframework.stereotype.Service
-import java.util.*
+import java.util.LinkedHashMap
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -23,6 +23,15 @@ import java.util.concurrent.ConcurrentHashMap
 class SessionManager(
     val agenticContext: AgenticContext
 ) {
+    companion object {
+        private const val DEFAULT_SESSION_ID = "default"
+        private const val SESSION_ID_CAPABILITY = "sessionId"
+        private const val PROFILE_MODE_CAPABILITY = "profileMode"
+        private const val DEFAULT_PROFILE_MODE = "DEFAULT"
+        private const val TEMPORARY_PROFILE_MODE = "TEMPORARY"
+        private const val SEQUENTIAL_PROFILE_MODE = "SEQUENTIAL"
+    }
+
     private val logger = LoggerFactory.getLogger(SessionManager::class.java)
 
     /**
@@ -61,23 +70,87 @@ class SessionManager(
      * @return The created managed session.
      */
     fun createSession(capabilities: Map<String, Any?>? = null): ManagedSession {
-        val sessionId = UUID.randomUUID().toString()
+        val normalizedCapabilities = normalizeCapabilities(capabilities)
+        val sessionId = normalizedCapabilities.getValue(SESSION_ID_CAPABILITY).toString()
+        val session = sessions.computeIfAbsent(sessionId) {
+            createManagedSession(sessionId, normalizedCapabilities)
+        }
 
-        val context = agenticContext
+        val activeSession = if (session.agenticSession.isActive) {
+            if (!session.status.equals("active", ignoreCase = true)) {
+                session.status = "active"
+            }
+            session
+        } else {
+            recreateInactiveSession(sessionId, normalizedCapabilities, session)
+        }
 
+        activeSession.lastAccessedAt = System.currentTimeMillis()
+        return activeSession
+    }
+
+    private fun createManagedSession(sessionId: String, capabilities: Map<String, Any?>): ManagedSession {
         val settings = PulsarSettings.parse(capabilities)
-        val agenticSession = context.createSession(settings)
+        val agenticSession = agenticContext.createSession(settings)
 
-        val session = ManagedSession(
+        return ManagedSession(
             sessionId = sessionId,
             agenticSession = agenticSession,
-            capabilities = capabilities
-        )
+            capabilities = capabilities,
+            status = if (agenticSession.isActive) "active" else "stopped"
+        ).also {
+            logger.info("Created session {} with capabilities: {}", sessionId, capabilities)
+        }
+    }
 
-        sessions[sessionId] = session
-        logger.info("Created session {} with capabilities: {}", sessionId, capabilities)
+    private fun recreateInactiveSession(
+        sessionId: String,
+        capabilities: Map<String, Any?>,
+        staleSession: ManagedSession,
+    ): ManagedSession {
+        return sessions.compute(sessionId) { _, existingSession ->
+            when {
+                existingSession == null -> createManagedSession(sessionId, capabilities)
+                existingSession.agenticSession.isActive -> {
+                    if (!existingSession.status.equals("active", ignoreCase = true)) {
+                        existingSession.status = "active"
+                    }
+                    existingSession
+                }
+                else -> {
+                    markSessionInactive(existingSession)
+                    if (existingSession === staleSession) {
+                        logger.warn("Cached session {} is inactive, creating a replacement", sessionId)
+                    } else {
+                        logger.warn("Concurrent cached session {} is inactive, creating a replacement", sessionId)
+                    }
+                    createManagedSession(sessionId, capabilities)
+                }
+            }
+        }!!
+    }
 
-        return session
+    private fun markSessionInactive(session: ManagedSession) {
+        session.status = "stopped"
+    }
+
+    private fun normalizeCapabilities(capabilities: Map<String, Any?>?): Map<String, Any?> {
+        val normalizedCapabilities = LinkedHashMap(capabilities.orEmpty())
+        val requestedSessionId = normalizedCapabilities[SESSION_ID_CAPABILITY]?.toString()?.trim()
+        val sessionId = if (requestedSessionId.isNullOrBlank() || requestedSessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true)) {
+            DEFAULT_SESSION_ID
+        } else {
+            requestedSessionId
+        }
+
+        normalizedCapabilities[SESSION_ID_CAPABILITY] = sessionId
+        normalizedCapabilities[PROFILE_MODE_CAPABILITY] = when {
+            sessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) -> DEFAULT_PROFILE_MODE
+            normalizedCapabilities[PROFILE_MODE_CAPABILITY]?.toString()?.equals(SEQUENTIAL_PROFILE_MODE, ignoreCase = true) == true -> SEQUENTIAL_PROFILE_MODE
+            else -> TEMPORARY_PROFILE_MODE
+        }
+
+        return normalizedCapabilities
     }
 
     /**
@@ -87,7 +160,11 @@ class SessionManager(
      * @return The managed session, or null if not found.
      */
     fun getSession(sessionId: String): ManagedSession? {
-        val session = sessions[sessionId]
+        val session = if (sessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true)) {
+            createSession(mapOf(SESSION_ID_CAPABILITY to DEFAULT_SESSION_ID))
+        } else {
+            sessions[sessionId]
+        }
         session?.lastAccessedAt = System.currentTimeMillis()
         return session
     }
@@ -129,6 +206,7 @@ class SessionManager(
      * @return A list of all managed sessions.
      */
     fun getAllSessions(): List<ManagedSession> {
+        createSession(mapOf(SESSION_ID_CAPABILITY to DEFAULT_SESSION_ID))
         return sessions.values.toList()
     }
 

@@ -1,7 +1,7 @@
 //! Argument parsing helpers for the Browser4 CLI.
 //!
 //! Parses raw command-line arguments into:
-//! - Global flags (`-s=<session>`, `--server=<url>`)
+//! - Global flags (`-s=<session>`, `--session=<session>`, `--server=<url>`)
 //! - Positional arguments (stored in `_`)
 //! - Named options (`--key=value`, `--flag`)
 
@@ -11,7 +11,7 @@ use std::collections::HashMap;
 /// Parsed global flags that appear before the command name.
 #[derive(Debug, Default, Clone)]
 pub struct GlobalFlags {
-    /// `-s=<name>` session name
+    /// `-s` / `--session` requested session identifier
     pub session_name: Option<String>,
     /// `--server=<url>` or `--server <url>` server override
     pub server_url: Option<String>,
@@ -31,7 +31,7 @@ pub struct BatchArgs {
 /// Parse global flags that may appear before the command.
 ///
 /// Recognises:
-/// - `-s=<name>` → session name
+/// - `-s=<name>`, `-s <name>`, `--session=<name>`, `--session <name>` → session name
 /// - `--server=<url>` or `--server <url>` → server URL override
 /// - `--use-maven-startup` → opt in to local Maven `spring-boot:run` startup
 /// - `--version` / `-v` → version flag (returned in `args`)
@@ -51,6 +51,13 @@ pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
         let arg = &argv[i];
         if arg.starts_with("-s=") {
             flags.session_name = Some(arg["-s=".len()..].to_string());
+        } else if arg.starts_with("--session=") {
+            flags.session_name = Some(arg["--session=".len()..].to_string());
+        } else if arg == "-s" || arg == "--session" {
+            if i + 1 < argv.len() && !argv[i + 1].starts_with('-') {
+                i += 1;
+                flags.session_name = Some(argv[i].clone());
+            }
         } else if arg.starts_with("--server=") {
             flags.server_url = Some(arg["--server=".len()..].to_string());
         } else if arg == "--server" {
@@ -311,6 +318,47 @@ mod tests {
         let flags = parse_global_flags(&argv);
         assert_eq!(flags.session_name.as_deref(), Some("mysession"));
         assert_eq!(flags.args, vec!["goto", "https://example.com"]);
+    }
+
+    #[test]
+    fn test_parse_global_flags_session_name_with_space() {
+        let argv = vec![
+            "-s".to_string(),
+            "mysession".to_string(),
+            "goto".to_string(),
+        ];
+
+        let flags = parse_global_flags(&argv);
+
+        assert_eq!(flags.session_name.as_deref(), Some("mysession"));
+        assert_eq!(flags.args, vec!["goto"]);
+    }
+
+    #[test]
+    fn test_parse_global_flags_long_session_name_equals() {
+        let argv = vec![
+            "--session=mysession".to_string(),
+            "goto".to_string(),
+        ];
+
+        let flags = parse_global_flags(&argv);
+
+        assert_eq!(flags.session_name.as_deref(), Some("mysession"));
+        assert_eq!(flags.args, vec!["goto"]);
+    }
+
+    #[test]
+    fn test_parse_global_flags_long_session_name_with_space() {
+        let argv = vec![
+            "--session".to_string(),
+            "mysession".to_string(),
+            "goto".to_string(),
+        ];
+
+        let flags = parse_global_flags(&argv);
+
+        assert_eq!(flags.session_name.as_deref(), Some("mysession"));
+        assert_eq!(flags.args, vec!["goto"]);
     }
 
     #[test]

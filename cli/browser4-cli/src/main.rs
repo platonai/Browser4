@@ -200,10 +200,7 @@ async fn create_session(
     session_name: Option<&str>,
     capabilities: Option<Value>,
 ) -> Result<String, String> {
-    let params = capabilities
-        .filter(|caps| !caps.as_object().map(|map| map.is_empty()).unwrap_or(false))
-        .map(|caps| json!({ "capabilities": caps }))
-        .unwrap_or_else(|| json!({}));
+    let params = build_open_session_request(capabilities, session_name);
     let result = call_tool(client, base_url, "open_session", params).await?;
     // The server response may be a JSON object `{"sessionId":"..."}` or a plain
     // string. Try JSON first; fall back to using the raw string as the session ID.
@@ -230,8 +227,33 @@ fn build_open_session_capabilities(tool_params: &Value) -> Value {
     build_open_session_capabilities_with_test_mode(tool_params, should_use_test_temporary_profile())
 }
 
+fn build_open_session_request(capabilities: Option<Value>, session_name: Option<&str>) -> Value {
+    let requested_session_id = session_name
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("default");
+
+    let mut caps = capabilities
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    caps.insert("sessionId".to_string(), json!(requested_session_id));
+
+    json!({ "capabilities": Value::Object(caps) })
+}
+
 fn should_navigate_after_open(url: &str) -> bool {
     !url.is_empty() && url != "about:blank"
+}
+
+fn should_reuse_open_session(existing_session_id: Option<&str>, session_name: Option<&str>) -> bool {
+    let requested_session_id = session_name
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("default");
+
+    existing_session_id
+        .map(|session_id| session_id.eq_ignore_ascii_case(requested_session_id))
+        .unwrap_or(false)
 }
 
 fn should_use_test_temporary_profile() -> bool {
@@ -271,6 +293,10 @@ fn build_open_session_capabilities_with_test_mode(
         .is_some();
     if let Some(pp) = tool_params.get("profilePath") {
         caps["profilePath"] = pp.clone();
+    }
+
+    if let Some(interact_level) = tool_params.get("interactLevel") {
+        caps["interactLevel"] = interact_level.clone();
     }
 
     if use_test_temporary_profile && !persistent && !has_profile_path {
@@ -379,9 +405,11 @@ async fn handle_open(
     let mut state = read_state(None, session_name);
     state.session_name = session_name.map(|s| s.to_string());
 
-    let session_id = if let Some(ref existing_id) = state.session_id {
+    let session_id = if should_reuse_open_session(state.session_id.as_deref(), session_name) {
+        let existing_id = state.session_id.as_deref().unwrap_or("default").to_string();
+        // TODO: check the backend to confirm the session is still active before claiming it
         println!("Session already open: {}", existing_id);
-        existing_id.clone()
+        existing_id
     } else {
         let capabilities = build_open_session_capabilities(tool_params);
         let new_id =
@@ -2468,6 +2496,51 @@ mod tests {
         );
 
         assert_eq!(caps["profileMode"], json!("TEMPORARY"));
+    }
+
+    #[test]
+    fn build_open_session_capabilities_keeps_interact_level() {
+        let caps = build_open_session_capabilities_with_test_mode(
+            &json!({
+                "interactLevel": "FATEST",
+            }),
+            false,
+        );
+
+        assert_eq!(caps["interactLevel"], json!("FATEST"));
+    }
+
+    #[test]
+    fn build_open_session_request_defaults_to_default_session_id() {
+        let request = build_open_session_request(None, None);
+
+        assert_eq!(request["capabilities"]["sessionId"], json!("default"));
+    }
+
+    #[test]
+    fn build_open_session_request_uses_named_session_id() {
+        let request = build_open_session_request(
+            Some(json!({
+                "profileMode": "SEQUENTIAL",
+            })),
+            Some("team-a"),
+        );
+
+        assert_eq!(request["capabilities"]["sessionId"], json!("team-a"));
+        assert_eq!(request["capabilities"]["profileMode"], json!("SEQUENTIAL"));
+    }
+
+    #[test]
+    fn should_reuse_open_session_for_default_only_when_saved_session_is_default() {
+        assert!(should_reuse_open_session(Some("default"), None));
+        assert!(!should_reuse_open_session(Some("team-a"), None));
+    }
+
+    #[test]
+    fn should_reuse_open_session_for_named_session_only_when_ids_match() {
+        assert!(should_reuse_open_session(Some("team-a"), Some("team-a")));
+        assert!(should_reuse_open_session(Some("TEAM-A"), Some("team-a")));
+        assert!(!should_reuse_open_session(Some("team-b"), Some("team-a")));
     }
 
     #[test]
