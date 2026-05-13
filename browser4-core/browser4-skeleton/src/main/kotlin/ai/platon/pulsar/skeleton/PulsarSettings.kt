@@ -81,6 +81,7 @@ data class PulsarSettings(
             val maxBrowsers: Int? = capabilities?.get("maxBrowsers")?.toString()?.toIntOrNull()
             val maxOpenTabs: Int? = capabilities?.get("maxOpenTabs")?.toString()?.toIntOrNull()
             val interactSettings: InteractSettings? = capabilities?.get("interactSettings")?.toString()?.let { InteractSettings.fromJsonOrNull(it) }
+            val interactLevel = parseInteractLevel(capabilities)
             val profileMode = capabilities?.get("profileMode")?.toString()?.let { BrowserProfileMode.fromString(it) }
 
             return PulsarSettings(
@@ -89,8 +90,31 @@ data class PulsarSettings(
                 maxBrowsers = maxBrowsers,
                 maxOpenTabs = maxOpenTabs,
                 profileMode = profileMode,
-                interactSettings = interactSettings,
+                interactSettings = interactSettings ?: InteractSettings.create(interactLevel ?: InteractLevel.DEFAULT),
             )
+        }
+
+        private fun parseInteractLevel(capabilities: Map<String, Any?>?): InteractLevel? {
+            val rawInteractLevel = sequenceOf("interactLevel", "interact-level")
+                .mapNotNull { capabilities?.get(it)?.toString()?.trim()?.takeIf(String::isNotEmpty) }
+                .firstOrNull()
+                ?: return null
+
+            val normalizedInteractLevel = normalizeInteractLevelAlias(rawInteractLevel)
+
+            return sequenceOf(normalizedInteractLevel, rawInteractLevel)
+                .filterNotNull()
+                .distinct()
+                .mapNotNull { value -> runCatching { InteractLevel.from(value) }.getOrNull() }
+                .firstOrNull()
+        }
+
+        private fun normalizeInteractLevelAlias(value: String): String {
+            val normalized = value.trim().uppercase().replace('-', '_').replace(' ', '_')
+            return when (normalized) {
+                "FATEST" -> "FASTEST"
+                else -> normalized
+            }
         }
 
         @JvmStatic

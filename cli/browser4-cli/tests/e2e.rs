@@ -59,6 +59,7 @@ mod scenarios;
 
 const BROWSER_PROFILE_MODE: &str = "SEQUENTIAL";
 const OPEN_PROFILE_MODE_ARG: &str = "--profile-mode=SEQUENTIAL";
+const OPEN_INTERACT_LEVEL_ARG: &str = "--interact-level=FATEST";
 const USE_MAVEN_STARTUP_FLAG: &str = "--use-maven-startup";
 
 // ---------------------------------------------------------------------------
@@ -957,8 +958,10 @@ impl E2ETestResources {
 
         let was_healthy_before = is_browser4_healthy_now(&self.ctx.browser4_base_url);
         let started_at = Instant::now();
-        let startup_result =
-            run_cli_process_with_live_output(&self.ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+        let startup_result = run_cli_process_with_live_output(
+            &self.ctx,
+            &["open", OPEN_PROFILE_MODE_ARG, OPEN_INTERACT_LEVEL_ARG],
+        );
         let startup_log_hint = format_browser4_startup_log_hint(&startup_result.stderr);
         let started_via_maven = startup_result
             .stderr
@@ -1995,7 +1998,7 @@ fn goto_interactive_page(ctx: &mut E2ECtx) {
 }
 
 fn run_open_command(ctx: &mut E2ECtx) -> CliRunResult {
-    let result = run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    let result = run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, OPEN_INTERACT_LEVEL_ARG]);
     sleep(Duration::from_secs(2));
     return result;
 }
