@@ -94,6 +94,11 @@ fn require_session(session_name: Option<&str>) -> Result<CliState, String> {
     Ok(state)
 }
 
+fn goto_requires_active_session_message() -> String {
+    r#"No active session for "goto". Run "browser4-cli open" to create or refresh the session first."#
+        .to_string()
+}
+
 fn get_session_id(state: &CliState) -> Result<&str, String> {
     state
         .session_id
@@ -474,19 +479,10 @@ async fn handle_goto(
     tool_params: &Value,
     session_name: Option<&str>,
 ) -> Result<(), String> {
-    let state = read_state(None, session_name);
-    let session_id = if let Some(ref existing_id) = state.session_id {
-        existing_id.clone()
-    } else {
-        let capabilities = build_open_session_capabilities(tool_params);
-        let new_id =
-            create_session(client, base_url, &state, session_name, Some(capabilities)).await?;
-        println!("Session opened: {}", new_id);
-        new_id
-    };
+    let session_id = require_active_session_for_goto(client, base_url, session_name).await?;
 
     let mut params = tool_params.clone();
-    params["sessionId"] = json!(session_id);
+    params["sessionId"] = json!(session_id.clone());
     let result = call_tool(client, base_url, tool_name, params).await?;
     if !result.is_empty() {
         println!("{}", result);
@@ -732,7 +728,40 @@ async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn parse_active_session_ids(result: &str) -> Vec<String> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BackendSessionRecord {
+    session_id: String,
+    status: Option<String>,
+}
+
+async fn require_active_session_for_goto(
+    client: &Client,
+    base_url: &str,
+    session_name: Option<&str>,
+) -> Result<String, String> {
+    let state = read_state(None, session_name);
+    let Some(session_id) = state.session_id.clone() else {
+        return Err(goto_requires_active_session_message());
+    };
+
+    let list_result = match call_tool(client, base_url, "list_sessions", json!({})).await {
+        Ok(result) => result,
+        Err(error) if is_backend_unreachable_error(&error) => {
+            invalidate_session(&state, base_url, session_name);
+            return Err(goto_requires_active_session_message());
+        }
+        Err(error) => return Err(error),
+    };
+
+    if session_is_active(&list_result, &session_id) {
+        Ok(session_id)
+    } else {
+        invalidate_session(&state, base_url, session_name);
+        Err(goto_requires_active_session_message())
+    }
+}
+
+fn parse_backend_session_records(result: &str) -> Vec<BackendSessionRecord> {
     serde_json::from_str::<Value>(result)
         .ok()
         .and_then(|value| {
@@ -740,21 +769,48 @@ fn parse_active_session_ids(result: &str) -> Vec<String> {
                 entries
                     .iter()
                     .filter_map(|entry| {
-                        entry
-                            .as_str()
-                            .map(str::to_string)
-                            .or_else(|| {
-                                entry
-                                    .get("sessionId")
-                                    .and_then(|value| value.as_str())
-                                    .map(str::to_string)
-                            })
-                            .filter(|session_id| !session_id.is_empty())
+                        entry.as_str().map(|session_id| BackendSessionRecord {
+                            session_id: session_id.to_string(),
+                            status: Some("active".to_string()),
+                        })
+                        .or_else(|| {
+                            entry
+                                .get("sessionId")
+                                .and_then(|value| value.as_str())
+                                .filter(|session_id| !session_id.is_empty())
+                                .map(|session_id| BackendSessionRecord {
+                                    session_id: session_id.to_string(),
+                                    status: entry
+                                        .get("status")
+                                        .and_then(|value| value.as_str())
+                                        .map(str::to_string),
+                                })
+                        })
                     })
                     .collect()
             })
         })
         .unwrap_or_default()
+}
+
+fn session_status_is_active(status: Option<&str>) -> bool {
+    status
+        .map(|value| value.eq_ignore_ascii_case("active"))
+        .unwrap_or(true)
+}
+
+fn session_is_active(result: &str, session_id: &str) -> bool {
+    parse_backend_session_records(result)
+        .into_iter()
+        .any(|record| record.session_id == session_id && session_status_is_active(record.status.as_deref()))
+}
+
+fn parse_active_session_ids(result: &str) -> Vec<String> {
+    parse_backend_session_records(result)
+        .into_iter()
+        .filter(|record| session_status_is_active(record.status.as_deref()))
+        .map(|record| record.session_id)
+        .collect()
 }
 
 fn is_backend_unreachable_error(error: &str) -> bool {
@@ -2670,10 +2726,29 @@ mod tests {
     }
 
     #[test]
+    fn parse_active_session_ids_ignores_non_active_backend_object_payloads() {
+        let ids = parse_active_session_ids(
+            r#"[{"sessionId":"session-1","url":"https://example.com","status":"active"},{"sessionId":"session-2","url":"","status":"stopped"}]"#,
+        );
+
+        assert_eq!(ids, vec!["session-1".to_string()]);
+    }
+
+    #[test]
     fn parse_active_session_ids_keeps_legacy_string_payloads() {
         let ids = parse_active_session_ids(r#"["session-1","session-2"]"#);
 
         assert_eq!(ids, vec!["session-1".to_string(), "session-2".to_string()]);
+    }
+
+    #[test]
+    fn session_is_active_requires_active_status_for_backend_objects() {
+        let listed_sessions =
+            r#"[{"sessionId":"session-1","status":"stopped"},{"sessionId":"session-2","status":"active"}]"#;
+
+        assert!(!session_is_active(listed_sessions, "session-1"));
+        assert!(session_is_active(listed_sessions, "session-2"));
+        assert!(!session_is_active(listed_sessions, "missing-session"));
     }
 
     #[test]

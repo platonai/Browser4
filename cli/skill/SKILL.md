@@ -11,7 +11,7 @@ allowed-tools: Bash(browser4-cli:*)
 ```bash
 # open new browser
 browser4-cli open
-# navigate to a page (auto-creates a session if none exists)
+# navigate to a page with the current active session
 browser4-cli goto https://browser4.io/
 # take a snapshot
 browser4-cli snapshot
@@ -25,6 +25,9 @@ browser4-cli screenshot
 browser4-cli close
 ```
 
+`browser4-cli goto` only reuses the current active session. If no active session is available, or the
+saved session is no longer active, run `browser4-cli open` first to create or refresh the session.
+
 ## Commands
 
 The sections below cover the standard browser workflow commands that are surfaced in the global `browser4-cli help` overview.
@@ -35,7 +38,7 @@ The sections below cover the standard browser workflow commands that are surface
 browser4-cli open
 # open and navigate right away in one step
 browser4-cli open https://example.com/
-# navigate to a URL (creates a session automatically if none is active)
+# navigate to a URL using the current active session
 browser4-cli goto https://browser4.io/
 browser4-cli type "search query"
 browser4-cli click e3
@@ -56,11 +59,13 @@ browser4-cli close
 ### Navigation
 
 ```bash
-browser4-cli goto <url>         # Navigate to a URL (auto-creates session if needed)
+browser4-cli goto <url>         # Navigate to a URL using the current active session
 browser4-cli go-back
 browser4-cli go-forward
 browser4-cli reload
 ```
+
+Before calling `goto`, make sure you have already created or refreshed the session with `browser4-cli open`.
 
 ### Keyboard
 

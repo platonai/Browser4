@@ -295,6 +295,32 @@ struct MockBrowser4State {
     result_queries: Vec<String>,
     next_agent_task_id: usize,
     next_collective_task_id: usize,
+    listed_sessions: Vec<MockListedSession>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct MockListedSession {
+    session_id: String,
+    status: String,
+    url: String,
+}
+
+impl MockListedSession {
+    fn active(session_id: &str) -> Self {
+        Self {
+            session_id: session_id.to_string(),
+            status: "active".to_string(),
+            url: "https://mock.browser4.local/current".to_string(),
+        }
+    }
+
+    fn stopped(session_id: &str) -> Self {
+        Self {
+            session_id: session_id.to_string(),
+            status: "stopped".to_string(),
+            url: "https://mock.browser4.local/current".to_string(),
+        }
+    }
 }
 
 struct MockBrowser4Server {
@@ -348,6 +374,13 @@ impl MockBrowser4Server {
             .expect("mock Browser4 state mutex poisoned")
             .clone()
     }
+
+    fn set_listed_sessions(&self, listed_sessions: Vec<MockListedSession>) {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .listed_sessions = listed_sessions;
+    }
 }
 
 impl Drop for MockBrowser4Server {
@@ -374,7 +407,7 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
             &mut stream,
             "200 OK",
             "application/json",
-            r#"["open_session","browser_navigate","agent_extract","agent_summarize"]"#,
+            r#"["open_session","list_sessions","browser_navigate","agent_extract","agent_summarize"]"#,
         ),
         ("POST", "/mcp/call-tool") => {
             let payload: serde_json::Value =
@@ -399,7 +432,33 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                 });
 
             let text = match tool.as_str() {
-                "open_session" => r#"{"sessionId":"collective-session-1"}"#.to_string(),
+                "open_session" => {
+                    state
+                        .lock()
+                        .expect("mock Browser4 state mutex poisoned")
+                        .listed_sessions = vec![MockListedSession::active("collective-session-1")];
+                    r#"{"sessionId":"collective-session-1"}"#.to_string()
+                }
+                "list_sessions" => {
+                    let listed_sessions = state
+                        .lock()
+                        .expect("mock Browser4 state mutex poisoned")
+                        .listed_sessions
+                        .clone();
+                    serde_json::Value::Array(
+                        listed_sessions
+                            .into_iter()
+                            .map(|session| {
+                                serde_json::json!({
+                                    "sessionId": session.session_id,
+                                    "url": session.url,
+                                    "status": session.status,
+                                })
+                            })
+                            .collect(),
+                    )
+                    .to_string()
+                }
                 "command_run" => {
                     let command = arguments
                         .get("command")

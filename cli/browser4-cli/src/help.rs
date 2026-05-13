@@ -126,6 +126,22 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli eval \"element => element.textContent\" e5".to_string());
     }
 
+    if cmd.name == "goto" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Uses the current active session only; it does not open a new session automatically."
+                .to_string(),
+        );
+        lines.push(
+            "  - If the saved session is missing or no longer active, run `browser4-cli open` to create or refresh it."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli open".to_string());
+        lines.push("  browser4-cli goto https://browser4.io/".to_string());
+    }
+
     lines.join("\n")
 }
 
@@ -184,7 +200,9 @@ mod tests {
         let goto = cmds.iter().find(|c| c.name == "goto").unwrap();
         let help = generate_command_help(goto);
         assert!(help.contains("browser4-cli goto <url>"));
-        assert!(help.contains("Navigate to a URL"));
+        assert!(help.contains("Navigate to a URL using the current active session"));
+        assert!(help.contains("does not open a new session automatically"));
+        assert!(help.contains("browser4-cli open"));
     }
 
     #[test]

@@ -168,6 +168,47 @@ pub(super) fn test_named_session_reuses_opened_session(ctx: &mut E2ECtx) {
     assert_eq!(navigate_calls[0].arguments["url"], "https://example.com/");
 }
 
+pub(super) fn test_goto_requires_existing_active_session(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    run_command_expecting_failure(
+        ctx,
+        &["goto", "https://example.com/missing-session"],
+        "No active session for \"goto\".",
+    );
+
+    let open_result = run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    assert!(
+        open_result.stdout.contains("Session opened: collective-session-1"),
+        "Expected mocked session open output in:\n{}",
+        open_result.stdout
+    );
+
+    mock_server.set_listed_sessions(vec![MockListedSession::stopped(
+        "collective-session-1",
+    )]);
+
+    run_command_expecting_failure(
+        ctx,
+        &["goto", "https://example.com/inactive-session"],
+        "Run \"browser4-cli open\" to create or refresh the session first.",
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let navigate_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_navigate")
+        .collect();
+    assert!(
+        navigate_calls.is_empty(),
+        "Expected goto to avoid navigation when no active session is available: {:?}",
+        tool_calls
+    );
+}
+
 pub(super) fn test_batch_reduces_transport_round_trips(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 

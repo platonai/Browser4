@@ -91,7 +91,7 @@ The tables below mirror the commands surfaced by the global `browser4-cli help` 
 |---|---|
 | `open [url]` | Open or switch to a browser session (optionally navigate to URL) |
 | `close` | Close the active session |
-| `goto <url>` | Navigate to a URL |
+| `goto <url>` | Navigate to a URL using the current active session |
 | `click <ref> [button]` | Click an element |
 | `dblclick <ref> [button]` | Double-click an element |
 | `type <text> [ref]` | Type text into the focused element or an optional target element |
@@ -223,14 +223,15 @@ gate for commands that require an active Browser4 session.
 | `open -s=<name>` | Reads/writes the named session state file | Opens or switches to the named session; subsequent `-s=<name>` commands use the same session |
 | Command succeeds through `with_session()` | `sessionId` stays unchanged | The command uses the persisted session normally |
 | Command fails because the server reports a stale / expired session and `recover_stale = false` | `invalidate_session()` clears `sessionId`, `activeSelector`, and `lastMousePosition`, while keeping `baseUrl` | The command fails with `Saved session expired. Run "browser4-cli open" first.` |
-| Command fails because the session is stale and `recover_stale = true` | `invalidate_session()` clears the stale session first, then `create_session()` writes a brand-new `sessionId` and retries the action | The command transparently continues on the recreated session if the retry succeeds |
+| `goto` is invoked but the saved session is missing or no longer `active` in the backend | `invalidate_session()` clears the saved `sessionId`, `activeSelector`, and `lastMousePosition` | The command fails with `No active session for "goto". Run "browser4-cli open" to create or refresh the session first.` |
 | `close` | `clear_state()` removes only the current session state file after best-effort remote close | The selected default or named session is fully cleared |
 | `close-all` / `kill-all` | `clear_all_state()` removes the default state file and all named session files | All persisted CLI session files are cleared |
 
 Notes:
 
-- Today, normal single-command stale-session recovery is enabled only for flows
-  that dispatch with `recover_stale = true` (currently `goto`).
+- `goto` reuses only the current backend-`active` session. It does not create a
+  new session automatically; run `browser4-cli open` first if the saved session
+  is missing or stale.
 - `open` without `-s` reuses the default session if one already exists; it only creates
   a new session when no default session is present. With `-s=<name>`, `open` switches
   to or creates the named session.
@@ -267,7 +268,7 @@ After each command that modifies browser state, the CLI automatically:
 # Open a new browser window
 browser4-cli open
 
-# Navigate to a page
+# Navigate to a page with the current active session
 browser4-cli goto https://playwright.dev
 
 # Inspect the page — note the eN labels on interactive nodes
