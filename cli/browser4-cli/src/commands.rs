@@ -176,7 +176,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         // ---- Core ----
         CommandDef {
             name: "open",
-            description: "Open or switch to a browser session",
+            description: "Open a browser session or refresh the saved one if it is no longer active",
             category: Category::Browsers,
             hidden: false,
             batch_supported: false,
@@ -819,7 +819,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         // ---- Browsers / Sessions ----
         CommandDef {
             name: "list",
-            description: "List browser sessions",
+            description: "List browser sessions with their status and next-open behavior",
             category: Category::Browsers,
             hidden: false,
             batch_supported: false,

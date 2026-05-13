@@ -126,6 +126,37 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli eval \"element => element.textContent\" e5".to_string());
     }
 
+    if cmd.name == "open" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Reuses the saved session for the current slot only when the backend still reports it as active."
+                .to_string(),
+        );
+        lines.push(
+            "  - If the saved session is missing or stale, `open` refreshes it by creating a new session."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli open".to_string());
+        lines.push("  browser4-cli open https://browser4.io/".to_string());
+    }
+
+    if cmd.name == "list" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Status shows whether the backend currently reports the saved session as Active, Stale, or Unknown."
+                .to_string(),
+        );
+        lines.push(
+            "  - Next open shows whether `browser4-cli open` will Reuse the saved session or Refresh it."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli list".to_string());
+    }
+
     if cmd.name == "goto" {
         lines.push("Notes:".to_string());
         lines.push(
@@ -203,6 +234,30 @@ mod tests {
         assert!(help.contains("Navigate to a URL using the current active session"));
         assert!(help.contains("does not open a new session automatically"));
         assert!(help.contains("browser4-cli open"));
+    }
+
+    #[test]
+    fn test_generate_command_help_open() {
+        let cmds = all_commands();
+        let open = cmds.iter().find(|c| c.name == "open").unwrap();
+        let help = generate_command_help(open);
+        assert!(help.contains("browser4-cli open [url]"));
+        assert!(help.contains(
+            "Open a browser session or refresh the saved one if it is no longer active"
+        ));
+        assert!(help.contains("backend still reports it as active"));
+        assert!(help.contains("creating a new session"));
+    }
+
+    #[test]
+    fn test_generate_command_help_list() {
+        let cmds = all_commands();
+        let list = cmds.iter().find(|c| c.name == "list").unwrap();
+        let help = generate_command_help(list);
+        assert!(help.contains("browser4-cli list"));
+        assert!(help.contains("status and next-open behavior"));
+        assert!(help.contains("Active, Stale, or Unknown"));
+        assert!(help.contains("Reuse the saved session or Refresh it"));
     }
 
     #[test]

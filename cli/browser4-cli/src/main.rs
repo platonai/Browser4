@@ -250,15 +250,11 @@ fn should_navigate_after_open(url: &str) -> bool {
     !url.is_empty() && url != "about:blank"
 }
 
-fn should_reuse_open_session(existing_session_id: Option<&str>, session_name: Option<&str>) -> bool {
-    let requested_session_id = session_name
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("default");
-
+fn should_reuse_open_session(existing_session_id: Option<&str>, _session_name: Option<&str>) -> bool {
     existing_session_id
-        .map(|session_id| session_id.eq_ignore_ascii_case(requested_session_id))
-        .unwrap_or(false)
+        .map(str::trim)
+        .filter(|session_id| !session_id.is_empty())
+        .is_some()
 }
 
 fn should_use_test_temporary_profile() -> bool {
@@ -410,9 +406,9 @@ async fn handle_open(
     let mut state = read_state(None, session_name);
     state.session_name = session_name.map(|s| s.to_string());
 
-    let session_id = if should_reuse_open_session(state.session_id.as_deref(), session_name) {
-        let existing_id = state.session_id.as_deref().unwrap_or("default").to_string();
-        // TODO: check the backend to confirm the session is still active before claiming it
+    let session_id = if let Some(existing_id) =
+        find_reusable_persisted_session_id(client, base_url, &state, session_name).await?
+    {
         println!("Session already open: {}", existing_id);
         existing_id
     } else {
@@ -669,21 +665,24 @@ fn log_shutdown_result(action: &str, result: &ShutdownResult) {
 }
 
 async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
-    let (active_ids, backend_note): (Vec<String>, Option<String>) =
+    let (backend_sessions, backend_note): (Option<Vec<BackendSessionRecord>>, Option<String>) =
         match call_tool(client, base_url, "list_sessions", json!({})).await {
-            Ok(result) => (parse_active_session_ids(&result), None),
+            Ok(result) => (Some(parse_backend_session_records(&result)), None),
             Err(error) if is_backend_unreachable_error(&error) => (
-                Vec::new(),
+                None,
                 Some(format!(
-                    "Note: Browser4 backend is not started or unreachable at {}. Showing local persisted sessions only.",
+                    "Note: Browser4 backend is not started or unreachable at {}. Showing local persisted sessions only; the next `open` will refresh any saved session because its active state cannot be verified.",
                     base_url
                 )),
             ),
             Err(error) => return Err(error),
         };
 
-    println!("{:<20} | {:<40} | {}", "Name", "Session ID", "Status");
-    println!("{:-<20}-+-{:-<40}-+-{:-<10}", "", "", "");
+    println!(
+        "{:<20} | {:<40} | {:<8} | {}",
+        "Name", "Session ID", "Status", "Next open"
+    );
+    println!("{:-<20}-+-{:-<40}-+-{:-<8}-+-{:-<9}", "", "", "", "");
 
     // List named sessions
     let state_dir = resolve_default_state_dir().join("sessions");
@@ -696,12 +695,12 @@ async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
                     if let Ok(content) = std::fs::read_to_string(&path) {
                         if let Ok(state) = serde_json::from_str::<CliState>(&content) {
                             if let Some(sid) = state.session_id {
-                                let status = if active_ids.contains(&sid) {
-                                    "Active"
-                                } else {
-                                    "Stale"
-                                };
-                                println!("{:<20} | {:<40} | {}", name, sid, status);
+                                let status = list_session_status(backend_sessions.as_deref(), &sid);
+                                let next_open = list_session_next_open_action(backend_sessions.as_deref(), &sid);
+                                println!(
+                                    "{:<20} | {:<40} | {:<8} | {}",
+                                    name, sid, status, next_open
+                                );
                             }
                         }
                     }
@@ -713,12 +712,12 @@ async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
     // List default session
     let default_state = read_state(None, None);
     if let Some(sid) = default_state.session_id {
-        let status = if active_ids.contains(&sid) {
-            "Active"
-        } else {
-            "Stale"
-        };
-        println!("{:<20} | {:<40} | {}", "(default)", sid, status);
+        let status = list_session_status(backend_sessions.as_deref(), &sid);
+        let next_open = list_session_next_open_action(backend_sessions.as_deref(), &sid);
+        println!(
+            "{:<20} | {:<40} | {:<8} | {}",
+            "(default)", sid, status, next_open
+        );
     }
 
     if let Some(note) = backend_note {
@@ -734,31 +733,78 @@ struct BackendSessionRecord {
     status: Option<String>,
 }
 
+fn list_session_status(backend_sessions: Option<&[BackendSessionRecord]>, session_id: &str) -> &'static str {
+    match backend_sessions {
+        Some(records) => records
+            .iter()
+            .find(|record| record.session_id == session_id)
+            .map(|record| {
+                if session_status_is_active(record.status.as_deref()) {
+                    "Active"
+                } else {
+                    "Stale"
+                }
+            })
+            .unwrap_or("Stale"),
+        None => "Unknown",
+    }
+}
+
+fn list_session_next_open_action(
+    backend_sessions: Option<&[BackendSessionRecord]>,
+    session_id: &str,
+) -> &'static str {
+    if backend_sessions
+        .map(|records| session_is_active_in_records(records, session_id))
+        .unwrap_or(false)
+    {
+        "Reuse"
+    } else {
+        "Refresh"
+    }
+}
+
+async fn find_reusable_persisted_session_id(
+    client: &Client,
+    base_url: &str,
+    state: &CliState,
+    session_name: Option<&str>,
+) -> Result<Option<String>, String> {
+    let Some(session_id) = state.session_id.clone() else {
+        return Ok(None);
+    };
+
+    if !should_reuse_open_session(Some(&session_id), session_name) {
+        return Ok(None);
+    }
+
+    let list_result = match call_tool(client, base_url, "list_sessions", json!({})).await {
+        Ok(result) => result,
+        Err(error) if is_backend_unreachable_error(&error) => {
+            invalidate_session(state, base_url, session_name);
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    };
+
+    if session_is_active(&list_result, &session_id) {
+        Ok(Some(session_id))
+    } else {
+        invalidate_session(state, base_url, session_name);
+        Ok(None)
+    }
+}
+
 async fn require_active_session_for_goto(
     client: &Client,
     base_url: &str,
     session_name: Option<&str>,
 ) -> Result<String, String> {
     let state = read_state(None, session_name);
-    let Some(session_id) = state.session_id.clone() else {
-        return Err(goto_requires_active_session_message());
-    };
 
-    let list_result = match call_tool(client, base_url, "list_sessions", json!({})).await {
-        Ok(result) => result,
-        Err(error) if is_backend_unreachable_error(&error) => {
-            invalidate_session(&state, base_url, session_name);
-            return Err(goto_requires_active_session_message());
-        }
-        Err(error) => return Err(error),
-    };
-
-    if session_is_active(&list_result, &session_id) {
-        Ok(session_id)
-    } else {
-        invalidate_session(&state, base_url, session_name);
-        Err(goto_requires_active_session_message())
-    }
+    find_reusable_persisted_session_id(client, base_url, &state, session_name)
+        .await?
+        .ok_or_else(goto_requires_active_session_message)
 }
 
 fn parse_backend_session_records(result: &str) -> Vec<BackendSessionRecord> {
@@ -799,12 +845,18 @@ fn session_status_is_active(status: Option<&str>) -> bool {
         .unwrap_or(true)
 }
 
-fn session_is_active(result: &str, session_id: &str) -> bool {
-    parse_backend_session_records(result)
-        .into_iter()
+fn session_is_active_in_records(records: &[BackendSessionRecord], session_id: &str) -> bool {
+    records
+        .iter()
         .any(|record| record.session_id == session_id && session_status_is_active(record.status.as_deref()))
 }
 
+fn session_is_active(result: &str, session_id: &str) -> bool {
+    let records = parse_backend_session_records(result);
+    session_is_active_in_records(&records, session_id)
+}
+
+#[cfg(test)]
 fn parse_active_session_ids(result: &str) -> Vec<String> {
     parse_backend_session_records(result)
         .into_iter()
@@ -2587,16 +2639,18 @@ mod tests {
     }
 
     #[test]
-    fn should_reuse_open_session_for_default_only_when_saved_session_is_default() {
+    fn should_reuse_open_session_for_default_when_any_session_id_is_saved() {
         assert!(should_reuse_open_session(Some("default"), None));
-        assert!(!should_reuse_open_session(Some("team-a"), None));
+        assert!(should_reuse_open_session(Some("team-a"), None));
+        assert!(should_reuse_open_session(Some("  session-1  "), None));
+        assert!(!should_reuse_open_session(Some("   "), None));
     }
 
     #[test]
-    fn should_reuse_open_session_for_named_session_only_when_ids_match() {
+    fn should_reuse_open_session_for_named_session_when_the_slot_has_a_saved_session() {
         assert!(should_reuse_open_session(Some("team-a"), Some("team-a")));
-        assert!(should_reuse_open_session(Some("TEAM-A"), Some("team-a")));
-        assert!(!should_reuse_open_session(Some("team-b"), Some("team-a")));
+        assert!(should_reuse_open_session(Some("session-42"), Some("team-a")));
+        assert!(!should_reuse_open_session(None, Some("team-a")));
     }
 
     #[test]
@@ -2749,6 +2803,48 @@ mod tests {
         assert!(!session_is_active(listed_sessions, "session-1"));
         assert!(session_is_active(listed_sessions, "session-2"));
         assert!(!session_is_active(listed_sessions, "missing-session"));
+    }
+
+    #[test]
+    fn list_session_status_marks_backend_reachable_active_and_stale_sessions() {
+        let records = vec![
+            BackendSessionRecord {
+                session_id: "session-1".to_string(),
+                status: Some("active".to_string()),
+            },
+            BackendSessionRecord {
+                session_id: "session-2".to_string(),
+                status: Some("stopped".to_string()),
+            },
+        ];
+
+        assert_eq!(list_session_status(Some(&records), "session-1"), "Active");
+        assert_eq!(list_session_status(Some(&records), "session-2"), "Stale");
+        assert_eq!(list_session_status(Some(&records), "missing"), "Stale");
+    }
+
+    #[test]
+    fn list_session_status_marks_backend_unreachable_sessions_unknown() {
+        assert_eq!(list_session_status(None, "session-1"), "Unknown");
+    }
+
+    #[test]
+    fn list_session_next_open_action_matches_reuse_and_refresh_behavior() {
+        let records = vec![
+            BackendSessionRecord {
+                session_id: "session-1".to_string(),
+                status: Some("active".to_string()),
+            },
+            BackendSessionRecord {
+                session_id: "session-2".to_string(),
+                status: Some("stopped".to_string()),
+            },
+        ];
+
+        assert_eq!(list_session_next_open_action(Some(&records), "session-1"), "Reuse");
+        assert_eq!(list_session_next_open_action(Some(&records), "session-2"), "Refresh");
+        assert_eq!(list_session_next_open_action(Some(&records), "missing"), "Refresh");
+        assert_eq!(list_session_next_open_action(None, "session-1"), "Refresh");
     }
 
     #[test]

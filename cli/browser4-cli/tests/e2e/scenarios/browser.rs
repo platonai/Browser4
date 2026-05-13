@@ -59,6 +59,11 @@ pub(super) fn test_newly_opened_session_shows_active(ctx: &mut E2ECtx) {
         "Expected session line not to contain 'Stale':\n{}",
         session_line
     );
+    assert!(
+        session_line.contains("Reuse"),
+        "Expected session line to show that open will reuse the active session:\n{}",
+        session_line
+    );
 
     run_command(ctx, &["close"]);
 }

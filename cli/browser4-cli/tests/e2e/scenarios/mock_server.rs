@@ -103,6 +103,47 @@ pub(super) fn test_open_with_url_prints_page_state(ctx: &mut E2ECtx) {
     );
 }
 
+pub(super) fn test_open_reuses_existing_active_session(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    mock_server.queue_open_session_ids(vec!["collective-session-1", "collective-session-2"]);
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let first_open = run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    assert!(
+        first_open.stdout.contains("Session opened: collective-session-1"),
+        "Expected first open to create the initial session:\n{}",
+        first_open.stdout
+    );
+
+    let second_open = run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    assert!(
+        second_open
+            .stdout
+            .contains("Session already open: collective-session-1"),
+        "Expected second open to reuse the active session:\n{}",
+        second_open.stdout
+    );
+    assert!(
+        !second_open.stdout.contains("Session opened: collective-session-2"),
+        "Expected second open to avoid creating a new session:\n{}",
+        second_open.stdout
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let open_session_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "open_session")
+        .collect();
+    assert_eq!(
+        open_session_calls.len(),
+        1,
+        "Expected only the first open to call open_session when the saved session is still active"
+    );
+    assert_eq!(read_persisted_session_id(&ctx.state_dir), "collective-session-1");
+}
+
 pub(super) fn test_named_session_reuses_opened_session(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 
@@ -166,6 +207,49 @@ pub(super) fn test_named_session_reuses_opened_session(ctx: &mut E2ECtx) {
         persisted_session_id
     );
     assert_eq!(navigate_calls[0].arguments["url"], "https://example.com/");
+}
+
+pub(super) fn test_open_refreshes_inactive_saved_session(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    mock_server.queue_open_session_ids(vec!["collective-session-1", "collective-session-2"]);
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let first_open = run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    assert!(
+        first_open.stdout.contains("Session opened: collective-session-1"),
+        "Expected first open to create the initial session:\n{}",
+        first_open.stdout
+    );
+
+    mock_server.set_listed_sessions(vec![MockListedSession::stopped(
+        "collective-session-1",
+    )]);
+
+    let second_open = run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    assert!(
+        second_open.stdout.contains("Session opened: collective-session-2"),
+        "Expected stale saved session to be refreshed with a new backend session:\n{}",
+        second_open.stdout
+    );
+    assert!(
+        !second_open.stdout.contains("Session already open"),
+        "Expected stale saved session to be refreshed instead of reused:\n{}",
+        second_open.stdout
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let open_session_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "open_session")
+        .collect();
+    assert_eq!(
+        open_session_calls.len(),
+        2,
+        "Expected open to call open_session again when the saved session is no longer active"
+    );
+    assert_eq!(read_persisted_session_id(&ctx.state_dir), "collective-session-2");
 }
 
 pub(super) fn test_goto_requires_existing_active_session(ctx: &mut E2ECtx) {

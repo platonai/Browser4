@@ -219,8 +219,9 @@ gate for commands that require an active Browser4 session.
 |---|---|---|
 | No persisted session | No state change | `require_session()` fails with `No active session. Run "browser4-cli open" first.` |
 | `open` succeeds (no existing session) | `create_session()` writes a fresh state file with new `sessionId`, current `baseUrl`, and clears `activeSelector` / `lastMousePosition` | A new active session becomes the current CLI session |
-| `open` when session already exists | No state change — reuses the existing `sessionId` | The existing session is reused; subsequent commands target the same session |
-| `open -s=<name>` | Reads/writes the named session state file | Opens or switches to the named session; subsequent `-s=<name>` commands use the same session |
+| `open` when a saved session exists and the backend still reports it `active` | No state change — keeps the existing `sessionId` | The existing session is reused; subsequent commands target the same session |
+| `open` when a saved session exists but is missing or no longer `active` in the backend | `invalidate_session()` clears the stale saved `sessionId`, `activeSelector`, and `lastMousePosition`, then `create_session()` writes a fresh session | The stale session is refreshed automatically by opening a new one |
+| `open -s=<name>` | Reads/writes the named session state file | Opens, reuses, or refreshes the named session for that slot; subsequent `-s=<name>` commands use the same slot |
 | Command succeeds through `with_session()` | `sessionId` stays unchanged | The command uses the persisted session normally |
 | Command fails because the server reports a stale / expired session and `recover_stale = false` | `invalidate_session()` clears `sessionId`, `activeSelector`, and `lastMousePosition`, while keeping `baseUrl` | The command fails with `Saved session expired. Run "browser4-cli open" first.` |
 | `goto` is invoked but the saved session is missing or no longer `active` in the backend | `invalidate_session()` clears the saved `sessionId`, `activeSelector`, and `lastMousePosition` | The command fails with `No active session for "goto". Run "browser4-cli open" to create or refresh the session first.` |
@@ -232,11 +233,12 @@ Notes:
 - `goto` reuses only the current backend-`active` session. It does not create a
   new session automatically; run `browser4-cli open` first if the saved session
   is missing or stale.
-- `open` without `-s` reuses the default session if one already exists; it only creates
-  a new session when no default session is present. With `-s=<name>`, `open` switches
-  to or creates the named session.
+- `open` first checks whether the saved session for the current slot is still
+  backend-`active`. It reuses active sessions and refreshes stale ones by
+  creating a new session for the same slot.
 - `list` reads persisted session files and compares them with live backend
-  sessions to label entries as `Active` or `Stale`.
+  sessions to show both the current status (`Active`, `Stale`, or `Unknown`)
+  and whether the next `open` will `Reuse` or `Refresh` that slot.
 
 ## Runtime Temp Files
 

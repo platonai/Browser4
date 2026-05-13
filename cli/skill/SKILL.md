@@ -28,6 +28,9 @@ browser4-cli close
 `browser4-cli goto` only reuses the current active session. If no active session is available, or the
 saved session is no longer active, run `browser4-cli open` first to create or refresh the session.
 
+`browser4-cli open` reuses the saved session for the current slot only when the backend still reports it
+as active. If the saved session is stale or missing, `open` refreshes it by creating a new session.
+
 ## Commands
 
 The sections below cover the standard browser workflow commands that are surfaced in the global `browser4-cli help` overview.
@@ -136,6 +139,9 @@ browser4-cli close-all
 # Explicitly stop Browser4.jar / the Browser4 backend and kill Browser4 browser processes
 browser4-cli kill-all
 ```
+
+`browser4-cli list` shows both the saved session state (`Active`, `Stale`, or `Unknown`) and what the
+next `browser4-cli open` will do for each slot (`Reuse` or `Refresh`).
 
 ## Advanced commands
 

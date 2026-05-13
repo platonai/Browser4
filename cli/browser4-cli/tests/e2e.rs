@@ -296,6 +296,7 @@ struct MockBrowser4State {
     next_agent_task_id: usize,
     next_collective_task_id: usize,
     listed_sessions: Vec<MockListedSession>,
+    queued_open_session_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -381,6 +382,13 @@ impl MockBrowser4Server {
             .expect("mock Browser4 state mutex poisoned")
             .listed_sessions = listed_sessions;
     }
+
+    fn queue_open_session_ids(&self, session_ids: Vec<&str>) {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .queued_open_session_ids = session_ids.into_iter().map(str::to_string).collect();
+    }
 }
 
 impl Drop for MockBrowser4Server {
@@ -433,11 +441,17 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
 
             let text = match tool.as_str() {
                 "open_session" => {
-                    state
-                        .lock()
-                        .expect("mock Browser4 state mutex poisoned")
-                        .listed_sessions = vec![MockListedSession::active("collective-session-1")];
-                    r#"{"sessionId":"collective-session-1"}"#.to_string()
+                    let session_id = {
+                        let mut guard = state.lock().expect("mock Browser4 state mutex poisoned");
+                        let session_id = if guard.queued_open_session_ids.is_empty() {
+                            "collective-session-1".to_string()
+                        } else {
+                            guard.queued_open_session_ids.remove(0)
+                        };
+                        guard.listed_sessions = vec![MockListedSession::active(&session_id)];
+                        session_id
+                    };
+                    serde_json::json!({ "sessionId": session_id }).to_string()
                 }
                 "list_sessions" => {
                     let listed_sessions = state
