@@ -2610,12 +2610,12 @@ mod tests {
     fn build_open_session_capabilities_keeps_interact_level() {
         let caps = build_open_session_capabilities_with_test_mode(
             &json!({
-                "interactLevel": "FATEST",
+                "interactLevel": "FASTEST",
             }),
             false,
         );
 
-        assert_eq!(caps["interactLevel"], json!("FATEST"));
+        assert_eq!(caps["interactLevel"], json!("FASTEST"));
     }
 
     #[test]

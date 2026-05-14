@@ -1263,11 +1263,11 @@ mod tests {
         let map = commands_map();
         let cmd = map.get("open").unwrap();
         let mut args = HashMap::new();
-        args.insert("interact-level".to_string(), json!("FATEST"));
+        args.insert("interact-level".to_string(), json!("FASTEST"));
 
         let params = (cmd.tool_params_fn)(&args);
 
-        assert_eq!(params["interactLevel"], "FATEST");
+        assert_eq!(params["interactLevel"], "FASTEST");
     }
 
     #[test]

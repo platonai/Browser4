@@ -7,10 +7,10 @@ import org.junit.jupiter.api.Test
 
 class PulsarSettingsTest {
     @Test
-    fun parseAcceptsFatestInteractLevelAlias() {
+    fun parseAcceptsFastestInteractLevelAlias() {
         val settings = PulsarSettings.parse(
             mapOf(
-                "interactLevel" to "FATEST",
+                "interactLevel" to "FASTEST",
             )
         )
 

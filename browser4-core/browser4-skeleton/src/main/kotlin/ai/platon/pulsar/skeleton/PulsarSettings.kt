@@ -112,7 +112,7 @@ data class PulsarSettings(
         private fun normalizeInteractLevelAlias(value: String): String {
             val normalized = value.trim().uppercase().replace('-', '_').replace(' ', '_')
             return when (normalized) {
-                "FATEST" -> "FASTEST"
+                "FASTEST" -> "FASTEST"
                 else -> normalized
             }
         }

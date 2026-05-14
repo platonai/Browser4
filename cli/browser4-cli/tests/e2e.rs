@@ -64,7 +64,7 @@ mod scenarios;
 
 const BROWSER_PROFILE_MODE: &str = "SEQUENTIAL";
 const OPEN_PROFILE_MODE_ARG: &str = "--profile-mode=SEQUENTIAL";
-const OPEN_INTERACT_LEVEL_ARG: &str = "--interact-level=FATEST";
+const OPEN_INTERACT_LEVEL_ARG: &str = "--interact-level=FASTEST";
 const USE_MAVEN_STARTUP_FLAG: &str = "--use-maven-startup";
 
 // ---------------------------------------------------------------------------
