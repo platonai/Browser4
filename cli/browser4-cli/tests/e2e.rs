@@ -13,6 +13,8 @@
 //!
 //! ```bash
 //! cargo test --test e2e -- --nocapture
+//! cargo test --test e2e -- --nocapture --enable-batch-scenario
+//! cargo test --test e2e -- --nocapture --batch-only
 //! cargo test --test e2e -- --nocapture --scenario=test_e2e_agent_task_commands
 //! cargo test --test e2e -- --nocapture --scenario=test_e2e_batch_*
 //! cargo test --test e2e -- --nocapture --scenario-from=test_e2e_mouse_and_dialog
@@ -23,6 +25,9 @@
 //!
 //! The `--failed` selector reruns scenario names stored by the previous run in
 //! `%TEMP%/browser4/browser4-cli/e2e/last-failed-scenarios.json`.
+//! By default the full e2e run skips batch-command scenarios; pass
+//! `--enable-batch-scenario` to include them, or `--batch-only` to run only
+//! batch-command scenarios.
 //!
 //! The Browser4 service is resolved in this order:
 //! 1. `BROWSER4_E2E_SERVICE_URL` environment variable – connect to an already-running
@@ -2272,20 +2277,26 @@ fn run_final_cleanup() -> Result<Vec<TimedStep>, String> {
 /// This set is validated by [`test_e2e_command_coverage`]: if a new command is
 /// added to `commands.rs` without appearing here *or* in the tested set, the
 /// build will fail.
-fn excluded_commands() -> HashSet<&'static str> {
-    [
+fn excluded_commands(include_batch_command: bool) -> HashSet<&'static str> {
+    let mut commands: HashSet<&'static str> = [
         // Destructive across concurrent sessions — would make the suite flaky
         "close-all",
         "kill-all",
     ]
-    .into()
+    .into();
+
+    if !include_batch_command {
+        commands.insert("batch");
+    }
+
+    commands
 }
 
 /// The set of commands that the e2e scenario functions exercise via
 /// [`run_command`] / [`run_command_expecting_failure`].  This must be kept in
 /// sync with what the test functions actually call.
-fn tested_commands() -> HashSet<&'static str> {
-    [
+fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
+    let mut commands: HashSet<&'static str> = [
         // test_session_lifecycle
         "open",
         "list",
@@ -2296,7 +2307,6 @@ fn tested_commands() -> HashSet<&'static str> {
         "go-forward",
         "reload",
         "delete-data",
-        "batch",
         // test_interaction_commands
         "resize",
         "type",
@@ -2345,7 +2355,13 @@ fn tested_commands() -> HashSet<&'static str> {
         // eval is exercised directly by dedicated scenarios and shared helpers
         "eval",
     ]
-    .into()
+    .into();
+
+    if include_batch_command {
+        commands.insert("batch");
+    }
+
+    commands
 }
 
 // ---------------------------------------------------------------------------
@@ -2362,11 +2378,11 @@ fn tested_commands() -> HashSet<&'static str> {
 /// This check does **not** require a running server. It is a test-time
 /// guard: if a command is added to `commands.rs` without being placed into
 /// either [`tested_commands`] or [`excluded_commands`], this test fails.
-fn verify_e2e_command_coverage() {
+fn verify_e2e_command_coverage(include_batch_command: bool) {
     let all: HashSet<&str> = all_commands().iter().map(|c| c.name).collect();
 
-    let tested = tested_commands();
-    let excluded = excluded_commands();
+    let tested = tested_commands(include_batch_command);
+    let excluded = excluded_commands(include_batch_command);
 
     // 1. No command should appear in both sets.
     let overlap: Vec<&&str> = tested.intersection(&excluded).collect();
@@ -2454,7 +2470,10 @@ fn print_timing_steps(steps: &[TimedStep]) {
     }
 }
 
-fn run_named_test(name: &str, test_fn: fn()) -> TimingReport {
+fn run_named_test<F>(name: &str, test_fn: F) -> TimingReport
+where
+    F: FnOnce(),
+{
     print!("{} test {name} ... ", Local::now());
 
     std::io::stdout().flush().expect("stdout flush failed");
@@ -2666,6 +2685,8 @@ struct RunOptions {
     has_positional_filter: bool,
     fail_fast: bool,
     list_only: bool,
+    batch_only: bool,
+    enable_batch_scenario: bool,
 }
 
 fn parse_scenario_limit(raw: &str) -> usize {
@@ -2716,6 +2737,8 @@ fn parse_run_options() -> RunOptions {
     let mut fail_fast = false;
     let mut has_positional_filter = false;
     let mut list_only = false;
+    let mut batch_only = false;
+    let mut enable_batch_scenario = false;
 
     while let Some(arg) = args.next() {
         if let Some(value) = arg.strip_prefix("--scenario=") {
@@ -2769,6 +2792,16 @@ fn parse_run_options() -> RunOptions {
             continue;
         }
 
+        if arg == "--batch-only" {
+            batch_only = true;
+            continue;
+        }
+
+        if arg == "--enable-batch-scenario" {
+            enable_batch_scenario = true;
+            continue;
+        }
+
         if !arg.starts_with('-') {
             has_positional_filter = true;
         }
@@ -2795,7 +2828,27 @@ fn parse_run_options() -> RunOptions {
         has_positional_filter,
         fail_fast,
         list_only,
+        batch_only,
+        enable_batch_scenario,
     }
+}
+
+fn select_batch_scenarios(
+    selected_scenarios: Vec<scenarios::ScenarioDef>,
+) -> Vec<scenarios::ScenarioDef> {
+    selected_scenarios
+        .into_iter()
+        .filter(|scenario| scenario.is_batch_command_scenario())
+        .collect()
+}
+
+fn exclude_batch_scenarios(
+    selected_scenarios: Vec<scenarios::ScenarioDef>,
+) -> Vec<scenarios::ScenarioDef> {
+    selected_scenarios
+        .into_iter()
+        .filter(|scenario| !scenario.is_batch_command_scenario())
+        .collect()
 }
 
 fn resolve_scenario(name: &str) -> Option<scenarios::ScenarioDef> {
@@ -2890,9 +2943,7 @@ fn main() {
         .collect::<Vec<_>>()
         .join(", ");
 
-    let (selected_scenarios, run_coverage): (Vec<scenarios::ScenarioDef>, bool) = match run_options
-        .scenario_filter
-    {
+    let mut selected_scenarios: Vec<scenarios::ScenarioDef> = match run_options.scenario_filter {
         Some(ScenarioFilter::Scenario(filter)) => {
             let selected = resolve_scenarios_by_filter(&filter);
             assert!(
@@ -2909,13 +2960,13 @@ fn main() {
                     .collect::<Vec<_>>()
                     .join(", ")
             );
-            (selected, false)
+            selected
         }
         Some(ScenarioFilter::From(filter)) => {
             let start_index = resolve_scenario_index(&filter).unwrap_or_else(|| {
                 panic!("Unknown scenario '{filter}'. Available scenarios: {available_names}");
             });
-            (all_scenarios[start_index..].to_vec(), false)
+            all_scenarios[start_index..].to_vec()
         }
         Some(ScenarioFilter::Failed) => {
             let failed = load_last_failed_scenarios();
@@ -2958,10 +3009,43 @@ fn main() {
                     .collect::<Vec<_>>()
                     .join(", ")
             );
-            (selected, false)
+            selected
         }
-        None => (all_scenarios.to_vec(), true),
+        None => all_scenarios.to_vec(),
     };
+
+    if run_options.batch_only {
+        selected_scenarios = select_batch_scenarios(selected_scenarios);
+        assert!(
+            !selected_scenarios.is_empty(),
+            "No batch scenarios are registered. Available scenarios: {available_names}"
+        );
+        println!(
+            "selected {} batch scenario(s) via --batch-only: {}",
+            selected_scenarios.len(),
+            selected_scenarios
+                .iter()
+                .map(|scenario| scenario.name)
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    } else if !has_explicit_scenario_filter && !run_options.enable_batch_scenario {
+        let batch_scenarios = selected_scenarios
+            .iter()
+            .copied()
+            .filter(|scenario| scenario.is_batch_command_scenario())
+            .collect::<Vec<_>>();
+        selected_scenarios = exclude_batch_scenarios(selected_scenarios);
+
+        if !batch_scenarios.is_empty() {
+            println!(
+                "default e2e run skips {} batch scenario(s); pass --enable-batch-scenario or --batch-only to include them",
+                batch_scenarios.len()
+            );
+        }
+    }
+
+    let run_coverage = !has_explicit_scenario_filter && !run_options.batch_only;
 
     let selected_scenarios = apply_scenario_limit_filter(selected_scenarios, run_options.scenario_limit);
 
@@ -3022,7 +3106,9 @@ fn main() {
         let mut failed_scenario_names: HashSet<String> = HashSet::new();
 
         if run_coverage {
-            let report = run_named_test(COVERAGE_TEST_NAME, verify_e2e_command_coverage);
+            let report = run_named_test(COVERAGE_TEST_NAME, || {
+                verify_e2e_command_coverage(run_options.enable_batch_scenario)
+            });
             timings.push(report);
         }
 

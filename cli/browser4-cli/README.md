@@ -1,7 +1,6 @@
 # Browser4 CLI
 
-A command-line interface for controlling a [Browser4](https://github.com/platonai/Browser4)
-server. Designed for use by AI agents through SKILLS + CLI.
+A command-line interface for controlling a [Browser4](https://github.com/platonai/Browser4) server. Designed for use by AI agents through SKILLS + CLI.
 
 ## Install
 
@@ -281,7 +280,7 @@ browser4-cli click e15
 browser4-cli type "Hello World" e15
 browser4-cli press Enter e15
 browser4-cli eval "document.title"
-browser4-cli eval "element => element.textContent.trim()" e15
+browser4-cli eval "element => element.textContent" e15
 browser4-cli keydown Shift
 browser4-cli mousemove 150 300
 browser4-cli mousewheel 0 100

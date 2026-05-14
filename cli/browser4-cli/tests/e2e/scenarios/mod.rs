@@ -20,6 +20,10 @@ impl ScenarioDef {
     pub(super) fn effective_test_count(self) -> usize {
         self.test_count.max(1)
     }
+
+    pub(super) fn is_batch_command_scenario(self) -> bool {
+        self.name.contains("_batch_") || self.short_name.contains("batch")
+    }
 }
 
 pub(crate) const SCENARIOS: &[ScenarioDef] = &[
