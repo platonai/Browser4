@@ -46,7 +46,7 @@ class SessionManagerTest {
     }
 
     @Test
-    fun createSessionUsesTemporaryProfileModeForNamedSessionsByDefault() {
+    fun createSessionUsesSequentialProfileModeForNamedSessionsByDefault() {
         val session = sessionManager.createSession(
             mapOf(
                 "sessionId" to "team-a",
@@ -56,7 +56,20 @@ class SessionManagerTest {
 
         assertEquals("team-a", session.sessionId)
         assertEquals("team-a", session.capabilities?.get("sessionId"))
-        assertEquals("TEMPORARY", session.capabilities?.get("profileMode"))
+        assertEquals("SEQUENTIAL", session.capabilities?.get("profileMode"))
+    }
+
+    @Test
+    fun createSessionPreservesSequentialProfileModeForDefaultSession() {
+        val session = sessionManager.createSession(
+            mapOf(
+                "profileMode" to "SEQUENTIAL",
+            )
+        )
+
+        assertEquals("default", session.sessionId)
+        assertEquals("default", session.capabilities?.get("sessionId"))
+        assertEquals("SEQUENTIAL", session.capabilities?.get("profileMode"))
     }
 
     @Test
@@ -93,8 +106,10 @@ class SessionManagerTest {
         val secondSession = sessionManager.createSession(mapOf("sessionId" to "team-c"))
 
         assertEquals("team-c", firstSession.sessionId)
+        assertEquals("SEQUENTIAL", firstSession.capabilities?.get("profileMode"))
         assertEquals("active", firstSession.status)
         assertEquals("team-c", secondSession.sessionId)
+        assertEquals("SEQUENTIAL", secondSession.capabilities?.get("profileMode"))
         assertEquals("active", secondSession.status)
         assertSame(firstSession, secondSession)
         assertSame(secondSession, sessionManager.getSession("team-c"))

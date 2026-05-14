@@ -117,6 +117,7 @@ class MCPToolControllerTest {
         Unit
     }
 
+
     @Test
     fun `test response deserializes null isError as false`() {
         val json = """{"content":[{"type":"text","text":"ok"}],"isError":null}"""

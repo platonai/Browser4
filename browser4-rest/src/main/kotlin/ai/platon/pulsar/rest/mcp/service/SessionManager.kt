@@ -145,9 +145,9 @@ class SessionManager(
 
         normalizedCapabilities[SESSION_ID_CAPABILITY] = sessionId
         normalizedCapabilities[PROFILE_MODE_CAPABILITY] = when {
-            sessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) -> DEFAULT_PROFILE_MODE
             normalizedCapabilities[PROFILE_MODE_CAPABILITY]?.toString()?.equals(SEQUENTIAL_PROFILE_MODE, ignoreCase = true) == true -> SEQUENTIAL_PROFILE_MODE
-            else -> TEMPORARY_PROFILE_MODE
+            sessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) -> DEFAULT_PROFILE_MODE
+            else -> SEQUENTIAL_PROFILE_MODE
         }
 
         return normalizedCapabilities
