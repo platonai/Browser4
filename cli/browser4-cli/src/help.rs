@@ -10,13 +10,13 @@ const CATEGORIES: &[(&str, &str)] = &[
     ("mouse", "Mouse"),
     ("export", "Save as"),
     ("tabs", "Tabs"),
-    // ("storage", "Storage"),
-    // ("network", "Network"),
-    // ("devtools", "DevTools"),
-    // ("agent", "Agent"),
-    // ("collective", "Collective"),
-    // ("install", "Install"),
-    // ("config", "Configuration"),
+    ("storage", "Storage"),
+    ("network", "Network"),
+    ("devtools", "DevTools"),
+    ("agent", "Agent"),
+    ("collective", "Collective"),
+    ("install", "Install"),
+    ("config", "Configuration"),
     ("browsers", "Browser sessions"),
 ];
 
@@ -45,11 +45,13 @@ pub fn generate_help() -> String {
     lines.push("\nGlobal options:".to_string());
     lines.push(format_with_gap("  --help [command]", "print help", 30));
     lines.push(format_with_gap("  --version", "print version", 30));
-    lines.push(format_with_gap(
-        "  --use-maven-startup",
-        "opt in to local maven spring-boot:run startup",
-        30,
-    ));
+
+    // for developer only
+    // lines.push(format_with_gap(
+    //     "  --use-maven-startup",
+    //     "opt in to local maven spring-boot:run startup",
+    //     30,
+    // ));
 
     lines.join("\n")
 }

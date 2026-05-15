@@ -745,7 +745,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "pdf",
             description: "Save page as PDF",
             category: Category::Export,
-            hidden: false,
+            hidden: true,
             batch_supported: true,
             args: &[],
             options: &[
