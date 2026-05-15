@@ -224,7 +224,8 @@ gate for commands that require an active Browser4 session.
 | Command succeeds through `with_session()` | `sessionId` stays unchanged | The command uses the persisted session normally |
 | Command fails because the server reports a stale / expired session and `recover_stale = false` | `invalidate_session()` clears `sessionId`, `activeSelector`, and `lastMousePosition`, while keeping `baseUrl` | The command fails with `Saved session expired. Run "browser4-cli open" first.` |
 | `goto` is invoked but the saved session is missing or no longer `active` in the backend | `invalidate_session()` clears the saved `sessionId`, `activeSelector`, and `lastMousePosition` | The command fails with `No active session for "goto". Run "browser4-cli open" to create or refresh the session first.` |
-| `close` | `clear_state()` removes only the current session state file after best-effort remote close | The selected default or named session is fully cleared |
+| `close` with an active session | `clear_state()` removes only the current session state file after best-effort remote close | The selected default or named session is fully cleared |
+| `close` with no persisted `sessionId` | `clear_state()` best-effort removes the current session slot | Prints `No active session. Run "browser4-cli open" first.` and exits successfully as a no-op |
 | `close-all` / `kill-all` | `clear_all_state()` removes the default state file and all named session files | All persisted CLI session files are cleared |
 
 Notes:

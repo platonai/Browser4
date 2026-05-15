@@ -24,6 +24,22 @@ pub(super) fn test_session_lifecycle(ctx: &mut E2ECtx) {
         "Expected 'Session closed.' in:\n{}",
         close_result.stdout
     );
+
+    let close_without_session_result = run_command(ctx, &["close"]);
+    let combined_output = format!(
+        "{}\n{}",
+        close_without_session_result.stdout, close_without_session_result.stderr
+    );
+    assert!(
+        combined_output.contains("No active session. Run \"browser4-cli open\" first."),
+        "Expected missing-session close message in output:\n{}",
+        combined_output
+    );
+    assert!(
+        !combined_output.contains("Error:"),
+        "Close without a session should not bubble up as a process error:\n{}",
+        combined_output
+    );
 }
 
 pub(super) fn test_newly_opened_session_shows_active(ctx: &mut E2ECtx) {

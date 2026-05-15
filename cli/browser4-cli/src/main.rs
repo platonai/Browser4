@@ -55,6 +55,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 const TEST_TEMPORARY_PROFILE_ENV: &str = "BROWSER4_CLI_TEST_TEMPORARY_PROFILE";
 const AGENT_RUN_FAILURE_POLL_ATTEMPTS: usize = 5;
 const AGENT_RUN_FAILURE_POLL_INTERVAL_MS: u64 = 250;
+const NO_ACTIVE_SESSION_MESSAGE: &str = r#"No active session. Run "browser4-cli open" first."#;
 
 /// Commands that should NOT trigger a post-command snapshot.
 fn no_snapshot_commands() -> HashSet<&'static str> {
@@ -89,7 +90,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
 fn require_session(session_name: Option<&str>) -> Result<CliState, String> {
     let state = read_state(None, session_name);
     if state.session_id.is_none() {
-        return Err(r#"No active session. Run "browser4-cli open" first."#.to_string());
+        return Err(NO_ACTIVE_SESSION_MESSAGE.to_string());
     }
     Ok(state)
 }
@@ -103,7 +104,15 @@ fn get_session_id(state: &CliState) -> Result<&str, String> {
     state
         .session_id
         .as_deref()
-        .ok_or_else(|| r#"No active session. Run "browser4-cli open" first."#.to_string())
+        .ok_or_else(|| NO_ACTIVE_SESSION_MESSAGE.to_string())
+}
+
+fn get_session_id_for_close(state: &CliState) -> Option<&str> {
+    state
+        .session_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|session_id| !session_id.is_empty())
 }
 
 fn tracked_selector(tool_params: &Value) -> Option<&str> {
@@ -494,8 +503,12 @@ async fn handle_close(
 ) -> Result<(), String> {
     // `close` is intentionally scoped to one browser session. Global Browser4
     // server shutdown and PULSAR_CHROME cleanup belong to `close-all`/`kill-all`.
-    let state = require_session(session_name)?;
-    let session_id = get_session_id(&state)?.to_string();
+    let state = read_state(None, session_name);
+    let Some(session_id) = get_session_id_for_close(&state).map(str::to_string) else {
+        clear_state(None, session_name);
+        eprintln!("{}", NO_ACTIVE_SESSION_MESSAGE);
+        return Ok(());
+    };
     // Ignore errors — session might already be closed
     let _ = call_tool(
         client,
@@ -1528,7 +1541,7 @@ async fn handle_co_result(
 }
 
 fn should_ensure_server_running(command: &str) -> bool {
-    command != "close-all" && command != "kill-all" && command != "list"
+    command != "close" && command != "close-all" && command != "kill-all" && command != "list"
 }
 
 // ---------------------------------------------------------------------------
@@ -2489,6 +2502,19 @@ fn print_help(command_name: Option<&str>) {
 mod tests {
     use super::*;
     use serde_json::json;
+    use tempfile::TempDir;
+
+    fn test_temp_dir() -> TempDir {
+        let root = std::env::temp_dir()
+            .join("browser4")
+            .join("browser4-cli")
+            .join("main-tests");
+        std::fs::create_dir_all(&root).unwrap();
+        tempfile::Builder::new()
+            .prefix("main-")
+            .tempdir_in(&root)
+            .unwrap()
+    }
 
     #[test]
     fn no_snapshot_commands_include_eval() {
@@ -2674,8 +2700,43 @@ mod tests {
     }
 
     #[test]
+    fn should_not_ensure_server_for_close() {
+        assert!(!should_ensure_server_running("close"));
+    }
+
+    #[test]
     fn should_ensure_server_for_open() {
         assert!(should_ensure_server_running("open"));
+    }
+
+    #[test]
+    fn get_session_id_for_close_returns_none_without_session_id() {
+        assert_eq!(get_session_id_for_close(&CliState::default()), None);
+    }
+
+    #[test]
+    fn get_session_id_for_close_ignores_blank_session_id() {
+        let state = CliState {
+            session_id: Some("   ".to_string()),
+            ..CliState::default()
+        };
+
+        assert_eq!(get_session_id_for_close(&state), None);
+    }
+
+    #[test]
+    fn get_session_id_for_close_preserves_non_session_state() {
+        let tmp = test_temp_dir();
+        let state = CliState {
+            base_url: "http://127.0.0.1:9555".to_string(),
+            ..CliState::default()
+        };
+        write_state(&state, Some(tmp.path()), Some("amazon")).unwrap();
+
+        let read_back = read_state(Some(tmp.path()), Some("amazon"));
+
+        assert_eq!(get_session_id_for_close(&read_back), None);
+        assert_eq!(read_back.base_url, "http://127.0.0.1:9555");
     }
 
     #[test]
