@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 # Build browser4 for all platforms using Docker
 # Usage: ./scripts/build-all-platforms.sh
@@ -7,6 +7,24 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 OUTPUT_DIR="$PROJECT_ROOT/bin"
+SKIP_DOCKER_BUILD=false
+DRY_RUN=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --skip-docker-build)
+            SKIP_DOCKER_BUILD=true
+            ;;
+        --dry-run)
+            DRY_RUN=true
+            ;;
+        *)
+            echo "Unknown argument: $1" >&2
+            exit 1
+            ;;
+    esac
+    shift
+done
 
 # Colors
 RED='\033[0;31m'
@@ -20,9 +38,24 @@ echo ""
 # Ensure output directory exists
 mkdir -p "$OUTPUT_DIR"
 
+run_cmd() {
+    if [ "$DRY_RUN" = true ]; then
+        echo "[DRY-RUN] $*"
+    else
+        "$@"
+    fi
+}
+
+if ! command -v docker >/dev/null 2>&1; then
+    echo "Docker CLI not found in PATH. Install Docker and retry." >&2
+    exit 1
+fi
+
 # Build the Docker image if needed
-echo -e "${YELLOW}Building Docker cross-compilation image...${NC}"
-docker build -t browser4-builder -f "$PROJECT_ROOT/docker/Dockerfile.build" "$PROJECT_ROOT"
+if [ "$SKIP_DOCKER_BUILD" = false ]; then
+    echo -e "${YELLOW}Building Docker cross-compilation image...${NC}"
+    run_cmd docker build -t browser4-builder -f "$PROJECT_ROOT/docker/Dockerfile.build" "$PROJECT_ROOT"
+fi
 
 # Function to build for a target
 build_target() {
@@ -31,11 +64,16 @@ build_target() {
 
     echo -e "${YELLOW}Building for ${target}...${NC}"
 
-    docker run --rm \
+    run_cmd docker run --rm \
         -v "$PROJECT_ROOT/cli:/build" \
         -v "$OUTPUT_DIR:/output" \
         browser4-builder \
         -c "cargo zigbuild --release --target ${target} && cp /build/target/${target}/release/browser4-cli* /output/${output_name} && chmod +x /output/${output_name} 2>/dev/null || true"
+
+    if [ "$DRY_RUN" = true ]; then
+        echo -e "${YELLOW}[DRY-RUN] Skipping artifact verification for ${output_name}${NC}"
+        return 0
+    fi
 
     if [ -f "$OUTPUT_DIR/$output_name" ]; then
         echo -e "${GREEN}✓ Built ${output_name}${NC}"
@@ -71,4 +109,9 @@ echo ""
 echo -e "${GREEN}Build complete!${NC}"
 echo ""
 echo "Binaries are in: $OUTPUT_DIR"
-ls -la "$OUTPUT_DIR"/browser4-cli-*
+
+if [ "$DRY_RUN" = true ]; then
+    echo "[DRY-RUN] Skipping artifact listing."
+else
+    ls -la "$OUTPUT_DIR"/browser4-cli-*
+fi
