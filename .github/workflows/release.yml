@@ -298,30 +298,6 @@ jobs:
             echo "📝 Current commit needs to be merged to master"
           fi
 
-      - name: Merge to master branch
-        id: merge_master
-        if: success() && env.IS_PRERELEASE == 'false' && steps.check_master.outputs.already_on_master == 'false'
-        run: |
-          echo "📦 Merging release to master branch..."
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          TAG="${{ env.TAG }}"
-          VERSION="${{ env.VERSION }}"
-
-          # Fetch and checkout master
-          git fetch origin master
-          git checkout master
-          git pull origin master
-
-          # Merge the tag
-          git merge --no-ff "$TAG" -m "chore: release $VERSION"
-
-          # Push to master
-          git push origin master
-
-          echo "✅ Successfully merged $TAG to master"
-
       - name: Build Browser4 JAR
         if: success()
         run: |
