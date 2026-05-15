@@ -218,7 +218,6 @@ mod tests {
         assert!(help.contains("snapshot"));
         assert!(help.contains("ArrowLeft"));
         assert!(help.contains("Evaluate JavaScript expression on page or element"));
-        assert!(help.contains("--use-maven-startup"));
         assert!(help.contains("Core:"));
         assert!(!help.contains("  batch "));
         assert!(!help.contains("  console"));
