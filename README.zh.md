@@ -1,6 +1,5 @@
 # 🤖 Browser4
 
-[![Docker Pulls](https://img.shields.io/docker/pulls/galaxyeye88/browser4?style=flat-square)](https://hub.docker.com/r/galaxyeye88/browser4)
 [![License: APACHE2](https://img.shields.io/badge/license-APACHE2-green?style=flat-square)](https://github.com/platonai/browser4/blob/main/LICENSE)
 
 ---
@@ -150,14 +149,14 @@ Browser4 CLI 与 Playwright 兼容，支持导航、交互、数据提取等广�
 mkdir -p ~/.browser4/lib
 curl -fsSL -o ~/.browser4/lib/Browser4.jar https://github.com/platonai/Browser4/releases/latest/download/Browser4.jar
 git clone https://github.com/platonai/Browser4.git
-cd Browser4/sdks/browser4-cli
+cd Browser4/cli/browser4-cli
 cargo install --path . --locked
 
 # Windows
 New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.browser4\lib" | Out-Null
 Invoke-WebRequest 'https://github.com/platonai/Browser4/releases/latest/download/Browser4.jar' -OutFile "$env:USERPROFILE\.browser4\lib\Browser4.jar"
 git clone https://github.com/platonai/Browser4.git
-cd Browser4\sdks\browser4-cli
+cd Browser4\cli\browser4-cli
 cargo install --path . --locked
 
 # 打开新浏览器窗口
@@ -204,11 +203,11 @@ browser4-cli close
 
 从源码构建 CLI：
 
-[README.md](sdks/browser4-cli/README.md)
+[README.md](cli/browser4-cli/README.md)
 
 Browser4 CLI 为 AI agents 通过 SKILLS + CLI 使用而设计。
 
-[SKILL.md](sdks/skill/SKILL.md)
+[SKILL.md](cli/skill/SKILL.md)
 
 ---
 

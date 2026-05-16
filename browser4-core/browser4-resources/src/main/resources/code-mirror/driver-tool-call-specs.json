@@ -1022,7 +1022,7 @@
   "cli" : "browser4-cli tab mouseWheel --deltaX=<Double>, default=0.0 --deltaY=<Double>, default=150.0"
 }, {
   "domain" : "tab",
-  "method" : "mouseMove",
+  "method" : "moveMouseTo",
   "arguments" : [ {
     "name" : "x",
     "type" : "Double",
@@ -1036,9 +1036,9 @@
   } ],
   "returnType" : "Unit",
   "description" : "The mouse moves to the position specified by [x] and [y].",
-  "help" : "The mouse moves to the position specified by [x] and [y].\n\n```kotlin driver.mouseMove(100.0, 200.0) ```",
-  "expression" : "tab.mouseMove(Arg(name=x, type=Double, defaultValue=), Arg(name=y, type=Double, defaultValue=))",
-  "cli" : "browser4-cli tab mouseMove --x=<Double>, default= --y=<Double>, default="
+  "help" : "The mouse moves to the position specified by [x] and [y].\n\n```kotlin driver.moveMouseTo(100.0, 200.0) ```",
+  "expression" : "tab.moveMouseTo(Arg(name=x, type=Double, defaultValue=), Arg(name=y, type=Double, defaultValue=))",
+  "cli" : "browser4-cli tab moveMouseTo --x=<Double>, default= --y=<Double>, default="
 }, {
   "domain" : "tab",
   "method" : "mouseMove",
@@ -1102,7 +1102,7 @@
   "cli" : "browser4-cli tab mouseUp --button=<String>, default=left --clickCount=<Int>, default=1"
 }, {
   "domain" : "tab",
-  "method" : "mouseMove",
+  "method" : "moveMouseTo",
   "arguments" : [ {
     "name" : "selector",
     "type" : "String",
@@ -1122,9 +1122,9 @@
   } ],
   "returnType" : "Unit",
   "description" : "The mouse moves to the element with [selector].",
-  "help" : "The mouse moves to the element with [selector].\n\n```kotlin driver.mouseMove(\"h2.title\") ```",
-  "expression" : "tab.mouseMove(Arg(name=selector, type=String, defaultValue=), Arg(name=deltaX, type=Int, defaultValue=), Arg(name=deltaY, type=Int, defaultValue=0))",
-  "cli" : "browser4-cli tab mouseMove --selector=<String>, default= --deltaX=<Int>, default= --deltaY=<Int>, default=0"
+  "help" : "The mouse moves to the element with [selector].\n\n```kotlin driver.moveMouseTo(\"h2.title\") ```",
+  "expression" : "tab.moveMouseTo(Arg(name=selector, type=String, defaultValue=), Arg(name=deltaX, type=Int, defaultValue=), Arg(name=deltaY, type=Int, defaultValue=0))",
+  "cli" : "browser4-cli tab moveMouseTo --selector=<String>, default= --deltaX=<Int>, default= --deltaY=<Int>, default=0"
 }, {
   "domain" : "tab",
   "method" : "dragAndDrop",

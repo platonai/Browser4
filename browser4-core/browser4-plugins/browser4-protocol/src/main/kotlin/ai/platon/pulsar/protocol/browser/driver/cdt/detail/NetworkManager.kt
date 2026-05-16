@@ -27,9 +27,7 @@ internal class NetworkManager(
 
     val isActive get() = driver.isActive
 
-    private val networkAPI get() = driver.devTools.network.takeIf { isActive }
-    private val fetchAPI get() = driver.devTools.fetch.takeIf { isActive }
-    private val securityAPI get() = driver.devTools.security.takeIf { isActive }
+    private val cdp get() = driver.cdp
 
     private val networkEventManager = NetworkEventManager()
 
@@ -50,27 +48,27 @@ internal class NetworkManager(
     var userCacheDisabled = false
 
     init {
-        fetchAPI?.onRequestPaused(::onRequestPaused)
-        fetchAPI?.onAuthRequired(::onAuthRequired)
-        networkAPI?.onRequestWillBeSent(::onRequestWillBeSent)
-        networkAPI?.onRequestWillBeSentExtraInfo(::onRequestWillBeSentExtraInfo)
-        networkAPI?.onRequestServedFromCache(::onRequestServedFromCache)
-        networkAPI?.onResponseReceived(::onResponseReceived)
-        networkAPI?.onLoadingFinished(::onLoadingFinished)
-        networkAPI?.onLoadingFailed(::onLoadingFailed)
-        networkAPI?.onResponseReceivedExtraInfo(::onResponseReceivedExtraInfo)
+        cdp.fetch.onRequestPaused(::onRequestPaused)
+        cdp.fetch.onAuthRequired(::onAuthRequired)
+        cdp.network.onRequestWillBeSent(::onRequestWillBeSent)
+        cdp.network.onRequestWillBeSentExtraInfo(::onRequestWillBeSentExtraInfo)
+        cdp.network.onRequestServedFromCache(::onRequestServedFromCache)
+        cdp.network.onResponseReceived(::onResponseReceived)
+        cdp.network.onLoadingFinished(::onLoadingFinished)
+        cdp.network.onLoadingFailed(::onLoadingFailed)
+        cdp.network.onResponseReceivedExtraInfo(::onResponseReceivedExtraInfo)
     }
 
     suspend fun enable() {
         if (ignoreHTTPSErrors) {
             rpc.invokeSilently("setIgnoreCertificateErrors") {
-                securityAPI?.enable()
-                securityAPI?.setIgnoreCertificateErrors(ignoreHTTPSErrors)
+                cdp.security.enable()
+                cdp.security.setIgnoreCertificateErrors(ignoreHTTPSErrors)
             }
         }
 
         rpc.invokeSilently("enable") {
-            networkAPI?.enable()
+            cdp.network.enable()
         }
     }
 
@@ -84,7 +82,7 @@ internal class NetworkManager(
         headers.entries.associateTo(extraHTTPHeaders) { it.key.lowercase() to it.value }
 
         rpc.invoke("setExtraHTTPHeaders") {
-            networkAPI?.setExtraHTTPHeaders(extraHTTPHeaders)
+            cdp.network.setExtraHTTPHeaders(extraHTTPHeaders)
         }
     }
 
@@ -109,7 +107,7 @@ internal class NetworkManager(
         val authChallengeResponse = AuthChallengeResponse(response, credentials?.username, credentials?.password)
 
         rpc.invokeSilently("continueWithAuth", event.requestId) {
-            fetchAPI?.continueWithAuth(event.requestId, authChallengeResponse)
+            cdp.fetch.continueWithAuth(event.requestId, authChallengeResponse)
         }
     }
 
@@ -124,7 +122,7 @@ internal class NetworkManager(
 
         if (!userRequestInterceptionEnabled && protocolRequestInterceptionEnabled) {
             rpc.invokeSilently("continueRequest", event.requestId) {
-                fetchAPI?.continueRequest(event.requestId)
+                cdp.fetch.continueRequest(event.requestId)
             }
         }
 
@@ -347,11 +345,11 @@ internal class NetworkManager(
         if (enabled) {
             val pattern = RequestPattern("*")
             rpc.invokeSilently("enable") {
-                fetchAPI?.enable(listOf(pattern), true)
+                cdp.fetch.enable(listOf(pattern), true)
             }
         } else {
-            // TODO: there are other scenarios to enable FetchAPI
-            // fetchAPI?.disable()
+            // TODO: there are other scenarios to enable cdp.fetch
+            // cdp.fetch.disable()
         }
     }
 
@@ -372,7 +370,7 @@ internal class NetworkManager(
     private suspend fun updateProtocolCacheDisabled() {
         try {
             rpc.invoke("setCacheDisabled") {
-                networkAPI?.setCacheDisabled(this.userCacheDisabled)
+                cdp.network.setCacheDisabled(this.userCacheDisabled)
             }
         } catch (e: ChromeRPCException) {
             rpc.handleChromeException(e, "setCacheDisabled")

@@ -42,6 +42,11 @@ class BrowserSettingsTests {
     fun testDelayPreset() {
         val settings = InteractSettings()
         val defaultPolicy = settings.generateRestrictedDelayPolicy().toMap()
+        val fastestPolicy = settings.applyDelayPreset(DelayPreset.FASTEST).generateRestrictedDelayPolicy()
+
+        assertEquals(10..10, fastestPolicy["gap"])
+        assertEquals(10..10, fastestPolicy["type"])
+        assertEquals(fastestPolicy["default"], fastestPolicy[""])
 
         val fastPolicy = settings.applyDelayPreset(DelayPreset.FAST).generateRestrictedDelayPolicy()
         assertTrue((fastPolicy["type"]?.last ?: Int.MAX_VALUE) < (defaultPolicy["type"]?.last ?: Int.MIN_VALUE))
@@ -57,11 +62,25 @@ class BrowserSettingsTests {
     }
 
     @Test
+    fun testFastestDelayPolicy() {
+        val policy = InteractSettings.FASTEST_DELAY_POLICY
+
+        assertEquals(10..10, policy["gap"])
+        assertEquals(10..10, policy["type"])
+        assertEquals(policy["default"], policy[""])
+        policy.values.forEach { assertEquals(10..10, it) }
+    }
+
+    @Test
     fun testCreateLevelDelayPresetMapping() {
-        val fast = InteractSettings.create(InteractLevel.FASTEST).delayPolicy
+        val fastest = InteractSettings.create(InteractLevel.FASTEST).delayPolicy
+        val fast = InteractSettings.create(InteractLevel.FASTER).delayPolicy
         val normal = InteractSettings.create(InteractLevel.DEFAULT).delayPolicy
         val stealth = InteractSettings.create(InteractLevel.BEST_DATA).delayPolicy
 
+        assertEquals(10..10, fastest["gap"])
+        assertEquals(10..10, fastest["type"])
+        assertEquals(fastest["default"], fastest[""])
         assertTrue((fast["type"]?.last ?: Int.MAX_VALUE) < (normal["type"]?.last ?: Int.MIN_VALUE))
         assertTrue((normal["type"]?.last ?: Int.MAX_VALUE) < (stealth["type"]?.last ?: Int.MIN_VALUE))
         assertEquals(fast["default"], fast[""])

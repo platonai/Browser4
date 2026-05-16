@@ -20,6 +20,7 @@ enum class DomSettlePolicy {
 }
 
 enum class DelayPreset {
+    FASTEST,
     FAST,
     DEFAULT,
     STEALTH
@@ -82,9 +83,14 @@ data class InteractSettings constructor(
      * */
     fun applyDelayPreset(preset: DelayPreset): InteractSettings {
         val presetPolicy = when (preset) {
+            DelayPreset.FASTEST -> FASTEST_DELAY_POLICY
             DelayPreset.FAST -> FAST_DELAY_POLICY
             DelayPreset.DEFAULT -> DEFAULT_DELAY_POLICY
             DelayPreset.STEALTH -> STEALTH_DELAY_POLICY
+        }
+
+        if (preset == DelayPreset.FASTEST) {
+            minDelayMillis = 10
         }
 
         delayPolicy.putAll(presetPolicy)
@@ -400,6 +406,28 @@ data class InteractSettings constructor(
             "" to 120..320
         )
 
+        /**
+         * Delay policy dedicated to tests.
+         *
+         * All action delays are fixed to 10 ms.
+         * */
+        val FASTEST_DELAY_POLICY = mapOf(
+            "gap" to 10..10,
+            "click" to 10..10,
+            "delete" to 10..10,
+            "keyUpDown" to 10..10,
+            "press" to 10..10,
+            "type" to 10..10,
+            "fill" to 10..10,
+            "mouseWheel" to 10..10,
+            "dragAndDrop" to 10..10,
+            "waitForNavigation" to 10..10,
+            "waitForSelector" to 10..10,
+            "waitUntil" to 10..10,
+            "default" to 10..10,
+            "" to 10..10
+        )
+
         val STEALTH_DELAY_POLICY = mapOf(
             "gap" to 900..1600,
             "click" to 120..260,
@@ -426,7 +454,8 @@ data class InteractSettings constructor(
          * Create interaction settings by [InteractLevel] and apply the corresponding delay preset.
          *
          * Mapping:
-         * - FASTEST/FASTER/FAST -> [DelayPreset.FAST]
+         * - FASTEST -> [DelayPreset.FASTEST]
+         * - FASTER/FAST -> [DelayPreset.FAST]
          * - DEFAULT -> [DelayPreset.DEFAULT]
          * - GOOD_DATA/BETTER_DATA/BEST_DATA -> [DelayPreset.STEALTH]
          *
@@ -445,7 +474,8 @@ data class InteractSettings constructor(
             }
 
             val preset = when (level) {
-                InteractLevel.FASTEST,
+                InteractLevel.FASTEST -> DelayPreset.FASTEST
+
                 InteractLevel.FASTER,
                 InteractLevel.FAST -> DelayPreset.FAST
 

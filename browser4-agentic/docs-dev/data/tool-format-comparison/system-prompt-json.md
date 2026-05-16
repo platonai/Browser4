@@ -386,6 +386,23 @@ Example:
     },
     {
       "domain": "tab",
+      "method": "eval",
+      "parameters": [
+        {"name": "expression", "type": "String"}
+      ],
+      "returns": "Unit"
+    },
+    {
+      "domain": "tab",
+      "method": "eval",
+      "parameters": [
+        {"name": "expression", "type": "String"},
+        {"name": "selector", "type": "String"}
+      ],
+      "returns": "Unit"
+    },
+    {
+      "domain": "tab",
       "method": "exists",
       "parameters": [
         {"name": "selector", "type": "String"}
@@ -451,8 +468,8 @@ Example:
       "domain": "tab",
       "method": "press",
       "parameters": [
-        {"name": "selector", "type": "String"},
-        {"name": "key", "type": "String"}
+        {"name": "key", "type": "String"},
+        {"name": "selector", "type": "String?", "default": "null"}
       ],
       "returns": "Unit"
     },
@@ -509,8 +526,8 @@ Example:
       "domain": "tab",
       "method": "type",
       "parameters": [
-        {"name": "selector", "type": "String"},
-        {"name": "text", "type": "String"}
+        {"name": "text", "type": "String"},
+        {"name": "selector", "type": "String?", "default": "null"}
       ],
       "returns": "Unit"
     },

@@ -65,7 +65,7 @@ class RobustRPC(
             return null
         }
 
-        if (!driver.devTools.isOpen) {
+        if (!driver.cdp.isOpen) {
             if (_isActive.compareAndSet(true, false)) {
                 logger.info("Devtools has been closed")
             }

@@ -41,6 +41,17 @@ class AgentToolExecutorNormalizeToolCallTest {
     }
 
     @Test
+    fun normalizeToolCallMapsBrowserNumericPositionalArgToIndex() {
+        val executor = AgentToolExecutor(Files.createTempDirectory("agent-tool-normalize"), agent)
+        val toolCall = ToolCall("browser", "switchTab", mutableMapOf("0" to 2))
+
+        val normalized = executor.normalizeToolCall(toolCall)
+
+        assertEquals("browser", normalized.domain)
+        assertEquals(2, normalized.arguments["index"])
+    }
+
+    @Test
     fun normalizeToolCallMapsEvalExpressionPositionalArgToNamedArg() {
         val executor = AgentToolExecutor(Files.createTempDirectory("agent-tool-normalize"), agent)
         val toolCall = ToolCall("tab", "eval", mutableMapOf("0" to "document.title"))

@@ -47,6 +47,8 @@ local.properties
 
 # PyDev specific (Python IDE for Eclipse)
 *.pydevproject
+__pycache__/
+*.py[cod]
 
 # CDT-specific (C/C++ Development Tooling)
 .cproject
@@ -124,3 +126,7 @@ application-private.properties
 */**/human-private/
 */**/.browser4-cli/
 /**/dist/**
+
+browser4-cli-linux-arm64
+browser4-cli-linux-x64
+browser4-cli-win32-x64.exe

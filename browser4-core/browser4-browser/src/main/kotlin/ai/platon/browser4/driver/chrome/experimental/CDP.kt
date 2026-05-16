@@ -40,6 +40,7 @@ class CDP(
     val input get() = devTools.input
     val network get() = devTools.network
     val fetch get() = devTools.fetch
+    val security get() = devTools.security
     val runtime get() = devTools.runtime
     val emulation get() = devTools.emulation
     val accessibility get() = devTools.accessibility

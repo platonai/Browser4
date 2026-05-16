@@ -21,7 +21,7 @@
 
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>browser4</artifactId>
-    <version>4.8.2-SNAPSHOT</version>
+    <version>4.9.0-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <name>Browser4</name>
@@ -107,8 +107,8 @@
             <properties>
                 <!-- Integration tests can be Slow/Heavy - this is expected behavior
                      Integration tests CAN require Browser/AI/Docker for service collaboration
-                     Only exclude E2E, SDK, and ManualOnly tests -->
-                <surefire.excludedGroups>E2E,E2ETest,SDK,ManualOnly</surefire.excludedGroups>
+                     Only exclude E2E, and ManualOnly tests -->
+                <surefire.excludedGroups>E2E,E2ETest,ManualOnly</surefire.excludedGroups>
             </properties>
         </profile>
 
@@ -123,19 +123,6 @@
             <properties>
                 <!-- E2E tests can be Heavy, RequiresBrowser, RequiresAI
                      Only exclude ManualOnly tests -->
-                <surefire.excludedGroups>ManualOnly</surefire.excludedGroups>
-            </properties>
-        </profile>
-
-        <profile>
-            <id>sdk-tests</id>
-            <activation>
-                <property>
-                    <name>runSDKTests</name>
-                    <value>true</value>
-                </property>
-            </activation>
-            <properties>
                 <surefire.excludedGroups>ManualOnly</surefire.excludedGroups>
             </properties>
         </profile>
@@ -179,7 +166,6 @@
 
                 <module>examples</module>
                 <module>browser4-tests</module>
-                <module>sdks</module>
             </modules>
         </profile>
 
@@ -205,16 +191,6 @@
             <properties>
                 <surefire.excludedGroups>None</surefire.excludedGroups>
             </properties>
-        </profile>
-
-        <profile>
-            <id>sdk</id>
-            <activation>
-                <activeByDefault>false</activeByDefault>
-            </activation>
-            <modules>
-                <module>sdks</module>
-            </modules>
         </profile>
 
         <!-- CI profile -->
@@ -565,18 +541,17 @@
         <!-- Test execution control properties -->
         <runITs>false</runITs>
         <runE2ETests>false</runE2ETests>
-        <runSDKTests>false</runSDKTests>
         <runCoreTests>false</runCoreTests>
         <runRestTests>false</runRestTests>
 
         <!-- Default excludedGroups: exclude all non-Fast tests
              Includes both new taxonomy tags and legacy tags for backward compatibility:
-             - New tags: Slow, Heavy, Integration, E2E, SDK, RequiresXYZ, ManualOnly
+             - New tags: Slow, Heavy, Integration, E2E, RequiresXYZ, ManualOnly
              - Legacy tags: IntegrationTest, E2ETest, HeavyTest, SkippableLowerLevelTest, TestInfraCheck, OptionalTest
              Migration: Gradually migrate tests from legacy tags to new taxonomy -->
         <surefire.excludedGroups>
             Slow,Heavy,RequiresServer,RequiresBrowser,RequiresAI,RequiresDocker,
-            Integration,E2E,SDK,ManualOnly,
+            Integration,E2E,ManualOnly,
             SkippableLowerLevelTest,TestInfraCheck,OptionalTest,
             IntegrationTest,E2ETest,HeavyTest
         </surefire.excludedGroups>

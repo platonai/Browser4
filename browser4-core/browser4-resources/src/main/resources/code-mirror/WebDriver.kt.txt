@@ -1222,7 +1222,6 @@ interface WebDriver : Closeable {
      * @param deltaY The distance to wheel vertically.
      * @param delayMillis The delay time in milliseconds.
      */
-    @Deprecated("Use mouseWheel(deltaX, deltaY) instead", replaceWith = ReplaceWith("mouseWheel(deltaX, deltaY)"))
     @Throws(WebDriverException::class)
     @MCP
     suspend fun mouseWheelDown(count: Int = 1, deltaX: Double = 0.0, deltaY: Double = 150.0, delayMillis: Long = 0)
@@ -1239,7 +1238,6 @@ interface WebDriver : Closeable {
      * @param deltaY The distance to wheel vertically.
      * @param delayMillis The delay time in milliseconds.
      */
-    @Deprecated("Use mouseWheel(deltaX, deltaY) instead", replaceWith = ReplaceWith("mouseWheel(deltaX, deltaY)"))
     @Throws(WebDriverException::class)
     @MCP
     suspend fun mouseWheelUp(count: Int = 1, deltaX: Double = 0.0, deltaY: Double = -150.0, delayMillis: Long = 0)
@@ -1265,7 +1263,7 @@ interface WebDriver : Closeable {
      * The mouse moves to the position specified by [x] and [y]. @mcp
      *
      * ```kotlin
-     * driver.mouseMove(100.0, 200.0)
+     * driver.moveMouseTo(100.0, 200.0)
      * ```
      *
      * @param x The x coordinate to move to.
@@ -1274,7 +1272,7 @@ interface WebDriver : Closeable {
     @Deprecated("Use mouseMove instead", replaceWith = ReplaceWith("mouseMove(x, y)"))
     @Throws(WebDriverException::class)
     @MCP
-    suspend fun mouseMove(x: Double, y: Double)
+    suspend fun moveMouseTo(x: Double, y: Double)
 
     /**
      * Moves the mouse to the position specified by [x] and [y]. @mcp
@@ -1332,7 +1330,7 @@ interface WebDriver : Closeable {
      * The mouse moves to the element with [selector]. @mcp
      *
      * ```kotlin
-     * driver.mouseMove("h2.title")
+     * driver.moveMouseTo("h2.title")
      * ```
      *
      * @param selector The selector of the element, multiple formats supported.
@@ -1341,7 +1339,7 @@ interface WebDriver : Closeable {
      */
     @Throws(WebDriverException::class)
     @MCP
-    suspend fun mouseMove(selector: String, deltaX: Int, deltaY: Int = 0)
+    suspend fun moveMouseTo(selector: String, deltaX: Int, deltaY: Int = 0)
 
     /**
      * Performs a drag, dragenter, dragover, and drop in sequence. @mcp

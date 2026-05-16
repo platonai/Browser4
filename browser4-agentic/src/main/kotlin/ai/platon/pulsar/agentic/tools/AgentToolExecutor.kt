@@ -274,6 +274,10 @@ class AgentToolExecutor constructor(
             return arguments.toMutableMap()
         }
 
+        if (domain == "browser" && method in setOf("switchTab", "closeTab")) {
+            return normalizeBrowserTabArguments(arguments, spec)
+        }
+
         if (domain == "tab" && method in setOf("eval", "evaluateValue", "evaluateValueDetail")) {
             return normalizeTabEvaluationArguments(method, arguments)
         }
@@ -291,6 +295,33 @@ class AgentToolExecutor constructor(
                 val targetName = spec.arguments.getOrNull(index)?.name ?: index.toString()
                 normalized.putIfAbsent(targetName, value)
             }
+
+        return normalized.toMutableMap()
+    }
+
+    private fun normalizeBrowserTabArguments(arguments: Map<String, Any?>, spec: ToolSpec): MutableMap<String, Any?> {
+        val normalized = linkedMapOf<String, Any?>()
+
+        arguments.entries
+            .filter { it.key.toIntOrNull() == null }
+            .forEach { (key, value) -> normalized[key] = value }
+
+        val positional = arguments.entries
+            .mapNotNull { entry -> entry.key.toIntOrNull()?.let { it to entry.value } }
+            .sortedBy { it.first }
+
+        val shouldTreatSinglePositionalAsTabId = positional.size == 1 &&
+            positional.first().first == 0 &&
+            !normalized.containsKey("index") &&
+            !normalized.containsKey("tabId")
+
+        positional.forEach { (index, value) ->
+            val targetName = when {
+                shouldTreatSinglePositionalAsTabId && value !is Number -> "tabId"
+                else -> spec.arguments.getOrNull(index)?.name ?: index.toString()
+            }
+            normalized.putIfAbsent(targetName, value)
+        }
 
         return normalized.toMutableMap()
     }

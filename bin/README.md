@@ -56,7 +56,7 @@ Comprehensive test runner for the current Maven reactors plus the Browser4 CLI p
 - `skills`: Run skills module tests
 - `mcp`: Run MCP module tests
 - `browser4`: Run all Browser4 main tests (`fast`, `rest`, `it`, `e2e`)
-- `cli`: Run Rust Browser4 CLI tests from `sdks/browser4-cli`
+- `cli`: Run Rust Browser4 CLI tests from `cli/browser4-cli`
 
 **Examples:**
 ```bash
@@ -114,8 +114,6 @@ Release management scripts.
 - `bump-version.ps1/sh`: Bump project version (minor/major).
 - `bump-version-patch.ps1/sh`: Bump project version (patch).
 - `update-versions.ps1/sh`: Update version strings across files.
-- `create-release-notes.sh`: Generate release notes.
-- `update-documentation.ps1/sh`: Update documentation version references.
 
 ### `script-tests/`
 
