@@ -41,9 +41,8 @@ cargo install browser4-cli
 
 ```bash
 git clone https://github.com/platonai/browser4-cli
-cd browser4-cli
+cd cli/browser4-cli
 pnpm install
-pnpm build
 pnpm build:native   # Requires Rust (https://rustup.rs)
 pnpm link --global  # Makes browser4-cli available globally
 ```
