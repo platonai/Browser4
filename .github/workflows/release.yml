@@ -51,11 +51,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Validate Release Branch
+      - name: Validate Release Configuration
         run: |
           echo "🔍 Validating release configuration..."
 
-          # For non-prerelease, ensure we're releasing from master or can merge to master
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             TAG="${{ github.event.inputs.tag }}"
           else
@@ -70,17 +69,8 @@ jobs:
           fi
 
           if [ "$IS_PRERELEASE" = "false" ]; then
-            CURRENT_BRANCH=$(git branch --show-current || git rev-parse --abbrev-ref HEAD)
-            echo "Current branch: $CURRENT_BRANCH"
             echo "Release type: Production"
-
-            # Check if master branch exists
-            if ! git ls-remote --exit-code --heads origin master >/dev/null 2>&1; then
-              echo "❌ Master branch does not exist"
-              exit 1
-            fi
-
-            echo "✅ Master branch exists and ready for merge"
+            echo "✅ Production releases can be created from any branch"
           else
             echo "Release type: Prerelease (RC)"
             echo "✅ Prerelease can be created from any branch"
@@ -281,22 +271,6 @@ jobs:
           network_name: ${{ env.NETWORK_NAME }}
           cleanup_compose: 'false'
           cleanup_volumes: 'true'
-
-      - name: Check if already on master
-        id: check_master
-        if: success()
-        run: |
-          git fetch origin master
-          MAIN_SHA=$(git rev-parse origin/master)
-          CURRENT_SHA=$(git rev-parse HEAD)
-
-          if [ "$MAIN_SHA" = "$CURRENT_SHA" ]; then
-            echo "already_on_master=true" >> $GITHUB_OUTPUT
-            echo "✅ Current commit is already on master branch"
-          else
-            echo "already_on_master=false" >> $GITHUB_OUTPUT
-            echo "📝 Current commit needs to be merged to master"
-          fi
 
       - name: Build Browser4 JAR
         if: success()
