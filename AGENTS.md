@@ -80,7 +80,7 @@ mvnw.cmd -q -DskipTests
 | `browser4-agentic`                     | AI agents implementation, MCP, skills registration |
 | `browser4-rest`                        | Spring Boot REST layer & command endpoints |
 | `cli/*`                                | Browser4 CLI + skill assets (`cli/browser4-cli`, `cli/skill`) |
-| `browser4-app/*`                       | Product packaging (`browser4-app/browser4-agents`) |
+| `browser4-app/*`                       | Product packaging and the unified launcher (`browser4-app/browser4-agents`, `target/Browser4.jar`) |
 | `examples/*`                           | Runnable examples (`examples/browser4-examples`) |
 | `browser4-tests`                       | E2E & heavy integration & scenario tests |
 | `browser4-tests/browser4-tests-common` | Shared test base classes and utilities |
@@ -154,19 +154,23 @@ To keep iteration fast, **don’t run full test suites by default**.
 - Then: run the **smallest relevant** test scope (module/class) when logic changes
 - Upgrade scope when risk increases (cross-module, public API/DTO/serialization, Spring wiring, dependency bumps,
   concurrency/I/O, browser/CDP lifecycle)
+- Test scheduling is tag-driven; reuse the dimensions in `docs/TESTING.md` (`Unit`/`Integration`/`E2E`/`SDK`, `Fast`/`Slow`/`Heavy`, `Requires*`, `ManualOnly`) instead of inventing new tags
 
 See [TESTING.md](docs/TESTING.md) for details and trade-offs.
 
 ### Test Commands in This Repository
-- Use `bin/test.ps1` on Windows for scoped runs: `fast`, `it`, `e2e`, `rest`, `skills`, `mcp`, `cli`, `browser4`
-- Maven profile switches in root `pom.xml` are property-driven: `-DrunITs=true`, `-DrunE2ETests=true`, `-DrunSDKTests=true`, `-DrunCoreTests=true`, `-DrunRestTests=true`
+- Use `bin/test.ps1` on Windows for scoped runs: `fast`, `it`, `e2e`, `rest`, `skills`, `mcp`, `cli`, `browser4`, `mocksite`
+- Maven profile switches in root `pom.xml` are property-driven: `-DrunITs=true`, `-DrunE2ETests=true`, `-DrunCoreTests=true`, `-DrunRestTests=true`
+- Use `bin/test.ps1 mocksite -Dmock.site.port=18080` to launch `MockSiteBoot` from `browser4-tests/browser4-rest-tests`; use `MockSiteLauncher` from `browser4-tests/browser4-tests-common` for in-process startup
 - `cli/browser4-cli/tests/e2e.rs`: all e2e scenarios must start and depend on Browser4.jar; this includes single-scenario runs via `--scenario`.
-- `.github/workflows/ci.yml` additionally enforces `MCPToolControllerE2ETest` as a required E2E safety check.
+- `.github/workflows/ci.yml` builds with `all-modules`, starts the Dockerized app on port `8182`, runs `cargo test` in `cli/browser4-cli`, and keeps the main Maven test pass limited to fast/unit-style tags by excluding `Slow`, `Heavy`, `Integration`, `E2E`, `SDK`, `Requires*`, and `ManualOnly`.
 
 ### Test Location
 - Module unit tests: `src/test/kotlin/...`
-- Centralized integration/E2E: `browser4-tests/`
-- Shared utilities: `browser4-tests/browser4-tests-common/`
+- Integration-heavy suites: `browser4-tests/pulsar-it-tests/`
+- E2E suites: `browser4-tests/pulsar-e2e-tests/`
+- REST integration/E2E tests and standalone mock site: `browser4-tests/browser4-rest-tests/`
+- Shared utilities and the programmatic mock site launcher: `browser4-tests/browser4-tests-common/`
 
 ### Naming Conventions
 - Unit tests: `<ClassName>Test.kt`
@@ -177,9 +181,9 @@ See [TESTING.md](docs/TESTING.md) for details and trade-offs.
     - ❌ `` `test user login with valid credentials` ``
 
 ### Test Performance Targets
-- Unit tests: <100ms
-- Integration tests: <5s
-- E2E tests: <30s
+- `Fast`: <5s
+- `Slow`: 5–30s
+- `Heavy`: >30s or high-resource/browser-dependent
 
 ### Coverage Targets
 - Global: ≥70%
@@ -242,7 +246,7 @@ browser.display.mode=GUI  # GUI | HEADLESS | SUPERVISED
 - [Configuration Guide](docs/config.md)
 - [Testing Taxonomy](docs/TESTING.md)
 - [Test Strategy](docs/test-strategy.md)
-- [Browser4 CLI Skills Development Guide](docs-dev/copilot/SKILLS-DEVELOPMENT-GUIDE.md)
+- [Browser4 CLI Skill Guide](cli/skill/SKILL.md)
 - [ARIA Snapshots](docs/aria-snapshots.md)
 
 ## Claude-Specific Guidance
@@ -297,10 +301,10 @@ When given a task, Claude should:
 1. Add a `CommandDef` in `cli/browser4-cli/src/commands.rs`; keep the CLI command name kebab-case, use a `browser_`-prefixed snake_case MCP tool name, and map args/options to JSON in `tool_params_fn`
 2. Add the frontend alias in `browser4-rest/.../MCPToolController.kt` so names like `browser_my_tool` resolve to the internal tool name such as `my_tool`
 3. Reuse existing backend tools when possible; if a new browser capability is required, add an `@MCP` method in `WebDriver.kt`, implement it in the concrete driver, and only add an explicit `BrowserTabToolExecutor` case when parameter mapping is non-trivial
-4. Update `cli/browser4-cli/src/main.rs` only when the command needs custom dispatch, dynamic tool-name selection, stale-session recovery, or inclusion in `no_snapshot_commands()` for read-only behavior
+4. Update `cli/browser4-cli/src/main.rs` only when the command needs custom dispatch, dynamic tool-name selection, stale-session recovery, inclusion in `no_snapshot_commands()` for read-only behavior, or custom batch handling in `compile_batch_request()`
 5. Update `cli/skill/SKILL.md` for user-facing command documentation; CLI help is generated from `CommandDef`, so avoid hand-editing help infrastructure
 6. Cover the change with the smallest relevant tests: `cli/browser4-cli/src/commands.rs` unit tests, `browser4-rest` controller mapping tests, `cli/browser4-cli/tests/e2e.rs`, and `browser4-tests/browser4-rest-tests/.../MCPToolControllerE2ETest.kt` when the command changes the end-to-end flow
-7. Watch the common failure points: missing backend alias, omitted `sessionId` in custom handlers, forgetting `no_snapshot_commands()` for read-only commands, mismatched element-ref parameter names, and snake_case/camelCase argument normalization
+7. Watch the common failure points: missing backend alias, omitted `sessionId` in custom handlers, forgetting `no_snapshot_commands()` for read-only commands, forgetting `batch_supported`/`compile_batch_request()` for batch-safe DOM commands, mismatched element-ref parameter names, broken `activeSelector` / `lastMousePosition` persistence in `cli/browser4-cli/src/state.rs`, and snake_case/camelCase argument normalization
 
 ### Browser Automation Specifics
 
@@ -436,4 +440,4 @@ Before submitting changes, verify:
 
 ---
 
-*Last updated: 2026-03-14*
+*Last updated: 2026-05-17*
