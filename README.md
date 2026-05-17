@@ -38,6 +38,25 @@ English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platon
 
 ## 💡 Usage Examples
 
+### Quick Start
+
+Just ask any LLM agent to use browser4-cli for browser interactions, and it will be able to perform complex tasks like this:
+
+```shell
+$prompt = @"
+Read https://raw.githubusercontent.com/platonai/Browser4/refs/heads/main/cli/skill/SKILL.md and understand how to
+use browser4-cli and perform the following task:
+
+1. go to amazon.com
+2. search for pens to draw on whiteboards
+3. compare the first 4 ones
+4. write the result to a markdown file
+"@
+
+copilot --allow-all -p "$prompt"
+# claude --dangerously-skip-permissions "$prompt"
+```
+
 ### CLI & SKILLS
 
 Browser4 CLI is a powerful command-line interface for direct browser control and automation, designed for both human
@@ -98,10 +117,6 @@ echo '[
 # Close the session when done
 browser4-cli close
 ```
-
-Build CLI from source:
-
-[README.md](cli/browser4-cli/README.md)
 
 Browser4 CLI is designed for use by AI agents through SKILLS + CLI.
 

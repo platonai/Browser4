@@ -40,6 +40,25 @@
 
 ## 💡 使用示例
 
+### 快速入门
+
+只需让任何大语言模型（LLM）智能体调用 browser4-cli来处理浏览器交互，它就能胜任像这样的复杂任务。
+
+```shell
+$prompt = @"
+Read https://raw.githubusercontent.com/platonai/Browser4/refs/heads/main/cli/skill/SKILL.md and understand how to
+use browser4-cli and perform the following task:
+
+1. go to amazon.com
+2. search for pens to draw on whiteboards
+3. compare the first 4 ones
+4. write the result to a markdown file
+"@
+
+copilot --allow-all -p "$prompt"
+# claude --dangerously-skip-permissions "$prompt"
+```
+
 ### CLI 与技能 (SKILLS)
 
 Browser4 CLI 是一个强大的命令行界面，用于直接控制浏览器和实现自动化，专为人类用户和 AI 智能体设计。它提供简洁的语法来执行复杂的浏览器交互，而无需编写代码。
