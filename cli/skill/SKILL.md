@@ -6,6 +6,14 @@ allowed-tools: Bash(browser4-cli:*)
 
 # Browser Automation with browser4-cli
 
+Browser automation CLI for AI agents.
+
+- Chrome/Chromium via CDP with accessibility-tree snapshots
+- Build-in agent loop for autonomous agents with tool use and reasoning capabilities
+- Data extraction and summarization tools for processing web content
+
+Install: `npm i -g browser4-cli`
+
 ## Quick start
 
 ```bash
