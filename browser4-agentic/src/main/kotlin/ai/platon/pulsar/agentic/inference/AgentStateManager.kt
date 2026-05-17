@@ -23,6 +23,7 @@ import kotlinx.coroutines.withTimeout
 import java.nio.file.Path
 import java.time.Instant
 import java.util.UUID
+import kotlin.time.Duration.Companion.milliseconds
 
 const val AGENT_HISTORY_FILE_NAME = "state-history.jsonl"
 const val TOOL_CALL_RESULT_FILE_NAME = "tool-call-result-history.jsonl"
@@ -482,7 +483,7 @@ class AgentStateManager(
         )
 
         // Add timeout to prevent hanging on DOM snapshot operations
-        return withTimeout(30_000) {
+        return withTimeout(30_000.milliseconds) {
             val baseState = driver.snapshotService.getBrowserUseState(snapshotOptions = snapshotOptions)
             injectTabsInfo(baseState)
         }

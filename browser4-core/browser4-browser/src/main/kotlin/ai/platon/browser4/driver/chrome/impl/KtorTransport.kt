@@ -76,7 +76,7 @@ class KtorTransport : Transport {
 
             tracer?.trace("Connecting to ws {} ...", normalizedUri)
             val ws = runBlocking(Dispatchers.IO) {
-                withTimeout(DEFAULT_CONNECT_TIMEOUT_MS) {
+                withTimeout(DEFAULT_CONNECT_TIMEOUT_MS.milliseconds) {
                     client!!.webSocketSession(urlString = normalizedUri.toString())
                 }
             }
@@ -136,7 +136,7 @@ class KtorTransport : Transport {
             if (ws != null) {
                 runCatching {
                     runBlocking(Dispatchers.IO) {
-                        withTimeout(CLOSE_TIMEOUT_MS) {
+                        withTimeout(CLOSE_TIMEOUT_MS.milliseconds) {
                             ws.close(CloseReason(CloseReason.Codes.NORMAL, ""))
                         }
                     }
