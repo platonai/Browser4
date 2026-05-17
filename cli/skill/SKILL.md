@@ -8,7 +8,7 @@ allowed-tools: Bash(browser4-cli:*)
 
 Browser automation CLI for AI agents.
 
-- Chrome/Chromium via CDP with accessibility-tree snapshots
+- Chrome/Chromium via CDP with accessibility-tree snapshots, playwright CLI compatible commands
 - Build-in agent loop for autonomous agents with tool use and reasoning capabilities
 - Data extraction and summarization tools for processing web content
 
@@ -48,9 +48,9 @@ The sections below cover the standard browser workflow commands that are surface
 ```bash
 browser4-cli open
 # open and navigate right away in one step
-browser4-cli open https://example.com/
+browser4-cli open https://browser4.io/
 # navigate to a URL using the current active session
-browser4-cli goto https://browser4.io/
+browser4-cli goto https://playwright.dev
 browser4-cli type "search query"
 browser4-cli click e3
 browser4-cli dblclick e7
@@ -113,13 +113,21 @@ browser4-cli tab-list
 browser4-cli tab-new
 browser4-cli tab-new https://example.com/page
 browser4-cli tab-close
-# inspect indices before targeting a specific tab
-browser4-cli tab-list
-browser4-cli tab-select 1
-browser4-cli tab-close 1
+browser4-cli tab-close 2
+browser4-cli tab-select 0
 ```
 
 Use `browser4-cli tab-list` to obtain the current zero-based tab index before calling `tab-select` or `tab-close` with a specific target.
+
+## Open parameters
+```bash
+# Start with profile mode
+browser4-cli open
+browser4-cli open https://browser4.io
+
+# Close the browser
+browser4-cli close
+```
 
 ## Snapshots
 
@@ -141,6 +149,10 @@ If `--filename` is not provided, a new snapshot file is created with a timestamp
 ## Browser Sessions
 
 ```bash
+# create new browser session named "mysession"
+browser4-cli -s=mysession open example.com
+browser4-cli -s=mysession click e6
+browser4-cli -s=mysession close  # stop a named browser
 browser4-cli list
 # Close all sessions, but keep Browser4.jar / the Browser4 backend running
 browser4-cli close-all
@@ -165,6 +177,19 @@ browser4-cli help agent-run
 browser4-cli help co-create
 ```
 
+
+## Installation
+
+### Global Installation (recommended)
+
+Installs the native Rust binary:
+
+```bash
+npm install -g browser4-cli
+```
+
+After installation, use `browser4-cli`.
+
 ## Example: Form submission
 
 ```bash
@@ -184,7 +209,7 @@ browser4-cli close
 browser4-cli open https://example.com
 browser4-cli tab-new https://example.com/other
 browser4-cli tab-list
-browser4-cli tab-select 1
+browser4-cli tab-select 0
 browser4-cli snapshot
 browser4-cli close
 ```
