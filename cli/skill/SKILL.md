@@ -177,7 +177,6 @@ browser4-cli help agent-run
 browser4-cli help co-create
 ```
 
-
 ## Installation
 
 ### Global Installation (recommended)

@@ -1,4 +1,4 @@
-# Browser4 CLI
+# Browser4
 
 Make websites accessible for AI agents. Automate tasks online with ease.
 
@@ -52,16 +52,6 @@ pnpm link --global  # Makes browser4-cli available globally
 - **Chrome** - Latest Chrome installed on your system.
 - **Java 17+** - Required to run the Browser4 backend (`Browser4.jar`).
 - **Rust** - Only needed when building from source (see From Source above).
-
-
-
-
-
-
-
-
-
-
 
 ## Usage
 

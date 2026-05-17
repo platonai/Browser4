@@ -103,8 +103,8 @@ browser4-cli close
 
 1. **Clone the repository**
    ```shell
-   git clone https://github.com/platonai/browser4.git
-   cd browser4
+   git clone https://github.com/platonai/Browser4.git
+   cd Browser4
    ```
 
 2. **Configure your LLM API key**
@@ -144,21 +144,13 @@ users and AI agents. It provides a simple syntax to perform complex browser inte
 Browser4 CLI is compatible with Playwright and supports a wide range of commands for navigation, interaction, and data extraction.
 It can be used in scripts, terminal sessions, or integrated into AI agents through SKILLS.
 
+Installs browser4-cli globally using npm:
+
 ```shell
-# macOS / Linux
-mkdir -p ~/.browser4/lib
-curl -fsSL -o ~/.browser4/lib/Browser4.jar https://github.com/platonai/Browser4/releases/latest/download/Browser4.jar
-git clone https://github.com/platonai/Browser4.git
-cd Browser4/cli/browser4-cli
-cargo install --path . --locked
+npm install -g browser4-cli
+```
 
-# Windows
-New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.browser4\lib" | Out-Null
-Invoke-WebRequest 'https://github.com/platonai/Browser4/releases/latest/download/Browser4.jar' -OutFile "$env:USERPROFILE\.browser4\lib\Browser4.jar"
-git clone https://github.com/platonai/Browser4.git
-cd Browser4\cli\browser4-cli
-cargo install --path . --locked
-
+```shell
 # Open a new browser window
 browser4-cli open
 
