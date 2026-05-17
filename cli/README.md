@@ -50,6 +50,7 @@ pnpm link --global  # Makes browser4-cli available globally
 ### Requirements
 
 - **Chrome** - Latest Chrome installed on your system.
+- **Java 17+** - Required to run the Browser4 backend (`Browser4.jar`).
 - **Rust** - Only needed when building from source (see From Source above).
 
 
@@ -71,12 +72,12 @@ browser4-cli -s=<session> <command> [args] [options]
 
 ### Global options
 
-| Flag | Description |
-|---|---|
+| Flag               | Description                                    |
+|--------------------|------------------------------------------------|
 | `--help [command]` | Print help (optionally for a specific command) |
-| `--version` | Print version |
-| `-s=<name>` | Named session label |
-| `--server=<url>` | Override Browser4 server URL |
+| `--version`        | Print version                                  |
+| `-s=<name>`        | Named session label                            |
+| `--server=<url>`   | Override Browser4 server URL                   |
 
 Sessions are persisted independently per name. Omitting `-s` uses the
 default session (`~/.browser4/cli-state.json`). With `-s=<name>`, a
