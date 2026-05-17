@@ -107,7 +107,7 @@ runs:
         # Stop on the first batch failure
         browser4-cli batch --bail "open https://playwright.dev" "click e1" "screenshot"
 
-      # Advanced: pipe batch commands as JSON via stdin
+        # Advanced: pipe batch commands as JSON via stdin
         echo '[
           ["goto", "https://example.com/form-filling"],
           ["click", "#reset-btn"],

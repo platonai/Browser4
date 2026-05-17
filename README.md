@@ -11,8 +11,6 @@ English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platon
 - [🤖 Browser4](#-browser4)
     - [🌟 Introduction](#-introduction)
         - [✨ Key Capabilities](#-key-capabilities)
-    - [🎥 Demo Videos](#-demo-videos)
-    - [🚀 Quick Start](#-quick-start)
     - [💡 Usage Examples](#-usage-examples)
         - [Browser Agents](#browser-agents)
         - [Workflow Automation](#workflow-automation)
