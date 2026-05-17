@@ -88,12 +88,12 @@ class CoreMetrics(
     /**
      * The start time of the program process
      */
-    val startTime = Instant.now()
+    val startTime: Instant = Instant.now()
 
     /**
      * The elapsed time since the program process starts
      */
-    val elapsedTime get() = Duration.between(startTime, Instant.now())
+    val elapsedTime: Duration get() = Duration.between(startTime, Instant.now())
 
     /**
      * The elapsed time in seconds since the program process starts

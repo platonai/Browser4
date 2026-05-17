@@ -109,7 +109,7 @@ Browser4 CLI is designed for use by AI agents through SKILLS + CLI.
 
 ---
 
-### 🚀 Native API Quick Start
+## 🚀 Native API Quick Start
 
 **Prerequisites**: Java 17+
 
@@ -127,22 +127,6 @@ Browser4 CLI is designed for use by AI agents through SKILLS + CLI.
    ```shell
    ./mvnw -DskipTests
    ```
-
-4. **Run examples**
-   ```shell
-   ./mvnw -pl examples/browser4-examples exec:java -D"exec.mainClass=ai.platon.pulsar.examples.agent.Browser4AgentKt"
-   ```
-   If you have encoding problem on Windows:
-   ```shell
-   ./bin/run-agent-examples.ps1
-   ```
-
-   Explore and run examples in the `browser4-examples` module to see Browser4 in action.
-   Java-compatible examples have been removed; use Kotlin APIs, SDKs, or CLI tools instead.
-
-For Docker deployment, see our [Docker Hub repository](https://hub.docker.com/r/galaxyeye88/browser4).
-
-**Windows Users**: You can also build Browser4 as a standalone Windows installer. See the [Windows Installer Guide](browser4-app/browser4-agents/README.md) for details.
 
 ---
 
@@ -261,7 +245,6 @@ session.submitAll(links)
 
 📺 Bilibili:
 [https://www.bilibili.com/video/BV1kM2rYrEFC](https://www.bilibili.com/video/BV1kM2rYrEFC)
-
 
 ---
 

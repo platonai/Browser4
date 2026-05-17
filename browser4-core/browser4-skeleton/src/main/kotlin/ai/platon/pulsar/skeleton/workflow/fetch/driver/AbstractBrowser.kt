@@ -33,7 +33,7 @@ abstract class AbstractBrowser(
 
     protected val initialized = AtomicBoolean()
     private val closed = AtomicBoolean()
-    protected var lastActiveTime = Instant.now()
+    protected var lastActiveTime: Instant = Instant.now()
 
     override val instanceId: Int = SEQUENCER.incrementAndGet()
 
@@ -69,7 +69,7 @@ abstract class AbstractBrowser(
     override val readableState: String get() = buildReadableState()
 
     val isGUI get() = settings.isGUI
-    val idleTimeout = Duration.ofMinutes(10)
+    val idleTimeout: Duration = Duration.ofMinutes(10)
 
     init {
         attach()

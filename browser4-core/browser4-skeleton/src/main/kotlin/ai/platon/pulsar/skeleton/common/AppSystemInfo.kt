@@ -26,8 +26,8 @@ class AppSystemInfo {
         var CRITICAL_CPU_THRESHOLD = System.getProperty("critical.cpu.threshold") ?.toDoubleOrNull() ?: 0.85
         var CRITICAL_MEMORY_THRESHOLD_MIB = System.getProperty("critical.memory.threshold.MiB")?.toDouble() ?: 0.0
 
-        val startTime = Instant.now()
-        val elapsedTime get() = Duration.between(startTime, Instant.now())
+        val startTime: Instant = Instant.now()
+        val elapsedTime: Duration get() = Duration.between(startTime, Instant.now())
 
         val systemInfo: SystemInfo? by lazy {
             when {

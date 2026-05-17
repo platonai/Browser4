@@ -77,18 +77,18 @@ abstract class AbstractPrivacyContext(
     /**
      * The start time of the privacy context.
      * */
-    val startTime = Instant.now()
+    val startTime: Instant = Instant.now()
 
     /**
      * The last active time of the privacy context.
      * */
-    var lastActiveTime = Instant.now()
+    var lastActiveTime: Instant = Instant.now()
         private set
 
     /**
      * The elapsed time of the privacy context since it's started.
      * */
-    override val elapsedTime get() = Duration.between(startTime, Instant.now())
+    override val elapsedTime: Duration get() = Duration.between(startTime, Instant.now())
 
     private val fetchTaskTimeout
         get() = conf.getDuration(CapabilityTypes.FETCH_TASK_TIMEOUT, AppConstants.FETCH_TASK_TIMEOUT_DEFAULT)
