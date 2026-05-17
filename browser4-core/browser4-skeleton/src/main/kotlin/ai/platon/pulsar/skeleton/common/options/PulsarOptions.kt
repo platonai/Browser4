@@ -5,6 +5,7 @@ import ai.platon.pulsar.common.options.OptionUtils
 import com.beust.jcommander.JCommander
 import com.beust.jcommander.ParameterException
 import org.apache.commons.lang3.StringUtils
+import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import java.util.regex.Pattern
 import kotlin.system.exitProcess
@@ -19,7 +20,7 @@ open class PulsarOptions(
      * */
     val argv: Array<String>
 ) : Parameterized {
-    protected val logger = LoggerFactory.getLogger(PulsarOptions::class.java)
+    protected val logger: Logger = LoggerFactory.getLogger(PulsarOptions::class.java)
 
     init { normalize(argv) }
 
