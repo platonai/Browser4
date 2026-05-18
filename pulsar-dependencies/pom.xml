@@ -17,7 +17,7 @@
     <groupId>ai.platon</groupId>
     <artifactId>pulsar-dependencies</artifactId>
     <name>Pulsar Dependencies</name>
-    <version>4.7.9-SNAPSHOT</version>
+    <version>4.7.10-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <description>Pulsar Dependencies</description>
