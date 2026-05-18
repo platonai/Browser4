@@ -31,7 +31,7 @@ class CommandControllerE2ETest : RestAPITestBase() {
 
         val request = CommandRequest(
             url,
-            "",
+            "-refresh",
             pageSummaryPrompt = "Summarize the product.",
             async = false
         )
@@ -69,7 +69,7 @@ class CommandControllerE2ETest : RestAPITestBase() {
 
         val request = CommandRequest(
             url,
-            "",
+            "-refresh",
             pageSummaryPrompt = "Summarize the product.",
             dataExtractionRules = "product name, ratings, price",
             async = false
