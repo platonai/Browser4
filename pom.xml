@@ -391,6 +391,12 @@
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>browser4-parse</artifactId>
                 <version>${project.version}</version>
+                <exclusions>
+                    <exclusion>
+                        <groupId>org.jsoup</groupId>
+                        <artifactId>*</artifactId>
+                    </exclusion>
+                </exclusions>
             </dependency>
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
