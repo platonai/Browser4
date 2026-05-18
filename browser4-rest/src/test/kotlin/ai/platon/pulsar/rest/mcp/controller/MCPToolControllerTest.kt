@@ -866,20 +866,26 @@ class MCPToolControllerTest {
     }
 
     @Test
-    fun testCommandBatchOpenAndTool() = runBlocking {
+    fun testCommandBatchExecutesCompiledToolStepsAgainstExistingSession() = runBlocking {
         `when`(managedSession.sessionId).thenReturn("batch-session")
-        `when`(sessionManager.createSession(any())).thenReturn(managedSession)
         `when`(sessionManager.getSession("batch-session")).thenReturn(managedSession)
-        `when`(agentToolExecutor.execute(anyToolCall())).thenReturn(toolCallResult("Batch Title"))
+        `when`(agentToolExecutor.execute(anyToolCall()))
+            .thenReturn(toolCallResult("Batch Title"))
+            .thenReturn(toolCallResult("https://example.com/interactive"))
 
         val request = MCPToolCallRequest(
             tool = "command_batch",
             arguments = mapOf(
+                "sessionId" to "batch-session",
                 "steps" to listOf(
-                    mapOf("op" to "open"),
                     mapOf(
                         "op" to "tool",
                         "tool" to "page_title",
+                        "arguments" to emptyMap<String, Any?>(),
+                    ),
+                    mapOf(
+                        "op" to "tool",
+                        "tool" to "page_url",
                         "arguments" to emptyMap<String, Any?>(),
                     ),
                 )
@@ -887,253 +893,76 @@ class MCPToolControllerTest {
         )
 
         val result = controller.callTool(request, response)
+        val payload = parseBatchPayload(result)
 
-        assertEquals(HttpStatus.OK, result.statusCode)
-        @Suppress("UNCHECKED_CAST")
-        val payload = objectMapper.readValue(result.body!!.content[0].text, Map::class.java) as Map<String, Any?>
         assertEquals("batch-session", payload["sessionId"])
-        @Suppress("UNCHECKED_CAST")
-        val results = payload["results"] as List<Map<String, Any?>>
+        assertEquals(0, payload["failureCount"])
+        assertEquals(false, payload["stoppedOnError"])
+
+        val results = parseBatchResults(payload)
+        assertEquals(2, results.size)
         assertEquals(true, results[0]["ok"])
-        assertEquals("Session opened: batch-session", results[0]["text"])
+        assertEquals("Batch Title", results[0]["text"])
         assertEquals(true, results[1]["ok"])
-        assertEquals("Batch Title", results[1]["text"])
-    }
+        assertEquals("https://example.com/interactive", results[1]["text"])
 
-    // -----------------------------------------------------------------------
-    // Batch execution — additional scenarios
-    // -----------------------------------------------------------------------
-
-    @Test
-    fun testCommandBatchMissingStepsReturnsError() = runBlocking {
-        val request = MCPToolCallRequest(
-            tool = "command_batch",
-            arguments = mapOf("bail" to true)
-        )
-
-        val result = controller.callTool(request, response)
-
-        assertEquals(HttpStatus.OK, result.statusCode)
-        assertTrue(result.body!!.isError)
-        assertTrue(
-            result.body!!.content[0].text.contains("steps"),
-            "Expected error about missing 'steps': ${result.body!!.content[0].text}"
-        )
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolExecutor, Mockito.times(2)).execute(capture(captor))
+        val toolCalls = captor.allValues
+        assertEquals("title", toolCalls[0].method)
+        assertEquals("currentUrl", toolCalls[1].method)
         Unit
     }
 
     @Test
-    fun testCommandBatchEmptyStepsReturnsEmptyResults() = runBlocking {
+    fun testCommandBatchRejectsNonDomOpsFromUncompiledPayload() = runBlocking {
         val request = MCPToolCallRequest(
             tool = "command_batch",
-            arguments = mapOf("steps" to emptyList<Any>())
+            arguments = mapOf(
+                "steps" to listOf(
+                    mapOf("op" to "open"),
+                    mapOf("op" to "close"),
+                )
+            )
         )
 
         val result = controller.callTool(request, response)
+        val payload = parseBatchPayload(result)
 
-        assertEquals(HttpStatus.OK, result.statusCode)
-        @Suppress("UNCHECKED_CAST")
-        val payload = objectMapper.readValue(result.body!!.content[0].text, Map::class.java) as Map<String, Any?>
-        @Suppress("UNCHECKED_CAST")
-        val results = payload["results"] as List<Map<String, Any?>>
-        assertTrue(results.isEmpty(), "Expected empty results for empty steps")
+        assertEquals(null, payload["sessionId"])
+        assertEquals(2, payload["failureCount"])
         assertEquals(false, payload["stoppedOnError"])
-        assertEquals(0, payload["failureCount"])
+
+        val results = parseBatchResults(payload)
+        assertEquals(2, results.size)
+        results.forEachIndexed { index, entry ->
+            assertEquals(index, (entry["index"] as Number).toInt())
+            assertEquals(false, entry["ok"])
+            assertTrue(
+                entry["error"].toString().contains("Batch command only supports DOM operations"),
+                "Expected backend batch validation error for non-DOM op: ${entry["error"]}"
+            )
+        }
+
+        Mockito.verify(sessionManager, Mockito.never()).createSession(any())
+        Mockito.verify(agentToolExecutor, Mockito.never()).execute(anyToolCall())
+        Unit
     }
 
     @Test
-    fun testCommandBatchBailStopsOnFirstError() = runBlocking {
+    fun testCommandBatchBailStopsOnFirstBackendError() = runBlocking {
         `when`(managedSession.sessionId).thenReturn("bail-session")
-        `when`(sessionManager.createSession(any())).thenReturn(managedSession)
         `when`(sessionManager.getSession("bail-session")).thenReturn(managedSession)
-        `when`(agentToolExecutor.execute(anyToolCall())).thenThrow(
-            RuntimeException("Tool execution failed")
-        )
+        `when`(agentToolExecutor.execute(anyToolCall()))
+            .thenReturn(toolCallResult("Before error"))
+            .thenThrow(RuntimeException("Tool execution failed"))
 
         val request = MCPToolCallRequest(
             tool = "command_batch",
             arguments = mapOf(
+                "sessionId" to "bail-session",
                 "bail" to true,
                 "steps" to listOf(
-                    mapOf("op" to "open"),
-                    mapOf(
-                        "op" to "tool",
-                        "tool" to "page_title",
-                        "arguments" to emptyMap<String, Any?>(),
-                    ),
-                    mapOf(
-                        "op" to "tool",
-                        "tool" to "page_url",
-                        "arguments" to emptyMap<String, Any?>(),
-                    ),
-                )
-            )
-        )
-
-        val result = controller.callTool(request, response)
-
-        assertEquals(HttpStatus.OK, result.statusCode)
-        @Suppress("UNCHECKED_CAST")
-        val payload = objectMapper.readValue(result.body!!.content[0].text, Map::class.java) as Map<String, Any?>
-        assertEquals(true, payload["stoppedOnError"])
-        @Suppress("UNCHECKED_CAST")
-        val results = payload["results"] as List<Map<String, Any?>>
-        // Should have open (ok) + page_title (error), but NOT page_url
-        assertEquals(2, results.size, "Expected bail to stop after first error, got: $results")
-        assertEquals(true, results[0]["ok"])
-        assertEquals(false, results[1]["ok"])
-        assertTrue((results[0]["durationMillis"] as Number).toLong() >= 0)
-        assertTrue((results[1]["durationMillis"] as Number).toLong() >= 0)
-    }
-
-    @Test
-    fun testCommandBatchContinuesOnErrorWithoutBail() = runBlocking {
-        `when`(managedSession.sessionId).thenReturn("continue-session")
-        `when`(sessionManager.createSession(any())).thenReturn(managedSession)
-        `when`(sessionManager.getSession("continue-session")).thenReturn(managedSession)
-        `when`(agentToolExecutor.execute(anyToolCall()))
-            .thenThrow(RuntimeException("First tool failed"))
-            .thenReturn(toolCallResult("Second succeeded"))
-
-        val request = MCPToolCallRequest(
-            tool = "command_batch",
-            arguments = mapOf(
-                "bail" to false,
-                "steps" to listOf(
-                    mapOf("op" to "open"),
-                    mapOf(
-                        "op" to "tool",
-                        "tool" to "page_title",
-                        "arguments" to emptyMap<String, Any?>(),
-                    ),
-                    mapOf(
-                        "op" to "tool",
-                        "tool" to "page_url",
-                        "arguments" to emptyMap<String, Any?>(),
-                    ),
-                )
-            )
-        )
-
-        val result = controller.callTool(request, response)
-
-        assertEquals(HttpStatus.OK, result.statusCode)
-        @Suppress("UNCHECKED_CAST")
-        val payload = objectMapper.readValue(result.body!!.content[0].text, Map::class.java) as Map<String, Any?>
-        assertEquals(false, payload["stoppedOnError"])
-        assertEquals(1, payload["failureCount"])
-        @Suppress("UNCHECKED_CAST")
-        val results = payload["results"] as List<Map<String, Any?>>
-        assertEquals(3, results.size, "Expected all 3 steps to execute without bail")
-        assertEquals(true, results[0]["ok"])
-        assertEquals(false, results[1]["ok"])
-        assertEquals(true, results[2]["ok"])
-        assertTrue(results.all { ((it["durationMillis"] as Number).toLong()) >= 0 })
-    }
-
-    @Test
-    fun testCommandBatchOpenAndClose() = runBlocking {
-        `when`(managedSession.sessionId).thenReturn("close-session")
-        `when`(sessionManager.createSession(any())).thenReturn(managedSession)
-        `when`(sessionManager.deleteSession("close-session")).thenReturn(true)
-
-        val request = MCPToolCallRequest(
-            tool = "command_batch",
-            arguments = mapOf(
-                "steps" to listOf(
-                    mapOf("op" to "open"),
-                    mapOf("op" to "close"),
-                )
-            )
-        )
-
-        val result = controller.callTool(request, response)
-
-        assertEquals(HttpStatus.OK, result.statusCode)
-        @Suppress("UNCHECKED_CAST")
-        val payload = objectMapper.readValue(result.body!!.content[0].text, Map::class.java) as Map<String, Any?>
-        // After close, sessionId should be null
-        assertEquals(null, payload["sessionId"])
-        @Suppress("UNCHECKED_CAST")
-        val results = payload["results"] as List<Map<String, Any?>>
-        assertEquals(2, results.size)
-        assertEquals(true, results[0]["ok"])
-        assertTrue(results[0]["text"].toString().contains("Session opened"))
-        assertEquals(true, results[1]["ok"])
-        assertTrue(results[1]["text"].toString().contains("Session closed"))
-    }
-
-    @Test
-    fun testCommandBatchToolWithoutSessionReturnsError() = runBlocking {
-        val request = MCPToolCallRequest(
-            tool = "command_batch",
-            arguments = mapOf(
-                "steps" to listOf(
-                    mapOf(
-                        "op" to "tool",
-                        "tool" to "page_title",
-                        "arguments" to emptyMap<String, Any?>(),
-                    ),
-                )
-            )
-        )
-
-        val result = controller.callTool(request, response)
-
-        assertEquals(HttpStatus.OK, result.statusCode)
-        @Suppress("UNCHECKED_CAST")
-        val payload = objectMapper.readValue(result.body!!.content[0].text, Map::class.java) as Map<String, Any?>
-        @Suppress("UNCHECKED_CAST")
-        val results = payload["results"] as List<Map<String, Any?>>
-        assertEquals(1, results.size)
-        assertEquals(false, results[0]["ok"])
-        assertTrue(
-            results[0]["error"].toString().contains("No active session"),
-            "Expected 'No active session' error: ${results[0]["error"]}"
-        )
-    }
-
-    @Test
-    fun testCommandBatchCloseWithoutSessionReturnsError() = runBlocking {
-        val request = MCPToolCallRequest(
-            tool = "command_batch",
-            arguments = mapOf(
-                "steps" to listOf(
-                    mapOf("op" to "close"),
-                )
-            )
-        )
-
-        val result = controller.callTool(request, response)
-
-        assertEquals(HttpStatus.OK, result.statusCode)
-        @Suppress("UNCHECKED_CAST")
-        val payload = objectMapper.readValue(result.body!!.content[0].text, Map::class.java) as Map<String, Any?>
-        @Suppress("UNCHECKED_CAST")
-        val results = payload["results"] as List<Map<String, Any?>>
-        assertEquals(1, results.size)
-        assertEquals(false, results[0]["ok"])
-        assertTrue(
-            results[0]["error"].toString().contains("No active session"),
-            "Expected 'No active session' error: ${results[0]["error"]}"
-        )
-    }
-
-    @Test
-    fun testCommandBatchMultipleToolCalls() = runBlocking {
-        `when`(managedSession.sessionId).thenReturn("multi-session")
-        `when`(sessionManager.createSession(any())).thenReturn(managedSession)
-        `when`(sessionManager.getSession("multi-session")).thenReturn(managedSession)
-        `when`(agentToolExecutor.execute(anyToolCall()))
-            .thenReturn(toolCallResult("Result 1"))
-            .thenReturn(toolCallResult("Result 2"))
-            .thenReturn(toolCallResult("Result 3"))
-
-        val request = MCPToolCallRequest(
-            tool = "command_batch",
-            arguments = mapOf(
-                "steps" to listOf(
-                    mapOf("op" to "open"),
                     mapOf("op" to "tool", "tool" to "page_title", "arguments" to emptyMap<String, Any?>()),
                     mapOf("op" to "tool", "tool" to "page_url", "arguments" to emptyMap<String, Any?>()),
                     mapOf("op" to "tool", "tool" to "page_title", "arguments" to emptyMap<String, Any?>()),
@@ -1142,228 +971,239 @@ class MCPToolControllerTest {
         )
 
         val result = controller.callTool(request, response)
+        val payload = parseBatchPayload(result)
 
-        assertEquals(HttpStatus.OK, result.statusCode)
-        @Suppress("UNCHECKED_CAST")
-        val payload = objectMapper.readValue(result.body!!.content[0].text, Map::class.java) as Map<String, Any?>
-        assertEquals(0, payload["failureCount"])
-        @Suppress("UNCHECKED_CAST")
-        val results = payload["results"] as List<Map<String, Any?>>
-        assertEquals(4, results.size)
-        assertTrue(results.all { it["ok"] == true }, "Expected all steps to succeed")
-        assertTrue(results.all { ((it["durationMillis"] as Number).toLong()) >= 0 })
-        assertEquals("Result 1", results[1]["text"])
-        assertEquals("Result 2", results[2]["text"])
-        assertEquals("Result 3", results[3]["text"])
-    }
+        assertEquals("bail-session", payload["sessionId"])
+        assertEquals(1, payload["failureCount"])
+        assertEquals(true, payload["stoppedOnError"])
 
-    @Test
-    fun testCommandBatchWithExistingSessionId() = runBlocking {
-        `when`(sessionManager.getSession("existing-session")).thenReturn(managedSession)
-        `when`(managedSession.agenticSession).thenReturn(agenticSession)
-        `when`(agenticSession.companionAgent).thenReturn(basicBrowserAgent)
-        `when`(basicBrowserAgent.toolExtractor).thenReturn(agentToolExecutor)
-        `when`(agentToolExecutor.execute(anyToolCall())).thenReturn(toolCallResult("Existing session result"))
-
-        val request = MCPToolCallRequest(
-            tool = "command_batch",
-            arguments = mapOf(
-                "sessionId" to "existing-session",
-                "steps" to listOf(
-                    mapOf("op" to "tool", "tool" to "page_title", "arguments" to emptyMap<String, Any?>()),
-                )
-            )
-        )
-
-        val result = controller.callTool(request, response)
-
-        assertEquals(HttpStatus.OK, result.statusCode)
-        @Suppress("UNCHECKED_CAST")
-        val payload = objectMapper.readValue(result.body!!.content[0].text, Map::class.java) as Map<String, Any?>
-        assertEquals("existing-session", payload["sessionId"])
-        @Suppress("UNCHECKED_CAST")
-        val results = payload["results"] as List<Map<String, Any?>>
-        assertEquals(1, results.size)
-        assertEquals(true, results[0]["ok"])
-        assertEquals("Existing session result", results[0]["text"])
-    }
-
-    @Test
-    fun testCommandBatchPressUsesDirectTabPressTool() = runBlocking {
-        mockTool("tab", "press")
-        `when`(managedSession.sessionId).thenReturn("press-session")
-        `when`(sessionManager.createSession(any())).thenReturn(managedSession)
-        `when`(sessionManager.getSession("press-session")).thenReturn(managedSession)
-        `when`(agentToolExecutor.execute(anyToolCall())).thenReturn(toolCallResult("pressed"))
-
-        val request = MCPToolCallRequest(
-            tool = "command_batch",
-            arguments = mapOf(
-                "steps" to listOf(
-                    mapOf("op" to "open"),
-                    mapOf("op" to "tool", "tool" to "browser_press_key", "arguments" to mapOf("ref" to "#search", "key" to "!")),
-                )
-            )
-        )
-
-        val result = controller.callTool(request, response)
-
-        assertEquals(HttpStatus.OK, result.statusCode)
-        @Suppress("UNCHECKED_CAST")
-        val payload = objectMapper.readValue(result.body!!.content[0].text, Map::class.java) as Map<String, Any?>
-        @Suppress("UNCHECKED_CAST")
-        val results = payload["results"] as List<Map<String, Any?>>
-        assertEquals(2, results.size)
-        assertEquals(true, results[1]["ok"])
-        assertEquals("pressed", results[1]["text"])
-
-        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
-        Mockito.verify(agentToolExecutor, Mockito.times(1)).execute(capture(captor))
-        val toolCall = captor.value
-        assertEquals("tab", toolCall.domain)
-        assertEquals("press", toolCall.method)
-        assertEquals("#search", toolCall.arguments["selector"])
-        assertEquals("!", toolCall.arguments["key"])
-    }
-
-    @Test
-    fun testCommandBatchPressWithoutSelectorUsesFocusedElement() = runBlocking {
-        mockTool("tab", "press")
-        `when`(managedSession.sessionId).thenReturn("press-session")
-        `when`(sessionManager.createSession(any())).thenReturn(managedSession)
-        `when`(sessionManager.getSession("press-session")).thenReturn(managedSession)
-        `when`(agentToolExecutor.execute(anyToolCall())).thenReturn(toolCallResult("pressed"))
-
-        val request = MCPToolCallRequest(
-            tool = "command_batch",
-            arguments = mapOf(
-                "steps" to listOf(
-                    mapOf("op" to "open"),
-                    mapOf("op" to "tool", "tool" to "browser_press_key", "arguments" to mapOf("key" to "Enter")),
-                )
-            )
-        )
-
-        val result = controller.callTool(request, response)
-
-        assertEquals(HttpStatus.OK, result.statusCode)
-        @Suppress("UNCHECKED_CAST")
-        val payload = objectMapper.readValue(result.body!!.content[0].text, Map::class.java) as Map<String, Any?>
-        @Suppress("UNCHECKED_CAST")
-        val results = payload["results"] as List<Map<String, Any?>>
-        assertEquals(2, results.size)
-        assertEquals(true, results[1]["ok"])
-        assertEquals("pressed", results[1]["text"])
-
-        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
-        Mockito.verify(agentToolExecutor, Mockito.times(1)).execute(capture(captor))
-        val toolCall = captor.value
-        assertEquals("tab", toolCall.domain)
-        assertEquals("press", toolCall.method)
-        assertEquals("Enter", toolCall.arguments["key"])
-        assertTrue(!toolCall.arguments.containsKey("selector"))
-    }
-
-    @Test
-    fun testCommandBatchOpenReusesExistingSessionId() {
-        runBlocking {
-            `when`(sessionManager.getSession("existing-session")).thenReturn(managedSession)
-            `when`(managedSession.sessionId).thenReturn("existing-session")
-            `when`(managedSession.agenticSession).thenReturn(agenticSession)
-            `when`(agenticSession.companionAgent).thenReturn(basicBrowserAgent)
-            `when`(basicBrowserAgent.toolExtractor).thenReturn(agentToolExecutor)
-            `when`(agentToolExecutor.execute(anyToolCall())).thenReturn(toolCallResult("Existing session result"))
-
-            val request = MCPToolCallRequest(
-                tool = "command_batch",
-                arguments = mapOf(
-                    "sessionId" to "existing-session",
-                    "steps" to listOf(
-                        mapOf("op" to "open", "capabilities" to mapOf("profileMode" to "TEMPORARY")),
-                        mapOf("op" to "tool", "tool" to "page_title", "arguments" to emptyMap<String, Any?>()),
-                    )
-                )
-            )
-
-            val result = controller.callTool(request, response)
-
-            assertEquals(HttpStatus.OK, result.statusCode)
-            @Suppress("UNCHECKED_CAST")
-            val payload = objectMapper.readValue(result.body!!.content[0].text, Map::class.java) as Map<String, Any?>
-            assertEquals("existing-session", payload["sessionId"])
-            @Suppress("UNCHECKED_CAST")
-            val results = payload["results"] as List<Map<String, Any?>>
-            assertEquals(2, results.size)
-            assertEquals(true, results[0]["ok"])
-            assertEquals("existing-session", results[0]["sessionId"])
-            assertEquals("Session already open: existing-session", results[0]["text"])
-            assertEquals(true, results[1]["ok"])
-            assertEquals("Existing session result", results[1]["text"])
-            Mockito.verify(sessionManager, Mockito.never()).createSession(any())
-        }
-    }
-
-    @Test
-    fun testCommandBatchOpenWithMissingExistingSessionReturnsError() {
-        runBlocking {
-            `when`(sessionManager.getSession("missing-session")).thenReturn(null)
-
-            val request = MCPToolCallRequest(
-                tool = "command_batch",
-                arguments = mapOf(
-                    "sessionId" to "missing-session",
-                    "steps" to listOf(
-                        mapOf("op" to "open")
-                    )
-                )
-            )
-
-            val result = controller.callTool(request, response)
-
-            assertEquals(HttpStatus.OK, result.statusCode)
-            @Suppress("UNCHECKED_CAST")
-            val payload = objectMapper.readValue(result.body!!.content[0].text, Map::class.java) as Map<String, Any?>
-            assertEquals("missing-session", payload["sessionId"])
-            assertEquals(1, payload["failureCount"])
-            @Suppress("UNCHECKED_CAST")
-            val results = payload["results"] as List<Map<String, Any?>>
-            assertEquals(1, results.size)
-            assertEquals(false, results[0]["ok"])
-            assertTrue(results[0]["error"].toString().contains("Session not found: missing-session"))
-            Mockito.verify(sessionManager, Mockito.never()).createSession(any())
-        }
-    }
-
-    @Test
-    fun testCommandBatchToolStepMissingToolName() = runBlocking {
-        `when`(managedSession.sessionId).thenReturn("missing-tool-session")
-        `when`(sessionManager.createSession(any())).thenReturn(managedSession)
-        `when`(sessionManager.getSession("missing-tool-session")).thenReturn(managedSession)
-
-        val request = MCPToolCallRequest(
-            tool = "command_batch",
-            arguments = mapOf(
-                "steps" to listOf(
-                    mapOf("op" to "open"),
-                    mapOf("op" to "tool", "arguments" to emptyMap<String, Any?>()),
-                )
-            )
-        )
-
-        val result = controller.callTool(request, response)
-
-        assertEquals(HttpStatus.OK, result.statusCode)
-        @Suppress("UNCHECKED_CAST")
-        val payload = objectMapper.readValue(result.body!!.content[0].text, Map::class.java) as Map<String, Any?>
-        @Suppress("UNCHECKED_CAST")
-        val results = payload["results"] as List<Map<String, Any?>>
+        val results = parseBatchResults(payload)
         assertEquals(2, results.size)
         assertEquals(true, results[0]["ok"])
         assertEquals(false, results[1]["ok"])
-        assertTrue(
-            results[1]["error"].toString().contains("tool"),
-            "Expected error about missing tool name: ${results[1]["error"]}"
+        assertTrue(results[1]["error"].toString().contains("Tool execution failed"))
+
+        Mockito.verify(agentToolExecutor, Mockito.times(2)).execute(anyToolCall())
+        Unit
+    }
+
+    @Test
+    fun testCommandBatchContinuesOnErrorWithoutBail() = runBlocking {
+        `when`(managedSession.sessionId).thenReturn("continue-session")
+        `when`(sessionManager.getSession("continue-session")).thenReturn(managedSession)
+        `when`(agentToolExecutor.execute(anyToolCall()))
+            .thenThrow(RuntimeException("First tool failed"))
+            .thenReturn(toolCallResult("Second succeeded"))
+
+        val request = MCPToolCallRequest(
+            tool = "command_batch",
+            arguments = mapOf(
+                "sessionId" to "continue-session",
+                "bail" to false,
+                "steps" to listOf(
+                    mapOf("op" to "tool", "tool" to "page_title", "arguments" to emptyMap<String, Any?>()),
+                    mapOf("op" to "tool", "tool" to "page_url", "arguments" to emptyMap<String, Any?>()),
+                )
+            )
         )
+
+        val result = controller.callTool(request, response)
+        val payload = parseBatchPayload(result)
+
+        assertEquals("continue-session", payload["sessionId"])
+        assertEquals(1, payload["failureCount"])
+        assertEquals(false, payload["stoppedOnError"])
+
+        val results = parseBatchResults(payload)
+        assertEquals(2, results.size)
+        assertEquals(false, results[0]["ok"])
+        assertTrue(results[0]["error"].toString().contains("First tool failed"))
+        assertEquals(true, results[1]["ok"])
+        assertEquals("Second succeeded", results[1]["text"])
+
+        Mockito.verify(agentToolExecutor, Mockito.times(2)).execute(anyToolCall())
+        Unit
+    }
+
+    @Test
+    fun testCommandBatchRestoresFocusBeforeCompiledKeySteps() = runBlocking {
+        `when`(managedSession.sessionId).thenReturn("focus-session")
+        `when`(sessionManager.getSession("focus-session")).thenReturn(managedSession)
+        mockTools("tab" to listOf("evaluateValue"))
+        `when`(agentToolExecutor.execute(anyToolCall()))
+            .thenReturn(toolCallResult("focused"))
+            .thenReturn(toolCallResult(""))
+            .thenReturn(toolCallResult("focused"))
+            .thenReturn(toolCallResult(""))
+
+        val request = MCPToolCallRequest(
+            tool = "command_batch",
+            arguments = mapOf(
+                "sessionId" to "focus-session",
+                "steps" to listOf(
+                    mapOf(
+                        "op" to "tool",
+                        "tool" to "browser_keydown",
+                        "arguments" to mapOf("key" to "Shift"),
+                        "preFocusSelector" to "#type-target",
+                    ),
+                    mapOf(
+                        "op" to "tool",
+                        "tool" to "browser_keyup",
+                        "arguments" to mapOf("key" to "Shift"),
+                        "preFocusSelector" to "#type-target",
+                    ),
+                )
+            )
+        )
+
+        val result = controller.callTool(request, response)
+        val payload = parseBatchPayload(result)
+        val results = parseBatchResults(payload)
+
+        assertEquals(0, payload["failureCount"])
+        assertEquals(2, results.size)
+        assertTrue(results.all { it["ok"] == true })
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolExecutor, Mockito.times(4)).execute(capture(captor))
+        val toolCalls = captor.allValues
+
+        assertEquals("evaluateValue", toolCalls[0].method)
+        assertTrue(toolCalls[0].arguments["expression"].toString().contains("#type-target"))
+        assertEquals("keyDown", toolCalls[1].method)
+        assertEquals("Shift", toolCalls[1].arguments["key"])
+        assertEquals("evaluateValue", toolCalls[2].method)
+        assertEquals("keyUp", toolCalls[3].method)
+        assertEquals("Shift", toolCalls[3].arguments["key"])
+        Unit
+    }
+
+    @Test
+    fun testCommandBatchRestoresMousePositionBeforePointerSteps() = runBlocking {
+        `when`(managedSession.sessionId).thenReturn("mouse-session")
+        `when`(sessionManager.getSession("mouse-session")).thenReturn(managedSession)
+        `when`(agentToolExecutor.execute(anyToolCall()))
+            .thenReturn(toolCallResult(""))
+            .thenReturn(toolCallResult(""))
+            .thenReturn(toolCallResult(""))
+            .thenReturn(toolCallResult(""))
+            .thenReturn(toolCallResult(""))
+            .thenReturn(toolCallResult(""))
+
+        val request = MCPToolCallRequest(
+            tool = "command_batch",
+            arguments = mapOf(
+                "sessionId" to "mouse-session",
+                "steps" to listOf(
+                    mapOf(
+                        "op" to "tool",
+                        "tool" to "browser_mouse_down",
+                        "arguments" to mapOf("button" to "left"),
+                        "preMousePosition" to mapOf("x" to 120.0, "y" to 240.0),
+                    ),
+                    mapOf(
+                        "op" to "tool",
+                        "tool" to "browser_mouse_up",
+                        "arguments" to mapOf("button" to "left"),
+                        "preMousePosition" to mapOf("x" to 120.0, "y" to 240.0),
+                    ),
+                    mapOf(
+                        "op" to "tool",
+                        "tool" to "browser_mouse_wheel",
+                        "arguments" to mapOf("deltaX" to 0, "deltaY" to 160),
+                        "preMousePosition" to mapOf("x" to 120.0, "y" to 240.0),
+                    ),
+                )
+            )
+        )
+
+        val result = controller.callTool(request, response)
+        val payload = parseBatchPayload(result)
+        val results = parseBatchResults(payload)
+
+        assertEquals(0, payload["failureCount"])
+        assertEquals(3, results.size)
+        assertTrue(results.all { it["ok"] == true })
+
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolExecutor, Mockito.times(6)).execute(capture(captor))
+        val toolCalls = captor.allValues
+
+        assertEquals("mouseMove", toolCalls[0].method)
+        assertEquals(120.0, toolCalls[0].arguments["x"])
+        assertEquals(240.0, toolCalls[0].arguments["y"])
+        assertEquals("mouseDown", toolCalls[1].method)
+        assertEquals("mouseMove", toolCalls[2].method)
+        assertEquals("mouseUp", toolCalls[3].method)
+        assertEquals("mouseMove", toolCalls[4].method)
+        assertEquals("mouseWheel", toolCalls[5].method)
+        Unit
+    }
+
+    @Test
+    fun testCommandBatchReturnsSnapshotAndScreenshotArtifacts() = runBlocking {
+        `when`(managedSession.sessionId).thenReturn("artifact-session")
+        `when`(sessionManager.getSession("artifact-session")).thenReturn(managedSession)
+        mockTools("tab" to listOf("ariaSnapshot", "screenshot"))
+        `when`(agentToolExecutor.execute(anyToolCall()))
+            .thenReturn(toolCallResult("https://example.com/interactive"))
+            .thenReturn(toolCallResult("Batch Title"))
+            .thenReturn(toolCallResult("snapshot text"))
+            .thenReturn(toolCallResult("YmFzZTY0LWltYWdl"))
+
+        val request = MCPToolCallRequest(
+            tool = "command_batch",
+            arguments = mapOf(
+                "sessionId" to "artifact-session",
+                "steps" to listOf(
+                    mapOf(
+                        "op" to "snapshot",
+                        "tool" to "browser_snapshot",
+                        "arguments" to emptyMap<String, Any?>(),
+                    ),
+                    mapOf(
+                        "op" to "screenshot",
+                        "tool" to "browser_take_screenshot",
+                        "arguments" to emptyMap<String, Any?>(),
+                    ),
+                )
+            )
+        )
+
+        val result = controller.callTool(request, response)
+        val payload = parseBatchPayload(result)
+        val results = parseBatchResults(payload)
+
+        assertEquals(0, payload["failureCount"])
+        assertEquals(2, results.size)
+        assertEquals("https://example.com/interactive", results[0]["pageUrl"])
+        assertEquals("Batch Title", results[0]["pageTitle"])
+        assertEquals("snapshot text", results[0]["snapshot"])
+        assertEquals("YmFzZTY0LWltYWdl", results[1]["screenshot"])
+        Unit
+    }
+
+    @Test
+    fun testCommandBatchToolWithoutSessionReturnsNoActiveSessionError() = runBlocking {
+        val request = MCPToolCallRequest(
+            tool = "command_batch",
+            arguments = mapOf(
+                "steps" to listOf(
+                    mapOf("op" to "tool", "tool" to "page_title", "arguments" to emptyMap<String, Any?>())
+                )
+            )
+        )
+
+        val result = controller.callTool(request, response)
+        val payload = parseBatchPayload(result)
+        val results = parseBatchResults(payload)
+
+        assertEquals(1, payload["failureCount"])
+        assertEquals(false, payload["stoppedOnError"])
+        assertEquals(false, results[0]["ok"])
+        assertTrue(results[0]["error"].toString().contains(MCPConstants.ERROR_NO_ACTIVE_SESSION))
+        Unit
     }
 
     @Test
@@ -1441,6 +1281,26 @@ class MCPToolControllerTest {
         assertTrue(result.body!!.isError)
         assertTrue(result.body!!.content[0].text.contains("Missing required parameter 'command' for run"))
         Unit
+    }
+
+    private fun parseBatchPayload(result: org.springframework.http.ResponseEntity<MCPToolCallResponse>): Map<String, Any?> {
+        assertEquals(HttpStatus.OK, result.statusCode)
+        @Suppress("UNCHECKED_CAST")
+        return objectMapper.readValue(result.body!!.content[0].text, Map::class.java) as Map<String, Any?>
+    }
+
+    private fun parseBatchResults(payload: Map<String, Any?>): List<Map<String, Any?>> {
+        @Suppress("UNCHECKED_CAST")
+        return payload["results"] as List<Map<String, Any?>>
+    }
+
+    private fun mockTools(vararg toolsByDomain: Pair<String, List<String>>) {
+        val toolSpecs = toolsByDomain.associate { (domain, methods) ->
+            domain to methods.associateWith { method ->
+                ToolSpec(domain = domain, method = method, description = "desc")
+            }
+        }
+        `when`(agentToolExecutor.getAllToolSpecs()).thenReturn(toolSpecs)
     }
 
     private fun mockTool(domain: String, method: String) {

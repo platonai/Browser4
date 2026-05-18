@@ -87,11 +87,19 @@ class SessionManagerTest {
     }
 
     @Test
-    fun getAllSessionsCreatesDefaultSessionOnDemand() {
+    fun getAllSessionsDoesNotCreateDefaultSessionOnDemand() {
         val sessions = sessionManager.getAllSessions()
 
-        assertEquals(1, sessions.size)
-        assertEquals("default", sessions.single().sessionId)
+        assertEquals(0, sessions.size)
+    }
+
+    @Test
+    fun getSessionCreatesDefaultSessionOnDemand() {
+        val session = sessionManager.getSession("default")
+
+        assertEquals("default", session?.sessionId)
+        assertEquals("default", session?.capabilities?.get("sessionId"))
+        assertEquals("DEFAULT", session?.capabilities?.get("profileMode"))
     }
 
     @Test

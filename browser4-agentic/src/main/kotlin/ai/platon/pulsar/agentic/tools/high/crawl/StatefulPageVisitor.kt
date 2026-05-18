@@ -28,6 +28,7 @@ import java.io.Closeable
 import java.nio.file.Files
 import java.time.Duration
 import kotlin.io.path.writeText
+import kotlin.time.Duration.Companion.milliseconds
 
 class StatefulPageVisitor(
     val session: AgenticSession,
@@ -313,7 +314,7 @@ class StatefulPageVisitor(
     }
 
     private suspend fun chatWithLLMWithTimeout(instruct: String, timeout: Duration): String {
-        val content = withTimeoutOrNull(timeout.toMillis()) {
+        val content = withTimeoutOrNull(timeout.toMillis().milliseconds) {
             chatWithLLM(instruct)
         }
 

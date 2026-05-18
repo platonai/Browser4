@@ -43,6 +43,7 @@ const packageJson = JSON.parse(
   (await import('fs')).readFileSync(join(projectRoot, 'package.json'), 'utf8')
 );
 const version = packageJson.version;
+const commandNames = Object.keys(packageJson.bin || { 'browser4-cli': './bin/browser4-cli.js' });
 
 // GitHub release URL
 const GITHUB_REPO = 'platonai/Browser4';
@@ -202,12 +203,12 @@ function showInstallReminder() {
   console.log('  ⚠ No Chrome installation detected.');
   console.log('  If you plan to use a local browser, run:');
   console.log('');
-  console.log('    browser4 install');
+  console.log('    browser4-cli install');
   if (platform() === 'linux') {
     console.log('');
     console.log('  On Linux, include system dependencies with:');
     console.log('');
-    console.log('    browser4 install --with-deps');
+    console.log('    browser4-cli install --with-deps');
   }
   console.log('');
   console.log('  You can skip this if you use --cdp, --provider, --engine, or --executable-path.');
@@ -240,27 +241,31 @@ async function fixUnixSymlink() {
     return; // npm not available
   }
 
-  const symlinkPath = join(npmBinDir, 'browser4');
+  let optimized = false;
+  for (const commandName of commandNames) {
+    const symlinkPath = join(npmBinDir, commandName);
 
-  // Check if symlink exists (indicates global install)
-  try {
-    const stat = lstatSync(symlinkPath);
-    if (!stat.isSymbolicLink()) {
-      return; // Not a symlink, don't touch it
+    try {
+      const stat = lstatSync(symlinkPath);
+      if (!stat.isSymbolicLink()) {
+        continue;
+      }
+    } catch {
+      continue;
     }
-  } catch {
-    return; // Symlink doesn't exist, not a global install
+
+    try {
+      unlinkSync(symlinkPath);
+      symlinkSync(binaryPath, symlinkPath);
+      optimized = true;
+    } catch (err) {
+      console.log(`⚠ Could not optimize symlink for ${commandName}: ${err.message}`);
+      console.log('  CLI will work via Node.js wrapper (slightly slower startup)');
+    }
   }
 
-  // Replace symlink to point directly to native binary
-  try {
-    unlinkSync(symlinkPath);
-    symlinkSync(binaryPath, symlinkPath);
+  if (optimized) {
     console.log('✓ Optimized: symlink points to native binary (zero overhead)');
-  } catch (err) {
-    // Permission error or other issue - not critical, JS wrapper still works
-    console.log(`⚠ Could not optimize symlink: ${err.message}`);
-    console.log('  CLI will work via Node.js wrapper (slightly slower startup)');
   }
 }
 
@@ -277,19 +282,9 @@ async function fixWindowsShims() {
     return;
   }
 
-  const cmdShim = join(npmBinDir, 'browser4.cmd');
-  const ps1Shim = join(npmBinDir, 'browser4.ps1');
-
-  // Shims may not exist yet during postinstall (npm creates them after
-  // lifecycle scripts). If missing, fall back: the JS wrapper at
-  // bin/browser4.js handles Windows correctly via child_process.spawn.
-  if (!existsSync(cmdShim)) {
-    return;
-  }
-
   // Detect architecture so ARM64 Windows is handled correctly
   const cpuArch = arch() === 'arm64' ? 'arm64' : 'x64';
-  const relativeBinaryPath = `node_modules\\browser4\\bin\\browser4-win32-${cpuArch}.exe`;
+  const relativeBinaryPath = `node_modules\\${packageJson.name}\\bin\\browser4-cli-win32-${cpuArch}.exe`;
   const absoluteBinaryPath = join(npmBinDir, relativeBinaryPath);
 
   // Only rewrite shims if the native binary actually exists
@@ -298,13 +293,31 @@ async function fixWindowsShims() {
   }
 
   try {
-    const cmdContent = `@ECHO off\r\n"%~dp0${relativeBinaryPath}" %*\r\n`;
-    writeFileSync(cmdShim, cmdContent);
+    let optimized = false;
+    for (const commandName of commandNames) {
+      const cmdShim = join(npmBinDir, `${commandName}.cmd`);
+      const ps1Shim = join(npmBinDir, `${commandName}.ps1`);
 
-    const ps1Content = `#!/usr/bin/env pwsh\r\n$basedir = Split-Path $MyInvocation.MyCommand.Definition -Parent\r\n& "$basedir\\${relativeBinaryPath}" $args\r\nexit $LASTEXITCODE\r\n`;
-    writeFileSync(ps1Shim, ps1Content);
+      if (!existsSync(cmdShim) && !existsSync(ps1Shim)) {
+        continue;
+      }
 
-    console.log('✓ Optimized: shims point to native binary (zero overhead)');
+      if (existsSync(cmdShim)) {
+        const cmdContent = `@ECHO off\r\n"%~dp0${relativeBinaryPath}" %*\r\n`;
+        writeFileSync(cmdShim, cmdContent);
+      }
+
+      if (existsSync(ps1Shim)) {
+        const ps1Content = `#!/usr/bin/env pwsh\r\n$basedir = Split-Path $MyInvocation.MyCommand.Definition -Parent\r\n& "$basedir\\${relativeBinaryPath}" $args\r\nexit $LASTEXITCODE\r\n`;
+        writeFileSync(ps1Shim, ps1Content);
+      }
+
+      optimized = true;
+    }
+
+    if (optimized) {
+      console.log('✓ Optimized: shims point to native binary (zero overhead)');
+    }
   } catch (err) {
     console.log(`⚠ Could not optimize shims: ${err.message}`);
     console.log('  CLI will work via Node.js wrapper (slightly slower startup)');

@@ -3,6 +3,7 @@ package ai.platon.pulsar.skeleton.workflow.parse
 import ai.platon.browser4.common.B4ResourceLoader
 import ai.platon.pulsar.common.config.CapabilityTypes
 import ai.platon.pulsar.common.config.ImmutableConfig
+import ai.platon.pulsar.common.getLogger
 import org.slf4j.LoggerFactory
 import org.w3c.dom.Document
 import org.w3c.dom.Element
@@ -124,7 +125,7 @@ class ParserConfigReader {
 
     companion object {
         /* our log stream */
-        val LOG = LoggerFactory.getLogger(ParserConfigReader::class.java)
+        val LOG = getLogger(ParserConfigReader::class)
 
         /**
          * The property name of the parse-plugins location

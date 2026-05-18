@@ -100,7 +100,7 @@ open class LoadOptions(
         names = ["-taskTime", "--task-time"], converter = InstantConverter::class,
         description = "An optional timestamp to denote a batch of tasks."
     )
-    var taskTime = Instant.EPOCH
+    var taskTime: Instant = Instant.EPOCH
 
     /**
      * Absolute deadline after which the task should be discarded.
@@ -114,7 +114,7 @@ open class LoadOptions(
         description = "The task's deadline indicates the time by which it should be completed. If this deadline is surpassed, " +
             " the task must be promptly discarded."
     )
-    var deadline = DateTimes.doomsday
+    var deadline: Instant = DateTimes.doomsday
 
     /**
      * Authentication token for authorized access to protected resources.
@@ -430,7 +430,7 @@ open class LoadOptions(
         names = ["-ii", "-itemExpire", "-itemExpires", "--item-expires"], converter = DurationConverter::class,
         description = "The same as expires, but only works for item pages"
     )
-    var itemExpires = ChronoUnit.DECADES.duration
+    var itemExpires: Duration = ChronoUnit.DECADES.duration
 
     /**
      * Absolute timestamp after which item detail pages should be refetched.
@@ -443,7 +443,7 @@ open class LoadOptions(
         names = ["-itemExpireAt", "--item-expire-at"], converter = InstantConverter::class,
         description = "If an item page is expired, it should be fetched from the web again"
     )
-    var itemExpireAt = DateTimes.doomsday
+    var itemExpireAt: Instant = DateTimes.doomsday
 
     /**
      * Number of scroll actions for item detail pages.

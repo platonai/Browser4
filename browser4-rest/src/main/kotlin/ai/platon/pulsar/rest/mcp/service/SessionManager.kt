@@ -206,7 +206,6 @@ class SessionManager(
      * @return A list of all managed sessions.
      */
     fun getAllSessions(): List<ManagedSession> {
-        createSession(mapOf(SESSION_ID_CAPABILITY to DEFAULT_SESSION_ID))
         return sessions.values.toList()
     }
 

@@ -11,8 +11,6 @@ English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platon
 - [🤖 Browser4](#-browser4)
     - [🌟 Introduction](#-introduction)
         - [✨ Key Capabilities](#-key-capabilities)
-    - [🎥 Demo Videos](#-demo-videos)
-    - [🚀 Quick Start](#-quick-start)
     - [💡 Usage Examples](#-usage-examples)
         - [Browser Agents](#browser-agents)
         - [Workflow Automation](#workflow-automation)
@@ -38,105 +36,28 @@ English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platon
 * ⚡  **Extreme Performance** — Fully coroutine-safe; supports 100k ~ 200k complex page visits per machine per day.
 * 🧬 **Data Extraction** — Hybrid of LLM, ML, and selectors for clean data across chaotic pages.
 
-## CLI & SKILLS
-
-```shell
-# Open a new browser window
-browser4-cli open
-
-# Navigate to a page
-browser4-cli goto https://playwright.dev
-
-# Inspect the page — note the eN labels on interactive nodes
-browser4-cli snapshot
-
-# Interact using refs from the snapshot
-browser4-cli click e15
-browser4-cli type e15 "Hello World"
-browser4-cli press e15 Enter
-browser4-cli eval "document.title"
-browser4-cli eval "element => element.textContent.trim()" e15
-browser4-cli keydown Shift
-browser4-cli mousemove 150 300
-browser4-cli mousewheel 0 100
-browser4-cli keyup Shift
-
-# Take a screenshot and save it to disk
-browser4-cli screenshot
-
-# Use a custom server URL
-browser4-cli open --server http://localhost:9090
-
-# Execute multiple commands in one process
-browser4-cli batch "open https://playwright.dev" "snapshot"
-
-# Stop on the first batch failure
-browser4-cli batch --bail "open https://playwright.dev" "click e1" "screenshot"
-
-# Pipe batch commands as JSON via stdin
-echo '[
-  ["open", "https://playwright.dev"],
-  ["snapshot"],
-  ["click", "e1"],
-  ["screenshot", "--filename=result.png"]
-]' | browser4-cli batch --json
-
-# Close the session when done
-browser4-cli close
-```
-
----
-
-## 🎥 Demo Videos
-
-🎬 YouTube:
-[![Watch the video](https://img.youtube.com/vi/rJzXNXH3Gwk/0.jpg)](https://youtu.be/rJzXNXH3Gwk)
-
-📺 Bilibili:
-[https://www.bilibili.com/video/BV1fXUzBFE4L](https://www.bilibili.com/video/BV1fXUzBFE4L)
-
----
-
-## 🚀 Quick Start
-
-**Prerequisites**: Java 17+
-
-1. **Clone the repository**
-   ```shell
-   git clone https://github.com/platonai/browser4.git
-   cd browser4
-   ```
-
-2. **Configure your LLM API key**
-
-   > Edit [application.properties](application.properties) and add your API key.
-
-3. **Build the project**
-   ```shell
-   ./mvnw -DskipTests
-   ```
-
-4. **Run examples**
-   ```shell
-   ./mvnw -pl examples/browser4-examples exec:java -D"exec.mainClass=ai.platon.pulsar.examples.agent.Browser4AgentKt"
-   ```
-   If you have encoding problem on Windows:
-   ```shell
-   ./bin/run-agent-examples.ps1
-   ```
-
-   Explore and run examples in the `browser4-examples` module to see Browser4 in action.
-   Java-compatible examples have been removed; use Kotlin APIs, SDKs, or CLI tools instead.
-
-For Docker deployment, see our [Docker Hub repository](https://hub.docker.com/r/galaxyeye88/browser4).
-
-**Windows Users**: You can also build Browser4 as a standalone Windows installer. See the [Windows Installer Guide](browser4-app/browser4-agents/README.md) for details.
-
----
-
 ## 💡 Usage Examples
 
-## CLI & SKILLS
+### Quick Start
+
+Just ask any LLM agent to use browser4-cli for browser interactions, and it will be able to perform complex tasks like this:
+
+```shell
+$prompt = @"
+Read https://raw.githubusercontent.com/platonai/Browser4/refs/heads/main/cli/skill/SKILL.md and understand how to
+use browser4-cli and perform the following task:
+
+1. go to amazon.com
+2. search for pens to draw on whiteboards
+3. compare the first 4 ones
+4. write the result to a markdown file
+"@
+
+copilot --allow-all -p "$prompt"
+# claude --dangerously-skip-permissions "$prompt"
+```
+
+### CLI & SKILLS
 
 Browser4 CLI is a powerful command-line interface for direct browser control and automation, designed for both human
 users and AI agents. It provides a simple syntax to perform complex browser interactions without writing code.
@@ -144,21 +65,13 @@ users and AI agents. It provides a simple syntax to perform complex browser inte
 Browser4 CLI is compatible with Playwright and supports a wide range of commands for navigation, interaction, and data extraction.
 It can be used in scripts, terminal sessions, or integrated into AI agents through SKILLS.
 
+Installs browser4-cli globally using npm:
+
 ```shell
-# macOS / Linux
-mkdir -p ~/.browser4/lib
-curl -fsSL -o ~/.browser4/lib/Browser4.jar https://github.com/platonai/Browser4/releases/latest/download/Browser4.jar
-git clone https://github.com/platonai/Browser4.git
-cd Browser4/cli/browser4-cli
-cargo install --path . --locked
+npm install -g browser4-cli
+```
 
-# Windows
-New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.browser4\lib" | Out-Null
-Invoke-WebRequest 'https://github.com/platonai/Browser4/releases/latest/download/Browser4.jar' -OutFile "$env:USERPROFILE\.browser4\lib\Browser4.jar"
-git clone https://github.com/platonai/Browser4.git
-cd Browser4\cli\browser4-cli
-cargo install --path . --locked
-
+```shell
 # Open a new browser window
 browser4-cli open
 
@@ -189,25 +102,46 @@ browser4-cli batch "goto https://playwright.dev" "snapshot"
 # Stop on the first batch failure
 browser4-cli batch --bail "goto https://playwright.dev" "click e1" "screenshot"
 
-# Pipe batch commands as JSON via stdin
+# Advanced: pipe batch commands as JSON via stdin
 echo '[
-  ["goto", "https://playwright.dev"],
-  ["snapshot"],
-  ["click", "e1"],
-  ["screenshot", "--filename=result.png"]
+  ["goto", "https://example.com/form-filling"],
+  ["click", "#reset-btn"],
+  ["fill", "#first-name", "Bob"],
+  ["fill", "#last-name", "Smith"],
+  ["fill", "#email", "bob@example.com"],
+  ["select", "#country", "uk"],
+  ["check", "#agree-terms"],
+  ["click", "#submit-btn"]
 ]' | browser4-cli batch --json
 
 # Close the session when done
 browser4-cli close
 ```
 
-Build CLI from source:
-
-[README.md](cli/browser4-cli/README.md)
-
 Browser4 CLI is designed for use by AI agents through SKILLS + CLI.
 
 [SKILL.md](cli/skill/SKILL.md)
+
+---
+
+## 🚀 Native API Quick Start
+
+**Prerequisites**: Java 17+
+
+1. **Clone the repository**
+   ```shell
+   git clone https://github.com/platonai/Browser4.git
+   cd Browser4
+   ```
+
+2. **Configure your LLM API key**
+
+   > Edit [application.properties](application.properties) and add your API key.
+
+3. **Build the project**
+   ```shell
+   ./mvnw -DskipTests
+   ```
 
 ---
 
@@ -327,7 +261,6 @@ session.submitAll(links)
 📺 Bilibili:
 [https://www.bilibili.com/video/BV1kM2rYrEFC](https://www.bilibili.com/video/BV1kM2rYrEFC)
 
-
 ---
 
 ### Auto Extraction
@@ -369,15 +302,15 @@ curl -L -o PulsarRPAPro.jar https://github.com/platonai/PulsarRPAPro/releases/do
 
 ## 📦 Modules Overview
 
-| Module            | Description                                             |
-|-------------------|---------------------------------------------------------|
-| `browser4-core`   | Core engine: sessions, scheduling, DOM, browser control |
-| `browser4-agentic`  | Agent implementation, MCP, and skill registration       |
-| `browser4-rest`     | Spring Boot REST layer & command endpoints              |
-| `browser4-agents` | Agent & crawler orchestration with product packaging    |
-| `sdks`            | CLI in Rust that supports SKILLS                        |
-| `examples`        | Runnable examples and demos                             |
-| `browser4-tests`    | E2E & heavy integration & scenario tests                |
+| Module             | Description                                             |
+|--------------------|---------------------------------------------------------|
+| `cli`              | CLI in Rust that supports SKILLS                        |
+| `browser4-core`    | Core engine: sessions, scheduling, DOM, browser control |
+| `browser4-agentic` | Agent implementation, MCP, and skill registration       |
+| `browser4-rest`    | Spring Boot REST layer & command endpoints              |
+| `browser4-agents`  | Agent & crawler orchestration with product packaging    |
+| `examples`         | Runnable examples and demos                             |
+| `browser4-tests`   | E2E & heavy integration & scenario tests                |
 
 ---
 

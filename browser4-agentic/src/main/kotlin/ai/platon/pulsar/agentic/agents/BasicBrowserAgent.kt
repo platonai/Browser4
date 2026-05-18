@@ -28,6 +28,7 @@ import java.nio.file.Path
 import java.text.MessageFormat
 import java.time.Instant
 import java.util.*
+import kotlin.time.Duration.Companion.milliseconds
 
 open class BasicBrowserAgent(
     override val session: AgenticSession,
@@ -153,7 +154,7 @@ open class BasicBrowserAgent(
         val context = stateManager.getOrCreateActiveContext(action, "act")
 
         val result = try {
-            withTimeout(config.actTimeoutMs) {
+            withTimeout(config.actTimeoutMs.milliseconds) {
                 doObserveAct(action)
             }
         } catch (e: TimeoutCancellationException) {
@@ -645,7 +646,7 @@ open class BasicBrowserAgent(
             val screenshotB64 = if (needsScreenshot) activeDriver.screenshot() else null
             val context = context.copy(screenshotB64 = screenshotB64)
 
-            val actionDescription = withTimeout(config.llmInferenceTimeoutMs) {
+            val actionDescription = withTimeout(config.llmInferenceTimeoutMs.milliseconds) {
                 inference.observe(params, context)
             }
 

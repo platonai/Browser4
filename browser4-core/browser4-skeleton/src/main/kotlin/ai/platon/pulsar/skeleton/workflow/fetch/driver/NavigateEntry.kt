@@ -76,7 +76,7 @@ data class NavigateEntry constructor(
     /**
      * The time when the document is ready.
      */
-    var documentReadyTime = DateTimes.doomsday
+    var documentReadyTime: Instant = DateTimes.doomsday
     /**
      * Track the time of page actions.
      */
