@@ -44,8 +44,7 @@ Just ask any LLM agent to use browser4-cli for browser interactions, and it will
 
 ```shell
 $prompt = @"
-Read https://raw.githubusercontent.com/platonai/Browser4/refs/heads/main/cli/skill/SKILL.md and understand how to
-use browser4-cli and perform the following task:
+Install https://raw.githubusercontent.com/platonai/Browser4/refs/heads/main/cli/skill/SKILL.md and use browser4-cli and perform the following task:
 
 1. go to amazon.com
 2. search for pens to draw on whiteboards
