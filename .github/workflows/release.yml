@@ -184,6 +184,47 @@ jobs:
         shell: bash
         run: chmod +x ./mvnw
 
+      - name: Replace SNAPSHOT versions for release
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.ci-build.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          python3 <<'PY'
+          from pathlib import Path
+          import os
+
+          repo_root = Path(os.environ["GITHUB_WORKSPACE"])
+          version_file = repo_root / "VERSION"
+          release_version = os.environ["RELEASE_VERSION"].strip()
+          snapshot_version = version_file.read_text(encoding="utf-8").splitlines()[0].strip()
+
+          if not snapshot_version:
+              raise SystemExit("VERSION file is empty")
+
+          print(f"=== Preparing release versions ===")
+          print(f"Snapshot version: {snapshot_version}")
+          print(f"Release version: {release_version}")
+
+          version_file.write_text(f"{release_version}\n", encoding="utf-8")
+
+          updated_files = []
+          for pom_file in repo_root.rglob("pom.xml"):
+              original = pom_file.read_text(encoding="utf-8")
+              updated = original.replace(snapshot_version, release_version)
+              if updated != original:
+                  pom_file.write_text(updated, encoding="utf-8", newline="\n")
+                  updated_files.append(str(pom_file.relative_to(repo_root)))
+
+          if not updated_files:
+              raise SystemExit(f"No pom.xml files contained snapshot version {snapshot_version}")
+
+          print("Updated pom.xml files:")
+          for path in updated_files:
+              print(f" - {path}")
+          PY
+
       - name: Deploy to Sonatype Central
         shell: bash
         run: |
