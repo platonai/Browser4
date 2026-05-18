@@ -92,7 +92,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
-          name: Browser4 ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
           body_path: release_notes.md
           draft: false
           prerelease: ${{ contains(steps.version.outputs.tag, '-rc.') || contains(steps.version.outputs.tag, '-alpha') || contains(steps.version.outputs.tag, '-beta') }}
