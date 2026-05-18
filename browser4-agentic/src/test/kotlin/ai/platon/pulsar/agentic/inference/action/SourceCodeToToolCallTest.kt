@@ -139,6 +139,14 @@ class SourceCodeToToolCallTest {
     }
 
     @Test
+    @DisplayName("ToolSpecGenerator normalizes generated snapshot content to Linux line endings")
+    fun toolSpecGeneratorNormalizesGeneratedSnapshotContentToLinuxLineEndings() {
+        val normalized = ToolSpecGenerator.normalizeToLinuxLineEndings("first\r\nsecond\rthird\nfourth")
+
+        assertEquals("first\nsecond\nthird\nfourth", normalized)
+    }
+
+    @Test
     @DisplayName("WebDriver snapshot json is stable across repeated generation")
     fun webDriverSnapshotJsonIsStableAcrossRepeatedGeneration() {
         assertSnapshotJsonDeterministic("tab", "browser4-core", "WebDriver.kt", "WebDriver")

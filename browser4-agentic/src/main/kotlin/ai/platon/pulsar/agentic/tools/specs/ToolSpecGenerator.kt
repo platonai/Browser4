@@ -28,11 +28,11 @@ object ToolSpecGenerator {
 
             if (!B4ProjectUtils.isInJar()) {
                 var fileName = "driver-tool-call-specs.json"
-                var content = toSnapshotJson(webDriverToolSpecs)
+                var content = normalizeToLinuxLineEndings(toSnapshotJson(webDriverToolSpecs))
                 B4LLMUtils.writeAsResource(fileName, content)
 
                 fileName = "agent-tool-call-specs.json"
-                content = toSnapshotJson(agentToolSpecs)
+                content = normalizeToLinuxLineEndings(toSnapshotJson(agentToolSpecs))
                 B4LLMUtils.writeAsResource(fileName, content)
             }
         }
@@ -40,6 +40,10 @@ object ToolSpecGenerator {
 
     internal fun toSnapshotJson(toolSpecs: List<ToolSpec>): String {
         return serializeToolSpecs(toolSpecs)
+    }
+
+    internal fun normalizeToLinuxLineEndings(content: String): String {
+        return content.replace("\r\n", "\n").replace('\r', '\n')
     }
 
     private fun serializeToolSpecs(toolSpecs: List<ToolSpec>): String {
