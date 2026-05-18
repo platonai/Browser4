@@ -10,7 +10,7 @@ English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platon
 **Table of Contents**
 - [🤖 Browser4](#-browser4)
     - [🌟 Introduction](#-introduction)
-        - [✨ Key Capabilities](#-key-capabilities)
+        - [�?Key Capabilities](#-key-capabilities)
     - [💡 Usage Examples](#-usage-examples)
         - [Browser Agents](#browser-agents)
         - [Workflow Automation](#workflow-automation)
@@ -20,7 +20,7 @@ English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platon
     - [📦 Modules Overview](#-modules-overview)
     - [📜 Documentation](#-documentation)
     - [🔧 Proxies - Unblock Websites](#-proxies---unblock-websites)
-    - [✨ Features](#-features)
+    - [�?Features](#-features)
     - [🤝 Support & Community](#-support--community)
 <!-- /TOC -->
 
@@ -28,13 +28,13 @@ English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platon
 
 💖 **Browser4: a lightning-fast, coroutine-safe browser engine for your AI** 💖
 
-### ✨ Key Capabilities
+### �?Key Capabilities
 
-* 👽 **Browser Agents** — Fully autonomous browser agents that reason, plan, and execute end-to-end tasks.
-* 🤖 **Browser Automation** — High-performance automation for workflows, navigation, and data extraction.
+* 👽 **Browser Agents** �?Fully autonomous browser agents that reason, plan, and execute end-to-end tasks.
+* 🤖 **Browser Automation** �?High-performance automation for workflows, navigation, and data extraction.
 * ⚙️ **Machine Learning Agent** - Learns field structures across complex pages without consuming tokens.
-* ⚡  **Extreme Performance** — Fully coroutine-safe; supports 100k ~ 200k complex page visits per machine per day.
-* 🧬 **Data Extraction** — Hybrid of LLM, ML, and selectors for clean data across chaotic pages.
+* �? **Extreme Performance** �?Fully coroutine-safe; supports 100k ~ 200k complex page visits per machine per day.
+* 🧬 **Data Extraction** �?Hybrid of LLM, ML, and selectors for clean data across chaotic pages.
 
 ## 💡 Usage Examples
 
@@ -78,7 +78,7 @@ browser4-cli open
 # Navigate to a page
 browser4-cli goto https://playwright.dev
 
-# Inspect the page — note the eN labels on interactive nodes
+# Inspect the page �?note the eN labels on interactive nodes
 browser4-cli snapshot
 
 # Interact using refs from the snapshot
@@ -265,7 +265,7 @@ session.submitAll(links)
 
 ### Auto Extraction
 
-Automatic, large-scale, high-precision field discovery and extraction powered by self-/unsupervised machine learning — no LLM API calls, no tokens, deterministic and fast.
+Automatic, large-scale, high-precision field discovery and extraction powered by self-/unsupervised machine learning �?no LLM API calls, no tokens, deterministic and fast.
 
 **What it does:**
 - Learns every extractable field on item/detail pages (often dozens to hundreds) with high precision.
@@ -279,7 +279,7 @@ Automatic, large-scale, high-precision field discovery and extraction powered by
 **Quick Commands (PulsarRPAPro):**
 ```bash
 # NOTE: MongoDB required
-curl -L -o PulsarRPAPro.jar https://github.com/platonai/PulsarRPAPro/releases/download/v4.6.0/PulsarRPAPro.jar
+curl -L -o PulsarRPAPro.jar https://github.com/platonai/PulsarRPAPro/releases/download/v4.9.1/PulsarRPAPro.jar
 ```
 
 **Integration Status:**
@@ -289,7 +289,7 @@ curl -L -o PulsarRPAPro.jar https://github.com/platonai/PulsarRPAPro/releases/do
 **Key Advantages:**
 - High precision: >95% fields discovered; majority with >99% accuracy (indicative on tested domains).
 - Resilient to selector churn & HTML noise.
-- Zero external dependency (no API key) → cost-efficient at scale.
+- Zero external dependency (no API key) �?cost-efficient at scale.
 - Explainable: generated selectors & SQL are transparent and auditable.
 
 👽 Extract data with machine learning agents:
@@ -314,7 +314,7 @@ curl -L -o PulsarRPAPro.jar https://github.com/platonai/PulsarRPAPro/releases/do
 
 ---
 
-## ✨ Features
+## �?Features
 
 Status: [Available] in repo, [Experimental] in active iteration, [Planned] not in repo, [Indicative] performance target.
 
@@ -392,3 +392,4 @@ If you need this type of URL, please contact your proxy service provider.
 ## License
 
 Apache 2.0 License. See [LICENSE](LICENSE) for details.
+
