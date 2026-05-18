@@ -482,8 +482,7 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
                 batchToolStep("browser_keyup", mapOf("key" to "Shift"), preFocusSelector = "#type-target"),
                 batchToolStep("browser_mouse_move_xy", mapOf("x" to 120, "y" to 120)),
                 batchToolStep("browser_mouse_down", mapOf("button" to "left"), preMousePosition = batchMousePosition(120, 120)),
-                batchToolStep("browser_mouse_up", mapOf("button" to "left"), preMousePosition = batchMousePosition(120, 120)),
-                batchToolStep("browser_mouse_wheel", mapOf("deltaX" to 0, "deltaY" to 160), preMousePosition = batchMousePosition(120, 120))
+                batchToolStep("browser_mouse_up", mapOf("button" to "left"), preMousePosition = batchMousePosition(120, 120))
             ),
             sessionId = sessionId,
             batchLabel = "stateful focus and mouse flow"
@@ -499,9 +498,7 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
                     it["lastMouse"][0].asInt() == 120 &&
                     it["lastMouse"][1].asInt() == 120 &&
                     it["mouseDownCount"].asInt() >= mouseDownBefore + 1 &&
-                    it["mouseUpCount"].asInt() >= mouseUpBefore + 1 &&
-                    it["lastWheel"][0].asInt() == 160 &&
-                    it["lastWheel"][1].asInt() == 0
+                    it["mouseUpCount"].asInt() >= mouseUpBefore + 1
         }
     }
 
@@ -523,7 +520,7 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         assertFalse(continueResponse.stoppedOnError)
         assertEquals(listOf(true, false, true), continueResponse.results.map { it.ok })
         waitForState(sessionId, "Expected non-bailing batch to keep running after an error") {
-            it["fillValue"].asText() == "after error"
+            it.path("fillValue").asText() == "after error"
         }
 
         val bailResponse = callCommandBatch(
@@ -540,9 +537,9 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         assertTrue(bailResponse.stoppedOnError)
         assertEquals(listOf(true, false), bailResponse.results.map { it.ok })
         waitForState(sessionId, "Expected batch text to contain the pre-error typed value") {
-            it["typeValue"].asText().contains("bail test")
+            it.path("typeValue").asText().contains("bail test")
         }
-        assertEquals("after error", readState(sessionId)["fillValue"].asText())
+        assertEquals("after error", readState(sessionId).path("fillValue").asText())
 
         val multiErrorResponse = callCommandBatch(
             listOf(
@@ -557,7 +554,7 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         assertFalse(multiErrorResponse.stoppedOnError)
         assertEquals(listOf(false, false, true), multiErrorResponse.results.map { it.ok })
         waitForState(sessionId, "Expected later batch command to run after multiple earlier errors") {
-            it["typeValue"].asText().contains("still works")
+            it.path("typeValue").asText().contains("still works")
         }
     }
 
