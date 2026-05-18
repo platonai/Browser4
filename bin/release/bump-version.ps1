@@ -125,22 +125,6 @@ if (Test-Path $pomXmlPath) {
     ((Get-Content $pomXmlPath -Raw) -replace "<tag>v$VERSION</tag>", "<tag>v$NEXT_VERSION</tag>") | Set-Content $pomXmlPath
 }
 
-# Files containing the version number to upgrade
-$VERSION_AWARE_FILES = @(
-    "$repoRoot\README.md",
-    "$repoRoot\README.zh.md"
-)
-
-# Replace version numbers in files
-foreach ($F in $VERSION_AWARE_FILES) {
-    if (Test-Path $F) {
-        $content = Get-Content $F -Raw
-        $content = $content -replace $SNAPSHOT_VERSION, $NEXT_SNAPSHOT_VERSION
-        $content = $content -replace "v[0-9]+\.[0-9]+\.[0-9]+", "v$NEXT_VERSION"
-        $content | Set-Content $F
-    }
-}
-
 # Commit changes
 $COMMENT = "Bump version to v$($NEXT_VERSION)"
 Write-Host "Ready to commit with comment: <$COMMENT>"
