@@ -27,13 +27,19 @@ interface HtmlIntegrityChecker {
     operator fun invoke(pageSource: String, pageDatum: PageDatum): HtmlIntegrity
 }
 
-abstract class AbstractHtmlIntegrityChecker: HtmlIntegrityChecker {
+abstract class AbstractHtmlIntegrityChecker : HtmlIntegrityChecker {
     override fun isRelevant(url: String): Boolean = true
     override operator fun invoke(pageSource: String, pageDatum: PageDatum): HtmlIntegrity = HtmlIntegrity.OK
 }
 
-open class DefaultHtmlIntegrityChecker(val conf: ImmutableConfig): AbstractHtmlIntegrityChecker() {
-    private val tracer = getLogger(DefaultHtmlIntegrityChecker::class).takeIf { it.isTraceEnabled }
+open class AlwaysPassHtmlIntegrityChecker(val conf: ImmutableConfig) : AbstractHtmlIntegrityChecker() {
+    override operator fun invoke(pageSource: String, pageDatum: PageDatum): HtmlIntegrity {
+        return HtmlIntegrity.OK
+    }
+}
+
+open class BasicHtmlIntegrityChecker(val conf: ImmutableConfig) : AbstractHtmlIntegrityChecker() {
+    private val tracer = getLogger(BasicHtmlIntegrityChecker::class).takeIf { it.isTraceEnabled }
 
     override operator fun invoke(pageSource: String, pageDatum: PageDatum): HtmlIntegrity {
         return checkHtmlIntegrity(pageSource)
@@ -80,7 +86,7 @@ open class DefaultHtmlIntegrityChecker(val conf: ImmutableConfig): AbstractHtmlI
     }
 }
 
-open class ChainedHtmlIntegrityChecker(val conf: ImmutableConfig): AbstractHtmlIntegrityChecker() {
+open class ChainedHtmlIntegrityChecker(val conf: ImmutableConfig) : AbstractHtmlIntegrityChecker() {
     private val checkers = CopyOnWriteArrayList<HtmlIntegrityChecker>()
 
     override fun isRelevant(url: String): Boolean = checkers.any { it.isRelevant(url) }

@@ -62,9 +62,7 @@ open class BrowserResponseHandlerImpl(
         addLast(DefaultPageCategorySniffer(immutableConfig))
     }
 
-    override val htmlIntegrityChecker = ChainedHtmlIntegrityChecker(immutableConfig).apply {
-        addLast(DefaultHtmlIntegrityChecker(immutableConfig))
-    }
+    override val htmlIntegrityChecker = ChainedHtmlIntegrityChecker(immutableConfig)
 
     init {
         attach()

@@ -643,8 +643,8 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
 
     @Test
     @Tag("RequiresAI")
-    @DisplayName("agent extract/summarize and command run/status/result work through MCP")
-    fun testAgentAndCommandTools() {
+    @DisplayName("agent extract and summarize work through MCP")
+    fun testAgentTools() {
         Assumptions.assumeTrue(ChatModelFactory.isModelConfigured(conf))
 
         val sessionId = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
@@ -666,12 +666,17 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         )
         assertNotError(extractResponse)
         assertTrue(textContent(extractResponse).isNotBlank(), "Expected agent_extract to return extracted content")
+    }
 
+    @Test
+    @DisplayName("agent-run agent-status and agent-result aliases work through MCP command tools")
+    fun testAgentRunStatusAndResultTools() {
         val commandRun = callTool(
             "command_run",
-            mapOf("command" to MOCK_PRODUCT_DETAIL_URL, "async" to true)
+            mapOf("command" to fixtureServer.interactiveUrl(), "async" to true)
         )
         assertNotError(commandRun)
+
         val taskId = textContent(commandRun).removePrefix("\"").removeSuffix("\"").trim()
         assertTrue(taskId.isNotBlank(), "Expected command_run to return a task id")
 
@@ -681,7 +686,8 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
 
         val result = callTool("command_result", mapOf("id" to taskId))
         assertNotError(result)
-        assertTrue(textContent(result).isNotBlank(), "Expected command_result to return the completed result")
+        val resultPayload = textContent(result)
+        assertTrue(resultPayload.isNotBlank(), "Expected command_result to return the completed result")
     }
 
     @Test

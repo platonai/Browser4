@@ -120,6 +120,11 @@
             <artifactId>micrometer-registry-prometheus</artifactId>
         </dependency>
 
+        <dependency>
+            <groupId>jakarta.annotation</groupId>
+            <artifactId>jakarta.annotation-api</artifactId>
+        </dependency>
+
         <!-- MockK for Kotlin-friendly mocking -->
         <dependency>
             <groupId>org.mockito</groupId>
