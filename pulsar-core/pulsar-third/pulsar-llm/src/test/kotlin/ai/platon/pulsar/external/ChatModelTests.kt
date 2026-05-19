@@ -7,6 +7,7 @@ import ai.platon.pulsar.dom.Documents
 import ai.platon.pulsar.test.TestUrls
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.BeforeAll
+import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Tag
 import kotlin.test.BeforeTest
@@ -15,6 +16,8 @@ import kotlin.test.assertTrue
 
 @Tag("RequiresServer")
 @Tag("RequiresAI")
+@Tag("ManualOnly")
+@Disabled("ManualOnly")
 class ChatModelTests {
 
     companion object {
