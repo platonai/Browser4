@@ -25,7 +25,6 @@ import org.jsoup.nodes.Element
 import java.io.IOException
 import java.io.InterruptedIOException
 import java.time.Duration
-import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
 open class CachedBrowserChatModel(
@@ -44,7 +43,7 @@ open class CachedBrowserChatModel(
                 ModelResponse::class.java,
                 ResourcePoolsBuilder.heap(1000) // Maximum entries in cache
             )
-                .withExpiry(ExpiryPolicyBuilder.timeToLiveExpiration(Duration.ofSeconds(llmResponseCacheTTL))) // TTL: 60 minutes
+                .withExpiry(ExpiryPolicyBuilder.timeToLiveExpiration(Duration.ofSeconds(llmResponseCacheTTL)))
         )
         .build(true)
 
@@ -57,7 +56,8 @@ open class CachedBrowserChatModel(
 
     override suspend fun call(userMessage: String, category: String?) = callUmSm(userMessage, "")
 
-    override suspend fun call(document: FeaturedDocument, prompt: String, category: String?) = call(document.document, prompt)
+    override suspend fun call(document: FeaturedDocument, prompt: String, category: String?) =
+        call(document.document, prompt)
 
     override suspend fun call(ele: Element, prompt: String, category: String?) = callUmSm(ele.text(), prompt)
 
@@ -249,8 +249,10 @@ open class CachedBrowserChatModel(
                 else -> 500
             }
             val log = Strings.compactInline(modelResponse.content, maxWidth)
-            logger.info("◀ Chat - token: {} | [len: {}] {}",
-                modelResponse.tokenUsage.totalTokenCount, modelResponse.content.length, log)
+            logger.info(
+                "◀ Chat - token: {} | [len: {}] {}",
+                modelResponse.tokenUsage.totalTokenCount, modelResponse.content.length, log
+            )
         }
 
         llmLogger.logResponse(requestId, modelResponse, category)
@@ -305,6 +307,7 @@ open class CachedBrowserChatModel(
                 logger.warn("Timeout and cancelled for $i times | {}", lastException.message)
                 throw ChatModelException("Timeout and cancelled for $i times | ${lastException.message}", lastException)
             }
+
             else -> {
                 logger.warn("Failed to send chat message for $i times: {}", lastException.stringify())
                 throw ChatModelException("Timeout and cancelled for $i times | ${lastException.message}", lastException)
@@ -348,10 +351,15 @@ open class CachedBrowserChatModel(
                         systemParts.add(m.toString())
                     }
                 }
+
                 is UserMessage -> {
                     // Aggregate textual content parts; fall back to toString()
                     val txt = try {
-                        val contents = try { m.contents() } catch (_: Throwable) { emptyList<Content>() }
+                        val contents = try {
+                            m.contents()
+                        } catch (_: Throwable) {
+                            emptyList<Content>()
+                        }
                         val joined = contents.mapNotNull { c ->
                             try {
                                 if (c is TextContent) c.text() else null
@@ -365,6 +373,7 @@ open class CachedBrowserChatModel(
                     }
                     userParts.add(txt)
                 }
+
                 else -> {
                     // ignore other message types for user/system logging
                 }
@@ -378,7 +387,12 @@ open class CachedBrowserChatModel(
 
     private fun toModelResponse(response: ChatResponse): ModelResponse {
         val u = response.tokenUsage()
-        val tokenUsage = if (u != null) TokenUsage(u.inputTokenCount(), u.outputTokenCount(), u.totalTokenCount()) else TokenUsage(0, 0, 0)
+        val tokenUsage =
+            if (u != null) TokenUsage(u.inputTokenCount(), u.outputTokenCount(), u.totalTokenCount()) else TokenUsage(
+                0,
+                0,
+                0
+            )
         val state = when (response.finishReason()) {
             FinishReason.STOP -> ResponseState.STOP
             FinishReason.LENGTH -> ResponseState.LENGTH

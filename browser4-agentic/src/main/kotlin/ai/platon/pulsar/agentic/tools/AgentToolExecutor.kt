@@ -90,8 +90,11 @@ class AgentToolExecutor constructor(
      * @param target The target object to be used by the custom tool executor.
      */
     fun registerCustomTarget(domain: String, target: Any) {
+        val oldTarget = _customTargets[domain]
         _customTargets[domain] = target
-        logger.info("✓ Registered custom target for domain: {}", domain)
+        if (oldTarget != target) {
+            logger.info("✓ Registered custom target for domain: {}", domain)
+        }
     }
 
     /**

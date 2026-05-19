@@ -454,7 +454,6 @@ class MCPToolController(
         }
     }
 
-
     private suspend fun handleBatchTool(
         index: Int,
         step: Map<String, Any?>,

@@ -14,6 +14,7 @@ import ai.platon.pulsar.rest.api.config.MockEcServerConfiguration
 import ai.platon.pulsar.rest.api.entities.CommandRequest
 import ai.platon.pulsar.agentic.tools.high.command.CommandService
 import ai.platon.pulsar.agentic.tools.high.command.toCommandStatus
+import ai.platon.pulsar.common.sleepSeconds
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.*
 import org.springframework.beans.factory.annotation.Autowired
@@ -330,6 +331,8 @@ class CommandServiceTest : MockEcServerTestBase() {
         assertNotNull(status)
         assertTrue { status.isDone }
         assertTrue { status.statusCode == 400 }
+
+        waitForCommandDone(status.id)
     }
 
     @Test
@@ -348,6 +351,8 @@ class CommandServiceTest : MockEcServerTestBase() {
         // Verify we can retrieve the status
         val status = commandService.getStatus(statusId)
         assertNotNull(status)
+
+        waitForCommandDone(status.id)
     }
 
     @Test
@@ -361,6 +366,8 @@ class CommandServiceTest : MockEcServerTestBase() {
         assertNotNull(status)
         assertTrue { status.isDone }
         assertTrue { status.statusCode == 400 }
+
+        waitForCommandDone(status.id)
     }
 
     @Test
@@ -381,6 +388,8 @@ class CommandServiceTest : MockEcServerTestBase() {
 
         // Since inference is disabled and the rules are not a Regex: pattern, link extraction is skipped.
         assertNull(status.commandResult?.links)
+
+        waitForCommandDone(status.id)
     }
 
     @Test
@@ -403,5 +412,20 @@ class CommandServiceTest : MockEcServerTestBase() {
 
         // The command should be done
         assertTrue { status.isDone }
+    }
+
+    private fun waitForCommandDone(statusId: String, timeoutSeconds: Long = 0) {
+        if (timeoutSeconds <= 0) {
+            return
+        }
+
+        var status = commandService.getStatus(statusId)
+
+        var n = timeoutSeconds
+        while (n-- > 0 && status?.processState != "done") {
+            status = commandService.getStatus(statusId)
+            printlnPro(status)
+            sleepSeconds(1)
+        }
     }
 }
