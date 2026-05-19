@@ -44,6 +44,37 @@ English | [简体中文](README.zh.md)
 
 ## 💡 Usage Examples
 
+### Maven
+
+```xml
+<dependencyManagement>
+    <dependencies>
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>pulsar-bom</artifactId>
+            <version>${browser4-base.version}</version>
+            <type>pom</type>
+            <scope>import</scope>
+        </dependency>
+    </dependencies>
+</dependencyManagement>
+
+<dependencies>
+    <dependency>
+        <groupId>ai.platon.pulsar</groupId>
+        <artifactId>pulsar-skeleton</artifactId>
+    </dependency>
+    <dependency>
+        <groupId>ai.platon.pulsar</groupId>
+        <artifactId>pulsar-protocol</artifactId>
+    </dependency>
+    <dependency>
+        <groupId>ai.platon.pulsar</groupId>
+        <artifactId>pulsar-ql</artifactId>
+    </dependency>
+</dependencies>
+```
+
 ### Workflow Automation
 
 Low-level browser automation & data extraction with fine-grained control.
