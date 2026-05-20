@@ -12,7 +12,7 @@ import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 
 internal class SessionActExecutor(
     val session: AgenticSession,
-    val driver: ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver,
+    val driver: WebDriver,
     val conf: ImmutableConfig
 ) {
     constructor(session: AgenticSession) : this(

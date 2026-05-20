@@ -117,7 +117,7 @@ class WebScrapingSkill : AbstractSkill() {
      * Execute web scraping using an existing WebDriver with JavaScript.
      */
     private suspend fun executeWithDriver(
-        driver: ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver,
+        driver: WebDriver,
         url: String,
         selector: String,
         attributes: List<*>

@@ -29,7 +29,7 @@ class AgentToolExecutor constructor(
     private val _customTargets = mutableMapOf<String, Any>()
 
     val session: AgenticSession get() = agent.session
-    val driver: ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver get() = session.getOrCreateBoundDriver()
+    val driver: WebDriver get() = session.getOrCreateBoundDriver()
     val fs: AgentFileSystem = AgentFileSystem(baseDir)
     val shell: AgentShell = AgentShell(baseDir)
     val system: SystemToolExecutor = SystemToolExecutor(this)
