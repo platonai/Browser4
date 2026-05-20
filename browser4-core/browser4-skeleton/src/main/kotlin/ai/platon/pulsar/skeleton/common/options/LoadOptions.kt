@@ -70,7 +70,7 @@ open class LoadOptions(
 
     /**
      * A label to categorize tasks into logical groups.
-     * Useful for organizing related crawl tasks and enabling easier filtering or querying of results.
+     * Useful for organizing related browser tasks and enabling easier filtering or querying of results.
      */
     @ApiPublic
     @Parameter(
@@ -81,7 +81,7 @@ open class LoadOptions(
 
     /**
      * A unique identifier for distinguishing between separate tasks.
-     * This helps in tracking and managing individual crawl operations within the system.
+     * This helps in tracking and managing individual browser operations within the system.
      */
     @ApiPublic
     @Parameter(
@@ -130,7 +130,7 @@ open class LoadOptions(
     /**
      * When enabled, ensures the crawler operates in a non-destructive mode.
      *
-     * Prevents modifications to the target page during interactions, making the crawl
+     * Prevents modifications to the target page during interactions, making the browser
      * operation completely passive without side effects on the target site.
      */
     @ApiPublic
@@ -155,7 +155,7 @@ open class LoadOptions(
     var isResource = false
 
     /**
-     * Determines task execution priority in the crawl queue.
+     * Determines task execution priority in the browser queue.
      *
      * Lower numerical values indicate higher priority (consistent with [java.util.concurrent.PriorityBlockingQueue]).
      * Values outside the valid range defined by [Priority13] will be adjusted to the nearest valid value.
@@ -375,7 +375,7 @@ open class LoadOptions(
      *
      * Controls the pace of scrolling to allow time for content to load between scrolls.
      * Shorter intervals may miss content that takes longer to load, while longer intervals
-     * increase overall crawl time.
+     * increase overall browser time.
      */
     @Parameter(
         names = ["-si", "-scrollInterval", "--scroll-interval"], converter = DurationConverter::class,

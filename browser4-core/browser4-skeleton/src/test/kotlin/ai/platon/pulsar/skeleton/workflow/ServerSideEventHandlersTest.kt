@@ -19,20 +19,20 @@ class ServerSideEventHandlersTest {
     fun testServerSidEventCreation() {
         val event = ServerSideEvent(
             eventType = "onWillLoad",
-            eventPhase = "crawl",
+            eventPhase = "browser",
             url = "https://example.com",
             message = "Loading page"
         )
 
         assertEquals("onWillLoad", event.eventType)
-        assertEquals("crawl", event.eventPhase)
+        assertEquals("browser", event.eventPhase)
         assertEquals("https://example.com", event.url)
         assertEquals("Loading page", event.message)
         assertTrue(event.timestamp <= Instant.now())
     }
 
     @Test
-        @DisplayName("test DefaultServerSideEventHandlers emits crawl events")
+        @DisplayName("test DefaultServerSideEventHandlers emits browser events")
     fun testDefaultServerSideEventHandlersEmitsCrawlEvents() = runBlocking {
         val handlers = DefaultServerSideEventHandlers()
         val events = mutableListOf<ServerSideEvent>()
@@ -62,11 +62,11 @@ class ServerSideEventHandlersTest {
 
         assertEquals(2, events.size)
         assertEquals("onWillLoad", events[0].eventType)
-        assertEquals("crawl", events[0].eventPhase)
+        assertEquals("browser", events[0].eventPhase)
         assertEquals("https://example.com", events[0].url)
 
         assertEquals("onLoaded", events[1].eventType)
-        assertEquals("crawl", events[1].eventPhase)
+        assertEquals("browser", events[1].eventPhase)
         assertEquals("Page loaded successfully", events[1].message)
     }
 

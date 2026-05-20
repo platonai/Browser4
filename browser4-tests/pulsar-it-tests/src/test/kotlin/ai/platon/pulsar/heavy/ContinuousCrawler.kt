@@ -28,7 +28,7 @@ fun main() {
         context.submitAll(document.selectHyperlinks("a[href~=/dp/]").take(topN2))
     }
 
-    // change to seeds100.txt to crawl more
+    // change to seeds100.txt to browser more
     val urls = LinkExtractors.fromResource("seeds100.txt")
         .take(topN)
         .map { ParsableHyperlink("$it -refresh", parseHandler) }

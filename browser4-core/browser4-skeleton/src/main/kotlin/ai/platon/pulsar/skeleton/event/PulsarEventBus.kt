@@ -55,7 +55,7 @@ object PulsarEventBus {
     }
 
     /**
-     * Emits a crawl event to server-side event handlers in a non-blocking manner.
+     * Emits a browser event to server-side event handlers in a non-blocking manner.
      * This method can be called from any thread without blocking.
      */
     fun emitCrawlEvent(eventType: String, url: String? = null, message: String? = null) {

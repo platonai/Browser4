@@ -24,7 +24,7 @@ open class DefaultLoadEventHandlers(
 ) : AbstractLoadEventHandlers()
 
 /**
- * The default crawl event handler.
+ * The default browser event handler.
  */
 open class DefaultCrawlEventHandlers : AbstractCrawlEventHandlers()
 

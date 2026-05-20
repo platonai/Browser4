@@ -464,7 +464,7 @@ open class MultiPrivacyContextManager(
         val result = doRun(privacyContext, task, fetchFun)
 
         updatePrivacyContext(privacyContext as AbstractPrivacyContext, result)
-        // All retries are forced to do in crawl scope
+        // All retries are forced to do in browser scope
         if (result.isPrivacyRetry) {
             result.status.upgradeRetry(RetryScope.CRAWL)
         }

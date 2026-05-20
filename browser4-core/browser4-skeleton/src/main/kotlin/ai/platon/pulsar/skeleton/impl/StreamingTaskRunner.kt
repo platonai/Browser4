@@ -249,7 +249,7 @@ open class StreamingTaskRunner(
      * Check if smart retry is enabled.
      *
      * If smart retry is enabled, tasks will be retried if it's canceled or marked as retry.
-     * A continuous crawl system should enable smart retry, while a simple demo can disable it.
+     * A continuous browser system should enable smart retry, while a simple demo can disable it.
      * */
     val isSmartRetryEnabled get() = sessionConfig.getBoolean(CRAWL_SMART_RETRY, true)
 
@@ -590,7 +590,7 @@ open class StreamingTaskRunner(
 
         val page = loadWithTimeout(url)
 
-        // A continuous crawl system should enable smart retry, while a simple demo can disable it
+        // A continuous browser system should enable smart retry, while a simple demo can disable it
         if (isSmartRetryEnabled) {
             handleRetry(url, page)
         }

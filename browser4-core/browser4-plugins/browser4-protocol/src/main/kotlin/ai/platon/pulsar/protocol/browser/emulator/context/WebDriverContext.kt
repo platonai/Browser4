@@ -152,7 +152,7 @@ open class WebDriverContext(
         } catch (e: WebDriverPoolExhaustedException) {
             if (AppContext.isActive) {
                 // log only when the application is active
-                val message = String.format("%s. [Exhausted] Retry task %s in crawl scope | cause by: %s", task.page.id, task.id, e.message)
+                val message = String.format("%s. [Exhausted] Retry task %s in browser scope | cause by: %s", task.page.id, task.id, e.message)
                 logger.warn(message)
             }
             FetchResult.crawlRetry(task, "Driver pool exhausted")
@@ -160,11 +160,11 @@ open class WebDriverContext(
             if (AppContext.isActive) {
                 // log only when the application is active
                 logger.warn("WebDriverPoolException | {} | {}", e.browserId, e.message)
-                logger.warn("{}. [WebDriverPoolException] Retry task {} in crawl scope", task.page.id, task.id)
+                logger.warn("{}. [WebDriverPoolException] Retry task {} in browser scope", task.page.id, task.id)
             }
             FetchResult.crawlRetry(task, "Driver pool exception")
         } catch (e: WebDriverException) {
-            logger.warn("{}. [WebDriverException] Retry task {} in crawl scope | caused by: {}", task.page.id, task.id, e.message)
+            logger.warn("{}. [WebDriverException] Retry task {} in browser scope | caused by: {}", task.page.id, task.id, e.message)
             logger.warn("Failed to execute fetch task", e)
             FetchResult.crawlRetry(task, e)
         }
@@ -183,7 +183,7 @@ open class WebDriverContext(
         val result = when {
             !AppContext.isActive -> FetchResult.canceled(task, reason)
             b?.isActive == true -> {
-                logger.warn("Closing illegal browser, retrying task #${task.page.id} in crawl scope | {} | {} | {}",
+                logger.warn("Closing illegal browser, retrying task #${task.page.id} in browser scope | {} | {} | {}",
                     b.readableState, e.message, task.page.url)
                 FetchResult.crawlRetry(task, reason)
             }

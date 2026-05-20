@@ -1,4 +1,4 @@
-package ai.platon.pulsar.skeleton.crawl.protocol
+package ai.platon.pulsar.skeleton.browser.protocol
 
 import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.persist.WebPage

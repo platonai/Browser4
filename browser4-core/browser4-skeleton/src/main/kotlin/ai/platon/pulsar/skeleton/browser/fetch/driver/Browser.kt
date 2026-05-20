@@ -1,4 +1,4 @@
-package ai.platon.pulsar.skeleton.crawl.fetch.driver
+package ai.platon.pulsar.skeleton.browser.fetch.driver
 
 import ai.platon.browser4.driver.common.BrowserSettings
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.NavigateHistory

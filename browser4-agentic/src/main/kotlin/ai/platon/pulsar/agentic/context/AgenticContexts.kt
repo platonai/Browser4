@@ -22,7 +22,7 @@ import org.springframework.context.support.AbstractApplicationContext
  * - Capture of live web pages into a local `WebPage`
  * - Parsing a `WebPage` into a lightweight `Document`
  * - Event handlers across the WebPage lifecycle
- * - One-line scrapers & full crawler (fetching, parsing, scheduling, priorities, crawl pool, plugins)
+ * - One-line scrapers & full crawler (fetching, parsing, scheduling, priorities, browser pool, plugins)
  * - Basic LLM support for interacting with pages or documents
  *
  * Notes:

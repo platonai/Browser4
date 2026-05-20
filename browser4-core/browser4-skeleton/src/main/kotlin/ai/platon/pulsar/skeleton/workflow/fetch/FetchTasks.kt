@@ -70,7 +70,7 @@ class FetchTask constructor(
     var batchStat: BatchStat? = null,
     // The task id
     val id: Int = instanceSequencer.incrementAndGet(),
-    var nRetries: Int = 0 // The total number retries in a crawl
+    var nRetries: Int = 0 // The total number retries in a browser
 ) : Comparable<FetchTask> {
     enum class State { NOT_READY, READY, WORKING, CANCELED, DONE }
 

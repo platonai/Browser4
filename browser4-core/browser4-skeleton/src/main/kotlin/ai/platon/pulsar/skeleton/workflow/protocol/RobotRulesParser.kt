@@ -1,7 +1,7 @@
 package ai.platon.pulsar.skeleton.workflow.protocol
 
 import ai.platon.pulsar.common.config.ImmutableConfig
-import ai.platon.pulsar.skeleton.crawl.protocol.Protocol
+import ai.platon.pulsar.skeleton.browser.protocol.Protocol
 import ai.platon.pulsar.skeleton.workflow.common.LazyConfigurable
 import com.google.common.io.Files
 import crawlercommons.robots.BaseRobotRules
