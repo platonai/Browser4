@@ -2,12 +2,11 @@ package ai.platon.pulsar.driver.chrome.impl
 
 import ai.platon.cdt.kt.protocol.types.runtime.CallFunctionOn
 import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
-import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.getLogger
+import ai.platon.pulsar.common.js.JsUtils
 import ai.platon.pulsar.driver.BrowserProtocol
 import ai.platon.pulsar.driver.chrome.IsolatedWorldManager
 import ai.platon.pulsar.driver.chrome.util.ChromeDriverException
-import ai.platon.pulsar.driver.common.B4JsUtils
 
 class JsHandler(
     private val bp: BrowserProtocol,
@@ -27,7 +26,7 @@ class JsHandler(
      * */
     @Throws(ChromeDriverException::class)
     suspend fun evaluateDetail(script: String): Evaluate? {
-        val expression: String = B4JsUtils.toCDPCompatibleExpression(script)
+        val expression: String = JsUtils.toCDPCompatibleExpression(script)
 
         val confusedExpr = confuser.confuse(expression)
 
@@ -92,7 +91,7 @@ class JsHandler(
      * */
     @Throws(ChromeDriverException::class)
     suspend fun evaluateValueDetail(script: String): Evaluate? {
-        val expression: String = B4JsUtils.toCDPCompatibleExpression(script)
+        val expression: String = JsUtils.toCDPCompatibleExpression(script)
 
         val confusedExpr = confuser.confuse(expression)
 
