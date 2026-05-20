@@ -14,8 +14,8 @@ import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
 import ai.platon.pulsar.skeleton.workflow.fetch.WebDriverFetcher
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserErrorPageException
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
+import ai.platon.pulsar.skeleton.browser.driver.BrowserErrorPageException
+import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import com.google.common.annotations.Beta
 import org.slf4j.LoggerFactory
 import java.time.Duration
@@ -77,18 +77,18 @@ abstract class AbstractPrivacyContext(
     /**
      * The start time of the privacy context.
      * */
-    val startTime: Instant = Instant.now()
+    val startTime = Instant.now()
 
     /**
      * The last active time of the privacy context.
      * */
-    var lastActiveTime: Instant = Instant.now()
+    var lastActiveTime = Instant.now()
         private set
 
     /**
      * The elapsed time of the privacy context since it's started.
      * */
-    override val elapsedTime: Duration get() = Duration.between(startTime, Instant.now())
+    override val elapsedTime get() = Duration.between(startTime, Instant.now())
 
     private val fetchTaskTimeout
         get() = conf.getDuration(CapabilityTypes.FETCH_TASK_TIMEOUT, AppConstants.FETCH_TASK_TIMEOUT_DEFAULT)

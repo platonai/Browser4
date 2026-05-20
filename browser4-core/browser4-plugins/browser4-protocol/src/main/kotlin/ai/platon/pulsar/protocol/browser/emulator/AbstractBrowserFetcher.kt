@@ -19,8 +19,8 @@ import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.model.GoraWebPage
+import ai.platon.pulsar.skeleton.browser.BrowserFetcher
 import ai.platon.pulsar.skeleton.workflow.fetch.Fetcher
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserFetcher
 import ai.platon.pulsar.skeleton.workflow.protocol.Response
 import kotlinx.coroutines.runBlocking
 

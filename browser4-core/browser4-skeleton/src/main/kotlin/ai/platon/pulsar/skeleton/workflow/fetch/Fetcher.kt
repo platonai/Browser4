@@ -2,7 +2,7 @@ package ai.platon.pulsar.skeleton.workflow.fetch
 
 import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.persist.WebPage
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
+import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.workflow.protocol.Response
 
 interface WebDriverFetcher {

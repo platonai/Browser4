@@ -1,4 +1,4 @@
-package ai.platon.pulsar.skeleton.workflow.fetch.driver
+package ai.platon.pulsar.skeleton.browser.driver
 
 import ai.platon.pulsar.common.DateTimes
 import java.time.Instant
@@ -76,7 +76,7 @@ data class NavigateEntry constructor(
     /**
      * The time when the document is ready.
      */
-    var documentReadyTime: Instant = DateTimes.doomsday
+    var documentReadyTime = DateTimes.doomsday
     /**
      * Track the time of page actions.
      */

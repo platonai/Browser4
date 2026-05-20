@@ -1,12 +1,12 @@
-package ai.platon.pulsar.skeleton.workflow.fetch.driver.rpa
+package ai.platon.pulsar.skeleton.browser.rpa
 
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.Runtimes
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.NavigateEntry
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
+import ai.platon.pulsar.skeleton.browser.driver.AbstractWebDriver
+import ai.platon.pulsar.skeleton.browser.driver.NavigateEntry
+import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.persist.WebPage
 import kotlinx.coroutines.delay
 import java.time.Duration

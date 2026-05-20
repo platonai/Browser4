@@ -6,7 +6,7 @@ import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
 import ai.platon.pulsar.skeleton.workflow.fetch.WebDriverFetcher
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
+import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 
 /**
  * Manages the lifecycle of privacy contexts, including permanent and temporary contexts.

@@ -1,8 +1,9 @@
-package ai.platon.pulsar.skeleton.workflow.fetch.driver
+package ai.platon.pulsar.skeleton.browser
 
-import ai.platon.browser4.driver.common.BrowserSettings
 import ai.platon.pulsar.common.browser.BrowserProfileMode
-import ai.platon.pulsar.skeleton.browser.fetch.driver.Browser
+import ai.platon.browser4.driver.common.BrowserSettings
+import ai.platon.pulsar.skeleton.browser.driver.BrowserLaunchException
+import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 
 interface BrowserManager : AutoCloseable {

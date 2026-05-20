@@ -1,11 +1,17 @@
-package ai.platon.pulsar.skeleton.workflow.fetch.driver
+package ai.platon.pulsar.skeleton.browser.detail
 
-import ai.platon.browser4.driver.common.BrowserSettings
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.event.AbstractEventEmitter
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.warnForClose
-import ai.platon.pulsar.skeleton.browser.fetch.driver.Browser
+import ai.platon.browser4.driver.common.BrowserSettings
+import ai.platon.pulsar.skeleton.browser.Browser
+import ai.platon.pulsar.skeleton.browser.driver.AbstractWebDriver
+import ai.platon.pulsar.skeleton.browser.driver.BrowserEvents
+import ai.platon.pulsar.skeleton.browser.driver.NavigateEntry
+import ai.platon.pulsar.skeleton.browser.driver.NavigateHistory
+import ai.platon.pulsar.skeleton.browser.driver.WebDriver
+import ai.platon.pulsar.skeleton.browser.driver.WebDriverException
 import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 import java.time.Duration
 import java.time.Instant
@@ -33,7 +39,7 @@ abstract class AbstractBrowser(
 
     protected val initialized = AtomicBoolean()
     private val closed = AtomicBoolean()
-    protected var lastActiveTime: Instant = Instant.now()
+    protected var lastActiveTime = Instant.now()
 
     override val instanceId: Int = SEQUENCER.incrementAndGet()
 
@@ -69,7 +75,7 @@ abstract class AbstractBrowser(
     override val readableState: String get() = buildReadableState()
 
     val isGUI get() = settings.isGUI
-    val idleTimeout: Duration = Duration.ofMinutes(10)
+    val idleTimeout = Duration.ofMinutes(10)
 
     init {
         attach()

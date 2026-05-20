@@ -1,4 +1,4 @@
-package ai.platon.pulsar.skeleton.workflow.fetch.driver
+package ai.platon.pulsar.skeleton.browser.driver
 
 enum class BrowserEvents {
     initialize,

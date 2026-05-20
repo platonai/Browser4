@@ -51,8 +51,8 @@ data class BatchStat(
     var numTasksSuccess: Long = 0,
     var totalSuccessBytes: Long = 0L
 ) {
-    var startTime: Instant = Instant.now()
-    val elapsedTime: Duration get() = Duration.between(startTime, Instant.now())
+    var startTime = Instant.now()
+    val elapsedTime get() = Duration.between(startTime, Instant.now())
 
     val timePerPage get() = elapsedTime.dividedBy(1 + numTasksSuccess)
     val bytesPerPage get() = 1.0 * totalSuccessBytes / (0.1 + numTasksSuccess)
@@ -70,14 +70,14 @@ class FetchTask constructor(
     var batchStat: BatchStat? = null,
     // The task id
     val id: Int = instanceSequencer.incrementAndGet(),
-    var nRetries: Int = 0 // The total number retries in a browser
+    var nRetries: Int = 0 // The total number retries in a crawl
 ) : Comparable<FetchTask> {
     enum class State { NOT_READY, READY, WORKING, CANCELED, DONE }
 
     val state = AtomicReference(State.NOT_READY)
 
     var proxyEntry: ProxyEntry? = null
-    val createdTime: Instant = Instant.now()
+    val createdTime = Instant.now()
 
     val url get() = page.url
     val href get() = page.href

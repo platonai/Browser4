@@ -1,17 +1,17 @@
-package ai.platon.pulsar.skeleton.workflow.fetch.driver
+package ai.platon.pulsar.skeleton.browser.driver
 
 import ai.platon.browser4.driver.chrome.NetworkResourceResponse
-import ai.platon.browser4.driver.chrome.dom.Locator
 import ai.platon.browser4.driver.chrome.dom.SnapshotService
-import ai.platon.browser4.driver.chrome.dom.model.ElementRefCriteria
-import ai.platon.pulsar.common.*
+import ai.platon.pulsar.common.AppContext
+import ai.platon.pulsar.common.DateTimes
+import ai.platon.pulsar.common.getTracerOrNull
 import ai.platon.pulsar.common.urls.Hyperlink
 import ai.platon.pulsar.common.urls.URLUtils
+import ai.platon.pulsar.common.warnForClose
 import ai.platon.pulsar.dom.nodes.GeoAnchor
 import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.external.ModelResponse
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
-import com.fasterxml.jackson.module.kotlin.readValue
+import ai.platon.pulsar.skeleton.browser.detail.AbstractBrowser
 import com.google.common.annotations.Beta
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -26,6 +26,10 @@ import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.math.abs
+import kotlin.math.ceil
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.random.Random
 import kotlin.random.nextInt
 import kotlin.time.Duration.Companion.milliseconds
@@ -378,10 +382,10 @@ abstract class AbstractWebDriver(
 
         // Smooth scrolling in discrete steps: avoid async Promise issues causing evaluate() to return early
         val distance = targetY - currentY
-        val absDistance = kotlin.math.abs(distance)
+        val absDistance = abs(distance)
         // Step size based on viewport size, limit max steps to balance speed and smooth feel
-        val stepSize = kotlin.math.max(64.0, kotlin.math.min(viewportHeight * 0.6, 600.0))
-        var steps = kotlin.math.ceil(absDistance / stepSize).toInt().coerceIn(1, 25)
+        val stepSize = max(64.0, min(viewportHeight * 0.6, 600.0))
+        var steps = ceil(absDistance / stepSize).toInt().coerceIn(1, 25)
         // If distance is very small, jump directly in a single step
         if (absDistance < 10) steps = 1
 
@@ -391,7 +395,7 @@ abstract class AbstractWebDriver(
             evaluate("window.scrollTo(0, $y)")
             // Wait for current step to stabilize: poll until scrollY ~ target y (error <=2px) or timeout
             val stepStart = Instant.now()
-            while (kotlin.math.abs(((evaluate("window.scrollY") as? Number)?.toDouble() ?: y) - y) > 2 &&
+            while (abs(((evaluate("window.scrollY") as? Number)?.toDouble() ?: y) - y) > 2 &&
                 Duration.between(stepStart, Instant.now()).toMillis() < 400 && isActive && !isCanceled
             ) {
                 kotlinx.coroutines.delay(25.milliseconds)
@@ -403,7 +407,7 @@ abstract class AbstractWebDriver(
         // Final alignment to targetY, ensure precise last position
         evaluate("window.scrollTo(0, $targetY)")
         val finalStart = Instant.now()
-        while (kotlin.math.abs(((evaluate("window.scrollY") as? Number)?.toDouble() ?: targetY) - targetY) > 1 &&
+        while (abs(((evaluate("window.scrollY") as? Number)?.toDouble() ?: targetY) - targetY) > 1 &&
             Duration.between(finalStart, Instant.now()).toMillis() < 1000 && isActive && !isCanceled
         ) {
             kotlinx.coroutines.delay(30.milliseconds)
