@@ -1212,6 +1212,38 @@ interface WebDriver : Closeable {
     suspend fun scrollToViewport(n: Double, smooth: Boolean = true): Double
 
     /**
+     * The mouse wheels down for [count] times. @mcp
+     *
+     * ```kotlin
+     * driver.mouseWheelDown(3)
+     * ```
+     *
+     * @param count The times to wheel down.
+     * @param deltaX The distance to wheel horizontally.
+     * @param deltaY The distance to wheel vertically.
+     * @param delayMillis The delay time in milliseconds.
+     */
+    @Throws(WebDriverException::class)
+    @MCP
+    suspend fun mouseWheelDown(count: Int = 1, deltaX: Double = 0.0, deltaY: Double = 150.0, delayMillis: Long = 0)
+
+    /**
+     * The mouse wheels up for [count] times. @mcp
+     *
+     * ```kotlin
+     * driver.mouseWheelUp(3)
+     * ```
+     *
+     * @param count The times to wheel up.
+     * @param deltaX The distance to wheel horizontally.
+     * @param deltaY The distance to wheel vertically.
+     * @param delayMillis The delay time in milliseconds.
+     */
+    @Throws(WebDriverException::class)
+    @MCP
+    suspend fun mouseWheelUp(count: Int = 1, deltaX: Double = 0.0, deltaY: Double = -150.0, delayMillis: Long = 0)
+
+    /**
      * Scrolls the mouse wheel by the provided deltas. @mcp
      *
      * Positive [deltaY] scrolls down and negative [deltaY] scrolls up.
@@ -1279,6 +1311,8 @@ interface WebDriver : Closeable {
 //    @Throws(WebDriverException::class)
 //    @MCP
 //    suspend fun mouseUp(x: Double, y: Double, button: String = "left", modifier: String? = null)
+
+
 
     /**
      * The mouse moves to the element with [selector]. @mcp

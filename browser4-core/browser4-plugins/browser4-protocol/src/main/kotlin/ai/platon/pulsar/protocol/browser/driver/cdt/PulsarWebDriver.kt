@@ -335,6 +335,40 @@ class PulsarWebDriver constructor(
     }
 
     @Throws(WebDriverException::class)
+    override suspend fun mouseWheelDown(count: Int, deltaX: Double, deltaY: Double, delayMillis: Long) {
+        try {
+            rpc.invokeWithRetry("mouseWheelDown", 1) {
+                repeat(count) { i ->
+                    if (i > 0) {
+                        if (delayMillis > 0) gap(delayMillis) else gap("mouseWheel")
+                    }
+
+                    mouse?.wheel(deltaX, deltaY)
+                }
+            }
+        } catch (e: ChromeDriverException) {
+            rpc.handleChromeException(e, "mouseWheelDown")
+        }
+    }
+
+    @Throws(WebDriverException::class)
+    override suspend fun mouseWheelUp(count: Int, deltaX: Double, deltaY: Double, delayMillis: Long) {
+        try {
+            rpc.invokeWithRetry("mouseWheelUp", 1) {
+                repeat(count) { i ->
+                    if (i > 0) {
+                        if (delayMillis > 0) gap(delayMillis) else gap("mouseWheel")
+                    }
+
+                    mouse?.wheel(deltaX, deltaY)
+                }
+            }
+        } catch (e: ChromeDriverException) {
+            rpc.handleChromeException(e, "mouseWheelUp")
+        }
+    }
+
+    @Throws(WebDriverException::class)
     override suspend fun mouseWheel(deltaX: Double, deltaY: Double) {
         driverHelper.invokeOnPage("mouseWheel") { mouse?.wheel(deltaX, deltaY) }
     }
