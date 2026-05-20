@@ -4,8 +4,8 @@ import ai.platon.browser4.driver.common.B4JsUtils
 import ai.platon.pulsar.FastWebDriverService
 import ai.platon.pulsar.WebDriverTestBase
 import ai.platon.pulsar.common.printlnPro
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.JsEvaluation
+import ai.platon.pulsar.skeleton.browser.driver.AbstractWebDriver
+import ai.platon.pulsar.skeleton.browser.driver.JsEvaluation
 import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import org.junit.jupiter.api.assertNull
 import kotlin.test.Test

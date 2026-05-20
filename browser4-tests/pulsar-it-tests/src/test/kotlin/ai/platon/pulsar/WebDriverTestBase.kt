@@ -11,7 +11,7 @@ import ai.platon.pulsar.browser.FastWebDriverService
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.protocol.browser.impl.DefaultBrowserFactory
 import ai.platon.pulsar.skeleton.browser.Browser
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserFactory
+import ai.platon.pulsar.skeleton.browser.BrowserFactory
 import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 import ai.platon.pulsar.util.server.EnableMockServerApplication
@@ -110,7 +110,10 @@ open class WebDriverTestBase : MockSiteAccess() {
         return null
     }
 
-    protected suspend fun collectEnhancedRoot(service: CDPSnapshotService, options: SnapshotOptions): MergedDOMTreeNode {
+    protected suspend fun collectEnhancedRoot(
+        service: CDPSnapshotService,
+        options: SnapshotOptions
+    ): MergedDOMTreeNode {
         repeat(3) { attempt ->
             val t = service.buildTargetTrees(target = PageTarget(), options = options)
             // Best-effort summary for diagnostics

@@ -6,7 +6,7 @@ import ai.platon.cdt.kt.protocol.events.network.ResponseReceived
 import ai.platon.cdt.kt.protocol.events.page.FrameNavigated
 import ai.platon.cdt.kt.protocol.types.network.ResourceType
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.NavigateEntry
+import ai.platon.pulsar.skeleton.browser.driver.NavigateEntry
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue

@@ -2,7 +2,7 @@ package ai.platon.pulsar.agentic.tools.builtin
 
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecGenerator
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.NavigateEntry
+import ai.platon.pulsar.skeleton.browser.driver.NavigateEntry
 import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import kotlinx.coroutines.delay
 import java.time.Duration

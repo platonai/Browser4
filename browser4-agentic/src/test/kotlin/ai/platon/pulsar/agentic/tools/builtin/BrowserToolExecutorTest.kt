@@ -1,14 +1,14 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
 import ai.platon.pulsar.agentic.model.ToolCall
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractBrowser
+import ai.platon.pulsar.skeleton.browser.detail.AbstractBrowser
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.DisplayName
+import org.junit.jupiter.api.Test
 
 class BrowserToolExecutorTest {
 
@@ -22,7 +22,7 @@ class BrowserToolExecutorTest {
     }
 
     @Test
-        @DisplayName("help returns available methods")
+    @DisplayName("help returns available methods")
     fun helpReturnsAvailableMethods() {
         val help = executor.help()
 
@@ -32,7 +32,7 @@ class BrowserToolExecutorTest {
     }
 
     @Test
-        @DisplayName("help for switchTab method returns detailed help")
+    @DisplayName("help for switchTab method returns detailed help")
     fun helpForSwitchtabMethodReturnsDetailedHelp() {
         val help = executor.help("switchTab")
 
@@ -42,7 +42,7 @@ class BrowserToolExecutorTest {
     }
 
     @Test
-        @DisplayName("help for unknown method returns empty string")
+    @DisplayName("help for unknown method returns empty string")
     fun helpForUnknownMethodReturnsEmptyString() {
         val help = executor.help("unknownMethod")
 
@@ -50,7 +50,7 @@ class BrowserToolExecutorTest {
     }
 
     @Test
-        @DisplayName("switchTab with invalid tab returns exception")
+    @DisplayName("switchTab with invalid tab returns exception")
     fun switchtabWithInvalidTabReturnsException() = runBlocking {
         every { browser.findDriverById(any()) } returns null
         every { browser.drivers } returns mutableMapOf()
@@ -68,7 +68,7 @@ class BrowserToolExecutorTest {
     }
 
     @Test
-        @DisplayName("domain property is browser")
+    @DisplayName("domain property is browser")
     fun domainPropertyIsBrowser() {
         assertEquals("browser", executor.domain)
     }

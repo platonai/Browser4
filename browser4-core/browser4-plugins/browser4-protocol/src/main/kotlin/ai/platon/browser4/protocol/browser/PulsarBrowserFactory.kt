@@ -8,7 +8,7 @@ import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.protocol.browser.impl.AbstractBrowserFactory
 import ai.platon.pulsar.protocol.browser.impl.PulsarBrowserLauncher
 import ai.platon.pulsar.skeleton.browser.Browser
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserLaunchException
+import ai.platon.pulsar.skeleton.browser.driver.BrowserLaunchException
 import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 
 /**
