@@ -142,12 +142,12 @@
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-beans</artifactId>
+            <artifactId>browser4-beans</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-boot</artifactId>
+            <artifactId>browser4-boot</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

@@ -25,13 +25,15 @@
         <!-- Internal Dependencies -->
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
+            <artifactId>browser4-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-browser</artifactId>
-            <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-llm</artifactId>
-            <version>${project.version}</version>
         </dependency>
 
         <dependency>
@@ -159,5 +161,4 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
-
 </project>

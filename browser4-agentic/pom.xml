@@ -43,7 +43,7 @@
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-beans</artifactId>
+            <artifactId>browser4-beans</artifactId>
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>

@@ -12,7 +12,7 @@ import org.springframework.context.annotation.ComponentScan
 import org.springframework.context.annotation.ImportResource
 
 @SpringBootApplication
-@ImportResource("classpath:pulsar-beans/app-context.xml")
+@ImportResource("classpath:browser4-beans/app-context.xml")
 @ComponentScan(
     "ai.platon.browser4.boot.autoconfigure",
     "ai.platon.pulsar.rest",
