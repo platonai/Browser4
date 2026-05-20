@@ -1,11 +1,11 @@
 package ai.platon.pulsar.protocol.browser.driver.cdt
 
 import ai.platon.browser4.driver.chrome.*
-import ai.platon.browser4.driver.chrome.experimental.CDP
 import ai.platon.browser4.driver.chrome.dom.SnapshotService
 import ai.platon.browser4.driver.chrome.dom.model.NanoDOMTree
 import ai.platon.browser4.driver.chrome.dom.model.SnapshotOptions
 import ai.platon.browser4.driver.chrome.dom.model.ViewportSpec
+import ai.platon.browser4.driver.chrome.experimental.CDP
 import ai.platon.browser4.driver.chrome.impl.ChromeImpl
 import ai.platon.browser4.driver.chrome.util.ChromeDriverException
 import ai.platon.browser4.driver.chrome.util.ChromeIOException
@@ -25,18 +25,17 @@ import ai.platon.pulsar.common.math.geometric.PointD
 import ai.platon.pulsar.common.math.geometric.RectD
 import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.protocol.browser.driver.cdt.detail.*
+import ai.platon.pulsar.skeleton.browser.driver.*
 import ai.platon.pulsar.skeleton.workflow.common.InternalURLUtil
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.*
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.google.common.annotations.Beta
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
-import org.apache.commons.lang3.SystemUtils
 import org.apache.commons.lang3.StringUtils
+import org.apache.commons.lang3.SystemUtils
 import java.nio.file.Files
 import java.time.Duration
 import java.time.Instant
@@ -336,47 +335,8 @@ class PulsarWebDriver constructor(
     }
 
     @Throws(WebDriverException::class)
-    override suspend fun mouseWheelDown(count: Int, deltaX: Double, deltaY: Double, delayMillis: Long) {
-        try {
-            rpc.invokeWithRetry("mouseWheelDown", 1) {
-                repeat(count) { i ->
-                    if (i > 0) {
-                        if (delayMillis > 0) gap(delayMillis) else gap("mouseWheel")
-                    }
-
-                    mouse?.wheel(deltaX, deltaY)
-                }
-            }
-        } catch (e: ChromeDriverException) {
-            rpc.handleChromeException(e, "mouseWheelDown")
-        }
-    }
-
-    @Throws(WebDriverException::class)
-    override suspend fun mouseWheelUp(count: Int, deltaX: Double, deltaY: Double, delayMillis: Long) {
-        try {
-            rpc.invokeWithRetry("mouseWheelUp", 1) {
-                repeat(count) { i ->
-                    if (i > 0) {
-                        if (delayMillis > 0) gap(delayMillis) else gap("mouseWheel")
-                    }
-
-                    mouse?.wheel(deltaX, deltaY)
-                }
-            }
-        } catch (e: ChromeDriverException) {
-            rpc.handleChromeException(e, "mouseWheelUp")
-        }
-    }
-
-    @Throws(WebDriverException::class)
     override suspend fun mouseWheel(deltaX: Double, deltaY: Double) {
         driverHelper.invokeOnPage("mouseWheel") { mouse?.wheel(deltaX, deltaY) }
-    }
-
-    @Throws(WebDriverException::class)
-    override suspend fun moveMouseTo(x: Double, y: Double) {
-        driverHelper.invokeOnPage("moveMouseTo") { mouse?.moveTo(x, y) }
     }
 
     @Throws(WebDriverException::class)
@@ -961,16 +921,6 @@ function() {
         val safeSelector = page.normalizeLocatorForJs(selector)
         evaluate("__pulsar_utils__.clickMatches('$safeSelector', '$attrName', '$pattern')")
     }
-
-
-
-
-
-
-
-
-
-
 
 
     @Throws(WebDriverException::class)

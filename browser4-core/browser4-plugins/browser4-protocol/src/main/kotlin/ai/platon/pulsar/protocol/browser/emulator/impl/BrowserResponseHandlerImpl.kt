@@ -20,26 +20,29 @@ import ai.platon.pulsar.common.browser.BrowserErrorCode
 import ai.platon.pulsar.common.config.CapabilityTypes.PARSE_SUPPORT_ALL_CHARSETS
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.event.AbstractEventEmitter
-import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
-import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserErrorPageException
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
-import ai.platon.pulsar.skeleton.workflow.protocol.Response
 import ai.platon.pulsar.persist.ProtocolStatus
 import ai.platon.pulsar.persist.RetryScope
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
 import ai.platon.pulsar.persist.model.ActiveDOMMessage
-import ai.platon.pulsar.protocol.browser.emulator.*
+import ai.platon.pulsar.protocol.browser.emulator.BrowserErrorResponse
+import ai.platon.pulsar.protocol.browser.emulator.BrowserResponseEvents
+import ai.platon.pulsar.protocol.browser.emulator.BrowserResponseHandler
+import ai.platon.pulsar.protocol.browser.emulator.NavigateTask
 import ai.platon.pulsar.protocol.browser.emulator.util.*
+import ai.platon.pulsar.skeleton.browser.driver.BrowserErrorPageException
+import ai.platon.pulsar.skeleton.browser.driver.WebDriver
+import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
+import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
+import ai.platon.pulsar.skeleton.workflow.protocol.Response
 import org.slf4j.LoggerFactory
 import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicInteger
 
 open class BrowserResponseHandlerImpl(
-        private val immutableConfig: ImmutableConfig
-): BrowserResponseHandler, AbstractEventEmitter<BrowserResponseEvents>() {
+    private val immutableConfig: ImmutableConfig
+) : BrowserResponseHandler, AbstractEventEmitter<BrowserResponseEvents>() {
     protected val logger = LoggerFactory.getLogger(BrowserResponseHandlerImpl::class.java)!!
     protected val tracer = logger.takeIf { it.isTraceEnabled }
     protected val supportAllCharsets get() = immutableConfig.getBoolean(PARSE_SUPPORT_ALL_CHARSETS, true)
@@ -112,7 +115,8 @@ open class BrowserResponseHandlerImpl(
                 elapsed,
                 Strings.compactFormat(length),
                 settings.pageLoadTimeout, settings.scriptTimeout, settings.scrollInterval,
-                link)
+                link
+            )
         }
     }
 
@@ -144,18 +148,25 @@ open class BrowserResponseHandlerImpl(
             // should cancel all running tasks and reset the privacy context and then re-fetch them
             htmlIntegrity.isRobotCheck || htmlIntegrity.isRobotCheck2 || htmlIntegrity.isRobotCheck3 ->
                 ProtocolStatus.retry(RetryScope.PRIVACY, htmlIntegrity).also { bannedPages.mark() }
+
             htmlIntegrity.isWrongProfile ->
                 ProtocolStatus.retry(RetryScope.CRAWL, htmlIntegrity).also { wrongProfile.mark() }
-            htmlIntegrity.isForbidden -> ProtocolStatus.retry(RetryScope.PRIVACY, htmlIntegrity).also { bannedPages.mark() }
-            htmlIntegrity.isNotFound -> ProtocolStatus.failed(ProtocolStatusCodes.SC_NOT_FOUND).also { notFoundPages.mark() }
+
+            htmlIntegrity.isForbidden -> ProtocolStatus.retry(RetryScope.PRIVACY, htmlIntegrity)
+                .also { bannedPages.mark() }
+
+            htmlIntegrity.isNotFound -> ProtocolStatus.failed(ProtocolStatusCodes.SC_NOT_FOUND)
+                .also { notFoundPages.mark() }
             // must come after privacy context reset, PRIVACY_CONTEXT reset have the higher priority
             htmlIntegrity.isEmpty -> ProtocolStatus.retry(RetryScope.PRIVACY, htmlIntegrity).also { emptyPages.mark() }
             htmlIntegrity.isSmall -> ProtocolStatus.retry(RetryScope.CRAWL, htmlIntegrity).also {
                 smallPages.mark()
                 smallPageRateHistogram.update(smallPageRate)
             }
+
             htmlIntegrity.hasMissingField -> ProtocolStatus.retry(RetryScope.CRAWL, htmlIntegrity)
                 .also { missingFieldPages.mark() }
+
             else -> ProtocolStatus.retry(RetryScope.CRAWL, htmlIntegrity)
         }
     }

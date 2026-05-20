@@ -2,9 +2,9 @@ package ai.platon.pulsar.protocol.browser.driver
 
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.warnInterruptible
-import ai.platon.pulsar.skeleton.common.AppSystemInfo
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractBrowser
 import ai.platon.pulsar.skeleton.browser.Browser
+import ai.platon.pulsar.skeleton.browser.detail.AbstractBrowser
+import ai.platon.pulsar.skeleton.common.AppSystemInfo
 import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 import kotlinx.coroutines.runBlocking
 
@@ -160,8 +160,10 @@ internal class BrowserAccompaniedDriverPoolCloser(
         val isGUI = browser.settings.isGUI
         val displayMode = browser.settings.displayMode
 
-        logger.info("Closing browser & driver pool with {} mode | #{} | {} | {} | {}",
-            displayMode, browser.instanceId, browser.readableState, browserId.contextDir.last(), browserId.contextDir)
+        logger.info(
+            "Closing browser & driver pool with {} mode | #{} | {} | {} | {}",
+            displayMode, browser.instanceId, browser.readableState, browserId.contextDir.last(), browserId.contextDir
+        )
 
         kotlin.runCatching { driverPoolPool.close(driverPool) }.onFailure { warnInterruptible(this, it) }
         kotlin.runCatching { browserManager.closeBrowser(browser) }.onFailure { warnInterruptible(this, it) }
