@@ -85,7 +85,7 @@ class WebScrapingSkill : AbstractSkill() {
         val attributes = params["attributes"] as? List<*> ?: listOf("text")
 
         // Try to get WebDriver and PulsarSession from context for real scraping
-        val driver = context.getResource<ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver>("driver")
+        val driver = context.getResource<WebDriver>("driver")
         val session = context.getResource<PulsarSession>("session")
 
         // If driver is available, perform real JavaScript-based extraction
