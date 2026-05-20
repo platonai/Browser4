@@ -31,8 +31,8 @@ import ai.platon.pulsar.skeleton.common.files.ext.export
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriverCancellationException
+import ai.platon.pulsar.skeleton.browser.driver.WebDriver
+import ai.platon.pulsar.skeleton.browser.driver.WebDriverCancellationException
 import ai.platon.pulsar.skeleton.workflow.protocol.ForwardingResponse
 import ai.platon.pulsar.skeleton.workflow.protocol.Response
 import kotlinx.coroutines.delay

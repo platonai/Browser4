@@ -6,7 +6,7 @@ import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.warnForClose
 import ai.platon.pulsar.common.warnInterruptible
-import ai.platon.pulsar.skeleton.browser.fetch.driver.Browser
+import ai.platon.pulsar.skeleton.browser.Browser
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.*
 import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 import java.util.concurrent.ConcurrentHashMap

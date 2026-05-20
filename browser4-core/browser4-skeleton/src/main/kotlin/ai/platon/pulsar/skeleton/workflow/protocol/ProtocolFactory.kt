@@ -5,7 +5,7 @@ import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.stringify
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.metadata.FetchMode
-import ai.platon.pulsar.skeleton.browser.protocol.Protocol
+import ai.platon.pulsar.skeleton.crawl.protocol.Protocol
 import org.apache.commons.lang3.StringUtils
 import org.slf4j.LoggerFactory
 import java.util.*

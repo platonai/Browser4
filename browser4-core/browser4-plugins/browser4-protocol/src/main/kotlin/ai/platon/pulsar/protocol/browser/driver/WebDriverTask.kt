@@ -2,7 +2,7 @@ package ai.platon.pulsar.protocol.browser.driver
 
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
+import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 import java.util.concurrent.atomic.AtomicInteger
 

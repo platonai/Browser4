@@ -16,7 +16,7 @@ import ai.platon.pulsar.skeleton.workflow.common.InternalURLUtil
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.JsEvaluation
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.JsException
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.NavigateEntry
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
+import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue

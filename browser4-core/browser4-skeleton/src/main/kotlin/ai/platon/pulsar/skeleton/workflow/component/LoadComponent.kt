@@ -29,7 +29,7 @@ import ai.platon.pulsar.skeleton.workflow.common.GlobalCacheFactory
 import ai.platon.pulsar.skeleton.workflow.common.url.CompletableHyperlink
 import ai.platon.pulsar.skeleton.workflow.common.url.ListenableUrl
 import ai.platon.pulsar.skeleton.workflow.common.url.toCompletableListenableHyperlink
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
+import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.workflow.parse.ParseResult
 import org.slf4j.LoggerFactory
 import java.net.URL

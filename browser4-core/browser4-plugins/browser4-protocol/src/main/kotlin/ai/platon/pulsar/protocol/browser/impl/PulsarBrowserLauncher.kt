@@ -6,7 +6,7 @@ import ai.platon.browser4.driver.chrome.common.LauncherOptions
 import ai.platon.browser4.driver.chrome.util.ChromeLaunchException
 import ai.platon.browser4.driver.common.BrowserSettings
 import ai.platon.pulsar.protocol.browser.driver.cdt.PulsarBrowser
-import ai.platon.pulsar.skeleton.browser.fetch.driver.Browser
+import ai.platon.pulsar.skeleton.browser.Browser
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserLaunchException
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserLauncher
 import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId

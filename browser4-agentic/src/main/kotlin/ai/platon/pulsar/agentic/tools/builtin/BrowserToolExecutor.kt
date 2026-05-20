@@ -2,7 +2,7 @@ package ai.platon.pulsar.agentic.tools.builtin
 
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.skeleton.browser.fetch.driver.Browser
+import ai.platon.pulsar.skeleton.browser.Browser
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractBrowser
 import ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver
 import kotlin.reflect.KClass

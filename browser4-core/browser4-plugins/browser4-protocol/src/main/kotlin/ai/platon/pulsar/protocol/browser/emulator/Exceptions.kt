@@ -15,7 +15,7 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator
 
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriverException
+import ai.platon.pulsar.skeleton.browser.driver.WebDriverException
 
 class NavigateTaskCancellationException: IllegalStateException {
     constructor() : super() {}

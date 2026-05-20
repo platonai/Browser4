@@ -3,7 +3,7 @@ package ai.platon.pulsar.examples.sites.food.dianping
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.context.PulsarContexts
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
+import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import com.google.gson.GsonBuilder
