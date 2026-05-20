@@ -13,7 +13,7 @@
     <modelVersion>4.0.0</modelVersion>
     <parent>
         <groupId>ai.platon.pulsar</groupId>
-        <artifactId>pulsar-spring-support</artifactId>
+        <artifactId>browser4-spring-support</artifactId>
         <version>4.9.2-SNAPSHOT</version>
     </parent>
 

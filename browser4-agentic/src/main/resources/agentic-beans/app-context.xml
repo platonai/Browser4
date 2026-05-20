@@ -8,7 +8,7 @@
        http://www.springframework.org/schema/context
        http://www.springframework.org/schema/context/spring-context-3.0.xsd" default-lazy-init="true">
 
-    <import resource="classpath*:pulsar-beans/components-context.xml"/>
+    <import resource="classpath*:browser4-beans/components-context.xml"/>
 
     <!-- Scan for Spring components in agentic package (including SkillBootstrap)
          SkillBootstrap uses @Lazy(false) annotation to ensure eager initialization -->

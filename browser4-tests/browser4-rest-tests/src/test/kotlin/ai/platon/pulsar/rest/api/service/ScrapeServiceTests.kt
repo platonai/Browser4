@@ -1,7 +1,7 @@
 package ai.platon.pulsar.rest.api.service
 
 import ai.platon.pulsar.agentic.tools.high.crawl.ScrapeRequest
-import ai.platon.pulsar.boot.autoconfigure.test.PulsarTestContextInitializer
+import ai.platon.browser4.boot.autoconfigure.test.PulsarTestContextInitializer
 import ai.platon.pulsar.common.DateTimes
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.printlnPro

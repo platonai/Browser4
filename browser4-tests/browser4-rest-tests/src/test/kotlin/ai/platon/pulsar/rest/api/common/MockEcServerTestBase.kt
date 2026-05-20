@@ -1,6 +1,6 @@
 package ai.platon.pulsar.rest.api.common
 
-import ai.platon.pulsar.boot.autoconfigure.test.PulsarTestContextInitializer
+import ai.platon.browser4.boot.autoconfigure.test.PulsarTestContextInitializer
 import ai.platon.pulsar.rest.api.config.MockEcServerConfiguration
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Tag
@@ -38,7 +38,7 @@ abstract class MockEcServerTestBase {
     protected val mockProductDetailUrl = "$mockServerBaseUrl/ec/dp/B0E000001"
 
     @BeforeEach
-    open fun setup() {
+    fun setup() {
         // Verify mock server is running
         try {
             val response = restTemplate.getForEntity("$mockServerBaseUrl/ec/", String::class.java)

@@ -5,11 +5,11 @@
        xsi:schemaLocation="http://www.springframework.org/schema/beans
        http://www.springframework.org/schema/beans/spring-beans-3.0.xsd" default-lazy-init="true">
 
-    <import resource="classpath*:pulsar-beans/plugins/schedule-context.xml"/>
-    <import resource="classpath*:pulsar-beans/plugins/protocol-context.xml"/>
-    <import resource="classpath*:pulsar-beans/plugins/parse-context.xml"/>
+    <import resource="classpath*:browser4-beans/plugins/schedule-context.xml"/>
+    <import resource="classpath*:browser4-beans/plugins/protocol-context.xml"/>
+    <import resource="classpath*:browser4-beans/plugins/parse-context.xml"/>
 
-    <import resource="classpath*:pulsar-beans/plugins/monitor-context.xml"/>
+    <import resource="classpath*:browser4-beans/plugins/monitor-context.xml"/>
 
     <bean id="fetchComponentCustom" class="ai.platon.pulsar.skeleton.workflow.component.BatchFetchComponent"
           destroy-method="close">

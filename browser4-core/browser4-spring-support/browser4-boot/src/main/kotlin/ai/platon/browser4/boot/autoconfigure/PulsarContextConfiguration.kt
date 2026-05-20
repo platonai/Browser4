@@ -1,4 +1,4 @@
-package ai.platon.pulsar.boot.autoconfigure
+package ai.platon.browser4.boot.autoconfigure
 
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.context.AgenticContext

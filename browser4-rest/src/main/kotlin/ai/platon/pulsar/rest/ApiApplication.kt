@@ -1,6 +1,6 @@
 package ai.platon.pulsar.rest
 
-import ai.platon.pulsar.boot.autoconfigure.PulsarContextInitializer
+import ai.platon.browser4.boot.autoconfigure.PulsarContextInitializer
 import ai.platon.pulsar.skeleton.TaskLoops
 import ai.platon.pulsar.skeleton.workflow.common.GlobalCache
 import ai.platon.pulsar.skeleton.workflow.common.GlobalCacheFactory
@@ -12,7 +12,7 @@ import org.springframework.context.annotation.ImportResource
 @SpringBootApplication
 @ImportResource("classpath:rest-beans/app-context.xml")
 @ComponentScan(
-    "ai.platon.pulsar.boot.autoconfigure",
+    "ai.platon.browser4.boot.autoconfigure",
     "ai.platon.pulsar.rest"
 )
 class ApiApplication(

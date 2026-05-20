@@ -1,12 +1,10 @@
 package ai.platon.pulsar.app
 
-import ai.platon.pulsar.boot.autoconfigure.PulsarContextInitializer
+import ai.platon.browser4.boot.autoconfigure.PulsarContextInitializer
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import jakarta.annotation.PostConstruct
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
@@ -16,7 +14,7 @@ import org.springframework.context.annotation.ImportResource
 @SpringBootApplication
 @ImportResource("classpath:pulsar-beans/app-context.xml")
 @ComponentScan(
-    "ai.platon.pulsar.boot.autoconfigure",
+    "ai.platon.browser4.boot.autoconfigure",
     "ai.platon.pulsar.rest",
 )
 class Browser4Application(

@@ -19,12 +19,12 @@
         <relativePath>../../pom.xml</relativePath>
     </parent>
 
-    <artifactId>pulsar-spring-support</artifactId>
+    <artifactId>browser4-spring-support</artifactId>
     <name>Browser4 Spring Support</name>
     <packaging>pom</packaging>
 
     <modules>
-        <module>pulsar-beans</module>
-        <module>pulsar-boot</module>
+        <module>browser4-beans</module>
+        <module>browser4-boot</module>
     </modules>
 </project>

@@ -33,6 +33,6 @@
         <module>pulsar-third</module>
         <module>browser4-skeleton</module>
         <module>browser4-browser</module>
-        <module>pulsar-spring-support</module>
+        <module>browser4-spring-support</module>
     </modules>
 </project>
