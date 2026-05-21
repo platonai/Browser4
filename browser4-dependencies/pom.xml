@@ -101,6 +101,13 @@
                 <groupId>org.apache.tika</groupId>
                 <artifactId>tika-parser-html-module</artifactId>
                 <version>${tika.version}</version>
+                <exclusions>
+                    <!-- Use pulsar-jsoup instead -->
+                    <exclusion>
+                        <groupId>org.jsoup</groupId>
+                        <artifactId>jsoup</artifactId>
+                    </exclusion>
+                </exclusions>
             </dependency>
 
             <dependency>
@@ -108,6 +115,7 @@
                 <artifactId>tika-parsers</artifactId>
                 <version>${tika.version}</version>
                 <exclusions>
+                    <!-- Use pulsar-jsoup instead -->
                     <exclusion>
                         <groupId>org.jsoup</groupId>
                         <artifactId>jsoup</artifactId>

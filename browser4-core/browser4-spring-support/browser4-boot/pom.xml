@@ -41,7 +41,7 @@
                 </exclusion>
                 <exclusion>
                     <groupId>ai.platon.pulsar</groupId>
-                    <artifactId>browser4-browser</artifactId>
+                    <artifactId>pulsar-browser</artifactId>
                 </exclusion>
                 <exclusion>
                     <groupId>ai.platon.pulsar</groupId>

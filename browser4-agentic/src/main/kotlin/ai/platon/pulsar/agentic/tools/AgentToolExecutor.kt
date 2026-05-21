@@ -179,6 +179,7 @@ class AgentToolExecutor constructor(
             "agent" -> executor.callFunctionOn(normalized, agent)
             "command" -> {
                 // TODO: the commandTarget is ai.platon.pulsar.agentic.tools.high.command.CommandService, consider make it built-in
+                //      and is registered in browser4-rest module
                 val commandTarget = _customTargets["command"]
                     ?: throw UnsupportedOperationException(
                         "Command domain '${normalized.domain}' requires a registered CommandService target."

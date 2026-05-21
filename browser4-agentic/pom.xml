@@ -29,12 +29,10 @@
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-protocol</artifactId>
-            <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-browser</artifactId>
-            <version>${project.version}</version>
         </dependency>
 
         <dependency>
@@ -49,7 +47,6 @@
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-tools</artifactId>
         </dependency>
-
 
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
@@ -66,7 +63,7 @@
                 </exclusion>
                 <exclusion>
                     <groupId>ai.platon.pulsar</groupId>
-                    <artifactId>browser4-browser</artifactId>
+                    <artifactId>pulsar-browser</artifactId>
                 </exclusion>
                 <exclusion>
                     <groupId>ai.platon.pulsar</groupId>
