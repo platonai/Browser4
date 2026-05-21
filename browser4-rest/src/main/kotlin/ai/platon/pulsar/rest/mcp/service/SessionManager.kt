@@ -75,14 +75,7 @@ class SessionManager(
             createManagedSession(sessionId, normalizedCapabilities)
         }
 
-        val activeSession = if (checkHealthy(session)) {
-            if (!session.status.equals("active", ignoreCase = true)) {
-                session.status = "active"
-            }
-            session
-        } else {
-            recreateUnhealthySession(sessionId, normalizedCapabilities, session)
-        }
+        val activeSession = resolveHealthySession(sessionId, normalizedCapabilities, session)
 
         activeSession.lastAccessedAt = System.currentTimeMillis()
         return activeSession
@@ -99,6 +92,25 @@ class SessionManager(
         }
 
         return healthy
+    }
+
+    private fun resolveHealthySession(
+        sessionId: String,
+        capabilities: Map<String, Any?>,
+        session: ManagedSession,
+    ): ManagedSession {
+        if (checkHealthy(session)) {
+            return markSessionActive(session)
+        }
+
+        val recreatedSession = recreateUnhealthySession(sessionId, capabilities, session)
+        return if (checkHealthy(recreatedSession)) {
+            markSessionActive(recreatedSession)
+        } else {
+            markSessionInactive(recreatedSession)
+            logger.warn("Replacement session {} is still unhealthy after recreation", sessionId)
+            recreatedSession
+        }
     }
 
     private fun createManagedSession(sessionId: String, capabilities: Map<String, Any?>): ManagedSession {
@@ -132,14 +144,21 @@ class SessionManager(
                 else -> {
                     markSessionInactive(existingSession)
                     if (existingSession === staleSession) {
-                        logger.warn("Cached session {} is inactive, creating a replacement", sessionId)
+                        logger.warn("Cached session {} is unhealthy, creating a replacement", sessionId)
                     } else {
-                        logger.warn("Concurrent cached session {} is inactive, creating a replacement", sessionId)
+                        logger.warn("Concurrent cached session {} is unhealthy, creating a replacement", sessionId)
                     }
                     createManagedSession(sessionId, capabilities)
                 }
             }
         }!!
+    }
+
+    private fun markSessionActive(session: ManagedSession): ManagedSession {
+        if (!session.status.equals("active", ignoreCase = true)) {
+            session.status = "active"
+        }
+        return session
     }
 
     private fun markSessionInactive(session: ManagedSession) {
@@ -175,7 +194,12 @@ class SessionManager(
         val session = if (sessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true)) {
             getOrCreateSession(mapOf(SESSION_ID_CAPABILITY to DEFAULT_SESSION_ID))
         } else {
-            sessions[sessionId]
+            sessions[sessionId]?.let { existingSession ->
+                val normalizedCapabilities = normalizeCapabilities(
+                    existingSession.capabilities ?: mapOf(SESSION_ID_CAPABILITY to existingSession.sessionId)
+                )
+                resolveHealthySession(sessionId, normalizedCapabilities, existingSession)
+            }
         }
         session?.lastAccessedAt = System.currentTimeMillis()
         return session
