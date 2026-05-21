@@ -797,15 +797,31 @@ jobs:
         if: steps.cli_publish_check.outputs.should_publish == 'true'
         working-directory: ${{ env.CLI_PACKAGE_DIR }}
         run: npm publish --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Verify npm auth
+      - name: Verify npm package was published
         if: steps.cli_publish_check.outputs.should_publish == 'true'
-        working-directory: ${{ env.CLI_PACKAGE_DIR }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm whoami
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PACKAGE_NAME='${{ steps.cli_publish_check.outputs.package_name }}'
+          CLI_VERSION='${{ steps.cli_publish_check.outputs.cli_version }}'
+
+          for attempt in 1 2 3 4 5; do
+            PUBLISHED_VERSION=$(npm view "$PACKAGE_NAME@$CLI_VERSION" version 2>/dev/null || true)
+            if [ "$PUBLISHED_VERSION" = "$CLI_VERSION" ]; then
+              echo "Verified $PACKAGE_NAME@$CLI_VERSION on npm"
+              exit 0
+            fi
+
+            if [ "$attempt" -lt 5 ]; then
+              echo "npm registry has not reported $PACKAGE_NAME@$CLI_VERSION yet (attempt $attempt/5); retrying in 10s..."
+              sleep 10
+            fi
+          done
+
+          echo "Unable to verify $PACKAGE_NAME@$CLI_VERSION on npm after publish"
+          exit 1
 
       - name: npm publish summary
         if: always()

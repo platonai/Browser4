@@ -359,6 +359,10 @@ cargo test --test e2e -- --nocapture --scenario=test_e2e_batch_form_submission
 
 For maintainers, the CLI package now uses an npm version guard before publish.
 
+The GitHub release workflow publishes the npm package via npm trusted publishing
+(GitHub Actions OIDC) instead of `NODE_AUTH_TOKEN`. This avoids CI failures caused
+by npm one-time-password challenges (`EOTP`).
+
 - Local release entrypoint: `npm run release`
 - Direct guarded publish entrypoint: `npm run publish:if-needed`
 - GitHub release workflow: re-checks npm immediately before the publish step
