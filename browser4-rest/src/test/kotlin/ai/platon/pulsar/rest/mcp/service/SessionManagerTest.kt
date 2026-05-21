@@ -29,9 +29,9 @@ class SessionManagerTest {
     }
 
     @Test
-    fun createSessionUsesDefaultSessionWhenSessionIdIsMissingOrDefault() {
-        val session = sessionManager.createSession(null)
-        val sameSession = sessionManager.createSession(
+    fun getOrCreateSessionUsesDefaultSessionWhenSessionIdIsMissingOrDefault() {
+        val session = sessionManager.getOrCreateSession(null)
+        val sameSession = sessionManager.getOrCreateSession(
             mapOf(
                 "sessionId" to "DEFAULT",
                 "profileMode" to "TEMPORARY",
@@ -46,8 +46,8 @@ class SessionManagerTest {
     }
 
     @Test
-    fun createSessionUsesSequentialProfileModeForNamedSessionsByDefault() {
-        val session = sessionManager.createSession(
+    fun getOrCreateSessionUsesSequentialProfileModeForNamedSessionsByDefault() {
+        val session = sessionManager.getOrCreateSession(
             mapOf(
                 "sessionId" to "team-a",
                 "profileMode" to "DEFAULT",
@@ -60,8 +60,8 @@ class SessionManagerTest {
     }
 
     @Test
-    fun createSessionPreservesSequentialProfileModeForDefaultSession() {
-        val session = sessionManager.createSession(
+    fun getOrCreateSessionPreservesSequentialProfileModeForDefaultSession() {
+        val session = sessionManager.getOrCreateSession(
             mapOf(
                 "profileMode" to "SEQUENTIAL",
             )
@@ -73,8 +73,8 @@ class SessionManagerTest {
     }
 
     @Test
-    fun createSessionPreservesSequentialProfileModeForNamedSessions() {
-        val session = sessionManager.createSession(
+    fun getOrCreateSessionPreservesSequentialProfileModeForNamedSessions() {
+        val session = sessionManager.getOrCreateSession(
             mapOf(
                 "sessionId" to "team-b",
                 "profileMode" to "sequential",
@@ -103,15 +103,15 @@ class SessionManagerTest {
     }
 
     @Test
-    fun createSessionRecreatesInactiveCachedSession() {
+    fun getOrCreateSessionRecreatesInactiveCachedSession() {
         val inactiveSession = mockAgenticSession(isActive = false)
         val replacementSession = mockAgenticSession(isActive = true)
         Mockito.doReturn(inactiveSession, replacementSession)
             .`when`(agenticContext)
             .createSession(Mockito.any(PulsarSettings::class.java) ?: PulsarSettings())
 
-        val firstSession = sessionManager.createSession(mapOf("sessionId" to "team-c"))
-        val secondSession = sessionManager.createSession(mapOf("sessionId" to "team-c"))
+        val firstSession = sessionManager.getOrCreateSession(mapOf("sessionId" to "team-c"))
+        val secondSession = sessionManager.getOrCreateSession(mapOf("sessionId" to "team-c"))
 
         assertEquals("team-c", firstSession.sessionId)
         assertEquals("SEQUENTIAL", firstSession.capabilities?.get("profileMode"))

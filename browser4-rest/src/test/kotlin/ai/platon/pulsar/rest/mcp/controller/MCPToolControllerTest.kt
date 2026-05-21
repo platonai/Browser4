@@ -107,13 +107,13 @@ class MCPToolControllerTest {
         val newSessionId = "new-session-id"
         val newManagedSession = Mockito.mock(ManagedSession::class.java)
         `when`(newManagedSession.sessionId).thenReturn(newSessionId)
-        `when`(sessionManager.createSession(any())).thenReturn(newManagedSession)
+        `when`(sessionManager.getOrCreateSession(any())).thenReturn(newManagedSession)
 
         val result = controller.callTool(request, response)
 
         assertEquals(HttpStatus.OK, result.statusCode)
         assertTrue(result.body!!.content[0].text.contains(newSessionId))
-        Mockito.verify(sessionManager).createSession(null)
+        Mockito.verify(sessionManager).getOrCreateSession(null)
         Unit
     }
 
@@ -253,7 +253,7 @@ class MCPToolControllerTest {
         val temporaryToolExecutor = Mockito.mock(AgentToolExecutor::class.java)
 
         `when`(sessionManager.getAllSessions()).thenReturn(emptyList())
-        `when`(sessionManager.createSession(null)).thenReturn(temporarySession)
+        `when`(sessionManager.getOrCreateSession(null)).thenReturn(temporarySession)
         `when`(temporarySession.sessionId).thenReturn("temporary-session")
         `when`(temporarySession.agenticSession).thenReturn(temporaryAgenticSession)
         `when`(temporaryAgenticSession.companionAgent).thenReturn(temporaryAgent)
@@ -269,7 +269,7 @@ class MCPToolControllerTest {
         val result = controller.listTools(response)
 
         assertEquals(HttpStatus.OK, result.statusCode)
-        Mockito.verify(sessionManager).createSession(null)
+        Mockito.verify(sessionManager).getOrCreateSession(null)
         Mockito.verify(sessionManager).deleteSession("temporary-session")
     }
 
@@ -944,7 +944,7 @@ class MCPToolControllerTest {
             )
         }
 
-        Mockito.verify(sessionManager, Mockito.never()).createSession(any())
+        Mockito.verify(sessionManager, Mockito.never()).getOrCreateSession(any())
         Mockito.verify(agentToolExecutor, Mockito.never()).execute(anyToolCall())
         Unit
     }

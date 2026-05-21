@@ -62,6 +62,15 @@ class PulsarBrowser(
             this(BrowserId.RANDOM_TEMP, ChromeImpl(port = port), settings, null)
 
     @Synchronized
+    override fun healthy(): Boolean {
+        if (!chrome.canConnect()) {
+            return false
+        }
+
+        return runCatching { chrome.listTabs() }.isSuccess
+    }
+
+    @Synchronized
     @Throws(WebDriverException::class)
     fun createTab() = createTab(ABOUT_BLANK_PAGE)
 

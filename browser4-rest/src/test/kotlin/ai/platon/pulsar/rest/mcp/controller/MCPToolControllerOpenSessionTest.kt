@@ -29,12 +29,12 @@ class MCPToolControllerOpenSessionTest {
             )
 
             Mockito.`when`(managedSession.sessionId).thenReturn("sequential-session-id")
-            Mockito.`when`(sessionManager.createSession(mapOf("profileMode" to "SEQUENTIAL"))).thenReturn(managedSession)
+            Mockito.`when`(sessionManager.getOrCreateSession(mapOf("profileMode" to "SEQUENTIAL"))).thenReturn(managedSession)
 
             val result = controller.callTool(request, response)
 
             assertEquals(HttpStatus.OK, result.statusCode)
-            Mockito.verify(sessionManager).createSession(mapOf("profileMode" to "SEQUENTIAL"))
+            Mockito.verify(sessionManager).getOrCreateSession(mapOf("profileMode" to "SEQUENTIAL"))
         }
     }
 }

@@ -10,7 +10,6 @@ import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
 import org.springframework.stereotype.Service
-import java.util.LinkedHashMap
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -69,24 +68,37 @@ class SessionManager(
      * @param capabilities Optional browser capabilities (browserName, etc.)
      * @return The created managed session.
      */
-    fun createSession(capabilities: Map<String, Any?>? = null): ManagedSession {
+    fun getOrCreateSession(capabilities: Map<String, Any?>? = null): ManagedSession {
         val normalizedCapabilities = normalizeCapabilities(capabilities)
         val sessionId = normalizedCapabilities.getValue(SESSION_ID_CAPABILITY).toString()
         val session = sessions.computeIfAbsent(sessionId) {
             createManagedSession(sessionId, normalizedCapabilities)
         }
 
-        val activeSession = if (session.agenticSession.isActive) {
+        val activeSession = if (checkHealthy(session)) {
             if (!session.status.equals("active", ignoreCase = true)) {
                 session.status = "active"
             }
             session
         } else {
-            recreateInactiveSession(sessionId, normalizedCapabilities, session)
+            recreateUnhealthySession(sessionId, normalizedCapabilities, session)
         }
 
         activeSession.lastAccessedAt = System.currentTimeMillis()
         return activeSession
+    }
+
+    fun checkHealthy(session: ManagedSession): Boolean {
+        var healthy = session.agenticSession.isActive
+
+        if (healthy) {
+            healthy = session.agenticSession.boundBrowser?.healthy() ?: true
+            if (healthy) {
+                healthy = session.agenticSession.boundDriver?.healthy() ?: true
+            }
+        }
+
+        return healthy
     }
 
     private fun createManagedSession(sessionId: String, capabilities: Map<String, Any?>): ManagedSession {
@@ -103,7 +115,7 @@ class SessionManager(
         }
     }
 
-    private fun recreateInactiveSession(
+    private fun recreateUnhealthySession(
         sessionId: String,
         capabilities: Map<String, Any?>,
         staleSession: ManagedSession,
@@ -111,7 +123,7 @@ class SessionManager(
         return sessions.compute(sessionId) { _, existingSession ->
             when {
                 existingSession == null -> createManagedSession(sessionId, capabilities)
-                existingSession.agenticSession.isActive -> {
+                checkHealthy(existingSession) -> {
                     if (!existingSession.status.equals("active", ignoreCase = true)) {
                         existingSession.status = "active"
                     }
@@ -161,7 +173,7 @@ class SessionManager(
      */
     fun getSession(sessionId: String): ManagedSession? {
         val session = if (sessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true)) {
-            createSession(mapOf(SESSION_ID_CAPABILITY to DEFAULT_SESSION_ID))
+            getOrCreateSession(mapOf(SESSION_ID_CAPABILITY to DEFAULT_SESSION_ID))
         } else {
             sessions[sessionId]
         }

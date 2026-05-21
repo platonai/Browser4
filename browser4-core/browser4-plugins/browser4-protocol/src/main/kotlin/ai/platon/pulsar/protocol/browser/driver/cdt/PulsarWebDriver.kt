@@ -33,6 +33,7 @@ import com.fasterxml.jackson.module.kotlin.readValue
 import com.google.common.annotations.Beta
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import org.apache.commons.lang3.StringUtils
 import org.apache.commons.lang3.SystemUtils
@@ -98,6 +99,18 @@ class PulsarWebDriver constructor(
 
     init {
         fingerprintApplier?.invoke(this)
+    }
+
+    override fun canConnect(): Boolean {
+        return cdp.isOpen
+    }
+
+    override fun healthy(): Boolean {
+        if (!canConnect()) {
+            return false
+        }
+
+        return runCatching { runBlocking { currentUrl() } }.isSuccess
     }
 
     override suspend fun addBlockedURLs(urlPatterns: List<String>) {
