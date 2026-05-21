@@ -243,9 +243,6 @@ class SessionManager(
         val session = sessions.remove(sessionId) ?: return false
 
         try {
-            // Close the agent to release browser resources
-            session.agent.close()
-
             val pulsarSession = session.agenticSession
             val browser = pulsarSession.boundBrowser
 
