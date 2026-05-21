@@ -252,6 +252,86 @@ pub(super) fn test_open_refreshes_inactive_saved_session(ctx: &mut E2ECtx) {
     assert_eq!(read_persisted_session_id(&ctx.state_dir), "collective-session-2");
 }
 
+pub(super) fn test_open_reopens_saved_session_after_human_closed_tab(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let workflow_url = "https://example.com/human-closed-tab";
+    let mock_server = MockBrowser4Server::start();
+    mock_server.queue_open_session_ids(vec!["collective-session-1", "collective-session-2"]);
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let first_open = run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    assert!(
+        first_open.stdout.contains("Session opened: collective-session-1"),
+        "Expected first open to create the initial session:\n{}",
+        first_open.stdout
+    );
+
+    mock_server.queue_tool_failure(
+        "browser_navigate",
+        Some("collective-session-1"),
+        Some(workflow_url),
+        "browser_navigate failed: Target closed",
+    );
+
+    let second_open = run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, workflow_url]);
+    assert!(
+        second_open.stdout.contains("Session opened: collective-session-2"),
+        "Expected open to recreate a saved session whose tab was closed externally:\n{}",
+        second_open.stdout
+    );
+    assert!(
+        !second_open
+            .stdout
+            .contains("Session already open: collective-session-1"),
+        "Expected open to avoid confirming reuse after the saved session proved unusable:\n{}",
+        second_open.stdout
+    );
+    assert!(
+        second_open.stdout.contains("### Page"),
+        "Expected page block after reopening the session:\n{}",
+        second_open.stdout
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let open_session_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "open_session")
+        .collect();
+    assert_eq!(
+        open_session_calls.len(),
+        2,
+        "Expected open to create a replacement session after the reused session failed"
+    );
+
+    let close_session_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "close_session")
+        .collect();
+    assert_eq!(
+        close_session_calls.len(),
+        1,
+        "Expected open to close the unusable saved session before reopening"
+    );
+    assert_eq!(
+        close_session_calls[0].arguments["sessionId"],
+        "collective-session-1"
+    );
+
+    let navigate_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_navigate")
+        .collect();
+    assert_eq!(
+        navigate_calls.len(),
+        2,
+        "Expected open to retry browser_navigate with the replacement session"
+    );
+    assert_eq!(navigate_calls[0].arguments["sessionId"], "collective-session-1");
+    assert_eq!(navigate_calls[1].arguments["sessionId"], "collective-session-2");
+    assert_eq!(read_persisted_session_id(&ctx.state_dir), "collective-session-2");
+}
+
 pub(super) fn test_goto_requires_existing_active_session(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 

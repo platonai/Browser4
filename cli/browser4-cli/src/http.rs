@@ -147,6 +147,8 @@ pub fn is_stale_session_error(message: &str) -> bool {
         || lower.contains("invalid session id")
         || lower.contains("session not found")
         || lower.contains("session does not exist")
+        || lower.contains("target closed")
+        || lower.contains("session closed")
 }
 
 /// Submit a plain-text command to the Browser4 server via the MCP endpoint.
@@ -241,6 +243,7 @@ mod tests {
         ));
         assert!(is_stale_session_error("Invalid session ID"));
         assert!(is_stale_session_error("Session not found"));
+        assert!(is_stale_session_error("Target closed"));
         assert!(!is_stale_session_error("Connection refused"));
     }
 

@@ -415,10 +415,10 @@ async fn handle_open(
     let mut state = read_state(None, session_name);
     state.session_name = session_name.map(|s| s.to_string());
 
-    let session_id = if let Some(existing_id) =
-        find_reusable_persisted_session_id(client, base_url, &state, session_name).await?
-    {
-        println!("Session already open: {}", existing_id);
+    let reusable_session_id =
+        find_reusable_persisted_session_id(client, base_url, &state, session_name).await?;
+    let reused_existing_session = reusable_session_id.is_some();
+    let session_id = if let Some(existing_id) = reusable_session_id {
         existing_id
     } else {
         let capabilities = build_open_session_capabilities(tool_params);
@@ -439,16 +439,20 @@ async fn handle_open(
             call_tool(client, base_url, tool_name, params.clone()).await;
         match navigate_result {
             Ok(result) => {
+                if reused_existing_session {
+                    println!("Session already open: {}", session_id);
+                }
                 if !result.is_empty() {
                     println!("{}", result);
                 }
                 post_command_snapshot(client, base_url, &session_id).await;
             }
             Err(err) => {
-                if !is_stale_session_error(&err) {
+                if !should_retry_open_after_navigation_error(&err, reused_existing_session) {
                     return Err(err);
                 }
                 // The browser context was not ready yet (CDP initialization race).
+                // Or the reused saved session no longer has a usable browser tab.
                 // Close the failed session, create a fresh one, and retry navigation.
                 let _ = call_tool(
                     client,
@@ -473,6 +477,8 @@ async fn handle_open(
                 post_command_snapshot(client, base_url, &retry_id).await;
             }
         }
+    } else if reused_existing_session {
+        println!("Session already open: {}", session_id);
     }
     Ok(())
 }
@@ -485,14 +491,26 @@ async fn handle_goto(
     session_name: Option<&str>,
 ) -> Result<(), String> {
     let session_id = require_active_session_for_goto(client, base_url, session_name).await?;
-
     let mut params = tool_params.clone();
     params["sessionId"] = json!(session_id.clone());
-    let result = call_tool(client, base_url, tool_name, params).await?;
-    if !result.is_empty() {
-        println!("{}", result);
+    let navigate_result =
+        call_tool(client, base_url, tool_name, params.clone()).await;
+    match navigate_result {
+        Ok(result) => {
+            if !result.is_empty() {
+                println!("{}", result);
+            }
+            post_command_snapshot(client, base_url, &session_id).await;
+        }
+        Err(err) => {
+            if should_retry_open_after_navigation_error(&err, true) {
+                println!("Failed to navigate, try to call `open` to refresh the session. Error: {}", err)
+            } else {
+                println!("Failed to navigate, {}", err)
+            }
+        }
     }
-    post_command_snapshot(client, base_url, &session_id).await;
+
     Ok(())
 }
 
@@ -890,6 +908,14 @@ fn is_backend_unreachable_error(error: &str) -> bool {
     ]
     .iter()
     .any(|pattern| lower.contains(pattern))
+}
+
+fn should_retry_open_after_navigation_error(
+    error: &str,
+    reused_existing_session: bool,
+) -> bool {
+    is_stale_session_error(error)
+        || (reused_existing_session && is_backend_unreachable_error(error))
 }
 
 async fn handle_delete_data(
@@ -2692,6 +2718,25 @@ mod tests {
     #[test]
     fn should_navigate_after_open_for_non_empty_url() {
         assert!(should_navigate_after_open("https://example.com"));
+    }
+
+    #[test]
+    fn should_retry_open_after_navigation_error_for_stale_session_errors() {
+        assert!(should_retry_open_after_navigation_error(
+            "browser_navigate failed: Cannot find context with specified id",
+            false
+        ));
+        assert!(should_retry_open_after_navigation_error(
+            "browser_navigate failed: Target closed",
+            true
+        ));
+    }
+
+    #[test]
+    fn should_retry_open_after_navigation_error_for_backend_disconnects_only_when_reusing() {
+        let error = "HTTP request failed: error sending request for url (http://localhost:8182/mcp/call-tool)";
+        assert!(!should_retry_open_after_navigation_error(error, false));
+        assert!(should_retry_open_after_navigation_error(error, true));
     }
 
     #[test]

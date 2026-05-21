@@ -302,6 +302,15 @@ struct MockBrowser4State {
     next_collective_task_id: usize,
     listed_sessions: Vec<MockListedSession>,
     queued_open_session_ids: Vec<String>,
+    queued_tool_failures: Vec<MockToolFailure>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct MockToolFailure {
+    tool: String,
+    session_id: Option<String>,
+    url: Option<String>,
+    message: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -394,6 +403,25 @@ impl MockBrowser4Server {
             .expect("mock Browser4 state mutex poisoned")
             .queued_open_session_ids = session_ids.into_iter().map(str::to_string).collect();
     }
+
+    fn queue_tool_failure(
+        &self,
+        tool: &str,
+        session_id: Option<&str>,
+        url: Option<&str>,
+        message: &str,
+    ) {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .queued_tool_failures
+            .push(MockToolFailure {
+                tool: tool.to_string(),
+                session_id: session_id.map(str::to_string),
+                url: url.map(str::to_string),
+                message: message.to_string(),
+            });
+    }
 }
 
 impl Drop for MockBrowser4Server {
@@ -443,6 +471,44 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                     tool: tool.clone(),
                     arguments: arguments.clone(),
                 });
+
+            if let Some(message) = {
+                let mut guard = state.lock().expect("mock Browser4 state mutex poisoned");
+                let failure_index = guard.queued_tool_failures.iter().position(|failure| {
+                    failure.tool == tool
+                        && failure
+                            .session_id
+                            .as_deref()
+                            .map(|expected| {
+                                arguments
+                                    .get("sessionId")
+                                    .and_then(|value| value.as_str())
+                                    == Some(expected)
+                            })
+                            .unwrap_or(true)
+                        && failure
+                            .url
+                            .as_deref()
+                            .map(|expected| {
+                                arguments.get("url").and_then(|value| value.as_str()) == Some(expected)
+                            })
+                            .unwrap_or(true)
+                });
+                failure_index.map(|index| guard.queued_tool_failures.remove(index).message)
+            } {
+                let response = serde_json::json!({
+                    "isError": true,
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": message,
+                        }
+                    ]
+                })
+                .to_string();
+                write_http_response(&mut stream, "200 OK", "application/json", &response);
+                return;
+            }
 
             let text = match tool.as_str() {
                 "open_session" => {
