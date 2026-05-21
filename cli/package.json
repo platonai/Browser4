@@ -22,7 +22,8 @@
     "build:windows": "npm run version:sync && docker compose -f docker/docker-compose.yml run --rm build-windows",
     "build:all-platforms": "npm run version:sync && (npm run build:linux & npm run build:windows & wait)",
     "build:docker": "docker build -t browser4-builder -f docker/Dockerfile.build .",
-    "release": "npm run version:sync && npm run build:all-platforms && npm publish",
+    "publish:if-needed": "node scripts/publish-if-needed.js",
+    "release": "npm run publish:if-needed",
     "postinstall": "node scripts/postinstall.js"
   },
   "keywords": [

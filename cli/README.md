@@ -355,6 +355,37 @@ cargo test --test e2e -- --nocapture
 cargo test --test e2e -- --nocapture --scenario=test_e2e_batch_form_submission
 ```
 
+## Publishing the CLI package
+
+For maintainers, the CLI package now uses an npm version guard before publish.
+
+- Local release entrypoint: `npm run release`
+- Direct guarded publish entrypoint: `npm run publish:if-needed`
+- GitHub release workflow: re-checks npm immediately before the publish step
+
+If the local version in `cli/package.json` already matches the version currently
+published on npm, the publish step is skipped automatically.
+
+Examples:
+
+```bash
+# Check whether npm publish is needed
+node scripts/check-npm-publish-needed.js --json
+
+# Publish only when the local version differs from npm
+npm run publish:if-needed
+
+# Standard maintainer release command (also guarded)
+npm run release
+```
+
+For local testing, you can override the detected remote version:
+
+```bash
+BROWSER4_CLI_NPM_REMOTE_VERSION=0.1.7 node scripts/check-npm-publish-needed.js --json
+BROWSER4_CLI_NPM_REMOTE_VERSION=0.1.7 node scripts/publish-if-needed.js --dry-run
+```
+
 ## License
 
 Apache-2.0

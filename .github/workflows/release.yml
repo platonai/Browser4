@@ -706,7 +706,38 @@ jobs:
         shell: bash
         run: node cli/scripts/sync-version.js
 
+      - name: Re-check npm version before publish
+        id: cli_publish_check
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          eval "$(node cli/scripts/check-npm-publish-needed.js --shell)"
+
+          echo "package_name=$PACKAGE_NAME" >> "$GITHUB_OUTPUT"
+          echo "cli_version=$CLI_VERSION" >> "$GITHUB_OUTPUT"
+          echo "remote_version=$REMOTE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "lookup_status=$LOOKUP_STATUS" >> "$GITHUB_OUTPUT"
+          echo "should_publish=$SHOULD_PUBLISH" >> "$GITHUB_OUTPUT"
+
+          if [ "$SHOULD_PUBLISH" != "true" ]; then
+            echo "::notice::Skipping npm publish because $PACKAGE_NAME@$CLI_VERSION already exists on npm."
+          elif [ "$LOOKUP_STATUS" = "failed" ]; then
+            echo "::warning::Unable to query npm version for $PACKAGE_NAME before publish. Proceeding because the prepare job determined a publish was required."
+          fi
+
+          {
+            echo "## 🔎 CLI Publish Re-check"
+            echo ""
+            echo "- **Package**: $PACKAGE_NAME"
+            echo "- **Local CLI Version**: $CLI_VERSION"
+            echo "- **Remote npm Version**: $REMOTE_VERSION"
+            echo "- **Lookup Status**: $LOOKUP_STATUS"
+            echo "- **Will Publish**: $SHOULD_PUBLISH"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Download all CLI binary artifacts
+        if: steps.cli_publish_check.outputs.should_publish == 'true'
         uses: actions/download-artifact@v4
         with:
           pattern: browser4-cli-*
@@ -714,6 +745,7 @@ jobs:
           merge-multiple: true
 
       - name: Move binaries into CLI package bin directory
+        if: steps.cli_publish_check.outputs.should_publish == 'true'
         shell: bash
         run: |
           mkdir -p cli/bin
@@ -724,6 +756,7 @@ jobs:
           ls -la cli/bin/
 
       - name: Verify all packaged binaries exist
+        if: steps.cli_publish_check.outputs.should_publish == 'true'
         shell: bash
         run: |
           EXPECTED_BINARIES=(
@@ -761,12 +794,14 @@ jobs:
           echo "All 7 platform binaries are present and valid"
 
       - name: Publish to npm
+        if: steps.cli_publish_check.outputs.should_publish == 'true'
         working-directory: ${{ env.CLI_PACKAGE_DIR }}
         run: npm publish --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Verify npm auth
+        if: steps.cli_publish_check.outputs.should_publish == 'true'
         working-directory: ${{ env.CLI_PACKAGE_DIR }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -780,6 +815,9 @@ jobs:
             echo "## 📦 CLI npm Publish"
             echo ""
             echo "- **CLI Version**: ${{ needs.prepare.outputs.cli_version }}"
+            echo "- **Remote npm Version (publish-time)**: ${{ steps.cli_publish_check.outputs.remote_version }}"
+            echo "- **Publish Re-check Status**: ${{ steps.cli_publish_check.outputs.lookup_status }}"
+            echo "- **Publish Executed**: ${{ steps.cli_publish_check.outputs.should_publish }}"
             echo "- **Status**: ${{ job.status }}"
           } >> "$GITHUB_STEP_SUMMARY"
 
