@@ -21,6 +21,11 @@ open class IllegalWebDriverStateException(
     driver: WebDriver? = null,
 ): WebDriverException(message, cause, driver)
 
+open class WebDriverUnavailableException(
+    message: String? = null,
+    cause: Throwable? = null
+): IllegalWebDriverStateException(message, cause)
+
 open class BrowserUnavailableException(
     message: String? = null,
     cause: Throwable? = null

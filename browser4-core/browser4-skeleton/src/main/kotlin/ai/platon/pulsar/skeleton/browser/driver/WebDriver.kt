@@ -137,9 +137,14 @@ interface WebDriver : Closeable {
     val parentSid: Int
 
     /**
-     * The guid of the driver.
+     * The GUID of the driver.
      * */
     val guid: String
+
+    /**
+     * The readable state
+     * */
+    val readableState: String
 
     /**
      * The browser of the driver.

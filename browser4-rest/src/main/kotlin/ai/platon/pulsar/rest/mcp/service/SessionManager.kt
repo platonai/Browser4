@@ -82,13 +82,41 @@ class SessionManager(
     }
 
     fun checkHealthy(session: ManagedSession): Boolean {
-        var healthy = session.agenticSession.isActive
+        val s = session.agenticSession
+        val browser = s.boundBrowser
+        val driver = s.boundDriver
+
+        if (driver != null && driver.browser != browser) {
+            logger.warn("Inconsistent driver/browser. Driver {} state: {} browser {} state: {}",
+                driver.id, driver.readableState, browser?.id, browser?.readableState)
+        }
+
+        var healthy = s.isActive
+        if (!healthy) {
+            logger.warn("AgenticSession {} is not healthy", s.id)
+        }
 
         if (healthy) {
-            healthy = session.agenticSession.boundBrowser?.healthy() ?: true
-            if (healthy) {
-                healthy = session.agenticSession.boundDriver?.healthy() ?: true
+            healthy = browser?.healthy() ?: true
+            if (!healthy && browser != null) {
+                logger.warn("Bound browser {} is unhealthy, state: {}", browser.id, browser.readableState)
             }
+
+            if (healthy) {
+                healthy = s.boundDriver?.healthy() ?: true
+                if (!healthy && driver != null) {
+                    logger.warn("Bound driver {} is unhealthy, state: {}", driver.id, driver.readableState)
+                }
+            }
+        }
+
+        if (!healthy) {
+            logger.warn("Session {} is unhealthy: session active={}, browser healthy={}, driver healthy={}",
+                session.sessionId,
+                s.isActive,
+                s.boundBrowser?.healthy() ?: "N/A",
+                s.boundDriver?.healthy() ?: "N/A"
+            )
         }
 
         return healthy

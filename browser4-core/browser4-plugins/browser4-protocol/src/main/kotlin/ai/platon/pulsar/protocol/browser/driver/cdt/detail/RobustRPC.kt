@@ -9,10 +9,8 @@ import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.stringify
 import ai.platon.pulsar.protocol.browser.driver.cdt.PulsarWebDriver
-import ai.platon.pulsar.skeleton.browser.driver.BrowserUnavailableException
-import ai.platon.pulsar.skeleton.browser.driver.IllegalWebDriverStateException
+import ai.platon.pulsar.skeleton.browser.driver.*
 import kotlinx.coroutines.delay
-import java.text.MessageFormat
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -42,7 +40,7 @@ class RobustRPC(
 
     @Throws(ChromeRPCException::class)
     suspend fun <T> invoke(action: String, block: suspend () -> T): T? {
-        if (!driver.checkState(action)) {
+        if (!driver.fastCheckState(action)) {
             return null
         }
 
@@ -54,14 +52,14 @@ class RobustRPC(
         }
     }
 
-    @Throws(Exception::class)
+    @Throws(WebDriverException::class)
     suspend fun <T> invokeWithRetry(
         action: String,
         maxRetry: Int = 2,
         url: String? = null,
         block: suspend () -> T
     ): T? {
-        if (!driver.checkState(action)) {
+        if (!driver.fastCheckState(action)) {
             return null
         }
 
@@ -74,12 +72,16 @@ class RobustRPC(
 
         var result = kotlin.runCatching { invokeDeferred0(action, url, block) }
             .onFailure {
-                logger.info("Oop, a bit slip-up executing action: " +
-                            "[$action], retrying 1/$maxRetry time ... | {}", it.brief())
+                logger.info(
+                    "Oop, a bit slip-up executing action: " +
+                            "[$action], retrying 1/$maxRetry time ... | {}", it.brief()
+                )
             }
 
         var i = 1
-        while (result.isFailure && i++ < maxRetry && driver.checkState()) {
+        while (result.isFailure && i++ < maxRetry && driver.fastCheckState()) {
+            checkHealthy(driver)
+
             val exception = result.exceptionOrNull()
             // Check if this is a permanent error that shouldn't be retried
             if (exception != null && !isRetryableException(exception)) {
@@ -91,11 +93,29 @@ class RobustRPC(
                 .onFailure { logger.warn("Exception to execute action: [$action], retrying $i/$maxRetry times", it) }
         }
 
-        if (driver.checkState(action)) {
+        if (driver.fastCheckState(action)) {
             return result.getOrElse { throw it }
         }
 
         return null
+    }
+
+    @Throws(BrowserUnavailableException::class, WebDriverUnavailableException::class)
+    private fun checkHealthy(driver: WebDriver): Boolean {
+        val browser = driver.browser
+        var healthy = browser.healthy()
+        if (!healthy) {
+            logger.warn("Browser {} is unhealthy, state: {}", browser.id, browser.readableState)
+            throw BrowserUnavailableException("Browser ${browser.id} is unhealthy, state: ${browser.readableState}")
+        }
+
+        healthy = driver.healthy()
+        if (!healthy) {
+            logger.warn("Driver {} is unhealthy, state: {}", driver.id, driver.readableState)
+            throw WebDriverUnavailableException("Driver ${driver.id} is unhealthy, state: ${driver.readableState}")
+        }
+
+        return true
     }
 
     /**
@@ -179,18 +199,7 @@ class RobustRPC(
             return
         }
 
-        val message2 = MessageFormat.format(
-            "Browser unavailable: {0} ({1}/{2}) | {3}",
-            action, rpcFailures, maxRPCFailures, e.message
-        )
-
-        if (!e.isOpen) {
-            throw BrowserUnavailableException("Browser connection closed | $message2", e)
-        } else if (!driver.isConnectable) {
-            throw BrowserUnavailableException("Browser connection lost | $message2", e)
-        } else {
-            throw IllegalWebDriverStateException("Unknown chrome IO error | $message2", e)
-        }
+        checkHealthy(driver)
     }
 
     @Throws(IllegalWebDriverStateException::class)
@@ -214,7 +223,7 @@ class RobustRPC(
 
     @Throws(ChromeRPCException::class)
     private suspend fun <T> invokeDeferred0(action: String, url: String? = null, block: suspend () -> T): T? {
-        if (!driver.checkState(action)) {
+        if (!driver.fastCheckState(action)) {
             return null
         }
 
