@@ -21,5 +21,6 @@ Task:
 
 "@
 
-gh copilot --allow-all -p "$prompt" ## --silent
+copilot --allow-all -p "$prompt" ## --silent
+# gh copilot --allow-all -p "$prompt" ## --silent
 # claude --dangerously-skip-permissions $prompt
