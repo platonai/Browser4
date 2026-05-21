@@ -259,9 +259,7 @@ class ChromeLauncher constructor(
         try {
             if (p != null && p.isAlive) {
                 Runtimes.destroyProcess(p, options.shutdownWaitTime)
-                if (p.isAlive) {
-                    destroyForcibly(p.pid())
-                }
+                destroyForcibly(p.pid())
             }
         } catch (t: Throwable) {
             warnForClose(this, t)
@@ -753,7 +751,7 @@ class ChromeLauncher constructor(
                 throw ChromeLaunchException("Chrome profile is locked by another process | $userDataDir")
             }
 
-            handleChromeFailedToStart()
+            logChromeFailedToStart()
 
             throw ChromeLaunchException("$message | $userDataDir")
         }
@@ -769,7 +767,7 @@ class ChromeLauncher constructor(
         }
     }
 
-    private fun handleChromeFailedToStart() {
+    private fun logChromeFailedToStart() {
         val count = Runtimes.countSystemProcess("chrome")
         if (count == 0) {
             logger.error("Failed to start Chrome, no chrome process running in the system")
