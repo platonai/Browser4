@@ -17,7 +17,7 @@
     <groupId>ai.platon</groupId>
     <artifactId>browser4-dependencies</artifactId>
     <name>Browser4 Dependencies</name>
-    <version>4.9.2-SNAPSHOT</version>
+    <version>4.9.3-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <description>Pulsar Dependencies</description>
