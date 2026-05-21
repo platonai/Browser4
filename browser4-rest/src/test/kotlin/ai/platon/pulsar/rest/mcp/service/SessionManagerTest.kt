@@ -3,7 +3,10 @@ package ai.platon.pulsar.rest.mcp.service
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.context.AgenticContext
 import ai.platon.pulsar.skeleton.PulsarSettings
+import ai.platon.pulsar.skeleton.browser.Browser
+import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotSame
 import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -29,9 +32,9 @@ class SessionManagerTest {
     }
 
     @Test
-    fun createSessionUsesDefaultSessionWhenSessionIdIsMissingOrDefault() {
-        val session = sessionManager.createSession(null)
-        val sameSession = sessionManager.createSession(
+    fun getOrCreateSessionUsesDefaultSessionWhenSessionIdIsMissingOrDefault() {
+        val session = sessionManager.getOrCreateSession(null)
+        val sameSession = sessionManager.getOrCreateSession(
             mapOf(
                 "sessionId" to "DEFAULT",
                 "profileMode" to "TEMPORARY",
@@ -46,8 +49,8 @@ class SessionManagerTest {
     }
 
     @Test
-    fun createSessionUsesSequentialProfileModeForNamedSessionsByDefault() {
-        val session = sessionManager.createSession(
+    fun getOrCreateSessionUsesSequentialProfileModeForNamedSessionsByDefault() {
+        val session = sessionManager.getOrCreateSession(
             mapOf(
                 "sessionId" to "team-a",
                 "profileMode" to "DEFAULT",
@@ -60,8 +63,8 @@ class SessionManagerTest {
     }
 
     @Test
-    fun createSessionPreservesSequentialProfileModeForDefaultSession() {
-        val session = sessionManager.createSession(
+    fun getOrCreateSessionPreservesSequentialProfileModeForDefaultSession() {
+        val session = sessionManager.getOrCreateSession(
             mapOf(
                 "profileMode" to "SEQUENTIAL",
             )
@@ -73,8 +76,8 @@ class SessionManagerTest {
     }
 
     @Test
-    fun createSessionPreservesSequentialProfileModeForNamedSessions() {
-        val session = sessionManager.createSession(
+    fun getOrCreateSessionPreservesSequentialProfileModeForNamedSessions() {
+        val session = sessionManager.getOrCreateSession(
             mapOf(
                 "sessionId" to "team-b",
                 "profileMode" to "sequential",
@@ -103,15 +106,15 @@ class SessionManagerTest {
     }
 
     @Test
-    fun createSessionRecreatesInactiveCachedSession() {
+    fun getOrCreateSessionRecreatesInactiveCachedSession() {
         val inactiveSession = mockAgenticSession(isActive = false)
         val replacementSession = mockAgenticSession(isActive = true)
         Mockito.doReturn(inactiveSession, replacementSession)
             .`when`(agenticContext)
             .createSession(Mockito.any(PulsarSettings::class.java) ?: PulsarSettings())
 
-        val firstSession = sessionManager.createSession(mapOf("sessionId" to "team-c"))
-        val secondSession = sessionManager.createSession(mapOf("sessionId" to "team-c"))
+        val firstSession = sessionManager.getOrCreateSession(mapOf("sessionId" to "team-c"))
+        val secondSession = sessionManager.getOrCreateSession(mapOf("sessionId" to "team-c"))
 
         assertEquals("team-c", firstSession.sessionId)
         assertEquals("SEQUENTIAL", firstSession.capabilities?.get("profileMode"))
@@ -124,9 +127,57 @@ class SessionManagerTest {
         verify(agenticContext, times(2)).createSession(Mockito.any(PulsarSettings::class.java) ?: PulsarSettings())
     }
 
-    private fun mockAgenticSession(isActive: Boolean = true): AgenticSession {
+    @Test
+    fun getSessionRecreatesNamedSessionWhenCachedBrowserBecomesUnhealthy() {
+        val browser = Mockito.mock(Browser::class.java)
+        Mockito.`when`(browser.healthy()).thenReturn(true, false)
+
+        val initialSession = mockAgenticSession(isActive = true, browser = browser)
+        val replacementSession = mockAgenticSession(isActive = true)
+        Mockito.doReturn(initialSession, replacementSession)
+            .`when`(agenticContext)
+            .createSession(Mockito.any(PulsarSettings::class.java) ?: PulsarSettings())
+
+        val firstSession = sessionManager.getOrCreateSession(mapOf("sessionId" to "team-d"))
+        val fetchedSession = sessionManager.getSession("team-d")
+
+        requireNotNull(fetchedSession)
+        assertNotSame(firstSession, fetchedSession)
+        assertEquals("team-d", fetchedSession.sessionId)
+        assertEquals("active", fetchedSession.status)
+        verify(agenticContext, times(2)).createSession(Mockito.any(PulsarSettings::class.java) ?: PulsarSettings())
+    }
+
+    @Test
+    fun getOrCreateSessionMarksReplacementStoppedWhenRecreatedSessionRemainsUnhealthy() {
+        val unhealthyBrowser = Mockito.mock(Browser::class.java)
+        Mockito.`when`(unhealthyBrowser.healthy()).thenReturn(false)
+        val unhealthyDriver = Mockito.mock(WebDriver::class.java)
+        Mockito.`when`(unhealthyDriver.healthy()).thenReturn(false)
+
+        val inactiveSession = mockAgenticSession(isActive = true, browser = unhealthyBrowser)
+        val unhealthyReplacement = mockAgenticSession(isActive = true, driver = unhealthyDriver)
+        Mockito.doReturn(inactiveSession, unhealthyReplacement)
+            .`when`(agenticContext)
+            .createSession(Mockito.any(PulsarSettings::class.java) ?: PulsarSettings())
+
+        val session = sessionManager.getOrCreateSession(mapOf("sessionId" to "team-e"))
+
+        assertEquals("team-e", session.sessionId)
+        assertEquals("stopped", session.status)
+        assertSame(session, sessionManager.getAllSessions().single())
+        verify(agenticContext, times(2)).createSession(Mockito.any(PulsarSettings::class.java) ?: PulsarSettings())
+    }
+
+    private fun mockAgenticSession(
+        isActive: Boolean = true,
+        browser: Browser? = null,
+        driver: WebDriver? = null,
+    ): AgenticSession {
         val session = Mockito.mock(AgenticSession::class.java)
         Mockito.`when`(session.isActive).thenReturn(isActive)
+        Mockito.`when`(session.boundBrowser).thenReturn(browser)
+        Mockito.`when`(session.boundDriver).thenReturn(driver)
         return session
     }
 }

@@ -250,7 +250,7 @@ class MCPToolController(
             )
 
             val activeSession = sessionManager.getAllSessions().firstOrNull()
-            val managedSession = activeSession ?: sessionManager.createSession(null)
+            val managedSession = activeSession ?: sessionManager.getOrCreateSession(null)
             val deleteAfterListing = activeSession == null
 
             try {
@@ -276,7 +276,7 @@ class MCPToolController(
 
     private fun handleOpenSession(request: MCPToolCallRequest): ResponseEntity<MCPToolCallResponse> {
         val capabilities = request.arguments?.get("capabilities") as? Map<String, Any?>
-        val session = sessionManager.createSession(capabilities)
+        val session = sessionManager.getOrCreateSession(capabilities)
 
         // Navigate to initial URL if provided
         val url = request.arguments?.get("url")?.toString()

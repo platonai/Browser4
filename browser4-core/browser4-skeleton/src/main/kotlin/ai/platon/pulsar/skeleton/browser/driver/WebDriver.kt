@@ -137,9 +137,14 @@ interface WebDriver : Closeable {
     val parentSid: Int
 
     /**
-     * The guid of the driver.
+     * The GUID of the driver.
      * */
     val guid: String
+
+    /**
+     * The readable state
+     * */
+    val readableState: String
 
     /**
      * The browser of the driver.
@@ -207,6 +212,15 @@ interface WebDriver : Closeable {
      * ```
      * */
     val timeoutPolicy: Map<String, Duration>
+
+    fun canConnect(): Boolean
+
+    /**
+     * Check if this driver is healthy.
+     *
+     * This is a heavy operation and should be called with low frequency.
+     * */
+    fun healthy(): Boolean
 
     /**
      * Adds a script which would be evaluated whenever the page is navigated. @mcp

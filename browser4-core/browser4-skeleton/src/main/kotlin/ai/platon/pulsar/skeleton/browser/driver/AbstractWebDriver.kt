@@ -183,7 +183,9 @@ abstract class AbstractWebDriver(
     val isCrashed get() = crashed.get()
 
     /** Human-readable composite status string (e.g. WORKING,IDLE or READY,REUSED). */
-    val status: String
+    val status: String get() = readableState
+
+    override val readableState: String
         get() {
             val sb = StringBuilder()
             val st = state.get() ?: return ""
@@ -691,7 +693,7 @@ abstract class AbstractWebDriver(
         return session
     }
 
-    fun checkState(action: String = ""): Boolean {
+    fun fastCheckState(action: String = ""): Boolean {
         if (!isActive) {
             return false
         }

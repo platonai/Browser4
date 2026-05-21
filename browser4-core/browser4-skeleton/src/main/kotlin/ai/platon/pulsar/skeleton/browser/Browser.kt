@@ -90,6 +90,13 @@ interface Browser : AutoCloseable {
     val readableState: String
 
     /**
+     * Check if this driver is healthy.
+     *
+     * This is a heavy operation and should be called with low frequency.
+     * */
+    fun healthy(): Boolean
+
+    /**
      * Create a new driver.
      * */
     @Throws(WebDriverException::class)
