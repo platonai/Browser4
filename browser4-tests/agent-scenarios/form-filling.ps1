@@ -13,3 +13,4 @@ If you need to perform an action in the browser, find the appropriate browser4-c
 "@
 
 gh copilot --allow-all -p "$prompt" ## --silent
+# claude --dangerously-skip-permissions $prompt
