@@ -9,6 +9,7 @@ import ai.platon.pulsar.agentic.tools.high.crawl.failed
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.Strings
 import ai.platon.pulsar.common.getLogger
+import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.skeleton.event.PageEventHandlers
 import ai.platon.pulsar.skeleton.event.impl.PageEventHandlersFactory
 import kotlinx.coroutines.*
@@ -113,12 +114,12 @@ class CommandService(
 
         // 2. Only one single url with optional parameters
         // it is better to use ScrapeController directly for this kind of commands which supports massive scraping
-        if (Strings.isSingleLine(command)) {
+        if (isConfiguredUrl(command)) {
             val url = session.normalize(command)
             if (url.isNotNil) {
                 val eventHandlers = PageEventHandlersFactory.create()
                 val request = PageVisitRequest(url = url.urlSpec, args = url.args)
-                submitPageVisitCommandAsync(request, eventHandlers)
+                return submitPageVisitCommandAsync(request, eventHandlers)
             }
         }
 
@@ -131,6 +132,10 @@ class CommandService(
             // 4. Free command
             submitAgentTaskAsync(command)
         }
+    }
+
+    private fun isConfiguredUrl(s: String): Boolean {
+        return Strings.isSingleLine(s) && URLUtils.normalizeOrNull(s) != null
     }
 
     /**

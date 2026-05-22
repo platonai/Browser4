@@ -25,6 +25,8 @@ import kotlin.test.Ignore
 import kotlin.test.Test
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration
+import kotlin.time.Duration.Companion.minutes
 
 @SpringBootTest
 @ContextConfiguration(initializers = [PulsarTestContextInitializer::class])
@@ -36,6 +38,8 @@ class CommandServiceTest : MockEcServerTestBase() {
 
     @Autowired
     private lateinit var commandService: CommandService
+
+    private val waitCompletionTimeout: Duration = 0.minutes
 
     @BeforeEach
     override fun setup() {
@@ -339,10 +343,14 @@ class CommandServiceTest : MockEcServerTestBase() {
     @DisplayName("test submitPlainCommandAsync with URL-based command")
     fun testSubmitPlainCommandAsyncWithUrlBasedCommand() {
         // A command with URL should be handled by the standard async flow
-        val plainCommand = """
+        val plainCommand1 = """
             Visit $MOCK_PRODUCT_DETAIL_URL
             Summarize the product.
         """.trimIndent()
+
+        val plainCommand2 = "goto https://www.amazon.com/s?k=shoes   ; give me the titles and prices of the first 10 products"
+
+        val plainCommand = plainCommand2
 
         val statusId = runBlocking { commandService.submitPlainCommandAsync(plainCommand) }
         assertNotNull(statusId)
@@ -414,14 +422,14 @@ class CommandServiceTest : MockEcServerTestBase() {
         assertTrue { status.isDone }
     }
 
-    private fun waitForCommandDone(statusId: String, timeoutSeconds: Long = 0) {
-        if (timeoutSeconds <= 0) {
+    private fun waitForCommandDone(statusId: String) {
+        if (waitCompletionTimeout.inWholeSeconds <= 0) {
             return
         }
 
         var status = commandService.getStatus(statusId)
 
-        var n = timeoutSeconds
+        var n = waitCompletionTimeout.inWholeSeconds
         while (n-- > 0 && status?.processState != "done") {
             status = commandService.getStatus(statusId)
             printlnPro(status)

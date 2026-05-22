@@ -20,7 +20,7 @@ typealias CommandStatus = ai.platon.pulsar.agentic.tools.high.command.CommandSta
  * @property args The load arguments
  * @property actions Instructs, e.g. "click the button with id 'submit'", [actions]  are performed after the active DOM is ready
  * */
-data class PromptRequest(
+data class PromptRequest constructor(
     /**
      * The page url
      * */

@@ -103,6 +103,7 @@ abstract class AbstractPulsarContext(
      * */
     private val abnormalPage
         get() = when {
+            !isActive -> null
             loadComponentOrNull != null -> null // everything is OK
             else -> GoraWebPage.NIL
         }
@@ -112,6 +113,7 @@ abstract class AbstractPulsarContext(
      * */
     private val abnormalPages: List<WebPage>?
         get() = when {
+            !isActive -> listOf()
             loadComponentOrNull != null -> null // everything is OK
             else -> listOf()
         }
@@ -119,7 +121,7 @@ abstract class AbstractPulsarContext(
     /**
      * Flag that indicates whether this context is currently active.
      * */
-    override val isActive get() = !closed.get() && applicationContext.isActive
+    override val isActive get() = !closed.get() && applicationContext.isActive && AppContext.isActive
 
     /**
      * The context id
@@ -323,8 +325,14 @@ abstract class AbstractPulsarContext(
     /**
      * Check the fetch state of a page.
      * */
-    override fun fetchState(page: WebPage, options: LoadOptions) =
-        loadComponentOrNull?.fetchState(page, options) ?: CheckState(FetchState.DO_NOT_FETCH, "closed")
+    override fun fetchState(page: WebPage, options: LoadOptions): CheckState {
+        if (!isActive) {
+            return CheckState(FetchState.DO_NOT_FETCH, "closed")
+        }
+
+        val fetchState = loadComponentOrNull?.fetchState(page, options)
+        return fetchState ?: CheckState(FetchState.DO_NOT_FETCH, "closed")
+    }
 
     /**
      * Scan pages in the storage.

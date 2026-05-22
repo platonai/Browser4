@@ -101,7 +101,6 @@ data class PageVisitRequest @JsonCreator constructor(
     @param:JsonProperty("args") var args: String? = null,
     @param:JsonProperty("onBrowserLaunchedActions") var onBrowserLaunchedActions: List<String>? = null,
     @param:JsonProperty("onPageReadyActions") var onPageReadyActions: List<String>? = null,
-    @param:JsonProperty("actions") var actions: List<String>? = null,
     @param:JsonProperty("pageSummaryPrompt") var pageSummaryPrompt: String? = null,
     @param:JsonProperty("dataExtractionRules") var dataExtractionRules: String? = null,
     @param:JsonProperty("uriExtractionRules") var uriExtractionRules: String? = null,
@@ -135,7 +134,8 @@ data class PageVisitRequest @JsonCreator constructor(
         val args = if (hasAction()) {
             LoadOptions.mergeArgs(this.args, "-refresh -requireSize $minimalSize")
         } else {
-            LoadOptions.mergeArgs(this.args, "-requireSize $minimalSize")
+            // TODO: always add -refresh, will review this behavior later when we have more understanding of the impact of -refresh
+            LoadOptions.mergeArgs(this.args, "-requireSize $minimalSize", "-refresh")
         }
 
         this.args = args
