@@ -252,8 +252,6 @@ class ChromeLauncher constructor(
      * */
     @Synchronized
     fun stop() {
-        shutdownHookRegistry.remove(shutdownHookThread)
-
         val p = process
         this.process = null
         try {
@@ -276,6 +274,7 @@ class ChromeLauncher constructor(
      * */
     override fun close() {
         if (closed.compareAndSet(false, true)) {
+            shutdownHookRegistry.remove(shutdownHookThread)
             stop()
         }
     }
