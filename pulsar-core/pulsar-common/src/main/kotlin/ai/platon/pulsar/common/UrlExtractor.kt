@@ -4,16 +4,7 @@ import java.util.regex.Pattern
 
 open class UrlExtractor {
     companion object {
-
-        /**
-         * @see <a href='https://github.com/aosp-mirror/platform_frameworks_base/blob/master/core/java/android/util/Patterns.java'>Patterns</a>
-         * */
-        val URL_PATTERN: Pattern = Pattern.compile(
-            "(?:^|[\\W])((ht|f)tp(s?):\\/\\/|www\\.)"
-                    + "(([\\w\\-]+\\.){1,}?([\\w\\-.~]+\\/?)*"
-                    + "[\\p{Alnum}.,%_=?&#\\-+()\\[\\]\\*$~@!:/{};']*)",
-            Pattern.CASE_INSENSITIVE or Pattern.MULTILINE or Pattern.DOTALL
-        )
+        val URL_PATTERN: Pattern = Patterns.AUTOLINK_WEB_URL
     }
 
     /**
