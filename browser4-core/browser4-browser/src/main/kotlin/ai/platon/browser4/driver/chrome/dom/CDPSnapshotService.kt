@@ -1,14 +1,13 @@
 package ai.platon.browser4.driver.chrome.dom
 
-import ai.platon.cdt.kt.protocol.types.accessibility.AXNode
-import ai.platon.browser4.driver.chrome.RemoteDevTools
-import ai.platon.browser4.driver.chrome.experimental.CDP
 import ai.platon.browser4.driver.chrome.dom.AccessibilityHandler.AccessibilityTreeResult
 import ai.platon.browser4.driver.chrome.dom.model.*
 import ai.platon.browser4.driver.chrome.dom.util.DomDebug
 import ai.platon.browser4.driver.chrome.dom.util.HashUtils
 import ai.platon.browser4.driver.chrome.dom.util.ScrollUtils
 import ai.platon.browser4.driver.chrome.dom.util.XPathUtils
+import ai.platon.browser4.driver.chrome.experimental.CDP
+import ai.platon.cdt.kt.protocol.types.accessibility.AXNode
 import ai.platon.pulsar.common.getLogger
 import java.awt.Dimension
 import java.util.*
@@ -242,7 +241,10 @@ class CDPSnapshotService(
             return true
         }
 
-        fun isElementVisibleAccordingToAllParents(node: MergedDOMTreeNode, htmlFrames: List<MergedDOMTreeNode>): Boolean {
+        fun isElementVisibleAccordingToAllParents(
+            node: MergedDOMTreeNode,
+            htmlFrames: List<MergedDOMTreeNode>
+        ): Boolean {
             val snap = node.snapshotNode ?: return false
             var current = snap.bounds?.roundTo(1)
                 ?.let { DOMRect(it.x, it.y, it.width, it.height) } ?: return false
@@ -291,7 +293,8 @@ class CDPSnapshotService(
             val backendNodeId = node.backendNodeId
 
             // Get snapshot and AX
-            val snapshot = if (options.includeSnapshot && backendNodeId != null) trees.snapshotByBackendId[backendNodeId] else null
+            val snapshot =
+                if (options.includeSnapshot && backendNodeId != null) trees.snapshotByBackendId[backendNodeId] else null
             val ax = if (options.includeAX && backendNodeId != null) trees.axByBackendId[backendNodeId] else null
 
             // Calculate absolute position based on accumulated offsets
@@ -326,7 +329,13 @@ class CDPSnapshotService(
 
             val parentBranchHash = if (ancestors.isNotEmpty()) {
                 runCatching { HashUtils.parentBranchHash(ancestors) }
-                    .onFailure { tracer?.trace("Parent branch hash failed | nodeId={} | {} ", node.nodeId, it.toString()) }
+                    .onFailure {
+                        tracer?.trace(
+                            "Parent branch hash failed | nodeId={} | {} ",
+                            node.nodeId,
+                            it.toString()
+                        )
+                    }
                     .getOrNull()
             } else null
 
@@ -685,7 +694,9 @@ class CDPSnapshotService(
         return { n: MergedDOMTreeNode ->
             (tag == null || n.nodeName.equals(tag, ignoreCase = true)) &&
                     (id == null || n.attributes["id"] == id) &&
-                    (classes.isEmpty() || classes.all { it in (n.attributes["class"]?.split(Regex("\\s+"))?.toSet() ?: emptySet()) })
+                    (classes.isEmpty() || classes.all {
+                        it in (n.attributes["class"]?.split(Regex("\\s+"))?.toSet() ?: emptySet())
+                    })
         }
     }
 
@@ -850,8 +861,9 @@ class CDPSnapshotService(
         val axResult: AccessibilityTreeResult = if (options.includeAX) {
             runCatching { accessibility.getFullAXTree(target.frameId, depth = null) }
                 .onFailure { e ->
-                logger.warn("AX tree collection failed | frameId={} | err={}", target.frameId, e.toString())
-                    tracer?.trace("AX tree exception", e) }
+                    logger.warn("AX tree collection failed | frameId={} | err={}", target.frameId, e.toString())
+                    tracer?.trace("AX tree exception", e)
+                }
                 .getOrDefault(AccessibilityTreeResult.EMPTY)
         } else AccessibilityTreeResult.EMPTY
 

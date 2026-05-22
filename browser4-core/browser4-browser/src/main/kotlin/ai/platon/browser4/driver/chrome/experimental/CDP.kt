@@ -2,25 +2,19 @@ package ai.platon.browser4.driver.chrome.experimental
 
 import ai.platon.browser4.driver.chrome.RemoteDevTools
 import ai.platon.cdt.kt.protocol.ChromeDevTools
-import ai.platon.cdt.kt.protocol.support.annotations.Optional
 import ai.platon.cdt.kt.protocol.support.annotations.ParamName
-import ai.platon.cdt.kt.protocol.support.annotations.Returns
-import ai.platon.cdt.kt.protocol.types.domsnapshot.CaptureSnapshot
 import ai.platon.cdt.kt.protocol.types.dom.Rect
+import ai.platon.cdt.kt.protocol.types.domsnapshot.CaptureSnapshot
 import ai.platon.cdt.kt.protocol.types.input.DispatchDragEventType
 import ai.platon.cdt.kt.protocol.types.input.DispatchKeyEventType
 import ai.platon.cdt.kt.protocol.types.input.DispatchMouseEventType
 import ai.platon.cdt.kt.protocol.types.input.DragData
 import ai.platon.cdt.kt.protocol.types.network.LoadNetworkResourceOptions
 import ai.platon.cdt.kt.protocol.types.network.LoadNetworkResourcePageResult
-import ai.platon.cdt.kt.protocol.types.page.CaptureScreenshotFormat
-import ai.platon.cdt.kt.protocol.types.page.Viewport
+import ai.platon.cdt.kt.protocol.types.page.*
 import ai.platon.cdt.kt.protocol.types.runtime.CallArgument
 import ai.platon.cdt.kt.protocol.types.runtime.CallFunctionOn
 import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
-import ai.platon.cdt.kt.protocol.types.page.Navigate
-import ai.platon.cdt.kt.protocol.types.page.ReferrerPolicy
-import ai.platon.cdt.kt.protocol.types.page.TransitionType
 
 /**
  * CDP is the single access point for all Chrome DevTools Protocol (CDP) domain APIs.
@@ -130,12 +124,12 @@ class CDP(
         fromSurface: Boolean? = null,
         captureBeyondViewport: Boolean? = null,
     ) = page.captureScreenshot(
-            format = format,
-            quality = quality,
-            clip = clip,
-            fromSurface = fromSurface,
-            captureBeyondViewport = captureBeyondViewport,
-        )
+        format = format,
+        quality = quality,
+        clip = clip,
+        fromSurface = fromSurface,
+        captureBeyondViewport = captureBeyondViewport,
+    )
 
     suspend fun setDeviceMetricsOverride(
         mobile: Boolean,
@@ -193,7 +187,8 @@ class CDP(
         pierce: Boolean? = null,
     ) = dom.describeNode(nodeId, backendNodeId, objectId, depth, pierce)
 
-    suspend fun scrollIntoViewIfNeeded(nodeId: Int, rect: Rect? = null) = dom.scrollIntoViewIfNeeded(nodeId, rect = rect)
+    suspend fun scrollIntoViewIfNeeded(nodeId: Int, rect: Rect? = null) =
+        dom.scrollIntoViewIfNeeded(nodeId, rect = rect)
 
     suspend fun resolveNodeByNodeId(nodeId: Int) = dom.resolveNode(nodeId = nodeId)
 

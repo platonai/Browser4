@@ -1,12 +1,10 @@
 package ai.platon.browser4.driver.chrome.dom
 
-import ai.platon.browser4.driver.chrome.RemoteDevTools
-import ai.platon.browser4.driver.chrome.experimental.CDP
 import ai.platon.browser4.driver.chrome.dom.model.MergedDOMTreeNode
 import ai.platon.browser4.driver.chrome.dom.model.NodeType
 import ai.platon.browser4.driver.chrome.dom.model.PageTarget
+import ai.platon.browser4.driver.chrome.experimental.CDP
 import ai.platon.pulsar.common.getLogger
-import kotlin.jvm.Volatile
 
 typealias CdpNode = ai.platon.cdt.kt.protocol.types.dom.Node
 
