@@ -267,6 +267,14 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_collective_submission_commands,
     },
+    ScenarioDef {
+        name: "test_e2e_collective_command_help_and_validation",
+        short_name: "test_collective_command_help_and_validation",
+        requires_browser4: false,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: mock_server::test_collective_command_help_and_validation,
+    },
 ];
 
 pub(super) fn all_scenarios() -> &'static [ScenarioDef] {

@@ -799,3 +799,95 @@ pub(super) fn test_collective_submission_commands(ctx: &mut E2ECtx) {
         vec!["collective-job-42".to_string()]
     );
 }
+
+pub(super) fn test_collective_command_help_and_validation(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let co_create_help = run_command(ctx, &["help", "co-create"]);
+    assert!(
+        co_create_help.stdout.contains("browser4-cli co-create"),
+        "Expected co-create usage in:\n{}",
+        co_create_help.stdout
+    );
+    assert!(
+        co_create_help.stdout.contains("browser4-cli co create"),
+        "Expected co-create alias example in:\n{}",
+        co_create_help.stdout
+    );
+    assert!(
+        co_create_help.stdout.contains("--max-browser-contexts"),
+        "Expected co-create options in:\n{}",
+        co_create_help.stdout
+    );
+
+    let co_submit_help = run_command(ctx, &["help", "co-submit"]);
+    assert!(
+        co_submit_help.stdout.contains("--seed-file"),
+        "Expected seed-file option in:\n{}",
+        co_submit_help.stdout
+    );
+    assert!(
+        co_submit_help
+            .stdout
+            .contains("blank lines and lines beginning with `#` are ignored"),
+        "Expected seed-file note in:\n{}",
+        co_submit_help.stdout
+    );
+    assert!(
+        co_submit_help
+            .stdout
+            .contains("browser4-cli co submit https://example.com/direct"),
+        "Expected co-submit example in:\n{}",
+        co_submit_help.stdout
+    );
+
+    let co_scrape_help = run_command(ctx, &["help", "co-scrape"]);
+    assert!(
+        co_scrape_help.stdout.contains("--selector"),
+        "Expected selector option in:\n{}",
+        co_scrape_help.stdout
+    );
+    assert!(
+        co_scrape_help.stdout.contains("Use `co-status` and `co-result`"),
+        "Expected follow-up note in:\n{}",
+        co_scrape_help.stdout
+    );
+
+    let co_status_help = run_command(ctx, &["help", "co-status"]);
+    assert!(
+        co_status_help.stdout.contains("browser4-cli co status co-task-4"),
+        "Expected co-status example in:\n{}",
+        co_status_help.stdout
+    );
+
+    let co_result_help = run_command(ctx, &["help", "co-result"]);
+    assert!(
+        co_result_help.stdout.contains("browser4-cli co result co-task-4"),
+        "Expected co-result example in:\n{}",
+        co_result_help.stdout
+    );
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let submit_failure = run_command_expecting_failure(
+        ctx,
+        &["co", "submit"],
+        "Either a URL or --seed-file is required.",
+    );
+    let submit_failure_output = format!("{}\n{}", submit_failure.stdout, submit_failure.stderr);
+    assert!(
+        submit_failure_output.contains("Either a URL or --seed-file is required."),
+        "Expected co-submit validation error in:\n{}",
+        submit_failure_output
+    );
+
+    let scrape_failure = run_command_expecting_failure(ctx, &["co", "scrape"], "URL is required.");
+    let scrape_failure_output = format!("{}\n{}", scrape_failure.stdout, scrape_failure.stderr);
+    assert!(
+        scrape_failure_output.contains("URL is required."),
+        "Expected co-scrape validation error in:\n{}",
+        scrape_failure_output
+    );
+}
+

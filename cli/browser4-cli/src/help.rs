@@ -175,6 +175,78 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli goto https://browser4.io/".to_string());
     }
 
+    if cmd.name == "co-create" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Creates a collective Browser4 session and stores the returned session ID in the current CLI slot."
+                .to_string(),
+        );
+        lines.push(
+            "  - You can also invoke it as `browser4-cli co create` using the short collective prefix."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli co-create".to_string());
+        lines.push(
+            "  browser4-cli co create --profile-mode=prototype --max-open-tabs=12 --max-browser-contexts=3 --display-mode=SUPERVISED"
+                .to_string(),
+        );
+    }
+
+    if cmd.name == "co-submit" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Accepts a direct URL, a `--seed-file`, or both, and submits each URL as an async collective task."
+                .to_string(),
+        );
+        lines.push(
+            "  - Seed files are plain text with one URL per line; blank lines and lines beginning with `#` are ignored."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli co-submit https://example.com/direct".to_string());
+        lines.push(
+            "  browser4-cli co submit https://example.com/direct --seed-file=./collective-seeds.txt --deadline=2026-03-30T00:00:00Z --expires=1d --refresh --parse --store-content"
+                .to_string(),
+        );
+    }
+
+    if cmd.name == "co-scrape" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Submits an async scrape-oriented collective task for the given URL."
+                .to_string(),
+        );
+        lines.push(
+            "  - Use `co-status` and `co-result` with the returned task ID to monitor and fetch the final result."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push(
+            "  browser4-cli co-scrape https://example.com/news --selector=.headline a --attribute=href --output=headlines.json"
+                .to_string(),
+        );
+        lines.push(
+            "  browser4-cli co scrape https://example.com/news --selector=.item --attribute=textContent --expires=6h --refresh"
+                .to_string(),
+        );
+    }
+
+    if cmd.name == "co-status" {
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli co-status co-task-4".to_string());
+        lines.push("  browser4-cli co status co-task-4".to_string());
+    }
+
+    if cmd.name == "co-result" {
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli co-result co-task-4".to_string());
+        lines.push("  browser4-cli co result co-task-4".to_string());
+    }
+
     lines.join("\n")
 }
 
@@ -327,6 +399,7 @@ mod tests {
         assert!(help.contains("--max-browser-contexts"));
         assert!(help.contains("--display-mode"));
         assert!(help.contains("Display mode: GUI, HEADLESS, SUPERVISED"));
+        assert!(help.contains("browser4-cli co create"));
     }
 
     #[test]
@@ -338,6 +411,8 @@ mod tests {
         assert!(help.contains("--seed-file"));
         assert!(help.contains("--deadline"));
         assert!(help.contains("--expires"));
+        assert!(help.contains("blank lines and lines beginning with `#` are ignored"));
+        assert!(help.contains("browser4-cli co submit https://example.com/direct"));
     }
 
     #[test]
@@ -349,6 +424,23 @@ mod tests {
         assert!(help.contains("--selector"));
         assert!(help.contains("--attribute"));
         assert!(help.contains("--output"));
+        assert!(help.contains("Use `co-status` and `co-result`"));
+        assert!(help.contains("browser4-cli co scrape https://example.com/news"));
+    }
+
+    #[test]
+    fn test_generate_command_help_co_status_and_result() {
+        let cmds = all_commands();
+
+        let status = cmds.iter().find(|c| c.name == "co-status").unwrap();
+        let status_help = generate_command_help(status);
+        assert!(status_help.contains("browser4-cli co-status <id>"));
+        assert!(status_help.contains("browser4-cli co status co-task-4"));
+
+        let result = cmds.iter().find(|c| c.name == "co-result").unwrap();
+        let result_help = generate_command_help(result);
+        assert!(result_help.contains("browser4-cli co-result <id>"));
+        assert!(result_help.contains("browser4-cli co result co-task-4"));
     }
 
     #[test]

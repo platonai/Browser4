@@ -177,6 +177,78 @@ browser4-cli help agent-run
 browser4-cli help co-create
 ```
 
+## Collective workflows
+
+The `co-*` commands are intended for collective Browser4 runs where one CLI
+session coordinates multiple backend browser contexts.
+
+You can use either the long form or the short `co <subcommand>` alias:
+
+```bash
+browser4-cli co-create
+browser4-cli co create
+browser4-cli co-submit https://example.com
+browser4-cli co submit https://example.com
+```
+
+Recommended lifecycle:
+
+```bash
+# 1) create a collective session with backend capability hints
+browser4-cli co create \
+  --profile-mode=prototype \
+  --max-open-tabs=12 \
+  --max-browser-contexts=3 \
+  --display-mode=SUPERVISED
+
+# 2) submit one direct URL plus a seed file for fan-out execution
+browser4-cli co submit https://example.com/direct \
+  --seed-file=./collective-seeds.txt \
+  --deadline=2026-03-30T00:00:00Z \
+  --expires=1d \
+  --refresh \
+  --parse \
+  --store-content
+
+# 3) submit a scrape-oriented task for a single page
+browser4-cli co scrape https://example.com/news \
+  --selector=.headline a \
+  --attribute=href \
+  --output=headlines.json \
+  --expires=6h \
+  --refresh
+
+# 4) poll and fetch the result
+browser4-cli co status co-task-4
+browser4-cli co result co-task-4
+```
+
+Notes:
+
+- `co-submit` accepts a positional URL, `--seed-file`, or both.
+- Seed files are plain text, one URL per line. Empty lines and lines beginning
+  with `#` are ignored.
+- `co-submit` forwards load-option style flags such as `--deadline`,
+  `--expires`, `--refresh`, `--parse`, and `--store-content` to the backend.
+- `co-scrape` submits asynchronously, then prints the selector / attribute /
+  output contract so the extraction intent is visible in the terminal log.
+- Capture the task ID printed by `co-submit` or `co-scrape`, then use
+  `co-status` and `co-result` to follow the async job.
+
+Example seed file:
+
+```text
+# urls for the collective crawler
+https://example.com/seed-1
+https://example.com/seed-2
+```
+
+Typical use cases:
+
+- parallel refresh of a curated URL list
+- supervised fan-out browsing across multiple contexts
+- repeatable selector-based scraping jobs with explicit output artifacts
+
 ## Installation
 
 ### Global Installation (recommended)

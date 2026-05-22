@@ -133,7 +133,6 @@ The tables below mirror the commands surfaced by the global `browser4-cli help` 
 | Command | Description |
 |---|---|
 | `screenshot [ref]` | Take a screenshot |
-| `pdf` | Save page as PDF |
 
 #### Tabs
 
@@ -156,7 +155,6 @@ Use `tab-list` first to find the zero-based tab index you want to select or clos
 
 Use `close-all` for session cleanup when you want to keep the current Browser4 service running. Use `kill-all` only when you explicitly want to stop the backend and clean up tracked Browser4 processes.
 
-
 ### Advanced commands
 
 These commands are intentionally omitted from the global `browser4-cli help` overview.
@@ -176,6 +174,109 @@ Query `browser4-cli help <command>` for the exact syntax when you need them.
 | `co-scrape <url>` | Scrape data from a URL using CSS selectors |
 | `co-status <id>` | Check the status of a collective task |
 | `co-result <id>` | Get the result of a completed collective task |
+
+## Collective workflows (`co-*`)
+
+The collective commands are designed for fan-out workflows where one CLI session
+coordinates multiple browser contexts in the Browser4 backend.
+
+You can invoke them either with the explicit command name or with the short
+prefix form:
+
+```shell
+browser4-cli co-create
+browser4-cli co create
+browser4-cli co-submit https://example.com
+browser4-cli co submit https://example.com
+```
+
+### Command lifecycle
+
+| Step | Command | What it does |
+|---|---|---|
+| 1 | `co-create` | Opens a collective session and persists the returned session ID in the current CLI slot |
+| 2 | `co-submit [url]` | Submits one direct URL plus any URLs from `--seed-file`, each as an async collective task |
+| 2 | `co-scrape <url>` | Submits an async scrape-oriented task for a single URL and echoes the selector/output metadata |
+| 3 | `co-status <id>` | Polls the backend for the task status JSON |
+| 4 | `co-result <id>` | Retrieves the final result payload for a completed task |
+
+### Notes
+
+- `co-create` accepts backend capability hints such as `--profile-mode`,
+  `--max-open-tabs`, `--max-browser-contexts`, and `--display-mode`.
+- `co-submit` accepts either a direct positional URL, `--seed-file`, or both.
+  Seed files are plain text files with one URL per line; blank lines and lines
+  starting with `#` are ignored.
+- `co-submit` maps CLI flags like `--deadline`, `--expires`, `--refresh`,
+  `--parse`, and `--store-content` into the plain command string submitted to
+  the backend.
+- `co-scrape` submits the URL asynchronously, then prints the `selector`,
+  `attribute`, and `output` values so the requested extraction contract is
+  visible in the terminal log.
+- `co-status` and `co-result` are read-only follow-up commands; keep the task ID
+  printed by `co-submit` / `co-scrape`.
+
+### Use cases
+
+#### 1. Create a supervised collective session for manual monitoring
+
+```shell
+browser4-cli co create \
+  --profile-mode=prototype \
+  --max-open-tabs=12 \
+  --max-browser-contexts=3 \
+  --display-mode=SUPERVISED
+```
+
+Use this when you want multiple isolated browser contexts and you still want to
+watch the run visually.
+
+#### 2. Submit a seed crawl with shared load options
+
+```shell
+browser4-cli co submit https://example.com/direct \
+  --seed-file=./collective-seeds.txt \
+  --deadline=2026-03-30T00:00:00Z \
+  --expires=1d \
+  --refresh \
+  --parse \
+  --store-content
+```
+
+Example `collective-seeds.txt`:
+
+```text
+# campaign landing pages
+https://example.com/seed-1
+https://example.com/seed-2
+```
+
+This pattern is useful for warming caches, refreshing a URL list, or launching
+parallel collection across a curated seed set.
+
+#### 3. Submit a selector-based scrape task
+
+```shell
+browser4-cli co scrape https://example.com/news \
+  --selector=.headline a \
+  --attribute=href \
+  --output=headlines.json \
+  --expires=6h \
+  --refresh
+```
+
+Use this for repeatable extraction jobs where you want the terminal output to
+record the source URL, selector contract, and output target.
+
+#### 4. Poll and fetch the result
+
+```shell
+browser4-cli co status co-task-4
+browser4-cli co result co-task-4
+```
+
+The status command prints the backend JSON payload as-is. Once the task is
+complete, use `co-result` to fetch the final artifact or text result.
 
 ## Element References
 
