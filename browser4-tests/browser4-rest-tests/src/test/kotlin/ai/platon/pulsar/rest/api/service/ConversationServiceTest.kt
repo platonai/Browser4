@@ -41,7 +41,7 @@ Extract links: all links containing `/dp/` on the page.
     """
 
 const val PAGE_VISIT_COMMAND_PROMPT3 = """
-Visit the page: http://localhost:8182/ec/dp/B0E000001
+Visit the page: http://localhost:18080/ec/dp/B0E000001
 
 ### 📝 Tasks:
 

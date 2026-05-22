@@ -15,7 +15,6 @@ import ai.platon.pulsar.skeleton.session.PulsarSession
 import com.fasterxml.jackson.module.kotlin.readValue
 import org.springframework.stereotype.Service
 
-
 @Service
 class ConversationService(
     val session: PulsarSession,

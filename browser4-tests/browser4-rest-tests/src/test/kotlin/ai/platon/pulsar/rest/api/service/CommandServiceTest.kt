@@ -1,30 +1,31 @@
 package ai.platon.pulsar.rest.api.service
 
-import ai.platon.browser4.driver.common.BrowserSettings
 import ai.platon.browser4.boot.autoconfigure.test.PulsarTestContextInitializer
+import ai.platon.browser4.driver.common.BrowserSettings
+import ai.platon.pulsar.agentic.tools.high.command.CommandService
+import ai.platon.pulsar.agentic.tools.high.command.toCommandStatus
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.common.serialize.json.Pson
 import ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper
+import ai.platon.pulsar.common.sleepSeconds
 import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.rest.api.TestHelper.MOCK_PRODUCT_DETAIL_URL
 import ai.platon.pulsar.rest.api.common.MockEcServerTestBase
 import ai.platon.pulsar.rest.api.config.MockEcServerConfiguration
 import ai.platon.pulsar.rest.api.entities.CommandRequest
-import ai.platon.pulsar.agentic.tools.high.command.CommandService
-import ai.platon.pulsar.agentic.tools.high.command.toCommandStatus
-import ai.platon.pulsar.common.sleepSeconds
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.*
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import org.springframework.test.context.ContextConfiguration
 import kotlin.test.Ignore
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertNull
-import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.minutes
 
@@ -286,9 +287,9 @@ class CommandServiceTest : MockEcServerTestBase() {
         printlnPro(prettyPulsarObjectMapper().writeValueAsString(status))
         assertNotNull(status)
 
-        Assumptions.assumeTrue(status.pageStatusCode == 200)
-        Assumptions.assumeTrue(status.isDone)
-        Assumptions.assumeTrue(status.statusCode == 200)
+        assertEquals(200, status.pageStatusCode)
+        assertTrue(status.isDone) { "Status should be done" }
+        assertEquals(200, status.pageStatusCode)
 
         assertNotNull(status.commandResult?.pageSummary)
         assertNotNull(status.commandResult?.fields)
@@ -303,9 +304,9 @@ class CommandServiceTest : MockEcServerTestBase() {
         printlnPro(prettyPulsarObjectMapper().writeValueAsString(status))
         assertNotNull(status)
 
-        Assumptions.assumeTrue(status.pageStatusCode == 200)
-        Assumptions.assumeTrue(status.isDone)
-        Assumptions.assumeTrue(status.statusCode == 200)
+        assertEquals(200, status.pageStatusCode)
+        assertTrue(status.isDone) { "Status should be done" }
+        assertEquals(200, status.pageStatusCode)
 
         assertNotNull(status.commandResult?.pageSummary)
         assertNotNull(status.commandResult?.fields)
@@ -348,7 +349,8 @@ class CommandServiceTest : MockEcServerTestBase() {
             Summarize the product.
         """.trimIndent()
 
-        val plainCommand2 = "goto https://www.amazon.com/s?k=shoes   ; give me the titles and prices of the first 10 products"
+        val plainCommand2 =
+            "goto https://www.amazon.com/s?k=shoes   ; give me the titles and prices of the first 10 products"
 
         val plainCommand = plainCommand2
 
