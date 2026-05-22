@@ -91,6 +91,7 @@
         <module>pulsar-bom</module>
         <module>pulsar-spring-support</module>
         <module>pulsar-tests/pulsar-tests-common</module>
+        <module>pulsar-all</module>
     </modules>
 
     <profiles>

@@ -12,8 +12,14 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>ai.platon.pulsar</groupId>
+    <parent>
+        <groupId>ai.platon.pulsar</groupId>
+        <artifactId>pulsar</artifactId>
+        <version>4.7.11-SNAPSHOT</version>
+    </parent>
+
     <artifactId>pulsar-all</artifactId>
+
     <name>Pulsar All-in-one</name>
 
     <build>
@@ -82,7 +88,7 @@
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-bom</artifactId>
-                <version>${browser4-base.version}</version>
+                <version>${project.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -103,9 +109,5 @@
             <artifactId>pulsar-ql</artifactId>
         </dependency>
     </dependencies>
-
-    <properties>
-        <browser4-base.version>4.7.10-SNAPSHOT</browser4-base.version>
-    </properties>
 
 </project>
