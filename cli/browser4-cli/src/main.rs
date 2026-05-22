@@ -1,7 +1,9 @@
 //! Browser4 CLI — drive a Browser4 server from the command line.
 //!
-//! All operations are routed through the Browser4 MCP Server tool interface
+//! Most operations are routed through the Browser4 MCP Server tool interface
 //! via `POST /mcp/call-tool`.
+//! Collective scrape submission/status/result flows also use the scrape REST
+//! endpoints under `/api/x`.
 //!
 //! # State persistence
 //! CLI state is persisted between invocations under `~/.browser4` by default.
@@ -38,8 +40,9 @@ use commands::commands_map;
 use daemon::{ensure_server_running, init_root_search_start_dir_from_startup, resolve_base_url};
 use help::{generate_command_help, generate_help};
 use http::{
-    call_tool, get_command_result, get_command_status, is_stale_session_error, make_client,
-    submit_batch_commands, submit_plain_command,
+    call_tool, get_command_result, get_command_status, get_scrape_result, get_scrape_status,
+    is_stale_session_error, make_client, submit_batch_commands, submit_plain_command,
+    submit_scrape_payload,
 };
 use managed_processes::{
     read_managed_server_processes, stop_browser4_server_forcibly, ManagedServerProcess,
@@ -1455,7 +1458,7 @@ async fn handle_co_submit(
     }
     let opts_str = load_opts.join(" ");
 
-    // Submit each URL as a plain command (async)
+    // Submit each URL through the scrape REST API.
     for u in &urls {
         let command = if opts_str.is_empty() {
             u.clone()
@@ -1463,7 +1466,7 @@ async fn handle_co_submit(
             format!("{} {}", u, opts_str)
         };
 
-        let result = submit_plain_command(client, base_url, &command, true).await?;
+        let result = submit_scrape_payload(client, base_url, &command).await?;
         let task_id = result.trim().trim_matches('"').to_string();
         println!("Submitted: {} → task {}", u, task_id);
     }
@@ -1508,7 +1511,7 @@ async fn handle_co_scrape(
     }
     let command = parts.join(" ");
 
-    let result = submit_plain_command(client, base_url, &command, true).await?;
+    let result = submit_scrape_payload(client, base_url, &command).await?;
     let task_id = result.trim().trim_matches('"').to_string();
 
     println!("Scrape submitted: {} → task {}", url, task_id);
@@ -1542,7 +1545,7 @@ async fn handle_co_status(
         return Err("Task ID is required.".to_string());
     }
 
-    let result = get_command_status(client, base_url, id).await?;
+    let result = get_scrape_status(client, base_url, id).await?;
     println!("{}", result);
     Ok(())
 }
@@ -1561,7 +1564,7 @@ async fn handle_co_result(
         return Err("Task ID is required.".to_string());
     }
 
-    let result = get_command_result(client, base_url, id).await?;
+    let result = get_scrape_result(client, base_url, id).await?;
     println!("{}", result);
     Ok(())
 }

@@ -119,6 +119,14 @@ class ScrapeController(
         return scrapeService.getStatus(request)
     }
 
+    @GetMapping("/{id}/result", consumes = [MediaType.ALL_VALUE], produces = [MediaType.APPLICATION_JSON_VALUE])
+    fun getResult(
+        @PathVariable(value = "id") uuid: String,
+        httpRequest: HttpServletRequest,
+    ): ScrapeResponse {
+        return getStatus(uuid, httpRequest)
+    }
+
     @GetMapping(value = ["/{id}/stream"], produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
     fun streamEvents(@PathVariable id: String): Flux<ServerSentEvent<ScrapeResponse>> {
         return scrapeService.streamEvents(id)

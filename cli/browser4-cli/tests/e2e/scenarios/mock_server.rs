@@ -769,15 +769,34 @@ pub(super) fn test_collective_submission_commands(ctx: &mut E2ECtx) {
     assert!(co_scrape_result.stdout.contains("output: items.json"));
 
     let co_status_result = run_command(ctx, &["co", "status", "collective-job-42"]);
-    assert_eq!(
-        strip_snapshot_output(&co_status_result.stdout),
-        r#"{"id":"collective-job-42","status":"RUNNING"}"#
+    let co_status_payload = strip_snapshot_output(&co_status_result.stdout);
+    assert!(
+        co_status_payload.contains(r#""id":"collective-job-42""#),
+        "Expected scrape status payload to contain the task id in:\n{}",
+        co_status_result.stdout
+    );
+    assert!(
+        co_status_payload.contains(r#""isDone":false"#),
+        "Expected scrape status payload to remain in-progress in:\n{}",
+        co_status_result.stdout
     );
 
     let co_result_result = run_command(ctx, &["co", "result", "collective-job-42"]);
-    assert_eq!(
-        strip_snapshot_output(&co_result_result.stdout),
-        "result for collective-job-42"
+    let co_result_payload = strip_snapshot_output(&co_result_result.stdout);
+    assert!(
+        co_result_payload.contains(r#""id":"collective-job-42""#),
+        "Expected scrape result payload to contain the task id in:\n{}",
+        co_result_result.stdout
+    );
+    assert!(
+        co_result_payload.contains(r#""isDone":true"#),
+        "Expected scrape result payload to be done in:\n{}",
+        co_result_result.stdout
+    );
+    assert!(
+        co_result_payload.contains(r#""resultSet":[{"url":"https://mock.browser4.local/result/collective-job-42"}]"#),
+        "Expected scrape result payload to contain a resultSet in:\n{}",
+        co_result_result.stdout
     );
 
     let snapshot = mock_server.snapshot();
@@ -789,6 +808,14 @@ pub(super) fn test_collective_submission_commands(ctx: &mut E2ECtx) {
             "https://example.com/seed-2 -deadline 2026-03-30T00:00:00Z -expires 1d -refresh -parse -storeContent".to_string(),
             "https://example.com/scrape-source -deadline 2026-03-30T00:00:00Z -expires 6h -refresh".to_string(),
         ]
+    );
+    assert!(
+        snapshot
+            .tool_calls
+            .iter()
+            .all(|call| call.tool != "command_run" && call.tool != "command_status" && call.tool != "command_result"),
+        "Expected collective submission/status/result to avoid MCP command_* calls: {:?}",
+        snapshot.tool_calls
     );
     assert_eq!(
         snapshot.status_queries,

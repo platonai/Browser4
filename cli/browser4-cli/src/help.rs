@@ -197,11 +197,15 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     if cmd.name == "co-submit" {
         lines.push("Notes:".to_string());
         lines.push(
-            "  - Accepts a direct URL, a `--seed-file`, or both, and submits each URL as an async collective task."
+            "  - Accepts a direct URL, a `--seed-file`, or both, and submits each payload through the scrape submit API."
                 .to_string(),
         );
         lines.push(
             "  - Seed files are plain text with one URL per line; blank lines and lines beginning with `#` are ignored."
+                .to_string(),
+        );
+        lines.push(
+            "  - URLs plus load options are forwarded as a raw payload string to `ScrapeController.submit(payload)`."
                 .to_string(),
         );
         lines.push(String::new());
@@ -220,7 +224,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - Use `co-status` and `co-result` with the returned task ID to monitor and fetch the final result."
+            "  - Use `co-status` and `co-result` with the returned task ID to monitor and fetch the scrape response JSON."
                 .to_string(),
         );
         lines.push(String::new());
@@ -236,12 +240,24 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     }
 
     if cmd.name == "co-status" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Reads the scrape task status from `ScrapeController.getStatus(id)` and prints the returned JSON payload."
+                .to_string(),
+        );
+        lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli co-status co-task-4".to_string());
         lines.push("  browser4-cli co status co-task-4".to_string());
     }
 
     if cmd.name == "co-result" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Reads the scrape task result from `ScrapeController.getResult(id)` and prints the returned payload."
+                .to_string(),
+        );
+        lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli co-result co-task-4".to_string());
         lines.push("  browser4-cli co result co-task-4".to_string());
@@ -412,6 +428,7 @@ mod tests {
         assert!(help.contains("--deadline"));
         assert!(help.contains("--expires"));
         assert!(help.contains("blank lines and lines beginning with `#` are ignored"));
+        assert!(help.contains("ScrapeController.submit(payload)"));
         assert!(help.contains("browser4-cli co submit https://example.com/direct"));
     }
 
@@ -424,7 +441,7 @@ mod tests {
         assert!(help.contains("--selector"));
         assert!(help.contains("--attribute"));
         assert!(help.contains("--output"));
-        assert!(help.contains("Use `co-status` and `co-result`"));
+        assert!(help.contains("scrape response JSON"));
         assert!(help.contains("browser4-cli co scrape https://example.com/news"));
     }
 
@@ -435,11 +452,13 @@ mod tests {
         let status = cmds.iter().find(|c| c.name == "co-status").unwrap();
         let status_help = generate_command_help(status);
         assert!(status_help.contains("browser4-cli co-status <id>"));
+        assert!(status_help.contains("ScrapeController.getStatus(id)"));
         assert!(status_help.contains("browser4-cli co status co-task-4"));
 
         let result = cmds.iter().find(|c| c.name == "co-result").unwrap();
         let result_help = generate_command_help(result);
         assert!(result_help.contains("browser4-cli co-result <id>"));
+        assert!(result_help.contains("ScrapeController.getResult(id)"));
         assert!(result_help.contains("browser4-cli co result co-task-4"));
     }
 

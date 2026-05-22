@@ -651,6 +651,22 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                 &format!(r#""{}""#, task_id),
             );
         }
+        _ if method == "POST" && (route == "/api/x/submit" || route == "/api/x/s") => {
+            let payload = String::from_utf8_lossy(&body).trim().to_string();
+            let task_id = {
+                let mut guard = state.lock().expect("mock Browser4 state mutex poisoned");
+                guard.plain_commands.push(payload);
+                guard.next_collective_task_id += 1;
+                format!("co-task-{}", guard.next_collective_task_id)
+            };
+
+            write_http_response(
+                &mut stream,
+                "200 OK",
+                "application/json",
+                &serde_json::json!(task_id).to_string(),
+            );
+        }
         _ if method == "GET"
             && route.starts_with("/api/commands/")
             && route.ends_with("/status") =>
@@ -672,6 +688,34 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
             let response = serde_json::json!({
                 "id": task_id,
                 "status": "RUNNING",
+            })
+            .to_string();
+            write_http_response(&mut stream, "200 OK", "application/json", &response);
+        }
+        _ if method == "GET" && route.starts_with("/api/x/") && route.ends_with("/status") => {
+            let Some(task_id) = route
+                .strip_prefix("/api/x/")
+                .and_then(|rest| rest.strip_suffix("/status"))
+                .map(|value| value.trim_end_matches('/'))
+                .filter(|value| !value.is_empty())
+            else {
+                write_http_response(&mut stream, "404 Not Found", "text/plain", "not found");
+                return;
+            };
+
+            state
+                .lock()
+                .expect("mock Browser4 state mutex poisoned")
+                .status_queries
+                .push(task_id.to_string());
+
+            let response = serde_json::json!({
+                "id": task_id,
+                "statusCode": 102,
+                "pageStatusCode": 102,
+                "isDone": false,
+                "resultSet": null,
+                "status": "Processing",
             })
             .to_string();
             write_http_response(&mut stream, "200 OK", "application/json", &response);
@@ -701,6 +745,38 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                 "text/plain; charset=utf-8",
                 &response,
             );
+        }
+        _ if method == "GET" && route.starts_with("/api/x/") && route.ends_with("/result") => {
+            let Some(task_id) = route
+                .strip_prefix("/api/x/")
+                .and_then(|rest| rest.strip_suffix("/result"))
+                .map(|value| value.trim_end_matches('/'))
+                .filter(|value| !value.is_empty())
+            else {
+                write_http_response(&mut stream, "404 Not Found", "text/plain", "not found");
+                return;
+            };
+
+            state
+                .lock()
+                .expect("mock Browser4 state mutex poisoned")
+                .result_queries
+                .push(task_id.to_string());
+
+            let response = serde_json::json!({
+                "id": task_id,
+                "statusCode": 200,
+                "pageStatusCode": 200,
+                "isDone": true,
+                "resultSet": [
+                    {
+                        "url": format!("https://mock.browser4.local/result/{task_id}"),
+                    }
+                ],
+                "status": "OK",
+            })
+            .to_string();
+            write_http_response(&mut stream, "200 OK", "application/json", &response);
         }
         _ => write_http_response(
             &mut stream,

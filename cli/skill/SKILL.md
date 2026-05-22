@@ -229,11 +229,13 @@ Notes:
 - Seed files are plain text, one URL per line. Empty lines and lines beginning
   with `#` are ignored.
 - `co-submit` forwards load-option style flags such as `--deadline`,
-  `--expires`, `--refresh`, `--parse`, and `--store-content` to the backend.
+  `--expires`, `--refresh`, `--parse`, and `--store-content` into the raw
+  payload sent to `ScrapeController.submit(payload)`.
 - `co-scrape` submits asynchronously, then prints the selector / attribute /
   output contract so the extraction intent is visible in the terminal log.
 - Capture the task ID printed by `co-submit` or `co-scrape`, then use
-  `co-status` and `co-result` to follow the async job.
+  `co-status` and `co-result` to follow the async scrape job via
+  `ScrapeController.getStatus(id)` and `ScrapeController.getResult(id)`.
 
 Example seed file:
 

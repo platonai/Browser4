@@ -1,4 +1,4 @@
-//! HTTP helpers for calling MCP tools on the Browser4 server.
+//! HTTP helpers for calling Browser4 MCP tools and scrape REST endpoints.
 
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -56,6 +56,52 @@ fn extract_mcp_text_payload(data: &Value) -> Option<String> {
     }
 
     None
+}
+
+fn extract_http_text_payload(response_text: &str) -> String {
+    let trimmed = response_text.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    match serde_json::from_str::<Value>(trimmed) {
+        Ok(Value::String(text)) => text,
+        Ok(value) => value.to_string(),
+        Err(_) => trimmed.to_string(),
+    }
+}
+
+fn build_endpoint_url(base_url: &str, path: &str) -> String {
+    format!("{}/{}", base_url.trim_end_matches('/'), path.trim_start_matches('/'))
+}
+
+async fn send_rest_request(request: reqwest::RequestBuilder) -> Result<String, String> {
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("HTTP request failed: {e}"))?;
+
+    let status = response.status();
+    let response_text = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read response body: {e}"))?;
+
+    if !status.is_success() {
+        let message = response_text.trim();
+        if message.is_empty() {
+            return Err(format!(
+                "HTTP request failed with status {} and an empty response body.",
+                status
+            ));
+        }
+        return Err(format!(
+            "HTTP request failed with status {}: {}",
+            status, message
+        ));
+    }
+
+    Ok(extract_http_text_payload(&response_text))
 }
 
 /// Call an MCP tool on the Browser4 server.
@@ -170,6 +216,42 @@ pub async fn submit_plain_command(
     .await
 }
 
+/// Submit a scrape payload through `ScrapeController.submit(payload)`.
+pub async fn submit_scrape_payload(
+    client: &Client,
+    base_url: &str,
+    payload: &str,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, "/api/x/submit");
+    send_rest_request(
+        client
+            .post(url)
+            .header("Content-Type", "text/plain; charset=utf-8")
+            .body(payload.to_string()),
+    )
+    .await
+}
+
+/// Read scrape task status through `ScrapeController.getStatus(id)`.
+pub async fn get_scrape_status(
+    client: &Client,
+    base_url: &str,
+    task_id: &str,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, &format!("/api/x/{task_id}/status"));
+    send_rest_request(client.get(url)).await
+}
+
+/// Read scrape task result through `ScrapeController.getResult(id)`.
+pub async fn get_scrape_result(
+    client: &Client,
+    base_url: &str,
+    task_id: &str,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, &format!("/api/x/{task_id}/result"));
+    send_rest_request(client.get(url)).await
+}
+
 /// Get the status of a command by its task ID via the MCP endpoint.
 pub async fn get_command_status(
     client: &Client,
@@ -274,6 +356,28 @@ mod tests {
         assert_eq!(
             extract_mcp_text_payload(&payload).as_deref(),
             Some("{\"results\":[],\"sessionId\":\"s-1\"}")
+        );
+    }
+
+    #[test]
+    fn test_extract_http_text_payload_unquotes_json_string() {
+        assert_eq!(extract_http_text_payload("\"co-task-1\""), "co-task-1");
+    }
+
+    #[test]
+    fn test_extract_http_text_payload_preserves_plain_text() {
+        assert_eq!(extract_http_text_payload("co-task-1\n"), "co-task-1");
+    }
+
+    #[test]
+    fn test_extract_http_text_payload_minifies_json_object() {
+        let payload = r#"{
+            "id": "co-task-1",
+            "isDone": false
+        }"#;
+        assert_eq!(
+            extract_http_text_payload(payload),
+            "{\"id\":\"co-task-1\",\"isDone\":false}"
         );
     }
 }

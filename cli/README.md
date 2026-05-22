@@ -170,10 +170,10 @@ Query `browser4-cli help <command>` for the exact syntax when you need them.
 | `agent-status <id>` | Check the status of a running agent task |
 | `agent-result <id>` | Get the result of a completed agent task |
 | `co-create` | Create a collective session with parallel browser contexts |
-| `co-submit [url]` | Submit URL(s) or tasks to the active collective session |
+| `co-submit [url]` | Submit URL(s) or X-SQL payloads to the scrape queue |
 | `co-scrape <url>` | Scrape data from a URL using CSS selectors |
-| `co-status <id>` | Check the status of a collective task |
-| `co-result <id>` | Get the result of a completed collective task |
+| `co-status <id>` | Check the status of a scrape task |
+| `co-result <id>` | Get the result of a completed scrape task |
 
 ## Collective workflows (`co-*`)
 
@@ -195,10 +195,10 @@ browser4-cli co submit https://example.com
 | Step | Command | What it does |
 |---|---|---|
 | 1 | `co-create` | Opens a collective session and persists the returned session ID in the current CLI slot |
-| 2 | `co-submit [url]` | Submits one direct URL plus any URLs from `--seed-file`, each as an async collective task |
+| 2 | `co-submit [url]` | Submits one direct URL plus any URLs from `--seed-file` through `ScrapeController.submit(payload)` |
 | 2 | `co-scrape <url>` | Submits an async scrape-oriented task for a single URL and echoes the selector/output metadata |
-| 3 | `co-status <id>` | Polls the backend for the task status JSON |
-| 4 | `co-result <id>` | Retrieves the final result payload for a completed task |
+| 3 | `co-status <id>` | Calls `ScrapeController.getStatus(id)` and prints the returned scrape JSON |
+| 4 | `co-result <id>` | Calls `ScrapeController.getResult(id)` and prints the returned payload |
 
 ### Notes
 
@@ -208,8 +208,8 @@ browser4-cli co submit https://example.com
   Seed files are plain text files with one URL per line; blank lines and lines
   starting with `#` are ignored.
 - `co-submit` maps CLI flags like `--deadline`, `--expires`, `--refresh`,
-  `--parse`, and `--store-content` into the plain command string submitted to
-  the backend.
+  `--parse`, and `--store-content` into the raw payload string submitted to
+  the scrape REST API.
 - `co-scrape` submits the URL asynchronously, then prints the `selector`,
   `attribute`, and `output` values so the requested extraction contract is
   visible in the terminal log.
@@ -275,8 +275,9 @@ browser4-cli co status co-task-4
 browser4-cli co result co-task-4
 ```
 
-The status command prints the backend JSON payload as-is. Once the task is
-complete, use `co-result` to fetch the final artifact or text result.
+The status and result commands print the scrape response payload as-is. In the
+current backend, `getResult(id)` returns the same response envelope type as
+`getStatus(id)`.
 
 ## Element References
 

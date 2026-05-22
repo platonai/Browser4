@@ -953,11 +953,11 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "co-submit",
-            description: "Submit URL(s) or tasks to the active collective session",
+            description: "Submit URL(s) or X-SQL payloads to the scrape queue",
             category: Category::Collective,
             hidden: true,
             batch_supported: false,
-            args: &[ArgDef { name: "url", description: "URL or task to submit", optional: true }],
+            args: &[ArgDef { name: "url", description: "URL or X-SQL payload to submit", optional: true }],
             options: &[
                 OptionDef { name: "seed-file", description: "File containing URLs to submit, one per line", is_bool: false },
                 OptionDef { name: "deadline", description: "Deadline for task completion (ISO 8601, e.g. 2026-02-24T23:59:59Z)", is_bool: false },
@@ -1008,7 +1008,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "co-status",
-            description: "Check the status of a collective task",
+            description: "Check the status of a scrape task",
             category: Category::Collective,
             hidden: true,
             batch_supported: false,
@@ -1021,7 +1021,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "co-result",
-            description: "Get the result of a completed collective task",
+            description: "Get the result of a completed scrape task",
             category: Category::Collective,
             hidden: true,
             batch_supported: false,
