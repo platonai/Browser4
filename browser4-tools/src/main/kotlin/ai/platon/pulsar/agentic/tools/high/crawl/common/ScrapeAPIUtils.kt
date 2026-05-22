@@ -8,7 +8,7 @@ import java.util.*
 object ScrapeAPIUtils {
 
     private val allowedArgs = LoadOptions.apiPublicOptionNames
-    private val allowedScrapeUDFs = arrayOf("loadandselect", "loadoutpages")
+    private val allowedScrapeUDFs = arrayOf("load", "loadandselect", "loadoutpages")
 
     @Throws(IllegalArgumentException::class)
     fun normalize(rawSql: String?): NormXSQL {

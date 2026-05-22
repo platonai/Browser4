@@ -19,6 +19,10 @@ class StatefulAgentRunner(
     private val commanderScope: CoroutineScope = CoroutineScope(
         commandDispatcher + SupervisorJob() + CoroutineName("commander")
     )
+
+    /**
+     * TODO: use UrlPool instead
+     * */
     private val statusCache = ConcurrentExpiringLRUCache<String, AgentTaskStatus>(Duration.ofHours(2))
 
     fun create(): AgentTaskStatus {

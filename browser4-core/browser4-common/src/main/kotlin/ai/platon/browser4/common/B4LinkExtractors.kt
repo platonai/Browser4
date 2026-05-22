@@ -73,6 +73,9 @@ object B4LinkExtractors {
     fun fromText(text: String, filter: (String) -> Boolean) = TextExtractor(text, filter).extract()
 
     @JvmStatic
+    fun hasLink(text: String) = TextExtractor(text).extract().isNotEmpty()
+
+    @JvmStatic
     fun fromResource(resource: String) = ResourceExtractor(resource).extract()
 
     @JvmStatic

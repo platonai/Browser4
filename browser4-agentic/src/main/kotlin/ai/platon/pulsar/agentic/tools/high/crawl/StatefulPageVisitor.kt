@@ -37,6 +37,9 @@ class StatefulPageVisitor(
 
     private val scrapeService = ScrapeService(session)
 
+    /**
+     * TODO: use UrlPool instead
+     * */
     private val statusCache = ConcurrentExpiringLRUCache<String, PageVisitStatus>(Duration.ofHours(2))
 
     fun create(): PageVisitStatus {
