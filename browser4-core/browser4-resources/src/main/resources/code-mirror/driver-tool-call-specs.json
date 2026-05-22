@@ -1022,25 +1022,6 @@
   "cli" : "browser4-cli tab mouseWheel --deltaX=<Double>, default=0.0 --deltaY=<Double>, default=150.0"
 }, {
   "domain" : "tab",
-  "method" : "moveMouseTo",
-  "arguments" : [ {
-    "name" : "x",
-    "type" : "Double",
-    "expression" : "x: Double = ",
-    "cliOptions" : "--x=<Double>, default="
-  }, {
-    "name" : "y",
-    "type" : "Double",
-    "expression" : "y: Double = ",
-    "cliOptions" : "--y=<Double>, default="
-  } ],
-  "returnType" : "Unit",
-  "description" : "The mouse moves to the position specified by [x] and [y].",
-  "help" : "The mouse moves to the position specified by [x] and [y].\n\n```kotlin driver.moveMouseTo(100.0, 200.0) ```",
-  "expression" : "tab.moveMouseTo(Arg(name=x, type=Double, defaultValue=), Arg(name=y, type=Double, defaultValue=))",
-  "cli" : "browser4-cli tab moveMouseTo --x=<Double>, default= --y=<Double>, default="
-}, {
-  "domain" : "tab",
   "method" : "mouseMove",
   "arguments" : [ {
     "name" : "x",

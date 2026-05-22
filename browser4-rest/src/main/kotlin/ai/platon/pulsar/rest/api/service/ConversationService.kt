@@ -1,7 +1,7 @@
 package ai.platon.pulsar.rest.api.service
 
+import ai.platon.browser4.common.B4LinkExtractors
 import ai.platon.pulsar.agentic.tools.high.crawl.common.*
-import ai.platon.pulsar.common.LinkExtractors
 import ai.platon.pulsar.common.ai.llm.PromptTemplate
 import ai.platon.pulsar.common.ai.llm.PromptTemplateLoader
 import ai.platon.pulsar.common.serialize.json.JSONExtractor
@@ -14,6 +14,7 @@ import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import com.fasterxml.jackson.module.kotlin.readValue
 import org.springframework.stereotype.Service
+
 
 @Service
 class ConversationService(
@@ -55,10 +56,11 @@ class ConversationService(
             return null
         }
 
-        val urls = LinkExtractors.fromText(request)
+        val urls = B4LinkExtractors.fromText(request)
         if (urls.isEmpty()) {
             return null
         }
+
         val url = urls.first()
 
         val json = convertPlainCommandToJSON(request, url)

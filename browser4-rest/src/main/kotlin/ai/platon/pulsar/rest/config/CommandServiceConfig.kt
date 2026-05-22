@@ -10,9 +10,6 @@ import org.springframework.context.annotation.Configuration
 @Configuration
 class CommandServiceConfig {
 
-    /**
-     * TODO: move CommandNormalizer to module browser4-agentic
-     * */
     @Bean
     fun commandNormalizer(conversationService: ConversationService): CommandNormalizer {
         return CommandNormalizer { plainCommand -> conversationService.normalizePlainCommand(plainCommand) }
