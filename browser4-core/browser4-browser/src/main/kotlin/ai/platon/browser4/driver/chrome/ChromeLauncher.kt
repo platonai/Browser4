@@ -177,7 +177,7 @@ class ChromeLauncher constructor(
 
                         try {
                             Thread.sleep(3000)
-                        } catch (interrupted: InterruptedException) {
+                        } catch (_: InterruptedException) {
                             Thread.currentThread().interrupt()
                             throw e
                         }
@@ -189,7 +189,7 @@ class ChromeLauncher constructor(
         }
 
         if (port == 0) {
-            throw lastException ?: ChromeLaunchException("Failed to launch chrome")
+            throw lastException ?: ChromeLaunchException("Failed to launch chrome with unknown port")
         }
 
         val launchDuration = System.currentTimeMillis() - startTime
@@ -299,8 +299,6 @@ class ChromeLauncher constructor(
     @get:Synchronized
     val isAlive: Boolean get() = process?.isAlive == true
 
-    val shouldBeWorking: Boolean get() = portPath.exists()
-
     /**
      * Launches a chrome process given a chrome binary and its arguments.
      *
@@ -362,7 +360,7 @@ class ChromeLauncher constructor(
             shutdownHookRegistry.register(shutdownHookThread)
             process = ProcessLauncher.launch(executable, arguments)
 
-            val p = process ?: throw ChromeLaunchException("Failed to start chrome process")
+            val p = process ?: throw ChromeLaunchException("Failed to start chrome process with unknown reason")
 
             // Write PID file to indicate the process is alive
             Files.writeString(pidPath, p.pid().toString(), StandardOpenOption.CREATE)
@@ -445,7 +443,7 @@ class ChromeLauncher constructor(
             }
 
             return totalKilled
-        } catch (e: InterruptedException) {
+        } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
             logger.warn("Interrupted while killing locking process for {}", userDataDir)
         } catch (e: Exception) {
@@ -629,7 +627,7 @@ class ChromeLauncher constructor(
             Socket("localhost", port).use {
                 true // Successfully connected, port is in use
             }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             false // Failed to connect, port is not in use
         }
     }
@@ -684,7 +682,7 @@ class ChromeLauncher constructor(
     @Throws(ChromeLaunchException::class)
     private fun waitForDevToolsServer(process: Process): Int {
         var port = 0
-        var cdpUrl: String? = null
+        var cdpUrl: String?
         val processOutput = StringBuilder()
         val charset = if (SystemUtils.IS_OS_WINDOWS) Charset.forName("GBK") else Charsets.UTF_8
         val readLineThread = Thread {
@@ -761,7 +759,7 @@ class ChromeLauncher constructor(
     private fun close(thread: Thread) {
         try {
             thread.join(options.threadWaitTime.toMillis())
-        } catch (e: InterruptedException) {
+        } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
         }
     }
@@ -853,12 +851,12 @@ ${scriptPath.toUri()}
 
     private fun cleanUpContextFiles() {
         try {
-            kotlin.runCatching {
+            runCatching {
                 clearProcessMarkers()
                 BrowserFilesPatch.cleanUpContextTmpDir(temporaryUddExpiry)
                 BrowserFilesPatch.cleanOldestContextTmpDirs(Duration.ofMinutes(2), recentNToKeep)
             }.onFailure { warnForClose(this, it) }
-        } catch (t: Throwable) {
+        } catch (_: Throwable) {
             // ignored
         }
     }
@@ -911,28 +909,7 @@ ${scriptPath.toUri()}
 //                    }
                     // Copy data from prototype user data dir to inherit the user data
                     FileUtils.copyDirectory(prototypeUserDataDir.toFile(), userDataDir.toFile(), fileFilter)
-                } else {
-                    handleExistUserDataDir(prototypeUserDataDir)
                 }
-            }
-        }
-    }
-
-    private fun handleExistUserDataDir(prototypeUserDataDir: Path) {
-        // the user data dir exists
-        Files.deleteIfExists(userDataDir.resolve("Default/Cookies"))
-        val leveldb = userDataDir.resolve("Default/Local Storage/leveldb")
-        if (Files.exists(leveldb)) {
-            // might have permission issue on Windows
-            // FileUtils.deleteDirectory(leveldb.toFile())
-        }
-
-        arrayOf("Default/Cookies", "Default/Local Storage/leveldb").forEach {
-            val target = userDataDir.resolve(it)
-            Files.createDirectories(target.parent)
-            val source = prototypeUserDataDir.resolve(it)
-            if (Files.exists(source)) {
-                // Files.copy(prototypeUserDataDir.resolve(it), target, StandardCopyOption.REPLACE_EXISTING)
             }
         }
     }
@@ -1032,7 +1009,7 @@ ${scriptPath.toUri()}
 
         // Encoding information
         val encodingInfo = mutableMapOf<String, Any>()
-        encodingInfo["fileEncoding"] = System.getProperty("file.encoding")
+        encodingInfo["fileEncoding"] = Charset.defaultCharset().displayName()
         encodingInfo["charset"] = if (SystemUtils.IS_OS_WINDOWS) "GBK" else "UTF-8"
         systemInfo["encoding"] = encodingInfo
 
@@ -1110,7 +1087,7 @@ ${scriptPath.toUri()}
             } else {
                 "0MB"
             }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             "unknown"
         }
     }
@@ -1127,7 +1104,7 @@ ${scriptPath.toUri()}
             Files.writeString(argsFile, "", StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)
 
             // Write the executable path
-            Files.writeString(argsFile, "$executable", StandardOpenOption.APPEND)
+            Files.writeString(argsFile, executable, StandardOpenOption.APPEND)
 
             // Write each argument on a new line
             arguments.forEach { arg ->
