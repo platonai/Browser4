@@ -12,11 +12,10 @@ import kotlin.math.roundToInt
 
 class ScreenshotHandler(
     private val pageHandler: PageHandler,
-    private val devTools: RemoteDevTools,
+    private val cdp: CDP,
 ) {
     private val logger = getLogger(this)
-    private val cdp = CDP(devTools)
-    private val isActive get() = AppContext.isActive && devTools.isOpen
+    private val isActive get() = AppContext.isActive && cdp.isOpen
     private fun activeCdp() = cdp.takeIf { isActive }
     private fun activePage() = if (isActive) cdp.page else null
     private fun activeDom() = if (isActive) cdp.dom else null

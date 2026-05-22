@@ -2,12 +2,17 @@ package ai.platon.browser4.driver.chrome.experimental
 
 import ai.platon.browser4.driver.chrome.RemoteDevTools
 import ai.platon.cdt.kt.protocol.ChromeDevTools
+import ai.platon.cdt.kt.protocol.support.annotations.Optional
+import ai.platon.cdt.kt.protocol.support.annotations.ParamName
+import ai.platon.cdt.kt.protocol.support.annotations.Returns
 import ai.platon.cdt.kt.protocol.types.domsnapshot.CaptureSnapshot
 import ai.platon.cdt.kt.protocol.types.dom.Rect
 import ai.platon.cdt.kt.protocol.types.input.DispatchDragEventType
 import ai.platon.cdt.kt.protocol.types.input.DispatchKeyEventType
 import ai.platon.cdt.kt.protocol.types.input.DispatchMouseEventType
 import ai.platon.cdt.kt.protocol.types.input.DragData
+import ai.platon.cdt.kt.protocol.types.network.LoadNetworkResourceOptions
+import ai.platon.cdt.kt.protocol.types.network.LoadNetworkResourcePageResult
 import ai.platon.cdt.kt.protocol.types.page.CaptureScreenshotFormat
 import ai.platon.cdt.kt.protocol.types.page.Viewport
 import ai.platon.cdt.kt.protocol.types.runtime.CallArgument
@@ -154,6 +159,12 @@ class CDP(
 
     suspend fun getDocument(depth: Int? = null, pierce: Boolean? = null) = dom.getDocument(depth, pierce)
 
+    suspend fun getOuterHTML(
+        nodeId: Int? = null,
+        backendNodeId: Int? = null,
+        objectId: String? = null,
+    ): String = dom.getOuterHTML(nodeId, backendNodeId, objectId)
+
     suspend fun getContentQuads(nodeId: Int) = dom.getContentQuads(nodeId)
 
     suspend fun getBoxModel(nodeId: Int) = dom.getBoxModel(nodeId, null, null)
@@ -189,6 +200,13 @@ class CDP(
     suspend fun resolveNodeByBackendNodeId(backendNodeId: Int) = dom.resolveNode(backendNodeId = backendNodeId)
 
     suspend fun requestNode(objectId: String) = dom.requestNode(objectId)
+
+    suspend fun setFileInputFiles(
+        files: List<String>,
+        nodeId: Int? = null,
+        backendNodeId: Int? = null,
+        objectId: String? = null,
+    ) = dom.setFileInputFiles(files, nodeId, backendNodeId, objectId)
 
     suspend fun getComputedStyleForNode(nodeId: Int) = css.getComputedStyleForNode(nodeId)
 
@@ -320,6 +338,14 @@ class CDP(
             includeBlendedBackgroundColors = includeBlendedBackgroundColors,
             includeTextColorOpacities = includeTextColorOpacities,
         )
+    }
+
+    suspend fun loadNetworkResource(
+        @ParamName("frameId") frameId: String,
+        @ParamName("url") url: String,
+        @ParamName("options") options: LoadNetworkResourceOptions,
+    ): LoadNetworkResourcePageResult {
+        return network.loadNetworkResource(frameId, url, options)
     }
 
     fun awaitTermination() {

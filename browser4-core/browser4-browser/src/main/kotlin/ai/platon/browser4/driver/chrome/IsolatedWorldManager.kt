@@ -21,7 +21,7 @@ import org.apache.commons.lang3.StringUtils
  * 6. Runtime is observable, extensible, and evolvable
  */
 class IsolatedWorldManager(
-    val devTools: RemoteDevTools,
+    val cdp: CDP,
     val settings: BrowserSettings
 ) {
     companion object {
@@ -41,7 +41,6 @@ class IsolatedWorldManager(
     }
 
     private val logger = getLogger(this)
-    private val cdp = CDP(devTools)
     private val confuser get() = settings.confuser
 
     /**

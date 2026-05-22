@@ -9,14 +9,13 @@ import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.getLogger
 
 class JsHandler(
-    private val devTools: RemoteDevTools,
+    private val cdp: CDP,
     private val pageHandler: PageHandler,
     private val isolatedWorldManager: IsolatedWorldManager,
 ) {
     private val logger = getLogger(this)
-    private val cdp = CDP(devTools)
 
-    private val isActive get() = AppContext.isActive && devTools.isOpen
+    private val isActive get() = AppContext.isActive && cdp.isOpen
 
     private val confuser get() = isolatedWorldManager.settings.confuser
 
@@ -53,11 +52,11 @@ class JsHandler(
     @Throws(ChromeDriverException::class)
     suspend fun callFunctionOn(selector: String, functionDeclaration: String): CallFunctionOn? {
         val node = pageHandler.queryLocator(selector) ?: return null
-        val resolved = resolveNodeObjectId(devTools, node) ?: return null
+        val resolved = resolveNodeObjectId(cdp, node) ?: return null
         return try {
             cdp.callFunctionOn(functionDeclaration, objectId = resolved.objectId, returnByValue = true)
         } finally {
-            releaseNodeObjectIfNeeded(devTools, resolved)
+            releaseNodeObjectIfNeeded(cdp, resolved)
         }
     }
 

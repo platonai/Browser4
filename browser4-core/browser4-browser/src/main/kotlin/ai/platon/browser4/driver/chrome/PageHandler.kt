@@ -26,7 +26,7 @@ data class LocatorAndCssSelector(
 )
 
 class PageHandler(
-    private val devTools: RemoteDevTools,
+    private val cdp: CDP,
     private val isolatedWorldManager: IsolatedWorldManager,
 ) {
     companion object {
@@ -36,16 +36,13 @@ class PageHandler(
 
     private val logger = getLogger(this)
 
-    /** Single access point for all CDP domain APIs. */
-    private val cdp = CDP(devTools)
-
-    private val isActive get() = AppContext.isActive && devTools.isOpen
+    private val isActive get() = AppContext.isActive && cdp.isOpen
 
     private var lastBrowserUseState: BrowserUseState? = null
 
-    val snapshotService: SnapshotService by lazy { CDPSnapshotService(devTools) }
+    val snapshotService: SnapshotService by lazy { CDPSnapshotService(cdp) }
 
-    val jsHandler: JsHandler = JsHandler(devTools, this, isolatedWorldManager)
+    val jsHandler: JsHandler = JsHandler(cdp, this, isolatedWorldManager)
 
     val mouse = Mouse(cdp)
     val keyboard = Keyboard(cdp)
@@ -440,7 +437,7 @@ class PageHandler(
             return false
         }
 
-        return withNodeObjectId(devTools, node) { objectId ->
+        return withNodeObjectId(cdp, node) { objectId ->
             val result = if (isActive) cdp.callFunctionOn(
                 CheckableElementJs.IS_CHECKED_FUNCTION_DECLARATION,
                 objectId = objectId,
@@ -602,7 +599,7 @@ class PageHandler(
      */
     private suspend fun trySmoothScroll(nodeRef: NodeRef): Boolean {
         return try {
-            withNodeObjectId(devTools, nodeRef) { objectId ->
+            withNodeObjectId(cdp, nodeRef) { objectId ->
                 // Execute on the element itself to avoid selector issues; center for stability
                 val functionDeclaration = """
                     function() {

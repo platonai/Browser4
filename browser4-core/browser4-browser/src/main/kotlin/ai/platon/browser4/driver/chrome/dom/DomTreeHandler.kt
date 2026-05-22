@@ -14,10 +14,9 @@ typealias CdpNode = ai.platon.cdt.kt.protocol.types.dom.Node
  * Handler for DOM tree operations.
  * Fetches and converts CDP DOM tree to enhanced representation.
  */
-class DomTreeHandler(devTools: RemoteDevTools) {
+class DomTreeHandler(private val cdp: CDP) {
     private val logger = getLogger(this)
     private val tracer get() = logger.takeIf { it.isTraceEnabled }
-    private val cdp = CDP(devTools)
 
     @Volatile
     private var lastBackendLookup: Map<Int, MergedDOMTreeNode> = emptyMap()

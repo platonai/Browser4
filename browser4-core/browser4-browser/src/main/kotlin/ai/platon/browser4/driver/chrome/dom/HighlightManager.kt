@@ -8,11 +8,10 @@ import kotlinx.coroutines.delay
 import kotlin.time.Duration.Companion.milliseconds
 
 class HighlightManager(
-    devTools: RemoteDevTools,
+    private val cdp: CDP,
 ) {
     private val logger = getLogger(this)
     private val tracer get() = logger.takeIf { it.isTraceEnabled }
-    private val cdp = CDP(devTools)
 
     suspend fun addHighlights(elements: InteractiveDOMTreeNodeList) {
         addHighlights0(elements)

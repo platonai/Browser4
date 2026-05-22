@@ -32,6 +32,7 @@ import kotlin.time.Duration.Companion.minutes
 @SpringBootTest
 @ContextConfiguration(initializers = [PulsarTestContextInitializer::class])
 @Import(MockEcServerConfiguration::class)
+@Tag("RequiresAI")
 class CommandServiceTest : MockEcServerTestBase() {
 
     @Autowired
@@ -319,6 +320,28 @@ class CommandServiceTest : MockEcServerTestBase() {
         val plainCommand = """
             Visit $MOCK_PRODUCT_DETAIL_URL
             Summarize the product.
+        """.trimIndent()
+
+        val status = runBlocking { commandService.executePlainCommandSync(plainCommand) }
+        printlnPro(prettyPulsarObjectMapper().writeValueAsString(status))
+        assertNotNull(status)
+
+        // The command should complete (either successfully or with expected status)
+        assertTrue { status.isDone }
+    }
+
+    @Test
+    @Tag("Slow")
+    @Tag("ManualOnly")
+    @DisplayName("test executePlainCommandSync with complex URL-based command")
+    fun testExecutePlainCommandSyncWithComplexUrlBasedCommand() {
+        // A command with URL should be handled by the standard flow
+        val plainCommand = """
+Visit https://www.amazon.com/dp/B08PP5MSVB
+Summarize the product.
+Extract: product name, price, ratings.
+Find all links containing /dp/.
+After page load: click #title, then scroll to the middle.
         """.trimIndent()
 
         val status = runBlocking { commandService.executePlainCommandSync(plainCommand) }

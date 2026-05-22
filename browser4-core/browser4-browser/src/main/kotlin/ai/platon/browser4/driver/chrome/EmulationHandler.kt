@@ -739,10 +739,9 @@ class EmulationHandler(
     private val domAPI: DOM?,
     private val keyboard: Keyboard?,
     private val mouse: Mouse?,
-    private val devTools: RemoteDevTools? = null
+    private val cdp: CDP? = null
 ) {
     private val logger = getLogger(this)
-    private val cdp = devTools?.let { CDP(it) }
 
     suspend fun click(
         node: NodeRef, count: Int, position: String = "center", modifier: String? = null, delayMillis: Long = 100

@@ -2,6 +2,7 @@ package ai.platon.pulsar.protocol.browser.driver.cdt.detail
 
 import ai.platon.browser4.driver.chrome.NodeRef
 import ai.platon.browser4.driver.chrome.PageHandler
+import ai.platon.browser4.driver.chrome.experimental.CDP
 import ai.platon.browser4.driver.chrome.util.ChromeDriverException
 import ai.platon.cdt.kt.protocol.commands.Fetch
 import ai.platon.cdt.kt.protocol.events.network.ResponseReceived
@@ -28,7 +29,7 @@ class WebDriverHelper(
     val driver: WebDriver,
     val rpc: RobustRPC,
     val page: PageHandler,
-    val fetchAPI: Fetch?,
+    val cdp: CDP,
     val messageWriter: MultiSinkMessageWriter
 ) {
     suspend fun reportInterestingResources(entry: NavigateEntry, event: ResponseReceived) {
@@ -83,8 +84,8 @@ class WebDriverHelper(
             mimeType == "application/json" && event.response.encodedDataLength < 1_000_000 && alwaysFalse()
         if (saveResourceBody) {
             val body = rpc.invokeSilently("getResponseBody") {
-                fetchAPI?.enable()
-                fetchAPI?.getResponseBody(event.requestId)?.body
+                cdp.fetch.enable()
+                cdp.fetch.getResponseBody(event.requestId).body
             }
             if (!body.isNullOrBlank()) {
                 suffix = "-" + event.type.name.lowercase() + "-body.txt"

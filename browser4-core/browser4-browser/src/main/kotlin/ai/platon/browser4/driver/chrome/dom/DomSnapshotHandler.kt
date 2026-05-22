@@ -15,10 +15,9 @@ import ai.platon.pulsar.common.getLogger
  * Handler for DOMSnapshot domain operations.
  * Captures and processes layout snapshots with style and rect information.
  */
-class DomSnapshotHandler(devTools: RemoteDevTools) {
+class DomSnapshotHandler(private val cdp: CDP) {
     private val logger = getLogger(this)
     private val tracer get() = logger.takeIf { it.isTraceEnabled }
-    private val cdp = CDP(devTools)
 
     /**
      * Enhanced capture with absolute coordinates and stacking context analysis.

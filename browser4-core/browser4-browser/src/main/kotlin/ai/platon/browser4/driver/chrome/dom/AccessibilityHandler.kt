@@ -7,13 +7,12 @@ import ai.platon.cdt.kt.protocol.types.page.FrameTree
 import ai.platon.pulsar.common.getLogger
 
 class AccessibilityHandler(
-    private val devTools: RemoteDevTools
+    private val cdp: CDP
 ) {
     private val logger = getLogger(this)
     private val tracer get() = logger.takeIf { it.isTraceEnabled }
-    private val cdp = CDP(devTools)
 
-    private val isActive get() = devTools.isOpen
+    private val isActive get() = cdp.isOpen
 
     @Volatile
     private var accessibilityEnabled = false
