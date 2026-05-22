@@ -1,12 +1,8 @@
 #!/usr/bin/env pwsh
 
-$ErrorActionPreference = 'Stop'
+cargo run --quiet -- open
 
-cargo run --quiet -- open https://www.amazon.com/
-sleep 5
-cargo run --quiet -- list
-
-$agentRunOutput = cargo run --quiet -- agent-run "goto https://www.hua.com/flower/ ; give me the titles and prices of the first 10 products" 2>&1
+$agentRunOutput = cargo run --quiet -- agent-run "https://www.hua.com/flower/" 2>&1
 $agentRunText = ($agentRunOutput | Out-String).Trim()
 $agentRunText
 
