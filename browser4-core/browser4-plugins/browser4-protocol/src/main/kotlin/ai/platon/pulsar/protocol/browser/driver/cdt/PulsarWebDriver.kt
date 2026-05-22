@@ -56,16 +56,6 @@ class PulsarWebDriver constructor(
 
     override val browserType: BrowserType = BrowserType.PULSAR_CHROME
 
-    @Deprecated("Use CDP facade (cdp) instead of direct devTools access")
-    val devTools: RemoteDevTools get() = cdp.remoteDevTools
-//    private val cdp.page get() = cdp.page.takeIf { isActive }
-//    private val domAPI get() = cdp.dom.takeIf { isActive }
-//    private val cssAPI get() = cdp.css.takeIf { isActive }
-//    private val networkAPI get() = cdp.network.takeIf { isActive }
-//    private val fetchAPI get() = cdp.fetch.takeIf { isActive }
-//    private val runtimeAPI get() = cdp.runtime.takeIf { isActive }
-//    private val emulationAPI get() = cdp.emulation.takeIf { isActive }
-
     private val isolatedWorldManager = IsolatedWorldManager(cdp, settings)
     private val page = PageHandler(cdp, isolatedWorldManager)
     private val jsHandler get() = page.jsHandler
