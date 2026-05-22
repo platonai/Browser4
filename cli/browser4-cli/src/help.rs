@@ -217,28 +217,6 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
     }
 
-    if cmd.name == "co-scrape" {
-        lines.push("Notes:".to_string());
-        lines.push(
-            "  - Submits an async scrape-oriented collective task for the given URL."
-                .to_string(),
-        );
-        lines.push(
-            "  - Use `co-status` and `co-result` with the returned task ID to monitor and fetch the scrape response JSON."
-                .to_string(),
-        );
-        lines.push(String::new());
-        lines.push("Examples:".to_string());
-        lines.push(
-            "  browser4-cli co-scrape https://example.com/news --selector=.headline a --attribute=href --output=headlines.json"
-                .to_string(),
-        );
-        lines.push(
-            "  browser4-cli co scrape https://example.com/news --selector=.item --attribute=textContent --expires=6h --refresh"
-                .to_string(),
-        );
-    }
-
     if cmd.name == "co-status" {
         lines.push("Notes:".to_string());
         lines.push(
@@ -432,18 +410,6 @@ mod tests {
         assert!(help.contains("browser4-cli co submit https://example.com/direct"));
     }
 
-    #[test]
-    fn test_generate_command_help_co_scrape() {
-        let cmds = all_commands();
-        let cmd = cmds.iter().find(|c| c.name == "co-scrape").unwrap();
-        let help = generate_command_help(cmd);
-        assert!(help.contains("browser4-cli co-scrape <url>"));
-        assert!(help.contains("--selector"));
-        assert!(help.contains("--attribute"));
-        assert!(help.contains("--output"));
-        assert!(help.contains("scrape response JSON"));
-        assert!(help.contains("browser4-cli co scrape https://example.com/news"));
-    }
 
     #[test]
     fn test_generate_command_help_co_status_and_result() {

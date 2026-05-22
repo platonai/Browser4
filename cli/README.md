@@ -171,7 +171,6 @@ Query `browser4-cli help <command>` for the exact syntax when you need them.
 | `agent-result <id>` | Get the result of a completed agent task |
 | `co-create` | Create a collective session with parallel browser contexts |
 | `co-submit [url]` | Submit URL(s) or X-SQL payloads to the scrape queue |
-| `co-scrape <url>` | Scrape data from a URL using CSS selectors |
 | `co-status <id>` | Check the status of a scrape task |
 | `co-result <id>` | Get the result of a completed scrape task |
 
@@ -196,7 +195,6 @@ browser4-cli co submit https://example.com
 |---|---|---|
 | 1 | `co-create` | Opens a collective session and persists the returned session ID in the current CLI slot |
 | 2 | `co-submit [url]` | Submits one direct URL plus any URLs from `--seed-file` through `ScrapeController.submit(payload)` |
-| 2 | `co-scrape <url>` | Submits an async scrape-oriented task for a single URL and echoes the selector/output metadata |
 | 3 | `co-status <id>` | Calls `ScrapeController.getStatus(id)` and prints the returned scrape JSON |
 | 4 | `co-result <id>` | Calls `ScrapeController.getResult(id)` and prints the returned payload |
 
@@ -210,11 +208,8 @@ browser4-cli co submit https://example.com
 - `co-submit` maps CLI flags like `--deadline`, `--expires`, `--refresh`,
   `--parse`, and `--store-content` into the raw payload string submitted to
   the scrape REST API.
-- `co-scrape` submits the URL asynchronously, then prints the `selector`,
-  `attribute`, and `output` values so the requested extraction contract is
-  visible in the terminal log.
 - `co-status` and `co-result` are read-only follow-up commands; keep the task ID
-  printed by `co-submit` / `co-scrape`.
+  printed by `co-submit`.
 
 ### Use cases
 
@@ -254,21 +249,7 @@ https://example.com/seed-2
 This pattern is useful for warming caches, refreshing a URL list, or launching
 parallel collection across a curated seed set.
 
-#### 3. Submit a selector-based scrape task
-
-```shell
-browser4-cli co scrape https://example.com/news \
-  --selector=.headline a \
-  --attribute=href \
-  --output=headlines.json \
-  --expires=6h \
-  --refresh
-```
-
-Use this for repeatable extraction jobs where you want the terminal output to
-record the source URL, selector contract, and output target.
-
-#### 4. Poll and fetch the result
+#### 3. Poll and fetch the result
 
 ```shell
 browser4-cli co status co-task-4

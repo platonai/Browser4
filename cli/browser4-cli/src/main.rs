@@ -79,7 +79,6 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "agent-result",
         "co-create",
         "co-submit",
-        "co-scrape",
         "co-status",
         "co-result",
     ]
@@ -1477,60 +1476,6 @@ async fn handle_co_submit(
     Ok(())
 }
 
-async fn handle_co_scrape(
-    client: &Client,
-    base_url: &str,
-    tool_params: &Value,
-) -> Result<(), String> {
-    let url = tool_params
-        .get("url")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default();
-    if url.is_empty() {
-        return Err("URL is required.".to_string());
-    }
-
-    let selector = tool_params.get("selector").and_then(|v| v.as_str());
-    let attribute = tool_params.get("attribute").and_then(|v| v.as_str());
-    let output = tool_params.get("output").and_then(|v| v.as_str());
-
-    // Build a scrape command string with load options
-    let mut parts = vec![url.to_string()];
-    if let Some(v) = tool_params.get("deadline").and_then(|v| v.as_str()) {
-        parts.push(format!("-deadline {}", v));
-    }
-    if let Some(v) = tool_params.get("expires").and_then(|v| v.as_str()) {
-        parts.push(format!("-expires {}", v));
-    }
-    if tool_params
-        .get("refresh")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-    {
-        parts.push("-refresh".to_string());
-    }
-    let command = parts.join(" ");
-
-    let result = submit_scrape_payload(client, base_url, &command).await?;
-    let task_id = result.trim().trim_matches('"').to_string();
-
-    println!("Scrape submitted: {} → task {}", url, task_id);
-    if let Some(sel) = selector {
-        println!("  selector: {}", sel);
-    }
-    if let Some(attr) = attribute {
-        println!("  attribute: {}", attr);
-    }
-    if let Some(out) = output {
-        println!("  output: {}", out);
-    }
-    println!(
-        "Use 'browser4-cli co status {}' to check progress.",
-        task_id
-    );
-    Ok(())
-}
-
 async fn handle_co_status(
     client: &Client,
     base_url: &str,
@@ -1949,7 +1894,7 @@ fn compile_batch_request(
                 }
             }
             "list" | "close-all" | "kill-all" | "delete-data" | "agent-run" | "agent-status"
-            | "agent-result" | "co-create" | "co-submit" | "co-scrape" | "co-status"
+            | "agent-result" | "co-create" | "co-submit" | "co-status"
             | "co-result" => {
                 if push_batch_local_failure(
                     &mut entries,
@@ -2473,9 +2418,6 @@ async fn run(command: &str, global: &args::GlobalFlags) -> Result<(), String> {
         }
         "co-submit" => {
             handle_co_submit(&client, &base_url, &tool_params).await?;
-        }
-        "co-scrape" => {
-            handle_co_scrape(&client, &base_url, &tool_params).await?;
         }
         "co-status" => {
             handle_co_status(&client, &base_url, &tool_params).await?;

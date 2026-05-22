@@ -2479,7 +2479,6 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         // test_collective_submission_commands
         "co-create",
         "co-submit",
-        "co-scrape",
         "co-status",
         "co-result",
         // test_mouse_and_dialog

@@ -930,7 +930,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         // ---- Collective (co) ----
         CommandDef {
             name: "co-create",
-            description: "Create a collective session with parallel browser contexts",
+            description: "Create a collective scrape session with parallel browser contexts",
             category: Category::Collective,
             hidden: true,
             batch_supported: false,
@@ -953,7 +953,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "co-submit",
-            description: "Submit URL(s) or X-SQL payloads to the scrape queue",
+            description: "Submit URL(s) or X-SQL payloads as scrape jobs",
             category: Category::Collective,
             hidden: true,
             batch_supported: false,
@@ -980,39 +980,12 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
-            name: "co-scrape",
-            description: "Scrape data from a URL using CSS selectors",
-            category: Category::Collective,
-            hidden: true,
-            batch_supported: false,
-            args: &[ArgDef { name: "url", description: "URL to scrape", optional: false }],
-            options: &[
-                OptionDef { name: "selector", description: "CSS selector to extract elements", is_bool: false },
-                OptionDef { name: "attribute", description: "Element attribute to extract (e.g. textContent, href)", is_bool: false },
-                OptionDef { name: "output", description: "Output file path for scraped data", is_bool: false },
-                OptionDef { name: "deadline", description: "Deadline for task completion (ISO 8601)", is_bool: false },
-                OptionDef { name: "expires", description: "Cache expiration duration (e.g. 1d, 1h)", is_bool: false },
-                OptionDef { name: "refresh", description: "Force a fresh fetch, ignoring cache", is_bool: true },
-            ],
-            tool_name_fn: |_| "command_run".to_string(),
-            tool_params_fn: |args| {
-                let mut p = json!({ "url": get_str(args, "url").unwrap_or_default() });
-                if let Some(v) = get_opt_str(args, "selector") { p["selector"] = json!(v); }
-                if let Some(v) = get_opt_str(args, "attribute") { p["attribute"] = json!(v); }
-                if let Some(v) = get_opt_str(args, "output") { p["output"] = json!(v); }
-                if let Some(v) = get_opt_str(args, "deadline") { p["deadline"] = json!(v); }
-                if let Some(v) = get_opt_str(args, "expires") { p["expires"] = json!(v); }
-                if let Some(b) = get_bool(args, "refresh") { p["refresh"] = json!(b); }
-                p
-            },
-        },
-        CommandDef {
             name: "co-status",
-            description: "Check the status of a scrape task",
+            description: "Check the status of a scrape job",
             category: Category::Collective,
             hidden: true,
             batch_supported: false,
-            args: &[ArgDef { name: "id", description: "Task ID returned by co submit or co scrape", optional: false }],
+            args: &[ArgDef { name: "id", description: "Task ID returned by co submit", optional: false }],
             options: &[],
             tool_name_fn: |_| "command_status".to_string(),
             tool_params_fn: |args| {
@@ -1021,11 +994,11 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "co-result",
-            description: "Get the result of a completed scrape task",
+            description: "Get the result of a completed scrape job",
             category: Category::Collective,
             hidden: true,
             batch_supported: false,
-            args: &[ArgDef { name: "id", description: "Task ID returned by co submit or co scrape", optional: false }],
+            args: &[ArgDef { name: "id", description: "Task ID returned by co submit", optional: false }],
             options: &[],
             tool_name_fn: |_| "command_result".to_string(),
             tool_params_fn: |args| {
@@ -1080,7 +1053,6 @@ mod tests {
             "agent-result",
             "co-create",
             "co-submit",
-            "co-scrape",
             "co-status",
             "co-result",
         ] {
@@ -1330,26 +1302,6 @@ mod tests {
     }
 
     #[test]
-    fn test_co_scrape_tool_name_and_params() {
-        let map = commands_map();
-        let cmd = map.get("co-scrape").unwrap();
-        let mut args = HashMap::new();
-        args.insert(
-            "url".to_string(),
-            json!("https://www.amazon.com/dp/B08PP5MSVB"),
-        );
-        args.insert("selector".to_string(), json!(".product-title"));
-        args.insert("attribute".to_string(), json!("textContent"));
-        args.insert("output".to_string(), json!("title.txt"));
-        assert_eq!((cmd.tool_name_fn)(&args), "command_run");
-        let params = (cmd.tool_params_fn)(&args);
-        assert_eq!(params["url"], "https://www.amazon.com/dp/B08PP5MSVB");
-        assert_eq!(params["selector"], ".product-title");
-        assert_eq!(params["attribute"], "textContent");
-        assert_eq!(params["output"], "title.txt");
-    }
-
-    #[test]
     fn test_co_status_tool_name() {
         let map = commands_map();
         let cmd = map.get("co-status").unwrap();
@@ -1457,7 +1409,6 @@ mod tests {
             .collect();
         assert!(collective_cmds.contains(&"co-create"));
         assert!(collective_cmds.contains(&"co-submit"));
-        assert!(collective_cmds.contains(&"co-scrape"));
         assert!(collective_cmds.contains(&"co-status"));
         assert!(collective_cmds.contains(&"co-result"));
     }
@@ -1474,7 +1425,6 @@ mod tests {
             "agent-result",
             "co-create",
             "co-submit",
-            "co-scrape",
             "co-status",
             "co-result",
         ] {

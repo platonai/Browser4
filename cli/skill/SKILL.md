@@ -210,15 +210,7 @@ browser4-cli co submit https://example.com/direct \
   --parse \
   --store-content
 
-# 3) submit a scrape-oriented task for a single page
-browser4-cli co scrape https://example.com/news \
-  --selector=.headline a \
-  --attribute=href \
-  --output=headlines.json \
-  --expires=6h \
-  --refresh
-
-# 4) poll and fetch the result
+# 3) poll and fetch the result
 browser4-cli co status co-task-4
 browser4-cli co result co-task-4
 ```
@@ -231,9 +223,7 @@ Notes:
 - `co-submit` forwards load-option style flags such as `--deadline`,
   `--expires`, `--refresh`, `--parse`, and `--store-content` into the raw
   payload sent to `ScrapeController.submit(payload)`.
-- `co-scrape` submits asynchronously, then prints the selector / attribute /
-  output contract so the extraction intent is visible in the terminal log.
-- Capture the task ID printed by `co-submit` or `co-scrape`, then use
+- Capture the task ID printed by `co-submit`, then use
   `co-status` and `co-result` to follow the async scrape job via
   `ScrapeController.getStatus(id)` and `ScrapeController.getResult(id)`.
 

@@ -743,31 +743,6 @@ pub(super) fn test_collective_submission_commands(ctx: &mut E2ECtx) {
         co_submit_result.stdout
     );
 
-    let co_scrape_result = run_command(
-        ctx,
-        &[
-            "co",
-            "scrape",
-            "https://example.com/scrape-source",
-            "--selector=.item",
-            "--attribute=textContent",
-            "--output=items.json",
-            "--deadline=2026-03-30T00:00:00Z",
-            "--expires=6h",
-            "--refresh",
-        ],
-    );
-    assert!(
-        co_scrape_result
-            .stdout
-            .contains("Scrape submitted: https://example.com/scrape-source → task co-task-4"),
-        "Expected scrape submission output in:\n{}",
-        co_scrape_result.stdout
-    );
-    assert!(co_scrape_result.stdout.contains("selector: .item"));
-    assert!(co_scrape_result.stdout.contains("attribute: textContent"));
-    assert!(co_scrape_result.stdout.contains("output: items.json"));
-
     let co_status_result = run_command(ctx, &["co", "status", "collective-job-42"]);
     let co_status_payload = strip_snapshot_output(&co_status_result.stdout);
     assert!(
@@ -806,7 +781,6 @@ pub(super) fn test_collective_submission_commands(ctx: &mut E2ECtx) {
             "https://example.com/direct -deadline 2026-03-30T00:00:00Z -expires 1d -refresh -parse -storeContent".to_string(),
             "https://example.com/seed-1 -deadline 2026-03-30T00:00:00Z -expires 1d -refresh -parse -storeContent".to_string(),
             "https://example.com/seed-2 -deadline 2026-03-30T00:00:00Z -expires 1d -refresh -parse -storeContent".to_string(),
-            "https://example.com/scrape-source -deadline 2026-03-30T00:00:00Z -expires 6h -refresh".to_string(),
         ]
     );
     assert!(
@@ -868,18 +842,6 @@ pub(super) fn test_collective_command_help_and_validation(ctx: &mut E2ECtx) {
         co_submit_help.stdout
     );
 
-    let co_scrape_help = run_command(ctx, &["help", "co-scrape"]);
-    assert!(
-        co_scrape_help.stdout.contains("--selector"),
-        "Expected selector option in:\n{}",
-        co_scrape_help.stdout
-    );
-    assert!(
-        co_scrape_help.stdout.contains("Use `co-status` and `co-result`"),
-        "Expected follow-up note in:\n{}",
-        co_scrape_help.stdout
-    );
-
     let co_status_help = run_command(ctx, &["help", "co-status"]);
     assert!(
         co_status_help.stdout.contains("browser4-cli co status co-task-4"),
@@ -907,14 +869,6 @@ pub(super) fn test_collective_command_help_and_validation(ctx: &mut E2ECtx) {
         submit_failure_output.contains("Either a URL or --seed-file is required."),
         "Expected co-submit validation error in:\n{}",
         submit_failure_output
-    );
-
-    let scrape_failure = run_command_expecting_failure(ctx, &["co", "scrape"], "URL is required.");
-    let scrape_failure_output = format!("{}\n{}", scrape_failure.stdout, scrape_failure.stderr);
-    assert!(
-        scrape_failure_output.contains("URL is required."),
-        "Expected co-scrape validation error in:\n{}",
-        scrape_failure_output
     );
 }
 
