@@ -225,7 +225,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     if cmd.name == "swarm-create" {
         lines.push("Notes:".to_string());
         lines.push(
-            "  - Creates a swarm scrape session and stores the returned session ID in the current CLI slot."
+            "  - Creates a swarm scrape session using the fixed session ID `SWARM` and stores it in the current CLI slot."
+                .to_string(),
+        );
+        lines.push(
+            "  - `--profile-mode` is required and only supports `SEQUENTIAL` or `TEMPORARY`."
                 .to_string(),
         );
         lines.push(String::new());
@@ -449,6 +453,8 @@ mod tests {
         assert!(help.contains("--max-open-tabs"));
         assert!(help.contains("--max-browser-contexts"));
         assert!(help.contains("--display-mode"));
+        assert!(help.contains("fixed session ID `SWARM`"));
+        assert!(help.contains("only supports `SEQUENTIAL` or `TEMPORARY`"));
         assert!(help.contains("Display mode: GUI, HEADLESS, SUPERVISED"));
         assert!(!help.contains("browser4-cli swarm-create"));
     }

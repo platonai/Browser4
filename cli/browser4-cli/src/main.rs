@@ -59,6 +59,7 @@ const TEST_TEMPORARY_PROFILE_ENV: &str = "BROWSER4_CLI_TEST_TEMPORARY_PROFILE";
 const AGENT_RUN_FAILURE_POLL_ATTEMPTS: usize = 5;
 const AGENT_RUN_FAILURE_POLL_INTERVAL_MS: u64 = 250;
 const NO_ACTIVE_SESSION_MESSAGE: &str = r#"No active session. Run "browser4-cli open" first."#;
+const SWARM_SESSION_ID: &str = "SWARM";
 
 /// Commands that should NOT trigger a post-command snapshot.
 fn no_snapshot_commands() -> HashSet<&'static str> {
@@ -256,6 +257,59 @@ fn build_open_session_request(capabilities: Option<Value>, session_name: Option<
     caps.insert("sessionId".to_string(), json!(requested_session_id));
 
     json!({ "capabilities": Value::Object(caps) })
+}
+
+fn build_swarm_create_capabilities(tool_params: &Value) -> Result<Value, String> {
+    let profile_mode = tool_params
+        .get("profileMode")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            "Swarm create requires --profile-mode=SEQUENTIAL or --profile-mode=TEMPORARY."
+                .to_string()
+        })?
+        .to_ascii_uppercase();
+
+    match profile_mode.as_str() {
+        "SEQUENTIAL" | "TEMPORARY" => {}
+        _ => {
+            return Err(format!(
+                "Swarm create only supports --profile-mode=SEQUENTIAL or --profile-mode=TEMPORARY. Received: {}",
+                profile_mode
+            ))
+        }
+    }
+
+    let mut capabilities = serde_json::Map::new();
+    capabilities.insert("profileMode".to_string(), json!(profile_mode));
+
+    if let Some(v) = tool_params
+        .get("maxOpenTabs")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        capabilities.insert("maxOpenTabs".to_string(), json!(v));
+    }
+    if let Some(v) = tool_params
+        .get("maxBrowserContexts")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        capabilities.insert("maxBrowserContexts".to_string(), json!(v));
+    }
+    if let Some(v) = tool_params
+        .get("displayMode")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        capabilities.insert("displayMode".to_string(), json!(v));
+    }
+
+    Ok(Value::Object(capabilities))
 }
 
 fn should_navigate_after_open(url: &str) -> bool {
@@ -1352,29 +1406,8 @@ async fn handle_swarm_create(
     tool_params: &Value,
     session_name: Option<&str>,
 ) -> Result<(), String> {
-    // Build capabilities map from CLI options
-    let mut capabilities = serde_json::Map::new();
-    if let Some(v) = tool_params.get("profileMode").and_then(|v| v.as_str()) {
-        capabilities.insert("profileMode".to_string(), json!(v));
-    }
-    if let Some(v) = tool_params.get("maxOpenTabs").and_then(|v| v.as_str()) {
-        capabilities.insert("maxOpenTabs".to_string(), json!(v));
-    }
-    if let Some(v) = tool_params
-        .get("maxBrowserContexts")
-        .and_then(|v| v.as_str())
-    {
-        capabilities.insert("maxBrowserContexts".to_string(), json!(v));
-    }
-    if let Some(v) = tool_params.get("displayMode").and_then(|v| v.as_str()) {
-        capabilities.insert("displayMode".to_string(), json!(v));
-    }
-
-    let open_args = if capabilities.is_empty() {
-        json!({})
-    } else {
-        json!({ "capabilities": Value::Object(capabilities) })
-    };
+    let capabilities = build_swarm_create_capabilities(tool_params)?;
+    let open_args = build_open_session_request(Some(capabilities), Some(SWARM_SESSION_ID));
 
     let result = call_tool(client, base_url, "open_session", open_args).await?;
 
@@ -1383,10 +1416,22 @@ async fn handle_swarm_create(
         parsed
             .get("sessionId")
             .and_then(|v| v.as_str())
-            .unwrap_or(&result)
+            .unwrap_or(SWARM_SESSION_ID)
             .to_string()
     } else {
-        result.clone()
+        let trimmed = result.trim();
+        if trimmed.is_empty() {
+            SWARM_SESSION_ID.to_string()
+        } else {
+            trimmed.trim_matches('"').to_string()
+        }
+    };
+
+    if session_id != SWARM_SESSION_ID {
+        return Err(format!(
+            "Swarm create must use the fixed session ID '{}', but Browser4 returned '{}'.",
+            SWARM_SESSION_ID, session_id
+        ));
     };
 
     let mut state = read_state(None, session_name);
@@ -2698,6 +2743,57 @@ mod tests {
         );
 
         assert_eq!(request["capabilities"]["sessionId"], json!("team-a"));
+        assert_eq!(request["capabilities"]["profileMode"], json!("SEQUENTIAL"));
+    }
+
+    #[test]
+    fn build_swarm_create_capabilities_requires_supported_profile_mode() {
+        let error = build_swarm_create_capabilities(&json!({})).unwrap_err();
+
+        assert_eq!(
+            error,
+            "Swarm create requires --profile-mode=SEQUENTIAL or --profile-mode=TEMPORARY."
+        );
+    }
+
+    #[test]
+    fn build_swarm_create_capabilities_accepts_supported_profile_modes_case_insensitively() {
+        let caps = build_swarm_create_capabilities(&json!({
+            "profileMode": "temporary",
+            "maxOpenTabs": "8",
+            "maxBrowserContexts": "2",
+            "displayMode": "HEADLESS",
+        }))
+        .unwrap();
+
+        assert_eq!(caps["profileMode"], json!("TEMPORARY"));
+        assert_eq!(caps["maxOpenTabs"], json!("8"));
+        assert_eq!(caps["maxBrowserContexts"], json!("2"));
+        assert_eq!(caps["displayMode"], json!("HEADLESS"));
+    }
+
+    #[test]
+    fn build_swarm_create_capabilities_rejects_unsupported_profile_modes() {
+        let error = build_swarm_create_capabilities(&json!({
+            "profileMode": "DEFAULT",
+        }))
+        .unwrap_err();
+
+        assert_eq!(
+            error,
+            "Swarm create only supports --profile-mode=SEQUENTIAL or --profile-mode=TEMPORARY. Received: DEFAULT"
+        );
+    }
+
+    #[test]
+    fn build_swarm_create_request_uses_fixed_swarm_session_id() {
+        let capabilities = build_swarm_create_capabilities(&json!({
+            "profileMode": "SEQUENTIAL",
+        }))
+        .unwrap();
+        let request = build_open_session_request(Some(capabilities), Some(SWARM_SESSION_ID));
+
+        assert_eq!(request["capabilities"]["sessionId"], json!(SWARM_SESSION_ID));
         assert_eq!(request["capabilities"]["profileMode"], json!("SEQUENTIAL"));
     }
 

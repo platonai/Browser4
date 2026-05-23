@@ -940,7 +940,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[
-                OptionDef { name: "profile-mode", description: "Browser profile mode (temporary, default, system_default, prototype)", is_bool: false },
+                OptionDef { name: "profile-mode", description: "Browser profile mode (SEQUENTIAL or TEMPORARY only)", is_bool: false },
                 OptionDef { name: "max-open-tabs", description: "Maximum open tabs per browser context (default: 8)", is_bool: false },
                 OptionDef { name: "max-browser-contexts", description: "Number of isolated browser environments (default: 2)", is_bool: false },
                 OptionDef { name: "display-mode", description: "Display mode: GUI, HEADLESS, SUPERVISED", is_bool: false },
@@ -948,7 +948,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_name_fn: |_| "open_session".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
-                if let Some(v) = get_opt_str(args, "profile-mode") { p["profileMode"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "profile-mode") { p["profileMode"] = json!(v.trim().to_ascii_uppercase()); }
                 if let Some(v) = get_opt_str(args, "max-open-tabs") { p["maxOpenTabs"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "max-browser-contexts") { p["maxBrowserContexts"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "display-mode") { p["displayMode"] = json!(v); }
@@ -1256,7 +1256,7 @@ mod tests {
         args.insert("max-browser-contexts".to_string(), json!("2"));
         args.insert("display-mode".to_string(), json!("GUI"));
         let params = (cmd.tool_params_fn)(&args);
-        assert_eq!(params["profileMode"], "temporary");
+        assert_eq!(params["profileMode"], "TEMPORARY");
         assert_eq!(params["maxOpenTabs"], "8");
         assert_eq!(params["maxBrowserContexts"], "2");
         assert_eq!(params["displayMode"], "GUI");
