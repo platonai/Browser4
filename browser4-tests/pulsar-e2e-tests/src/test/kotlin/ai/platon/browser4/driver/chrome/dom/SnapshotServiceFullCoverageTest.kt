@@ -1,8 +1,8 @@
 package ai.platon.browser4.driver.chrome.dom
 
 import ai.platon.browser4.driver.chrome.RemoteDevTools
-import ai.platon.browser4.driver.chrome.dom.model.MergedDOMTreeNode
 import ai.platon.browser4.driver.chrome.dom.model.ElementRefCriteria
+import ai.platon.browser4.driver.chrome.dom.model.MergedDOMTreeNode
 import ai.platon.browser4.driver.chrome.dom.model.PageTarget
 import ai.platon.browser4.driver.chrome.dom.model.SnapshotOptions
 import ai.platon.browser4.driver.chrome.dom.util.DomDebug
@@ -29,8 +29,9 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
     fun getTreesBuildAndSerializeEndToEndWithAssertions() = runEnhancedWebDriverTest(testURL) { driver ->
         assertIs<PulsarWebDriver>(driver)
         driver.waitForSelector("h1")
-        val devTools = driver.implementation as RemoteDevTools
-        val service = CDPSnapshotService(devTools)
+
+        val cdp = driver.cdp
+        val service = CDPSnapshotService(cdp)
 
         val options = SnapshotOptions(
             maxDepth = 100,
@@ -45,7 +46,7 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
         )
 
         // Prepare a deterministic dynamic state (virtual list -> scrollable container, images are added on DOMContentLoaded)
-        runCatching { devTools.runtime.evaluate("generateLargeList(100)") }
+        runCatching { cdp.runtime.evaluate("generateLargeList(100)") }
 
         val enhancedRoot = collectEnhancedRoot(service, options)
         // Print enhanced MergedDOMTree summary and basic tree stats
@@ -87,8 +88,7 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
     fun findElementUsingCssXpathBackendIdElementHashAndConvertToInteractedElement() =
         runEnhancedWebDriverTest(testURL) { driver ->
             assertIs<PulsarWebDriver>(driver)
-            val devTools = driver.implementation as RemoteDevTools
-            val service = CDPSnapshotService(devTools)
+            val service = CDPSnapshotService(driver.cdp)
 
             val options = SnapshotOptions(
                 maxDepth = 100,
@@ -170,8 +170,8 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
     fun optionsTogglingNoAxOrSnapshotYieldsMinimalEnhancedNodes() =
         runEnhancedWebDriverTest(interactiveDynamicURL) { driver ->
             assertIs<PulsarWebDriver>(driver)
-            val devTools = driver.implementation as RemoteDevTools
-            val service = CDPSnapshotService(devTools)
+            val cdp = driver.cdp
+            val service = CDPSnapshotService(cdp)
 
             val options = SnapshotOptions(
                 maxDepth = 100,
@@ -208,11 +208,11 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
     @DisplayName("Scrollability and interactivity analysis on dynamic content")
     fun scrollabilityAndInteractivityAnalysisOnDynamicContent() = runEnhancedWebDriverTest(testURL) { driver ->
         assertIs<PulsarWebDriver>(driver)
-        val devTools = driver.implementation as RemoteDevTools
         val service = driver.snapshotService as CDPSnapshotService
+        val cdp = driver.cdp
 
         // Create a clearly scrollable container and interactive buttons
-        runCatching { devTools.runtime.evaluate("generateLargeList(1000)") }
+        runCatching { cdp.evaluate("generateLargeList(1000)") }
 
         val options = SnapshotOptions(
             maxDepth = 100,
@@ -230,13 +230,13 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
         var hasScrollableContainer = false
         repeat(50) { // up to ~10s
             val containerExists = runCatching {
-                devTools.runtime.evaluate("document.getElementById('virtualScrollContainer') != null")
+                driver.cdp.evaluate("document.getElementById('virtualScrollContainer') != null")
             }.getOrNull()?.result?.value?.toString()?.equals("true", ignoreCase = true) == true
 
             if (containerExists) {
                 // Also check if the content has been rendered with sufficient height
                 val hasContent = runCatching {
-                    devTools.runtime.evaluate(
+                    driver.cdp.evaluate(
                         """
                         var container = document.getElementById('virtualScrollContainer');
                         var content = document.getElementById('virtualScrollContent');
@@ -310,17 +310,16 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
     @DisplayName("Dynamic content load is reflected in enhanced DOM tree")
     fun dynamicContentLoadIsReflectedInEnhancedDomTree() = runEnhancedWebDriverTest(testURL) { driver ->
         assertIs<PulsarWebDriver>(driver)
-        val devTools = driver.implementation as RemoteDevTools
-        val service = CDPSnapshotService(devTools)
+        val service = CDPSnapshotService(driver.cdp)
 
         // Trigger async load of users (2s delay per page script)
-        runCatching { devTools.runtime.evaluate("loadContent('users')") }
+        runCatching { driver.cdp.evaluate("loadContent('users')") }
 
         // Deterministically wait for #dynamicContent to get 'loaded' class, then assert
         var loadedObserved = false
         repeat(40) { // up to ~20s
             val ok = runCatching {
-                devTools.runtime.evaluate("document.getElementById('dynamicContent')?.classList?.contains('loaded')")
+                driver.cdp.evaluate("document.getElementById('dynamicContent')?.classList?.contains('loaded')")
             }.getOrNull()?.result?.value?.toString()?.equals("true", ignoreCase = true) == true
             if (ok) {
                 loadedObserved = true; return@repeat
@@ -361,8 +360,7 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
     @DisplayName("SnapshotNodeEx bounds and rects are populated correctly")
     fun snapshotnodeexBoundsAndRectsArePopulatedCorrectly() = runEnhancedWebDriverTest(testURL) { driver ->
         assertIs<PulsarWebDriver>(driver)
-        val devTools = driver.implementation as RemoteDevTools
-        val service = CDPSnapshotService(devTools)
+        val service = CDPSnapshotService(driver.cdp)
 
         val options = SnapshotOptions(
             maxDepth = 100,
@@ -424,11 +422,11 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
     @DisplayName("SnapshotNodeEx bounds on interactive elements")
     fun snapshotNodeExBoundsOnInteractiveElements() = runEnhancedWebDriverTest(testURL) { driver ->
         assertIs<PulsarWebDriver>(driver)
-        val devTools = driver.implementation as RemoteDevTools
-        val service = CDPSnapshotService(devTools)
+        val cdp = driver.cdp
+        val service = CDPSnapshotService(driver.cdp)
 
         // Generate dynamic content with buttons
-        runCatching { devTools.runtime.evaluate("generateLargeList(100)") }
+        runCatching { cdp.runtime.evaluate("generateLargeList(100)") }
 
         val options = SnapshotOptions(
             maxDepth = -1,
@@ -443,7 +441,7 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
         )
 
         suspend fun jsNumber(expr: String): Double? = runCatching {
-            val r = devTools.runtime.evaluate(expr).result
+            val r = cdp.evaluate(expr).result
             r.value?.toString()?.toDoubleOrNull() ?: r.unserializableValue?.toDoubleOrNull()
         }.getOrNull()
 
@@ -532,7 +530,7 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
         assertTrue(close(ab.height, expectedH), "absoluteBounds.height(${ab.height}) ~= $expectedH")
 
         // 3) Scroll and verify invariants again
-        runCatching { devTools.runtime.evaluate("window.scrollTo(0, 200)") }
+        runCatching { cdp.evaluate("window.scrollTo(0, 200)") }
         Thread.sleep(300)
 
         val root2 = collectEnhancedRoot(service, options)
@@ -584,19 +582,19 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
     @DisplayName("SnapshotNodeEx scrollRects on scrollable container")
     fun snapshotNodeExScrollRectsOnScrollableContainer() = runEnhancedWebDriverTest(testURL) { driver ->
         assertIs<PulsarWebDriver>(driver)
-        val devTools = driver.implementation as RemoteDevTools
+        val cdp = driver.cdp
 
         // Generate a large scrollable list
-        runCatching { devTools.runtime.evaluate("generateLargeList(1000)") }
+        runCatching { cdp.evaluate("generateLargeList(1000)") }
 
-        val service = CDPSnapshotService(devTools)
+        val service = CDPSnapshotService(cdp)
         service.getBrowserUseState()
 
         // Wait for container to be present
         var hasContainer = false
         repeat(2) {
             val ok = runCatching {
-                devTools.runtime.evaluate("document.getElementById('virtualScrollContainer') != null")
+                cdp.evaluate("document.getElementById('virtualScrollContainer') != null")
             }.getOrNull()?.result?.value?.toString()?.equals("true", ignoreCase = true) == true
             if (ok) {
                 hasContainer = true;

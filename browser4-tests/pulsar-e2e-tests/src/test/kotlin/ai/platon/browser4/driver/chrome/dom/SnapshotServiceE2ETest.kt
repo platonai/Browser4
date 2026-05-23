@@ -44,8 +44,8 @@ class SnapshotServiceE2ETest : WebDriverTestBase() {
         assertIs<PulsarWebDriver>(driver)
         driver.waitForSelector("h1")
         driver.bringToFront()
-        val devTools = driver.implementation as RemoteDevTools
-        val service = CDPSnapshotService(devTools)
+
+        val service = CDPSnapshotService(driver.cdp)
 
         val options = SnapshotOptions(
             maxDepth = 1000,
@@ -59,11 +59,11 @@ class SnapshotServiceE2ETest : WebDriverTestBase() {
             includeInteractivity = true
         )
 
-        runCatching { devTools.runtime.evaluate("generateLargeList(100)") }
+        runCatching { driver.cdp.evaluate("generateLargeList(100)") }
         var hasVirtualItems = false
         for (attempt in 0 until 30) {
             hasVirtualItems = runCatching {
-                devTools.runtime.evaluate(
+                driver.cdp.evaluate(
                     "document.querySelectorAll('#virtualScrollContent [data-testid^=\"tta-virtual-\"]').length >= 3"
                 )
             }.getOrNull()?.result?.value?.toString()?.equals("true", ignoreCase = true) == true

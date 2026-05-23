@@ -47,11 +47,11 @@ class DOMBoundsParityTest : WebDriverTestBase() {
     fun boundsAreInCssPixelsIndependentOfDprScalingApplied() =
         runEnhancedWebDriverTest(interactiveDynamicURL) { driver ->
             assertIs<PulsarWebDriver>(driver)
-            val devTools = driver.implementation as RemoteDevTools
-            val service = CDPSnapshotService(devTools)
+
+            val service = CDPSnapshotService(driver.cdp)
 
             // Inject a simple layout with a known CSS box size
-            devTools.runtime.evaluate(
+            driver.cdp.evaluate(
                 """
             (function(){
               document.open();
@@ -93,11 +93,11 @@ class DOMBoundsParityTest : WebDriverTestBase() {
     fun iframeOffsetsAndScrollAreReflectedInAbsolutePositionAndVisibilityTrueWhenWithinViewport() =
         runEnhancedWebDriverTest(interactiveDynamicURL) { driver ->
             assertIs<PulsarWebDriver>(driver)
-            val devTools = driver.implementation as RemoteDevTools
+
             val service = driver.snapshotService as CDPSnapshotService
 
             // Build parent with an iframe using srcdoc (same-origin), scroll iframe content to 400
-            devTools.runtime.evaluate(
+            driver.cdp.evaluate(
                 """
             (function(){
               document.open();
@@ -175,11 +175,11 @@ class DOMBoundsParityTest : WebDriverTestBase() {
     @DisplayName("iframe content outside viewport is not visible")
     fun iframeContentOutsideViewportIsNotVisible() = runEnhancedWebDriverTest(interactiveDynamicURL) { driver ->
         assertIs<PulsarWebDriver>(driver)
-        val devTools = driver.implementation as RemoteDevTools
-        val service = CDPSnapshotService(devTools)
+
+        val service = CDPSnapshotService(driver.cdp)
 
         // Large content inside iframe without sufficient scroll to reveal inner2
-        devTools.runtime.evaluate(
+        driver.cdp.evaluate(
             """
             (function(){
               document.open();

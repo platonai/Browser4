@@ -31,8 +31,8 @@ class OptimizedDOMTreeTest : WebDriverTestBase() {
     fun optimizedDOMTreeBuilderInvariantsOnInteractiveDynamicPage() =
         runEnhancedWebDriverTest(interactiveDynamicURL) { driver ->
             assertIs<PulsarWebDriver>(driver)
-            val devTools = driver.implementation as RemoteDevTools
-            val service = CDPSnapshotService(devTools)
+
+            val service = CDPSnapshotService(driver.cdp)
 
             val options = SnapshotOptions(
                 maxDepth = 100,
@@ -117,8 +117,8 @@ class OptimizedDOMTreeTest : WebDriverTestBase() {
     @DisplayName("isNew flag respects previous backend node ids")
     fun isNewFlagRespectsPreviousBackendNodeIds() = runEnhancedWebDriverTest(interactiveDynamicURL) { driver ->
         assertIs<PulsarWebDriver>(driver)
-        val devTools = driver.implementation as RemoteDevTools
-        val service = CDPSnapshotService(devTools)
+
+        val service = CDPSnapshotService(driver.cdp)
 
         val options = SnapshotOptions(
             maxDepth = 100,
@@ -167,12 +167,12 @@ class OptimizedDOMTreeTest : WebDriverTestBase() {
     fun optimizetreePrunesInvisibleWrapperWithPrunedChildrenOnRealPage() =
         runEnhancedWebDriverTest(interactiveDynamicURL) { driver ->
             assertIs<PulsarWebDriver>(driver)
-            val devTools = driver.implementation as RemoteDevTools
-            val service = CDPSnapshotService(devTools)
+
+            val service = CDPSnapshotService(driver.cdp)
 
             // Inject an invisible wrapper with trivial content; children will be pruned first, then wrapper by optimizeTree
             runCatching {
-                devTools.runtime.evaluate(
+                driver.cdp.evaluate(
                     """
                 (function(){
                   var el = document.getElementById('invisibleWrapper');

@@ -3,6 +3,7 @@ package ai.platon.browser4.driver.chrome.dom
 import ai.platon.browser4.driver.chrome.RemoteDevTools
 import ai.platon.browser4.driver.chrome.dom.model.PageTarget
 import ai.platon.browser4.driver.chrome.dom.model.SnapshotOptions
+import ai.platon.browser4.driver.chrome.experimental.CDP
 import ai.platon.pulsar.WebDriverTestBase
 import ai.platon.pulsar.protocol.browser.driver.cdt.PulsarWebDriver
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -36,11 +37,11 @@ class AriaSnapshotRendererE2ETest : WebDriverTestBase() {
             driver.waitForSelector("h1")
             driver.bringToFront()
 
-            val devTools = driver.implementation as RemoteDevTools
-            installRendererFixture(devTools)
+
+            installRendererFixture(driver.cdp)
             driver.waitForSelector("h1")
 
-            val service = CDPSnapshotService(devTools)
+            val service = CDPSnapshotService(driver.cdp)
             val normalized = normalizeRefs(collectAriaSnapshot(service)).lowercase()
 
             assertTrue(normalized.contains("- region \"collapsed generic\" [ref=#]:"), normalized)
@@ -67,7 +68,7 @@ class AriaSnapshotRendererE2ETest : WebDriverTestBase() {
         driver.waitForSelector("iframe")
         driver.bringToFront()
 
-        val service = CDPSnapshotService(driver.implementation as RemoteDevTools)
+        val service = CDPSnapshotService(driver.cdp)
         val normalized = normalizeRefs(collectAriaSnapshot(service)).lowercase()
 
         assertTrue(Regex("""- iframe \[ref=#]""").findAll(normalized).count() >= 2, normalized)
@@ -90,8 +91,8 @@ class AriaSnapshotRendererE2ETest : WebDriverTestBase() {
         return snapshot.replace(Regex("""\[ref=[^\]]+]"""), "[ref=#]")
     }
 
-    private suspend fun installRendererFixture(devTools: RemoteDevTools) {
-        devTools.runtime.evaluate(
+    private suspend fun installRendererFixture(cdp: CDP) {
+        cdp.evaluate(
             """
             document.head.innerHTML = '<meta charset="UTF-8"><title>Aria Snapshot Renderer Fixtures</title>';
             document.body.innerHTML = `

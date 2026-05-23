@@ -35,6 +35,7 @@ class CDP(
     val page get() = devTools.page
     val target get() = devTools.target
     val dom get() = devTools.dom
+    val console get() = devTools.console
     val css get() = devTools.css
     val input get() = devTools.input
     val network get() = devTools.network

@@ -157,8 +157,6 @@ abstract class AbstractWebDriver(
     open val chatModel get() = ChatModelFactory.getOrCreateOrNull(config)
     open val implementation: Any = this
 
-    // TODO: Will move to WebDriver
-    @Beta
     open val snapshotService: SnapshotService? = null
 
     /** Idle timeout before a READY driver is considered stale and eligible for recycling/retirement. */
