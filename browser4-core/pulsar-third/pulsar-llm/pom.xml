@@ -65,6 +65,13 @@
             <scope>test</scope>
         </dependency>
 
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>pulsar-resources</artifactId>
+            <type>test-jar</type>
+            <classifier>tests</classifier>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
 </project>

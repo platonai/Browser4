@@ -1,6 +1,6 @@
 package ai.platon.pulsar.external
 
-import ai.platon.browser4.common.B4ResourceLoader
+import ai.platon.pulsar.common.ResourceLoader
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.dom.Documents
@@ -20,12 +20,11 @@ class ChatModelTests {
     companion object {
         private val url = TestUrls.PRODUCT_DETAIL_URL
         private val args = "-requireSize 200000"
-        private val productHtml = B4ResourceLoader.readString("pages/amazon/B08PP5MSVB.original.htm")
-        private val productText = B4ResourceLoader.readString("prompts/product.txt")
+        private val productHtml = ResourceLoader.readString("pages/amazon/B08PP5MSVB.original.htm")
+        private val productText = ResourceLoader.readString("prompts/product.txt")
         private val clusterAnalysisPrompt =
-            B4ResourceLoader.readString("prompts/data-expert/fulltext/prompt.p1723107189.6.remarkable.txt")
+            ResourceLoader.readString("prompts/data-expert/fulltext/prompt.p1723107189.6.remarkable.txt")
         private val conf = ImmutableConfig(loadDefaults = true)
-        private val isModelConfigured get() = ChatModelFactory.isModelConfigured(conf)
         private lateinit var model: BrowserChatModel
 
         @BeforeAll
