@@ -131,15 +131,6 @@ fn no_active_session_message() -> String {
     )
 }
 
-fn goto_requires_active_session_message() -> String {
-    format_session_guidance_message(
-        "Active session required",
-        Some("goto"),
-        "`goto` needs an active reusable session, but none is available right now.",
-        &["run `browser4-cli open` to create or refresh the session first."],
-    )
-}
-
 fn saved_session_expired_message() -> String {
     format_session_guidance_message(
         "Session refresh needed",
@@ -507,13 +498,12 @@ async fn post_command_snapshot(client: &Client, base_url: &str, session_id: &str
 // Command handlers
 // ---------------------------------------------------------------------------
 
-async fn handle_open(
+async fn get_or_create_navigation_session(
     client: &Client,
     base_url: &str,
-    tool_name: &str,
     tool_params: &Value,
     session_name: Option<&str>,
-) -> Result<(), String> {
+) -> Result<(CliState, String, bool), String> {
     let mut state = read_state(None, session_name);
     state.session_name = session_name.map(|s| s.to_string());
 
@@ -529,6 +519,19 @@ async fn handle_open(
         println!("Session opened: {}", new_id);
         new_id
     };
+
+    Ok((state, session_id, reused_existing_session))
+}
+
+async fn handle_open(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let (state, session_id, reused_existing_session) =
+        get_or_create_navigation_session(client, base_url, tool_params, session_name).await?;
 
     let url = tool_params
         .get("url")
@@ -603,7 +606,8 @@ async fn handle_goto(
     tool_params: &Value,
     session_name: Option<&str>,
 ) -> Result<(), String> {
-    let session_id = require_active_session_for_goto(client, base_url, session_name).await?;
+    let (state, session_id, reused_existing_session) =
+        get_or_create_navigation_session(client, base_url, tool_params, session_name).await?;
     let target_url = tool_params
         .get("url")
         .and_then(|value| value.as_str())
@@ -619,16 +623,55 @@ async fn handle_goto(
             post_command_snapshot(client, base_url, &session_id).await;
         }
         Err(err) => {
-            let should_suggest_refresh = should_retry_open_after_navigation_error(&err, true);
-            println!(
-                "{}",
-                format_navigation_failure_message(
-                    target_url,
-                    &session_id,
-                    &err,
-                    should_suggest_refresh,
-                )
-            );
+            if !should_retry_open_after_navigation_error(&err, reused_existing_session) {
+                let should_suggest_refresh = should_retry_open_after_navigation_error(&err, true);
+                println!(
+                    "{}",
+                    format_navigation_failure_message(
+                        target_url,
+                        &session_id,
+                        &err,
+                        should_suggest_refresh,
+                    )
+                );
+                return Ok(());
+            }
+
+            let _ = call_tool(
+                client,
+                base_url,
+                "close_session",
+                json!({ "sessionId": session_id }),
+            )
+            .await;
+            invalidate_session(&state, base_url, session_name);
+            let capabilities = build_open_session_capabilities(tool_params);
+            let retry_id =
+                create_session(client, base_url, &state, session_name, Some(capabilities)).await?;
+            println!("Session opened: {}", retry_id);
+            params["sessionId"] = json!(retry_id.clone());
+
+            match call_tool(client, base_url, tool_name, params).await {
+                Ok(result) => {
+                    if !result.is_empty() {
+                        println!("{}", result);
+                    }
+                    post_command_snapshot(client, base_url, &retry_id).await;
+                }
+                Err(retry_err) => {
+                    let should_suggest_refresh =
+                        should_retry_open_after_navigation_error(&retry_err, true);
+                    println!(
+                        "{}",
+                        format_navigation_failure_message(
+                            target_url,
+                            &retry_id,
+                            &retry_err,
+                            should_suggest_refresh,
+                        )
+                    );
+                }
+            }
         }
     }
 
@@ -993,18 +1036,6 @@ async fn find_reusable_persisted_session_id(
         invalidate_session(state, base_url, session_name);
         Ok(None)
     }
-}
-
-async fn require_active_session_for_goto(
-    client: &Client,
-    base_url: &str,
-    session_name: Option<&str>,
-) -> Result<String, String> {
-    let state = read_state(None, session_name);
-
-    find_reusable_persisted_session_id(client, base_url, &state, session_name)
-        .await?
-        .ok_or_else(goto_requires_active_session_message)
 }
 
 fn parse_backend_session_records(result: &str) -> Vec<BackendSessionRecord> {
@@ -2912,7 +2943,10 @@ mod tests {
         .unwrap();
         let request = build_open_session_request(Some(capabilities), Some(SWARM_SESSION_ID));
 
-        assert_eq!(request["capabilities"]["sessionId"], json!(SWARM_SESSION_ID));
+        assert_eq!(
+            request["capabilities"]["sessionId"],
+            json!(SWARM_SESSION_ID)
+        );
         assert_eq!(request["capabilities"]["profileMode"], json!("SEQUENTIAL"));
     }
 
@@ -3024,15 +3058,6 @@ mod tests {
         assert!(message.contains("run `browser4-cli open` first."));
         assert!(message.contains("🧾 Details"));
         assert!(message.contains("No active session is currently stored"));
-    }
-
-    #[test]
-    fn goto_requires_active_session_message_mentions_command_name() {
-        let message = goto_requires_active_session_message();
-
-        assert!(message.contains("🔐 Active session required"));
-        assert!(message.contains("Command: goto"));
-        assert!(message.contains("run `browser4-cli open` to create or refresh the session first."));
     }
 
     #[test]

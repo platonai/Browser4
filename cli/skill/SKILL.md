@@ -33,8 +33,9 @@ browser4-cli screenshot
 browser4-cli close
 ```
 
-`browser4-cli goto` only reuses the current active session. If no active session is available, or the
-saved session is no longer active, run `browser4-cli open` first to create or refresh the session.
+`browser4-cli goto` first tries to reuse the current active session. If no active session is available,
+or the saved session is no longer active, it automatically starts or refreshes the session before
+navigating.
 
 `browser4-cli open` reuses the saved session for the current slot only when the backend still reports it
 as active. If the saved session is stale or missing, `open` refreshes it by creating a new session.
@@ -70,7 +71,7 @@ browser4-cli close
 ### Navigation
 
 ```bash
-browser4-cli goto <url>         # Navigate to a URL using the current active session
+browser4-cli goto <url>         # Navigate to a URL, auto-opening or refreshing the session if needed
 browser4-cli go-back
 browser4-cli go-forward
 browser4-cli reload

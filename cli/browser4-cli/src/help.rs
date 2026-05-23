@@ -209,11 +209,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     if cmd.name == "goto" {
         lines.push("Notes:".to_string());
         lines.push(
-            "  - Uses the current active session only; it does not open a new session automatically."
+            "  - Reuses the current active session when possible and auto-opens a fresh one when the saved session is missing or stale."
                 .to_string(),
         );
         lines.push(
-            "  - If the saved session is missing or no longer active, run `browser4-cli open` to create or refresh it."
+            "  - If the backend had been stopped, `goto` starts or reconnects through the current slot before navigating."
                 .to_string(),
         );
         lines.push(String::new());
@@ -342,9 +342,11 @@ mod tests {
         let goto = cmds.iter().find(|c| c.name == "goto").unwrap();
         let help = generate_command_help(goto);
         assert!(help.contains("browser4-cli goto <url>"));
-        assert!(help.contains("Navigate to a URL using the current active session"));
-        assert!(help.contains("does not open a new session automatically"));
-        assert!(help.contains("browser4-cli open"));
+        assert!(
+            help.contains("Navigate to a URL, auto-opening or refreshing the session when needed")
+        );
+        assert!(help.contains("auto-opens a fresh one"));
+        assert!(help.contains("backend had been stopped"));
     }
 
     #[test]

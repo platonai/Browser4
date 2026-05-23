@@ -134,7 +134,12 @@ fn format_http_error(status: reqwest::StatusCode, response_text: &str) -> String
     }
 }
 
-fn summarize_mcp_request(tool: &str, endpoint: &str, args: &Value, timeout: Option<std::time::Duration>) -> String {
+fn summarize_mcp_request(
+    tool: &str,
+    endpoint: &str,
+    args: &Value,
+    timeout: Option<std::time::Duration>,
+) -> String {
     let mut parts = vec![format!("tool={tool}"), format!("endpoint={endpoint}")];
 
     if let Some(timeout) = timeout {
@@ -446,10 +451,14 @@ mod tests {
 
     fn spawn_delayed_mcp_server(delay: std::time::Duration) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind delayed MCP test server");
-        let addr = listener.local_addr().expect("read delayed MCP test server addr");
+        let addr = listener
+            .local_addr()
+            .expect("read delayed MCP test server addr");
 
         thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept delayed MCP test connection");
+            let (mut stream, _) = listener
+                .accept()
+                .expect("accept delayed MCP test connection");
             stream
                 .set_read_timeout(Some(std::time::Duration::from_secs(2)))
                 .ok();
@@ -643,9 +652,18 @@ mod tests {
             is_timeout_error(&error),
             "Expected timeout-related error, got: {error}"
         );
-        assert!(error.contains("tool=page_title"), "Expected tool diagnostics, got: {error}");
-        assert!(error.contains("timeout=1s"), "Expected timeout diagnostics, got: {error}");
-        assert!(error.contains("endpoint=http://"), "Expected endpoint diagnostics, got: {error}");
+        assert!(
+            error.contains("tool=page_title"),
+            "Expected tool diagnostics, got: {error}"
+        );
+        assert!(
+            error.contains("timeout=1s"),
+            "Expected timeout diagnostics, got: {error}"
+        );
+        assert!(
+            error.contains("endpoint=http://"),
+            "Expected endpoint diagnostics, got: {error}"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -669,14 +687,24 @@ mod tests {
         )
         .await;
 
-        let error = result.expect_err("navigation request should time out with the forced 1s budget");
+        let error =
+            result.expect_err("navigation request should time out with the forced 1s budget");
         assert!(
             is_timeout_error(&error),
             "Expected timeout-related error, got: {error}"
         );
-        assert!(error.contains("tool=browser_navigate"), "Expected tool diagnostics, got: {error}");
-        assert!(error.contains("timeout=1s"), "Expected timeout diagnostics, got: {error}");
-        assert!(error.contains("sessionId=default"), "Expected session diagnostics, got: {error}");
+        assert!(
+            error.contains("tool=browser_navigate"),
+            "Expected tool diagnostics, got: {error}"
+        );
+        assert!(
+            error.contains("timeout=1s"),
+            "Expected timeout diagnostics, got: {error}"
+        );
+        assert!(
+            error.contains("sessionId=default"),
+            "Expected session diagnostics, got: {error}"
+        );
         assert!(
             error.contains("url=https://www.amazon.com/"),
             "Expected URL diagnostics, got: {error}"

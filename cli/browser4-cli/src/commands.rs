@@ -259,7 +259,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "goto",
-            description: "Navigate to a URL using the current active session",
+            description: "Navigate to a URL, auto-opening or refreshing the session when needed",
             category: Category::Navigation,
             hidden: false,
             batch_supported: true,

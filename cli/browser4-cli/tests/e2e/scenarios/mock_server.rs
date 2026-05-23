@@ -356,7 +356,8 @@ pub(super) fn test_open_navigation_failure_uses_structured_message(ctx: &mut E2E
         "browser_navigate failed: invalid URL",
     );
 
-    let open_result = run_command_allowing_failure(ctx, &["open", OPEN_PROFILE_MODE_ARG, workflow_url]);
+    let open_result =
+        run_command_allowing_failure(ctx, &["open", OPEN_PROFILE_MODE_ARG, workflow_url]);
     let combined_output = format!("{}\n{}", open_result.stdout, open_result.stderr);
 
     assert_ne!(
@@ -389,45 +390,76 @@ pub(super) fn test_open_navigation_failure_uses_structured_message(ctx: &mut E2E
     );
 }
 
-pub(super) fn test_goto_requires_existing_active_session(ctx: &mut E2ECtx) {
+pub(super) fn test_goto_opens_session_when_missing_or_inactive(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 
     let mock_server = MockBrowser4Server::start();
+    mock_server.queue_open_session_ids(vec!["swarm-session-1", "swarm-session-2"]);
     ctx.browser4_base_url = mock_server.base_url();
 
-    run_command_expecting_failure(
-        ctx,
-        &["goto", "https://example.com/missing-session"],
-        "🔐 Active session required",
-    );
-
-    let open_result = run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    let first_goto = run_command(ctx, &["goto", "https://example.com/missing-session"]);
     assert!(
-        open_result
+        first_goto
             .stdout
             .contains("Session opened: swarm-session-1"),
-        "Expected mocked session open output in:\n{}",
-        open_result.stdout
+        "Expected goto to auto-open a session when none is persisted:\n{}",
+        first_goto.stdout
+    );
+    assert!(
+        !first_goto.stdout.contains("🔐 Active session required"),
+        "Expected goto to avoid the old missing-session guidance once auto-open is enabled:\n{}",
+        first_goto.stdout
     );
 
     mock_server.set_listed_sessions(vec![MockListedSession::stopped("swarm-session-1")]);
 
-    run_command_expecting_failure(
-        ctx,
-        &["goto", "https://example.com/inactive-session"],
-        "run `browser4-cli open` to create or refresh the session first.",
+    let second_goto = run_command(ctx, &["goto", "https://example.com/inactive-session"]);
+    assert!(
+        second_goto
+            .stdout
+            .contains("Session opened: swarm-session-2"),
+        "Expected goto to refresh the saved session when the backend marks it inactive:\n{}",
+        second_goto.stdout
+    );
+    assert!(
+        !second_goto
+            .stdout
+            .contains("run `browser4-cli open` to create or refresh the session first."),
+        "Expected goto to refresh automatically instead of printing manual recovery guidance:\n{}",
+        second_goto.stdout
     );
 
     let tool_calls = mock_server.snapshot().tool_calls;
+    let open_session_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "open_session")
+        .collect();
+    assert_eq!(
+        open_session_calls.len(),
+        2,
+        "Expected goto to create a session initially and refresh it after the backend reported it inactive"
+    );
+
     let navigate_calls: Vec<_> = tool_calls
         .iter()
         .filter(|call| call.tool == "browser_navigate")
         .collect();
     assert!(
-        navigate_calls.is_empty(),
-        "Expected goto to avoid navigation when no active session is available: {:?}",
+        navigate_calls.len() >= 2,
+        "Expected goto to navigate after auto-opening or refreshing the session: {:?}",
         tool_calls
     );
+    assert_eq!(navigate_calls[0].arguments["sessionId"], "swarm-session-1");
+    assert_eq!(
+        navigate_calls[0].arguments["url"],
+        "https://example.com/missing-session"
+    );
+    assert_eq!(navigate_calls[1].arguments["sessionId"], "swarm-session-2");
+    assert_eq!(
+        navigate_calls[1].arguments["url"],
+        "https://example.com/inactive-session"
+    );
+    assert_eq!(read_persisted_session_id(&ctx.state_dir), "swarm-session-2");
 }
 
 pub(super) fn test_batch_reduces_transport_round_trips(ctx: &mut E2ECtx) {

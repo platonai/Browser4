@@ -384,16 +384,16 @@ gate for commands that require an active Browser4 session.
 | `open -s=<name>` | Reads/writes the named session state file | Opens, reuses, or refreshes the named session for that slot; subsequent `-s=<name>` commands use the same slot |
 | Command succeeds through `with_session()` | `sessionId` stays unchanged | The command uses the persisted session normally |
 | Command fails because the server reports a stale / expired session and `recover_stale = false` | `invalidate_session()` clears `sessionId`, `activeSelector`, and `lastMousePosition`, while keeping `baseUrl` | The command fails with `Saved session expired. Run "browser4-cli open" first.` |
-| `goto` is invoked but the saved session is missing or no longer `active` in the backend | `invalidate_session()` clears the saved `sessionId`, `activeSelector`, and `lastMousePosition` | The command fails with `No active session for "goto". Run "browser4-cli open" to create or refresh the session first.` |
+| `goto` is invoked but the saved session is missing or no longer `active` in the backend | `invalidate_session()` clears any stale saved `sessionId`, then `create_session()` writes a fresh session before navigation continues | `goto` automatically refreshes the session and proceeds to the requested URL |
 | `close` with an active session | `clear_state()` removes only the current session state file after best-effort remote close | The selected default or named session is fully cleared |
 | `close` with no persisted `sessionId` | `clear_state()` best-effort removes the current session slot | Prints `No active session. Run "browser4-cli open" first.` and exits successfully as a no-op |
 | `close-all` / `kill-all` | `clear_all_state()` removes the default state file and all named session files | All persisted CLI session files are cleared |
 
 Notes:
 
-- `goto` reuses only the current backend-`active` session. It does not create a
-  new session automatically; run `browser4-cli open` first if the saved session
-  is missing or stale.
+- `goto` first tries to reuse the current backend-`active` session. If the saved
+  session is missing, stale, or the backend had been stopped, it automatically
+  opens a fresh session for the current slot before navigating.
 - `open` first checks whether the saved session for the current slot is still
   backend-`active`. It reuses active sessions and refreshes stale ones by
   creating a new session for the same slot.

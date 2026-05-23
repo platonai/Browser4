@@ -228,12 +228,12 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_fn: mock_server::test_open_navigation_failure_uses_structured_message,
     },
     ScenarioDef {
-        name: "test_e2e_goto_requires_existing_active_session",
-        short_name: "test_goto_requires_existing_active_session",
+        name: "test_e2e_goto_opens_session_when_missing_or_inactive",
+        short_name: "test_goto_opens_session_when_missing_or_inactive",
         requires_browser4: false,
         restart_browser4: false,
         test_count: 1,
-        test_fn: mock_server::test_goto_requires_existing_active_session,
+        test_fn: mock_server::test_goto_opens_session_when_missing_or_inactive,
     },
     ScenarioDef {
         name: "test_e2e_batch_reduces_transport_round_trips",
