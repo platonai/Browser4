@@ -1,6 +1,5 @@
 package ai.platon.browser4.driver.chrome.dom
 
-import ai.platon.browser4.driver.chrome.RemoteDevTools
 import ai.platon.browser4.driver.chrome.dom.model.*
 import ai.platon.pulsar.WebDriverTestBase
 import ai.platon.pulsar.common.AppPaths
@@ -20,7 +19,6 @@ import kotlin.test.assertIs
 @Tag("E2ETest")
 class SnapshotServiceE2ETest : WebDriverTestBase() {
     private val testURL get() = "$generatedAssetsBaseURL/interactive-dynamic.html"
-    private val startTime = Instant.now()
     private val ident = AppPaths.md5Hex(testURL)
     private val reportDir = AppPaths.detectAuxiliaryLogDir().resolve("tests")
 

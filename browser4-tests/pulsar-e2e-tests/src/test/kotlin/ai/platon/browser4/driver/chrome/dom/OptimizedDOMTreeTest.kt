@@ -1,6 +1,5 @@
 package ai.platon.browser4.driver.chrome.dom
 
-import ai.platon.browser4.driver.chrome.RemoteDevTools
 import ai.platon.browser4.driver.chrome.dom.model.MergedDOMTreeNode
 import ai.platon.browser4.driver.chrome.dom.model.NodeType
 import ai.platon.browser4.driver.chrome.dom.model.OptimizedDOMTreeNode
@@ -108,7 +107,7 @@ class OptimizedDOMTreeTest : WebDriverTestBase() {
             // TEXT_NODEs included must contain non-trivial text and be marked shouldDisplay
             all.filter { it.originalNode.nodeType == NodeType.TEXT_NODE }.forEach { n ->
                 assertTrue(n.shouldDisplay, "Text nodes in simplified tree must be displayable")
-                val text = n.originalNode.nodeValue.orEmpty().trim()
+                val text = n.originalNode.nodeValue.trim()
                 assertTrue(text.length > 1, "Text nodes must contain non-trivial content")
             }
         }

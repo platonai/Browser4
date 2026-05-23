@@ -133,7 +133,7 @@ class PulsarWebDriver constructor(
 
     override suspend fun goBack() {
         driverHelper.invokeOnPage("goBack") {
-            val history = cdp.page.getNavigationHistory() ?: return@invokeOnPage
+            val history = cdp.page.getNavigationHistory()
             val currentIndex = history.currentIndex
             val entries = history.entries
             val targetIndex = currentIndex - 1
@@ -545,11 +545,11 @@ class PulsarWebDriver constructor(
                     returnByValue = true
                 )
 
-                if (res?.exceptionDetails != null) {
+                if (res.exceptionDetails != null) {
                     throw WebDriverException("JS Error in selectOption: " + res.exceptionDetails?.exception?.description)
                 }
 
-                val resultValue = res?.result?.value
+                val resultValue = res.result.value
 
                 if (resultValue is List<*>) {
                     resultValue.filterIsInstance<String>()
@@ -1441,7 +1441,7 @@ function() {
     @Throws(WebDriverException::class)
     private suspend fun getCookies0(): List<Map<String, String>> {
         val cookies = cdp.network.getCookies().map { serialize(it) }
-        return cookies ?: listOf()
+        return cookies
     }
 
     private fun serialize(cookie: ai.platon.cdt.kt.protocol.types.network.Cookie): Map<String, String> {

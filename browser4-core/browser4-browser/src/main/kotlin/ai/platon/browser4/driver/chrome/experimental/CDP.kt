@@ -25,9 +25,6 @@ import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
 class CDP(
     private val devTools: ChromeDevTools
 ) {
-    val remoteDevTools: RemoteDevTools =
-        (devTools as? RemoteDevTools) ?: error("CDP requires RemoteDevTools for this runtime")
-
     val remoteDevToolsOrNull: RemoteDevTools? get() = devTools as? RemoteDevTools
     val isOpen: Boolean get() = remoteDevToolsOrNull?.isOpen ?: true
 

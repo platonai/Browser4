@@ -1,6 +1,5 @@
 package ai.platon.browser4.driver.chrome.dom
 
-import ai.platon.browser4.driver.chrome.RemoteDevTools
 import ai.platon.browser4.driver.chrome.dom.model.ElementRefCriteria
 import ai.platon.browser4.driver.chrome.dom.model.MergedDOMTreeNode
 import ai.platon.browser4.driver.chrome.dom.model.PageTarget
@@ -597,7 +596,7 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
                 cdp.evaluate("document.getElementById('virtualScrollContainer') != null")
             }.getOrNull()?.result?.value?.toString()?.equals("true", ignoreCase = true) == true
             if (ok) {
-                hasContainer = true;
+                hasContainer = true
                 return@repeat
             }
             Thread.sleep(1000)
