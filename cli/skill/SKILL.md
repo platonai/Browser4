@@ -173,55 +173,61 @@ browser4-cli help batch
 browser4-cli help console
 browser4-cli help extract
 browser4-cli help summarize
-browser4-cli help agent-run
-browser4-cli help swarm-create
+browser4-cli help agent run
+browser4-cli help swarm create
 ```
 
 ## Agent task commands
 
-Use the `agent-*` commands when you want Browser4's backend agent to execute a
+Use the `agent` subcommands when you want Browser4's backend agent to execute a
 natural-language task asynchronously.
+
+Use the spaced `agent <subcommand>` form:
+
+```bash
+browser4-cli agent run "Open example.com and summarize the hero section"
+browser4-cli agent status agent-task-1
+browser4-cli agent result agent-task-1
+```
 
 Recommended lifecycle:
 
 ```bash
 # 1) submit an autonomous task
-browser4-cli agent-run "Open example.com and summarize the hero section"
+browser4-cli agent run "Open example.com and summarize the hero section"
 
 # 2) poll progress with the returned task id
-browser4-cli agent-status agent-task-1
+browser4-cli agent status agent-task-1
 
 # 3) read the final result
-browser4-cli agent-result agent-task-1
+browser4-cli agent result agent-task-1
 ```
 
 Notes:
 
-- `agent-run` returns immediately after the backend accepts the task and prints
-  the generated task ID plus a ready-to-copy `agent-status` follow-up command.
-- `agent-status` prints the backend status payload as-is. This is typically JSON
+- `agent run` returns immediately after the backend accepts the task and prints
+  the generated task ID plus a ready-to-copy `agent status` follow-up command.
+- `agent status` prints the backend status payload as-is. This is typically JSON
   and may include fields like `id`, `status`, `statusCode`, `processState`,
   `message`, `agentState`, `agentHistory`, and `commandResult`.
-- `agent-result` prints the backend result payload as-is. Depending on the
+- `agent result` prints the backend result payload as-is. Depending on the
   task, that payload may be plain text or structured JSON.
 - The commands are task-ID based, so they do not depend on the current saved
   CLI browser session slot.
-- `agent-*` commands are advanced commands and are not supported in `batch`
+- `agent` subcommands are advanced commands and are not supported in `batch`
   mode.
-- `agent-run` performs a short status probe after submission so missing LLM/API
+- `agent run` performs a short status probe after submission so missing LLM/API
   key configuration errors can fail fast with a clearer message.
 
 ## Swarm workflows
 
-The `swarm-*` commands are intended for a swarm scrape workflow where one CLI
+The `swarm` subcommands are intended for a swarm scrape workflow where one CLI
 session coordinates multiple backend browser contexts.
 
-You can use either the long form or the spaced `swarm <subcommand>` form:
+Use the spaced `swarm <subcommand>` form:
 
 ```bash
-browser4-cli swarm-create
 browser4-cli swarm create
-browser4-cli swarm-submit https://example.com
 browser4-cli swarm submit https://example.com
 ```
 
@@ -251,14 +257,14 @@ browser4-cli swarm result scrape-task-4
 
 Notes:
 
-- `swarm-submit` accepts a positional URL, `--seed-file`, or both.
+- `swarm submit` accepts a positional URL, `--seed-file`, or both.
 - Seed files are plain text, one URL per line. Empty lines and lines beginning
   with `#` are ignored.
-- `swarm-submit` forwards load-option style flags such as `--deadline`,
+- `swarm submit` forwards load-option style flags such as `--deadline`,
   `--expires`, `--refresh`, `--parse`, and `--store-content` into the raw
   submission payload sent to `ScrapeController.submit(payload)`.
-- Capture the job ID printed by `swarm-submit`, then use
-  `swarm-status` and `swarm-result` to follow the async scrape job via
+- Capture the job ID printed by `swarm submit`, then use
+  `swarm status` and `swarm result` to follow the async scrape job via
   `ScrapeController.getStatus(id)` and `ScrapeController.getResult(id)`.
 
 Example seed file:

@@ -907,7 +907,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             category: Category::Agent,
             hidden: true,
             batch_supported: false,
-            args: &[ArgDef { name: "id", description: "Task ID returned by agent-run", optional: false }],
+            args: &[ArgDef { name: "id", description: "Task ID returned by agent run", optional: false }],
             options: &[],
             tool_name_fn: |_| "command_status".to_string(),
             tool_params_fn: |args| {
@@ -920,7 +920,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             category: Category::Agent,
             hidden: true,
             batch_supported: false,
-            args: &[ArgDef { name: "id", description: "Task ID returned by agent-run", optional: false }],
+            args: &[ArgDef { name: "id", description: "Task ID returned by agent run", optional: false }],
             options: &[],
             tool_name_fn: |_| "command_result".to_string(),
             tool_params_fn: |args| {

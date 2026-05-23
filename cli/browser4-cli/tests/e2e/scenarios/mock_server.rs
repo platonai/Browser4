@@ -584,8 +584,8 @@ pub(super) fn test_swarm_session_and_agent_tools(ctx: &mut E2ECtx) {
     let summary = strip_snapshot_output(&summarize_result.stdout);
     assert_eq!(summary, "Mock summary for #page-marker");
     assert!(
-        summarize_result.stdout.contains("### Page"),
-        "Expected summarize output to include a snapshot block:\n{}",
+        !summarize_result.stdout.contains("### Page"),
+        "Expected summarize output to remain plain text without a snapshot block:\n{}",
         summarize_result.stdout
     );
 
@@ -620,7 +620,7 @@ pub(super) fn test_agent_task_commands(ctx: &mut E2ECtx) {
     ctx.record_step("mock Browser4 server start", started_at.elapsed());
     ctx.browser4_base_url = mock_server.base_url();
 
-    let agent_run_result = run_command(ctx, &["agent-run", "collect the latest updates"]);
+    let agent_run_result = run_command(ctx, &["agent", "run", "collect the latest updates"]);
     assert!(
         agent_run_result
             .stdout
@@ -631,18 +631,18 @@ pub(super) fn test_agent_task_commands(ctx: &mut E2ECtx) {
     assert!(
         agent_run_result
             .stdout
-            .contains("browser4-cli agent-status agent-task-1"),
+            .contains("browser4-cli agent status agent-task-1"),
         "Expected agent status hint in:\n{}",
         agent_run_result.stdout
     );
 
-    let agent_status_result = run_command(ctx, &["agent-status", "agent-task-1"]);
+    let agent_status_result = run_command(ctx, &["agent", "status", "agent-task-1"]);
     assert_eq!(
         strip_snapshot_output(&agent_status_result.stdout),
         r#"{"id":"agent-task-1","status":"RUNNING"}"#
     );
 
-    let agent_result_result = run_command(ctx, &["agent-result", "agent-task-1"]);
+    let agent_result_result = run_command(ctx, &["agent", "result", "agent-task-1"]);
     assert_eq!(
         strip_snapshot_output(&agent_result_result.stdout),
         "result for agent-task-1"
@@ -680,7 +680,7 @@ pub(super) fn test_agent_run_missing_llm_key(ctx: &mut E2ECtx) {
 
     let failure = run_command_expecting_failure(
         ctx,
-        &["agent-run", "task missing llm key"],
+        &["agent", "run", "task missing llm key"],
         "Agent task requires an LLM key and cannot execute",
     );
     let combined = format!("{}\n{}", failure.stdout, failure.stderr);
@@ -700,6 +700,36 @@ pub(super) fn test_agent_run_missing_llm_key(ctx: &mut E2ECtx) {
             .contains(&"agent-task-missing-llm".to_string()),
         "Expected agent-run to probe status for the missing-LLM task, got {:?}",
         snapshot.status_queries
+    );
+}
+
+pub(super) fn test_prefixed_flat_forms_are_rejected(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    run_command_expecting_failure(
+        ctx,
+        &["agent-run", "collect the latest updates"],
+        "Use 'browser4-cli agent run' instead.",
+    );
+    run_command_expecting_failure(
+        ctx,
+        &["swarm-create"],
+        "Use 'browser4-cli swarm create' instead.",
+    );
+    run_command_expecting_failure(
+        ctx,
+        &["co", "create"],
+        "Use 'browser4-cli swarm <subcommand>' instead.",
+    );
+    run_command_expecting_failure(
+        ctx,
+        &["help", "agent-run"],
+        "Use 'browser4-cli help agent run' instead.",
+    );
+    run_command_expecting_failure(
+        ctx,
+        &["help", "swarm-create"],
+        "Use 'browser4-cli help swarm create' instead.",
     );
 }
 
@@ -804,15 +834,15 @@ pub(super) fn test_swarm_submission_commands(ctx: &mut E2ECtx) {
 pub(super) fn test_swarm_command_help_and_validation(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 
-    let swarm_create_help = run_command(ctx, &["help", "swarm-create"]);
+    let swarm_create_help = run_command(ctx, &["help", "swarm", "create"]);
     assert!(
-        swarm_create_help.stdout.contains("browser4-cli swarm-create"),
-        "Expected swarm-create usage in:\n{}",
+        swarm_create_help.stdout.contains("browser4-cli swarm create"),
+        "Expected swarm create usage in:\n{}",
         swarm_create_help.stdout
     );
     assert!(
-        swarm_create_help.stdout.contains("browser4-cli swarm create"),
-        "Expected swarm-create alias example in:\n{}",
+        !swarm_create_help.stdout.contains("browser4-cli swarm-create"),
+        "Expected flat swarm-create form to be absent in:\n{}",
         swarm_create_help.stdout
     );
     assert!(
@@ -821,7 +851,7 @@ pub(super) fn test_swarm_command_help_and_validation(ctx: &mut E2ECtx) {
         swarm_create_help.stdout
     );
 
-    let swarm_submit_help = run_command(ctx, &["help", "swarm-submit"]);
+    let swarm_submit_help = run_command(ctx, &["help", "swarm", "submit"]);
     assert!(
         swarm_submit_help.stdout.contains("--seed-file"),
         "Expected seed-file option in:\n{}",
@@ -842,7 +872,7 @@ pub(super) fn test_swarm_command_help_and_validation(ctx: &mut E2ECtx) {
         swarm_submit_help.stdout
     );
 
-    let swarm_status_help = run_command(ctx, &["help", "swarm-status"]);
+    let swarm_status_help = run_command(ctx, &["help", "swarm", "status"]);
     assert!(
         swarm_status_help
             .stdout
@@ -851,7 +881,7 @@ pub(super) fn test_swarm_command_help_and_validation(ctx: &mut E2ECtx) {
         swarm_status_help.stdout
     );
 
-    let swarm_result_help = run_command(ctx, &["help", "swarm-result"]);
+    let swarm_result_help = run_command(ctx, &["help", "swarm", "result"]);
     assert!(
         swarm_result_help
             .stdout

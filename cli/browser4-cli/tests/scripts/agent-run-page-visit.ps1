@@ -2,7 +2,7 @@
 
 cargo run --quiet -- open
 
-$agentRunOutput = cargo run --quiet -- agent-run "https://www.hua.com/flower/" 2>&1
+$agentRunOutput = cargo run --quiet -- agent run "https://www.hua.com/flower/" 2>&1
 $agentRunText = ($agentRunOutput | Out-String).Trim()
 $agentRunText
 
@@ -15,7 +15,7 @@ $success = $false
 $lastStatusText = ''
 
 for ($attempt = 1; $attempt -le 60; $attempt++) {
-	$statusOutput = cargo run --quiet -- agent-status $taskId 2>&1
+	$statusOutput = cargo run --quiet -- agent status $taskId 2>&1
 	$lastStatusText = ($statusOutput | Out-String).Trim()
 	$lastStatusText
 
@@ -45,6 +45,6 @@ for ($attempt = 1; $attempt -le 60; $attempt++) {
     sleep 5
 }
 
-$agentResultOutput = cargo run --quiet -- agent-result $taskId 2>&1
+$agentResultOutput = cargo run --quiet -- agent result $taskId 2>&1
 Write-Host 'Final agent result:'
 $agentResultOutput

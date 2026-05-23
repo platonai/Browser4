@@ -2,6 +2,19 @@
 
 use crate::commands::{all_commands, CommandDef};
 
+fn public_command_name(name: &str) -> &str {
+    match name {
+        "agent-run" => "agent run",
+        "agent-status" => "agent status",
+        "agent-result" => "agent result",
+        "swarm-create" => "swarm create",
+        "swarm-submit" => "swarm submit",
+        "swarm-status" => "swarm status",
+        "swarm-result" => "swarm result",
+        _ => name,
+    }
+}
+
 /// Categories in display order with their titles.
 const CATEGORIES: &[(&str, &str)] = &[
     ("core", "Core"),
@@ -72,7 +85,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         .join(" ");
 
     let mut lines: Vec<String> = vec![
-        format!("browser4-cli {} {}", cmd.name, args_text)
+        format!("browser4-cli {} {}", public_command_name(cmd.name), args_text)
             .trim()
             .to_string(),
         String::new(),
@@ -128,6 +141,37 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli eval \"element => element.textContent\" e5".to_string());
     }
 
+    if cmd.name == "agent-run" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Agent tasks are available only via the spaced `agent <subcommand>` form."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli agent run \"Open example.com and summarize the hero section\"".to_string());
+    }
+
+    if cmd.name == "agent-status" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Accepts the task ID returned by `agent run`.".to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli agent status agent-task-1".to_string());
+    }
+
+    if cmd.name == "agent-result" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Accepts the task ID returned by `agent run`.".to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli agent result agent-task-1".to_string());
+    }
+
     if cmd.name == "open" {
         lines.push("Notes:".to_string());
         lines.push(
@@ -181,13 +225,8 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - Creates a swarm scrape session and stores the returned session ID in the current CLI slot."
                 .to_string(),
         );
-        lines.push(
-            "  - You can also invoke it as `browser4-cli swarm create` using the swarm prefix."
-                .to_string(),
-        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli swarm-create".to_string());
         lines.push(
             "  browser4-cli swarm create --profile-mode=TEMPORARY --max-open-tabs=12 --max-browser-contexts=3 --display-mode=HEADLESS"
                 .to_string(),
@@ -210,7 +249,6 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli swarm-submit https://example.com/direct".to_string());
         lines.push(
             "  browser4-cli swarm submit https://example.com/direct --seed-file=./swarm-seeds.txt --deadline=2026-03-30T00:00:00Z --expires=1d --refresh --parse --store-content"
                 .to_string(),
@@ -225,7 +263,6 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli swarm-status scrape-task-4".to_string());
         lines.push("  browser4-cli swarm status scrape-task-4".to_string());
     }
 
@@ -237,7 +274,6 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli swarm-result scrape-task-4".to_string());
         lines.push("  browser4-cli swarm result scrape-task-4".to_string());
     }
 
@@ -258,7 +294,7 @@ fn generate_help_entry(cmd: &CommandDef) -> String {
         .collect::<Vec<_>>()
         .join(" ");
 
-    let prefix = format!("  {} {}", cmd.name, args_text);
+    let prefix = format!("  {} {}", public_command_name(cmd.name), args_text);
     let prefix = prefix.trim_end();
     format_with_gap(prefix, cmd.description, 30)
 }
@@ -377,8 +413,27 @@ mod tests {
         let cmds = all_commands();
         let cmd = cmds.iter().find(|c| c.name == "agent-run").unwrap();
         let help = generate_command_help(cmd);
-        assert!(help.contains("browser4-cli agent-run <task>"));
+        assert!(help.contains("browser4-cli agent run <task>"));
         assert!(help.contains("autonomous agent task"));
+        assert!(help.contains("browser4-cli agent run"));
+        assert!(!help.contains("browser4-cli agent-run"));
+    }
+
+    #[test]
+    fn test_generate_command_help_agent_status_and_result() {
+        let cmds = all_commands();
+
+        let status = cmds.iter().find(|c| c.name == "agent-status").unwrap();
+        let status_help = generate_command_help(status);
+        assert!(status_help.contains("browser4-cli agent status <id>"));
+        assert!(status_help.contains("browser4-cli agent status agent-task-1"));
+        assert!(!status_help.contains("browser4-cli agent-status"));
+
+        let result = cmds.iter().find(|c| c.name == "agent-result").unwrap();
+        let result_help = generate_command_help(result);
+        assert!(result_help.contains("browser4-cli agent result <id>"));
+        assert!(result_help.contains("browser4-cli agent result agent-task-1"));
+        assert!(!result_help.contains("browser4-cli agent-result"));
     }
 
     #[test]
@@ -386,14 +441,14 @@ mod tests {
         let cmds = all_commands();
         let cmd = cmds.iter().find(|c| c.name == "swarm-create").unwrap();
         let help = generate_command_help(cmd);
-        assert!(help.contains("browser4-cli swarm-create"));
+        assert!(help.contains("browser4-cli swarm create"));
         assert!(help.contains("swarm scrape session"));
         assert!(help.contains("--profile-mode"));
         assert!(help.contains("--max-open-tabs"));
         assert!(help.contains("--max-browser-contexts"));
         assert!(help.contains("--display-mode"));
         assert!(help.contains("Display mode: GUI, HEADLESS, SUPERVISED"));
-        assert!(help.contains("browser4-cli swarm create"));
+        assert!(!help.contains("browser4-cli swarm-create"));
     }
 
     #[test]
@@ -401,7 +456,7 @@ mod tests {
         let cmds = all_commands();
         let cmd = cmds.iter().find(|c| c.name == "swarm-submit").unwrap();
         let help = generate_command_help(cmd);
-        assert!(help.contains("browser4-cli swarm-submit"));
+        assert!(help.contains("browser4-cli swarm submit"));
         assert!(help.contains("--seed-file"));
         assert!(help.contains("--deadline"));
         assert!(help.contains("--expires"));
@@ -409,6 +464,7 @@ mod tests {
         assert!(help.contains("submits each entry as a scrape job"));
         assert!(help.contains("ScrapeController.submit(payload)"));
         assert!(help.contains("browser4-cli swarm submit https://example.com/direct"));
+        assert!(!help.contains("browser4-cli swarm-submit"));
     }
 
 
@@ -418,17 +474,19 @@ mod tests {
 
         let status = cmds.iter().find(|c| c.name == "swarm-status").unwrap();
         let status_help = generate_command_help(status);
-        assert!(status_help.contains("browser4-cli swarm-status <id>"));
+        assert!(status_help.contains("browser4-cli swarm status <id>"));
         assert!(status_help.contains("scrape job status"));
         assert!(status_help.contains("ScrapeController.getStatus(id)"));
         assert!(status_help.contains("browser4-cli swarm status scrape-task-4"));
+        assert!(!status_help.contains("browser4-cli swarm-status"));
 
         let result = cmds.iter().find(|c| c.name == "swarm-result").unwrap();
         let result_help = generate_command_help(result);
-        assert!(result_help.contains("browser4-cli swarm-result <id>"));
+        assert!(result_help.contains("browser4-cli swarm result <id>"));
         assert!(result_help.contains("scrape job result"));
         assert!(result_help.contains("ScrapeController.getResult(id)"));
         assert!(result_help.contains("browser4-cli swarm result scrape-task-4"));
+        assert!(!result_help.contains("browser4-cli swarm-result"));
     }
 
     #[test]

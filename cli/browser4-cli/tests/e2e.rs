@@ -2290,7 +2290,7 @@ fn assert_swarm_session_call(mock_server: &MockBrowser4Server) {
         .expect("expected open_session call");
     assert_eq!(
         open_session_call.arguments["capabilities"]["profileMode"],
-        "prototype"
+        "TEMPORARY"
     );
     assert_eq!(
         open_session_call.arguments["capabilities"]["maxOpenTabs"],
@@ -2302,7 +2302,7 @@ fn assert_swarm_session_call(mock_server: &MockBrowser4Server) {
     );
     assert_eq!(
         open_session_call.arguments["capabilities"]["displayMode"],
-        "SUPERVISED"
+        "HEADLESS"
     );
 }
 

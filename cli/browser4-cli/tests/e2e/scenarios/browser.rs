@@ -307,7 +307,7 @@ pub(super) fn test_agent_run_live_or_missing_llm_key(ctx: &mut E2ECtx) {
         "Navigate to {} and report the page title.",
         ctx.interactive_url()
     );
-    let result = run_command_allowing_failure(ctx, &["agent-run", &task]);
+    let result = run_command_allowing_failure(ctx, &["agent", "run", &task]);
 
     if result.exit_code == 0 {
         assert!(
@@ -316,7 +316,7 @@ pub(super) fn test_agent_run_live_or_missing_llm_key(ctx: &mut E2ECtx) {
             result.stdout
         );
         let task_id = extract_submitted_task_id(&result.stdout);
-        let status_result = run_command(ctx, &["agent-status", &task_id]);
+        let status_result = run_command(ctx, &["agent", "status", &task_id]);
         let status = strip_snapshot_output(&status_result.stdout);
         assert!(
             status.contains(&task_id),

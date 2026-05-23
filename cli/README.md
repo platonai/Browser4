@@ -162,19 +162,19 @@ Query `browser4-cli help <command>` for the exact syntax when you need them.
 
 | Command | Description |
 |---|---|
-| `batch [command...]` | Execute multiple commands in one invocation. Only DOM operations are supported (Core, Navigation, Keyboard, Mouse, Export, Tabs categories). Commands like `open`, `close`, `list`, `agent-run`, etc. are not allowed in batch mode. |
+| `batch [command...]` | Execute multiple commands in one invocation. Only DOM operations are supported (Core, Navigation, Keyboard, Mouse, Export, Tabs categories). Commands like `open`, `close`, `list`, `agent run`, etc. are not allowed in batch mode. |
 | `console [min-level]` | List console messages |
 | `extract <instruction>` | Extract structured data from the current page |
 | `summarize [instruction]` | Summarize page content using AI |
-| `agent-run <task>` | Run an autonomous agent task |
-| `agent-status <id>` | Check the status of a running agent task |
-| `agent-result <id>` | Get the result of a completed agent task |
-| `swarm-create` | Create a swarm scrape session with parallel browser contexts |
-| `swarm-submit [url]` | Submit URL(s) or X-SQL payloads as scrape jobs |
-| `swarm-status <id>` | Check the status of a scrape job |
-| `swarm-result <id>` | Get the result of a completed scrape job |
+| `agent run <task>` | Run an autonomous agent task |
+| `agent status <id>` | Check the status of a running agent task |
+| `agent result <id>` | Get the result of a completed agent task |
+| `swarm create` | Create a swarm scrape session with parallel browser contexts |
+| `swarm submit [url]` | Submit URL(s) or X-SQL payloads as scrape jobs |
+| `swarm status <id>` | Check the status of a scrape job |
+| `swarm result <id>` | Get the result of a completed scrape job |
 
-## Agent task workflow (`agent-*`)
+## Agent task workflow (`agent <subcommand>`)
 
 The `agent-*` commands wrap the backend command agent's asynchronous task API.
 They are useful when you want Browser4 to plan and execute a natural-language
@@ -182,33 +182,41 @@ task in the background instead of issuing one low-level browser action at a
 time.
 
 Like other advanced commands, they are intentionally omitted from the global
-`browser4-cli help` overview. Query `browser4-cli help agent-run` (or
-`agent-status` / `agent-result`) when you need the exact syntax.
+`browser4-cli help` overview. Query `browser4-cli help agent run` (or
+`agent status` / `agent result`) when you need the exact syntax.
+
+Use the spaced `agent <subcommand>` form:
+
+```shell
+browser4-cli agent run "Open example.com and summarize the hero section"
+browser4-cli agent status agent-task-1
+browser4-cli agent result agent-task-1
+```
 
 ### Command lifecycle
 
 | Step | Command | What it does |
 |---|---|---|
-| 1 | `agent-run <task>` | Submits an asynchronous natural-language task through `command_run` and prints the returned task ID |
-| 2 | `agent-status <id>` | Fetches the latest task status payload through `command_status` |
-| 3 | `agent-result <id>` | Fetches the completed task result payload through `command_result` |
+| 1 | `agent run <task>` | Submits an asynchronous natural-language task through `command_run` and prints the returned task ID |
+| 2 | `agent status <id>` | Fetches the latest task status payload through `command_status` |
+| 3 | `agent result <id>` | Fetches the completed task result payload through `command_result` |
 
 ### Notes
 
-- `agent-run` is asynchronous: it returns immediately after the backend accepts
-  the task and prints a follow-up `agent-status` command with the generated task
+- `agent run` is asynchronous: it returns immediately after the backend accepts
+  the task and prints a follow-up `agent status` command with the generated task
   ID.
-- `agent-status` prints the backend status payload as-is. In practice this is a
+- `agent status` prints the backend status payload as-is. In practice this is a
   JSON object that commonly includes fields such as `id`, `status`,
   `statusCode`, `processState`, `message`, `agentState`, `agentHistory`, and
   `commandResult`.
-- `agent-result` prints the backend result payload as-is. Depending on the task,
+- `agent result` prints the backend result payload as-is. Depending on the task,
   it may be plain text or structured JSON.
 - These commands are task-ID based and do not require an active CLI browser
   session slot. The global `-s=<name>` option is therefore usually not relevant
   for `agent-*` follow-up calls.
-- `agent-*` commands are not supported inside `batch` mode.
-- `agent-run` performs a short post-submit status probe so obvious missing-LLM
+- `agent` subcommands are not supported inside `batch` mode.
+- `agent run` performs a short post-submit status probe so obvious missing-LLM
   configuration failures can be surfaced immediately instead of leaving you with
   a task ID that will never succeed.
 
@@ -217,20 +225,20 @@ Like other advanced commands, they are intentionally omitted from the global
 #### 1. Submit an autonomous agent task
 
 ```shell
-browser4-cli agent-run "Open example.com and summarize the hero section"
+browser4-cli agent run "Open example.com and summarize the hero section"
 ```
 
 Typical output:
 
 ```text
 Task submitted: agent-task-1
-Use 'browser4-cli agent-status agent-task-1' to check progress.
+Use 'browser4-cli agent status agent-task-1' to check progress.
 ```
 
 #### 2. Poll task progress
 
 ```shell
-browser4-cli agent-status agent-task-1
+browser4-cli agent status agent-task-1
 ```
 
 Example status payload:
@@ -246,24 +254,21 @@ details such as `processState`, agent history snapshots, or an embedded partial
 #### 3. Read the final result
 
 ```shell
-browser4-cli agent-result agent-task-1
+browser4-cli agent result agent-task-1
 ```
 
 If the backend returns a structured `CommandResult`, expect fields such as
 `summary`, `pageSummary`, `fields`, `links`, or `xsqlResultSet`.
 
-## Swarm scrape workflow (`swarm-*`)
+## Swarm scrape workflow (`swarm <subcommand>`)
 
-The `swarm-*` commands support a swarm scrape workflow where one CLI session
+The `swarm` subcommands support a swarm scrape workflow where one CLI session
 coordinates multiple browser contexts in the Browser4 backend.
 
-You can invoke them either with the explicit command name or with the short
-prefix form:
+Use the spaced `swarm <subcommand>` form:
 
 ```shell
-browser4-cli swarm-create
 browser4-cli swarm create
-browser4-cli swarm-submit https://example.com
 browser4-cli swarm submit https://example.com
 ```
 
@@ -271,23 +276,23 @@ browser4-cli swarm submit https://example.com
 
 | Step | Command | What it does |
 |---|---|---|
-| 1 | `swarm-create` | Opens a swarm scrape session and persists the returned session ID in the current CLI slot |
-| 2 | `swarm-submit [url]` | Submits one direct URL plus any URLs from `--seed-file` as scrape jobs through `ScrapeController.submit(payload)` |
-| 3 | `swarm-status <id>` | Calls `ScrapeController.getStatus(id)` and prints the returned scrape job status JSON |
-| 4 | `swarm-result <id>` | Calls `ScrapeController.getResult(id)` and prints the returned scrape job result JSON |
+| 1 | `swarm create` | Opens a swarm scrape session and persists the returned session ID in the current CLI slot |
+| 2 | `swarm submit [url]` | Submits one direct URL plus any URLs from `--seed-file` as scrape jobs through `ScrapeController.submit(payload)` |
+| 3 | `swarm status <id>` | Calls `ScrapeController.getStatus(id)` and prints the returned scrape job status JSON |
+| 4 | `swarm result <id>` | Calls `ScrapeController.getResult(id)` and prints the returned scrape job result JSON |
 
 ### Notes
 
-- `swarm-create` accepts backend capability hints such as `--profile-mode`,
+- `swarm create` accepts backend capability hints such as `--profile-mode`,
   `--max-open-tabs`, `--max-browser-contexts`, and `--display-mode`.
-- `swarm-submit` accepts either a direct positional URL, `--seed-file`, or both.
+- `swarm submit` accepts either a direct positional URL, `--seed-file`, or both.
   Seed files are plain text files with one URL per line; blank lines and lines
   starting with `#` are ignored.
-- `swarm-submit` maps CLI flags like `--deadline`, `--expires`, `--refresh`,
+- `swarm submit` maps CLI flags like `--deadline`, `--expires`, `--refresh`,
   `--parse`, and `--store-content` into the raw submission payload sent to the
   scrape REST API.
-- `swarm-status` and `swarm-result` are read-only follow-up commands; keep the job ID
-  printed by `swarm-submit`.
+- `swarm status` and `swarm result` are read-only follow-up commands; keep the job ID
+  printed by `swarm submit`.
 
 ### Use cases
 

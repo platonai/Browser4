@@ -260,6 +260,14 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_fn: mock_server::test_agent_run_missing_llm_key,
     },
     ScenarioDef {
+        name: "test_e2e_prefixed_flat_forms_are_rejected",
+        short_name: "test_prefixed_flat_forms_are_rejected",
+        requires_browser4: false,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: mock_server::test_prefixed_flat_forms_are_rejected,
+    },
+    ScenarioDef {
         name: "test_e2e_swarm_submission_commands",
         short_name: "test_swarm_submission_commands",
         requires_browser4: false,

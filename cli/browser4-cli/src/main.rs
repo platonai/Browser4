@@ -71,6 +71,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "list",
         "help",
         "eval",
+        "summarize",
         "snapshot",
         "screenshot",
         "pdf",
@@ -1230,7 +1231,7 @@ async fn handle_agent_run(
     }
     println!("Task submitted: {}", task_id);
     println!(
-        "Use 'browser4-cli agent-status {}' to check progress.",
+        "Use 'browser4-cli agent status {}' to check progress.",
         task_id
     );
     Ok(())
@@ -1522,31 +1523,49 @@ fn should_ensure_server_running(command: &str) -> bool {
 // Entry point
 // ---------------------------------------------------------------------------
 
-fn canonicalize_swarm_command_name(command: &str) -> &str {
-    match command {
-        "co-create" => "swarm-create",
-        "co-submit" => "swarm-submit",
-        "co-status" => "swarm-status",
-        "co-result" => "swarm-result",
-        _ => command,
-    }
-}
-
-/// Rewrite `swarm <subcommand>` (or the legacy `co <subcommand>`) to
-/// `swarm-<subcommand>`.
-fn rewrite_swarm_prefix(args: &[String]) -> Option<Vec<String>> {
+/// Rewrite spaced prefixed subcommands like `swarm create` / `agent run`
+/// to their internal kebab-case command forms.
+fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
     let prefix = args.first().map(|s| s.as_str())?;
-    if prefix != "swarm" && prefix != "co" {
-        return None;
-    }
     let sub = args.get(1)?;
-    let mut rewritten = vec![format!("swarm-{}", sub)];
+    let rewritten_command = match prefix {
+        "swarm" => format!("swarm-{}", sub),
+        "agent" => format!("agent-{}", sub),
+        _ => return None,
+    };
+    let mut rewritten = vec![rewritten_command];
     rewritten.extend(args[2..].iter().cloned());
     Some(rewritten)
 }
 
-fn normalize_command_invocation(global: &args::GlobalFlags) -> (String, args::GlobalFlags) {
-    if let Some(rewritten) = rewrite_swarm_prefix(&global.args) {
+fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
+    match command {
+        "agent-run" => Some("agent run"),
+        "agent-status" => Some("agent status"),
+        "agent-result" => Some("agent result"),
+        "swarm-create" => Some("swarm create"),
+        "swarm-submit" => Some("swarm submit"),
+        "swarm-status" => Some("swarm status"),
+        "swarm-result" => Some("swarm result"),
+        "co-create" => Some("swarm create"),
+        "co-submit" => Some("swarm submit"),
+        "co-status" => Some("swarm status"),
+        "co-result" => Some("swarm result"),
+        _ => None,
+    }
+}
+
+fn preferred_prefixed_group_form(command: &str) -> Option<&'static str> {
+    match command {
+        "agent" => Some("agent <subcommand>"),
+        "swarm" => Some("swarm <subcommand>"),
+        "co" => Some("swarm <subcommand>"),
+        _ => None,
+    }
+}
+
+fn normalize_command_invocation(global: &args::GlobalFlags) -> (String, args::GlobalFlags, bool) {
+    if let Some(rewritten) = rewrite_prefixed_command(&global.args) {
         let cmd = rewritten[0].clone();
         let new_global = args::GlobalFlags {
             session_name: global.session_name.clone(),
@@ -1554,21 +1573,12 @@ fn normalize_command_invocation(global: &args::GlobalFlags) -> (String, args::Gl
             use_maven_startup: global.use_maven_startup,
             args: rewritten,
         };
-        (cmd, new_global)
+        (cmd, new_global, true)
     } else {
         let Some(raw_command) = global.args.first() else {
-            return (String::new(), global.clone());
+            return (String::new(), global.clone(), false);
         };
-        let cmd = canonicalize_swarm_command_name(raw_command).to_string();
-        if cmd == *raw_command {
-            (cmd, global.clone())
-        } else {
-            let mut normalized = global.clone();
-            if let Some(first) = normalized.args.first_mut() {
-                *first = cmd.clone();
-            }
-            (cmd, normalized)
-        }
+        (raw_command.clone(), global.clone(), false)
     }
 }
 
@@ -1732,7 +1742,7 @@ fn compile_batch_request(
             continue;
         }
 
-        let (nested_command, effective_nested_global) =
+        let (nested_command, effective_nested_global, _) =
             normalize_command_invocation(&nested_global);
         if nested_command.is_empty() {
             if push_batch_local_failure(
@@ -2233,26 +2243,36 @@ async fn main() {
 
     let raw_args: Vec<String> = std::env::args().skip(1).collect();
     let global = parse_global_flags(&raw_args);
-    let (command, effective_global) = normalize_command_invocation(&global);
+    let (command, effective_global, from_spaced_prefix) = normalize_command_invocation(&global);
 
-    if let Err(e) = run(&command, &effective_global).await {
+    if let Err(e) = run(&command, &effective_global, from_spaced_prefix).await {
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }
 }
 
-async fn run(command: &str, global: &args::GlobalFlags) -> Result<(), String> {
+async fn run(
+    command: &str,
+    global: &args::GlobalFlags,
+    from_spaced_prefix: bool,
+) -> Result<(), String> {
     // Handle help or no command
     if command.is_empty() || command == "help" || command == "--help" || command == "-h" {
-        // Resolve "help swarm <subcommand>" using the shared prefix rewriter.
+        // Resolve spaced prefixed help targets such as
+        // `help swarm create` / `help agent run`.
         let help_args: Vec<String> = global.args.iter().skip(1).cloned().collect();
-        let sub = if let Some(rewritten) = rewrite_swarm_prefix(&help_args) {
+        let sub = if let Some(rewritten) = rewrite_prefixed_command(&help_args) {
             Some(rewritten[0].clone())
         } else {
-            global
-                .args
-                .get(1)
-                .map(|value| canonicalize_swarm_command_name(value).to_string())
+            if let Some(target) = global.args.get(1) {
+                if let Some(preferred) = preferred_spaced_command_form(target) {
+                    return Err(format!(
+                        "Unsupported command form: {}. Use 'browser4-cli help {}' instead.",
+                        target, preferred
+                    ));
+                }
+            }
+            global.args.get(1).cloned()
         };
         print_help(sub.as_deref());
         return Ok(());
@@ -2266,6 +2286,22 @@ async fn run(command: &str, global: &args::GlobalFlags) -> Result<(), String> {
 
     if command == "batch" {
         return handle_batch(global).await;
+    }
+
+    if !from_spaced_prefix {
+        if let Some(preferred) = preferred_spaced_command_form(command) {
+            return Err(format!(
+                "Unsupported command form: {}. Use 'browser4-cli {}' instead.",
+                command, preferred
+            ));
+        }
+    }
+
+    if let Some(preferred) = preferred_prefixed_group_form(command) {
+        return Err(format!(
+            "Unsupported command form: {}. Use 'browser4-cli {}' instead.",
+            command, preferred
+        ));
     }
 
     // Resolve base URL: --server flag > persisted state > default
@@ -2508,6 +2544,11 @@ mod tests {
     #[test]
     fn no_snapshot_commands_include_eval() {
         assert!(no_snapshot_commands().contains("eval"));
+    }
+
+    #[test]
+    fn no_snapshot_commands_include_summarize() {
+        assert!(no_snapshot_commands().contains("summarize"));
     }
 
     #[test]
@@ -2756,26 +2797,87 @@ mod tests {
             args: vec!["swarm".to_string(), "create".to_string()],
         };
 
-        let (command, normalized) = normalize_command_invocation(&global);
+        let (command, normalized, from_spaced_prefix) = normalize_command_invocation(&global);
 
         assert_eq!(command, "swarm-create");
         assert!(normalized.use_maven_startup);
+        assert!(from_spaced_prefix);
     }
 
     #[test]
-    fn normalize_command_invocation_maps_legacy_co_command_to_swarm() {
+    fn normalize_command_invocation_maps_agent_prefix_to_agent_command() {
         let global = args::GlobalFlags {
             session_name: None,
             server_url: None,
             use_maven_startup: false,
-            args: vec!["co-submit".to_string(), "https://example.com".to_string()],
+            args: vec![
+                "agent".to_string(),
+                "status".to_string(),
+                "agent-task-1".to_string(),
+            ],
         };
 
-        let (command, normalized) = normalize_command_invocation(&global);
+        let (command, normalized, from_spaced_prefix) = normalize_command_invocation(&global);
 
-        assert_eq!(command, "swarm-submit");
-        assert_eq!(normalized.args[0], "swarm-submit");
-        assert_eq!(normalized.args[1], "https://example.com");
+        assert_eq!(command, "agent-status");
+        assert_eq!(normalized.args[0], "agent-status");
+        assert_eq!(normalized.args[1], "agent-task-1");
+        assert!(from_spaced_prefix);
+    }
+
+    #[test]
+    fn normalize_command_invocation_leaves_flat_prefixed_forms_unchanged() {
+        let global = args::GlobalFlags {
+            session_name: None,
+            server_url: None,
+            use_maven_startup: false,
+            args: vec!["agent-run".to_string(), "task".to_string()],
+        };
+
+        let (command, normalized, from_spaced_prefix) = normalize_command_invocation(&global);
+
+        assert_eq!(command, "agent-run");
+        assert_eq!(normalized.args[0], "agent-run");
+        assert_eq!(normalized.args[1], "task");
+        assert!(!from_spaced_prefix);
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_supports_agent_run() {
+        let rewritten = rewrite_prefixed_command(&[
+            "agent".to_string(),
+            "run".to_string(),
+            "Open example.com".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(rewritten[0], "agent-run");
+        assert_eq!(rewritten[1], "Open example.com");
+    }
+
+    #[test]
+    fn rewrite_prefixed_command_rejects_legacy_co_prefix() {
+        assert!(rewrite_prefixed_command(&[
+            "co".to_string(),
+            "create".to_string(),
+        ])
+        .is_none());
+    }
+
+    #[test]
+    fn preferred_spaced_command_form_maps_flat_aliases() {
+        assert_eq!(preferred_spaced_command_form("agent-run"), Some("agent run"));
+        assert_eq!(preferred_spaced_command_form("swarm-submit"), Some("swarm submit"));
+        assert_eq!(preferred_spaced_command_form("co-status"), Some("swarm status"));
+        assert_eq!(preferred_spaced_command_form("goto"), None);
+    }
+
+    #[test]
+    fn preferred_prefixed_group_form_maps_legacy_and_bare_prefixes() {
+        assert_eq!(preferred_prefixed_group_form("agent"), Some("agent <subcommand>"));
+        assert_eq!(preferred_prefixed_group_form("swarm"), Some("swarm <subcommand>"));
+        assert_eq!(preferred_prefixed_group_form("co"), Some("swarm <subcommand>"));
+        assert_eq!(preferred_prefixed_group_form("open"), None);
     }
 
     #[test]
