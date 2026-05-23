@@ -30,12 +30,10 @@
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-skeleton</artifactId>
-            <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-protocol</artifactId>
-            <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>

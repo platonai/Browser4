@@ -53,7 +53,7 @@ class ScrapeController(
         val payload = payload.trim()
 
         val sql = if (payload.startsWith("http")) {
-            "select abs_url(dom) as url from load_and_select('$payload', ':root')"
+            "select dom_base_uri(dom) as url from load_and_select('$payload', ':root')"
         } else payload
 
         runCatching { ScrapeAPIUtils.checkSql(sql) }.onFailure {
