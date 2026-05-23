@@ -177,9 +177,43 @@ browser4-cli help agent-run
 browser4-cli help co-create
 ```
 
+## Agent task commands
+
+Use the `agent-*` commands when you want Browser4's backend agent to execute a
+natural-language task asynchronously.
+
+Recommended lifecycle:
+
+```bash
+# 1) submit an autonomous task
+browser4-cli agent-run "Open example.com and summarize the hero section"
+
+# 2) poll progress with the returned task id
+browser4-cli agent-status agent-task-1
+
+# 3) read the final result
+browser4-cli agent-result agent-task-1
+```
+
+Notes:
+
+- `agent-run` returns immediately after the backend accepts the task and prints
+  the generated task ID plus a ready-to-copy `agent-status` follow-up command.
+- `agent-status` prints the backend status payload as-is. This is typically JSON
+  and may include fields like `id`, `status`, `statusCode`, `processState`,
+  `message`, `agentState`, `agentHistory`, and `commandResult`.
+- `agent-result` prints the backend result payload as-is. Depending on the
+  task, that payload may be plain text or structured JSON.
+- The commands are task-ID based, so they do not depend on the current saved
+  CLI browser session slot.
+- `agent-*` commands are advanced commands and are not supported in `batch`
+  mode.
+- `agent-run` performs a short status probe after submission so missing LLM/API
+  key configuration errors can fail fast with a clearer message.
+
 ## Collective workflows
 
-The `co-*` commands are intended for collective Browser4 runs where one CLI
+The `co-*` commands are intended for a collective scrape workflow where one CLI
 session coordinates multiple backend browser contexts.
 
 You can use either the long form or the short `co <subcommand>` alias:
@@ -194,14 +228,14 @@ browser4-cli co submit https://example.com
 Recommended lifecycle:
 
 ```bash
-# 1) create a collective session with backend capability hints
+# 1) create a collective scrape session with backend capability hints
 browser4-cli co create \
   --profile-mode=prototype \
   --max-open-tabs=12 \
   --max-browser-contexts=3 \
   --display-mode=SUPERVISED
 
-# 2) submit one direct URL plus a seed file for fan-out execution
+# 2) submit one direct URL plus a seed file as scrape jobs
 browser4-cli co submit https://example.com/direct \
   --seed-file=./collective-seeds.txt \
   --deadline=2026-03-30T00:00:00Z \
@@ -222,8 +256,8 @@ Notes:
   with `#` are ignored.
 - `co-submit` forwards load-option style flags such as `--deadline`,
   `--expires`, `--refresh`, `--parse`, and `--store-content` into the raw
-  payload sent to `ScrapeController.submit(payload)`.
-- Capture the task ID printed by `co-submit`, then use
+  submission payload sent to `ScrapeController.submit(payload)`.
+- Capture the job ID printed by `co-submit`, then use
   `co-status` and `co-result` to follow the async scrape job via
   `ScrapeController.getStatus(id)` and `ScrapeController.getResult(id)`.
 

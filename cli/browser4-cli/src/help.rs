@@ -178,7 +178,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     if cmd.name == "co-create" {
         lines.push("Notes:".to_string());
         lines.push(
-            "  - Creates a collective Browser4 session and stores the returned session ID in the current CLI slot."
+            "  - Creates a collective scrape session and stores the returned session ID in the current CLI slot."
                 .to_string(),
         );
         lines.push(
@@ -197,7 +197,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     if cmd.name == "co-submit" {
         lines.push("Notes:".to_string());
         lines.push(
-            "  - Accepts a direct URL, a `--seed-file`, or both, and submits each payload through the scrape submit API."
+            "  - Accepts a direct URL, a `--seed-file`, or both, and submits each entry as a scrape job through the scrape submit API."
                 .to_string(),
         );
         lines.push(
@@ -220,7 +220,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     if cmd.name == "co-status" {
         lines.push("Notes:".to_string());
         lines.push(
-            "  - Reads the scrape task status from `ScrapeController.getStatus(id)` and prints the returned JSON payload."
+            "  - Reads the scrape job status from `ScrapeController.getStatus(id)` and prints the returned JSON payload."
                 .to_string(),
         );
         lines.push(String::new());
@@ -232,7 +232,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     if cmd.name == "co-result" {
         lines.push("Notes:".to_string());
         lines.push(
-            "  - Reads the scrape task result from `ScrapeController.getResult(id)` and prints the returned payload."
+            "  - Reads the scrape job result from `ScrapeController.getResult(id)` and prints the returned payload."
                 .to_string(),
         );
         lines.push(String::new());
@@ -387,7 +387,7 @@ mod tests {
         let cmd = cmds.iter().find(|c| c.name == "co-create").unwrap();
         let help = generate_command_help(cmd);
         assert!(help.contains("browser4-cli co-create"));
-        assert!(help.contains("collective session"));
+        assert!(help.contains("collective scrape session"));
         assert!(help.contains("--profile-mode"));
         assert!(help.contains("--max-open-tabs"));
         assert!(help.contains("--max-browser-contexts"));
@@ -406,6 +406,7 @@ mod tests {
         assert!(help.contains("--deadline"));
         assert!(help.contains("--expires"));
         assert!(help.contains("blank lines and lines beginning with `#` are ignored"));
+        assert!(help.contains("submits each entry as a scrape job"));
         assert!(help.contains("ScrapeController.submit(payload)"));
         assert!(help.contains("browser4-cli co submit https://example.com/direct"));
     }
@@ -418,12 +419,14 @@ mod tests {
         let status = cmds.iter().find(|c| c.name == "co-status").unwrap();
         let status_help = generate_command_help(status);
         assert!(status_help.contains("browser4-cli co-status <id>"));
+        assert!(status_help.contains("scrape job status"));
         assert!(status_help.contains("ScrapeController.getStatus(id)"));
         assert!(status_help.contains("browser4-cli co status co-task-4"));
 
         let result = cmds.iter().find(|c| c.name == "co-result").unwrap();
         let result_help = generate_command_help(result);
         assert!(result_help.contains("browser4-cli co-result <id>"));
+        assert!(result_help.contains("scrape job result"));
         assert!(result_help.contains("ScrapeController.getResult(id)"));
         assert!(result_help.contains("browser4-cli co result co-task-4"));
     }

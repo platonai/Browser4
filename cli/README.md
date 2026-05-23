@@ -169,14 +169,92 @@ Query `browser4-cli help <command>` for the exact syntax when you need them.
 | `agent-run <task>` | Run an autonomous agent task |
 | `agent-status <id>` | Check the status of a running agent task |
 | `agent-result <id>` | Get the result of a completed agent task |
-| `co-create` | Create a collective session with parallel browser contexts |
-| `co-submit [url]` | Submit URL(s) or X-SQL payloads to the scrape queue |
-| `co-status <id>` | Check the status of a scrape task |
-| `co-result <id>` | Get the result of a completed scrape task |
+| `co-create` | Create a collective scrape session with parallel browser contexts |
+| `co-submit [url]` | Submit URL(s) or X-SQL payloads as scrape jobs |
+| `co-status <id>` | Check the status of a scrape job |
+| `co-result <id>` | Get the result of a completed scrape job |
 
-## Collective workflows (`co-*`)
+## Agent task workflow (`agent-*`)
 
-The collective commands are designed for fan-out workflows where one CLI session
+The `agent-*` commands wrap the backend command agent's asynchronous task API.
+They are useful when you want Browser4 to plan and execute a natural-language
+task in the background instead of issuing one low-level browser action at a
+time.
+
+Like other advanced commands, they are intentionally omitted from the global
+`browser4-cli help` overview. Query `browser4-cli help agent-run` (or
+`agent-status` / `agent-result`) when you need the exact syntax.
+
+### Command lifecycle
+
+| Step | Command | What it does |
+|---|---|---|
+| 1 | `agent-run <task>` | Submits an asynchronous natural-language task through `command_run` and prints the returned task ID |
+| 2 | `agent-status <id>` | Fetches the latest task status payload through `command_status` |
+| 3 | `agent-result <id>` | Fetches the completed task result payload through `command_result` |
+
+### Notes
+
+- `agent-run` is asynchronous: it returns immediately after the backend accepts
+  the task and prints a follow-up `agent-status` command with the generated task
+  ID.
+- `agent-status` prints the backend status payload as-is. In practice this is a
+  JSON object that commonly includes fields such as `id`, `status`,
+  `statusCode`, `processState`, `message`, `agentState`, `agentHistory`, and
+  `commandResult`.
+- `agent-result` prints the backend result payload as-is. Depending on the task,
+  it may be plain text or structured JSON.
+- These commands are task-ID based and do not require an active CLI browser
+  session slot. The global `-s=<name>` option is therefore usually not relevant
+  for `agent-*` follow-up calls.
+- `agent-*` commands are not supported inside `batch` mode.
+- `agent-run` performs a short post-submit status probe so obvious missing-LLM
+  configuration failures can be surfaced immediately instead of leaving you with
+  a task ID that will never succeed.
+
+### Use cases
+
+#### 1. Submit an autonomous agent task
+
+```shell
+browser4-cli agent-run "Open example.com and summarize the hero section"
+```
+
+Typical output:
+
+```text
+Task submitted: agent-task-1
+Use 'browser4-cli agent-status agent-task-1' to check progress.
+```
+
+#### 2. Poll task progress
+
+```shell
+browser4-cli agent-status agent-task-1
+```
+
+Example status payload:
+
+```json
+{"id":"agent-task-1","status":"RUNNING"}
+```
+
+On a real Browser4 backend the payload can be richer and may include lifecycle
+details such as `processState`, agent history snapshots, or an embedded partial
+`commandResult`.
+
+#### 3. Read the final result
+
+```shell
+browser4-cli agent-result agent-task-1
+```
+
+If the backend returns a structured `CommandResult`, expect fields such as
+`summary`, `pageSummary`, `fields`, `links`, or `xsqlResultSet`.
+
+## Collective scrape workflow (`co-*`)
+
+The `co-*` commands support a collective scrape workflow where one CLI session
 coordinates multiple browser contexts in the Browser4 backend.
 
 You can invoke them either with the explicit command name or with the short
@@ -193,10 +271,10 @@ browser4-cli co submit https://example.com
 
 | Step | Command | What it does |
 |---|---|---|
-| 1 | `co-create` | Opens a collective session and persists the returned session ID in the current CLI slot |
-| 2 | `co-submit [url]` | Submits one direct URL plus any URLs from `--seed-file` through `ScrapeController.submit(payload)` |
-| 3 | `co-status <id>` | Calls `ScrapeController.getStatus(id)` and prints the returned scrape JSON |
-| 4 | `co-result <id>` | Calls `ScrapeController.getResult(id)` and prints the returned payload |
+| 1 | `co-create` | Opens a collective scrape session and persists the returned session ID in the current CLI slot |
+| 2 | `co-submit [url]` | Submits one direct URL plus any URLs from `--seed-file` as scrape jobs through `ScrapeController.submit(payload)` |
+| 3 | `co-status <id>` | Calls `ScrapeController.getStatus(id)` and prints the returned scrape job status JSON |
+| 4 | `co-result <id>` | Calls `ScrapeController.getResult(id)` and prints the returned scrape job result JSON |
 
 ### Notes
 
@@ -206,14 +284,14 @@ browser4-cli co submit https://example.com
   Seed files are plain text files with one URL per line; blank lines and lines
   starting with `#` are ignored.
 - `co-submit` maps CLI flags like `--deadline`, `--expires`, `--refresh`,
-  `--parse`, and `--store-content` into the raw payload string submitted to
-  the scrape REST API.
-- `co-status` and `co-result` are read-only follow-up commands; keep the task ID
+  `--parse`, and `--store-content` into the raw submission payload sent to the
+  scrape REST API.
+- `co-status` and `co-result` are read-only follow-up commands; keep the job ID
   printed by `co-submit`.
 
 ### Use cases
 
-#### 1. Create a supervised collective session for manual monitoring
+#### 1. Create a supervised collective scrape session for manual monitoring
 
 ```shell
 browser4-cli co create \
@@ -226,7 +304,7 @@ browser4-cli co create \
 Use this when you want multiple isolated browser contexts and you still want to
 watch the run visually.
 
-#### 2. Submit a seed crawl with shared load options
+#### 2. Submit a seed crawl as scrape jobs
 
 ```shell
 browser4-cli co submit https://example.com/direct \
@@ -256,8 +334,8 @@ browser4-cli co status co-task-4
 browser4-cli co result co-task-4
 ```
 
-The status and result commands print the scrape response payload as-is. In the
-current backend, `getResult(id)` returns the same response envelope type as
+The status and result commands print the scrape job response payload as-is. In
+the current backend, `getResult(id)` returns the same response envelope type as
 `getStatus(id)`.
 
 ## Element References
