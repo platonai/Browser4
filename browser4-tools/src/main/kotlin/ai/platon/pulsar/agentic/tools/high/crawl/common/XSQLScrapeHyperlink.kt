@@ -2,8 +2,8 @@ package ai.platon.pulsar.agentic.tools.high.crawl.common
 
 import ai.platon.pulsar.agentic.tools.high.crawl.ScrapeRequest
 import ai.platon.pulsar.agentic.tools.high.crawl.ScrapeResponse
-import ai.platon.pulsar.agentic.tools.high.crawl.refresh
 import ai.platon.pulsar.agentic.tools.high.crawl.emitEvent
+import ai.platon.pulsar.agentic.tools.high.crawl.refresh
 import ai.platon.pulsar.common.PulsarParams.VAR_IS_SCRAPE
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.getLogger
@@ -103,6 +103,6 @@ open class XSQLScrapeHyperlink(
 
         val rs = executeQuery(request, response)
         response.resultSet = ResultSetUtils.getTextEntitiesFromResultSet(rs)
-        response.refresh(ResourceStatus.SC_OK, page.protocolStatus.minorCode, false)
+        response.refresh(response.statusCode, page.protocolStatus.minorCode, false)
     }
 }
