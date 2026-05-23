@@ -37,7 +37,6 @@ class AriaSnapshotRendererE2ETest : WebDriverTestBase() {
             driver.waitForSelector("h1")
             driver.bringToFront()
 
-
             installRendererFixture(driver.cdp)
             driver.waitForSelector("h1")
 

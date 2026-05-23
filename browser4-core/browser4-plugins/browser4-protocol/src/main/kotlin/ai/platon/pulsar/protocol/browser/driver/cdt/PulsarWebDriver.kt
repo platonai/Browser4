@@ -83,7 +83,7 @@ class PulsarWebDriver constructor(
     /**
      * Expose the underlying implementation, used for diagnosis purpose
      * */
-    override val implementation: Any get() = cdp.remoteDevTools
+    override val implementation: Any get() = cdp
 
     override val snapshotService: SnapshotService get() = page.snapshotService
 
