@@ -169,10 +169,10 @@ Query `browser4-cli help <command>` for the exact syntax when you need them.
 | `agent-run <task>` | Run an autonomous agent task |
 | `agent-status <id>` | Check the status of a running agent task |
 | `agent-result <id>` | Get the result of a completed agent task |
-| `co-create` | Create a collective scrape session with parallel browser contexts |
-| `co-submit [url]` | Submit URL(s) or X-SQL payloads as scrape jobs |
-| `co-status <id>` | Check the status of a scrape job |
-| `co-result <id>` | Get the result of a completed scrape job |
+| `swarm-create` | Create a swarm scrape session with parallel browser contexts |
+| `swarm-submit [url]` | Submit URL(s) or X-SQL payloads as scrape jobs |
+| `swarm-status <id>` | Check the status of a scrape job |
+| `swarm-result <id>` | Get the result of a completed scrape job |
 
 ## Agent task workflow (`agent-*`)
 
@@ -252,49 +252,49 @@ browser4-cli agent-result agent-task-1
 If the backend returns a structured `CommandResult`, expect fields such as
 `summary`, `pageSummary`, `fields`, `links`, or `xsqlResultSet`.
 
-## Collective scrape workflow (`co-*`)
+## Swarm scrape workflow (`swarm-*`)
 
-The `co-*` commands support a collective scrape workflow where one CLI session
+The `swarm-*` commands support a swarm scrape workflow where one CLI session
 coordinates multiple browser contexts in the Browser4 backend.
 
 You can invoke them either with the explicit command name or with the short
 prefix form:
 
 ```shell
-browser4-cli co-create
-browser4-cli co create
-browser4-cli co-submit https://example.com
-browser4-cli co submit https://example.com
+browser4-cli swarm-create
+browser4-cli swarm create
+browser4-cli swarm-submit https://example.com
+browser4-cli swarm submit https://example.com
 ```
 
 ### Command lifecycle
 
 | Step | Command | What it does |
 |---|---|---|
-| 1 | `co-create` | Opens a collective scrape session and persists the returned session ID in the current CLI slot |
-| 2 | `co-submit [url]` | Submits one direct URL plus any URLs from `--seed-file` as scrape jobs through `ScrapeController.submit(payload)` |
-| 3 | `co-status <id>` | Calls `ScrapeController.getStatus(id)` and prints the returned scrape job status JSON |
-| 4 | `co-result <id>` | Calls `ScrapeController.getResult(id)` and prints the returned scrape job result JSON |
+| 1 | `swarm-create` | Opens a swarm scrape session and persists the returned session ID in the current CLI slot |
+| 2 | `swarm-submit [url]` | Submits one direct URL plus any URLs from `--seed-file` as scrape jobs through `ScrapeController.submit(payload)` |
+| 3 | `swarm-status <id>` | Calls `ScrapeController.getStatus(id)` and prints the returned scrape job status JSON |
+| 4 | `swarm-result <id>` | Calls `ScrapeController.getResult(id)` and prints the returned scrape job result JSON |
 
 ### Notes
 
-- `co-create` accepts backend capability hints such as `--profile-mode`,
+- `swarm-create` accepts backend capability hints such as `--profile-mode`,
   `--max-open-tabs`, `--max-browser-contexts`, and `--display-mode`.
-- `co-submit` accepts either a direct positional URL, `--seed-file`, or both.
+- `swarm-submit` accepts either a direct positional URL, `--seed-file`, or both.
   Seed files are plain text files with one URL per line; blank lines and lines
   starting with `#` are ignored.
-- `co-submit` maps CLI flags like `--deadline`, `--expires`, `--refresh`,
+- `swarm-submit` maps CLI flags like `--deadline`, `--expires`, `--refresh`,
   `--parse`, and `--store-content` into the raw submission payload sent to the
   scrape REST API.
-- `co-status` and `co-result` are read-only follow-up commands; keep the job ID
-  printed by `co-submit`.
+- `swarm-status` and `swarm-result` are read-only follow-up commands; keep the job ID
+  printed by `swarm-submit`.
 
 ### Use cases
 
-#### 1. Create a supervised collective scrape session for manual monitoring
+#### 1. Create a supervised swarm scrape session for manual monitoring
 
 ```shell
-browser4-cli co create \
+browser4-cli swarm create \
   --profile-mode=prototype \
   --max-open-tabs=12 \
   --max-browser-contexts=3 \
@@ -307,8 +307,8 @@ watch the run visually.
 #### 2. Submit a seed crawl as scrape jobs
 
 ```shell
-browser4-cli co submit https://example.com/direct \
-  --seed-file=./collective-seeds.txt \
+browser4-cli swarm submit https://example.com/direct \
+  --seed-file=./swarm-seeds.txt \
   --deadline=2026-03-30T00:00:00Z \
   --expires=1d \
   --refresh \
@@ -316,7 +316,7 @@ browser4-cli co submit https://example.com/direct \
   --store-content
 ```
 
-Example `collective-seeds.txt`:
+Example `swarm-seeds.txt`:
 
 ```text
 # campaign landing pages
@@ -330,8 +330,8 @@ parallel collection across a curated seed set.
 #### 3. Poll and fetch the result
 
 ```shell
-browser4-cli co status co-task-4
-browser4-cli co result co-task-4
+browser4-cli swarm status scrape-task-4
+browser4-cli swarm result scrape-task-4
 ```
 
 The status and result commands print the scrape job response payload as-is. In

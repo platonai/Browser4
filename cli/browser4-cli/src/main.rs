@@ -2,7 +2,7 @@
 //!
 //! Most operations are routed through the Browser4 MCP Server tool interface
 //! via `POST /mcp/call-tool`.
-//! Collective scrape submission/status/result flows also use the scrape REST
+//! Swarm scrape submission/status/result flows also use the scrape REST
 //! endpoints under `/api/x`.
 //!
 //! # State persistence
@@ -77,10 +77,10 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "agent-run",
         "agent-status",
         "agent-result",
-        "co-create",
-        "co-submit",
-        "co-status",
-        "co-result",
+        "swarm-create",
+        "swarm-submit",
+        "swarm-status",
+        "swarm-result",
     ]
     .into()
 }
@@ -1335,10 +1335,10 @@ async fn handle_agent_result(
 }
 
 // ---------------------------------------------------------------------------
-// Collective (co) command handlers
+// Swarm command handlers
 // ---------------------------------------------------------------------------
 
-async fn handle_co_create(
+async fn handle_swarm_create(
     client: &Client,
     base_url: &str,
     tool_params: &Value,
@@ -1387,11 +1387,11 @@ async fn handle_co_create(
     state.base_url = base_url.to_string();
     write_state(&state, None, session_name).map_err(|e| e.to_string())?;
 
-    println!("Collective session created: {}", session_id);
+    println!("Swarm session created: {}", session_id);
     Ok(())
 }
 
-async fn handle_co_submit(
+async fn handle_swarm_submit(
     client: &Client,
     base_url: &str,
     tool_params: &Value,
@@ -1476,7 +1476,7 @@ async fn handle_co_submit(
     Ok(())
 }
 
-async fn handle_co_status(
+async fn handle_swarm_status(
     client: &Client,
     base_url: &str,
     tool_params: &Value,
@@ -1495,7 +1495,7 @@ async fn handle_co_status(
     Ok(())
 }
 
-async fn handle_co_result(
+async fn handle_swarm_result(
     client: &Client,
     base_url: &str,
     tool_params: &Value,
@@ -1522,23 +1522,31 @@ fn should_ensure_server_running(command: &str) -> bool {
 // Entry point
 // ---------------------------------------------------------------------------
 
-/// Rewrite "co <subcommand>" to "co-<subcommand>".
-///
-/// When the user types `browser4-cli co create ...`, the args are
-/// `["co", "create", ...]`. This function joins them into `["co-create", ...]`.
-/// Returns `None` if the input does not start with `"co"` or has no subcommand.
-fn rewrite_co_prefix(args: &[String]) -> Option<Vec<String>> {
-    if args.first().map(|s| s.as_str()) != Some("co") {
+fn canonicalize_swarm_command_name(command: &str) -> &str {
+    match command {
+        "co-create" => "swarm-create",
+        "co-submit" => "swarm-submit",
+        "co-status" => "swarm-status",
+        "co-result" => "swarm-result",
+        _ => command,
+    }
+}
+
+/// Rewrite `swarm <subcommand>` (or the legacy `co <subcommand>`) to
+/// `swarm-<subcommand>`.
+fn rewrite_swarm_prefix(args: &[String]) -> Option<Vec<String>> {
+    let prefix = args.first().map(|s| s.as_str())?;
+    if prefix != "swarm" && prefix != "co" {
         return None;
     }
     let sub = args.get(1)?;
-    let mut rewritten = vec![format!("co-{}", sub)];
+    let mut rewritten = vec![format!("swarm-{}", sub)];
     rewritten.extend(args[2..].iter().cloned());
     Some(rewritten)
 }
 
 fn normalize_command_invocation(global: &args::GlobalFlags) -> (String, args::GlobalFlags) {
-    if let Some(rewritten) = rewrite_co_prefix(&global.args) {
+    if let Some(rewritten) = rewrite_swarm_prefix(&global.args) {
         let cmd = rewritten[0].clone();
         let new_global = args::GlobalFlags {
             session_name: global.session_name.clone(),
@@ -1548,12 +1556,19 @@ fn normalize_command_invocation(global: &args::GlobalFlags) -> (String, args::Gl
         };
         (cmd, new_global)
     } else {
-        let cmd = global
-            .args
-            .first()
-            .map(|s| s.to_string())
-            .unwrap_or_default();
-        (cmd, global.clone())
+        let Some(raw_command) = global.args.first() else {
+            return (String::new(), global.clone());
+        };
+        let cmd = canonicalize_swarm_command_name(raw_command).to_string();
+        if cmd == *raw_command {
+            (cmd, global.clone())
+        } else {
+            let mut normalized = global.clone();
+            if let Some(first) = normalized.args.first_mut() {
+                *first = cmd.clone();
+            }
+            (cmd, normalized)
+        }
     }
 }
 
@@ -1894,8 +1909,8 @@ fn compile_batch_request(
                 }
             }
             "list" | "close-all" | "kill-all" | "delete-data" | "agent-run" | "agent-status"
-            | "agent-result" | "co-create" | "co-submit" | "co-status"
-            | "co-result" => {
+            | "agent-result" | "swarm-create" | "swarm-submit" | "swarm-status"
+            | "swarm-result" => {
                 if push_batch_local_failure(
                     &mut entries,
                     spec,
@@ -2229,12 +2244,15 @@ async fn main() {
 async fn run(command: &str, global: &args::GlobalFlags) -> Result<(), String> {
     // Handle help or no command
     if command.is_empty() || command == "help" || command == "--help" || command == "-h" {
-        // Resolve "help co <subcommand>" using the shared prefix rewriter
+        // Resolve "help swarm <subcommand>" using the shared prefix rewriter.
         let help_args: Vec<String> = global.args.iter().skip(1).cloned().collect();
-        let sub = if let Some(rewritten) = rewrite_co_prefix(&help_args) {
+        let sub = if let Some(rewritten) = rewrite_swarm_prefix(&help_args) {
             Some(rewritten[0].clone())
         } else {
-            global.args.get(1).cloned()
+            global
+                .args
+                .get(1)
+                .map(|value| canonicalize_swarm_command_name(value).to_string())
         };
         print_help(sub.as_deref());
         return Ok(());
@@ -2406,9 +2424,9 @@ async fn run(command: &str, global: &args::GlobalFlags) -> Result<(), String> {
         "agent-result" => {
             handle_agent_result(&client, &base_url, &tool_params).await?;
         }
-        // Collective commands
-        "co-create" => {
-            handle_co_create(
+        // Swarm commands
+        "swarm-create" => {
+            handle_swarm_create(
                 &client,
                 &base_url,
                 &tool_params,
@@ -2416,14 +2434,14 @@ async fn run(command: &str, global: &args::GlobalFlags) -> Result<(), String> {
             )
             .await?;
         }
-        "co-submit" => {
-            handle_co_submit(&client, &base_url, &tool_params).await?;
+        "swarm-submit" => {
+            handle_swarm_submit(&client, &base_url, &tool_params).await?;
         }
-        "co-status" => {
-            handle_co_status(&client, &base_url, &tool_params).await?;
+        "swarm-status" => {
+            handle_swarm_status(&client, &base_url, &tool_params).await?;
         }
-        "co-result" => {
-            handle_co_result(&client, &base_url, &tool_params).await?;
+        "swarm-result" => {
+            handle_swarm_result(&client, &base_url, &tool_params).await?;
         }
         _ => {
             if tool_name.is_empty() {
@@ -2735,13 +2753,29 @@ mod tests {
             session_name: Some("team".to_string()),
             server_url: Some("http://127.0.0.1:8182".to_string()),
             use_maven_startup: true,
-            args: vec!["co".to_string(), "create".to_string()],
+            args: vec!["swarm".to_string(), "create".to_string()],
         };
 
         let (command, normalized) = normalize_command_invocation(&global);
 
-        assert_eq!(command, "co-create");
+        assert_eq!(command, "swarm-create");
         assert!(normalized.use_maven_startup);
+    }
+
+    #[test]
+    fn normalize_command_invocation_maps_legacy_co_command_to_swarm() {
+        let global = args::GlobalFlags {
+            session_name: None,
+            server_url: None,
+            use_maven_startup: false,
+            args: vec!["co-submit".to_string(), "https://example.com".to_string()],
+        };
+
+        let (command, normalized) = normalize_command_invocation(&global);
+
+        assert_eq!(command, "swarm-submit");
+        assert_eq!(normalized.args[0], "swarm-submit");
+        assert_eq!(normalized.args[1], "https://example.com");
     }
 
     #[test]

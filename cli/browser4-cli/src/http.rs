@@ -361,23 +361,23 @@ mod tests {
 
     #[test]
     fn test_extract_http_text_payload_unquotes_json_string() {
-        assert_eq!(extract_http_text_payload("\"co-task-1\""), "co-task-1");
+        assert_eq!(extract_http_text_payload("\"swarm-task-1\""), "swarm-task-1");
     }
 
     #[test]
     fn test_extract_http_text_payload_preserves_plain_text() {
-        assert_eq!(extract_http_text_payload("co-task-1\n"), "co-task-1");
+        assert_eq!(extract_http_text_payload("swarm-task-1\n"), "swarm-task-1");
     }
 
     #[test]
     fn test_extract_http_text_payload_minifies_json_object() {
         let payload = r#"{
-            "id": "co-task-1",
+            "id": "swarm-task-1",
             "isDone": false
         }"#;
         assert_eq!(
             extract_http_text_payload(payload),
-            "{\"id\":\"co-task-1\",\"isDone\":false}"
+            "{\"id\":\"swarm-task-1\",\"isDone\":false}"
         );
     }
 }

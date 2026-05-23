@@ -174,7 +174,7 @@ browser4-cli help console
 browser4-cli help extract
 browser4-cli help summarize
 browser4-cli help agent-run
-browser4-cli help co-create
+browser4-cli help swarm-create
 ```
 
 ## Agent task commands
@@ -211,33 +211,33 @@ Notes:
 - `agent-run` performs a short status probe after submission so missing LLM/API
   key configuration errors can fail fast with a clearer message.
 
-## Collective workflows
+## Swarm workflows
 
-The `co-*` commands are intended for a collective scrape workflow where one CLI
+The `swarm-*` commands are intended for a swarm scrape workflow where one CLI
 session coordinates multiple backend browser contexts.
 
-You can use either the long form or the short `co <subcommand>` alias:
+You can use either the long form or the spaced `swarm <subcommand>` form:
 
 ```bash
-browser4-cli co-create
-browser4-cli co create
-browser4-cli co-submit https://example.com
-browser4-cli co submit https://example.com
+browser4-cli swarm-create
+browser4-cli swarm create
+browser4-cli swarm-submit https://example.com
+browser4-cli swarm submit https://example.com
 ```
 
 Recommended lifecycle:
 
 ```bash
-# 1) create a collective scrape session with backend capability hints
-browser4-cli co create \
+# 1) create a swarm scrape session with backend capability hints
+browser4-cli swarm create \
   --profile-mode=prototype \
   --max-open-tabs=12 \
   --max-browser-contexts=3 \
   --display-mode=SUPERVISED
 
 # 2) submit one direct URL plus a seed file as scrape jobs
-browser4-cli co submit https://example.com/direct \
-  --seed-file=./collective-seeds.txt \
+browser4-cli swarm submit https://example.com/direct \
+  --seed-file=./swarm-seeds.txt \
   --deadline=2026-03-30T00:00:00Z \
   --expires=1d \
   --refresh \
@@ -245,26 +245,26 @@ browser4-cli co submit https://example.com/direct \
   --store-content
 
 # 3) poll and fetch the result
-browser4-cli co status co-task-4
-browser4-cli co result co-task-4
+browser4-cli swarm status scrape-task-4
+browser4-cli swarm result scrape-task-4
 ```
 
 Notes:
 
-- `co-submit` accepts a positional URL, `--seed-file`, or both.
+- `swarm-submit` accepts a positional URL, `--seed-file`, or both.
 - Seed files are plain text, one URL per line. Empty lines and lines beginning
   with `#` are ignored.
-- `co-submit` forwards load-option style flags such as `--deadline`,
+- `swarm-submit` forwards load-option style flags such as `--deadline`,
   `--expires`, `--refresh`, `--parse`, and `--store-content` into the raw
   submission payload sent to `ScrapeController.submit(payload)`.
-- Capture the job ID printed by `co-submit`, then use
-  `co-status` and `co-result` to follow the async scrape job via
+- Capture the job ID printed by `swarm-submit`, then use
+  `swarm-status` and `swarm-result` to follow the async scrape job via
   `ScrapeController.getStatus(id)` and `ScrapeController.getResult(id)`.
 
 Example seed file:
 
 ```text
-# urls for the collective crawler
+# urls for the swarm crawler
 https://example.com/seed-1
 https://example.com/seed-2
 ```

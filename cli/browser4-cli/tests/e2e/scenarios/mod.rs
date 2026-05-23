@@ -156,12 +156,12 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_fn: batch::test_batch_json_edge_cases,
     },
     ScenarioDef {
-        name: "test_e2e_collective_session_and_agent_tools",
-        short_name: "test_collective_session_and_agent_tools",
+        name: "test_e2e_swarm_session_and_agent_tools",
+        short_name: "test_swarm_session_and_agent_tools",
         requires_browser4: false,
         restart_browser4: false,
         test_count: 1,
-        test_fn: mock_server::test_collective_session_and_agent_tools,
+        test_fn: mock_server::test_swarm_session_and_agent_tools,
     },
     ScenarioDef {
         name: "test_e2e_open_uses_temporary_profile_mode",
@@ -260,20 +260,20 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_fn: mock_server::test_agent_run_missing_llm_key,
     },
     ScenarioDef {
-        name: "test_e2e_collective_submission_commands",
-        short_name: "test_collective_submission_commands",
+        name: "test_e2e_swarm_submission_commands",
+        short_name: "test_swarm_submission_commands",
         requires_browser4: false,
         restart_browser4: false,
         test_count: 1,
-        test_fn: mock_server::test_collective_submission_commands,
+        test_fn: mock_server::test_swarm_submission_commands,
     },
     ScenarioDef {
-        name: "test_e2e_collective_command_help_and_validation",
-        short_name: "test_collective_command_help_and_validation",
+        name: "test_e2e_swarm_command_help_and_validation",
+        short_name: "test_swarm_command_help_and_validation",
         requires_browser4: false,
         restart_browser4: false,
         test_count: 1,
-        test_fn: mock_server::test_collective_command_help_and_validation,
+        test_fn: mock_server::test_swarm_command_help_and_validation,
     },
 ];
 

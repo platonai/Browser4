@@ -299,7 +299,7 @@ struct MockBrowser4State {
     status_queries: Vec<String>,
     result_queries: Vec<String>,
     next_agent_task_id: usize,
-    next_collective_task_id: usize,
+    next_swarm_task_id: usize,
     listed_sessions: Vec<MockListedSession>,
     queued_open_session_ids: Vec<String>,
     queued_tool_failures: Vec<MockToolFailure>,
@@ -515,7 +515,7 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                     let session_id = {
                         let mut guard = state.lock().expect("mock Browser4 state mutex poisoned");
                         let session_id = if guard.queued_open_session_ids.is_empty() {
-                            "collective-session-1".to_string()
+                            "swarm-session-1".to_string()
                         } else {
                             guard.queued_open_session_ids.remove(0)
                         };
@@ -562,8 +562,8 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                         let mut guard = state.lock().expect("mock Browser4 state mutex poisoned");
                         guard.plain_commands.push(command.clone());
                         if command.starts_with("http://") || command.starts_with("https://") {
-                            guard.next_collective_task_id += 1;
-                            format!("co-task-{}", guard.next_collective_task_id)
+                            guard.next_swarm_task_id += 1;
+                            format!("swarm-task-{}", guard.next_swarm_task_id)
                         } else {
                             guard.next_agent_task_id += 1;
                             format!("agent-task-{}", guard.next_agent_task_id)
@@ -636,8 +636,8 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                 let mut guard = state.lock().expect("mock Browser4 state mutex poisoned");
                 guard.plain_commands.push(command.clone());
                 if command.starts_with("http://") || command.starts_with("https://") {
-                    guard.next_collective_task_id += 1;
-                    format!("co-task-{}", guard.next_collective_task_id)
+                    guard.next_swarm_task_id += 1;
+                    format!("swarm-task-{}", guard.next_swarm_task_id)
                 } else {
                     guard.next_agent_task_id += 1;
                     format!("agent-task-{}", guard.next_agent_task_id)
@@ -656,8 +656,8 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
             let task_id = {
                 let mut guard = state.lock().expect("mock Browser4 state mutex poisoned");
                 guard.plain_commands.push(payload);
-                guard.next_collective_task_id += 1;
-                format!("co-task-{}", guard.next_collective_task_id)
+                guard.next_swarm_task_id += 1;
+                format!("swarm-task-{}", guard.next_swarm_task_id)
             };
 
             write_http_response(
@@ -832,7 +832,7 @@ fn mock_command_batch_response(arguments: &serde_json::Value) -> String {
             "open" => {
                 let session_id = current_session_id
                     .clone()
-                    .unwrap_or_else(|| "collective-session-1".to_string());
+                    .unwrap_or_else(|| "swarm-session-1".to_string());
                 let text = if current_session_id.is_some() {
                     format!("Session already open: {session_id}")
                 } else {
@@ -2250,39 +2250,39 @@ fn open_resized_interactive_page(ctx: &mut E2ECtx) {
     assert!(vw >= 1000, "Expected viewport width >= 1000, got {vw}");
 }
 
-fn start_mock_collective_session(ctx: &mut E2ECtx) -> MockBrowser4Server {
+fn start_mock_swarm_session(ctx: &mut E2ECtx) -> MockBrowser4Server {
     let started_at = Instant::now();
     let mock_server = MockBrowser4Server::start();
     ctx.record_step("mock Browser4 server start", started_at.elapsed());
     ctx.browser4_base_url = mock_server.base_url();
 
-    let co_create_result = run_command(
+    let swarm_create_result = run_command(
         ctx,
         &[
-            "co",
+            "swarm",
             "create",
-            "--profile-mode=prototype",
+            "--profile-mode=TEMPORARY",
             "--max-open-tabs=12",
             "--max-browser-contexts=3",
-            "--display-mode=SUPERVISED",
+            "--display-mode=HEADLESS",
         ],
     );
     assert!(
-        co_create_result
+        swarm_create_result
             .stdout
-            .contains("Collective session created: collective-session-1"),
-        "Expected collective session creation output in:\n{}",
-        co_create_result.stdout
+            .contains("Swarm session created: swarm-session-1"),
+        "Expected swarm session creation output in:\n{}",
+        swarm_create_result.stdout
     );
     assert_eq!(
         read_persisted_session_id(&ctx.state_dir),
-        "collective-session-1"
+        "swarm-session-1"
     );
 
     mock_server
 }
 
-fn assert_collective_session_call(mock_server: &MockBrowser4Server) {
+fn assert_swarm_session_call(mock_server: &MockBrowser4Server) {
     let tool_calls = mock_server.snapshot().tool_calls;
     let open_session_call = tool_calls
         .iter()
@@ -2469,18 +2469,18 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "snapshot",
         "screenshot",
         "pdf",
-        // test_collective_session_and_agent_tools
+        // test_swarm_session_and_agent_tools
         "extract",
         "summarize",
         // test_agent_task_commands
         "agent-run",
         "agent-status",
         "agent-result",
-        // test_collective_submission_commands
-        "co-create",
-        "co-submit",
-        "co-status",
-        "co-result",
+        // test_swarm_submission_commands
+        "swarm-create",
+        "swarm-submit",
+        "swarm-status",
+        "swarm-result",
         // test_mouse_and_dialog
         "mousemove",
         "mousedown",

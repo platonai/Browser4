@@ -20,7 +20,7 @@ pub enum Category {
     Config,
     Install,
     Agent,
-    Collective,
+    Swarm,
 }
 
 impl Category {
@@ -39,7 +39,7 @@ impl Category {
             Category::Config => "config",
             Category::Install => "install",
             Category::Agent => "agent",
-            Category::Collective => "collective",
+            Category::Swarm => "swarm",
         }
     }
 }
@@ -927,11 +927,11 @@ pub fn all_commands() -> Vec<CommandDef> {
                 json!({ "id": get_str(args, "id").unwrap_or_default() })
             },
         },
-        // ---- Collective (co) ----
+        // ---- Swarm ----
         CommandDef {
-            name: "co-create",
-            description: "Create a collective scrape session with parallel browser contexts",
-            category: Category::Collective,
+            name: "swarm-create",
+            description: "Create a swarm scrape session with parallel browser contexts",
+            category: Category::Swarm,
             hidden: true,
             batch_supported: false,
             args: &[],
@@ -952,9 +952,9 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
-            name: "co-submit",
+            name: "swarm-submit",
             description: "Submit URL(s) or X-SQL payloads as scrape jobs",
-            category: Category::Collective,
+            category: Category::Swarm,
             hidden: true,
             batch_supported: false,
             args: &[ArgDef { name: "url", description: "URL or X-SQL payload to submit", optional: true }],
@@ -980,12 +980,12 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
-            name: "co-status",
+            name: "swarm-status",
             description: "Check the status of a scrape job",
-            category: Category::Collective,
+            category: Category::Swarm,
             hidden: true,
             batch_supported: false,
-            args: &[ArgDef { name: "id", description: "Task ID returned by co submit", optional: false }],
+            args: &[ArgDef { name: "id", description: "Task ID returned by swarm submit", optional: false }],
             options: &[],
             tool_name_fn: |_| "command_status".to_string(),
             tool_params_fn: |args| {
@@ -993,12 +993,12 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
-            name: "co-result",
+            name: "swarm-result",
             description: "Get the result of a completed scrape job",
-            category: Category::Collective,
+            category: Category::Swarm,
             hidden: true,
             batch_supported: false,
-            args: &[ArgDef { name: "id", description: "Task ID returned by co submit", optional: false }],
+            args: &[ArgDef { name: "id", description: "Task ID returned by swarm submit", optional: false }],
             options: &[],
             tool_name_fn: |_| "command_result".to_string(),
             tool_params_fn: |args| {
@@ -1051,10 +1051,10 @@ mod tests {
             "agent-run",
             "agent-status",
             "agent-result",
-            "co-create",
-            "co-submit",
-            "co-status",
-            "co-result",
+            "swarm-create",
+            "swarm-submit",
+            "swarm-status",
+            "swarm-result",
         ] {
             assert!(map.contains_key(*expected), "Missing command: {}", expected);
         }
@@ -1211,9 +1211,9 @@ mod tests {
     }
 
     #[test]
-    fn test_co_create_tool_name() {
+    fn test_swarm_create_tool_name() {
         let map = commands_map();
-        let cmd = map.get("co-create").unwrap();
+        let cmd = map.get("swarm-create").unwrap();
         let args = HashMap::new();
         assert_eq!((cmd.tool_name_fn)(&args), "open_session");
     }
@@ -1243,9 +1243,9 @@ mod tests {
     }
 
     #[test]
-    fn test_co_create_params_with_options() {
+    fn test_swarm_create_params_with_options() {
         let map = commands_map();
-        let cmd = map.get("co-create").unwrap();
+        let cmd = map.get("swarm-create").unwrap();
         let mut args = HashMap::new();
         args.insert("profile-mode".to_string(), json!("temporary"));
         args.insert("max-open-tabs".to_string(), json!("8"));
@@ -1259,9 +1259,9 @@ mod tests {
     }
 
     #[test]
-    fn test_co_submit_tool_name_and_params() {
+    fn test_swarm_submit_tool_name_and_params() {
         let map = commands_map();
-        let cmd = map.get("co-submit").unwrap();
+        let cmd = map.get("swarm-submit").unwrap();
         let mut args = HashMap::new();
         args.insert(
             "url".to_string(),
@@ -1275,9 +1275,9 @@ mod tests {
     }
 
     #[test]
-    fn test_co_submit_with_seed_file() {
+    fn test_swarm_submit_with_seed_file() {
         let map = commands_map();
-        let cmd = map.get("co-submit").unwrap();
+        let cmd = map.get("swarm-submit").unwrap();
         let mut args = HashMap::new();
         args.insert("seed-file".to_string(), json!("seeds.txt"));
         let params = (cmd.tool_params_fn)(&args);
@@ -1285,9 +1285,9 @@ mod tests {
     }
 
     #[test]
-    fn test_co_submit_with_load_options() {
+    fn test_swarm_submit_with_load_options() {
         let map = commands_map();
-        let cmd = map.get("co-submit").unwrap();
+        let cmd = map.get("swarm-submit").unwrap();
         let mut args = HashMap::new();
         args.insert("url".to_string(), json!("https://example.com"));
         args.insert("refresh".to_string(), json!(true));
@@ -1302,9 +1302,9 @@ mod tests {
     }
 
     #[test]
-    fn test_co_status_tool_name() {
+    fn test_swarm_status_tool_name() {
         let map = commands_map();
-        let cmd = map.get("co-status").unwrap();
+        let cmd = map.get("swarm-status").unwrap();
         let mut args = HashMap::new();
         args.insert("id".to_string(), json!("abc-123"));
         assert_eq!((cmd.tool_name_fn)(&args), "command_status");
@@ -1313,9 +1313,9 @@ mod tests {
     }
 
     #[test]
-    fn test_co_result_tool_name() {
+    fn test_swarm_result_tool_name() {
         let map = commands_map();
-        let cmd = map.get("co-result").unwrap();
+        let cmd = map.get("swarm-result").unwrap();
         let mut args = HashMap::new();
         args.insert("id".to_string(), json!("abc-123"));
         assert_eq!((cmd.tool_name_fn)(&args), "command_result");
@@ -1400,17 +1400,17 @@ mod tests {
     }
 
     #[test]
-    fn test_collective_commands_in_collective_category() {
+    fn test_swarm_commands_in_swarm_category() {
         let cmds = all_commands();
-        let collective_cmds: Vec<&str> = cmds
+        let swarm_cmds: Vec<&str> = cmds
             .iter()
-            .filter(|c| c.category == Category::Collective)
+            .filter(|c| c.category == Category::Swarm)
             .map(|c| c.name)
             .collect();
-        assert!(collective_cmds.contains(&"co-create"));
-        assert!(collective_cmds.contains(&"co-submit"));
-        assert!(collective_cmds.contains(&"co-status"));
-        assert!(collective_cmds.contains(&"co-result"));
+        assert!(swarm_cmds.contains(&"swarm-create"));
+        assert!(swarm_cmds.contains(&"swarm-submit"));
+        assert!(swarm_cmds.contains(&"swarm-status"));
+        assert!(swarm_cmds.contains(&"swarm-result"));
     }
 
     #[test]
@@ -1423,10 +1423,10 @@ mod tests {
             "agent-run",
             "agent-status",
             "agent-result",
-            "co-create",
-            "co-submit",
-            "co-status",
-            "co-result",
+            "swarm-create",
+            "swarm-submit",
+            "swarm-status",
+            "swarm-result",
         ] {
             assert!(map.get(name).unwrap().hidden, "{name} should stay hidden");
         }

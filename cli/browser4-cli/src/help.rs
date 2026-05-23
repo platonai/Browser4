@@ -14,7 +14,7 @@ const CATEGORIES: &[(&str, &str)] = &[
     ("network", "Network"),
     ("devtools", "DevTools"),
     ("agent", "Agent"),
-    ("collective", "Collective"),
+    ("swarm", "Swarm"),
     ("install", "Install"),
     ("config", "Configuration"),
     ("browsers", "Browser sessions"),
@@ -175,26 +175,26 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli goto https://browser4.io/".to_string());
     }
 
-    if cmd.name == "co-create" {
+    if cmd.name == "swarm-create" {
         lines.push("Notes:".to_string());
         lines.push(
-            "  - Creates a collective scrape session and stores the returned session ID in the current CLI slot."
+            "  - Creates a swarm scrape session and stores the returned session ID in the current CLI slot."
                 .to_string(),
         );
         lines.push(
-            "  - You can also invoke it as `browser4-cli co create` using the short collective prefix."
+            "  - You can also invoke it as `browser4-cli swarm create` using the swarm prefix."
                 .to_string(),
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli co-create".to_string());
+        lines.push("  browser4-cli swarm-create".to_string());
         lines.push(
-            "  browser4-cli co create --profile-mode=prototype --max-open-tabs=12 --max-browser-contexts=3 --display-mode=SUPERVISED"
+            "  browser4-cli swarm create --profile-mode=prototype --max-open-tabs=12 --max-browser-contexts=3 --display-mode=SUPERVISED"
                 .to_string(),
         );
     }
 
-    if cmd.name == "co-submit" {
+    if cmd.name == "swarm-submit" {
         lines.push("Notes:".to_string());
         lines.push(
             "  - Accepts a direct URL, a `--seed-file`, or both, and submits each entry as a scrape job through the scrape submit API."
@@ -210,14 +210,14 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli co-submit https://example.com/direct".to_string());
+        lines.push("  browser4-cli swarm-submit https://example.com/direct".to_string());
         lines.push(
-            "  browser4-cli co submit https://example.com/direct --seed-file=./collective-seeds.txt --deadline=2026-03-30T00:00:00Z --expires=1d --refresh --parse --store-content"
+            "  browser4-cli swarm submit https://example.com/direct --seed-file=./swarm-seeds.txt --deadline=2026-03-30T00:00:00Z --expires=1d --refresh --parse --store-content"
                 .to_string(),
         );
     }
 
-    if cmd.name == "co-status" {
+    if cmd.name == "swarm-status" {
         lines.push("Notes:".to_string());
         lines.push(
             "  - Reads the scrape job status from `ScrapeController.getStatus(id)` and prints the returned JSON payload."
@@ -225,11 +225,11 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli co-status co-task-4".to_string());
-        lines.push("  browser4-cli co status co-task-4".to_string());
+        lines.push("  browser4-cli swarm-status scrape-task-4".to_string());
+        lines.push("  browser4-cli swarm status scrape-task-4".to_string());
     }
 
-    if cmd.name == "co-result" {
+    if cmd.name == "swarm-result" {
         lines.push("Notes:".to_string());
         lines.push(
             "  - Reads the scrape job result from `ScrapeController.getResult(id)` and prints the returned payload."
@@ -237,8 +237,8 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli co-result co-task-4".to_string());
-        lines.push("  browser4-cli co result co-task-4".to_string());
+        lines.push("  browser4-cli swarm-result scrape-task-4".to_string());
+        lines.push("  browser4-cli swarm result scrape-task-4".to_string());
     }
 
     lines.join("\n")
@@ -289,7 +289,7 @@ mod tests {
         assert!(!help.contains("  console"));
         assert!(!help.contains("  extract"));
         assert!(!help.contains("  agent-run"));
-        assert!(!help.contains("  co-create"));
+        assert!(!help.contains("  swarm-create"));
     }
 
     #[test]
@@ -382,53 +382,53 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_command_help_co_create() {
+    fn test_generate_command_help_swarm_create() {
         let cmds = all_commands();
-        let cmd = cmds.iter().find(|c| c.name == "co-create").unwrap();
+        let cmd = cmds.iter().find(|c| c.name == "swarm-create").unwrap();
         let help = generate_command_help(cmd);
-        assert!(help.contains("browser4-cli co-create"));
-        assert!(help.contains("collective scrape session"));
+        assert!(help.contains("browser4-cli swarm-create"));
+        assert!(help.contains("swarm scrape session"));
         assert!(help.contains("--profile-mode"));
         assert!(help.contains("--max-open-tabs"));
         assert!(help.contains("--max-browser-contexts"));
         assert!(help.contains("--display-mode"));
         assert!(help.contains("Display mode: GUI, HEADLESS, SUPERVISED"));
-        assert!(help.contains("browser4-cli co create"));
+        assert!(help.contains("browser4-cli swarm create"));
     }
 
     #[test]
-    fn test_generate_command_help_co_submit() {
+    fn test_generate_command_help_swarm_submit() {
         let cmds = all_commands();
-        let cmd = cmds.iter().find(|c| c.name == "co-submit").unwrap();
+        let cmd = cmds.iter().find(|c| c.name == "swarm-submit").unwrap();
         let help = generate_command_help(cmd);
-        assert!(help.contains("browser4-cli co-submit"));
+        assert!(help.contains("browser4-cli swarm-submit"));
         assert!(help.contains("--seed-file"));
         assert!(help.contains("--deadline"));
         assert!(help.contains("--expires"));
         assert!(help.contains("blank lines and lines beginning with `#` are ignored"));
         assert!(help.contains("submits each entry as a scrape job"));
         assert!(help.contains("ScrapeController.submit(payload)"));
-        assert!(help.contains("browser4-cli co submit https://example.com/direct"));
+        assert!(help.contains("browser4-cli swarm submit https://example.com/direct"));
     }
 
 
     #[test]
-    fn test_generate_command_help_co_status_and_result() {
+    fn test_generate_command_help_swarm_status_and_result() {
         let cmds = all_commands();
 
-        let status = cmds.iter().find(|c| c.name == "co-status").unwrap();
+        let status = cmds.iter().find(|c| c.name == "swarm-status").unwrap();
         let status_help = generate_command_help(status);
-        assert!(status_help.contains("browser4-cli co-status <id>"));
+        assert!(status_help.contains("browser4-cli swarm-status <id>"));
         assert!(status_help.contains("scrape job status"));
         assert!(status_help.contains("ScrapeController.getStatus(id)"));
-        assert!(status_help.contains("browser4-cli co status co-task-4"));
+        assert!(status_help.contains("browser4-cli swarm status scrape-task-4"));
 
-        let result = cmds.iter().find(|c| c.name == "co-result").unwrap();
+        let result = cmds.iter().find(|c| c.name == "swarm-result").unwrap();
         let result_help = generate_command_help(result);
-        assert!(result_help.contains("browser4-cli co-result <id>"));
+        assert!(result_help.contains("browser4-cli swarm-result <id>"));
         assert!(result_help.contains("scrape job result"));
         assert!(result_help.contains("ScrapeController.getResult(id)"));
-        assert!(result_help.contains("browser4-cli co result co-task-4"));
+        assert!(result_help.contains("browser4-cli swarm result scrape-task-4"));
     }
 
     #[test]
