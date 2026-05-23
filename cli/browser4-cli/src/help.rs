@@ -229,11 +229,12 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - `--profile-mode` is required and only supports `SEQUENTIAL` or `TEMPORARY`."
+            "  - `--profile-mode` defaults to `SEQUENTIAL` and only supports `SEQUENTIAL` or `TEMPORARY`."
                 .to_string(),
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
+        lines.push("  browser4-cli swarm create".to_string());
         lines.push(
             "  browser4-cli swarm create --profile-mode=TEMPORARY --max-open-tabs=12 --max-browser-contexts=3 --display-mode=HEADLESS"
                 .to_string(),
@@ -454,7 +455,9 @@ mod tests {
         assert!(help.contains("--max-browser-contexts"));
         assert!(help.contains("--display-mode"));
         assert!(help.contains("fixed session ID `SWARM`"));
+        assert!(help.contains("defaults to `SEQUENTIAL`"));
         assert!(help.contains("only supports `SEQUENTIAL` or `TEMPORARY`"));
+        assert!(help.contains("browser4-cli swarm create\n"));
         assert!(help.contains("Display mode: GUI, HEADLESS, SUPERVISED"));
         assert!(!help.contains("browser4-cli swarm-create"));
     }

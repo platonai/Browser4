@@ -265,10 +265,7 @@ fn build_swarm_create_capabilities(tool_params: &Value) -> Result<Value, String>
         .and_then(|value| value.as_str())
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| {
-            "Swarm create requires --profile-mode=SEQUENTIAL or --profile-mode=TEMPORARY."
-                .to_string()
-        })?
+        .unwrap_or("SEQUENTIAL")
         .to_ascii_uppercase();
 
     match profile_mode.as_str() {
@@ -2747,13 +2744,20 @@ mod tests {
     }
 
     #[test]
-    fn build_swarm_create_capabilities_requires_supported_profile_mode() {
-        let error = build_swarm_create_capabilities(&json!({})).unwrap_err();
+    fn build_swarm_create_capabilities_defaults_profile_mode_to_sequential() {
+        let caps = build_swarm_create_capabilities(&json!({})).unwrap();
 
-        assert_eq!(
-            error,
-            "Swarm create requires --profile-mode=SEQUENTIAL or --profile-mode=TEMPORARY."
-        );
+        assert_eq!(caps["profileMode"], json!("SEQUENTIAL"));
+    }
+
+    #[test]
+    fn build_swarm_create_capabilities_treats_blank_profile_mode_as_default() {
+        let caps = build_swarm_create_capabilities(&json!({
+            "profileMode": "   ",
+        }))
+        .unwrap();
+
+        assert_eq!(caps["profileMode"], json!("SEQUENTIAL"));
     }
 
     #[test]

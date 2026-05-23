@@ -940,7 +940,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[
-                OptionDef { name: "profile-mode", description: "Browser profile mode (SEQUENTIAL or TEMPORARY only)", is_bool: false },
+                OptionDef { name: "profile-mode", description: "Browser profile mode (default: SEQUENTIAL; supported: SEQUENTIAL or TEMPORARY)", is_bool: false },
                 OptionDef { name: "max-open-tabs", description: "Maximum open tabs per browser context (default: 8)", is_bool: false },
                 OptionDef { name: "max-browser-contexts", description: "Number of isolated browser environments (default: 2)", is_bool: false },
                 OptionDef { name: "display-mode", description: "Display mode: GUI, HEADLESS, SUPERVISED", is_bool: false },
@@ -948,7 +948,11 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_name_fn: |_| "open_session".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
-                if let Some(v) = get_opt_str(args, "profile-mode") { p["profileMode"] = json!(v.trim().to_ascii_uppercase()); }
+                let profile_mode = get_opt_str(args, "profile-mode")
+                    .map(|value| value.trim().to_ascii_uppercase())
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| "SEQUENTIAL".to_string());
+                p["profileMode"] = json!(profile_mode);
                 if let Some(v) = get_opt_str(args, "max-open-tabs") { p["maxOpenTabs"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "max-browser-contexts") { p["maxBrowserContexts"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "display-mode") { p["displayMode"] = json!(v); }
@@ -1260,6 +1264,17 @@ mod tests {
         assert_eq!(params["maxOpenTabs"], "8");
         assert_eq!(params["maxBrowserContexts"], "2");
         assert_eq!(params["displayMode"], "GUI");
+    }
+
+    #[test]
+    fn test_swarm_create_params_default_profile_mode_to_sequential() {
+        let map = commands_map();
+        let cmd = map.get("swarm-create").unwrap();
+        let args = HashMap::new();
+
+        let params = (cmd.tool_params_fn)(&args);
+
+        assert_eq!(params["profileMode"], "SEQUENTIAL");
     }
 
     #[test]

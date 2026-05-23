@@ -1,27 +1,5 @@
 #!/usr/bin/env pwsh
 
-Set-StrictMode -Version Latest
-$ErrorActionPreference = 'Stop'
-
-function Enable-Utf8NativeOutput {
-    try {
-        $utf8 = [System.Text.Encoding]::UTF8
-        $global:OutputEncoding = $utf8
-        [Console]::OutputEncoding = $utf8
-        [Console]::InputEncoding = $utf8
-
-        if (($IsWindows -or $env:OS -eq 'Windows_NT') -and [Console]::OutputEncoding.CodePage -ne 65001) {
-            chcp.com 65001 > $null
-            [Console]::OutputEncoding = $utf8
-            [Console]::InputEncoding = $utf8
-        }
-    } catch {
-        # Best effort only; continue even if the host cannot switch encodings.
-    }
-}
-
-Enable-Utf8NativeOutput
-
 cargo run -- open
 cargo run -- swarm create
 $output = cargo run --quiet -- swarm submit "https://example.com" 2>&1
