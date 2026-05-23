@@ -1475,7 +1475,7 @@ async fn handle_swarm_submit(
 
         let result = submit_scrape_payload(client, base_url, &command).await?;
         let task_id = result.trim().trim_matches('"').to_string();
-        println!("Submitted: {} → task {}", u, task_id);
+        println!("Task Submitted: {} -> Task ID: {}", u, task_id);
     }
 
     if urls.len() > 1 {

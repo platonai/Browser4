@@ -357,7 +357,7 @@ class MCPToolController(
         } ?: throw IllegalArgumentException("command_batch requires a 'steps' array.")
 
         val bail = args["bail"].toBooleanValue() ?: false
-        var currentSessionId = args["sessionId"]?.toString()?.takeIf { it.isNotBlank() }
+        val currentSessionId = args["sessionId"]?.toString()?.takeIf { it.isNotBlank() }
         val results = mutableListOf<BatchExecutionResult>()
         var stoppedOnError = false
 
@@ -823,22 +823,6 @@ class MCPToolController(
         else -> null
     }
 
-    private fun snakeToCamel(key: String): String {
-        if (!key.contains("_")) {
-            return key
-        }
-
-        val parts = key.split("_").filter { it.isNotEmpty() }
-        if (parts.isEmpty()) {
-            return key
-        }
-
-        return buildString {
-            append(parts.first())
-            parts.drop(1).forEach { append(it.replaceFirstChar { c -> c.uppercase() }) }
-        }
-    }
-
     // =========================================================================
     // Helpers
     // =========================================================================
@@ -851,11 +835,6 @@ class MCPToolController(
     private fun requireSessionId(arguments: Map<String, Any?>): String {
         return arguments[MCPConstants.KEY_SESSION_ID]?.toString()
             ?: throw IllegalArgumentException("Missing required parameter: ${MCPConstants.KEY_SESSION_ID}")
-    }
-
-    private fun requireArg(args: Map<String, Any?>, key: String): String {
-        return args[key]?.toString()
-            ?: throw IllegalArgumentException("Missing required parameter: $key")
     }
 
     private fun textResponse(text: String): MCPToolCallResponse =
