@@ -58,7 +58,6 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 const TEST_TEMPORARY_PROFILE_ENV: &str = "BROWSER4_CLI_TEST_TEMPORARY_PROFILE";
 const AGENT_RUN_FAILURE_POLL_ATTEMPTS: usize = 5;
 const AGENT_RUN_FAILURE_POLL_INTERVAL_MS: u64 = 250;
-const NO_ACTIVE_SESSION_MESSAGE: &str = r#"No active session. Run "browser4-cli open" first."#;
 const SWARM_SESSION_ID: &str = "SWARM";
 
 /// Commands that should NOT trigger a post-command snapshot.
@@ -94,21 +93,67 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
 fn require_session(session_name: Option<&str>) -> Result<CliState, String> {
     let state = read_state(None, session_name);
     if state.session_id.is_none() {
-        return Err(NO_ACTIVE_SESSION_MESSAGE.to_string());
+        return Err(no_active_session_message());
     }
     Ok(state)
 }
 
+fn format_session_guidance_message(
+    title: &str,
+    command_hint: Option<&str>,
+    details: &str,
+    suggestions: &[&str],
+) -> String {
+    let mut message = vec![format!("🔐 {title}")];
+
+    if let Some(command_hint) = command_hint {
+        message.push(format!("  Command: {command_hint}"));
+    }
+
+    if !suggestions.is_empty() {
+        message.push(String::new());
+        message.push("💡 What to try".to_string());
+        message.extend(suggestions.iter().map(|line| format!("  - {line}")));
+    }
+
+    message.push(String::new());
+    message.push("🧾 Details".to_string());
+    message.push(format!("  {details}"));
+    message.join("\n")
+}
+
+fn no_active_session_message() -> String {
+    format_session_guidance_message(
+        "Session required",
+        None,
+        "No active session is currently stored for this CLI context.",
+        &["run `browser4-cli open` first."],
+    )
+}
+
 fn goto_requires_active_session_message() -> String {
-    r#"No active session for "goto". Run "browser4-cli open" to create or refresh the session first."#
-        .to_string()
+    format_session_guidance_message(
+        "Active session required",
+        Some("goto"),
+        "`goto` needs an active reusable session, but none is available right now.",
+        &["run `browser4-cli open` to create or refresh the session first."],
+    )
+}
+
+fn saved_session_expired_message() -> String {
+    format_session_guidance_message(
+        "Session refresh needed",
+        None,
+        "The saved session expired or is no longer usable.",
+        &["run `browser4-cli open` to create a fresh session, then retry."],
+    )
 }
 
 fn get_session_id(state: &CliState) -> Result<&str, String> {
     state
         .session_id
         .as_deref()
-        .ok_or_else(|| NO_ACTIVE_SESSION_MESSAGE.to_string())
+        .ok_or_else(no_active_session_message)
 }
 
 fn get_session_id_for_close(state: &CliState) -> Option<&str> {
@@ -405,7 +450,7 @@ where
             }
             invalidate_session(&state, base_url, session_name);
             if !recover_stale {
-                return Err(r#"Saved session expired. Run "browser4-cli open" first."#.to_string());
+                return Err(saved_session_expired_message());
             }
             let new_session_id =
                 create_session(client, base_url, &state, session_name, None).await?;
@@ -505,7 +550,12 @@ async fn handle_open(
             }
             Err(err) => {
                 if !should_retry_open_after_navigation_error(&err, reused_existing_session) {
-                    return Err(err);
+                    return Err(format_navigation_failure_message(
+                        url,
+                        &session_id,
+                        &err,
+                        false,
+                    ));
                 }
                 // The browser context was not ready yet (CDP initialization race).
                 // Or the reused saved session no longer has a usable browser tab.
@@ -524,7 +574,16 @@ async fn handle_open(
                         .await?;
                 println!("Session opened: {}", retry_id);
                 params["sessionId"] = json!(retry_id);
-                let retry_result = call_tool(client, base_url, tool_name, params).await?;
+                let retry_result = call_tool(client, base_url, tool_name, params)
+                    .await
+                    .map_err(|err| {
+                        format_navigation_failure_message(
+                            url,
+                            &retry_id,
+                            &err,
+                            should_retry_open_after_navigation_error(&err, true),
+                        )
+                    })?;
                 if !retry_result.is_empty() {
                     println!("{}", retry_result);
                 }
@@ -545,6 +604,10 @@ async fn handle_goto(
     session_name: Option<&str>,
 ) -> Result<(), String> {
     let session_id = require_active_session_for_goto(client, base_url, session_name).await?;
+    let target_url = tool_params
+        .get("url")
+        .and_then(|value| value.as_str())
+        .unwrap_or("<unknown>");
     let mut params = tool_params.clone();
     params["sessionId"] = json!(session_id.clone());
     let navigate_result = call_tool(client, base_url, tool_name, params.clone()).await;
@@ -556,18 +619,62 @@ async fn handle_goto(
             post_command_snapshot(client, base_url, &session_id).await;
         }
         Err(err) => {
-            if should_retry_open_after_navigation_error(&err, true) {
-                println!(
-                    "Failed to navigate, try to call `open` to refresh the session. Error: {}",
-                    err
+            let should_suggest_refresh = should_retry_open_after_navigation_error(&err, true);
+            println!(
+                "{}",
+                format_navigation_failure_message(
+                    target_url,
+                    &session_id,
+                    &err,
+                    should_suggest_refresh,
                 )
-            } else {
-                println!("Failed to navigate, {}", err)
-            }
+            );
         }
     }
 
     Ok(())
+}
+
+fn is_timeout_error_message(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("timed out") || lower.contains("deadline has elapsed")
+}
+
+fn format_navigation_failure_message(
+    target_url: &str,
+    session_id: &str,
+    error: &str,
+    suggest_refresh: bool,
+) -> String {
+    let mut message = vec![
+        "❌ Navigation failed".to_string(),
+        format!("  URL: {target_url}"),
+        format!("  Session: {session_id}"),
+    ];
+
+    let mut suggestions = Vec::new();
+
+    if suggest_refresh {
+        suggestions.push("run `browser4-cli open` to refresh the session, then retry.".to_string());
+    }
+
+    if is_timeout_error_message(error) {
+        suggestions.push(
+            "if the page eventually opens, increase `BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS` and retry."
+                .to_string(),
+        );
+    }
+
+    if !suggestions.is_empty() {
+        message.push(String::new());
+        message.push("💡 What to try".to_string());
+        message.extend(suggestions.into_iter().map(|line| format!("  - {line}")));
+    }
+
+    message.push(String::new());
+    message.push("🧾 Details".to_string());
+    message.push(format!("  {error}"));
+    message.join("\n")
 }
 
 async fn handle_close(
@@ -580,7 +687,7 @@ async fn handle_close(
     let state = read_state(None, session_name);
     let Some(session_id) = get_session_id_for_close(&state).map(str::to_string) else {
         clear_state(None, session_name);
-        eprintln!("{}", NO_ACTIVE_SESSION_MESSAGE);
+        eprintln!("{}", no_active_session_message());
         return Ok(());
     };
     // Ignore errors — session might already be closed
@@ -2295,8 +2402,16 @@ async fn main() {
     let (command, effective_global, from_spaced_prefix) = normalize_command_invocation(&global);
 
     if let Err(e) = run(&command, &effective_global, from_spaced_prefix).await {
-        eprintln!("Error: {}", e);
+        eprintln!("{}", format_cli_error_output(&e));
         std::process::exit(1);
+    }
+}
+
+fn format_cli_error_output(error: &str) -> String {
+    if error.contains('\n') {
+        error.to_string()
+    } else {
+        format!("Error: {error}")
     }
 }
 
@@ -2851,6 +2966,97 @@ mod tests {
         let error = "HTTP request failed: error sending request for url (http://localhost:8182/mcp/call-tool)";
         assert!(!should_retry_open_after_navigation_error(error, false));
         assert!(should_retry_open_after_navigation_error(error, true));
+    }
+
+    #[test]
+    fn format_navigation_failure_message_includes_refresh_guidance_for_retryable_errors() {
+        let message = format_navigation_failure_message(
+            "https://www.amazon.com/",
+            "default",
+            "HTTP request failed [tool=browser_navigate]: error sending request for url",
+            true,
+        );
+
+        assert!(message.contains("❌ Navigation failed"));
+        assert!(message.contains("  URL: https://www.amazon.com/"));
+        assert!(message.contains("  Session: default"));
+        assert!(message.contains("💡 What to try"));
+        assert!(message.contains("run `browser4-cli open` to refresh the session"));
+        assert!(message.contains("🧾 Details"));
+        assert!(message.contains("HTTP request failed [tool=browser_navigate]"));
+    }
+
+    #[test]
+    fn format_navigation_failure_message_adds_timeout_tip_for_timeout_errors() {
+        let message = format_navigation_failure_message(
+            "https://www.amazon.com/",
+            "default",
+            "HTTP request timed out [tool=browser_navigate, timeout=120s]: deadline has elapsed",
+            true,
+        );
+
+        assert!(message.contains("💡 What to try"));
+        assert!(message.contains("BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS"));
+    }
+
+    #[test]
+    fn format_navigation_failure_message_omits_retry_guidance_for_non_retryable_errors() {
+        let message = format_navigation_failure_message(
+            "https://example.com/",
+            "default",
+            "browser_navigate failed: invalid URL",
+            false,
+        );
+
+        assert!(message.contains("❌ Navigation failed"));
+        assert!(!message.contains("💡 What to try"));
+        assert!(message.contains("🧾 Details"));
+        assert!(!message.contains("run `browser4-cli open` to refresh the session"));
+        assert!(!message.contains("BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS"));
+    }
+
+    #[test]
+    fn no_active_session_message_uses_structured_cli_format() {
+        let message = no_active_session_message();
+
+        assert!(message.contains("🔐 Session required"));
+        assert!(message.contains("💡 What to try"));
+        assert!(message.contains("run `browser4-cli open` first."));
+        assert!(message.contains("🧾 Details"));
+        assert!(message.contains("No active session is currently stored"));
+    }
+
+    #[test]
+    fn goto_requires_active_session_message_mentions_command_name() {
+        let message = goto_requires_active_session_message();
+
+        assert!(message.contains("🔐 Active session required"));
+        assert!(message.contains("Command: goto"));
+        assert!(message.contains("run `browser4-cli open` to create or refresh the session first."));
+    }
+
+    #[test]
+    fn saved_session_expired_message_uses_refresh_guidance() {
+        let message = saved_session_expired_message();
+
+        assert!(message.contains("🔐 Session refresh needed"));
+        assert!(message.contains("saved session expired or is no longer usable"));
+        assert!(message.contains("run `browser4-cli open` to create a fresh session, then retry."));
+    }
+
+    #[test]
+    fn format_cli_error_output_keeps_structured_multiline_messages_readable() {
+        let error = "❌ Navigation failed\n\n🧾 Details\n  HTTP request timed out";
+
+        assert_eq!(format_cli_error_output(error), error);
+    }
+
+    #[test]
+    fn format_cli_error_output_preserves_prefix_for_simple_errors() {
+        assert_eq!(
+            format_cli_error_output("Unknown command"),
+            "Error: Unknown command"
+        );
     }
 
     #[test]

@@ -31,8 +31,13 @@ pub(super) fn test_session_lifecycle(ctx: &mut E2ECtx) {
         close_without_session_result.stdout, close_without_session_result.stderr
     );
     assert!(
-        combined_output.contains("No active session. Run \"browser4-cli open\" first."),
+        combined_output.contains("🔐 Session required"),
         "Expected missing-session close message in output:\n{}",
+        combined_output
+    );
+    assert!(
+        combined_output.contains("run `browser4-cli open` first."),
+        "Expected missing-session guidance in output:\n{}",
         combined_output
     );
     assert!(

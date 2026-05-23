@@ -6,12 +6,55 @@ use serde_json::{json, Value};
 use crate::state::resolve_ref;
 
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
+const NAVIGATION_REQUEST_TIMEOUT_SECS: u64 = 120;
 const BATCH_REQUEST_TIMEOUT_SECS: u64 = 120;
+const DEFAULT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_HTTP_TIMEOUT_SECS";
+const NAVIGATION_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS";
+
+fn timeout_secs_from_env(env_key: &str, default_secs: u64) -> u64 {
+    std::env::var(env_key)
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|secs| *secs > 0)
+        .unwrap_or(default_secs)
+}
+
+fn default_request_timeout() -> std::time::Duration {
+    std::time::Duration::from_secs(timeout_secs_from_env(
+        DEFAULT_REQUEST_TIMEOUT_ENV,
+        DEFAULT_REQUEST_TIMEOUT_SECS,
+    ))
+}
+
+fn navigation_request_timeout() -> std::time::Duration {
+    std::time::Duration::from_secs(timeout_secs_from_env(
+        NAVIGATION_REQUEST_TIMEOUT_ENV,
+        NAVIGATION_REQUEST_TIMEOUT_SECS,
+    ))
+}
+
+fn is_navigation_tool(tool: &str) -> bool {
+    matches!(
+        tool,
+        "browser_navigate"
+            | "browser_reload"
+            | "browser_navigate_back"
+            | "browser_navigate_forward"
+    )
+}
+
+fn timeout_for_tool(tool: &str) -> std::time::Duration {
+    if is_navigation_tool(tool) {
+        navigation_request_timeout()
+    } else {
+        default_request_timeout()
+    }
+}
 
 /// Build a `reqwest::Client` configured for Browser4 MCP calls.
 pub fn make_client() -> Client {
     Client::builder()
-        .timeout(std::time::Duration::from_secs(DEFAULT_REQUEST_TIMEOUT_SECS))
+        .timeout(default_request_timeout())
         .build()
         .expect("HTTP client construction should not fail")
 }
@@ -91,6 +134,39 @@ fn format_http_error(status: reqwest::StatusCode, response_text: &str) -> String
     }
 }
 
+fn summarize_mcp_request(tool: &str, endpoint: &str, args: &Value, timeout: Option<std::time::Duration>) -> String {
+    let mut parts = vec![format!("tool={tool}"), format!("endpoint={endpoint}")];
+
+    if let Some(timeout) = timeout {
+        parts.push(format!("timeout={}s", timeout.as_secs()));
+    }
+
+    if let Some(session_id) = args.get("sessionId").and_then(|value| value.as_str()) {
+        parts.push(format!("sessionId={session_id}"));
+    }
+
+    if let Some(url) = args.get("url").and_then(|value| value.as_str()) {
+        parts.push(format!("url={url}"));
+    }
+
+    format!("[{}]", parts.join(", "))
+}
+
+fn format_mcp_transport_error(
+    tool: &str,
+    endpoint: &str,
+    args: &Value,
+    timeout: Option<std::time::Duration>,
+    error: &reqwest::Error,
+) -> String {
+    let context = summarize_mcp_request(tool, endpoint, args, timeout);
+    if error.is_timeout() {
+        format!("HTTP request timed out {context}: {error}")
+    } else {
+        format!("HTTP request failed {context}: {error}")
+    }
+}
+
 async fn send_rest_request(request: reqwest::RequestBuilder) -> Result<String, String> {
     let response = request
         .send()
@@ -120,7 +196,7 @@ pub async fn call_tool(
     tool: &str,
     args: Value,
 ) -> Result<String, String> {
-    call_tool_with_timeout(client, base_url, tool, args, None).await
+    call_tool_with_timeout(client, base_url, tool, args, Some(timeout_for_tool(tool))).await
 }
 
 async fn call_tool_with_timeout(
@@ -148,7 +224,7 @@ async fn call_tool_with_timeout(
     let response = request
         .send()
         .await
-        .map_err(|e| format!("HTTP request failed: {e}"))?;
+        .map_err(|e| format_mcp_transport_error(tool, &url, &args, timeout, &e))?;
 
     let status = response.status();
     let response_text = response
@@ -328,6 +404,80 @@ pub async fn submit_batch_commands(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::Mutex;
+    use std::thread;
+
+    static TIMEOUT_ENV_MUTEX: Mutex<()> = Mutex::new(());
+
+    struct TimeoutEnvGuard {
+        default_timeout: Option<String>,
+        navigation_timeout: Option<String>,
+    }
+
+    impl TimeoutEnvGuard {
+        fn set(default_timeout_secs: &str, navigation_timeout_secs: &str) -> Self {
+            let guard = Self {
+                default_timeout: std::env::var(DEFAULT_REQUEST_TIMEOUT_ENV).ok(),
+                navigation_timeout: std::env::var(NAVIGATION_REQUEST_TIMEOUT_ENV).ok(),
+            };
+            std::env::set_var(DEFAULT_REQUEST_TIMEOUT_ENV, default_timeout_secs);
+            std::env::set_var(NAVIGATION_REQUEST_TIMEOUT_ENV, navigation_timeout_secs);
+            guard
+        }
+    }
+
+    impl Drop for TimeoutEnvGuard {
+        fn drop(&mut self) {
+            if let Some(value) = &self.default_timeout {
+                std::env::set_var(DEFAULT_REQUEST_TIMEOUT_ENV, value);
+            } else {
+                std::env::remove_var(DEFAULT_REQUEST_TIMEOUT_ENV);
+            }
+
+            if let Some(value) = &self.navigation_timeout {
+                std::env::set_var(NAVIGATION_REQUEST_TIMEOUT_ENV, value);
+            } else {
+                std::env::remove_var(NAVIGATION_REQUEST_TIMEOUT_ENV);
+            }
+        }
+    }
+
+    fn spawn_delayed_mcp_server(delay: std::time::Duration) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind delayed MCP test server");
+        let addr = listener.local_addr().expect("read delayed MCP test server addr");
+
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept delayed MCP test connection");
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                .ok();
+
+            let mut buffer = [0_u8; 8192];
+            let _ = stream.read(&mut buffer);
+
+            thread::sleep(delay);
+
+            let body = r#"{"content":[{"type":"text","text":"ok"}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        });
+
+        format!("http://{}", addr)
+    }
+
+    fn is_timeout_error(error: &str) -> bool {
+        let lower = error.to_ascii_lowercase();
+        lower.contains("timed out")
+            || lower.contains("deadline has elapsed")
+            || lower.contains("error sending request for url")
+    }
 
     #[test]
     fn test_normalize_refs_e_notation() {
@@ -420,6 +570,116 @@ mod tests {
         assert_eq!(
             format_http_error(reqwest::StatusCode::BAD_REQUEST, "bad request"),
             "HTTP request failed with status 400 Bad Request: bad request"
+        );
+    }
+
+    #[test]
+    fn test_summarize_mcp_request_includes_timeout_and_common_navigation_fields() {
+        let summary = summarize_mcp_request(
+            "browser_navigate",
+            "http://localhost:8182/mcp/call-tool",
+            &json!({
+                "sessionId": "default",
+                "url": "https://www.amazon.com/"
+            }),
+            Some(std::time::Duration::from_secs(120)),
+        );
+
+        assert_eq!(
+            summary,
+            "[tool=browser_navigate, endpoint=http://localhost:8182/mcp/call-tool, timeout=120s, sessionId=default, url=https://www.amazon.com/]"
+        );
+    }
+
+    #[test]
+    fn test_timeout_for_tool_uses_navigation_budget_for_navigation_commands() {
+        let _env_lock = TIMEOUT_ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _env_guard = TimeoutEnvGuard::set("3", "7");
+
+        assert_eq!(timeout_for_tool("browser_navigate").as_secs(), 7);
+        assert_eq!(timeout_for_tool("browser_reload").as_secs(), 7);
+        assert_eq!(timeout_for_tool("browser_navigate_back").as_secs(), 7);
+        assert_eq!(timeout_for_tool("browser_navigate_forward").as_secs(), 7);
+        assert_eq!(timeout_for_tool("page_title").as_secs(), 3);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_call_tool_applies_navigation_timeout_override() {
+        let _env_lock = TIMEOUT_ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _env_guard = TimeoutEnvGuard::set("1", "2");
+
+        let client = make_client();
+        let base_url = spawn_delayed_mcp_server(std::time::Duration::from_millis(1_500));
+
+        let result = call_tool(
+            &client,
+            &base_url,
+            "browser_navigate",
+            json!({ "url": "https://example.com/slow" }),
+        )
+        .await;
+
+        assert_eq!(result.as_deref(), Ok("ok"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_call_tool_keeps_default_timeout_for_non_navigation_commands() {
+        let _env_lock = TIMEOUT_ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _env_guard = TimeoutEnvGuard::set("1", "2");
+
+        let client = make_client();
+        let base_url = spawn_delayed_mcp_server(std::time::Duration::from_millis(1_500));
+
+        let result = call_tool(&client, &base_url, "page_title", json!({})).await;
+
+        let error = result.expect_err("non-navigation tool should still time out");
+        assert!(
+            is_timeout_error(&error),
+            "Expected timeout-related error, got: {error}"
+        );
+        assert!(error.contains("tool=page_title"), "Expected tool diagnostics, got: {error}");
+        assert!(error.contains("timeout=1s"), "Expected timeout diagnostics, got: {error}");
+        assert!(error.contains("endpoint=http://"), "Expected endpoint diagnostics, got: {error}");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_call_tool_timeout_diagnostics_include_navigation_context() {
+        let _env_lock = TIMEOUT_ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _env_guard = TimeoutEnvGuard::set("1", "1");
+
+        let client = make_client();
+        let base_url = spawn_delayed_mcp_server(std::time::Duration::from_millis(1_500));
+
+        let result = call_tool(
+            &client,
+            &base_url,
+            "browser_navigate",
+            json!({
+                "sessionId": "default",
+                "url": "https://www.amazon.com/"
+            }),
+        )
+        .await;
+
+        let error = result.expect_err("navigation request should time out with the forced 1s budget");
+        assert!(
+            is_timeout_error(&error),
+            "Expected timeout-related error, got: {error}"
+        );
+        assert!(error.contains("tool=browser_navigate"), "Expected tool diagnostics, got: {error}");
+        assert!(error.contains("timeout=1s"), "Expected timeout diagnostics, got: {error}");
+        assert!(error.contains("sessionId=default"), "Expected session diagnostics, got: {error}");
+        assert!(
+            error.contains("url=https://www.amazon.com/"),
+            "Expected URL diagnostics, got: {error}"
         );
     }
 }

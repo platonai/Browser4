@@ -677,7 +677,13 @@ async fn start_server(
         .stderr(startup_log.stderr);
 
     let mut child = command.spawn().map_err(|e| {
-        let error = format!("Failed to start server: {e}");
+        let error = format_server_startup_failure_message(
+            base_url,
+            Some("Browser4 could not be launched."),
+            &format!("Failed to start server: {e}"),
+            None,
+            Some(startup_log.path.as_path()),
+        );
         append_startup_log_message(&startup_log.path, &error);
         error
     })?;
@@ -1095,11 +1101,12 @@ async fn wait_for_server_ready(
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
 
-    Err(format!(
-        "Server failed to become MCP-ready within {}s: {}{}",
-        timeout.as_secs(),
-        last_error,
-        format_startup_log_timeout_details(startup_log_path)
+    Err(format_server_startup_failure_message(
+        base_url,
+        Some("Browser4 did not become MCP-ready before the startup timeout elapsed."),
+        &format!("Last readiness probe result: {last_error}"),
+        Some(timeout),
+        startup_log_path,
     ))
 }
 
@@ -1134,13 +1141,55 @@ fn truncate_status_for_log(message: &str) -> String {
     truncated
 }
 
+fn format_server_startup_failure_message(
+    base_url: &str,
+    summary: Option<&str>,
+    details: &str,
+    timeout: Option<Duration>,
+    startup_log_path: Option<&Path>,
+) -> String {
+    let mut message = vec!["🛑 Browser4 server startup failed".to_string()];
+    message.push(format!("  Server: {base_url}"));
+
+    if let Some(timeout) = timeout {
+        message.push(format!("  Timeout: {}s", timeout.as_secs()));
+    }
+
+    if let Some(summary) = summary {
+        message.push(format!("  Summary: {summary}"));
+    }
+
+    let mut suggestions = vec!["inspect the Browser4 startup log for the underlying server error."];
+    if timeout.is_some() {
+        suggestions.push("retry the command after Browser4 finishes starting.");
+    } else {
+        suggestions.push("confirm Java/Browser4 dependencies are available, then retry.");
+    }
+
+    message.push(String::new());
+    message.push("💡 What to try".to_string());
+    message.extend(suggestions.into_iter().map(|line| format!("  - {line}")));
+
+    message.push(String::new());
+    message.push("🧾 Details".to_string());
+    message.push(format!("  {details}"));
+
+    let startup_log_details = format_startup_log_timeout_details(startup_log_path);
+    if !startup_log_details.is_empty() {
+        message.push(String::new());
+        message.push(startup_log_details);
+    }
+
+    message.join("\n")
+}
+
 fn format_startup_log_timeout_details(startup_log_path: Option<&Path>) -> String {
     let Some(startup_log_path) = startup_log_path else {
         return String::new();
     };
 
     format!(
-        "\nBrowser4 startup log: {}\nStartup log tail:\n{}",
+        "📄 Browser4 startup log\n  Path: {}\n  Tail:\n{}",
         startup_log_path.display(),
         read_startup_log_tail(startup_log_path)
     )
@@ -1505,9 +1554,35 @@ mod tests {
 
         let details = format_startup_log_timeout_details(Some(&log_path));
 
-        assert!(details.contains(&format!("Browser4 startup log: {}", log_path.display())));
-        assert!(details.contains("Startup log tail:"));
+        assert!(details.contains("📄 Browser4 startup log"));
+        assert!(details.contains(&format!("Path: {}", log_path.display())));
+        assert!(details.contains("Tail:"));
         assert!(details.contains("line10"));
+    }
+
+    #[test]
+    fn test_format_server_startup_failure_message_includes_sections() {
+        let tmp = test_temp_dir();
+        let log_path = tmp.path().join("startup.log");
+        write(&log_path, "tail line 1\ntail line 2\n").unwrap();
+
+        let message = format_server_startup_failure_message(
+            "http://127.0.0.1:8182",
+            Some("Browser4 did not become MCP-ready before the startup timeout elapsed."),
+            "Last readiness probe result: connection refused",
+            Some(Duration::from_secs(60)),
+            Some(&log_path),
+        );
+
+        assert!(message.contains("🛑 Browser4 server startup failed"));
+        assert!(message.contains("Server: http://127.0.0.1:8182"));
+        assert!(message.contains("Timeout: 60s"));
+        assert!(message.contains("💡 What to try"));
+        assert!(message.contains("inspect the Browser4 startup log"));
+        assert!(message.contains("🧾 Details"));
+        assert!(message.contains("Last readiness probe result: connection refused"));
+        assert!(message.contains("📄 Browser4 startup log"));
+        assert!(message.contains("tail line 2"));
     }
 
     #[test]

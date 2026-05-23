@@ -342,6 +342,53 @@ pub(super) fn test_open_reopens_saved_session_after_human_closed_tab(ctx: &mut E
     assert_eq!(read_persisted_session_id(&ctx.state_dir), "swarm-session-2");
 }
 
+pub(super) fn test_open_navigation_failure_uses_structured_message(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let workflow_url = "https://example.com/invalid-open-target";
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    mock_server.queue_tool_failure(
+        "browser_navigate",
+        Some("swarm-session-1"),
+        Some(workflow_url),
+        "browser_navigate failed: invalid URL",
+    );
+
+    let open_result = run_command_allowing_failure(ctx, &["open", OPEN_PROFILE_MODE_ARG, workflow_url]);
+    let combined_output = format!("{}\n{}", open_result.stdout, open_result.stderr);
+
+    assert_ne!(
+        open_result.exit_code, 0,
+        "Expected open to fail for invalid navigation target:\n{combined_output}"
+    );
+    assert!(
+        combined_output.contains("❌ Navigation failed"),
+        "Expected structured failure heading in:\n{combined_output}"
+    );
+    assert!(
+        combined_output.contains("URL: https://example.com/invalid-open-target"),
+        "Expected failed target URL in:\n{combined_output}"
+    );
+    assert!(
+        combined_output.contains("Session: swarm-session-1"),
+        "Expected session id in:\n{combined_output}"
+    );
+    assert!(
+        combined_output.contains("🧾 Details"),
+        "Expected details section in:\n{combined_output}"
+    );
+    assert!(
+        combined_output.contains("browser_navigate failed: invalid URL"),
+        "Expected backend error details in:\n{combined_output}"
+    );
+    assert!(
+        !combined_output.contains("Error: ❌ Navigation failed"),
+        "Expected structured errors to be printed without an extra Error: prefix:\n{combined_output}"
+    );
+}
+
 pub(super) fn test_goto_requires_existing_active_session(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 
@@ -351,7 +398,7 @@ pub(super) fn test_goto_requires_existing_active_session(ctx: &mut E2ECtx) {
     run_command_expecting_failure(
         ctx,
         &["goto", "https://example.com/missing-session"],
-        "No active session for \"goto\".",
+        "🔐 Active session required",
     );
 
     let open_result = run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
@@ -368,7 +415,7 @@ pub(super) fn test_goto_requires_existing_active_session(ctx: &mut E2ECtx) {
     run_command_expecting_failure(
         ctx,
         &["goto", "https://example.com/inactive-session"],
-        "Run \"browser4-cli open\" to create or refresh the session first.",
+        "run `browser4-cli open` to create or refresh the session first.",
     );
 
     let tool_calls = mock_server.snapshot().tool_calls;

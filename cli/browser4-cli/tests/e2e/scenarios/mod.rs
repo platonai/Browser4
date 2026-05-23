@@ -220,6 +220,14 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_fn: mock_server::test_open_reopens_saved_session_after_human_closed_tab,
     },
     ScenarioDef {
+        name: "test_e2e_open_navigation_failure_uses_structured_message",
+        short_name: "test_open_navigation_failure_uses_structured_message",
+        requires_browser4: false,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: mock_server::test_open_navigation_failure_uses_structured_message,
+    },
+    ScenarioDef {
         name: "test_e2e_goto_requires_existing_active_session",
         short_name: "test_goto_requires_existing_active_session",
         requires_browser4: false,
