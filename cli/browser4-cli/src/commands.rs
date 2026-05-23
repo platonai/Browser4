@@ -81,8 +81,6 @@ pub struct CommandDef {
     pub tool_params_fn: fn(&HashMap<String, Value>) -> Value,
 }
 
-
-
 // ---------------------------------------------------------------------------
 // Helper macros and builders
 // ---------------------------------------------------------------------------
@@ -134,7 +132,10 @@ fn looks_like_selector_or_ref(value: &str) -> bool {
 fn resolve_key_and_ref(map: &HashMap<String, Value>) -> (String, Option<String>) {
     let positionals = raw_positionals(map);
     match positionals.as_slice() {
-        [single] => (single.clone(), get_opt_str(map, "ref").map(ToOwned::to_owned)),
+        [single] => (
+            single.clone(),
+            get_opt_str(map, "ref").map(ToOwned::to_owned),
+        ),
         [first, second, ..] => {
             if looks_like_selector_or_ref(first) && !looks_like_selector_or_ref(second) {
                 (second.clone(), Some(first.clone()))
@@ -152,7 +153,10 @@ fn resolve_key_and_ref(map: &HashMap<String, Value>) -> (String, Option<String>)
 fn resolve_text_and_ref(map: &HashMap<String, Value>) -> (String, Option<String>) {
     let positionals = raw_positionals(map);
     match positionals.as_slice() {
-        [single] => (single.clone(), get_opt_str(map, "ref").map(ToOwned::to_owned)),
+        [single] => (
+            single.clone(),
+            get_opt_str(map, "ref").map(ToOwned::to_owned),
+        ),
         [first, second, ..] => {
             if looks_like_selector_or_ref(first) && !looks_like_selector_or_ref(second) {
                 (second.clone(), Some(first.clone()))

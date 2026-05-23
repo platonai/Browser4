@@ -480,9 +480,7 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                             .session_id
                             .as_deref()
                             .map(|expected| {
-                                arguments
-                                    .get("sessionId")
-                                    .and_then(|value| value.as_str())
+                                arguments.get("sessionId").and_then(|value| value.as_str())
                                     == Some(expected)
                             })
                             .unwrap_or(true)
@@ -490,7 +488,8 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                             .url
                             .as_deref()
                             .map(|expected| {
-                                arguments.get("url").and_then(|value| value.as_str()) == Some(expected)
+                                arguments.get("url").and_then(|value| value.as_str())
+                                    == Some(expected)
                             })
                             .unwrap_or(true)
                 });
@@ -2218,7 +2217,10 @@ fn goto_interactive_page(ctx: &mut E2ECtx) {
 }
 
 fn run_open_command(ctx: &mut E2ECtx) -> CliRunResult {
-    let result = run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, OPEN_INTERACT_LEVEL_ARG]);
+    let result = run_command(
+        ctx,
+        &["open", OPEN_PROFILE_MODE_ARG, OPEN_INTERACT_LEVEL_ARG],
+    );
     sleep(Duration::from_secs(2));
     return result;
 }
@@ -2274,10 +2276,7 @@ fn start_mock_swarm_session(ctx: &mut E2ECtx) -> MockBrowser4Server {
         "Expected swarm session creation output in:\n{}",
         swarm_create_result.stdout
     );
-    assert_eq!(
-        read_persisted_session_id(&ctx.state_dir),
-        "swarm-session-1"
-    );
+    assert_eq!(read_persisted_session_id(&ctx.state_dir), "swarm-session-1");
 
     mock_server
 }
@@ -3060,7 +3059,6 @@ impl PlannedScenarioRun {
             )
         }
     }
-
 }
 
 const COVERAGE_TEST_NAME: &str = "test_e2e_command_coverage";
@@ -3188,7 +3186,8 @@ fn main() {
 
     let run_coverage = !has_explicit_scenario_filter && !run_options.batch_only;
 
-    let selected_scenarios = apply_scenario_limit_filter(selected_scenarios, run_options.scenario_limit);
+    let selected_scenarios =
+        apply_scenario_limit_filter(selected_scenarios, run_options.scenario_limit);
 
     if let Some(limit) = run_options.scenario_limit {
         println!(
@@ -3223,7 +3222,10 @@ fn main() {
         for planned_run in &planned_runs {
             println!("{}: test", planned_run.display_name());
         }
-        println!("\n{} tests, 0 benchmarks", planned_runs.len() + usize::from(run_coverage));
+        println!(
+            "\n{} tests, 0 benchmarks",
+            planned_runs.len() + usize::from(run_coverage)
+        );
         return;
     }
 
@@ -3335,8 +3337,7 @@ fn main() {
             if failed_scenario_count == 0 {
                 println!(
                     "test result: ok. {} passed; 0 failed; 0 ignored; 0 measured; {} filtered out",
-                    total_tests,
-                    filtered_out
+                    total_tests, filtered_out
                 );
             } else if failed_scenario_count <= MAX_ALLOWED_FAILED_SCENARIOS {
                 println!(

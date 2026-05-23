@@ -85,9 +85,13 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         .join(" ");
 
     let mut lines: Vec<String> = vec![
-        format!("browser4-cli {} {}", public_command_name(cmd.name), args_text)
-            .trim()
-            .to_string(),
+        format!(
+            "browser4-cli {} {}",
+            public_command_name(cmd.name),
+            args_text
+        )
+        .trim()
+        .to_string(),
         String::new(),
         cmd.description.to_string(),
         String::new(),
@@ -149,14 +153,15 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli agent run \"Open example.com and summarize the hero section\"".to_string());
+        lines.push(
+            "  browser4-cli agent run \"Open example.com and summarize the hero section\""
+                .to_string(),
+        );
     }
 
     if cmd.name == "agent-status" {
         lines.push("Notes:".to_string());
-        lines.push(
-            "  - Accepts the task ID returned by `agent run`.".to_string(),
-        );
+        lines.push("  - Accepts the task ID returned by `agent run`.".to_string());
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli agent status agent-task-1".to_string());
@@ -164,9 +169,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
 
     if cmd.name == "agent-result" {
         lines.push("Notes:".to_string());
-        lines.push(
-            "  - Accepts the task ID returned by `agent run`.".to_string(),
-        );
+        lines.push("  - Accepts the task ID returned by `agent run`.".to_string());
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli agent result agent-task-1".to_string());
@@ -345,9 +348,8 @@ mod tests {
         let open = cmds.iter().find(|c| c.name == "open").unwrap();
         let help = generate_command_help(open);
         assert!(help.contains("browser4-cli open [url]"));
-        assert!(help.contains(
-            "Open a browser session or refresh the saved one if it is no longer active"
-        ));
+        assert!(help
+            .contains("Open a browser session or refresh the saved one if it is no longer active"));
         assert!(help.contains("backend still reports it as active"));
         assert!(help.contains("creating a new session"));
     }
@@ -466,7 +468,6 @@ mod tests {
         assert!(help.contains("browser4-cli swarm submit https://example.com/direct"));
         assert!(!help.contains("browser4-cli swarm-submit"));
     }
-
 
     #[test]
     fn test_generate_command_help_swarm_status_and_result() {

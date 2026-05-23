@@ -112,7 +112,9 @@ pub(super) fn test_open_reuses_existing_active_session(ctx: &mut E2ECtx) {
 
     let first_open = run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
     assert!(
-        first_open.stdout.contains("Session opened: swarm-session-1"),
+        first_open
+            .stdout
+            .contains("Session opened: swarm-session-1"),
         "Expected first open to create the initial session:\n{}",
         first_open.stdout
     );
@@ -126,7 +128,9 @@ pub(super) fn test_open_reuses_existing_active_session(ctx: &mut E2ECtx) {
         second_open.stdout
     );
     assert!(
-        !second_open.stdout.contains("Session opened: swarm-session-2"),
+        !second_open
+            .stdout
+            .contains("Session opened: swarm-session-2"),
         "Expected second open to avoid creating a new session:\n{}",
         second_open.stdout
     );
@@ -218,18 +222,20 @@ pub(super) fn test_open_refreshes_inactive_saved_session(ctx: &mut E2ECtx) {
 
     let first_open = run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
     assert!(
-        first_open.stdout.contains("Session opened: swarm-session-1"),
+        first_open
+            .stdout
+            .contains("Session opened: swarm-session-1"),
         "Expected first open to create the initial session:\n{}",
         first_open.stdout
     );
 
-    mock_server.set_listed_sessions(vec![MockListedSession::stopped(
-        "swarm-session-1",
-    )]);
+    mock_server.set_listed_sessions(vec![MockListedSession::stopped("swarm-session-1")]);
 
     let second_open = run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
     assert!(
-        second_open.stdout.contains("Session opened: swarm-session-2"),
+        second_open
+            .stdout
+            .contains("Session opened: swarm-session-2"),
         "Expected stale saved session to be refreshed with a new backend session:\n{}",
         second_open.stdout
     );
@@ -262,7 +268,9 @@ pub(super) fn test_open_reopens_saved_session_after_human_closed_tab(ctx: &mut E
 
     let first_open = run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
     assert!(
-        first_open.stdout.contains("Session opened: swarm-session-1"),
+        first_open
+            .stdout
+            .contains("Session opened: swarm-session-1"),
         "Expected first open to create the initial session:\n{}",
         first_open.stdout
     );
@@ -276,7 +284,9 @@ pub(super) fn test_open_reopens_saved_session_after_human_closed_tab(ctx: &mut E
 
     let second_open = run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, workflow_url]);
     assert!(
-        second_open.stdout.contains("Session opened: swarm-session-2"),
+        second_open
+            .stdout
+            .contains("Session opened: swarm-session-2"),
         "Expected open to recreate a saved session whose tab was closed externally:\n{}",
         second_open.stdout
     );
@@ -346,14 +356,14 @@ pub(super) fn test_goto_requires_existing_active_session(ctx: &mut E2ECtx) {
 
     let open_result = run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
     assert!(
-        open_result.stdout.contains("Session opened: swarm-session-1"),
+        open_result
+            .stdout
+            .contains("Session opened: swarm-session-1"),
         "Expected mocked session open output in:\n{}",
         open_result.stdout
     );
 
-    mock_server.set_listed_sessions(vec![MockListedSession::stopped(
-        "swarm-session-1",
-    )]);
+    mock_server.set_listed_sessions(vec![MockListedSession::stopped("swarm-session-1")]);
 
     run_command_expecting_failure(
         ctx,
@@ -539,10 +549,7 @@ pub(super) fn test_press_command_uses_direct_tool_dispatch(ctx: &mut E2ECtx) {
         .filter(|call| call.tool == "browser_press_key")
         .collect();
     assert_eq!(press_calls.len(), 1, "expected one browser_press_key call");
-    assert_eq!(
-        press_calls[0].arguments["sessionId"],
-        "swarm-session-1"
-    );
+    assert_eq!(press_calls[0].arguments["sessionId"], "swarm-session-1");
     assert_eq!(press_calls[0].arguments["ref"], "#type-target");
     assert_eq!(press_calls[0].arguments["key"], "!");
     assert!(
@@ -602,10 +609,7 @@ pub(super) fn test_swarm_session_and_agent_tools(ctx: &mut E2ECtx) {
         .iter()
         .find(|call| call.tool == "agent_summarize")
         .expect("expected agent_summarize call");
-    assert_eq!(
-        summarize_call.arguments["sessionId"],
-        "swarm-session-1"
-    );
+    assert_eq!(summarize_call.arguments["sessionId"], "swarm-session-1");
     assert_eq!(
         summarize_call.arguments["instruction"],
         "summarize the page marker"
@@ -799,7 +803,8 @@ pub(super) fn test_swarm_submission_commands(ctx: &mut E2ECtx) {
         swarm_result_result.stdout
     );
     assert!(
-        swarm_result_payload.contains(r#""resultSet":[{"url":"https://mock.browser4.local/result/swarm-job-42"}]"#),
+        swarm_result_payload
+            .contains(r#""resultSet":[{"url":"https://mock.browser4.local/result/swarm-job-42"}]"#),
         "Expected scrape result payload to contain a resultSet in:\n{}",
         swarm_result_result.stdout
     );
@@ -817,18 +822,14 @@ pub(super) fn test_swarm_submission_commands(ctx: &mut E2ECtx) {
         snapshot
             .tool_calls
             .iter()
-            .all(|call| call.tool != "command_run" && call.tool != "command_status" && call.tool != "command_result"),
+            .all(|call| call.tool != "command_run"
+                && call.tool != "command_status"
+                && call.tool != "command_result"),
         "Expected swarm submission/status/result to avoid MCP command_* calls: {:?}",
         snapshot.tool_calls
     );
-    assert_eq!(
-        snapshot.status_queries,
-        vec!["swarm-job-42".to_string()]
-    );
-    assert_eq!(
-        snapshot.result_queries,
-        vec!["swarm-job-42".to_string()]
-    );
+    assert_eq!(snapshot.status_queries, vec!["swarm-job-42".to_string()]);
+    assert_eq!(snapshot.result_queries, vec!["swarm-job-42".to_string()]);
 }
 
 pub(super) fn test_swarm_command_help_and_validation(ctx: &mut E2ECtx) {
@@ -836,12 +837,16 @@ pub(super) fn test_swarm_command_help_and_validation(ctx: &mut E2ECtx) {
 
     let swarm_create_help = run_command(ctx, &["help", "swarm", "create"]);
     assert!(
-        swarm_create_help.stdout.contains("browser4-cli swarm create"),
+        swarm_create_help
+            .stdout
+            .contains("browser4-cli swarm create"),
         "Expected swarm create usage in:\n{}",
         swarm_create_help.stdout
     );
     assert!(
-        !swarm_create_help.stdout.contains("browser4-cli swarm-create"),
+        !swarm_create_help
+            .stdout
+            .contains("browser4-cli swarm-create"),
         "Expected flat swarm-create form to be absent in:\n{}",
         swarm_create_help.stdout
     );
@@ -905,4 +910,3 @@ pub(super) fn test_swarm_command_help_and_validation(ctx: &mut E2ECtx) {
         submit_failure_output
     );
 }
-

@@ -72,7 +72,23 @@ fn extract_http_text_payload(response_text: &str) -> String {
 }
 
 fn build_endpoint_url(base_url: &str, path: &str) -> String {
-    format!("{}/{}", base_url.trim_end_matches('/'), path.trim_start_matches('/'))
+    format!(
+        "{}/{}",
+        base_url.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    )
+}
+
+fn format_http_error(status: reqwest::StatusCode, response_text: &str) -> String {
+    let message = response_text.trim();
+    if message.is_empty() {
+        format!(
+            "HTTP request failed with status {} and an empty response body.",
+            status
+        )
+    } else {
+        format!("HTTP request failed with status {}: {}", status, message)
+    }
 }
 
 async fn send_rest_request(request: reqwest::RequestBuilder) -> Result<String, String> {
@@ -88,17 +104,7 @@ async fn send_rest_request(request: reqwest::RequestBuilder) -> Result<String, S
         .map_err(|e| format!("Failed to read response body: {e}"))?;
 
     if !status.is_success() {
-        let message = response_text.trim();
-        if message.is_empty() {
-            return Err(format!(
-                "HTTP request failed with status {} and an empty response body.",
-                status
-            ));
-        }
-        return Err(format!(
-            "HTTP request failed with status {}: {}",
-            status, message
-        ));
+        return Err(format_http_error(status, &response_text));
     }
 
     Ok(extract_http_text_payload(&response_text))
@@ -248,8 +254,29 @@ pub async fn get_scrape_result(
     base_url: &str,
     task_id: &str,
 ) -> Result<String, String> {
-    let url = build_endpoint_url(base_url, &format!("/api/x/{task_id}/result"));
-    send_rest_request(client.get(url)).await
+    let result_url = build_endpoint_url(base_url, &format!("/api/x/{task_id}/result"));
+    let response = client
+        .get(&result_url)
+        .send()
+        .await
+        .map_err(|e| format!("HTTP request failed: {e}"))?;
+
+    let status = response.status();
+    let response_text = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read response body: {e}"))?;
+
+    if status.is_success() {
+        return Ok(extract_http_text_payload(&response_text));
+    }
+
+    if status == reqwest::StatusCode::NOT_FOUND {
+        let status_url = build_endpoint_url(base_url, &format!("/api/x/{task_id}/status"));
+        return send_rest_request(client.get(status_url)).await;
+    }
+
+    Err(format_http_error(status, &response_text))
 }
 
 /// Get the status of a command by its task ID via the MCP endpoint.
@@ -361,7 +388,10 @@ mod tests {
 
     #[test]
     fn test_extract_http_text_payload_unquotes_json_string() {
-        assert_eq!(extract_http_text_payload("\"swarm-task-1\""), "swarm-task-1");
+        assert_eq!(
+            extract_http_text_payload("\"swarm-task-1\""),
+            "swarm-task-1"
+        );
     }
 
     #[test]
@@ -378,6 +408,18 @@ mod tests {
         assert_eq!(
             extract_http_text_payload(payload),
             "{\"id\":\"swarm-task-1\",\"isDone\":false}"
+        );
+    }
+
+    #[test]
+    fn test_format_http_error_handles_empty_and_non_empty_bodies() {
+        assert_eq!(
+            format_http_error(reqwest::StatusCode::NOT_FOUND, ""),
+            "HTTP request failed with status 404 Not Found and an empty response body."
+        );
+        assert_eq!(
+            format_http_error(reqwest::StatusCode::BAD_REQUEST, "bad request"),
+            "HTTP request failed with status 400 Bad Request: bad request"
         );
     }
 }

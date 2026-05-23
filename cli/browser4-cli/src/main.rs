@@ -262,7 +262,10 @@ fn should_navigate_after_open(url: &str) -> bool {
     !url.is_empty() && url != "about:blank"
 }
 
-fn should_reuse_open_session(existing_session_id: Option<&str>, _session_name: Option<&str>) -> bool {
+fn should_reuse_open_session(
+    existing_session_id: Option<&str>,
+    _session_name: Option<&str>,
+) -> bool {
     existing_session_id
         .map(str::trim)
         .filter(|session_id| !session_id.is_empty())
@@ -438,8 +441,7 @@ async fn handle_open(
     if should_navigate_after_open(url) {
         let mut params = tool_params.clone();
         params["sessionId"] = json!(session_id.clone());
-        let navigate_result =
-            call_tool(client, base_url, tool_name, params.clone()).await;
+        let navigate_result = call_tool(client, base_url, tool_name, params.clone()).await;
         match navigate_result {
             Ok(result) => {
                 if reused_existing_session {
@@ -466,14 +468,12 @@ async fn handle_open(
                 .await;
                 invalidate_session(&state, base_url, session_name);
                 let capabilities = build_open_session_capabilities(tool_params);
-                let retry_id = create_session(
-                    client, base_url, &state, session_name, Some(capabilities),
-                )
-                .await?;
+                let retry_id =
+                    create_session(client, base_url, &state, session_name, Some(capabilities))
+                        .await?;
                 println!("Session opened: {}", retry_id);
                 params["sessionId"] = json!(retry_id);
-                let retry_result =
-                    call_tool(client, base_url, tool_name, params).await?;
+                let retry_result = call_tool(client, base_url, tool_name, params).await?;
                 if !retry_result.is_empty() {
                     println!("{}", retry_result);
                 }
@@ -496,8 +496,7 @@ async fn handle_goto(
     let session_id = require_active_session_for_goto(client, base_url, session_name).await?;
     let mut params = tool_params.clone();
     params["sessionId"] = json!(session_id.clone());
-    let navigate_result =
-        call_tool(client, base_url, tool_name, params.clone()).await;
+    let navigate_result = call_tool(client, base_url, tool_name, params.clone()).await;
     match navigate_result {
         Ok(result) => {
             if !result.is_empty() {
@@ -507,7 +506,10 @@ async fn handle_goto(
         }
         Err(err) => {
             if should_retry_open_after_navigation_error(&err, true) {
-                println!("Failed to navigate, try to call `open` to refresh the session. Error: {}", err)
+                println!(
+                    "Failed to navigate, try to call `open` to refresh the session. Error: {}",
+                    err
+                )
             } else {
                 println!("Failed to navigate, {}", err)
             }
@@ -730,7 +732,10 @@ async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
                         if let Ok(state) = serde_json::from_str::<CliState>(&content) {
                             if let Some(sid) = state.session_id {
                                 let status = list_session_status(backend_sessions.as_deref(), &sid);
-                                let next_open = list_session_next_open_action(backend_sessions.as_deref(), &sid);
+                                let next_open = list_session_next_open_action(
+                                    backend_sessions.as_deref(),
+                                    &sid,
+                                );
                                 println!(
                                     "{:<20} | {:<40} | {:<8} | {}",
                                     name, sid, status, next_open
@@ -767,7 +772,10 @@ struct BackendSessionRecord {
     status: Option<String>,
 }
 
-fn list_session_status(backend_sessions: Option<&[BackendSessionRecord]>, session_id: &str) -> &'static str {
+fn list_session_status(
+    backend_sessions: Option<&[BackendSessionRecord]>,
+    session_id: &str,
+) -> &'static str {
     match backend_sessions {
         Some(records) => records
             .iter()
@@ -849,23 +857,25 @@ fn parse_backend_session_records(result: &str) -> Vec<BackendSessionRecord> {
                 entries
                     .iter()
                     .filter_map(|entry| {
-                        entry.as_str().map(|session_id| BackendSessionRecord {
-                            session_id: session_id.to_string(),
-                            status: Some("active".to_string()),
-                        })
-                        .or_else(|| {
-                            entry
-                                .get("sessionId")
-                                .and_then(|value| value.as_str())
-                                .filter(|session_id| !session_id.is_empty())
-                                .map(|session_id| BackendSessionRecord {
-                                    session_id: session_id.to_string(),
-                                    status: entry
-                                        .get("status")
-                                        .and_then(|value| value.as_str())
-                                        .map(str::to_string),
-                                })
-                        })
+                        entry
+                            .as_str()
+                            .map(|session_id| BackendSessionRecord {
+                                session_id: session_id.to_string(),
+                                status: Some("active".to_string()),
+                            })
+                            .or_else(|| {
+                                entry
+                                    .get("sessionId")
+                                    .and_then(|value| value.as_str())
+                                    .filter(|session_id| !session_id.is_empty())
+                                    .map(|session_id| BackendSessionRecord {
+                                        session_id: session_id.to_string(),
+                                        status: entry
+                                            .get("status")
+                                            .and_then(|value| value.as_str())
+                                            .map(str::to_string),
+                                    })
+                            })
                     })
                     .collect()
             })
@@ -880,9 +890,9 @@ fn session_status_is_active(status: Option<&str>) -> bool {
 }
 
 fn session_is_active_in_records(records: &[BackendSessionRecord], session_id: &str) -> bool {
-    records
-        .iter()
-        .any(|record| record.session_id == session_id && session_status_is_active(record.status.as_deref()))
+    records.iter().any(|record| {
+        record.session_id == session_id && session_status_is_active(record.status.as_deref())
+    })
 }
 
 fn session_is_active(result: &str, session_id: &str) -> bool {
@@ -913,10 +923,7 @@ fn is_backend_unreachable_error(error: &str) -> bool {
     .any(|pattern| lower.contains(pattern))
 }
 
-fn should_retry_open_after_navigation_error(
-    error: &str,
-    reused_existing_session: bool,
-) -> bool {
+fn should_retry_open_after_navigation_error(error: &str, reused_existing_session: bool) -> bool {
     is_stale_session_error(error)
         || (reused_existing_session && is_backend_unreachable_error(error))
 }
@@ -2705,7 +2712,10 @@ mod tests {
     #[test]
     fn should_reuse_open_session_for_named_session_when_the_slot_has_a_saved_session() {
         assert!(should_reuse_open_session(Some("team-a"), Some("team-a")));
-        assert!(should_reuse_open_session(Some("session-42"), Some("team-a")));
+        assert!(should_reuse_open_session(
+            Some("session-42"),
+            Some("team-a")
+        ));
         assert!(!should_reuse_open_session(None, Some("team-a")));
     }
 
@@ -2857,26 +2867,40 @@ mod tests {
 
     #[test]
     fn rewrite_prefixed_command_rejects_legacy_co_prefix() {
-        assert!(rewrite_prefixed_command(&[
-            "co".to_string(),
-            "create".to_string(),
-        ])
-        .is_none());
+        assert!(rewrite_prefixed_command(&["co".to_string(), "create".to_string(),]).is_none());
     }
 
     #[test]
     fn preferred_spaced_command_form_maps_flat_aliases() {
-        assert_eq!(preferred_spaced_command_form("agent-run"), Some("agent run"));
-        assert_eq!(preferred_spaced_command_form("swarm-submit"), Some("swarm submit"));
-        assert_eq!(preferred_spaced_command_form("co-status"), Some("swarm status"));
+        assert_eq!(
+            preferred_spaced_command_form("agent-run"),
+            Some("agent run")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("swarm-submit"),
+            Some("swarm submit")
+        );
+        assert_eq!(
+            preferred_spaced_command_form("co-status"),
+            Some("swarm status")
+        );
         assert_eq!(preferred_spaced_command_form("goto"), None);
     }
 
     #[test]
     fn preferred_prefixed_group_form_maps_legacy_and_bare_prefixes() {
-        assert_eq!(preferred_prefixed_group_form("agent"), Some("agent <subcommand>"));
-        assert_eq!(preferred_prefixed_group_form("swarm"), Some("swarm <subcommand>"));
-        assert_eq!(preferred_prefixed_group_form("co"), Some("swarm <subcommand>"));
+        assert_eq!(
+            preferred_prefixed_group_form("agent"),
+            Some("agent <subcommand>")
+        );
+        assert_eq!(
+            preferred_prefixed_group_form("swarm"),
+            Some("swarm <subcommand>")
+        );
+        assert_eq!(
+            preferred_prefixed_group_form("co"),
+            Some("swarm <subcommand>")
+        );
         assert_eq!(preferred_prefixed_group_form("open"), None);
     }
 
@@ -2923,10 +2947,7 @@ mod tests {
         assert_eq!(compiled.steps.len(), 1);
         assert_eq!(compiled.steps[0]["op"], json!("tool"));
         assert_eq!(compiled.steps[0]["tool"], json!("browser_press_key"));
-        assert_eq!(
-            compiled.steps[0]["arguments"]["ref"],
-            json!("#type-target")
-        );
+        assert_eq!(compiled.steps[0]["arguments"]["ref"], json!("#type-target"));
         assert_eq!(compiled.steps[0]["arguments"]["key"], json!("!"));
     }
 
@@ -2984,8 +3005,7 @@ mod tests {
 
     #[test]
     fn session_is_active_requires_active_status_for_backend_objects() {
-        let listed_sessions =
-            r#"[{"sessionId":"session-1","status":"stopped"},{"sessionId":"session-2","status":"active"}]"#;
+        let listed_sessions = r#"[{"sessionId":"session-1","status":"stopped"},{"sessionId":"session-2","status":"active"}]"#;
 
         assert!(!session_is_active(listed_sessions, "session-1"));
         assert!(session_is_active(listed_sessions, "session-2"));
@@ -3028,9 +3048,18 @@ mod tests {
             },
         ];
 
-        assert_eq!(list_session_next_open_action(Some(&records), "session-1"), "Reuse");
-        assert_eq!(list_session_next_open_action(Some(&records), "session-2"), "Refresh");
-        assert_eq!(list_session_next_open_action(Some(&records), "missing"), "Refresh");
+        assert_eq!(
+            list_session_next_open_action(Some(&records), "session-1"),
+            "Reuse"
+        );
+        assert_eq!(
+            list_session_next_open_action(Some(&records), "session-2"),
+            "Refresh"
+        );
+        assert_eq!(
+            list_session_next_open_action(Some(&records), "missing"),
+            "Refresh"
+        );
         assert_eq!(list_session_next_open_action(None, "session-1"), "Refresh");
     }
 

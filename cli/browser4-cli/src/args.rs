@@ -336,10 +336,7 @@ mod tests {
 
     #[test]
     fn test_parse_global_flags_long_session_name_equals() {
-        let argv = vec![
-            "--session=mysession".to_string(),
-            "goto".to_string(),
-        ];
+        let argv = vec!["--session=mysession".to_string(), "goto".to_string()];
 
         let flags = parse_global_flags(&argv);
 

@@ -76,6 +76,14 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_fn: browser::test_agent_run_live_or_missing_llm_key,
     },
     ScenarioDef {
+        name: "test_e2e_swarm_submission_commands_live",
+        short_name: "test_swarm_submission_commands_live",
+        requires_browser4: true,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: browser::test_swarm_submission_commands_live,
+    },
+    ScenarioDef {
         name: "test_e2e_wait_for_state_failure_modes",
         short_name: "test_wait_for_state_failure_modes",
         requires_browser4: true,
