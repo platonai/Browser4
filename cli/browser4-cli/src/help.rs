@@ -189,7 +189,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli swarm-create".to_string());
         lines.push(
-            "  browser4-cli swarm create --profile-mode=prototype --max-open-tabs=12 --max-browser-contexts=3 --display-mode=SUPERVISED"
+            "  browser4-cli swarm create --profile-mode=TEMPORARY --max-open-tabs=12 --max-browser-contexts=3 --display-mode=HEADLESS"
                 .to_string(),
         );
     }

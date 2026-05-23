@@ -295,10 +295,10 @@ browser4-cli swarm submit https://example.com
 
 ```shell
 browser4-cli swarm create \
-  --profile-mode=prototype \
+  --profile-mode=TEMPORARY \
   --max-open-tabs=12 \
   --max-browser-contexts=3 \
-  --display-mode=SUPERVISED
+  --display-mode=HEADLESS
 ```
 
 Use this when you want multiple isolated browser contexts and you still want to

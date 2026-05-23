@@ -230,10 +230,10 @@ Recommended lifecycle:
 ```bash
 # 1) create a swarm scrape session with backend capability hints
 browser4-cli swarm create \
-  --profile-mode=prototype \
+  --profile-mode=TEMPORARY \
   --max-open-tabs=12 \
   --max-browser-contexts=3 \
-  --display-mode=SUPERVISED
+  --display-mode=HEADLESS
 
 # 2) submit one direct URL plus a seed file as scrape jobs
 browser4-cli swarm submit https://example.com/direct \
