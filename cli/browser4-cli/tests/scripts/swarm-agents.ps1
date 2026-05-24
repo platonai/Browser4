@@ -29,6 +29,3 @@ for ($i = 1; $i -le 3; $i++) {
     }
     Start-Sleep -Seconds 3
 }
-
-exit 0
-

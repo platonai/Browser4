@@ -10,7 +10,7 @@ Find all links containing /dp/.
 After page load: click #title, then scroll to the middle.
 "@
 
-$agentRunOutput = cargo run --quiet -- agent run $task 2>&1
+$agentRunOutput = cargo run --quiet -- agent run "$task" 2>&1
 $agentRunText = ($agentRunOutput | Out-String).Trim()
 $agentRunText
 
