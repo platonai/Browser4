@@ -15,10 +15,10 @@ import java.nio.file.Path
 import kotlin.test.assertEquals
 import org.junit.jupiter.api.DisplayName
 
-class SequentialPrivacyAgentGeneratorTest {
+class SequentialBrowserProfileGeneratorTest {
 
     private lateinit var conf: ImmutableConfig
-    private lateinit var generator: SequentialPrivacyAgentGenerator
+    private lateinit var generator: SequentialBrowserProfileGenerator
     private lateinit var mockFingerprint: Fingerprint
     private lateinit var contextBaseDir: Path
     private val contextDirs = mutableListOf<Path>()
@@ -26,7 +26,7 @@ class SequentialPrivacyAgentGeneratorTest {
     @BeforeEach
     fun setUp() {
         conf = MutableConfig()
-        generator = SequentialPrivacyAgentGenerator("test")
+        generator = SequentialBrowserProfileGenerator("test")
         mockFingerprint = Fingerprint.EXAMPLE
         contextBaseDir = AppPaths.CONTEXT_GROUP_BASE_DIR.resolve("test/PULSAR_CHROME")
         IntRange(1, 10).forEach { i ->

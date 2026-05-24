@@ -2,8 +2,10 @@ package ai.platon.pulsar.skeleton.workflow.fetch.privacy
 
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.browser.fingerprint.Fingerprint
+import ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -15,6 +17,29 @@ class BrowserProfileTest {
 
     @TempDir
     lateinit var tempDir: Path
+
+    @org.junit.jupiter.api.Test
+    fun testGetFingerprint() {
+        val profile = BrowserProfile.createRandomTemp()
+        val fingerprint = profile.fingerprint
+        assertNotNull(fingerprint)
+    }
+
+    @org.junit.jupiter.api.Test
+    fun testGetId() {
+        val profile = BrowserProfile.createRandomTemp()
+        val id = profile.id
+        assertNotNull(id)
+    }
+
+    @org.junit.jupiter.api.Test
+    fun testToJSON() {
+        val profile = BrowserProfile.createRandomTemp()
+        profile.fingerprint = Fingerprint.EXAMPLE
+        val json = prettyPulsarObjectMapper().writeValueAsString(profile)
+        val obj = prettyPulsarObjectMapper().readValue(json, BrowserProfile::class.java)
+        assertEquals(profile, obj)
+    }
 
     @Test
     fun createUsesExistingFingerprintWhenPresent() {

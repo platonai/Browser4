@@ -263,15 +263,15 @@ open class MultiPrivacyContextManager(
                 throw PrivacyException("Inactive privacy context manager")
             }
 
-            val privacyAgent = createPrivacyAgent(page, fingerprint)
-            if (privacyAgent.isPermanent) {
-                // logger.info("Prepare for permanent browser profile | {}", privacyAgent)
+            val browserProfile = createBrowserProfile(page, fingerprint)
+            if (browserProfile.isPermanent) {
+                // logger.info("Prepare for permanent browser profile | {}", browserProfile)
                 reserveResourceForcefully()
-                return getOrCreate(privacyAgent)
+                return getOrCreate(browserProfile)
             }
 
             if (activeContextCount < allowedPrivacyContextCount) {
-                getOrCreate(privacyAgent)
+                getOrCreate(browserProfile)
             }
 
             try {
@@ -338,14 +338,14 @@ open class MultiPrivacyContextManager(
     }
 
     @Throws(PrivacyException::class)
-    private fun createPrivacyAgent(page: WebPage, fingerprint: Fingerprint): BrowserProfile {
+    private fun createBrowserProfile(page: WebPage, fingerprint: Fingerprint): BrowserProfile {
         // Specify the browser profile by the user code
         val specifiedProfile = page.getBeanOrNull(BrowserProfile::class.java)
         if (specifiedProfile is BrowserProfile) {
             return specifiedProfile
         }
 
-        val generator = privacyAgentGeneratorFactory.generator
+        val generator = browserProfileGeneratorFactory.generator
         try {
             return generator.invoke(fingerprint)
         } catch (e: IOException) {

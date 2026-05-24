@@ -39,11 +39,11 @@ class ConcurrentStatefulPrivacyContextPool(
     /**
      * life cycle of the permanent context is relatively long. The system will never delete the permanent contexts.
      *
-     * The predefined privacy agents for permanent contexts are:
+     * The predefined browser profiles for permanent contexts are:
      *
-     * 1. PrivacyAgent.USER_DEFAULT
-     * 2. PrivacyAgent.PROTOTYPE
-     * 2. PrivacyAgent.DEFAULT
+     * 1. BrowserProfile.USER_DEFAULT
+     * 2. BrowserProfile.PROTOTYPE
+     * 2. BrowserProfile.DEFAULT
      * */
     private val _permanentContexts = ConcurrentHashMap<BrowserProfile, PrivacyContext>()
 
@@ -131,10 +131,10 @@ class ConcurrentStatefulPrivacyContextPool(
 
     @Synchronized
     fun close(privacyContext: PrivacyContext) {
-        val privacyAgent = privacyContext.profile
+        val browserProfile = privacyContext.profile
 
-        _permanentContexts.remove(privacyAgent)
-        _temporaryContexts.remove(privacyAgent)
+        _permanentContexts.remove(browserProfile)
+        _temporaryContexts.remove(browserProfile)
 
         if (!_zombieContexts.contains(privacyContext)) {
             // every time we add the item to the head,

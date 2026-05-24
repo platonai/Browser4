@@ -16,18 +16,9 @@ public class PulsarParams extends Params {
     public static final String VAR_PREV_FETCH_TIME_BEFORE_UPDATE = "prev_fetch_time_before_update";
     public static final String VAR_PRIVACY_CONTEXT_DISPLAY = "privacy_context_name";
     /**
-     * Privacy agent variable name
-     */
-    public static final String VAR_PRIVACY_AGENT = "VAR_PRIVACY_AGENT";
-    /**
      * Additional load status to report by PageLoadStatusFormatter.
      * */
     public static final String VAR_ADD_LOAD_STATUS = "additional_load_status";
-    /**
-     * If this task is a scrape task
-     * TODO: this is a temporary solution
-     * */
-    public static final String VAR_IS_SCRAPE = "IS_SCRAPE";
 
     public static final String VAR_LOAD_OPTIONS = "LOAD_OPTIONS";
 

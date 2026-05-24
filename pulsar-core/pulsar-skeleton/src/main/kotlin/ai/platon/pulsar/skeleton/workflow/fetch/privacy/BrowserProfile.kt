@@ -14,7 +14,7 @@ import java.nio.file.Path
 /**
  * A browser profile defines a unique agent to visit websites.
  *
- * Page visits through different privacy agents should not be detected
+ * Page visits through different browser profiles should not be detected
  * as the same person, even if the visits are from the same host.
  * */
 data class BrowserProfile(
@@ -38,7 +38,7 @@ data class BrowserProfile(
     constructor(contextDir: Path, browserType: BrowserType) : this(contextDir, Fingerprint(browserType))
 
     /**
-     * The PrivacyAgent equality.
+     * The BrowserProfile equality.
      * Note: do not use the default equality function
      * */
     override fun equals(other: Any?) = other is BrowserProfile && other.id == this.id
@@ -75,7 +75,7 @@ data class BrowserProfile(
 
             BrowserSettings.withBrowserContextMode(BrowserProfileMode.SYSTEM_DEFAULT, browserType)
             require(System.getProperty(BROWSER_CONTEXT_NUMBER).toIntOrNull() == 1)
-            require(System.getProperty(PRIVACY_AGENT_GENERATOR_CLASS).contains("SystemDefaultPrivacyAgentGenerator"))
+            require(System.getProperty(PRIVACY_AGENT_GENERATOR_CLASS).contains("SystemDefaultBrowserProfileGenerator"))
             return create(browserType, PrivacyContext.SYSTEM_DEFAULT_BROWSER_CONTEXT_DIR_PLACEHOLDER)
         }
 
@@ -88,7 +88,7 @@ data class BrowserProfile(
 
             BrowserSettings.withBrowserContextMode(BrowserProfileMode.DEFAULT, browserType)
             require(System.getProperty(BROWSER_CONTEXT_NUMBER).toIntOrNull() == 1)
-            require(System.getProperty(PRIVACY_AGENT_GENERATOR_CLASS).contains("DefaultPrivacyAgentGenerator"))
+            require(System.getProperty(PRIVACY_AGENT_GENERATOR_CLASS).contains("DefaultBrowserProfileGenerator"))
             return create(browserType, PrivacyContext.DEFAULT_CONTEXT_DIR)
         }
 
@@ -101,7 +101,7 @@ data class BrowserProfile(
 
             BrowserSettings.withBrowserContextMode(BrowserProfileMode.PROTOTYPE, browserType)
             require(System.getProperty(BROWSER_CONTEXT_NUMBER).toIntOrNull() == 1)
-            require(System.getProperty(PRIVACY_AGENT_GENERATOR_CLASS).contains("PrototypePrivacyAgentGenerator"))
+            require(System.getProperty(PRIVACY_AGENT_GENERATOR_CLASS).contains("PrototypeBrowserProfileGenerator"))
             return create(browserType, PrivacyContext.PROTOTYPE_CONTEXT_DIR)
         }
 

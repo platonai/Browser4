@@ -31,11 +31,11 @@ abstract class AbstractPrivacyManager(
 
     /**
      * Permanent contexts have a long lifecycle and are never deleted by the system.
-     * Predefined privacy agents for permanent contexts include:
-     * 1. PrivacyAgent.SYSTEM_DEFAULT
-     * 2. PrivacyAgent.PROTOTYPE
-     * 3. PrivacyAgent.DEFAULT
-     * 4. PrivacyAgent.NEXT_SEQUENTIAL
+     * Predefined browser profiles for permanent contexts include:
+     * 1. BrowserProfile.SYSTEM_DEFAULT
+     * 2. BrowserProfile.PROTOTYPE
+     * 3. BrowserProfile.DEFAULT
+     * 4. BrowserProfile.NEXT_SEQUENTIAL
      */
     val permanentContexts = ConcurrentHashMap<BrowserProfile, PrivacyContext>()
 
@@ -76,14 +76,14 @@ abstract class AbstractPrivacyManager(
     private val cleaningScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     /**
-     * Factory for generating privacy agents.
+     * Factory for generating browser profiles.
      */
-    protected val privacyAgentGeneratorFactory = PrivacyAgentGeneratorFactory(conf)
+    protected val browserProfileGeneratorFactory = BrowserProfileGeneratorFactory(conf)
 
     /**
-     * The generator used to create privacy agents.
+     * The generator used to create browser profiles.
      */
-    open val privacyAgentGenerator get() = privacyAgentGeneratorFactory.generator
+    open val browserProfileGenerator get() = browserProfileGeneratorFactory.generator
 
     /**
      * Indicates whether the privacy manager is closed.
@@ -229,11 +229,11 @@ abstract class AbstractPrivacyManager(
             logger.debug("Active contexts: {}, zombie contexts: {}", activeContexts.size, zombieContexts.size)
         }
 
-        val privacyAgent = privacyContext.profile
+        val browserProfile = privacyContext.profile
 
         synchronized(contextLifeCycleMonitor) {
-            permanentContexts.remove(privacyAgent)
-            temporaryContexts.remove(privacyAgent)
+            permanentContexts.remove(browserProfile)
+            temporaryContexts.remove(browserProfile)
 
             if (!zombieContexts.contains(privacyContext)) {
                 zombieContexts.addFirst(privacyContext)

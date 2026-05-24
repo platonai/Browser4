@@ -2,44 +2,44 @@ package ai.platon.pulsar.skeleton.workflow.fetch.privacy
 
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.skeleton.PulsarSettings
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.PrivacyAgentGeneratorFactory.Companion.BROWSER_CONTEXT_MODE_TO_AGENTS
+import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserProfileGeneratorFactory.Companion.BROWSER_CONTEXT_MODE_TO_AGENTS
 import org.junit.jupiter.api.Assertions.assertTrue
 import kotlin.test.Test
 
-class PrivacyAgentGeneratorFactoryTest {
+class BrowserProfileGeneratorFactoryTest {
     @Test
     fun testOverrideBrowserContextMode() {
         System.setProperty("browser.context.mode", "prototype")
 
         val conf = ImmutableConfig()
-        val factory = PrivacyAgentGeneratorFactory(conf)
+        val factory = BrowserProfileGeneratorFactory(conf)
         val generator = factory.generator
-        assertTrue(generator is PrototypePrivacyAgentGenerator)
+        assertTrue(generator is PrototypeBrowserProfileGenerator)
 
         // cached
         val generator2 = factory.generator
         assertTrue { generator === generator2 }
 
 
-        // PrivacyAgentGeneratorFactory.generators is a companion, and the conf from the last test case is used
+        // BrowserProfileGeneratorFactory.generators is a companion, and the conf from the last test case is used
         // might be a bug
         // assertTrue { generator2.conf === conf }
     }
 
     @Test
     fun testOverridePulsarSettings() {
-        val factory = PrivacyAgentGeneratorFactory(ImmutableConfig())
+        val factory = BrowserProfileGeneratorFactory(ImmutableConfig())
 
         PulsarSettings.withSystemDefaultBrowser()
 
         val generator = factory.generator
-        assertTrue(generator is SystemDefaultPrivacyAgentGenerator)
+        assertTrue(generator is SystemDefaultBrowserProfileGenerator)
     }
 
     @Test
     fun testOverrideBrowserContextModeMatrix() {
         val conf = ImmutableConfig()
-        val factory = PrivacyAgentGeneratorFactory(conf)
+        val factory = BrowserProfileGeneratorFactory(conf)
 
         for ((modeValue, expectedClass) in BROWSER_CONTEXT_MODE_TO_AGENTS.entries) {
             System.setProperty("browser.context.mode", modeValue.name)
@@ -55,7 +55,7 @@ class PrivacyAgentGeneratorFactoryTest {
                 "Instance was not cached for mode '$modeValue'"
             }
 
-            // PrivacyAgentGeneratorFactory.generators is a companion, and the conf from the last test case is used
+            // BrowserProfileGeneratorFactory.generators is a companion, and the conf from the last test case is used
             // might be a bug
             // assertTrue { generator2.conf === conf }
         }
