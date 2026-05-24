@@ -4,15 +4,10 @@ import ai.platon.pulsar.common.browser.BrowserFiles.PID_FILE_NAME
 import org.apache.commons.lang3.SystemUtils
 import java.nio.file.Files
 import java.nio.file.Path
-import java.nio.file.StandardOpenOption
 import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 import java.util.concurrent.TimeUnit
-import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertNotNull
-import kotlin.test.assertNull
-import kotlin.test.assertTrue
+import kotlin.test.*
 
 class ChromeLauncherTest {
     @Test
@@ -70,13 +65,6 @@ class ChromeLauncherTest {
             destroyProcessIfAlive(process)
             tempDir.toFile().deleteRecursively()
         }
-    }
-
-    @Test
-    fun testDistinctPositivePidsFiltersInvalidAndDuplicateValues() {
-        val candidatePids = ChromeLauncher.distinctPositivePids(321L, null, 0L, -7L, 321L, 654L)
-
-        assertEquals(listOf(321L, 654L), candidatePids)
     }
 
     private fun startLockingProcess(tempDir: Path, userDataDir: Path): Process {

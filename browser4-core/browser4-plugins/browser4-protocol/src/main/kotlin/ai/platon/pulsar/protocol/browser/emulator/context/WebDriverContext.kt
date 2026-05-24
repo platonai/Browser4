@@ -215,7 +215,7 @@ open class WebDriverContext(
             else -> FetchResult.canceled(task, reason)
         }
 
-        driverPoolManager.closeBrowserAccompaniedDriverPoolGracefully(browserId, DRIVER_FAST_CLOSE_TIME_OUT)
+        driverPoolManager.closeBrowserAccompaniedDriverPoolForcibly(browserId, DRIVER_FAST_CLOSE_TIME_OUT)
         return result
     }
 
@@ -243,22 +243,7 @@ open class WebDriverContext(
     }
 
     private fun closeContext() {
-        val asap = !AppContext.isActive || AppSystemInfo.isSystemOverCriticalLoad
-
-        logger.debug("Closing web driver context, asap: $asap")
-
-        // not shutdown, wait longer
-        if (asap) {
-            closeUnderlyingLayerGracefully()
-        } else {
-            // always close the context as soon as possible, just retry the unfinished tasks.
-            // waitUntilAllDoneNormally(Duration.ofMinutes(1))
-            // close underlying IO based modules asynchronously
-            closeUnderlyingLayerGracefully()
-        }
-
-        // No need to wait for the underlying layer to be closed, just close it
-        // waitUntilNoRunningTasks(Duration.ofSeconds(10))
+        closeUnderlyingLayer()
 
         val isShutdown = if (AppContext.isActive) "" else " (shutdown)"
         val display = browserId.display
@@ -272,13 +257,13 @@ open class WebDriverContext(
         }
     }
 
-    private fun closeUnderlyingLayerGracefully() {
+    private fun closeUnderlyingLayer() {
         // Mark all working tasks to be canceled, so they return as soon as possible
         runningTasks.forEach { it.cancel() }
         // Cancel the browser, and all online drivers, and the worker coroutines with the drivers
         driverPoolManager.cancelAll(browserId)
 
-        driverPoolManager.closeBrowserAccompaniedDriverPoolGracefully(browserId, DRIVER_SAFE_CLOSE_TIME_OUT)
+        driverPoolManager.closeBrowserAccompaniedDriverPoolForcibly(browserId, DRIVER_SAFE_CLOSE_TIME_OUT)
     }
 
     private fun shutdownUnderlyingLayerImmediately() {

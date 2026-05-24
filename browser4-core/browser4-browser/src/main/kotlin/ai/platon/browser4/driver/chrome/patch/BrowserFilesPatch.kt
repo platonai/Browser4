@@ -51,6 +51,7 @@ internal class ContextGroup(val group: String) {
     }
 }
 
+@Deprecated("Use ai.platon.pulsar.common.browser.BrowserFiles instead", ReplaceWith("BrowserFiles"))
 object BrowserFilesPatch {
 
     private val logger = getLogger(this)

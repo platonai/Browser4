@@ -1,6 +1,5 @@
 package ai.platon.browser4.driver.chrome
 
-import ai.platon.browser4.driver.chrome.patch.BrowserFilesPatch
 import ai.platon.pulsar.common.Runtimes
 import ai.platon.pulsar.common.browser.BrowserFiles
 import ai.platon.pulsar.common.warnInterruptible
@@ -12,6 +11,7 @@ import java.nio.file.Files
 import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
+import kotlin.io.path.exists
 
 /**
  * Destroys Chrome processes associated with a specific user data directory.
@@ -22,9 +22,20 @@ class ChromeDestroyer(
     companion object {
         private val logger = LoggerFactory.getLogger(ChromeDestroyer::class.java)
         private val BROWSER_PROCESS_KEYWORDS = listOf("chrome", "chromium", "google-chrome", "chromium-browser")
+
+        private val POSIX_PROCESS_LISTING_COMMAND = """
+            if command -v pgrep >/dev/null 2>&1; then
+                pgrep -af 'chrome|chromium|google-chrome|chromium-browser'
+            else
+                ps -eo pid=,args= | grep -E -i 'chrome|chromium|google-chrome|chromium-browser' | grep -v grep
+            fi
+        """.trimIndent()
     }
 
     private val pidPath get() = userDataDir.resolveSibling(BrowserFiles.PID_FILE_NAME)
+    private val pidBakPath get() = userDataDir.resolveSibling("${BrowserFiles.PID_FILE_NAME}.bak")
+    private val portBakPath get() = userDataDir.resolveSibling("${BrowserFiles.PORT_FILE_NAME}.bak")
+    private val cdpUrlBakPath get() = userDataDir.resolveSibling("${BrowserFiles.CDP_URL_FILE_NAME}.bak")
 
     /**
      * Destroys the matching Chrome process forcibly and clears process markers.
@@ -33,9 +44,9 @@ class ChromeDestroyer(
      */
     fun destroy(primaryPid: Long? = null) {
         try {
-            val candidatePids = ChromeLauncher.distinctPositivePids(primaryPid, readRecordedPid())
+            val candidatePids = distinctPositivePids(primaryPid, readRecordedPid())
 
-            killLockingProcess(candidatePids)
+            killProcess(candidatePids)
         } catch (e: NoSuchFileException) {
             logger.warn("NoSuchFileException | {}", e.message)
         } catch (e: IOException) {
@@ -47,11 +58,53 @@ class ChromeDestroyer(
         }
     }
 
-    internal fun clearProcessMarkers() {
-        BrowserFilesPatch.clearProcessMarkers(userDataDir)
+    /**
+     * Check if there are Chrome processes that are likely associated with the user data directory and may be zombies.
+     *
+     * The associated Chrome processes are zombie when:
+     * 1. Chrome processes associated with the user data directory exist in the system
+     * 2. one of the following backup files exists: port file, pid file, cdp url file
+     * */
+    fun isZombie(): Boolean {
+        if (!hasZombieProcessMarkers()) {
+            return false
+        }
+
+        return try {
+            if (isRecordedProcessAlive()) {
+                return true
+            }
+
+            val foundByProcessHandle = ProcessHandle.allProcesses()
+                .filter { isBrowserProcess(it) }
+                .anyMatch { isCommandLineMatch(it.info().commandLine().orElse(null).orEmpty()) }
+
+            foundByProcessHandle || when {
+                SystemUtils.IS_OS_WINDOWS -> hasMatchingProcessWindows()
+                SystemUtils.IS_OS_MAC || SystemUtils.IS_OS_LINUX -> hasMatchingProcessPosix()
+                else -> false
+            }
+        } catch (_: SecurityException) {
+            false
+        } catch (e: Exception) {
+            logger.debug("Failed to check zombie chrome process for {} | {}", userDataDir, e.message)
+            false
+        }
     }
 
-    internal fun killLockingProcess(candidatePids: Collection<Long> = emptyList()): Int {
+    internal fun distinctPositivePids(vararg pids: Long?): List<Long> {
+        return pids.asSequence()
+            .filterNotNull()
+            .filter { it > 0 }
+            .distinct()
+            .toList()
+    }
+
+    internal fun clearProcessMarkers() {
+        BrowserFiles.clearProcessMarkers(userDataDir)
+    }
+
+    internal fun killProcess(candidatePids: Collection<Long> = emptyList()): Int {
         try {
             logger.info("Attempting to find and kill process holding lock on {}", userDataDir)
             val attemptedPids = candidatePids.asSequence()
@@ -109,14 +162,30 @@ class ChromeDestroyer(
     }
 
     private fun readRecordedPid(): Long? {
-        return if (Files.exists(pidPath)) {
-            Files.readAllLines(pidPath)
-                .firstOrNull { it.isNotBlank() }
-                ?.trim()
-                ?.toLongOrNull()
-        } else {
-            null
+        val path = pidPath.takeIf { it.exists() } ?: pidBakPath.takeIf { it.exists() } ?: return null
+        return Files.readAllLines(path)
+            .firstOrNull { it.isNotBlank() }
+            ?.trim()
+            ?.toLongOrNull()
+    }
+
+    internal fun hasZombieProcessMarkers(): Boolean {
+        return listOf(pidBakPath, portBakPath, cdpUrlBakPath).any { it.exists() }
+    }
+
+    private fun isRecordedProcessAlive(): Boolean {
+        val pid = readRecordedPid() ?: return false
+        if (!Runtimes.isProcessAlive(pid)) {
+            return false
         }
+
+        val handle = ProcessHandle.of(pid).orElse(null) ?: return pidBakPath.exists()
+        if (!isBrowserProcess(handle)) {
+            return false
+        }
+
+        val commandLine = handle.info().commandLine().orElse(null).orEmpty()
+        return commandLine.isBlank() || isCommandLineMatch(commandLine)
     }
 
     private fun isCommandLineMatch(cmdLine: String): Boolean {
@@ -130,22 +199,7 @@ class ChromeDestroyer(
     private fun killLockingProcessWindows(excludedPids: Set<Long> = emptySet()): Int {
         try {
             logger.info("Trying PowerShell fallback to kill locking process")
-            val normalizedPath = ChromeLauncher.normalizeCommandText(userDataDir.toAbsolutePath().toString()).replace("'", "''")
-            val command = $$"""
-                $path = '$$normalizedPath'
-                Get-CimInstance Win32_Process |
-                    Where-Object {
-                        $_.CommandLine -and
-                        (
-                            $_.Name -match '^(chrome|chromium)\.exe$' -or
-                            $_.CommandLine -match '(?i)(chrome|chromium|google-chrome|chromium-browser)'
-                        ) -and
-                        $_.CommandLine.Replace('\\', '/') -like "*$path*"
-                    } |
-                    ForEach-Object { "{0}`t{1}" -f $_.ProcessId, $_.CommandLine }
-            """.trimIndent()
-
-            val output = runCommandAndCollectOutput("powershell.exe", "-NoProfile", "-Command", command)
+            val output = runWindowsProcessListingCommand()
             return killProcessesFromListing(output, "PowerShell", excludedPids)
         } catch (e: Exception) {
             logger.warn("Failed to kill locking process via PowerShell", e)
@@ -153,23 +207,59 @@ class ChromeDestroyer(
         return 0
     }
 
+    private fun hasMatchingProcessWindows(): Boolean {
+        return try {
+            hasMatchingProcessFromListing(runWindowsProcessListingCommand())
+        } catch (e: Exception) {
+            logger.debug("Failed to detect zombie chrome via PowerShell for {} | {}", userDataDir, e.message)
+            false
+        }
+    }
+
     private fun killLockingProcessPosix(excludedPids: Set<Long> = emptySet()): Int {
         return try {
             logger.info("Trying POSIX fallback to kill locking process")
-            val command = """
-                if command -v pgrep >/dev/null 2>&1; then
-                    pgrep -af 'chrome|chromium|google-chrome|chromium-browser'
-                else
-                    ps -eo pid=,args= | grep -E -i 'chrome|chromium|google-chrome|chromium-browser' | grep -v grep
-                fi
-            """.trimIndent()
-
-            val output = runCommandAndCollectOutput("bash", "-lc", command)
+            val output = runPosixProcessListingCommand()
             killProcessesFromListing(output, "POSIX", excludedPids)
         } catch (e: Exception) {
             logger.warn("Failed to kill locking process via POSIX fallback", e)
             0
         }
+    }
+
+    private fun hasMatchingProcessPosix(): Boolean {
+        return try {
+            hasMatchingProcessFromListing(runPosixProcessListingCommand())
+        } catch (e: Exception) {
+            logger.debug("Failed to detect zombie chrome via POSIX fallback for {} | {}", userDataDir, e.message)
+            false
+        }
+    }
+
+    private fun runWindowsProcessListingCommand(): List<String> {
+        val command = createWindowsProcessListingCommand()
+        return runCommandAndCollectOutput("powershell.exe", "-NoProfile", "-Command", command)
+    }
+
+    private fun createWindowsProcessListingCommand(): String {
+        val normalizedPath = ChromeLauncher.normalizeCommandText(userDataDir.toAbsolutePath().toString()).replace("'", "''")
+        return $$"""
+            $path = '$$normalizedPath'
+            Get-CimInstance Win32_Process |
+                Where-Object {
+                    $_.CommandLine -and
+                    (
+                        $_.Name -match '^(chrome|chromium)\.exe$' -or
+                        $_.CommandLine -match '(?i)(chrome|chromium|google-chrome|chromium-browser)'
+                    ) -and
+                    $_.CommandLine.Replace('\\', '/') -like "*$path*"
+                } |
+                ForEach-Object { "{0}`t{1}" -f $_.ProcessId, $_.CommandLine }
+        """.trimIndent()
+    }
+
+    private fun runPosixProcessListingCommand(): List<String> {
+        return runCommandAndCollectOutput("bash", "-lc", POSIX_PROCESS_LISTING_COMMAND)
     }
 
     private fun killProcessesFromListing(lines: List<String>, source: String, excludedPids: Set<Long> = emptySet()): Int {
@@ -180,6 +270,12 @@ class ChromeDestroyer(
             .filter { it !in excludedPids }
             .distinct()
             .count { pid -> killProcessByPid(pid, source) }
+    }
+
+    private fun hasMatchingProcessFromListing(lines: List<String>): Boolean {
+        return lines.asSequence()
+            .mapNotNull(ChromeLauncher::parseProcessListingLine)
+            .any { (_, cmdLine) -> isCommandLineMatch(cmdLine) }
     }
 
     private fun killProcessByPid(pid: Long, source: String): Boolean {

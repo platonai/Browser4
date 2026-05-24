@@ -272,9 +272,18 @@ open class WebDriverPoolManager constructor(
             try {
                 driverPoolCloser.closeGracefully(browserId)
             } catch (e: Exception) {
-                logger.warn("Failed to close the browser | {} | {}", browserId, e.message)
-                logger.error("Failed to close the browser", e)
+                logger.warn("Failed to close the browser gracefully | {}", browserId, e)
             }
+        }
+    }
+
+    fun closeBrowserAccompaniedDriverPoolForcibly(browserId: BrowserId, timeToWait: Duration) {
+        numReset.mark()
+
+        try {
+            driverPoolCloser.closeForcibly(browserId)
+        } catch (e: Exception) {
+            logger.warn("Failed to close the browser forcibly | {}", browserId, e)
         }
     }
 

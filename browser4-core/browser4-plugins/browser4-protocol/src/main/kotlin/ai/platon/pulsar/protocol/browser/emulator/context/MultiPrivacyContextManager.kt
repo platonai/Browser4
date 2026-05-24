@@ -382,7 +382,9 @@ open class MultiPrivacyContextManager(
     }
 
     private fun killZombieBrowserForcefully(browserProfile: BrowserProfile) {
-
+//        if (browserProfile.isDefault) {
+//            ChromeDestroyer(PrivacyContext.DEFAULT_CONTEXT_DIR).destroy()
+//        }
     }
 
     private fun reserveResourceForcefully() {
