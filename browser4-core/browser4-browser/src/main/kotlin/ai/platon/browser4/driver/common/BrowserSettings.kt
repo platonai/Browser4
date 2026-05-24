@@ -100,7 +100,7 @@ open class BrowserSettings constructor(
         }
 
         private fun withSystemDefaultBrowserInternal(browserType: BrowserType, conf: MutableConfig? = null): Companion {
-            val clazz = "ai.platon.pulsar.skeleton.workflow.fetch.privacy.SystemDefaultPrivacyAgentGenerator"
+            val clazz = "ai.platon.pulsar.skeleton.workflow.fetch.privacy.SystemDefaultBrowserProfileGenerator"
             if (conf == null) {
                 System.setProperty(PRIVACY_AGENT_GENERATOR_CLASS, clazz)
             } else {
@@ -111,7 +111,7 @@ open class BrowserSettings constructor(
         }
 
         private fun withDefaultBrowserInternal(browserType: BrowserType, conf: MutableConfig? = null): Companion {
-            val clazz = "ai.platon.pulsar.skeleton.workflow.fetch.privacy.DefaultPrivacyAgentGenerator"
+            val clazz = "ai.platon.pulsar.skeleton.workflow.fetch.privacy.DefaultBrowserProfileGenerator"
             if (conf == null) {
                 System.setProperty(PRIVACY_AGENT_GENERATOR_CLASS, clazz)
             } else {
@@ -122,7 +122,7 @@ open class BrowserSettings constructor(
         }
 
         private fun withPrototypeBrowserInternal(browserType: BrowserType, conf: MutableConfig? = null): Companion {
-            val clazz = "ai.platon.pulsar.skeleton.workflow.fetch.privacy.PrototypePrivacyAgentGenerator"
+            val clazz = "ai.platon.pulsar.skeleton.workflow.fetch.privacy.PrototypeBrowserProfileGenerator"
             if (conf == null) {
                 System.setProperty(PRIVACY_AGENT_GENERATOR_CLASS, clazz)
             } else {
@@ -149,7 +149,7 @@ open class BrowserSettings constructor(
                 conf[BROWSER_CONTEXT_MODE] = "SEQUENTIAL"
                 conf[MAX_SEQUENTIAL_PRIVACY_AGENT_NUMBER] = "$maxAgents"
             }
-            val clazz = "ai.platon.pulsar.skeleton.workflow.fetch.privacy.SequentialPrivacyAgentGenerator"
+            val clazz = "ai.platon.pulsar.skeleton.workflow.fetch.privacy.SequentialBrowserProfileGenerator"
             if (conf == null) {
                 System.setProperty(PRIVACY_AGENT_GENERATOR_CLASS, clazz)
             } else {
@@ -159,7 +159,7 @@ open class BrowserSettings constructor(
         }
 
         private fun withTemporaryBrowserInternal(browserType: BrowserType, conf: MutableConfig? = null): Companion {
-            val clazz = "ai.platon.pulsar.skeleton.workflow.fetch.privacy.RandomPrivacyAgentGenerator"
+            val clazz = "ai.platon.pulsar.skeleton.workflow.fetch.privacy.RandomBrowserProfileGenerator"
             if (conf == null) {
                 System.setProperty(PRIVACY_AGENT_GENERATOR_CLASS, clazz)
             } else {

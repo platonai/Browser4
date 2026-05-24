@@ -15,6 +15,7 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator.context
 
+import ai.platon.browser4.protocol.browser.DefaultWebDriverPoolManager
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.browser.fingerprint.Fingerprint
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_CONTEXT_NUMBER
@@ -28,14 +29,13 @@ import ai.platon.pulsar.persist.AbstractWebPage
 import ai.platon.pulsar.persist.RetryScope
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.model.GoraWebPage
-import ai.platon.browser4.protocol.browser.DefaultWebDriverPoolManager
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager
+import ai.platon.pulsar.skeleton.CoreMetrics
+import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.common.AppSystemInfo
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
-import ai.platon.pulsar.skeleton.CoreMetrics
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.workflow.fetch.privacy.AbstractPrivacyContext
 import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserProfile
 import ai.platon.pulsar.skeleton.workflow.fetch.privacy.PrivacyContext
@@ -74,13 +74,14 @@ open class MultiPrivacyContextManager(
     private val tracer = logger.takeIf { it.isTraceEnabled }
     private val throttlingLogger = ThrottlingLogger(logger)
     private var numTasksAtLastReportTime = 0L
-    private val allowedPrivacyContextCount: Int get() {
-        // PRIVACY_CONTEXT_NUMBER is deprecated, use BROWSER_CONTEXT_NUMBER instead
+    private val allowedPrivacyContextCount: Int
+        get() {
+            // PRIVACY_CONTEXT_NUMBER is deprecated, use BROWSER_CONTEXT_NUMBER instead
 //        val defaultValue = conf.getInt(PRIVACY_CONTEXT_NUMBER, 2)
 //        return conf.getInt(BROWSER_CONTEXT_NUMBER, defaultValue)
 
-        return conf.getWithFallback(BROWSER_CONTEXT_NUMBER, PRIVACY_CONTEXT_NUMBER)?.toIntOrNull() ?: 2
-    }
+            return conf.getWithFallback(BROWSER_CONTEXT_NUMBER, PRIVACY_CONTEXT_NUMBER)?.toIntOrNull() ?: 2
+        }
 
     val maxAllowedBadContexts = 10
 
@@ -174,12 +175,14 @@ open class MultiPrivacyContextManager(
                     context.display, temporaryContexts.size, allowedPrivacyContextCount, context.baseDir
                 )
             }
+
             profile.isGroup -> {
                 logger.info(
                     "Sequential privacy context in group is created | {} | active: {}, allowed: {} | {}",
                     context.display, temporaryContexts.size, allowedPrivacyContextCount, context.baseDir
                 )
             }
+
             else -> {
                 logger.warn("Unexpected privacy context is created | {} | {}", context.display, context.baseDir)
             }
@@ -263,15 +266,16 @@ open class MultiPrivacyContextManager(
                 throw PrivacyException("Inactive privacy context manager")
             }
 
-            val privacyAgent = createPrivacyAgent(page, fingerprint)
-            if (privacyAgent.isPermanent) {
-                // logger.info("Prepare for permanent browser profile | {}", privacyAgent)
+            val browserProfile = createBrowserProfile(page, fingerprint)
+            if (browserProfile.isPermanent) {
+                // logger.info("Prepare for permanent browser profile | {}", browserProfile)
+                killZombieBrowserForcefully(browserProfile)
                 reserveResourceForcefully()
-                return getOrCreate(privacyAgent)
+                return getOrCreate(browserProfile)
             }
 
             if (activeContextCount < allowedPrivacyContextCount) {
-                getOrCreate(privacyAgent)
+                getOrCreate(browserProfile)
             }
 
             try {
@@ -338,14 +342,14 @@ open class MultiPrivacyContextManager(
     }
 
     @Throws(PrivacyException::class)
-    private fun createPrivacyAgent(page: WebPage, fingerprint: Fingerprint): BrowserProfile {
+    private fun createBrowserProfile(page: WebPage, fingerprint: Fingerprint): BrowserProfile {
         // Specify the browser profile by the user code
         val specifiedProfile = page.getBeanOrNull(BrowserProfile::class.java)
         if (specifiedProfile is BrowserProfile) {
             return specifiedProfile
         }
 
-        val generator = privacyAgentGeneratorFactory.generator
+        val generator = browserProfileGeneratorFactory.generator
         try {
             return generator.invoke(fingerprint)
         } catch (e: IOException) {
@@ -375,6 +379,10 @@ open class MultiPrivacyContextManager(
         }
 
         return pc
+    }
+
+    private fun killZombieBrowserForcefully(browserProfile: BrowserProfile) {
+
     }
 
     private fun reserveResourceForcefully() {

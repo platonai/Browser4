@@ -1,18 +1,17 @@
 package ai.platon.pulsar.skeleton.workflow.fetch.privacy
 
 import ai.platon.pulsar.common.browser.BrowserType
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserProfile
 import java.nio.file.Files
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.test.*
 
-class PrivacyAgentTests {
+class BrowserProfileTests {
     private val contextPathBase = Files.createTempDirectory("test-")
     private val contextPath = contextPathBase.resolve("cx.5kDMDS2")
     private val contextPath2 = contextPathBase.resolve("cx.7KmtAC2")
 
     @Test
-    fun testPrivacyAgentComparison() {
+    fun testBrowserProfileComparison() {
         val id = BrowserProfile(contextPath, BrowserType.PULSAR_CHROME)
         val id2 = BrowserProfile(contextPath2, BrowserType.PLAYWRIGHT_CHROME)
         assertNotEquals(id, id2)
@@ -22,7 +21,7 @@ class PrivacyAgentTests {
     }
 
     @Test
-    fun testPrivacyAgentEquality() {
+    fun testBrowserProfileEquality() {
         val id = BrowserProfile(contextPath, BrowserType.PULSAR_CHROME)
         val id2 = BrowserProfile(contextPath, BrowserType.PULSAR_CHROME)
         assertEquals(id, id2)
@@ -36,7 +35,7 @@ class PrivacyAgentTests {
     }
 
     @Test
-    fun testPrivacyAgentContains() {
+    fun testBrowserProfileContains() {
         val activeContexts = ConcurrentHashMap<BrowserProfile, Any>()
         val id = BrowserProfile(contextPath, BrowserType.PULSAR_CHROME)
         val id2 = BrowserProfile(contextPath, BrowserType.PLAYWRIGHT_CHROME)

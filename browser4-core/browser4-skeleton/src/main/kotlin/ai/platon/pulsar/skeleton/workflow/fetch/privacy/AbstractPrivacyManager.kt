@@ -1,15 +1,16 @@
 package ai.platon.pulsar.skeleton.workflow.fetch.privacy
 
-import ai.platon.pulsar.common.*
+import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.browser.fingerprint.Fingerprint
 import ai.platon.pulsar.common.config.CapabilityTypes.PRIVACY_CONTEXT_CLOSE_LAZY
 import ai.platon.pulsar.common.config.ImmutableConfig
+import ai.platon.pulsar.common.warnForClose
 import ai.platon.pulsar.persist.WebPage
+import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.common.AppSystemInfo
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
 import ai.platon.pulsar.skeleton.workflow.fetch.WebDriverFetcher
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import kotlinx.coroutines.*
 import org.slf4j.LoggerFactory
 import java.util.concurrent.ConcurrentHashMap
@@ -32,10 +33,10 @@ abstract class AbstractPrivacyManager(
     /**
      * Permanent contexts have a long lifecycle and are never deleted by the system.
      * Predefined privacy agents for permanent contexts include:
-     * 1. PrivacyAgent.SYSTEM_DEFAULT
-     * 2. PrivacyAgent.PROTOTYPE
-     * 3. PrivacyAgent.DEFAULT
-     * 4. PrivacyAgent.NEXT_SEQUENTIAL
+     * 1. BrowserProfile.SYSTEM_DEFAULT
+     * 2. BrowserProfile.PROTOTYPE
+     * 3. BrowserProfile.DEFAULT
+     * 4. BrowserProfile.NEXT_SEQUENTIAL
      */
     val permanentContexts = ConcurrentHashMap<BrowserProfile, PrivacyContext>()
 
@@ -78,12 +79,12 @@ abstract class AbstractPrivacyManager(
     /**
      * Factory for generating privacy agents.
      */
-    protected val privacyAgentGeneratorFactory = PrivacyAgentGeneratorFactory(conf)
+    protected val browserProfileGeneratorFactory = BrowserProfileGeneratorFactory(conf)
 
     /**
      * The generator used to create privacy agents.
      */
-    open val privacyAgentGenerator get() = privacyAgentGeneratorFactory.generator
+    open val browserProfileGenerator get() = browserProfileGeneratorFactory.generator
 
     /**
      * Indicates whether the privacy manager is closed.
@@ -229,11 +230,11 @@ abstract class AbstractPrivacyManager(
             logger.debug("Active contexts: {}, zombie contexts: {}", activeContexts.size, zombieContexts.size)
         }
 
-        val privacyAgent = privacyContext.profile
+        val browserProfile = privacyContext.profile
 
         synchronized(contextLifeCycleMonitor) {
-            permanentContexts.remove(privacyAgent)
-            temporaryContexts.remove(privacyAgent)
+            permanentContexts.remove(browserProfile)
+            temporaryContexts.remove(browserProfile)
 
             if (!zombieContexts.contains(privacyContext)) {
                 zombieContexts.addFirst(privacyContext)

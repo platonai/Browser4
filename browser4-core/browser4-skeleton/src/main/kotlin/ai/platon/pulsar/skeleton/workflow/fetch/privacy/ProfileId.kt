@@ -56,7 +56,7 @@ data class ProfileId(
     val isPermanent get() = isSystemDefault || isDefault || isPrototype
 
     /**
-     * The PrivacyAgent equality.
+     * The BrowserProfile equality.
      * Note: do not use the default equality function
      * */
     override fun equals(other: Any?): Boolean {

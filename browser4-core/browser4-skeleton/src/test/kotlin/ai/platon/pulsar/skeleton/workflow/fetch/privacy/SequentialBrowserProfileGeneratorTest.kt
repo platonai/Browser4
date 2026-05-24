@@ -4,21 +4,21 @@ import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.browser.fingerprint.Fingerprint
 import ai.platon.pulsar.common.config.ImmutableConfig
-import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.common.config.MutableConfig
+import ai.platon.pulsar.common.printlnPro
 import org.apache.commons.io.FileUtils
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.test.assertEquals
-import org.junit.jupiter.api.DisplayName
 
-class SequentialPrivacyAgentGeneratorTest {
+class SequentialBrowserProfileGeneratorTest {
 
     private lateinit var conf: ImmutableConfig
-    private lateinit var generator: SequentialPrivacyAgentGenerator
+    private lateinit var generator: SequentialBrowserProfileGenerator
     private lateinit var mockFingerprint: Fingerprint
     private lateinit var contextBaseDir: Path
     private val contextDirs = mutableListOf<Path>()
@@ -26,7 +26,7 @@ class SequentialPrivacyAgentGeneratorTest {
     @BeforeEach
     fun setUp() {
         conf = MutableConfig()
-        generator = SequentialPrivacyAgentGenerator("test")
+        generator = SequentialBrowserProfileGenerator("test")
         mockFingerprint = Fingerprint.EXAMPLE
         contextBaseDir = AppPaths.CONTEXT_GROUP_BASE_DIR.resolve("test/PULSAR_CHROME")
         IntRange(1, 10).forEach { i ->
