@@ -28,7 +28,6 @@ import java.nio.channels.FileLockInterruptionException
 import java.nio.channels.OverlappingFileLockException
 import java.nio.charset.Charset
 import java.nio.file.Files
-import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.PosixFileAttributeView
@@ -36,7 +35,6 @@ import java.nio.file.attribute.PosixFilePermission
 import java.time.Duration
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.regex.Pattern
 import kotlin.io.path.deleteIfExists
@@ -56,7 +54,6 @@ class ChromeLauncher constructor(
         private val logger = LoggerFactory.getLogger(ChromeLauncher::class.java)
 
         private val DEVTOOLS_LISTENING_LINE_PATTERN = Pattern.compile("^DevTools listening on (ws://.+:(\\d+)/.+)$")
-        private val BROWSER_PROCESS_KEYWORDS = listOf("chrome", "chromium", "google-chrome", "chromium-browser")
 
         internal fun normalizeCommandText(text: String): String {
             return text.trim().replace("\\", "/")
@@ -110,6 +107,7 @@ class ChromeLauncher constructor(
 
     // The number of recent temporary user data directories to keep, the browser has to be closed
     private val recentNToKeep = 10
+    private val chromeDestroyer = ChromeDestroyer(userDataDir)
     private var process: Process? = null
 
     @Volatile
@@ -118,10 +116,6 @@ class ChromeLauncher constructor(
     private val isClosed get() = closed.get()
     private val isActive get() = AppContext.isActive && !Thread.currentThread().isInterrupted
     private val shutdownHookThread = Thread { this.close() }
-
-    private fun clearProcessMarkers() {
-        BrowserFilesPatch.clearProcessMarkers(userDataDir)
-    }
 
     /**
      * Launches a Chrome process using the specified Chrome binary and options.
@@ -167,7 +161,7 @@ class ChromeLauncher constructor(
                         logger.warn("Chrome profile locked, retrying... ($i) | {}", e.message)
 
                         // Try to kill the zombie process holding the lock
-                        killLockingProcess()
+                        chromeDestroyer.killLockingProcess()
 
                         try {
                             Thread.sleep(3000)
@@ -222,23 +216,7 @@ class ChromeLauncher constructor(
      * */
     @Synchronized
     fun destroyForcibly() {
-        destroyForcibly(process?.pid())
-    }
-
-    private fun destroyForcibly(primaryPid: Long? = null) {
-        try {
-            val candidatePids = distinctPositivePids(primaryPid, readRecordedPid())
-
-            killLockingProcess(candidatePids)
-        } catch (e: NoSuchFileException) {
-            logger.warn("NoSuchFileException | {}", e.message)
-        } catch (e: IOException) {
-            logger.warn("IOException | {}", e.message)
-        } catch (t: Throwable) {
-            warnInterruptible(this, t, "Failed to destroy chrome launcher forcibly | {}", userDataDir)
-        } finally {
-            clearProcessMarkers()
-        }
+        chromeDestroyer.destroy(process?.pid())
     }
 
     /**
@@ -251,12 +229,12 @@ class ChromeLauncher constructor(
         try {
             if (p != null && p.isAlive) {
                 Runtimes.destroyProcess(p, options.shutdownWaitTime)
-                destroyForcibly(p.pid())
+                chromeDestroyer.destroy(p.pid())
             }
         } catch (t: Throwable) {
             warnForClose(this, t)
         } finally {
-            clearProcessMarkers()
+            chromeDestroyer.clearProcessMarkers()
         }
 
         cleanUpContextFiles()
@@ -379,175 +357,6 @@ class ChromeLauncher constructor(
             stop()
             throw e
         }
-    }
-
-    private fun readRecordedPid(): Long? {
-        return Files.readAllLines(pidPath)
-            .firstOrNull { it.isNotBlank() }
-            ?.trim()
-            ?.toLongOrNull()
-    }
-
-    private fun killLockingProcess(candidatePids: Collection<Long> = emptyList()): Int {
-        try {
-            logger.info("Attempting to find and kill process holding lock on {}", userDataDir)
-            val attemptedPids = candidatePids.asSequence()
-                .filter { it > 0 }
-                .distinct()
-                .toMutableSet()
-
-            val killedKnownPids = attemptedPids.count { pid ->
-                logger.warn("Destroy chrome launcher forcibly, pid: {} | {}", pid, userDataDir)
-                killProcessByPid(pid, "known-pid")
-            }
-
-            val killedByProcessHandle = ProcessHandle.allProcesses()
-                .filter { it.pid() !in attemptedPids }
-                .filter { isBrowserProcess(it) }
-                .filter { isCommandLineMatch(it.info().commandLine().orElse("") ?: "") }
-                .map { it.pid() }
-                .distinct()
-                .map { pid ->
-                    attemptedPids.add(pid)
-                    killProcessByPid(pid, "ProcessHandle")
-                }
-                .count()
-                .toInt()
-
-            val killedByFallback = if (killedByProcessHandle == 0) {
-                when {
-                    SystemUtils.IS_OS_WINDOWS -> killLockingProcessWindows(attemptedPids)
-                    SystemUtils.IS_OS_MAC || SystemUtils.IS_OS_LINUX -> killLockingProcessPosix(attemptedPids)
-                    else -> {
-                        logger.warn("No platform-specific fallback is available for {}", System.getProperty("os.name"))
-                        0
-                    }
-                }
-            } else {
-                0
-            }
-
-            val totalKilled = killedKnownPids + killedByProcessHandle + killedByFallback
-            if (totalKilled > 0) {
-                logger.info("Killed {} browser process(es) holding lock on {}", totalKilled, userDataDir)
-                // Give the OS some time to release file locks and cleanup the process.
-                Thread.sleep(2000)
-            } else {
-                logger.info("No locking browser process found for {}", userDataDir)
-            }
-
-            return totalKilled
-        } catch (_: InterruptedException) {
-            Thread.currentThread().interrupt()
-            logger.warn("Interrupted while killing locking process for {}", userDataDir)
-        } catch (e: Exception) {
-            logger.warn("Failed to kill locking process", e)
-        }
-        return 0
-    }
-
-    private fun isCommandLineMatch(cmdLine: String): Boolean {
-        return commandLineContainsUserDataDir(
-            cmdLine,
-            userDataDir.toAbsolutePath().toString(),
-            ignoreCase = SystemUtils.IS_OS_WINDOWS
-        )
-    }
-
-    private fun killLockingProcessWindows(excludedPids: Set<Long> = emptySet()): Int {
-        try {
-            logger.info("Trying PowerShell fallback to kill locking process")
-            val normalizedPath = normalizeCommandText(userDataDir.toAbsolutePath().toString()).replace("'", "''")
-            val command = $$"""
-                $path = '$$normalizedPath'
-                Get-CimInstance Win32_Process |
-                    Where-Object {
-                        $_.CommandLine -and
-                        (
-                            $_.Name -match '^(chrome|chromium)\.exe$' -or
-                            $_.CommandLine -match '(?i)(chrome|chromium|google-chrome|chromium-browser)'
-                        ) -and
-                        $_.CommandLine.Replace('\', '/') -like "*$path*"
-                    } |
-                    ForEach-Object { "{0}`t{1}" -f $_.ProcessId, $_.CommandLine }
-            """.trimIndent()
-
-            val output = runCommandAndCollectOutput("powershell.exe", "-NoProfile", "-Command", command)
-            return killProcessesFromListing(output, "PowerShell", excludedPids)
-        } catch (e: Exception) {
-            logger.warn("Failed to kill locking process via PowerShell", e)
-        }
-        return 0
-    }
-
-    private fun killLockingProcessPosix(excludedPids: Set<Long> = emptySet()): Int {
-        return try {
-            logger.info("Trying POSIX fallback to kill locking process")
-            val command = """
-                if command -v pgrep >/dev/null 2>&1; then
-                    pgrep -af 'chrome|chromium|google-chrome|chromium-browser'
-                else
-                    ps -eo pid=,args= | grep -E -i 'chrome|chromium|google-chrome|chromium-browser' | grep -v grep
-                fi
-            """.trimIndent()
-
-            val output = runCommandAndCollectOutput("bash", "-lc", command)
-            killProcessesFromListing(output, "POSIX", excludedPids)
-        } catch (e: Exception) {
-            logger.warn("Failed to kill locking process via POSIX fallback", e)
-            0
-        }
-    }
-
-    private fun killProcessesFromListing(lines: List<String>, source: String, excludedPids: Set<Long> = emptySet()): Int {
-        return lines.asSequence()
-            .mapNotNull(::parseProcessListingLine)
-            .filter { (_, cmdLine) -> isCommandLineMatch(cmdLine) }
-            .map { (pid, _) -> pid }
-            .filter { it !in excludedPids }
-            .distinct()
-            .count { pid -> killProcessByPid(pid, source) }
-    }
-
-    private fun killProcessByPid(pid: Long, source: String): Boolean {
-        if (pid <= 0 || pid > Int.MAX_VALUE) {
-            logger.warn("Skipping invalid pid {} from {} while cleaning {}", pid, source, userDataDir)
-            return false
-        }
-
-        logger.warn("Killing process holding lock ({}): pid={} | {}", source, pid, userDataDir)
-        Runtimes.destroyProcessForcibly(pid.toInt())
-        return true
-    }
-
-    private fun isBrowserProcess(handle: ProcessHandle): Boolean {
-        val info = handle.info()
-        val command = info.command().orElse("") ?: ""
-        val commandLine = info.commandLine().orElse("") ?: ""
-        return isBrowserCommand(command) || isBrowserCommand(commandLine)
-    }
-
-    private fun isBrowserCommand(command: String): Boolean {
-        if (command.isBlank()) {
-            return false
-        }
-
-        val normalized = command.lowercase()
-        return BROWSER_PROCESS_KEYWORDS.any { normalized.contains(it) }
-    }
-
-    private fun runCommandAndCollectOutput(vararg command: String): List<String> {
-        val process = ProcessBuilder(*command)
-            .redirectErrorStream(true)
-            .start()
-
-        val output = process.inputStream.bufferedReader().use(BufferedReader::readLines)
-        if (!process.waitFor(10, TimeUnit.SECONDS)) {
-            process.destroyForcibly()
-            logger.warn("Timed out while executing fallback command: {}", command.joinToString(" "))
-        }
-
-        return output
     }
 
     /**
@@ -846,7 +655,7 @@ ${scriptPath.toUri()}
     private fun cleanUpContextFiles() {
         try {
             runCatching {
-                clearProcessMarkers()
+                chromeDestroyer.clearProcessMarkers()
                 BrowserFilesPatch.cleanUpContextTmpDir(temporaryUddExpiry)
                 BrowserFilesPatch.cleanOldestContextTmpDirs(Duration.ofMinutes(2), recentNToKeep)
             }.onFailure { warnForClose(this, it) }
