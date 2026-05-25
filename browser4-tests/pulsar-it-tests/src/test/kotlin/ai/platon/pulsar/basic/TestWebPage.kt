@@ -1,14 +1,15 @@
 package ai.platon.pulsar.basic
 
 import ai.platon.pulsar.common.PulsarParams
+import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.common.sleepSeconds
 import ai.platon.pulsar.persist.AbstractWebPage
-import ai.platon.pulsar.persist.model.GoraWebPage
 import ai.platon.pulsar.persist.metadata.Name
+import ai.platon.pulsar.persist.model.GoraWebPage
 import ai.platon.pulsar.skeleton.common.message.PageLoadStatusFormatter
-import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.skeleton.common.persist.ext.options
 import ai.platon.pulsar.test.TestUrls
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assumptions
 import org.junit.jupiter.api.BeforeEach
 import java.time.Instant
@@ -24,7 +25,7 @@ class TestWebPage: TestBase() {
 
     @BeforeEach
     fun clearResources() {
-        session.delete(url)
+        runBlocking { session.delete(url) }
         assertTrue("Page should not exists | $url") { !session.exists(url) }
     }
 
@@ -33,7 +34,7 @@ class TestWebPage: TestBase() {
         val args = "-i 5s"
         val normalizedArgs = "-expires PT5S"
         val option = session.options(args)
-        var page = session.load(url, option)
+        var page = runBlocking { session.load(url, option) }
         Assumptions.assumeTrue(page.protocolStatus.isSuccess,
             "Failed to fetch the page, abort the test | $url")
 
@@ -57,7 +58,7 @@ class TestWebPage: TestBase() {
         val options2 = session.options("$args -expireAt $expireAt")
         assertTrue { options2.isExpired(page.prevFetchTime) }
 
-        page = session.load(url, options2)
+        page = runBlocking { session.load(url, options2) }
         Assumptions.assumeTrue(page.protocolStatus.isSuccess,
             "Failed to fetch the page, abort the test | $url")
 
@@ -88,8 +89,8 @@ class TestWebPage: TestBase() {
         assertEquals(2, page.fetchCount)
     }
 
-    @Test
-    fun testPageModel() {
+    @org.junit.jupiter.api.Test
+    suspend fun testPageModel() {
         var page = session.load(url)
         require(page is GoraWebPage)
         page.unbox().pageModel?.fieldGroups = null

@@ -3,6 +3,7 @@ package ai.platon.pulsar.basic
 import ai.platon.pulsar.skeleton.common.persist.ext.options
 import ai.platon.pulsar.skeleton.workflow.common.url.StatefulListenableHyperlink
 import ai.platon.pulsar.skeleton.workflow.component.FetchComponent
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.DisplayName
 import org.springframework.beans.factory.annotation.Autowired
 import kotlin.test.*
@@ -62,7 +63,7 @@ class TestEvents : TestBase() {
             }
         }
 
-        session.load(hyperlink)
+        runBlocking { session.load(hyperlink) }
 
         assertTrue { "onBeforeLoad" in firedEvents }
         assertTrue { "onAfterFetch" in firedEvents }

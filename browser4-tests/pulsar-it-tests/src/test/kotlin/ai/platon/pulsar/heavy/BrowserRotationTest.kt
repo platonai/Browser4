@@ -8,14 +8,11 @@ import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.persist.ProtocolStatus
 import ai.platon.pulsar.skeleton.PulsarSettings
 import ai.platon.pulsar.skeleton.TaskLoop
-import ai.platon.pulsar.skeleton.workflow.common.url.ListenableHyperlink
 import ai.platon.pulsar.skeleton.browser.driver.AbstractWebDriver
+import ai.platon.pulsar.skeleton.workflow.common.url.ListenableHyperlink
 import kotlinx.coroutines.delay
-import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.Assumptions
-import org.junit.jupiter.api.BeforeAll
-import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.Tag
+import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.*
 import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.deleteRecursively
 import kotlin.test.Test
@@ -56,17 +53,17 @@ class BrowserRotationTest : MassiveTestBase() {
     fun testWithSequentialBrowser() {
         Assumptions.assumeTrue { testFileCount > 0 }
         PulsarSettings.withSequentialBrowsers()
-        runAndAwait()
+        runBlocking { runAndAwait() }
     }
 
     @Test
     fun testWithTemporaryBrowser() {
         Assumptions.assumeTrue { testFileCount > 0 }
         PulsarSettings.withTemporaryBrowser()
-        runAndAwait()
+        runBlocking { runAndAwait() }
     }
 
-    private fun runAndAwait() {
+    private suspend fun runAndAwait() {
         if (testFileCount == 0) {
             printlnPro("Skip the test since testFileCount is 0")
             return

@@ -1,15 +1,17 @@
 package ai.platon.pulsar.basic.session
 
+import ai.platon.pulsar.basic.TestBase
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.config.AppConstants.LOCAL_FILE_BASE_URL
+import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.persist.model.WebPageFormatter
-import ai.platon.pulsar.common.printlnPro
-import ai.platon.pulsar.basic.TestBase
 import com.google.gson.Gson
+import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Assumptions.assumeTrue
+import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.Test
 import java.nio.file.Files
-import kotlin.test.*
 
 /**
  * Created by Vincent on 16-7-20.
@@ -22,7 +24,7 @@ class PulsarSessionTests: TestBase() {
 
     private val resourceUrl = "https://www.amazon.com/robots.txt?t=$timestamp"
 
-    @BeforeTest
+    @BeforeEach
     fun setup() {
         // The data store is FileStore, and delete does not work
 //        webDB.delete(url)
@@ -30,7 +32,7 @@ class PulsarSessionTests: TestBase() {
     }
 
     @Test
-    fun testNormalize() {
+    suspend fun testNormalize() {
         val normURL = session.normalize(url)
         assertNotEquals(session.sessionConfig, normURL.options.conf)
         val page = session.load(normURL)
@@ -38,12 +40,13 @@ class PulsarSessionTests: TestBase() {
     }
 
     @Test
-    fun testLoad() {
+    suspend fun testLoad() {
         val page = session.load(url)
         val page2 = webDB.getOrNull(url)
 
         if (page.protocolStatus.isSuccess) {
             assertNotNull(page2)
+            requireNotNull(page2)
             assertTrue { page2.fetchCount > 0 }
             assertTrue { page2.protocolStatus.isSuccess }
         }
@@ -58,7 +61,7 @@ class PulsarSessionTests: TestBase() {
     }
 
     @Test
-    fun testLoadResource() {
+    suspend fun testLoadResource() {
         val page = session.loadResource(resourceUrl, url, "-refresh")
 
         assertTrue { page.fetchCount > 0 }
@@ -70,7 +73,7 @@ class PulsarSessionTests: TestBase() {
     }
 
     @Test
-    fun testLoadLocalFile() {
+    suspend fun testLoadLocalFile() {
         val path = AppPaths.getTmpDirectory("test.html")
         printlnPro(path)
         val html = """
@@ -91,4 +94,3 @@ class PulsarSessionTests: TestBase() {
         assertEquals("Hello", document.selectFirstTextOrNull("h1"))
     }
 }
-
