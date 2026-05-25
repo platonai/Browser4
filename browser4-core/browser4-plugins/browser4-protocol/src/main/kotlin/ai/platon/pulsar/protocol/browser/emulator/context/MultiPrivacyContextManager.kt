@@ -15,6 +15,7 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator.context
 
+import ai.platon.browser4.driver.chrome.ChromeDestroyer
 import ai.platon.browser4.protocol.browser.DefaultWebDriverPoolManager
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.browser.fingerprint.Fingerprint
@@ -382,9 +383,9 @@ open class MultiPrivacyContextManager(
     }
 
     private fun killZombieBrowserForcefully(browserProfile: BrowserProfile) {
-//        if (browserProfile.isDefault) {
-//            ChromeDestroyer(PrivacyContext.DEFAULT_CONTEXT_DIR).destroy()
-//        }
+        if (browserProfile.isDefault) {
+            ChromeDestroyer(PrivacyContext.DEFAULT_CONTEXT_DIR).destroyZombie()
+        }
     }
 
     private fun reserveResourceForcefully() {

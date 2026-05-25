@@ -93,7 +93,7 @@ class DOMBoundsParityTest : WebDriverTestBase() {
         runEnhancedWebDriverTest(interactiveDynamicURL) { driver ->
             assertIs<PulsarWebDriver>(driver)
 
-            val service = driver.snapshotService as CDPSnapshotService
+            val service = CDPSnapshotService(driver.cdp)
 
             // Build parent with an iframe using srcdoc (same-origin), scroll iframe content to 400
             driver.cdp.evaluate(

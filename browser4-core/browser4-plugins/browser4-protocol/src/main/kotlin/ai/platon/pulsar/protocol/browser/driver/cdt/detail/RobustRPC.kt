@@ -1,5 +1,6 @@
 package ai.platon.pulsar.protocol.browser.driver.cdt.detail
 
+import ai.platon.browser4.driver.chrome.NodeRef
 import ai.platon.browser4.driver.chrome.util.CDPReturnError
 import ai.platon.browser4.driver.chrome.util.ChromeDriverException
 import ai.platon.browser4.driver.chrome.util.ChromeIOException
@@ -37,6 +38,67 @@ class RobustRPC(
 
     val rpcFailures = AtomicInteger()
     var maxRPCFailures = MAX_RPC_FAILURES
+
+    suspend fun <T> invokeOnPage(
+        name: String,
+        url: String? = null,
+        message: String? = null,
+        action: suspend () -> T
+    ): T? {
+        try {
+            return invokeWithRetry(name, url = url) {
+                action()
+            }
+        } catch (e: ChromeDriverException) {
+            handleChromeException(e, name, message)
+            throw e
+        }
+    }
+
+    suspend fun <T> invokeOnElement(
+        selector: String,
+        name: String,
+        focus: Boolean = false,
+        scrollIntoView: Boolean = false,
+        action: suspend (NodeRef) -> T
+    ): T? {
+        try {
+            return invokeWithRetry(name) {
+                val node = if (focus) {
+                    driver.page.focusOnSelector(selector)
+                } else if (scrollIntoView) {
+                    driver.page.scrollIntoViewIfNeeded(selector)
+                } else {
+                    driver.page.queryLocator(selector)
+                }
+
+                if (node != null) {
+                    action(node)
+                } else {
+                    null
+                }
+            }
+        } catch (e: ChromeDriverException) {
+            handleChromeException(e, name, "selector: [$selector], focus: $focus, scrollIntoView: $scrollIntoView")
+        }
+
+        return null
+    }
+
+    suspend fun <T> predicateOnPage(
+        name: String,
+        url: String? = null,
+        message: String? = null,
+        action: suspend () -> T
+    ): Boolean = invokeOnPage(name, url, message, action) != null
+
+    suspend fun predicateOnElement(
+        selector: String,
+        name: String,
+        focus: Boolean = false,
+        scrollIntoView: Boolean = false,
+        predicate: suspend (NodeRef) -> Boolean
+    ): Boolean = invokeOnElement(selector, name, focus, scrollIntoView, predicate) == true
 
     @Throws(ChromeRPCException::class)
     suspend fun <T> invoke(action: String, block: suspend () -> T): T? {

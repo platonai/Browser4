@@ -207,8 +207,8 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
     @DisplayName("Scrollability and interactivity analysis on dynamic content")
     fun scrollabilityAndInteractivityAnalysisOnDynamicContent() = runEnhancedWebDriverTest(testURL) { driver ->
         assertIs<PulsarWebDriver>(driver)
-        val service = driver.snapshotService as CDPSnapshotService
         val cdp = driver.cdp
+        val service = CDPSnapshotService(driver.cdp)
 
         // Create a clearly scrollable container and interactive buttons
         runCatching { cdp.evaluate("generateLargeList(1000)") }

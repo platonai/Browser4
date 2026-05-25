@@ -1,7 +1,6 @@
 package ai.platon.pulsar.skeleton.browser.driver
 
 import ai.platon.browser4.driver.chrome.NetworkResourceResponse
-import ai.platon.browser4.driver.chrome.dom.SnapshotService
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.DateTimes
 import ai.platon.pulsar.common.getTracerOrNull
@@ -155,8 +154,6 @@ abstract class AbstractWebDriver(
 
     open val chatModel get() = ChatModelFactory.getOrCreateOrNull(config)
     open val implementation: Any = this
-
-    open val snapshotService: SnapshotService? = null
 
     /** Idle timeout before a READY driver is considered stale and eligible for recycling/retirement. */
     var idleTimeout: Duration = Duration.ofMinutes(10)
@@ -528,6 +525,9 @@ abstract class AbstractWebDriver(
     override suspend fun waitUntil(predicate: suspend () -> Boolean) = waitUntil(timeout("waitUntil"), predicate)
     override suspend fun waitUntil(timeout: Duration, predicate: suspend () -> Boolean) =
         waitUntil("waitUtil", timeout, predicate)
+
+
+
 
     /**
      * Generate a random delay in milliseconds for an action.

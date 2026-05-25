@@ -92,6 +92,12 @@ class ChromeDestroyer(
         }
     }
 
+    fun destroyZombie() {
+        if (isZombie()) {
+            destroy()
+        }
+    }
+
     internal fun distinctPositivePids(vararg pids: Long?): List<Long> {
         return pids.asSequence()
             .filterNotNull()

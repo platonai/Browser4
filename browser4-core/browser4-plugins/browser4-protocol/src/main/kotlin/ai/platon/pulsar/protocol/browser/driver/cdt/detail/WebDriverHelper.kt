@@ -1,9 +1,7 @@
 package ai.platon.pulsar.protocol.browser.driver.cdt.detail
 
-import ai.platon.browser4.driver.chrome.NodeRef
 import ai.platon.browser4.driver.chrome.PageHandler
 import ai.platon.browser4.driver.chrome.experimental.CDP
-import ai.platon.browser4.driver.chrome.util.ChromeDriverException
 import ai.platon.cdt.kt.protocol.events.network.ResponseReceived
 import ai.platon.cdt.kt.protocol.types.network.ResourceType
 import ai.platon.cdt.kt.protocol.types.runtime.CallFunctionOn
@@ -99,68 +97,6 @@ class WebDriverHelper(
         val mapper = jacksonObjectMapper().setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
         return mapper.readValue(mapper.writeValueAsString(cookie))
     }
-
-    suspend fun <T> invokeOnPage(
-        name: String,
-        url: String? = null,
-        message: String? = null,
-        action: suspend () -> T
-    ): T? {
-        try {
-            return rpc.invokeWithRetry(name, url = url) {
-                action()
-            }
-        } catch (e: ChromeDriverException) {
-            rpc.handleChromeException(e, name, message)
-        }
-
-        return null
-    }
-
-    suspend fun <T> invokeOnElement(
-        selector: String,
-        name: String,
-        focus: Boolean = false,
-        scrollIntoView: Boolean = false,
-        action: suspend (NodeRef) -> T
-    ): T? {
-        try {
-            return rpc.invokeWithRetry(name) {
-                val node = if (focus) {
-                    page.focusOnSelector(selector)
-                } else if (scrollIntoView) {
-                    page.scrollIntoViewIfNeeded(selector)
-                } else {
-                    page.queryLocator(selector)
-                }
-
-                if (node != null) {
-                    action(node)
-                } else {
-                    null
-                }
-            }
-        } catch (e: ChromeDriverException) {
-            rpc.handleChromeException(e, name, "selector: [$selector], focus: $focus, scrollIntoView: $scrollIntoView")
-        }
-
-        return null
-    }
-
-    suspend fun <T> predicateOnPage(
-        name: String,
-        url: String? = null,
-        message: String? = null,
-        action: suspend () -> T
-    ): Boolean = invokeOnPage(name, url, message, action) != null
-
-    suspend fun predicateOnElement(
-        selector: String,
-        name: String,
-        focus: Boolean = false,
-        scrollIntoView: Boolean = false,
-        predicate: suspend (NodeRef) -> Boolean
-    ): Boolean = invokeOnElement(selector, name, focus, scrollIntoView, predicate) == true
 
     fun createJsEvaluate(evaluate: Evaluate?): JsEvaluation? {
         evaluate ?: return null
