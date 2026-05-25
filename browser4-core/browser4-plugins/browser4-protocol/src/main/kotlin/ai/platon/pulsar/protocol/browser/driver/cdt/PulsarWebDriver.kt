@@ -1301,6 +1301,7 @@ function() {
         try {
             val isolatedWorldJs = settings.dualWorldScriptLoader.getIsolatedWorldJs(false)
             if (isolatedWorldJs.isNotBlank()) {
+                check(cdp.isOpen) { "Underlying browser (CDP) is closed" }
                 val targetFrameId = cdp.getFrameTree().frame.id
                 val contextId = isolatedWorldManager.ensureRuntime(targetFrameId, isolatedWorldJs)
                 logger.debug(
@@ -1311,7 +1312,11 @@ function() {
                 logger.warn("No isolated world JS found to re-inject after frame navigation")
             }
         } catch (e: Exception) {
-            logger.warn("Failed to re-inject Browser4 runtime after frame navigation", e)
+            if (isActive && canConnect()) {
+                logger.warn("Failed to re-inject Browser4 runtime after frame navigation", e)
+            } else {
+                logger.debug("Underlying browser (CDP) is closed")
+            }
         }
     }
 

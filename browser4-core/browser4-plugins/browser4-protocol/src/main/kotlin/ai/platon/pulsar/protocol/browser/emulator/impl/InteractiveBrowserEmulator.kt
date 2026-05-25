@@ -627,6 +627,11 @@ open class InteractiveBrowserEmulator(
         var n = 10
         while (n-- > 0 && !isScriptInjected(driver)) {
             delay(1000.milliseconds)
+            checkState(driver)
+            if (n < 5) {
+                // TODO: Health checks should reside in the driver layer and be managed through a unified strategy
+                driver.healthy()
+            }
         }
 
         if (n <= 0) {
