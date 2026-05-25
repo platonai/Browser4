@@ -22,6 +22,7 @@ import ai.platon.pulsar.skeleton.context.support.AbstractPulsarContext
 import ai.platon.pulsar.skeleton.event.PageEventHandlers
 import ai.platon.pulsar.skeleton.workflow.common.FetchEntry
 import ai.platon.pulsar.skeleton.workflow.common.url.ListenableHyperlink
+import kotlinx.coroutines.runBlocking
 import org.jsoup.nodes.Element
 import org.slf4j.LoggerFactory
 import java.nio.ByteBuffer
@@ -393,7 +394,7 @@ abstract class AbstractPulsarSession(
 
     override fun parse(page: WebPage, noCache: Boolean) = parse0(page, noCache)
 
-    override suspend fun loadDocument(url: String) = parse(load(url))
+    override fun loadDocument(url: String) = runBlocking { parse(load(url)) }
 
     override suspend fun loadDocument(url: String, args: String) = parse(load(url, args))
 
