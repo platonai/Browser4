@@ -53,7 +53,7 @@ class ScrapeService(
         }
 
         val page = session.load(request.url, options)
-        val document = session.parse(page)
+        val document = session.parse(page, noCache = true)
 
         return page to document
     }
