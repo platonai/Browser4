@@ -42,7 +42,7 @@ abstract class TestBase {
         val context = SQLContexts.create()
         val session = context.getOrCreateSession()
 
-        fun ensurePage(url: String) {
+        suspend fun ensurePage(url: String) {
             val pageCondition = { page: WebPage -> page.protocolStatus.isSuccess && page.persistedContentLength > 8000 }
             val page = session.load(url).takeIf(pageCondition) ?: session.load(url, "-refresh")
 

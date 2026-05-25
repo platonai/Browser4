@@ -52,7 +52,7 @@ object DomToH2Queries {
      * or an array of strings represented by a [ValueArray]
      * @return A collection of [WebPage]s
      */
-    fun loadAll(session: PulsarSession, urls: Value): Collection<WebPage> {
+    suspend fun loadAll(session: PulsarSession, urls: Value): Collection<WebPage> {
         var pages: Collection<WebPage> = listOf()
 
         when (urls) {
@@ -85,7 +85,7 @@ object DomToH2Queries {
      * @param transformer    The transformer used to translate a Web page into something else
      * @return A collection of O
      */
-    fun <O> loadAll(
+    suspend fun <O> loadAll(
         session: PulsarSession,
         configuredUrls: Value, restrictCss: String, offset: Int, limit: Int,
         transformer: (Element, String, Int, Int) -> Collection<O>
@@ -112,7 +112,7 @@ object DomToH2Queries {
         return collection
     }
 
-    fun loadOutPages(
+    suspend fun loadOutPages(
         session: PulsarSession,
         portalUrl: String, restrictCss: String,
         offset: Int = 1, limit: Int = Int.MAX_VALUE,

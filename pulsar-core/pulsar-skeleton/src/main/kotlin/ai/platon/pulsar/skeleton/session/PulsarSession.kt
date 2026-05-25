@@ -531,7 +531,7 @@ interface PulsarSession : AutoCloseable {
      * @param url The url to open
      * @return The webpage loaded or NIL
      */
-    fun open(url: String): WebPage
+    suspend fun open(url: String): WebPage
 
     /**
      * Open a url with page events.
@@ -547,7 +547,7 @@ interface PulsarSession : AutoCloseable {
      * @param url The url to open
      * @return The webpage loaded or NIL
      */
-    fun open(url: String, eventHandlers: PageEventHandlers): WebPage
+    suspend fun open(url: String, eventHandlers: PageEventHandlers): WebPage
 
     /**
      * Open a url with webdriver.
@@ -653,7 +653,7 @@ interface PulsarSession : AutoCloseable {
      * @param url The url to load
      * @return The webpage loaded or NIL
      */
-    fun load(url: String): WebPage
+    suspend fun load(url: String): WebPage
 
     /**
      * Load a url with specified arguments.
@@ -678,7 +678,7 @@ interface PulsarSession : AutoCloseable {
      * @param args The load arguments
      * @return The webpage loaded or NIL
      */
-    fun load(url: String, args: String): WebPage
+    suspend fun load(url: String, args: String): WebPage
 
     /**
      * Load a url with specified options.
@@ -703,7 +703,7 @@ interface PulsarSession : AutoCloseable {
      * @param options The load options
      * @return The webpage loaded or NIL
      */
-    fun load(url: String, options: LoadOptions): WebPage
+    suspend fun load(url: String, options: LoadOptions): WebPage
 
     /**
      * Load a url with the specified arguments.
@@ -719,7 +719,7 @@ interface PulsarSession : AutoCloseable {
      * @param url  The url to load
      * @return The webpage loaded or NIL
      */
-    fun load(url: UrlAware): WebPage
+    suspend fun load(url: UrlAware): WebPage
 
     /**
      * Load a url with the specified arguments.
@@ -736,7 +736,7 @@ interface PulsarSession : AutoCloseable {
      * @param args The load arguments
      * @return The webpage loaded or NIL
      */
-    fun load(url: UrlAware, args: String): WebPage
+    suspend fun load(url: UrlAware, args: String): WebPage
 
     /**
      * Load a url with options.
@@ -754,7 +754,7 @@ interface PulsarSession : AutoCloseable {
      * @param options The load options
      * @return The webpage loaded or NIL
      */
-    fun load(url: UrlAware, options: LoadOptions): WebPage
+    suspend fun load(url: UrlAware, options: LoadOptions): WebPage
 
     /**
      * Load a normal url.
@@ -770,7 +770,7 @@ interface PulsarSession : AutoCloseable {
      * * @param url The normal url
      * @return The webpage loaded or NIL
      */
-    fun load(url: NormURL): WebPage
+    suspend fun load(url: NormURL): WebPage
 
     /**
      * Load a url with specified options.
@@ -1494,7 +1494,7 @@ interface PulsarSession : AutoCloseable {
      * @param args         The load arguments
      * @return The loaded out pages
      */
-    fun loadOutPages(portalUrl: String, args: String): List<WebPage>
+    suspend fun loadOutPages(portalUrl: String, args: String): List<WebPage>
 
     /**
      * Load or fetch the portal page, and then load or fetch the out links selected by `-outLink` option.
@@ -1510,7 +1510,7 @@ interface PulsarSession : AutoCloseable {
      * @param options   The load options
      * @return The loaded out pages
      */
-    fun loadOutPages(portalUrl: String, options: LoadOptions): List<WebPage>
+    suspend fun loadOutPages(portalUrl: String, options: LoadOptions): List<WebPage>
 
     /**
      * A confusing version, it's too complicated to handle events and should not be implemented.
@@ -1535,7 +1535,7 @@ interface PulsarSession : AutoCloseable {
      * @param args         The load arguments
      * @return The loaded out pages
      */
-    fun loadOutPages(portalUrl: UrlAware, args: String): List<WebPage>
+    suspend fun loadOutPages(portalUrl: UrlAware, args: String): List<WebPage>
 
     /**
      * Load or fetch the portal page, and then load or fetch the out links selected by `-outLink` option.
@@ -1551,7 +1551,7 @@ interface PulsarSession : AutoCloseable {
      * @param options   The load options
      * @return The loaded out pages
      */
-    fun loadOutPages(portalUrl: UrlAware, options: LoadOptions): List<WebPage>
+    suspend fun loadOutPages(portalUrl: UrlAware, options: LoadOptions): List<WebPage>
 
     /**
      * A confusing version, it's too complicated to handle events and should not be implemented.
@@ -1576,7 +1576,7 @@ interface PulsarSession : AutoCloseable {
      * @param args   The load arguments
      * @return The loaded out pages
      */
-    fun loadOutPagesAsync(portalUrl: String, args: String): List<CompletableFuture<WebPage>>
+    suspend fun loadOutPagesAsync(portalUrl: String, args: String): List<CompletableFuture<WebPage>>
 
     /**
      * Load or fetch the portal page, and then load or fetch the out links selected by `-outLink` option asynchronously.
@@ -1592,7 +1592,7 @@ interface PulsarSession : AutoCloseable {
      * @param options   The load options
      * @return The loaded out pages
      */
-    fun loadOutPagesAsync(portalUrl: String, options: LoadOptions): List<CompletableFuture<WebPage>>
+    suspend fun loadOutPagesAsync(portalUrl: String, options: LoadOptions): List<CompletableFuture<WebPage>>
 
     /**
      * Load the portal page and submit the out links specified by the `-outLink` option to the URL pool.
@@ -1615,7 +1615,7 @@ interface PulsarSession : AutoCloseable {
      * @param args      The load arguments
      * @return The [PulsarSession] itself to enable chained operation
      */
-    fun submitForOutPages(portalUrl: String, args: String): PulsarSession
+    suspend fun submitForOutPages(portalUrl: String, args: String): PulsarSession
 
     /**
      * Load the portal page and submit the out links specified by the `-outLink` option to the URL pool.
@@ -1638,7 +1638,7 @@ interface PulsarSession : AutoCloseable {
      * @param options   The load options
      * @return The [PulsarSession] itself to enable chained operation
      */
-    fun submitForOutPages(portalUrl: String, options: LoadOptions): PulsarSession
+    suspend fun submitForOutPages(portalUrl: String, options: LoadOptions): PulsarSession
 
     /**
      * Load the portal page and submit the out links specified by the `-outLink` option to the URL pool.
@@ -1661,7 +1661,7 @@ interface PulsarSession : AutoCloseable {
      * @param args      The load arguments
      * @return The [PulsarSession] itself to enable chained operation
      */
-    fun submitForOutPages(portalUrl: UrlAware, args: String): PulsarSession
+    suspend fun submitForOutPages(portalUrl: UrlAware, args: String): PulsarSession
 
     /**
      * Load the portal page and submit the out links specified by the `-outLink` option to the URL pool.
@@ -1684,7 +1684,7 @@ interface PulsarSession : AutoCloseable {
      * @param options   The load options
      * @return The [PulsarSession] itself to enable chained operation
      */
-    fun submitForOutPages(portalUrl: UrlAware, options: LoadOptions): PulsarSession
+    suspend fun submitForOutPages(portalUrl: UrlAware, options: LoadOptions): PulsarSession
 
     /**
      * Load a url as a resource without browser rendering.
@@ -1700,7 +1700,7 @@ interface PulsarSession : AutoCloseable {
      * @param referrer The referrer URL
      * @return The webpage containing the resource
      */
-    fun loadResource(url: String, referrer: String): WebPage
+    suspend fun loadResource(url: String, referrer: String): WebPage
 
     /**
      * Load a url as a resource without browser rendering.
@@ -1717,7 +1717,7 @@ interface PulsarSession : AutoCloseable {
      * @param args The load arguments
      * @return The webpage containing the resource
      */
-    fun loadResource(url: String, referrer: String, args: String): WebPage
+    suspend fun loadResource(url: String, referrer: String, args: String): WebPage
 
     /**
      * Load a url as a resource without browser rendering.
@@ -1734,7 +1734,7 @@ interface PulsarSession : AutoCloseable {
      * @param options The load options
      * @return The webpage containing the resource
      */
-    fun loadResource(url: String, referrer: String, options: LoadOptions): WebPage
+    suspend fun loadResource(url: String, referrer: String, options: LoadOptions): WebPage
 
     /**
      * Load a url as a resource without browser rendering.
@@ -1842,7 +1842,7 @@ interface PulsarSession : AutoCloseable {
      * @param url The url to load
      * @return The parsed HTML document
      * */
-    fun loadDocument(url: String): FeaturedDocument
+    suspend fun loadDocument(url: String): FeaturedDocument
 
     /**
      * Load or fetch a webpage and parse it into an HTML document
@@ -1855,7 +1855,7 @@ interface PulsarSession : AutoCloseable {
      * @param args The load arguments
      * @return The parsed HTML document
      * */
-    fun loadDocument(url: String, args: String): FeaturedDocument
+    suspend fun loadDocument(url: String, args: String): FeaturedDocument
 
     /**
      * Load or fetch a webpage and parse it into an HTML document
@@ -1868,7 +1868,7 @@ interface PulsarSession : AutoCloseable {
      * @param options The load options
      * @return The parsed HTML document
      * */
-    fun loadDocument(url: String, options: LoadOptions): FeaturedDocument
+    suspend fun loadDocument(url: String, options: LoadOptions): FeaturedDocument
 
     /**
      * Load or fetch a webpage and parse it into an HTML document
@@ -1880,7 +1880,7 @@ interface PulsarSession : AutoCloseable {
      * @param url The url to load
      * @return The parsed HTML document
      * */
-    fun loadDocument(url: UrlAware): FeaturedDocument
+    suspend fun loadDocument(url: UrlAware): FeaturedDocument
 
     /**
      * Load or fetch a webpage and parse it into an HTML document
@@ -1893,7 +1893,7 @@ interface PulsarSession : AutoCloseable {
      * @param args The load arguments
      * @return The parsed HTML document
      * */
-    fun loadDocument(url: UrlAware, args: String): FeaturedDocument
+    suspend fun loadDocument(url: UrlAware, args: String): FeaturedDocument
 
     /**
      * Load or fetch a webpage and parse it into an HTML document
@@ -1906,7 +1906,7 @@ interface PulsarSession : AutoCloseable {
      * @param options The load options
      * @return The parsed HTML document
      * */
-    fun loadDocument(url: UrlAware, options: LoadOptions): FeaturedDocument
+    suspend fun loadDocument(url: UrlAware, options: LoadOptions): FeaturedDocument
 
     /**
      * Load or fetch a webpage and then parse it into an HTML document.
@@ -1918,7 +1918,7 @@ interface PulsarSession : AutoCloseable {
      * @param url The url to load
      * @return The parsed HTML document
      * */
-    fun loadDocument(url: NormURL): FeaturedDocument
+    suspend fun loadDocument(url: NormURL): FeaturedDocument
 
     /**
      * Load or fetch a webpage located by the given url, and then extract fields specified by
@@ -2003,7 +2003,7 @@ interface PulsarSession : AutoCloseable {
      * @param fieldSelectors The selectors to extract fields
      * @return All the extracted fields and their selectors
      * */
-    fun scrape(url: String, args: String, fieldSelectors: Iterable<String>): Map<String, String?>
+    suspend fun scrape(url: String, args: String, fieldSelectors: Iterable<String>): Map<String, String?>
 
     /**
      * Load or fetch a webpage located by the given url, and then extract fields specified by
@@ -2018,7 +2018,7 @@ interface PulsarSession : AutoCloseable {
      * @param fieldSelectors The selectors to extract fields
      * @return All the extracted fields and their selectors
      * */
-    fun scrape(url: String, options: LoadOptions, fieldSelectors: Iterable<String>): Map<String, String?>
+    suspend fun scrape(url: String, options: LoadOptions, fieldSelectors: Iterable<String>): Map<String, String?>
 
     /**
      * Load or fetch a webpage located by the given url, and then extract fields specified by
@@ -2033,7 +2033,7 @@ interface PulsarSession : AutoCloseable {
      * @param fieldSelectors The selectors to extract fields
      * @return All the extracted fields and their names
      * */
-    fun scrape(url: String, args: String, fieldSelectors: Map<String, String>): Map<String, String?>
+    suspend fun scrape(url: String, args: String, fieldSelectors: Map<String, String>): Map<String, String?>
 
     /**
      * Load or fetch a webpage located by the given url, and then extract fields specified by
@@ -2048,7 +2048,7 @@ interface PulsarSession : AutoCloseable {
      * @param fieldSelectors The selectors to extract fields
      * @return All the extracted fields and their names
      * */
-    fun scrape(url: String, options: LoadOptions, fieldSelectors: Map<String, String>): Map<String, String?>
+    suspend fun scrape(url: String, options: LoadOptions, fieldSelectors: Map<String, String>): Map<String, String?>
 
     /**
      * Load or fetch a webpage located by the given url, and then extract fields specified by
@@ -2064,7 +2064,7 @@ interface PulsarSession : AutoCloseable {
      * @param fieldSelectors The selectors to extract fields
      * @return All the extracted fields and their names
      * */
-    fun scrape(
+    suspend fun scrape(
         url: String, args: String, restrictSelector: String, fieldSelectors: Iterable<String>
     ): List<Map<String, String?>>
 
@@ -2083,7 +2083,7 @@ interface PulsarSession : AutoCloseable {
      * @param fieldSelectors The selectors to extract fields
      * @return All the extracted fields and their selectors
      * */
-    fun scrape(
+    suspend fun scrape(
         url: String, options: LoadOptions, restrictSelector: String, fieldSelectors: Iterable<String>
     ): List<Map<String, String?>>
 
@@ -2102,7 +2102,7 @@ interface PulsarSession : AutoCloseable {
      * @param fieldSelectors The selectors to extract fields
      * @return All the extracted fields and their names
      * */
-    fun scrape(
+    suspend fun scrape(
         url: String, args: String, restrictSelector: String, fieldSelectors: Map<String, String>
     ): List<Map<String, String?>>
 
@@ -2121,7 +2121,7 @@ interface PulsarSession : AutoCloseable {
      * @param fieldSelectors The selectors to extract fields
      * @return All the extracted fields and their names
      * */
-    fun scrape(
+    suspend fun scrape(
         url: String, options: LoadOptions, restrictSelector: String, fieldSelectors: Map<String, String>
     ): List<Map<String, String?>>
 
@@ -2139,7 +2139,7 @@ interface PulsarSession : AutoCloseable {
      * @return All extracted fields. For each out page, fields extracted
      *          with their selectors are saved in a map.
      * */
-    fun scrapeOutPages(portalUrl: String, args: String, fieldSelectors: Iterable<String>): List<Map<String, String?>>
+    suspend fun scrapeOutPages(portalUrl: String, args: String, fieldSelectors: Iterable<String>): List<Map<String, String?>>
 
     /**
      * Load or fetch out pages specified by out link selector, and then extract fields specified by
@@ -2154,7 +2154,7 @@ interface PulsarSession : AutoCloseable {
      * @param fieldSelectors CSS selectors to extract fields from out pages
      * @return All extracted fields. For each out page, fields extracted with their selectors are saved in a map.
      * */
-    fun scrapeOutPages(
+    suspend fun scrapeOutPages(
         portalUrl: String,
         options: LoadOptions,
         fieldSelectors: Iterable<String>
@@ -2174,7 +2174,7 @@ interface PulsarSession : AutoCloseable {
      * @param fieldSelectors CSS selectors to extract fields from out pages
      * @return All extracted fields. For each out page, fields extracted with their selectors are saved in a map.
      * */
-    fun scrapeOutPages(
+    suspend fun scrapeOutPages(
         portalUrl: String, args: String, restrictSelector: String, fieldSelectors: Iterable<String>
     ): List<Map<String, String?>>
 
@@ -2193,7 +2193,7 @@ interface PulsarSession : AutoCloseable {
      * @param fieldSelectors CSS selectors to extract fields from out pages
      * @return All extracted fields. For each out page, fields extracted with their selectors are saved in a map.
      * */
-    fun scrapeOutPages(
+    suspend fun scrapeOutPages(
         portalUrl: String, options: LoadOptions, restrictSelector: String, fieldSelectors: Iterable<String>
     ): List<Map<String, String?>>
 
@@ -2210,7 +2210,7 @@ interface PulsarSession : AutoCloseable {
      * @param fieldSelectors CSS selectors to extract fields from out pages
      * @return All extracted fields. For each out page, fields extracted with their names are saved in a map.
      * */
-    fun scrapeOutPages(portalUrl: String, args: String, fieldSelectors: Map<String, String>): List<Map<String, String?>>
+    suspend fun scrapeOutPages(portalUrl: String, args: String, fieldSelectors: Map<String, String>): List<Map<String, String?>>
 
     /**
      * Load or fetch out pages specified by out link selector, and then extract fields specified by
@@ -2226,7 +2226,7 @@ interface PulsarSession : AutoCloseable {
      * @param fieldSelectors CSS selectors to extract fields from out pages
      * @return All extracted fields. For each out page, fields extracted with their names are saved in a map.
      * */
-    fun scrapeOutPages(
+    suspend fun scrapeOutPages(
         portalUrl: String,
         options: LoadOptions,
         fieldSelectors: Map<String, String>
@@ -2247,7 +2247,7 @@ interface PulsarSession : AutoCloseable {
      * @param fieldSelectors CSS selectors to extract fields from out pages
      * @return All extracted fields. For each out page, fields extracted with their names are saved in a map.
      * */
-    fun scrapeOutPages(
+    suspend fun scrapeOutPages(
         portalUrl: String, args: String, restrictSelector: String, fieldSelectors: Map<String, String>
     ): List<Map<String, String?>>
 
@@ -2266,7 +2266,7 @@ interface PulsarSession : AutoCloseable {
      * @param fieldSelectors CSS selectors to extract fields from out pages
      * @return All extracted fields. For each out page, fields extracted with their names are saved in a map.
      * */
-    fun scrapeOutPages(
+    suspend fun scrapeOutPages(
         portalUrl: String, options: LoadOptions, restrictSelector: String, fieldSelectors: Map<String, String>
     ): List<Map<String, String?>>
 
@@ -2324,7 +2324,7 @@ interface PulsarSession : AutoCloseable {
      * @param page The webpage to export.
      * @return The path of the exported file.
      */
-    fun export(page: WebPage): Path
+    suspend fun export(page: WebPage): Path
 
     /**
      * Exports the content of a webpage to a file with a specified identifier.
@@ -2342,7 +2342,7 @@ interface PulsarSession : AutoCloseable {
      * @param ident A file name identifier used to distinguish the exported file.
      * @return The path of the exported file.
      */
-    fun export(page: WebPage, ident: String = ""): Path
+    suspend fun export(page: WebPage, ident: String = ""): Path
 
     /**
      * Exports the content of a webpage to a specified file path.
@@ -2360,7 +2360,7 @@ interface PulsarSession : AutoCloseable {
      * @param path The file path where the content will be saved.
      * @return The path of the exported file.
      */
-    fun exportTo(page: WebPage, path: Path): Path
+    suspend fun exportTo(page: WebPage, path: Path): Path
 
     /**
      * Exports the outer HTML of a document to a file.
@@ -2371,7 +2371,7 @@ interface PulsarSession : AutoCloseable {
      * @param doc The document to export.
      * @return The path of the exported file.
      */
-    fun export(doc: FeaturedDocument): Path
+    suspend fun export(doc: FeaturedDocument): Path
 
     /**
      * Exports the outer HTML of a document to a file with a specified identifier.
@@ -2389,7 +2389,7 @@ interface PulsarSession : AutoCloseable {
      * @param ident A file name identifier used to distinguish the exported file.
      * @return The path of the exported file.
      */
-    fun export(doc: FeaturedDocument, ident: String = ""): Path
+    suspend fun export(doc: FeaturedDocument, ident: String = ""): Path
 
     /**
      * Exports the outer HTML of a document to a specified file path.
@@ -2407,7 +2407,7 @@ interface PulsarSession : AutoCloseable {
      * @param path The file path where the content will be saved.
      * @return The path of the exported file.
      */
-    fun exportTo(doc: FeaturedDocument, path: Path): Path
+    suspend fun exportTo(doc: FeaturedDocument, path: Path): Path
 
     /**
      * Persist the webpage.
@@ -2420,7 +2420,7 @@ interface PulsarSession : AutoCloseable {
      * @param page Page to persist
      * @return Whether the page is persisted successfully
      * */
-    fun persist(page: WebPage): Boolean
+    suspend fun persist(page: WebPage): Boolean
 
     /**
      * Delete a webpage from the storage
@@ -2431,10 +2431,10 @@ interface PulsarSession : AutoCloseable {
      *
      * @param url The url to delete
      * */
-    fun delete(url: String)
+    suspend fun delete(url: String)
 
     /**
      * Flush to the storage
      * */
-    fun flush()
+    suspend fun flush()
 }

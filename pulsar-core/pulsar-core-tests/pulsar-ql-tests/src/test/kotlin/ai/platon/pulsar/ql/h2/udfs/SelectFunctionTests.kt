@@ -7,8 +7,8 @@ import kotlin.test.assertTrue
 
 class SelectFunctionTests: TestBase() {
 
-    @Test
-    fun testAllHrefs() {
+    @org.junit.jupiter.api.Test
+    suspend fun testAllHrefs() {
         val page = session.load(productDetailUrl)
         if (!page.protocolStatus.isSuccess) {
             logger.warn("Failed to load page | {}", productDetailUrl)
@@ -24,8 +24,8 @@ from load_and_select('$productDetailUrl', ':root');
         assertTrue(rs.next())
     }
 
-    @Test
-    fun testAllHrefs2() {
+    @org.junit.jupiter.api.Test
+    suspend fun testAllHrefs2() {
         val url = productDetailUrl
         val page = session.load(url)
         if (!page.protocolStatus.isSuccess) {

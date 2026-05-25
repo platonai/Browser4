@@ -12,8 +12,8 @@ class TestClassPathXmlPulsarContext {
 
     val context = SQLContexts.create()
 
-    @Test
-    fun whenCloseSession_thenBrowserClosed() {
+    @org.junit.jupiter.api.Test
+    suspend fun whenCloseSession_thenBrowserClosed() {
         assertTrue(context is AbstractPulsarContext)
         val session = context.getOrCreateSession()
 

@@ -7,6 +7,7 @@ import ai.platon.pulsar.ql.common.annotation.UDFGroup
 import ai.platon.pulsar.ql.common.annotation.UDFunction
 import ai.platon.pulsar.ql.context.SQLContexts
 import ai.platon.pulsar.ql.h2.H2SessionFactory
+import kotlinx.coroutines.runBlocking
 import org.slf4j.LoggerFactory
 import java.sql.Connection
 
@@ -50,7 +51,8 @@ object AdminFunctions {
     @JvmStatic
     @JvmOverloads
     fun save(@H2Context conn: Connection, url: String, postfix: String = ".htm"): String {
-        val page = H2SessionFactory.getSession(conn).load(url)
+        val session = H2SessionFactory.getSession(conn)
+        val page = runBlocking { session.load(url) }
         val path = AppPaths.WEB_CACHE_DIR.resolve(AppPaths.fromUri(url, "", postfix))
         return AppFiles.saveTo(page, path).toString()
     }

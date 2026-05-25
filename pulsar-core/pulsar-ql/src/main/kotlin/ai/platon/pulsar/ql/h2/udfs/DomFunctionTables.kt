@@ -18,6 +18,7 @@ import ai.platon.pulsar.ql.common.annotation.H2Context
 import ai.platon.pulsar.ql.h2.DomToH2Queries
 import ai.platon.pulsar.ql.h2.DomToH2Queries.toDOMResultSet
 import ai.platon.pulsar.ql.h2.DomToH2Queries.toResultSet
+import kotlinx.coroutines.runBlocking
 import org.h2.jdbc.JdbcConnection
 import org.h2.tools.SimpleResultSet
 import org.h2.value.DataType
@@ -46,7 +47,7 @@ object DomFunctionTables {
             return toResultSet("DOM", listOf<ValueDom>())
         }
 
-        val pages = DomToH2Queries.loadAll(session, urls)
+        val pages = runBlocking { DomToH2Queries.loadAll(session, urls) }
         val doms = pages.map { session.parseValueDom(it) }
 
         return toResultSet("DOM", doms)
@@ -63,7 +64,7 @@ object DomFunctionTables {
             return toDOMResultSet(FeaturedDocument.NIL, listOf())
         }
 
-        val document = session.loadDocument(url)
+        val document = runBlocking { session.loadDocument(url) }
         val elements = document.select(cssQuery, offset, limit)
         return toDOMResultSet(document, elements.map { domValue(it) })
     }
@@ -92,7 +93,7 @@ object DomFunctionTables {
             return toResultSet("LINK", listOf<String>())
         }
 
-        val links = DomToH2Queries.loadAll(session, portalUrl, restrictCss, offset, limit, DomToH2Queries::getLinks)
+        val links = runBlocking { DomToH2Queries.loadAll(session, portalUrl, restrictCss, offset, limit, DomToH2Queries::getLinks) }
         return toResultSet("LINK", links)
     }
 
@@ -120,7 +121,7 @@ object DomFunctionTables {
             return toResultSet(listOf())
         }
 
-        val doc = session.loadDocument(portalUrl)
+        val doc = runBlocking { session.loadDocument(portalUrl) }
         val anchors = doc.document.selectAnchors(restrictCss, offset, limit)
 
         return toResultSet(anchors)
@@ -187,8 +188,8 @@ object DomFunctionTables {
             return toResultSet("DOM", listOf<ValueDom>())
         }
 
-        val docs = DomToH2Queries.loadOutPages(session, portal, restrictCss, offset, limit, normalize, ignoreQuery)
-                .map { session.parse(it) }
+        val docs = runBlocking { DomToH2Queries.loadOutPages(session, portal, restrictCss, offset, limit, normalize, ignoreQuery)
+                .map { session.parse(it) } }
 
         val elements = if (targetCss == ":root") {
             docs.map { it.document }
@@ -239,7 +240,7 @@ object DomFunctionTables {
             return toResultSet("DOM", listOf<ValueDom>())
         }
 
-        val pages = DomToH2Queries.loadOutPages(session, portalUrl, restrictCss, offset, limit, normalize, ignoreQuery)
+        val pages = runBlocking { DomToH2Queries.loadOutPages(session, portalUrl, restrictCss, offset, limit, normalize, ignoreQuery) }
 
         val docs = pages.map { session.parse(it) }
 
@@ -268,7 +269,7 @@ object DomFunctionTables {
             offset: Int = 1,
             limit: Int = 100): ResultSet {
         val session = H2SessionFactory.getSession(conn)
-        val page = session.load(portalUrl)
+        val page = runBlocking { session.load(portalUrl) }
         val dom = if (page.isNil) ValueDom.NIL else session.parseValueDom(page)
         return features(conn, dom, cssQuery, offset, limit)
     }
@@ -324,7 +325,7 @@ object DomFunctionTables {
             offset: Int = 1,
             limit: Int = Integer.MAX_VALUE): ResultSet {
         val session = H2SessionFactory.getSession(conn)
-        val page = session.load(portalUrl)
+        val page = runBlocking { session.load(portalUrl) }
         val dom = if (page.isNil) ValueDom.NIL else session.parseValueDom(page)
         return getElementsWithMostSibling(conn, dom, restrictCss, offset, limit)
     }

@@ -14,6 +14,7 @@ import ai.platon.pulsar.ql.context.SQLContexts
 import ai.platon.pulsar.ql.h2.H2SessionFactory
 import ai.platon.pulsar.ql.h2.domValue
 import ai.platon.pulsar.ql.common.types.ValueDom
+import kotlinx.coroutines.runBlocking
 import org.h2.value.Value
 import org.h2.value.ValueArray
 import org.h2.value.ValueString
@@ -41,7 +42,8 @@ object DomFunctions {
         if (!sqlContext.isActive) return ValueDom.NIL
 
         val session = H2SessionFactory.getSession(conn)
-        return session.run { parseValueDom(load(configuredUrl)) }
+        val page = runBlocking { session.load(configuredUrl) }
+        return session.parseValueDom(page)
     }
 
     @UDFunction(description = "Fetch the page specified by url immediately, and then parse it into a document")
@@ -52,7 +54,9 @@ object DomFunctions {
         val h2session = H2SessionFactory.getH2Session(conn)
         val session = sqlContext.getSession(h2session.serialId)
         val normURL = session.normalize(configuredUrl).apply { options.expires = Duration.ZERO }
-        return session.parseValueDom(session.load(normURL))
+
+        val page = runBlocking { session.load(normURL) }
+        return session.parseValueDom(page)
     }
 
     /**
