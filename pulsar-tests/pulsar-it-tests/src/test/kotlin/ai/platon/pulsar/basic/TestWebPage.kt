@@ -23,13 +23,13 @@ class TestWebPage: TestBase() {
     private val groupId = 43853791
 
     @BeforeEach
-    fun clearResources() {
+    suspend fun clearResources() {
         session.delete(url)
         assertTrue("Page should not exists | $url") { !session.exists(url) }
     }
 
-    @Test
-    fun testFetchTime() {
+    @org.junit.jupiter.api.Test
+    suspend fun testFetchTime() {
         val args = "-i 5s"
         val normalizedArgs = "-expires PT5S"
         val option = session.options(args)
@@ -88,8 +88,8 @@ class TestWebPage: TestBase() {
         assertEquals(2, page.fetchCount)
     }
 
-    @Test
-    fun testPageModel() {
+    @org.junit.jupiter.api.Test
+    suspend fun testPageModel() {
         var page = session.load(url)
         require(page is GoraWebPage)
         page.unbox().pageModel?.fieldGroups = null

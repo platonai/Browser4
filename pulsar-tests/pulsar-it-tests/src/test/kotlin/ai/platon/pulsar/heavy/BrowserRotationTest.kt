@@ -52,21 +52,21 @@ class BrowserRotationTest : MassiveTestBase() {
         kotlin.runCatching { AppPaths.LOCAL_STORAGE_DIR.resolve("localfile-org").deleteRecursively() }
     }
 
-    @Test
-    fun testWithSequentialBrowser() {
+    @org.junit.jupiter.api.Test
+    suspend fun testWithSequentialBrowser() {
         Assumptions.assumeTrue { testFileCount > 0 }
         PulsarSettings.withSequentialBrowsers()
         runAndAwait()
     }
 
-    @Test
-    fun testWithTemporaryBrowser() {
+    @org.junit.jupiter.api.Test
+    suspend fun testWithTemporaryBrowser() {
         Assumptions.assumeTrue { testFileCount > 0 }
         PulsarSettings.withTemporaryBrowser()
         runAndAwait()
     }
 
-    private fun runAndAwait() {
+    private suspend fun runAndAwait() {
         if (testFileCount == 0) {
             printlnPro("Skip the test since testFileCount is 0")
             return

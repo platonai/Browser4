@@ -14,8 +14,8 @@ class PageStatusTests : TestBase() {
     private val url = "https://www.amazon.com/Best-Sellers/zgbs?t=$timestamp"
     private val url2 = "https://www.amazon.com/Best-Sellers-Beauty/zgbs/beauty?t=$timestamp"
 
-    @Test
-    fun testFetchForExpires() {
+    @org.junit.jupiter.api.Test
+    suspend fun testFetchForExpires() {
         val seconds = 5L
         val args = "-i ${seconds}s"
         var startTime = Instant.now()
@@ -56,8 +56,8 @@ class PageStatusTests : TestBase() {
         assertEquals(fetchCount1 + 1, fetchCount2)
     }
 
-    @Test
-    fun testFetchForExpireAt() {
+    @org.junit.jupiter.api.Test
+    suspend fun testFetchForExpireAt() {
         val now = Instant.now()
         val seconds = 5L
         val args = "-i ${seconds}s"

@@ -17,7 +17,7 @@ class SessionLoadTests : TestBase() {
     private val urls = LinkExtractors.fromResource("categories.txt")
 
     @BeforeEach
-    fun clearResources() {
+    suspend fun clearResources() {
         session.globalCache.resetCaches()
 
         session.delete(url)
@@ -136,9 +136,9 @@ class SessionLoadTests : TestBase() {
         logger.info("Tested - whenLoadAllAsyncSecondlyWithoutExpiry_thenPagesAreLoadedFromCache")
     }
 
-    @Test
+    @org.junit.jupiter.api.Test
     @DisplayName("When loaded a HTML page then the navigate state are correct")
-    fun whenLoadedAHtmlPageThenTheNavigateStateAreCorrect() {
+    suspend fun whenLoadedAHtmlPageThenTheNavigateStateAreCorrect() {
         logger.info("Testing - When loaded a HTML page then the navigate state are correct")
 
         val options = session.options("-refresh")

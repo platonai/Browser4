@@ -13,11 +13,11 @@ class LoadService(
 ) {
     private val logger = LoggerFactory.getLogger(LoadService::class.java)
 
-    fun load(url: String): WebPage {
+    suspend fun load(url: String): WebPage {
         return session.load(url)
     }
 
-    fun loadDocument(url: String, args: String? = null): Pair<WebPage, FeaturedDocument> {
+    suspend fun loadDocument(url: String, args: String? = null): Pair<WebPage, FeaturedDocument> {
         if (url.contains(":8182/")) {
             logger.warn("Unexpected url, internal url is not allowed | {}", url)
             return GoraWebPage.NIL to FeaturedDocument.NIL

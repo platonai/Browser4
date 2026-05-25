@@ -22,9 +22,9 @@ class TestEvents : TestBase() {
         metrics.persists.reset()
     }
 
-    @Test
+    @org.junit.jupiter.api.Test
     @DisplayName("When a page is fetched then events are fired and metrics are recorded")
-    fun whenAPageIsFetchedThenEventsAreFiredAndMetricsAreRecorded() {
+    suspend fun whenAPageIsFetchedThenEventsAreFiredAndMetricsAreRecorded() {
         val metrics = fetchComponent.coreMetrics
         assertNotNull(metrics)
 

@@ -29,16 +29,16 @@ class PulsarSessionTests: TestBase() {
 //        webDB.delete(url2)
     }
 
-    @Test
-    fun testNormalize() {
+    @org.junit.jupiter.api.Test
+    suspend fun testNormalize() {
         val normURL = session.normalize(url)
         assertNotEquals(session.sessionConfig, normURL.options.conf)
         val page = session.load(normURL)
         assertEquals(normURL.options.conf, page.conf)
     }
 
-    @Test
-    fun testLoad() {
+    @org.junit.jupiter.api.Test
+    suspend fun testLoad() {
         val page = session.load(url)
         val page2 = webDB.getOrNull(url)
 
@@ -57,8 +57,8 @@ class PulsarSessionTests: TestBase() {
         }
     }
 
-    @Test
-    fun testLoadResource() {
+    @org.junit.jupiter.api.Test
+    suspend fun testLoadResource() {
         val page = session.loadResource(resourceUrl, url, "-refresh")
 
         assertTrue { page.fetchCount > 0 }
@@ -69,8 +69,8 @@ class PulsarSessionTests: TestBase() {
         printlnPro("Webpage exported | $path")
     }
 
-    @Test
-    fun testLoadLocalFile() {
+    @org.junit.jupiter.api.Test
+    suspend fun testLoadLocalFile() {
         val path = AppPaths.getTmpDirectory("test.html")
         printlnPro(path)
         val html = """
@@ -91,4 +91,3 @@ class PulsarSessionTests: TestBase() {
         assertEquals("Hello", document.selectFirstTextOrNull("h1"))
     }
 }
-
