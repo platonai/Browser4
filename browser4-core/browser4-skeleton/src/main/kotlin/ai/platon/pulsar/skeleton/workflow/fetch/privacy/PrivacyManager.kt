@@ -1,12 +1,10 @@
 package ai.platon.pulsar.skeleton.workflow.fetch.privacy
 
-import ai.platon.pulsar.common.browser.fingerprint.Fingerprint
 import ai.platon.pulsar.common.config.ImmutableConfig
-import ai.platon.pulsar.persist.WebPage
+import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
 import ai.platon.pulsar.skeleton.workflow.fetch.WebDriverFetcher
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 
 /**
  * Manages the lifecycle of privacy contexts, including permanent and temporary contexts.
@@ -62,34 +60,6 @@ interface PrivacyManager : AutoCloseable {
      * @return The result of the fetch task.
      */
     suspend fun run(task: FetchTask, fetchFun: suspend (FetchTask, WebDriver) -> FetchResult): FetchResult
-
-    /**
-     * Attempts to get the next ready privacy context for a given page, fingerprint, and task.
-     *
-     * @param page The web page associated with the context.
-     * @param fingerprint The fingerprint used to identify the context.
-     * @param task The fetch task associated with the context.
-     * @return The next ready privacy context.
-     */
-    fun tryGetNextReadyPrivacyContext(page: WebPage, fingerprint: Fingerprint, task: FetchTask): PrivacyContext
-
-    /**
-     * Attempts to get the next ready privacy context for a given fingerprint.
-     *
-     * @param fingerprint The fingerprint used to identify the context.
-     * @return The next ready privacy context.
-     */
-    fun tryGetNextReadyPrivacyContext(fingerprint: Fingerprint): PrivacyContext
-
-    /**
-     * Attempts to get the next under-loaded privacy context for a given page, fingerprint, and task.
-     *
-     * @param page The web page associated with the context.
-     * @param fingerprint The fingerprint used to identify the context.
-     * @param task The fetch task associated with the context.
-     * @return The next under-loaded privacy context, or null if none is available.
-     */
-    fun tryGetNextUnderLoadedPrivacyContext(page: WebPage, fingerprint: Fingerprint, task: FetchTask): PrivacyContext?
 
     /**
      * Gets or creates a privacy context for the given browser profile.

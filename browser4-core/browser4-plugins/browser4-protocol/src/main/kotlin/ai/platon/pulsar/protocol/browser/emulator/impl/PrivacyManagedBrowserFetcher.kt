@@ -24,7 +24,6 @@ import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.protocol.browser.emulator.AbstractBrowserFetcher
 import ai.platon.pulsar.protocol.browser.emulator.BrowserEmulator
 import ai.platon.pulsar.protocol.browser.emulator.IncognitoBrowserFetcher
-import ai.platon.pulsar.protocol.browser.emulator.context.BrowserPrivacyManager
 import ai.platon.pulsar.skeleton.browser.Browser
 import ai.platon.pulsar.skeleton.browser.BrowserManager
 import ai.platon.pulsar.skeleton.browser.driver.IllegalWebDriverStateException
@@ -35,6 +34,7 @@ import ai.platon.pulsar.skeleton.common.persist.ext.browseEventHandlers
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
 import ai.platon.pulsar.skeleton.workflow.fetch.WebDriverFetcher
+import ai.platon.pulsar.skeleton.workflow.fetch.privacy.PrivacyManager
 import ai.platon.pulsar.skeleton.workflow.protocol.ForwardingResponse
 import ai.platon.pulsar.skeleton.workflow.protocol.Response
 import org.slf4j.LoggerFactory
@@ -108,7 +108,7 @@ open class BrowserWebDriverFetcher(
  */
 open class PrivacyManagedBrowserFetcher constructor(
     val browserManager: BrowserManager,
-    override val privacyManager: BrowserPrivacyManager,
+    override val privacyManager: PrivacyManager,
     override val browserEmulator: BrowserEmulator,
     override val conf: ImmutableConfig,
     private val closeCascaded: Boolean = false

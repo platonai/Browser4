@@ -29,6 +29,7 @@ import ai.platon.pulsar.protocol.browser.emulator.impl.PrivacyManagedBrowserFetc
 import ai.platon.pulsar.protocol.browser.impl.BasicBrowserManager
 import ai.platon.pulsar.protocol.browser.impl.DefaultBrowserFactory
 import ai.platon.pulsar.skeleton.browser.BrowserManager
+import ai.platon.pulsar.skeleton.workflow.fetch.privacy.PrivacyManager
 
 class DefaultBrowserManager(conf: ImmutableConfig) : BasicBrowserManager(DefaultBrowserFactory(conf), conf)
 
@@ -82,12 +83,12 @@ class DefaultBrowserComponents(val conf: ImmutableConfig = ImmutableConfig.DEFAU
         DefaultPrivacyManagedBrowserFetcher(conf)
     }
 
-    val privacyManager: BrowserPrivacyManager
+    val privacyManager: PrivacyManager
         get() = incognitoBrowserFetcher.privacyManager
 
     val driverPoolManager: WebDriverPoolManager
-        get() = privacyManager.driverPoolManager
+        get() = (privacyManager as BrowserPrivacyManager).driverPoolManager
 
     val browserManager: BrowserManager
-        get() = privacyManager.browserManager
+        get() = (privacyManager as BrowserPrivacyManager).browserManager
 }

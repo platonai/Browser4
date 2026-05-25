@@ -46,6 +46,7 @@ import kotlinx.coroutines.delay
 import java.nio.charset.StandardCharsets
 import java.time.Duration
 import java.time.Instant
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Created by Vincent on 18-1-1.
@@ -331,27 +332,6 @@ open class InteractiveBrowserEmulator(
         return FetchResult(task, response ?: ForwardingResponse(exception, task.page), exception)
     }
 
-    private fun handleException(e: Exception, task: FetchTask, driver: WebDriver) {
-        when {
-            e.javaClass.name == "kotlinx.coroutines.JobCancellationException" -> {
-                if (isActive) {
-                    // The system is not closing.
-                    // The coroutine is canceled, it's not a normal case
-                    val message = e.message ?: "Coroutine was cancelled"
-                    logger.warn("{}. {} | {}", task.page.id, message, task.url)
-                } else {
-                    // The system is closing.
-                    // Let the higher level to handle it, usually it's handled by the main loop
-                    throw e
-                }
-            }
-
-            else -> {
-                logger.warn("[Unexpected]", e)
-            }
-        }
-    }
-
     @Throws(NavigateTaskCancellationException::class, WebDriverCancellationException::class)
     private suspend fun loadResourceWithoutRendering(navigateTask: NavigateTask, driver: WebDriver): Response {
         checkState(navigateTask.fetchTask, driver)
@@ -537,8 +517,6 @@ open class InteractiveBrowserEmulator(
         val page = task.page
         require(driver is AbstractWebDriver)
 
-        tracer?.trace("InteractSettings: {}", task.interactSettings)
-
         if (result.state.isContinue) {
             updateMetaInfos(page, driver)
         }
@@ -648,7 +626,7 @@ open class InteractiveBrowserEmulator(
 
         var n = 10
         while (n-- > 0 && !isScriptInjected(driver)) {
-            delay(1000)
+            delay(1000.milliseconds)
         }
 
         if (n <= 0) {
@@ -695,7 +673,7 @@ open class InteractiveBrowserEmulator(
                 msg = evaluate(interactTask, expression)
 
                 if (msg == null || msg == false) {
-                    delay(delayMillis)
+                    delay(delayMillis.milliseconds)
                 }
             }
             message = msg
@@ -740,7 +718,7 @@ open class InteractiveBrowserEmulator(
             if (driver.isNetworkIdle) {
                 break
             }
-            delay(pollMillis)
+            delay(pollMillis.milliseconds)
         }
 
         result.protocolStatus = ProtocolStatus.STATUS_SUCCESS
@@ -763,7 +741,7 @@ open class InteractiveBrowserEmulator(
             // evaluate(interactTask, positions, scrollInterval, bringToFront = bringToFront)
             positions.forEach {
                 driver.scrollToMiddle(it)
-                delay(scrollInterval)
+                delay(scrollInterval.milliseconds)
             }
         }
     }
@@ -804,7 +782,7 @@ open class InteractiveBrowserEmulator(
             counterJsWaits.inc()
             val verbose = false
             exists = expressions.all { expression -> true == evaluate(interactTask, expression, verbose) }
-            delay(delayMillis)
+            delay(delayMillis.milliseconds)
         }
     }
 

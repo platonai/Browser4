@@ -15,17 +15,17 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator
 
-import ai.platon.pulsar.protocol.browser.emulator.context.BrowserPrivacyManager
 import ai.platon.pulsar.skeleton.browser.BrowserFetcher
 import ai.platon.pulsar.skeleton.workflow.fetch.Fetcher
 import ai.platon.pulsar.skeleton.workflow.fetch.WebDriverFetcher
+import ai.platon.pulsar.skeleton.workflow.fetch.privacy.PrivacyManager
 
 /**
  * Created by Vincent on 18-1-1.
  * Copyright @ 2013-2023 Platon AI. All rights reserved
  */
 interface IncognitoBrowserFetcher : Fetcher, BrowserFetcher {
-    val privacyManager: BrowserPrivacyManager
+    val privacyManager: PrivacyManager
     val webdriverFetcher: WebDriverFetcher
     val browserEmulator: BrowserEmulator
 }

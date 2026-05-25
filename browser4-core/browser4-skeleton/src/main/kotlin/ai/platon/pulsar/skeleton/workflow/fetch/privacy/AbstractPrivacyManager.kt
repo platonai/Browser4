@@ -16,6 +16,7 @@ import org.slf4j.LoggerFactory
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedDeque
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Manages the lifecycle of privacy contexts, including permanent and temporary contexts.
@@ -84,7 +85,7 @@ abstract class AbstractPrivacyManager(
     /**
      * The generator used to create privacy agents.
      */
-    open val browserProfileGenerator get() = browserProfileGeneratorFactory.generator
+    open val profileGenerator get() = browserProfileGeneratorFactory.generator
 
     /**
      * Indicates whether the privacy manager is closed.
@@ -114,7 +115,7 @@ abstract class AbstractPrivacyManager(
      * @param task The fetch task associated with the context.
      * @return The next ready privacy context.
      */
-    abstract override fun tryGetNextReadyPrivacyContext(page: WebPage, fingerprint: Fingerprint, task: FetchTask): PrivacyContext
+    abstract fun tryGetNextReadyPrivacyContext(page: WebPage, fingerprint: Fingerprint, task: FetchTask): PrivacyContext
 
     /**
      * Attempts to get the next ready privacy context for a given fingerprint.
@@ -122,7 +123,7 @@ abstract class AbstractPrivacyManager(
      * @param fingerprint The fingerprint used to identify the context.
      * @return The next ready privacy context.
      */
-    abstract override fun tryGetNextReadyPrivacyContext(fingerprint: Fingerprint): PrivacyContext
+    abstract fun tryGetNextReadyPrivacyContext(fingerprint: Fingerprint): PrivacyContext
 
     /**
      * Attempts to get the next under-loaded privacy context for a given page, fingerprint, and task.
@@ -132,7 +133,7 @@ abstract class AbstractPrivacyManager(
      * @param task The fetch task associated with the context.
      * @return The next under-loaded privacy context, or null if none is available.
      */
-    abstract override fun tryGetNextUnderLoadedPrivacyContext(page: WebPage, fingerprint: Fingerprint, task: FetchTask): PrivacyContext?
+    abstract fun tryGetNextUnderLoadedPrivacyContext(page: WebPage, fingerprint: Fingerprint, task: FetchTask): PrivacyContext?
 
     /**
      * Gets or creates a privacy context for the given browser profile.
@@ -254,7 +255,7 @@ abstract class AbstractPrivacyManager(
      */
     private fun closeZombieContextsLazily() {
         cleaningScope.launch {
-            delay(5_000)
+            delay(5_000.milliseconds)
             closeDyingContexts()
         }
     }
