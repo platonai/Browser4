@@ -5,6 +5,7 @@ import ai.platon.pulsar.common.sql.SQLTemplate
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.ql.h2.DomToH2Queries
 import ai.platon.pulsar.ql.h2.utils.ResultSetUtils
+import kotlinx.coroutines.runBlocking
 import java.util.concurrent.Executors
 import kotlin.test.Ignore
 import kotlin.test.Test
@@ -22,8 +23,8 @@ class TestDomToH2Queries: TestBase() {
     private val url = "$portalUrl $args"
     private val restrictCss = "a[href~=/dp/]"
 
-    @Test
-    fun testLoadOutPages() {
+    @org.junit.jupiter.api.Test
+    suspend fun testLoadOutPages() {
         val limit = 20
         val pages = DomToH2Queries.loadOutPages(session, url, restrictCss, 1, limit)
         pages.map { it.url }.distinct().forEachIndexed { i, url -> printlnPro("$i.\t$url") }
@@ -39,7 +40,7 @@ class TestDomToH2Queries: TestBase() {
         val executor = Executors.newWorkStealingPool()
         val futures = IntRange(1, parallel).map {
             executor.submit<Collection<WebPage>> {
-                val pages = DomToH2Queries.loadOutPages(session, url, restrictCss, 1, limit)
+                val pages = runBlocking { DomToH2Queries.loadOutPages(session, url, restrictCss, 1, limit) }
                 pages.map { it.url }.distinct().forEachIndexed { i, url -> printlnPro("$i.\t$url") }
                 assertTrue("Page size: " + pages.size) { pages.size <= limit }
                 pages

@@ -115,6 +115,6 @@
 
         <kotlin.version>2.2.21</kotlin.version>
         <spring-boot.version>4.0.1</spring-boot.version>
-        <browser4-base.version>4.7.5-SNAPSHOT</browser4-base.version>
+        <browser4-base.version>4.7.10</browser4-base.version>
     </properties>
 </project>

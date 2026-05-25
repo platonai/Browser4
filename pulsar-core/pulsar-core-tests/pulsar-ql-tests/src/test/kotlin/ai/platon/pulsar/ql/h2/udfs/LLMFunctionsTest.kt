@@ -22,7 +22,7 @@ class LLMFunctionsTest : TestBase() {
         """
 
     @BeforeEach
-    fun setup() {
+    suspend fun setup() {
         Assumptions.assumeTrue(ChatModelFactory.isModelConfigured(session.configuration))
         ensurePage(url)
     }
