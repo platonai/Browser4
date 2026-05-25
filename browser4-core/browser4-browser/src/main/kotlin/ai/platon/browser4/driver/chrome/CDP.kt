@@ -31,7 +31,7 @@ import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
  * All direct usage of [ai.platon.cdt.kt.protocol.ChromeDevTools] should go through this class to improve
  * maintainability and provide a consistent, centralized interface.
  */
-class CDP(
+class BrowserProtocol(
     private val devTools: ChromeDevTools
 ) {
     val remoteDevToolsOrNull: RemoteDevTools? get() = devTools as? RemoteDevTools
@@ -462,3 +462,5 @@ class CDP(
         remoteDevToolsOrNull?.close()
     }
 }
+
+typealias CDP = BrowserProtocol
