@@ -13,7 +13,7 @@ class W3PageController(
     val loadService: LoadService
 ) {
     @GetMapping
-    fun loadContent(@RequestParam url: String): String {
+    suspend fun loadContent(@RequestParam url: String): String {
         return loadService.load(url).contentAsString
     }
 }

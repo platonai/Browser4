@@ -1,8 +1,8 @@
 package ai.platon.pulsar.skeleton.workflow.protocol.http
 
-import ai.platon.pulsar.common.*
+import ai.platon.pulsar.common.AppContext
+import ai.platon.pulsar.common.HttpHeaders
 import ai.platon.pulsar.common.config.ImmutableConfig
-import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.persist.ProtocolStatus
 import ai.platon.pulsar.persist.RetryScope
 import ai.platon.pulsar.persist.WebPage
@@ -51,75 +51,11 @@ abstract class AbstractHttpProtocol : Protocol {
     override fun reset() {
     }
 
-    override fun getResponses(pages: Collection<WebPage>, volatileConfig: VolatileConfig): Collection<Response> {
-        return pages.takeIf { isActive }
-            ?.mapNotNull {
-                it.runCatching { getResponse(it, false) }
-                    .onFailure { warnInterruptible(this, it) }
-                    .getOrNull()
-            }
-            ?: listOf()
-    }
-
-    override fun getProtocolOutput(page: WebPage): ProtocolOutput {
-        return try {
-            doGetProtocolOutput(page)
-        } catch (e: Throwable) {
-            // log.warn("Unexpected exception", e)
-            warnUnexpected(this, e)
-            ProtocolOutput(ProtocolStatus.failed(e))
-        }
-    }
-
     @Throws(Exception::class)
     override suspend fun getProtocolOutputDeferred(page: WebPage): ProtocolOutput {
         val startTime = Instant.now()
         val response = getResponseDeferred(page, false)
             ?: return ProtocolOutput(ProtocolStatus.retry(RetryScope.CRAWL, "Null response from protocol"))
-        setResponseTime(startTime, page, response)
-        return getOutputWithHttpCodeTranslated(page.url, response)
-    }
-
-    /**
-     * Retrieves the protocol output with retry logic. Retries are only performed if the retry scope is RetryScope.PROTOCOL.
-     *
-     * @param page The web page for which the protocol output is to be retrieved.
-     * @return The protocol output containing the status and response data.
-     */
-    private fun doGetProtocolOutput(page: WebPage): ProtocolOutput {
-        val startTime = Instant.now()
-        var response: Response?
-        var lastThrowable: Throwable? = null
-
-        try {
-            response = getResponse(page, false)
-        } catch (e: IllegalApplicationStateException) {
-            log.warn(e.message)
-            response = null
-            lastThrowable = e
-        } catch (e: Exception) {
-            response = null
-            lastThrowable = e
-            // log.warn(e.stringify("[Unexpected]"))
-            warnUnexpected(this, e)
-        } catch (t: Throwable) {
-            response = null
-            lastThrowable = t
-            // log.warn(t.stringify("[Unexpected]"))
-            warnUnexpected(this, t)
-        }
-
-        // If the system is no longer active, return a canceled status
-        if (!isActive) {
-            return ProtocolOutput(ProtocolStatus.failed(ProtocolStatusCodes.CANCELED))
-        }
-
-        // If the response is null, return a failed response
-        if (response == null) {
-            return getFailedResponse(lastThrowable)
-        }
-
-        // Set the response time and return the translated protocol output
         setResponseTime(startTime, page, response)
         return getOutputWithHttpCodeTranslated(page.url, response)
     }
@@ -184,21 +120,10 @@ abstract class AbstractHttpProtocol : Protocol {
         page.metadata[Name.RESPONSE_TIME] = elapsedTime.toString()
     }
 
-    /**
-     * Get the protocol response for the given page.
-     *
-     * @param page The page to get the response for.
-     * @param followRedirects Whether to follow redirects.
-     * @return The response for the given page.
-     * @throws Exception If an error occurs while getting the response.
-     */
-    @Throws(Exception::class)
-    abstract fun getResponse(page: WebPage, followRedirects: Boolean): Response?
-
     @Throws(Exception::class)
     abstract suspend fun getResponseDeferred(page: WebPage, followRedirects: Boolean): Response?
 
-    override fun getRobotRules(page: WebPage): BaseRobotRules {
+    override suspend fun getRobotRules(page: WebPage): BaseRobotRules {
         return robots.getRobotRulesSet(this, page.url)
     }
 

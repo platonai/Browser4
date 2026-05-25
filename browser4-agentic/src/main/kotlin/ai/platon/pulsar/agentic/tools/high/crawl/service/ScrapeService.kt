@@ -34,7 +34,7 @@ class ScrapeService(
      * */
     private val responseStatusIndex = MultiMapUtils.newListValuedHashMap<Int, String>()
 
-    fun loadDocument(request: PageVisitRequest, eventHandlers: PageEventHandlers): Pair<WebPage, FeaturedDocument> {
+    suspend fun loadDocument(request: PageVisitRequest, eventHandlers: PageEventHandlers): Pair<WebPage, FeaturedDocument> {
         val args = request.enhanceArgs()
         val options = session.options(args, eventHandlers)
 

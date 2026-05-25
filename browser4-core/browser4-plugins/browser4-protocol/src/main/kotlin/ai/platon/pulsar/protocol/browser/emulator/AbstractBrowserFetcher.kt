@@ -16,7 +16,6 @@
 package ai.platon.pulsar.protocol.browser.emulator
 
 import ai.platon.pulsar.common.config.VolatileConfig
-import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.model.GoraWebPage
 import ai.platon.pulsar.skeleton.browser.BrowserFetcher
@@ -30,15 +29,7 @@ import kotlinx.coroutines.runBlocking
  */
 abstract class AbstractBrowserFetcher : BrowserFetcher, Fetcher {
 
-    private val logger = getLogger(this::class)
-
     abstract val isActive: Boolean
-
-    @Throws(Exception::class)
-    override fun fetch(url: String) = fetchContent(GoraWebPage.newWebPage(url, conf.toVolatileConfig()))
-
-    @Throws(Exception::class)
-    override fun fetch(url: String, conf: VolatileConfig) = fetchContent(GoraWebPage.newWebPage(url, conf))
 
     /**
      * Fetch page content

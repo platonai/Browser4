@@ -14,12 +14,6 @@ interface WebDriverFetcher {
 
 interface Fetcher {
 
-    @Throws(Exception::class)
-    fun fetch(url: String): Response
-
-    @Throws(Exception::class)
-    fun fetch(url: String, conf: VolatileConfig): Response
-
     /**
      * Fetch page content.
      *

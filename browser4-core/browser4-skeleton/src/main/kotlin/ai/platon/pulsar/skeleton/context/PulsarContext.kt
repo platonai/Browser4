@@ -332,7 +332,7 @@ interface PulsarContext : java.lang.AutoCloseable {
      * @param options The options
      * @return The WebPage. If there is no web page at local storage nor remote location, [WebPageImpl.NIL] is returned
      */
-    fun load(url: String, options: LoadOptions): WebPage
+    suspend fun load(url: String, options: LoadOptions): WebPage
 
     /**
      * Load a url with specified options, see [LoadOptions] for all options
@@ -341,7 +341,7 @@ interface PulsarContext : java.lang.AutoCloseable {
      * @param options The options
      * @return The WebPage. If there is no web page at local storage nor remote location, [WebPageImpl.NIL] is returned
      */
-    fun load(url: URL, options: LoadOptions): WebPage
+    suspend fun load(url: URL, options: LoadOptions): WebPage
 
     /**
      * Load a url, options can be specified following the url, see [LoadOptions] for all options
@@ -349,7 +349,7 @@ interface PulsarContext : java.lang.AutoCloseable {
      * @param url The url followed by options
      * @return The WebPage. If there is no web page at local storage nor remote location, [WebPageImpl.NIL] is returned
      */
-    fun load(url: NormURL): WebPage
+    suspend fun load(url: NormURL): WebPage
 
     /**
      * Load a url, options can be specified following the url, see [LoadOptions] for all options

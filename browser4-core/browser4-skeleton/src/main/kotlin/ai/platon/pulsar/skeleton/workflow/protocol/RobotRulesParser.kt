@@ -68,7 +68,7 @@ abstract class RobotRulesParser(
         return robotParser.parseContent(url, content, contentType, robotName)
     }
 
-    fun getRobotRulesSet(protocol: Protocol, url: String): BaseRobotRules {
+    suspend fun getRobotRulesSet(protocol: Protocol, url: String): BaseRobotRules {
         val u = try {
             URI.create(url).toURL()
         } catch (e: Exception) {
@@ -77,7 +77,7 @@ abstract class RobotRulesParser(
         return getRobotRulesSet(protocol, u)
     }
 
-    abstract fun getRobotRulesSet(protocol: Protocol, url: URL): BaseRobotRules
+    abstract suspend fun getRobotRulesSet(protocol: Protocol, url: URL): BaseRobotRules
 
     companion object {
         /**

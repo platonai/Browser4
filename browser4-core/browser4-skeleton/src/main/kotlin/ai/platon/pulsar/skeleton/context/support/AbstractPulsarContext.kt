@@ -380,7 +380,7 @@ abstract class AbstractPulsarContext(
      * @return The WebPage. If there is no web page at local storage nor remote location, [GoraWebPage.NIL] is returned.
      */
     @Throws(WebDBException::class)
-    override fun load(url: String, options: LoadOptions): WebPage {
+    override suspend fun load(url: String, options: LoadOptions): WebPage {
         val normURL = normalize(url, options)
         return abnormalPage ?: loadComponent.load(normURL)
     }
@@ -393,7 +393,7 @@ abstract class AbstractPulsarContext(
      * @return The WebPage. If there is no web page at local storage nor remote location, [GoraWebPage.NIL] is returned.
      */
     @Throws(WebDBException::class)
-    override fun load(url: URL, options: LoadOptions): WebPage {
+    override suspend fun load(url: URL, options: LoadOptions): WebPage {
         return abnormalPage ?: loadComponent.load(url, options)
     }
 
@@ -404,7 +404,7 @@ abstract class AbstractPulsarContext(
      * @return The WebPage. If there is no web page at local storage nor remote location, [GoraWebPage.NIL] is returned.
      */
     @Throws(WebDBException::class)
-    override fun load(url: NormURL): WebPage {
+    override suspend fun load(url: NormURL): WebPage {
         return abnormalPage ?: loadComponent.load(url)
     }
 

@@ -32,7 +32,7 @@ open class HttpRobotRulesParser(
      * @param url  URL robots.txt applies to
      * @return [BaseRobotRules] holding the rules from robots.txt
      */
-    override fun getRobotRulesSet(protocol: Protocol, url: URL): BaseRobotRules {
+    override suspend fun getRobotRulesSet(protocol: Protocol, url: URL): BaseRobotRules {
         val volatileConfig = conf.toVolatileConfig()
         val cacheKey = getCacheKey(url)
         var robotRules = CACHE[cacheKey]
@@ -46,7 +46,7 @@ open class HttpRobotRulesParser(
             try {
                 val http = (protocol as? AbstractHttpProtocol) ?: return EMPTY_RULES
                 val page = GoraWebPage.newWebPage(url.toURI().resolve("/robots.txt").toString(), volatileConfig)
-                var response: Response? = http.getResponse(page, true) ?: return EMPTY_RULES
+                var response: Response? = http.getResponseDeferred(page, true) ?: return EMPTY_RULES
 
                 // try one level of redirection ?
                 if (response != null && (response.httpCode == 301 || response.httpCode == 302)) {
@@ -56,7 +56,7 @@ open class HttpRobotRulesParser(
                     }
                     if (redirection != null) {
                         redir = URI.create(redirection).toURL()
-                        response = http.getResponse(GoraWebPage.newWebPage(redir.toString(), volatileConfig), true)
+                        response = http.getResponseDeferred(GoraWebPage.newWebPage(redir.toString(), volatileConfig), true)
                     }
                 }
 

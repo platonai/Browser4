@@ -19,11 +19,11 @@ class LoadService {
     @Autowired
     lateinit var session: AgenticSession
 
-    fun load(url: String): WebPage {
+    suspend fun load(url: String): WebPage {
         return session.load(url)
     }
 
-    fun loadDocument(url: String, args: String? = null): Pair<WebPage, FeaturedDocument> {
+    suspend fun loadDocument(url: String, args: String? = null): Pair<WebPage, FeaturedDocument> {
         if (url.contains(":8182/")) {
             logger.warn("Unexpected url, internal url is not allowed | {}", url)
             return GoraWebPage.NIL to FeaturedDocument.NIL
@@ -35,7 +35,7 @@ class LoadService {
         return page to document
     }
 
-    fun loadDocument(request: PromptRequest): Pair<WebPage, FeaturedDocument> {
+    suspend fun loadDocument(request: PromptRequest): Pair<WebPage, FeaturedDocument> {
         val args = request.args ?: ""
         val options = session.options(args)
         val be = options.eventHandlers.browseEventHandlers
@@ -53,7 +53,7 @@ class LoadService {
         return page to document
     }
 
-    fun loadDocument(request: CommandRequest, eventHandlers: PageEventHandlers): Pair<WebPage, FeaturedDocument> {
+    suspend fun loadDocument(request: CommandRequest, eventHandlers: PageEventHandlers): Pair<WebPage, FeaturedDocument> {
         val args = request.enhanceArgs()
         val options = session.options(args, eventHandlers)
 
