@@ -1839,10 +1839,12 @@ interface PulsarSession : AutoCloseable {
      * val document = session.loadDocument("http://example.com")
      * ```
      *
+     * TODO: should be suspend but non-suspend version is required by pulsar-ql
+     *
      * @param url The url to load
      * @return The parsed HTML document
      * */
-    suspend fun loadDocument(url: String): FeaturedDocument
+    fun loadDocument(url: String): FeaturedDocument
 
     /**
      * Load or fetch a webpage and parse it into an HTML document
