@@ -1,8 +1,8 @@
 package ai.platon.pulsar.rest.mcp.controller
 
-import ai.platon.pulsar.rest.mcp.service.SessionManager
-import ai.platon.pulsar.rest.mcp.service.SessionManager.ManagedSession
 import ai.platon.pulsar.agentic.tools.high.command.CommandService
+import ai.platon.pulsar.rest.api.service.SessionManager
+import ai.platon.pulsar.rest.api.service.SessionManager.ManagedSession
 import jakarta.servlet.http.HttpServletResponse
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals

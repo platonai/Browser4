@@ -1,10 +1,10 @@
 package ai.platon.pulsar.rest.api.controller
 
-import ai.platon.pulsar.agentic.tools.high.command.CommandResult
-import ai.platon.pulsar.agentic.tools.high.command.CommandService
-import ai.platon.pulsar.agentic.tools.high.command.CommandStatus
 import ai.platon.pulsar.agentic.tools.high.crawl.PageVisitRequest
 import ai.platon.pulsar.common.getLogger
+import ai.platon.pulsar.rest.api.entities.CommandResult
+import ai.platon.pulsar.rest.api.entities.CommandStatus
+import ai.platon.pulsar.rest.api.service.CommandService
 import ai.platon.pulsar.skeleton.event.impl.PageEventHandlersFactory
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.launchIn
@@ -93,7 +93,7 @@ class CommandController(
 
     @GetMapping(value = ["/{id}/stream"], produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
     fun streamEvents(@PathVariable id: String): Flux<ServerSentEvent<CommandStatus>> {
-        return Flux.create<CommandStatus> { sink ->
+        return Flux.create { sink ->
             val job = commandService.commandStatusFlow(id)
                 .onEach { sink.next(it) }
                 .onCompletion { sink.complete() }

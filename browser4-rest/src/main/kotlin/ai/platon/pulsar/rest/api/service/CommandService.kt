@@ -1,6 +1,5 @@
 package ai.platon.pulsar.rest.api.service
 
-import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.tools.high.agent.StatefulAgentRunner
 import ai.platon.pulsar.agentic.tools.high.crawl.PageVisitRequest
 import ai.platon.pulsar.agentic.tools.high.crawl.PageVisitStatus
@@ -31,19 +30,20 @@ import kotlin.time.Duration.Companion.milliseconds
  * and [StatefulAgentRunner] for agent-based commands. It can be used by both REST API
  * and agentic modules.
  *
- * @param session The agentic session for page loading and interaction.
  * @param commandNormalizer Optional normalizer that converts plain text commands into
  *        structured [PageVisitRequest] objects. If not provided, plain text commands
  *        without URLs will be executed as agent commands.
  */
 @Service
 class CommandService(
-    val session: AgenticSession,
+    val sessionManager: SessionManager,
     private val commandNormalizer: CommandNormalizer? = null,
 ) : Closeable {
     companion object {
         const val FLOW_POLLING_INTERVAL = 1000L
     }
+
+    val session get() = sessionManager.getOrCreateSessionById(SessionManager.SWARM_SESSION_ID).agenticSession
 
     // Create a dedicated dispatcher for long-running command operations
     private val commandDispatcher = Dispatchers.IO.limitedParallelism(10)

@@ -11,15 +11,16 @@ import ai.platon.pulsar.rest.api.entities.CommandRequest
 import ai.platon.pulsar.rest.api.entities.CommandStatus
 import ai.platon.pulsar.rest.api.entities.PromptRequest
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
-import ai.platon.pulsar.skeleton.session.PulsarSession
 import com.fasterxml.jackson.module.kotlin.readValue
 import org.springframework.stereotype.Service
 
 @Service
 class ConversationService(
-    val session: PulsarSession,
+    val sessionManager: SessionManager,
     val loadService: LoadService,
 ) {
+    val session get() = sessionManager.getOrCreateSessionById(SessionManager.SWARM_SESSION_ID).agenticSession
+
     suspend fun chat(prompt: String): String {
         return session.chat(prompt).content
     }

@@ -1,6 +1,5 @@
 package ai.platon.pulsar.rest.api.service
 
-import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.model.GoraWebPage
@@ -12,10 +11,12 @@ import org.springframework.stereotype.Service
 
 @Service
 class LoadService(
-    val session: AgenticSession
+    private val sessionManager: SessionManager
 ) {
 
     private val logger = LoggerFactory.getLogger(LoadService::class.java)
+
+    val session get() = sessionManager.getOrCreateSessionById(SessionManager.SWARM_SESSION_ID).agenticSession
 
     suspend fun load(url: String): WebPage {
         return session.load(url)

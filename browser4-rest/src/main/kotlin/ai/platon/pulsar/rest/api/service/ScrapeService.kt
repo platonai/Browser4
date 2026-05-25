@@ -1,6 +1,5 @@
 package ai.platon.pulsar.rest.api.service
 
-import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.BasicAgenticSession
 import ai.platon.pulsar.agentic.tools.high.crawl.ScrapeRequest
 import ai.platon.pulsar.agentic.tools.high.crawl.ScrapeResponse
@@ -29,9 +28,11 @@ import kotlin.time.Duration.Companion.milliseconds
 
 @Service
 class ScrapeService(
-    val session: AgenticSession
+    private val sessionManager: SessionManager
 ) {
     private val logger = LoggerFactory.getLogger(ScrapeService::class.java)
+
+    private val session get() = sessionManager.getOrCreateSessionById(SessionManager.SWARM_SESSION_ID).agenticSession
 
     /**
      * The response cache, the key is the id, the value is the response

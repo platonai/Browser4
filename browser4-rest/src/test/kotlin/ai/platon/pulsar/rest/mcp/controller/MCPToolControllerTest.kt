@@ -2,23 +2,19 @@ package ai.platon.pulsar.rest.mcp.controller
 
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
-import ai.platon.pulsar.agentic.model.ToolCall
+import ai.platon.pulsar.agentic.model.*
 import ai.platon.pulsar.agentic.tools.AgentToolExecutor
-import ai.platon.pulsar.agentic.model.TcException
-import ai.platon.pulsar.agentic.model.TcEvaluate
-import ai.platon.pulsar.agentic.model.ToolCallResult
-import ai.platon.pulsar.agentic.model.ToolSpec
-import ai.platon.pulsar.agentic.tools.high.command.CommandService
-import ai.platon.pulsar.agentic.tools.high.command.CommandStatus
-import ai.platon.pulsar.rest.mcp.service.SessionManager
-import ai.platon.pulsar.rest.mcp.service.SessionManager.ManagedSession
+import ai.platon.pulsar.rest.api.entities.CommandResult
+import ai.platon.pulsar.rest.api.entities.CommandStatus
+import ai.platon.pulsar.rest.api.service.CommandService
+import ai.platon.pulsar.rest.api.service.SessionManager
+import ai.platon.pulsar.rest.api.service.SessionManager.ManagedSession
 import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import jakarta.servlet.http.HttpServletResponse
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
-import org.junit.jupiter.api.Assertions.assertFalse
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.ArgumentCaptor
@@ -27,8 +23,7 @@ import org.mockito.Mockito
 import org.mockito.Mockito.`when`
 import org.mockito.MockitoAnnotations
 import org.springframework.http.HttpStatus
-import jakarta.servlet.http.HttpServletResponse
-import java.util.UUID
+import java.util.*
 
 class MCPToolControllerTest {
     private val objectMapper = jacksonObjectMapper()
@@ -107,7 +102,7 @@ class MCPToolControllerTest {
         val newSessionId = "new-session-id"
         val newManagedSession = Mockito.mock(ManagedSession::class.java)
         `when`(newManagedSession.sessionId).thenReturn(newSessionId)
-        `when`(sessionManager.getOrCreateSession(any())).thenReturn(newManagedSession)
+        `when`(sessionManager.getOrCreateSessionById(any())).thenReturn(newManagedSession)
 
         val result = controller.callTool(request, response)
 
@@ -944,7 +939,7 @@ class MCPToolControllerTest {
             )
         }
 
-        Mockito.verify(sessionManager, Mockito.never()).getOrCreateSession(any())
+        Mockito.verify(sessionManager, Mockito.never()).getOrCreateSessionById(any())
         Mockito.verify(agentToolExecutor, Mockito.never()).execute(anyToolCall())
         Unit
     }
@@ -1234,7 +1229,7 @@ class MCPToolControllerTest {
     @Test
     fun testCommandResult() = runBlocking {
         val taskId = "task-xyz"
-        val commandResult = ai.platon.pulsar.agentic.tools.high.command.CommandResult(summary = "done")
+        val commandResult = CommandResult(summary = "done")
         `when`(commandAgentToolExecutor.execute(anyToolCall())).thenReturn(
             toolCallResult(objectMapper.writeValueAsString(commandResult))
         )

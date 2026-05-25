@@ -1,8 +1,9 @@
-package ai.platon.pulsar.rest.mcp.service
+package ai.platon.pulsar.rest.api.service
 
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.PerceptiveAgent
 import ai.platon.pulsar.agentic.context.AgenticContext
+import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.core.api.PulsarSettings
 import jakarta.annotation.PreDestroy
 import kotlinx.coroutines.sync.Mutex
@@ -23,12 +24,11 @@ class SessionManager(
     val agenticContext: AgenticContext
 ) {
     companion object {
-        private const val DEFAULT_SESSION_ID = "default"
+        const val DEFAULT_SESSION_ID = "default"
+        const val SWARM_SESSION_ID = "swarm"
+
         private const val SESSION_ID_CAPABILITY = "sessionId"
         private const val PROFILE_MODE_CAPABILITY = "profileMode"
-        private const val DEFAULT_PROFILE_MODE = "DEFAULT"
-        private const val TEMPORARY_PROFILE_MODE = "TEMPORARY"
-        private const val SEQUENTIAL_PROFILE_MODE = "SEQUENTIAL"
     }
 
     private val logger = LoggerFactory.getLogger(SessionManager::class.java)
@@ -62,15 +62,8 @@ class SessionManager(
 
     private val sessions = ConcurrentHashMap<String, ManagedSession>()
 
-    /**
-     * Creates a new browser session with the specified capabilities.
-     *
-     * @param capabilities Optional browser capabilities (browserName, etc.)
-     * @return The created managed session.
-     */
-    fun getOrCreateSession(capabilities: Map<String, Any?>? = null): ManagedSession {
+    fun getOrCreateSessionById(sessionId: String, capabilities: Map<String, Any?>? = null): ManagedSession {
         val normalizedCapabilities = normalizeCapabilities(capabilities)
-        val sessionId = normalizedCapabilities.getValue(SESSION_ID_CAPABILITY).toString()
         val session = sessions.computeIfAbsent(sessionId) {
             createManagedSession(sessionId, normalizedCapabilities)
         }
@@ -81,14 +74,28 @@ class SessionManager(
         return activeSession
     }
 
+    /**
+     * Creates a new browser session with the specified capabilities.
+     *
+     * @param capabilities Optional browser capabilities (browserName, etc.)
+     * @return The created managed session.
+     */
+    fun getOrCreateSession(capabilities: Map<String, Any?>? = null): ManagedSession {
+        val normalizedCapabilities = normalizeCapabilities(capabilities)
+        val sessionId = normalizedCapabilities.getValue(SESSION_ID_CAPABILITY).toString()
+        return getOrCreateSessionById(sessionId, normalizedCapabilities)
+    }
+
     fun checkHealthy(session: ManagedSession): Boolean {
         val s = session.agenticSession
         val browser = s.boundBrowser
         val driver = s.boundDriver
 
         if (driver != null && driver.browser != browser) {
-            logger.warn("Inconsistent driver/browser. Driver {} state: {} browser {} state: {}",
-                driver.id, driver.readableState, browser?.id, browser?.readableState)
+            logger.warn(
+                "Inconsistent driver/browser. Driver {} state: {} browser {} state: {}",
+                driver.id, driver.readableState, browser?.id, browser?.readableState
+            )
         }
 
         var healthy = s.isActive
@@ -111,7 +118,8 @@ class SessionManager(
         }
 
         if (!healthy) {
-            logger.warn("Session {} is unhealthy: session active={}, browser healthy={}, driver healthy={}",
+            logger.warn(
+                "Session {} is unhealthy: session active={}, browser healthy={}, driver healthy={}",
                 session.sessionId,
                 s.isActive,
                 s.boundBrowser?.healthy() ?: "N/A",
@@ -169,6 +177,7 @@ class SessionManager(
                     }
                     existingSession
                 }
+
                 else -> {
                     markSessionInactive(existingSession)
                     if (existingSession === staleSession) {
@@ -196,7 +205,11 @@ class SessionManager(
     private fun normalizeCapabilities(capabilities: Map<String, Any?>?): Map<String, Any?> {
         val normalizedCapabilities = LinkedHashMap(capabilities.orEmpty())
         val requestedSessionId = normalizedCapabilities[SESSION_ID_CAPABILITY]?.toString()?.trim()
-        val sessionId = if (requestedSessionId.isNullOrBlank() || requestedSessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true)) {
+        val sessionId = if (requestedSessionId.isNullOrBlank() || requestedSessionId.equals(
+                DEFAULT_SESSION_ID,
+                ignoreCase = true
+            )
+        ) {
             DEFAULT_SESSION_ID
         } else {
             requestedSessionId
@@ -204,10 +217,12 @@ class SessionManager(
 
         normalizedCapabilities[SESSION_ID_CAPABILITY] = sessionId
         normalizedCapabilities[PROFILE_MODE_CAPABILITY] = when {
-            normalizedCapabilities[PROFILE_MODE_CAPABILITY]?.toString()?.equals(SEQUENTIAL_PROFILE_MODE, ignoreCase = true) == true -> SEQUENTIAL_PROFILE_MODE
-            sessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) -> DEFAULT_PROFILE_MODE
-            else -> SEQUENTIAL_PROFILE_MODE
-        }
+            normalizedCapabilities[PROFILE_MODE_CAPABILITY]?.toString()
+                ?.equals(BrowserProfileMode.SEQUENTIAL.name, ignoreCase = true) == true -> BrowserProfileMode.SEQUENTIAL
+
+            sessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) -> BrowserProfileMode.DEFAULT
+            else -> BrowserProfileMode.SEQUENTIAL
+        }.name
 
         return normalizedCapabilities
     }
@@ -247,8 +262,10 @@ class SessionManager(
             val browser = pulsarSession.boundBrowser
 
             logger.info("---------------------MANAGED SESSION BEGIN----------------------------")
-            logger.info("Deleting session {}, closing pulsar session #{} {}",
-                sessionId, pulsarSession.id, pulsarSession.display)
+            logger.info(
+                "Deleting session {}, closing pulsar session #{} {}",
+                sessionId, pulsarSession.id, pulsarSession.display
+            )
 
             // Close session
             pulsarSession.close()
