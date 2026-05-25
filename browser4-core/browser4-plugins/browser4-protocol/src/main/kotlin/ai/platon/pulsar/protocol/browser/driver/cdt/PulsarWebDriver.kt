@@ -1,6 +1,7 @@
 package ai.platon.pulsar.protocol.browser.driver.cdt
 
 import ai.platon.browser4.driver.chrome.*
+import ai.platon.browser4.driver.chrome.dom.SnapshotService
 import ai.platon.browser4.driver.chrome.dom.model.*
 import ai.platon.browser4.driver.chrome.experimental.CDP
 import ai.platon.browser4.driver.chrome.impl.ChromeImpl
@@ -81,6 +82,8 @@ class PulsarWebDriver constructor(
      * Expose the underlying implementation, used for diagnosis purpose
      * */
     override val implementation: Any get() = cdp
+
+    override val snapshotService: SnapshotService get() = page.snapshotService
 
     init {
         fingerprintApplier?.invoke(this)

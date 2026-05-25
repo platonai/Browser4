@@ -1,6 +1,7 @@
 package ai.platon.pulsar.skeleton.browser.driver
 
 import ai.platon.browser4.driver.chrome.NetworkResourceResponse
+import ai.platon.browser4.driver.chrome.dom.SnapshotService
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.DateTimes
 import ai.platon.pulsar.common.getTracerOrNull
@@ -154,6 +155,7 @@ abstract class AbstractWebDriver(
 
     open val chatModel get() = ChatModelFactory.getOrCreateOrNull(config)
     open val implementation: Any = this
+    abstract val snapshotService: SnapshotService
 
     /** Idle timeout before a READY driver is considered stale and eligible for recycling/retirement. */
     var idleTimeout: Duration = Duration.ofMinutes(10)

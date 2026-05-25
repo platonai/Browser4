@@ -51,6 +51,7 @@ class RobustRPC(
             }
         } catch (e: ChromeDriverException) {
             handleChromeException(e, name, message)
+            logger.warn("Unexpected code path, will re-throw. Exception should be handled in handleChromeException method, but still got an exception: [{}], message: [{}]", name, message, e)
             throw e
         }
     }
@@ -60,6 +61,7 @@ class RobustRPC(
         name: String,
         focus: Boolean = false,
         scrollIntoView: Boolean = false,
+        message: String? = null,
         action: suspend (NodeRef) -> T
     ): T? {
         try {
@@ -80,9 +82,9 @@ class RobustRPC(
             }
         } catch (e: ChromeDriverException) {
             handleChromeException(e, name, "selector: [$selector], focus: $focus, scrollIntoView: $scrollIntoView")
+            logger.warn("Unexpected code path, will re-throw. Exception should be handled in handleChromeException method, but still got an exception: [{}], message: [{}]", name, message, e)
+            throw e
         }
-
-        return null
     }
 
     suspend fun <T> predicateOnPage(
@@ -97,8 +99,9 @@ class RobustRPC(
         name: String,
         focus: Boolean = false,
         scrollIntoView: Boolean = false,
+        message: String? = null,
         predicate: suspend (NodeRef) -> Boolean
-    ): Boolean = invokeOnElement(selector, name, focus, scrollIntoView, predicate) == true
+    ): Boolean = invokeOnElement(selector, name, focus, scrollIntoView, message, predicate) == true
 
     @Throws(ChromeRPCException::class)
     suspend fun <T> invoke(action: String, block: suspend () -> T): T? {
