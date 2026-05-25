@@ -255,6 +255,7 @@ class SessionManager(
             // Close the companion browser if it exists
             if (browser != null) {
                 // might be already closed by the session, but we ensure it's closed here to release resources
+                // TODO: remove this redundant close call after confirming that session.close() always closes the browser
                 pulsarSession.context.browserManager.closeBrowser(browser)
             }
 

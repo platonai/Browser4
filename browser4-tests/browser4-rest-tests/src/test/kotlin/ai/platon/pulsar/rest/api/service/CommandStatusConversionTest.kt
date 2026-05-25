@@ -4,11 +4,11 @@ import ai.platon.pulsar.agentic.tools.high.agent.AgentTaskStatus
 import ai.platon.pulsar.agentic.tools.high.crawl.PageVisitStatus
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
-import ai.platon.pulsar.agentic.tools.high.command.toCommandStatus
+import ai.platon.pulsar.rest.api.entities.toCommandStatus
+import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import java.time.Instant
 import kotlin.test.assertEquals
-import org.junit.jupiter.api.DisplayName
 
 /**
  * Test status conversion logic to ensure proper field transfer between different status types.

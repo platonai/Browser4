@@ -1,4 +1,4 @@
-package ai.platon.pulsar.agentic.tools.high.command
+package ai.platon.pulsar.rest.api.service
 
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.tools.high.agent.StatefulAgentRunner
@@ -8,13 +8,18 @@ import ai.platon.pulsar.agentic.tools.high.crawl.StatefulPageVisitor
 import ai.platon.pulsar.agentic.tools.high.crawl.failed
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.Strings
-import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.urls.URLUtils
+import ai.platon.pulsar.rest.api.entities.CommandResult
+import ai.platon.pulsar.rest.api.entities.CommandStatus
+import ai.platon.pulsar.rest.api.entities.refreshed
+import ai.platon.pulsar.rest.api.entities.toCommandStatus
+import ai.platon.pulsar.rest.config.CommandNormalizer
 import ai.platon.pulsar.skeleton.event.PageEventHandlers
 import ai.platon.pulsar.skeleton.event.impl.PageEventHandlersFactory
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import org.springframework.stereotype.Service
 import java.io.Closeable
 import java.time.Instant
 import kotlin.time.Duration.Companion.milliseconds
@@ -31,6 +36,7 @@ import kotlin.time.Duration.Companion.milliseconds
  *        structured [PageVisitRequest] objects. If not provided, plain text commands
  *        without URLs will be executed as agent commands.
  */
+@Service
 class CommandService(
     val session: AgenticSession,
     private val commandNormalizer: CommandNormalizer? = null,
@@ -38,8 +44,6 @@ class CommandService(
     companion object {
         const val FLOW_POLLING_INTERVAL = 1000L
     }
-
-    private val logger = getLogger(CommandService::class)
 
     // Create a dedicated dispatcher for long-running command operations
     private val commandDispatcher = Dispatchers.IO.limitedParallelism(10)

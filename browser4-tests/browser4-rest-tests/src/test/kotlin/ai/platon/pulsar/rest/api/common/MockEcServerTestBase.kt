@@ -11,6 +11,7 @@ import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Import
 import org.springframework.test.context.ContextConfiguration
 import org.springframework.web.client.RestTemplate
+import org.springframework.web.client.getForEntity
 
 /**
  * Base test class that automatically starts the mock EC server before tests run.
@@ -41,7 +42,7 @@ abstract class MockEcServerTestBase {
     fun setup() {
         // Verify mock server is running
         try {
-            val response = restTemplate.getForEntity("$mockServerBaseUrl/ec/", String::class.java)
+            val response = restTemplate.getForEntity<String>("$mockServerBaseUrl/ec/")
             if (response.statusCode.isError) {
                 throw RuntimeException("Mock EC server is not responding properly: ${response.statusCode}")
             }

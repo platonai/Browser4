@@ -1,4 +1,4 @@
-package ai.platon.pulsar.agentic.tools.high.command
+package ai.platon.pulsar.rest.api.entities
 
 import ai.platon.pulsar.agentic.model.AgentHistory
 import ai.platon.pulsar.agentic.model.AgentState
@@ -143,6 +143,7 @@ data class CommandStatus(
      * This is set when executing agent commands and returned to API clients for agent-backed commands.
      */
     var agentHistory: CommandAgentHistory? = null
+
     /**
      * The server-side event handlers reference for tracking server-side events during command execution.
      * This is set when executing commands and provides access to the event flow.

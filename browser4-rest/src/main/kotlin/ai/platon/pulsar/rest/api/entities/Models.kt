@@ -1,16 +1,6 @@
 package ai.platon.pulsar.rest.api.entities
 
-import ai.platon.pulsar.agentic.tools.high.crawl.PageVisitRequest
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
-
-// Command-related types are now in browser4-tools module.
-// These typealiases maintain backward compatibility for REST layer consumers.
-typealias CommandRequest = PageVisitRequest
-typealias CommandResult = ai.platon.pulsar.agentic.tools.high.command.CommandResult
-typealias CommandAgentState = ai.platon.pulsar.agentic.tools.high.command.CommandAgentState
-typealias CommandAgentHistory = ai.platon.pulsar.agentic.tools.high.command.CommandAgentHistory
-typealias InstructResult = ai.platon.pulsar.agentic.tools.high.command.InstructResult
-typealias CommandStatus = ai.platon.pulsar.agentic.tools.high.command.CommandStatus
 
 /**
  * Request for chat
