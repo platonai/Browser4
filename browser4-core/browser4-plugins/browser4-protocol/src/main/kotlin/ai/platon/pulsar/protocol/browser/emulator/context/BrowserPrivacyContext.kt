@@ -92,7 +92,7 @@ open class BrowserPrivacyContext(
     override suspend fun open(url: String): FetchResult {
         val task = FetchTask.create(url, conf.toVolatileConfig())
         val f = checkNotNull(webdriverFetcher) { "WebDriverFetcher is null" }
-        return doRun(task) { _, driver -> f.fetchDeferred(task, driver) }
+        return run(task) { _, driver -> f.fetchDeferred(task, driver) }
     }
 
     /**
@@ -103,7 +103,7 @@ open class BrowserPrivacyContext(
     override suspend fun open(url: String, options: LoadOptions): FetchResult {
         val task = FetchTask.create(url, options)
         val f = checkNotNull(webdriverFetcher) { "WebDriverFetcher is null" }
-        return doRun(task) { _, driver -> f.fetchDeferred(task, driver) }
+        return run(task) { _, driver -> f.fetchDeferred(task, driver) }
     }
 
     @Throws(ProxyVendorException::class)

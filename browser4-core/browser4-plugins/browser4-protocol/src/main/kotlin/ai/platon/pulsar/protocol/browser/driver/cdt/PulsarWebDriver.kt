@@ -1040,7 +1040,7 @@ function() {
 
     @Throws(WebDriverException::class)
     override suspend fun nanoDOMTree(): NanoDOMTree? {
-        return rpc.invokeWithRetry("nanoDOMTree") {
+        return rpc.invokeOnPage("nanoDOMTree") {
             val snapshotOptions = SnapshotOptions()
             val domState = page.snapshotService.getDOMState(snapshotOptions = snapshotOptions)
             domState.serializableTree.toNanoTreeInRange()

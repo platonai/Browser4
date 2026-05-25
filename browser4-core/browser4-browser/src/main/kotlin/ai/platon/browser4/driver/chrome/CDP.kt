@@ -35,7 +35,7 @@ class CDP(
     private val devTools: ChromeDevTools
 ) {
     val remoteDevToolsOrNull: RemoteDevTools? get() = devTools as? RemoteDevTools
-    val isOpen: Boolean get() = remoteDevToolsOrNull?.isOpen ?: true
+    val isOpen: Boolean get() = remoteDevToolsOrNull?.isOpen ?: false
 
     private val browser get() = devTools.browser
     private val page get() = devTools.page
@@ -318,7 +318,6 @@ class CDP(
             pointerType = null,
         )
     }
-
 
     suspend fun setInterceptDrags(enabled: Boolean) = input.setInterceptDrags(enabled)
 
