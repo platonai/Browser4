@@ -264,6 +264,7 @@ open class InteractiveBrowserEmulator(
     @Throws(Exception::class)
     protected open suspend fun browseWithDriver(task: FetchTask, driver: WebDriver): FetchResult {
         require(driver is AbstractWebDriver)
+        checkState(driver)
 
         // page.lastBrowser is used by AppFiles.export, so it has to be set before export
         // TODO: page should not be modified in browser phase, it should only be updated using PageDatum
@@ -434,7 +435,7 @@ open class InteractiveBrowserEmulator(
         require(driver is AbstractWebDriver)
 
         val browserSettings = driver.browser.settings
-        // TODO: a better flag to specify whether to attach or navigate
+        // TODO: a better flag to specify whether to capture or navigate
         val page = fetchTask.page
         require(page is AbstractWebPage)
         val capture = page.hasVar(VAR_CAPTURE)

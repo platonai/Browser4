@@ -28,9 +28,9 @@ class CDP(
     val remoteDevToolsOrNull: RemoteDevTools? get() = devTools as? RemoteDevTools
     val isOpen: Boolean get() = remoteDevToolsOrNull?.isOpen ?: true
 
-    val browser get() = devTools.browser
+    private val browser get() = devTools.browser
     val page get() = devTools.page
-    val target get() = devTools.target
+    private val target get() = devTools.target
     val dom get() = devTools.dom
     val console get() = devTools.console
     val css get() = devTools.css
@@ -39,9 +39,9 @@ class CDP(
     val fetch get() = devTools.fetch
     val security get() = devTools.security
     val runtime get() = devTools.runtime
-    val emulation get() = devTools.emulation
-    val accessibility get() = devTools.accessibility
-    val domSnapshot get() = devTools.domSnapshot
+    private val emulation get() = devTools.emulation
+    private val accessibility get() = devTools.accessibility
+    private val domSnapshot get() = devTools.domSnapshot
 
     /** Returns the main frame, suspending until the frame tree is available. */
     suspend fun mainFrame() = page.getFrameTree().frame

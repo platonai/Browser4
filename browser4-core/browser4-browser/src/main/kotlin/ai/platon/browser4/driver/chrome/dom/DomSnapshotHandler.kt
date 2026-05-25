@@ -29,6 +29,8 @@ class DomSnapshotHandler(private val cdp: CDP) {
         includeAbsoluteCoords: Boolean = true,
         devicePixelRatio: Double = 1.0
     ): Map<Int, SnapshotNodeEx> {
+        check(cdp.isOpen) { "CDP is not open" }
+
         val computedStyles = if (includeStyles) REQUIRED_COMPUTED_STYLES else emptyList()
         val snapshot = captureSnapshot(
             computedStyles,

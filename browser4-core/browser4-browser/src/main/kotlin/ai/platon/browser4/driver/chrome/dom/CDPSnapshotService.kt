@@ -100,6 +100,8 @@ class CDPSnapshotService(
         target: PageTarget,
         snapshotOptions: SnapshotOptions
     ): BrowserUseState {
+        check(cdp.isOpen) { "CDP is not open" }
+
         val domState = getDOMState(target, snapshotOptions)
         return buildBrowserState(domState)
     }
@@ -108,6 +110,8 @@ class CDPSnapshotService(
         target: PageTarget,
         snapshotOptions: SnapshotOptions
     ): DOMState {
+        check(cdp.isOpen) { "CDP is not open" }
+
         val allTrees = buildTargetTrees(options = snapshotOptions)
         if (logger.isDebugEnabled) {
             logger.debug("allTrees summary: \n{}", DomDebug.summarize(allTrees))
@@ -132,6 +136,8 @@ class CDPSnapshotService(
         target: PageTarget = PageTarget(),
         options: SnapshotOptions = SnapshotOptions()
     ): TargetTrees {
+        check(cdp.isOpen) { "CDP is not open" }
+
         val startTime = System.currentTimeMillis()
         val cdpTiming = mutableMapOf<String, Long>()
 

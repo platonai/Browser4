@@ -146,7 +146,7 @@ class PulsarWebDriver constructor(
 
     override suspend fun goForward() {
         driverHelper.invokeOnPage("goForward") {
-            val history = cdp.page.getNavigationHistory() ?: return@invokeOnPage
+            val history = cdp.page.getNavigationHistory()
             val currentIndex = history.currentIndex
             val entries = history.entries
             val targetIndex = currentIndex + 1
@@ -239,9 +239,9 @@ class PulsarWebDriver constructor(
 
     @Throws(WebDriverException::class)
     override suspend fun exists(selector: String): Boolean {
-        return page.exists(selector)
-//        driverHelper.predicateOnElement(selector) {
-//        }
+        return driverHelper.predicateOnPage("exists") {
+            page.exists(selector)
+        }
     }
 
     /**
@@ -297,7 +297,9 @@ class PulsarWebDriver constructor(
 
     @Throws(WebDriverException::class)
     override suspend fun isVisible(selector: String): Boolean {
-        return page.isVisible(selector)
+        return driverHelper.predicateOnPage("isVisible") {
+            page.isVisible(selector)
+        }
     }
 
     @Throws(WebDriverException::class)
@@ -328,11 +330,11 @@ class PulsarWebDriver constructor(
                     awaitPromise = true
                 )
 
-                if (result?.exceptionDetails != null) {
+                if (result.exceptionDetails != null) {
                     throw WebDriverException("JS Error in $actionName: " + result.exceptionDetails?.exception?.description)
                 }
 
-                result?.result?.value as? Boolean ?: false
+                result.result?.value as? Boolean ?: false
             } ?: false
         }
     }

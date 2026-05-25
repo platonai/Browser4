@@ -4,7 +4,6 @@ import ai.platon.browser4.driver.chrome.NodeRef
 import ai.platon.browser4.driver.chrome.PageHandler
 import ai.platon.browser4.driver.chrome.experimental.CDP
 import ai.platon.browser4.driver.chrome.util.ChromeDriverException
-import ai.platon.cdt.kt.protocol.commands.Fetch
 import ai.platon.cdt.kt.protocol.events.network.ResponseReceived
 import ai.platon.cdt.kt.protocol.types.network.ResourceType
 import ai.platon.cdt.kt.protocol.types.runtime.CallFunctionOn
@@ -147,6 +146,13 @@ class WebDriverHelper(
 
         return null
     }
+
+    suspend fun <T> predicateOnPage(
+        name: String,
+        url: String? = null,
+        message: String? = null,
+        action: suspend () -> T
+    ): Boolean = invokeOnPage(name, url, message, action) != null
 
     suspend fun predicateOnElement(
         selector: String,

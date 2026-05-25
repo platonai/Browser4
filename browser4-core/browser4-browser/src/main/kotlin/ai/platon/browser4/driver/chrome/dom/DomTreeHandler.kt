@@ -4,6 +4,7 @@ import ai.platon.browser4.driver.chrome.dom.model.MergedDOMTreeNode
 import ai.platon.browser4.driver.chrome.dom.model.NodeType
 import ai.platon.browser4.driver.chrome.dom.model.PageTarget
 import ai.platon.browser4.driver.chrome.experimental.CDP
+import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.getLogger
 
 typealias CdpNode = ai.platon.cdt.kt.protocol.types.dom.Node
@@ -32,15 +33,14 @@ class DomTreeHandler(private val cdp: CDP) {
      * @return Enhanced DOM tree root node; returns an empty root on failure
      */
     suspend fun getDocument(target: PageTarget?, maxDepth: Int = 0): MergedDOMTreeNode {
+        check(cdp.isOpen) { "CDP is not open" }
+
         val maxDepth = if (maxDepth > 0) maxDepth else 999999
-        val depth = maxDepth.takeIf { it > 0 }
+        val depth = maxDepth.takeIf { true }
         val document = try {
-            when {
-                depth != null -> cdp.getDocument(depth, pierce = true)
-                else -> cdp.getDocument(null, pierce = true)
-            }
+            cdp.getDocument(depth, pierce = true)
         } catch (e: Exception) {
-            logger.warn("DOM.getDocument failed | frameId={} | err={}", target?.frameId, e.toString())
+            logger.warn("Failed to call `cdp.getDocument()` | frameId={} | err={}", target?.frameId, e.brief())
             tracer?.debug("DOM.getDocument exception", e)
             null
         }
