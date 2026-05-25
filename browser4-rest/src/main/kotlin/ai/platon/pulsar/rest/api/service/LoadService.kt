@@ -8,16 +8,14 @@ import ai.platon.pulsar.rest.api.entities.CommandRequest
 import ai.platon.pulsar.rest.api.entities.PromptRequest
 import ai.platon.pulsar.skeleton.event.PageEventHandlers
 import org.slf4j.LoggerFactory
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Service
 
 @Service
-class LoadService {
+class LoadService(
+    val session: AgenticSession
+) {
 
     private val logger = LoggerFactory.getLogger(LoadService::class.java)
-
-    @Autowired
-    lateinit var session: AgenticSession
 
     suspend fun load(url: String): WebPage {
         return session.load(url)
@@ -53,19 +51,26 @@ class LoadService {
         return page to document
     }
 
-    suspend fun loadDocument(request: CommandRequest, eventHandlers: PageEventHandlers): Pair<WebPage, FeaturedDocument> {
+    suspend fun loadDocument(
+        request: CommandRequest,
+        eventHandlers: PageEventHandlers
+    ): Pair<WebPage, FeaturedDocument> {
         val args = request.enhanceArgs()
         val options = session.options(args, eventHandlers)
 
         val be = options.eventHandlers.browseEventHandlers
 
-        request.onBrowserLaunchedActions?.let { actions -> be.onBrowserLaunched.addLast { page, driver ->
-            actions.forEach { session.act(it) }
-        } }
+        request.onBrowserLaunchedActions?.let { actions ->
+            be.onBrowserLaunched.addLast { page, driver ->
+                actions.forEach { session.act(it) }
+            }
+        }
 
-        request.onPageReadyActions?.let { actions -> be.onDocumentFullyLoaded.addLast { page, driver ->
-            actions.forEach { session.act(it) }
-        } }
+        request.onPageReadyActions?.let { actions ->
+            be.onDocumentFullyLoaded.addLast { page, driver ->
+                actions.forEach { session.act(it) }
+            }
+        }
 
 //        request.actionsOnDidInteract?.let { actions -> be.onDidInteract.addLast { page, driver ->
 //            actions.forEach { driver.instruct(it) }

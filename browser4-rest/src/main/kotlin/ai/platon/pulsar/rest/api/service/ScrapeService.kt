@@ -2,7 +2,6 @@ package ai.platon.pulsar.rest.api.service
 
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.BasicAgenticSession
-import ai.platon.pulsar.agentic.tools.high.command.CommandService.Companion.FLOW_POLLING_INTERVAL
 import ai.platon.pulsar.agentic.tools.high.crawl.ScrapeRequest
 import ai.platon.pulsar.agentic.tools.high.crawl.ScrapeResponse
 import ai.platon.pulsar.agentic.tools.high.crawl.common.DegenerateXSQLScrapeHyperlink
@@ -13,6 +12,7 @@ import ai.platon.pulsar.agentic.tools.high.crawl.refreshed
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
 import ai.platon.pulsar.rest.api.entities.ScrapeStatusRequest
+import ai.platon.pulsar.rest.api.service.CommandService.Companion.FLOW_POLLING_INTERVAL
 import jakarta.annotation.PreDestroy
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
