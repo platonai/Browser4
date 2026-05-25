@@ -3,9 +3,9 @@ package ai.platon.pulsar.examples.sites.spa.wemix
 import ai.platon.browser4.driver.common.BrowserSettings
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.persist.WebPage
+import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.context.PulsarContexts
 import ai.platon.pulsar.skeleton.event.WebPageWebDriverEventHandler
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import kotlinx.coroutines.delay
 import kotlin.random.Random
 
@@ -59,7 +59,7 @@ private class RPACrawler {
     /**
      * Crawl a single page application
      * */
-    fun crawlSPA() {
+    suspend fun crawlSPA() {
         BrowserSettings.withSPA()
 
         val paginateHandler = RPAPaginateHandler(1)
@@ -73,4 +73,4 @@ private class RPACrawler {
     }
 }
 
-fun main() = RPACrawler().crawlSPA()
+suspend fun main() = RPACrawler().crawlSPA()

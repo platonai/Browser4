@@ -55,7 +55,7 @@ class RestaurantCrawlerSlim(val session: PulsarSession) {
     }
 }
 
-fun main() {
+suspend fun main() {
     val portalUrl = "https://www.dianping.com/beijing/ch10/g110"
     val args = "-i 1s -ii 5s -ol \"#shop-all-list .tit a[href~=shop]\" -ignoreFailure"
 

@@ -11,7 +11,7 @@ import kotlin.time.Duration.Companion.milliseconds
 /**
  * Demonstrates talking to the active webpage.
  * */
-fun main() {
+suspend fun main() {
     val session = AgenticContexts.createSession()
     val url = TestUrls.PRODUCT_DETAIL_URL
 

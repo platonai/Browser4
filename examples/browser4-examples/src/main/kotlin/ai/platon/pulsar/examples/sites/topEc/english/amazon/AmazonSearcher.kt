@@ -1,10 +1,10 @@
 package ai.platon.pulsar.examples.sites.topEc.english.amazon
 
-import ai.platon.pulsar.skeleton.context.PulsarContexts
-import ai.platon.pulsar.skeleton.event.WebPageWebDriverEventHandler
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.dom.Documents
 import ai.platon.pulsar.persist.WebPage
+import ai.platon.pulsar.skeleton.browser.driver.WebDriver
+import ai.platon.pulsar.skeleton.context.PulsarContexts
+import ai.platon.pulsar.skeleton.event.WebPageWebDriverEventHandler
 
 class AmazonSearcherJsEventHandler: WebPageWebDriverEventHandler() {
     @Suppress("PARAMETER_NAME_CHANGED_ON_OVERRIDE")
@@ -38,7 +38,7 @@ class AmazonSearcherJsEventHandler: WebPageWebDriverEventHandler() {
     }
 }
 
-fun main() {
+suspend fun main() {
     val portalUrl = "https://www.amazon.com/"
 
     val cx = PulsarContexts.create()
@@ -47,5 +47,5 @@ fun main() {
     opts.eventHandlers.browseEventHandlers.onFeatureComputed.addLast(AmazonSearcherJsEventHandler())
     i.load(portalUrl, opts)
 
-    readLine()
+    readlnOrNull()
 }

@@ -4,7 +4,7 @@ import ai.platon.pulsar.examples.sites.topEc.chinese.login.taobao.TaobaoLoginHan
 import ai.platon.pulsar.skeleton.context.PulsarContexts
 import ai.platon.pulsar.skeleton.session.PulsarSession
 
-fun main() {
+suspend fun main() {
     val portalUrl = "https://list.tmall.com/search_product.htm?q=大家电"
     val args = "-i 1s -ii 5m -ol a[href~=detail] -ignoreFailure"
 

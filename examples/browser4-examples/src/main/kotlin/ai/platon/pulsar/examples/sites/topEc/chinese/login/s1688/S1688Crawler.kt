@@ -18,7 +18,7 @@ class S1688Crawler(
     val password = System.getenv("PULSAR_TAOBAO_PASSWORD") ?: "MustFallPassword"
     val submitSelector = "button[type=submit]"
 
-    fun crawl() {
+    suspend fun crawl() {
         val options = session.options(args)
 
         val loginHandler = LoginHandler(
@@ -31,7 +31,7 @@ class S1688Crawler(
     }
 }
 
-fun main() {
+suspend fun main() {
     S1688Crawler().crawl()
     PulsarContexts.await()
 }

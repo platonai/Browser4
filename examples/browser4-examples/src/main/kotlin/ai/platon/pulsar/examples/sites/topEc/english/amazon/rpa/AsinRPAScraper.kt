@@ -1,14 +1,15 @@
 package ai.platon.pulsar.examples.sites.topEc.english.amazon.rpa
 
-import ai.platon.pulsar.common.*
+import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.sql.ResultSetFormatter
 import ai.platon.pulsar.common.sql.SQLTemplate
-import ai.platon.pulsar.skeleton.workflow.common.url.ListenableHyperlink
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
+import ai.platon.pulsar.common.warnInterruptible
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.persist.AbstractWebPage
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.ql.context.SQLContexts
+import ai.platon.pulsar.skeleton.browser.driver.WebDriver
+import ai.platon.pulsar.skeleton.workflow.common.url.ListenableHyperlink
 
 class AsinRPAScraper {
     companion object {
@@ -36,7 +37,7 @@ class AsinRPAScraper {
      * Given ASIN url list, scrape all the ASIN pages and relative seller pages.
      * After clicking `New seller` button, the seller url will be displayed.
      * */
-    fun crawl() {
+    suspend fun crawl() {
         val url = "https://www.amazon.com/dp/B09V3KXJPB"
         val domain = "amazon.com"
         val link = createASINHyperlink(domain, url)
@@ -122,7 +123,7 @@ class AsinRPAScraper {
     }
 }
 
-fun main() {
+suspend fun main() {
     val crawler = AsinRPAScraper()
     crawler.crawl()
 

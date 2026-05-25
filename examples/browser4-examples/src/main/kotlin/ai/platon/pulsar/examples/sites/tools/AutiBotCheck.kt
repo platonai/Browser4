@@ -13,7 +13,7 @@ import ai.platon.pulsar.ql.context.SQLContexts
  * https://browserleaks.com/
  * https://privacybee.com/blog/browser-fingerprinting/
  * */
-fun main() {
+suspend fun main() {
     val urls = """
 http://www.baidu.com
 https://bot.sannysoft.com/
@@ -23,14 +23,14 @@ https://arh.antoinevastel.com/bots/areyouheadless
         .map { it.trim() }
         .filter { it.startsWith("http") }
         .take(1)
-    
+
     val session = SQLContexts.createSession()
-    
+
     val proxyPool = session.context.getBean(ProxyPool::class)
     val proxyLoader = TemporaryProxyLoader(proxyPool)
     proxyLoader.loadProxies()
-    
+
     urls.forEach { session.open(it) }
-    
-    readLine()
+
+    readlnOrNull()
 }
