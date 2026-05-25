@@ -1,8 +1,8 @@
 package ai.platon.browser4.driver.chrome.dom
 
+import ai.platon.browser4.driver.chrome.CDP
 import ai.platon.browser4.driver.chrome.dom.model.ElementRefCriteria
 import ai.platon.browser4.driver.chrome.dom.model.SnapshotOptions
-import ai.platon.browser4.driver.chrome.experimental.CDP
 import ai.platon.pulsar.WebDriverTestBase
 import ai.platon.pulsar.protocol.browser.driver.cdt.PulsarWebDriver
 import org.junit.jupiter.api.Assertions.*

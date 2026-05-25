@@ -1,6 +1,5 @@
 package ai.platon.browser4.driver.chrome
 
-import ai.platon.browser4.driver.chrome.experimental.CDP
 import ai.platon.pulsar.common.AppContext
 
 /**

@@ -1,9 +1,9 @@
 package ai.platon.browser4.driver.chrome.dom
 
+import ai.platon.browser4.driver.chrome.CDP
 import ai.platon.browser4.driver.chrome.dom.model.MergedDOMTreeNode
 import ai.platon.browser4.driver.chrome.dom.model.NodeType
 import ai.platon.browser4.driver.chrome.dom.model.PageTarget
-import ai.platon.browser4.driver.chrome.experimental.CDP
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.getLogger
 

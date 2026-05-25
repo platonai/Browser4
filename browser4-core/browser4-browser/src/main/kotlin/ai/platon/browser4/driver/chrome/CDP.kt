@@ -1,14 +1,10 @@
-package ai.platon.browser4.driver.chrome.experimental
+package ai.platon.browser4.driver.chrome
 
-import ai.platon.browser4.driver.chrome.RemoteDevTools
 import ai.platon.cdt.kt.protocol.ChromeDevTools
 import ai.platon.cdt.kt.protocol.support.annotations.ParamName
 import ai.platon.cdt.kt.protocol.types.dom.Rect
 import ai.platon.cdt.kt.protocol.types.domsnapshot.CaptureSnapshot
-import ai.platon.cdt.kt.protocol.types.input.DispatchDragEventType
-import ai.platon.cdt.kt.protocol.types.input.DispatchKeyEventType
-import ai.platon.cdt.kt.protocol.types.input.DispatchMouseEventType
-import ai.platon.cdt.kt.protocol.types.input.DragData
+import ai.platon.cdt.kt.protocol.types.input.*
 import ai.platon.cdt.kt.protocol.types.network.LoadNetworkResourceOptions
 import ai.platon.cdt.kt.protocol.types.network.LoadNetworkResourcePageResult
 import ai.platon.cdt.kt.protocol.types.page.*
@@ -19,7 +15,7 @@ import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
 /**
  * CDP is the single access point for all Chrome DevTools Protocol (CDP) domain APIs.
  *
- * All direct usage of [ChromeDevTools] should go through this class to improve
+ * All direct usage of [ai.platon.cdt.kt.protocol.ChromeDevTools] should go through this class to improve
  * maintainability and provide a consistent, centralized interface.
  */
 class CDP(
@@ -231,7 +227,7 @@ class CDP(
             type = DispatchMouseEventType.MOUSE_PRESSED,
             x = x,
             y = y,
-            button = ai.platon.cdt.kt.protocol.types.input.MouseButton.LEFT,
+            button = MouseButton.LEFT,
             modifiers = modifiers,
             timestamp = null,
             buttons = buttons,
@@ -252,7 +248,7 @@ class CDP(
             type = DispatchMouseEventType.MOUSE_RELEASED,
             x = x,
             y = y,
-            button = ai.platon.cdt.kt.protocol.types.input.MouseButton.LEFT,
+            button = MouseButton.LEFT,
             clickCount = clickCount,
             modifiers = modifiers,
             buttons = buttons,
