@@ -193,6 +193,8 @@ class MCPToolController(
     ): ResponseEntity<MCPToolCallResponse> {
         addRequestId(response)
 
+        logger.info("Calling tool ${request.tool} " + request.arguments?.entries?.joinToString(" ") { it.key + " " + it.value })
+
         return try {
             when (request.tool) {
                 // Session management tools

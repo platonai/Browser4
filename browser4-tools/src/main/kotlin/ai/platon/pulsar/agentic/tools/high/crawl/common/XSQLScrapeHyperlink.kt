@@ -96,7 +96,7 @@ open class XSQLScrapeHyperlink(
 
     protected open fun doExtract(page: WebPage, document: FeaturedDocument) {
         if (!page.protocolStatus.isSuccess || page.contentLength == 0L || page.content == null) {
-            logger.info("No content | {}", page.url)
+            logger.info("No content | Protocol Status: {} | Page URL: {} | Document Base URI: {}", page.protocolStatus, page.url, document.baseURI)
             response.statusCode = ResourceStatus.SC_NO_CONTENT
             response.refresh(ResourceStatus.SC_NO_CONTENT, ResourceStatus.SC_NO_CONTENT, false)
         }
