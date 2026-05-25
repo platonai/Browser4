@@ -73,7 +73,7 @@ class CDPRequest(
             interceptionId ?: throw ChromeRPCException("InterceptionId is required by Fetch.continueRequest")
 
         try {
-            driver.cdp.fetch.continueRequest(
+            driver.cdp.continueRequest(
                 requestId,
                 overrides.url, overrides.method, postDataBinaryBase64, overrides.headers
             )
@@ -107,7 +107,7 @@ class CDPRequest(
         try {
             val responseBodyBase64 = Base64.getEncoder().encodeToString(responseBody)
             // Provides response to the request.
-            driver.cdp.fetch.fulfillRequest(
+            driver.cdp.fulfillRequest(
                 requestId,
                 responseCode, responseHeaders, binaryResponseHeaders, responseBodyBase64, httpStatus.reasonPhrase
             )
@@ -119,7 +119,7 @@ class CDPRequest(
     suspend fun abort(abortErrorReason: ErrorReason) {
         interceptionHandled = true
 
-        interceptionId?.let { driver.cdp.fetch.failRequest(it, abortErrorReason) }
+        interceptionId?.let { driver.cdp.failRequest(it, abortErrorReason) }
             ?: throw ChromeRPCException("HTTPRequest is missing _interceptionId needed for Fetch.failRequest")
     }
 

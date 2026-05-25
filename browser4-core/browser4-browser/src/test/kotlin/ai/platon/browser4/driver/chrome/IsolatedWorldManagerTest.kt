@@ -32,7 +32,7 @@ class IsolatedWorldManagerTest {
         val devTools = mock<RemoteDevTools>()
         val cdp = CDP(devTools)
         val page = mock<ai.platon.cdt.kt.protocol.commands.Page>()
-        whenever(cdp.page).thenReturn(page)
+        whenever(devTools.page).thenReturn(page)
 
         val settings = mock<BrowserSettings>()
         val mgr = IsolatedWorldManager(cdp, settings)
@@ -61,7 +61,7 @@ class IsolatedWorldManagerTest {
         val devTools = mock<RemoteDevTools>()
         val cdp = CDP(devTools)
         val page = mock<ai.platon.cdt.kt.protocol.commands.Page>()
-        whenever(cdp.page).thenReturn(page)
+        whenever(devTools.page).thenReturn(page)
 
         val settings = mock<BrowserSettings>()
         val mgr = IsolatedWorldManager(cdp, settings)

@@ -1,11 +1,10 @@
 package ai.platon.browser4.driver
 
+import ai.platon.browser4.driver.chrome.CDP
 import ai.platon.browser4.driver.chrome.ChromeLauncher
 import ai.platon.browser4.driver.chrome.RemoteChrome
 import ai.platon.browser4.driver.chrome.RemoteDevTools
 import ai.platon.browser4.driver.chrome.common.LauncherOptions
-import ai.platon.browser4.driver.chrome.invoke
-import ai.platon.cdt.kt.protocol.types.page.Navigate
 import ai.platon.pulsar.common.browser.BrowserFiles
 import ai.platon.pulsar.common.sleepSeconds
 import com.google.gson.Gson
@@ -21,6 +20,7 @@ class ChromeDevToolsTest {
     private lateinit var launcher: ChromeLauncher
     private lateinit var chrome: RemoteChrome
     private lateinit var devTools: RemoteDevTools
+    private lateinit var cdp: CDP
 
     @BeforeTest
     fun createDevTools() {
@@ -35,8 +35,9 @@ class ChromeDevToolsTest {
         assertTrue(versionString.contains("Mozilla"))
 
         devTools = chrome.createDevTools(tab)
+        cdp = CDP(devTools)
 
-        runBlocking { devTools.page.enable() }
+        runBlocking { cdp.pageEnable() }
     }
 
     @AfterTest
@@ -48,10 +49,8 @@ class ChromeDevToolsTest {
     @Test
     fun testDevTools() {
         runBlocking {
-            devTools.page.navigate("https://vercel.com/")
-            // ▶ Send {"id":1,"method":"Page.navigate","params":{"url":"https://www.aliyun.com","id":"4"}}
-            //  Accept {"id":1,"result":{"frameId":"5209F155E679677705D979C8F6DBF6A5","loaderId":"CEEE5FEC31BD255B9ECBB55CB75FB172","isDownload":false}}
-            val navigate: Navigate? = devTools.invoke("Page.navigate", mapOf("url" to "https://www.example.com/"))
+            cdp.navigate("https://vercel.com/")
+            val navigate = cdp.navigate("https://www.example.com/")
             assertNotNull(navigate)
         }
 

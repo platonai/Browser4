@@ -92,13 +92,13 @@ class PulsarWebDriverCDPTests : WebDriverTestBase() {
             browser.newDriver().use { driver ->
                 assertIs<PulsarWebDriver>(driver)
 
-                driver.cdp.dom.onAttributeModified { e ->
+                driver.cdp.onAttributeModified { e ->
                     val message = MessageFormat.format("> {0}. node changed | {1} := {2}", e.nodeId, e.name, e.value)
                     printlnPro(message)
                 }
 
-                driver.cdp.console.enable()
-                driver.cdp.console.onMessageAdded { e ->
+                driver.cdp.consoleEnable()
+                driver.cdp.onConsoleMessageAdded { e ->
                     printlnPro(e.message)
                 }
 

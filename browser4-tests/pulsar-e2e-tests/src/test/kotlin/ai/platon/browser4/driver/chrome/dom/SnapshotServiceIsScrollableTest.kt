@@ -165,7 +165,7 @@ class SnapshotServiceIsScrollableTest : WebDriverTestBase() {
 
         // Case 2: Set overflow:auto on documentElement and body => expect at least one scrollable (html or body)
         runCatching {
-            driver.cdp.runtime.evaluate(
+            driver.cdp.evaluate(
                 "document.documentElement.style.overflow='auto'; document.body.style.overflow='auto'; true;"
             )
         }
@@ -397,7 +397,7 @@ class SnapshotServiceIsScrollableTest : WebDriverTestBase() {
     }
 
     private suspend fun evaluateBoolean(cdp: CDP, expression: String): Boolean {
-        return runCatching { cdp.runtime.evaluate(expression) }
+        return runCatching { cdp.evaluate(expression) }
             .getOrNull()
             ?.result
             ?.value

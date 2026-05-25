@@ -1,17 +1,12 @@
 package ai.platon.browser4.driver.chrome.impl
 
-import ai.platon.browser4.driver.chrome.util.CDPReturnError
-import ai.platon.browser4.driver.chrome.util.ChromeIOException
-import ai.platon.browser4.driver.chrome.util.ChromeRPCException
-import ai.platon.browser4.driver.chrome.util.ChromeRPCTimeoutException
-import ai.platon.browser4.driver.chrome.util.ProxyClasses
-import ai.platon.browser4.driver.chrome.util.SuspendAwareHandler
-import ai.platon.cdt.kt.protocol.support.types.EventHandler
-import ai.platon.cdt.kt.protocol.support.types.EventListener
 import ai.platon.browser4.driver.chrome.DevToolsConfig
 import ai.platon.browser4.driver.chrome.MethodInvocation
 import ai.platon.browser4.driver.chrome.RemoteDevTools
 import ai.platon.browser4.driver.chrome.Transport
+import ai.platon.browser4.driver.chrome.util.*
+import ai.platon.cdt.kt.protocol.support.types.EventHandler
+import ai.platon.cdt.kt.protocol.support.types.EventListener
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.readable
 import ai.platon.pulsar.common.sleepSeconds
@@ -106,8 +101,8 @@ abstract class ChromeDevToolsImpl(
      * Invokes a remote method and returns the result.
      *
      * This method is designed to be non-blocking, but it is often called in blocking methods
-     * from Java proxy objects. For example, when calling `devTools.page.navigate(url)`, the
-     * framework translates the function call to this `invoke` method. Since `devTools.page.navigate(url)`
+     * from Java proxy objects. For example, when calling a page-level navigation method through the
+     * CDP facade, the framework translates the function call to this `invoke` method. Since that call
      * is not a suspend function, this method is wrapped in `runBlocking` to ensure compatibility.
      *
      * @param clazz The class of the return type. This is used to deserialize the result into the expected type.
@@ -279,7 +274,7 @@ abstract class ChromeDevToolsImpl(
         } else {
             Duration.ofSeconds(3)
         }
-        
+
         waitUntilIdle(shutdownWaitTimeout)
 
         logger.debug("Closing devtools client ...")

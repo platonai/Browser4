@@ -45,7 +45,7 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
         )
 
         // Prepare a deterministic dynamic state (virtual list -> scrollable container, images are added on DOMContentLoaded)
-        runCatching { cdp.runtime.evaluate("generateLargeList(100)") }
+        runCatching { cdp.evaluate("generateLargeList(100)") }
 
         val enhancedRoot = collectEnhancedRoot(service, options)
         // Print enhanced MergedDOMTree summary and basic tree stats
@@ -425,7 +425,7 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
         val service = CDPSnapshotService(driver.cdp)
 
         // Generate dynamic content with buttons
-        runCatching { cdp.runtime.evaluate("generateLargeList(100)") }
+        runCatching { cdp.evaluate("generateLargeList(100)") }
 
         val options = SnapshotOptions(
             maxDepth = -1,

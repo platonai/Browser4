@@ -1,7 +1,5 @@
 package ai.platon.browser4.driver.chrome
 
-import ai.platon.cdt.kt.protocol.commands.DOM
-import ai.platon.cdt.kt.protocol.commands.Page
 import ai.platon.cdt.kt.protocol.types.input.DispatchDragEventType
 import ai.platon.cdt.kt.protocol.types.input.DispatchKeyEventType
 import ai.platon.cdt.kt.protocol.types.input.DragData
@@ -213,8 +211,6 @@ class ClickableDOM(
  * @author Vincent Zhang, ivincent.zhang@gmail.com, platon.ai
  */
 class Mouse(private val cdp: CDP) {
-    private val input get() = cdp.input
-
     var currentX = 0.0
     var currentY = 0.0
 
@@ -394,8 +390,8 @@ class Mouse(private val cdp: CDP) {
         var dragData: DragData? = null
 
         cdp.setInterceptDrags(true)
-        input.onDragIntercepted {
-            dragData = it.data
+        cdp.onDragIntercepted { event ->
+            dragData = event.data
         }
 
         try {
@@ -734,11 +730,9 @@ class Keyboard(private val cdp: CDP) {
 }
 
 class EmulationHandler(
-    private val pageAPI: Page?,
-    private val domAPI: DOM?,
+    private val cdp: CDP,
     private val keyboard: Keyboard?,
     private val mouse: Mouse?,
-    private val cdp: CDP? = null
 ) {
     private val logger = getLogger(this)
 
@@ -768,9 +762,7 @@ class EmulationHandler(
      */
     suspend fun hover(node: NodeRef, position: String = "center") {
         val m = mouse ?: return
-        val p = pageAPI
-        val d = domAPI
-        if (p == null || d == null) {
+        if (!cdp.isOpen) {
             return
         }
 
@@ -817,9 +809,7 @@ class EmulationHandler(
         val minDeltaY = 1.0
         val normalizedPosition = position.trim().lowercase()
 
-        val p = pageAPI
-        val d = domAPI
-        if (p == null || d == null) {
+        if (!cdp.isOpen) {
             return null
         }
 
@@ -919,12 +909,11 @@ class EmulationHandler(
         modifier: String?,
         delayMillis: Long,
     ): Boolean {
-        val localCdp = cdp ?: return false
         val m = mouse ?: return false
         val clickCount = max(1, count)
         val modifierState = buildMouseModifierState(modifier)
 
-        return withNodeObjectId(localCdp, node) { objectId ->
+        return withNodeObjectId(cdp, node) { objectId ->
             m.moveTo(point)
             if (delayMillis > 0) {
                 delay(delayMillis.milliseconds)
@@ -977,7 +966,7 @@ class EmulationHandler(
                 }
             """.trimIndent()
 
-            localCdp.callFunctionOn(
+            cdp.callFunctionOn(
                 script,
                 objectId = objectId,
                 returnByValue = true,

@@ -1,10 +1,23 @@
 package ai.platon.browser4.driver.chrome
 
 import ai.platon.cdt.kt.protocol.ChromeDevTools
+import ai.platon.cdt.kt.protocol.events.console.MessageAdded
+import ai.platon.cdt.kt.protocol.events.dom.AttributeModified
+import ai.platon.cdt.kt.protocol.events.fetch.AuthRequired
+import ai.platon.cdt.kt.protocol.events.fetch.RequestPaused
+import ai.platon.cdt.kt.protocol.events.input.DragIntercepted
+import ai.platon.cdt.kt.protocol.events.network.*
+import ai.platon.cdt.kt.protocol.events.page.DocumentOpened
+import ai.platon.cdt.kt.protocol.events.page.FrameNavigated
+import ai.platon.cdt.kt.protocol.events.page.WindowOpen
 import ai.platon.cdt.kt.protocol.support.annotations.ParamName
 import ai.platon.cdt.kt.protocol.types.dom.Rect
 import ai.platon.cdt.kt.protocol.types.domsnapshot.CaptureSnapshot
+import ai.platon.cdt.kt.protocol.types.fetch.AuthChallengeResponse
+import ai.platon.cdt.kt.protocol.types.fetch.HeaderEntry
+import ai.platon.cdt.kt.protocol.types.fetch.RequestPattern
 import ai.platon.cdt.kt.protocol.types.input.*
+import ai.platon.cdt.kt.protocol.types.network.ErrorReason
 import ai.platon.cdt.kt.protocol.types.network.LoadNetworkResourceOptions
 import ai.platon.cdt.kt.protocol.types.network.LoadNetworkResourcePageResult
 import ai.platon.cdt.kt.protocol.types.page.*
@@ -25,16 +38,16 @@ class CDP(
     val isOpen: Boolean get() = remoteDevToolsOrNull?.isOpen ?: true
 
     private val browser get() = devTools.browser
-    val page get() = devTools.page
+    private val page get() = devTools.page
     private val target get() = devTools.target
-    val dom get() = devTools.dom
-    val console get() = devTools.console
-    val css get() = devTools.css
-    val input get() = devTools.input
-    val network get() = devTools.network
-    val fetch get() = devTools.fetch
-    val security get() = devTools.security
-    val runtime get() = devTools.runtime
+    private val dom get() = devTools.dom
+    private val console get() = devTools.console
+    private val css get() = devTools.css
+    private val input get() = devTools.input
+    private val network get() = devTools.network
+    private val fetch get() = devTools.fetch
+    private val security get() = devTools.security
+    private val runtime get() = devTools.runtime
     private val emulation get() = devTools.emulation
     private val accessibility get() = devTools.accessibility
     private val domSnapshot get() = devTools.domSnapshot
@@ -44,6 +57,13 @@ class CDP(
 
     suspend fun pageEnable() = page.enable()
     suspend fun domEnable() = dom.enable()
+    suspend fun runtimeEnable() = runtime.enable()
+    suspend fun networkEnable() = network.enable()
+    suspend fun cssEnable() = css.enable()
+    suspend fun consoleEnable() = console.enable()
+    suspend fun fetchEnable(patterns: List<RequestPattern>? = null, handleAuthRequests: Boolean? = null) =
+        fetch.enable(patterns, handleAuthRequests)
+    suspend fun securityEnable() = security.enable()
     suspend fun accessibilityEnable() = accessibility.enable()
     suspend fun getFrameTree() = page.getFrameTree()
 
@@ -102,6 +122,27 @@ class CDP(
     suspend fun getLayoutMetrics() = page.getLayoutMetrics()
 
     suspend fun getNavigationHistory() = page.getNavigationHistory()
+
+    suspend fun reloadPage(ignoreCache: Boolean? = null, scriptToEvaluateOnLoad: String? = null) =
+        page.reload(ignoreCache, scriptToEvaluateOnLoad)
+
+    suspend fun navigateToHistoryEntry(entryId: Int) = page.navigateToHistoryEntry(entryId)
+
+    suspend fun bringToFront() = page.bringToFront()
+
+    suspend fun stopLoading() = page.stopLoading()
+
+    suspend fun handleJavaScriptDialog(accept: Boolean, promptText: String? = null) =
+        page.handleJavaScriptDialog(accept = accept, promptText = promptText)
+
+    suspend fun addScriptToEvaluateOnNewDocument(source: String) =
+        page.addScriptToEvaluateOnNewDocument(source)
+
+    fun onFrameNavigated(handler: suspend (FrameNavigated) -> Unit) = page.onFrameNavigated(handler)
+
+    fun onDocumentOpened(handler: suspend (DocumentOpened) -> Unit) = page.onDocumentOpened(handler)
+
+    fun onWindowOpen(handler: suspend (WindowOpen) -> Unit) = page.onWindowOpen(handler)
 
     suspend fun createIsolatedWorld(frameId: String, worldName: String, grantUniveralAccess: Boolean = true): Int {
         return page.createIsolatedWorld(
@@ -170,6 +211,8 @@ class CDP(
     suspend fun discardSearchResults(searchId: String) = dom.discardSearchResults(searchId)
 
     suspend fun getAttributes(nodeId: Int) = dom.getAttributes(nodeId)
+
+    fun onAttributeModified(handler: suspend (AttributeModified) -> Unit) = dom.onAttributeModified(handler)
 
     suspend fun focus(nodeId: Int) = dom.focus(nodeId)
 
@@ -279,6 +322,8 @@ class CDP(
 
     suspend fun setInterceptDrags(enabled: Boolean) = input.setInterceptDrags(enabled)
 
+    fun onDragIntercepted(handler: suspend (DragIntercepted) -> Unit) = input.onDragIntercepted(handler)
+
     suspend fun dispatchDragEvent(type: DispatchDragEventType, x: Double, y: Double, data: DragData) {
         input.dispatchDragEvent(type, x, y, data)
     }
@@ -328,6 +373,79 @@ class CDP(
             includeTextColorOpacities = includeTextColorOpacities,
         )
     }
+
+    suspend fun clearBrowserCookies() = network.clearBrowserCookies()
+
+    suspend fun getCookies() = network.getCookies()
+
+    suspend fun deleteCookies(
+        name: String,
+        url: String? = null,
+        domain: String? = null,
+        path: String? = null,
+    ) = network.deleteCookies(name, url, domain, path)
+
+    suspend fun setExtraHTTPHeaders(headers: Map<String, Any>) = network.setExtraHTTPHeaders(headers)
+
+    suspend fun setBlockedURLs(urls: List<String>) = network.setBlockedURLs(urls)
+
+    suspend fun setCacheDisabled(cacheDisabled: Boolean) = network.setCacheDisabled(cacheDisabled)
+
+    fun onRequestWillBeSent(handler: suspend (RequestWillBeSent) -> Unit) = network.onRequestWillBeSent(handler)
+
+    fun onRequestWillBeSentExtraInfo(handler: suspend (RequestWillBeSentExtraInfo) -> Unit) =
+        network.onRequestWillBeSentExtraInfo(handler)
+
+    fun onRequestServedFromCache(handler: suspend (RequestServedFromCache) -> Unit) =
+        network.onRequestServedFromCache(handler)
+
+    fun onResponseReceived(handler: suspend (ResponseReceived) -> Unit) = network.onResponseReceived(handler)
+
+    fun onResponseReceivedExtraInfo(handler: suspend (ResponseReceivedExtraInfo) -> Unit) =
+        network.onResponseReceivedExtraInfo(handler)
+
+    fun onLoadingFinished(handler: suspend (LoadingFinished) -> Unit) = network.onLoadingFinished(handler)
+
+    fun onLoadingFailed(handler: suspend (LoadingFailed) -> Unit) = network.onLoadingFailed(handler)
+
+    suspend fun continueRequest(
+        requestId: String,
+        url: String? = null,
+        method: String? = null,
+        postData: String? = null,
+        headers: List<HeaderEntry>? = null,
+    ) = fetch.continueRequest(requestId, url, method, postData, headers)
+
+    suspend fun continueWithAuth(requestId: String, authChallengeResponse: AuthChallengeResponse) =
+        fetch.continueWithAuth(requestId, authChallengeResponse)
+
+    suspend fun fulfillRequest(
+        requestId: String,
+        responseCode: Int,
+        responseHeaders: List<HeaderEntry>? = null,
+        binaryResponseHeaders: String? = null,
+        body: String? = null,
+        responsePhrase: String? = null,
+    ) = fetch.fulfillRequest(
+        requestId,
+        responseCode,
+        responseHeaders,
+        binaryResponseHeaders,
+        body,
+        responsePhrase,
+    )
+
+    suspend fun failRequest(requestId: String, errorReason: ErrorReason) = fetch.failRequest(requestId, errorReason)
+
+    suspend fun getResponseBody(requestId: String) = fetch.getResponseBody(requestId)
+
+    fun onRequestPaused(handler: suspend (RequestPaused) -> Unit) = fetch.onRequestPaused(handler)
+
+    fun onAuthRequired(handler: suspend (AuthRequired) -> Unit) = fetch.onAuthRequired(handler)
+
+    suspend fun setIgnoreCertificateErrors(ignore: Boolean) = security.setIgnoreCertificateErrors(ignore)
+
+    fun onConsoleMessageAdded(handler: suspend (MessageAdded) -> Unit) = console.onMessageAdded(handler)
 
     suspend fun loadNetworkResource(
         @ParamName("frameId") frameId: String,

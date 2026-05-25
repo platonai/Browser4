@@ -48,27 +48,27 @@ internal class NetworkManager(
     var userCacheDisabled = false
 
     init {
-        cdp.fetch.onRequestPaused(::onRequestPaused)
-        cdp.fetch.onAuthRequired(::onAuthRequired)
-        cdp.network.onRequestWillBeSent(::onRequestWillBeSent)
-        cdp.network.onRequestWillBeSentExtraInfo(::onRequestWillBeSentExtraInfo)
-        cdp.network.onRequestServedFromCache(::onRequestServedFromCache)
-        cdp.network.onResponseReceived(::onResponseReceived)
-        cdp.network.onLoadingFinished(::onLoadingFinished)
-        cdp.network.onLoadingFailed(::onLoadingFailed)
-        cdp.network.onResponseReceivedExtraInfo(::onResponseReceivedExtraInfo)
+        cdp.onRequestPaused(::onRequestPaused)
+        cdp.onAuthRequired(::onAuthRequired)
+        cdp.onRequestWillBeSent(::onRequestWillBeSent)
+        cdp.onRequestWillBeSentExtraInfo(::onRequestWillBeSentExtraInfo)
+        cdp.onRequestServedFromCache(::onRequestServedFromCache)
+        cdp.onResponseReceived(::onResponseReceived)
+        cdp.onLoadingFinished(::onLoadingFinished)
+        cdp.onLoadingFailed(::onLoadingFailed)
+        cdp.onResponseReceivedExtraInfo(::onResponseReceivedExtraInfo)
     }
 
     suspend fun enable() {
         if (ignoreHTTPSErrors) {
             rpc.invokeSilently("setIgnoreCertificateErrors") {
-                cdp.security.enable()
-                cdp.security.setIgnoreCertificateErrors(ignoreHTTPSErrors)
+                cdp.securityEnable()
+                cdp.setIgnoreCertificateErrors(ignoreHTTPSErrors)
             }
         }
 
         rpc.invokeSilently("enable") {
-            cdp.network.enable()
+            cdp.networkEnable()
         }
     }
 
@@ -82,7 +82,7 @@ internal class NetworkManager(
         headers.entries.associateTo(extraHTTPHeaders) { it.key.lowercase() to it.value }
 
         rpc.invoke("setExtraHTTPHeaders") {
-            cdp.network.setExtraHTTPHeaders(extraHTTPHeaders)
+            cdp.setExtraHTTPHeaders(extraHTTPHeaders)
         }
     }
 
@@ -107,7 +107,7 @@ internal class NetworkManager(
         val authChallengeResponse = AuthChallengeResponse(response, credentials?.username, credentials?.password)
 
         rpc.invokeSilently("continueWithAuth", event.requestId) {
-            cdp.fetch.continueWithAuth(event.requestId, authChallengeResponse)
+            cdp.continueWithAuth(event.requestId, authChallengeResponse)
         }
     }
 
@@ -122,7 +122,7 @@ internal class NetworkManager(
 
         if (!userRequestInterceptionEnabled && protocolRequestInterceptionEnabled) {
             rpc.invokeSilently("continueRequest", event.requestId) {
-                cdp.fetch.continueRequest(event.requestId)
+                cdp.continueRequest(event.requestId)
             }
         }
 
@@ -345,11 +345,11 @@ internal class NetworkManager(
         if (enabled) {
             val pattern = RequestPattern("*")
             rpc.invokeSilently("enable") {
-                cdp.fetch.enable(listOf(pattern), true)
+                cdp.fetchEnable(listOf(pattern), true)
             }
         } else {
-            // TODO: there are other scenarios to enable cdp.fetch
-            // cdp.fetch.disable()
+            // TODO: there are other scenarios to keep request interception enabled.
+            // Add a CDP facade disable wrapper when that lifecycle is fully defined.
         }
     }
 
@@ -370,7 +370,7 @@ internal class NetworkManager(
     private suspend fun updateProtocolCacheDisabled() {
         try {
             rpc.invoke("setCacheDisabled") {
-                cdp.network.setCacheDisabled(this.userCacheDisabled)
+                cdp.setCacheDisabled(this.userCacheDisabled)
             }
         } catch (e: ChromeRPCException) {
             rpc.handleChromeException(e, "setCacheDisabled")

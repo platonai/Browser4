@@ -81,8 +81,8 @@ class WebDriverHelper(
             mimeType == "application/json" && event.response.encodedDataLength < 1_000_000 && alwaysFalse()
         if (saveResourceBody) {
             val body = rpc.invokeSilently("getResponseBody") {
-                cdp.fetch.enable()
-                cdp.fetch.getResponseBody(event.requestId).body
+                cdp.fetchEnable()
+                cdp.getResponseBody(event.requestId).body
             }
             if (!body.isNullOrBlank()) {
                 suffix = "-" + event.type.name.lowercase() + "-body.txt"
