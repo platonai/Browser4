@@ -33,7 +33,7 @@ class DomTreeHandler(private val cdp: CDP) {
      * @return Enhanced DOM tree root node; returns an empty root on failure
      */
     suspend fun getDocument(target: PageTarget?, maxDepth: Int = 0): MergedDOMTreeNode {
-        check(cdp.isOpen) { "CDP is not open" }
+        check(cdp.isOpen) { "Lower layer browser (CDP) is closed" }
 
         val maxDepth = if (maxDepth > 0) maxDepth else 999999
         val depth = maxDepth.takeIf { true }
