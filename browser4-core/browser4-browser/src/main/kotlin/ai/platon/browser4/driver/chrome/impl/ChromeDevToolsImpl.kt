@@ -102,7 +102,7 @@ abstract class ChromeDevToolsImpl(
      *
      * This method is designed to be non-blocking, but it is often called in blocking methods
      * from Java proxy objects. For example, when calling a page-level navigation method through the
-     * CDP facade, the framework translates the function call to this `invoke` method. Since that call
+     * BrowserProtocol facade, the framework translates the function call to this `invoke` method. Since that call
      * is not a suspend function, this method is wrapped in `runBlocking` to ensure compatibility.
      *
      * @param clazz The class of the return type. This is used to deserialize the result into the expected type.

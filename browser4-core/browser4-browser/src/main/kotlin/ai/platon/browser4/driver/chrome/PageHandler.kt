@@ -25,7 +25,7 @@ data class LocatorAndCssSelector(
 )
 
 class PageHandler(
-    private val cdp: CDP,
+    private val browserProtocol: BrowserProtocol,
     private val isolatedWorldManager: IsolatedWorldManager,
 ) {
     companion object {
@@ -35,20 +35,20 @@ class PageHandler(
 
     private val logger = getLogger(this)
 
-    private val isActive get() = AppContext.isActive && cdp.isOpen
+    private val isActive get() = AppContext.isActive && browserProtocol.isOpen
 
     private var lastBrowserUseState: BrowserUseState? = null
 
-    val snapshotService: SnapshotService by lazy { CDPSnapshotService(cdp) }
+    val snapshotService: SnapshotService by lazy { CDPSnapshotService(browserProtocol) }
 
-    val jsHandler: JsHandler = JsHandler(cdp, this, isolatedWorldManager)
+    val jsHandler: JsHandler = JsHandler(browserProtocol, this, isolatedWorldManager)
 
-    val mouse = Mouse(cdp)
-    val keyboard = Keyboard(cdp)
+    val mouse = Mouse(browserProtocol)
+    val keyboard = Keyboard(browserProtocol)
 
     @Throws(ChromeDriverException::class)
     suspend fun navigate(url: String): Navigate? {
-        return if (isActive) cdp.navigate(url) else null
+        return if (isActive) browserProtocol.navigate(url) else null
     }
 
     @Throws(ChromeDriverException::class)
@@ -59,7 +59,7 @@ class PageHandler(
         frameId: String? = null,
         referrerPolicy: ReferrerPolicy? = null
     ): Navigate? {
-        return if (isActive) cdp.navigate(url, referrer, transitionType, frameId, referrerPolicy) else null
+        return if (isActive) browserProtocol.navigate(url, referrer, transitionType, frameId, referrerPolicy) else null
     }
 
     suspend fun exists(locator: String): Boolean {
@@ -219,10 +219,10 @@ class PageHandler(
     @Throws(ChromeDriverException::class)
     private suspend fun resolveCSSSelectorAll(selector: String): List<NodeRef>? {
         if (!isActive) return null
-        val rootId = cdp.getDocument().nodeId ?: return null
+        val rootId = browserProtocol.getDocument().nodeId ?: return null
 
         val nodeIds = try {
-            cdp.querySelectorAll(rootId, selector)
+            browserProtocol.querySelectorAll(rootId, selector)
         } catch (e: CDPReturnError) {
             if (e.errorCode != -32000L) {
                 logger.warn(
@@ -240,7 +240,7 @@ class PageHandler(
             return null
         }
 
-        // Optimized: map directly to NodeRefs without resolving each one via CDP if possible.
+        // Optimized: map directly to NodeRefs without resolving each one via BrowserProtocol if possible.
         // querySelectorAll returns nodeIds which are already valid.
         return nodeIds.map { nodeId -> NodeRef(nodeId, 0, null) }
     }
@@ -251,16 +251,16 @@ class PageHandler(
 
         return try {
             if (!isActive) return null
-            cdp.getDocument()?.nodeId ?: return null
+            browserProtocol.getDocument()?.nodeId ?: return null
 
-            val searchResult = cdp.performSearch(xpath, true) ?: return null
+            val searchResult = browserProtocol.performSearch(xpath, true) ?: return null
             val nodeIds = if (searchResult.resultCount > 0) {
                 // Retrieve all matching nodes
                 val results =
-                    cdp.getSearchResults(searchResult.searchId, fromIndex = 0, toIndex = searchResult.resultCount)
+                    browserProtocol.getSearchResults(searchResult.searchId, fromIndex = 0, toIndex = searchResult.resultCount)
                 // Clean up search results to avoid resource leak
                 try {
-                    cdp.discardSearchResults(searchResult.searchId)
+                    browserProtocol.discardSearchResults(searchResult.searchId)
                 } catch (_: Exception) {
                 }
                 results
@@ -379,7 +379,7 @@ class PageHandler(
 
         // `attributes`: n1, v1, n2, v2, n3, v3, ...
         if (!isActive) return null
-        val attributes = cdp.getAttributes(node.nodeId) ?: return null
+        val attributes = browserProtocol.getAttributes(node.nodeId) ?: return null
         val nameIndex = attributes.indexOf(attrName)
         if (nameIndex < 0) {
             return null
@@ -405,7 +405,7 @@ class PageHandler(
 
         var isVisible = true
 
-        val properties = if (isActive) cdp.getComputedStyleForNode(node.nodeId) else null
+        val properties = if (isActive) browserProtocol.getComputedStyleForNode(node.nodeId) else null
         properties?.forEach { prop ->
             when (prop.name) {
                 "display" if prop.value == "none" -> isVisible = false
@@ -418,7 +418,7 @@ class PageHandler(
             isVisible = if (!isActive) {
                 false
             } else {
-                ClickableDOM.create(cdp, node)?.isVisible() ?: false
+                ClickableDOM.create(browserProtocol, node)?.isVisible() ?: false
             }
         }
 
@@ -436,8 +436,8 @@ class PageHandler(
             return false
         }
 
-        return withNodeObjectId(cdp, node) { objectId ->
-            val result = if (isActive) cdp.callFunctionOn(
+        return withNodeObjectId(browserProtocol, node) { objectId ->
+            val result = if (isActive) browserProtocol.callFunctionOn(
                 CheckableElementJs.IS_CHECKED_FUNCTION_DECLARATION,
                 objectId = objectId,
                 returnByValue = true,
@@ -466,7 +466,7 @@ class PageHandler(
         val nodeRef = queryLocator(locator) ?: return null
 
         // Fix: Only use nodeId parameter, others should be null
-        if (isActive) cdp.focus(nodeRef.nodeId)
+        if (isActive) browserProtocol.focus(nodeRef.nodeId)
 
         return nodeRef
     }
@@ -482,13 +482,13 @@ class PageHandler(
     suspend fun scrollIntoViewIfNeeded(locator: String, rect: Rect? = null): NodeRef? {
         val node = resolveLocator(locator) ?: return null
 
-        // Prefer smooth behavior when rect is not specified; otherwise honor rect via CDP first
+        // Prefer smooth behavior when rect is not specified; otherwise honor rect via BrowserProtocol first
         return try {
             if (rect == null) {
                 // Try smooth scrolling via JS on the element itself
                 if (trySmoothScroll(node)) return node
             }
-            // Fallback or rect path: use CDP DOM API
+            // Fallback or rect path: use BrowserProtocol DOM API
             scrollIntoViewIfNeeded(node, locator, rect)
         } catch (e: ChromeRPCException) {
             logger.warn(
@@ -517,7 +517,7 @@ class PageHandler(
      */
     @Throws(ChromeDriverException::class)
     suspend fun scrollIntoViewIfNeeded(nodeRef: NodeRef, selector: String? = null, rect: Rect? = null): NodeRef? {
-        val node = if (isActive) cdp.describeNode(
+        val node = if (isActive) browserProtocol.describeNode(
             nodeRef.nodeId,
             nodeRef.backendNodeId,
             nodeRef.objectId,
@@ -529,14 +529,14 @@ class PageHandler(
             return null
         }
 
-        // If a rect is provided, honor it via CDP; otherwise prefer smooth behavior via JS
+        // If a rect is provided, honor it via BrowserProtocol; otherwise prefer smooth behavior via JS
         return try {
             if (rect != null) {
-                cdp.scrollIntoViewIfNeeded(node.nodeId, rect = rect)
+                browserProtocol.scrollIntoViewIfNeeded(node.nodeId, rect = rect)
                 nodeRef
             } else {
                 if (trySmoothScroll(nodeRef)) nodeRef else {
-                    cdp.scrollIntoViewIfNeeded(node.nodeId, rect = null)
+                    browserProtocol.scrollIntoViewIfNeeded(node.nodeId, rect = null)
                     nodeRef
                 }
             }
@@ -572,7 +572,7 @@ class PageHandler(
     }
 
     /**
-     * Normalize an element locator for use in non-JS contexts (e.g. CDP DOM APIs) by extracting a CSS selector if possible.
+     * Normalize an element locator for use in non-JS contexts (e.g. BrowserProtocol DOM APIs) by extracting a CSS selector if possible.
      * */
     fun normalizeLocatorForNonJs(locator: String): LocatorAndCssSelector? {
         return findCssSelectorFromLocator(locator)
@@ -598,7 +598,7 @@ class PageHandler(
      */
     private suspend fun trySmoothScroll(nodeRef: NodeRef): Boolean {
         return try {
-            withNodeObjectId(cdp, nodeRef) { objectId ->
+            withNodeObjectId(browserProtocol, nodeRef) { objectId ->
                 // Execute on the element itself to avoid selector issues; center for stability
                 val functionDeclaration = """
                     function() {
@@ -608,7 +608,7 @@ class PageHandler(
                         } catch (e) { return false; }
                     }
                 """.trimIndent()
-                cdp.callFunctionOn(
+                browserProtocol.callFunctionOn(
                     functionDeclaration, objectId = objectId, returnByValue = true,
                     userGesture = true, awaitPromise = true
                 )
@@ -623,10 +623,10 @@ class PageHandler(
     @Throws(ChromeDriverException::class)
     private suspend fun resolveCSSSelector(cssSelector: String): NodeRef? {
         if (!isActive) return null
-        val rootId = cdp.getDocument().nodeId
+        val rootId = browserProtocol.getDocument().nodeId
 
         val nodeId = try {
-            cdp.querySelector(rootId, cssSelector)
+            browserProtocol.querySelector(rootId, cssSelector)
         } catch (e: CDPReturnError) {
             // code: -32000 message: "Could not find node with given id"
             // This exception is expected, will change this log to debug
@@ -657,7 +657,7 @@ class PageHandler(
      *
      * @param xpath The XPath expression to resolve.
      * @return A NodeRef containing the resolved node identifiers, or null if not found.
-     * @throws ChromeDriverException If an unexpected CDP error occurs.
+     * @throws ChromeDriverException If an unexpected BrowserProtocol error occurs.
      */
     @Throws(ChromeDriverException::class)
     private suspend fun resolveXPath(xpath: String): NodeRef? {
@@ -665,15 +665,15 @@ class PageHandler(
 
         val nodeId = try {
             if (!isActive) return null
-            cdp.getDocument()?.nodeId ?: return null
+            browserProtocol.getDocument()?.nodeId ?: return null
 
-            val searchResult = cdp.performSearch(xpath, true) ?: return null
+            val searchResult = browserProtocol.performSearch(xpath, true) ?: return null
             val nodeId = if (searchResult.resultCount > 0) {
                 // Only retrieve the first matching node if results exist
-                val results = cdp.getSearchResults(searchResult.searchId, fromIndex = 0, toIndex = 1)
+                val results = browserProtocol.getSearchResults(searchResult.searchId, fromIndex = 0, toIndex = 1)
                 // Clean up search results to avoid resource leak
                 try {
-                    cdp.discardSearchResults(searchResult.searchId)
+                    browserProtocol.discardSearchResults(searchResult.searchId)
                 } catch (_: Exception) {
                 }
                 results?.firstOrNull()
@@ -727,9 +727,9 @@ class PageHandler(
                 // If nodeId is provided, we might not need to resolve it again unless we want to verify it exists
                 // But the original code resolved it. Let's keep the behavior but check if it's necessary.
                 // Resolving a nodeId returns a RemoteObject.
-                cdp.resolveNodeByNodeId(nodeId)
+                browserProtocol.resolveNodeByNodeId(nodeId)
             } else if (backendNodeId != null && backendNodeId > 0) {
-                cdp.resolveNodeByBackendNodeId(backendNodeId)
+                browserProtocol.resolveNodeByBackendNodeId(backendNodeId)
             } else {
                 return null
             }
@@ -743,11 +743,11 @@ class PageHandler(
             // Use DOM.requestNode to get the nodeId from the runtime object.
             // This is crucial when we started with a backendNodeId.
             // When started with nodeId, it should return the same nodeId.
-            val resolvedNodeId = cdp.requestNode(tempObjectId) ?: 0
+            val resolvedNodeId = browserProtocol.requestNode(tempObjectId) ?: 0
 
             // Release the remote object to avoid memory leaks
             try {
-                cdp.releaseObject(tempObjectId)
+                browserProtocol.releaseObject(tempObjectId)
             } catch (_: Exception) {
             }
 

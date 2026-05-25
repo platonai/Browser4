@@ -31,7 +31,7 @@ class OptimizedDOMTreeTest : WebDriverTestBase() {
         runEnhancedWebDriverTest(interactiveDynamicURL) { driver ->
             assertIs<PulsarWebDriver>(driver)
 
-            val service = CDPSnapshotService(driver.cdp)
+            val service = CDPSnapshotService(driver.browserProtocol)
 
             val options = SnapshotOptions(
                 maxDepth = 100,
@@ -117,7 +117,7 @@ class OptimizedDOMTreeTest : WebDriverTestBase() {
     fun isNewFlagRespectsPreviousBackendNodeIds() = runEnhancedWebDriverTest(interactiveDynamicURL) { driver ->
         assertIs<PulsarWebDriver>(driver)
 
-        val service = CDPSnapshotService(driver.cdp)
+        val service = CDPSnapshotService(driver.browserProtocol)
 
         val options = SnapshotOptions(
             maxDepth = 100,
@@ -167,11 +167,11 @@ class OptimizedDOMTreeTest : WebDriverTestBase() {
         runEnhancedWebDriverTest(interactiveDynamicURL) { driver ->
             assertIs<PulsarWebDriver>(driver)
 
-            val service = CDPSnapshotService(driver.cdp)
+            val service = CDPSnapshotService(driver.browserProtocol)
 
             // Inject an invisible wrapper with trivial content; children will be pruned first, then wrapper by optimizeTree
             runCatching {
-                driver.cdp.evaluate(
+                driver.browserProtocol.evaluate(
                     """
                 (function(){
                   var el = document.getElementById('invisibleWrapper');

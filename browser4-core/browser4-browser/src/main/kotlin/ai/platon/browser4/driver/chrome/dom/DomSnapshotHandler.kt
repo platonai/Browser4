@@ -1,6 +1,6 @@
 package ai.platon.browser4.driver.chrome.dom
 
-import ai.platon.browser4.driver.chrome.CDP
+import ai.platon.browser4.driver.chrome.BrowserProtocol
 import ai.platon.browser4.driver.chrome.dom.model.DOMRect
 import ai.platon.browser4.driver.chrome.dom.model.SnapshotNodeEx
 import ai.platon.browser4.driver.chrome.dom.util.DomDebug
@@ -14,7 +14,7 @@ import ai.platon.pulsar.common.getLogger
  * Handler for DOMSnapshot domain operations.
  * Captures and processes layout snapshots with style and rect information.
  */
-class DomSnapshotHandler(private val cdp: CDP) {
+class DomSnapshotHandler(private val browserProtocol: BrowserProtocol) {
     private val logger = getLogger(this)
     private val tracer get() = logger.takeIf { it.isTraceEnabled }
 
@@ -29,7 +29,7 @@ class DomSnapshotHandler(private val cdp: CDP) {
         includeAbsoluteCoords: Boolean = true,
         devicePixelRatio: Double = 1.0
     ): Map<Int, SnapshotNodeEx> {
-        check(cdp.isOpen) { "Lower layer browser (CDP) is closed" }
+        check(browserProtocol.isOpen) { "Lower layer browser (BrowserProtocol) is closed" }
 
         val computedStyles = if (includeStyles) REQUIRED_COMPUTED_STYLES else emptyList()
         val snapshot = captureSnapshot(
@@ -179,7 +179,7 @@ class DomSnapshotHandler(private val cdp: CDP) {
         @ParamName("includeTextColorOpacities") @Optional @Experimental includeTextColorOpacities: Boolean? = null,
     ): CaptureSnapshot {
         return try {
-            cdp.domSnapshotCaptureSnapshot(
+            browserProtocol.domSnapshotCaptureSnapshot(
                 computedStyles,
                 includePaintOrder = includePaintOrder,
                 includeDOMRects = includeDOMRects,

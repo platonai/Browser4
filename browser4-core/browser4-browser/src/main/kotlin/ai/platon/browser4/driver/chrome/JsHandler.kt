@@ -8,13 +8,13 @@ import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.getLogger
 
 class JsHandler(
-    private val cdp: CDP,
+    private val browserProtocol: BrowserProtocol,
     private val pageHandler: PageHandler,
     private val isolatedWorldManager: IsolatedWorldManager,
 ) {
     private val logger = getLogger(this)
 
-    private val isActive get() = AppContext.isActive && cdp.isOpen
+    private val isActive get() = AppContext.isActive && browserProtocol.isOpen
 
     private val confuser get() = isolatedWorldManager.settings.confuser
 
@@ -32,7 +32,7 @@ class JsHandler(
         val confusedExpr = confuser.confuse(expression)
 
         val isolatedContextId = isolatedWorldManager
-            .getContextId(runCatching { cdp.mainFrame().id }.getOrNull())
+            .getContextId(runCatching { browserProtocol.mainFrame().id }.getOrNull())
         if (isolatedContextId != null && isolatedContextId > 0) {
             val isolatedResult = evaluateInContext(confusedExpr, isolatedContextId, returnByValue = false)
             if (isolatedResult != null) {
@@ -41,7 +41,7 @@ class JsHandler(
         }
 
         return try {
-            cdp.evaluate(confusedExpr)
+            browserProtocol.evaluate(confusedExpr)
         } catch (e: Exception) {
             logger.warn("Failed to evaluate $script", e)
             null
@@ -51,11 +51,11 @@ class JsHandler(
     @Throws(ChromeDriverException::class)
     suspend fun callFunctionOn(selector: String, functionDeclaration: String): CallFunctionOn? {
         val node = pageHandler.queryLocator(selector) ?: return null
-        val resolved = resolveNodeObjectId(cdp, node) ?: return null
+        val resolved = resolveNodeObjectId(browserProtocol, node) ?: return null
         return try {
-            cdp.callFunctionOn(functionDeclaration, objectId = resolved.objectId, returnByValue = true)
+            browserProtocol.callFunctionOn(functionDeclaration, objectId = resolved.objectId, returnByValue = true)
         } finally {
-            releaseNodeObjectIfNeeded(cdp, resolved)
+            releaseNodeObjectIfNeeded(browserProtocol, resolved)
         }
     }
 
@@ -97,7 +97,7 @@ class JsHandler(
         val confusedExpr = confuser.confuse(expression)
 
         val isolatedContextId = isolatedWorldManager
-            .getContextId(runCatching { cdp.mainFrame().id }.getOrNull())
+            .getContextId(runCatching { browserProtocol.mainFrame().id }.getOrNull())
         if (isolatedContextId != null && isolatedContextId > 0) {
             val isolatedResult = evaluateInContext(confusedExpr, isolatedContextId, returnByValue = true)
             if (isolatedResult != null) {
@@ -106,7 +106,7 @@ class JsHandler(
         }
 
         return try {
-            cdp.evaluate(confusedExpr, returnByValue = true)
+            browserProtocol.evaluate(confusedExpr, returnByValue = true)
         } catch (e: Exception) {
             logger.warn("Failed to evaluate $script", e)
             null
@@ -166,6 +166,6 @@ class JsHandler(
      * @return Detailed evaluation result, or null if evaluation fails
      * */
     private suspend fun evaluateInContext(expression: String, contextId: Int, returnByValue: Boolean): Evaluate? {
-        return cdp.evaluate(expression = expression, contextId = contextId, returnByValue = returnByValue)
+        return browserProtocol.evaluate(expression = expression, contextId = contextId, returnByValue = returnByValue)
     }
 }

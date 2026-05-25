@@ -1,13 +1,13 @@
 package ai.platon.browser4.driver.chrome.dom
 
-import ai.platon.browser4.driver.chrome.CDP
+import ai.platon.browser4.driver.chrome.BrowserProtocol
 import ai.platon.browser4.driver.chrome.dom.model.InteractiveDOMTreeNodeList
 import ai.platon.pulsar.common.getLogger
 import kotlinx.coroutines.delay
 import kotlin.time.Duration.Companion.milliseconds
 
 class HighlightManager(
-    private val cdp: CDP,
+    private val browserProtocol: BrowserProtocol,
 ) {
     private val logger = getLogger(this)
     private val tracer get() = logger.takeIf { it.isTraceEnabled }
@@ -29,7 +29,7 @@ class HighlightManager(
         var attempts = 5
         while (attempts-- > 0) {
             val eval = runCatching {
-                cdp.evaluate("Boolean(document.querySelector('[data-b4-highlight]'))")
+                browserProtocol.evaluate("Boolean(document.querySelector('[data-b4-highlight]'))")
             }.getOrNull()
             val hasHighlights = eval?.result?.value == true
             if (!hasHighlights) break
@@ -162,7 +162,7 @@ class HighlightManager(
             """.trimIndent()
 
             runCatching {
-                cdp.evaluate(script)
+                browserProtocol.evaluate(script)
             }.onFailure { e ->
                 logger.warn("Failed to add highlights | err={}", e.toString())
                 tracer?.trace("addHighlights exception", e)
@@ -198,7 +198,7 @@ class HighlightManager(
             """.trimIndent()
 
             runCatching {
-                cdp.evaluate(script)
+                browserProtocol.evaluate(script)
             }.onFailure { e ->
                 logger.warn("Failed to remove highlights | err={}", e.toString())
                 tracer?.trace("removeHighlights exception", e)

@@ -128,7 +128,7 @@ class RobustRPC(
             return null
         }
 
-        if (!driver.cdp.isOpen) {
+        if (!driver.browserProtocol.isOpen) {
             if (_isActive.compareAndSet(true, false)) {
                 logger.info("Devtools has been closed")
             }
@@ -191,7 +191,7 @@ class RobustRPC(
      * - etc.
      */
     private fun isRetryableException(e: Throwable): Boolean {
-        // Non-retryable CDP errors
+        // Non-retryable BrowserProtocol errors
         if (e is CDPReturnError) {
             val errorMessage = e.errorMessage?.lowercase() ?: ""
             val message = e.message?.lowercase() ?: ""

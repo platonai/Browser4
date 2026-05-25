@@ -1,6 +1,6 @@
 package ai.platon.browser4.driver.chrome.dom
 
-import ai.platon.browser4.driver.chrome.CDP
+import ai.platon.browser4.driver.chrome.BrowserProtocol
 import ai.platon.browser4.driver.chrome.dom.model.MergedDOMTreeNode
 import ai.platon.browser4.driver.chrome.dom.model.NodeType
 import ai.platon.browser4.driver.chrome.dom.model.PageTarget
@@ -11,9 +11,9 @@ typealias CdpNode = ai.platon.cdt.kt.protocol.types.dom.Node
 
 /**
  * Handler for DOM tree operations.
- * Fetches and converts CDP DOM tree to enhanced representation.
+ * Fetches and converts BrowserProtocol DOM tree to enhanced representation.
  */
-class DomTreeHandler(private val cdp: CDP) {
+class DomTreeHandler(private val browserProtocol: BrowserProtocol) {
     private val logger = getLogger(this)
     private val tracer get() = logger.takeIf { it.isTraceEnabled }
 
@@ -33,12 +33,12 @@ class DomTreeHandler(private val cdp: CDP) {
      * @return Enhanced DOM tree root node; returns an empty root on failure
      */
     suspend fun getDocument(target: PageTarget?, maxDepth: Int = 0): MergedDOMTreeNode {
-        check(cdp.isOpen) { "Lower layer browser (CDP) is closed" }
+        check(browserProtocol.isOpen) { "Lower layer browser (BrowserProtocol) is closed" }
 
         val maxDepth = if (maxDepth > 0) maxDepth else 999999
         val depth = maxDepth.takeIf { true }
         val document = try {
-            cdp.getDocument(depth, pierce = true)
+            browserProtocol.getDocument(depth, pierce = true)
         } catch (e: Exception) {
             logger.warn("Failed to call `cdp.getDocument()` | frameId={} | err={}", target?.frameId, e.brief())
             tracer?.debug("DOM.getDocument exception", e)
@@ -70,9 +70,9 @@ class DomTreeHandler(private val cdp: CDP) {
     }
 
     /**
-     * Map CDP Node to EnhancedDOMTreeNode recursively.
+     * Map BrowserProtocol Node to EnhancedDOMTreeNode recursively.
      *
-     * @param node CDP node
+     * @param node BrowserProtocol node
      * @param depth Current depth in tree
      * @param maxDepth Maximum depth to traverse (0 = no limit)
      * @param frameId Frame ID for this node

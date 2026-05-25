@@ -30,12 +30,12 @@ class IsolatedWorldManagerTest {
     @Test
     fun testCreateIsolatedWorldUsesResolvedMainFrameId() {
         val devTools = mock<RemoteDevTools>()
-        val cdp = CDP(devTools)
+        val browserProtocol = BrowserProtocol(devTools)
         val page = mock<ai.platon.cdt.kt.protocol.commands.Page>()
         whenever(devTools.page).thenReturn(page)
 
         val settings = mock<BrowserSettings>()
-        val mgr = IsolatedWorldManager(cdp, settings)
+        val mgr = IsolatedWorldManager(browserProtocol, settings)
 
         val mainFrame = createFrame("main")
         wheneverBlocking { page.getFrameTree() }.thenReturn(FrameTree(mainFrame, childFrames = null))
@@ -59,12 +59,12 @@ class IsolatedWorldManagerTest {
     @Test
     fun testCreateIsolatedWorldRejectsMissingFrameWhenTreeAvailable() {
         val devTools = mock<RemoteDevTools>()
-        val cdp = CDP(devTools)
+        val browserProtocol = BrowserProtocol(devTools)
         val page = mock<ai.platon.cdt.kt.protocol.commands.Page>()
         whenever(devTools.page).thenReturn(page)
 
         val settings = mock<BrowserSettings>()
-        val mgr = IsolatedWorldManager(cdp, settings)
+        val mgr = IsolatedWorldManager(browserProtocol, settings)
 
         val mainFrame = createFrame("main")
         wheneverBlocking { page.getFrameTree() }.thenReturn(FrameTree(mainFrame, childFrames = null))

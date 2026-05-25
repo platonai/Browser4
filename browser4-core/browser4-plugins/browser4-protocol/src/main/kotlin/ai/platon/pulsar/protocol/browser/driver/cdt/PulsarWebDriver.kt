@@ -43,7 +43,7 @@ import kotlin.random.Random
 class PulsarWebDriver constructor(
     uniqueID: String,
     val chromeTab: ChromeTab,
-    val cdp: CDP,
+    val browserProtocol: BrowserProtocol,
     override val browser: PulsarBrowser
 ) : AbstractWebDriver(uniqueID, browser) {
 
@@ -53,19 +53,19 @@ class PulsarWebDriver constructor(
 
     override val browserType: BrowserType = BrowserType.PULSAR_CHROME
 
-    private val isolatedWorldManager = IsolatedWorldManager(cdp, settings)
-    val page = PageHandler(cdp, isolatedWorldManager)
+    private val isolatedWorldManager = IsolatedWorldManager(browserProtocol, settings)
+    val page = PageHandler(browserProtocol, isolatedWorldManager)
     private val jsHandler get() = page.jsHandler
     private val mouse get() = page.mouse.takeIf { isActive }
     private val keyboard get() = page.keyboard.takeIf { isActive }
-    private val screenshot = ScreenshotHandler(page, cdp)
-    private val emulator get() = EmulationHandler(cdp, keyboard, mouse)
+    private val screenshot = ScreenshotHandler(page, browserProtocol)
+    private val emulator get() = EmulationHandler(browserProtocol, keyboard, mouse)
 
     private val rpc = RobustRPC(this)
     private val networkManager by lazy { NetworkManager(this, rpc) }
     private val messageWriter = MultiSinkMessageWriter()
 
-    private val driverHelper get() = WebDriverHelper(this, rpc, page, cdp, messageWriter)
+    private val driverHelper get() = WebDriverHelper(this, rpc, page, browserProtocol, messageWriter)
 
     private val closed = AtomicBoolean()
 
@@ -80,7 +80,7 @@ class PulsarWebDriver constructor(
     /**
      * Expose the underlying implementation, used for diagnosis purpose
      * */
-    override val implementation: Any get() = cdp
+    override val implementation: Any get() = browserProtocol
 
     override val snapshotService: SnapshotService get() = page.snapshotService
 
@@ -89,7 +89,7 @@ class PulsarWebDriver constructor(
     }
 
     override fun canConnect(): Boolean {
-        return cdp.isOpen
+        return browserProtocol.isOpen
     }
 
     override fun healthy(): Boolean {
@@ -124,32 +124,32 @@ class PulsarWebDriver constructor(
 
     override suspend fun reload() {
         rpc.invokeOnPage("reload") {
-            cdp.reloadPage()
+            browserProtocol.reloadPage()
         }
     }
 
     override suspend fun goBack() {
         rpc.invokeOnPage("goBack") {
-            val history = cdp.getNavigationHistory()
+            val history = browserProtocol.getNavigationHistory()
             val currentIndex = history.currentIndex
             val entries = history.entries
             val targetIndex = currentIndex - 1
             if (targetIndex >= 0 && targetIndex < entries.size) {
                 val entryId = entries[targetIndex].id
-                cdp.navigateToHistoryEntry(entryId)
+                browserProtocol.navigateToHistoryEntry(entryId)
             }
         }
     }
 
     override suspend fun goForward() {
         rpc.invokeOnPage("goForward") {
-            val history = cdp.getNavigationHistory()
+            val history = browserProtocol.getNavigationHistory()
             val currentIndex = history.currentIndex
             val entries = history.entries
             val targetIndex = currentIndex + 1
             if (targetIndex >= 0 && targetIndex < entries.size) {
                 val entryId = entries[targetIndex].id
-                cdp.navigateToHistoryEntry(entryId)
+                browserProtocol.navigateToHistoryEntry(entryId)
             }
         }
     }
@@ -164,7 +164,7 @@ class PulsarWebDriver constructor(
     }
 
     override suspend fun clearBrowserCookies() {
-        rpc.invokeOnPage("clearBrowserCookies") { cdp.clearBrowserCookies() }
+        rpc.invokeOnPage("clearBrowserCookies") { browserProtocol.clearBrowserCookies() }
     }
 
     // Use the JavaScript version in super class
@@ -262,7 +262,7 @@ class PulsarWebDriver constructor(
         try {
             val channel = Channel<String>()
 
-            cdp.onDocumentOpened {
+            browserProtocol.onDocumentOpened {
                 // keep oldUrl check for debugging / future use
                 @Suppress("UNUSED_VARIABLE")
                 val navigated = it.frame.url != oldUrl
@@ -317,8 +317,8 @@ class PulsarWebDriver constructor(
     private suspend fun setChecked(selector: String, shouldCheck: Boolean) {
         val actionName = if (shouldCheck) "check" else "uncheck"
         rpc.invokeOnElement(selector, actionName, scrollIntoView = true) { node ->
-            withNodeObjectId(cdp, node) { objectId ->
-                val result = cdp.callFunctionOn(
+            withNodeObjectId(browserProtocol, node) { objectId ->
+                val result = browserProtocol.callFunctionOn(
                     CheckableElementJs.SET_CHECKED_FUNCTION_DECLARATION,
                     objectId = objectId,
                     arguments = listOf(CallArgument(value = shouldCheck)),
@@ -381,7 +381,7 @@ class PulsarWebDriver constructor(
     }
 
     /**
-     * TODO: use CDP to implement mouseDown: CDP → Browser Input System → Hit Testing → DOM → JS Event
+     * TODO: use BrowserProtocol to implement mouseDown: BrowserProtocol → Browser Input System → Hit Testing → DOM → JS Event
      * */
     @Throws(WebDriverException::class)
     override suspend fun mouseDown(button: String, clickCount: Int) {
@@ -405,7 +405,7 @@ class PulsarWebDriver constructor(
     }
 
     /**
-     * TODO: use CDP to implement mouseUp: CDP → Browser Input System → Hit Testing → DOM → JS Event
+     * TODO: use BrowserProtocol to implement mouseUp: BrowserProtocol → Browser Input System → Hit Testing → DOM → JS Event
      * */
     @Throws(WebDriverException::class)
     override suspend fun mouseUp(button: String, clickCount: Int) {
@@ -439,7 +439,7 @@ class PulsarWebDriver constructor(
             if (!isActive) return
 
             rpc.invokeWithRetry("moveMouseTo") {
-                val point = ClickableDOM(cdp, node, offset).clickablePoint().value
+                val point = ClickableDOM(browserProtocol, node, offset).clickablePoint().value
                 if (point != null) {
                     val point2 = PointD(point.x + deltaX, point.y + deltaY)
                     mouse?.moveTo(point2)
@@ -536,8 +536,8 @@ class PulsarWebDriver constructor(
         """.trimIndent()
 
         val result = rpc.invokeOnElement(selector, "selectOption") { node ->
-            withNodeObjectId(cdp, node) { objectId ->
-                val res = cdp.callFunctionOn(
+            withNodeObjectId(browserProtocol, node) { objectId ->
+                val res = browserProtocol.callFunctionOn(
                     functionDeclaration,
                     objectId = objectId,
                     arguments = listOf(CallArgument(value = jsonValues)),
@@ -580,7 +580,7 @@ class PulsarWebDriver constructor(
     @Throws(WebDriverException::class)
     override suspend fun resize(width: Int, height: Int) {
         rpc.invokeOnPage("resize") {
-            cdp.setDeviceMetricsOverride(
+            browserProtocol.setDeviceMetricsOverride(
                 width = width,
                 height = height,
                 deviceScaleFactor = 0.0,
@@ -592,14 +592,14 @@ class PulsarWebDriver constructor(
     @Throws(WebDriverException::class)
     override suspend fun dialogAccept(promptText: String?) {
         rpc.invokeOnPage("dialogAccept") {
-            cdp.handleJavaScriptDialog(accept = true, promptText = promptText)
+            browserProtocol.handleJavaScriptDialog(accept = true, promptText = promptText)
         }
     }
 
     @Throws(WebDriverException::class)
     override suspend fun dialogDismiss() {
         rpc.invokeOnPage("dialogDismiss") {
-            cdp.handleJavaScriptDialog(accept = false)
+            browserProtocol.handleJavaScriptDialog(accept = false)
         }
     }
 
@@ -652,8 +652,8 @@ class PulsarWebDriver constructor(
         //| attribute | HTML 初始声明 | ❌ 不变（除非手动 setAttribute） |
         //| property  | DOM 当前状态  | ✅ 会变（用户交互 / JS 修改）      |
 
-        return withNodeObjectId(cdp, node) { objectId ->
-            cdp.callFunctionOn(
+        return withNodeObjectId(browserProtocol, node) { objectId ->
+            browserProtocol.callFunctionOn(
                 "function() { return this && typeof this.value !== 'undefined' ? this.value : null; }",
                 objectId = objectId,
                 returnByValue = true
@@ -694,7 +694,7 @@ class PulsarWebDriver constructor(
     @Throws(WebDriverException::class)
     override suspend fun upload(selector: String, paths: List<String>) {
         rpc.invokeOnElement(selector, "upload", focus = true) { node ->
-            cdp.setFileInputFiles(files = paths, nodeId = node.nodeId)
+            browserProtocol.setFileInputFiles(files = paths, nodeId = node.nodeId)
         }
     }
 
@@ -761,11 +761,11 @@ class PulsarWebDriver constructor(
             val deltaOffsetY = 4.0 + Random.nextInt(4)  // Add randomization to Y offset
             val offset = OffsetD(deltaOffsetX, deltaOffsetY)
 
-            if (!isActive) throw IllegalWebDriverStateException("CDP is not active", driver = this)
+            if (!isActive) throw IllegalWebDriverStateException("BrowserProtocol is not active", driver = this)
             val m = mouse ?: throw IllegalWebDriverStateException("Mouse not available", driver = this)
 
             rpc.invokeWithRetry("dragAndDrop") {
-                val clickableDOM = ClickableDOM(cdp, node, offset)
+                val clickableDOM = ClickableDOM(browserProtocol, node, offset)
                 val clickableResult = clickableDOM.clickablePoint()
                 val startPoint = clickableResult.value
 
@@ -789,7 +789,7 @@ class PulsarWebDriver constructor(
 
                 tracer?.trace("dragAndDrop | from: {} to: {} | delta: {}, {}", startPoint, targetPoint, deltaX, deltaY)
 
-                // Use mouse to perform drag-and-drop via CDP drag events
+                // Use mouse to perform drag-and-drop via BrowserProtocol drag events
                 m.dragAndDrop(startPoint, targetPoint, randomDelayMillis("dragAndDrop"))
 
                 gap()
@@ -805,7 +805,7 @@ class PulsarWebDriver constructor(
             when {
                 node.isNull() -> null
                 // TODO: performance issue for large HTML (memory copy), consider accept the raw byte stream and convert to string in native code
-                else -> cdp.getOuterHTML(node.nodeId, node.backendNodeId, node.objectId)
+                else -> browserProtocol.getOuterHTML(node.nodeId, node.backendNodeId, node.objectId)
             }
         }
     }
@@ -862,8 +862,8 @@ function() {
   }
 }
                     """.trimIndent()
-                    withNodeObjectId(cdp, node) { objectId ->
-                        val remoteObject = cdp.callFunctionOn(
+                    withNodeObjectId(browserProtocol, node) { objectId ->
+                        val remoteObject = browserProtocol.callFunctionOn(
                             functionDeclaration,
                             objectId = objectId,
                             returnByValue = true
@@ -960,7 +960,7 @@ function() {
         try {
             return rpc.invokeWithRetry("clickablePoint") {
                 val node = page.scrollIntoViewIfNeeded(selector)
-                ClickableDOM.create(cdp, node)?.clickablePoint()?.value
+                ClickableDOM.create(browserProtocol, node)?.clickablePoint()?.value
             }
         } catch (e: ChromeDriverException) {
             rpc.handleChromeException(e, "clickablePoint")
@@ -974,7 +974,7 @@ function() {
         try {
             return rpc.invokeWithRetry("boundingBox") {
                 val node = page.scrollIntoViewIfNeeded(selector)
-                ClickableDOM.create(cdp, node)?.boundingBox()
+                ClickableDOM.create(browserProtocol, node)?.boundingBox()
             }
         } catch (e: ChromeDriverException) {
             rpc.handleChromeException(e, "boundingBox")
@@ -1031,10 +1031,10 @@ function() {
     @Throws(WebDriverException::class)
     override suspend fun pageSource(): String? {
         return rpc.invokeOnPage("pageSource") {
-            // TODO: add a CDP facade wrapper for resource content retrieval for semantic consistency and performance
-            val document = cdp.getDocument()
+            // TODO: add a BrowserProtocol facade wrapper for resource content retrieval for semantic consistency and performance
+            val document = browserProtocol.getDocument()
             // TODO: pass only one of nodeId and backendNodeId
-            cdp.getOuterHTML(document.nodeId, document.backendNodeId)
+            browserProtocol.getOuterHTML(document.nodeId, document.backendNodeId)
         }
     }
 
@@ -1056,13 +1056,13 @@ function() {
 
     override suspend fun bringToFront() {
         rpc.invokeDeferredSilently("bringToFront") {
-            cdp.bringToFront()
+            browserProtocol.bringToFront()
             browser.frontDriver = this
         }
     }
 
     override fun awaitTermination() {
-        cdp.awaitTermination()
+        browserProtocol.awaitTermination()
     }
 
     override suspend fun loadResource(url: String): NetworkResourceResponse {
@@ -1071,8 +1071,8 @@ function() {
         )
 
         val response = rpc.invokeWithRetry("loadNetworkResource") {
-            val frameId = cdp.getFrameTree().frame.id
-            val resource = cdp.loadNetworkResource(frameId, url, options)
+            val frameId = browserProtocol.getFrameTree().frame.id
+            val resource = browserProtocol.loadNetworkResource(frameId, url, options)
             NetworkResourceResponse.from(resource)
         }
 
@@ -1091,13 +1091,13 @@ function() {
         super.close()
 
         if (closed.compareAndSet(false, true)) {
-            runCatching { cdp.close() }.onFailure { warnForClose(this, it) }
+            runCatching { browserProtocol.close() }.onFailure { warnForClose(this, it) }
         }
     }
 
     @Throws(WebDriverException::class)
     override suspend fun pause() {
-        rpc.invokeOnPage("pause") { cdp.stopLoading() }
+        rpc.invokeOnPage("pause") { browserProtocol.stopLoading() }
     }
 
     @Throws(WebDriverException::class)
@@ -1112,17 +1112,17 @@ function() {
 
             if (browser.isGUI) {
                 // in gui mode, just stop the loading, so we can diagnose
-                cdp.stopLoading()
+                browserProtocol.stopLoading()
             } else {
                 // go to about:blank, so the browser stops the previous page and releases all resources
                 navigate(ChromeImpl.ABOUT_BLANK_PAGE)
             }
         } catch (e: ChromeIOException) {
-            if (!e.isOpen || !cdp.isOpen) {
+            if (!e.isOpen || !browserProtocol.isOpen) {
                 // intentionally ignored: the chrome is closed
             }
         } catch (e: ChromeDriverException) {
-            if (cdp.isOpen) {
+            if (browserProtocol.isOpen) {
                 try {
                     rpc.handleChromeException(e, "terminate")
                 } catch (e: Exception) {
@@ -1140,21 +1140,21 @@ function() {
     @Throws(ChromeIOException::class)
     suspend fun enableAPIAgents() {
         try {
-            cdp.pageEnable()
-            cdp.domEnable()
-            cdp.runtimeEnable()
-            cdp.networkEnable()
-            cdp.cssEnable()
+            browserProtocol.pageEnable()
+            browserProtocol.domEnable()
+            browserProtocol.runtimeEnable()
+            browserProtocol.networkEnable()
+            browserProtocol.cssEnable()
 
             if (resourceBlockProbability > 1e-6) {
-                cdp.fetchEnable()
+                browserProtocol.fetchEnable()
             }
 
             val proxyUsername = browser.id.fingerprint.proxyEntry?.username
             if (!proxyUsername.isNullOrBlank()) {
                 // allow all url patterns
                 val patterns = listOf(RequestPattern())
-                cdp.fetchEnable(patterns, true)
+                browserProtocol.fetchEnable(patterns, true)
             }
         } catch (e: Exception) {
             logger.warn("Failed to enable CDT agents", e)
@@ -1172,7 +1172,7 @@ function() {
 
         if (blockedURLs.isNotEmpty()) {
             // Blocks URLs from loading.
-            cdp.setBlockedURLs(blockedURLs)
+            browserProtocol.setBlockedURLs(blockedURLs)
         }
 
         networkManager.enable()
@@ -1184,9 +1184,9 @@ function() {
             onResponseReceived(entry, event)
         }
 
-        cdp.onFrameNavigated { onFrameNavigated(entry, it) }
-        cdp.onDocumentOpened { entry.mainRequestCookies = getCookies0() }
-        cdp.onWindowOpen { onWindowOpen(it) }
+        browserProtocol.onFrameNavigated { onFrameNavigated(entry, it) }
+        browserProtocol.onDocumentOpened { entry.mainRequestCookies = getCookies0() }
+        browserProtocol.onWindowOpen { onWindowOpen(it) }
 
         val proxyEntry = browser.id.fingerprint.proxyEntry
         if (proxyEntry?.username != null) {
@@ -1248,7 +1248,7 @@ function() {
         // simulate blocking logic
         val isMinor = chromeNavigateEntry.isMinorResource(event)
         if (isMinor && isBlocked(event.request.url)) {
-            cdp.failRequest(event.requestId, ErrorReason.ABORTED)
+            browserProtocol.failRequest(event.requestId, ErrorReason.ABORTED)
         }
 
         // handle user-defined events
@@ -1301,8 +1301,8 @@ function() {
         try {
             val isolatedWorldJs = settings.dualWorldScriptLoader.getIsolatedWorldJs(false)
             if (isolatedWorldJs.isNotBlank()) {
-                check(cdp.isOpen) { "Underlying browser (CDP) is closed" }
-                val targetFrameId = cdp.getFrameTree().frame.id
+                check(browserProtocol.isOpen) { "Underlying browser (BrowserProtocol) is closed" }
+                val targetFrameId = browserProtocol.getFrameTree().frame.id
                 val contextId = isolatedWorldManager.ensureRuntime(targetFrameId, isolatedWorldJs)
                 logger.debug(
                     "Ensured Browser4 runtime in isolated world after main-frame navigation | frame={}",
@@ -1315,7 +1315,7 @@ function() {
             if (isActive && canConnect()) {
                 logger.warn("Failed to re-inject Browser4 runtime after frame navigation", e)
             } else {
-                logger.debug("Underlying browser (CDP) is closed")
+                logger.debug("Underlying browser (BrowserProtocol) is closed")
             }
         }
     }
@@ -1372,8 +1372,8 @@ function() {
             mimeType == "application/json" && event.response.encodedDataLength < 1_000_000 && alwaysFalse()
         if (saveResourceBody) {
             val body = rpc.invokeSilently("getResponseBody") {
-                cdp.fetchEnable()
-                cdp.getResponseBody(event.requestId).body
+                browserProtocol.fetchEnable()
+                browserProtocol.getResponseBody(event.requestId).body
             }
             if (!body.isNullOrBlank()) {
                 suffix = "-" + event.type.name.lowercase() + "-body.txt"
@@ -1408,7 +1408,7 @@ function() {
         // 1. Inject Page World scripts (stealth patches)
         val pageWorldJs = loader.getPageWorldJs(false)
         if (pageWorldJs.isNotBlank()) {
-            cdp.addScriptToEvaluateOnNewDocument("\n;;\n$pageWorldJs\n;;\n")
+            browserProtocol.addScriptToEvaluateOnNewDocument("\n;;\n$pageWorldJs\n;;\n")
             logger.debug("Injected Page World scripts (stealth patches)")
         }
 
@@ -1425,7 +1425,7 @@ function() {
                     "Injected Browser4 runtime into Isolated World (context: {}) | {}",
                     contextId, StringUtils.abbreviateMiddle(userTypedUrl, "...", 200)
                 )
-                val evaluate = cdp.evaluate("typeof(__pulsar_utils__)", contextId = contextId)
+                val evaluate = browserProtocol.evaluate("typeof(__pulsar_utils__)", contextId = contextId)
                 if (evaluate.result.value != "function") {
                     logger.warn(
                         "Failed to verify isolated world injection: typeof(__pulsar_utils__) should be 'function' but got: {}",
@@ -1452,7 +1452,7 @@ function() {
 
     @Throws(WebDriverException::class)
     private suspend fun getCookies0(): List<Map<String, String>> {
-        val cookies = cdp.getCookies().map { serialize(it) }
+        val cookies = browserProtocol.getCookies().map { serialize(it) }
         return cookies
     }
 
@@ -1464,7 +1464,7 @@ function() {
     private suspend fun cdpDeleteCookies(
         name: String, url: String? = null, domain: String? = null, path: String? = null
     ) {
-        cdp.deleteCookies(name, url, domain, path)
+        browserProtocol.deleteCookies(name, url, domain, path)
     }
 
     private suspend fun waitForScrollSettled(selector: String, timeout: Duration = Duration.ofMillis(5_000)) {

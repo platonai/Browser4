@@ -14,19 +14,19 @@ import org.apache.commons.lang3.StringUtils
  * Design Goals:
  * 1. Page JS cannot directly access Agent Runtime
  * 2. Page JS cannot reliably detect Agent Runtime
- * 3. CDP / Agent can stably access Runtime
+ * 3. BrowserProtocol / Agent can stably access Runtime
  * 4. Runtime is versionable and hot-updatable
  * 5. Runtime doesn't break page behavior
  * 6. Runtime is observable, extensible, and evolvable
  */
 class IsolatedWorldManager(
-    val cdp: CDP,
+    val browserProtocol: BrowserProtocol,
     val settings: BrowserSettings
 ) {
     companion object {
         /**
          * Isolated world name for Browser4 runtime.
-         * This name is used to identify and access the isolated world via CDP.
+         * This name is used to identify and access the isolated world via BrowserProtocol.
          */
         const val RUNTIME_WORLD_NAME = "__browser4_runtime__"
 
@@ -56,7 +56,7 @@ class IsolatedWorldManager(
      * @return The execution context ID of the created isolated world
      */
     suspend fun createIsolatedWorld(frameId: String? = null): Int {
-        val resolvedFrameId: String? = frameId ?: runCatching { cdp.mainFrame().id }.getOrNull()
+        val resolvedFrameId: String? = frameId ?: runCatching { browserProtocol.mainFrame().id }.getOrNull()
 
         logger.debug(
             "Creating isolated world '{}' for frame: {}",
@@ -67,7 +67,7 @@ class IsolatedWorldManager(
         var lastError: Exception? = null
         repeat(DEFAULT_CREATE_WORLD_RETRIES) { attempt ->
             try {
-                val executionContextId = cdp.createIsolatedWorld(
+                val executionContextId = browserProtocol.createIsolatedWorld(
                     frameId = resolvedFrameId ?: "main",
                     worldName = RUNTIME_WORLD_NAME,
                     grantUniveralAccess = true,
@@ -113,7 +113,7 @@ class IsolatedWorldManager(
      * @return The result of the evaluation
      */
     suspend fun evaluateInIsolatedWorld(script: String, contextId: Int? = null): Any? {
-        val result = cdp.evaluate(
+        val result = browserProtocol.evaluate(
             expression = confuser.confuse(script),
             contextId = contextId,
             returnByValue = true,

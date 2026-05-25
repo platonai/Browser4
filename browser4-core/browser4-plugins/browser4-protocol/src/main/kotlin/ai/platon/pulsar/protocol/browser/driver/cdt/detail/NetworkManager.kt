@@ -27,7 +27,7 @@ internal class NetworkManager(
 
     val isActive get() = driver.isActive
 
-    private val cdp get() = driver.cdp
+    private val cdp get() = driver.browserProtocol
 
     private val networkEventManager = NetworkEventManager()
 
@@ -180,7 +180,7 @@ internal class NetworkManager(
         networkEventManager.addRequestWillBeSentEvent(networkRequestId, event)
 
         /**
-         * CDP may have sent a Fetch.requestPaused event already. Check for it.
+         * BrowserProtocol may have sent a Fetch.requestPaused event already. Check for it.
          */
         val requestPausedEvent = networkEventManager.getRequestPausedEvent(networkRequestId)
         if (requestPausedEvent != null) {
@@ -349,7 +349,7 @@ internal class NetworkManager(
             }
         } else {
             // TODO: there are other scenarios to keep request interception enabled.
-            // Add a CDP facade disable wrapper when that lifecycle is fully defined.
+            // Add a BrowserProtocol facade disable wrapper when that lifecycle is fully defined.
         }
     }
 

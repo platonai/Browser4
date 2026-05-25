@@ -1,6 +1,6 @@
 package ai.platon.browser4.driver.chrome.dom
 
-import ai.platon.browser4.driver.chrome.CDP
+import ai.platon.browser4.driver.chrome.BrowserProtocol
 import ai.platon.browser4.driver.chrome.dom.model.PageTarget
 import ai.platon.browser4.driver.chrome.dom.model.SnapshotOptions
 import ai.platon.pulsar.WebDriverTestBase
@@ -36,10 +36,10 @@ class AriaSnapshotRendererE2ETest : WebDriverTestBase() {
             driver.waitForSelector("h1")
             driver.bringToFront()
 
-            installRendererFixture(driver.cdp)
+            installRendererFixture(driver.browserProtocol)
             driver.waitForSelector("h1")
 
-            val service = CDPSnapshotService(driver.cdp)
+            val service = CDPSnapshotService(driver.browserProtocol)
             val normalized = normalizeRefs(collectAriaSnapshot(service)).lowercase()
 
             assertTrue(normalized.contains("- region \"collapsed generic\" [ref=#]:"), normalized)
@@ -66,7 +66,7 @@ class AriaSnapshotRendererE2ETest : WebDriverTestBase() {
         driver.waitForSelector("iframe")
         driver.bringToFront()
 
-        val service = CDPSnapshotService(driver.cdp)
+        val service = CDPSnapshotService(driver.browserProtocol)
         val normalized = normalizeRefs(collectAriaSnapshot(service)).lowercase()
 
         assertTrue(Regex("""- iframe \[ref=#]""").findAll(normalized).count() >= 2, normalized)
@@ -89,8 +89,8 @@ class AriaSnapshotRendererE2ETest : WebDriverTestBase() {
         return snapshot.replace(Regex("""\[ref=[^\]]+]"""), "[ref=#]")
     }
 
-    private suspend fun installRendererFixture(cdp: CDP) {
-        cdp.evaluate(
+    private suspend fun installRendererFixture(browserProtocol: BrowserProtocol) {
+        browserProtocol.evaluate(
             """
             document.head.innerHTML = '<meta charset="UTF-8"><title>Aria Snapshot Renderer Fixtures</title>';
             document.body.innerHTML = `

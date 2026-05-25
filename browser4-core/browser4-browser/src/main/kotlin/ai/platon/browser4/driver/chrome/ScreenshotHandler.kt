@@ -11,11 +11,11 @@ import kotlin.math.roundToInt
 
 class ScreenshotHandler(
     private val pageHandler: PageHandler,
-    private val cdp: CDP,
+    private val browserProtocol: BrowserProtocol,
 ) {
     private val logger = getLogger(this)
-    private val isActive get() = AppContext.isActive && cdp.isOpen
-    private fun activeCdp() = cdp.takeIf { isActive }
+    private val isActive get() = AppContext.isActive && browserProtocol.isOpen
+    private fun activeCdp() = browserProtocol.takeIf { isActive }
     private val debugLevel = System.getProperty("browser.additionalDebugLevel")?.toIntOrNull() ?: 0
 
     /**
@@ -31,7 +31,7 @@ class ScreenshotHandler(
         val width = rect.width.toInt()
         val height = rect.height.toInt()
 
-        cdp.setDeviceMetricsOverride(
+        browserProtocol.setDeviceMetricsOverride(
             mobile = false,
             width = width,
             height = height,
@@ -43,12 +43,12 @@ class ScreenshotHandler(
         // PNG = Crisp, precise, lossless, and supports transparency (ideal for testing and UI design)
         // JPEG = Compact, softly detailed, lossy, and opaque (suitable for presentation and archiving)
         val format = CaptureScreenshotFormat.JPEG
-        val result = cdp.captureScreenshot(
+        val result = browserProtocol.captureScreenshot(
             format = format,
             captureBeyondViewport = true,
         )
 
-        cdp.clearDeviceMetricsOverride()
+        browserProtocol.clearDeviceMetricsOverride()
 
         return result
     }
@@ -112,7 +112,7 @@ class ScreenshotHandler(
             return null
         }
 
-        return cdp.captureScreenshot(
+        return browserProtocol.captureScreenshot(
             format = format,
             quality = quality,
             clip = viewport,

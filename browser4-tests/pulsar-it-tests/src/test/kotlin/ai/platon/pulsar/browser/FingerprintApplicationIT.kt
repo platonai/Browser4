@@ -12,7 +12,7 @@ import java.nio.file.Path
 /**
  * Integration tests for fingerprint application with real browsers.
  *
- * Tests that fingerprint parameters are correctly applied via CDP
+ * Tests that fingerprint parameters are correctly applied via BrowserProtocol
  * and JavaScript injection when a browser starts.
  */
 @Tag("Integration")

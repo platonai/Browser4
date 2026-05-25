@@ -29,7 +29,7 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
         assertIs<PulsarWebDriver>(driver)
         driver.waitForSelector("h1")
 
-        val cdp = driver.cdp
+        val cdp = driver.browserProtocol
         val service = CDPSnapshotService(cdp)
 
         val options = SnapshotOptions(
@@ -87,7 +87,7 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
     fun findElementUsingCssXpathBackendIdElementHashAndConvertToInteractedElement() =
         runEnhancedWebDriverTest(testURL) { driver ->
             assertIs<PulsarWebDriver>(driver)
-            val service = CDPSnapshotService(driver.cdp)
+            val service = CDPSnapshotService(driver.browserProtocol)
 
             val options = SnapshotOptions(
                 maxDepth = 100,
@@ -169,7 +169,7 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
     fun optionsTogglingNoAxOrSnapshotYieldsMinimalEnhancedNodes() =
         runEnhancedWebDriverTest(interactiveDynamicURL) { driver ->
             assertIs<PulsarWebDriver>(driver)
-            val cdp = driver.cdp
+            val cdp = driver.browserProtocol
             val service = CDPSnapshotService(cdp)
 
             val options = SnapshotOptions(
@@ -207,8 +207,8 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
     @DisplayName("Scrollability and interactivity analysis on dynamic content")
     fun scrollabilityAndInteractivityAnalysisOnDynamicContent() = runEnhancedWebDriverTest(testURL) { driver ->
         assertIs<PulsarWebDriver>(driver)
-        val cdp = driver.cdp
-        val service = CDPSnapshotService(driver.cdp)
+        val cdp = driver.browserProtocol
+        val service = CDPSnapshotService(driver.browserProtocol)
 
         // Create a clearly scrollable container and interactive buttons
         runCatching { cdp.evaluate("generateLargeList(1000)") }
@@ -229,13 +229,13 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
         var hasScrollableContainer = false
         repeat(50) { // up to ~10s
             val containerExists = runCatching {
-                driver.cdp.evaluate("document.getElementById('virtualScrollContainer') != null")
+                driver.browserProtocol.evaluate("document.getElementById('virtualScrollContainer') != null")
             }.getOrNull()?.result?.value?.toString()?.equals("true", ignoreCase = true) == true
 
             if (containerExists) {
                 // Also check if the content has been rendered with sufficient height
                 val hasContent = runCatching {
-                    driver.cdp.evaluate(
+                    driver.browserProtocol.evaluate(
                         """
                         var container = document.getElementById('virtualScrollContainer');
                         var content = document.getElementById('virtualScrollContent');
@@ -309,16 +309,16 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
     @DisplayName("Dynamic content load is reflected in enhanced DOM tree")
     fun dynamicContentLoadIsReflectedInEnhancedDomTree() = runEnhancedWebDriverTest(testURL) { driver ->
         assertIs<PulsarWebDriver>(driver)
-        val service = CDPSnapshotService(driver.cdp)
+        val service = CDPSnapshotService(driver.browserProtocol)
 
         // Trigger async load of users (2s delay per page script)
-        runCatching { driver.cdp.evaluate("loadContent('users')") }
+        runCatching { driver.browserProtocol.evaluate("loadContent('users')") }
 
         // Deterministically wait for #dynamicContent to get 'loaded' class, then assert
         var loadedObserved = false
         repeat(40) { // up to ~20s
             val ok = runCatching {
-                driver.cdp.evaluate("document.getElementById('dynamicContent')?.classList?.contains('loaded')")
+                driver.browserProtocol.evaluate("document.getElementById('dynamicContent')?.classList?.contains('loaded')")
             }.getOrNull()?.result?.value?.toString()?.equals("true", ignoreCase = true) == true
             if (ok) {
                 loadedObserved = true; return@repeat
@@ -359,7 +359,7 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
     @DisplayName("SnapshotNodeEx bounds and rects are populated correctly")
     fun snapshotnodeexBoundsAndRectsArePopulatedCorrectly() = runEnhancedWebDriverTest(testURL) { driver ->
         assertIs<PulsarWebDriver>(driver)
-        val service = CDPSnapshotService(driver.cdp)
+        val service = CDPSnapshotService(driver.browserProtocol)
 
         val options = SnapshotOptions(
             maxDepth = 100,
@@ -383,14 +383,14 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
         val bodySnapshot = bodyNode.snapshotNode
         assertNotNull(bodySnapshot, "Expected body to have snapshot data")
 
-        // Test clientRects property (CDP may not populate bounds for body/html, but clientRects should be available)
+        // Test clientRects property (BrowserProtocol may not populate bounds for body/html, but clientRects should be available)
         val bounds = bodySnapshot.bounds ?: bodySnapshot.clientRects
         assertNotNull(bounds, "Expected body snapshot to have bounds or clientRects")
         assertTrue(bounds.width > 0, "Expected bounds width to be positive")
         assertTrue(bounds.height > 0, "Expected bounds height to be positive")
         printlnPro("Body bounds: x=${bounds.x}, y=${bounds.y}, width=${bounds.width}, height=${bounds.height}")
 
-        // Test absoluteBounds property (may be null for body/html elements if CDP doesn't provide bounds)
+        // Test absoluteBounds property (may be null for body/html elements if BrowserProtocol doesn't provide bounds)
         if (bodySnapshot.absoluteBounds != null) {
             val absoluteBounds = bodySnapshot.absoluteBounds!!
             assertTrue(absoluteBounds.width > 0, "Expected absoluteBounds width to be positive")
@@ -421,8 +421,8 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
     @DisplayName("SnapshotNodeEx bounds on interactive elements")
     fun snapshotNodeExBoundsOnInteractiveElements() = runEnhancedWebDriverTest(testURL) { driver ->
         assertIs<PulsarWebDriver>(driver)
-        val cdp = driver.cdp
-        val service = CDPSnapshotService(driver.cdp)
+        val cdp = driver.browserProtocol
+        val service = CDPSnapshotService(driver.browserProtocol)
 
         // Generate dynamic content with buttons
         runCatching { cdp.evaluate("generateLargeList(100)") }
@@ -477,7 +477,7 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
         buttonSnapshot.bounds?.let { bounds ->
             assertTrue(bounds.width >= 0, "Expected button bounds width to be non-negative")
             assertTrue(bounds.height >= 0, "Expected button bounds height to be non-negative")
-            printlnPro("Button bounds(raw from CDP): x=${bounds.x}, y=${bounds.y}, width=${bounds.width}, height=${bounds.height}")
+            printlnPro("Button bounds(raw from BrowserProtocol): x=${bounds.x}, y=${bounds.y}, width=${bounds.width}, height=${bounds.height}")
         }
         buttonSnapshot.absoluteBounds?.let { ab ->
             assertTrue(ab.width >= 0)
@@ -496,7 +496,7 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
         val scrollY = jsNumber("window.scrollY || window.pageYOffset || 0") ?: 0.0
         val cssPosition = buttonSnapshot.computedStyles?.get("position") ?: ""
 
-        // Expectations: CDP layout.bounds are document-absolute; BCR is viewport-relative.
+        // Expectations: BrowserProtocol layout.bounds are document-absolute; BCR is viewport-relative.
         // Expected absolute (document) coordinates derived from BCR:
         val expectedAbsX = bcr["x"]!! + if (cssPosition == "fixed") 0.0 else scrollX
         val expectedAbsY = bcr["y"]!! + if (cssPosition == "fixed") 0.0 else scrollY
@@ -511,7 +511,7 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
         assertNotNull(b)
         assertNotNull(ab)
 
-        // CDP bounds should align with document-absolute expected values
+        // BrowserProtocol bounds should align with document-absolute expected values
         assertTrue(
             close(b.x, expectedAbsX),
             "bounds.x(${b.x}) should ~= bcr.x+scrollX ($expectedAbsX), position=$cssPosition"
@@ -522,7 +522,7 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
         )
         assertTrue(close(b.width, expectedW), "bounds.width(${b.width}) ~= bcr.width($expectedW)")
         assertTrue(close(b.height, expectedH), "bounds.height(${b.height}) ~= bcr.height($expectedH)")
-        // absoluteBounds should match CDP bounds exactly in our implementation
+        // absoluteBounds should match BrowserProtocol bounds exactly in our implementation
         assertTrue(close(ab.x, expectedAbsX), "absoluteBounds.x(${ab.x}) should ~= expectedAbsX($expectedAbsX)")
         assertTrue(close(ab.y, expectedAbsY), "absoluteBounds.y(${ab.y}) should ~= expectedAbsY($expectedAbsY)")
         assertTrue(close(ab.width, expectedW), "absoluteBounds.width(${ab.width}) ~= $expectedW")
@@ -581,7 +581,7 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
     @DisplayName("SnapshotNodeEx scrollRects on scrollable container")
     fun snapshotNodeExScrollRectsOnScrollableContainer() = runEnhancedWebDriverTest(testURL) { driver ->
         assertIs<PulsarWebDriver>(driver)
-        val cdp = driver.cdp
+        val cdp = driver.browserProtocol
 
         // Generate a large scrollable list
         runCatching { cdp.evaluate("generateLargeList(1000)") }
@@ -611,14 +611,14 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
         assertNotNull(snapshot, "Expected scroll container to have snapshot data")
         printlnPro(DomDebug.summarize(scrollContainer))
 
-        // Test bounds (use clientRects as fallback since CDP may not populate bounds for all elements)
+        // Test bounds (use clientRects as fallback since BrowserProtocol may not populate bounds for all elements)
         val bounds = snapshot.bounds ?: snapshot.clientRects
         assertNotNull(bounds, "Expected scroll container to have bounds or clientRects")
         assertTrue(bounds.width > 0, "Expected scroll container bounds width to be positive")
         assertTrue(bounds.height > 0, "Expected scroll container bounds height to be positive")
         printlnPro("ScrollContainer bounds: x=${bounds.x}, y=${bounds.y}, width=${bounds.width}, height=${bounds.height}")
 
-        // Test absoluteBounds (maybe null if CDP doesn't provide bounds, only clientRects)
+        // Test absoluteBounds (maybe null if BrowserProtocol doesn't provide bounds, only clientRects)
         requireNotNull(snapshot.absoluteBounds)
         val absoluteBounds = snapshot.absoluteBounds!!
         assertTrue(absoluteBounds.width > 0, "Expected scroll container absoluteBounds width to be positive")

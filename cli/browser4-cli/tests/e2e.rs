@@ -1274,7 +1274,7 @@ impl E2ETestResources {
         let mut steps = Vec::new();
         // Kill any lingering Chrome processes from the previous server before
         // starting a fresh one.  Without this, the new Java server may see
-        // stale CDP browser contexts, leading to intermittent
+        // stale BrowserProtocol browser contexts, leading to intermittent
         // "Cannot find context with specified id" errors.
         let cleanup_started_at = Instant::now();
         stop_browser4_server_forcibly();

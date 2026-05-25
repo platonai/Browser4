@@ -1,6 +1,6 @@
 package ai.platon.browser4.driver.chrome.dom
 
-import ai.platon.browser4.driver.chrome.CDP
+import ai.platon.browser4.driver.chrome.BrowserProtocol
 import ai.platon.browser4.driver.chrome.dom.model.ElementRefCriteria
 import ai.platon.browser4.driver.chrome.dom.model.SnapshotOptions
 import ai.platon.pulsar.WebDriverTestBase
@@ -18,11 +18,11 @@ class SnapshotServiceIsScrollableTest : WebDriverTestBase() {
     @DisplayName("scroll analysis basics - overflow metadata exists and hidden stays false")
     fun isScrollableBasicsRegularElementsAndOverflowHidden() = runEnhancedWebDriverTest(testURL) { driver ->
         assertIs<PulsarWebDriver>(driver)
-        val service = CDPSnapshotService(driver.cdp)
+        val service = CDPSnapshotService(driver.browserProtocol)
 
         // Create a basic scrollable DIV and a non-scrollable (overflow hidden) DIV
         runCatching {
-            driver.cdp.evaluate(
+            driver.browserProtocol.evaluate(
                 """
                 (function(){
                   // clear any previous markers if tests reuse the page
@@ -73,7 +73,7 @@ class SnapshotServiceIsScrollableTest : WebDriverTestBase() {
         suspend fun waitExists(id: String) {
             repeat(30) {
                 val ok = runCatching {
-                    driver.cdp.evaluate("document.getElementById('${id}') != null")
+                    driver.browserProtocol.evaluate("document.getElementById('${id}') != null")
                 }.getOrNull()?.result?.value?.toString()?.equals("true", true) == true
                 if (ok) return
                 Thread.sleep(100)
@@ -94,7 +94,7 @@ class SnapshotServiceIsScrollableTest : WebDriverTestBase() {
         assertNotNull(basicSnapshot.scrollRects, "#scroll_basic should expose scrollRects")
         assertTrue(
             evaluateBoolean(
-                driver.cdp,
+                driver.browserProtocol,
                 """
                 (() => {
                   const el = document.getElementById('scroll_basic');
@@ -117,11 +117,11 @@ class SnapshotServiceIsScrollableTest : WebDriverTestBase() {
     @DisplayName("scroll analysis special - body html overflow styles are captured")
     fun isScrollableSpecialBodyHtmlAndToggleOverflow() = runEnhancedWebDriverTest(testURL) { driver ->
         assertIs<PulsarWebDriver>(driver)
-        val service = CDPSnapshotService(driver.cdp)
+        val service = CDPSnapshotService(driver.browserProtocol)
 
         // Ensure the page has large content and explicitly set overflow on body/html
         runCatching {
-            driver.cdp.evaluate(
+            driver.browserProtocol.evaluate(
                 """
                 (function(){
                   // Remove previous marker
@@ -165,7 +165,7 @@ class SnapshotServiceIsScrollableTest : WebDriverTestBase() {
 
         // Case 2: Set overflow:auto on documentElement and body => expect at least one scrollable (html or body)
         runCatching {
-            driver.cdp.evaluate(
+            driver.browserProtocol.evaluate(
                 "document.documentElement.style.overflow='auto'; document.body.style.overflow='auto'; true;"
             )
         }
@@ -178,7 +178,7 @@ class SnapshotServiceIsScrollableTest : WebDriverTestBase() {
         assertNotNull(html)
         assertTrue(
             evaluateBoolean(
-                driver.cdp,
+                driver.browserProtocol,
                 """
                 (() => {
                   const scrolling = document.scrollingElement || document.documentElement || document.body;
@@ -194,11 +194,11 @@ class SnapshotServiceIsScrollableTest : WebDriverTestBase() {
     @DisplayName("scroll analysis dedup fixtures - nested containers keep expected geometry")
     fun isScrollableDedupNestedContainersSimilarVsDistinctAreas() = runEnhancedWebDriverTest(testURL) { driver ->
         assertIs<PulsarWebDriver>(driver)
-        val service = CDPSnapshotService(driver.cdp)
+        val service = CDPSnapshotService(driver.browserProtocol)
 
         // Build nested scroll containers
         runCatching {
-            driver.cdp.evaluate(
+            driver.browserProtocol.evaluate(
                 """
                 (function(){
                   // cleanup
@@ -281,7 +281,7 @@ class SnapshotServiceIsScrollableTest : WebDriverTestBase() {
         suspend fun waitExists(id: String) {
             repeat(30) {
                 val ok = runCatching {
-                    driver.cdp.evaluate("document.getElementById('${id}') != null")
+                    driver.browserProtocol.evaluate("document.getElementById('${id}') != null")
                 }.getOrNull()?.result?.value?.toString()?.equals("true", true) == true
                 if (ok) return
                 Thread.sleep(100)
@@ -310,7 +310,7 @@ class SnapshotServiceIsScrollableTest : WebDriverTestBase() {
 
         assertTrue(
             evaluateBoolean(
-                driver.cdp,
+                driver.browserProtocol,
                 """
                 (() => {
                   const outer = document.getElementById('outer_same');
@@ -325,7 +325,7 @@ class SnapshotServiceIsScrollableTest : WebDriverTestBase() {
         )
         assertTrue(
             evaluateBoolean(
-                driver.cdp,
+                driver.browserProtocol,
                 """
                 (() => {
                   const outer = document.getElementById('outer_diff');
@@ -344,11 +344,11 @@ class SnapshotServiceIsScrollableTest : WebDriverTestBase() {
     @DisplayName("isScrollable null when scroll analysis disabled")
     fun isScrollableNullWhenScrollAnalysisDisabled() = runEnhancedWebDriverTest(testURL) { driver ->
         assertIs<PulsarWebDriver>(driver)
-        val service = CDPSnapshotService(driver.cdp)
+        val service = CDPSnapshotService(driver.browserProtocol)
 
         // Create a basic scrollable DIV
         runCatching {
-            driver.cdp.evaluate(
+            driver.browserProtocol.evaluate(
                 """
                 (function(){
                   const old = document.getElementById('scroll_disabled'); if (old) old.remove();
@@ -383,7 +383,7 @@ class SnapshotServiceIsScrollableTest : WebDriverTestBase() {
         // Wait for element
         repeat(30) {
             val ok = runCatching {
-                driver.cdp.evaluate("document.getElementById('scroll_disabled') != null")
+                driver.browserProtocol.evaluate("document.getElementById('scroll_disabled') != null")
             }.getOrNull()?.result?.value?.toString()?.equals("true", true) == true
             if (ok) return@repeat
             Thread.sleep(100)
@@ -396,8 +396,8 @@ class SnapshotServiceIsScrollableTest : WebDriverTestBase() {
         assertNull(node!!.isScrollable, "isScrollable should be null when includeScrollAnalysis=false")
     }
 
-    private suspend fun evaluateBoolean(cdp: CDP, expression: String): Boolean {
-        return runCatching { cdp.evaluate(expression) }
+    private suspend fun evaluateBoolean(browserProtocol: BrowserProtocol, expression: String): Boolean {
+        return runCatching { browserProtocol.evaluate(expression) }
             .getOrNull()
             ?.result
             ?.value

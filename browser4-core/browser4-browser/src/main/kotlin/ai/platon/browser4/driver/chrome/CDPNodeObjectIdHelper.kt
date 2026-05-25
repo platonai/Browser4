@@ -17,18 +17,18 @@ data class ResolvedNodeObjectId(
  * Resolves a [NodeRef] into a runtime object id.
  *
  * If the node already carries an object id, it is reused and the caller should not release it.
- * Otherwise a temporary object id is resolved via CDP DOM APIs and must be released by the caller.
+ * Otherwise a temporary object id is resolved via BrowserProtocol DOM APIs and must be released by the caller.
  */
-suspend fun resolveNodeObjectId(cdp: CDP, node: NodeRef): ResolvedNodeObjectId? {
+suspend fun resolveNodeObjectId(browserProtocol: BrowserProtocol, node: NodeRef): ResolvedNodeObjectId? {
     node.objectId?.let { return ResolvedNodeObjectId(it, false) }
 
-    if (!AppContext.isActive || !cdp.isOpen) {
+    if (!AppContext.isActive || !browserProtocol.isOpen) {
         return null
     }
 
     val objectId = when {
-        node.nodeId > 0 -> cdp.resolveNodeByNodeId(node.nodeId).objectId
-        node.backendNodeId > 0 -> cdp.resolveNodeByBackendNodeId(node.backendNodeId).objectId
+        node.nodeId > 0 -> browserProtocol.resolveNodeByNodeId(node.nodeId).objectId
+        node.backendNodeId > 0 -> browserProtocol.resolveNodeByBackendNodeId(node.backendNodeId).objectId
         else -> null
     }
 
@@ -38,28 +38,28 @@ suspend fun resolveNodeObjectId(cdp: CDP, node: NodeRef): ResolvedNodeObjectId? 
 /**
  * Releases a temporary runtime object id previously returned by [resolveNodeObjectId].
  */
-suspend fun releaseNodeObjectIfNeeded(cdp: CDP, resolved: ResolvedNodeObjectId?) {
-    if (resolved?.shouldRelease != true || !AppContext.isActive || !cdp.isOpen) {
+suspend fun releaseNodeObjectIfNeeded(browserProtocol: BrowserProtocol, resolved: ResolvedNodeObjectId?) {
+    if (resolved?.shouldRelease != true || !AppContext.isActive || !browserProtocol.isOpen) {
         return
     }
 
-    runCatching { cdp.releaseObject(resolved.objectId) }
+    runCatching { browserProtocol.releaseObject(resolved.objectId) }
 }
 
 /**
  * Resolves a node to a runtime object id, executes [block], and releases temporary objects automatically.
  */
 suspend inline fun <T> withNodeObjectId(
-    cdp: CDP,
+    browserProtocol: BrowserProtocol,
     node: NodeRef,
     block: suspend (String) -> T,
 ): T? {
-    val resolved = resolveNodeObjectId(cdp, node) ?: return null
+    val resolved = resolveNodeObjectId(browserProtocol, node) ?: return null
 
     return try {
         block(resolved.objectId)
     } finally {
-        releaseNodeObjectIfNeeded(cdp, resolved)
+        releaseNodeObjectIfNeeded(browserProtocol, resolved)
     }
 }
 

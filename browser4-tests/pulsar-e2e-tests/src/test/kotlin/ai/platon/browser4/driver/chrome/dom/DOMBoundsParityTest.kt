@@ -47,10 +47,10 @@ class DOMBoundsParityTest : WebDriverTestBase() {
         runEnhancedWebDriverTest(interactiveDynamicURL) { driver ->
             assertIs<PulsarWebDriver>(driver)
 
-            val service = CDPSnapshotService(driver.cdp)
+            val service = CDPSnapshotService(driver.browserProtocol)
 
             // Inject a simple layout with a known CSS box size
-            driver.cdp.evaluate(
+            driver.browserProtocol.evaluate(
                 """
             (function(){
               document.open();
@@ -93,10 +93,10 @@ class DOMBoundsParityTest : WebDriverTestBase() {
         runEnhancedWebDriverTest(interactiveDynamicURL) { driver ->
             assertIs<PulsarWebDriver>(driver)
 
-            val service = CDPSnapshotService(driver.cdp)
+            val service = CDPSnapshotService(driver.browserProtocol)
 
             // Build parent with an iframe using srcdoc (same-origin), scroll iframe content to 400
-            driver.cdp.evaluate(
+            driver.browserProtocol.evaluate(
                 """
             (function(){
               document.open();
@@ -175,10 +175,10 @@ class DOMBoundsParityTest : WebDriverTestBase() {
     fun iframeContentOutsideViewportIsNotVisible() = runEnhancedWebDriverTest(interactiveDynamicURL) { driver ->
         assertIs<PulsarWebDriver>(driver)
 
-        val service = CDPSnapshotService(driver.cdp)
+        val service = CDPSnapshotService(driver.browserProtocol)
 
         // Large content inside iframe without sufficient scroll to reveal inner2
-        driver.cdp.evaluate(
+        driver.browserProtocol.evaluate(
             """
             (function(){
               document.open();

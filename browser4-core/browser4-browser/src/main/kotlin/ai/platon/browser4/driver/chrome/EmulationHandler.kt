@@ -72,22 +72,22 @@ internal fun normalizeKeyStringForPress(keyString: String): String {
  * @author Vincent Zhang, ivincent.zhang@gmail.com, platon.ai
  */
 class ClickableDOM(
-    val cdp: CDP,
+    val browserProtocol: BrowserProtocol,
     val node: NodeRef,
     val offset: OffsetD? = null
 ) {
     companion object {
-        fun create(cdp: CDP?, node: NodeRef?, offset: OffsetD? = null): ClickableDOM? {
+        fun create(browserProtocol: BrowserProtocol?, node: NodeRef?, offset: OffsetD? = null): ClickableDOM? {
             if (node == null) return null
-            if (cdp == null) return null
-            return ClickableDOM(cdp, node, offset)
+            if (browserProtocol == null) return null
+            return ClickableDOM(browserProtocol, node, offset)
         }
     }
 
     suspend fun clickablePoint(): DescriptiveResult<PointD> {
         val contentQuads = runCatching {
             // dom.getContentQuads(node.nodeId, node.backendNodeId, node.objectId)
-            cdp.getContentQuads(node.nodeId)
+            browserProtocol.getContentQuads(node.nodeId)
         }
             .onFailure { getLogger(this).warn("Failed to get content quads for node ${node.nodeId}", it) }
             .getOrNull()
@@ -97,7 +97,7 @@ class ClickableDOM(
             return DescriptiveResult("error:notvisible")
         }
 
-        val layoutMetrics = cdp.getLayoutMetrics()
+        val layoutMetrics = browserProtocol.getLayoutMetrics()
 
         val viewport = layoutMetrics.cssLayoutViewport
 
@@ -151,7 +151,7 @@ class ClickableDOM(
 
     suspend fun boundingBox(): RectD? {
         // Only provide nodeId to satisfy the "exactly one id" requirement
-        val box = cdp.getBoxModel(node.nodeId)
+        val box = browserProtocol.getBoxModel(node.nodeId)
 
         val quad = box.border.takeIf { it.isNotEmpty() } ?: return null
 
@@ -210,7 +210,7 @@ class ClickableDOM(
  *
  * @author Vincent Zhang, ivincent.zhang@gmail.com, platon.ai
  */
-class Mouse(private val cdp: CDP) {
+class Mouse(private val browserProtocol: BrowserProtocol) {
     var currentX = 0.0
     var currentY = 0.0
 
@@ -268,7 +268,7 @@ class Mouse(private val cdp: CDP) {
     }
 
     private suspend fun cdpMoveTo(x: Double, y: Double) {
-        cdp.dispatchMouseMoved(x, y, buttonsState)
+        browserProtocol.dispatchMouseMoved(x, y, buttonsState)
     }
 
     /**
@@ -296,7 +296,7 @@ class Mouse(private val cdp: CDP) {
     suspend fun down(x: Double, y: Double, clickCount: Int = 1, modifiers: Int? = null) {
         // Update buttons bitfield to include left button (1)
         buttonsState = buttonsState or 1
-        cdp.dispatchMousePressed(x, y, clickCount, modifiers, buttonsState)
+        browserProtocol.dispatchMousePressed(x, y, clickCount, modifiers, buttonsState)
     }
 
     suspend fun up() {
@@ -310,11 +310,11 @@ class Mouse(private val cdp: CDP) {
     suspend fun up(x: Double, y: Double, clickCount: Int = 1, modifiers: Int? = null) {
         // Update buttons bitfield to reflect release of left button
         buttonsState = buttonsState and 1.inv()
-        cdp.dispatchMouseReleased(x, y, clickCount, modifiers, buttonsState)
+        browserProtocol.dispatchMouseReleased(x, y, clickCount, modifiers, buttonsState)
     }
 
     suspend fun scroll(deltaX: Double = 0.0, deltaY: Double = 10.0) {
-        cdp.dispatchMouseWheel(currentX, currentY, deltaX, deltaY)
+        browserProtocol.dispatchMouseWheel(currentX, currentY, deltaX, deltaY)
     }
 
     /**
@@ -377,7 +377,7 @@ class Mouse(private val cdp: CDP) {
      * @param y Y coordinate
      */
     suspend fun wheel(x: Double, y: Double, deltaX: Double, deltaY: Double) {
-        cdp.dispatchMouseWheel(x, y, deltaX, deltaY)
+        browserProtocol.dispatchMouseWheel(x, y, deltaX, deltaY)
     }
 
     /**
@@ -389,8 +389,8 @@ class Mouse(private val cdp: CDP) {
     suspend fun drag(start: PointD, target: PointD): DragData? {
         var dragData: DragData? = null
 
-        cdp.setInterceptDrags(true)
-        cdp.onDragIntercepted { event ->
+        browserProtocol.setInterceptDrags(true)
+        browserProtocol.onDragIntercepted { event ->
             dragData = event.data
         }
 
@@ -401,14 +401,14 @@ class Mouse(private val cdp: CDP) {
 
             // Wait a bit for the drag event to be intercepted
             // The event should fire during the moveTo operations, but add a small buffer
-            // to account for CDP event delivery latency
+            // to account for BrowserProtocol event delivery latency
             if (dragData == null) {
                 delay(100.milliseconds)
             }
         } finally {
             // Always release button and disable interception
             runCatching { up() }
-            runCatching { cdp.setInterceptDrags(false) }
+            runCatching { browserProtocol.setInterceptDrags(false) }
         }
 
         return dragData
@@ -420,7 +420,7 @@ class Mouse(private val cdp: CDP) {
      * @param data - drag data containing items and operations mask
      */
     suspend fun dragEnter(target: PointD, data: DragData) {
-        cdp.dispatchDragEvent(
+        browserProtocol.dispatchDragEvent(
             DispatchDragEventType.DRAG_ENTER, target.x, target.y,
             data
         )
@@ -432,7 +432,7 @@ class Mouse(private val cdp: CDP) {
      * @param data - drag data containing items and operations mask
      */
     suspend fun dragOver(target: PointD, data: DragData) {
-        cdp.dispatchDragEvent(
+        browserProtocol.dispatchDragEvent(
             DispatchDragEventType.DRAG_OVER, target.x, target.y,
             data
         )
@@ -444,7 +444,7 @@ class Mouse(private val cdp: CDP) {
      * @param data - drag data containing items and operations mask
      */
     suspend fun drop(target: PointD, data: DragData) {
-        cdp.dispatchDragEvent(
+        browserProtocol.dispatchDragEvent(
             DispatchDragEventType.DROP, target.x, target.y,
             data
         )
@@ -480,7 +480,7 @@ class Mouse(private val cdp: CDP) {
 /**
  * Keyboard provides an api for managing a virtual keyboard.
  * */
-class Keyboard(private val cdp: CDP) {
+class Keyboard(private val browserProtocol: BrowserProtocol) {
     private val pressedModifiers = mutableSetOf<String>()
     private val pressedKeys = mutableSetOf<String>()
 
@@ -489,7 +489,7 @@ class Keyboard(private val cdp: CDP) {
             if (Character.isISOControl(char)) {
                 press("$char", delayMillis)
             } else {
-                cdp.insertText("$char")
+                browserProtocol.insertText("$char")
             }
 
             if (delayMillis > 0) {
@@ -557,7 +557,7 @@ class Keyboard(private val cdp: CDP) {
         try {
             val autoRepeat = pressedKeys.contains(baseVirtualKey.code)
             pressedKeys.add(baseVirtualKey.code)
-            cdp.dispatchKeyEvent(
+            browserProtocol.dispatchKeyEvent(
                 type = DispatchKeyEventType.KEY_DOWN,
                 modifiers = toModifiersMask(pressedModifiers),
                 windowsVirtualKeyCode = baseVirtualKey.keyCodeWithoutLocation,
@@ -571,7 +571,7 @@ class Keyboard(private val cdp: CDP) {
                 commands = emptyList(),
             )
             delay(delayMillis.coerceAtLeast(60).milliseconds)
-            cdp.dispatchKeyEvent(
+            browserProtocol.dispatchKeyEvent(
                 type = DispatchKeyEventType.KEY_UP,
                 modifiers = toModifiersMask(pressedModifiers),
                 windowsVirtualKeyCode = baseVirtualKey.keyCodeWithoutLocation,
@@ -694,7 +694,7 @@ class Keyboard(private val cdp: CDP) {
 
         val type = if (key.text.isEmpty()) DispatchKeyEventType.RAW_KEY_DOWN else DispatchKeyEventType.KEY_DOWN
         val commands = emptyList<String>()
-        cdp.dispatchKeyEvent(
+        browserProtocol.dispatchKeyEvent(
             type = type,
             modifiers = toModifiersMask(modifiers),
             windowsVirtualKeyCode = key.keyCodeWithoutLocation,
@@ -718,7 +718,7 @@ class Keyboard(private val cdp: CDP) {
         }
         pressedKeys.remove(key.code)
 
-        cdp.dispatchKeyEvent(
+        browserProtocol.dispatchKeyEvent(
             type = DispatchKeyEventType.KEY_UP,
             modifiers = toModifiersMask(modifiers),
             key = key.key,
@@ -730,7 +730,7 @@ class Keyboard(private val cdp: CDP) {
 }
 
 class EmulationHandler(
-    private val cdp: CDP,
+    private val browserProtocol: BrowserProtocol,
     private val keyboard: Keyboard?,
     private val mouse: Mouse?,
 ) {
@@ -762,7 +762,7 @@ class EmulationHandler(
      */
     suspend fun hover(node: NodeRef, position: String = "center") {
         val m = mouse ?: return
-        if (!cdp.isOpen) {
+        if (!browserProtocol.isOpen) {
             return
         }
 
@@ -770,7 +770,7 @@ class EmulationHandler(
         val point = getInteractPoint(node, position, useRandomOffset = false) ?: return
 
         // Get bounding box to calculate a point outside the element
-        val clickableDOM = ClickableDOM.create(cdp, node, null) ?: return
+        val clickableDOM = ClickableDOM.create(browserProtocol, node, null) ?: return
         val box = runCatching { clickableDOM.boundingBox() }
             .onFailure { logger.warn("Failed to get bounding box for hover", it) }
             .getOrNull()
@@ -809,11 +809,11 @@ class EmulationHandler(
         val minDeltaY = 1.0
         val normalizedPosition = position.trim().lowercase()
 
-        if (!cdp.isOpen) {
+        if (!browserProtocol.isOpen) {
             return null
         }
 
-        val clickableDOM = ClickableDOM.create(cdp, node, offset) ?: return null
+        val clickableDOM = ClickableDOM.create(browserProtocol, node, offset) ?: return null
         val point = clickableDOM.clickablePoint().value ?: return null
 
         val box = runCatching { clickableDOM.boundingBox() }
@@ -870,7 +870,7 @@ class EmulationHandler(
         if (normModifier != null && kb != null) {
             val virtualKey = kb.createVirtualKeyForSingleKeyString(normModifier)
             if (virtualKey.isModifier) {
-                // Use CDP-compliant modifier bitmask for mouse events
+                // Use BrowserProtocol-compliant modifier bitmask for mouse events
                 cdpModifiers = modifierMaskForKeyString(normModifier.name)
                 if (!modifier.equals(mappedModifierName, true)) {
                     logger.info(
@@ -913,7 +913,7 @@ class EmulationHandler(
         val clickCount = max(1, count)
         val modifierState = buildMouseModifierState(modifier)
 
-        return withNodeObjectId(cdp, node) { objectId ->
+        return withNodeObjectId(browserProtocol, node) { objectId ->
             m.moveTo(point)
             if (delayMillis > 0) {
                 delay(delayMillis.milliseconds)
@@ -966,7 +966,7 @@ class EmulationHandler(
                 }
             """.trimIndent()
 
-            cdp.callFunctionOn(
+            browserProtocol.callFunctionOn(
                 script,
                 objectId = objectId,
                 returnByValue = true,

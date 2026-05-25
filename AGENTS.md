@@ -153,7 +153,7 @@ To keep iteration fast, **don’t run full test suites by default**.
 - Default: `./mvnw` compile with tests skipped
 - Then: run the **smallest relevant** test scope (module/class) when logic changes
 - Upgrade scope when risk increases (cross-module, public API/DTO/serialization, Spring wiring, dependency bumps,
-  concurrency/I/O, browser/CDP lifecycle)
+  concurrency/I/O, browser/BrowserProtocol lifecycle)
 - Test scheduling is tag-driven; reuse the dimensions in `docs/TESTING.md` (`Unit`/`Integration`/`E2E`/`SDK`, `Fast`/`Slow`/`Heavy`, `Requires*`, `ManualOnly`) instead of inventing new tags
 
 See [TESTING.md](docs/TESTING.md) for details and trade-offs.
@@ -239,7 +239,7 @@ browser.display.mode=GUI  # GUI | HEADLESS | SUPERVISED
 | JDK version mismatch | Ensure JDK 17+ in `JAVA_HOME`                               |
 | Windows parameter escaping | Use `-D"key.with.dots=value"`                               |
 | Port 8182 in use | Override `server.port` or use root `application.properties` |
-| CDP retry log storms | Use existing retry utilities, lower log level               |
+| BrowserProtocol retry log storms | Use existing retry utilities, lower log level               |
 
 ## Documentation References
 
@@ -365,7 +365,7 @@ skillRegistry.register(CustomTool())
 - **Input Validation** - Always validate URLs and user inputs
 - **API Keys** - Never hardcode, use configuration
 - **XSS Prevention** - Sanitize extracted content
-- **CDP Security** - Handle Chrome DevTools Protocol errors gracefully
+- **BrowserProtocol Security** - Handle Chrome DevTools Protocol errors gracefully
 
 ### Debugging with Claude
 

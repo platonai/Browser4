@@ -26,7 +26,7 @@ import ai.platon.cdt.kt.protocol.types.runtime.CallFunctionOn
 import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
 
 /**
- * CDP is the single access point for all Chrome DevTools Protocol (CDP) domain APIs.
+ * BrowserProtocol is the single access point for all Chrome DevTools Protocol (BrowserProtocol) domain APIs.
  *
  * All direct usage of [ai.platon.cdt.kt.protocol.ChromeDevTools] should go through this class to improve
  * maintainability and provide a consistent, centralized interface.
@@ -462,5 +462,3 @@ class BrowserProtocol(
         remoteDevToolsOrNull?.close()
     }
 }
-
-typealias CDP = BrowserProtocol

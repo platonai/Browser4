@@ -43,7 +43,7 @@ class SnapshotServiceE2ETest : WebDriverTestBase() {
         driver.waitForSelector("h1")
         driver.bringToFront()
 
-        val service = CDPSnapshotService(driver.cdp)
+        val service = CDPSnapshotService(driver.browserProtocol)
 
         val options = SnapshotOptions(
             maxDepth = 1000,
@@ -57,11 +57,11 @@ class SnapshotServiceE2ETest : WebDriverTestBase() {
             includeInteractivity = true
         )
 
-        runCatching { driver.cdp.evaluate("generateLargeList(100)") }
+        runCatching { driver.browserProtocol.evaluate("generateLargeList(100)") }
         var hasVirtualItems = false
         for (attempt in 0 until 30) {
             hasVirtualItems = runCatching {
-                driver.cdp.evaluate(
+                driver.browserProtocol.evaluate(
                     "document.querySelectorAll('#virtualScrollContent [data-testid^=\"tta-virtual-\"]').length >= 3"
                 )
             }.getOrNull()?.result?.value?.toString()?.equals("true", ignoreCase = true) == true

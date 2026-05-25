@@ -1,6 +1,6 @@
 package ai.platon.browser4.driver
 
-import ai.platon.browser4.driver.chrome.CDP
+import ai.platon.browser4.driver.chrome.BrowserProtocol
 import ai.platon.browser4.driver.chrome.ChromeLauncher
 import ai.platon.browser4.driver.chrome.common.ChromeOptions
 import ai.platon.browser4.driver.chrome.common.LauncherOptions
@@ -65,10 +65,10 @@ class ChromeImplLauncherTest {
             println(versionString)
 
             val devTools = chrome.createDevTools(tab)
-            val cdp = CDP(devTools)
+            val browserProtocol = BrowserProtocol(devTools)
             runBlocking {
-                cdp.pageEnable()
-                cdp.navigate("https://vercel.com/")
+                browserProtocol.pageEnable()
+                browserProtocol.navigate("https://vercel.com/")
             }
 
             sleepSeconds(2)

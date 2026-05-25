@@ -560,7 +560,7 @@ async fn handle_open(
                         false,
                     ));
                 }
-                // The browser context was not ready yet (CDP initialization race).
+                // The browser context was not ready yet (BrowserProtocol initialization race).
                 // Or the reused saved session no longer has a usable browser tab.
                 // Close the failed session, create a fresh one, and retry navigation.
                 let _ = call_tool(

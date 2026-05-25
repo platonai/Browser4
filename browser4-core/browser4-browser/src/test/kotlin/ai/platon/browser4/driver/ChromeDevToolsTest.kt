@@ -1,6 +1,6 @@
 package ai.platon.browser4.driver
 
-import ai.platon.browser4.driver.chrome.CDP
+import ai.platon.browser4.driver.chrome.BrowserProtocol
 import ai.platon.browser4.driver.chrome.ChromeLauncher
 import ai.platon.browser4.driver.chrome.RemoteChrome
 import ai.platon.browser4.driver.chrome.RemoteDevTools
@@ -20,7 +20,7 @@ class ChromeDevToolsTest {
     private lateinit var launcher: ChromeLauncher
     private lateinit var chrome: RemoteChrome
     private lateinit var devTools: RemoteDevTools
-    private lateinit var cdp: CDP
+    private lateinit var browserProtocol: BrowserProtocol
 
     @BeforeTest
     fun createDevTools() {
@@ -35,9 +35,9 @@ class ChromeDevToolsTest {
         assertTrue(versionString.contains("Mozilla"))
 
         devTools = chrome.createDevTools(tab)
-        cdp = CDP(devTools)
+        browserProtocol = BrowserProtocol(devTools)
 
-        runBlocking { cdp.pageEnable() }
+        runBlocking { browserProtocol.pageEnable() }
     }
 
     @AfterTest
@@ -49,8 +49,8 @@ class ChromeDevToolsTest {
     @Test
     fun testDevTools() {
         runBlocking {
-            cdp.navigate("https://vercel.com/")
-            val navigate = cdp.navigate("https://www.example.com/")
+            browserProtocol.navigate("https://vercel.com/")
+            val navigate = browserProtocol.navigate("https://www.example.com/")
             assertNotNull(navigate)
         }
 
