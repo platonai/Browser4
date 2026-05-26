@@ -484,6 +484,9 @@ class MCPToolController(
             ?: throw IllegalArgumentException(MCPConstants.ERROR_MISSING_TOOL)
         val arguments =
             step[MCPConstants.KEY_ARGUMENTS].toAnyMap().orEmpty() + (MCPConstants.KEY_SESSION_ID to sessionId)
+
+        logger.info("Calling batch tool step: $index " + tool + " " + arguments.entries.joinToString(" ") { "--" + it.key + "=" + it.value })
+
         val text = executeAgentToolText(tool, arguments)
 
         return BatchExecutionResult(index = index, ok = true, text = text.ifBlank { null })
