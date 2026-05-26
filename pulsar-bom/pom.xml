@@ -16,7 +16,7 @@
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>pulsar-bom</artifactId>
     <name>Pulsar BOM</name>
-    <version>4.7.12-SNAPSHOT</version>
+    <version>4.7.13-SNAPSHOT</version>
 
     <packaging>pom</packaging>
 

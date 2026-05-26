@@ -15,7 +15,7 @@
     <parent>
         <groupId>ai.platon.pulsar</groupId>
         <artifactId>pulsar-core-tests</artifactId>
-        <version>4.7.12-SNAPSHOT</version>
+        <version>4.7.13-SNAPSHOT</version>
     </parent>
 
     <artifactId>pulsar-ql-tests</artifactId>
