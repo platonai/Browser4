@@ -70,6 +70,18 @@ mvnw.cmd -q -DskipTests
 - Windows: `bin/build.ps1 [-test]`
 - Linux/macOS: `bin/build.sh [-test]`
 
+> **Note for Linux/macOS:** Many scripts in this repo are PowerShell (`.ps1`) files (e.g., `bin/test.ps1`, `bin/build.ps1`). To run them on Linux/macOS, install PowerShell if not already installed, then use `pwsh`:
+> ```bash
+> # Install PowerShell (Ubuntu/Debian)
+> sudo apt-get install -y powershell
+> # Or via snap
+> sudo snap install powershell --classic
+>
+> # Run a PowerShell script
+> pwsh bin/test.ps1 fast
+> pwsh bin/build.ps1 -test
+> ```
+
 ## Project Structure
 
 | Module                                 | Description |
@@ -235,6 +247,7 @@ browser.display.mode=GUI  # GUI | HEADLESS | SUPERVISED
 
 | Issue | Solution                                                    |
 |-------|-------------------------------------------------------------|
+| `.ps1` scripts don't run on Linux | Install PowerShell: `sudo apt-get install -y powershell`, then `pwsh script.ps1` |
 | `mvnw` no execute permission | `chmod +x mvnw`                                             |
 | JDK version mismatch | Ensure JDK 17+ in `JAVA_HOME`                               |
 | Windows parameter escaping | Use `-D"key.with.dots=value"`                               |
