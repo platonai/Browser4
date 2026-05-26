@@ -121,4 +121,4 @@ $MvnOptions += 'install'
 $MvnOptions += $AdditionalMvnArgs
 Invoke-MavenBuild -Directory $repoRoot -BuildArgs $MvnOptions
 Copy-Browser4JarToTarget -RepoRoot $repoRoot
-Invoke-CargoBuild -Directory (Join-Path $repoRoot 'sdks\browser4-cli') -RunTests (-not $SkipTests)
+Invoke-CargoBuild -Directory (Join-Path $repoRoot 'cli\browser4-cli') -RunTests (-not $SkipTests)
