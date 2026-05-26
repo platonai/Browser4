@@ -639,7 +639,7 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
     @Test
     @Tag("RequiresAI")
     @DisplayName("agent extract and summarize work through MCP")
-    fun testAgentTools() {
+    fun testAgentExtractAndSummarizeTools() {
         Assumptions.assumeTrue(ChatModelFactory.isModelConfigured(conf))
 
         val sessionId = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)

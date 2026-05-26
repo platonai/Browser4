@@ -167,6 +167,11 @@ class RobustRPC(
 
     @Throws(BrowserUnavailableException::class, WebDriverUnavailableException::class)
     private fun checkHealthy(driver: WebDriver): Boolean {
+        require(driver is AbstractWebDriver)
+        if (!driver.isActive || driver.isQuit || driver.isCanceled || driver.isRetired) {
+            return false
+        }
+
         val browser = driver.browser
         var healthy = browser.healthy()
         if (!healthy) {
