@@ -347,3 +347,7 @@ browser4-cli tab-select 0
 browser4-cli snapshot
 browser4-cli close
 ```
+
+## Specific tasks
+
+* **Storage state (cookies, localStorage)** [references/storage-state.md](references/storage-state.md)
