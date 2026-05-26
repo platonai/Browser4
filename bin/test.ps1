@@ -34,7 +34,7 @@ function Print-Usage {
     Write-Host "  fast        Run fast unit tests only"
     Write-Host "  it          Run integration tests"
     Write-Host "  e2e         Run end-to-end tests"
-    Write-Host "  cli         Run Rust Browser4 CLI tests from sdks\browser4-cli"
+    Write-Host "  cli         Run Rust Browser4 CLI tests from cli\browser4-cli"
     Write-Host "  mocksite    Launch MockSiteBoot from browser4-tests\browser4-rest-tests"
     Write-Host "  rest        Run REST module tests"
     Write-Host "  skills      Run skills-focused agentic tests"
@@ -151,7 +151,7 @@ function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
 }
 
 function Invoke-Browser4CliTests([string[]]$additionalArgs) {
-    $browser4CliDir = Join-Path $repoRoot 'sdks\browser4-cli'
+    $browser4CliDir = Join-Path $repoRoot 'cli\browser4-cli'
 
     Write-Host "=========================================="
     Write-Host "Running Browser4 CLI tests..."
