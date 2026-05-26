@@ -59,8 +59,35 @@ class SessionManager(
 
     private val sessions = ConcurrentHashMap<String, ManagedSession>()
 
+    /**
+     * The default session is a special session that can be accessed without specifying a session ID.
+     * It is created on demand and shared across all requests that do not specify a session ID.
+     * The profile mode is pinned to DEFAULT.
+     * */
+    fun defaultSession(capabilities: Map<String, Any?>? = null): ManagedSession {
+        return getOrCreateSessionById(DEFAULT_SESSION_ID, capabilities)
+    }
+
+    /**
+     * The swarm session is a special session that used for swarm use cases. It is created on demand and shared
+     * across all requests that specify the swarm session ID. The profile mode is pinned to SEQUENTIAL or TEMPORARY
+     * based on the input capabilities, but defaults to SEQUENTIAL if not specified or invalid. The swarm session
+     * is designed to be shared across multiple requests, so it should not be recreated if it already exists.
+     * The capabilities can be used to create the swarm session profile if the swarm session does not exist,
+     * or will be ignored if the swarm session is already exists.
+     *
+     * The swarm session may launch multiple browser contexts, each browser context isolated and has its own profile,
+     * but all browser contexts share the same session-level profile which is determined by the profile mode.
+     * */
+    fun swarmSession(capabilities: Map<String, Any?>? = null): ManagedSession {
+        return getOrCreateSessionById(SWARM_SESSION_ID, capabilities)
+    }
+
+    /**
+     *
+     * */
     fun getOrCreateSessionById(sessionId: String, capabilities: Map<String, Any?>? = null): ManagedSession {
-        val normalizedCapabilities = normalizeCapabilities(capabilities)
+        val normalizedCapabilities = normalizeCapabilities(sessionId, capabilities)
         val session = sessions.computeIfAbsent(sessionId) {
             createManagedSession(sessionId, normalizedCapabilities)
         }
@@ -78,9 +105,15 @@ class SessionManager(
      * @return The created managed session.
      */
     fun getOrCreateSession(capabilities: Map<String, Any?>? = null): ManagedSession {
-        val normalizedCapabilities = normalizeCapabilities(capabilities)
+        val normalizedCapabilities = normalizeCapabilities(capabilities = capabilities)
         val sessionId = normalizedCapabilities.getValue(SESSION_ID_CAPABILITY).toString()
-        return getOrCreateSessionById(sessionId, normalizedCapabilities)
+        val session = sessions.computeIfAbsent(sessionId) {
+            createManagedSession(sessionId, normalizedCapabilities)
+        }
+
+        val activeSession = resolveHealthySession(sessionId, normalizedCapabilities, session)
+        activeSession.lastAccessedAt = System.currentTimeMillis()
+        return activeSession
     }
 
     fun checkHealthy(session: ManagedSession): Boolean {
@@ -199,21 +232,37 @@ class SessionManager(
         session.status = "stopped"
     }
 
-    private fun normalizeCapabilities(capabilities: Map<String, Any?>?): Map<String, Any?> {
+    private fun normalizeCapabilities(
+        explicitSessionId: String? = null,
+        capabilities: Map<String, Any?>?,
+    ): Map<String, Any?> {
         val normalizedCapabilities = LinkedHashMap(capabilities.orEmpty())
+        val hasExplicitSessionId = !explicitSessionId.isNullOrBlank()
         val requestedSessionId = normalizedCapabilities[SESSION_ID_CAPABILITY]?.toString()?.trim()
-        val sessionId = if (requestedSessionId.isNullOrBlank() || requestedSessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true)) {
-            DEFAULT_SESSION_ID
-        } else {
-            requestedSessionId
+        val sessionId = when {
+            explicitSessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) -> DEFAULT_SESSION_ID
+            explicitSessionId.equals(SWARM_SESSION_ID, ignoreCase = true) -> SWARM_SESSION_ID
+            hasExplicitSessionId -> requireNotNull(explicitSessionId).trim()
+            requestedSessionId.isNullOrBlank() || requestedSessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) -> DEFAULT_SESSION_ID
+            requestedSessionId.equals(SWARM_SESSION_ID, ignoreCase = true) -> SWARM_SESSION_ID
+            else -> requestedSessionId
         }
+
+        val requestedProfileMode = BrowserProfileMode.fromString(
+            normalizedCapabilities[PROFILE_MODE_CAPABILITY]?.toString()
+        )
 
         normalizedCapabilities[SESSION_ID_CAPABILITY] = sessionId
         normalizedCapabilities[PROFILE_MODE_CAPABILITY] = when {
-            normalizedCapabilities[PROFILE_MODE_CAPABILITY]?.toString()
-                ?.equals(BrowserProfileMode.SEQUENTIAL.name, ignoreCase = true) == true -> BrowserProfileMode.SEQUENTIAL
-
+            sessionId.equals(SWARM_SESSION_ID, ignoreCase = true) -> when (requestedProfileMode) {
+                BrowserProfileMode.TEMPORARY -> BrowserProfileMode.TEMPORARY
+                BrowserProfileMode.SEQUENTIAL -> BrowserProfileMode.SEQUENTIAL
+                else -> BrowserProfileMode.SEQUENTIAL
+            }
+            hasExplicitSessionId && sessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) -> BrowserProfileMode.DEFAULT
+            sessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) && requestedProfileMode == BrowserProfileMode.SEQUENTIAL -> BrowserProfileMode.SEQUENTIAL
             sessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) -> BrowserProfileMode.DEFAULT
+            requestedProfileMode == BrowserProfileMode.SEQUENTIAL -> BrowserProfileMode.SEQUENTIAL
             else -> BrowserProfileMode.SEQUENTIAL
         }.name
 
@@ -232,6 +281,7 @@ class SessionManager(
         } else {
             sessions[sessionId]?.let { existingSession ->
                 val normalizedCapabilities = normalizeCapabilities(
+                    sessionId,
                     existingSession.capabilities ?: mapOf(SESSION_ID_CAPABILITY to existingSession.sessionId)
                 )
                 resolveHealthySession(sessionId, normalizedCapabilities, existingSession)

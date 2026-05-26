@@ -89,6 +89,37 @@ class SessionManagerTest {
     }
 
     @Test
+    fun getOrCreateSessionByIdUsesExplicitSessionIdWhenCapabilitiesAreMissing() {
+        val session = sessionManager.getOrCreateSessionById("team-f")
+
+        assertEquals("team-f", session.sessionId)
+        assertEquals("team-f", session.capabilities?.get("sessionId"))
+        assertEquals("SEQUENTIAL", session.capabilities?.get("profileMode"))
+    }
+
+    @Test
+    fun swarmSessionDefaultsToSequentialProfileMode() {
+        val session = sessionManager.swarmSession()
+
+        assertEquals(SessionManager.SWARM_SESSION_ID, session.sessionId)
+        assertEquals(SessionManager.SWARM_SESSION_ID, session.capabilities?.get("sessionId"))
+        assertEquals("SEQUENTIAL", session.capabilities?.get("profileMode"))
+    }
+
+    @Test
+    fun swarmSessionPreservesTemporaryProfileMode() {
+        val session = sessionManager.swarmSession(
+            mapOf(
+                "profileMode" to "temporary",
+            )
+        )
+
+        assertEquals(SessionManager.SWARM_SESSION_ID, session.sessionId)
+        assertEquals(SessionManager.SWARM_SESSION_ID, session.capabilities?.get("sessionId"))
+        assertEquals("TEMPORARY", session.capabilities?.get("profileMode"))
+    }
+
+    @Test
     fun getAllSessionsDoesNotCreateDefaultSessionOnDemand() {
         val sessions = sessionManager.getAllSessions()
 

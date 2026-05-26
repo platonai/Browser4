@@ -7,7 +7,6 @@ import ai.platon.pulsar.agentic.tools.advanced.crawl.StatefulPageVisitor
 import ai.platon.pulsar.agentic.tools.advanced.crawl.failed
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.SessionManager
-import ai.platon.pulsar.common.SessionManager.Companion.DEFAULT_SESSION_ID
 import ai.platon.pulsar.common.Strings
 import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.rest.api.entities.CommandResult
@@ -43,7 +42,8 @@ class CommandRunner(
         const val FLOW_POLLING_INTERVAL = 1000L
     }
 
-    val session get() = sessionManager.getOrCreateSessionById(DEFAULT_SESSION_ID).agenticSession
+    // Discus: CommandRunner works on any sessions with permanent profiles
+    val session get() = sessionManager.defaultSession().agenticSession
 
     // Create a dedicated dispatcher for long-running command operations
     private val commandDispatcher = Dispatchers.IO.limitedParallelism(10)
