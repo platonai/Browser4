@@ -97,6 +97,7 @@ class PulsarWebDriver constructor(
             return false
         }
 
+        // Must not dependent on WebDriver which causes cyclic function calls
         return runCatching { runBlocking { browserProtocol.mainFrame() } }.isSuccess
     }
 
