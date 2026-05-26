@@ -97,7 +97,7 @@ class PulsarWebDriver constructor(
             return false
         }
 
-        return runCatching { runBlocking { currentUrl() } }.isSuccess
+        return runCatching { runBlocking { browserProtocol.mainFrame() } }.isSuccess
     }
 
     override suspend fun addBlockedURLs(urlPatterns: List<String>) {
