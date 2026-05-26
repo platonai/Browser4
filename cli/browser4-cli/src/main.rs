@@ -29,7 +29,7 @@ use std::path::PathBuf;
 
 use base64::Engine;
 use reqwest::Client;
-use serde::Deserialize;
+use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Value};
 
 use args::{
@@ -76,6 +76,21 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "screenshot",
         "state-save",
         "state-load",
+        "cookie-list",
+        "cookie-get",
+        "cookie-set",
+        "cookie-delete",
+        "cookie-clear",
+        "localstorage-list",
+        "localstorage-get",
+        "localstorage-set",
+        "localstorage-delete",
+        "localstorage-clear",
+        "sessionstorage-list",
+        "sessionstorage-get",
+        "sessionstorage-set",
+        "sessionstorage-delete",
+        "sessionstorage-clear",
         "pdf",
         "agent-run",
         "agent-status",
@@ -821,6 +836,169 @@ struct StorageStateLoadSummary {
     local_storage_entries: usize,
 }
 
+#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
+struct StorageLookupResult {
+    #[serde(default)]
+    found: bool,
+    #[serde(default)]
+    value: String,
+}
+
+#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
+struct StorageDeleteResult {
+    #[serde(default)]
+    existed: bool,
+}
+
+#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
+struct StorageClearResult {
+    #[serde(default)]
+    cleared: usize,
+}
+
+fn parse_json_output<T: DeserializeOwned>(value: &str, context: &str) -> Result<T, String> {
+    serde_json::from_str(value).map_err(|e| format!("Failed to parse {context}: {e}"))
+}
+
+async fn call_session_tool(
+    client: &Client,
+    base_url: &str,
+    session_name: Option<&str>,
+    tool_name: &str,
+    tool_params: Value,
+) -> Result<String, String> {
+    with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let tool_name = tool_name.to_string();
+        let tool_params = tool_params.clone();
+        async move {
+            let mut payload = tool_params;
+            payload["sessionId"] = json!(session_id);
+            call_tool(&client, &base_url, &tool_name, payload).await
+        }
+    })
+    .await
+}
+
+async fn current_session_storage_state(
+    client: &Client,
+    base_url: &str,
+    session_name: Option<&str>,
+) -> Result<Value, String> {
+    let response = call_session_tool(
+        client,
+        base_url,
+        session_name,
+        "browser_save_storage_state",
+        json!({}),
+    )
+    .await?;
+    parse_json_output(&response, "storage state JSON")
+}
+
+async fn current_session_url(
+    client: &Client,
+    base_url: &str,
+    session_name: Option<&str>,
+) -> Result<String, String> {
+    call_session_tool(client, base_url, session_name, "current_url", json!({})).await
+}
+
+fn storage_area_label(storage_area: &str) -> &'static str {
+    match storage_area {
+        "localStorage" => "localStorage",
+        "sessionStorage" => "sessionStorage",
+        _ => "storage",
+    }
+}
+
+fn build_storage_list_expression(storage_area: &str) -> String {
+    format!(
+        "(() => {{ \
+            const storage = window.{storage_area}; \
+            const entries = []; \
+            for (let index = 0; index < storage.length; index += 1) {{ \
+                const name = storage.key(index); \
+                if (name == null) continue; \
+                entries.push({{ name, value: storage.getItem(name) ?? '' }}); \
+            }} \
+            return JSON.stringify(entries); \
+        }})()"
+    )
+}
+
+fn build_storage_get_expression(storage_area: &str, key: &str) -> Result<String, String> {
+    let key_json = serde_json::to_string(key).map_err(|e| format!("Failed to encode key: {e}"))?;
+    Ok(format!(
+        "(() => {{ \
+            const storage = window.{storage_area}; \
+            const key = {key_json}; \
+            const value = storage.getItem(key); \
+            return JSON.stringify({{ found: value !== null, value: value ?? '' }}); \
+        }})()"
+    ))
+}
+
+fn build_storage_set_expression(
+    storage_area: &str,
+    key: &str,
+    value: &str,
+) -> Result<String, String> {
+    let key_json = serde_json::to_string(key).map_err(|e| format!("Failed to encode key: {e}"))?;
+    let value_json =
+        serde_json::to_string(value).map_err(|e| format!("Failed to encode value: {e}"))?;
+    Ok(format!(
+        "(() => {{ \
+            const storage = window.{storage_area}; \
+            const key = {key_json}; \
+            const value = {value_json}; \
+            storage.setItem(key, value); \
+            return JSON.stringify({{ found: true, value: storage.getItem(key) ?? '' }}); \
+        }})()"
+    ))
+}
+
+fn build_storage_delete_expression(storage_area: &str, key: &str) -> Result<String, String> {
+    let key_json = serde_json::to_string(key).map_err(|e| format!("Failed to encode key: {e}"))?;
+    Ok(format!(
+        "(() => {{ \
+            const storage = window.{storage_area}; \
+            const key = {key_json}; \
+            const existed = storage.getItem(key) !== null; \
+            storage.removeItem(key); \
+            return JSON.stringify({{ existed }}); \
+        }})()"
+    ))
+}
+
+fn build_storage_clear_expression(storage_area: &str) -> String {
+    format!(
+        "(() => {{ \
+            const storage = window.{storage_area}; \
+            const cleared = storage.length; \
+            storage.clear(); \
+            return JSON.stringify({{ cleared }}); \
+        }})()"
+    )
+}
+
+async fn evaluate_storage_expression(
+    client: &Client,
+    base_url: &str,
+    session_name: Option<&str>,
+    expression: String,
+) -> Result<String, String> {
+    call_session_tool(
+        client,
+        base_url,
+        session_name,
+        "browser_evaluate",
+        json!({ "expression": expression }),
+    )
+    .await
+}
+
 fn known_server_base_urls(
     base_url: &str,
     managed_processes: &[ManagedServerProcess],
@@ -1250,6 +1428,342 @@ async fn handle_state_load(
         summary.cookies,
         summary.origins,
         summary.local_storage_entries
+    );
+    Ok(())
+}
+
+async fn handle_cookie_list(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let state = current_session_storage_state(client, base_url, session_name).await?;
+    let domain_filter = tool_params.get("domain").and_then(|value| value.as_str());
+    let path_filter = tool_params.get("path").and_then(|value| value.as_str());
+    let cookies = state["cookies"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|cookie| {
+            domain_filter
+                .map(|domain| cookie.get("domain").and_then(|value| value.as_str()) == Some(domain))
+                .unwrap_or(true)
+                && path_filter
+                    .map(|path| cookie.get("path").and_then(|value| value.as_str()) == Some(path))
+                    .unwrap_or(true)
+        })
+        .collect::<Vec<_>>();
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&cookies)
+            .map_err(|e| format!("Failed to format cookies: {e}"))?
+    );
+    Ok(())
+}
+
+async fn handle_cookie_get(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let target_name = tool_params
+        .get("name")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| "cookie-get requires a cookie name".to_string())?;
+    let state = current_session_storage_state(client, base_url, session_name).await?;
+    let cookie = state["cookies"]
+        .as_array()
+        .and_then(|cookies| {
+            cookies.iter().find(|cookie| {
+                cookie.get("name").and_then(|value| value.as_str()) == Some(target_name)
+            })
+        })
+        .cloned()
+        .ok_or_else(|| format!("Cookie not found: {target_name}"))?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&cookie)
+            .map_err(|e| format!("Failed to format cookie: {e}"))?
+    );
+    Ok(())
+}
+
+async fn handle_cookie_set(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let name = tool_params
+        .get("name")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| "cookie-set requires a cookie name".to_string())?;
+    let value = tool_params
+        .get("value")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| "cookie-set requires a cookie value".to_string())?;
+
+    let mut cookie = serde_json::Map::new();
+    cookie.insert("name".to_string(), json!(name));
+    cookie.insert("value".to_string(), json!(value));
+
+    if let Some(domain) = tool_params.get("domain").and_then(|value| value.as_str()) {
+        cookie.insert("domain".to_string(), json!(domain));
+    } else {
+        let current_url = current_session_url(client, base_url, session_name).await?;
+        if !(current_url.starts_with("http://") || current_url.starts_with("https://")) {
+            return Err(
+                "cookie-set requires an HTTP(S) page in the current session or an explicit --domain option."
+                    .to_string(),
+            );
+        }
+        cookie.insert("url".to_string(), json!(current_url));
+    }
+
+    if let Some(path) = tool_params.get("path").and_then(|value| value.as_str()) {
+        cookie.insert("path".to_string(), json!(path));
+    }
+    if let Some(expires) = tool_params.get("expires").and_then(|value| value.as_str()) {
+        let expires_number = expires
+            .parse::<f64>()
+            .map_err(|e| format!("Invalid --expires value '{expires}': {e}"))?;
+        cookie.insert("expires".to_string(), json!(expires_number));
+    }
+    if let Some(http_only) = tool_params
+        .get("httpOnly")
+        .and_then(|value| value.as_bool())
+    {
+        cookie.insert("httpOnly".to_string(), json!(http_only));
+    }
+    if let Some(secure) = tool_params.get("secure").and_then(|value| value.as_bool()) {
+        cookie.insert("secure".to_string(), json!(secure));
+    }
+    if let Some(same_site) = tool_params.get("sameSite").and_then(|value| value.as_str()) {
+        cookie.insert("sameSite".to_string(), json!(same_site));
+    }
+
+    let state = json!({
+        "cookies": [Value::Object(cookie)],
+        "origins": [],
+    });
+    let payload = serde_json::to_string(&state)
+        .map_err(|e| format!("Failed to encode cookie payload: {e}"))?;
+    let result = call_session_tool(
+        client,
+        base_url,
+        session_name,
+        "browser_load_storage_state",
+        json!({ "state": payload }),
+    )
+    .await?;
+    let _: StorageStateLoadSummary = parse_json_output(&result, "cookie-set summary")?;
+    println!("Cookie set: {}", name);
+    Ok(())
+}
+
+async fn handle_cookie_delete(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let name = tool_params
+        .get("name")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| "cookie-delete requires a cookie name".to_string())?;
+    let mut payload = json!({ "name": name });
+    if let Some(domain) = tool_params.get("domain").and_then(|value| value.as_str()) {
+        payload["domain"] = json!(domain);
+    } else {
+        let current_url = current_session_url(client, base_url, session_name).await?;
+        if !(current_url.starts_with("http://") || current_url.starts_with("https://")) {
+            return Err(
+                "cookie-delete requires an HTTP(S) page in the current session or an explicit --domain option."
+                    .to_string(),
+            );
+        }
+        payload["url"] = json!(current_url);
+    }
+    if let Some(path) = tool_params.get("path").and_then(|value| value.as_str()) {
+        payload["path"] = json!(path);
+    }
+    let _ = call_session_tool(client, base_url, session_name, tool_name, payload).await?;
+    println!("Cookie deleted: {}", name);
+    Ok(())
+}
+
+async fn handle_cookie_clear(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let _ = call_session_tool(client, base_url, session_name, tool_name, json!({})).await?;
+    println!("Cookies cleared.");
+    Ok(())
+}
+
+async fn handle_storage_list(
+    client: &Client,
+    base_url: &str,
+    session_name: Option<&str>,
+    storage_area: &str,
+) -> Result<(), String> {
+    let raw = evaluate_storage_expression(
+        client,
+        base_url,
+        session_name,
+        build_storage_list_expression(storage_area),
+    )
+    .await?;
+    let parsed: Value = parse_json_output(
+        &raw,
+        &format!("{} list JSON", storage_area_label(storage_area)),
+    )?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&parsed).map_err(|e| format!(
+            "Failed to format {} list: {e}",
+            storage_area_label(storage_area)
+        ))?
+    );
+    Ok(())
+}
+
+async fn handle_storage_get(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+    storage_area: &str,
+) -> Result<(), String> {
+    let key = tool_params
+        .get("key")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| format!("{}-get requires a key", storage_area.to_ascii_lowercase()))?;
+    let raw = evaluate_storage_expression(
+        client,
+        base_url,
+        session_name,
+        build_storage_get_expression(storage_area, key)?,
+    )
+    .await?;
+    let result: StorageLookupResult = parse_json_output(
+        &raw,
+        &format!("{} get result", storage_area_label(storage_area)),
+    )?;
+    if !result.found {
+        return Err(format!(
+            "{} key not found: {}",
+            storage_area_label(storage_area),
+            key
+        ));
+    }
+    println!("{}", result.value);
+    Ok(())
+}
+
+async fn handle_storage_set(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+    storage_area: &str,
+) -> Result<(), String> {
+    let key = tool_params
+        .get("key")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| format!("{}-set requires a key", storage_area.to_ascii_lowercase()))?;
+    let value = tool_params
+        .get("value")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| format!("{}-set requires a value", storage_area.to_ascii_lowercase()))?;
+    let raw = evaluate_storage_expression(
+        client,
+        base_url,
+        session_name,
+        build_storage_set_expression(storage_area, key, value)?,
+    )
+    .await?;
+    let result: StorageLookupResult = parse_json_output(
+        &raw,
+        &format!("{} set result", storage_area_label(storage_area)),
+    )?;
+    if !result.found {
+        return Err(format!(
+            "Failed to set {} key: {}",
+            storage_area_label(storage_area),
+            key
+        ));
+    }
+    println!("{} key set: {}", storage_area_label(storage_area), key);
+    Ok(())
+}
+
+async fn handle_storage_delete(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+    storage_area: &str,
+) -> Result<(), String> {
+    let key = tool_params
+        .get("key")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| {
+            format!(
+                "{}-delete requires a key",
+                storage_area.to_ascii_lowercase()
+            )
+        })?;
+    let raw = evaluate_storage_expression(
+        client,
+        base_url,
+        session_name,
+        build_storage_delete_expression(storage_area, key)?,
+    )
+    .await?;
+    let result: StorageDeleteResult = parse_json_output(
+        &raw,
+        &format!("{} delete result", storage_area_label(storage_area)),
+    )?;
+    if result.existed {
+        println!("{} key deleted: {}", storage_area_label(storage_area), key);
+    } else {
+        println!(
+            "{} key not present: {}",
+            storage_area_label(storage_area),
+            key
+        );
+    }
+    Ok(())
+}
+
+async fn handle_storage_clear(
+    client: &Client,
+    base_url: &str,
+    session_name: Option<&str>,
+    storage_area: &str,
+) -> Result<(), String> {
+    let raw = evaluate_storage_expression(
+        client,
+        base_url,
+        session_name,
+        build_storage_clear_expression(storage_area),
+    )
+    .await?;
+    let result: StorageClearResult = parse_json_output(
+        &raw,
+        &format!("{} clear result", storage_area_label(storage_area)),
+    )?;
+    println!(
+        "{} cleared: {} entrie(s).",
+        storage_area_label(storage_area),
+        result.cleared
     );
     Ok(())
 }
@@ -2708,6 +3222,148 @@ async fn run(
             )
             .await?;
         }
+        "cookie-list" => {
+            handle_cookie_list(
+                &client,
+                &base_url,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
+        "cookie-get" => {
+            handle_cookie_get(
+                &client,
+                &base_url,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
+        "cookie-set" => {
+            handle_cookie_set(
+                &client,
+                &base_url,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
+        "cookie-delete" => {
+            handle_cookie_delete(
+                &client,
+                &base_url,
+                &tool_name,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
+        "cookie-clear" => {
+            handle_cookie_clear(
+                &client,
+                &base_url,
+                &tool_name,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
+        "localstorage-list" => {
+            handle_storage_list(
+                &client,
+                &base_url,
+                global.session_name.as_deref(),
+                "localStorage",
+            )
+            .await?;
+        }
+        "localstorage-get" => {
+            handle_storage_get(
+                &client,
+                &base_url,
+                &tool_params,
+                global.session_name.as_deref(),
+                "localStorage",
+            )
+            .await?;
+        }
+        "localstorage-set" => {
+            handle_storage_set(
+                &client,
+                &base_url,
+                &tool_params,
+                global.session_name.as_deref(),
+                "localStorage",
+            )
+            .await?;
+        }
+        "localstorage-delete" => {
+            handle_storage_delete(
+                &client,
+                &base_url,
+                &tool_params,
+                global.session_name.as_deref(),
+                "localStorage",
+            )
+            .await?;
+        }
+        "localstorage-clear" => {
+            handle_storage_clear(
+                &client,
+                &base_url,
+                global.session_name.as_deref(),
+                "localStorage",
+            )
+            .await?;
+        }
+        "sessionstorage-list" => {
+            handle_storage_list(
+                &client,
+                &base_url,
+                global.session_name.as_deref(),
+                "sessionStorage",
+            )
+            .await?;
+        }
+        "sessionstorage-get" => {
+            handle_storage_get(
+                &client,
+                &base_url,
+                &tool_params,
+                global.session_name.as_deref(),
+                "sessionStorage",
+            )
+            .await?;
+        }
+        "sessionstorage-set" => {
+            handle_storage_set(
+                &client,
+                &base_url,
+                &tool_params,
+                global.session_name.as_deref(),
+                "sessionStorage",
+            )
+            .await?;
+        }
+        "sessionstorage-delete" => {
+            handle_storage_delete(
+                &client,
+                &base_url,
+                &tool_params,
+                global.session_name.as_deref(),
+                "sessionStorage",
+            )
+            .await?;
+        }
+        "sessionstorage-clear" => {
+            handle_storage_clear(
+                &client,
+                &base_url,
+                global.session_name.as_deref(),
+                "sessionStorage",
+            )
+            .await?;
+        }
         "snapshot" => {
             handle_snapshot(
                 &client,
@@ -2884,6 +3540,21 @@ mod tests {
     #[test]
     fn no_snapshot_commands_include_state_load() {
         assert!(no_snapshot_commands().contains("state-load"));
+    }
+
+    #[test]
+    fn no_snapshot_commands_include_cookie_list() {
+        assert!(no_snapshot_commands().contains("cookie-list"));
+    }
+
+    #[test]
+    fn no_snapshot_commands_include_localstorage_set() {
+        assert!(no_snapshot_commands().contains("localstorage-set"));
+    }
+
+    #[test]
+    fn no_snapshot_commands_include_sessionstorage_clear() {
+        assert!(no_snapshot_commands().contains("sessionstorage-clear"));
     }
 
     #[test]
