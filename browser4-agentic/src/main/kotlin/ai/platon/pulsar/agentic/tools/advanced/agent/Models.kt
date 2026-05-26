@@ -1,9 +1,9 @@
-package ai.platon.pulsar.agentic.tools.high.agent
+package ai.platon.pulsar.agentic.tools.advanced.agent
 
 import ai.platon.pulsar.agentic.model.AgentHistory
 import ai.platon.pulsar.agentic.model.AgentState
-import ai.platon.pulsar.agentic.tools.high.crawl.PGInstructResult
-import ai.platon.pulsar.agentic.tools.high.crawl.PageVisitRequest
+import ai.platon.pulsar.agentic.tools.advanced.crawl.PGInstructResult
+import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitRequest
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.skeleton.event.ServerSideEventHandlers
 import com.fasterxml.jackson.annotation.JsonIgnore

@@ -1,4 +1,4 @@
-package ai.platon.pulsar.agentic.tools.high.crawl
+package ai.platon.pulsar.agentic.tools.advanced.crawl
 
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes

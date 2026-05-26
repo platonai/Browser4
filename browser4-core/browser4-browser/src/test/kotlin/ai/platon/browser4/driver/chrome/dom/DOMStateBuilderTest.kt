@@ -83,12 +83,12 @@ class DOMStateBuilderTest {
     }
 
     @Test
-    @DisplayName("serialize with paint order pruning removes high paint order elements")
+    @DisplayName("serialize with paint order pruning removes advanced paint order elements")
     fun serializeWithPaintOrderPruningRemovesHighPaintOrderElements() {
         val highPaintOrderNode = MergedDOMTreeNode(
             nodeId = 4,
             nodeName = "DIV",
-            elementHash = "high-paint-hash",
+            elementHash = "advanced-paint-hash",
             snapshotNode = SnapshotNodeEx(
                 paintOrder = 1500 // Above default threshold of 1000
             )
@@ -124,9 +124,9 @@ class DOMStateBuilderTest {
         val tree = mapper.readTree(json)
 
         val children = tree.get("children")
-        assertEquals(2, children.size()) // Both children should be present but high paint order should be pruned
+        assertEquals(2, children.size()) // Both children should be present but advanced paint order should be pruned
 
-        val highPaintChild = children.first { it.get("originalNode").get("elementHash").asText() == "high-paint-hash" }
+        val highPaintChild = children.first { it.get("originalNode").get("elementHash").asText() == "advanced-paint-hash" }
         // REVIEW CHANGE: shouldDisplay is null for pruned nodes (which means false), so it's omitted from JSON
         // Test that the field is either null or false to confirm pruned status
         val shouldDisplay = highPaintChild.get("shouldDisplay")

@@ -1,11 +1,11 @@
-package ai.platon.pulsar.agentic.tools.high.crawl
+package ai.platon.pulsar.agentic.tools.advanced.crawl
 
 import ai.platon.pulsar.agentic.AgenticSession
-import ai.platon.pulsar.agentic.tools.high.crawl.common.DomUtils
-import ai.platon.pulsar.agentic.tools.high.crawl.common.PLACEHOLDER_PAGE_CONTENT
-import ai.platon.pulsar.agentic.tools.high.crawl.common.RestAPIPromptUtils
-import ai.platon.pulsar.agentic.tools.high.crawl.common.ScrapeAPIUtils
-import ai.platon.pulsar.agentic.tools.high.crawl.service.ScrapeService
+import ai.platon.pulsar.agentic.tools.advanced.crawl.common.DomUtils
+import ai.platon.pulsar.agentic.tools.advanced.crawl.common.PLACEHOLDER_PAGE_CONTENT
+import ai.platon.pulsar.agentic.tools.advanced.crawl.common.RestAPIPromptUtils
+import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeAPIUtils
+import ai.platon.pulsar.agentic.tools.advanced.crawl.service.ScrapeService
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.ai.llm.PromptTemplate

@@ -24,8 +24,8 @@ class SessionManager(
         const val DEFAULT_SESSION_ID = "default"
         const val SWARM_SESSION_ID = "swarm"
 
-        private const val SESSION_ID_CAPABILITY = "sessionId"
-        private const val PROFILE_MODE_CAPABILITY = "profileMode"
+        const val SESSION_ID_CAPABILITY = "sessionId"
+        const val PROFILE_MODE_CAPABILITY = "profileMode"
     }
 
     private val logger = LoggerFactory.getLogger(SessionManager::class.java)
@@ -202,11 +202,7 @@ class SessionManager(
     private fun normalizeCapabilities(capabilities: Map<String, Any?>?): Map<String, Any?> {
         val normalizedCapabilities = LinkedHashMap(capabilities.orEmpty())
         val requestedSessionId = normalizedCapabilities[SESSION_ID_CAPABILITY]?.toString()?.trim()
-        val sessionId = if (requestedSessionId.isNullOrBlank() || requestedSessionId.equals(
-                DEFAULT_SESSION_ID,
-                ignoreCase = true
-            )
-        ) {
+        val sessionId = if (requestedSessionId.isNullOrBlank() || requestedSessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true)) {
             DEFAULT_SESSION_ID
         } else {
             requestedSessionId

@@ -1,10 +1,10 @@
 package ai.platon.pulsar.rest.tool
 
-import ai.platon.pulsar.agentic.tools.high.agent.StatefulAgentRunner
-import ai.platon.pulsar.agentic.tools.high.crawl.PageVisitRequest
-import ai.platon.pulsar.agentic.tools.high.crawl.PageVisitStatus
-import ai.platon.pulsar.agentic.tools.high.crawl.StatefulPageVisitor
-import ai.platon.pulsar.agentic.tools.high.crawl.failed
+import ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner
+import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitRequest
+import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitStatus
+import ai.platon.pulsar.agentic.tools.advanced.crawl.StatefulPageVisitor
+import ai.platon.pulsar.agentic.tools.advanced.crawl.failed
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.SessionManager
 import ai.platon.pulsar.common.SessionManager.Companion.DEFAULT_SESSION_ID
@@ -27,12 +27,12 @@ import kotlin.time.Duration.Companion.milliseconds
 /**
  * General-purpose command execution service for page visit and agent commands.
  *
- * This service orchestrates command execution through [ai.platon.pulsar.agentic.tools.high.crawl.StatefulPageVisitor] for page visits
- * and [ai.platon.pulsar.agentic.tools.high.agent.StatefulAgentRunner] for agent-based commands. It can be used by both REST API
+ * This service orchestrates command execution through [ai.platon.pulsar.agentic.tools.advanced.crawl.StatefulPageVisitor] for page visits
+ * and [ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner] for agent-based commands. It can be used by both REST API
  * and agentic modules.
  *
  * @param commandNormalizer Optional normalizer that converts plain text commands into
- *        structured [ai.platon.pulsar.agentic.tools.high.crawl.PageVisitRequest] objects. If not provided, plain text commands
+ *        structured [ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitRequest] objects. If not provided, plain text commands
  *        without URLs will be executed as agent commands.
  */
 class CommandRunner(

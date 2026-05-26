@@ -264,7 +264,7 @@ object DOMStateBuilder {
     }
 
     /**
-     * Create a pruned node with minimal information for high paint-order elements.
+     * Create a pruned node with minimal information for advanced paint-order elements.
      */
     private fun createPrunedNode(
         node: OptimizedDOMTreeNode,

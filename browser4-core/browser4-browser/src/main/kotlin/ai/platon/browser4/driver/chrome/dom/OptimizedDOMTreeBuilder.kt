@@ -74,7 +74,7 @@ class OptimizedDOMTreeBuilder(
                     children = children,
                     shouldDisplay = true,
                     isShadowHost = false,
-                    // Mark high paint order as ignored
+                    // Mark advanced paint order as ignored
                     ignoredByPaintOrder = (node.snapshotNode?.paintOrder ?: Int.MIN_VALUE) > maxPaintOrderThreshold
                 )
             }

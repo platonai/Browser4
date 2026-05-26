@@ -1,6 +1,6 @@
 package ai.platon.pulsar.rest.api.controller
 
-import ai.platon.pulsar.agentic.tools.high.crawl.PageVisitRequest
+import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitRequest
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.rest.api.entities.CommandResult
 import ai.platon.pulsar.rest.api.entities.CommandStatus

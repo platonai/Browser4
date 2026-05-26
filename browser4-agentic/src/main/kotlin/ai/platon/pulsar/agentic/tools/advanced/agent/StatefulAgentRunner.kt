@@ -1,4 +1,4 @@
-package ai.platon.pulsar.agentic.tools.high.agent
+package ai.platon.pulsar.agentic.tools.advanced.agent
 
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.event.AgentEventBus

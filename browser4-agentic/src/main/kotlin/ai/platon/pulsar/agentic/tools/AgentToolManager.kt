@@ -205,7 +205,7 @@ class AgentToolManager constructor(
             "shell" -> executor.callFunctionOn(normalized, shell)
             "agent" -> executor.callFunctionOn(normalized, agent)
             "command" -> {
-                // TODO: the commandTarget is ai.platon.pulsar.agentic.tools.high.CommandRunner, consider make it built-in
+                // TODO: the commandTarget is ai.platon.pulsar.agentic.tools.advanced.CommandRunner, consider make it built-in
                 //      and is registered in browser4-rest module
                 val commandTarget = _customTargets["command"]
                     ?: throw UnsupportedOperationException(

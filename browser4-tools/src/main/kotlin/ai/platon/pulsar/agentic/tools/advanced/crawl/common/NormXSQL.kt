@@ -1,4 +1,4 @@
-package ai.platon.pulsar.agentic.tools.high.crawl.common
+package ai.platon.pulsar.agentic.tools.advanced.crawl.common
 
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.urls.URLUtils

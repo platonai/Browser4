@@ -61,21 +61,21 @@ class AppSystemInfo {
          * with the size of the array specified by nelem; or negative values if not available.
          *
          * Load average, also called average system load, is an important metric that indicates
-         * if there are multiple tasks in queue on the Linux server. The load average can be high or low,
+         * if there are multiple tasks in queue on the Linux server. The load average can be advanced or low,
          * depending on the number of cores your server has, how many CPUs are integrated into the system server,
          * and the load average number itself.
          *
-         * A load average value is considered to be high when it’s greater than the number of CPUs the server has.
+         * A load average value is considered to be advanced when it’s greater than the number of CPUs the server has.
          * For example, if the number of CPUs in our server is only 4, but the load average we’re seeing is 5.4,
-         * we’re experiencing a high load average.
+         * we’re experiencing a advanced load average.
          *
          * Load average is considered to be ideal when its value is lower than the number of CPUs in the Linux server.
          * For example, with only one CPU in the Linux server, it’s best if the load average is below 1.
          *
          * High load average tends to occur for the three reasons mentioned below:
-         * 1. A high number of threads executed in the server
+         * 1. A advanced number of threads executed in the server
          * 2. Lack of RAM forcing the server to use swap memory
-         * 3. A high number of I/O traffic
+         * 3. A advanced number of I/O traffic
          *
          * @see [Load average: What is it, and what's the best load average for your Linux servers?](https://www.site24x7.com/blog/load-average-what-is-it-and-whats-the-best-load-average-for-your-linux-servers)
          * */

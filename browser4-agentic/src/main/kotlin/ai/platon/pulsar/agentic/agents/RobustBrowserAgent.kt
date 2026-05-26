@@ -13,7 +13,6 @@ import ai.platon.pulsar.common.Strings
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.config.AppConstants.SEARCH_ENGINE_URLS
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.common.serialize.json.Pson
 import ai.platon.pulsar.external.ModelResponse
 import ai.platon.pulsar.external.ResponseState
@@ -35,7 +34,7 @@ import kotlin.time.Duration.Companion.minutes
  *
  * Each field tunes a specific aspect of the autonomous loop:
  * - maxSteps: Upper bound of observe->act iterations in a single resolve session.
- * - maxRetries: Retries for the high-level resolve() in case of transient/timeout errors.
+ * - maxRetries: Retries for the advanced-level resolve() in case of transient/timeout errors.
  * - baseRetryDelayMs/maxRetryDelayMs: Exponential backoff parameters.
  * - consecutiveNoOpLimit: Abort after N consecutive steps without actionable tool calls.
  * - actionGenerationTimeoutMs / llmInferenceTimeoutMs: Timeouts for model inference.

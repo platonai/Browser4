@@ -87,7 +87,7 @@ $pluginUpdatesFile = Join-Path $ReportDir "plugin-updates.txt"
 & $MvnCmd versions:display-plugin-updates $MvnLogFlags $VersionsLogFlags "-Dversions.outputFile=$pluginUpdatesFile" 2>&1 | Out-Null
 
 $content = Get-Content $pluginUpdatesFile -Raw
-if ($content -match "All plugins have a version specified" -or 
+if ($content -match "All plugins have a version specified" -or
     $content -match "All plugins with a version specified are using the latest versions") {
     Write-Host "✓ All plugins are up to date" -ForegroundColor Green
 } else {
@@ -144,13 +144,13 @@ if ($Full) {
     Print-Header "6. Security Vulnerability Check"
     Write-Host "Running OWASP Dependency Check (this may take several minutes)..."
     Write-Host "Note: First run will download CVE database" -ForegroundColor Yellow
-    
+
     $securityLogFile = Join-Path $ReportDir "security-check.log"
     # Note: dependency-check plugin might use a different logger package, usually org.owasp
     $securityResult = & $MvnCmd dependency-check:check $MvnLogFlags 2>&1 | Out-File -FilePath $securityLogFile
-    
+
     if ($LASTEXITCODE -eq 0) {
-        Write-Host "✓ No high severity vulnerabilities found" -ForegroundColor Green
+        Write-Host "✓ No advanced severity vulnerabilities found" -ForegroundColor Green
     } else {
         Write-Host "✗ Security vulnerabilities detected!" -ForegroundColor Red
         Write-Host "See report: target\dependency-check-report.html"

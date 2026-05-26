@@ -6,12 +6,12 @@ import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import kotlin.reflect.KClass
 
 /**
- * Tool executor that exposes [ai.platon.pulsar.agentic.tools.high.CommandRunner] methods as agent tools.
+ * Tool executor that exposes [ai.platon.pulsar.agentic.tools.advanced.CommandRunner] methods as agent tools.
  *
  * Domain: `command`
  *
  * ## Supported Methods:
- * - `run(command, async?)` — Execute a plain command. Returns a task ID (async) or a [ai.platon.pulsar.agentic.tools.high.command.CommandStatus] JSON (sync).
+ * - `run(command, async?)` — Execute a plain command. Returns a task ID (async) or a [ai.platon.pulsar.agentic.tools.advanced.command.CommandStatus] JSON (sync).
  * - `status(id)` — Get the status of a running command task.
  * - `result(id)` — Get the result of a completed command task.
  *

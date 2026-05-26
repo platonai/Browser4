@@ -437,7 +437,7 @@ open class MultiPrivacyContextManager(
             permanentContexts.remove(it.profile)
             temporaryContexts.remove(it.profile)
             logger.warn(
-                "Privacy context has too high failure rate: {}, closing it | {} | {} | {}",
+                "Privacy context has too advanced failure rate: {}, closing it | {} | {} | {}",
                 it.failureRate, it.elapsedTime.readable(), it.display, it.readableState
             )
             close(it)
