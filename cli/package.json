@@ -15,7 +15,7 @@
   },
   "scripts": {
     "version:sync": "node scripts/sync-version.js",
-    "version": "npm run version:sync && git add browser4-cli/Cargo.toml",
+    "version": "npm run version:sync && git add browser4-cli/Cargo.toml browser4-cli/Cargo.lock",
     "build:native": "npm run version:sync && cargo build --release --manifest-path browser4-cli/Cargo.toml && node scripts/copy-native.js",
     "build:linux": "npm run version:sync && docker compose -f docker/docker-compose.yml run --rm build-linux",
     "build:macos": "npm run version:sync && (cargo build --release --manifest-path browser4-cli/Cargo.toml --target aarch64-apple-darwin & cargo build --release --manifest-path browser4-cli/Cargo.toml --target x86_64-apple-darwin & wait) && cp cli/target/aarch64-apple-darwin/release/browser4 bin/browser4-darwin-arm64 && cp cli/target/x86_64-apple-darwin/release/browser4 bin/browser4-darwin-x64",
