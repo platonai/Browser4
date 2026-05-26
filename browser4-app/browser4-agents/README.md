@@ -53,6 +53,10 @@ Typical outputs:
 These are the assets consumed by `browser4-cli install`, and after installation
 `browser4-cli open` launches the installed `Browser4.jar` with the bundled JRE.
 
+The release workflow now verifies each generated runtime bundle before publishing
+it by extracting the archive, checking the expected metadata/layout, starting
+`Browser4.jar` with the bundled JRE, and probing `/actuator/health`.
+
 The runtime bundle builder is optimized for standalone backend startup rather than local JDK development.
 It now:
 

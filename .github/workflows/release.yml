@@ -752,6 +752,13 @@ jobs:
             -AssetName "${{ matrix.asset_name }}" `
             -Force
 
+      - name: Verify Browser4 runtime bundle
+        shell: pwsh
+        run: |
+          ./browser4-app/browser4-agents/verify-runtime-bundle.ps1 `
+            -BundlePath "browser4-app/browser4-agents/target/runtime-release/${{ matrix.asset_name }}" `
+            -ExpectedAssetName "${{ matrix.asset_name }}"
+
       - name: Upload runtime bundle artifact
         uses: actions/upload-artifact@v4
         with:
