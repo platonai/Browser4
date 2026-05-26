@@ -13,8 +13,10 @@ import java.io.InputStreamReader
 import java.nio.file.*
 import java.time.Duration
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import javax.swing.JFrame
 import kotlin.random.Random
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Runtime utility
@@ -135,57 +137,113 @@ object Runtimes {
         return result
     }
 
+    /**
+     * Attempts to terminate a started [process] gracefully.
+     *
+     * This is the preferred shutdown path for a process that is still under this JVM's control.
+     * The implementation first requests a normal termination via [Process.destroy]. If the
+     * process does not exit within [shutdownWaitTime], it escalates by terminating known child
+     * processes and then force-killing the parent process.
+     *
+     * Shutdown order:
+     * - first request graceful parent exit
+     * - wait up to [shutdownWaitTime]
+     * - if needed, kill child processes first and then force-kill the parent
+     *
+     * @param process the running process to terminate
+     * @param shutdownWaitTime the maximum time to wait in each shutdown phase before escalation;
+     * negative durations are treated as zero
+     * @throws InterruptedException if the current thread is interrupted while waiting for the
+     * process to exit; the interrupt flag is restored before rethrowing
+     */
     fun destroyProcess(process: Process, shutdownWaitTime: Duration) {
+        terminateProcessGracefully(process, shutdownWaitTime)
+    }
+
+    /**
+     * Forcibly terminates the process identified by [pid].
+     *
+     * This method is intended for cleanup paths where graceful shutdown is no longer sufficient.
+     * When the process can be resolved through [ProcessHandle], the whole process tree is cleaned
+     * in child-first order. If that fails, a platform-specific system command is used as a
+     * fallback.
+     *
+     * Fallback commands:
+     * - Windows: `taskkill /F /T /PID <pid>`
+     * - Linux/macOS: `kill -9 <pid>`
+     *
+     * @param pid the process id to terminate; non-positive values are ignored
+     */
+    fun destroyProcessForcibly(pid: Int) {
+        killProcessTree(pid)
+    }
+
+    /**
+     * Forcibly terminates processes that match [namePattern].
+     *
+     * Matching is platform dependent:
+     * - Windows treats [namePattern] as an image name passed to `taskkill /IM`
+     * - Linux/macOS treat [namePattern] as a full command-line pattern passed to `pkill -f`
+     *
+     * Blank patterns are ignored. This method is intended as a broad cleanup utility and may
+     * terminate multiple matching processes.
+     *
+     * @param namePattern the image name or command-line pattern used to select processes
+     */
+    fun destroyProcessForcibly(namePattern: String) {
+        killProcessesByNamePattern(namePattern)
+    }
+
+    /**
+     * Implements the graceful-then-force shutdown policy for [destroyProcess].
+     *
+     * The parent process is always given the first chance to exit cleanly. Child processes are
+     * only terminated when escalation is required or the waiting thread is interrupted.
+     */
+    private fun terminateProcessGracefully(process: Process, shutdownWaitTime: Duration) {
         val pid = process.pid()
         val info = runCatching { formatProcessInfo(process.toHandle()) }.getOrElse { "pid=$pid" }
+        val shutdownWaitMillis = shutdownWaitTime.toMillis().coerceAtLeast(0L)
 
-        // Collect children once to avoid consuming the stream twice
-        val children = process.children().toList()
-        if (children.isNotEmpty()) {
-            logger.info("Process {} has {} child process(es), terminating them first", pid, children.size)
-        }
-        children.forEach { destroyChildProcess(it) }
-
-        process.destroy()
         try {
-            if (!process.waitFor(shutdownWaitTime.seconds, TimeUnit.SECONDS)) {
-                logger.warn("Process {} did not exit gracefully within {} seconds, force killing", pid, shutdownWaitTime.seconds)
+            process.destroy()
+            if (!process.waitFor(shutdownWaitMillis, TimeUnit.MILLISECONDS)) {
+                val children = process.children().toList()
+                if (children.isNotEmpty()) {
+                    logger.info("Process {} did not exit within {}, terminating {} child process(es) before forcing parent", pid, shutdownWaitTime, children.size)
+                }
+                children.forEach { killProcessSubtree(it) }
+
+                logger.warn("Process {} did not exit gracefully within {}, force killing", pid, shutdownWaitTime)
                 process.destroyForcibly()
-                if (!process.waitFor(shutdownWaitTime.seconds, TimeUnit.SECONDS)) {
-                    logger.error("Process {} still alive after destroyForcibly + {} s wait", pid, shutdownWaitTime.seconds)
+                if (!process.waitFor(shutdownWaitMillis, TimeUnit.MILLISECONDS)) {
+                    logger.error("Process {} still alive after destroyForcibly + {} wait", pid, shutdownWaitTime)
                 }
             }
 
             logger.info("Exit | {}", info)
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
+            val children = runCatching { process.children().toList() }.getOrElse { emptyList() }
+            children.forEach { killProcessSubtree(it) }
             logger.warn("Interrupted while waiting for process {} to exit, force killing", pid)
             process.destroyForcibly()
             throw e
         }
     }
 
-    fun destroyProcessForcibly(pid: Int) {
+    /**
+     * Kills a process tree identified by [pid].
+     *
+     * The implementation prefers the Java [ProcessHandle] API and falls back to a native command
+     * only when handle-based termination cannot be used.
+     */
+    private fun killProcessTree(pid: Int) {
         if (pid <= 0) return
 
         try {
             ProcessHandle.of(pid.toLong()).ifPresent { handle ->
-                // Log child process count
-                val childCount = handle.children().count().toInt()
-                if (childCount > 0) {
-                    logger.info("Forcibly killing process {} with {} child process(es)", pid, childCount)
-                }
-
-                destroyChildProcess(handle)
-                if (handle.isAlive) handle.destroy()
-                if (handle.isAlive) handle.destroyForcibly()
-
-                // Verify process was killed
-                if (handle.isAlive) {
-                    logger.error("Failed to forcibly kill process {} using ProcessHandle", pid)
-                } else {
-                    logger.info("Successfully killed process {} using ProcessHandle", pid)
-                }
+                killProcessTree(handle)
             }
             return
         } catch (e: Exception) {
@@ -193,10 +251,11 @@ object Runtimes {
         }
 
         val command = when {
-            SystemUtils.IS_OS_WINDOWS -> "taskkill /F /PID $pid"
+            SystemUtils.IS_OS_WINDOWS -> "taskkill /F /T /PID $pid"
             SystemUtils.IS_OS_LINUX || SystemUtils.IS_OS_MAC -> "kill -9 $pid"
             else -> "kill -9 $pid"
         }
+
         runCatching {
             exec(command)
             logger.info("Executed kill command for pid {}: {}", pid, command)
@@ -205,29 +264,116 @@ object Runtimes {
         }
     }
 
-    fun destroyProcessForcibly(namePattern: String) {
+    /**
+     * Kills [handle] and its descendants in child-first order.
+     *
+     * Descendants are terminated recursively before the target process itself is asked to exit and,
+     * if necessary, forcibly destroyed.
+     */
+    private fun killProcessTree(handle: ProcessHandle) {
+        val pid = handle.pid()
+        val children = handle.children().toList()
+        val childCount = children.size
+        if (childCount > 0) {
+            logger.info("Forcibly killing process {} with {} child process(es)", pid, childCount)
+        }
+
+        children.forEach { killProcessSubtree(it) }
+
+        if (handle.isAlive) {
+            handle.destroy()
+            try {
+                handle.onExit().get(2, TimeUnit.SECONDS)
+            } catch (_: TimeoutException) {
+            }
+            if (handle.isAlive) {
+                handle.destroyForcibly()
+            }
+        }
+
+        if (handle.isAlive) {
+            logger.error("Failed to forcibly kill process {} using ProcessHandle", pid)
+        } else {
+            logger.info("Successfully killed process {} using ProcessHandle", pid)
+        }
+    }
+
+    /**
+     * Executes a platform-specific command that terminates processes matching [namePattern].
+     *
+     * This helper normalizes blank input, builds the command via
+     * [buildKillProcessesByNamePatternCommand], waits for completion with a timeout, and records
+     * diagnostic output on failure.
+     */
+    private fun killProcessesByNamePattern(namePattern: String) {
+        val normalizedPattern = namePattern.trim()
+        if (normalizedPattern.isBlank()) {
+            logger.warn("Skipping destroyProcessForcibly because the name pattern is blank")
+            return
+        }
+
+        val command = buildKillProcessesByNamePatternCommand(normalizedPattern) ?: run {
+            logger.info("Unsupported operating system")
+            return
+        }
+
         try {
-            val command = if (SystemUtils.IS_OS_WINDOWS) {
-                // Windows
-                "taskkill /F /IM $namePattern"
-            } else if (SystemUtils.IS_OS_LINUX || SystemUtils.IS_OS_MAC) {
-                // macOS or Linux
-                "pkill -f $namePattern"
-            } else {
-                logger.info("Unsupported operating system")
+            val process = ProcessBuilder(command)
+                .redirectErrorStream(true)
+                .start()
+            val output = process.inputStream.bufferedReader().useLines { it.toList() }
+
+            if (!process.waitFor(10, TimeUnit.SECONDS)) {
+                process.destroyForcibly()
+                logger.warn(
+                    "Timed out while terminating processes matching pattern {} using command: {}",
+                    normalizedPattern,
+                    command.joinToString(" ")
+                )
                 return
             }
 
-            // Execute the command
-            val process = Runtime.getRuntime().exec(arrayOf(command))
-            process.waitFor()
-
-            // Check if the command executed successfully
             if (process.exitValue() == 0) {
-                logger.info("Processes matching pattern {} have been terminated", namePattern)
+                logger.info("Processes matching pattern {} have been terminated", normalizedPattern)
+            } else {
+                logger.warn(
+                    "Failed to terminate processes matching pattern {} using command: {} | exitCode={} | output={}",
+                    normalizedPattern,
+                    command.joinToString(" "),
+                    process.exitValue(),
+                    output.joinToString(System.lineSeparator())
+                )
             }
         } catch (e: Exception) {
-            logger.info("Failed to terminate Chrome processes", e)
+            logger.warn("Failed to terminate processes matching pattern {}", normalizedPattern, e)
+        }
+    }
+
+    /**
+     * Builds the native command used by [destroyProcessForcibly] for name-based matching.
+     *
+     * The returned list is designed for [ProcessBuilder], so each token is separated and no shell
+     * parsing is required.
+     *
+     * @param namePattern the non-blank image name or command-line pattern to match
+     * @param isWindows whether to build the Windows variant; defaults to the current runtime OS
+     * @param isPosix whether to build the Linux/macOS variant; defaults to the current runtime OS
+     * @return the command tokens, or `null` when the pattern is blank or the platform is not
+     * supported
+     */
+    internal fun buildKillProcessesByNamePatternCommand(
+        namePattern: String,
+        isWindows: Boolean = SystemUtils.IS_OS_WINDOWS,
+        isPosix: Boolean = SystemUtils.IS_OS_LINUX || SystemUtils.IS_OS_MAC,
+    ): List<String>? {
+        if (namePattern.isBlank()) {
+            return null
+        }
+
+        return when {
+            isWindows -> listOf("taskkill", "/F", "/T", "/IM", namePattern)
+            isPosix -> listOf("pkill", "-f", "--", namePattern)
+            else -> null
         }
     }
 
@@ -263,7 +409,7 @@ object Runtimes {
     }
 
     suspend fun randomDelay(timeMillis: Long, delta: Int) {
-        delay(timeMillis + Random.nextInt(delta))
+        delay((timeMillis + Random.nextInt(delta)).milliseconds)
     }
 
     /**
@@ -373,9 +519,16 @@ object Runtimes {
 
     private fun unallocatedSpaceOr0(store: FileStore) = store.runCatching { unallocatedSpace }.getOrNull() ?: 0L
 
-    private fun destroyChildProcess(process: ProcessHandle) {
+    /**
+     * Recursively terminates [process] and all of its descendants in child-first order.
+     *
+     * This helper is used by the force-kill paths after the caller has already decided that a
+     * subtree should be removed. It first visits children, then terminates the current node, and
+     * finally waits briefly for the process to disappear.
+     */
+    private fun killProcessSubtree(process: ProcessHandle) {
         val children = process.children().toList()
-        children.forEach { destroyChildProcess(it) }
+        children.forEach { killProcessSubtree(it) }
 
         val info = formatProcessInfo(process)
         val pid = process.pid()
