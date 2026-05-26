@@ -191,6 +191,23 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli open https://browser4.io/".to_string());
     }
 
+    if cmd.name == "install" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Downloads the self-contained Browser4 runtime bundle for the current OS/architecture from GitHub Releases."
+                .to_string(),
+        );
+        lines.push(
+            "  - The bundle contains both `Browser4.jar` and a minimal `jlink`-built JRE used automatically by `browser4-cli open`."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli install".to_string());
+        lines.push("  browser4-cli install --tag=v4.9.3".to_string());
+        lines.push("  browser4-cli install --tag=4.9.3 --force".to_string());
+    }
+
     if cmd.name == "list" {
         lines.push("Notes:".to_string());
         lines.push(
@@ -326,6 +343,7 @@ mod tests {
         assert!(help.contains("goto"));
         assert!(help.contains("click"));
         assert!(help.contains("snapshot"));
+        assert!(help.contains("install"));
         assert!(help.contains("ArrowLeft"));
         assert!(help.contains("Evaluate JavaScript expression on page or element"));
         assert!(help.contains("Core:"));
@@ -359,6 +377,18 @@ mod tests {
             .contains("Open a browser session or refresh the saved one if it is no longer active"));
         assert!(help.contains("backend still reports it as active"));
         assert!(help.contains("creating a new session"));
+    }
+
+    #[test]
+    fn test_generate_command_help_install() {
+        let cmds = all_commands();
+        let install = cmds.iter().find(|c| c.name == "install").unwrap();
+        let help = generate_command_help(install);
+        assert!(help.contains("browser4-cli install"));
+        assert!(help.contains("self-contained Browser4 runtime bundle"));
+        assert!(help.contains("`Browser4.jar` and a minimal `jlink`-built JRE"));
+        assert!(help.contains("browser4-cli install --tag=v4.9.3"));
+        assert!(help.contains("--force"));
     }
 
     #[test]

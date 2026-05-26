@@ -29,6 +29,30 @@ mvnw package -Pwin-jpackage -DskipTests
 
 This creates a portable Windows executable that can be distributed as a ZIP file. Users can run `Browser4.exe` directly without installing.
 
+### 2.5. Create a self-contained runtime bundle for `browser4-cli install`
+
+The release pipeline now publishes lightweight runtime bundles that contain:
+
+- `Browser4.jar`
+- a minimal `jlink`-built JRE under `jre/`
+
+Build one locally after packaging the jar:
+
+```powershell
+./mvnw.cmd -pl browser4-app/browser4-agents -am -DskipTests package
+pwsh ./browser4-app/browser4-agents/build-runtime-bundle.ps1 -Force
+```
+
+Typical outputs:
+
+- `target/runtime-bundle/browser4-runtime-windows-x64.zip`
+- `target/runtime-bundle/browser4-runtime-linux-x64.tar.gz`
+- `target/runtime-bundle/browser4-runtime-darwin-x64.tar.gz`
+- `target/runtime-bundle/browser4-runtime-darwin-arm64.tar.gz`
+
+These are the assets consumed by `browser4-cli install`, and after installation
+`browser4-cli open` launches the installed `Browser4.jar` with the bundled JRE.
+
 ### 3. Create Windows EXE Installer
 
 The EXE installer provides a traditional Windows installation experience:
@@ -106,6 +130,9 @@ target/
 │   │       └── runtime/                      # Bundled JRE
 │   └── dist/                                 # Only if installer created
 │       └── Browser4-0.0.1.exe                # Windows installer
+├── runtime-bundle/
+│   ├── browser4-runtime-windows-x64.zip      # Browser4.jar + jlink JRE for browser4-cli install
+│   └── _work/                                # Temporary assembly workspace
 ```
 
 ## Running the Application

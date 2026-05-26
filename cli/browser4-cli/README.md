@@ -40,6 +40,27 @@ separate state file is stored under `~/.browser4/sessions/<name>.json`.
 `open` without `-s` reuses the default session if one exists; with
 `-s=<name>` it switches to or creates the named session.
 
+## Install Browser4 backend runtime
+
+`browser4-cli install` downloads a self-contained Browser4 runtime bundle from GitHub Releases.
+The bundle includes both `Browser4.jar` and a bundled minimal `jlink` JRE under the CLI state
+directory, so later `browser4-cli open` invocations can launch Browser4 without relying on a
+system-wide Java installation.
+
+```bash
+# install the latest runtime bundle for the current OS/architecture
+browser4-cli install
+
+# install a specific release tag
+browser4-cli install --tag=v4.9.3
+
+# force a tagged reinstall
+browser4-cli install --tag=4.9.3 --force
+
+# after installation, open uses the bundled JRE automatically
+browser4-cli open
+```
+
 ## Testing
 
 ```bash

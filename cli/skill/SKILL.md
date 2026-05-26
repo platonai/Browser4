@@ -14,9 +14,13 @@ Browser automation CLI for AI agents.
 
 Install: `npm i -g browser4-cli`
 
+Optional backend runtime install: `browser4-cli install`
+
 ## Quick start
 
 ```bash
+# install the self-contained Browser4 backend runtime (Browser4.jar + bundled JRE)
+browser4-cli install
 # open new browser
 browser4-cli open
 # navigate to a page with the current active session
@@ -39,6 +43,9 @@ navigating.
 
 `browser4-cli open` reuses the saved session for the current slot only when the backend still reports it
 as active. If the saved session is stale or missing, `open` refreshes it by creating a new session.
+
+When `browser4-cli install` has been run, `browser4-cli open` uses the bundled `jlink` JRE and
+installed `Browser4.jar` from the CLI state directory instead of requiring a separately installed Java runtime.
 
 ## Commands
 
@@ -290,6 +297,9 @@ Installs the native Rust binary:
 
 ```bash
 npm install -g browser4-cli
+
+# optional but recommended for standalone backend startup
+browser4-cli install
 ```
 
 After installation, use `browser4-cli`.

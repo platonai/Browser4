@@ -74,6 +74,15 @@ runs:
 
         ## 🚀 Quick Start
 
+        ### Self-contained install
+
+        Use the CLI to download the matching Browser4 runtime bundle for your platform:
+
+        ```shell
+        browser4-cli install
+        browser4-cli open
+        ```
+
         ### CLI & SKILLS
 
         ```shell

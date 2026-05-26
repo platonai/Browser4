@@ -232,6 +232,37 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_params_fn: |_| json!({}),
         },
         CommandDef {
+            name: "install",
+            description: "Install the self-contained Browser4 runtime bundle (Browser4.jar + bundled JRE)",
+            category: Category::Install,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef {
+                    name: "tag",
+                    description: "Release tag to install, for example v4.9.3 or 4.9.3 (defaults to latest release)",
+                    is_bool: false,
+                },
+                OptionDef {
+                    name: "force",
+                    description: "Force re-download even when the requested tagged runtime is already installed",
+                    is_bool: true,
+                },
+            ],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut params = json!({});
+                if let Some(tag) = get_opt_str(args, "tag") {
+                    params["tag"] = json!(tag);
+                }
+                if let Some(force) = get_bool(args, "force") {
+                    params["force"] = json!(force);
+                }
+                params
+            },
+        },
+        CommandDef {
             name: "batch",
             description: "Execute multiple commands in one invocation",
             category: Category::Core,
@@ -1047,6 +1078,7 @@ mod tests {
         for expected in &[
             "open",
             "close",
+            "install",
             "batch",
             "goto",
             "click",
@@ -1092,6 +1124,21 @@ mod tests {
         let args = HashMap::new();
         assert!((cmd.tool_name_fn)(&args).is_empty());
         assert_eq!((cmd.tool_params_fn)(&args), json!({}));
+    }
+
+    #[test]
+    fn test_install_params_capture_tag_and_force() {
+        let map = commands_map();
+        let cmd = map.get("install").unwrap();
+        let mut args = HashMap::new();
+        args.insert("tag".to_string(), json!("4.9.3"));
+        args.insert("force".to_string(), json!(true));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.get("tag").is_some());
+        assert_eq!(params["tag"], "4.9.3");
+        assert_eq!(params["force"], true);
+        assert!((cmd.tool_name_fn)(&args).is_empty());
     }
 
     #[test]

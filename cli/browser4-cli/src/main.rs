@@ -37,7 +37,10 @@ use args::{
     parse_global_flags, parse_raw_args,
 };
 use commands::commands_map;
-use daemon::{ensure_server_running, init_root_search_start_dir_from_startup, resolve_base_url};
+use daemon::{
+    ensure_server_running, init_root_search_start_dir_from_startup, install_browser4_runtime,
+    resolve_base_url,
+};
 use help::{generate_command_help, generate_help};
 use http::{
     call_tool, get_command_result, get_command_status, get_scrape_result, get_scrape_status,
@@ -69,6 +72,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "close-all",
         "kill-all",
         "list",
+        "install",
         "help",
         "eval",
         "summarize",
@@ -1702,8 +1706,33 @@ async fn handle_swarm_result(
     Ok(())
 }
 
+async fn handle_install(tool_params: &Value) -> Result<(), String> {
+    let tag = tool_params.get("tag").and_then(|value| value.as_str());
+    let force = tool_params
+        .get("force")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    let runtime = install_browser4_runtime(tag, force).await?;
+
+    if runtime.reused_existing {
+        println!("Browser4 runtime already installed.");
+    } else {
+        println!("Browser4 runtime installed successfully.");
+    }
+    println!("- Tag: {}", runtime.tag);
+    println!("- Asset: {}", runtime.asset_name);
+    println!("- JAR: {}", runtime.jar_path.display());
+    println!("- Java: {}", runtime.java_path.display());
+    println!("- Source: {}", runtime.download_url);
+    Ok(())
+}
+
 fn should_ensure_server_running(command: &str) -> bool {
-    command != "close" && command != "close-all" && command != "kill-all" && command != "list"
+    command != "close"
+        && command != "close-all"
+        && command != "kill-all"
+        && command != "list"
+        && command != "install"
 }
 
 // ---------------------------------------------------------------------------
@@ -2575,6 +2604,9 @@ async fn run(
         "list" => {
             handle_list(&client, &base_url).await?;
         }
+        "install" => {
+            handle_install(&tool_params).await?;
+        }
         "delete-data" => {
             handle_delete_data(&client, &base_url, global.session_name.as_deref()).await?;
         }
@@ -2744,6 +2776,11 @@ mod tests {
     #[test]
     fn no_snapshot_commands_include_summarize() {
         assert!(no_snapshot_commands().contains("summarize"));
+    }
+
+    #[test]
+    fn no_snapshot_commands_include_install() {
+        assert!(no_snapshot_commands().contains("install"));
     }
 
     #[test]
@@ -3092,6 +3129,11 @@ mod tests {
     #[test]
     fn should_not_ensure_server_for_close() {
         assert!(!should_ensure_server_running("close"));
+    }
+
+    #[test]
+    fn should_not_ensure_server_for_install() {
+        assert!(!should_ensure_server_running("install"));
     }
 
     #[test]

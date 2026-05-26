@@ -446,6 +446,22 @@ jobs:
 
           CLI package version in this release workflow:
           - \`${{ needs.prepare.outputs.cli_version }}\`
+
+          ## Self-contained Browser4 runtime bundles
+
+          This release also includes self-contained Browser4 runtime bundles with:
+          - \`Browser4.jar\`
+          - a minimal \`jlink\`-built JRE
+
+          Supported release assets:
+          - \`browser4-runtime-windows-x64.zip\`
+          - \`browser4-runtime-linux-x64.tar.gz\`
+          - \`browser4-runtime-darwin-x64.tar.gz\`
+          - \`browser4-runtime-darwin-arm64.tar.gz\`
+
+          Recommended install flow:
+
+          \`browser4-cli install\`
           EOF
 
       - name: Upload JAR artifact
@@ -681,6 +697,68 @@ jobs:
           path: artifacts/${{ matrix.binary }}
           retention-days: 7
 
+  build-runtime-bundles:
+    name: Build runtime bundle (${{ matrix.name }})
+    needs: [prepare, build-core-and-docker]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            asset_name: browser4-runtime-windows-x64.zip
+            artifact_name: browser4-runtime-windows-x64
+          - name: Linux x64
+            os: ubuntu-latest
+            asset_name: browser4-runtime-linux-x64.tar.gz
+            artifact_name: browser4-runtime-linux-x64
+          - name: macOS x64
+            os: macos-13
+            asset_name: browser4-runtime-darwin-x64.tar.gz
+            artifact_name: browser4-runtime-darwin-x64
+          - name: macOS ARM64
+            os: macos-14
+            asset_name: browser4-runtime-darwin-arm64.tar.gz
+            artifact_name: browser4-runtime-darwin-arm64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Setup Environment
+        uses: ./.github/actions/setup-environment
+        with:
+          java_version: ${{ env.JAVA_VERSION }}
+          enable_cache: 'true'
+
+      - name: Download Browser4 JAR artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-jar
+          path: browser4-app/browser4-agents/target/
+
+      - name: Build Browser4 runtime bundle
+        shell: pwsh
+        run: |
+          ./browser4-app/browser4-agents/build-runtime-bundle.ps1 `
+            -JarPath "${{ env.PRODUCTION_JAR_PATH }}" `
+            -OutputDirectory "browser4-app/browser4-agents/target/runtime-release" `
+            -AssetName "${{ matrix.asset_name }}" `
+            -Force
+
+      - name: Upload runtime bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: browser4-app/browser4-agents/target/runtime-release/${{ matrix.asset_name }}
+          retention-days: 7
+
   publish-cli-npm:
     name: Publish browser4-cli to npm
     needs: [prepare, build-cli-binaries]
@@ -843,11 +921,13 @@ jobs:
       - prepare
       - build-core-and-docker
       - build-cli-binaries
+      - build-runtime-bundles
       - publish-cli-npm
     if: |
       always() &&
       needs.build-core-and-docker.result == 'success' &&
       (needs.build-cli-binaries.result == 'success' || needs.build-cli-binaries.result == 'skipped') &&
+      needs.build-runtime-bundles.result == 'success' &&
       (needs.publish-cli-npm.result == 'success' || needs.publish-cli-npm.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
@@ -873,6 +953,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           pattern: browser4-cli-*
+          path: release-assets/
+          merge-multiple: true
+
+      - name: Download runtime bundle artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: browser4-runtime-*
           path: release-assets/
           merge-multiple: true
 
@@ -902,6 +989,13 @@ jobs:
             fi
           fi
 
+          RUNTIME_BUNDLE_COUNT=$(find release-assets -maxdepth 1 -type f \( -name 'browser4-runtime-*.zip' -o -name 'browser4-runtime-*.tar.gz' \) | wc -l)
+          if [ "$RUNTIME_BUNDLE_COUNT" -lt 4 ]; then
+            echo "❌ Expected 4 Browser4 runtime bundles, found $RUNTIME_BUNDLE_COUNT"
+            ls -la release-assets/
+            exit 1
+          fi
+
           echo "✅ Release assets verified"
 
       - name: Build release asset manifest
@@ -914,6 +1008,7 @@ jobs:
             if [ "${{ needs.prepare.outputs.cli_should_build }}" = "true" ]; then
               find release-assets -maxdepth 1 -type f -name 'browser4-cli-*' | sort
             fi
+            find release-assets -maxdepth 1 -type f \( -name 'browser4-runtime-*.zip' -o -name 'browser4-runtime-*.tar.gz' \) | sort
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
 
@@ -953,6 +1048,8 @@ jobs:
           echo "  - Size: $(numfmt --to=iec --suffix=B $JAR_SIZE)"
           echo "  - Prerelease: ${{ needs.prepare.outputs.is_prerelease }}"
           echo "  - CLI Version: ${{ needs.prepare.outputs.cli_version }}"
+          echo "  - Runtime bundles:"
+          find release-assets -maxdepth 1 -type f \( -name 'browser4-runtime-*.zip' -o -name 'browser4-runtime-*.tar.gz' \) -printf '    - %f\n' | sort
           echo ""
           echo "🔗 Release URL: https://github.com/${{ github.repository }}/releases/tag/${{ needs.prepare.outputs.tag }}"
           echo ""
@@ -976,6 +1073,7 @@ jobs:
             echo ""
             echo "### 📦 Artifacts"
             echo "- **JAR**: ${{ needs.build-core-and-docker.outputs.jar_name }}"
+            echo "- **Runtime Bundles**: browser4-runtime-windows-x64.zip, browser4-runtime-linux-x64.tar.gz, browser4-runtime-darwin-x64.tar.gz, browser4-runtime-darwin-arm64.tar.gz"
             echo "- **CLI Version**: ${{ needs.prepare.outputs.cli_version }}"
             echo "- **npm Version**: ${{ needs.prepare.outputs.npm_version }}"
             echo "- **npm Lookup Status**: ${{ needs.prepare.outputs.cli_npm_lookup_status }}"
@@ -991,6 +1089,7 @@ jobs:
             echo "- **Prepare**: ${{ needs.prepare.result }}"
             echo "- **Core Build + Docker**: ${{ needs.build-core-and-docker.result }}"
             echo "- **CLI Binary Build**: ${{ needs.build-cli-binaries.result }}"
+            echo "- **Runtime Bundle Build**: ${{ needs.build-runtime-bundles.result }}"
             echo "- **CLI npm Publish**: ${{ needs.publish-cli-npm.result }}"
             echo ""
             echo "✅ Release pipeline completed successfully!"
@@ -1002,6 +1101,7 @@ jobs:
       - prepare
       - build-core-and-docker
       - build-cli-binaries
+      - build-runtime-bundles
       - publish-cli-npm
       - publish-github-release
     if: failure()
