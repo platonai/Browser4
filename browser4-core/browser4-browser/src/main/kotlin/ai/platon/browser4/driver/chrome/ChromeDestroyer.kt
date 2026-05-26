@@ -113,12 +113,20 @@ class ChromeDestroyer(
     internal fun killProcess(candidatePids: Collection<Long> = emptyList()): Int {
         try {
             logger.info("Attempting to find and kill process holding lock on {}", userDataDir)
-            val attemptedPids = candidatePids.asSequence()
+            val knownPids = candidatePids.asSequence()
                 .filter { it > 0 }
                 .distinct()
-                .toMutableSet()
+                .toList()
 
-            val killedKnownPids = attemptedPids.count { pid ->
+            val attemptedPids = mutableSetOf<Long>()
+
+            val killedKnownPids = knownPids.count { pid ->
+                if (!isProcessAlive(pid)) {
+                    logger.info("Skipping exited candidate pid {} while cleaning {}", pid, userDataDir)
+                    return@count false
+                }
+
+                attemptedPids.add(pid)
                 logger.warn("Destroy chrome launcher forcibly, pid: {} | {}", pid, userDataDir)
                 killProcessByPid(pid, "known-pid")
             }
@@ -290,9 +298,23 @@ class ChromeDestroyer(
             return false
         }
 
+        if (!isProcessAlive(pid)) {
+            logger.info("Skipping exited pid {} from {} while cleaning {}", pid, source, userDataDir)
+            return false
+        }
+
         logger.warn("Killing process holding lock ({}): pid={} | {}", source, pid, userDataDir)
         Runtimes.destroyProcessForcibly(pid.toInt())
         return true
+    }
+
+    private fun isProcessAlive(pid: Long): Boolean {
+        return try {
+            Runtimes.isProcessAlive(pid)
+        } catch (e: Exception) {
+            logger.debug("Failed to check pid {} for {} | {}", pid, userDataDir, e.message)
+            false
+        }
     }
 
     private fun isBrowserProcess(handle: ProcessHandle): Boolean {

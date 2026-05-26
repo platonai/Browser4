@@ -10,6 +10,7 @@ import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -88,6 +89,49 @@ class ChromeDestroyerTest {
             destroyer.destroy()
 
             assertTrue(process.waitFor(15, TimeUnit.SECONDS))
+        } finally {
+            destroyProcessIfAlive(process)
+            tempDir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testKillProcessSkipsExitedCandidatePid() {
+        val tempDir = Files.createTempDirectory("chrome-destroyer-test-")
+        val userDataDir = tempDir.resolve("profile")
+        val destroyer = ChromeDestroyer(userDataDir)
+        val process = startZombieCandidateProcess(tempDir, userDataDir)
+
+        try {
+            val pid = process.pid()
+            destroyProcessIfAlive(process)
+
+            assertFalse(process.isAlive, "helper zombie process should be terminated before invoking killProcess")
+            assertEquals(0, destroyer.killProcess(listOf(pid)))
+        } finally {
+            destroyProcessIfAlive(process)
+            tempDir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun testKillProcessByPidSkipsExitedPid() {
+        val tempDir = Files.createTempDirectory("chrome-destroyer-test-")
+        val userDataDir = tempDir.resolve("profile")
+        val destroyer = ChromeDestroyer(userDataDir)
+        val process = startZombieCandidateProcess(tempDir, userDataDir)
+
+        try {
+            val pid = process.pid()
+            destroyProcessIfAlive(process)
+
+            assertFalse(process.isAlive, "helper zombie process should be terminated before invoking killProcessByPid")
+
+            val method = ChromeDestroyer::class.java.getDeclaredMethod("killProcessByPid", Long::class.javaPrimitiveType, String::class.java)
+            method.isAccessible = true
+
+            val killed = method.invoke(destroyer, pid, "test") as Boolean
+            assertFalse(killed)
         } finally {
             destroyProcessIfAlive(process)
             tempDir.toFile().deleteRecursively()
