@@ -88,6 +88,11 @@ class PulsarWebDriver constructor(
         fingerprintApplier?.invoke(this)
     }
 
+    /**
+     * Check if the underlying browser connection is active.
+     *
+     * TODO: design a complete solution to check the browser status
+     * */
     override fun canConnect(): Boolean {
         return browserProtocol.isOpen
     }
@@ -98,7 +103,7 @@ class PulsarWebDriver constructor(
         }
 
         // Must not dependent on WebDriver which causes cyclic function calls
-        return runCatching { runBlocking { browserProtocol.mainFrame() } }.isSuccess
+        return runCatching { runBlocking { browserProtocol.isOpen } }.isSuccess
     }
 
     override suspend fun addBlockedURLs(urlPatterns: List<String>) {

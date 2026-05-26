@@ -749,7 +749,11 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         return sessionId
     }
 
-    private fun openTemporarySession(): String = openSession(mapOf("profileMode" to OPEN_PROFILE_MODE))
+    private fun openTemporarySession(): String = openSession(mapOf(
+        "sessionId" to "test",
+        "profileMode" to OPEN_PROFILE_MODE,
+        "interactLevel" to "FASTEST"
+    ))
 
     private fun navigate(sessionId: String, url: String) {
         val response = callTool("browser_navigate", mapOf("sessionId" to sessionId, "url" to url))
