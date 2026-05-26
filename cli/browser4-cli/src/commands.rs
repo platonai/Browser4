@@ -931,6 +931,30 @@ pub fn all_commands() -> Vec<CommandDef> {
                 json!({ "id": get_str(args, "id").unwrap_or_default() })
             },
         },
+        // ---- Install ----
+        CommandDef {
+            name: "install",
+            description: "Download and install Browser4.jar and a bundled JRE from GitHub releases",
+            category: Category::Install,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef {
+                    name: "version",
+                    description: "Browser4 version to install, e.g. 4.9.0. Defaults to the latest release.",
+                    is_bool: false,
+                },
+            ],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(v) = get_opt_str(args, "version") {
+                    p["version"] = json!(v);
+                }
+                p
+            },
+        },
         // ---- Swarm ----
         CommandDef {
             name: "swarm-create",
@@ -1054,6 +1078,7 @@ mod tests {
             "fill",
             "snapshot",
             "screenshot",
+            "install",
             "extract",
             "summarize",
             "agent-run",

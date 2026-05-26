@@ -195,9 +195,10 @@ fn build_maven_launch_spec(repo_root: &Path, port: u16) -> Result<ServerLaunchSp
 }
 
 fn build_jar_launch_spec(jar_path: &Path, port: u16) -> ServerLaunchSpec {
+    let java = find_java_binary(jar_path);
     ServerLaunchSpec {
         kind: ServerLaunchKind::Jar,
-        program: PathBuf::from("java"),
+        program: java,
         args: vec![
             "-jar".to_string(),
             java_jar_argument_path(jar_path),
@@ -214,6 +215,29 @@ fn build_jar_launch_spec(jar_path: &Path, port: u16) -> ServerLaunchSpec {
             port
         ),
     }
+}
+
+/// Resolves the `java` binary to use when launching a JAR.
+///
+/// Priority:
+/// 1. Bundled JRE that lives next to `jar_path` (i.e. `<jar_dir>/jre/bin/java[.exe]`)
+/// 2. Bundled JRE that was installed by `browser4-cli install` in the default lib dir
+/// 3. System `java` on `PATH`
+fn find_java_binary(jar_path: &Path) -> PathBuf {
+    // Check for bundled JRE sitting alongside the JAR
+    if let Some(jar_dir) = jar_path.parent() {
+        if let Some(java) = crate::install::bundled_jre_java_binary(jar_dir) {
+            return java;
+        }
+    }
+
+    // Check the default install lib dir (~/.browser4/lib)
+    let lib_dir = crate::install::default_lib_dir();
+    if let Some(java) = crate::install::bundled_jre_java_binary(&lib_dir) {
+        return java;
+    }
+
+    PathBuf::from("java")
 }
 
 fn java_jar_argument_path(jar_path: &Path) -> String {

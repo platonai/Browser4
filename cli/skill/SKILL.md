@@ -14,6 +14,23 @@ Browser automation CLI for AI agents.
 
 Install: `npm i -g browser4-cli`
 
+## Install the Browser4 backend
+
+`browser4-cli install` downloads `Browser4.jar` and a minimal bundled JRE (built with `jlink`)
+from the latest GitHub release, so you can start the backend without a pre-installed JDK:
+
+```bash
+# Install the latest release
+browser4-cli install
+
+# Install a specific version
+browser4-cli install --version=4.9.0
+```
+
+After installing, `browser4-cli open` automatically uses the bundled JRE when launching
+`Browser4.jar`.  If no bundled JRE is available for the current platform (e.g. Linux ARM64
+musl), the system `java` binary on `PATH` is used instead.
+
 ## Quick start
 
 ```bash

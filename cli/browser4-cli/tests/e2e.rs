@@ -2423,6 +2423,8 @@ fn excluded_commands(include_batch_command: bool) -> HashSet<&'static str> {
         // Destructive across concurrent sessions — would make the suite flaky
         "close-all",
         "kill-all",
+        // Contacts GitHub releases API; not suitable for automated e2e tests
+        "install",
     ]
     .into();
 

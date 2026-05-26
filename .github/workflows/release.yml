@@ -681,8 +681,151 @@ jobs:
           path: artifacts/${{ matrix.binary }}
           retention-days: 7
 
-  publish-cli-npm:
-    name: Publish browser4-cli to npm
+  build-jre-archives:
+    name: Build ${{ matrix.name }} JRE
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            os: ubuntu-latest
+            asset: browser4-jre-linux-x64.tar.gz
+            pack_ext: tar.gz
+            cross_jdk_url: ""
+          - name: Linux ARM64
+            os: ubuntu-latest
+            asset: browser4-jre-linux-arm64.tar.gz
+            pack_ext: tar.gz
+            # Download and use the ARM64 JDK jmods for cross-platform jlink
+            cross_jdk_os: linux
+            cross_jdk_arch: aarch64
+          - name: Windows x64
+            os: windows-latest
+            asset: browser4-jre-win32-x64.zip
+            pack_ext: zip
+            cross_jdk_url: ""
+          - name: macOS x64
+            os: macos-13
+            asset: browser4-jre-darwin-x64.tar.gz
+            pack_ext: tar.gz
+            cross_jdk_url: ""
+          - name: macOS ARM64
+            os: macos-latest
+            asset: browser4-jre-darwin-arm64.tar.gz
+            pack_ext: tar.gz
+            cross_jdk_url: ""
+
+    steps:
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Download cross-platform JDK (Linux ARM64)
+        if: matrix.cross_jdk_arch == 'aarch64' && runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ADOPTIUM_API="https://api.adoptium.net/v3/binary/latest/${{ env.JAVA_VERSION }}/ga/linux/aarch64/jdk/hotspot/normal/eclipse"
+          echo "Downloading ARM64 JDK from Adoptium API..."
+          mkdir -p cross-jdk
+          curl -sL "$ADOPTIUM_API" -o cross-jdk.tar.gz
+          tar xzf cross-jdk.tar.gz -C cross-jdk --strip-components=1
+          echo "CROSS_JDK_JMODS=$PWD/cross-jdk/jmods" >> "$GITHUB_ENV"
+          echo "✅ ARM64 JDK downloaded to cross-jdk/"
+
+      - name: Build JRE with jlink (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          JRE_MODULES: >-
+            java.base,java.compiler,java.desktop,java.instrument,java.logging,
+            java.management,java.management.rmi,java.naming,java.net.http,java.prefs,
+            java.rmi,java.scripting,java.security.jgss,java.security.sasl,
+            java.sql,java.xml,java.xml.crypto,
+            jdk.attach,jdk.crypto.cryptoki,jdk.crypto.ec,jdk.httpserver,
+            jdk.management,jdk.management.agent,jdk.naming.dns,jdk.net,
+            jdk.security.auth,jdk.security.jgss,jdk.unsupported,jdk.zipfs
+        run: |
+          set -euo pipefail
+
+          # Strip spaces and newlines from the module list
+          MODULES=$(echo "$JRE_MODULES" | tr -d ' \n')
+
+          if [ -n "${CROSS_JDK_JMODS:-}" ]; then
+            MODULE_PATH="$CROSS_JDK_JMODS"
+            echo "Cross-platform jlink with module-path: $MODULE_PATH"
+          else
+            MODULE_PATH="${JAVA_HOME}/jmods"
+            echo "Native jlink with module-path: $MODULE_PATH"
+          fi
+
+          rm -rf jre
+          jlink \
+            --module-path "$MODULE_PATH" \
+            --add-modules "$MODULES" \
+            --compress zip-6 \
+            --no-header-files \
+            --no-man-pages \
+            --strip-debug \
+            --output jre
+
+          echo "JRE built:"
+          ls -la jre/bin/java || true
+          echo "JRE size: $(du -sh jre | cut -f1)"
+
+      - name: Build JRE with jlink (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          JRE_MODULES: "java.base,java.compiler,java.desktop,java.instrument,java.logging,java.management,java.management.rmi,java.naming,java.net.http,java.prefs,java.rmi,java.scripting,java.security.jgss,java.security.sasl,java.sql,java.xml,java.xml.crypto,jdk.attach,jdk.crypto.cryptoki,jdk.crypto.ec,jdk.httpserver,jdk.management,jdk.management.agent,jdk.naming.dns,jdk.net,jdk.security.auth,jdk.security.jgss,jdk.unsupported,jdk.zipfs"
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $modules = $env:JRE_MODULES
+
+          if (Test-Path jre) { Remove-Item -Recurse -Force jre }
+
+          jlink `
+            --module-path "$env:JAVA_HOME\jmods" `
+            --add-modules $modules `
+            --compress zip-6 `
+            --no-header-files `
+            --no-man-pages `
+            --strip-debug `
+            --output jre
+
+          Write-Host "JRE built:"
+          Get-ChildItem jre\bin\java.exe -ErrorAction SilentlyContinue
+          Write-Host "JRE size: $([math]::Round((Get-ChildItem jre -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB, 1)) MB"
+
+      - name: Package JRE archive (tar.gz)
+        if: matrix.pack_ext == 'tar.gz'
+        shell: bash
+        run: |
+          tar -czf "${{ matrix.asset }}" jre
+          echo "Archive: ${{ matrix.asset }} ($(du -sh ${{ matrix.asset }} | cut -f1))"
+
+      - name: Package JRE archive (zip)
+        if: matrix.pack_ext == 'zip'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path jre -DestinationPath "${{ matrix.asset }}" -Force
+          $size = [math]::Round((Get-Item "${{ matrix.asset }}").Length / 1MB, 1)
+          Write-Host "Archive: ${{ matrix.asset }} (${size} MB)"
+
+      - name: Upload JRE archive artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+          retention-days: 7
+
+  publish-cli-npm:    name: Publish browser4-cli to npm
     needs: [prepare, build-cli-binaries]
     if: needs.prepare.outputs.cli_should_publish_npm == 'true'
     runs-on: ubuntu-latest
@@ -843,11 +986,13 @@ jobs:
       - prepare
       - build-core-and-docker
       - build-cli-binaries
+      - build-jre-archives
       - publish-cli-npm
     if: |
       always() &&
       needs.build-core-and-docker.result == 'success' &&
       (needs.build-cli-binaries.result == 'success' || needs.build-cli-binaries.result == 'skipped') &&
+      (needs.build-jre-archives.result == 'success' || needs.build-jre-archives.result == 'skipped') &&
       (needs.publish-cli-npm.result == 'success' || needs.publish-cli-npm.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
@@ -873,6 +1018,14 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           pattern: browser4-cli-*
+          path: release-assets/
+          merge-multiple: true
+
+      - name: Download JRE artifacts
+        if: needs.build-jre-archives.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: browser4-jre-*
           path: release-assets/
           merge-multiple: true
 
@@ -913,6 +1066,9 @@ jobs:
             echo "release-assets/${{ needs.build-core-and-docker.outputs.jar_name }}"
             if [ "${{ needs.prepare.outputs.cli_should_build }}" = "true" ]; then
               find release-assets -maxdepth 1 -type f -name 'browser4-cli-*' | sort
+            fi
+            if [ "${{ needs.build-jre-archives.result }}" = "success" ]; then
+              find release-assets -maxdepth 1 -type f -name 'browser4-jre-*' | sort
             fi
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
@@ -991,6 +1147,7 @@ jobs:
             echo "- **Prepare**: ${{ needs.prepare.result }}"
             echo "- **Core Build + Docker**: ${{ needs.build-core-and-docker.result }}"
             echo "- **CLI Binary Build**: ${{ needs.build-cli-binaries.result }}"
+            echo "- **JRE Archives**: ${{ needs.build-jre-archives.result }}"
             echo "- **CLI npm Publish**: ${{ needs.publish-cli-npm.result }}"
             echo ""
             echo "✅ Release pipeline completed successfully!"
@@ -1002,6 +1159,7 @@ jobs:
       - prepare
       - build-core-and-docker
       - build-cli-binaries
+      - build-jre-archives
       - publish-cli-npm
       - publish-github-release
     if: failure()

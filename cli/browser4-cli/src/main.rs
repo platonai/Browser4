@@ -19,6 +19,7 @@ mod commands;
 mod daemon;
 mod help;
 mod http;
+mod install;
 mod managed_processes;
 mod snapshot;
 mod state;
@@ -75,6 +76,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "snapshot",
         "screenshot",
         "pdf",
+        "install",
         "agent-run",
         "agent-status",
         "agent-result",
@@ -1703,7 +1705,11 @@ async fn handle_swarm_result(
 }
 
 fn should_ensure_server_running(command: &str) -> bool {
-    command != "close" && command != "close-all" && command != "kill-all" && command != "list"
+    command != "close"
+        && command != "close-all"
+        && command != "kill-all"
+        && command != "list"
+        && command != "install"
 }
 
 // ---------------------------------------------------------------------------
@@ -2105,9 +2111,9 @@ fn compile_batch_request(
                     final_state.active_selector = active_selector.clone();
                 }
             }
-            "list" | "close-all" | "kill-all" | "delete-data" | "agent-run" | "agent-status"
-            | "agent-result" | "swarm-create" | "swarm-submit" | "swarm-status"
-            | "swarm-result" => {
+            "list" | "close-all" | "kill-all" | "delete-data" | "install" | "agent-run"
+            | "agent-status" | "agent-result" | "swarm-create" | "swarm-submit"
+            | "swarm-status" | "swarm-result" => {
                 if push_batch_local_failure(
                     &mut entries,
                     spec,
@@ -2655,9 +2661,12 @@ async fn run(
         "agent-result" => {
             handle_agent_result(&client, &base_url, &tool_params).await?;
         }
+        // Install command
+        "install" => {
+            install::handle_install(&tool_params).await?;
+        }
         // Swarm commands
-        "swarm-create" => {
-            handle_swarm_create(
+        "swarm-create" => {            handle_swarm_create(
                 &client,
                 &base_url,
                 &tool_params,
