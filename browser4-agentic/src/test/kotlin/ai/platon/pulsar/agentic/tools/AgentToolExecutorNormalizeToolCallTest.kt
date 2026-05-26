@@ -10,7 +10,6 @@ import java.nio.file.Files
 
 class AgentToolExecutorNormalizeToolCallTest {
 
-    private val session = mockk<AgenticSession>(relaxed = true)
     private val agent = mockk<BasicBrowserAgent>(relaxed = true)
 
     @Test

@@ -94,7 +94,7 @@ class Browser4MCPServerTest {
         )
 
         toolManager = mockk(relaxed = true)
-        every { toolManager.concreteExecutors } returns listOf(driverExecutor, fsExecutor, systemExecutor).associateBy { it.domain }
+        every { toolManager.registeredExecutors } returns listOf(driverExecutor, fsExecutor, systemExecutor).associateBy { it.domain }
 
         mcpServer = Browser4MCPServer(
             toolManager = toolManager,

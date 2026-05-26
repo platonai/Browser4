@@ -65,12 +65,8 @@ class AgentToolManager constructor(
         "AgentShell" to "shell",
     )
 
-    private val _concreteExecutors: MutableMap<String, ToolExecutor> = mutableMapOf()
-
-    val concreteExecutors: Map<String, ToolExecutor> get() = _concreteExecutors
-
-    val executor by lazy {
-        _concreteExecutors += listOf(
+    private val _concreteExecutors: MutableMap<String, ToolExecutor> by lazy {
+        listOf(
             BrowserTabToolExecutor(),
             BrowserToolExecutor(),
             FileSystemToolExecutor(),
@@ -78,9 +74,12 @@ class AgentToolManager constructor(
             AgentToolExecutor(),
             system,
             skills
-        ).associateBy { it.domain }
-        BasicToolCallExecutor(concreteExecutors)
+        ).associateBy { it.domain }.toMutableMap()
     }
+
+    val executor by lazy { BasicToolCallExecutor(_concreteExecutors) }
+
+    val registeredExecutors: Map<String, ToolExecutor> get() = executor.toolExecutors
 
     val customTargets: Map<String, Any> get() = _customTargets
 
@@ -142,7 +141,7 @@ class AgentToolManager constructor(
 
     fun help(domain: String, method: String): String {
         // Check built-in executors first
-        val builtInHelp = concreteExecutors.values.firstOrNull { it.domain == domain }?.help(method)
+        val builtInHelp = registeredExecutors.values.firstOrNull { it.domain == domain }?.help(method)
         if (builtInHelp != null) {
             return builtInHelp
         }
@@ -170,7 +169,7 @@ class AgentToolManager constructor(
      * @return A map from domain name to a map of method name to [ToolSpec].
      */
     fun getAllToolSpecs(): Map<String, Map<String, ToolSpec>> {
-        return concreteExecutors.values.associate { executor -> executor.domain to executor.getToolSpecs() }
+        return registeredExecutors.values.associate { executor -> executor.domain to executor.getToolSpecs() }
     }
 
     /**
@@ -181,7 +180,7 @@ class AgentToolManager constructor(
      * @return The [ToolSpec] for the given domain and method, or null.
      */
     fun getToolSpec(domain: String, method: String): ToolSpec? {
-        return concreteExecutors.values.find { it.domain == domain }?.getToolSpecs()?.get(method)
+        return registeredExecutors.values.find { it.domain == domain }?.getToolSpecs()?.get(method)
     }
 
     /**

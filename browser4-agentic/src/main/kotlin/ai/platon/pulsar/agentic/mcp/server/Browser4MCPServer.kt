@@ -99,7 +99,7 @@ class Browser4MCPServer(
      * [AgentToolManager.execute], matching the internal agent execution path.
      */
     private fun Server.registerToolsFromManager(toolManager: AgentToolManager) {
-        val toolExecutors = toolManager.executor.toolExecutors.values
+        val toolExecutors = toolManager.registeredExecutors.values
         for (executor in toolExecutors) {
             val specs = executor.getToolSpecs()
             if (specs.isEmpty()) continue

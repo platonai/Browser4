@@ -8,7 +8,6 @@ import kotlin.reflect.KClass
 class SystemToolExecutor(
     val agentToolManager: AgentToolManager
 ) : AbstractToolExecutor() {
-    private val logger = getLogger(this)
 
     override val domain = "system"
 
@@ -38,7 +37,7 @@ class SystemToolExecutor(
     @Throws(IllegalArgumentException::class)
     override suspend fun callFunctionOn(
         domain: String, functionName: String, args: Map<String, Any?>, receiver: Any
-    ): Any? {
+    ): Any {
         require(domain == this.domain) { "Unsupported domain: $domain" }
         require(functionName.isNotBlank()) { "Function name must not be blank" }
 

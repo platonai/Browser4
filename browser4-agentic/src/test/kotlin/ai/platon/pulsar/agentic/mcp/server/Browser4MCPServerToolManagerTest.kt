@@ -21,7 +21,7 @@ import org.junit.jupiter.api.Test
  * Tests for [Browser4MCPServer] when constructed from [AgentToolManager].
  *
  * Validates that:
- * - Tools are discovered dynamically from [AgentToolManager.concreteExecutors] and their
+ * - Tools are discovered dynamically from [AgentToolManager.registeredExecutors] and their
  *   [ToolSpec] metadata, rather than being registered with hard-coded schemas.
  * - Every MCP tool handler routes its call through [AgentToolManager.execute].
  * - The snake_case MCP tool names are derived correctly from domain + method.
@@ -83,7 +83,7 @@ class Browser4MCPServerToolManagerTest {
         )
 
         toolManager = mockk(relaxed = true)
-        every { toolManager.concreteExecutors } returns mutableListOf(driverExecutor, fsExecutor).associateBy { it.domain }
+        every { toolManager.registeredExecutors } returns mutableListOf(driverExecutor, fsExecutor).associateBy { it.domain }
 
         mcpServer = Browser4MCPServer(
             toolManager = toolManager,
@@ -122,7 +122,7 @@ class Browser4MCPServerToolManagerTest {
     @Test
     @DisplayName("each registered tool's spec has a non-blank description")
     fun registeredToolsHaveDescriptions() {
-        val allSpecs = toolManager.executor.toolExecutors.values
+        val allSpecs = toolManager.registeredExecutors.values
             .flatMap { executor -> executor.getToolSpecs().values }
         allSpecs.forEach { spec ->
             assertFalse(spec.description.isNullOrBlank(),
