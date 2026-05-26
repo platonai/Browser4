@@ -120,6 +120,17 @@ browser4-cli tab-select 0
 
 Use `browser4-cli tab-list` to obtain the current zero-based tab index before calling `tab-select` or `tab-close` with a specific target.
 
+### Storage
+
+```bash
+browser4-cli state-save
+browser4-cli state-save auth-state.json
+browser4-cli state-load auth-state.json
+```
+
+`state-save` writes a JSON file containing cookies plus the active origin's `localStorage`.
+`state-load` restores that JSON into the current session and auto-opens a session first when needed.
+
 ## Open parameters
 ```bash
 # Start with profile mode

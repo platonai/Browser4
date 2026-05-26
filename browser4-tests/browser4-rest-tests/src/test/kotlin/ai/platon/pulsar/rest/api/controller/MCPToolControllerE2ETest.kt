@@ -86,6 +86,8 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         "dialog-dismiss" to "browser_handle_dialog",
         "resize" to "browser_resize",
         "screenshot" to "browser_take_screenshot",
+        "state-save" to "browser_save_storage_state",
+        "state-load" to "browser_load_storage_state",
         "tab-list" to "browser_tabs",
         "tab-new" to "browser_tabs",
         "tab-close" to "browser_tabs",
@@ -213,6 +215,72 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         val deleteResponse = callTool("delete_session_data", mapOf("sessionId" to sessionId))
         assertNotError(deleteResponse)
         assertTrue(textContent(deleteResponse).contains("User data deleted"))
+    }
+
+    @Test
+    @DisplayName("storage state tools save and restore cookies plus localStorage")
+    fun testStorageStateTools() {
+        val sessionId = openAndNavigate(fixtureServer.interactiveUrl())
+        assertNotError(
+            callTool(
+                "browser_evaluate",
+                mapOf(
+                    "sessionId" to sessionId,
+                    "expression" to """
+                        (() => {
+                          document.cookie = 'savedCookie=saved-value; path=/';
+                          window.localStorage.setItem('savedKey', 'saved-value');
+                          return 'ok';
+                        })()
+                    """.trimIndent()
+                )
+            )
+        )
+
+        val savedStateResponse = callTool("browser_save_storage_state", mapOf("sessionId" to sessionId))
+        assertNotError(savedStateResponse)
+        val savedStateText = textContent(savedStateResponse)
+        val savedState = objectMapper.readTree(savedStateText)
+        assertTrue(savedState["cookies"].any { it["name"].asText() == "savedCookie" })
+        assertTrue(
+            savedState["origins"].any { origin ->
+                origin["origin"].asText() == fixtureServer.baseUrl &&
+                    origin["localStorage"].any { it["name"].asText() == "savedKey" && it["value"].asText() == "saved-value" }
+            }
+        )
+
+        assertNotError(callTool("delete_session_data", mapOf("sessionId" to sessionId)))
+        waitForEvalText(
+            sessionId,
+            "window.localStorage.getItem('savedKey') ?? ''",
+            "",
+            "Expected delete_session_data to clear localStorage before restore"
+        )
+
+        val loadResponse = callTool(
+            "browser_load_storage_state",
+            mapOf(
+                "sessionId" to sessionId,
+                "state" to savedStateText,
+            )
+        )
+        assertNotError(loadResponse)
+        val loadSummary = objectMapper.readTree(textContent(loadResponse))
+        assertEquals(1, loadSummary["origins"].asInt())
+        assertTrue(loadSummary["cookies"].asInt() >= 1)
+
+        waitForEvalText(
+            sessionId,
+            "window.localStorage.getItem('savedKey') ?? ''",
+            "saved-value",
+            "Expected browser_load_storage_state to restore localStorage"
+        )
+        waitForEvalText(
+            sessionId,
+            "document.cookie.includes('savedCookie=saved-value').toString()",
+            "true",
+            "Expected browser_load_storage_state to restore cookies"
+        )
     }
 
     @Test

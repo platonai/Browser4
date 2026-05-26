@@ -1,0 +1,19 @@
+[2026-05-26 11:46:36] [INFO] Control repository root: D:\workspace\Browser4\Browser4-4.9
+[2026-05-26 11:46:36] [INFO] Target repository root: D:\workspace\Browser4\Browser4-4.9
+[2026-05-26 11:46:36] [INFO] Agent working directory: D:\workspace\Browser4\Browser4-4.9
+[2026-05-26 11:46:36] [INFO] ===========================================================================
+[2026-05-26 11:46:36] [INFO] Coworker Task Runner - PowerShell Version
+[2026-05-26 11:46:36] [INFO] Started at: 05/26/2026 11:46:36
+[2026-05-26 11:46:36] [INFO] Script Log: D:\workspace\Browser4\Browser4-4.9\coworker\tasks\300logs\2026\05\26\114636-coworker.log
+[2026-05-26 11:46:36] [INFO] ==========================================================================
+[2026-05-26 11:46:36] [INFO] [PREPARE] Task: 1.md
+[2026-05-26 11:46:36] [INFO] [PREPARE] Task: 2.md
+[2026-05-26 11:46:36] [INFO] [PREPARE] Task: 3.md
+[2026-05-26 11:46:36] [INFO] [PREPARE] Task: 4.md
+[2026-05-26 11:46:36] [INFO] [PREPARE] Task: 5.md
+[2026-05-26 11:46:36] [INFO] [PREPARE] Task: README.md
+[2026-05-26 11:46:36] [INFO] [PREPARE] Task: README.zh.md
+[2026-05-26 11:46:36] [DEBUG] renameScript path: D:\workspace\Browser4\Browser4-4.9\coworker\scripts\workers\rename.ps1
+[2026-05-26 11:46:36] [DEBUG] Test-Path renameScript: True
+[2026-05-26 11:46:37] [DEBUG] Rename returned invalid name: Error: Start-Process failed
+[2026-05-26 11:46:39] [DEBUG] Rename returned invalid name: Error: Start-Process failed

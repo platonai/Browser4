@@ -52,6 +52,14 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_fn: browser::test_navigation_and_storage,
     },
     ScenarioDef {
+        name: "test_e2e_storage_state_commands",
+        short_name: "test_storage_state_commands",
+        requires_browser4: true,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: browser::test_storage_state_commands,
+    },
+    ScenarioDef {
         name: "test_e2e_interaction_commands",
         short_name: "test_interaction_commands",
         requires_browser4: true,

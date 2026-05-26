@@ -48,7 +48,7 @@ use managed_processes::{
     read_managed_server_processes, stop_browser4_server_forcibly, ManagedServerProcess,
     ShutdownResult,
 };
-use snapshot::{resolve_output_path, save_binary, save_snapshot};
+use snapshot::{resolve_output_path, save_binary, save_snapshot, timestamped_filename};
 use state::{
     clear_all_state, clear_state, read_state, resolve_default_state_dir, resolve_ref, write_state,
     CliState, MousePosition,
@@ -74,6 +74,8 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "summarize",
         "snapshot",
         "screenshot",
+        "state-save",
+        "state-load",
         "pdf",
         "agent-run",
         "agent-status",
@@ -809,6 +811,16 @@ struct CloseAllSummary {
     errors: Vec<String>,
 }
 
+#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
+struct StorageStateLoadSummary {
+    #[serde(default)]
+    cookies: usize,
+    #[serde(default)]
+    origins: usize,
+    #[serde(rename = "localStorageEntries", default)]
+    local_storage_entries: usize,
+}
+
 fn known_server_base_urls(
     base_url: &str,
     managed_processes: &[ManagedServerProcess],
@@ -1141,6 +1153,104 @@ async fn handle_delete_data(
     } else {
         println!("{}", result);
     }
+    Ok(())
+}
+
+fn resolve_storage_state_path(filename: Option<&str>) -> Result<PathBuf, String> {
+    let trimmed = filename.map(str::trim).filter(|value| !value.is_empty());
+    let file_name = trimmed
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(timestamped_filename("storage-state", "json")));
+    if file_name.is_absolute() {
+        return Ok(file_name);
+    }
+
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    Ok(cwd.join(file_name))
+}
+
+async fn handle_state_save(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let output_path =
+        resolve_storage_state_path(tool_params.get("filename").and_then(|value| value.as_str()))?;
+    let result = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let tool_name = tool_name.to_string();
+        async move {
+            call_tool(
+                &client,
+                &base_url,
+                &tool_name,
+                json!({ "sessionId": session_id }),
+            )
+            .await
+        }
+    })
+    .await?;
+
+    let state_json = serde_json::from_str::<Value>(&result)
+        .map_err(|e| format!("Browser4 returned invalid storage state JSON: {e}"))?;
+    let formatted = serde_json::to_string_pretty(&state_json)
+        .map_err(|e| format!("Failed to format storage state JSON: {e}"))?;
+    save_snapshot(&output_path, &formatted).map_err(|e| e.to_string())?;
+    println!("Storage state saved: {}", output_path.display());
+    Ok(())
+}
+
+async fn handle_state_load(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let filename = tool_params
+        .get("filename")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| "state-load requires a storage-state JSON file path".to_string())?;
+    let input_path = resolve_storage_state_path(Some(filename))?;
+    let state_json = std::fs::read_to_string(&input_path).map_err(|e| {
+        format!(
+            "Failed to read storage state file {}: {}",
+            input_path.display(),
+            e
+        )
+    })?;
+    serde_json::from_str::<Value>(&state_json).map_err(|e| {
+        format!(
+            "Failed to parse storage state file {}: {}",
+            input_path.display(),
+            e
+        )
+    })?;
+
+    let (_, session_id, _) =
+        get_or_create_navigation_session(client, base_url, &json!({}), session_name).await?;
+    let result = call_tool(
+        client,
+        base_url,
+        tool_name,
+        json!({
+            "sessionId": session_id,
+            "state": state_json,
+        }),
+    )
+    .await?;
+    let summary: StorageStateLoadSummary = serde_json::from_str(&result)
+        .map_err(|e| format!("Browser4 returned an invalid storage-state load summary: {e}"))?;
+    println!(
+        "Storage state loaded: {} (cookies: {}, origins: {}, localStorage entries: {})",
+        input_path.display(),
+        summary.cookies,
+        summary.origins,
+        summary.local_storage_entries
+    );
     Ok(())
 }
 
@@ -2578,6 +2688,26 @@ async fn run(
         "delete-data" => {
             handle_delete_data(&client, &base_url, global.session_name.as_deref()).await?;
         }
+        "state-save" => {
+            handle_state_save(
+                &client,
+                &base_url,
+                &tool_name,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
+        "state-load" => {
+            handle_state_load(
+                &client,
+                &base_url,
+                &tool_name,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
         "snapshot" => {
             handle_snapshot(
                 &client,
@@ -2744,6 +2874,42 @@ mod tests {
     #[test]
     fn no_snapshot_commands_include_summarize() {
         assert!(no_snapshot_commands().contains("summarize"));
+    }
+
+    #[test]
+    fn no_snapshot_commands_include_state_save() {
+        assert!(no_snapshot_commands().contains("state-save"));
+    }
+
+    #[test]
+    fn no_snapshot_commands_include_state_load() {
+        assert!(no_snapshot_commands().contains("state-load"));
+    }
+
+    #[test]
+    fn resolve_storage_state_path_uses_current_directory() {
+        let tmp = test_temp_dir();
+        let previous_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+        let resolved = resolve_storage_state_path(Some("auth-state.json")).unwrap();
+        std::env::set_current_dir(previous_dir).unwrap();
+
+        assert_eq!(resolved, tmp.path().join("auth-state.json"));
+    }
+
+    #[test]
+    fn resolve_storage_state_path_defaults_to_timestamped_json_in_current_directory() {
+        let tmp = test_temp_dir();
+        let previous_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+        let resolved = resolve_storage_state_path(None).unwrap();
+        std::env::set_current_dir(previous_dir).unwrap();
+
+        assert_eq!(resolved.parent(), Some(tmp.path()));
+        assert!(resolved
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("storage-state-") && name.ends_with(".json")));
     }
 
     #[test]

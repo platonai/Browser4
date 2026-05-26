@@ -102,6 +102,8 @@ class MCPToolController(
             "browser_evaluate" to "evaluate_value",
             "browser_resize" to "resize",
             "browser_take_screenshot" to "screenshot",
+            "browser_save_storage_state" to "save_storage_state",
+            "browser_load_storage_state" to "load_storage_state",
         )
 
         private const val CLEAR_SESSION_STORAGE_SCRIPT = """

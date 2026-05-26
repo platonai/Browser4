@@ -152,6 +152,143 @@ pub(super) fn test_navigation_and_storage(ctx: &mut E2ECtx) {
     run_command(ctx, &["close"]);
 }
 
+pub(super) fn test_storage_state_commands(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let interactive_url = ctx.interactive_url();
+    let storage_state_path = ctx.workspace_dir.join("auth-state.json");
+    let storage_state_path_text = storage_state_path.to_string_lossy().into_owned();
+    let initial_state = serde_json::json!({
+        "cookies": [
+            {
+                "name": "restoredCookie",
+                "value": "restored-value",
+                "url": interactive_url,
+            }
+        ],
+        "origins": [
+            {
+                "origin": ctx.fixture_base_url,
+                "localStorage": [
+                    { "name": "restoredKey", "value": "restored-value" }
+                ]
+            }
+        ]
+    });
+    fs::write(
+        &storage_state_path,
+        serde_json::to_string_pretty(&initial_state).unwrap(),
+    )
+    .unwrap();
+
+    let load_without_session = run_command(ctx, &["state-load", &storage_state_path_text]);
+    assert!(
+        load_without_session
+            .stdout
+            .contains("Storage state loaded:"),
+        "Expected storage-state load output:\n{}",
+        load_without_session.stdout
+    );
+
+    run_command(ctx, &["goto", &interactive_url]);
+    wait_for_eval_text(
+        ctx,
+        "document.cookie.includes('restoredCookie=restored-value').toString()",
+        "true",
+        2_000,
+        "Expected state-load to restore cookies into a fresh session",
+    );
+    wait_for_eval_text(
+        ctx,
+        "window.localStorage.getItem('restoredKey') ?? ''",
+        "restored-value",
+        2_000,
+        "Expected state-load to restore localStorage into a fresh session",
+    );
+
+    run_command(
+        ctx,
+        &[
+            "eval",
+            "(() => { document.cookie = 'savedCookie=saved-value; path=/'; window.localStorage.setItem('savedKey', 'saved-value'); return 'ok'; })()",
+        ],
+    );
+
+    let save_result = run_command(ctx, &["state-save", &storage_state_path_text]);
+    assert!(
+        save_result.stdout.contains("Storage state saved:"),
+        "Expected storage-state save output:\n{}",
+        save_result.stdout
+    );
+
+    let saved_state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&storage_state_path).unwrap()).unwrap();
+    assert!(
+        saved_state["cookies"]
+            .as_array()
+            .is_some_and(|cookies| cookies.iter().any(|cookie| {
+                cookie["name"].as_str() == Some("savedCookie")
+                    && cookie["value"].as_str() == Some("saved-value")
+            })),
+        "Expected saved state file to contain savedCookie:\n{}",
+        saved_state
+    );
+    assert!(
+        saved_state["origins"]
+            .as_array()
+            .is_some_and(|origins| origins.iter().any(|origin| {
+                origin["origin"].as_str() == Some(&ctx.fixture_base_url)
+                    && origin["localStorage"].as_array().is_some_and(|entries| {
+                        entries.iter().any(|entry| {
+                            entry["name"].as_str() == Some("savedKey")
+                                && entry["value"].as_str() == Some("saved-value")
+                        })
+                    })
+            })),
+        "Expected saved state file to contain savedKey localStorage entry:\n{}",
+        saved_state
+    );
+
+    run_command(ctx, &["delete-data"]);
+    wait_for_eval_text(
+        ctx,
+        "document.cookie.includes('savedCookie=saved-value').toString()",
+        "false",
+        2_000,
+        "Expected delete-data to remove cookies before restoring state",
+    );
+    wait_for_eval_text(
+        ctx,
+        "window.localStorage.getItem('savedKey') ?? ''",
+        "",
+        2_000,
+        "Expected delete-data to clear localStorage before restoring state",
+    );
+
+    let load_result = run_command(ctx, &["state-load", &storage_state_path_text]);
+    assert!(
+        load_result.stdout.contains("Storage state loaded:"),
+        "Expected storage-state reload output:\n{}",
+        load_result.stdout
+    );
+    wait_for_eval_text(
+        ctx,
+        "document.cookie.includes('savedCookie=saved-value').toString()",
+        "true",
+        2_000,
+        "Expected state-load to restore saved cookies",
+    );
+    wait_for_eval_text(
+        ctx,
+        "window.localStorage.getItem('savedKey') ?? ''",
+        "saved-value",
+        2_000,
+        "Expected state-load to restore saved localStorage",
+    );
+
+    run_command(ctx, &["close"]);
+}
+
 pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
     run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);

@@ -1,0 +1,4 @@
+- Added state-save and state-load to rowser4-cli, backed by new Browser4 tab tools that save/load cookies plus the active origin's localStorage as JSON. Implemented direct file-path handling in the CLI, restored cookie writes through CDP, documented the commands in cli/skill/SKILL.md, and added Rust/Kotlin command-mapping plus end-to-end coverage.
+- Outcome: the new storage-state commands now work across sessions and browser restarts, with focused CLI and REST e2e coverage passing after making the packaged tab-tool specs explicit for the Browser4.jar runtime.
+- Lesson learned: Browser4.jar-backed CLI e2e can miss newly added tab tools if their specs are only reflection-generated; for new MCP-facing driver methods, keep explicit BrowserTabToolExecutor specs when packaged runtime discovery matters.
+- Correction: the first bullet refers to `browser4-cli`; the odd character was a PowerShell backtick escape artifact in the appended text.

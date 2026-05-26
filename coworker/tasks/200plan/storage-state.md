@@ -112,12 +112,7 @@ browser4-cli cookie-clear
 For complex scenarios like adding multiple cookies at once, use `run-code`:
 
 ```bash
-browser4-cli run-code "async page => {
-  await page.context().addCookies([
-    { name: 'session_id', value: 'sess_abc123', domain: 'example.com', path: '/', httpOnly: true },
-    { name: 'preferences', value: JSON.stringify({ theme: 'dark' }), domain: 'example.com', path: '/' }
-  ]);
-}"
+
 ```
 
 ## Local Storage

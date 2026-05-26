@@ -2448,6 +2448,9 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "go-forward",
         "reload",
         "delete-data",
+        // test_storage_state_commands
+        "state-save",
+        "state-load",
         // test_interaction_commands
         "resize",
         "type",

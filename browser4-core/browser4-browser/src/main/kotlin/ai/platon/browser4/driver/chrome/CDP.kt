@@ -34,6 +34,8 @@ import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
 class BrowserProtocol(
     private val devTools: ChromeDevTools
 ) {
+    private data class EmptyResult(val ignored: String? = null)
+
     val remoteDevToolsOrNull: RemoteDevTools? get() = devTools as? RemoteDevTools
     val isOpen: Boolean get() = remoteDevToolsOrNull?.isOpen ?: false
 
@@ -383,6 +385,12 @@ class BrowserProtocol(
         domain: String? = null,
         path: String? = null,
     ) = network.deleteCookies(name, url, domain, path)
+
+    suspend fun setCookies(cookies: List<Map<String, Any?>>) {
+        val remoteDevTools = remoteDevToolsOrNull
+            ?: throw IllegalStateException("Remote DevTools is not available")
+        remoteDevTools.invoke("Network.setCookies", mapOf("cookies" to cookies), EmptyResult::class)
+    }
 
     suspend fun setExtraHTTPHeaders(headers: Map<String, Any>) = network.setExtraHTTPHeaders(headers)
 

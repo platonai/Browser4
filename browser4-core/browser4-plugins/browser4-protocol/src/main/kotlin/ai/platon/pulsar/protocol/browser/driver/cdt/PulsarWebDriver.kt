@@ -34,6 +34,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import org.apache.commons.lang3.StringUtils
 import org.apache.commons.lang3.SystemUtils
+import java.net.URI
 import java.nio.file.Files
 import java.time.Duration
 import java.time.Instant
@@ -46,6 +47,26 @@ class PulsarWebDriver constructor(
     val browserProtocol: BrowserProtocol,
     override val browser: PulsarBrowser
 ) : AbstractWebDriver(uniqueID, browser) {
+    private data class StorageStatePayload(
+        val cookies: List<Map<String, Any?>> = emptyList(),
+        val origins: List<StorageStateOriginPayload> = emptyList(),
+    )
+
+    private data class StorageStateOriginPayload(
+        val origin: String = "",
+        val localStorage: List<StorageStateEntryPayload> = emptyList(),
+    )
+
+    private data class StorageStateEntryPayload(
+        val name: String = "",
+        val value: String = "",
+    )
+
+    private data class StorageStateLoadSummary(
+        val cookies: Int,
+        val origins: Int,
+        val localStorageEntries: Int,
+    )
 
     private val logger = getLogger(this)
 
@@ -171,6 +192,54 @@ class PulsarWebDriver constructor(
 
     override suspend fun clearBrowserCookies() {
         rpc.invokeOnPage("clearBrowserCookies") { browserProtocol.clearBrowserCookies() }
+    }
+
+    override suspend fun saveStorageState(): String {
+        val mapper = jacksonObjectMapper().setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
+        val cookies = getCookies().map { toStorageStateCookie(it) }
+        val origins = listOfNotNull(captureCurrentOriginLocalStorage())
+        return mapper.writerWithDefaultPrettyPrinter().writeValueAsString(
+            mapOf(
+                "cookies" to cookies,
+                "origins" to origins,
+            )
+        )
+    }
+
+    override suspend fun loadStorageState(state: String): String {
+        val mapper = jacksonObjectMapper().setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
+        val payload = mapper.readValue<StorageStatePayload>(state)
+        val cookies = payload.cookies.map(::normalizeCookieForSet)
+        if (cookies.isNotEmpty()) {
+            browserProtocol.setCookies(cookies)
+        }
+
+        val originalUrl = currentUrl()
+        var restoredOrigins = 0
+        var restoredLocalStorageEntries = 0
+
+        payload.origins.forEach { originState ->
+            val origin = originState.origin.trim()
+            require(origin.isNotEmpty()) { "Storage state origin must not be blank" }
+            require(URLUtils.isStandard(origin)) { "Storage state origin must be a standard URL: $origin" }
+
+            open(origin)
+            restoreLocalStorage(originState.localStorage, mapper)
+            restoredOrigins += 1
+            restoredLocalStorageEntries += originState.localStorage.size
+        }
+
+        if (payload.origins.isNotEmpty() && originalUrl.isNotBlank() && currentUrl() != originalUrl) {
+            open(originalUrl)
+        }
+
+        return mapper.writeValueAsString(
+            StorageStateLoadSummary(
+                cookies = cookies.size,
+                origins = restoredOrigins,
+                localStorageEntries = restoredLocalStorageEntries,
+            )
+        )
     }
 
     // Use the JavaScript version in super class
@@ -1462,9 +1531,131 @@ function() {
         return cookies
     }
 
+    private suspend fun captureCurrentOriginLocalStorage(): Map<String, Any>? {
+        val result = evaluateValue(
+            """
+            (() => {
+              try {
+                const origin = window.location.origin;
+                if (!origin || origin === "null") {
+                  return { origin: null, localStorage: [] };
+                }
+                const localStorageEntries = [];
+                for (let index = 0; index < window.localStorage.length; index += 1) {
+                  const name = window.localStorage.key(index);
+                  if (name == null) continue;
+                  localStorageEntries.push({
+                    name,
+                    value: window.localStorage.getItem(name) ?? ""
+                  });
+                }
+                return { origin, localStorage: localStorageEntries };
+              } catch (error) {
+                return { origin: null, localStorage: [], error: String(error) };
+              }
+            })()
+            """.trimIndent()
+        ) as? Map<*, *> ?: return null
+
+        val error = result["error"]?.toString()?.trim().orEmpty()
+        require(error.isEmpty()) { "Failed to capture localStorage: $error" }
+
+        val origin = result["origin"]?.toString()?.trim().orEmpty()
+        if (origin.isEmpty() || origin == "null") {
+            return null
+        }
+
+        val localStorageEntries = (result["localStorage"] as? List<*>).orEmpty().map { entry ->
+            val item = entry as? Map<*, *> ?: throw IllegalArgumentException("localStorage entry must be an object")
+            val name = item["name"]?.toString()?.trim().orEmpty()
+            require(name.isNotEmpty()) { "localStorage entry name must not be blank" }
+            mapOf(
+                "name" to name,
+                "value" to (item["value"]?.toString() ?: ""),
+            )
+        }
+
+        return mapOf(
+            "origin" to origin,
+            "localStorage" to localStorageEntries,
+        )
+    }
+
+    private suspend fun restoreLocalStorage(
+        localStorage: List<StorageStateEntryPayload>,
+        mapper: com.fasterxml.jackson.databind.ObjectMapper,
+    ) {
+        val normalizedEntries = localStorage.map { entry ->
+            val name = entry.name.trim()
+            require(name.isNotEmpty()) { "localStorage entry name must not be blank" }
+            mapOf(
+                "name" to name,
+                "value" to entry.value,
+            )
+        }
+        val entriesJson = mapper.writeValueAsString(normalizedEntries)
+        val restoredCount = evaluateValue(
+            """
+            (() => {
+              const entries = $entriesJson;
+              window.localStorage.clear();
+              for (const entry of entries) {
+                window.localStorage.setItem(entry.name, entry.value ?? "");
+              }
+              return entries.length;
+            })()
+            """.trimIndent()
+        )
+        val restored = (restoredCount as? Number)?.toInt()
+        require(restored == normalizedEntries.size) {
+            "Expected to restore ${normalizedEntries.size} localStorage entries but restored ${restored ?: "none"}"
+        }
+    }
+
     private fun serialize(cookie: ai.platon.cdt.kt.protocol.types.network.Cookie): Map<String, String> {
         val mapper = jacksonObjectMapper().setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
         return mapper.readValue(mapper.writeValueAsString(cookie))
+    }
+
+    private fun toStorageStateCookie(cookie: Map<String, String>): Map<String, Any> {
+        val name = cookie["name"]?.trim().orEmpty()
+        require(name.isNotEmpty()) { "Cookie name must not be blank" }
+
+        val normalized = linkedMapOf<String, Any>(
+            "name" to name,
+            "value" to (cookie["value"] ?: ""),
+        )
+
+        cookie["domain"]?.trim()?.takeIf { it.isNotEmpty() }?.let { normalized["domain"] = it }
+        cookie["path"]?.trim()?.takeIf { it.isNotEmpty() }?.let { normalized["path"] = it }
+        cookie["expires"]?.toDoubleOrNull()?.takeIf { it > 0 }?.let { normalized["expires"] = it }
+        cookie["httpOnly"]?.toBooleanStrictOrNull()?.let { normalized["httpOnly"] = it }
+        cookie["secure"]?.toBooleanStrictOrNull()?.let { normalized["secure"] = it }
+        cookie["sameSite"]?.trim()?.takeIf { it.isNotEmpty() }?.let { normalized["sameSite"] = it }
+        return normalized
+    }
+
+    private fun normalizeCookieForSet(cookie: Map<String, Any?>): Map<String, Any?> {
+        val name = cookie["name"]?.toString()?.trim().orEmpty()
+        require(name.isNotEmpty()) { "Storage state cookie name must not be blank" }
+
+        val normalized = linkedMapOf<String, Any?>(
+            "name" to name,
+            "value" to (cookie["value"]?.toString() ?: ""),
+        )
+
+        cookie["url"]?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { normalized["url"] = it }
+        cookie["domain"]?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { normalized["domain"] = it }
+        cookie["path"]?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { normalized["path"] = it }
+        cookie["expires"]?.toString()?.toDoubleOrNull()?.takeIf { it > 0 }?.let { normalized["expires"] = it }
+        cookie["httpOnly"]?.toString()?.toBooleanStrictOrNull()?.let { normalized["httpOnly"] = it }
+        cookie["secure"]?.toString()?.toBooleanStrictOrNull()?.let { normalized["secure"] = it }
+        cookie["sameSite"]?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { normalized["sameSite"] = it }
+
+        require("url" in normalized || "domain" in normalized) {
+            "Storage state cookie '$name' must include either url or domain"
+        }
+        return normalized
     }
 
     private suspend fun cdpDeleteCookies(

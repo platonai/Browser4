@@ -523,6 +523,25 @@ interface WebDriver : Closeable {
     suspend fun clearBrowserCookies()
 
     /**
+     * Saves the current browser storage state, including cookies and the active origin's localStorage, as JSON. @mcp
+     *
+     * @return A JSON string that can later be passed to [loadStorageState].
+     */
+    @Throws(WebDriverException::class)
+    @MCP
+    suspend fun saveStorageState(): String
+
+    /**
+     * Loads a previously saved browser storage state JSON, restoring cookies and localStorage. @mcp
+     *
+     * @param state A JSON string produced by [saveStorageState].
+     * @return A JSON summary of the restored cookies, origins, and localStorage entries.
+     */
+    @Throws(WebDriverException::class)
+    @MCP
+    suspend fun loadStorageState(state: String): String
+
+    /**
      * Wait until the element identified by the selector becomes present in the DOM or timeout. @mcp
      *
      * ```kotlin

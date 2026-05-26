@@ -724,6 +724,47 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
+        // ---- Storage ----
+        CommandDef {
+            name: "state-save",
+            description: "Save cookies and localStorage to a JSON file",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef {
+                name: "filename",
+                description: "Optional file path. Defaults to storage-state-<timestamp>.json in the current directory",
+                optional: true,
+            }],
+            options: &[],
+            tool_name_fn: |_| "browser_save_storage_state".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(filename) = get_opt_str(args, "filename") {
+                    p["filename"] = json!(filename);
+                }
+                p
+            },
+        },
+        CommandDef {
+            name: "state-load",
+            description: "Load cookies and localStorage from a JSON file",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef {
+                name: "filename",
+                description: "Path to a storage-state JSON file",
+                optional: false,
+            }],
+            options: &[],
+            tool_name_fn: |_| "browser_load_storage_state".to_string(),
+            tool_params_fn: |args| {
+                json!({
+                    "filename": get_str(args, "filename").unwrap_or_default()
+                })
+            },
+        },
         // ---- Export ----
         CommandDef {
             name: "screenshot",
@@ -1052,6 +1093,8 @@ mod tests {
             "click",
             "type",
             "fill",
+            "state-save",
+            "state-load",
             "snapshot",
             "screenshot",
             "extract",
@@ -1151,6 +1194,17 @@ mod tests {
         assert_eq!((cmd.tool_name_fn)(&args), "agent_extract");
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["instruction"], "product name, price");
+    }
+
+    #[test]
+    fn test_state_load_tool_name_and_params() {
+        let map = commands_map();
+        let cmd = map.get("state-load").unwrap();
+        let mut args = HashMap::new();
+        args.insert("filename".to_string(), json!("auth-state.json"));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_load_storage_state");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["filename"], "auth-state.json");
     }
 
     #[test]

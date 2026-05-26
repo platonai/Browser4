@@ -442,6 +442,51 @@ class MCPToolControllerTest {
     }
 
     @Test
+    fun `test browser save storage state maps to saveStorageState`() = runBlocking {
+        mockTool("tab", "saveStorageState")
+
+        val request = MCPToolCallRequest(
+            tool = "browser_save_storage_state",
+            arguments = mapOf("sessionId" to sessionId)
+        )
+
+        `when`(agentToolManager.execute(anyToolCall())).thenReturn(toolCallResult("""{"cookies":[],"origins":[]}"""))
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolManager).execute(capture(captor))
+        val toolCall = captor.value
+
+        assertEquals("tab", toolCall.domain)
+        assertEquals("saveStorageState", toolCall.method)
+    }
+
+    @Test
+    fun `test browser load storage state maps to loadStorageState`() = runBlocking {
+        mockTool("tab", "loadStorageState")
+
+        val request = MCPToolCallRequest(
+            tool = "browser_load_storage_state",
+            arguments = mapOf("sessionId" to sessionId, "state" to """{"cookies":[],"origins":[]}""")
+        )
+
+        `when`(agentToolManager.execute(anyToolCall())).thenReturn(toolCallResult("""{"cookies":0,"origins":0,"localStorageEntries":0}"""))
+
+        val result = controller.callTool(request, response)
+
+        assertEquals(HttpStatus.OK, result.statusCode)
+        val captor = ArgumentCaptor.forClass(ToolCall::class.java)
+        Mockito.verify(agentToolManager).execute(capture(captor))
+        val toolCall = captor.value
+
+        assertEquals("tab", toolCall.domain)
+        assertEquals("loadStorageState", toolCall.method)
+        assertEquals("""{"cookies":[],"origins":[]}""", toolCall.arguments["state"])
+    }
+
+    @Test
     fun `test eval tool name resolves to tab eval and preserves selector and expression`() = runBlocking {
         mockTool("tab", "eval")
 
