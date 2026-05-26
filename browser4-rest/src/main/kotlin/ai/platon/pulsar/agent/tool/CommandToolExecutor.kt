@@ -23,7 +23,7 @@ import kotlin.reflect.KClass
  * // command.result(id="<task-id>")
  * ```
  *
- * @see ai.platon.pulsar.agentic.tools.high.CommandRunner
+ * @see CommandRunner
  */
 class CommandToolExecutor : AbstractToolExecutor() {
 

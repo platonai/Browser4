@@ -4,8 +4,8 @@ import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.AgentToolManager
+import ai.platon.pulsar.common.SessionManager
 import ai.platon.pulsar.common.brief
-import ai.platon.pulsar.rest.api.service.SessionManager
 import ai.platon.pulsar.rest.tool.CommandRunner
 import ai.platon.pulsar.rest.tool.CommandToolExecutor
 import com.fasterxml.jackson.annotation.JsonInclude

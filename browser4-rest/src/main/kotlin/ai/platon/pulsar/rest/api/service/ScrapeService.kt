@@ -9,9 +9,10 @@ import ai.platon.pulsar.agentic.tools.high.crawl.common.ScrapeHyperlink
 import ai.platon.pulsar.agentic.tools.high.crawl.common.XSQLScrapeHyperlink
 import ai.platon.pulsar.agentic.tools.high.crawl.refreshed
 import ai.platon.pulsar.common.ResourceStatus
+import ai.platon.pulsar.common.SessionManager
+import ai.platon.pulsar.common.SessionManager.Companion.SWARM_SESSION_ID
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
 import ai.platon.pulsar.rest.api.entities.ScrapeStatusRequest
-import ai.platon.pulsar.rest.api.service.SessionManager.Companion.SWARM_SESSION_ID
 import ai.platon.pulsar.rest.tool.CommandRunner.Companion.FLOW_POLLING_INTERVAL
 import jakarta.annotation.PreDestroy
 import kotlinx.coroutines.*

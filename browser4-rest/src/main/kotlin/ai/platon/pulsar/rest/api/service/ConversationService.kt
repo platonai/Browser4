@@ -2,6 +2,8 @@ package ai.platon.pulsar.rest.api.service
 
 import ai.platon.browser4.common.B4LinkExtractors
 import ai.platon.pulsar.agentic.tools.high.crawl.common.*
+import ai.platon.pulsar.common.SessionManager
+import ai.platon.pulsar.common.SessionManager.Companion.SWARM_SESSION_ID
 import ai.platon.pulsar.common.ai.llm.PromptTemplate
 import ai.platon.pulsar.common.ai.llm.PromptTemplateLoader
 import ai.platon.pulsar.common.serialize.json.JSONExtractor
@@ -10,7 +12,6 @@ import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.rest.api.entities.CommandRequest
 import ai.platon.pulsar.rest.api.entities.CommandStatus
 import ai.platon.pulsar.rest.api.entities.PromptRequest
-import ai.platon.pulsar.rest.api.service.SessionManager.Companion.SWARM_SESSION_ID
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import com.fasterxml.jackson.module.kotlin.readValue
 import org.springframework.stereotype.Service

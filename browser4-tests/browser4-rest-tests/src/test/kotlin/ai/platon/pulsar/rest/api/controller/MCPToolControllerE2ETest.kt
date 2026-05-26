@@ -1,9 +1,9 @@
 package ai.platon.pulsar.rest.api.controller
 
+import ai.platon.pulsar.common.SessionManager
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.rest.api.TestHelper.MOCK_PRODUCT_DETAIL_URL
-import ai.platon.pulsar.rest.api.service.SessionManager
 import ai.platon.pulsar.rest.mcp.controller.MCPToolCallResponse
 import ai.platon.pulsar.rest.mcp.controller.MCPToolController
 import com.fasterxml.jackson.databind.DeserializationFeature

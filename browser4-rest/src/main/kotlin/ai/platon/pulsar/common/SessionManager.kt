@@ -1,28 +1,25 @@
-package ai.platon.pulsar.rest.api.service
+package ai.platon.pulsar.common
 
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.PerceptiveAgent
 import ai.platon.pulsar.agentic.context.AgenticContext
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.core.api.PulsarSettings
-import jakarta.annotation.PreDestroy
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
-import org.springframework.boot.autoconfigure.condition.ConditionalOnBean
-import org.springframework.stereotype.Service
+import java.io.Closeable
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Manages WebDriver sessions with real AgenticContext instances.
- * Handles session lifecycle, cleanup, and browser integration.
- * Only active when AgenticContext is available (production mode).
+ * Manages AgenticSession-backed browser sessions and their lifecycle.
+ *
+ * This component is framework-agnostic and can be wired manually or exposed
+ * through an external dependency injection container.
  */
-@Service
-@ConditionalOnBean(AgenticContext::class)
 class SessionManager(
     val agenticContext: AgenticContext
-) {
+) : Closeable {
     companion object {
         const val DEFAULT_SESSION_ID = "default"
         const val SWARM_SESSION_ID = "swarm"
@@ -308,13 +305,17 @@ class SessionManager(
     }
 
     /**
-     * Cleanup method called on shutdown.
+     * Closes all active sessions managed by this instance.
      */
-    @PreDestroy
     fun shutdown() {
         logger.info("Shutting down SessionManager, closing {} active sessions", sessions.size)
         sessions.keys.toList().forEach { sessionId ->
             deleteSession(sessionId)
         }
     }
+
+    override fun close() {
+        shutdown()
+    }
 }
+

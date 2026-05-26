@@ -2,7 +2,7 @@ package ai.platon.pulsar.rest.mcp.service
 
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.context.AgenticContext
-import ai.platon.pulsar.rest.api.service.SessionManager
+import ai.platon.pulsar.common.SessionManager
 import ai.platon.pulsar.skeleton.PulsarSettings
 import ai.platon.pulsar.skeleton.browser.Browser
 import ai.platon.pulsar.skeleton.browser.driver.WebDriver

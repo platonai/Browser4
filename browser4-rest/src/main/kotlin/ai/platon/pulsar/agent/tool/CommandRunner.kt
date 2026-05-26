@@ -6,14 +6,14 @@ import ai.platon.pulsar.agentic.tools.high.crawl.PageVisitStatus
 import ai.platon.pulsar.agentic.tools.high.crawl.StatefulPageVisitor
 import ai.platon.pulsar.agentic.tools.high.crawl.failed
 import ai.platon.pulsar.common.ResourceStatus
+import ai.platon.pulsar.common.SessionManager
+import ai.platon.pulsar.common.SessionManager.Companion.DEFAULT_SESSION_ID
 import ai.platon.pulsar.common.Strings
 import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.rest.api.entities.CommandResult
 import ai.platon.pulsar.rest.api.entities.CommandStatus
 import ai.platon.pulsar.rest.api.entities.refreshed
 import ai.platon.pulsar.rest.api.entities.toCommandStatus
-import ai.platon.pulsar.rest.api.service.SessionManager
-import ai.platon.pulsar.rest.api.service.SessionManager.Companion.DEFAULT_SESSION_ID
 import ai.platon.pulsar.rest.config.CommandNormalizer
 import ai.platon.pulsar.skeleton.event.PageEventHandlers
 import ai.platon.pulsar.skeleton.event.impl.PageEventHandlersFactory

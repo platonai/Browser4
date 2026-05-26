@@ -4,10 +4,10 @@ import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.model.*
 import ai.platon.pulsar.agentic.tools.AgentToolManager
+import ai.platon.pulsar.common.SessionManager
+import ai.platon.pulsar.common.SessionManager.ManagedSession
 import ai.platon.pulsar.rest.api.entities.CommandResult
 import ai.platon.pulsar.rest.api.entities.CommandStatus
-import ai.platon.pulsar.rest.api.service.SessionManager
-import ai.platon.pulsar.rest.api.service.SessionManager.ManagedSession
 import ai.platon.pulsar.rest.tool.CommandRunner
 import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
