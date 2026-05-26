@@ -54,10 +54,15 @@ class LoadingWebDriverPoolTest {
     @Tag("Heavy")
     @Test
     fun test_pollAndPutWebDrivers() {
-        val executor = Executors.newFixedThreadPool(pool.numDriverSlots)
+        val slots = pool.numDriverSlots
+        val executor = Executors.newFixedThreadPool(slots)
         val futures = mutableListOf<java.util.concurrent.Future<*>>()
 
         repeat(60) { round ->
+            if (futures.size >= slots) {
+                futures.removeAt(0).get()
+            }
+
             val driver = pool.poll()
 
             printlnPro("${round + 1}. Round ${round + 1} polling a driver")
@@ -74,10 +79,6 @@ class LoadingWebDriverPoolTest {
             }
 
             futures += future
-
-            if (futures.size >= pool.numDriverSlots) {
-                futures.removeAt(0).get()
-            }
         }
 
         futures.forEach { it.get() }
