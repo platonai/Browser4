@@ -78,6 +78,31 @@ function Resolve-ToolPath([string]$toolName) {
     throw "Required tool '$toolName' was not found. Ensure JDK 17+ is installed and JAVA_HOME is configured."
 }
 
+function Get-JavaVersionText {
+    $java = Resolve-ToolPath 'java'
+    $tempRoot = [System.IO.Path]::GetTempPath()
+    $stdoutPath = Join-Path $tempRoot ([System.IO.Path]::GetRandomFileName())
+    $stderrPath = Join-Path $tempRoot ([System.IO.Path]::GetRandomFileName())
+    try {
+        $process = Start-Process -FilePath $java `
+            -ArgumentList @('-version') `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath `
+            -Wait `
+            -PassThru
+        if ($process.ExitCode -ne 0) {
+            throw "java -version failed with exit code $($process.ExitCode)"
+        }
+        $stdout = if (Test-Path $stdoutPath) { Get-Content $stdoutPath -Raw } else { '' }
+        $stderr = if (Test-Path $stderrPath) { Get-Content $stderrPath -Raw } else { '' }
+        return ($stdout + [Environment]::NewLine + $stderr).Trim()
+    }
+    finally {
+        Remove-IfExists $stdoutPath
+        Remove-IfExists $stderrPath
+    }
+}
+
 function Ensure-CleanDirectory([string]$path) {
     if (Test-Path $path) {
         Remove-Item -Recurse -Force $path
@@ -117,7 +142,30 @@ function Remove-SafeRuntimePayload([string]$runtimeRoot) {
         'lib\jvm.lib',
         'bin\jvmcicompiler.dll',
         'bin\libjvmcicompiler.dylib',
-        'bin\libjvmcicompiler.so'
+        'bin\libjvmcicompiler.so',
+        'bin\jar.exe',
+        'bin\jarsigner.exe',
+        'bin\javac.exe',
+        'bin\javadoc.exe',
+        'bin\javap.exe',
+        'bin\jdb.exe',
+        'bin\jdeps.exe',
+        'bin\jfr.exe',
+        'bin\jimage.exe',
+        'bin\jlink.exe',
+        'bin\jmod.exe',
+        'bin\jpackage.exe',
+        'bin\jrunscript.exe',
+        'bin\jshell.exe',
+        'bin\jstatd.exe',
+        'bin\keytool.exe',
+        'bin\kinit.exe',
+        'bin\klist.exe',
+        'bin\ktab.exe',
+        'bin\rmiregistry.exe',
+        'bin\serialver.exe',
+        'bin\jaccessinspector.exe',
+        'bin\jaccesswalker.exe'
     )
 
     foreach ($relativePath in $safeToRemove) {
@@ -153,6 +201,8 @@ Ensure-CleanDirectory $bundleDirectory
 
 $jdeps = Resolve-ToolPath 'jdeps'
 $jlink = Resolve-ToolPath 'jlink'
+$javaVersionText = Get-JavaVersionText
+$isGraalVmRuntime = $javaVersionText -match 'GraalVM'
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 [System.IO.Compression.ZipFile]::ExtractToDirectory($resolvedJarPath, $extractDirectory)
@@ -185,14 +235,14 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $recommendedModules = @(
-    'java.instrument',
     'java.management',
-    'java.naming',
-    'java.net.http',
-    'java.security.jgss',
-    'java.sql',
-    'jdk.crypto.ec',
-    'jdk.unsupported',
+    'jdk.crypto.ec'
+)
+$excludedModules = @(
+    'jdk.attach',
+    'jdk.jdi',
+    'jdk.jfr',
+    'jdk.management',
     'jdk.zipfs'
 )
 $modules = @(
@@ -200,7 +250,8 @@ $modules = @(
         ForEach-Object { $_.Trim() } |
         Where-Object {
             (-not [string]::IsNullOrWhiteSpace($_)) -and
-            ($_.StartsWith('java.') -or $_.StartsWith('jdk.'))
+            ($_.StartsWith('java.') -or $_.StartsWith('jdk.')) -and
+            ($_ -notin $excludedModules)
         } |
         Select-Object -Unique
 )
@@ -220,6 +271,9 @@ $jlinkArgs = @(
     '--compress', 'zip-9',
     '--output', $jreDirectory
 )
+if ($isGraalVmRuntime) {
+    $jlinkArgs = @('--add-options', '-XX:+UnlockExperimentalVMOptions -XX:-UseJVMCICompiler') + $jlinkArgs
+}
 & $jlink @jlinkArgs
 if ($LASTEXITCODE -ne 0) {
     throw "jlink failed with exit code $LASTEXITCODE"

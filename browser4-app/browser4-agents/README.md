@@ -53,6 +53,14 @@ Typical outputs:
 These are the assets consumed by `browser4-cli install`, and after installation
 `browser4-cli open` launches the installed `Browser4.jar` with the bundled JRE.
 
+The runtime bundle builder is optimized for standalone backend startup rather than local JDK development.
+It now:
+
+- keeps only the modules needed to launch `Browser4.jar`
+- strips debug attributes and uses stronger `jlink` compression
+- removes tool-oriented payload such as `javac`, `javadoc`, `jlink`, and related executables from the final image
+- disables the GraalVM JVMCI compiler in the linked runtime so the large `jvmcicompiler` payload can be omitted safely
+
 ### 3. Create Windows EXE Installer
 
 The EXE installer provides a traditional Windows installation experience:
