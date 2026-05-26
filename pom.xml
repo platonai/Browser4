@@ -89,7 +89,7 @@
         <module>browser4-dependencies</module>
         <module>browser4-tests/browser4-tests-common</module>
         <module>browser4-core</module>
-        <module>browser4-tools</module>
+        <module>browser4-agent-tools</module>
         <module>browser4-agentic</module>
         <module>browser4-rest</module>
     </modules>
@@ -158,8 +158,8 @@
             <modules>
                 <module>browser4-dependencies</module>
                 <module>browser4-core</module>
-                <module>browser4-tools</module>
                 <module>browser4-agentic</module>
+                <module>browser4-agent-tools</module>
                 <module>browser4-rest</module>
 
                 <module>browser4-app</module>
@@ -427,7 +427,7 @@
             </dependency>
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
-                <artifactId>browser4-tools</artifactId>
+                <artifactId>browser4-agent-tools</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

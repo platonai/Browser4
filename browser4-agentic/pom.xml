@@ -43,10 +43,6 @@
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-beans</artifactId>
         </dependency>
-        <dependency>
-            <groupId>ai.platon.pulsar</groupId>
-            <artifactId>browser4-tools</artifactId>
-        </dependency>
 
         <dependency>
             <groupId>ai.platon.pulsar</groupId>

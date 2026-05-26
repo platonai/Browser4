@@ -49,7 +49,7 @@
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>browser4-tools</artifactId>
+            <artifactId>browser4-agent-tools</artifactId>
         </dependency>
 
         <dependency>

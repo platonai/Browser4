@@ -18,9 +18,9 @@
         <version>4.9.3-SNAPSHOT</version>
     </parent>
 
-    <artifactId>browser4-tools</artifactId>
-    <name>Browser4 Tools</name>
-    <description>High level tools based on Browser4 core functionality in browser4-core module</description>
+    <artifactId>browser4-agent-tools</artifactId>
+    <name>Browser4 Agent Tools</name>
+    <description>Advanced agent tools</description>
 
     <dependencies>
         <dependency>
@@ -30,6 +30,10 @@
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-parse</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>browser4-agentic</artifactId>
         </dependency>
 
         <dependency>
