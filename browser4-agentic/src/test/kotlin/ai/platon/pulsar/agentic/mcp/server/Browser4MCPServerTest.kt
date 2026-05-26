@@ -3,7 +3,7 @@ package ai.platon.pulsar.agentic.mcp.server
 import ai.platon.pulsar.agentic.model.TcEvaluate
 import ai.platon.pulsar.agentic.model.ToolCallResult
 import ai.platon.pulsar.agentic.model.ToolSpec
-import ai.platon.pulsar.agentic.tools.AgentToolExecutor
+import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -21,15 +21,15 @@ import org.junit.jupiter.api.Test
  * Unit tests for [Browser4MCPServer].
  *
  * These tests verify that:
- * - All expected MCP tools are registered based on executor tool specs from [AgentToolExecutor].
- * - Each tool handler routes its call through [AgentToolExecutor.execute].
+ * - All expected MCP tools are registered based on executor tool specs from [AgentToolManager].
+ * - Each tool handler routes its call through [AgentToolManager.execute].
  * - Each tool returns a non-error result when the manager succeeds.
  * - Each tool returns an error result (isError = true) when the manager throws or returns an exception.
  */
 @DisplayName("Browser4MCPServer")
 class Browser4MCPServerTest {
 
-    private lateinit var toolManager: AgentToolExecutor
+    private lateinit var toolManager: AgentToolManager
     private lateinit var driverExecutor: ToolExecutor
     private lateinit var fsExecutor: ToolExecutor
     private lateinit var systemExecutor: ToolExecutor
@@ -94,7 +94,7 @@ class Browser4MCPServerTest {
         )
 
         toolManager = mockk(relaxed = true)
-        every { toolManager.concreteExecutors } returns listOf(driverExecutor, fsExecutor, systemExecutor)
+        every { toolManager.concreteExecutors } returns listOf(driverExecutor, fsExecutor, systemExecutor).associateBy { it.domain }
 
         mcpServer = Browser4MCPServer(
             toolManager = toolManager,

@@ -1,8 +1,8 @@
 package ai.platon.pulsar.rest.config
 
-import ai.platon.pulsar.agentic.AgenticSession
-import ai.platon.pulsar.rest.api.service.CommandService
 import ai.platon.pulsar.rest.api.service.ConversationService
+import ai.platon.pulsar.rest.api.service.SessionManager
+import ai.platon.pulsar.rest.tool.CommandRunner
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 
@@ -15,7 +15,7 @@ class CommandServiceConfig {
     }
 
     @Bean(destroyMethod = "close")
-    fun commandService(session: AgenticSession, commandNormalizer: CommandNormalizer): CommandService {
-        return CommandService(session, commandNormalizer)
+    fun commandService(sessionManager: SessionManager, commandNormalizer: CommandNormalizer): CommandRunner {
+        return CommandRunner(sessionManager, commandNormalizer)
     }
 }

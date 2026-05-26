@@ -11,7 +11,8 @@ import ai.platon.pulsar.agentic.tools.high.crawl.refreshed
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
 import ai.platon.pulsar.rest.api.entities.ScrapeStatusRequest
-import ai.platon.pulsar.rest.api.service.CommandService.Companion.FLOW_POLLING_INTERVAL
+import ai.platon.pulsar.rest.api.service.SessionManager.Companion.SWARM_SESSION_ID
+import ai.platon.pulsar.rest.tool.CommandRunner.Companion.FLOW_POLLING_INTERVAL
 import jakarta.annotation.PreDestroy
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -32,7 +33,7 @@ class ScrapeService(
 ) {
     private val logger = LoggerFactory.getLogger(ScrapeService::class.java)
 
-    private val session get() = sessionManager.getOrCreateSessionById(SessionManager.SWARM_SESSION_ID).agenticSession
+    private val session get() = sessionManager.getOrCreateSessionById(SWARM_SESSION_ID).agenticSession
 
     /**
      * The response cache, the key is the id, the value is the response

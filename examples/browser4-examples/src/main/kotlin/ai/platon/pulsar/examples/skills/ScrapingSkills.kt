@@ -28,7 +28,7 @@ suspend fun main() {
 
     // Get or create the skill registry
     val registry = SkillRegistry.instance
-    val context = agent.toolExtractor.skillContext
+    val context = agent.agentToolManager.skillContext
 
     // Register example skills
     val webScrapingSkill = WebScrapingSkill()

@@ -16,11 +16,11 @@ import kotlinx.coroutines.delay
 import java.nio.file.Path
 import kotlin.time.Duration.Companion.milliseconds
 
-class AgentToolExecutor constructor(
+class AgentToolManager constructor(
     val baseDir: Path,
     val agent: BasicBrowserAgent,
 ) {
-    private val logger = getLogger(AgentToolExecutor::class)
+    private val logger = getLogger(AgentToolManager::class)
 
     /**
      * Custom tool targets registry, mapping domain names to their corresponding target objects.
@@ -65,20 +65,22 @@ class AgentToolExecutor constructor(
         "AgentShell" to "shell",
     )
 
-    val concreteExecutors: List<ToolExecutor> by lazy {
-        listOf(
+    private val _concreteExecutors: MutableMap<String, ToolExecutor> = mutableMapOf()
+
+    val concreteExecutors: Map<String, ToolExecutor> get() = _concreteExecutors
+
+    val executor by lazy {
+        _concreteExecutors += listOf(
             BrowserTabToolExecutor(),
             BrowserToolExecutor(),
             FileSystemToolExecutor(),
             ShellToolExecutor(),
             AgentToolExecutor(),
-            CommandToolExecutor(),
             system,
             skills
-        )
+        ).associateBy { it.domain }
+        BasicToolCallExecutor(concreteExecutors)
     }
-
-    val executor by lazy { BasicToolCallExecutor(concreteExecutors) }
 
     val customTargets: Map<String, Any> get() = _customTargets
 
@@ -112,9 +114,35 @@ class AgentToolExecutor constructor(
         return false
     }
 
+    fun hasCustomTarget(domain: String): Boolean {
+        return _customTargets.containsKey(domain)
+    }
+
+    fun registerCustomToolExecutor(executor: ToolExecutor) {
+        val domain = executor.domain
+        val oldExecutor = _concreteExecutors[domain]
+        _concreteExecutors[domain] = executor
+        if (oldExecutor != executor) {
+            logger.info("✓ Registered custom tool executor for domain: {}", domain)
+        }
+    }
+
+    fun unregisterCustomToolExecutor(domain: String): Boolean {
+        val removed = _concreteExecutors.remove(domain)
+        if (removed != null) {
+            logger.info("✓ Unregistered custom tool executor for domain: {}", domain)
+            return true
+        }
+        return false
+    }
+
+    fun hasToolExecutor(domain: String): Boolean {
+        return _concreteExecutors.containsKey(domain)
+    }
+
     fun help(domain: String, method: String): String {
         // Check built-in executors first
-        val builtInHelp = concreteExecutors.firstOrNull { it.domain == domain }?.help(method)
+        val builtInHelp = concreteExecutors.values.firstOrNull { it.domain == domain }?.help(method)
         if (builtInHelp != null) {
             return builtInHelp
         }
@@ -142,7 +170,7 @@ class AgentToolExecutor constructor(
      * @return A map from domain name to a map of method name to [ToolSpec].
      */
     fun getAllToolSpecs(): Map<String, Map<String, ToolSpec>> {
-        return concreteExecutors.associate { executor -> executor.domain to executor.getToolSpecs() }
+        return concreteExecutors.values.associate { executor -> executor.domain to executor.getToolSpecs() }
     }
 
     /**
@@ -153,7 +181,7 @@ class AgentToolExecutor constructor(
      * @return The [ToolSpec] for the given domain and method, or null.
      */
     fun getToolSpec(domain: String, method: String): ToolSpec? {
-        return concreteExecutors.find { it.domain == domain }?.getToolSpecs()?.get(method)
+        return concreteExecutors.values.find { it.domain == domain }?.getToolSpecs()?.get(method)
     }
 
     /**
@@ -178,11 +206,11 @@ class AgentToolExecutor constructor(
             "shell" -> executor.callFunctionOn(normalized, shell)
             "agent" -> executor.callFunctionOn(normalized, agent)
             "command" -> {
-                // TODO: the commandTarget is ai.platon.pulsar.agentic.tools.high.command.CommandService, consider make it built-in
+                // TODO: the commandTarget is ai.platon.pulsar.agentic.tools.high.CommandRunner, consider make it built-in
                 //      and is registered in browser4-rest module
                 val commandTarget = _customTargets["command"]
                     ?: throw UnsupportedOperationException(
-                        "Command domain '${normalized.domain}' requires a registered CommandService target."
+                        "Command domain '${normalized.domain}' requires a registered CommandRunner target."
                     )
                 executor.callFunctionOn(normalized, commandTarget)
             }

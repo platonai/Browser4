@@ -1,4 +1,4 @@
-package ai.platon.pulsar.rest.api.service
+package ai.platon.pulsar.rest.tool
 
 import ai.platon.pulsar.agentic.tools.high.agent.StatefulAgentRunner
 import ai.platon.pulsar.agentic.tools.high.crawl.PageVisitRequest
@@ -12,13 +12,14 @@ import ai.platon.pulsar.rest.api.entities.CommandResult
 import ai.platon.pulsar.rest.api.entities.CommandStatus
 import ai.platon.pulsar.rest.api.entities.refreshed
 import ai.platon.pulsar.rest.api.entities.toCommandStatus
+import ai.platon.pulsar.rest.api.service.SessionManager
+import ai.platon.pulsar.rest.api.service.SessionManager.Companion.DEFAULT_SESSION_ID
 import ai.platon.pulsar.rest.config.CommandNormalizer
 import ai.platon.pulsar.skeleton.event.PageEventHandlers
 import ai.platon.pulsar.skeleton.event.impl.PageEventHandlersFactory
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
-import org.springframework.stereotype.Service
 import java.io.Closeable
 import java.time.Instant
 import kotlin.time.Duration.Companion.milliseconds
@@ -26,16 +27,15 @@ import kotlin.time.Duration.Companion.milliseconds
 /**
  * General-purpose command execution service for page visit and agent commands.
  *
- * This service orchestrates command execution through [StatefulPageVisitor] for page visits
- * and [StatefulAgentRunner] for agent-based commands. It can be used by both REST API
+ * This service orchestrates command execution through [ai.platon.pulsar.agentic.tools.high.crawl.StatefulPageVisitor] for page visits
+ * and [ai.platon.pulsar.agentic.tools.high.agent.StatefulAgentRunner] for agent-based commands. It can be used by both REST API
  * and agentic modules.
  *
  * @param commandNormalizer Optional normalizer that converts plain text commands into
- *        structured [PageVisitRequest] objects. If not provided, plain text commands
+ *        structured [ai.platon.pulsar.agentic.tools.high.crawl.PageVisitRequest] objects. If not provided, plain text commands
  *        without URLs will be executed as agent commands.
  */
-@Service
-class CommandService(
+class CommandRunner(
     val sessionManager: SessionManager,
     private val commandNormalizer: CommandNormalizer? = null,
 ) : Closeable {
@@ -43,7 +43,7 @@ class CommandService(
         const val FLOW_POLLING_INTERVAL = 1000L
     }
 
-    val session get() = sessionManager.getOrCreateSessionById(SessionManager.SWARM_SESSION_ID).agenticSession
+    val session get() = sessionManager.getOrCreateSessionById(DEFAULT_SESSION_ID).agenticSession
 
     // Create a dedicated dispatcher for long-running command operations
     private val commandDispatcher = Dispatchers.IO.limitedParallelism(10)

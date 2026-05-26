@@ -217,6 +217,8 @@ class ChromeLauncher constructor(
         try {
             if (p != null && p.isAlive) {
                 Runtimes.destroyProcess(p, options.shutdownWaitTime)
+                // Wait for the process exit
+                sleepSeconds(3)
                 chromeDestroyer.destroy(p.pid())
             }
         } catch (t: Throwable) {

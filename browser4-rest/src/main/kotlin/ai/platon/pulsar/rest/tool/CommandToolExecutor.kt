@@ -1,12 +1,12 @@
-package ai.platon.pulsar.agentic.tools.builtin
+package ai.platon.pulsar.rest.tool
 
 import ai.platon.pulsar.agentic.model.ToolSpec
-import ai.platon.pulsar.agentic.tools.high.command.CommandService
+import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import kotlin.reflect.KClass
 
 /**
- * Tool executor that exposes [ai.platon.pulsar.agentic.tools.high.command.CommandService] methods as agent tools.
+ * Tool executor that exposes [ai.platon.pulsar.agentic.tools.high.CommandRunner] methods as agent tools.
  *
  * Domain: `command`
  *
@@ -23,13 +23,13 @@ import kotlin.reflect.KClass
  * // command.result(id="<task-id>")
  * ```
  *
- * @see ai.platon.pulsar.agentic.tools.high.command.CommandService
+ * @see ai.platon.pulsar.agentic.tools.high.CommandRunner
  */
 class CommandToolExecutor : AbstractToolExecutor() {
 
     override val domain: String = "command"
 
-    override val receiverClass: KClass<*> = CommandService::class
+    override val receiverClass: KClass<*> = CommandRunner::class
 
     init {
         toolSpec["run"] = ToolSpec(
@@ -72,7 +72,7 @@ class CommandToolExecutor : AbstractToolExecutor() {
         domain: String, functionName: String, args: Map<String, Any?>, receiver: Any
     ): Any? {
         require(domain == this.domain) { "Unsupported domain: $domain" }
-        require(receiver is CommandService) { "Receiver must be a CommandService" }
+        require(receiver is CommandRunner) { "Receiver must be a CommandRunner" }
 
         val service = receiver
 

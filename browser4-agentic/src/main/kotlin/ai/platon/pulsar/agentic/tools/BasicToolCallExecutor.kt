@@ -2,9 +2,9 @@ package ai.platon.pulsar.agentic.tools
 
 import ai.platon.pulsar.agentic.model.TcEvaluate
 import ai.platon.pulsar.agentic.model.ToolCall
+import ai.platon.pulsar.agentic.tools.builtin.BrowserTabToolExecutor
 import ai.platon.pulsar.agentic.tools.builtin.BrowserToolExecutor
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
-import ai.platon.pulsar.agentic.tools.builtin.BrowserTabToolExecutor
 import kotlin.reflect.full.isSuperclassOf
 
 /**
@@ -29,11 +29,11 @@ import kotlin.reflect.full.isSuperclassOf
  * @author Vincent Zhang, ivincent.zhang@gmail.com, platon.ai
  */
 open class BasicToolCallExecutor(
-    val toolExecutors: List<ToolExecutor> = listOf(BrowserTabToolExecutor(), BrowserToolExecutor())
+    val toolExecutors: Map<String, ToolExecutor> = listOf(BrowserTabToolExecutor(), BrowserToolExecutor()).associateBy { it.domain }
 ) {
     @Throws(UnsupportedOperationException::class)
     suspend fun callFunctionOn(tc: ToolCall, receiver: Any): TcEvaluate {
-        return toolExecutors
+        return toolExecutors.values
             .firstOrNull { it.receiverClass.isSuperclassOf(receiver::class) }
             ?.callFunctionOn(tc, receiver)
             ?: throw UnsupportedOperationException("❓ Unsupported receiver ${receiver::class}")

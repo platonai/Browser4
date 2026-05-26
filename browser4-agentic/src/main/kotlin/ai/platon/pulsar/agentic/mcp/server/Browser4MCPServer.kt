@@ -2,15 +2,11 @@ package ai.platon.pulsar.agentic.mcp.server
 
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
-import ai.platon.pulsar.agentic.tools.AgentToolExecutor
+import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.common.getLogger
 import io.modelcontextprotocol.kotlin.sdk.server.Server
 import io.modelcontextprotocol.kotlin.sdk.server.ServerOptions
-import io.modelcontextprotocol.kotlin.sdk.types.CallToolResult
-import io.modelcontextprotocol.kotlin.sdk.types.Implementation
-import io.modelcontextprotocol.kotlin.sdk.types.ServerCapabilities
-import io.modelcontextprotocol.kotlin.sdk.types.TextContent
-import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
+import io.modelcontextprotocol.kotlin.sdk.types.*
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
@@ -20,15 +16,15 @@ import kotlinx.serialization.json.JsonPrimitive
  * This server allows external MCP clients (Claude Desktop, Cursor, Windsurf, etc.)
  * to drive a real browser through the Model Context Protocol.
  *
- * Tools are discovered dynamically from the [AgentToolExecutor]'s registered executors and their
+ * Tools are discovered dynamically from the [AgentToolManager]'s registered executors and their
  * [ai.platon.pulsar.agentic.model.ToolSpec] metadata, keeping registration in sync with the
  * internal agent tool-call infrastructure.
  *
- * @param toolManager The [AgentToolExecutor] to use for tool discovery and execution.
+ * @param toolManager The [AgentToolManager] to use for tool discovery and execution.
  * @param serverInfo MCP server identification (name and version).
  */
 class Browser4MCPServer(
-    private val toolManager: AgentToolExecutor,
+    private val toolManager: AgentToolManager,
     serverInfo: Implementation = Implementation(name = "browser4-mcp-server", version = "1.0.0"),
 ) {
     private val logger = getLogger(this)
@@ -100,10 +96,11 @@ class Browser4MCPServer(
     /**
      * Register all MCP tools by discovering executors and their [ToolSpec] metadata
      * from [toolManager]. Every tool handler routes its call through
-     * [AgentToolExecutor.execute], matching the internal agent execution path.
+     * [AgentToolManager.execute], matching the internal agent execution path.
      */
-    private fun Server.registerToolsFromManager(toolManager: AgentToolExecutor) {
-        for (executor in toolManager.concreteExecutors) {
+    private fun Server.registerToolsFromManager(toolManager: AgentToolManager) {
+        val toolExecutors = toolManager.executor.toolExecutors.values
+        for (executor in toolExecutors) {
             val specs = executor.getToolSpecs()
             if (specs.isEmpty()) continue
             for ((method, spec) in specs) {
@@ -136,7 +133,7 @@ class Browser4MCPServer(
             }
         }
 
-        logger.info("Registered {} MCP tools from AgentToolManager", toolManager.concreteExecutors.sumOf { it.getToolSpecs().size })
+        logger.info("Registered {} MCP tools from AgentToolManager", toolExecutors.sumOf { it.getToolSpecs().size })
     }
 
     /**

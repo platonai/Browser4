@@ -10,6 +10,7 @@ import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.rest.api.entities.CommandRequest
 import ai.platon.pulsar.rest.api.entities.CommandStatus
 import ai.platon.pulsar.rest.api.entities.PromptRequest
+import ai.platon.pulsar.rest.api.service.SessionManager.Companion.SWARM_SESSION_ID
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import com.fasterxml.jackson.module.kotlin.readValue
 import org.springframework.stereotype.Service
@@ -19,7 +20,7 @@ class ConversationService(
     val sessionManager: SessionManager,
     val loadService: LoadService,
 ) {
-    val session get() = sessionManager.getOrCreateSessionById(SessionManager.SWARM_SESSION_ID).agenticSession
+    val session get() = sessionManager.getOrCreateSessionById(SWARM_SESSION_ID).agenticSession
 
     suspend fun chat(prompt: String): String {
         return session.chat(prompt).content

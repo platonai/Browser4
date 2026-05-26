@@ -4,7 +4,7 @@ import ai.platon.pulsar.agentic.tools.high.crawl.PageVisitRequest
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.rest.api.entities.CommandResult
 import ai.platon.pulsar.rest.api.entities.CommandStatus
-import ai.platon.pulsar.rest.api.service.CommandService
+import ai.platon.pulsar.rest.tool.CommandRunner
 import ai.platon.pulsar.skeleton.event.impl.PageEventHandlersFactory
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.launchIn
@@ -24,7 +24,7 @@ import reactor.core.publisher.Flux
     produces = [MediaType.APPLICATION_JSON_VALUE]
 )
 class CommandController(
-    val commandService: CommandService,
+    val commandRunner: CommandRunner,
 ) {
     private val logger = getLogger(CommandController::class)
 
@@ -38,8 +38,8 @@ class CommandController(
     suspend fun submitCommand(@RequestBody request: PageVisitRequest): ResponseEntity<Any> {
         val eventHandlers = PageEventHandlersFactory.create()
         val response = when {
-            request.isAsync() -> commandService.submitPageVisitCommandAsync(request, eventHandlers)
-            else -> commandService.executePageVisitCommandSync(request, eventHandlers)
+            request.isAsync() -> commandRunner.submitPageVisitCommandAsync(request, eventHandlers)
+            else -> commandRunner.executePageVisitCommandSync(request, eventHandlers)
         }
 
         return ResponseEntity.ok(response)
@@ -73,9 +73,9 @@ class CommandController(
         }
 
         val response = if (isAsync()) {
-            commandService.submitPlainCommandAsync(plainCommand)
+            commandRunner.submitPlainCommandAsync(plainCommand)
         } else {
-            commandService.executePlainCommandSync(plainCommand)
+            commandRunner.executePlainCommandSync(plainCommand)
         }
 
         return ResponseEntity.ok(response)
@@ -83,25 +83,25 @@ class CommandController(
 
     @GetMapping(value = ["/{id}/status"])
     fun getStatus(@PathVariable id: String): ResponseEntity<CommandStatus> {
-        return ResponseEntity.ok(commandService.getStatus(id))
+        return ResponseEntity.ok(commandRunner.getStatus(id))
     }
 
     @GetMapping(value = ["/{id}/result"])
     fun getResult(@PathVariable id: String): ResponseEntity<CommandResult> {
-        return ResponseEntity.ok(commandService.getResult(id))
+        return ResponseEntity.ok(commandRunner.getResult(id))
     }
 
     @GetMapping(value = ["/{id}/stream"], produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
     fun streamEvents(@PathVariable id: String): Flux<ServerSentEvent<CommandStatus>> {
         return Flux.create { sink ->
-            val job = commandService.commandStatusFlow(id)
+            val job = commandRunner.commandStatusFlow(id)
                 .onEach { sink.next(it) }
                 .onCompletion { sink.complete() }
                 .catch {
                     logger.error("Error in command status flow", it)
                     sink.error(it)
                 }
-                .launchIn(commandService.launchScope())
+                .launchIn(commandRunner.launchScope())
 
             sink.onDispose { job.cancel() }
         }.map {

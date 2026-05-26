@@ -3,10 +3,11 @@ package ai.platon.pulsar.rest.mcp.controller
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
-import ai.platon.pulsar.agentic.tools.AgentToolExecutor
+import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.common.brief
-import ai.platon.pulsar.rest.api.service.CommandService
 import ai.platon.pulsar.rest.api.service.SessionManager
+import ai.platon.pulsar.rest.tool.CommandRunner
+import ai.platon.pulsar.rest.tool.CommandToolExecutor
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.annotation.JsonSetter
@@ -74,7 +75,7 @@ data class MCPContent(
 @ConditionalOnBean(SessionManager::class)
 class MCPToolController(
     private val sessionManager: SessionManager,
-    private val commandService: CommandService,
+    private val commandRunner: CommandRunner,
 ) {
     companion object {
         private val FRONTEND_TOOL_NAME_ALIASES: Map<String, String> = mapOf(
@@ -128,6 +129,8 @@ class MCPToolController(
     }
 
     private val logger = LoggerFactory.getLogger(MCPToolController::class.java)
+
+    private val commandToolExecutor = CommandToolExecutor()
 
     private fun requireSessionId(sessionId: String?): String {
         return sessionId ?: throw IllegalArgumentException(MCPConstants.ERROR_NO_ACTIVE_SESSION)
@@ -204,7 +207,7 @@ class MCPToolController(
                 "close_all_sessions" -> handleCloseAllSessions()
                 "kill_all_sessions" -> handleKillAllSessions()
                 "delete_session_data" -> handleDeleteSessionData(request)
-                // Command tools — delegate to CommandService (no session required)
+                // Command tools — delegate to CommandRunner (no session required)
                 "command_run" -> handleCommandRun(request)
                 "command_batch" -> handleCommandBatch(request)
                 "command_status" -> handleCommandStatus(request)
@@ -258,7 +261,7 @@ class MCPToolController(
             try {
                 val agent = managedSession.agenticSession.companionAgent as? BasicBrowserAgent
                 if (agent != null) {
-                    tools.addAll(collectAdvertisedToolNames(agent.toolExtractor.getAllToolSpecs()))
+                    tools.addAll(collectAdvertisedToolNames(agent.agentToolManager.getAllToolSpecs()))
                 }
             } finally {
                 if (deleteAfterListing) {
@@ -342,7 +345,7 @@ class MCPToolController(
     // =========================================================================
 
     /**
-     * Execute a plain command via the unified [AgentToolExecutor] path.
+     * Execute a plain command via the unified [AgentToolManager] path.
      *
      * When `async=true` (default), returns the task ID string immediately.
      * When `async=false`, blocks until execution completes and returns the [CommandStatus] as JSON.
@@ -402,7 +405,7 @@ class MCPToolController(
 
     /**
      * Common dispatcher for command tool calls — invokes the command agent's
-     * [AgentToolExecutor] and maps the result to an [MCPToolCallResponse].
+     * [AgentToolManager] and maps the result to an [MCPToolCallResponse].
      *
      * @param toolDisplayName Human-readable tool name for error messages.
      * @param method The command domain method to invoke (`run`, `status`, or `result`).
@@ -414,7 +417,7 @@ class MCPToolController(
         args: Map<String, Any?>,
     ): ResponseEntity<MCPToolCallResponse> {
         return try {
-            val toolExecutor = getCommandAgentToolExecutor()
+            val toolExecutor = getCommandAgentToolManager()
             val evaluate = toolExecutor.execute(ToolCall("command", method, args.toMutableMap())).evaluate
             if (evaluate.exception != null) {
                 ResponseEntity.ok(errorResponse("$toolDisplayName failed: ${evaluate.exception!!.message}"))
@@ -427,10 +430,17 @@ class MCPToolController(
         }
     }
 
-    private fun getCommandAgentToolExecutor(): AgentToolExecutor {
-        val commandAgent = commandService.session.companionAgent as? BasicBrowserAgent
-            ?: throw IllegalStateException("CommandService session agent does not support tools")
-        return commandAgent.toolExtractor.also { it.registerCustomTarget("command", commandService) }
+    private fun getCommandAgentToolManager(): AgentToolManager {
+        val commandAgent = commandRunner.session.companionAgent as? BasicBrowserAgent
+            ?: throw IllegalStateException("CommandRunner session agent does not support tools")
+        val agentToolManager = commandAgent.agentToolManager
+
+        val domain = "command"
+        if (!agentToolManager.hasToolExecutor(domain)) {
+            agentToolManager.registerCustomToolExecutor(commandToolExecutor)
+            agentToolManager.registerCustomTarget(domain, commandRunner)
+        }
+        return agentToolManager
     }
 
     private suspend fun executeBatchStep(
@@ -595,7 +605,7 @@ class MCPToolController(
         val toolCall = resolveMcpToolCall(normalizedTool, normalizedArgs, agent)
             ?: throw IllegalArgumentException("Unknown tool: $toolName")
 
-        val result = agent.toolExtractor.execute(toolCall)
+        val result = agent.agentToolManager.execute(toolCall)
 
         val evaluate = result.evaluate
         evaluate.exception?.let { exception ->
@@ -626,7 +636,7 @@ class MCPToolController(
      * Dispatch a tool call to the session's AgentToolManager.
      *
      * This replaces the manual tool implementation by delegating to the central
-     * tool registry in [AgentToolExecutor].
+     * tool registry in [AgentToolManager].
      */
     private suspend fun dispatchToAgentToolExecutor(request: MCPToolCallRequest): ResponseEntity<MCPToolCallResponse> {
         val normalizedRequest = normalizeFrontendToolCall(request.tool, request.arguments ?: emptyMap())
@@ -645,7 +655,7 @@ class MCPToolController(
             ?: return ResponseEntity.ok(errorResponse("Unknown tool: ${request.tool}"))
 
         return try {
-            val result = agent.toolExtractor.execute(toolCall)
+            val result = agent.agentToolManager.execute(toolCall)
             val evaluate = result.evaluate
             val exception = evaluate.exception
             if (exception != null) {
@@ -687,7 +697,7 @@ class MCPToolController(
         }
 
         // 2. Generic mapping
-        val specs = agent.toolExtractor.getAllToolSpecs()
+        val specs = agent.agentToolManager.getAllToolSpecs()
         for ((domain, methods) in specs) {
             for ((method, _) in methods) {
                 val mcpName = toMcpToolName(domain, method)

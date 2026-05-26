@@ -14,13 +14,13 @@ import ai.platon.pulsar.test.TestUrls
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assumptions
 import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Tag
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import org.springframework.test.context.ContextConfiguration
 import kotlin.test.*
-import org.junit.jupiter.api.DisplayName
 
 const val PAGE_VISIT_COMMAND_PROMPT1 = """
 Visit http://localhost:18080/ec/dp/B0E000001
@@ -82,7 +82,7 @@ class ConversationServiceTest : MockEcServerTestBase() {
     }
 
     @Test
-        @DisplayName("test prompt conversion to request")
+    @DisplayName("test prompt conversion to request")
     fun testPromptConversionToRequest() {
         val prompt = PAGE_VISIT_COMMAND_PROMPT1
 
@@ -93,7 +93,7 @@ class ConversationServiceTest : MockEcServerTestBase() {
     }
 
     @Test
-        @DisplayName("test prompt conversion to request 2")
+    @DisplayName("test prompt conversion to request 2")
     fun testPromptConversionToRequest2() {
         val prompt = PAGE_VISIT_COMMAND_PROMPT2
 
@@ -104,8 +104,8 @@ class ConversationServiceTest : MockEcServerTestBase() {
     }
 
     @Test
-        @DisplayName("test convertPlainCommandToJSON with X-SQL")
-    fun testConvertplaincommandtojsonWithXSql() {
+    @DisplayName("test convertPlainCommandToJSON with X-SQL")
+    fun testConvertPlainCommandToJsonWithXSql() {
         val url1 = "http://localhost:18080/ec/dp/B0E000001"
         val url2 = "http://localhost:18080/ec/dp/B0E000002"
 
@@ -152,7 +152,7 @@ from load_and_select(@url, 'body');
     }
 
     @Test
-        @DisplayName("test prompt conversion to request 3")
+    @DisplayName("test prompt conversion to request 3")
     fun testPromptConversionToRequest3() {
         val prompt = PAGE_VISIT_COMMAND_PROMPT3
 
@@ -163,8 +163,8 @@ from load_and_select(@url, 'body');
     }
 
     @Test
-        @DisplayName("test convertPlainCommandToJSON with cache")
-    fun testConvertplaincommandtojsonWithCache() {
+    @DisplayName("test convertPlainCommandToJSON with cache")
+    fun testConvertPlainCommandToJsonWithCache() {
         val url1 = "http://localhost:18080/ec/dp/B0E000001"
         val url2 = "http://localhost:18080/ec/dp/B0E000002"
 
@@ -195,7 +195,7 @@ Page summary prompt: Provide a brief introduction of this product.
     }
 
     @Test
-        @DisplayName("test prompt conversion without URL")
+    @DisplayName("test prompt conversion without URL")
     fun testPromptConversionWithoutUrl() {
         val prompt = """
 Go to localhost:18080/ec/dp/B0E000001
@@ -211,17 +211,17 @@ Page summary prompt: Provide a brief introduction of this product.
      * Execute a normal sql
      * */
     @Test
-        @DisplayName("When chat about a page then the result is not empty")
+    @DisplayName("When chat about a page then the result is not empty")
     fun whenChatAboutAPageThenTheResultIsNotEmpty() {
         val request = PromptRequest(TestUrls.MOCK_PRODUCT_LIST_URL, "Tell me something about the page")
 
         val response = runBlocking { conversationService.chat(request) }
-        printlnPro(response.toString())
+        printlnPro(response)
         assertTrue { response.isNotEmpty() }
     }
 
     @Test
-        @DisplayName("test actions on page ready")
+    @DisplayName("test actions on page ready")
     fun testActionsOnPageReady() {
         val actions = """
             move cursor to the element with id 'title' and click it
@@ -234,13 +234,13 @@ Page summary prompt: Provide a brief introduction of this product.
         )
 
         val response = runBlocking { conversationService.chat(request) }
-        printlnPro(response.toString())
+        printlnPro(response)
         assertTrue { response.isNotEmpty() }
     }
 
     @Test
-        @DisplayName("test convertResponseToMarkdown")
-    fun testConvertresponsetomarkdown() {
+    @DisplayName("test convertResponseToMarkdown")
+    fun testConvertResponseToMarkdown() {
         val response = """
 {
   "uuid" : null,
@@ -261,7 +261,7 @@ Page summary prompt: Provide a brief introduction of this product.
 
         try {
             val markdown = runBlocking { conversationService.convertResponseToMarkdown(response) }
-            printlnPro(markdown.toString())
+            printlnPro(markdown)
         } catch (e: Exception) {
             e.printStackTrace()
         }

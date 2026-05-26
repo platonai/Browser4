@@ -1,12 +1,12 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
 import ai.platon.pulsar.agentic.model.ToolSpec
-import ai.platon.pulsar.agentic.tools.AgentToolExecutor
+import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.common.getLogger
 import kotlin.reflect.KClass
 
 class SystemToolExecutor(
-    val agentToolExecutor: AgentToolExecutor
+    val agentToolManager: AgentToolManager
 ) : AbstractToolExecutor() {
     private val logger = getLogger(this)
 
@@ -28,7 +28,7 @@ class SystemToolExecutor(
     }
 
     fun help(domain: String, method: String): String {
-        return agentToolExecutor.help(domain, method)
+        return agentToolManager.help(domain, method)
     }
 
     /**

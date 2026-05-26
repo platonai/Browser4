@@ -5,6 +5,7 @@ import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.model.GoraWebPage
 import ai.platon.pulsar.rest.api.entities.CommandRequest
 import ai.platon.pulsar.rest.api.entities.PromptRequest
+import ai.platon.pulsar.rest.api.service.SessionManager.Companion.SWARM_SESSION_ID
 import ai.platon.pulsar.skeleton.event.PageEventHandlers
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
@@ -16,7 +17,7 @@ class LoadService(
 
     private val logger = LoggerFactory.getLogger(LoadService::class.java)
 
-    val session get() = sessionManager.getOrCreateSessionById(SessionManager.SWARM_SESSION_ID).agenticSession
+    val session get() = sessionManager.getOrCreateSessionById(SWARM_SESSION_ID).agenticSession
 
     suspend fun load(url: String): WebPage {
         return session.load(url)
