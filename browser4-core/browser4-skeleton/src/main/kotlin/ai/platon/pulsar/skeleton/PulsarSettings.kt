@@ -50,6 +50,7 @@ data class PulsarSettings(
     val maxOpenTabs: Int? = null,
     val interactSettings: InteractSettings? = null,
     val profileMode: BrowserProfileMode? = null,
+    val label: String? = null,
 ) {
     fun overrideSystemProperties() {
         overrideConfigurationInternal(null)
@@ -119,13 +120,13 @@ data class PulsarSettings(
 
         @JvmStatic
         @JvmOverloads
-        fun withBrowserContextMode(contextMode: BrowserProfileMode, conf: MutableConfig? = null): Companion =
-            withBrowserContextMode(contextMode, BrowserType.DEFAULT, conf)
+        fun withBrowserContextMode(browserProfileMode: BrowserProfileMode, conf: MutableConfig? = null): Companion =
+            withBrowserContextMode(browserProfileMode, BrowserType.DEFAULT, conf)
 
         @JvmStatic
         @JvmOverloads
-        fun withBrowserContextMode(contextMode: BrowserProfileMode, browserType: BrowserType, conf: MutableConfig? = null): Companion {
-            BrowserSettings.withBrowserContextMode(contextMode, browserType, conf)
+        fun withBrowserContextMode(browserProfileMode: BrowserProfileMode, browserType: BrowserType, conf: MutableConfig? = null): Companion {
+            BrowserSettings.withBrowserContextMode(browserProfileMode, browserType, conf)
             return PulsarSettings
         }
 

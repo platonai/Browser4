@@ -1,10 +1,12 @@
 package ai.platon.pulsar.rest.api.controller
 
+import ai.platon.browser4.common.B4Constants.DEFAULT_SESSION_ID
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitRequest
+import ai.platon.pulsar.common.SessionManager
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.rest.api.entities.CommandResult
 import ai.platon.pulsar.rest.api.entities.CommandStatus
-import ai.platon.pulsar.rest.tool.CommandRunner
+import ai.platon.pulsar.agent.tool.UserCommandExecutor
 import ai.platon.pulsar.skeleton.event.impl.PageEventHandlersFactory
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.launchIn
@@ -24,7 +26,8 @@ import reactor.core.publisher.Flux
     produces = [MediaType.APPLICATION_JSON_VALUE]
 )
 class CommandController(
-    val commandRunner: CommandRunner,
+    val sessionManager: SessionManager,
+    val commandExecutor: UserCommandExecutor,
 ) {
     private val logger = getLogger(CommandController::class)
 
@@ -36,10 +39,12 @@ class CommandController(
      * */
     @PostMapping(value = ["", "/"])
     suspend fun submitCommand(@RequestBody request: PageVisitRequest): ResponseEntity<Any> {
+        val sessionId = request.sessionId ?: DEFAULT_SESSION_ID
+
         val eventHandlers = PageEventHandlersFactory.create()
         val response = when {
-            request.isAsync() -> commandRunner.submitPageVisitCommandAsync(request, eventHandlers)
-            else -> commandRunner.executePageVisitCommandSync(request, eventHandlers)
+            request.isAsync() -> commandExecutor.submitPageVisitCommand(sessionId, request, eventHandlers)
+            else -> commandExecutor.executePageVisitCommand(sessionId, request, eventHandlers)
         }
 
         return ResponseEntity.ok(response)
@@ -61,6 +66,7 @@ class CommandController(
     @PostMapping("/plain")
     suspend fun submitPlainCommand(
         @RequestBody plainCommand: String,
+        @RequestParam(name = "sessionId") sessionId: String? = null,
         @RequestParam(name = "async") async: Boolean? = null,
         @RequestParam(name = "mode") mode: String? = null,
     ): ResponseEntity<Any> {
@@ -72,36 +78,53 @@ class CommandController(
             }
         }
 
+        val sessionId = sessionId ?: DEFAULT_SESSION_ID
+
         val response = if (isAsync()) {
-            commandRunner.submitPlainCommandAsync(plainCommand)
+            commandExecutor.submitPlainCommand(sessionId, plainCommand)
         } else {
-            commandRunner.executePlainCommandSync(plainCommand)
+            commandExecutor.executePlainCommand(sessionId, plainCommand)
         }
 
         return ResponseEntity.ok(response)
     }
 
     @GetMapping(value = ["/{id}/status"])
-    fun getStatus(@PathVariable id: String): ResponseEntity<CommandStatus> {
-        return ResponseEntity.ok(commandRunner.getStatus(id))
+    fun getStatus(
+        @PathVariable id: String,
+        @RequestParam(name = "sessionId") sessionId: String? = null,
+    ): ResponseEntity<CommandStatus> {
+        val sessionId = sessionId ?: DEFAULT_SESSION_ID
+
+        return ResponseEntity.ok(commandExecutor.getStatus(sessionId, id))
     }
 
     @GetMapping(value = ["/{id}/result"])
-    fun getResult(@PathVariable id: String): ResponseEntity<CommandResult> {
-        return ResponseEntity.ok(commandRunner.getResult(id))
+    fun getResult(
+        @PathVariable id: String,
+        @RequestParam(name = "sessionId") sessionId: String? = null,
+    ): ResponseEntity<CommandResult> {
+        val sessionId = sessionId ?: DEFAULT_SESSION_ID
+
+        return ResponseEntity.ok(commandExecutor.getResult(sessionId, id))
     }
 
     @GetMapping(value = ["/{id}/stream"], produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
-    fun streamEvents(@PathVariable id: String): Flux<ServerSentEvent<CommandStatus>> {
+    fun streamEvents(
+        @PathVariable id: String,
+        @RequestParam(name = "sessionId") sessionId: String? = null,
+    ): Flux<ServerSentEvent<CommandStatus>> {
+        val sessionId = sessionId ?: DEFAULT_SESSION_ID
+
         return Flux.create { sink ->
-            val job = commandRunner.commandStatusFlow(id)
+            val job = commandExecutor.commandStatusFlow(sessionId, id)
                 .onEach { sink.next(it) }
                 .onCompletion { sink.complete() }
                 .catch {
                     logger.error("Error in command status flow", it)
                     sink.error(it)
                 }
-                .launchIn(commandRunner.launchScope())
+                .launchIn(commandExecutor.launchScope())
 
             sink.onDispose { job.cancel() }
         }.map {

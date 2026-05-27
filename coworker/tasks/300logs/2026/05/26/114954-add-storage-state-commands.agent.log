@@ -1,0 +1,753 @@
+﻿I’m reading the task brief and checking the current repo state first.
+
+● Todo added Implementing storage state commands
+
+● Read add-storage-state-commands.md
+  │ coworker\tasks\2working\add-storage-state-commands.md
+  └ 5 lines read
+
+● Check git worktree status (shell)
+  │ git --no-pager status --short
+  └ 200 lines...
+
+I found the task pointer; next I’m tracing the existing CLI/backend surfaces for storage state support.
+
+● Read storage-state.md
+  │ coworker\tasks\200plan\storage-state.md
+  └ 259 lines read
+
+● Search (glob)
+  │ "browser4-rest\**\*MCPToolController*.kt"
+  └ No matches found
+
+● Search (glob)
+  │ "browser4-core\**\*WebDriver*.kt"
+  └ No matches found
+
+● Search (glob)
+  │ "cli\browser4-cli\src\*.rs"
+  └ No matches found
+
+● Search (grep)
+  │ "storage state|storage_state|saveStorageState|loadStorageState|save-storage|
+  │ load-storage|localStorage|cookies" in *.{kt,rs,md}
+  └ 103 lines found
+
+I have the feature shape; now I’m reading the command registry, backend aliases, and existing browser APIs together.
+
+● Read commands.rs
+  │ cli\browser4-cli\src\commands.rs
+  └ 1 line read
+
+● Read main.rs
+  │ cli\browser4-cli\src\main.rs
+  └ 1 line read
+
+● Read PulsarWebDriver.kt
+  │ browser4-core\browser4-plugins\browser4-protocol\src\main\kotlin\ai\platon\p
+  │ ulsar\protocol\browser\driver\cdt\PulsarWebDriver.kt
+  └ L1430:1515 (86 lines read)
+
+● Read MCPToolController.kt
+  │ browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolCo
+  │ ntroller.kt
+  └ L1:260 (259 lines read)
+
+● Read WebDriver.kt
+  │ browser4-core\browser4-skeleton\src\main\kotlin\ai\platon\pulsar\skeleton\br
+  │ owser\driver\WebDriver.kt
+  └ L450:560 (111 lines read)
+
+● Search (glob)
+  │ "**/*.rs" in cli\browser4-cli\src
+  └ 10 files found
+
+I’ve confirmed the main files; next I’m pinpointing the exact command-definition and dispatch hooks to extend.
+
+● Read commands.rs
+  │ cli\browser4-cli\src\commands.rs
+  └ L1:260 (260 lines read)
+
+● Read commands.rs
+  │ cli\browser4-cli\src\commands.rs
+  └ L260:620 (361 lines read)
+
+● Read main.rs
+  │ cli\browser4-cli\src\main.rs
+  └ L260:620 (361 lines read)
+
+● Read main.rs
+  │ cli\browser4-cli\src\main.rs
+  └ L1:260 (260 lines read)
+
+● Search (grep)
+  │ "CommandDef|no_snapshot_commands|compile_batch_request|browser_[a-z_]+|open_
+  │ session|cookie|localstorage|state-save|state-load|storage"
+  │ (cli\browser4-cli\src\commands.rs, cli\browser4-cli\src\main.rs,
+  │ cli\browser4-cli\src\help.rs, browser4-rest\src\main\kotlin\ai\platon\pulsar
+  │ \rest\mcp\controller\MCPToolController.kt)
+  └ 9 lines found
+
+I’ve got the command registry structure; now I’m reading only the storage-related command blocks and any existing tests around them.
+
+● Search (glob)
+  │ "**/*.{rs,kt}" in cli\browser4-cli\tests, browser4-tests\browser4-rest-tests
+  └ 30 files found
+
+● Search (grep)
+  │ "name: "[^"]+"|Category::Storage|browser_.*storage|browser_.*cookie|storageS
+  │ tate|state-save|state-load" (cli\browser4-cli\src\commands.rs)
+  └ 127 lines found
+
+● Search (grep)
+  │ "storage|cookie|localstorage|sessionstorage|state-save|state-load" in
+  │ *.{rs,kt} (cli\browser4-cli\src, cli\browser4-cli\tests,
+  │ browser4-tests\browser4-rest-tests, browser4-rest\src\main\kotlin)
+  └ 10 files found
+
+I haven’t found existing storage-state commands, so I’m checking whether the backend already has reusable browser methods or if I need to add them end to end.
+
+● Read AbstractWebDriver.kt
+  │ browser4-core\browser4-skeleton\src\main\kotlin\ai\platon\pulsar\skeleton\br
+  │ owser\driver\AbstractWebDriver.kt
+  └ L600:720 (119 lines read)
+
+● Read MCPToolController.kt
+  │ browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolCo
+  │ ntroller.kt
+  └ L260:520 (261 lines read)
+
+● Search (grep)
+  │ "storageState|storage state|setCookies|addCookies|getCookies\(|clearBrowserC
+  │ ookies|localStorage|sessionStorage|evaluateValue|evaluate\(" in *.kt
+  │ (browser4-core, browser4-rest)
+  └ 7 lines found
+
+I found the alias/controller test area too; now I’m narrowing to the exact browser methods available for implementing save/load.
+
+● Read browser.rs
+  │ cli\browser4-cli\tests\e2e\scenarios\browser.rs
+  └ L1:260 (260 lines read)
+
+● Read MCPToolControllerTest.kt
+  │ browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolCo
+  │ ntrollerTest.kt
+  └ L340:460 (120 lines read)
+
+● Read MCPToolControllerE2ETest.kt
+  │ browser4-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api
+  │ \controller\MCPToolControllerE2ETest.kt
+  └ L1:260 (259 lines read)
+
+● Search (grep)
+  │ "setCookies|addCookies|deleteCookies|clearBrowserCookies|getCookies|storageS
+  │ tate|localStorage|sessionStorage|evaluateValue"
+  │ (browser4-core\browser4-plugins\browser4-protocol\src\main\kotlin\ai\platon\
+  │ pulsar\protocol\browser\driver\cdt\PulsarWebDriver.kt)
+  └ 20 lines found
+
+● Search (grep)
+  │ "suspend fun (set|get|clear|delete).*Cookies|storageState|localStorage|sessi
+  │ onStorage|evaluateValue|evaluate\(|setCookie|addCookie"
+  │ (browser4-core\browser4-skeleton\src\main\kotlin\ai\platon\pulsar\skeleton\b
+  │ rowser\driver\WebDriver.kt)
+  └ 13 lines found
+
+I can reuse `evaluate` for storage, but cookie restore needs a proper protocol call if it exists—checking that next.
+
+● Read PulsarWebDriver.kt
+  │ browser4-core\browser4-plugins\browser4-protocol\src\main\kotlin\ai\platon\p
+  │ ulsar\protocol\browser\driver\cdt\PulsarWebDriver.kt
+  └ L140:240 (101 lines read)
+
+● Read WebDriver.kt
+  │ browser4-core\browser4-skeleton\src\main\kotlin\ai\platon\pulsar\skeleton\br
+  │ owser\driver\WebDriver.kt
+  └ L1740:1860 (121 lines read)
+
+● Search (grep)
+  │ "setCookies\(|setCookie\(|addCookies\(|CookieParam|SetCookies|clearBrowserCo
+  │ okies\(|getCookies\(" in *.kt
+  └ 24 lines found
+
+The driver exposes cookie reads/clears but not obvious writes, so I’m checking the lower CDP wrapper for a native `setCookies` path.
+
+● Search (grep)
+  │ "setCookies|setCookie|CookieParam|network\.set|suspend fun set" (browser4-co
+  │ re\browser4-browser\src\main\kotlin\ai\platon\browser4\driver\chrome\CDP.kt)
+  └ 7 lines found
+
+● Read CDP.kt
+  │ browser4-core\browser4-browser\src\main\kotlin\ai\platon\browser4\driver\chr
+  │ ome\CDP.kt
+  └ L340:420 (80 lines read)
+
+● Search (grep)
+  │ "data class .*Cookie|typealias .*Cookie|class .*Cookie" in *.kt
+  └ No matches found
+
+There’s no wrapped `setCookies` helper, so I’m checking the tool executor/controller path and fixture coverage before I add a minimal backend method for it.
+
+● Read BrowserTabToolExecutor.kt
+  │ browser4-agentic\src\main\kotlin\ai\platon\pulsar\agentic\tools\builtin\Brow
+  │ serTabToolExecutor.kt
+  └ L1160:1235 (76 lines read)
+
+● Search (grep)
+  │ "interactive|localStorage|sessionStorage|document.cookie|cookie"
+  │ (browser4-tests\browser4-tests-common\src\main\resources\static\generated)
+  └ 61 lines found
+
+● Search (grep)
+  │ "resolveToolCall|FRONTEND_TOOL_NAME_ALIASES|browser_get_cookies|clearBrowser
+  │ Cookies|getCookies|evaluateValue|title" (browser4-rest\src\main\kotlin\ai\pl
+  │ aton\pulsar\rest\mcp\controller\MCPToolController.kt, browser4-agentic\src\m
+  │ ain\kotlin\ai\platon\pulsar\agentic\tools\builtin\BrowserTabToolExecutor.kt)
+  └ 27 lines found
+
+I found where browser tools are declared and dispatched; I’m reading that declaration block before making the end-to-end additions.
+
+● Read MCPToolController.kt
+  │ browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolCo
+  │ ntroller.kt
+  └ L660:850 (191 lines read)
+
+● Read BrowserTabToolExecutor.kt
+  │ browser4-agentic\src\main\kotlin\ai\platon\pulsar\agentic\tools\builtin\Brow
+  │ serTabToolExecutor.kt
+  └ L1:160 (160 lines read)
+
+This spans CLI, backend, and tests, so I’m writing a short plan and then implementing the storage-state flow end to end.
+
+● Search (grep)
+  │ "DOMStorage|localStorage\.setItem|Storage\.|IndexedDB|origin" in *.kt
+  │ (browser4-core)
+  └ 7 lines found
+
+● Create session plan file (shell)
+  │ @'
+  │ # Plan
+  │
+  │ 1. Inspect existing CLI/browser storage capabilities and test surfaces.
+  │ 2. Add backend storage-state save/load support and expose it through …
+  └ 7 lines...
+
+I’ve got the plan in place; next I’m checking for a CDP storage API so load can restore localStorage without fragile page navigation.
+
+● Search (grep)
+  │ "DOMStorage|localStorage|sessionStorage|IndexedDB|Storage"
+  │ (browser4-core\browser4-browser\src\main\kotlin)
+  └ No matches found
+
+● Search (grep)
+  │ "class .*Network|interface .*Network|fun setCookie|fun setCookies|fun
+  │ deleteCookies|fun getCookies" in *.kt
+  └ 7 files found
+
+There’s no existing storage-domain wrapper, so I’m inspecting the CDP layer for a safe raw-command escape hatch before I add any new API surface.
+
+● Read Types.kt
+  │ browser4-core\browser4-browser\src\main\kotlin\ai\platon\browser4\driver\chr
+  │ ome\Types.kt
+  └ L1:260 (131 lines read)
+
+● Search (grep)
+  │ "call\(|send\(|invoke\(|method =|network\.|runtime\.|target\." (browser4-cor
+  │ e\browser4-browser\src\main\kotlin\ai\platon\browser4\driver\chrome)
+  └ 73 lines found
+
+● Search (grep)
+  │ "class .*JsHandler|evaluateValueDetail|callFunctionOn|RemoteObject"
+  │ (browser4-core\browser4-plugins\browser4-protocol\src\main\kotlin)
+  └ 11 lines found
+
+I found the generic CDP invocation layer; now I’m checking whether the driver can reach it cleanly enough to implement cookie restore without introducing a big abstraction.
+
+● Read ChromeServices.kt
+  │ browser4-core\browser4-browser\src\main\kotlin\ai\platon\browser4\driver\chr
+  │ ome\ChromeServices.kt
+  └ L1:180 (102 lines read)
+
+● Read CDP.kt
+  │ browser4-core\browser4-browser\src\main\kotlin\ai\platon\browser4\driver\chr
+  │ ome\CDP.kt
+  └ L1:120 (120 lines read)
+
+● Search (grep)
+  │ "class CDP|val network|RemoteDevTools|devTools" (browser4-core\browser4-brow
+  │ ser\src\main\kotlin\ai\platon\browser4\driver\chrome\CDP.kt)
+  └ 16 lines found
+
+I can likely use the generic `RemoteDevTools.invoke(...)` path for raw CDP commands, so I’m checking existing call patterns before wiring `Network.setCookies`.
+
+● Read ChromeDevToolsImpl.kt
+  │ browser4-core\browser4-browser\src\main\kotlin\ai\platon\browser4\driver\chr
+  │ ome\impl\ChromeDevToolsImpl.kt
+  └ L80:170 (91 lines read)
+
+● Search (grep)
+  │ "remoteDevToolsOrNull|invoke\("[A-Za-z]+\.[A-Za-z]+"" in *.kt
+  └ 4 lines found
+
+I’ve verified the raw CDP call path exists; next I’m checking whether the project already uses it with map payloads so I can match that pattern.
+
+● Search (grep)
+  │ "return Unit|Void.TYPE|Unit::class|Void::class" (browser4-core\browser4-brow
+  │ ser\src\main\kotlin\ai\platon\browser4\driver\chrome)
+  └ 4 lines found
+
+● Search (grep)
+  │ "invoke<.*Map|invoke\("[A-Za-z]+\.[A-Za-z]+".*Map|returnClass =
+  │ Map::class|MethodInvocation\(" in *.kt
+  └ 7 lines found
+
+I’m leaning toward a JSON-string tool contract for storage state so the CLI can own file I/O and the backend can stay simple; I’m confirming the executor dispatch needs before editing.
+
+● Read BrowserTabToolExecutor.kt
+  │ browser4-agentic\src\main\kotlin\ai\platon\pulsar\agentic\tools\builtin\Brow
+  │ serTabToolExecutor.kt
+  └ L520:1265 (466 lines read)
+
+● Search (grep)
+  │ "else ->|when \(functionName\)|toolSpec\[|execute\(" (browser4-agentic\src\m
+  │ ain\kotlin\ai\platon\pulsar\agentic\tools\builtin\BrowserTabToolExecutor.kt)
+  └ 23 lines found
+
+The tool executor needs explicit cases, and the CLI likely needs custom handlers for file I/O, so I’m reading that dispatch section before patching.
+
+● Read main.rs
+  │ cli\browser4-cli\src\main.rs
+  └ L620:1120 (501 lines read)
+
+● Search (grep)
+  │ "match command_name|handle_open\(|handle_goto\(|no_snapshot_commands\(|tool_
+  │ name_fn|tool_params_fn|post_command_snapshot|save_snapshot"
+  │ (cli\browser4-cli\src\main.rs)
+  └ 22 lines found
+
+I found the main dispatch points; I’m reading the command-execution branch and nearby tests so I can patch the new commands in one pass.
+
+● Read commands.rs
+  │ cli\browser4-cli\src\commands.rs
+  └ L1000:1160 (161 lines read)
+
+● Read main.rs
+  │ cli\browser4-cli\src\main.rs
+  └ L1960:2075 (116 lines read)
+
+● Read main.rs
+  │ cli\browser4-cli\src\main.rs
+  └ L2520:2725 (206 lines read)
+
+● Read main.rs
+  │ cli\browser4-cli\src\main.rs
+  └ L2725:2805 (81 lines read)
+
+I’ve found the CLI dispatch. Before implementing save/load file handling, I’m checking the existing output-path helper so the new default filename matches repo conventions.
+
+● Read snapshot.rs
+  │ cli\browser4-cli\src\snapshot.rs
+  └ L1:220 (97 lines read)
+
+● Read help.rs
+  │ cli\browser4-cli\src\help.rs
+  └ L1:220 (220 lines read)
+
+I’ve got the path helper. For the new e2e, I’m checking the existing test harness utilities so the state file lands in a stable temp location.
+
+● Read mod.rs
+  │ cli\browser4-cli\tests\e2e\scenarios\mod.rs
+  └ L1:260 (260 lines read)
+
+● Read e2e.rs
+  │ cli\browser4-cli\tests\e2e.rs
+  └ L1:260 (260 lines read)
+
+I have the fixture server; I’m locating the shared test context fields next so the new scenario can create and inspect a storage-state file cleanly.
+
+● Search (grep)
+  │ "struct E2ECtx|state_dir:|workspace|temp_dir|run_command\(|interactive_url\(
+  │ |other_url\(" (cli\browser4-cli\tests\e2e.rs)
+  └ 27 lines found
+
+I found the workspace/state dirs in the harness; now I’m reading the helper block around them so the new test can reuse the existing conventions.
+
+● Read e2e.rs
+  │ cli\browser4-cli\tests\e2e.rs
+  └ L1100:1455 (355 lines read)
+
+● Read e2e.rs
+  │ cli\browser4-cli\tests\e2e.rs
+  └ L2210:2265 (56 lines read)
+
+The harness has what I need. I’m checking the command-coverage assertions too so the new commands don’t break the e2e meta-tests.
+
+● Search (grep)
+  │ "covered_commands|excluded_commands|all_commands\(|state-save|state-load"
+  │ (cli\browser4-cli\tests\e2e.rs)
+  └ 6 lines found
+
+I found the coverage gate. I’m reading the tested/excluded command sets so I can update them alongside the new scenario.
+
+● Read e2e.rs
+  │ cli\browser4-cli\tests\e2e.rs
+  └ L2360:2555 (196 lines read)
+
+I can capture only the current origin directly, but restore may need temporary origin navigations. I’m checking the driver navigation APIs now so that implementation stays within existing behavior.
+
+● Read WebDriver.kt
+  │ browser4-core\browser4-skeleton\src\main\kotlin\ai\platon\pulsar\skeleton\br
+  │ owser\driver\WebDriver.kt
+  └ L1:120 (120 lines read)
+
+● Read WebDriver.kt
+  │ browser4-core\browser4-skeleton\src\main\kotlin\ai\platon\pulsar\skeleton\br
+  │ owser\driver\WebDriver.kt
+  └ L350:450 (101 lines read)
+
+● Search (grep)
+  │ "suspend fun (navigate|open|waitForPage|currentUrl)\(|override suspend fun
+  │ (navigate|open|waitForPage|currentUrl)\(" (browser4-core\browser4-skeleton\s
+  │ rc\main\kotlin\ai\platon\pulsar\skeleton\browser\driver\WebDriver.kt,
+  │ browser4-core\browser4-plugins\browser4-protocol\src\main\kotlin\ai\platon\p
+  │ ulsar\protocol\browser\driver\cdt\PulsarWebDriver.kt)
+  └ 8 lines found
+
+The driver has direct navigation support. I’m reading that section to see the safest way to hop through origins during restore and then return to the prior page.
+
+● Read PulsarWebDriver.kt
+  │ browser4-core\browser4-plugins\browser4-protocol\src\main\kotlin\ai\platon\p
+  │ ulsar\protocol\browser\driver\cdt\PulsarWebDriver.kt
+  └ L96:138 (43 lines read)
+
+● Read PulsarWebDriver.kt
+  │ browser4-core\browser4-plugins\browser4-protocol\src\main\kotlin\ai\platon\p
+  │ ulsar\protocol\browser\driver\cdt\PulsarWebDriver.kt
+  └ L280:310 (31 lines read)
+
+● Read WebDriver.kt
+  │ browser4-core\browser4-skeleton\src\main\kotlin\ai\platon\pulsar\skeleton\br
+  │ owser\driver\WebDriver.kt
+  └ L240:330 (91 lines read)
+
+A key behavior surfaced: `state-load` should work even without an existing session, while `state-save` should not silently reopen a fresh one. I’m checking existing export-path behavior before I lock in the filename semantics.
+
+● Search (grep)
+  │ "resolve_output_path\(|--filename|snapshot filename|screenshot filename|pdf
+  │ filename" (cli\browser4-cli\tests, cli\browser4-cli\src)
+  └ 12 lines found
+
+● Search (grep)
+  │ "storage-state|auth-state|state-save|state-load" in *.md
+  └ 10 lines found
+
+The plan examples clearly treat an explicit filename as a direct file path, so I’m checking current export tests before deciding whether to follow existing snapshot behavior or the task’s stricter contract here.
+
+● Read browser.rs
+  │ cli\browser4-cli\tests\e2e\scenarios\browser.rs
+  └ L520:620 (101 lines read)
+
+The task examples are more explicit than the snapshot/export behavior, so I’m planning direct file-path semantics for storage state and checking the user-facing CLI docs that need to mention the new commands.
+
+● Read SKILL.md
+  │ cli\skill\SKILL.md
+  └ L1:260 (259 lines read)
+
+● Search (grep)
+  │ "snapshot|screenshot|delete-data|tab-list|storage|cookie|localstorage"
+  │ (cli\skill\SKILL.md)
+  └ 22 lines found
+
+I’ve gathered the relevant codepaths. I’m reading the exact insertion points for the new storage commands and the controller/unit tests before patching the implementation.
+
+● Read commands.rs
+  │ cli\browser4-cli\src\commands.rs
+  └ L700:840 (141 lines read)
+
+● Read MCPToolControllerTest.kt
+  │ browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolCo
+  │ ntrollerTest.kt
+  └ L720:790 (71 lines read)
+
+● Read MCPToolControllerTest.kt
+  │ browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolCo
+  │ ntrollerTest.kt
+  └ L1:120 (120 lines read)
+
+● Read MCPToolControllerTest.kt
+  │ browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolCo
+  │ ntrollerTest.kt
+  └ L380:445 (66 lines read)
+
+I’ve finished the investigation and identified the end-to-end touch points. Before editing, I’m taking a quick baseline compile of the existing tree.
+
+● Run baseline Maven compile (shell)
+  │ .\mvnw.cmd -q -DskipTests compile
+  └ 2 lines...
+
+I’m editing the CLI, driver, controller, tests, and CLI skill doc together so the new storage-state commands land consistently in one change set.
+
+● Read PulsarWebDriver.kt
+  │ browser4-core\browser4-plugins\browser4-protocol\src\main\kotlin\ai\platon\p
+  │ ulsar\protocol\browser\driver\cdt\PulsarWebDriver.kt
+  └ L1:90 (89 lines read)
+
+● Read browser.rs
+  │ cli\browser4-cli\tests\e2e\scenarios\browser.rs
+  └ L1:120 (120 lines read)
+
+● Read CDP.kt
+  │ browser4-core\browser4-browser\src\main\kotlin\ai\platon\browser4\driver\chr
+  │ ome\CDP.kt
+  └ L1:40 (40 lines read)
+
+● Read MCPToolController.kt
+  │ browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolCo
+  │ ntroller.kt
+  └ L78:110 (33 lines read)
+
+● Read main.rs
+  │ cli\browser4-cli\src\main.rs
+  └ L1:70 (70 lines read)
+
+● Edit
+  │ Edit browser4-core\browser4-browser\src\main\kotlin\ai\platon\browser4\drive
+  │ r\chrome\CDP.kt
+  │ Edit browser4-core\browser4-skeleton\src\main\kotlin\ai\platon\pulsar\skelet
+  │ on\browser\driver\WebDriver.kt
+  │ Edit browser4-core\browser4-plugins\browser4-protocol\src\main\kotlin\ai\pla
+  │ ton\pulsar\protocol\browser\driver\cdt\PulsarWebDriver.kt
+  │ Edit browser4-agentic\src\main\kotlin\ai\platon\pulsar\agentic\tools\builtin
+  │ \BrowserTabToolExecutor.kt
+  │ Edit browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPT
+  │ oolController.kt
+  │ Edit cli\browser4-cli\src\commands.rs
+  │ Edit cli\browser4-cli\src\main.rs
+  │ Edit browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPT
+  │ oolControllerTest.kt
+  │ Edit browser4-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\res
+  │ t\api\controller\MCPToolControllerE2ETest.kt
+  │ Edit cli\browser4-cli\tests\e2e\scenarios\mod.rs
+  │ Edit cli\browser4-cli\tests\e2e\scenarios\browser.rs
+  │ Edit cli\browser4-cli\tests\e2e.rs
+  └ Edit cli\skill\SKILL.md
+
+I’ve applied the first pass. Next I’m formatting the Rust side and compiling/tests to catch any integration mistakes across the CLI and Kotlin backend.
+
+● Format Rust CLI code (shell)
+  │ cargo fmt --manifest-path .\cli\browser4-cli\Cargo.toml
+  └ 1 line...
+
+● Compile Maven modules after changes (shell)
+  │ .\mvnw.cmd -q -DskipTests compile
+  └ 2 lines...
+
+● Run CLI Rust tests (shell)
+  │ cargo test --manifest-path .\cli\browser4-cli\Cargo.toml --quiet
+  └ 135 lines...
+
+The CLI test run hit the stale prebuilt `Browser4.jar`, not the updated backend. I’m stopping that run, fixing a small Rust warning, then rebuilding the app jar before rerunning the relevant tests.
+
+● Stop shell
+  └ 1 line...
+
+● Read pom.xml
+  │ browser4-app\browser4-agents\pom.xml
+  └ L1:220 (220 lines read)
+
+● Read build.ps1
+  │ bin\build.ps1
+  └ L1:220 (6 lines read)
+
+I only have one small Rust cleanup left from the first pass; after that I’ll rebuild the Browser4 jar and rerun the focused CLI/backend tests against the updated server code.
+
+● Edit
+  └ Edit cli\browser4-cli\src\main.rs
+
+I’m rebuilding the app jar and rerunning only the relevant test slices now: Rust unit tests immediately, then the new CLI e2e scenario and matching Kotlin tests against the rebuilt jar.
+
+● Format and run Rust unit tests (shell)
+  │ cargo fmt --manifest-path .\cli\browser4-cli\Cargo.toml && cargo test
+  │ --manifest-path .\cli\browser4-cli\Cargo.toml --quiet --lib --bin
+  │ browser4-cli
+  └ 9 lines...
+
+● Build updated Browser4 jar (shell)
+  │ .\mvnw.cmd -q -pl browser4-app\browser4-agents -am -DskipTests package
+  └ 2 lines...
+
+The jar is rebuilt. I’m running the focused backend controller tests next, then the storage-state e2e slices in Kotlin and the CLI.
+
+● Run MCPToolController unit test (shell)
+  │ .\mvnw.cmd -q -pl browser4-rest -Dtest=MCPToolControllerTest test
+  │ -D"surefire.failIfNoSpecifiedTests=false"
+  └ 126 lines...
+
+The controller unit slice passed. I’m running the targeted REST e2e for storage state next, then the CLI storage-state scenario against the rebuilt jar.
+
+● Run REST storage-state e2e test (shell)
+  │ .\mvnw.cmd -q -pl browser4-tests\browser4-rest-tests -am
+  │ -Dtest=MCPToolControllerE2ETest#testStorageStateTools test
+  │ -D"surefire.failIfNoSpecifiedTests=false"
+  └ 10 lines...
+
+The test module selector was off. I’m looking up the actual Maven module name before rerunning the targeted REST e2e.
+
+● Search (grep)
+  │ "<module>.*browser4-rest-tests.*</module>|<artifactId>browser4-rest-tests</a
+  │ rtifactId>" (pom.xml, browser4-tests\pom.xml,
+  │ browser4-tests\browser4-rest-tests\pom.xml)
+  └ 2 lines found
+
+I found the correct test reactor entry. Rerunning the REST storage-state e2e with the module’s own parent pom now.
+
+● Run REST storage-state e2e test (shell)
+  │ .\mvnw.cmd -q -f .\browser4-tests\pom.xml -pl browser4-rest-tests -am
+  │ -Dtest=MCPToolControllerE2ETest#testStorageStateTools test
+  │ -D"surefire.failIfNoSpecifiedTests=false"
+  └ 13 lines...
+
+The REST e2e compile exposed a small typo: `baseUrl` is a property there, not a function. I’m fixing that and then rerunning the focused e2e and CLI scenario.
+
+● Read MCPToolControllerE2ETest.kt
+  │ browser4-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api
+  │ \controller\MCPToolControllerE2ETest.kt
+  └ L230:255 (26 lines read)
+
+● Search (grep)
+  │ "baseUrl\(\)" (browser4-tests\browser4-rest-tests\src\test\kotlin\ai\platon\
+  │ pulsar\rest\api\controller\MCPToolControllerE2ETest.kt)
+  └ 1 line found
+
+● Edit
+  └ Edit browser4-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\res
+    t\api\controller\MCPToolControllerE2ETest.kt
+
+I fixed the typo. Rerunning the focused REST e2e first, then I’ll run the CLI storage-state scenario against the rebuilt jar.
+
+● Rerun REST storage-state e2e test (shell)
+  │ .\mvnw.cmd -q -f .\browser4-tests\pom.xml -pl browser4-rest-tests -am
+  │ -Dtest=MCPToolControllerE2ETest#testStorageStateTools test
+  │ -D"surefire.failIfNoSpecifiedTests=false"
+  └ 3 lines...
+
+The REST e2e passed. I’m running the CLI’s dedicated storage-state scenario now so the end-to-end file command flow is covered too.
+
+● Run CLI storage-state e2e scenario (shell)
+  │ cargo test --manifest-path .\cli\browser4-cli\Cargo.toml --test e2e --
+  │ --scenario=test_e2e_storage_state_commands
+  └ 66 lines...
+
+The source-backed REST e2e passed, so the remaining CLI-jar failure points to tool advertisement/spec discovery in the packaged runtime. I’m making the new tab-tool specs explicit so they’re guaranteed to be present in the jar build too.
+
+● Edit
+  └ Edit browser4-agentic\src\main\kotlin\ai\platon\pulsar\agentic\tools\builtin
+    \BrowserTabToolExecutor.kt
+
+I made the storage-state tool specs explicit. Rebuilding the jar again and rerunning the CLI storage-state scenario against that packaged runtime now.
+
+● Rebuild jar and rerun CLI storage e2e (shell)
+  │ .\mvnw.cmd -q -pl browser4-app\browser4-agents -am -DskipTests package &&
+  │ cargo test --manifest-path .\cli\browser4-cli\Cargo.toml --test e2e --
+  │ --scenario=test_e2e_storage_state_commands
+  └ 80 lines...
+
+The implementation and focused validation are done. I’m updating the task log memory files now and marking the work complete in session tracking.
+
+✔ Todo completed add-storage-state-commands
+
+✗ Read MEMORY.20260526.md
+  │ coworker\tasks\300logs\2026\05\26\MEMORY.20260526.md
+  └ Path does not exist
+
+✗ Read MEMORY.202605.md
+  │ coworker\tasks\300logs\2026\05\MEMORY.202605.md
+  └ Path does not exist
+
+● Search (glob)
+  │ "MEMORY.202605*.md" in coworker\tasks\300logs\2026\05
+  └ No matches found
+
+The expected memory files don’t exist yet, so I’m checking the log tree and creating/updating the required daily and monthly entries in place.
+
+● List directory coworker\tasks\300logs
+  └ 2 files found
+
+● Search (glob)
+  │ "**/MEMORY*.md" in coworker\tasks\300logs
+  └ No matches found
+
+● Search (glob)
+  │ "2026\05\*" in coworker\tasks\300logs
+  └ No matches found
+
+I confirmed the log tree is mostly empty. I’m listing the dated folders next so I can create the missing daily/monthly memory files without overwriting anything.
+
+● List memory directories (shell)
+  │ Get-ChildItem -Recurse -Directory .\coworker\tasks\300logs | Select-Object
+  │ -ExpandProperty FullName
+  └ 8 lines...
+
+I found no existing May memory markdown yet, so I’m appending today’s task to a new daily file and creating the required monthly file with the correct “no prior daily summaries” note.
+
+● Mark session plan complete (shell)
+  │ @'
+  │ # Plan
+  │
+  │ 1. Inspect existing CLI/browser storage capabilities and test surfaces.
+  │ [done]…
+  └ 9 lines...
+
+● Append daily and monthly memory entries (shell)
+  │ $daily = 'D:\workspace\Browser4\Browser4-4.9\coworker\tasks\300logs\2026\0
+  │ 5\26\MEMORY.20260526.md'; $monthly = 'D:\workspace\Browser4\Browser4-4.9\c
+  │ oworker\tasks\300logs\2026\05\MEMORY.202605.md'; $dailyEntry = @"
+  │ - Added `state-save` and `state-load` to `browser4-cli`, backed by new
+  │ Browser4 tab tools that save/load cookies plus the active origin's …
+  └ 17 lines...
+
+I’ve written the required memory entries. I’m doing one final quick readback of those files and the worktree before wrapping up.
+
+● Read MEMORY.20260526.md
+  │ coworker\tasks\300logs\2026\05\26\MEMORY.20260526.md
+  └ L1:end (3 lines read)
+
+● Read MEMORY.202605.md
+  │ coworker\tasks\300logs\2026\05\MEMORY.202605.md
+  └ L1:end (1 line read)
+
+● Check final git status (shell)
+  │ git --no-pager status --short
+  └ 213 lines...
+
+The new daily memory file picked up a PowerShell backtick artifact in the first line, so I’m appending a short correction note instead of rewriting prior content.
+
+● Read MEMORY.20260526.md
+  │ coworker\tasks\300logs\2026\05\26\MEMORY.20260526.md
+  └ L1:end (3 lines read)
+
+● Append correction to daily memory (shell)
+  │ $daily = 'D:\workspace\Browser4\Browser4-4.9\coworker\tasks\300logs\2026\05\
+  │ 26\MEMORY.20260526.md'; Add-Content -Path $daily -Value '- Correction: the
+  │ first bullet refers to `browser4-cli`; the odd character was a PowerShell
+  │ backtick escape artifact in the appended text.'
+  └ 1 line...
+
+I appended the correction note; reading the file back once more to make sure it’s there before I finish.
+
+● Read MEMORY.20260526.md
+  │ coworker\tasks\300logs\2026\05\26\MEMORY.20260526.md
+  └ L1:end (4 lines read)
+
+**Done.** Added `state-save` and `state-load` to `browser4-cli`, backed by new Browser4 tab tools that save and restore cookies plus the active origin’s `localStorage` as JSON. `state-save` now writes a timestamped `storage-state-*.json` by default or a direct file path when provided, and `state-load` auto-opens a session when needed.
+
+I also wired the new MCP aliases through the REST controller, added Rust/Kotlin command and end-to-end coverage, updated `cli/skill/SKILL.md`, and appended the required daily/monthly memory entries under `coworker\tasks\300logs\2026\05\...`.
+
+
+=== AGENT STDERR ===
+
+
+
+Changes    +755 -6
+Requests   1 Premium (24m 29s)
+Tokens     ↑ 8.4m (8.2m cached) • ↓ 43.4k (21.1k reasoning)

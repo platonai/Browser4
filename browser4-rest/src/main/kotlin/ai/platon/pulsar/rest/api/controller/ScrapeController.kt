@@ -21,9 +21,7 @@ import reactor.core.publisher.Flux
     produces = [MediaType.APPLICATION_JSON_VALUE]
 )
 class ScrapeController(
-    val applicationContext: ApplicationContext,
-    val scrapeService: ScrapeService,
-    val session: PulsarSession
+    val scrapeService: ScrapeService
 ) {
     /**
      * @param sql The SQL to execute
@@ -45,6 +43,8 @@ class ScrapeController(
 
     /**
      * Submit a URL to scrape or submit an X-SQL to execute
+     *
+     * TODO: check if the task should be submitted to the URLPool
      *
      * @param payload The url to scrape or an X-SQL to execute
      * */

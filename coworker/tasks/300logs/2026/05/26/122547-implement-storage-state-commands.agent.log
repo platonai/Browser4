@@ -1,0 +1,489 @@
+I’m reviewing the task brief and the current repo state, then I’ll implement the required changes end to end.
+
+● Read implement-storage-state-commands.md
+  │ coworker\tasks\2working\implement-storage-state-commands.md
+  └ 10 lines read
+
+● Check git status and branch (shell)
+  │ git --no-pager status --short && git --no-pager branch --show-current
+  └ 204 lines...
+
+● Search (glob)
+  │ "**/*{commands.rs,main.rs,MCPToolController.kt,*Storage*Test.kt,e2e.rs,SKILL
+  │ .md}"
+  └ 12 files found
+
+● Read storage-state.md
+  │ coworker\tasks\200plan\storage-state.md
+  └ 254 lines read
+
+● Search (grep)
+  │ "state-save|state-load|storage state|localStorage|cookies" in *.{rs,kt,md}
+  └ 7 lines found
+
+● Read commands.rs
+  │ cli\browser4-cli\src\commands.rs
+  └ L1:320 (320 lines read)
+
+● Read SKILL.md
+  │ cli\skill\SKILL.md
+  └ L1:260 (260 lines read)
+
+● Read MCPToolController.kt
+  │ browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolCo
+  │ ntroller.kt
+  └ L1:280 (280 lines read)
+
+● Read e2e.rs
+  │ cli\browser4-cli\tests\e2e.rs
+  └ L1:360 (360 lines read)
+
+● Search (grep)
+  │ "storage-state|state-save|state-load" in *.md (cli\skill)
+  └ 5 lines found
+
+✗ Search (grep)
+  │ "name: "state-save"|name: "state-load"|browser_save_storage_state|browser_lo
+  │ ad_storage_state|save_storage_state|load_storage_state" in *.{rs,kt}
+  │ (cli\browser4-cli\src, cli\browser4-cli\tests, browser4-rest\src,
+  │ browser4-core\src, browser4-tests)
+  └ rg: D:\workspace\Browser4\Browser4-4.9\browser4-core\src:
+    系统找不到指定的文件。 (os error 2)
+
+I found the storage-state surface already exists in docs, so I’m checking the actual command wiring and tests to see what’s missing versus the task brief.
+
+● Search (glob)
+  │ "**/*WebDriver*.kt"
+  └ 33 files found
+
+● Search (grep)
+  │ "state-save|state-load" in *.rs (cli\browser4-cli\src)
+  └ 12 lines found
+
+● Search (grep)
+  │ "save_storage_state|load_storage_state|saveStorageState|loadStorageState|bro
+  │ wser_save_storage_state|browser_load_storage_state" in *.{kt,rs}
+  └ 38 lines found
+
+● Search (grep)
+  │ "name: "cookie-|name: "localstorage-|name: "sessionstorage-"
+  │ (cli\browser4-cli\src\commands.rs)
+  └ No matches found
+
+● Search (grep)
+  │ "cookie-list|cookie-get|cookie-set|cookie-delete|cookie-clear|localstorage-l
+  │ ist|localstorage-get|localstorage-set|localstorage-delete|localstorage-clear
+  │ |sessionstorage-list|sessionstorage-get|sessionstorage-set|sessionstorage-de
+  │ lete|sessionstorage-clear" in *.{rs,kt,md}
+  └ 20 lines found
+
+This is broader than the already-added `state-save/state-load`: the task file points to `storage-state.md`, and the cookie/local/session storage commands from that plan are still missing. I’m implementing that full command set now.
+
+✗ Read WebDriver.kt
+  │ browser4-core\browser4-core\src\main\kotlin\ai\platon\pulsar\skeleton\browse
+  │ r\driver\WebDriver.kt
+  └ Path does not exist
+
+● Read BrowserTabToolExecutor.kt
+  │ browser4-agentic\src\main\kotlin\ai\platon\pulsar\agentic\tools\builtin\Brow
+  │ serTabToolExecutor.kt
+  └ L140:260 (121 lines read)
+
+● Search (grep)
+  │ "getCookies|setCookies|clearCookies|localStorage|sessionStorage|get_storage|
+  │ set_storage|evaluate_value|evaluate|document.cookie|Storage" in *.kt
+  │ (browser4-agentic)
+  └ 7 lines found
+
+● Search (grep)
+  │ "getCookies|setCookies|clearCookies|deleteCookies|evaluate|executeJavaScript
+  │ |localStorage|sessionStorage|document.cookie" in *.kt (browser4-core,
+  │ browser4-rest, browser4-tests)
+  └ 7 lines found
+
+● Read BrowserTabToolExecutor.kt
+  │ browser4-agentic\src\main\kotlin\ai\platon\pulsar\agentic\tools\builtin\Brow
+  │ serTabToolExecutor.kt
+  └ L1210:1255 (45 lines read)
+
+● Read commands.rs
+  │ cli\browser4-cli\src\commands.rs
+  └ L700:780 (81 lines read)
+
+● Read WebDriver.kt
+  │ browser4-core\browser4-skeleton\src\main\kotlin\ai\platon\pulsar\skeleton\br
+  │ owser\driver\WebDriver.kt
+  └ L420:620 (201 lines read)
+
+● Read PulsarWebDriver.kt
+  │ browser4-core\browser4-plugins\browser4-protocol\src\main\kotlin\ai\platon\p
+  │ ulsar\protocol\browser\driver\cdt\PulsarWebDriver.kt
+  └ L150:260 (111 lines read)
+
+● Read main.rs
+  │ cli\browser4-cli\src\main.rs
+  └ L1180:1245 (66 lines read)
+
+● Read main.rs
+  │ cli\browser4-cli\src\main.rs
+  └ L2660:2725 (66 lines read)
+
+● Search (grep)
+  │ "evaluateValue|browser_evaluate|eval" (cli\browser4-cli\src\commands.rs)
+  └ 8 lines found
+
+● Search (grep)
+  │ "browser_clear_browser_cookies|browser_get_cookies|browser_delete_cookies|cl
+  │ earBrowserCookies|getCookies|deleteCookies" in *.{rs,kt}
+  │ (cli\browser4-cli\src, browser4-rest\src)
+  └ 2 lines found
+
+● Search (grep)
+  │ "setCookies\(|setCookie\(" in *.kt
+  └ 2 lines found
+
+● Read MCPToolController.kt
+  │ browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolCo
+  │ ntroller.kt
+  └ L300:360 (61 lines read)
+
+● Read MCPToolControllerTest.kt
+  │ browser4-rest\src\test\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolCo
+  │ ntrollerTest.kt
+  └ L430:840 (410 lines read)
+
+● Search (grep)
+  │ "clearBrowserCookies|getCookies|deleteCookies" (browser4-rest\src\main\kotli
+  │ n\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt)
+  └ 1 line found
+
+● Read MCPToolController.kt
+  │ browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolCo
+  │ ntroller.kt
+  └ L560:760 (201 lines read)
+
+● Search (grep)
+  │ "NormalizedToolCall|FRONTEND_TOOL_NAME_ALIASES|toolAlias|alias|camelCase|sna
+  │ ke_case|dispatchToAgentToolExecutor|normalizeTool" (browser4-rest\src\main\k
+  │ otlin\ai\platon\pulsar\rest\mcp\controller\MCPToolController.kt)
+  └ 17 lines found
+
+● Read MCPToolController.kt
+  │ browser4-rest\src\main\kotlin\ai\platon\pulsar\rest\mcp\controller\MCPToolCo
+  │ ntroller.kt
+  └ L780:910 (87 lines read)
+
+● Read BrowserTabToolExecutor.kt
+  │ browser4-agentic\src\main\kotlin\ai\platon\pulsar\agentic\tools\builtin\Brow
+  │ serTabToolExecutor.kt
+  └ L1:120 (120 lines read)
+
+● Read main.rs
+  │ cli\browser4-cli\src\main.rs
+  └ L1:220 (220 lines read)
+
+● Read main.rs
+  │ cli\browser4-cli\src\main.rs
+  └ L2320:2910 (591 lines read)
+
+● Search (grep)
+  │ "fn no_snapshot_commands|fn post_command_snapshot|println!\(|handle_.*cookie
+  │ |handle_.*storage|StorageStateLoadSummary|pretty|print_json|save_snapshot|re
+  │ solve_storage_state_path|handle_tool_response"
+  │ (cli\browser4-cli\src\main.rs)
+  └ 90 lines found
+
+● Search (grep)
+  │ "assert_all_commands_covered|covered_commands|excluded_commands|commands_und
+  │ er_test" (cli\browser4-cli\tests\e2e.rs)
+  └ 5 lines found
+
+● Search (grep)
+  │ "state-save|state-load|cookie|localstorage|sessionstorage"
+  │ (cli\browser4-cli\tests\e2e.rs)
+  └ 2 lines found
+
+● Search (grep)
+  │ "browser_save_storage_state|browser_load_storage_state|saveStorageState|load
+  │ StorageState|getCookies|clearBrowserCookies|deleteCookies"
+  │ (cli\browser4-cli\tests\e2e.rs)
+  └ No matches found
+
+I have the missing surface identified. Next I’m wiring the new storage commands into the CLI, then I’ll add targeted Rust/Kotlin coverage and update the CLI guide.
+
+● Read MCPToolControllerE2ETest.kt
+  │ browser4-tests\browser4-rest-tests\src\test\kotlin\ai\platon\pulsar\rest\api
+  │ \controller\MCPToolControllerE2ETest.kt
+  └ L220:310 (91 lines read)
+
+● Read e2e.rs
+  │ cli\browser4-cli\tests\e2e.rs
+  └ L2380:2565 (186 lines read)
+
+● Search (grep)
+  │ "fn test_e2e_.*storage|navigation_and_storage|storage state
+  │ tools|run_cli|assert_success|MockBrowser4Server"
+  │ (cli\browser4-cli\tests\e2e.rs)
+  └ 26 lines found
+
+● Read mod.rs
+  │ cli\browser4-cli\tests\e2e\scenarios\mod.rs
+  └ L1:260 (260 lines read)
+
+● Search (glob)
+  │ "**/tests/e2e/scenarios/*.rs" in cli\browser4-cli
+  └ 4 files found
+
+● Read browser.rs
+  │ cli\browser4-cli\tests\e2e\scenarios\browser.rs
+  └ L1:260 (260 lines read)
+
+● Read browser.rs
+  │ cli\browser4-cli\tests\e2e\scenarios\browser.rs
+  └ L260:520 (261 lines read)
+
+● Search (grep)
+  │ "test_storage_state_commands|test_navigation_and_storage|localStorage|state-
+  │ save|delete-data" (cli\browser4-cli\tests\e2e\scenarios\browser.rs)
+  └ 17 lines found
+
+● Read PulsarWebDriver.kt
+  │ browser4-core\browser4-plugins\browser4-protocol\src\main\kotlin\ai\platon\p
+  │ ulsar\protocol\browser\driver\cdt\PulsarWebDriver.kt
+  └ L760:940 (181 lines read)
+
+● Search (grep)
+  │ "data class StorageState|normalizeCookieForSet|toStorageStateCookie|captureC
+  │ urrentOriginLocalStorage|restoreLocalStorage"
+  │ (browser4-core\browser4-plugins\browser4-protocol\src\main\kotlin\ai\platon\
+  │ pulsar\protocol\browser\driver\cdt\PulsarWebDriver.kt)
+  └ 12 lines found
+
+● Read PulsarWebDriver.kt
+  │ browser4-core\browser4-plugins\browser4-protocol\src\main\kotlin\ai\platon\p
+  │ ulsar\protocol\browser\driver\cdt\PulsarWebDriver.kt
+  └ L40:90 (50 lines read)
+
+● Read PulsarWebDriver.kt
+  │ browser4-core\browser4-plugins\browser4-protocol\src\main\kotlin\ai\platon\p
+  │ ulsar\protocol\browser\driver\cdt\PulsarWebDriver.kt
+  └ L1528:1668 (141 lines read)
+
+● Read commands.rs
+  │ cli\browser4-cli\src\commands.rs
+  └ L1380:1465 (86 lines read)
+
+● Read commands.rs
+  │ cli\browser4-cli\src\commands.rs
+  └ L1080:1260 (181 lines read)
+
+● Read main.rs
+  │ cli\browser4-cli\src\main.rs
+  └ L520:760 (241 lines read)
+
+● Search (grep)
+  │ "async fn with_session|async fn get_or_create_navigation_session|stale
+  │ session|with_session\(" (cli\browser4-cli\src\main.rs)
+  └ 10 lines found
+
+● Read main.rs
+  │ cli\browser4-cli\src\main.rs
+  └ L420:520 (101 lines read)
+
+● Read args.rs
+  │ cli\browser4-cli\src\args.rs
+  └ L1:220 (220 lines read)
+
+● Search (grep)
+  │ "httpOnly|sameSite|--|to_ascii_lowercase|replace\("_"|replace\("-"|strip_pre
+  │ fix\("--"" (cli\browser4-cli\src\args.rs)
+  └ 49 lines found
+
+● Edit
+  └ Create C:/Users/pereg/.copilot/session-state/3ad8f392-3309-48a3-9441-8cd8aee
+    d3909/plan.md
+
+I’ve got the implementation plan pinned down. I’m making the CLI-side storage helpers now so the missing commands work without requiring new backend MCP methods.
+
+● Read SKILL.md
+  │ cli\skill\SKILL.md
+  └ L118:165 (48 lines read)
+
+● Read commands.rs
+  │ cli\browser4-cli\src\commands.rs
+  └ L620:880 (261 lines read)
+
+● Read main.rs
+  │ cli\browser4-cli\src\main.rs
+  └ L800:1265 (466 lines read)
+
+● Read e2e.rs
+  │ cli\browser4-cli\tests\e2e.rs
+  └ L920:1085 (165 lines read)
+
+● Search (grep)
+  │ "struct E2ECtx|fixture_base_url|interactive_url\(|workspace_dir"
+  │ (cli\browser4-cli\tests\e2e.rs)
+  └ 16 lines found
+
+● Read e2e.rs
+  │ cli\browser4-cli\tests\e2e.rs
+  └ L1108:1140 (33 lines read)
+
+● Edit
+  └ Edit cli\browser4-cli\src\commands.rs
+
+● Edit
+  └ Edit cli\browser4-cli\src\main.rs
+
+● Edit
+  └ Edit cli\browser4-cli\src\main.rs
+
+● Edit
+  └ Edit cli\browser4-cli\src\main.rs
+
+● Edit
+  └ Edit cli\skill\SKILL.md
+
+I’ve finished the CLI wiring and help text. I’m expanding the browser-backed e2e scenario now so every new storage command is exercised instead of only the old state-save/state-load path.
+
+● Read browser.rs
+  │ cli\browser4-cli\tests\e2e\scenarios\browser.rs
+  └ L150:310 (161 lines read)
+
+● Read e2e.rs
+  │ cli\browser4-cli\tests\e2e.rs
+  └ L2438:2506 (68 lines read)
+
+● Edit
+  └ Edit cli\browser4-cli\tests\e2e\scenarios\browser.rs
+
+● Edit
+  └ Edit cli\browser4-cli\tests\e2e.rs
+
+I’ve finished the code changes. I’m running the CLI unit tests first, then the browser-backed storage e2e scenario to verify the whole command set works together.
+
+● Format Rust code and run storage unit tests (shell)
+  │ cargo fmt --manifest-path cli\browser4-cli\Cargo.toml && cargo test
+  │ --manifest-path cli\browser4-cli\Cargo.toml
+  │ test_cookie_set_tool_name_and_params
+  │ test_cookie_delete_tool_name_and_params test_localstorage_set_params
+  │ test_sessionstorage_get_params no_snapshot_commands_include_cookie_list …
+  └ 4 lines...
+
+The first test invocation used the wrong Cargo syntax. I’m rerunning with the correct scoped commands and then the storage e2e scenario.
+
+● Run CLI unit tests and storage e2e (shell)
+  │ cargo fmt --manifest-path cli\browser4-cli\Cargo.toml && cargo test
+  │ --manifest-path cli\browser4-cli\Cargo.toml --lib && cargo test
+  │ --manifest-path cli\browser4-cli\Cargo.toml --test e2e -- --nocapture
+  │ --scenario=test_e2e_storage_state_commands
+  └ 279 lines...
+
+`localStorage` passed immediately, but the first browser-backed run showed `sessionStorage` wasn’t sticking through the CLI helper. I’m checking whether that’s a driver/runtime behavior difference and adjusting the implementation to match what Browser4 actually preserves.
+
+● Read mcp-tool-controller-interactive-fixture.html
+  │ browser4-tests\browser4-tests-common\src\main\resources\static\b4\mcp-tool-c
+  │ ontroller-interactive-fixture.html
+  └ L1:260 (175 lines read)
+
+● Search (grep)
+  │ "sessionStorage|sessionstorage" in *.{kt,rs,html,js}
+  └ 5 lines found
+
+● Search (grep)
+  │ "Browser4 returned invalid|browser_evaluate|evaluate\("\(\(\) =>"
+  │ (cli\browser4-cli\src\main.rs)
+  └ 3 lines found
+
+● Search (grep)
+  │ "sessionStorage" in *.kt (browser4-core, browser4-tests, browser4-rest,
+  │ browser4-agentic)
+  └ 4 lines found
+
+● Read http.rs
+  │ cli\browser4-cli\src\http.rs
+  └ L1:180 (179 lines read)
+
+● Search (grep)
+  │ "Error:|isError|ERROR:" (cli\browser4-cli\src\http.rs)
+  └ 1 line found
+
+● Read main.rs
+  │ cli\browser4-cli\src\main.rs
+  └ L1360:1455 (96 lines read)
+
+I found the failure: positional storage values like `3` were being parsed as numbers, and the command builder only read string arguments, so `sessionstorage-set step 3` silently sent an empty value. I’m fixing the argument normalization and rerunning the storage scenario.
+
+● Read commands.rs
+  │ cli\browser4-cli\src\commands.rs
+  └ L84:118 (35 lines read)
+
+● Read commands.rs
+  │ cli\browser4-cli\src\commands.rs
+  └ L748:1010 (263 lines read)
+
+● Read commands.rs
+  │ cli\browser4-cli\src\commands.rs
+  └ L1010:1065 (56 lines read)
+
+● Edit
+  └ Edit cli\browser4-cli\src\commands.rs
+
+● Edit
+  └ Edit cli\browser4-cli\src\commands.rs
+
+● Rerun CLI unit tests and storage e2e (shell)
+  │ cargo fmt --manifest-path cli\browser4-cli\Cargo.toml && cargo test
+  │ --manifest-path cli\browser4-cli\Cargo.toml --lib && cargo test
+  │ --manifest-path cli\browser4-cli\Cargo.toml --test e2e -- --nocapture
+  │ --scenario=test_e2e_storage_state_commands
+  └ 287 lines...
+
+The browser-backed scenario now passes. I’m running the binary unit tests too so the `main.rs` storage helpers and no-snapshot wiring are covered, not just the library module and e2e path.
+
+● Run browser4-cli binary unit tests (shell)
+  │ cargo test --manifest-path cli\browser4-cli\Cargo.toml --bin browser4-cli
+  └ 252 lines...
+
+The implementation is done and the tests are green. I’m appending the required daily memory entry now and verifying whether the monthly rollup needs any backfill before I finish.
+
+● Read MEMORY.20260526.md
+  │ coworker\tasks\300logs\2026\05\26\MEMORY.20260526.md
+  └ 4 lines read
+
+● Read MEMORY.202605.md
+  │ coworker\tasks\300logs\2026\05\MEMORY.202605.md
+  └ 1 line read
+
+● Search (glob)
+  │ "2026\05\*\MEMORY.202605*.md" in coworker\tasks\300logs
+  └ No matches found
+
+● Edit
+  └ Edit coworker\tasks\300logs\2026\05\26\MEMORY.20260526.md
+
+● Edit
+  └ Edit C:/Users/pereg/.copilot/session-state/3ad8f392-3309-48a3-9441-8cd8aeed3
+    909/plan.md
+
+● Show final changed files and diff stats (shell)
+  │ git --no-pager status --short && git --no-pager diff --stat --
+  │ cli\browser4-cli\src\commands.rs cli\browser4-cli\src\main.rs
+  │ cli\browser4-cli\tests\e2e.rs
+  │ cli\browser4-cli\tests\e2e\scenarios\browser.rs cli\skill\SKILL.md
+  │ coworker\tasks\300logs\2026\05\26\MEMORY.20260526.md
+  └ 219 lines...
+
+Implemented the full storage command set from `storage-state.md` in `browser4-cli`: `cookie-list/get/set/delete/clear`, `localstorage-list/get/set/delete/clear`, and `sessionstorage-list/get/set/delete/clear`. I wired them through current-session helpers in `cli/browser4-cli/src/main.rs`, added the command definitions in `cli/browser4-cli/src/commands.rs`, documented them in `cli/skill/SKILL.md`, and expanded the browser-backed e2e storage scenario plus command coverage. I also fixed argument normalization so numeric storage values like `sessionstorage-set step 3` are preserved as strings instead of being dropped.
+
+The required memory update is done: I appended today’s task summary, outcome, and lesson learned to `coworker\tasks\300logs\2026\05\26\MEMORY.20260526.md`. I also checked the monthly memory file; there were still no prior daily memory files for 2026-05 before today, so no monthly backfill was needed.
+
+
+=== AGENT STDERR ===
+
+
+
+Changes    +1282 -16
+Requests   1 Premium (17m 10s)
+Tokens     ↑ 5.8m (5.6m cached) • ↓ 32.9k (11.9k reasoning)

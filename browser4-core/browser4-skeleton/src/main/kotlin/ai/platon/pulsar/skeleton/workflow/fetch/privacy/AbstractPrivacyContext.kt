@@ -69,7 +69,7 @@ abstract class AbstractPrivacyContext(
     val failureRateThreshold = conf.getFloat(CapabilityTypes.PRIVACY_CONTEXT_FAILURE_RATE_THRESHOLD, 0.6f)
 
     /**
-     * Check if failure rate is too advanced.
+     * Check if failure rate is too high.
      * High failure rate make sense only when there are many tasks.
      * */
     override val isHighFailureRate get() = meterTasks.count > 100 && failureRate > failureRateThreshold

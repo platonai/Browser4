@@ -1,11 +1,14 @@
 package ai.platon.pulsar.rest.mcp.service
 
+import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.context.AgenticContext
+import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.SessionManager
 import ai.platon.pulsar.skeleton.PulsarSettings
 import ai.platon.pulsar.skeleton.browser.Browser
 import ai.platon.pulsar.skeleton.browser.driver.WebDriver
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -31,7 +34,7 @@ class SessionManagerTest {
     }
 
     @Test
-    fun getOrCreateSessionUsesDefaultSessionWhenSessionIdIsMissingOrDefault() {
+    fun getOrCreateSessionUsesDefaultSessionWhenSessionIdIsMissingOrEnsureDefault() {
         val session = sessionManager.getOrCreateSession(null)
         val sameSession = sessionManager.getOrCreateSession(
             mapOf(
@@ -62,7 +65,7 @@ class SessionManagerTest {
     }
 
     @Test
-    fun getOrCreateSessionPreservesSequentialProfileModeForDefaultSession() {
+    fun getOrCreateSessionPreservesSequentialProfileModeForEnsureDefaultSession() {
         val session = sessionManager.getOrCreateSession(
             mapOf(
                 "profileMode" to "SEQUENTIAL",
@@ -89,14 +92,45 @@ class SessionManagerTest {
     }
 
     @Test
-    fun getAllSessionsDoesNotCreateDefaultSessionOnDemand() {
+    fun getOrCreateSessionByIdUsesExplicitSessionIdWhenCapabilitiesAreMissing() {
+        val session = sessionManager.getOrCreateSession("team-f")
+
+        assertEquals("team-f", session.sessionId)
+        assertEquals("team-f", session.capabilities?.get("sessionId"))
+        assertEquals("SEQUENTIAL", session.capabilities?.get("profileMode"))
+    }
+
+    @Test
+    fun ensureSwarmSessionDefaultsToSequentialProfileMode() {
+        val session = sessionManager.ensureSwarmSession()
+
+        assertEquals(SWARM_SESSION_ID, session.sessionId)
+        assertEquals(SWARM_SESSION_ID, session.capabilities?.get("sessionId"))
+        assertEquals("SEQUENTIAL", session.capabilities?.get("profileMode"))
+    }
+
+    @Test
+    fun ensureSwarmSessionPreservesTemporaryProfileMode() {
+        val session = sessionManager.ensureSwarmSession(
+            mapOf(
+                "profileMode" to "temporary",
+            )
+        )
+
+        assertEquals(SWARM_SESSION_ID, session.sessionId)
+        assertEquals(SWARM_SESSION_ID, session.capabilities?.get("sessionId"))
+        assertEquals("TEMPORARY", session.capabilities?.get("profileMode"))
+    }
+
+    @Test
+    fun getAllSessionsDoesNotCreateEnsureDefaultSessionOnDemand() {
         val sessions = sessionManager.getAllSessions()
 
         assertEquals(0, sessions.size)
     }
 
     @Test
-    fun getSessionCreatesDefaultSessionOnDemand() {
+    fun getSessionCreatesEnsureDefaultSessionOnDemand() {
         val session = sessionManager.getSession("default")
 
         assertEquals("default", session?.sessionId)
@@ -129,7 +163,7 @@ class SessionManagerTest {
     @Test
     fun getSessionRecreatesNamedSessionWhenCachedBrowserBecomesUnhealthy() {
         val browser = Mockito.mock(Browser::class.java)
-        Mockito.`when`(browser.healthy()).thenReturn(true, false)
+        Mockito.`when`(browser.healthy()).thenReturn(CheckState(0), CheckState(-1))
 
         val initialSession = mockAgenticSession(isActive = true, browser = browser)
         val replacementSession = mockAgenticSession(isActive = true)
@@ -150,9 +184,9 @@ class SessionManagerTest {
     @Test
     fun getOrCreateSessionMarksReplacementStoppedWhenRecreatedSessionRemainsUnhealthy() {
         val unhealthyBrowser = Mockito.mock(Browser::class.java)
-        Mockito.`when`(unhealthyBrowser.healthy()).thenReturn(false)
+        Mockito.`when`(unhealthyBrowser.healthy()).thenReturn(CheckState(-1))
         val unhealthyDriver = Mockito.mock(WebDriver::class.java)
-        Mockito.`when`(unhealthyDriver.healthy()).thenReturn(false)
+        runBlocking { Mockito.`when`(unhealthyDriver.healthy()).thenReturn(CheckState(-1)) }
 
         val inactiveSession = mockAgenticSession(isActive = true, browser = unhealthyBrowser)
         val unhealthyReplacement = mockAgenticSession(isActive = true, driver = unhealthyDriver)

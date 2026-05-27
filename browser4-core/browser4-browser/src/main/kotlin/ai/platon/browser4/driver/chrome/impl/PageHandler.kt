@@ -1,5 +1,11 @@
-package ai.platon.browser4.driver.chrome
+package ai.platon.browser4.driver.chrome.impl
 
+import ai.platon.browser4.driver.chrome.protocol.BrowserProtocol
+import ai.platon.browser4.driver.chrome.ClickableDOM
+import ai.platon.browser4.driver.chrome.IsolatedWorldManager
+import ai.platon.browser4.driver.chrome.Keyboard
+import ai.platon.browser4.driver.chrome.Mouse
+import ai.platon.browser4.driver.chrome.NodeRef
 import ai.platon.browser4.driver.chrome.dom.CDPSnapshotService
 import ai.platon.browser4.driver.chrome.dom.Locator
 import ai.platon.browser4.driver.chrome.dom.SnapshotService
@@ -219,7 +225,7 @@ class PageHandler(
     @Throws(ChromeDriverException::class)
     private suspend fun resolveCSSSelectorAll(selector: String): List<NodeRef>? {
         if (!isActive) return null
-        val rootId = browserProtocol.getDocument().nodeId ?: return null
+        val rootId = browserProtocol.getDocument().nodeId
 
         val nodeIds = try {
             browserProtocol.querySelectorAll(rootId, selector)
@@ -251,9 +257,9 @@ class PageHandler(
 
         return try {
             if (!isActive) return null
-            browserProtocol.getDocument()?.nodeId ?: return null
+            browserProtocol.getDocument().nodeId
 
-            val searchResult = browserProtocol.performSearch(xpath, true) ?: return null
+            val searchResult = browserProtocol.performSearch(xpath, true)
             val nodeIds = if (searchResult.resultCount > 0) {
                 // Retrieve all matching nodes
                 val results =
@@ -368,8 +374,8 @@ class PageHandler(
      * @return Attribute value or null if not found
      */
     @Throws(ChromeDriverException::class)
-    suspend fun getAttribute(selector: String, attrName: String) =
-        invokeOnElement(selector) { getAttribute(it, attrName) }
+    suspend fun getAttribute(locator: String, attrName: String) =
+        invokeOnElement(locator) { getAttribute(it, attrName) }
 
     @Throws(ChromeDriverException::class)
     suspend fun getAttribute(node: NodeRef, attrName: String): String? {
@@ -379,7 +385,7 @@ class PageHandler(
 
         // `attributes`: n1, v1, n2, v2, n3, v3, ...
         if (!isActive) return null
-        val attributes = browserProtocol.getAttributes(node.nodeId) ?: return null
+        val attributes = browserProtocol.getAttributes(node.nodeId)
         val nameIndex = attributes.indexOf(attrName)
         if (nameIndex < 0) {
             return null
@@ -540,7 +546,7 @@ class PageHandler(
                     nodeRef
                 }
             }
-        } catch (e: ChromeRPCException) {
+        } catch (_: ChromeRPCException) {
             // As a last resort, attempt legacy JS utility when a CSS selector is available
             if (!selector.isNullOrBlank()) {
                 val safeSelector = normalizeLocatorForJs(selector)
@@ -614,8 +620,8 @@ class PageHandler(
                 )
                 true
             } ?: false
-        } catch (e: Exception) {
-            // swallow and indicate failure; caller will fallback
+        } catch (_: Exception) {
+            // swallow and indicate failure; caller will fall back
             false
         }
     }
@@ -665,7 +671,7 @@ class PageHandler(
 
         val nodeId = try {
             if (!isActive) return null
-            browserProtocol.getDocument()?.nodeId ?: return null
+            browserProtocol.getDocument().nodeId
 
             val searchResult = browserProtocol.performSearch(xpath, true) ?: return null
             val nodeId = if (searchResult.resultCount > 0) {
@@ -676,7 +682,7 @@ class PageHandler(
                     browserProtocol.discardSearchResults(searchResult.searchId)
                 } catch (_: Exception) {
                 }
-                results?.firstOrNull()
+                results.firstOrNull()
             } else {
                 null
             }
@@ -734,7 +740,7 @@ class PageHandler(
                 return null
             }
 
-            val tempObjectId = remoteObject?.objectId
+            val tempObjectId = remoteObject.objectId
             if (tempObjectId == null) {
                 logger.warn("Failed to resolve node: {}, {}", nodeId, backendNodeId)
                 return null
@@ -743,7 +749,7 @@ class PageHandler(
             // Use DOM.requestNode to get the nodeId from the runtime object.
             // This is crucial when we started with a backendNodeId.
             // When started with nodeId, it should return the same nodeId.
-            val resolvedNodeId = browserProtocol.requestNode(tempObjectId) ?: 0
+            val resolvedNodeId = browserProtocol.requestNode(tempObjectId)
 
             // Release the remote object to avoid memory leaks
             try {

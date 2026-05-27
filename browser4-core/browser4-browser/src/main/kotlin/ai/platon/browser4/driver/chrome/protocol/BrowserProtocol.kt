@@ -1,5 +1,6 @@
-package ai.platon.browser4.driver.chrome
+package ai.platon.browser4.driver.chrome.protocol
 
+import ai.platon.browser4.driver.chrome.RemoteDevTools
 import ai.platon.cdt.kt.protocol.ChromeDevTools
 import ai.platon.cdt.kt.protocol.events.console.MessageAdded
 import ai.platon.cdt.kt.protocol.events.dom.AttributeModified
@@ -28,18 +29,21 @@ import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
 /**
  * BrowserProtocol is the single access point for all Chrome DevTools Protocol (BrowserProtocol) domain APIs.
  *
- * All direct usage of [ai.platon.cdt.kt.protocol.ChromeDevTools] should go through this class to improve
+ * All direct usage of [ChromeDevTools] should go through this class to improve
  * maintainability and provide a consistent, centralized interface.
  */
-class BrowserProtocol(
+open class BrowserProtocol(
     private val devTools: ChromeDevTools
 ) {
+    private data class EmptyResult(val ignored: String? = null)
+
     val remoteDevToolsOrNull: RemoteDevTools? get() = devTools as? RemoteDevTools
     val isOpen: Boolean get() = remoteDevToolsOrNull?.isOpen ?: false
 
-    val browser get() = devTools.browser
-    val page get() = devTools.page
+    private val browser get() = devTools.browser
     private val target get() = devTools.target
+    private val page get() = devTools.page
+    private val runtime get() = devTools.runtime
     private val dom get() = devTools.dom
     private val console get() = devTools.console
     private val css get() = devTools.css
@@ -47,10 +51,21 @@ class BrowserProtocol(
     private val network get() = devTools.network
     private val fetch get() = devTools.fetch
     private val security get() = devTools.security
-    private val runtime get() = devTools.runtime
     private val emulation get() = devTools.emulation
     private val accessibility get() = devTools.accessibility
     private val domSnapshot get() = devTools.domSnapshot
+
+    suspend fun isBrowserAlive(): Boolean {
+        return runCatching { browser.getVersion() }.isSuccess
+    }
+
+    suspend fun isTargetAlive(): Boolean {
+        return runCatching { target.getTargets() }.isSuccess
+    }
+
+    suspend fun isV8Alive(): Boolean {
+        return runCatching { runtime.evaluate("1+1") }.isSuccess
+    }
 
     /** Returns the main frame, suspending until the frame tree is available. */
     suspend fun mainFrame() = page.getFrameTree().frame
@@ -383,6 +398,12 @@ class BrowserProtocol(
         domain: String? = null,
         path: String? = null,
     ) = network.deleteCookies(name, url, domain, path)
+
+    suspend fun setCookies(cookies: List<Map<String, Any?>>) {
+        val remoteDevTools = remoteDevToolsOrNull
+            ?: throw IllegalStateException("Remote DevTools is not available")
+        remoteDevTools.invoke("Network.setCookies", mapOf("cookies" to cookies), EmptyResult::class)
+    }
 
     suspend fun setExtraHTTPHeaders(headers: Map<String, Any>) = network.setExtraHTTPHeaders(headers)
 

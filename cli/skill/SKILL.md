@@ -127,6 +127,36 @@ browser4-cli tab-select 0
 
 Use `browser4-cli tab-list` to obtain the current zero-based tab index before calling `tab-select` or `tab-close` with a specific target.
 
+### Storage
+
+```bash
+browser4-cli state-save
+browser4-cli state-save auth-state.json
+browser4-cli state-load auth-state.json
+browser4-cli cookie-list
+browser4-cli cookie-list --domain=example.com
+browser4-cli cookie-get session_id
+browser4-cli cookie-set session abc123 --path=/
+browser4-cli cookie-delete session_id
+browser4-cli cookie-clear
+browser4-cli localstorage-list
+browser4-cli localstorage-get theme
+browser4-cli localstorage-set theme dark
+browser4-cli localstorage-delete theme
+browser4-cli localstorage-clear
+browser4-cli sessionstorage-list
+browser4-cli sessionstorage-get step
+browser4-cli sessionstorage-set step 3
+browser4-cli sessionstorage-delete step
+browser4-cli sessionstorage-clear
+```
+
+`state-save` writes a JSON file containing cookies plus the active origin's `localStorage`.
+`state-load` restores that JSON into the current session and auto-opens a session first when needed.
+`cookie-list` and `cookie-get` read from the current session's cookie jar.
+`cookie-set` defaults to the current page URL when `--domain` is omitted.
+The `localstorage-*` and `sessionstorage-*` commands operate on the active page origin in the current session.
+
 ## Open parameters
 ```bash
 # Start with profile mode
@@ -327,3 +357,7 @@ browser4-cli tab-select 0
 browser4-cli snapshot
 browser4-cli close
 ```
+
+## Specific tasks
+
+* **Storage state (cookies, localStorage)** [references/storage-state.md](references/storage-state.md)

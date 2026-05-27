@@ -1,10 +1,17 @@
 package ai.platon.pulsar.common
 
+import ai.platon.browser4.common.B4Constants.BROWSER_PROFILE_MODE
+import ai.platon.browser4.common.B4Constants.DEFAULT_SESSION_ID
+import ai.platon.browser4.common.B4Constants.PROFILE_MODE_CAPABILITY
+import ai.platon.browser4.common.B4Constants.SESSION_ID_CAPABILITY
+import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.PerceptiveAgent
 import ai.platon.pulsar.agentic.context.AgenticContext
 import ai.platon.pulsar.common.browser.BrowserProfileMode
+import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_CONTEXT_MODE
 import ai.platon.pulsar.core.api.PulsarSettings
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
@@ -20,47 +27,61 @@ import java.util.concurrent.ConcurrentHashMap
 class SessionManager(
     val agenticContext: AgenticContext
 ) : Closeable {
-    companion object {
-        const val DEFAULT_SESSION_ID = "default"
-        const val SWARM_SESSION_ID = "swarm"
-
-        const val SESSION_ID_CAPABILITY = "sessionId"
-        const val PROFILE_MODE_CAPABILITY = "profileMode"
-    }
-
     private val logger = LoggerFactory.getLogger(SessionManager::class.java)
-
-    /**
-     * Container for session-related objects.
-     *
-     * The driverMutex ensures that WebDriver operations are executed serially, not in parallel.
-     * This is critical because WebDriver methods must not be called concurrently.
-     */
-    data class ManagedSession(
-        val sessionId: String,
-        val agenticSession: AgenticSession,
-        val capabilities: Map<String, Any?>?,
-        var url: String? = null,
-        var status: String = "active", // active, paused, stopped
-        val createdAt: Long = System.currentTimeMillis(),
-        var lastAccessedAt: Long = System.currentTimeMillis(),
-    ) {
-        val mutex: Mutex = Mutex()
-
-        val driver get() = agenticSession.getOrCreateBoundDriver()
-        val agent: PerceptiveAgent get() = agenticSession.companionAgent
-
-        suspend inline fun <R> withLock(block: ManagedSession.() -> R): R {
-            return mutex.withLock(null) {
-                this.block()
-            }
-        }
-    }
 
     private val sessions = ConcurrentHashMap<String, ManagedSession>()
 
-    fun getOrCreateSessionById(sessionId: String, capabilities: Map<String, Any?>? = null): ManagedSession {
-        val normalizedCapabilities = normalizeCapabilities(capabilities)
+    /**
+     * The default session is a special session that can be accessed without specifying a session ID.
+     * It is created on demand and shared across all requests that do not specify a session ID.
+     * The profile mode is pinned to DEFAULT.
+     * */
+    fun ensureDefaultSession(capabilities: Map<String, Any?>? = null): ManagedSession {
+        val session = getOrCreateSession(DEFAULT_SESSION_ID, capabilities)
+        val pulsarSession = session.agenticSession
+
+        val conf = pulsarSession.sessionConfig
+        val browserProfileMode = conf.getWithFallback(BROWSER_PROFILE_MODE, BROWSER_CONTEXT_MODE)
+        require(browserProfileMode == BrowserProfileMode.DEFAULT.name) {
+            "Default session must have profile mode DEFAULT, but got $browserProfileMode"
+        }
+
+        return session
+    }
+
+    /**
+     * The swarm session is a special session that used for swarm use cases. It is created on demand and shared
+     * across all requests that specify the swarm session ID. The profile mode is pinned to SEQUENTIAL or TEMPORARY
+     * based on the input capabilities, but defaults to SEQUENTIAL if not specified or invalid. The swarm session
+     * is designed to be shared across multiple requests, so it should not be recreated if it already exists.
+     * The capabilities can be used to create the swarm session profile if the swarm session does not exist,
+     * or will be ignored if the swarm session is already exists.
+     *
+     * The swarm session may launch multiple browser contexts, each browser context isolated and has its own profile,
+     * but all browser contexts share the same session-level profile which is determined by the profile mode.
+     * */
+    fun ensureSwarmSession(capabilities: Map<String, Any?>? = null): ManagedSession {
+        val session = getOrCreateSession(SWARM_SESSION_ID, capabilities)
+        val pulsarSession = session.agenticSession
+
+        // post check if the session is a swarm session
+//        require(pulsarSession.boundBrowser == null)
+//        require(pulsarSession.boundDriver == null)
+        val conf = pulsarSession.sessionConfig
+
+        val browserProfileMode = conf.getWithFallback(BROWSER_PROFILE_MODE, BROWSER_CONTEXT_MODE)
+        require(browserProfileMode == BrowserProfileMode.SEQUENTIAL.name || browserProfileMode == BrowserProfileMode.TEMPORARY.name) {
+            "Swarm session must have profile mode SEQUENTIAL or TEMPORARY, but got $browserProfileMode"
+        }
+
+        return session
+    }
+
+    /**
+     *
+     * */
+    fun getOrCreateSession(sessionId: String, capabilities: Map<String, Any?>? = null): ManagedSession {
+        val normalizedCapabilities = normalizeCapabilities(sessionId, capabilities)
         val session = sessions.computeIfAbsent(sessionId) {
             createManagedSession(sessionId, normalizedCapabilities)
         }
@@ -78,12 +99,16 @@ class SessionManager(
      * @return The created managed session.
      */
     fun getOrCreateSession(capabilities: Map<String, Any?>? = null): ManagedSession {
-        val normalizedCapabilities = normalizeCapabilities(capabilities)
-        val sessionId = normalizedCapabilities.getValue(SESSION_ID_CAPABILITY).toString()
-        return getOrCreateSessionById(sessionId, normalizedCapabilities)
+        val normalizedCapabilities = normalizeCapabilities(capabilities = capabilities)
+        val sessionId = normalizedCapabilities[SESSION_ID_CAPABILITY]?.toString() ?: DEFAULT_SESSION_ID
+        return getOrCreateSession(sessionId, normalizedCapabilities)
     }
 
-    fun checkHealthy(session: ManagedSession): Boolean {
+    fun checkHealthyBlocking(session: ManagedSession): CheckState {
+        return runBlocking { checkHealthy(session) }
+    }
+
+    suspend fun checkHealthy(session: ManagedSession): CheckState {
         val s = session.agenticSession
         val browser = s.boundBrowser
         val driver = s.boundDriver
@@ -95,26 +120,26 @@ class SessionManager(
             )
         }
 
-        var healthy = s.isActive
-        if (!healthy) {
+        var healthy = CheckState(if (s.isActive) 0 else -1)
+        if (!healthy.isOK) {
             logger.warn("AgenticSession {} is not healthy", s.id)
         }
 
-        if (healthy) {
-            healthy = browser?.healthy() ?: true
-            if (!healthy && browser != null) {
+        if (healthy.isOK) {
+            healthy = browser?.healthy() ?: CheckState()
+            if (!healthy.isOK && browser != null) {
                 logger.warn("Bound browser {} is unhealthy, state: {}", browser.id, browser.readableState)
             }
 
-            if (healthy) {
-                healthy = s.boundDriver?.healthy() ?: true
-                if (!healthy && driver != null) {
+            if (healthy.isOK) {
+                healthy = s.boundDriver?.healthy() ?: CheckState()
+                if (!healthy.isOK && driver != null) {
                     logger.warn("Bound driver {} is unhealthy, state: {}", driver.id, driver.readableState)
                 }
             }
         }
 
-        if (!healthy) {
+        if (!healthy.isOK) {
             logger.warn(
                 "Session {} is unhealthy: session active={}, browser healthy={}, driver healthy={}",
                 session.sessionId,
@@ -132,12 +157,12 @@ class SessionManager(
         capabilities: Map<String, Any?>,
         session: ManagedSession,
     ): ManagedSession {
-        if (checkHealthy(session)) {
+        if (checkHealthyBlocking(session).isOK) {
             return markSessionActive(session)
         }
 
         val recreatedSession = recreateUnhealthySession(sessionId, capabilities, session)
-        return if (checkHealthy(recreatedSession)) {
+        return if (checkHealthyBlocking(recreatedSession).isOK) {
             markSessionActive(recreatedSession)
         } else {
             markSessionInactive(recreatedSession)
@@ -168,7 +193,7 @@ class SessionManager(
         return sessions.compute(sessionId) { _, existingSession ->
             when {
                 existingSession == null -> createManagedSession(sessionId, capabilities)
-                checkHealthy(existingSession) -> {
+                checkHealthyBlocking(existingSession).isOK -> {
                     if (!existingSession.status.equals("active", ignoreCase = true)) {
                         existingSession.status = "active"
                     }
@@ -199,21 +224,37 @@ class SessionManager(
         session.status = "stopped"
     }
 
-    private fun normalizeCapabilities(capabilities: Map<String, Any?>?): Map<String, Any?> {
+    private fun normalizeCapabilities(
+        explicitSessionId: String? = null,
+        capabilities: Map<String, Any?>?,
+    ): Map<String, Any?> {
         val normalizedCapabilities = LinkedHashMap(capabilities.orEmpty())
+        val hasExplicitSessionId = !explicitSessionId.isNullOrBlank()
         val requestedSessionId = normalizedCapabilities[SESSION_ID_CAPABILITY]?.toString()?.trim()
-        val sessionId = if (requestedSessionId.isNullOrBlank() || requestedSessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true)) {
-            DEFAULT_SESSION_ID
-        } else {
-            requestedSessionId
+        val sessionId = when {
+            explicitSessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) -> DEFAULT_SESSION_ID
+            explicitSessionId.equals(SWARM_SESSION_ID, ignoreCase = true) -> SWARM_SESSION_ID
+            hasExplicitSessionId -> requireNotNull(explicitSessionId).trim()
+            requestedSessionId.isNullOrBlank() || requestedSessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) -> DEFAULT_SESSION_ID
+            requestedSessionId.equals(SWARM_SESSION_ID, ignoreCase = true) -> SWARM_SESSION_ID
+            else -> requestedSessionId
         }
+
+        val requestedProfileMode = BrowserProfileMode.fromString(
+            normalizedCapabilities[PROFILE_MODE_CAPABILITY]?.toString()
+        )
 
         normalizedCapabilities[SESSION_ID_CAPABILITY] = sessionId
         normalizedCapabilities[PROFILE_MODE_CAPABILITY] = when {
-            normalizedCapabilities[PROFILE_MODE_CAPABILITY]?.toString()
-                ?.equals(BrowserProfileMode.SEQUENTIAL.name, ignoreCase = true) == true -> BrowserProfileMode.SEQUENTIAL
-
+            sessionId.equals(SWARM_SESSION_ID, ignoreCase = true) -> when (requestedProfileMode) {
+                BrowserProfileMode.TEMPORARY -> BrowserProfileMode.TEMPORARY
+                BrowserProfileMode.SEQUENTIAL -> BrowserProfileMode.SEQUENTIAL
+                else -> BrowserProfileMode.SEQUENTIAL
+            }
+            hasExplicitSessionId && sessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) -> BrowserProfileMode.DEFAULT
+            sessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) && requestedProfileMode == BrowserProfileMode.SEQUENTIAL -> BrowserProfileMode.SEQUENTIAL
             sessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) -> BrowserProfileMode.DEFAULT
+            requestedProfileMode == BrowserProfileMode.SEQUENTIAL -> BrowserProfileMode.SEQUENTIAL
             else -> BrowserProfileMode.SEQUENTIAL
         }.name
 
@@ -232,6 +273,7 @@ class SessionManager(
         } else {
             sessions[sessionId]?.let { existingSession ->
                 val normalizedCapabilities = normalizeCapabilities(
+                    sessionId,
                     existingSession.capabilities ?: mapOf(SESSION_ID_CAPABILITY to existingSession.sessionId)
                 )
                 resolveHealthySession(sessionId, normalizedCapabilities, existingSession)
@@ -315,3 +357,29 @@ class SessionManager(
     }
 }
 
+/**
+ * Container for session-related objects.
+ *
+ * The driverMutex ensures that WebDriver operations are executed serially, not in parallel.
+ * This is critical because WebDriver methods must not be called concurrently.
+ */
+data class ManagedSession(
+    val sessionId: String,
+    val agenticSession: AgenticSession,
+    val capabilities: Map<String, Any?>?,
+    var url: String? = null,
+    var status: String = "active", // active, paused, stopped
+    val createdAt: Long = System.currentTimeMillis(),
+    var lastAccessedAt: Long = System.currentTimeMillis(),
+) {
+    val mutex: Mutex = Mutex()
+
+    val driver get() = agenticSession.getOrCreateBoundDriver()
+    val agent: PerceptiveAgent get() = agenticSession.companionAgent
+
+    suspend inline fun <R> withLock(block: ManagedSession.() -> R): R {
+        return mutex.withLock(null) {
+            this.block()
+        }
+    }
+}

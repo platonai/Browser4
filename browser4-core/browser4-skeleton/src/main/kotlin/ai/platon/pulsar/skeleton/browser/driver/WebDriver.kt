@@ -7,6 +7,7 @@ import ai.platon.browser4.driver.chrome.dom.model.NanoDOMTree
 import ai.platon.browser4.driver.chrome.dom.model.PageTarget
 import ai.platon.browser4.driver.chrome.dom.model.SnapshotOptions
 import ai.platon.browser4.driver.common.BrowserSettings
+import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.ai.llm.MCP
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.math.geometric.PointD
@@ -217,14 +218,17 @@ interface WebDriver : Closeable {
      * */
     val timeoutPolicy: Map<String, Duration>
 
-    fun canConnect(): Boolean
+    /**
+     * Quick check if the connection to the backend tab is open.
+     * */
+    val isOpen: Boolean
 
     /**
      * Check if this driver is healthy.
      *
      * This is a heavy operation and should be called with low frequency.
      * */
-    fun healthy(): Boolean
+    suspend fun healthy(): CheckState
 
     /**
      * Adds a script which would be evaluated whenever the page is navigated. @mcp
@@ -521,6 +525,25 @@ interface WebDriver : Closeable {
     @Throws(WebDriverException::class)
     @MCP
     suspend fun clearBrowserCookies()
+
+    /**
+     * Saves the current browser storage state, including cookies and the active origin's localStorage, as JSON. @mcp
+     *
+     * @return A JSON string that can later be passed to [loadStorageState].
+     */
+    @Throws(WebDriverException::class)
+    @MCP
+    suspend fun saveStorageState(): String
+
+    /**
+     * Loads a previously saved browser storage state JSON, restoring cookies and localStorage. @mcp
+     *
+     * @param state A JSON string produced by [saveStorageState].
+     * @return A JSON summary of the restored cookies, origins, and localStorage entries.
+     */
+    @Throws(WebDriverException::class)
+    @MCP
+    suspend fun loadStorageState(state: String): String
 
     /**
      * Wait until the element identified by the selector becomes present in the DOM or timeout. @mcp

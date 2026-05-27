@@ -93,6 +93,15 @@ fn get_opt_str<'a>(map: &'a HashMap<String, Value>, key: &str) -> Option<&'a str
     map.get(key).and_then(|v| v.as_str())
 }
 
+fn get_string_value(map: &HashMap<String, Value>, key: &str) -> Option<String> {
+    map.get(key).and_then(|value| match value {
+        Value::String(text) => Some(text.clone()),
+        Value::Number(number) => Some(number.to_string()),
+        Value::Bool(flag) => Some(flag.to_string()),
+        _ => None,
+    })
+}
+
 fn get_bool(map: &HashMap<String, Value>, key: &str) -> Option<bool> {
     map.get(key).and_then(|v| v.as_bool())
 }
@@ -755,6 +764,332 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
+        // ---- Storage ----
+        CommandDef {
+            name: "state-save",
+            description: "Save cookies and localStorage to a JSON file",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef {
+                name: "filename",
+                description: "Optional file path. Defaults to storage-state-<timestamp>.json in the current directory",
+                optional: true,
+            }],
+            options: &[],
+            tool_name_fn: |_| "browser_save_storage_state".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(filename) = get_opt_str(args, "filename") {
+                    p["filename"] = json!(filename);
+                }
+                p
+            },
+        },
+        CommandDef {
+            name: "state-load",
+            description: "Load cookies and localStorage from a JSON file",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef {
+                name: "filename",
+                description: "Path to a storage-state JSON file",
+                optional: false,
+            }],
+            options: &[],
+            tool_name_fn: |_| "browser_load_storage_state".to_string(),
+            tool_params_fn: |args| {
+                json!({
+                    "filename": get_str(args, "filename").unwrap_or_default()
+                })
+            },
+        },
+        CommandDef {
+            name: "cookie-list",
+            description: "List browser cookies",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "domain", description: "Only include cookies with the exact domain", is_bool: false },
+                OptionDef { name: "path", description: "Only include cookies with the exact path", is_bool: false },
+            ],
+            tool_name_fn: |_| "browser_save_storage_state".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(domain) = get_opt_str(args, "domain") {
+                    p["domain"] = json!(domain);
+                }
+                if let Some(path) = get_opt_str(args, "path") {
+                    p["path"] = json!(path);
+                }
+                p
+            },
+        },
+        CommandDef {
+            name: "cookie-get",
+            description: "Get a cookie by name",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef {
+                name: "name",
+                description: "Cookie name",
+                optional: false,
+            }],
+            options: &[],
+            tool_name_fn: |_| "browser_save_storage_state".to_string(),
+            tool_params_fn: |args| {
+                json!({
+                    "name": get_string_value(args, "name").unwrap_or_default()
+                })
+            },
+        },
+        CommandDef {
+            name: "cookie-set",
+            description: "Set a browser cookie",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "name", description: "Cookie name", optional: false },
+                ArgDef { name: "value", description: "Cookie value", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "domain", description: "Cookie domain", is_bool: false },
+                OptionDef { name: "path", description: "Cookie path", is_bool: false },
+                OptionDef { name: "expires", description: "Cookie expiration Unix timestamp", is_bool: false },
+                OptionDef { name: "httpOnly", description: "Mark the cookie as HttpOnly", is_bool: true },
+                OptionDef { name: "secure", description: "Mark the cookie as Secure", is_bool: true },
+                OptionDef { name: "sameSite", description: "Cookie SameSite policy (Strict, Lax, None)", is_bool: false },
+            ],
+            tool_name_fn: |_| "browser_load_storage_state".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({
+                    "name": get_string_value(args, "name").unwrap_or_default(),
+                    "value": get_string_value(args, "value").unwrap_or_default(),
+                });
+                if let Some(domain) = get_opt_str(args, "domain") {
+                    p["domain"] = json!(domain);
+                }
+                if let Some(path) = get_opt_str(args, "path") {
+                    p["path"] = json!(path);
+                }
+                if let Some(expires) = get_opt_str(args, "expires") {
+                    p["expires"] = json!(expires);
+                }
+                if let Some(http_only) = get_bool(args, "httpOnly") {
+                    p["httpOnly"] = json!(http_only);
+                }
+                if let Some(secure) = get_bool(args, "secure") {
+                    p["secure"] = json!(secure);
+                }
+                if let Some(same_site) = get_opt_str(args, "sameSite") {
+                    p["sameSite"] = json!(same_site);
+                }
+                p
+            },
+        },
+        CommandDef {
+            name: "cookie-delete",
+            description: "Delete a browser cookie by name",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef {
+                name: "name",
+                description: "Cookie name",
+                optional: false,
+            }],
+            options: &[
+                OptionDef { name: "domain", description: "Cookie domain override", is_bool: false },
+                OptionDef { name: "path", description: "Cookie path override", is_bool: false },
+            ],
+            tool_name_fn: |_| "delete_cookies".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({
+                    "name": get_string_value(args, "name").unwrap_or_default()
+                });
+                if let Some(domain) = get_opt_str(args, "domain") {
+                    p["domain"] = json!(domain);
+                }
+                if let Some(path) = get_opt_str(args, "path") {
+                    p["path"] = json!(path);
+                }
+                p
+            },
+        },
+        CommandDef {
+            name: "cookie-clear",
+            description: "Clear all browser cookies",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            tool_name_fn: |_| "clear_browser_cookies".to_string(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "localstorage-list",
+            description: "List localStorage entries",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            tool_name_fn: |_| "browser_evaluate".to_string(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "localstorage-get",
+            description: "Get a localStorage value by key",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef {
+                name: "key",
+                description: "localStorage key",
+                optional: false,
+            }],
+            options: &[],
+            tool_name_fn: |_| "browser_evaluate".to_string(),
+            tool_params_fn: |args| {
+                json!({
+                    "key": get_string_value(args, "key").unwrap_or_default()
+                })
+            },
+        },
+        CommandDef {
+            name: "localstorage-set",
+            description: "Set a localStorage value",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "key", description: "localStorage key", optional: false },
+                ArgDef { name: "value", description: "Value to store", optional: false },
+            ],
+            options: &[],
+            tool_name_fn: |_| "browser_evaluate".to_string(),
+            tool_params_fn: |args| {
+                json!({
+                    "key": get_string_value(args, "key").unwrap_or_default(),
+                    "value": get_string_value(args, "value").unwrap_or_default(),
+                })
+            },
+        },
+        CommandDef {
+            name: "localstorage-delete",
+            description: "Delete a localStorage entry",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef {
+                name: "key",
+                description: "localStorage key",
+                optional: false,
+            }],
+            options: &[],
+            tool_name_fn: |_| "browser_evaluate".to_string(),
+            tool_params_fn: |args| {
+                json!({
+                    "key": get_string_value(args, "key").unwrap_or_default()
+                })
+            },
+        },
+        CommandDef {
+            name: "localstorage-clear",
+            description: "Clear localStorage",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            tool_name_fn: |_| "browser_evaluate".to_string(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "sessionstorage-list",
+            description: "List sessionStorage entries",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            tool_name_fn: |_| "browser_evaluate".to_string(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "sessionstorage-get",
+            description: "Get a sessionStorage value by key",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef {
+                name: "key",
+                description: "sessionStorage key",
+                optional: false,
+            }],
+            options: &[],
+            tool_name_fn: |_| "browser_evaluate".to_string(),
+            tool_params_fn: |args| {
+                json!({
+                    "key": get_string_value(args, "key").unwrap_or_default()
+                })
+            },
+        },
+        CommandDef {
+            name: "sessionstorage-set",
+            description: "Set a sessionStorage value",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "key", description: "sessionStorage key", optional: false },
+                ArgDef { name: "value", description: "Value to store", optional: false },
+            ],
+            options: &[],
+            tool_name_fn: |_| "browser_evaluate".to_string(),
+            tool_params_fn: |args| {
+                json!({
+                    "key": get_string_value(args, "key").unwrap_or_default(),
+                    "value": get_string_value(args, "value").unwrap_or_default(),
+                })
+            },
+        },
+        CommandDef {
+            name: "sessionstorage-delete",
+            description: "Delete a sessionStorage entry",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef {
+                name: "key",
+                description: "sessionStorage key",
+                optional: false,
+            }],
+            options: &[],
+            tool_name_fn: |_| "browser_evaluate".to_string(),
+            tool_params_fn: |args| {
+                json!({
+                    "key": get_string_value(args, "key").unwrap_or_default()
+                })
+            },
+        },
+        CommandDef {
+            name: "sessionstorage-clear",
+            description: "Clear sessionStorage",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            tool_name_fn: |_| "browser_evaluate".to_string(),
+            tool_params_fn: |_| json!({}),
+        },
         // ---- Export ----
         CommandDef {
             name: "screenshot",
@@ -1084,6 +1419,23 @@ mod tests {
             "click",
             "type",
             "fill",
+            "state-save",
+            "state-load",
+            "cookie-list",
+            "cookie-get",
+            "cookie-set",
+            "cookie-delete",
+            "cookie-clear",
+            "localstorage-list",
+            "localstorage-get",
+            "localstorage-set",
+            "localstorage-delete",
+            "localstorage-clear",
+            "sessionstorage-list",
+            "sessionstorage-get",
+            "sessionstorage-set",
+            "sessionstorage-delete",
+            "sessionstorage-clear",
             "snapshot",
             "screenshot",
             "extract",
@@ -1198,6 +1550,85 @@ mod tests {
         assert_eq!((cmd.tool_name_fn)(&args), "agent_extract");
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["instruction"], "product name, price");
+    }
+
+    #[test]
+    fn test_state_load_tool_name_and_params() {
+        let map = commands_map();
+        let cmd = map.get("state-load").unwrap();
+        let mut args = HashMap::new();
+        args.insert("filename".to_string(), json!("auth-state.json"));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_load_storage_state");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["filename"], "auth-state.json");
+    }
+
+    #[test]
+    fn test_cookie_set_tool_name_and_params() {
+        let map = commands_map();
+        let cmd = map.get("cookie-set").unwrap();
+        let mut args = HashMap::new();
+        args.insert("name".to_string(), json!("session"));
+        args.insert("value".to_string(), json!("abc123"));
+        args.insert("path".to_string(), json!("/"));
+        args.insert("httpOnly".to_string(), json!(true));
+        args.insert("sameSite".to_string(), json!("Lax"));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_load_storage_state");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["name"], "session");
+        assert_eq!(params["value"], "abc123");
+        assert_eq!(params["path"], "/");
+        assert_eq!(params["httpOnly"], true);
+        assert_eq!(params["sameSite"], "Lax");
+    }
+
+    #[test]
+    fn test_cookie_delete_tool_name_and_params() {
+        let map = commands_map();
+        let cmd = map.get("cookie-delete").unwrap();
+        let mut args = HashMap::new();
+        args.insert("name".to_string(), json!("session"));
+        args.insert("domain".to_string(), json!("example.com"));
+        assert_eq!((cmd.tool_name_fn)(&args), "delete_cookies");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["name"], "session");
+        assert_eq!(params["domain"], "example.com");
+    }
+
+    #[test]
+    fn test_localstorage_set_params() {
+        let map = commands_map();
+        let cmd = map.get("localstorage-set").unwrap();
+        let mut args = HashMap::new();
+        args.insert("key".to_string(), json!("theme"));
+        args.insert("value".to_string(), json!("dark"));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_evaluate");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["key"], "theme");
+        assert_eq!(params["value"], "dark");
+    }
+
+    #[test]
+    fn test_sessionstorage_get_params() {
+        let map = commands_map();
+        let cmd = map.get("sessionstorage-get").unwrap();
+        let mut args = HashMap::new();
+        args.insert("key".to_string(), json!("step"));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_evaluate");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["key"], "step");
+    }
+
+    #[test]
+    fn test_sessionstorage_set_preserves_numeric_values_as_strings() {
+        let map = commands_map();
+        let cmd = map.get("sessionstorage-set").unwrap();
+        let mut args = HashMap::new();
+        args.insert("key".to_string(), json!("step"));
+        args.insert("value".to_string(), json!(3));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["key"], "step");
+        assert_eq!(params["value"], "3");
     }
 
     #[test]

@@ -1,6 +1,7 @@
 package ai.platon.pulsar.rest.api.service
 
 import ai.platon.browser4.boot.autoconfigure.test.PulsarTestContextInitializer
+import ai.platon.browser4.common.B4Constants.DEFAULT_SESSION_ID
 import ai.platon.browser4.driver.common.BrowserSettings
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.config.ImmutableConfig
@@ -14,7 +15,7 @@ import ai.platon.pulsar.rest.api.common.MockEcServerTestBase
 import ai.platon.pulsar.rest.api.config.MockEcServerConfiguration
 import ai.platon.pulsar.rest.api.entities.CommandRequest
 import ai.platon.pulsar.rest.api.entities.toCommandStatus
-import ai.platon.pulsar.rest.tool.CommandRunner
+import ai.platon.pulsar.agent.tool.UserCommandExecutor
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.*
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -39,9 +40,11 @@ class CommandRunnerTest : MockEcServerTestBase() {
     private lateinit var conf: ImmutableConfig
 
     @Autowired
-    private lateinit var commandRunner: CommandRunner
+    private lateinit var commandExecutor: UserCommandExecutor
 
     private val waitCompletionTimeout: Duration = 0.minutes
+
+    val sessionId = DEFAULT_SESSION_ID
 
     @BeforeEach
     override fun setup() {
@@ -54,7 +57,7 @@ class CommandRunnerTest : MockEcServerTestBase() {
     @DisplayName("test executeCommand WITHOUT instructions")
     fun testExecuteCommandWithoutInstructions() {
         val request = CommandRequest(MOCK_PRODUCT_DETAIL_URL)
-        val status = runBlocking { commandRunner.executePageVisitCommand(request).toCommandStatus() }
+        val status = runBlocking { commandExecutor.executePageVisitCommand(sessionId, request).toCommandStatus() }
         val result = status.commandResult
         // nothing to do if page is not loaded
         Assumptions.assumeTrue(status.pageStatusCode == 200)
@@ -79,7 +82,7 @@ class CommandRunnerTest : MockEcServerTestBase() {
             onPageReadyActions = actions
         )
 
-        val status = runBlocking { commandRunner.executePageVisitCommand(request) }.toCommandStatus()
+        val status = runBlocking { commandExecutor.executePageVisitCommand(sessionId, request) }.toCommandStatus()
 
         printlnPro(status)
         Assumptions.assumeTrue(status.pageStatusCode == 200)
@@ -107,7 +110,7 @@ class CommandRunnerTest : MockEcServerTestBase() {
             pageSummaryPrompt = "Tell me something about the page",
         )
 
-        val status = runBlocking { commandRunner.executePageVisitCommand(request) }.toCommandStatus()
+        val status = runBlocking { commandExecutor.executePageVisitCommand(sessionId, request) }.toCommandStatus()
 
         printlnPro(status)
         Assumptions.assumeTrue(status.pageStatusCode == 200)
@@ -130,7 +133,7 @@ class CommandRunnerTest : MockEcServerTestBase() {
             pageSummaryPrompt = "Give me the product name",
         )
 
-        val status = runBlocking { commandRunner.executePageVisitCommand(request) }.toCommandStatus()
+        val status = runBlocking { commandExecutor.executePageVisitCommand(sessionId, request) }.toCommandStatus()
         val result = status.commandResult
 
         Assumptions.assumeTrue(status.pageStatusCode == 200)
@@ -155,7 +158,7 @@ class CommandRunnerTest : MockEcServerTestBase() {
             dataExtractionRules = "product name, ratings, price"
         )
 
-        val status = runBlocking { commandRunner.executePageVisitCommand(request) }.toCommandStatus()
+        val status = runBlocking { commandExecutor.executePageVisitCommand(sessionId, request) }.toCommandStatus()
         printlnPro(prettyPulsarObjectMapper().writeValueAsString(status))
         val result = status.commandResult
 
@@ -194,7 +197,7 @@ class CommandRunnerTest : MockEcServerTestBase() {
             uriExtractionRules = "Regex: https?://.+/dp/[\\w]+.*",
         )
 
-        val status = runBlocking { commandRunner.executePageVisitCommand(request) }.toCommandStatus()
+        val status = runBlocking { commandExecutor.executePageVisitCommand(sessionId, request) }.toCommandStatus()
         printlnPro(prettyPulsarObjectMapper().writeValueAsString(status))
         val result = status.commandResult
 
@@ -235,7 +238,7 @@ class CommandRunnerTest : MockEcServerTestBase() {
             """.trimIndent()
         )
 
-        val status = runBlocking { commandRunner.executePageVisitCommand(request) }.toCommandStatus()
+        val status = runBlocking { commandExecutor.executePageVisitCommand(sessionId, request) }.toCommandStatus()
         printlnPro(prettyPulsarObjectMapper().writeValueAsString(status))
         val result = status.commandResult
 
@@ -258,7 +261,7 @@ class CommandRunnerTest : MockEcServerTestBase() {
             uriExtractionRules = "Regex: http://localhost:\\d+/ec/dp/\\w+"
         )
 
-        val status = runBlocking { commandRunner.executePageVisitCommand(request) }.toCommandStatus()
+        val status = runBlocking { commandExecutor.executePageVisitCommand(sessionId, request) }.toCommandStatus()
         printlnPro(prettyPulsarObjectMapper().writeValueAsString(status))
         val result = status.commandResult
 
@@ -284,7 +287,7 @@ class CommandRunnerTest : MockEcServerTestBase() {
     fun testExecuteCommandWithSimpleAndCleanCommand() {
         val prompt = PAGE_VISIT_COMMAND_PROMPT1
 
-        val status = runBlocking { commandRunner.executePageVisitCommand(prompt) }.toCommandStatus()
+        val status = runBlocking { commandExecutor.executePageVisitCommand(sessionId, prompt) }.toCommandStatus()
         printlnPro(prettyPulsarObjectMapper().writeValueAsString(status))
         assertNotNull(status)
 
@@ -301,7 +304,7 @@ class CommandRunnerTest : MockEcServerTestBase() {
     fun testExecuteCommandWithDetailedAndVerboseCommand() {
         val prompt = PAGE_VISIT_COMMAND_PROMPT3
 
-        val status = runBlocking { commandRunner.executePageVisitCommand(prompt) }.toCommandStatus()
+        val status = runBlocking { commandExecutor.executePageVisitCommand(sessionId, prompt) }.toCommandStatus()
         printlnPro(prettyPulsarObjectMapper().writeValueAsString(status))
         assertNotNull(status)
 
@@ -322,7 +325,7 @@ class CommandRunnerTest : MockEcServerTestBase() {
             Summarize the product.
         """.trimIndent()
 
-        val status = runBlocking { commandRunner.executePlainCommandSync(plainCommand) }
+        val status = runBlocking { commandExecutor.executePlainCommand(sessionId, plainCommand) }
         printlnPro(prettyPulsarObjectMapper().writeValueAsString(status))
         assertNotNull(status)
 
@@ -344,7 +347,7 @@ Find all links containing /dp/.
 After page load: click #title, then scroll to the middle.
         """.trimIndent()
 
-        val status = runBlocking { commandRunner.executePlainCommandSync(plainCommand) }
+        val status = runBlocking { commandExecutor.executePlainCommand(sessionId, plainCommand) }
         printlnPro(prettyPulsarObjectMapper().writeValueAsString(status))
         assertNotNull(status)
 
@@ -355,7 +358,7 @@ After page load: click #title, then scroll to the middle.
     @Test
     @DisplayName("test executePlainCommandSync with blank command returns bad request")
     fun testExecutePlainCommandSyncWithBlankCommandReturnsBadRequest() {
-        val status = runBlocking { commandRunner.executePlainCommandSync("") }
+        val status = runBlocking { commandExecutor.executePlainCommand(sessionId, "") }
         assertNotNull(status)
         assertTrue { status.isDone }
         assertTrue { status.statusCode == 400 }
@@ -377,12 +380,12 @@ After page load: click #title, then scroll to the middle.
 
         val plainCommand = plainCommand2
 
-        val statusId = runBlocking { commandRunner.submitPlainCommandAsync(plainCommand) }
+        val statusId = runBlocking { commandExecutor.submitPlainCommand(sessionId, plainCommand) }
         assertNotNull(statusId)
         assertTrue { statusId.isNotBlank() }
 
         // Verify we can retrieve the status
-        val status = commandRunner.getStatus(statusId)
+        val status = commandExecutor.getStatus(sessionId, statusId)
         assertNotNull(status)
 
         waitForCommandDone(status.id)
@@ -391,11 +394,11 @@ After page load: click #title, then scroll to the middle.
     @Test
     @DisplayName("test submitPlainCommandAsync with blank command")
     fun testSubmitPlainCommandAsyncWithBlankCommand() {
-        val statusId = runBlocking { commandRunner.submitPlainCommandAsync("") }
+        val statusId = runBlocking { commandExecutor.submitPlainCommand(sessionId, "") }
         assertNotNull(statusId)
 
         // Even blank commands should have a status
-        val status = commandRunner.getStatus(statusId)
+        val status = commandExecutor.getStatus(sessionId, statusId)
         assertNotNull(status)
         assertTrue { status.isDone }
         assertTrue { status.statusCode == 400 }
@@ -412,7 +415,7 @@ After page load: click #title, then scroll to the middle.
             inferUriExtractionRegex = false
         )
 
-        val status = runBlocking { commandRunner.executePageVisitCommand(request) }.toCommandStatus()
+        val status = runBlocking { commandExecutor.executePageVisitCommand(sessionId, request) }.toCommandStatus()
         printlnPro(prettyPulsarObjectMapper().writeValueAsString(status))
 
         Assumptions.assumeTrue(status.pageStatusCode == 200)
@@ -434,7 +437,7 @@ After page load: click #title, then scroll to the middle.
         // Use a simple command that will trigger agent execution
         val plainCommand = "Search for test information"
 
-        val status = runBlocking { commandRunner.executeAgentCommand(plainCommand) }
+        val status = runBlocking { commandExecutor.executeAgentCommand(sessionId, plainCommand) }
 
         printlnPro(Pson.toJson(status))
 
@@ -452,11 +455,11 @@ After page load: click #title, then scroll to the middle.
             return
         }
 
-        var status = commandRunner.getStatus(statusId)
+        var status = commandExecutor.getStatus(sessionId, statusId)
 
         var n = waitCompletionTimeout.inWholeSeconds
         while (n-- > 0 && status?.processState != "done") {
-            status = commandRunner.getStatus(statusId)
+            status = commandExecutor.getStatus(sessionId, statusId)
             printlnPro(status)
             sleepSeconds(1)
         }

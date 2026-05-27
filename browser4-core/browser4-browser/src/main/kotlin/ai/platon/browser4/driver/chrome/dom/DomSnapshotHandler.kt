@@ -1,6 +1,6 @@
 package ai.platon.browser4.driver.chrome.dom
 
-import ai.platon.browser4.driver.chrome.BrowserProtocol
+import ai.platon.browser4.driver.chrome.protocol.BrowserProtocol
 import ai.platon.browser4.driver.chrome.dom.model.DOMRect
 import ai.platon.browser4.driver.chrome.dom.model.SnapshotNodeEx
 import ai.platon.browser4.driver.chrome.dom.util.DomDebug

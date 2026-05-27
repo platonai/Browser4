@@ -3,7 +3,9 @@ package ai.platon.pulsar.skeleton.browser.driver
 import ai.platon.browser4.driver.chrome.NetworkResourceResponse
 import ai.platon.browser4.driver.chrome.dom.SnapshotService
 import ai.platon.pulsar.common.AppContext
+import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.DateTimes
+import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.getTracerOrNull
 import ai.platon.pulsar.common.urls.Hyperlink
 import ai.platon.pulsar.common.urls.URLUtils
@@ -692,18 +694,34 @@ abstract class AbstractWebDriver(
         return session
     }
 
-    fun fastCheckState(action: String = ""): Boolean {
-        if (!isActive) {
-            return false
-        }
-        if (isCanceled) {
-            return false
-        }
+    fun quickCheckHealthy(action: String = ""): CheckState {
         if (action.isNotBlank()) {
             lastActiveTime = Instant.now()
             navigateEntry.refresh(action)
         }
-        return isActive
+
+        if (!isActive) {
+            return CheckState(ResourceStatus.SC_SERVICE_UNAVAILABLE, "WebDriver is not active")
+        }
+
+        if (isCanceled) {
+            return CheckState(ResourceStatus.SC_SERVICE_UNAVAILABLE, "WebDriver is canceled")
+        }
+
+        if (isQuit) {
+            return CheckState(ResourceStatus.SC_SERVICE_UNAVAILABLE, "WebDriver is quit")
+        }
+
+        if (isCrashed) {
+            return CheckState(ResourceStatus.SC_SERVICE_UNAVAILABLE, "WebDriver is crashed")
+        }
+
+        if (!isOpen) {
+            return CheckState(ResourceStatus.SC_SERVICE_UNAVAILABLE,
+                "WebDriver is not open - the connection to the backend tab is lost")
+        }
+
+        return CheckState(0)
     }
 
     protected fun reportInjectedJs(scripts: String) {

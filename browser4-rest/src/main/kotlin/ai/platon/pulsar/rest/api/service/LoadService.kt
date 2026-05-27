@@ -1,7 +1,7 @@
 package ai.platon.pulsar.rest.api.service
 
+import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.common.SessionManager
-import ai.platon.pulsar.common.SessionManager.Companion.SWARM_SESSION_ID
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.model.GoraWebPage
@@ -18,7 +18,7 @@ class LoadService(
 
     private val logger = LoggerFactory.getLogger(LoadService::class.java)
 
-    val session get() = sessionManager.getOrCreateSessionById(SWARM_SESSION_ID).agenticSession
+    val session get() = sessionManager.getOrCreateSession(SWARM_SESSION_ID).agenticSession
 
     suspend fun load(url: String): WebPage {
         return session.load(url)

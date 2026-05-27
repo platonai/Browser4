@@ -152,6 +152,402 @@ pub(super) fn test_navigation_and_storage(ctx: &mut E2ECtx) {
     run_command(ctx, &["close"]);
 }
 
+pub(super) fn test_storage_state_commands(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let interactive_url = ctx.interactive_url();
+    let storage_state_path = ctx.workspace_dir.join("auth-state.json");
+    let storage_state_path_text = storage_state_path.to_string_lossy().into_owned();
+    let initial_state = serde_json::json!({
+        "cookies": [
+            {
+                "name": "restoredCookie",
+                "value": "restored-value",
+                "url": interactive_url,
+            }
+        ],
+        "origins": [
+            {
+                "origin": ctx.fixture_base_url,
+                "localStorage": [
+                    { "name": "restoredKey", "value": "restored-value" }
+                ]
+            }
+        ]
+    });
+    fs::write(
+        &storage_state_path,
+        serde_json::to_string_pretty(&initial_state).unwrap(),
+    )
+    .unwrap();
+
+    let load_without_session = run_command(ctx, &["state-load", &storage_state_path_text]);
+    assert!(
+        load_without_session
+            .stdout
+            .contains("Storage state loaded:"),
+        "Expected storage-state load output:\n{}",
+        load_without_session.stdout
+    );
+
+    run_command(ctx, &["goto", &interactive_url]);
+    wait_for_eval_text(
+        ctx,
+        "document.cookie.includes('restoredCookie=restored-value').toString()",
+        "true",
+        2_000,
+        "Expected state-load to restore cookies into a fresh session",
+    );
+    wait_for_eval_text(
+        ctx,
+        "window.localStorage.getItem('restoredKey') ?? ''",
+        "restored-value",
+        2_000,
+        "Expected state-load to restore localStorage into a fresh session",
+    );
+
+    let cookie_set_result = run_command(ctx, &["cookie-set", "session_id", "abc123", "--path=/"]);
+    assert!(
+        cookie_set_result.stdout.contains("Cookie set: session_id"),
+        "Expected cookie-set output:\n{}",
+        cookie_set_result.stdout
+    );
+    wait_for_eval_text(
+        ctx,
+        "document.cookie.includes('session_id=abc123').toString()",
+        "true",
+        2_000,
+        "Expected cookie-set to restore the session_id cookie",
+    );
+
+    let cookie_get_result = run_command(ctx, &["cookie-get", "session_id"]);
+    let cookie_get: serde_json::Value = serde_json::from_str(cookie_get_result.stdout.trim())
+        .expect("cookie-get should return JSON");
+    assert_eq!(cookie_get["name"].as_str(), Some("session_id"));
+    assert_eq!(cookie_get["value"].as_str(), Some("abc123"));
+
+    let cookie_list_result = run_command(ctx, &["cookie-list"]);
+    let cookie_list: serde_json::Value = serde_json::from_str(cookie_list_result.stdout.trim())
+        .expect("cookie-list should return a JSON array");
+    let cookie_domain = cookie_list
+        .as_array()
+        .and_then(|cookies| {
+            cookies.iter().find_map(|cookie| {
+                (cookie["name"].as_str() == Some("session_id"))
+                    .then(|| cookie["domain"].as_str().map(str::to_string))
+                    .flatten()
+            })
+        })
+        .expect("cookie-list should include session_id with a domain");
+    assert!(
+        cookie_list.as_array().is_some_and(|cookies| {
+            cookies
+                .iter()
+                .any(|cookie| cookie["name"].as_str() == Some("session_id"))
+        }),
+        "Expected cookie-list to contain session_id:\n{}",
+        cookie_list
+    );
+
+    let cookie_list_domain_result =
+        run_command(ctx, &["cookie-list", &format!("--domain={cookie_domain}")]);
+    let cookie_list_by_domain: serde_json::Value =
+        serde_json::from_str(cookie_list_domain_result.stdout.trim())
+            .expect("cookie-list --domain should return a JSON array");
+    assert!(
+        cookie_list_by_domain.as_array().is_some_and(|cookies| {
+            cookies
+                .iter()
+                .any(|cookie| cookie["name"].as_str() == Some("session_id"))
+        }),
+        "Expected cookie-list --domain to contain session_id:\n{}",
+        cookie_list_by_domain
+    );
+
+    let cookie_list_path_result = run_command(ctx, &["cookie-list", "--path=/"]);
+    let cookie_list_by_path: serde_json::Value =
+        serde_json::from_str(cookie_list_path_result.stdout.trim())
+            .expect("cookie-list --path should return a JSON array");
+    assert!(
+        cookie_list_by_path.as_array().is_some_and(|cookies| {
+            cookies
+                .iter()
+                .any(|cookie| cookie["name"].as_str() == Some("session_id"))
+        }),
+        "Expected cookie-list --path to contain session_id:\n{}",
+        cookie_list_by_path
+    );
+
+    let cookie_delete_result = run_command(ctx, &["cookie-delete", "session_id"]);
+    assert!(
+        cookie_delete_result
+            .stdout
+            .contains("Cookie deleted: session_id"),
+        "Expected cookie-delete output:\n{}",
+        cookie_delete_result.stdout
+    );
+    wait_for_eval_text(
+        ctx,
+        "document.cookie.includes('session_id=abc123').toString()",
+        "false",
+        2_000,
+        "Expected cookie-delete to remove the session_id cookie",
+    );
+
+    run_command(ctx, &["cookie-set", "clear_one", "1", "--path=/"]);
+    run_command(ctx, &["cookie-set", "clear_two", "2", "--path=/"]);
+    let cookie_clear_result = run_command(ctx, &["cookie-clear"]);
+    assert!(
+        cookie_clear_result.stdout.contains("Cookies cleared."),
+        "Expected cookie-clear output:\n{}",
+        cookie_clear_result.stdout
+    );
+    wait_for_eval_text(
+        ctx,
+        "document.cookie.includes('clear_one=1').toString()",
+        "false",
+        2_000,
+        "Expected cookie-clear to remove clear_one",
+    );
+    wait_for_eval_text(
+        ctx,
+        "document.cookie.includes('clear_two=2').toString()",
+        "false",
+        2_000,
+        "Expected cookie-clear to remove clear_two",
+    );
+
+    let localstorage_set_result = run_command(ctx, &["localstorage-set", "theme", "dark"]);
+    assert!(
+        localstorage_set_result
+            .stdout
+            .contains("localStorage key set: theme"),
+        "Expected localstorage-set output:\n{}",
+        localstorage_set_result.stdout
+    );
+    wait_for_eval_text(
+        ctx,
+        "window.localStorage.getItem('theme') ?? ''",
+        "dark",
+        2_000,
+        "Expected localstorage-set to persist the theme key",
+    );
+
+    let localstorage_get_result = run_command(ctx, &["localstorage-get", "theme"]);
+    assert_eq!(localstorage_get_result.stdout.trim(), "dark");
+
+    run_command(
+        ctx,
+        &[
+            "localstorage-set",
+            "user_settings",
+            "{\"theme\":\"dark\",\"language\":\"en\"}",
+        ],
+    );
+    let localstorage_list_result = run_command(ctx, &["localstorage-list"]);
+    let localstorage_list: serde_json::Value =
+        serde_json::from_str(localstorage_list_result.stdout.trim())
+            .expect("localstorage-list should return a JSON array");
+    assert!(
+        localstorage_list.as_array().is_some_and(|entries| {
+            entries.iter().any(|entry| {
+                entry["name"].as_str() == Some("theme") && entry["value"].as_str() == Some("dark")
+            }) && entries.iter().any(|entry| {
+                entry["name"].as_str() == Some("user_settings")
+                    && entry["value"].as_str() == Some("{\"theme\":\"dark\",\"language\":\"en\"}")
+            })
+        }),
+        "Expected localstorage-list to include theme and user_settings:\n{}",
+        localstorage_list
+    );
+
+    let localstorage_delete_result = run_command(ctx, &["localstorage-delete", "theme"]);
+    assert!(
+        localstorage_delete_result
+            .stdout
+            .contains("localStorage key deleted: theme"),
+        "Expected localstorage-delete output:\n{}",
+        localstorage_delete_result.stdout
+    );
+    wait_for_eval_text(
+        ctx,
+        "window.localStorage.getItem('theme') ?? ''",
+        "",
+        2_000,
+        "Expected localstorage-delete to remove theme",
+    );
+
+    let localstorage_clear_result = run_command(ctx, &["localstorage-clear"]);
+    assert!(
+        localstorage_clear_result
+            .stdout
+            .contains("localStorage cleared:"),
+        "Expected localstorage-clear output:\n{}",
+        localstorage_clear_result.stdout
+    );
+    wait_for_eval_text(
+        ctx,
+        "window.localStorage.length.toString()",
+        "0",
+        2_000,
+        "Expected localstorage-clear to clear all entries",
+    );
+
+    let sessionstorage_set_result = run_command(ctx, &["sessionstorage-set", "step", "3"]);
+    assert!(
+        sessionstorage_set_result
+            .stdout
+            .contains("sessionStorage key set: step"),
+        "Expected sessionstorage-set output:\n{}",
+        sessionstorage_set_result.stdout
+    );
+    wait_for_eval_text(
+        ctx,
+        "window.sessionStorage.getItem('step') ?? ''",
+        "3",
+        2_000,
+        "Expected sessionstorage-set to persist the step key",
+    );
+
+    let sessionstorage_get_result = run_command(ctx, &["sessionstorage-get", "step"]);
+    assert_eq!(sessionstorage_get_result.stdout.trim(), "3");
+
+    run_command(
+        ctx,
+        &["sessionstorage-set", "form_data", "{\"name\":\"Ada\"}"],
+    );
+    let sessionstorage_list_result = run_command(ctx, &["sessionstorage-list"]);
+    let sessionstorage_list: serde_json::Value =
+        serde_json::from_str(sessionstorage_list_result.stdout.trim())
+            .expect("sessionstorage-list should return a JSON array");
+    assert!(
+        sessionstorage_list.as_array().is_some_and(|entries| {
+            entries.iter().any(|entry| {
+                entry["name"].as_str() == Some("step") && entry["value"].as_str() == Some("3")
+            }) && entries.iter().any(|entry| {
+                entry["name"].as_str() == Some("form_data")
+                    && entry["value"].as_str() == Some("{\"name\":\"Ada\"}")
+            })
+        }),
+        "Expected sessionstorage-list to include step and form_data:\n{}",
+        sessionstorage_list
+    );
+
+    let sessionstorage_delete_result = run_command(ctx, &["sessionstorage-delete", "step"]);
+    assert!(
+        sessionstorage_delete_result
+            .stdout
+            .contains("sessionStorage key deleted: step"),
+        "Expected sessionstorage-delete output:\n{}",
+        sessionstorage_delete_result.stdout
+    );
+    wait_for_eval_text(
+        ctx,
+        "window.sessionStorage.getItem('step') ?? ''",
+        "",
+        2_000,
+        "Expected sessionstorage-delete to remove step",
+    );
+
+    let sessionstorage_clear_result = run_command(ctx, &["sessionstorage-clear"]);
+    assert!(
+        sessionstorage_clear_result
+            .stdout
+            .contains("sessionStorage cleared:"),
+        "Expected sessionstorage-clear output:\n{}",
+        sessionstorage_clear_result.stdout
+    );
+    wait_for_eval_text(
+        ctx,
+        "window.sessionStorage.length.toString()",
+        "0",
+        2_000,
+        "Expected sessionstorage-clear to clear all entries",
+    );
+
+    run_command(
+        ctx,
+        &[
+            "eval",
+            "(() => { document.cookie = 'savedCookie=saved-value; path=/'; window.localStorage.setItem('savedKey', 'saved-value'); return 'ok'; })()",
+        ],
+    );
+
+    let save_result = run_command(ctx, &["state-save", &storage_state_path_text]);
+    assert!(
+        save_result.stdout.contains("Storage state saved:"),
+        "Expected storage-state save output:\n{}",
+        save_result.stdout
+    );
+
+    let saved_state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&storage_state_path).unwrap()).unwrap();
+    assert!(
+        saved_state["cookies"]
+            .as_array()
+            .is_some_and(|cookies| cookies.iter().any(|cookie| {
+                cookie["name"].as_str() == Some("savedCookie")
+                    && cookie["value"].as_str() == Some("saved-value")
+            })),
+        "Expected saved state file to contain savedCookie:\n{}",
+        saved_state
+    );
+    assert!(
+        saved_state["origins"]
+            .as_array()
+            .is_some_and(|origins| origins.iter().any(|origin| {
+                origin["origin"].as_str() == Some(&ctx.fixture_base_url)
+                    && origin["localStorage"].as_array().is_some_and(|entries| {
+                        entries.iter().any(|entry| {
+                            entry["name"].as_str() == Some("savedKey")
+                                && entry["value"].as_str() == Some("saved-value")
+                        })
+                    })
+            })),
+        "Expected saved state file to contain savedKey localStorage entry:\n{}",
+        saved_state
+    );
+
+    run_command(ctx, &["delete-data"]);
+    wait_for_eval_text(
+        ctx,
+        "document.cookie.includes('savedCookie=saved-value').toString()",
+        "false",
+        2_000,
+        "Expected delete-data to remove cookies before restoring state",
+    );
+    wait_for_eval_text(
+        ctx,
+        "window.localStorage.getItem('savedKey') ?? ''",
+        "",
+        2_000,
+        "Expected delete-data to clear localStorage before restoring state",
+    );
+
+    let load_result = run_command(ctx, &["state-load", &storage_state_path_text]);
+    assert!(
+        load_result.stdout.contains("Storage state loaded:"),
+        "Expected storage-state reload output:\n{}",
+        load_result.stdout
+    );
+    wait_for_eval_text(
+        ctx,
+        "document.cookie.includes('savedCookie=saved-value').toString()",
+        "true",
+        2_000,
+        "Expected state-load to restore saved cookies",
+    );
+    wait_for_eval_text(
+        ctx,
+        "window.localStorage.getItem('savedKey') ?? ''",
+        "saved-value",
+        2_000,
+        "Expected state-load to restore saved localStorage",
+    );
+
+    run_command(ctx, &["close"]);
+}
+
 pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
     run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);

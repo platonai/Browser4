@@ -1,6 +1,6 @@
 package ai.platon.browser4.driver.chrome.dom
 
-import ai.platon.browser4.driver.chrome.BrowserProtocol
+import ai.platon.browser4.driver.chrome.protocol.BrowserProtocol
 import ai.platon.cdt.kt.protocol.types.accessibility.AXNode
 import ai.platon.cdt.kt.protocol.types.page.FrameTree
 import ai.platon.pulsar.common.getLogger

@@ -48,7 +48,10 @@ abstract class AbstractAgenticContext(
 
     override fun getOrCreateSession(): AgenticSession = sessions.values.filterIsInstance<AgenticSession>().firstOrNull() ?: createSession()
 
-    override fun getOrCreateSession(settings: PulsarSettings): AgenticSession = sessions.values.filterIsInstance<AgenticSession>().firstOrNull() ?: createSession()
+    override fun getOrCreateSession(settings: PulsarSettings): AgenticSession {
+        // TODO: consider changed settings, for example, REST-level sessionId requires associated PulsarSession
+        return sessions.values.filterIsInstance<AgenticSession>().firstOrNull() ?: createSession()
+    }
 
     @Throws(Exception::class)
     override fun createSession(sessionDelegate: SessionDelegate): SQLSession {

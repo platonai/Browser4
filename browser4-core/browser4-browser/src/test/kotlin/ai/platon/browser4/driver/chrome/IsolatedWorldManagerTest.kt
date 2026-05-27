@@ -1,5 +1,6 @@
 package ai.platon.browser4.driver.chrome
 
+import ai.platon.browser4.driver.chrome.protocol.BrowserProtocol
 import ai.platon.browser4.driver.common.BrowserSettings
 import ai.platon.cdt.kt.protocol.types.page.*
 import kotlinx.coroutines.runBlocking

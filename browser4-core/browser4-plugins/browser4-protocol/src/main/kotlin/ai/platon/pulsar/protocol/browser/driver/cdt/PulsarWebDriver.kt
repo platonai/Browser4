@@ -3,7 +3,12 @@ package ai.platon.pulsar.protocol.browser.driver.cdt
 import ai.platon.browser4.driver.chrome.*
 import ai.platon.browser4.driver.chrome.dom.SnapshotService
 import ai.platon.browser4.driver.chrome.dom.model.*
+import ai.platon.browser4.driver.chrome.impl.CheckableElementJs
 import ai.platon.browser4.driver.chrome.impl.ChromeImpl
+import ai.platon.browser4.driver.chrome.impl.PageHandler
+import ai.platon.browser4.driver.chrome.impl.ScreenshotHandler
+import ai.platon.browser4.driver.chrome.impl.withNodeObjectId
+import ai.platon.browser4.driver.chrome.protocol.BrowserProtocol
 import ai.platon.browser4.driver.chrome.util.ChromeDriverException
 import ai.platon.browser4.driver.chrome.util.ChromeIOException
 import ai.platon.cdt.kt.protocol.events.network.RequestWillBeSent
@@ -30,7 +35,6 @@ import com.fasterxml.jackson.module.kotlin.readValue
 import com.google.common.annotations.Beta
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import org.apache.commons.lang3.StringUtils
 import org.apache.commons.lang3.SystemUtils
@@ -46,6 +50,26 @@ class PulsarWebDriver constructor(
     val browserProtocol: BrowserProtocol,
     override val browser: PulsarBrowser
 ) : AbstractWebDriver(uniqueID, browser) {
+    private data class StorageStatePayload(
+        val cookies: List<Map<String, Any?>> = emptyList(),
+        val origins: List<StorageStateOriginPayload> = emptyList(),
+    )
+
+    private data class StorageStateOriginPayload(
+        val origin: String = "",
+        val localStorage: List<StorageStateEntryPayload> = emptyList(),
+    )
+
+    private data class StorageStateEntryPayload(
+        val name: String = "",
+        val value: String = "",
+    )
+
+    private data class StorageStateLoadSummary(
+        val cookies: Int,
+        val origins: Int,
+        val localStorageEntries: Int,
+    )
 
     private val logger = getLogger(this)
 
@@ -88,22 +112,22 @@ class PulsarWebDriver constructor(
         fingerprintApplier?.invoke(this)
     }
 
-    /**
-     * Check if the underlying browser connection is active.
-     *
-     * TODO: design a complete solution to check the browser status
-     * */
-    override fun canConnect(): Boolean {
-        return browserProtocol.isOpen
-    }
+    override val isOpen get() = browserProtocol.isOpen
 
-    override fun healthy(): Boolean {
-        if (!canConnect()) {
-            return false
+    override suspend fun healthy(): CheckState {
+        val state = quickCheckHealthy()
+        if (!state.isOK) {
+            return state
         }
 
-        // Must not dependent on WebDriver which causes cyclic function calls
-        return runCatching { runBlocking { browserProtocol.isOpen } }.isSuccess
+        if (!browserProtocol.isTargetAlive()) {
+            return CheckState(
+                ResourceStatus.SC_SERVICE_UNAVAILABLE,
+                "WebDriver service unavailable - the target page is not alive"
+            )
+        }
+
+        return CheckState(0, "WebDriver is healthy")
     }
 
     override suspend fun addBlockedURLs(urlPatterns: List<String>) {
@@ -173,6 +197,54 @@ class PulsarWebDriver constructor(
         rpc.invokeOnPage("clearBrowserCookies") { browserProtocol.clearBrowserCookies() }
     }
 
+    override suspend fun saveStorageState(): String {
+        val mapper = jacksonObjectMapper().setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
+        val cookies = getCookies().map { toStorageStateCookie(it) }
+        val origins = listOfNotNull(captureCurrentOriginLocalStorage())
+        return mapper.writerWithDefaultPrettyPrinter().writeValueAsString(
+            mapOf(
+                "cookies" to cookies,
+                "origins" to origins,
+            )
+        )
+    }
+
+    override suspend fun loadStorageState(state: String): String {
+        val mapper = jacksonObjectMapper().setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
+        val payload = mapper.readValue<StorageStatePayload>(state)
+        val cookies = payload.cookies.map(::normalizeCookieForSet)
+        if (cookies.isNotEmpty()) {
+            browserProtocol.setCookies(cookies)
+        }
+
+        val originalUrl = currentUrl()
+        var restoredOrigins = 0
+        var restoredLocalStorageEntries = 0
+
+        payload.origins.forEach { originState ->
+            val origin = originState.origin.trim()
+            require(origin.isNotEmpty()) { "Storage state origin must not be blank" }
+            require(URLUtils.isStandard(origin)) { "Storage state origin must be a standard URL: $origin" }
+
+            open(origin)
+            restoreLocalStorage(originState.localStorage, mapper)
+            restoredOrigins += 1
+            restoredLocalStorageEntries += originState.localStorage.size
+        }
+
+        if (payload.origins.isNotEmpty() && originalUrl.isNotBlank() && currentUrl() != originalUrl) {
+            open(originalUrl)
+        }
+
+        return mapper.writeValueAsString(
+            StorageStateLoadSummary(
+                cookies = cookies.size,
+                origins = restoredOrigins,
+                localStorageEntries = restoredLocalStorageEntries,
+            )
+        )
+    }
+
     // Use the JavaScript version in super class
     override suspend fun selectFirstAttributeOrNull(selector: String, attrName: String): String? {
         val name = "selectFirstAttributeOrNull"
@@ -190,9 +262,7 @@ class PulsarWebDriver constructor(
     override suspend fun evaluateDetail(expression: String): JsEvaluation? {
         return rpc.invokeOnPage("evaluateDetail") {
             driverHelper.createJsEvaluate(
-                jsHandler.evaluateDetail(
-                    expression
-                )
+                jsHandler.evaluateDetail(expression)
             )
         }
     }
@@ -337,7 +407,7 @@ class PulsarWebDriver constructor(
                     throw WebDriverException("JS Error in $actionName: " + result.exceptionDetails?.exception?.description)
                 }
 
-                result.result?.value as? Boolean ?: false
+                result.result.value as? Boolean ?: false
             } ?: false
         }
     }
@@ -345,12 +415,12 @@ class PulsarWebDriver constructor(
     @Throws(WebDriverException::class)
     override suspend fun mouseWheelDown(count: Int, deltaX: Double, deltaY: Double, delayMillis: Long) {
         try {
-            rpc.invokeWithRetry("mouseWheelDown", 1) {
-                repeat(count) { i ->
-                    if (i > 0) {
-                        if (delayMillis > 0) gap(delayMillis) else gap("mouseWheel")
-                    }
+            repeat(count) { i ->
+                if (i > 0) {
+                    if (delayMillis > 0) gap(delayMillis) else gap("mouseWheel")
+                }
 
+                rpc.invokeOnPage("mouseWheelDown") {
                     mouse?.wheel(deltaX, deltaY)
                 }
             }
@@ -362,12 +432,12 @@ class PulsarWebDriver constructor(
     @Throws(WebDriverException::class)
     override suspend fun mouseWheelUp(count: Int, deltaX: Double, deltaY: Double, delayMillis: Long) {
         try {
-            rpc.invokeWithRetry("mouseWheelUp", 1) {
-                repeat(count) { i ->
-                    if (i > 0) {
-                        if (delayMillis > 0) gap(delayMillis) else gap("mouseWheel")
-                    }
+            repeat(count) { i ->
+                if (i > 0) {
+                    if (delayMillis > 0) gap(delayMillis) else gap("mouseWheel")
+                }
 
+                rpc.invokeOnPage("mouseWheelUp") {
                     mouse?.wheel(deltaX, deltaY)
                 }
             }
@@ -437,14 +507,14 @@ class PulsarWebDriver constructor(
     @Throws(WebDriverException::class)
     override suspend fun moveMouseTo(selector: String, deltaX: Int, deltaY: Int) {
         try {
-            val node = rpc.invokeWithRetry("scrollIntoViewIfNeeded") {
+            val node = rpc.invokeOnPage("scrollIntoViewIfNeeded") {
                 page.scrollIntoViewIfNeeded(selector)
             } ?: return
 
             val offset = OffsetD(4.0, 4.0)
             if (!isActive) return
 
-            rpc.invokeWithRetry("moveMouseTo") {
+            rpc.invokeOnPage("moveMouseTo") {
                 val point = ClickableDOM(browserProtocol, node, offset).clickablePoint().value
                 if (point != null) {
                     val point2 = PointD(point.x + deltaX, point.y + deltaY)
@@ -754,7 +824,7 @@ class PulsarWebDriver constructor(
     @Throws(WebDriverException::class)
     override suspend fun dragAndDrop(selector: String, deltaX: Int, deltaY: Int) {
         try {
-            val node = rpc.invokeWithRetry("scrollIntoViewIfNeeded") {
+            val node = rpc.invokeOnPage("scrollIntoViewIfNeeded") {
                 page.scrollIntoViewIfNeeded(selector)
             }
 
@@ -770,7 +840,7 @@ class PulsarWebDriver constructor(
             if (!isActive) throw IllegalWebDriverStateException("BrowserProtocol is not active", driver = this)
             val m = mouse ?: throw IllegalWebDriverStateException("Mouse not available", driver = this)
 
-            rpc.invokeWithRetry("dragAndDrop") {
+            rpc.invokeOnPage("dragAndDrop") {
                 val clickableDOM = ClickableDOM(browserProtocol, node, offset)
                 val clickableResult = clickableDOM.clickablePoint()
                 val startPoint = clickableResult.value
@@ -964,7 +1034,7 @@ function() {
     @Throws(WebDriverException::class)
     override suspend fun clickablePoint(selector: String): PointD? {
         try {
-            return rpc.invokeWithRetry("clickablePoint") {
+            return rpc.invokeOnPage("clickablePoint") {
                 val node = page.scrollIntoViewIfNeeded(selector)
                 ClickableDOM.create(browserProtocol, node)?.clickablePoint()?.value
             }
@@ -978,7 +1048,7 @@ function() {
     @Throws(WebDriverException::class)
     override suspend fun boundingBox(selector: String): RectD? {
         try {
-            return rpc.invokeWithRetry("boundingBox") {
+            return rpc.invokeOnPage("boundingBox") {
                 val node = page.scrollIntoViewIfNeeded(selector)
                 ClickableDOM.create(browserProtocol, node)?.boundingBox()
             }
@@ -997,7 +1067,7 @@ function() {
     @Throws(WebDriverException::class)
     override suspend fun screenshot(fullPage: Boolean): String? {
         return try {
-            rpc.invokeWithRetry("screenshot") {
+            rpc.invokeOnPage("screenshot") {
                 screenshot.screenshot(fullPage)
             }
         } catch (e: ChromeDriverException) {
@@ -1016,7 +1086,7 @@ function() {
         return try {
             page.scrollIntoViewIfNeeded(selector) ?: return null
             // Force the page stop all navigations and pending resource fetches.
-            rpc.invokeWithRetry("screenshot") { screenshot.screenshot(selector) }
+            rpc.invokeOnPage("screenshot") { screenshot.screenshot(selector) }
         } catch (e: ChromeDriverException) {
             rpc.handleChromeException(e, "screenshot")
             null
@@ -1027,7 +1097,7 @@ function() {
     override suspend fun screenshot(rect: RectD): String? {
         return try {
             // Force the page stop all navigations and pending resource fetches.
-            rpc.invokeWithRetry("screenshot") { screenshot.screenshot(rect) }
+            rpc.invokeOnPage("screenshot") { screenshot.screenshot(rect) }
         } catch (e: ChromeDriverException) {
             rpc.handleChromeException(e, "screenshot")
             null
@@ -1076,7 +1146,7 @@ function() {
             disableCache = false, includeCredentials = false
         )
 
-        val response = rpc.invokeWithRetry("loadNetworkResource") {
+        val response = rpc.invokeOnPage("loadNetworkResource") {
             val frameId = browserProtocol.getFrameTree().frame.id
             val resource = browserProtocol.loadNetworkResource(frameId, url, options)
             NetworkResourceResponse.from(resource)
@@ -1090,10 +1160,10 @@ function() {
      * */
     override fun close() {
         browser.destroyDriver(this)
-        doClose()
+        closeMe()
     }
 
-    fun doClose() {
+    fun closeMe() {
         super.close()
 
         if (closed.compareAndSet(false, true)) {
@@ -1128,23 +1198,25 @@ function() {
                 // intentionally ignored: the chrome is closed
             }
         } catch (e: ChromeDriverException) {
-            if (browserProtocol.isOpen) {
-                try {
-                    rpc.handleChromeException(e, "terminate")
-                } catch (e: Exception) {
-                    logger.error("[Unexpected]", e)
-                }
+            try {
+                rpc.handleChromeException(e, "terminate")
+            } catch (e: Exception) {
+                logger.error("[Unexpected]", e)
             }
         }
     }
 
     override fun toString() = "Driver#$id"
 
-    /**
-     *
-     * */
     @Throws(ChromeIOException::class)
     suspend fun enableAPIAgents() {
+        rpc.invokeOnPage("enableAPIAgents") {
+            enableAPIAgents0()
+        }
+    }
+
+    @Throws(ChromeIOException::class)
+    private suspend fun enableAPIAgents0() {
         try {
             browserProtocol.pageEnable()
             browserProtocol.domEnable()
@@ -1184,15 +1256,20 @@ function() {
         networkManager.enable()
 
         networkManager.on1(NetworkEvents.RequestWillBeSent) { event: RequestWillBeSent ->
-            onRequestWillBeSent(entry, event)
+            rpc.invoke0("onRequestWillBeSent") { onRequestWillBeSent(entry, event) }
         }
         networkManager.on1(NetworkEvents.ResponseReceived) { event: ResponseReceived ->
-            onResponseReceived(entry, event)
+            rpc.invoke0("onResponseReceived") { onResponseReceived(entry, event) }
         }
-
-        browserProtocol.onFrameNavigated { onFrameNavigated(entry, it) }
-        browserProtocol.onDocumentOpened { entry.mainRequestCookies = getCookies0() }
-        browserProtocol.onWindowOpen { onWindowOpen(it) }
+        browserProtocol.onFrameNavigated {
+            rpc.invoke("onFrameNavigated") { onFrameNavigated(entry, it) }
+        }
+        browserProtocol.onDocumentOpened {
+            rpc.invoke("onDocumentOpened") { entry.mainRequestCookies = getCookies0() }
+        }
+        browserProtocol.onWindowOpen {
+            rpc.invoke("onWindowOpen") { onWindowOpen(it) }
+        }
 
         val proxyEntry = browser.id.fingerprint.proxyEntry
         if (proxyEntry?.username != null) {
@@ -1289,6 +1366,14 @@ function() {
     }
 
     private suspend fun onFrameNavigated(entry: NavigateEntry, event: FrameNavigated) {
+        try {
+            rpc.invoke("onFrameNavigated") { onFrameNavigated0(entry, event) }
+        } catch (e: ChromeDriverException) {
+            rpc.handleChromeException(e, "terminate")
+        }
+    }
+
+    private suspend fun onFrameNavigated0(entry: NavigateEntry, event: FrameNavigated) {
         val chromeNavigateEntry = ChromeNavigateEntry(entry)
 
         chromeNavigateEntry.updateStateAfterFrameNavigated(event)
@@ -1318,7 +1403,7 @@ function() {
                 logger.warn("No isolated world JS found to re-inject after frame navigation")
             }
         } catch (e: Exception) {
-            if (isActive && canConnect()) {
+            if (quickCheckHealthy().isOK) {
                 logger.warn("Failed to re-inject Browser4 runtime after frame navigation", e)
             } else {
                 logger.debug("Underlying browser (BrowserProtocol) is closed")
@@ -1462,9 +1547,131 @@ function() {
         return cookies
     }
 
+    private suspend fun captureCurrentOriginLocalStorage(): Map<String, Any>? {
+        val result = evaluateValue(
+            """
+            (() => {
+              try {
+                const origin = window.location.origin;
+                if (!origin || origin === "null") {
+                  return { origin: null, localStorage: [] };
+                }
+                const localStorageEntries = [];
+                for (let index = 0; index < window.localStorage.length; index += 1) {
+                  const name = window.localStorage.key(index);
+                  if (name == null) continue;
+                  localStorageEntries.push({
+                    name,
+                    value: window.localStorage.getItem(name) ?? ""
+                  });
+                }
+                return { origin, localStorage: localStorageEntries };
+              } catch (error) {
+                return { origin: null, localStorage: [], error: String(error) };
+              }
+            })()
+            """.trimIndent()
+        ) as? Map<*, *> ?: return null
+
+        val error = result["error"]?.toString()?.trim().orEmpty()
+        require(error.isEmpty()) { "Failed to capture localStorage: $error" }
+
+        val origin = result["origin"]?.toString()?.trim().orEmpty()
+        if (origin.isEmpty() || origin == "null") {
+            return null
+        }
+
+        val localStorageEntries = (result["localStorage"] as? List<*>).orEmpty().map { entry ->
+            val item = entry as? Map<*, *> ?: throw IllegalArgumentException("localStorage entry must be an object")
+            val name = item["name"]?.toString()?.trim().orEmpty()
+            require(name.isNotEmpty()) { "localStorage entry name must not be blank" }
+            mapOf(
+                "name" to name,
+                "value" to (item["value"]?.toString() ?: ""),
+            )
+        }
+
+        return mapOf(
+            "origin" to origin,
+            "localStorage" to localStorageEntries,
+        )
+    }
+
+    private suspend fun restoreLocalStorage(
+        localStorage: List<StorageStateEntryPayload>,
+        mapper: com.fasterxml.jackson.databind.ObjectMapper,
+    ) {
+        val normalizedEntries = localStorage.map { entry ->
+            val name = entry.name.trim()
+            require(name.isNotEmpty()) { "localStorage entry name must not be blank" }
+            mapOf(
+                "name" to name,
+                "value" to entry.value,
+            )
+        }
+        val entriesJson = mapper.writeValueAsString(normalizedEntries)
+        val restoredCount = evaluateValue(
+            """
+            (() => {
+              const entries = $entriesJson;
+              window.localStorage.clear();
+              for (const entry of entries) {
+                window.localStorage.setItem(entry.name, entry.value ?? "");
+              }
+              return entries.length;
+            })()
+            """.trimIndent()
+        )
+        val restored = (restoredCount as? Number)?.toInt()
+        require(restored == normalizedEntries.size) {
+            "Expected to restore ${normalizedEntries.size} localStorage entries but restored ${restored ?: "none"}"
+        }
+    }
+
     private fun serialize(cookie: ai.platon.cdt.kt.protocol.types.network.Cookie): Map<String, String> {
         val mapper = jacksonObjectMapper().setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
         return mapper.readValue(mapper.writeValueAsString(cookie))
+    }
+
+    private fun toStorageStateCookie(cookie: Map<String, String>): Map<String, Any> {
+        val name = cookie["name"]?.trim().orEmpty()
+        require(name.isNotEmpty()) { "Cookie name must not be blank" }
+
+        val normalized = linkedMapOf<String, Any>(
+            "name" to name,
+            "value" to (cookie["value"] ?: ""),
+        )
+
+        cookie["domain"]?.trim()?.takeIf { it.isNotEmpty() }?.let { normalized["domain"] = it }
+        cookie["path"]?.trim()?.takeIf { it.isNotEmpty() }?.let { normalized["path"] = it }
+        cookie["expires"]?.toDoubleOrNull()?.takeIf { it > 0 }?.let { normalized["expires"] = it }
+        cookie["httpOnly"]?.toBooleanStrictOrNull()?.let { normalized["httpOnly"] = it }
+        cookie["secure"]?.toBooleanStrictOrNull()?.let { normalized["secure"] = it }
+        cookie["sameSite"]?.trim()?.takeIf { it.isNotEmpty() }?.let { normalized["sameSite"] = it }
+        return normalized
+    }
+
+    private fun normalizeCookieForSet(cookie: Map<String, Any?>): Map<String, Any?> {
+        val name = cookie["name"]?.toString()?.trim().orEmpty()
+        require(name.isNotEmpty()) { "Storage state cookie name must not be blank" }
+
+        val normalized = linkedMapOf<String, Any?>(
+            "name" to name,
+            "value" to (cookie["value"]?.toString() ?: ""),
+        )
+
+        cookie["url"]?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { normalized["url"] = it }
+        cookie["domain"]?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { normalized["domain"] = it }
+        cookie["path"]?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { normalized["path"] = it }
+        cookie["expires"]?.toString()?.toDoubleOrNull()?.takeIf { it > 0 }?.let { normalized["expires"] = it }
+        cookie["httpOnly"]?.toString()?.toBooleanStrictOrNull()?.let { normalized["httpOnly"] = it }
+        cookie["secure"]?.toString()?.toBooleanStrictOrNull()?.let { normalized["secure"] = it }
+        cookie["sameSite"]?.toString()?.trim()?.takeIf { it.isNotEmpty() }?.let { normalized["sameSite"] = it }
+
+        require("url" in normalized || "domain" in normalized) {
+            "Storage state cookie '$name' must include either url or domain"
+        }
+        return normalized
     }
 
     private suspend fun cdpDeleteCookies(

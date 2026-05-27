@@ -1,13 +1,15 @@
 package ai.platon.pulsar.rest.mcp.controller
 
+import ai.platon.browser4.common.B4Constants
+import ai.platon.browser4.common.B4Constants.DEFAULT_SESSION_ID
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.common.SessionManager
 import ai.platon.pulsar.common.brief
-import ai.platon.pulsar.rest.tool.CommandRunner
-import ai.platon.pulsar.rest.tool.CommandToolExecutor
+import ai.platon.pulsar.agent.tool.UserCommandExecutor
+import ai.platon.pulsar.agent.tool.CommandToolExecutor
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.annotation.JsonSetter
@@ -75,7 +77,7 @@ data class MCPContent(
 @ConditionalOnBean(SessionManager::class)
 class MCPToolController(
     private val sessionManager: SessionManager,
-    private val commandRunner: CommandRunner,
+    private val commandExecutor: UserCommandExecutor,
 ) {
     companion object {
         private val FRONTEND_TOOL_NAME_ALIASES: Map<String, String> = mapOf(
@@ -102,6 +104,8 @@ class MCPToolController(
             "browser_evaluate" to "evaluate_value",
             "browser_resize" to "resize",
             "browser_take_screenshot" to "screenshot",
+            "browser_save_storage_state" to "save_storage_state",
+            "browser_load_storage_state" to "load_storage_state",
         )
 
         private const val CLEAR_SESSION_STORAGE_SCRIPT = """
@@ -416,8 +420,10 @@ class MCPToolController(
         method: String,
         args: Map<String, Any?>,
     ): ResponseEntity<MCPToolCallResponse> {
+        val sessionId: String = args[B4Constants.SESSION_ID_CAPABILITY]?.toString() ?: DEFAULT_SESSION_ID
+
         return try {
-            val toolExecutor = getCommandAgentToolManager()
+            val toolExecutor = getCommandAgentToolManager(sessionId)
             val evaluate = toolExecutor.execute(ToolCall("command", method, args.toMutableMap())).evaluate
             if (evaluate.exception != null) {
                 ResponseEntity.ok(errorResponse("$toolDisplayName failed: ${evaluate.exception!!.message}"))
@@ -430,15 +436,17 @@ class MCPToolController(
         }
     }
 
-    private fun getCommandAgentToolManager(): AgentToolManager {
-        val commandAgent = commandRunner.session.companionAgent as? BasicBrowserAgent
+    private fun getCommandAgentToolManager(sessionId: String): AgentToolManager {
+        val agentRunner = commandExecutor.ensureAgentRunner(sessionId)
+        val commandAgent = agentRunner.session.companionAgent as? BasicBrowserAgent
             ?: throw IllegalStateException("CommandRunner session agent does not support tools")
+
         val agentToolManager = commandAgent.agentToolManager
 
         val domain = "command"
         if (!agentToolManager.hasToolExecutor(domain)) {
             agentToolManager.registerCustomToolExecutor(commandToolExecutor)
-            agentToolManager.registerCustomTarget(domain, commandRunner)
+            agentToolManager.registerCustomTarget(domain, commandExecutor)
         }
         return agentToolManager
     }

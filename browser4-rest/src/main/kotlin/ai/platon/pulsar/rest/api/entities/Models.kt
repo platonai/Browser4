@@ -1,5 +1,8 @@
 package ai.platon.pulsar.rest.api.entities
 
+import ai.platon.browser4.common.B4Constants.PROFILE_MODE_CAPABILITY
+import ai.platon.pulsar.common.ManagedSession
+import ai.platon.pulsar.common.SessionManager
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 
 /**
@@ -34,6 +37,29 @@ data class PromptRequest constructor(
 data class ScrapeStatusRequest(
     val id: String,
 )
+
+data class SessionResponse(
+    val sessionId: String,
+    val status: String,
+    val profileMode: String? = null,
+    val capabilities: Map<String, Any?>? = null,
+    val url: String? = null,
+    val createdAt: Long,
+    val lastAccessedAt: Long,
+)
+
+fun ManagedSession.toSessionResponse(): SessionResponse {
+    val safeCapabilities = capabilities?.toMap()
+    return SessionResponse(
+        sessionId = sessionId,
+        status = status,
+        profileMode = safeCapabilities?.get(PROFILE_MODE_CAPABILITY)?.toString(),
+        capabilities = safeCapabilities,
+        url = url,
+        createdAt = createdAt,
+        lastAccessedAt = lastAccessedAt,
+    )
+}
 
 /**
  * W3 resources
