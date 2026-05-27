@@ -161,6 +161,20 @@
             <build>
                 <plugins>
                     <plugin>
+                        <groupId>org.springframework.boot</groupId>
+                        <artifactId>spring-boot-maven-plugin</artifactId>
+                        <version>${spring-boot.version}</version>
+                        <executions>
+                            <execution>
+                                <id>process-aot</id>
+                                <phase>prepare-package</phase>
+                                <goals>
+                                    <goal>process-aot</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
                         <groupId>org.graalvm.buildtools</groupId>
                         <artifactId>native-maven-plugin</artifactId>
                         <version>${native-maven-plugin.version}</version>
@@ -206,6 +220,6 @@
         <!-- jpackage requires a numeric/strict version; snapshots are not accepted -->
         <jpackage.appVersion>4.4.0</jpackage.appVersion>
 
-        <native-maven-plugin.version>0.10.6</native-maven-plugin.version>
+        <native-maven-plugin.version>1.1.1</native-maven-plugin.version>
     </properties>
 </project>

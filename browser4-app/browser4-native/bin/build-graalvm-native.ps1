@@ -4,8 +4,10 @@
 param(
     [switch]$WithTests = $false,
     [switch]$CheckOnly = $false,
-    [string]$JavaHome = ""
+    [string]$JavaHome = "D:\Program Files\Java\graalvm-jdk-25.0.3+9.1"
 )
+
+$env:JAVA_HOME = "D:\Program Files\Java\graalvm-jdk-25.0.3+9.1"
 
 $ErrorActionPreference = "Stop"
 

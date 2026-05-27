@@ -5,6 +5,7 @@ import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import jakarta.annotation.PostConstruct
 import org.springframework.beans.factory.annotation.Value
+import org.springframework.boot.WebApplicationType
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
 import org.springframework.context.annotation.ComponentScan
@@ -20,8 +21,8 @@ class Browser4NativeImageApplication(
 ) {
     private val logger = getLogger(Browser4NativeImageApplication::class)
 
-    @Value("\${server.port:8182}")
-    var port: Int = 8182
+    @Value("\${server.port:8882}")
+    var port: Int = 8882
 
     @Value("\${server.servlet.context-path:}")
     lateinit var contextPath: String
@@ -53,5 +54,6 @@ fun main(args: Array<String>) {
     runApplication<Browser4NativeImageApplication>(*args) {
         addInitializers(PulsarContextInitializer())
         setLogStartupInfo(true)
+        setWebApplicationType(WebApplicationType.SERVLET)
     }
 }
