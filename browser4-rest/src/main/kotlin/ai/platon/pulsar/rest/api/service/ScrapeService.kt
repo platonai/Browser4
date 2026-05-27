@@ -80,6 +80,10 @@ class ScrapeService(
         responseCache[hyperlink.uuid] = hyperlink.response
         hyperlink.response.id = hyperlink.uuid
         require(session is BasicAgenticSession)
+        // TODO: the URLs submitted to the URLPool might not be processed by this session,
+        //      instead of which, SWARM session will handle the fetching, which means in-consistent browser settings.
+        //      the reserved solution is to add a session id to the hyperlink, so the scheduler can choose the corresponding
+        //      session to execute the hyperlink.
         session.submit(hyperlink)
         return hyperlink.uuid
     }
