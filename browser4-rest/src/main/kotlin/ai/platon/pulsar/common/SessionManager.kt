@@ -1,9 +1,15 @@
 package ai.platon.pulsar.common
 
+import ai.platon.browser4.common.B4Constants.BROWSER_PROFILE_MODE
+import ai.platon.browser4.common.B4Constants.DEFAULT_SESSION_ID
+import ai.platon.browser4.common.B4Constants.PROFILE_MODE_CAPABILITY
+import ai.platon.browser4.common.B4Constants.SESSION_ID_CAPABILITY
+import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.PerceptiveAgent
 import ai.platon.pulsar.agentic.context.AgenticContext
 import ai.platon.pulsar.common.browser.BrowserProfileMode
+import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_CONTEXT_MODE
 import ai.platon.pulsar.core.api.PulsarSettings
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
@@ -21,14 +27,6 @@ import java.util.concurrent.ConcurrentHashMap
 class SessionManager(
     val agenticContext: AgenticContext
 ) : Closeable {
-    companion object {
-        const val DEFAULT_SESSION_ID = "default"
-        const val SWARM_SESSION_ID = "swarm"
-
-        const val SESSION_ID_CAPABILITY = "sessionId"
-        const val PROFILE_MODE_CAPABILITY = "profileMode"
-    }
-
     private val logger = LoggerFactory.getLogger(SessionManager::class.java)
 
     /**
@@ -66,7 +64,16 @@ class SessionManager(
      * The profile mode is pinned to DEFAULT.
      * */
     fun ensureDefaultSession(capabilities: Map<String, Any?>? = null): ManagedSession {
-        return getOrCreateSession(DEFAULT_SESSION_ID, capabilities)
+        val session = getOrCreateSession(DEFAULT_SESSION_ID, capabilities)
+        val pulsarSession = session.agenticSession
+
+        val conf = pulsarSession.sessionConfig
+        val browserProfileMode = conf.getWithFallback(BROWSER_PROFILE_MODE, BROWSER_CONTEXT_MODE)
+        require(browserProfileMode == BrowserProfileMode.DEFAULT.name) {
+            "Default session must have profile mode DEFAULT, but got $browserProfileMode"
+        }
+
+        return session
     }
 
     /**
@@ -81,7 +88,20 @@ class SessionManager(
      * but all browser contexts share the same session-level profile which is determined by the profile mode.
      * */
     fun ensureSwarmSession(capabilities: Map<String, Any?>? = null): ManagedSession {
-        return getOrCreateSession(SWARM_SESSION_ID, capabilities)
+        val session = getOrCreateSession(SWARM_SESSION_ID, capabilities)
+        val pulsarSession = session.agenticSession
+
+        // post check if the session is a swarm session
+//        require(pulsarSession.boundBrowser == null)
+//        require(pulsarSession.boundDriver == null)
+        val conf = pulsarSession.sessionConfig
+
+        val browserProfileMode = conf.getWithFallback(BROWSER_PROFILE_MODE, BROWSER_CONTEXT_MODE)
+        require(browserProfileMode == BrowserProfileMode.SEQUENTIAL.name || browserProfileMode == BrowserProfileMode.TEMPORARY.name) {
+            "Swarm session must have profile mode SEQUENTIAL or TEMPORARY, but got $browserProfileMode"
+        }
+
+        return session
     }
 
     /**
@@ -107,7 +127,7 @@ class SessionManager(
      */
     fun getOrCreateSession(capabilities: Map<String, Any?>? = null): ManagedSession {
         val normalizedCapabilities = normalizeCapabilities(capabilities = capabilities)
-        val sessionId = normalizedCapabilities.getValue(SESSION_ID_CAPABILITY).toString()
+        val sessionId = normalizedCapabilities[SESSION_ID_CAPABILITY]?.toString() ?: DEFAULT_SESSION_ID
         return getOrCreateSession(sessionId, normalizedCapabilities)
     }
 

@@ -22,7 +22,6 @@ class SwarmService(
 ) {
     private val logger = LoggerFactory.getLogger(SwarmService::class.java)
 
-    // Discus: CommandRunner works on any sessions with permanent profiles
     val session get() = sessionManager.ensureSwarmSession().agenticSession
 
     /**

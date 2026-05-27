@@ -1,5 +1,6 @@
 package ai.platon.browser4.driver.common
 
+import ai.platon.browser4.common.B4Constants.BROWSER_PROFILE_MODE
 import ai.platon.browser4.driver.chrome.common.ChromeOptions
 import ai.platon.pulsar.common.Runtimes
 import ai.platon.pulsar.common.browser.BrowserProfileMode
@@ -67,18 +68,20 @@ open class BrowserSettings constructor(
         }
 
         @JvmStatic
-        fun withBrowserContextMode(contextMode: BrowserProfileMode, conf: MutableConfig? = null): Companion =
-            withBrowserContextMode(contextMode, BrowserType.DEFAULT, conf)
+        fun withBrowserContextMode(browserProfileMode: BrowserProfileMode, conf: MutableConfig? = null): Companion =
+            withBrowserContextMode(browserProfileMode, BrowserType.DEFAULT, conf)
 
         @JvmStatic
-        fun withBrowserContextMode(contextMode: BrowserProfileMode, browserType: BrowserType, conf: MutableConfig? = null): Companion {
+        fun withBrowserContextMode(browserProfileMode: BrowserProfileMode, browserType: BrowserType, conf: MutableConfig? = null): Companion {
             if (conf == null) {
-                System.setProperty(BROWSER_CONTEXT_MODE, contextMode.name)
+                System.setProperty(BROWSER_PROFILE_MODE, browserProfileMode.name)
+                System.setProperty(BROWSER_CONTEXT_MODE, browserProfileMode.name) // fallback
             } else {
-                conf[BROWSER_CONTEXT_MODE] = contextMode.name
+                conf[BROWSER_PROFILE_MODE] = browserProfileMode.name
+                conf[BROWSER_CONTEXT_MODE] = browserProfileMode.name // fallback
             }
 
-            when (contextMode) {
+            when (browserProfileMode) {
                 BrowserProfileMode.SYSTEM_DEFAULT -> {
                     withSystemDefaultBrowserInternal(browserType, conf)
                 }
