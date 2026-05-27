@@ -18,7 +18,7 @@ if (-not $taskIdMatch.Success) {
 $taskId = $taskIdMatch.Groups[1].Value
 Write-Host "Waiting for agent task $taskId to finish..."
 
-for ($i = 1; $i -le 10; $i++) {
+for ($i = 1; $i -le 20; $i++) {
     $status = cargo run --quiet -- swarm status $taskId 2>&1
     $status = ($status | Out-String).Trim()
     Write-Host $status

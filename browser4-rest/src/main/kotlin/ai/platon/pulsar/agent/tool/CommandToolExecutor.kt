@@ -86,7 +86,7 @@ class CommandToolExecutor : AbstractToolExecutor() {
                     required = setOf("command"),
                     functionName
                 )
-                val sessionId = paramString(args, "sessionId", functionName) ?: DEFAULT_SESSION_ID
+                val sessionId = paramString(args, "sessionId", functionName, default = DEFAULT_SESSION_ID)!!
                 val command = paramString(args, "command", functionName)!!
                 val isAsync = paramBool(args, "async", functionName, required = false, default = true) ?: true
                 if (isAsync) {
@@ -100,7 +100,7 @@ class CommandToolExecutor : AbstractToolExecutor() {
             // command.status(id: String)
             "status" -> {
                 validateArgs(args, allowed = setOf("id"), required = setOf("id"), functionName)
-                val sessionId = paramString(args, "sessionId", functionName) ?: DEFAULT_SESSION_ID
+                val sessionId = paramString(args, "sessionId", functionName, default = DEFAULT_SESSION_ID)!!
                 val id = paramString(args, "id", functionName)!!
                 val status = service.getStatus(sessionId, id)
                 pulsarObjectMapper().writeValueAsString(status)
@@ -109,7 +109,7 @@ class CommandToolExecutor : AbstractToolExecutor() {
             // command.result(id: String)
             "result" -> {
                 validateArgs(args, allowed = setOf("id"), required = setOf("id"), functionName)
-                val sessionId = paramString(args, "sessionId", functionName) ?: DEFAULT_SESSION_ID
+                val sessionId = paramString(args, "sessionId", functionName, default = DEFAULT_SESSION_ID)!!
                 val id = paramString(args, "id", functionName)!!
                 val result = service.getResult(sessionId, id)
                 pulsarObjectMapper().writeValueAsString(result)

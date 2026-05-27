@@ -3,6 +3,8 @@
 cargo run --quiet -- open
 
 $agentRunOutput = cargo run --quiet -- agent run "goto https://www.hua.com/flower/ ; give me the titles and prices of the first 10 products" 2>&1
+echo $agentRunOutput
+
 $agentRunText = ($agentRunOutput | Out-String).Trim()
 $agentRunText
 

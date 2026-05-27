@@ -43,9 +43,9 @@ use daemon::{
 };
 use help::{generate_command_help, generate_help};
 use http::{
-    call_tool, get_command_result, get_command_status, get_scrape_result, get_scrape_status,
+    call_tool, get_command_result, get_command_status, get_swarm_result, get_swarm_status,
     is_stale_session_error, make_client, submit_batch_commands, submit_plain_command,
-    submit_scrape_payload,
+    submit_swarm_payload,
 };
 use managed_processes::{
     read_managed_server_processes, stop_browser4_server_forcibly, ManagedServerProcess,
@@ -2281,7 +2281,7 @@ async fn handle_swarm_submit(
             format!("{} {}", u, opts_str)
         };
 
-        let result = submit_scrape_payload(client, base_url, &command).await?;
+        let result = submit_swarm_payload(client, base_url, &command).await?;
         let task_id = result.trim().trim_matches('"').to_string();
         println!("Task Submitted: {} -> Task ID: {}", u, task_id);
     }
@@ -2306,7 +2306,7 @@ async fn handle_swarm_status(
         return Err("Task ID is required.".to_string());
     }
 
-    let result = get_scrape_status(client, base_url, id).await?;
+    let result = get_swarm_status(client, base_url, id).await?;
     println!("{}", result);
     Ok(())
 }
@@ -2325,7 +2325,7 @@ async fn handle_swarm_result(
         return Err("Task ID is required.".to_string());
     }
 
-    let result = get_scrape_result(client, base_url, id).await?;
+    let result = get_swarm_result(client, base_url, id).await?;
     println!("{}", result);
     Ok(())
 }

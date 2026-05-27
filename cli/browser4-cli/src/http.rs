@@ -303,13 +303,13 @@ pub async fn submit_plain_command(
     .await
 }
 
-/// Submit a scrape payload through `ScrapeController.submit(payload)`.
-pub async fn submit_scrape_payload(
+/// Submit a swarm payload through `SwarmController.submit(payload)`.
+pub async fn submit_swarm_payload(
     client: &Client,
     base_url: &str,
     payload: &str,
 ) -> Result<String, String> {
-    let url = build_endpoint_url(base_url, "/api/x/submit");
+    let url = build_endpoint_url(base_url, "/api/swarm/submit");
     send_rest_request(
         client
             .post(url)
@@ -319,45 +319,24 @@ pub async fn submit_scrape_payload(
     .await
 }
 
-/// Read scrape task status through `ScrapeController.getStatus(id)`.
-pub async fn get_scrape_status(
+/// Read swarm task status through `SwarmController.getStatus(id)`.
+pub async fn get_swarm_status(
     client: &Client,
     base_url: &str,
     task_id: &str,
 ) -> Result<String, String> {
-    let url = build_endpoint_url(base_url, &format!("/api/x/{task_id}/status"));
+    let url = build_endpoint_url(base_url, &format!("/api/swarm/{task_id}/status"));
     send_rest_request(client.get(url)).await
 }
 
-/// Read scrape task result through `ScrapeController.getResult(id)`.
-pub async fn get_scrape_result(
+/// Read swarm task result through `SwarmController.getResult(id)`.
+pub async fn get_swarm_result(
     client: &Client,
     base_url: &str,
     task_id: &str,
 ) -> Result<String, String> {
-    let result_url = build_endpoint_url(base_url, &format!("/api/x/{task_id}/result"));
-    let response = client
-        .get(&result_url)
-        .send()
-        .await
-        .map_err(|e| format!("HTTP request failed: {e}"))?;
-
-    let status = response.status();
-    let response_text = response
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read response body: {e}"))?;
-
-    if status.is_success() {
-        return Ok(extract_http_text_payload(&response_text));
-    }
-
-    if status == reqwest::StatusCode::NOT_FOUND {
-        let status_url = build_endpoint_url(base_url, &format!("/api/x/{task_id}/status"));
-        return send_rest_request(client.get(status_url)).await;
-    }
-
-    Err(format_http_error(status, &response_text))
+    let url = build_endpoint_url(base_url, &format!("/api/swarm/{task_id}/result"));
+    send_rest_request(client.get(url)).await
 }
 
 /// Get the status of a command by its task ID via the MCP endpoint.

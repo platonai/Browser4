@@ -198,7 +198,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 OptionDef { name: "headed", description: "Run browser in headed mode", is_bool: true },
                 OptionDef { name: "persistent", description: "Use persistent browser profile", is_bool: true },
                 OptionDef { name: "profile", description: "Path to browser profile directory", is_bool: false },
-                OptionDef { name: "profile-mode", description: "Browser profile mode (temporary, default, system_default, prototype)", is_bool: false },
+                OptionDef { name: "profile-mode", description: "Browser profile mode (temporary, sequential, default)", is_bool: false },
                 OptionDef { name: "interact-level", description: "Interaction level for the new session (for example FASTEST, FAST, DEFAULT)", is_bool: false },
             ],
             tool_name_fn: |args| {
