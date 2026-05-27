@@ -2423,6 +2423,8 @@ fn excluded_commands(include_batch_command: bool) -> HashSet<&'static str> {
         // Destructive across concurrent sessions — would make the suite flaky
         "close-all",
         "kill-all",
+        // One-time setup / external download — not suitable for e2e
+        "install",
     ]
     .into();
 
