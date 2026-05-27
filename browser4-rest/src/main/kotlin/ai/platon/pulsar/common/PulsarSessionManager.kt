@@ -61,13 +61,21 @@ class PulsarSessionManager(
      * but all browser contexts share the same session-level profile which is determined by the profile mode.
      * */
     fun ensureSwarmSession(capabilities: Map<String, Any?>? = null): ManagedSession {
-        val session = getOrCreateSession(SWARM_SESSION_ID, capabilities)
-        val pulsarSession = session.agenticSession
+        val sessionId = SWARM_SESSION_ID
+        val normalizedCapabilities = normalizeCapabilities(sessionId, capabilities)
+        val settings = PulsarSettings.parse(normalizedCapabilities)
+        val agenticSession = agenticContext.ensureSwarmSession(settings)
+
+        val session = sessions.computeIfAbsent(sessionId) {
+            ManagedSession(sessionId, agenticSession, capabilities)
+        }
+
+        // val pulsarSession = session.agenticSession
 
         // post check if the session is a swarm session
 //        require(pulsarSession.boundBrowser == null)
 //        require(pulsarSession.boundDriver == null)
-        val conf = pulsarSession.sessionConfig
+        val conf = agenticSession.sessionConfig
 
         val browserProfileMode = conf.getWithFallback(BROWSER_PROFILE_MODE, BROWSER_CONTEXT_MODE)
         require(browserProfileMode == BrowserProfileMode.SEQUENTIAL.name || browserProfileMode == BrowserProfileMode.TEMPORARY.name) {

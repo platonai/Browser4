@@ -1,8 +1,10 @@
 package ai.platon.pulsar.agentic.context
 
+import ai.platon.browser4.common.B4Constants.SWARM_SESSION_LABEL
 import ai.platon.pulsar.agentic.AgenticQLSession
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.BasicAgenticSession
+import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.config.CapabilityTypes
 import ai.platon.pulsar.common.getLogger
@@ -14,7 +16,6 @@ import ai.platon.pulsar.ql.context.SQLContext
 import ai.platon.pulsar.ql.h2.H2SessionDelegate
 import ai.platon.pulsar.skeleton.PulsarSettings
 import ai.platon.pulsar.skeleton.session.BasicPulsarSession
-import ai.platon.pulsar.skeleton.session.PulsarSession
 import org.springframework.context.support.AbstractApplicationContext
 import org.springframework.context.support.ClassPathXmlApplicationContext
 
@@ -23,6 +24,7 @@ interface AgenticContext : SQLContext {
     override fun getOrCreateSession(): AgenticSession
     override fun createSession(settings: PulsarSettings): AgenticSession
     override fun getOrCreateSession(settings: PulsarSettings): AgenticSession
+    override fun ensureSwarmSession(settings: PulsarSettings): AgenticSession
     override fun createSession(sessionDelegate: SessionDelegate): SQLSession
 }
 
@@ -43,7 +45,10 @@ abstract class AbstractAgenticContext(
     }
 
     override fun createSession(settings: PulsarSettings): AgenticSession {
-        return createSession().also { settings.overrideConfiguration(it.sessionConfig) }
+        val session = BasicAgenticSession(this, configuration.toVolatileConfig())
+        settings.label?.let { session.label = it }
+        settings.overrideConfiguration(session.sessionConfig)
+        return session.also { sessions[it.id] = it }
     }
 
     override fun getOrCreateSession(): AgenticSession = sessions.values.filterIsInstance<AgenticSession>().firstOrNull() ?: createSession()
@@ -61,6 +66,25 @@ abstract class AbstractAgenticContext(
         }
         logger.info("AgenticQLSession is created | #{}/{}/{}", session.id, sessionDelegate.id, id)
         return session as AgenticQLSession
+    }
+
+    /**
+     * Create a pulsar session
+     * */
+    override fun ensureSwarmSession(settings: PulsarSettings): AgenticSession {
+        val swarmSession = sessions.values.filterIsInstance<AgenticSession>().firstOrNull { it.label == SWARM_SESSION_LABEL }
+        if (swarmSession != null) {
+            return swarmSession
+        }
+
+        val lastProfileMode = settings.profileMode
+        val profileMode = when (lastProfileMode) {
+            BrowserProfileMode.SEQUENTIAL -> BrowserProfileMode.SEQUENTIAL
+            BrowserProfileMode.TEMPORARY -> BrowserProfileMode.TEMPORARY
+            else -> BrowserProfileMode.SEQUENTIAL
+        }
+        val settings = settings.copy(label = SWARM_SESSION_LABEL, profileMode = profileMode)
+        return createSession(settings)
     }
 }
 

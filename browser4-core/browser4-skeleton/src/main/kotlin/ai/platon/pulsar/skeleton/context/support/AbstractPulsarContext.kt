@@ -221,12 +221,17 @@ abstract class AbstractPulsarContext(
     abstract override fun createSession(settings: PulsarSettings): PulsarSession
 
     override fun getOrCreateSession(settings: PulsarSettings): PulsarSession =
-        sessions.values.firstOrNull() ?: createSession()
+        sessions.values.firstOrNull() ?: createSession(settings)
 
     /**
      * Create a pulsar session
      * */
     override fun ensureSwarmSession(settings: PulsarSettings): PulsarSession {
+        val swarmSession = sessions.values.firstOrNull { it.label == SWARM_SESSION_LABEL }
+        if (swarmSession != null) {
+            return swarmSession
+        }
+
         val lastProfileMode = settings.profileMode
         val profileMode = when (lastProfileMode) {
             BrowserProfileMode.SEQUENTIAL -> BrowserProfileMode.SEQUENTIAL
@@ -234,7 +239,7 @@ abstract class AbstractPulsarContext(
             else -> BrowserProfileMode.SEQUENTIAL
         }
         val settings = settings.copy(label = SWARM_SESSION_LABEL, profileMode = profileMode)
-        return getOrCreateSession(settings)
+        return createSession(settings)
     }
 
     /**

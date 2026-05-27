@@ -54,7 +54,7 @@ abstract class AbstractPulsarSession(
     /**
      * A label used to identify the session
      * */
-    override val label: String = "",
+    override var label: String = "",
 ) : PulsarSession {
 
     companion object {
