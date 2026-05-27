@@ -1,5 +1,6 @@
-package ai.platon.browser4.driver.chrome
+package ai.platon.browser4.driver.chrome.protocol
 
+import ai.platon.browser4.driver.chrome.RemoteDevTools
 import ai.platon.cdt.kt.protocol.ChromeDevTools
 import ai.platon.cdt.kt.protocol.events.console.MessageAdded
 import ai.platon.cdt.kt.protocol.events.dom.AttributeModified
@@ -28,10 +29,10 @@ import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
 /**
  * BrowserProtocol is the single access point for all Chrome DevTools Protocol (BrowserProtocol) domain APIs.
  *
- * All direct usage of [ai.platon.cdt.kt.protocol.ChromeDevTools] should go through this class to improve
+ * All direct usage of [ChromeDevTools] should go through this class to improve
  * maintainability and provide a consistent, centralized interface.
  */
-class BrowserProtocol(
+open class BrowserProtocol(
     private val devTools: ChromeDevTools
 ) {
     private data class EmptyResult(val ignored: String? = null)

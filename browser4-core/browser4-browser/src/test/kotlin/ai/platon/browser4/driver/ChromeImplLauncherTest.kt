@@ -1,6 +1,6 @@
 package ai.platon.browser4.driver
 
-import ai.platon.browser4.driver.chrome.BrowserProtocol
+import ai.platon.browser4.driver.chrome.protocol.BrowserProtocol
 import ai.platon.browser4.driver.chrome.ChromeLauncher
 import ai.platon.browser4.driver.chrome.common.ChromeOptions
 import ai.platon.browser4.driver.chrome.common.LauncherOptions

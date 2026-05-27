@@ -1,12 +1,11 @@
 package ai.platon.browser4.driver.chrome.impl
 
-import ai.platon.browser4.driver.chrome.BrowserProtocol
+import ai.platon.browser4.driver.chrome.protocol.BrowserProtocol
 import ai.platon.browser4.driver.chrome.IsolatedWorldManager
 import ai.platon.browser4.driver.chrome.util.ChromeDriverException
 import ai.platon.browser4.driver.common.B4JsUtils
 import ai.platon.cdt.kt.protocol.types.runtime.CallFunctionOn
 import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
-import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.getLogger
 
 class JsHandler(
@@ -73,7 +72,7 @@ class JsHandler(
 
         val exception = evaluate?.exceptionDetails?.exception
         if (exception != null) {
-            val errorMsg = "${exception.description}\n>>>$script<<<"
+            val errorMsg = "Failed to evaluate | ${exception.description}\n>>>$script<<<"
             logger.warn(errorMsg)
             throw ChromeDriverException(errorMsg)
         }

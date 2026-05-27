@@ -1,6 +1,6 @@
 package ai.platon.browser4.driver.chrome.impl
 
-import ai.platon.browser4.driver.chrome.BrowserProtocol
+import ai.platon.browser4.driver.chrome.protocol.BrowserProtocol
 import ai.platon.browser4.driver.chrome.ClickableDOM
 import ai.platon.browser4.driver.chrome.NodeClip
 import ai.platon.browser4.driver.chrome.NodeRef
@@ -11,7 +11,6 @@ import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.math.geometric.RectD
 import com.google.gson.Gson
-import kotlin.math.roundToInt
 
 class ScreenshotHandler(
     private val pageHandler: PageHandler,

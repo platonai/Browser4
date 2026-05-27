@@ -8,6 +8,7 @@ import ai.platon.browser4.driver.chrome.impl.ChromeImpl
 import ai.platon.browser4.driver.chrome.impl.PageHandler
 import ai.platon.browser4.driver.chrome.impl.ScreenshotHandler
 import ai.platon.browser4.driver.chrome.impl.withNodeObjectId
+import ai.platon.browser4.driver.chrome.protocol.BrowserProtocol
 import ai.platon.browser4.driver.chrome.util.ChromeDriverException
 import ai.platon.browser4.driver.chrome.util.ChromeIOException
 import ai.platon.cdt.kt.protocol.events.network.RequestWillBeSent
@@ -259,9 +260,7 @@ class PulsarWebDriver constructor(
     override suspend fun evaluateDetail(expression: String): JsEvaluation? {
         return rpc.invokeOnPage("evaluateDetail") {
             driverHelper.createJsEvaluate(
-                jsHandler.evaluateDetail(
-                    expression
-                )
+                jsHandler.evaluateDetail(expression)
             )
         }
     }

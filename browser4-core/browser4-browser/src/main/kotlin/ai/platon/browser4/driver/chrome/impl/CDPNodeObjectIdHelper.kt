@@ -1,6 +1,6 @@
 package ai.platon.browser4.driver.chrome.impl
 
-import ai.platon.browser4.driver.chrome.BrowserProtocol
+import ai.platon.browser4.driver.chrome.protocol.BrowserProtocol
 import ai.platon.browser4.driver.chrome.NodeRef
 import ai.platon.pulsar.common.AppContext
 
