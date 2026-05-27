@@ -1,5 +1,6 @@
-package ai.platon.pulsar.rest.tool
+package ai.platon.pulsar.agent.tool
 
+import ai.platon.browser4.common.B4Constants.DEFAULT_SESSION_ID
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.builtin.AbstractToolExecutor
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
@@ -23,13 +24,13 @@ import kotlin.reflect.KClass
  * // command.result(id="<task-id>")
  * ```
  *
- * @see CommandRunner
+ * @see UserCommandExecutor
  */
 class CommandToolExecutor : AbstractToolExecutor() {
 
     override val domain: String = "command"
 
-    override val receiverClass: KClass<*> = CommandRunner::class
+    override val receiverClass: KClass<*> = UserCommandExecutor::class
 
     init {
         toolSpec["run"] = ToolSpec(
@@ -72,7 +73,7 @@ class CommandToolExecutor : AbstractToolExecutor() {
         domain: String, functionName: String, args: Map<String, Any?>, receiver: Any
     ): Any? {
         require(domain == this.domain) { "Unsupported domain: $domain" }
-        require(receiver is CommandRunner) { "Receiver must be a CommandRunner" }
+        require(receiver is UserCommandExecutor) { "Receiver must be a CommandRunner" }
 
         val service = receiver
 
@@ -85,12 +86,13 @@ class CommandToolExecutor : AbstractToolExecutor() {
                     required = setOf("command"),
                     functionName
                 )
+                val sessionId = paramString(args, "sessionId", functionName) ?: DEFAULT_SESSION_ID
                 val command = paramString(args, "command", functionName)!!
                 val isAsync = paramBool(args, "async", functionName, required = false, default = true) ?: true
                 if (isAsync) {
-                    service.submitPlainCommandAsync(command)
+                    service.submitPlainCommand(sessionId, command)
                 } else {
-                    val status = service.executePlainCommandSync(command)
+                    val status = service.executePlainCommand(sessionId, command)
                     pulsarObjectMapper().writeValueAsString(status)
                 }
             }
@@ -98,16 +100,18 @@ class CommandToolExecutor : AbstractToolExecutor() {
             // command.status(id: String)
             "status" -> {
                 validateArgs(args, allowed = setOf("id"), required = setOf("id"), functionName)
+                val sessionId = paramString(args, "sessionId", functionName) ?: DEFAULT_SESSION_ID
                 val id = paramString(args, "id", functionName)!!
-                val status = service.getStatus(id)
+                val status = service.getStatus(sessionId, id)
                 pulsarObjectMapper().writeValueAsString(status)
             }
 
             // command.result(id: String)
             "result" -> {
                 validateArgs(args, allowed = setOf("id"), required = setOf("id"), functionName)
+                val sessionId = paramString(args, "sessionId", functionName) ?: DEFAULT_SESSION_ID
                 val id = paramString(args, "id", functionName)!!
-                val result = service.getResult(id)
+                val result = service.getResult(sessionId, id)
                 pulsarObjectMapper().writeValueAsString(result)
             }
 

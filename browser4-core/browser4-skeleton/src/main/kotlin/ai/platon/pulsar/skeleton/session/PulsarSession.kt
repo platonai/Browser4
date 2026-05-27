@@ -165,6 +165,11 @@ interface PulsarSession : AutoCloseable {
     val uuid: String
 
     /**
+     * A label used to identify the session
+     * */
+    val label: String
+
+    /**
      * A short descriptive display text.
      * */
     val display: String

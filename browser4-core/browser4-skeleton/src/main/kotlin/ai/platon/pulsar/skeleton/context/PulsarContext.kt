@@ -98,6 +98,11 @@ interface PulsarContext : java.lang.AutoCloseable {
     fun getOrCreateSession(settings: PulsarSettings): PulsarSession
 
     /**
+     * Create a pulsar session
+     * */
+    fun ensureSwarmSession(settings: PulsarSettings): PulsarSession
+
+    /**
      * Close a pulsar session
      * */
     fun closeSession(session: PulsarSession)
@@ -173,12 +178,12 @@ interface PulsarContext : java.lang.AutoCloseable {
     fun normalizeOrNull(url: String?, options: LoadOptions, toItemOption: Boolean = false): NormURL?
 
     /**
-     * Normalize urls, remove invalid ones
+     * Normalize URLs, remove invalid ones
      *
-     * @param urls The urls to normalize
+     * @param urls The URLs to normalize
      * @param options The LoadOptions applied to each url
      * @param toItemOption If the LoadOptions is converted to item load options
-     * @return All normalized urls, all invalid input urls are removed
+     * @return All normalized URLs, all invalid input URLs are removed
      * */
     fun normalize(urls: Iterable<String>, options: LoadOptions, toItemOption: Boolean = false): List<NormURL>
 

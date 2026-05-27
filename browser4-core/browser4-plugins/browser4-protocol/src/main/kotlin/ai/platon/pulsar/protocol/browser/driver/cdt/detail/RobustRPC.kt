@@ -32,7 +32,7 @@ class RobustRPC(
     var maxRPCFailures = MAX_RPC_FAILURES
 
     @Throws(ChromeDriverException::class)
-    suspend fun invoke(action: String, block: suspend () -> Unit) {
+    suspend fun invoke0(action: String, block: suspend () -> Unit) {
         invokeWithRetry(action, block = block)
     }
 

@@ -5,10 +5,10 @@ import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.model.*
 import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.common.SessionManager
-import ai.platon.pulsar.common.SessionManager.ManagedSession
+import ai.platon.pulsar.common.ManagedSession
 import ai.platon.pulsar.rest.api.entities.CommandResult
 import ai.platon.pulsar.rest.api.entities.CommandStatus
-import ai.platon.pulsar.rest.tool.CommandRunner
+import ai.platon.pulsar.agent.tool.UserCommandExecutor
 import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import jakarta.servlet.http.HttpServletResponse
@@ -32,7 +32,7 @@ class MCPToolControllerTest {
     private lateinit var sessionManager: SessionManager
 
     @Mock
-    private lateinit var commandRunner: CommandRunner
+    private lateinit var commandExecutor: UserCommandExecutor
 
     @Mock
     private lateinit var commandAgenticSession: AgenticSession
@@ -65,14 +65,14 @@ class MCPToolControllerTest {
     @BeforeEach
     fun setUp() {
         MockitoAnnotations.openMocks(this)
-        controller = MCPToolController(sessionManager, commandRunner)
+        controller = MCPToolController(sessionManager, commandExecutor)
 
         // Setup session structure
         `when`(sessionManager.getSession(sessionId)).thenReturn(managedSession)
         `when`(managedSession.agenticSession).thenReturn(agenticSession)
         `when`(agenticSession.companionAgent).thenReturn(basicBrowserAgent)
         `when`(basicBrowserAgent.agentToolManager).thenReturn(agentToolManager)
-        `when`(commandRunner.session).thenReturn(commandAgenticSession)
+//        `when`(commandExecutor.session).thenReturn(commandAgenticSession)
         `when`(commandAgenticSession.companionAgent).thenReturn(commandAgent)
         `when`(commandAgent.agentToolManager).thenReturn(commandAgentToolManager)
     }
@@ -828,7 +828,7 @@ class MCPToolControllerTest {
 
         assertEquals(HttpStatus.OK, result.statusCode)
         assertEquals(taskId, result.body!!.content[0].text)
-        Mockito.verify(commandAgentToolManager).registerCustomTarget("command", commandRunner)
+        Mockito.verify(commandAgentToolManager).registerCustomTarget("command", commandExecutor)
         val captor = ArgumentCaptor.forClass(ToolCall::class.java)
         Mockito.verify(commandAgentToolManager).execute(capture(captor))
         assertEquals("command", captor.value.domain)

@@ -29,33 +29,6 @@ class SessionManager(
 ) : Closeable {
     private val logger = LoggerFactory.getLogger(SessionManager::class.java)
 
-    /**
-     * Container for session-related objects.
-     *
-     * The driverMutex ensures that WebDriver operations are executed serially, not in parallel.
-     * This is critical because WebDriver methods must not be called concurrently.
-     */
-    data class ManagedSession(
-        val sessionId: String,
-        val agenticSession: AgenticSession,
-        val capabilities: Map<String, Any?>?,
-        var url: String? = null,
-        var status: String = "active", // active, paused, stopped
-        val createdAt: Long = System.currentTimeMillis(),
-        var lastAccessedAt: Long = System.currentTimeMillis(),
-    ) {
-        val mutex: Mutex = Mutex()
-
-        val driver get() = agenticSession.getOrCreateBoundDriver()
-        val agent: PerceptiveAgent get() = agenticSession.companionAgent
-
-        suspend inline fun <R> withLock(block: ManagedSession.() -> R): R {
-            return mutex.withLock(null) {
-                this.block()
-            }
-        }
-    }
-
     private val sessions = ConcurrentHashMap<String, ManagedSession>()
 
     /**
@@ -384,3 +357,29 @@ class SessionManager(
     }
 }
 
+/**
+ * Container for session-related objects.
+ *
+ * The driverMutex ensures that WebDriver operations are executed serially, not in parallel.
+ * This is critical because WebDriver methods must not be called concurrently.
+ */
+data class ManagedSession(
+    val sessionId: String,
+    val agenticSession: AgenticSession,
+    val capabilities: Map<String, Any?>?,
+    var url: String? = null,
+    var status: String = "active", // active, paused, stopped
+    val createdAt: Long = System.currentTimeMillis(),
+    var lastAccessedAt: Long = System.currentTimeMillis(),
+) {
+    val mutex: Mutex = Mutex()
+
+    val driver get() = agenticSession.getOrCreateBoundDriver()
+    val agent: PerceptiveAgent get() = agenticSession.companionAgent
+
+    suspend inline fun <R> withLock(block: ManagedSession.() -> R): R {
+        return mutex.withLock(null) {
+            this.block()
+        }
+    }
+}

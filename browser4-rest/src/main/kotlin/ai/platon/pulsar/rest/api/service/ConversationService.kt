@@ -1,9 +1,9 @@
 package ai.platon.pulsar.rest.api.service
 
+import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.browser4.common.B4LinkExtractors
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.*
 import ai.platon.pulsar.common.SessionManager
-import ai.platon.pulsar.common.SessionManager.Companion.SWARM_SESSION_ID
 import ai.platon.pulsar.common.ai.llm.PromptTemplate
 import ai.platon.pulsar.common.ai.llm.PromptTemplateLoader
 import ai.platon.pulsar.common.serialize.json.JSONExtractor

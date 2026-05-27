@@ -4,6 +4,7 @@ import ai.platon.browser4.common.B4Constants.PROFILE_MODE_CAPABILITY
 import ai.platon.browser4.common.B4Constants.SESSION_ID_CAPABILITY
 import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agentic.AgenticSession
+import ai.platon.pulsar.common.ManagedSession
 import ai.platon.pulsar.common.SessionManager
 import ai.platon.pulsar.rest.api.service.SwarmService
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -19,7 +20,7 @@ class SwarmControllerTest {
         val agenticSession = Mockito.mock(AgenticSession::class.java)
         val controller = SwarmController(sessionManager, swarmService)
         val capabilities = mapOf("profileMode" to "TEMPORARY")
-        val managedSession = SessionManager.ManagedSession(
+        val managedSession = ManagedSession(
             sessionId = SWARM_SESSION_ID,
             agenticSession = agenticSession,
             capabilities = mapOf(

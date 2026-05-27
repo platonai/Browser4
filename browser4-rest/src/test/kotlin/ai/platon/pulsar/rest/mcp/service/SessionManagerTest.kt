@@ -1,12 +1,14 @@
 package ai.platon.pulsar.rest.mcp.service
 
+import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.context.AgenticContext
+import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.SessionManager
 import ai.platon.pulsar.skeleton.PulsarSettings
-import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.skeleton.browser.Browser
 import ai.platon.pulsar.skeleton.browser.driver.WebDriver
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -14,7 +16,6 @@ import org.mockito.Mock
 import org.mockito.Mockito
 import org.mockito.Mockito.times
 import org.mockito.Mockito.verify
-import kotlinx.coroutines.runBlocking
 import org.mockito.MockitoAnnotations
 
 class SessionManagerTest {
@@ -103,8 +104,8 @@ class SessionManagerTest {
     fun ensureSwarmSessionDefaultsToSequentialProfileMode() {
         val session = sessionManager.ensureSwarmSession()
 
-        assertEquals(SessionManager.SWARM_SESSION_ID, session.sessionId)
-        assertEquals(SessionManager.SWARM_SESSION_ID, session.capabilities?.get("sessionId"))
+        assertEquals(SWARM_SESSION_ID, session.sessionId)
+        assertEquals(SWARM_SESSION_ID, session.capabilities?.get("sessionId"))
         assertEquals("SEQUENTIAL", session.capabilities?.get("profileMode"))
     }
 
@@ -116,8 +117,8 @@ class SessionManagerTest {
             )
         )
 
-        assertEquals(SessionManager.SWARM_SESSION_ID, session.sessionId)
-        assertEquals(SessionManager.SWARM_SESSION_ID, session.capabilities?.get("sessionId"))
+        assertEquals(SWARM_SESSION_ID, session.sessionId)
+        assertEquals(SWARM_SESSION_ID, session.capabilities?.get("sessionId"))
         assertEquals("TEMPORARY", session.capabilities?.get("profileMode"))
     }
 

@@ -1,10 +1,12 @@
 package ai.platon.pulsar.skeleton.impl
 
+import ai.platon.browser4.common.B4Constants.SWARM_SESSION_LABEL
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.collect.UrlFeeder
 import ai.platon.pulsar.common.config.CapabilityTypes.CRAWL_ENABLE_DEFAULT_DATA_COLLECTORS
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.warnForClose
+import ai.platon.pulsar.skeleton.PulsarSettings
 import ai.platon.pulsar.skeleton.context.PulsarContexts
 import ai.platon.pulsar.skeleton.context.support.AbstractPulsarContext
 import ai.platon.pulsar.skeleton.TaskRunner
@@ -120,8 +122,11 @@ open class StreamingTaskLoop(
         require(applicationContext.isActive) { "Expect context is active | ${applicationContext.id}" }
         require(cx.isActive) { "Expect context is active | ${cx.id}" }
 
-        val session = cx.getOrCreateSession()
+        // If the swarm session is not created, create one with default SWARM settings,
+        // or if the session has been created before, use the existing one.
+        val session = cx.ensureSwarmSession(PulsarSettings())
         require(session.isActive) { "Expect session is active, actual ${session::class}#${session.id}" }
+        require(session.label.equals(SWARM_SESSION_LABEL, ignoreCase = true)) { "Expect session is the SWARM session, actual ${session::class}#${session.id}" }
 
         // clear the global illegal states, so the newly created crawler can work properly
         StreamingTaskRunner.clearIllegalState()

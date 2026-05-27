@@ -1160,6 +1160,10 @@ function() {
      * */
     override fun close() {
         browser.destroyDriver(this)
+        closeMe()
+    }
+
+    fun closeMe() {
         super.close()
 
         if (closed.compareAndSet(false, true)) {
@@ -1252,10 +1256,10 @@ function() {
         networkManager.enable()
 
         networkManager.on1(NetworkEvents.RequestWillBeSent) { event: RequestWillBeSent ->
-            rpc.invoke("onRequestWillBeSent") { onRequestWillBeSent(entry, event) }
+            rpc.invoke0("onRequestWillBeSent") { onRequestWillBeSent(entry, event) }
         }
         networkManager.on1(NetworkEvents.ResponseReceived) { event: ResponseReceived ->
-            rpc.invoke("onResponseReceived") { onResponseReceived(entry, event) }
+            rpc.invoke0("onResponseReceived") { onResponseReceived(entry, event) }
         }
         browserProtocol.onFrameNavigated {
             rpc.invoke("onFrameNavigated") { onFrameNavigated(entry, it) }

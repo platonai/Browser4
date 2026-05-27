@@ -50,7 +50,11 @@ abstract class AbstractPulsarSession(
     /**
      * The session id. Session id is expected to be set by the container, e.g. the h2 database runtime
      * */
-    override val id: Long
+    override val id: Long,
+    /**
+     * A label used to identify the session
+     * */
+    override val label: String = "",
 ) : PulsarSession {
 
     companion object {

@@ -161,7 +161,7 @@ class PulsarBrowser(
             mutableReusedDrivers.remove(chromeTabId)
             mutableDrivers.remove(chromeTabId)
 
-            runCatching { driver.doClose() }.onFailure { warnForClose(this, it) }
+            runCatching { driver.closeMe() }.onFailure { warnForClose(this, it) }
 
             try {
                 closeTab(driver.chromeTab)

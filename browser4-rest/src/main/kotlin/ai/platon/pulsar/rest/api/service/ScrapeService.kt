@@ -1,5 +1,6 @@
 package ai.platon.pulsar.rest.api.service
 
+import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agentic.BasicAgenticSession
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
@@ -10,10 +11,9 @@ import ai.platon.pulsar.agentic.tools.advanced.crawl.common.XSQLScrapeHyperlink
 import ai.platon.pulsar.agentic.tools.advanced.crawl.refreshed
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.SessionManager
-import ai.platon.pulsar.common.SessionManager.Companion.SWARM_SESSION_ID
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
 import ai.platon.pulsar.rest.api.entities.ScrapeStatusRequest
-import ai.platon.pulsar.rest.tool.CommandRunner.Companion.FLOW_POLLING_INTERVAL
+import ai.platon.pulsar.agent.tool.UserCommandExecutor.Companion.FLOW_POLLING_INTERVAL
 import jakarta.annotation.PreDestroy
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*

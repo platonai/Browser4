@@ -1,4 +1,4 @@
-package ai.platon.pulsar.rest.tool
+package ai.platon.pulsar.agent.tool
 
 import ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitRequest
@@ -21,29 +21,27 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import java.io.Closeable
 import java.time.Instant
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * General-purpose command execution service for page visit and agent commands.
  *
- * This service orchestrates command execution through [ai.platon.pulsar.agentic.tools.advanced.crawl.StatefulPageVisitor] for page visits
- * and [ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner] for agent-based commands. It can be used by both REST API
+ * This service orchestrates command execution through [StatefulPageVisitor] for page visits
+ * and [StatefulAgentRunner] for agent-based commands. It can be used by both REST API
  * and agentic modules.
  *
  * @param commandNormalizer Optional normalizer that converts plain text commands into
- *        structured [ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitRequest] objects. If not provided, plain text commands
+ *        structured [PageVisitRequest] objects. If not provided, plain text commands
  *        without URLs will be executed as agent commands.
  */
-class CommandRunner(
+class UserCommandExecutor(
     val sessionManager: SessionManager,
     private val commandNormalizer: CommandNormalizer? = null,
 ) : Closeable {
     companion object {
         const val FLOW_POLLING_INTERVAL = 1000L
     }
-
-    // Discus: CommandRunner works on any sessions with permanent profiles
-    val session get() = sessionManager.ensureDefaultSession().agenticSession
 
     // Create a dedicated dispatcher for long-running command operations
     private val commandDispatcher = Dispatchers.IO.limitedParallelism(10)
@@ -52,18 +50,28 @@ class CommandRunner(
         commandDispatcher + SupervisorJob() + CoroutineName("commander")
     )
 
-    private val statefulPageVisitor = StatefulPageVisitor(session)
-    private val statefulAgentRunner = StatefulAgentRunner(session)
+    private val pageVisitors = ConcurrentHashMap<String, StatefulPageVisitor>()
+    private val agentRunners = ConcurrentHashMap<String, StatefulAgentRunner>()
 
-    suspend fun executePageVisitCommandSync(
+    fun ensurePageVisitor(sessionId: String): StatefulPageVisitor =
+        pageVisitors.getOrPut(sessionId) { StatefulPageVisitor(sessionManager.getOrCreateSession(sessionId).agenticSession) }
+
+    fun ensureAgentRunner(sessionId: String): StatefulAgentRunner =
+        agentRunners.getOrPut(sessionId) { StatefulAgentRunner(sessionManager.getOrCreateSession(sessionId).agenticSession) }
+
+    suspend fun executePageVisitCommand(
+        sessionId: String,
         request: PageVisitRequest, eventHandlers: PageEventHandlers
     ): CommandStatus {
-        return statefulPageVisitor.visit(request, eventHandlers).toCommandStatus()
+        return ensurePageVisitor(sessionId).visit(request, eventHandlers).toCommandStatus()
     }
 
-    fun submitPageVisitCommandAsync(request: PageVisitRequest, eventHandlers: PageEventHandlers): String {
-        val status = statefulPageVisitor.create()
-        commanderScope.launch { statefulPageVisitor.visit(request, status, eventHandlers) }
+    fun submitPageVisitCommand(
+        sessionId: String,
+        request: PageVisitRequest, eventHandlers: PageEventHandlers
+    ): String {
+        val status = ensurePageVisitor(sessionId).create()
+        commanderScope.launch { ensurePageVisitor(sessionId).visit(request, status, eventHandlers) }
         return status.id
     }
 
@@ -77,7 +85,10 @@ class CommandRunner(
      * @param plainCommand The plain text command to execute.
      * @return CommandStatus containing the execution result.
      */
-    suspend fun executePlainCommandSync(plainCommand: String): CommandStatus {
+    suspend fun executePlainCommand(
+        sessionId: String,
+        plainCommand: String
+    ): CommandStatus {
         if (plainCommand.isBlank()) {
             return CommandStatus.failed(ResourceStatus.SC_BAD_REQUEST)
         }
@@ -85,13 +96,13 @@ class CommandRunner(
         val request = commandNormalizer?.normalize(plainCommand)
         return if (request != null) {
             // Page visit execution
-            val status = statefulPageVisitor.create()
+            val status = ensurePageVisitor(sessionId).create()
             val eventHandlers = PageEventHandlersFactory.create()
-            statefulPageVisitor.visit(request, status, eventHandlers)
+            ensurePageVisitor(sessionId).visit(request, status, eventHandlers)
             status.toCommandStatus()
         } else {
             // Open task execution
-            val agentStatus = statefulAgentRunner.execute(plainCommand)
+            val agentStatus = ensureAgentRunner(sessionId).execute(plainCommand)
             agentStatus.toCommandStatus()
         }
     }
@@ -106,12 +117,15 @@ class CommandRunner(
      * @param plainCommand The plain text command to execute.
      * @return The command status ID for tracking execution progress.
      */
-    suspend fun submitPlainCommandAsync(plainCommand: String): String {
+    suspend fun submitPlainCommand(
+        sessionId: String,
+        plainCommand: String
+    ): String {
         val command = plainCommand.trim()
 
         // 1. Bad command
         if (command.isBlank()) {
-            val status = statefulPageVisitor.create()
+            val status = ensurePageVisitor(sessionId).create()
             status.failed(ResourceStatus.SC_BAD_REQUEST)
             return status.id
         }
@@ -119,11 +133,12 @@ class CommandRunner(
         // 2. Only one single url with optional parameters
         // it is better to use ScrapeController directly for this kind of commands which supports massive scraping
         if (isConfiguredUrl(command)) {
-            val url = session.normalize(command)
+            val session = sessionManager.getOrCreateSession(sessionId)
+            val url = session.agenticSession.normalize(command)
             if (url.isNotNil) {
                 val eventHandlers = PageEventHandlersFactory.create()
                 val request = PageVisitRequest(url = url.urlSpec, args = url.args)
-                return submitPageVisitCommandAsync(request, eventHandlers)
+                return submitPageVisitCommand(sessionId, request, eventHandlers)
             }
         }
 
@@ -131,10 +146,10 @@ class CommandRunner(
         return if (request != null) {
             // 3. Structured page visit command
             val eventHandlers = PageEventHandlersFactory.create()
-            submitPageVisitCommandAsync(request, eventHandlers)
+            submitPageVisitCommand(sessionId, request, eventHandlers)
         } else {
             // 4. Free command
-            submitAgentTaskAsync(command)
+            submitAgentTask(sessionId, command)
         }
     }
 
@@ -151,30 +166,36 @@ class CommandRunner(
      * @param plainCommand The plain text command for the agent to execute.
      * @return CommandStatus containing the execution result.
      */
-    suspend fun executeAgentCommand(plainCommand: String): CommandStatus {
-        val status = statefulAgentRunner.execute(plainCommand)
+    suspend fun executeAgentCommand(
+        sessionId: String,
+        plainCommand: String
+    ): CommandStatus {
+        val status = ensureAgentRunner(sessionId).execute(plainCommand)
         return status.toCommandStatus()
     }
 
-    fun submitAgentTaskAsync(plainCommand: String): String {
-        val status = statefulAgentRunner.create()
-        commanderScope.launch { statefulAgentRunner.execute(plainCommand, status) }
+    fun submitAgentTask(
+        sessionId: String,
+        plainCommand: String
+    ): String {
+        val status = ensureAgentRunner(sessionId).create()
+        commanderScope.launch { ensureAgentRunner(sessionId).execute(plainCommand, status) }
         return status.id
     }
 
-    fun getStatus(id: String): CommandStatus? {
-        return statefulPageVisitor.getStatus(id)?.toCommandStatus()
-            ?: statefulAgentRunner.getStatus(id)?.toCommandStatus()
+    fun getStatus(sessionId: String, id: String): CommandStatus? {
+        return ensurePageVisitor(sessionId).getStatus(id)?.toCommandStatus()
+            ?: ensureAgentRunner(sessionId).getStatus(id)?.toCommandStatus()
     }
 
-    fun getResult(id: String): CommandResult? = getStatus(id)?.commandResult
+    fun getResult(sessionId: String, id: String): CommandResult? = getStatus(sessionId, id)?.commandResult
 
-    fun commandStatusFlow(id: String): Flow<CommandStatus> = flow {
+    fun commandStatusFlow(sessionId: String, id: String): Flow<CommandStatus> = flow {
         var lastModifiedTime = Instant.EPOCH
         do {
             delay(FLOW_POLLING_INTERVAL.milliseconds)
 
-            val status = getStatus(id) ?: CommandStatus.notFound(id)
+            val status = getStatus(sessionId, id) ?: CommandStatus.notFound(id)
             if (status.refreshed(lastModifiedTime)) {
                 emit(status)
                 lastModifiedTime = status.lastModifiedTime
@@ -198,7 +219,7 @@ class CommandRunner(
      * @param request The request string containing a URL and other parameters.
      * @return A PageVisitStatus object containing the result of the command execution.
      * */
-    suspend fun executePageVisitCommand(request: String): PageVisitStatus {
+    suspend fun executePageVisitCommand(sessionId: String, request: String): PageVisitStatus {
         if (request.isBlank()) {
             return PageVisitStatus.failed(ResourceStatus.SC_BAD_REQUEST)
         }
@@ -208,11 +229,11 @@ class CommandRunner(
         )
 
         val eventHandlers = PageEventHandlersFactory.create()
-        return statefulPageVisitor.visit(request2, eventHandlers)
+        return ensurePageVisitor(sessionId).visit(request2, eventHandlers)
     }
 
-    suspend fun executePageVisitCommand(request: PageVisitRequest): PageVisitStatus {
-        return statefulPageVisitor.visit(request)
+    suspend fun executePageVisitCommand(sessionId: String, request: PageVisitRequest): PageVisitStatus {
+        return ensurePageVisitor(sessionId).visit(request)
     }
 
     /**

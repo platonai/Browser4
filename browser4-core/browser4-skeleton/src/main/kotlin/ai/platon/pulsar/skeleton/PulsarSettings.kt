@@ -50,6 +50,7 @@ data class PulsarSettings(
     val maxOpenTabs: Int? = null,
     val interactSettings: InteractSettings? = null,
     val profileMode: BrowserProfileMode? = null,
+    val label: String? = null,
 ) {
     fun overrideSystemProperties() {
         overrideConfigurationInternal(null)
