@@ -402,7 +402,7 @@ class PulsarWebDriver constructor(
                     throw WebDriverException("JS Error in $actionName: " + result.exceptionDetails?.exception?.description)
                 }
 
-                result.result?.value as? Boolean ?: false
+                result.result.value as? Boolean ?: false
             } ?: false
         }
     }
@@ -410,12 +410,12 @@ class PulsarWebDriver constructor(
     @Throws(WebDriverException::class)
     override suspend fun mouseWheelDown(count: Int, deltaX: Double, deltaY: Double, delayMillis: Long) {
         try {
-            rpc.invokeOnPage("mouseWheelDown") {
-                repeat(count) { i ->
-                    if (i > 0) {
-                        if (delayMillis > 0) gap(delayMillis) else gap("mouseWheel")
-                    }
+            repeat(count) { i ->
+                if (i > 0) {
+                    if (delayMillis > 0) gap(delayMillis) else gap("mouseWheel")
+                }
 
+                rpc.invokeOnPage("mouseWheelDown") {
                     mouse?.wheel(deltaX, deltaY)
                 }
             }
@@ -427,12 +427,12 @@ class PulsarWebDriver constructor(
     @Throws(WebDriverException::class)
     override suspend fun mouseWheelUp(count: Int, deltaX: Double, deltaY: Double, delayMillis: Long) {
         try {
-            rpc.invokeOnPage("mouseWheelUp") {
-                repeat(count) { i ->
-                    if (i > 0) {
-                        if (delayMillis > 0) gap(delayMillis) else gap("mouseWheel")
-                    }
+            repeat(count) { i ->
+                if (i > 0) {
+                    if (delayMillis > 0) gap(delayMillis) else gap("mouseWheel")
+                }
 
+                rpc.invokeOnPage("mouseWheelUp") {
                     mouse?.wheel(deltaX, deltaY)
                 }
             }
