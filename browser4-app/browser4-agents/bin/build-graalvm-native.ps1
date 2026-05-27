@@ -86,9 +86,9 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$repoRoot = Join-Path $scriptDir "..\.."
+$repoRoot = Join-Path $scriptDir "..\..\.."
 $mvnWrapper = Join-Path $repoRoot "mvnw.cmd"
-$pomPath = Join-Path $scriptDir "pom.xml"
+$pomPath = Join-Path $scriptDir "..\pom.xml"
 
 if (-not (Test-Path $mvnWrapper)) {
     Write-Err "Maven wrapper not found at: $mvnWrapper"
@@ -170,7 +170,7 @@ try {
 }
 
 $duration = (Get-Date) - $startTime
-$targetDir = Join-Path $scriptDir "target"
+$targetDir = Join-Path $scriptDir "..\target"
 $exeCandidates = Get-ChildItem -Path $targetDir -Filter "*.exe" -ErrorAction SilentlyContinue
 
 Write-Host ""

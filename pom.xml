@@ -377,6 +377,12 @@
                 <version>${browser4-base.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
+                <exclusions>
+                    <exclusion>
+                        <groupId>ai.platon.pulsar</groupId>
+                        <artifactId>pulsar-llm</artifactId>
+                    </exclusion>
+                </exclusions>
             </dependency>
 
             <!-- Internal Dependencies -->
@@ -430,7 +436,7 @@
             </dependency>
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-llm</artifactId>
+                <artifactId>browser4-llm</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>

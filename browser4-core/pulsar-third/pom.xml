@@ -25,6 +25,6 @@
     <name>Browser4 Third</name>
 
     <modules>
-        <module>pulsar-llm</module>
+        <module>browser4-llm</module>
     </modules>
 </project>
