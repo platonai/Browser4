@@ -357,7 +357,7 @@ data class InteractSettings constructor(
          * - The empty key `""` is kept as a compatibility fallback and is normalized to `default`.
          *
          * Known keys:
-         * - `gap`: general pacing between advanced-level actions/retries.
+         * - `gap`: general pacing between high-level actions/retries.
          * - `click`: mouse down/up gap for click operations.
          * - `delete`: delay used while clearing text (delete/backspace/shortcut presses).
          * - `keyUpDown`: reserved bucket for key-up/key-down style actions.
@@ -373,7 +373,7 @@ data class InteractSettings constructor(
          * - `""`: secondary compatibility fallback bucket.
          * */
         val DEFAULT_DELAY_POLICY = mapOf(
-            "gap" to 650..1100, // Used by AbstractWebDriver.gap(): pacing between advanced-level actions and retry loops.
+            "gap" to 650..1100, // Used by AbstractWebDriver.gap(): pacing between high-level actions and retry loops.
             "click" to 90..180, // Used by PulsarWebDriver.click(): Mouse.click delay between mousedown/mouseup (and between multi-click cycles).
             "delete" to 80..180, // Used by PulsarWebDriver.clear(): per delete/backspace or press("Control+A"/"Delete") key press delay.
             "keyUpDown" to 70..170, // Reserved key-up/key-down bucket; currently not directly referenced by PulsarWebDriver actions.

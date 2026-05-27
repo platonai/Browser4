@@ -130,7 +130,7 @@ interface PrivacyContext: AutoCloseable {
      * */
     val failureRate: Float
     /**
-     * Check whether the failure rate is advanced.
+     * Check whether the failure rate is high.
      * */
     val isHighFailureRate: Boolean
     /**
