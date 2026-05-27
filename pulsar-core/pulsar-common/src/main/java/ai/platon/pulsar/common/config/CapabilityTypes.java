@@ -115,8 +115,15 @@ public interface CapabilityTypes {
     /**
      * The mode of browser context, case-insensitive.
      * default, system_default, prototype, sequential, temporary
+     * @deprecated Use {@code BROWSER_PROFILE_MODE} instead
      */
+    @Deprecated
     String BROWSER_CONTEXT_MODE = "browser.context.mode";
+    /**
+     * The mode of browser profile, case-insensitive.
+     * default, system_default, prototype, sequential, temporary
+     */
+    String BROWSER_PROFILE_MODE = "browser.profile.mode";
     /**
      * The number of active privacy contexts.
      */
