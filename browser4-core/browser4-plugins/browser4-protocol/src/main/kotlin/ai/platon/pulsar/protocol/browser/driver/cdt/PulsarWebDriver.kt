@@ -3,7 +3,11 @@ package ai.platon.pulsar.protocol.browser.driver.cdt
 import ai.platon.browser4.driver.chrome.*
 import ai.platon.browser4.driver.chrome.dom.SnapshotService
 import ai.platon.browser4.driver.chrome.dom.model.*
+import ai.platon.browser4.driver.chrome.impl.CheckableElementJs
 import ai.platon.browser4.driver.chrome.impl.ChromeImpl
+import ai.platon.browser4.driver.chrome.impl.PageHandler
+import ai.platon.browser4.driver.chrome.impl.ScreenshotHandler
+import ai.platon.browser4.driver.chrome.impl.withNodeObjectId
 import ai.platon.browser4.driver.chrome.util.ChromeDriverException
 import ai.platon.browser4.driver.chrome.util.ChromeIOException
 import ai.platon.cdt.kt.protocol.events.network.RequestWillBeSent

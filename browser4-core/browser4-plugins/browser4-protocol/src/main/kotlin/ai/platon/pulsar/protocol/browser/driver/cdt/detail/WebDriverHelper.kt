@@ -1,7 +1,7 @@
 package ai.platon.pulsar.protocol.browser.driver.cdt.detail
 
 import ai.platon.browser4.driver.chrome.BrowserProtocol
-import ai.platon.browser4.driver.chrome.PageHandler
+import ai.platon.browser4.driver.chrome.impl.PageHandler
 import ai.platon.cdt.kt.protocol.events.network.ResponseReceived
 import ai.platon.cdt.kt.protocol.types.network.ResourceType
 import ai.platon.cdt.kt.protocol.types.runtime.CallFunctionOn

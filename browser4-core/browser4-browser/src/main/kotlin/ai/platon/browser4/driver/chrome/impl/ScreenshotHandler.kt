@@ -1,5 +1,9 @@
-package ai.platon.browser4.driver.chrome
+package ai.platon.browser4.driver.chrome.impl
 
+import ai.platon.browser4.driver.chrome.BrowserProtocol
+import ai.platon.browser4.driver.chrome.ClickableDOM
+import ai.platon.browser4.driver.chrome.NodeClip
+import ai.platon.browser4.driver.chrome.NodeRef
 import ai.platon.browser4.driver.common.BrowserSettings
 import ai.platon.cdt.kt.protocol.types.page.CaptureScreenshotFormat
 import ai.platon.cdt.kt.protocol.types.page.Viewport

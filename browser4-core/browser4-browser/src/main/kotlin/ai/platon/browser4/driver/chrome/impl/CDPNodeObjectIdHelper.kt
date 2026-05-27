@@ -1,5 +1,7 @@
-package ai.platon.browser4.driver.chrome
+package ai.platon.browser4.driver.chrome.impl
 
+import ai.platon.browser4.driver.chrome.BrowserProtocol
+import ai.platon.browser4.driver.chrome.NodeRef
 import ai.platon.pulsar.common.AppContext
 
 /**
@@ -14,7 +16,7 @@ data class ResolvedNodeObjectId(
 )
 
 /**
- * Resolves a [NodeRef] into a runtime object id.
+ * Resolves a [ai.platon.browser4.driver.chrome.NodeRef] into a runtime object id.
  *
  * If the node already carries an object id, it is reused and the caller should not release it.
  * Otherwise a temporary object id is resolved via BrowserProtocol DOM APIs and must be released by the caller.
