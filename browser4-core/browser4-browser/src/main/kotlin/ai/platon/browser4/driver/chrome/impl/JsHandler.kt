@@ -16,8 +16,6 @@ class JsHandler(
 ) {
     private val logger = getLogger(this)
 
-    private val isActive get() = AppContext.isActive && browserProtocol.isOpen
-
     private val confuser get() = isolatedWorldManager.settings.confuser
 
     /**
@@ -152,7 +150,7 @@ class JsHandler(
 
         val exception = result?.exceptionDetails?.exception
         if (exception != null) {
-            logger.warn(exception.description + "\n>>>$functionDeclaration<<<")
+            logger.warn("Evaluate exception | " + exception.description + ":\n>>>$functionDeclaration<<<")
         }
 
         return result?.result?.value

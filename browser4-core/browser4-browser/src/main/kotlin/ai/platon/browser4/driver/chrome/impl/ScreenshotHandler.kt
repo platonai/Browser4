@@ -126,10 +126,6 @@ class ScreenshotHandler(
     }
 
     private suspend fun calculateNodeClip(node: NodeRef, selector: String): NodeClip? {
-        if (debugLevel > 50) {
-            debugNodeClipDebug(node, selector)
-        }
-
         // must scroll to top to calculate the client rect
         pageHandler.jsHandler.evaluate("__pulsar_utils__.scrollToTop()")
 
@@ -149,56 +145,5 @@ class ScreenshotHandler(
     private suspend fun calculateNodeClip0(node: NodeRef, selector: String): RectD? {
         val clickableDOM = ClickableDOM.create(activeCdp(), node) ?: return null
         return clickableDOM.boundingBox()
-    }
-
-    private suspend fun debugNodeClipDebug(node: NodeRef, selector: String) {
-        println("\n")
-        println("===== $selector ${node.nodeId}")
-
-        var clientRects = pageHandler.jsHandler.evaluate("__pulsar_utils__.queryClientRects('$selector')")
-        println(clientRects)
-        var contentQuads = activeCdp()?.getContentQuads(node.nodeId)
-        println(contentQuads)
-
-        var clientRect = pageHandler.jsHandler.evaluate("__pulsar_utils__.queryClientRect('$selector')")?.toString()
-
-        println("clientRect: ")
-        println(clientRect)
-
-        var clickableDOM = ClickableDOM.create(activeCdp(), node) ?: return
-        println(clickableDOM.boundingBox())
-        println(clickableDOM.clickablePoint())
-
-        println("== scrollToTop ==")
-        pageHandler.jsHandler.evaluate("__pulsar_utils__.scrollToTop()")
-
-        clientRects = pageHandler.jsHandler.evaluate("__pulsar_utils__.queryClientRects('$selector')")
-        println(clientRects)
-        contentQuads = activeCdp()?.getContentQuads(node.nodeId)
-        println(contentQuads)
-
-        clientRect = pageHandler.jsHandler.evaluate("__pulsar_utils__.queryClientRect('$selector')")?.toString()
-
-        println("clientRect: ")
-        println(clientRect)
-
-        clickableDOM = ClickableDOM.create(activeCdp(), node) ?: return
-        println(clickableDOM.boundingBox())
-        println(clickableDOM.clickablePoint())
-
-        val viewport = activeCdp()?.getLayoutMetrics()?.cssLayoutViewport ?: return
-        val pageX = viewport.pageX
-        val pageY = viewport.pageY
-
-        println("pageX, pageY: ")
-        println("$pageX, $pageY")
-    }
-
-    private fun normalizeClip(clip: RectD): RectD {
-        val x = clip.x.roundToInt()
-        val y = clip.y.roundToInt()
-        val width = (clip.width + clip.x - x).roundToInt()
-        val height = (clip.height + clip.y - y).roundToInt()
-        return RectD(x.toDouble(), y.toDouble(), width.toDouble(), height.toDouble())
     }
 }
