@@ -24,10 +24,10 @@ import java.util.concurrent.ConcurrentHashMap
  * This component is framework-agnostic and can be wired manually or exposed
  * through an external dependency injection container.
  */
-class SessionManager(
+class PulsarSessionManager(
     val agenticContext: AgenticContext
 ) : Closeable {
-    private val logger = LoggerFactory.getLogger(SessionManager::class.java)
+    private val logger = LoggerFactory.getLogger(PulsarSessionManager::class.java)
 
     private val sessions = ConcurrentHashMap<String, ManagedSession>()
 

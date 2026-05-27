@@ -1,6 +1,6 @@
 package ai.platon.pulsar.rest.api.controller
 
-import ai.platon.pulsar.common.SessionManager
+import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.rest.api.TestHelper.MOCK_PRODUCT_DETAIL_URL
@@ -49,7 +49,7 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
     private lateinit var conf: ImmutableConfig
 
     @Autowired
-    lateinit var sessionManager: SessionManager
+    lateinit var sessionManager: PulsarSessionManager
 
     private lateinit var fixtureServer: FixtureServer
     private lateinit var tempDir: Path

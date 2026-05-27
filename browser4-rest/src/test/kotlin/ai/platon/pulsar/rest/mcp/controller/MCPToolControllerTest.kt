@@ -4,7 +4,7 @@ import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.model.*
 import ai.platon.pulsar.agentic.tools.AgentToolManager
-import ai.platon.pulsar.common.SessionManager
+import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.common.ManagedSession
 import ai.platon.pulsar.rest.api.entities.CommandResult
 import ai.platon.pulsar.rest.api.entities.CommandStatus
@@ -29,7 +29,7 @@ class MCPToolControllerTest {
     private val objectMapper = jacksonObjectMapper()
 
     @Mock
-    private lateinit var sessionManager: SessionManager
+    private lateinit var sessionManager: PulsarSessionManager
 
     @Mock
     private lateinit var commandExecutor: UserCommandExecutor

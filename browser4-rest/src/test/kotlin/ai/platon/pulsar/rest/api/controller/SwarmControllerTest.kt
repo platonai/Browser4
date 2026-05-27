@@ -5,7 +5,7 @@ import ai.platon.browser4.common.B4Constants.SESSION_ID_CAPABILITY
 import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.common.ManagedSession
-import ai.platon.pulsar.common.SessionManager
+import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.rest.api.service.SwarmService
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
@@ -15,7 +15,7 @@ import org.mockito.Mockito.verify
 class SwarmControllerTest {
     @Test
     fun openReturnsSafeSessionResponse() {
-        val sessionManager = Mockito.mock(SessionManager::class.java)
+        val sessionManager = Mockito.mock(PulsarSessionManager::class.java)
         val swarmService = Mockito.mock(SwarmService::class.java)
         val agenticSession = Mockito.mock(AgenticSession::class.java)
         val controller = SwarmController(sessionManager, swarmService)

@@ -4,7 +4,7 @@ import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.context.AgenticContext
 import ai.platon.pulsar.common.CheckState
-import ai.platon.pulsar.common.SessionManager
+import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.skeleton.PulsarSettings
 import ai.platon.pulsar.skeleton.browser.Browser
 import ai.platon.pulsar.skeleton.browser.driver.WebDriver
@@ -18,11 +18,11 @@ import org.mockito.Mockito.times
 import org.mockito.Mockito.verify
 import org.mockito.MockitoAnnotations
 
-class SessionManagerTest {
+class PulsarSessionManagerTest {
     @Mock
     private lateinit var agenticContext: AgenticContext
 
-    private lateinit var sessionManager: SessionManager
+    private lateinit var sessionManager: PulsarSessionManager
 
     @BeforeEach
     fun setUp() {
@@ -30,7 +30,7 @@ class SessionManagerTest {
         Mockito.doAnswer {
             mockAgenticSession()
         }.`when`(agenticContext).createSession(Mockito.any(PulsarSettings::class.java) ?: PulsarSettings())
-        sessionManager = SessionManager(agenticContext)
+        sessionManager = PulsarSessionManager(agenticContext)
     }
 
     @Test

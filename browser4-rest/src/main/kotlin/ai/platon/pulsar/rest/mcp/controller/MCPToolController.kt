@@ -6,7 +6,7 @@ import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.AgentToolManager
-import ai.platon.pulsar.common.SessionManager
+import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.agent.tool.UserCommandExecutor
 import ai.platon.pulsar.agent.tool.CommandToolExecutor
@@ -74,9 +74,9 @@ data class MCPContent(
     path = ["/mcp"],
     produces = [MediaType.APPLICATION_JSON_VALUE]
 )
-@ConditionalOnBean(SessionManager::class)
+@ConditionalOnBean(PulsarSessionManager::class)
 class MCPToolController(
-    private val sessionManager: SessionManager,
+    private val sessionManager: PulsarSessionManager,
     private val commandExecutor: UserCommandExecutor,
 ) {
     companion object {

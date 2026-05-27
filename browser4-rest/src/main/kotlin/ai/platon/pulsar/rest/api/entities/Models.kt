@@ -2,7 +2,6 @@ package ai.platon.pulsar.rest.api.entities
 
 import ai.platon.browser4.common.B4Constants.PROFILE_MODE_CAPABILITY
 import ai.platon.pulsar.common.ManagedSession
-import ai.platon.pulsar.common.SessionManager
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 
 /**

@@ -8,7 +8,7 @@ import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeAPIUtils
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeHyperlink
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.XSQLScrapeHyperlink
 import ai.platon.pulsar.common.ResourceStatus
-import ai.platon.pulsar.common.SessionManager
+import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
 import ai.platon.pulsar.rest.api.entities.ScrapeStatusRequest
 import org.apache.commons.collections4.MultiMapUtils
@@ -18,7 +18,7 @@ import java.util.concurrent.ConcurrentSkipListMap
 
 @Service
 class SwarmService(
-    private val sessionManager: SessionManager
+    private val sessionManager: PulsarSessionManager
 ) {
     private val logger = LoggerFactory.getLogger(SwarmService::class.java)
 

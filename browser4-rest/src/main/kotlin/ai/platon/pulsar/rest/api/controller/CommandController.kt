@@ -2,7 +2,7 @@ package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.browser4.common.B4Constants.DEFAULT_SESSION_ID
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitRequest
-import ai.platon.pulsar.common.SessionManager
+import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.rest.api.entities.CommandResult
 import ai.platon.pulsar.rest.api.entities.CommandStatus
@@ -26,7 +26,7 @@ import reactor.core.publisher.Flux
     produces = [MediaType.APPLICATION_JSON_VALUE]
 )
 class CommandController(
-    val sessionManager: SessionManager,
+    val sessionManager: PulsarSessionManager,
     val commandExecutor: UserCommandExecutor,
 ) {
     private val logger = getLogger(CommandController::class)

@@ -6,7 +6,7 @@ import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitStatus
 import ai.platon.pulsar.agentic.tools.advanced.crawl.StatefulPageVisitor
 import ai.platon.pulsar.agentic.tools.advanced.crawl.failed
 import ai.platon.pulsar.common.ResourceStatus
-import ai.platon.pulsar.common.SessionManager
+import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.common.Strings
 import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.rest.api.entities.CommandResult
@@ -36,7 +36,7 @@ import kotlin.time.Duration.Companion.milliseconds
  *        without URLs will be executed as agent commands.
  */
 class UserCommandExecutor(
-    val sessionManager: SessionManager,
+    val sessionManager: PulsarSessionManager,
     private val commandNormalizer: CommandNormalizer? = null,
 ) : Closeable {
     companion object {
