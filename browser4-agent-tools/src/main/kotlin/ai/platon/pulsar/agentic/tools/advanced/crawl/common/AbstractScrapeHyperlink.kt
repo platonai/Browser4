@@ -66,10 +66,10 @@ abstract class AbstractScrapeHyperlink(
             rs = executeQuery(sql.sql)
         } catch (e: JdbcSQLException) {
             response.statusCode = ResourceStatus.SC_EXPECTATION_FAILED
-            logger.warn("Failed to execute sql #${response.id}{}", e.brief())
+            logger.warn("Failed to execute X-SQL #${response.id} | state: ${response.statusCode} | \n{}", e.brief())
         } catch (e: Throwable) {
             response.statusCode = ResourceStatus.SC_EXPECTATION_FAILED
-            logger.warn("Failed to execute sql #${response.id}\n{}", e.brief())
+            logger.warn("[Unexpected] Failed to execute X-SQL #${response.id}\n{}", e.brief())
         }
 
         return rs
