@@ -1,6 +1,5 @@
 package ai.platon.pulsar.driver.chrome
 
-import ai.platon.browser4.driver.chrome.ChromeDestroyer
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.browser.BrowserFiles
 import ai.platon.pulsar.common.browser.Browsers

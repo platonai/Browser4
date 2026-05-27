@@ -1,6 +1,7 @@
-package ai.platon.browser4.driver.chrome
+package ai.platon.pulsar.driver.chrome
 
 import ai.platon.pulsar.driver.chrome.BrowserFileSystem
+import ai.platon.pulsar.driver.chrome.ChromeDestroyer
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files

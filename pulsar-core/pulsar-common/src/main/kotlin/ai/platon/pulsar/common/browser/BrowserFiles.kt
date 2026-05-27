@@ -151,7 +151,7 @@ object BrowserFiles {
             files.sortedByDescending { Files.getLastModifiedTime(it) }  // newest first
                 .drop(recentNToKeep)  // drop the newest N context dirs, so them are not cleaned
                 .forEach { cleanUpContextDir(it, expiry) } // clean the rest
-        } catch (ignored: LinkageError) {
+        } catch (_: LinkageError) {
             // This prevents NoClassDefFoundError when classes have been unloaded
             // (e.g., when running via maven exec:java)
             // ignored

@@ -1,9 +1,7 @@
-package ai.platon.browser4.driver.chrome
+package ai.platon.pulsar.driver.chrome
 
 import ai.platon.pulsar.common.Runtimes
 import ai.platon.pulsar.common.warnInterruptible
-import ai.platon.pulsar.driver.chrome.BrowserFileSystem
-import ai.platon.pulsar.driver.chrome.ChromeLauncher
 import org.apache.commons.lang3.SystemUtils
 import org.slf4j.LoggerFactory
 import java.io.BufferedReader
