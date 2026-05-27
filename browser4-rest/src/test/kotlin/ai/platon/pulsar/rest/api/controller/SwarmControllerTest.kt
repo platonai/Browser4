@@ -29,7 +29,7 @@ class SwarmControllerTest {
             lastAccessedAt = 2L,
         )
 
-        Mockito.`when`(sessionManager.swarmSession(capabilities)).thenReturn(managedSession)
+        Mockito.`when`(sessionManager.ensureSwarmSession(capabilities)).thenReturn(managedSession)
 
         val response = controller.getOrCreate(capabilities)
 
@@ -37,7 +37,7 @@ class SwarmControllerTest {
         assertEquals("active", response.status)
         assertEquals("TEMPORARY", response.profileMode)
         assertEquals("value", response.capabilities?.get("custom"))
-        verify(sessionManager).swarmSession(capabilities)
+        verify(sessionManager).ensureSwarmSession(capabilities)
     }
 }
 

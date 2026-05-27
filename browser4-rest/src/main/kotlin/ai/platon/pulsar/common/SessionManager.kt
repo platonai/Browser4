@@ -65,8 +65,8 @@ class SessionManager(
      * It is created on demand and shared across all requests that do not specify a session ID.
      * The profile mode is pinned to DEFAULT.
      * */
-    fun defaultSession(capabilities: Map<String, Any?>? = null): ManagedSession {
-        return getOrCreateSessionById(DEFAULT_SESSION_ID, capabilities)
+    fun ensureDefaultSession(capabilities: Map<String, Any?>? = null): ManagedSession {
+        return getOrCreateSession(DEFAULT_SESSION_ID, capabilities)
     }
 
     /**
@@ -80,14 +80,14 @@ class SessionManager(
      * The swarm session may launch multiple browser contexts, each browser context isolated and has its own profile,
      * but all browser contexts share the same session-level profile which is determined by the profile mode.
      * */
-    fun swarmSession(capabilities: Map<String, Any?>? = null): ManagedSession {
-        return getOrCreateSessionById(SWARM_SESSION_ID, capabilities)
+    fun ensureSwarmSession(capabilities: Map<String, Any?>? = null): ManagedSession {
+        return getOrCreateSession(SWARM_SESSION_ID, capabilities)
     }
 
     /**
      *
      * */
-    fun getOrCreateSessionById(sessionId: String, capabilities: Map<String, Any?>? = null): ManagedSession {
+    fun getOrCreateSession(sessionId: String, capabilities: Map<String, Any?>? = null): ManagedSession {
         val normalizedCapabilities = normalizeCapabilities(sessionId, capabilities)
         val session = sessions.computeIfAbsent(sessionId) {
             createManagedSession(sessionId, normalizedCapabilities)
@@ -108,13 +108,7 @@ class SessionManager(
     fun getOrCreateSession(capabilities: Map<String, Any?>? = null): ManagedSession {
         val normalizedCapabilities = normalizeCapabilities(capabilities = capabilities)
         val sessionId = normalizedCapabilities.getValue(SESSION_ID_CAPABILITY).toString()
-        val session = sessions.computeIfAbsent(sessionId) {
-            createManagedSession(sessionId, normalizedCapabilities)
-        }
-
-        val activeSession = resolveHealthySession(sessionId, normalizedCapabilities, session)
-        activeSession.lastAccessedAt = System.currentTimeMillis()
-        return activeSession
+        return getOrCreateSession(sessionId, normalizedCapabilities)
     }
 
     fun checkHealthyBlocking(session: ManagedSession): CheckState {

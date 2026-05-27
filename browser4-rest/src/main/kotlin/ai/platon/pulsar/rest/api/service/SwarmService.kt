@@ -7,23 +7,14 @@ import ai.platon.pulsar.agentic.tools.advanced.crawl.common.DegenerateXSQLScrape
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeAPIUtils
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeHyperlink
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.XSQLScrapeHyperlink
-import ai.platon.pulsar.agentic.tools.advanced.crawl.refreshed
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.SessionManager
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
 import ai.platon.pulsar.rest.api.entities.ScrapeStatusRequest
-import ai.platon.pulsar.rest.tool.CommandRunner.Companion.FLOW_POLLING_INTERVAL
-import jakarta.annotation.PreDestroy
-import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.*
 import org.apache.commons.collections4.MultiMapUtils
 import org.slf4j.LoggerFactory
-import org.springframework.http.codec.ServerSentEvent
 import org.springframework.stereotype.Service
-import reactor.core.publisher.Flux
-import java.time.Instant
 import java.util.concurrent.ConcurrentSkipListMap
-import kotlin.time.Duration.Companion.milliseconds
 
 @Service
 class SwarmService(
@@ -32,7 +23,7 @@ class SwarmService(
     private val logger = LoggerFactory.getLogger(SwarmService::class.java)
 
     // Discus: CommandRunner works on any sessions with permanent profiles
-    val session get() = sessionManager.swarmSession().agenticSession
+    val session get() = sessionManager.ensureSwarmSession().agenticSession
 
     /**
      * The response cache, the key is the id, the value is the response

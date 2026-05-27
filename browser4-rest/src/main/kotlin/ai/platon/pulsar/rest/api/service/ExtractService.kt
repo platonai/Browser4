@@ -12,7 +12,7 @@ class ExtractService(
     val sessionManager: SessionManager,
     val loadService: LoadService,
 ) {
-    val session get() = sessionManager.getOrCreateSessionById(SWARM_SESSION_ID).agenticSession
+    val session get() = sessionManager.getOrCreateSession(SWARM_SESSION_ID).agenticSession
 
     suspend fun extract(request: PromptRequest): String {
         val prompt = request.prompt

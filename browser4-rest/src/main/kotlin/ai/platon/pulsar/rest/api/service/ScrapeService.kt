@@ -34,7 +34,7 @@ class ScrapeService(
 ) {
     private val logger = LoggerFactory.getLogger(ScrapeService::class.java)
 
-    private val session get() = sessionManager.getOrCreateSessionById(SWARM_SESSION_ID).agenticSession
+    private val session get() = sessionManager.getOrCreateSession(SWARM_SESSION_ID).agenticSession
 
     /**
      * The response cache, the key is the id, the value is the response

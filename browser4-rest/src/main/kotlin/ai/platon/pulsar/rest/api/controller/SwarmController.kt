@@ -35,7 +35,7 @@ class SwarmController(
      * */
     @PostMapping
     fun getOrCreate(@RequestBody capabilities: Map<String, Any?>): SessionResponse {
-        return sessionManager.swarmSession(capabilities).toSessionResponse()
+        return sessionManager.ensureSwarmSession(capabilities).toSessionResponse()
     }
 
     /**

@@ -43,7 +43,7 @@ class CommandRunner(
     }
 
     // Discus: CommandRunner works on any sessions with permanent profiles
-    val session get() = sessionManager.defaultSession().agenticSession
+    val session get() = sessionManager.ensureDefaultSession().agenticSession
 
     // Create a dedicated dispatcher for long-running command operations
     private val commandDispatcher = Dispatchers.IO.limitedParallelism(10)

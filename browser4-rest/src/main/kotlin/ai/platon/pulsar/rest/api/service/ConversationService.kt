@@ -21,7 +21,7 @@ class ConversationService(
     val sessionManager: SessionManager,
     val loadService: LoadService,
 ) {
-    val session get() = sessionManager.getOrCreateSessionById(SWARM_SESSION_ID).agenticSession
+    val session get() = sessionManager.getOrCreateSession(SWARM_SESSION_ID).agenticSession
 
     suspend fun chat(prompt: String): String {
         return session.chat(prompt).content

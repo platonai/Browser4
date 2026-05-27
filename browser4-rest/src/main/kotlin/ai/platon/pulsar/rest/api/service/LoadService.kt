@@ -18,7 +18,7 @@ class LoadService(
 
     private val logger = LoggerFactory.getLogger(LoadService::class.java)
 
-    val session get() = sessionManager.getOrCreateSessionById(SWARM_SESSION_ID).agenticSession
+    val session get() = sessionManager.getOrCreateSession(SWARM_SESSION_ID).agenticSession
 
     suspend fun load(url: String): WebPage {
         return session.load(url)
