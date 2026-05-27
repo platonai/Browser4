@@ -121,8 +121,10 @@ class PulsarWebDriver constructor(
         }
 
         if (!browserProtocol.isTargetAlive()) {
-            return CheckState(ResourceStatus.SC_SERVICE_UNAVAILABLE,
-                "WebDriver service unavailable - the target page is not alive")
+            return CheckState(
+                ResourceStatus.SC_SERVICE_UNAVAILABLE,
+                "WebDriver service unavailable - the target page is not alive"
+            )
         }
 
         return CheckState(0, "WebDriver is healthy")
@@ -1158,10 +1160,6 @@ function() {
      * */
     override fun close() {
         browser.destroyDriver(this)
-        doClose()
-    }
-
-    fun doClose() {
         super.close()
 
         if (closed.compareAndSet(false, true)) {
@@ -1196,23 +1194,25 @@ function() {
                 // intentionally ignored: the chrome is closed
             }
         } catch (e: ChromeDriverException) {
-            if (browserProtocol.isOpen) {
-                try {
-                    rpc.handleChromeException(e, "terminate")
-                } catch (e: Exception) {
-                    logger.error("[Unexpected]", e)
-                }
+            try {
+                rpc.handleChromeException(e, "terminate")
+            } catch (e: Exception) {
+                logger.error("[Unexpected]", e)
             }
         }
     }
 
     override fun toString() = "Driver#$id"
 
-    /**
-     *
-     * */
     @Throws(ChromeIOException::class)
     suspend fun enableAPIAgents() {
+        rpc.invokeOnPage("enableAPIAgents") {
+            enableAPIAgents0()
+        }
+    }
+
+    @Throws(ChromeIOException::class)
+    private suspend fun enableAPIAgents0() {
         try {
             browserProtocol.pageEnable()
             browserProtocol.domEnable()
@@ -1252,15 +1252,20 @@ function() {
         networkManager.enable()
 
         networkManager.on1(NetworkEvents.RequestWillBeSent) { event: RequestWillBeSent ->
-            onRequestWillBeSent(entry, event)
+            rpc.invoke("onRequestWillBeSent") { onRequestWillBeSent(entry, event) }
         }
         networkManager.on1(NetworkEvents.ResponseReceived) { event: ResponseReceived ->
-            onResponseReceived(entry, event)
+            rpc.invoke("onResponseReceived") { onResponseReceived(entry, event) }
         }
-
-        browserProtocol.onFrameNavigated { onFrameNavigated(entry, it) }
-        browserProtocol.onDocumentOpened { entry.mainRequestCookies = getCookies0() }
-        browserProtocol.onWindowOpen { onWindowOpen(it) }
+        browserProtocol.onFrameNavigated {
+            rpc.invoke("onFrameNavigated") { onFrameNavigated(entry, it) }
+        }
+        browserProtocol.onDocumentOpened {
+            rpc.invoke("onDocumentOpened") { entry.mainRequestCookies = getCookies0() }
+        }
+        browserProtocol.onWindowOpen {
+            rpc.invoke("onWindowOpen") { onWindowOpen(it) }
+        }
 
         val proxyEntry = browser.id.fingerprint.proxyEntry
         if (proxyEntry?.username != null) {
@@ -1357,6 +1362,14 @@ function() {
     }
 
     private suspend fun onFrameNavigated(entry: NavigateEntry, event: FrameNavigated) {
+        try {
+            rpc.invoke("onFrameNavigated") { onFrameNavigated0(entry, event) }
+        } catch (e: ChromeDriverException) {
+            rpc.handleChromeException(e, "terminate")
+        }
+    }
+
+    private suspend fun onFrameNavigated0(entry: NavigateEntry, event: FrameNavigated) {
         val chromeNavigateEntry = ChromeNavigateEntry(entry)
 
         chromeNavigateEntry.updateStateAfterFrameNavigated(event)
