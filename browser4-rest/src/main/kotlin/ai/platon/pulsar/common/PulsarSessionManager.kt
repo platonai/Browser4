@@ -24,10 +24,10 @@ import java.util.concurrent.ConcurrentHashMap
  * This component is framework-agnostic and can be wired manually or exposed
  * through an external dependency injection container.
  */
-class SessionManager(
+class PulsarSessionManager(
     val agenticContext: AgenticContext
 ) : Closeable {
-    private val logger = LoggerFactory.getLogger(SessionManager::class.java)
+    private val logger = LoggerFactory.getLogger(PulsarSessionManager::class.java)
 
     private val sessions = ConcurrentHashMap<String, ManagedSession>()
 
@@ -77,9 +77,6 @@ class SessionManager(
         return session
     }
 
-    /**
-     *
-     * */
     fun getOrCreateSession(sessionId: String, capabilities: Map<String, Any?>? = null): ManagedSession {
         val normalizedCapabilities = normalizeCapabilities(sessionId, capabilities)
         val session = sessions.computeIfAbsent(sessionId) {
@@ -100,8 +97,13 @@ class SessionManager(
      */
     fun getOrCreateSession(capabilities: Map<String, Any?>? = null): ManagedSession {
         val normalizedCapabilities = normalizeCapabilities(capabilities = capabilities)
-        val sessionId = normalizedCapabilities[SESSION_ID_CAPABILITY]?.toString() ?: DEFAULT_SESSION_ID
-        return getOrCreateSession(sessionId, normalizedCapabilities)
+        val sessionId = normalizedCapabilities.getValue(SESSION_ID_CAPABILITY).toString()
+        val session = sessions.computeIfAbsent(sessionId) {
+            createManagedSession(sessionId, normalizedCapabilities)
+        }
+        val activeSession = resolveHealthySession(sessionId, normalizedCapabilities, session)
+        activeSession.lastAccessedAt = System.currentTimeMillis()
+        return activeSession
     }
 
     fun checkHealthyBlocking(session: ManagedSession): CheckState {
@@ -362,6 +364,10 @@ class SessionManager(
  *
  * The driverMutex ensures that WebDriver operations are executed serially, not in parallel.
  * This is critical because WebDriver methods must not be called concurrently.
+ *
+ * @property sessionId The REST-level session id, which is distinct with [AgenticSession.uuid]
+ * @property agenticSession The managed [AgenticSession]
+ * @property capabilities The capabilities used to create the [AgenticSession]
  */
 data class ManagedSession(
     val sessionId: String,

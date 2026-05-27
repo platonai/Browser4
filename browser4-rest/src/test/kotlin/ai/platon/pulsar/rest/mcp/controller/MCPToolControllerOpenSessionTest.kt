@@ -1,6 +1,6 @@
 package ai.platon.pulsar.rest.mcp.controller
 
-import ai.platon.pulsar.common.SessionManager
+import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.common.ManagedSession
 import ai.platon.pulsar.agent.tool.UserCommandExecutor
 import jakarta.servlet.http.HttpServletResponse
@@ -14,7 +14,7 @@ class MCPToolControllerOpenSessionTest {
     @Test
     fun openSessionForwardsSequentialProfileModeCapabilities() {
         runBlocking {
-            val sessionManager = Mockito.mock(SessionManager::class.java)
+            val sessionManager = Mockito.mock(PulsarSessionManager::class.java)
             val commandService = Mockito.mock(UserCommandExecutor::class.java)
             val response = Mockito.mock(HttpServletResponse::class.java)
             val managedSession = Mockito.mock(ManagedSession::class.java)

@@ -10,7 +10,7 @@ import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeHyperlink
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.XSQLScrapeHyperlink
 import ai.platon.pulsar.agentic.tools.advanced.crawl.refreshed
 import ai.platon.pulsar.common.ResourceStatus
-import ai.platon.pulsar.common.SessionManager
+import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
 import ai.platon.pulsar.rest.api.entities.ScrapeStatusRequest
 import ai.platon.pulsar.agent.tool.UserCommandExecutor.Companion.FLOW_POLLING_INTERVAL
@@ -30,7 +30,7 @@ import kotlin.time.Duration.Companion.milliseconds
 
 @Service
 class ScrapeService(
-    private val sessionManager: SessionManager
+    private val sessionManager: PulsarSessionManager
 ) {
     private val logger = LoggerFactory.getLogger(ScrapeService::class.java)
 
@@ -80,6 +80,10 @@ class ScrapeService(
         responseCache[hyperlink.uuid] = hyperlink.response
         hyperlink.response.id = hyperlink.uuid
         require(session is BasicAgenticSession)
+        // TODO: the URLs submitted to the URLPool might not be processed by this session,
+        //      instead of which, SWARM session will handle the fetching, which means in-consistent browser settings.
+        //      the reserved solution is to add a session id to the hyperlink, so the scheduler can choose the corresponding
+        //      session to execute the hyperlink.
         session.submit(hyperlink)
         return hyperlink.uuid
     }

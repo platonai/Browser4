@@ -4,7 +4,8 @@ import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.context.AgenticContext
 import ai.platon.pulsar.common.CheckState
-import ai.platon.pulsar.common.SessionManager
+import ai.platon.pulsar.common.PulsarSessionManager
+import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.skeleton.PulsarSettings
 import ai.platon.pulsar.skeleton.browser.Browser
 import ai.platon.pulsar.skeleton.browser.driver.WebDriver
@@ -18,11 +19,11 @@ import org.mockito.Mockito.times
 import org.mockito.Mockito.verify
 import org.mockito.MockitoAnnotations
 
-class SessionManagerTest {
+class PulsarSessionManagerTest {
     @Mock
     private lateinit var agenticContext: AgenticContext
 
-    private lateinit var sessionManager: SessionManager
+    private lateinit var sessionManager: PulsarSessionManager
 
     @BeforeEach
     fun setUp() {
@@ -30,7 +31,7 @@ class SessionManagerTest {
         Mockito.doAnswer {
             mockAgenticSession()
         }.`when`(agenticContext).createSession(Mockito.any(PulsarSettings::class.java) ?: PulsarSettings())
-        sessionManager = SessionManager(agenticContext)
+        sessionManager = PulsarSessionManager(agenticContext)
     }
 
     @Test
@@ -43,8 +44,8 @@ class SessionManagerTest {
             )
         )
 
-        assertEquals("default", session.sessionId)
-        assertEquals("default", session.capabilities?.get("sessionId"))
+        assertEquals("DEFAULT", session.sessionId)
+        assertEquals("DEFAULT", session.capabilities?.get("sessionId"))
         assertEquals("DEFAULT", session.capabilities?.get("profileMode"))
         assertSame(session, sameSession)
         verify(agenticContext, times(1)).createSession(Mockito.any(PulsarSettings::class.java) ?: PulsarSettings())
@@ -72,8 +73,8 @@ class SessionManagerTest {
             )
         )
 
-        assertEquals("default", session.sessionId)
-        assertEquals("default", session.capabilities?.get("sessionId"))
+        assertEquals("DEFAULT", session.sessionId)
+        assertEquals("DEFAULT", session.capabilities?.get("sessionId"))
         assertEquals("SEQUENTIAL", session.capabilities?.get("profileMode"))
     }
 
@@ -133,8 +134,8 @@ class SessionManagerTest {
     fun getSessionCreatesEnsureDefaultSessionOnDemand() {
         val session = sessionManager.getSession("default")
 
-        assertEquals("default", session?.sessionId)
-        assertEquals("default", session?.capabilities?.get("sessionId"))
+        assertEquals("DEFAULT", session?.sessionId)
+        assertEquals("DEFAULT", session?.capabilities?.get("sessionId"))
         assertEquals("DEFAULT", session?.capabilities?.get("profileMode"))
     }
 
@@ -211,6 +212,9 @@ class SessionManagerTest {
         Mockito.`when`(session.isActive).thenReturn(isActive)
         Mockito.`when`(session.boundBrowser).thenReturn(browser)
         Mockito.`when`(session.boundDriver).thenReturn(driver)
+        val config = Mockito.mock(VolatileConfig::class.java)
+        Mockito.`when`(config.getWithFallback(Mockito.anyString(), Mockito.anyString())).thenReturn("SEQUENTIAL")
+        Mockito.`when`(session.sessionConfig).thenReturn(config)
         return session
     }
 }

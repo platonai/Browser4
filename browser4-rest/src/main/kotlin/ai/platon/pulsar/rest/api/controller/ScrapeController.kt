@@ -5,14 +5,15 @@ import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeAPIUtils
 import ai.platon.pulsar.rest.api.entities.ScrapeStatusRequest
 import ai.platon.pulsar.rest.api.service.ScrapeService
-import ai.platon.pulsar.skeleton.session.PulsarSession
 import jakarta.servlet.http.HttpServletRequest
-import org.springframework.context.ApplicationContext
 import org.springframework.http.MediaType
 import org.springframework.http.codec.ServerSentEvent
 import org.springframework.web.bind.annotation.*
 import reactor.core.publisher.Flux
 
+/**
+ * Scraping service allows the user post an X-SQL or a URL to scrape a web page.
+ * */
 @RestController
 @CrossOrigin
 @RequestMapping(

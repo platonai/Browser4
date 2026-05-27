@@ -61,7 +61,12 @@ open class CompletableHyperlink<T>(
     /**
      * The depth of this hyperlink
      * */
-    override var depth: Int = 0
+    override var depth: Int = 0,
+    /**
+     * The session id that requires the corresponding PulsarSession to handle this url.
+     * Reserved.
+     * */
+    var sessionId: String? = null,
 ): UrlAware, Comparable<UrlAware>, StatefulUrl, CompletableFuture<T>() {
 
     override val configuredUrl get() = URLUtils.mergeUrlArgs(url, args)
@@ -69,9 +74,9 @@ open class CompletableHyperlink<T>(
     override val isStandard get() = URLUtils.isStandard(url)
 
     @get: Throws(MalformedURLException::class)
-    override val toURL get() = URI.create(url).toURL()
+    override val toURL: URL get() = URI.create(url).toURL()
 
-    override val toURLOrNull get() = URLUtils.getURLOrNull2(url)
+    override val toURLOrNull: URL? get() = URLUtils.getURLOrNull2(url)
 
     override val isNil: Boolean get() = url == AppConstants.NIL_PAGE_URL
 

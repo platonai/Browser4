@@ -117,7 +117,7 @@ data class PageVisitRequest @JsonCreator constructor(
     @param:JsonProperty("richText") var richText: Boolean? = null,
     @param:JsonProperty("async") var async: Boolean? = null,
     @param:JsonProperty("id") var id: String? = null,
-    @param:JsonProperty("id") var sessionId: String? = null,
+    @param:JsonProperty("sessionId") var sessionId: String? = null,
 ) {
     fun hasAction(): Boolean {
         return !onBrowserLaunchedActions.isNullOrEmpty() || !onPageReadyActions.isNullOrEmpty()

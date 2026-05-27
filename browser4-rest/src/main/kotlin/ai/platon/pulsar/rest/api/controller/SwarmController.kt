@@ -3,7 +3,7 @@ package ai.platon.pulsar.rest.api.controller
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeAPIUtils
-import ai.platon.pulsar.common.SessionManager
+import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.rest.api.entities.ScrapeStatusRequest
 import ai.platon.pulsar.rest.api.entities.SessionResponse
 import ai.platon.pulsar.rest.api.entities.toSessionResponse
@@ -20,7 +20,7 @@ import org.springframework.web.bind.annotation.*
     produces = [MediaType.APPLICATION_JSON_VALUE]
 )
 class SwarmController(
-    val sessionManager: SessionManager,
+    val sessionManager: PulsarSessionManager,
     val swarmService: SwarmService
 ) {
     /**
