@@ -40,8 +40,9 @@ class BrowserProtocol(
     val isOpen: Boolean get() = remoteDevToolsOrNull?.isOpen ?: false
 
     val browser get() = devTools.browser
+    val target get() = devTools.target
     val page get() = devTools.page
-    private val target get() = devTools.target
+    val runtime get() = devTools.runtime
     private val dom get() = devTools.dom
     private val console get() = devTools.console
     private val css get() = devTools.css
@@ -49,10 +50,21 @@ class BrowserProtocol(
     private val network get() = devTools.network
     private val fetch get() = devTools.fetch
     private val security get() = devTools.security
-    private val runtime get() = devTools.runtime
     private val emulation get() = devTools.emulation
     private val accessibility get() = devTools.accessibility
     private val domSnapshot get() = devTools.domSnapshot
+
+    suspend fun isBrowserAlive(): Boolean {
+        return runCatching { browser.getVersion() }.isSuccess
+    }
+
+    suspend fun isTargetAlive(): Boolean {
+        return runCatching { target.getTargets() }.isSuccess
+    }
+
+    suspend fun isV8Alive(): Boolean {
+        return runCatching { runtime.evaluate("1+1") }.isSuccess
+    }
 
     /** Returns the main frame, suspending until the frame tree is available. */
     suspend fun mainFrame() = page.getFrameTree().frame

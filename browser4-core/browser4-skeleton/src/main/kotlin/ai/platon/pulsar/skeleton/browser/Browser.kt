@@ -1,6 +1,7 @@
 package ai.platon.pulsar.skeleton.browser
 
 import ai.platon.browser4.driver.common.BrowserSettings
+import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.skeleton.browser.driver.NavigateHistory
 import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.browser.driver.WebDriverException
@@ -94,7 +95,7 @@ interface Browser : AutoCloseable {
      *
      * This is a heavy operation and should be called with low frequency.
      * */
-    fun healthy(): Boolean
+    fun healthy(): CheckState
 
     /**
      * Create a new driver.

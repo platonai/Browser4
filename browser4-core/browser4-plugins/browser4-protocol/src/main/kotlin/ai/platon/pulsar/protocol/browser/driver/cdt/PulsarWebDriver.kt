@@ -30,11 +30,9 @@ import com.fasterxml.jackson.module.kotlin.readValue
 import com.google.common.annotations.Beta
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import org.apache.commons.lang3.StringUtils
 import org.apache.commons.lang3.SystemUtils
-import java.net.URI
 import java.nio.file.Files
 import java.time.Duration
 import java.time.Instant
@@ -109,22 +107,20 @@ class PulsarWebDriver constructor(
         fingerprintApplier?.invoke(this)
     }
 
-    /**
-     * Check if the underlying browser connection is active.
-     *
-     * TODO: design a complete solution to check the browser status
-     * */
-    override fun canConnect(): Boolean {
-        return browserProtocol.isOpen
-    }
+    override val isOpen get() = browserProtocol.isOpen
 
-    override fun healthy(): Boolean {
-        if (!canConnect()) {
-            return false
+    override suspend fun healthy(): CheckState {
+        val state = quickCheckHealthy()
+        if (!state.isOK) {
+            return state
         }
 
-        // Must not dependent on WebDriver which causes cyclic function calls
-        return runCatching { runBlocking { browserProtocol.isOpen } }.isSuccess
+        if (!browserProtocol.isTargetAlive()) {
+            return CheckState(ResourceStatus.SC_SERVICE_UNAVAILABLE,
+                "WebDriver service unavailable - the target page is not alive")
+        }
+
+        return CheckState(0, "WebDriver is healthy")
     }
 
     override suspend fun addBlockedURLs(urlPatterns: List<String>) {
@@ -414,7 +410,7 @@ class PulsarWebDriver constructor(
     @Throws(WebDriverException::class)
     override suspend fun mouseWheelDown(count: Int, deltaX: Double, deltaY: Double, delayMillis: Long) {
         try {
-            rpc.invokeWithRetry("mouseWheelDown", 1) {
+            rpc.invokeOnPage("mouseWheelDown") {
                 repeat(count) { i ->
                     if (i > 0) {
                         if (delayMillis > 0) gap(delayMillis) else gap("mouseWheel")
@@ -431,7 +427,7 @@ class PulsarWebDriver constructor(
     @Throws(WebDriverException::class)
     override suspend fun mouseWheelUp(count: Int, deltaX: Double, deltaY: Double, delayMillis: Long) {
         try {
-            rpc.invokeWithRetry("mouseWheelUp", 1) {
+            rpc.invokeOnPage("mouseWheelUp") {
                 repeat(count) { i ->
                     if (i > 0) {
                         if (delayMillis > 0) gap(delayMillis) else gap("mouseWheel")
@@ -506,14 +502,14 @@ class PulsarWebDriver constructor(
     @Throws(WebDriverException::class)
     override suspend fun moveMouseTo(selector: String, deltaX: Int, deltaY: Int) {
         try {
-            val node = rpc.invokeWithRetry("scrollIntoViewIfNeeded") {
+            val node = rpc.invokeOnPage("scrollIntoViewIfNeeded") {
                 page.scrollIntoViewIfNeeded(selector)
             } ?: return
 
             val offset = OffsetD(4.0, 4.0)
             if (!isActive) return
 
-            rpc.invokeWithRetry("moveMouseTo") {
+            rpc.invokeOnPage("moveMouseTo") {
                 val point = ClickableDOM(browserProtocol, node, offset).clickablePoint().value
                 if (point != null) {
                     val point2 = PointD(point.x + deltaX, point.y + deltaY)
@@ -823,7 +819,7 @@ class PulsarWebDriver constructor(
     @Throws(WebDriverException::class)
     override suspend fun dragAndDrop(selector: String, deltaX: Int, deltaY: Int) {
         try {
-            val node = rpc.invokeWithRetry("scrollIntoViewIfNeeded") {
+            val node = rpc.invokeOnPage("scrollIntoViewIfNeeded") {
                 page.scrollIntoViewIfNeeded(selector)
             }
 
@@ -839,7 +835,7 @@ class PulsarWebDriver constructor(
             if (!isActive) throw IllegalWebDriverStateException("BrowserProtocol is not active", driver = this)
             val m = mouse ?: throw IllegalWebDriverStateException("Mouse not available", driver = this)
 
-            rpc.invokeWithRetry("dragAndDrop") {
+            rpc.invokeOnPage("dragAndDrop") {
                 val clickableDOM = ClickableDOM(browserProtocol, node, offset)
                 val clickableResult = clickableDOM.clickablePoint()
                 val startPoint = clickableResult.value
@@ -1033,7 +1029,7 @@ function() {
     @Throws(WebDriverException::class)
     override suspend fun clickablePoint(selector: String): PointD? {
         try {
-            return rpc.invokeWithRetry("clickablePoint") {
+            return rpc.invokeOnPage("clickablePoint") {
                 val node = page.scrollIntoViewIfNeeded(selector)
                 ClickableDOM.create(browserProtocol, node)?.clickablePoint()?.value
             }
@@ -1047,7 +1043,7 @@ function() {
     @Throws(WebDriverException::class)
     override suspend fun boundingBox(selector: String): RectD? {
         try {
-            return rpc.invokeWithRetry("boundingBox") {
+            return rpc.invokeOnPage("boundingBox") {
                 val node = page.scrollIntoViewIfNeeded(selector)
                 ClickableDOM.create(browserProtocol, node)?.boundingBox()
             }
@@ -1066,7 +1062,7 @@ function() {
     @Throws(WebDriverException::class)
     override suspend fun screenshot(fullPage: Boolean): String? {
         return try {
-            rpc.invokeWithRetry("screenshot") {
+            rpc.invokeOnPage("screenshot") {
                 screenshot.screenshot(fullPage)
             }
         } catch (e: ChromeDriverException) {
@@ -1085,7 +1081,7 @@ function() {
         return try {
             page.scrollIntoViewIfNeeded(selector) ?: return null
             // Force the page stop all navigations and pending resource fetches.
-            rpc.invokeWithRetry("screenshot") { screenshot.screenshot(selector) }
+            rpc.invokeOnPage("screenshot") { screenshot.screenshot(selector) }
         } catch (e: ChromeDriverException) {
             rpc.handleChromeException(e, "screenshot")
             null
@@ -1096,7 +1092,7 @@ function() {
     override suspend fun screenshot(rect: RectD): String? {
         return try {
             // Force the page stop all navigations and pending resource fetches.
-            rpc.invokeWithRetry("screenshot") { screenshot.screenshot(rect) }
+            rpc.invokeOnPage("screenshot") { screenshot.screenshot(rect) }
         } catch (e: ChromeDriverException) {
             rpc.handleChromeException(e, "screenshot")
             null
@@ -1145,7 +1141,7 @@ function() {
             disableCache = false, includeCredentials = false
         )
 
-        val response = rpc.invokeWithRetry("loadNetworkResource") {
+        val response = rpc.invokeOnPage("loadNetworkResource") {
             val frameId = browserProtocol.getFrameTree().frame.id
             val resource = browserProtocol.loadNetworkResource(frameId, url, options)
             NetworkResourceResponse.from(resource)
@@ -1387,7 +1383,7 @@ function() {
                 logger.warn("No isolated world JS found to re-inject after frame navigation")
             }
         } catch (e: Exception) {
-            if (isActive && canConnect()) {
+            if (quickCheckHealthy().isOK) {
                 logger.warn("Failed to re-inject Browser4 runtime after frame navigation", e)
             } else {
                 logger.debug("Underlying browser (BrowserProtocol) is closed")

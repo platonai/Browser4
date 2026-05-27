@@ -7,6 +7,7 @@ import ai.platon.browser4.driver.chrome.dom.model.NanoDOMTree
 import ai.platon.browser4.driver.chrome.dom.model.PageTarget
 import ai.platon.browser4.driver.chrome.dom.model.SnapshotOptions
 import ai.platon.browser4.driver.common.BrowserSettings
+import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.ai.llm.MCP
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.math.geometric.PointD
@@ -217,14 +218,17 @@ interface WebDriver : Closeable {
      * */
     val timeoutPolicy: Map<String, Duration>
 
-    fun canConnect(): Boolean
+    /**
+     * Quick check if the connection to the backend tab is open.
+     * */
+    val isOpen: Boolean
 
     /**
      * Check if this driver is healthy.
      *
      * This is a heavy operation and should be called with low frequency.
      * */
-    fun healthy(): Boolean
+    suspend fun healthy(): CheckState
 
     /**
      * Adds a script which would be evaluated whenever the page is navigated. @mcp

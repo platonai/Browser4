@@ -7,6 +7,8 @@ import ai.platon.browser4.driver.chrome.util.ChromeDriverException
 import ai.platon.browser4.driver.chrome.util.ChromeIOException
 import ai.platon.browser4.driver.chrome.util.ChromeServiceException
 import ai.platon.browser4.driver.common.BrowserSettings
+import ai.platon.pulsar.common.CheckState
+import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_REUSE_RECOVERED_DRIVERS
 import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.common.warnForClose
@@ -61,12 +63,21 @@ class PulsarBrowser(
             this(BrowserId.RANDOM_TEMP, ChromeImpl(port = port), settings, null)
 
     @Synchronized
-    override fun healthy(): Boolean {
-        if (!chrome.canConnect()) {
-            return false
+    override fun healthy(): CheckState {
+        if (!isActive) {
+            return CheckState(ResourceStatus.SC_SERVER_ERROR, "Browser is not active")
         }
 
-        return runCatching { chrome.listTabs() }.isSuccess
+        if (!chrome.canConnect()) {
+            return CheckState(ResourceStatus.SC_SERVICE_UNAVAILABLE, "Browser service unavailable - failed to connect to browser")
+        }
+
+        val canGetVersion = runCatching { chrome.version }.isSuccess
+        if (!canGetVersion) {
+            return CheckState(ResourceStatus.SC_SERVICE_UNAVAILABLE, "Browser service unavailable - failed to get version")
+        }
+
+        return CheckState(0, "Browser is healthy")
     }
 
     @Synchronized
