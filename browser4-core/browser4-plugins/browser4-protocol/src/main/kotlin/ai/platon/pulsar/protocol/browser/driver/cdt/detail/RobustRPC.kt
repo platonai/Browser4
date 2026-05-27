@@ -31,7 +31,7 @@ class RobustRPC(
     val rpcFailures = AtomicInteger()
     var maxRPCFailures = MAX_RPC_FAILURES
 
-    @Throws(ChromeRPCException::class)
+    @Throws(ChromeDriverException::class)
     suspend fun <T> invoke(action: String, block: suspend () -> T): T? {
         return invokeWithRetry(action, block = block)
     }

@@ -109,8 +109,7 @@ class ChromeImpl(
     }
 
     override fun canConnect(): Boolean {
-        val url = URI.create("http://$host:$port").toURL()
-        return NetUtil.testHttpNetwork(url)
+        return NetUtil.testTcpNetwork(host, port)
     }
 
     @Throws(ChromeIOException::class)
