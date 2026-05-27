@@ -60,6 +60,8 @@ object BrowserFiles {
 
     const val CDP_URL_FILE_NAME = "cdp-url"
 
+    const val USER_DATA_DIR_LOCK_NAME = "user-data-dir.lock"
+
     const val CONTEXT_LOCK_NAME = "context.lock"
 
     val TEMPORARY_UDD_EXPIRY = Duration.ofHours(12)
@@ -261,11 +263,7 @@ object BrowserFiles {
      * @param lockFile The path to the file to be locked, of type [Path].
      * @param supplier A function that takes a [FileChannel] as an argument and returns a value of type [T]. This function will be executed while the file is locked.
      * @return The result of the supplier function, of type [T].
-     * @throws ClosedChannelException If this channel is closed.
-     * @throws AsynchronousCloseException If another thread closes this channel while the invoking thread is blocked in this method.
-     * @throws FileLockInterruptionException If the invoking thread is interrupted while blocked in this method.
      * @throws OverlappingFileLockException If a lock that overlaps the requested region is already held by this Java virtual machine, or if another thread is already blocked in this method and is attempting to lock an overlapping region of the same file.
-     * @throws NonWritableChannelException If this channel was not opened for writing.
      * @throws IOException If some other I/O error occurs.
      *
      * TODO: handle all the exceptions properly
@@ -439,11 +437,7 @@ object BrowserFiles {
      * */
     fun getContextGroupDirLockFile(group: String): Path {
         val lockFile = AppPaths.getContextGroupDir(group).resolve(CONTEXT_LOCK_NAME)
-        if (lockFile.notExists()) {
-            Files.createDirectories(lockFile.parent)
-            Files.createFile(lockFile)
-        }
-        return lockFile
+        return ensureLockFile(lockFile)
     }
 
     /**
@@ -458,11 +452,7 @@ object BrowserFiles {
      * */
     fun getTempContextGroupDirLockFile(group: String): Path {
         val lockFile = AppPaths.getTmpContextGroupDir(group).resolve(CONTEXT_LOCK_NAME)
-        if (lockFile.notExists()) {
-            Files.createDirectories(lockFile.parent)
-            Files.createFile(lockFile)
-        }
-        return lockFile
+        return ensureLockFile(lockFile)
     }
 
     /**
@@ -479,10 +469,12 @@ object BrowserFiles {
         val contextBaseDir = userDataDir.parent
         val groupDir = contextBaseDir.parent
         val lockFile = groupDir.resolveSibling(CONTEXT_LOCK_NAME)
-        if (lockFile.notExists()) {
-            Files.createDirectories(lockFile.parent)
-            Files.createFile(lockFile)
-        }
+        return ensureLockFile(lockFile)
+    }
+
+    private fun ensureLockFile(lockFile: Path): Path {
+        Files.createDirectories(lockFile.parent)
+        runCatching { Files.createFile(lockFile) }
         return lockFile
     }
 

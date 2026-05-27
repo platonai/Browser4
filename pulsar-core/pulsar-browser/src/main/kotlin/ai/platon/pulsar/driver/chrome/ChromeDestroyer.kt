@@ -1,19 +1,16 @@
 package ai.platon.browser4.driver.chrome
 
 import ai.platon.pulsar.common.Runtimes
-import ai.platon.pulsar.common.browser.BrowserFiles
 import ai.platon.pulsar.common.warnInterruptible
+import ai.platon.pulsar.driver.chrome.BrowserFileSystem
 import ai.platon.pulsar.driver.chrome.ChromeLauncher
 import org.apache.commons.lang3.SystemUtils
 import org.slf4j.LoggerFactory
 import java.io.BufferedReader
 import java.io.IOException
-import java.nio.file.Files
 import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
-import kotlin.io.path.exists
-
 /**
  * Destroys Chrome processes associated with a specific user data directory.
  */
@@ -33,10 +30,7 @@ class ChromeDestroyer(
         """.trimIndent()
     }
 
-    private val pidPath get() = userDataDir.resolveSibling(BrowserFiles.PID_FILE_NAME)
-    private val pidBakPath get() = userDataDir.resolveSibling("${BrowserFiles.PID_FILE_NAME}.bak")
-    private val portBakPath get() = userDataDir.resolveSibling("${BrowserFiles.PORT_FILE_NAME}.bak")
-    private val cdpUrlBakPath get() = userDataDir.resolveSibling("${BrowserFiles.CDP_URL_FILE_NAME}.bak")
+    private val browserFileSystem = BrowserFileSystem(userDataDir)
 
     /**
      * Destroys the matching Chrome process forcibly and clears process markers.
@@ -108,7 +102,7 @@ class ChromeDestroyer(
     }
 
     internal fun clearProcessMarkers() {
-        BrowserFiles.clearProcessMarkers(userDataDir)
+        browserFileSystem.clearProcessMarkers()
     }
 
     internal fun killProcess(candidatePids: Collection<Long> = emptyList()): Int {
@@ -177,15 +171,12 @@ class ChromeDestroyer(
     }
 
     private fun readRecordedPid(): Long? {
-        val path = pidPath.takeIf { it.exists() } ?: pidBakPath.takeIf { it.exists() } ?: return null
-        return Files.readAllLines(path)
-            .firstOrNull { it.isNotBlank() }
-            ?.trim()
-            ?.toLongOrNull()
+        return browserFileSystem.readPid(preferBackup = true)
     }
 
     internal fun hasZombieProcessMarkers(): Boolean {
-        return listOf(pidBakPath, portBakPath, cdpUrlBakPath).any { it.exists() }
+        // TODO: race condition: a other thread might be processing the bak files, a file lock is required
+        return browserFileSystem.hasBackupMarks()
     }
 
     private fun isRecordedProcessAlive(): Boolean {
@@ -194,7 +185,7 @@ class ChromeDestroyer(
             return false
         }
 
-        val handle = ProcessHandle.of(pid).orElse(null) ?: return pidBakPath.exists()
+        val handle = ProcessHandle.of(pid).orElse(null) ?: return browserFileSystem.pidBakPath.toFile().exists()
         if (!isBrowserProcess(handle)) {
             return false
         }
