@@ -39,10 +39,10 @@ class BrowserProtocol(
     val remoteDevToolsOrNull: RemoteDevTools? get() = devTools as? RemoteDevTools
     val isOpen: Boolean get() = remoteDevToolsOrNull?.isOpen ?: false
 
-    val browser get() = devTools.browser
-    val target get() = devTools.target
-    val page get() = devTools.page
-    val runtime get() = devTools.runtime
+    private val browser get() = devTools.browser
+    private val target get() = devTools.target
+    private val page get() = devTools.page
+    private val runtime get() = devTools.runtime
     private val dom get() = devTools.dom
     private val console get() = devTools.console
     private val css get() = devTools.css
