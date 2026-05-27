@@ -1,4 +1,4 @@
-package ai.platon.pulsar.driver.chrome
+package ai.platon.browser4.driver.chrome
 
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.browser.BrowserFiles
