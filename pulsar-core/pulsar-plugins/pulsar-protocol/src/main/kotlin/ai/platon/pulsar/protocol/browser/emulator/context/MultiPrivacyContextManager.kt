@@ -15,6 +15,7 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator.context
 
+import ai.platon.browser4.driver.chrome.ChromeDestroyer
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.browser.fingerprint.Fingerprint
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_CONTEXT_NUMBER
@@ -74,13 +75,14 @@ open class MultiPrivacyContextManager(
     private val tracer = logger.takeIf { it.isTraceEnabled }
     private val throttlingLogger = ThrottlingLogger(logger)
     private var numTasksAtLastReportTime = 0L
-    private val allowedPrivacyContextCount: Int get() {
-        // PRIVACY_CONTEXT_NUMBER is deprecated, use BROWSER_CONTEXT_NUMBER instead
+    private val allowedPrivacyContextCount: Int
+        get() {
+            // PRIVACY_CONTEXT_NUMBER is deprecated, use BROWSER_CONTEXT_NUMBER instead
 //        val defaultValue = conf.getInt(PRIVACY_CONTEXT_NUMBER, 2)
 //        return conf.getInt(BROWSER_CONTEXT_NUMBER, defaultValue)
 
-        return conf.getWithFallback(BROWSER_CONTEXT_NUMBER, PRIVACY_CONTEXT_NUMBER)?.toIntOrNull() ?: 2
-    }
+            return conf.getWithFallback(BROWSER_CONTEXT_NUMBER, PRIVACY_CONTEXT_NUMBER)?.toIntOrNull() ?: 2
+        }
 
     val maxAllowedBadContexts = 10
 
@@ -174,12 +176,14 @@ open class MultiPrivacyContextManager(
                     context.display, temporaryContexts.size, allowedPrivacyContextCount, context.baseDir
                 )
             }
+
             profile.isGroup -> {
                 logger.info(
                     "Sequential privacy context in group is created | {} | active: {}, allowed: {} | {}",
                     context.display, temporaryContexts.size, allowedPrivacyContextCount, context.baseDir
                 )
             }
+
             else -> {
                 logger.warn("Unexpected privacy context is created | {} | {}", context.display, context.baseDir)
             }
@@ -266,6 +270,7 @@ open class MultiPrivacyContextManager(
             val browserProfile = createBrowserProfile(page, fingerprint)
             if (browserProfile.isPermanent) {
                 // logger.info("Prepare for permanent browser profile | {}", browserProfile)
+                killZombieBrowserForcefully(browserProfile)
                 reserveResourceForcefully()
                 return getOrCreate(browserProfile)
             }
@@ -377,6 +382,12 @@ open class MultiPrivacyContextManager(
         return pc
     }
 
+    private fun killZombieBrowserForcefully(browserProfile: BrowserProfile) {
+        if (browserProfile.isDefault) {
+            ChromeDestroyer(PrivacyContext.DEFAULT_CONTEXT_DIR).destroyZombie()
+        }
+    }
+
     private fun reserveResourceForcefully() {
         doMaintain()
 
@@ -464,7 +475,7 @@ open class MultiPrivacyContextManager(
         val result = doRun(privacyContext, task, fetchFun)
 
         updatePrivacyContext(privacyContext as AbstractPrivacyContext, result)
-        // All retries are forced to do in crawl scope
+        // All retries are forced to do in browser scope
         if (result.isPrivacyRetry) {
             result.status.upgradeRetry(RetryScope.CRAWL)
         }
