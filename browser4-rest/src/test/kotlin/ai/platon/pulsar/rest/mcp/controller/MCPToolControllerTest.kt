@@ -9,6 +9,7 @@ import ai.platon.pulsar.common.ManagedSession
 import ai.platon.pulsar.rest.api.entities.CommandResult
 import ai.platon.pulsar.rest.api.entities.CommandStatus
 import ai.platon.pulsar.agent.tool.UserCommandExecutor
+import ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner
 import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import jakarta.servlet.http.HttpServletResponse
@@ -17,6 +18,7 @@ import kotlinx.coroutines.sync.Mutex
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.mockito.kotlin.any
 import org.mockito.ArgumentCaptor
 import org.mockito.Mock
 import org.mockito.Mockito
@@ -75,16 +77,8 @@ class MCPToolControllerTest {
 //        `when`(commandExecutor.session).thenReturn(commandAgenticSession)
         `when`(commandAgenticSession.companionAgent).thenReturn(commandAgent)
         `when`(commandAgent.agentToolManager).thenReturn(commandAgentToolManager)
-    }
-
-    private fun <T> any(): T {
-        Mockito.any<T>()
-        return null as T
-    }
-
-    private fun anyToolCall(): ToolCall {
-        Mockito.any(ToolCall::class.java)
-        return ToolCall("dummy", "dummy")
+        `when`(commandExecutor.ensureAgentRunner(Mockito.anyString()))
+            .thenReturn(StatefulAgentRunner(commandAgenticSession))
     }
 
     private fun capture(captor: ArgumentCaptor<ToolCall>): ToolCall {
@@ -370,7 +364,7 @@ class MCPToolControllerTest {
         )
 
         // Mock execute to return a value
-        `when`(agentToolManager.execute(anyToolCall())).thenReturn(toolCallResult("My Page Title"))
+        `when`(agentToolManager.execute(any())).thenReturn(toolCallResult("My Page Title"))
 
         val result = controller.callTool(request, response)
 
@@ -394,7 +388,7 @@ class MCPToolControllerTest {
             arguments = mapOf("sessionId" to sessionId, "expression" to "document.title")
         )
 
-        `when`(agentToolManager.execute(anyToolCall())).thenReturn(toolCallResult("Browser4 CLI Other Fixture"))
+        `when`(agentToolManager.execute(any())).thenReturn(toolCallResult("Browser4 CLI Other Fixture"))
 
         val result = controller.callTool(request, response)
 
@@ -423,7 +417,7 @@ class MCPToolControllerTest {
             )
         )
 
-        `when`(agentToolManager.execute(anyToolCall())).thenReturn(toolCallResult("other page"))
+        `when`(agentToolManager.execute(any())).thenReturn(toolCallResult("other page"))
 
         val result = controller.callTool(request, response)
 
@@ -450,7 +444,7 @@ class MCPToolControllerTest {
             arguments = mapOf("sessionId" to sessionId)
         )
 
-        `when`(agentToolManager.execute(anyToolCall())).thenReturn(toolCallResult("""{"cookies":[],"origins":[]}"""))
+        `when`(agentToolManager.execute(any())).thenReturn(toolCallResult("""{"cookies":[],"origins":[]}"""))
 
         val result = controller.callTool(request, response)
 
@@ -472,7 +466,7 @@ class MCPToolControllerTest {
             arguments = mapOf("sessionId" to sessionId, "state" to """{"cookies":[],"origins":[]}""")
         )
 
-        `when`(agentToolManager.execute(anyToolCall())).thenReturn(toolCallResult("""{"cookies":0,"origins":0,"localStorageEntries":0}"""))
+        `when`(agentToolManager.execute(any())).thenReturn(toolCallResult("""{"cookies":0,"origins":0,"localStorageEntries":0}"""))
 
         val result = controller.callTool(request, response)
 
@@ -499,7 +493,7 @@ class MCPToolControllerTest {
             )
         )
 
-        `when`(agentToolManager.execute(anyToolCall())).thenReturn(toolCallResult("other page"))
+        `when`(agentToolManager.execute(any())).thenReturn(toolCallResult("other page"))
 
         val result = controller.callTool(request, response)
 
@@ -524,7 +518,7 @@ class MCPToolControllerTest {
             arguments = mapOf("sessionId" to sessionId, "action" to "select", "index" to 1)
         )
 
-        `when`(agentToolManager.execute(anyToolCall())).thenReturn(toolCallResult("ok"))
+        `when`(agentToolManager.execute(any())).thenReturn(toolCallResult("ok"))
 
         val result = controller.callTool(request, response)
         assertEquals(HttpStatus.OK, result.statusCode)
@@ -656,7 +650,7 @@ class MCPToolControllerTest {
             arguments = mapOf("sessionId" to sessionId, "action" to "new", "url" to "about:blank")
         )
 
-        `when`(agentToolManager.execute(anyToolCall())).thenReturn(toolCallResult("ok"))
+        `when`(agentToolManager.execute(any())).thenReturn(toolCallResult("ok"))
 
         val result = controller.callTool(request, response)
         assertEquals(HttpStatus.OK, result.statusCode)
@@ -676,7 +670,7 @@ class MCPToolControllerTest {
             arguments = mapOf("sessionId" to sessionId, "action" to "list")
         )
 
-        `when`(agentToolManager.execute(anyToolCall())).thenReturn(toolCallResult("[]"))
+        `when`(agentToolManager.execute(any())).thenReturn(toolCallResult("[]"))
 
         val result = controller.callTool(request, response)
         assertEquals(HttpStatus.OK, result.statusCode)
@@ -696,7 +690,7 @@ class MCPToolControllerTest {
             arguments = mapOf("sessionId" to sessionId, "action" to "close")
         )
 
-        `when`(agentToolManager.execute(anyToolCall())).thenReturn(toolCallResult("ok"))
+        `when`(agentToolManager.execute(any())).thenReturn(toolCallResult("ok"))
 
         val result = controller.callTool(request, response)
         assertEquals(HttpStatus.OK, result.statusCode)
@@ -716,7 +710,7 @@ class MCPToolControllerTest {
             arguments = mapOf("sessionId" to sessionId, "action" to "close", "index" to 1)
         )
 
-        `when`(agentToolManager.execute(anyToolCall())).thenReturn(toolCallResult("ok"))
+        `when`(agentToolManager.execute(any())).thenReturn(toolCallResult("ok"))
 
         val result = controller.callTool(request, response)
         assertEquals(HttpStatus.OK, result.statusCode)
@@ -817,7 +811,7 @@ class MCPToolControllerTest {
     @Test
     fun testCommandRunAsync() = runBlocking {
         val taskId = "task-abc-123"
-        `when`(commandAgentToolManager.execute(anyToolCall())).thenReturn(toolCallResult(taskId))
+        `when`(commandAgentToolManager.execute(any())).thenReturn(toolCallResult(taskId))
 
         val request = MCPToolCallRequest(
             tool = "command_run",
@@ -841,7 +835,7 @@ class MCPToolControllerTest {
     @Test
     fun testCommandRunAsyncIsDefault() = runBlocking {
         val taskId = "task-default-async"
-        `when`(commandAgentToolManager.execute(anyToolCall())).thenReturn(toolCallResult(taskId))
+        `when`(commandAgentToolManager.execute(any())).thenReturn(toolCallResult(taskId))
 
         val request = MCPToolCallRequest(
             tool = "command_run",
@@ -863,7 +857,7 @@ class MCPToolControllerTest {
     @Test
     fun testCommandRunSync() = runBlocking {
         val status = CommandStatus(id = "sync-id", processState = "done")
-        `when`(commandAgentToolManager.execute(anyToolCall())).thenReturn(
+        `when`(commandAgentToolManager.execute(any())).thenReturn(
             toolCallResult(objectMapper.writeValueAsString(status))
         )
 
@@ -888,7 +882,7 @@ class MCPToolControllerTest {
     fun testCommandBatchExecutesCompiledToolStepsAgainstExistingSession() = runBlocking {
         `when`(managedSession.sessionId).thenReturn("batch-session")
         `when`(sessionManager.getSession("batch-session")).thenReturn(managedSession)
-        `when`(agentToolManager.execute(anyToolCall()))
+        `when`(agentToolManager.execute(any()))
             .thenReturn(toolCallResult("Batch Title"))
             .thenReturn(toolCallResult("https://example.com/interactive"))
 
@@ -937,7 +931,7 @@ class MCPToolControllerTest {
     fun testCommandBatchBailStopsOnFirstBackendError() = runBlocking {
         `when`(managedSession.sessionId).thenReturn("bail-session")
         `when`(sessionManager.getSession("bail-session")).thenReturn(managedSession)
-        `when`(agentToolManager.execute(anyToolCall()))
+        `when`(agentToolManager.execute(any()))
             .thenReturn(toolCallResult("Before error"))
             .thenThrow(RuntimeException("Tool execution failed"))
 
@@ -967,7 +961,7 @@ class MCPToolControllerTest {
         assertEquals(false, results[1]["ok"])
         assertTrue(results[1]["error"].toString().contains("Tool execution failed"))
 
-        Mockito.verify(agentToolManager, Mockito.times(2)).execute(anyToolCall())
+        Mockito.verify(agentToolManager, Mockito.times(2)).execute(any())
         Unit
     }
 
@@ -975,7 +969,7 @@ class MCPToolControllerTest {
     fun testCommandBatchContinuesOnErrorWithoutBail() = runBlocking {
         `when`(managedSession.sessionId).thenReturn("continue-session")
         `when`(sessionManager.getSession("continue-session")).thenReturn(managedSession)
-        `when`(agentToolManager.execute(anyToolCall()))
+        `when`(agentToolManager.execute(any()))
             .thenThrow(RuntimeException("First tool failed"))
             .thenReturn(toolCallResult("Second succeeded"))
 
@@ -1005,7 +999,7 @@ class MCPToolControllerTest {
         assertEquals(true, results[1]["ok"])
         assertEquals("Second succeeded", results[1]["text"])
 
-        Mockito.verify(agentToolManager, Mockito.times(2)).execute(anyToolCall())
+        Mockito.verify(agentToolManager, Mockito.times(2)).execute(any())
         Unit
     }
 
@@ -1014,7 +1008,7 @@ class MCPToolControllerTest {
         `when`(managedSession.sessionId).thenReturn("focus-session")
         `when`(sessionManager.getSession("focus-session")).thenReturn(managedSession)
         mockTools("tab" to listOf("evaluateValue"))
-        `when`(agentToolManager.execute(anyToolCall()))
+        `when`(agentToolManager.execute(any()))
             .thenReturn(toolCallResult("focused"))
             .thenReturn(toolCallResult(""))
             .thenReturn(toolCallResult("focused"))
@@ -1067,7 +1061,7 @@ class MCPToolControllerTest {
     fun testCommandBatchRestoresMousePositionBeforePointerSteps() = runBlocking {
         `when`(managedSession.sessionId).thenReturn("mouse-session")
         `when`(sessionManager.getSession("mouse-session")).thenReturn(managedSession)
-        `when`(agentToolManager.execute(anyToolCall()))
+        `when`(agentToolManager.execute(any()))
             .thenReturn(toolCallResult(""))
             .thenReturn(toolCallResult(""))
             .thenReturn(toolCallResult(""))
@@ -1130,7 +1124,7 @@ class MCPToolControllerTest {
         `when`(managedSession.sessionId).thenReturn("artifact-session")
         `when`(sessionManager.getSession("artifact-session")).thenReturn(managedSession)
         mockTools("tab" to listOf("ariaSnapshot", "screenshot"))
-        `when`(agentToolManager.execute(anyToolCall()))
+        `when`(agentToolManager.execute(any()))
             .thenReturn(toolCallResult("https://example.com/interactive"))
             .thenReturn(toolCallResult("Batch Title"))
             .thenReturn(toolCallResult("snapshot text"))
@@ -1194,7 +1188,7 @@ class MCPToolControllerTest {
     fun testCommandStatus() = runBlocking {
         val taskId = "task-xyz"
         val status = CommandStatus(id = taskId, processState = "done")
-        `when`(commandAgentToolManager.execute(anyToolCall())).thenReturn(
+        `when`(commandAgentToolManager.execute(any())).thenReturn(
             toolCallResult(objectMapper.writeValueAsString(status))
         )
 
@@ -1219,7 +1213,7 @@ class MCPToolControllerTest {
     fun testCommandResult() = runBlocking {
         val taskId = "task-xyz"
         val commandResult = CommandResult(summary = "done")
-        `when`(commandAgentToolManager.execute(anyToolCall())).thenReturn(
+        `when`(commandAgentToolManager.execute(any())).thenReturn(
             toolCallResult(objectMapper.writeValueAsString(commandResult))
         )
 
@@ -1242,7 +1236,7 @@ class MCPToolControllerTest {
 
     @Test
     fun testCommandRunMissingCommandReturnsError() = runBlocking {
-        `when`(commandAgentToolManager.execute(anyToolCall())).thenReturn(
+        `when`(commandAgentToolManager.execute(any())).thenReturn(
             toolCallResult(
                 evaluate = TcEvaluate(
                     expression = "command.run(async=\"true\")",
@@ -1295,7 +1289,7 @@ class MCPToolControllerTest {
 
         // Ensure execute returns success
         runBlocking {
-            `when`(agentToolManager.execute(anyToolCall())).thenReturn(toolCallResult("ok"))
+            `when`(agentToolManager.execute(any())).thenReturn(toolCallResult("ok"))
         }
     }
 
