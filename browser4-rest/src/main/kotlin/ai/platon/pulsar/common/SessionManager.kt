@@ -5,6 +5,7 @@ import ai.platon.pulsar.agentic.PerceptiveAgent
 import ai.platon.pulsar.agentic.context.AgenticContext
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.core.api.PulsarSettings
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
@@ -116,7 +117,11 @@ class SessionManager(
         return activeSession
     }
 
-    fun checkHealthy(session: ManagedSession): Boolean {
+    fun checkHealthyBlocking(session: ManagedSession): CheckState {
+        return runBlocking { checkHealthy(session) }
+    }
+
+    suspend fun checkHealthy(session: ManagedSession): CheckState {
         val s = session.agenticSession
         val browser = s.boundBrowser
         val driver = s.boundDriver
@@ -128,26 +133,26 @@ class SessionManager(
             )
         }
 
-        var healthy = s.isActive
-        if (!healthy) {
+        var healthy = CheckState(if (s.isActive) 0 else -1)
+        if (!healthy.isOK) {
             logger.warn("AgenticSession {} is not healthy", s.id)
         }
 
-        if (healthy) {
-            healthy = browser?.healthy() ?: true
-            if (!healthy && browser != null) {
+        if (healthy.isOK) {
+            healthy = browser?.healthy() ?: CheckState()
+            if (!healthy.isOK && browser != null) {
                 logger.warn("Bound browser {} is unhealthy, state: {}", browser.id, browser.readableState)
             }
 
-            if (healthy) {
-                healthy = s.boundDriver?.healthy() ?: true
-                if (!healthy && driver != null) {
+            if (healthy.isOK) {
+                healthy = s.boundDriver?.healthy() ?: CheckState()
+                if (!healthy.isOK && driver != null) {
                     logger.warn("Bound driver {} is unhealthy, state: {}", driver.id, driver.readableState)
                 }
             }
         }
 
-        if (!healthy) {
+        if (!healthy.isOK) {
             logger.warn(
                 "Session {} is unhealthy: session active={}, browser healthy={}, driver healthy={}",
                 session.sessionId,
@@ -165,12 +170,12 @@ class SessionManager(
         capabilities: Map<String, Any?>,
         session: ManagedSession,
     ): ManagedSession {
-        if (checkHealthy(session)) {
+        if (checkHealthyBlocking(session).isOK) {
             return markSessionActive(session)
         }
 
         val recreatedSession = recreateUnhealthySession(sessionId, capabilities, session)
-        return if (checkHealthy(recreatedSession)) {
+        return if (checkHealthyBlocking(recreatedSession).isOK) {
             markSessionActive(recreatedSession)
         } else {
             markSessionInactive(recreatedSession)
@@ -201,7 +206,7 @@ class SessionManager(
         return sessions.compute(sessionId) { _, existingSession ->
             when {
                 existingSession == null -> createManagedSession(sessionId, capabilities)
-                checkHealthy(existingSession) -> {
+                checkHealthyBlocking(existingSession).isOK -> {
                     if (!existingSession.status.equals("active", ignoreCase = true)) {
                         existingSession.status = "active"
                     }
