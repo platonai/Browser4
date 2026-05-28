@@ -3,23 +3,23 @@ package ai.platon.pulsar.integration.proxy
 import ai.platon.pulsar.WebDriverTestBase
 import ai.platon.pulsar.common.NetUtil
 import ai.platon.pulsar.common.brief
+import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.common.proxy.ProxyEntry
 import ai.platon.pulsar.common.proxy.impl.ProxyHubLoader
 import ai.platon.pulsar.skeleton.PulsarSettings
-import ai.platon.pulsar.browser.driver.AbstractWebDriver
-import ai.platon.pulsar.common.printlnPro
+import ai.platon.pulsar.skeleton.browser.driver.AbstractWebDriver
 import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.apache.commons.io.FileUtils
 import org.junit.jupiter.api.Assumptions
 import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.DisplayName
 import java.net.Proxy
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import org.junit.jupiter.api.DisplayName
 import kotlin.time.Duration.Companion.milliseconds
 
 class PulsarWebDriverProxyTests : WebDriverTestBase() {
@@ -56,7 +56,7 @@ class PulsarWebDriverProxyTests : WebDriverTestBase() {
     }
 
     @Test
-        @DisplayName("When navigate to a HTML page with proxy then success")
+    @DisplayName("When navigate to a HTML page with proxy then success")
     fun whenNavigateAHtmlPageWithProxyThenSuccess() = runWebDriverTest(browserId) { driver ->
         Assumptions.assumeTrue(proxies.isNotEmpty())
 
