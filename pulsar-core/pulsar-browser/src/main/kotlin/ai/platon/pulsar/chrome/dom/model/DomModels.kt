@@ -1,13 +1,13 @@
 package ai.platon.pulsar.chrome.dom.model
 
-import ai.platon.pulsar.browser.chrome.dom.DOMSerializer
+import ai.platon.pulsar.chrome.dom.DOMSerializer
 import ai.platon.pulsar.browser.common.FBNLocator
 import ai.platon.pulsar.browser.common.LocatorMap
-import ai.platon.pulsar.browser.chrome.dom.util.CSSSelectorUtils
-import ai.platon.pulsar.browser.chrome.dom.util.DOMUtils
-import ai.platon.pulsar.browser.chrome.dom.util.InteractiveNodeListBuilder
-import ai.platon.pulsar.browser.chrome.dom.util.InteractiveNodeListBuilder.Companion.estimatedSize
-import ai.platon.pulsar.browser.chrome.dom.util.NanoDOMTreeBuilder
+import ai.platon.pulsar.chrome.dom.util.CSSSelectorUtils
+import ai.platon.pulsar.chrome.dom.util.DOMUtils
+import ai.platon.pulsar.chrome.dom.util.InteractiveNodeListBuilder
+import ai.platon.pulsar.chrome.dom.util.InteractiveNodeListBuilder.Companion.estimatedSize
+import ai.platon.pulsar.chrome.dom.util.NanoDOMTreeBuilder
 import ai.platon.pulsar.browser.common.BrowserSettings.Companion.VIEWPORT
 import ai.platon.pulsar.common.math.roundTo
 import ai.platon.pulsar.common.serialize.json.Pson

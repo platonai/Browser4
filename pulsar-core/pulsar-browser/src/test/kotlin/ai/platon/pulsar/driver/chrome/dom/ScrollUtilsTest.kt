@@ -1,9 +1,9 @@
 package ai.platon.pulsar.driver.chrome.dom
 
-import ai.platon.pulsar.browser.chrome.dom.model.DOMRect
-import ai.platon.pulsar.browser.chrome.dom.model.MergedDOMTreeNode
-import ai.platon.pulsar.browser.chrome.dom.model.SnapshotNodeEx
-import ai.platon.pulsar.browser.chrome.dom.util.ScrollUtils
+import ai.platon.pulsar.chrome.dom.model.DOMRect
+import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
+import ai.platon.pulsar.chrome.dom.model.SnapshotNodeEx
+import ai.platon.pulsar.chrome.dom.util.ScrollUtils
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue

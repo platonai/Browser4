@@ -20,7 +20,7 @@
 package ai.platon.pulsar.driver.examples
 
 import ai.platon.cdt.kt.protocol.events.tracing.DataCollected
-import ai.platon.pulsar.browser.chrome.ChromeLauncher
+import ai.platon.pulsar.chrome.ChromeLauncher
 import com.fasterxml.jackson.databind.ObjectMapper
 import java.nio.file.Paths
 

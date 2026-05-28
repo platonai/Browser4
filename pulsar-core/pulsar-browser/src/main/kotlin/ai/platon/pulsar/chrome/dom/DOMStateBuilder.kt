@@ -3,8 +3,8 @@ package ai.platon.pulsar.chrome.dom
 import ai.platon.pulsar.browser.common.FBNLocator
 import ai.platon.pulsar.browser.common.Locator
 import ai.platon.pulsar.browser.common.LocatorMap
-import ai.platon.pulsar.browser.chrome.dom.model.*
-import ai.platon.pulsar.browser.chrome.dom.util.ScrollUtils
+import ai.platon.pulsar.chrome.dom.model.*
+import ai.platon.pulsar.chrome.dom.util.ScrollUtils
 
 /**
  * Builds the compact `DOMState` representation that Browser4 ships to agents and serializers.

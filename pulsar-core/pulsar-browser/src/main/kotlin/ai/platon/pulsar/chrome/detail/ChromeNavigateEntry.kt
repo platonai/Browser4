@@ -6,8 +6,8 @@ import ai.platon.cdt.kt.protocol.events.network.ResponseReceived
 import ai.platon.cdt.kt.protocol.events.page.FrameNavigated
 import ai.platon.cdt.kt.protocol.types.network.Cookie
 import ai.platon.cdt.kt.protocol.types.network.ResourceType
+import ai.platon.pulsar.browser.common.NavigateEntry
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.skeleton.browser.driver.NavigateEntry
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
@@ -116,8 +116,10 @@ class ChromeNavigateEntry(
                 url = "data:xxx(...ignored)"
             }
             // It might be a redirection, prefetch, or just an image
-            logger.debug("The resource type of the first response is {}, responses: {} | {}",
-                event.type, navigateEntry.networkResponseCount, url)
+            logger.debug(
+                "The resource type of the first response is {}, responses: {} | {}",
+                event.type, navigateEntry.networkResponseCount, url
+            )
         }
 
         if (isMajorResponseReceived(event)) {

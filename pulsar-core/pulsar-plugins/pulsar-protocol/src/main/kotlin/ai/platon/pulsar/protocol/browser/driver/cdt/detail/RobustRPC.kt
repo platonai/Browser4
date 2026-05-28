@@ -1,9 +1,9 @@
 package ai.platon.pulsar.protocol.browser.driver.cdt.detail
 
-import ai.platon.pulsar.browser.chrome.util.CDPReturnError
-import ai.platon.pulsar.browser.chrome.util.ChromeDriverException
-import ai.platon.pulsar.browser.chrome.util.ChromeIOException
-import ai.platon.pulsar.browser.chrome.util.ChromeRPCException
+import ai.platon.pulsar.chrome.util.CDPReturnError
+import ai.platon.pulsar.chrome.util.ChromeDriverException
+import ai.platon.pulsar.chrome.util.ChromeIOException
+import ai.platon.pulsar.chrome.util.ChromeRPCException
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.browser.impl.NodeRef
 import ai.platon.pulsar.protocol.browser.driver.cdt.PulsarWebDriver

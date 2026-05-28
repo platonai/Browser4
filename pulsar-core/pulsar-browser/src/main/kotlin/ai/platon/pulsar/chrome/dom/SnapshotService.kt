@@ -1,13 +1,13 @@
 package ai.platon.pulsar.chrome.dom
 
-import ai.platon.pulsar.browser.chrome.dom.model.BrowserUseState
-import ai.platon.pulsar.browser.chrome.dom.model.DOMState
-import ai.platon.pulsar.browser.chrome.dom.model.ElementRefCriteria
-import ai.platon.pulsar.browser.chrome.dom.model.InteractiveDOMTreeNodeList
-import ai.platon.pulsar.browser.chrome.dom.model.MergedDOMTreeNode
-import ai.platon.pulsar.browser.chrome.dom.model.PageTarget
-import ai.platon.pulsar.browser.chrome.dom.model.SnapshotOptions
-import ai.platon.pulsar.browser.chrome.dom.model.*
+import ai.platon.pulsar.chrome.dom.model.BrowserUseState
+import ai.platon.pulsar.chrome.dom.model.DOMState
+import ai.platon.pulsar.chrome.dom.model.ElementRefCriteria
+import ai.platon.pulsar.chrome.dom.model.InteractiveDOMTreeNodeList
+import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
+import ai.platon.pulsar.chrome.dom.model.PageTarget
+import ai.platon.pulsar.chrome.dom.model.SnapshotOptions
+import ai.platon.pulsar.chrome.dom.model.*
 
 /**
  * Kotlin-native snapshot service interface.

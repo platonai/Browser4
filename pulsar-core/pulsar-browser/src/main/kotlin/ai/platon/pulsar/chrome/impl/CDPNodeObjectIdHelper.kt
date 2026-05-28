@@ -1,6 +1,6 @@
 package ai.platon.pulsar.chrome.impl
 
-import ai.platon.pulsar.browser.chrome.RemoteDevTools
+import ai.platon.pulsar.chrome.RemoteDevTools
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.browser.impl.BrowserProtocol
 import ai.platon.pulsar.browser.impl.NodeRef

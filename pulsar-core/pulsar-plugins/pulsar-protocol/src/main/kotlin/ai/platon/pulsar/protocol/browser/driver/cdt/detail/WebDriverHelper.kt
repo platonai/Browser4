@@ -9,7 +9,7 @@ import ai.platon.pulsar.common.MultiSinkMessageWriter
 import ai.platon.pulsar.common.alwaysFalse
 import ai.platon.pulsar.common.warnInterruptible
 import ai.platon.pulsar.browser.impl.BrowserProtocol
-import ai.platon.pulsar.browser.chrome.impl.PageHandler
+import ai.platon.pulsar.chrome.impl.PageHandler
 import ai.platon.pulsar.skeleton.browser.driver.JsEvaluation
 import ai.platon.pulsar.skeleton.browser.driver.JsException
 import ai.platon.pulsar.skeleton.browser.driver.NavigateEntry
@@ -52,7 +52,7 @@ class WebDriverHelper(
         // page url is normalized
         val pageUrl = entry.pageUrl
         val resourceUrl = event.response.url
-        val host = InternalURLUtil.getHost(pageUrl) ?: "unknown"
+        val host = URLUtils.getHostNameOrNull(pageUrl) ?: "unknown"
         val reportDir = messageWriter.baseDir.resolve("trace").resolve(host)
 
         if (!Files.exists(reportDir)) {

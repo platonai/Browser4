@@ -1,12 +1,12 @@
 package ai.platon.pulsar.chrome.impl
 
-import ai.platon.pulsar.browser.chrome.RemoteChrome
-import ai.platon.pulsar.browser.chrome.RemoteDevTools
-import ai.platon.pulsar.browser.chrome.Transport
-import ai.platon.pulsar.browser.chrome.util.ChromeIOException
-import ai.platon.pulsar.browser.chrome.util.ChromeServiceException
-import ai.platon.pulsar.browser.chrome.util.ProxyClasses
-import ai.platon.pulsar.browser.chrome.util.SuspendAwareHandler
+import ai.platon.pulsar.chrome.RemoteChrome
+import ai.platon.pulsar.chrome.RemoteDevTools
+import ai.platon.pulsar.chrome.Transport
+import ai.platon.pulsar.chrome.util.ChromeIOException
+import ai.platon.pulsar.chrome.util.ChromeServiceException
+import ai.platon.pulsar.chrome.util.ProxyClasses
+import ai.platon.pulsar.chrome.util.SuspendAwareHandler
 import ai.platon.pulsar.common.NetUtil
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.warnForClose

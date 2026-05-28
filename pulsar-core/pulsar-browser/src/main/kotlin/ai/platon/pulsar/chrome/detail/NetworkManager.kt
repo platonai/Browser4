@@ -1,6 +1,5 @@
 package ai.platon.pulsar.chrome.detail
 
-import ai.platon.pulsar.browser.chrome.util.ChromeRPCException
 import ai.platon.cdt.kt.protocol.events.fetch.AuthRequired
 import ai.platon.cdt.kt.protocol.events.fetch.RequestPaused
 import ai.platon.cdt.kt.protocol.events.network.*
@@ -8,11 +7,12 @@ import ai.platon.cdt.kt.protocol.types.fetch.AuthChallengeResponse
 import ai.platon.cdt.kt.protocol.types.fetch.AuthChallengeResponseResponse
 import ai.platon.cdt.kt.protocol.types.fetch.RequestPattern
 import ai.platon.cdt.kt.protocol.types.network.Response
+import ai.platon.pulsar.chrome.PulsarWebDriver
+import ai.platon.pulsar.chrome.util.ChromeRPCException
+import ai.platon.pulsar.chrome.util.Credentials
 import ai.platon.pulsar.common.DateTimes
 import ai.platon.pulsar.common.event.AbstractEventEmitter
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.protocol.browser.driver.cdt.Credentials
-import ai.platon.pulsar.protocol.browser.driver.cdt.PulsarWebDriver
 import java.lang.ref.WeakReference
 import java.time.Duration
 import java.time.Instant
@@ -286,7 +286,10 @@ internal class NetworkManager(
         networkEventManager.addResponseExtraInfoEvent(requestId, event)
     }
 
-    private fun patchRequestEventHeaders(requestWillBeSent: RequestWillBeSent, requestPaused: RequestPaused): RequestWillBeSent {
+    private fun patchRequestEventHeaders(
+        requestWillBeSent: RequestWillBeSent,
+        requestPaused: RequestPaused
+    ): RequestWillBeSent {
         // includes extra headers, like: Accept, Origin
         val patchedHeaders = requestWillBeSent.request.headers + requestPaused.request.headers
         val patchedRequest = requestWillBeSent.request.copy(headers = patchedHeaders)
@@ -381,7 +384,7 @@ internal class NetworkManager(
         val requestId = event.requestId
         tracer?.trace("onLoadingFinished | {}", event.requestId)
 
-        val queuedEventGroup =networkEventManager.getQueuedEventGroup(requestId)
+        val queuedEventGroup = networkEventManager.getQueuedEventGroup(requestId)
         if (queuedEventGroup != null) {
             queuedEventGroup.loadingFinishedEvent = event
         } else {

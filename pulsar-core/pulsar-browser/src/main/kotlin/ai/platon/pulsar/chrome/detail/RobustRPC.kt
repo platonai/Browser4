@@ -1,18 +1,18 @@
 package ai.platon.pulsar.chrome.detail
 
-import ai.platon.pulsar.browser.chrome.PulsarWebDriver
-import ai.platon.pulsar.browser.chrome.util.CDPReturnError
-import ai.platon.pulsar.browser.chrome.util.ChromeDriverException
-import ai.platon.pulsar.browser.chrome.util.ChromeIOException
-import ai.platon.pulsar.browser.chrome.util.ChromeRPCException
 import ai.platon.pulsar.browser.AbstractWebDriver
+import ai.platon.pulsar.browser.WebDriver
 import ai.platon.pulsar.browser.common.BrowserUnavailableException
 import ai.platon.pulsar.browser.common.IllegalWebDriverStateException
-import ai.platon.pulsar.browser.WebDriver
 import ai.platon.pulsar.browser.common.WebDriverException
 import ai.platon.pulsar.browser.common.WebDriverUnavailableException
-import ai.platon.pulsar.common.*
 import ai.platon.pulsar.browser.impl.NodeRef
+import ai.platon.pulsar.chrome.PulsarWebDriver
+import ai.platon.pulsar.chrome.util.CDPReturnError
+import ai.platon.pulsar.chrome.util.ChromeDriverException
+import ai.platon.pulsar.chrome.util.ChromeIOException
+import ai.platon.pulsar.chrome.util.ChromeRPCException
+import ai.platon.pulsar.common.*
 import kotlinx.coroutines.delay
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger

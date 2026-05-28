@@ -1,6 +1,6 @@
 package ai.platon.pulsar.chrome.impl
 
-import ai.platon.pulsar.browser.chrome.util.ChromeRPCException
+import ai.platon.pulsar.chrome.util.ChromeRPCException
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.getTracerOrNull
 import ai.platon.pulsar.common.printlnPro

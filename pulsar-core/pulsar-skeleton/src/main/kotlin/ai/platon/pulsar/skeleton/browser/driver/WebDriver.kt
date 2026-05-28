@@ -11,10 +11,10 @@ import ai.platon.pulsar.common.urls.Hyperlink
 import ai.platon.pulsar.dom.nodes.GeoAnchor
 import ai.platon.pulsar.browser.impl.NetworkResourceResponse
 import ai.platon.pulsar.browser.impl.NodeRef
-import ai.platon.pulsar.browser.chrome.dom.model.BrowserUseState
-import ai.platon.pulsar.browser.chrome.dom.model.NanoDOMTree
-import ai.platon.pulsar.browser.chrome.dom.model.PageTarget
-import ai.platon.pulsar.browser.chrome.dom.model.SnapshotOptions
+import ai.platon.pulsar.chrome.dom.model.BrowserUseState
+import ai.platon.pulsar.chrome.dom.model.NanoDOMTree
+import ai.platon.pulsar.chrome.dom.model.PageTarget
+import ai.platon.pulsar.chrome.dom.model.SnapshotOptions
 import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.pulsar.external.ModelResponse
 import ai.platon.pulsar.skeleton.browser.detail.AbstractBrowser

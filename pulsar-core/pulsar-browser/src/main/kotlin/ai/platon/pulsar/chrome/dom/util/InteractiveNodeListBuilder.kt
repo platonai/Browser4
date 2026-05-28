@@ -1,10 +1,10 @@
 package ai.platon.pulsar.chrome.dom.util
 
-import ai.platon.pulsar.browser.chrome.dom.model.CleanedDOMTreeNode
-import ai.platon.pulsar.browser.chrome.dom.model.DefaultIncludeAttributes
-import ai.platon.pulsar.browser.chrome.dom.model.InteractiveDOMTreeNode
-import ai.platon.pulsar.browser.chrome.dom.model.InteractiveDOMTreeNodeList
-import ai.platon.pulsar.browser.chrome.dom.model.SerializableDOMTreeNode
+import ai.platon.pulsar.chrome.dom.model.CleanedDOMTreeNode
+import ai.platon.pulsar.chrome.dom.model.DefaultIncludeAttributes
+import ai.platon.pulsar.chrome.dom.model.InteractiveDOMTreeNode
+import ai.platon.pulsar.chrome.dom.model.InteractiveDOMTreeNodeList
+import ai.platon.pulsar.chrome.dom.model.SerializableDOMTreeNode
 import ai.platon.pulsar.common.Strings
 import org.apache.commons.lang3.StringUtils
 import kotlin.collections.plusAssign

@@ -1,7 +1,7 @@
 package ai.platon.pulsar.driver.chrome.dom
 
-import ai.platon.pulsar.browser.chrome.dom.impl.OptimizedDOMTreeBuilder
-import ai.platon.pulsar.browser.chrome.dom.model.*
+import ai.platon.pulsar.chrome.dom.impl.OptimizedDOMTreeBuilder
+import ai.platon.pulsar.chrome.dom.model.*
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.DisplayName

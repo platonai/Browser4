@@ -21,7 +21,7 @@ import ai.platon.cdt.kt.protocol.types.page.*
 import ai.platon.cdt.kt.protocol.types.runtime.CallArgument
 import ai.platon.cdt.kt.protocol.types.runtime.CallFunctionOn
 import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
-import ai.platon.pulsar.browser.chrome.RemoteDevTools
+import ai.platon.pulsar.chrome.RemoteDevTools
 import ai.platon.pulsar.browser.impl.BrowserProtocol
 
 /**

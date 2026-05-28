@@ -1,8 +1,8 @@
 package ai.platon.pulsar.chrome.impl
 
-import ai.platon.pulsar.browser.chrome.Transport
-import ai.platon.pulsar.browser.chrome.util.ChromeDriverException
-import ai.platon.pulsar.browser.chrome.util.ChromeIOException
+import ai.platon.pulsar.chrome.Transport
+import ai.platon.pulsar.chrome.util.ChromeDriverException
+import ai.platon.pulsar.chrome.util.ChromeIOException
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.getLogger

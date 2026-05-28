@@ -3,16 +3,16 @@ package ai.platon.pulsar.chrome.dom
 import ai.platon.cdt.kt.protocol.types.accessibility.AXNode
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.browser.impl.BrowserProtocol
-import ai.platon.pulsar.browser.chrome.dom.impl.AccessibilityHandler
-import ai.platon.pulsar.browser.chrome.dom.impl.AccessibilityHandler.AccessibilityTreeResult
-import ai.platon.pulsar.browser.chrome.dom.impl.DomSnapshotHandler
-import ai.platon.pulsar.browser.chrome.dom.impl.DomTreeHandler
-import ai.platon.pulsar.browser.chrome.dom.impl.OptimizedDOMTreeBuilder
-import ai.platon.pulsar.browser.chrome.dom.model.*
-import ai.platon.pulsar.browser.chrome.dom.util.DomDebug
-import ai.platon.pulsar.browser.chrome.dom.util.HashUtils
-import ai.platon.pulsar.browser.chrome.dom.util.ScrollUtils
-import ai.platon.pulsar.browser.chrome.dom.util.XPathUtils
+import ai.platon.pulsar.chrome.dom.impl.AccessibilityHandler
+import ai.platon.pulsar.chrome.dom.impl.AccessibilityHandler.AccessibilityTreeResult
+import ai.platon.pulsar.chrome.dom.impl.DomSnapshotHandler
+import ai.platon.pulsar.chrome.dom.impl.DomTreeHandler
+import ai.platon.pulsar.chrome.dom.impl.OptimizedDOMTreeBuilder
+import ai.platon.pulsar.chrome.dom.model.*
+import ai.platon.pulsar.chrome.dom.util.DomDebug
+import ai.platon.pulsar.chrome.dom.util.HashUtils
+import ai.platon.pulsar.chrome.dom.util.ScrollUtils
+import ai.platon.pulsar.chrome.dom.util.XPathUtils
 import java.awt.Dimension
 import java.util.*
 

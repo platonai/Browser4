@@ -1,10 +1,10 @@
 package ai.platon.pulsar.driver
 
-import ai.platon.pulsar.browser.chrome.ChromeLauncher
-import ai.platon.pulsar.browser.chrome.RemoteChrome
-import ai.platon.pulsar.browser.chrome.RemoteDevTools
-import ai.platon.pulsar.browser.chrome.LauncherOptions
-import ai.platon.pulsar.browser.chrome.invoke
+import ai.platon.pulsar.chrome.ChromeLauncher
+import ai.platon.pulsar.chrome.RemoteChrome
+import ai.platon.pulsar.chrome.RemoteDevTools
+import ai.platon.pulsar.chrome.LauncherOptions
+import ai.platon.pulsar.chrome.invoke
 import ai.platon.cdt.kt.protocol.types.page.Navigate
 import ai.platon.pulsar.common.browser.BrowserFiles
 import ai.platon.pulsar.common.sleepSeconds

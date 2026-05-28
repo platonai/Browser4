@@ -5,17 +5,17 @@ import ai.platon.cdt.kt.protocol.types.network.Cookie
 import ai.platon.cdt.kt.protocol.types.network.ResourceType
 import ai.platon.cdt.kt.protocol.types.runtime.CallFunctionOn
 import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
+import ai.platon.pulsar.browser.WebDriver
+import ai.platon.pulsar.browser.common.JsEvaluation
+import ai.platon.pulsar.browser.common.JsException
+import ai.platon.pulsar.browser.common.NavigateEntry
+import ai.platon.pulsar.browser.impl.BrowserProtocol
+import ai.platon.pulsar.chrome.impl.PageHandler
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.MultiSinkMessageWriter
 import ai.platon.pulsar.common.alwaysFalse
+import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.common.warnInterruptible
-import ai.platon.pulsar.browser.impl.BrowserProtocol
-import ai.platon.pulsar.browser.chrome.impl.PageHandler
-import ai.platon.pulsar.skeleton.browser.driver.JsEvaluation
-import ai.platon.pulsar.skeleton.browser.driver.JsException
-import ai.platon.pulsar.skeleton.browser.driver.NavigateEntry
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
-import ai.platon.pulsar.skeleton.workflow.common.InternalURLUtil
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
@@ -53,7 +53,7 @@ class WebDriverHelper(
         // page url is normalized
         val pageUrl = entry.pageUrl
         val resourceUrl = event.response.url
-        val host = InternalURLUtil.getHost(pageUrl) ?: "unknown"
+        val host = URLUtils.getHostNameOrNull(pageUrl) ?: "unknown"
         val reportDir = messageWriter.baseDir.resolve("trace").resolve(host)
 
         if (!Files.exists(reportDir)) {

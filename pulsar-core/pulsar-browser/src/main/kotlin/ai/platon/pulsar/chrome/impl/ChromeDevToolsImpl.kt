@@ -2,9 +2,9 @@ package ai.platon.pulsar.chrome.impl
 
 import ai.platon.cdt.kt.protocol.support.types.EventHandler
 import ai.platon.cdt.kt.protocol.support.types.EventListener
-import ai.platon.pulsar.browser.chrome.RemoteDevTools
-import ai.platon.pulsar.browser.chrome.Transport
-import ai.platon.pulsar.browser.chrome.util.*
+import ai.platon.pulsar.chrome.RemoteDevTools
+import ai.platon.pulsar.chrome.Transport
+import ai.platon.pulsar.chrome.util.*
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.readable
 import ai.platon.pulsar.common.sleepSeconds

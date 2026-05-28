@@ -15,7 +15,7 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator.context
 
-import ai.platon.pulsar.browser.chrome.ChromeDestroyer
+import ai.platon.pulsar.chrome.ChromeDestroyer
 import ai.platon.pulsar.protocol.browser.DefaultWebDriverPoolManager
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.browser.fingerprint.Fingerprint

@@ -1,7 +1,7 @@
 package ai.platon.pulsar.chrome.dom.util
 
-import ai.platon.pulsar.browser.chrome.dom.DOMSerializer
-import ai.platon.pulsar.browser.chrome.dom.model.*
+import ai.platon.pulsar.chrome.dom.DOMSerializer
+import ai.platon.pulsar.chrome.dom.model.*
 import java.util.*
 import kotlin.math.round
 

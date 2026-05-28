@@ -1,7 +1,7 @@
 package ai.platon.pulsar.chrome.dom.util
 
-import ai.platon.pulsar.browser.chrome.dom.model.DOMRect
-import ai.platon.pulsar.browser.chrome.dom.model.MergedDOMTreeNode
+import ai.platon.pulsar.chrome.dom.model.DOMRect
+import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
 import java.awt.*
 import java.awt.image.BufferedImage
 import java.io.ByteArrayInputStream

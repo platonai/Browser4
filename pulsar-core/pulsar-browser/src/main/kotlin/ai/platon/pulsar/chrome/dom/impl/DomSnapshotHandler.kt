@@ -6,9 +6,9 @@ import ai.platon.cdt.kt.protocol.support.annotations.ParamName
 import ai.platon.cdt.kt.protocol.types.domsnapshot.CaptureSnapshot
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.browser.impl.BrowserProtocol
-import ai.platon.pulsar.browser.chrome.dom.model.DOMRect
-import ai.platon.pulsar.browser.chrome.dom.model.SnapshotNodeEx
-import ai.platon.pulsar.browser.chrome.dom.util.DomDebug
+import ai.platon.pulsar.chrome.dom.model.DOMRect
+import ai.platon.pulsar.chrome.dom.model.SnapshotNodeEx
+import ai.platon.pulsar.chrome.dom.util.DomDebug
 
 /**
  * Handler for DOMSnapshot domain operations.

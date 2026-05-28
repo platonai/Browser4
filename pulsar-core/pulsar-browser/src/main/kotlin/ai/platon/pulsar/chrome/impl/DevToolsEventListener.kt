@@ -2,7 +2,7 @@ package ai.platon.pulsar.chrome.impl
 
 import ai.platon.cdt.kt.protocol.support.types.EventHandler
 import ai.platon.cdt.kt.protocol.support.types.EventListener
-import ai.platon.pulsar.browser.chrome.RemoteDevTools
+import ai.platon.pulsar.chrome.RemoteDevTools
 
 class DevToolsEventListener(
     val key: String,

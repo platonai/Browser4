@@ -1,6 +1,6 @@
 package ai.platon.pulsar.chrome.dom.util
 
-import ai.platon.pulsar.browser.chrome.dom.model.*
+import ai.platon.pulsar.chrome.dom.model.*
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.math.roundTo
 import kotlin.math.max

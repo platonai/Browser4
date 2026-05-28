@@ -1,13 +1,13 @@
 package ai.platon.pulsar.chrome.detail
 
-import ai.platon.pulsar.browser.chrome.util.ChromeRPCException
 import ai.platon.cdt.kt.protocol.types.fetch.HeaderEntry
 import ai.platon.cdt.kt.protocol.types.network.ErrorReason
 import ai.platon.cdt.kt.protocol.types.network.Initiator
 import ai.platon.cdt.kt.protocol.types.network.Request
 import ai.platon.cdt.kt.protocol.types.network.ResourceType
+import ai.platon.pulsar.chrome.PulsarWebDriver
+import ai.platon.pulsar.chrome.util.ChromeRPCException
 import ai.platon.pulsar.common.http.HttpStatus
-import ai.platon.pulsar.protocol.browser.driver.cdt.PulsarWebDriver
 import java.lang.ref.WeakReference
 import java.util.*
 

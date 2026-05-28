@@ -1,6 +1,6 @@
 package ai.platon.pulsar.chrome.dom
 
-import ai.platon.pulsar.browser.chrome.dom.model.*
+import ai.platon.pulsar.chrome.dom.model.*
 import ai.platon.pulsar.common.serialize.json.doubleBindModule
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.databind.ObjectMapper

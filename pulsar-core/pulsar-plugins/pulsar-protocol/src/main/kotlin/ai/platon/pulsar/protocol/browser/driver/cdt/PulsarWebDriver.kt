@@ -19,12 +19,12 @@ import ai.platon.pulsar.browser.impl.BrowserProtocol
 import ai.platon.pulsar.browser.impl.BrowserTab
 import ai.platon.pulsar.browser.impl.NetworkResourceResponse
 import ai.platon.pulsar.browser.impl.NodeRef
-import ai.platon.pulsar.browser.chrome.IsolatedWorldManager
-import ai.platon.pulsar.browser.chrome.dom.SnapshotService
-import ai.platon.pulsar.browser.chrome.dom.model.*
-import ai.platon.pulsar.browser.chrome.impl.*
-import ai.platon.pulsar.browser.chrome.util.ChromeDriverException
-import ai.platon.pulsar.browser.chrome.util.ChromeIOException
+import ai.platon.pulsar.chrome.IsolatedWorldManager
+import ai.platon.pulsar.chrome.dom.SnapshotService
+import ai.platon.pulsar.chrome.dom.model.*
+import ai.platon.pulsar.chrome.impl.*
+import ai.platon.pulsar.chrome.util.ChromeDriverException
+import ai.platon.pulsar.chrome.util.ChromeIOException
 import ai.platon.pulsar.protocol.browser.driver.cdt.detail.*
 import ai.platon.pulsar.skeleton.browser.driver.*
 import ai.platon.pulsar.skeleton.workflow.common.InternalURLUtil
@@ -1433,7 +1433,7 @@ function() {
         // page url is normalized
         val pageUrl = entry.pageUrl
         val resourceUrl = event.response.url
-        val host = InternalURLUtil.getHost(pageUrl) ?: "unknown"
+        val host = URLUtils.getHostNameOrNull(pageUrl) ?: "unknown"
         val reportDir = messageWriter.baseDir.resolve("trace").resolve(host)
 
         if (!Files.exists(reportDir)) {
