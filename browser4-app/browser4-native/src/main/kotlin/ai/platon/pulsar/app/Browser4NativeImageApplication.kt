@@ -12,7 +12,6 @@ import org.springframework.context.annotation.ComponentScan
 import org.springframework.context.annotation.ImportResource
 
 @SpringBootApplication
-@ImportResource("classpath:pulsar-beans/app-context.xml")
 @ComponentScan(
     "ai.platon.pulsar.boot.autoconfigure"
 )

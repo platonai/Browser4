@@ -12,5 +12,4 @@ import org.springframework.test.context.ContextConfiguration
     "ai.platon.pulsar.rest.api",
     "ai.platon.pulsar.rest.mcp",
 ])
-@ImportResource("classpath:rest-beans/app-context.xml")
 class ServiceApplication

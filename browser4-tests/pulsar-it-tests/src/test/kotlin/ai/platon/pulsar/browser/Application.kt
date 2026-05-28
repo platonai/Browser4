@@ -11,6 +11,5 @@ import org.springframework.test.context.ContextConfiguration
         "ai.platon.pulsar.test.server"
     ]
 )
-@ImportResource("classpath:test-beans/app-context.xml")
 @ContextConfiguration(initializers = [PulsarTestContextInitializer::class])
 class Application

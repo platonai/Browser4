@@ -12,5 +12,4 @@ import org.springframework.test.context.ContextConfiguration
     "ai.platon.pulsar.boot.autoconfigure",
     "ai.platon.pulsar.rest",
 )
-@ImportResource("classpath:rest-beans/app-context.xml")
 class Application
