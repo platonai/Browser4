@@ -1,6 +1,6 @@
 package ai.platon.pulsar.skeleton.browser.driver
 
-import ai.platon.pulsar.driver.NetworkResourceResponse
+import ai.platon.pulsar.browser.impl.NetworkResourceResponse
 import org.jsoup.Connection
 import java.util.*
 

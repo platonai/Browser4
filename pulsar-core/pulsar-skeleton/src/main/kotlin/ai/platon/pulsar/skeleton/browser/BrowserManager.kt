@@ -1,7 +1,7 @@
 package ai.platon.pulsar.skeleton.browser
 
 import ai.platon.pulsar.common.browser.BrowserProfileMode
-import ai.platon.pulsar.driver.common.BrowserSettings
+import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.pulsar.skeleton.browser.driver.BrowserLaunchException
 import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId

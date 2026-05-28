@@ -8,7 +8,7 @@ import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_CONTEXT_NUMBER
 import ai.platon.pulsar.common.config.CapabilityTypes.PRIVACY_AGENT_GENERATOR_CLASS
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.logging.ThrottlingLogger
-import ai.platon.pulsar.driver.common.BrowserSettings
+import ai.platon.pulsar.browser.common.BrowserSettings
 import java.nio.file.Path
 
 /**

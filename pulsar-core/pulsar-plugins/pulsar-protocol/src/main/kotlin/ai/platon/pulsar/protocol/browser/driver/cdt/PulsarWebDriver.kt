@@ -16,9 +16,9 @@ import ai.platon.pulsar.common.math.geometric.PointD
 import ai.platon.pulsar.common.math.geometric.RectD
 import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.browser.impl.BrowserProtocol
-import ai.platon.pulsar.driver.BrowserTab
-import ai.platon.pulsar.driver.NetworkResourceResponse
-import ai.platon.pulsar.driver.NodeRef
+import ai.platon.pulsar.browser.impl.BrowserTab
+import ai.platon.pulsar.browser.impl.NetworkResourceResponse
+import ai.platon.pulsar.browser.impl.NodeRef
 import ai.platon.pulsar.browser.chrome.IsolatedWorldManager
 import ai.platon.pulsar.browser.chrome.dom.SnapshotService
 import ai.platon.pulsar.browser.chrome.dom.model.*

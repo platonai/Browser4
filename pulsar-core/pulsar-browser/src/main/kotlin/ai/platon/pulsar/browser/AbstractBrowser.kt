@@ -1,13 +1,13 @@
 package ai.platon.pulsar.browser
 
-import ai.platon.pulsar.browser.detail.BrowserEvents
-import ai.platon.pulsar.browser.detail.NavigateEntry
-import ai.platon.pulsar.browser.detail.NavigateHistory
-import ai.platon.pulsar.browser.detail.WebDriverException
+import ai.platon.pulsar.browser.common.BrowserEvents
+import ai.platon.pulsar.browser.common.NavigateEntry
+import ai.platon.pulsar.browser.common.NavigateHistory
+import ai.platon.pulsar.browser.common.WebDriverException
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.event.AbstractEventEmitter
 import ai.platon.pulsar.common.warnForClose
-import ai.platon.pulsar.driver.common.BrowserSettings
+import ai.platon.pulsar.browser.common.BrowserSettings
 import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap

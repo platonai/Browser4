@@ -7,7 +7,7 @@
 
     <import resource="../proxy-context.xml"/>
 
-    <bean id="browserSettings" class="ai.platon.pulsar.driver.common.BrowserSettings">
+    <bean id="browserSettings" class="ai.platon.pulsar.browser.common.BrowserSettings">
         <constructor-arg ref="conf"/>
     </bean>
 

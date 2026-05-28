@@ -1,10 +1,10 @@
 package ai.platon.pulsar.browser
 
-import ai.platon.pulsar.browser.chrome.dom.SnapshotService
-import ai.platon.pulsar.browser.detail.NavigateEntry
-import ai.platon.pulsar.browser.detail.NavigateHistory
-import ai.platon.pulsar.browser.detail.NetworkResourceHelper
-import ai.platon.pulsar.browser.detail.WebDriverException
+import ai.platon.pulsar.chrome.dom.SnapshotService
+import ai.platon.pulsar.browser.common.NavigateEntry
+import ai.platon.pulsar.browser.common.NavigateHistory
+import ai.platon.pulsar.browser.common.NetworkResourceHelper
+import ai.platon.pulsar.browser.common.WebDriverException
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.DateTimes
@@ -13,7 +13,7 @@ import ai.platon.pulsar.common.getTracerOrNull
 import ai.platon.pulsar.common.urls.Hyperlink
 import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.common.warnForClose
-import ai.platon.pulsar.driver.NetworkResourceResponse
+import ai.platon.pulsar.browser.impl.NetworkResourceResponse
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -157,7 +157,7 @@ abstract class AbstractWebDriver(
 
     // open val chatModel get() = ChatModelFactory.getOrCreateOrNull(config)
     open val implementation: Any = this
-    abstract val snapshotService: SnapshotService
+    abstract val snapshotService: ai.platon.pulsar.chrome.dom.SnapshotService
 
     /** Idle timeout before a READY driver is considered stale and eligible for recycling/retirement. */
     var idleTimeout: Duration = Duration.ofMinutes(10)

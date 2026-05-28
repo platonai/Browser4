@@ -5,7 +5,7 @@ import ai.platon.pulsar.browser.chrome.util.ChromeDriverException
 import ai.platon.pulsar.browser.chrome.util.ChromeIOException
 import ai.platon.pulsar.browser.chrome.util.ChromeRPCException
 import ai.platon.pulsar.common.*
-import ai.platon.pulsar.driver.NodeRef
+import ai.platon.pulsar.browser.impl.NodeRef
 import ai.platon.pulsar.protocol.browser.driver.cdt.PulsarWebDriver
 import ai.platon.pulsar.skeleton.browser.driver.*
 import kotlinx.coroutines.delay

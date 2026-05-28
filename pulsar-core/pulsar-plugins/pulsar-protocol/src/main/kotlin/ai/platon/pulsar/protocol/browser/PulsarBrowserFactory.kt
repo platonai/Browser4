@@ -2,7 +2,7 @@ package ai.platon.pulsar.protocol.browser
 
 import ai.platon.pulsar.browser.chrome.ChromeOptions
 import ai.platon.pulsar.browser.chrome.LauncherOptions
-import ai.platon.pulsar.driver.common.BrowserSettings
+import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.protocol.browser.impl.AbstractBrowserFactory

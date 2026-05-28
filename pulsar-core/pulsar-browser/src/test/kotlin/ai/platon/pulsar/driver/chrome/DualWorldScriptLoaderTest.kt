@@ -1,7 +1,7 @@
 package ai.platon.pulsar.driver.chrome
 
-import ai.platon.pulsar.driver.common.BrowserSettings
-import ai.platon.pulsar.driver.common.DualWorldScriptLoader
+import ai.platon.pulsar.browser.common.BrowserSettings
+import ai.platon.pulsar.browser.common.DualWorldScriptLoader
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import ai.platon.pulsar.common.config.ImmutableConfig

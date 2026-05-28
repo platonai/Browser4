@@ -1,6 +1,6 @@
 package ai.platon.pulsar.skeleton.browser
 
-import ai.platon.pulsar.driver.common.BrowserSettings
+import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.skeleton.browser.driver.NavigateHistory
 import ai.platon.pulsar.skeleton.browser.driver.WebDriver

@@ -4,7 +4,7 @@ import ai.platon.pulsar.browser.chrome.ChromeLauncher
 import ai.platon.pulsar.browser.chrome.ChromeOptions
 import ai.platon.pulsar.browser.chrome.LauncherOptions
 import ai.platon.pulsar.browser.chrome.util.ChromeLaunchException
-import ai.platon.pulsar.driver.common.BrowserSettings
+import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.pulsar.protocol.browser.driver.cdt.PulsarBrowser
 import ai.platon.pulsar.skeleton.browser.Browser
 import ai.platon.pulsar.skeleton.browser.BrowserLauncher

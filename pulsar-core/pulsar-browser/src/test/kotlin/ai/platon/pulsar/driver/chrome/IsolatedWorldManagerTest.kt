@@ -1,7 +1,7 @@
 package ai.platon.pulsar.driver.chrome
 
 import ai.platon.pulsar.browser.chrome.impl.RemoteChromeProtocol
-import ai.platon.pulsar.driver.common.BrowserSettings
+import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.cdt.kt.protocol.types.page.*
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals

@@ -1,13 +1,13 @@
 package ai.platon.pulsar.browser
 
-import ai.platon.pulsar.browser.chrome.dom.model.BrowserUseState
-import ai.platon.pulsar.browser.chrome.dom.model.NanoDOMTree
-import ai.platon.pulsar.browser.chrome.dom.model.PageTarget
-import ai.platon.pulsar.browser.chrome.dom.model.SnapshotOptions
-import ai.platon.pulsar.browser.detail.JsEvaluation
-import ai.platon.pulsar.browser.detail.NavigateEntry
-import ai.platon.pulsar.browser.detail.NavigateHistory
-import ai.platon.pulsar.browser.detail.WebDriverException
+import ai.platon.pulsar.chrome.dom.model.BrowserUseState
+import ai.platon.pulsar.chrome.dom.model.NanoDOMTree
+import ai.platon.pulsar.chrome.dom.model.PageTarget
+import ai.platon.pulsar.chrome.dom.model.SnapshotOptions
+import ai.platon.pulsar.browser.common.JsEvaluation
+import ai.platon.pulsar.browser.common.NavigateEntry
+import ai.platon.pulsar.browser.common.NavigateHistory
+import ai.platon.pulsar.browser.common.WebDriverException
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.ai.llm.MCP
 import ai.platon.pulsar.common.browser.BrowserType
@@ -16,8 +16,8 @@ import ai.platon.pulsar.common.math.geometric.RectD
 import ai.platon.pulsar.common.serialize.json.Pson
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.common.urls.Hyperlink
-import ai.platon.pulsar.driver.NetworkResourceResponse
-import ai.platon.pulsar.driver.NodeRef
+import ai.platon.pulsar.browser.impl.NetworkResourceResponse
+import ai.platon.pulsar.browser.impl.NodeRef
 import com.google.common.annotations.Beta
 import org.jsoup.Connection
 import java.io.Closeable
@@ -128,7 +128,7 @@ import kotlin.time.Duration.Companion.milliseconds
  * @see [Document: referrer property](https://developer.mozilla.org/en-US/docs/Web/API/Document/referrer)
  * @see [Document: location property](https://developer.mozilla.org/en-US/docs/Web/API/Document/location)
  *
- * @see ai.platon.pulsar.driver.common.BrowserSettings
+ * @see ai.platon.pulsar.browser.common.BrowserSettings
  */
 interface WebDriver : Closeable {
     /**
@@ -464,13 +464,13 @@ interface WebDriver : Closeable {
      * */
     @MCP
     @Throws(WebDriverException::class)
-    suspend fun nanoDOMTree(): NanoDOMTree?
+    suspend fun nanoDOMTree(): ai.platon.pulsar.chrome.dom.model.NanoDOMTree?
 
     @Throws(WebDriverException::class)
     suspend fun browserUseState(
-        target: PageTarget = _root_ide_package_.ai.platon.pulsar.driver.chrome.dom.model.PageTarget(),
-        snapshotOptions: SnapshotOptions = _root_ide_package_.ai.platon.pulsar.driver.chrome.dom.model.SnapshotOptions()
-    ): BrowserUseState
+        target: ai.platon.pulsar.chrome.dom.model.PageTarget = _root_ide_package_.ai.platon.pulsar.chrome.dom.model.PageTarget(),
+        snapshotOptions: ai.platon.pulsar.chrome.dom.model.SnapshotOptions = _root_ide_package_.ai.platon.pulsar.chrome.dom.model.SnapshotOptions()
+    ): ai.platon.pulsar.chrome.dom.model.BrowserUseState
 
     /**
      * Interact with an AI model using the context of the element selected by [selector]. @mcp
