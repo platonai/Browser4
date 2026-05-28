@@ -1,5 +1,8 @@
 package ai.platon.pulsar.browser
 
+import ai.platon.pulsar.browser.BrowserProfile.Companion.CONTEXT_DIR_PREFIX
+import ai.platon.pulsar.browser.BrowserProfile.Companion.DEFAULT_CONTEXT_DIR
+import ai.platon.pulsar.browser.BrowserProfile.Companion.PROTOTYPE_CONTEXT_DIR
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.browser.BrowserType
 import java.nio.file.Path
@@ -16,7 +19,7 @@ data class ProfileId(
         isDefault -> "default"
         isPrototype -> "prototype"
         ident.length <= 5 -> ident
-        else -> ident.substringAfter(PrivacyContext.CONTEXT_DIR_PREFIX)
+        else -> ident.substringAfter(CONTEXT_DIR_PREFIX)
     }
     /**
      * If true, the browser profile opens browser just like a real user does every day.
@@ -26,13 +29,13 @@ data class ProfileId(
      * If true, the browser profile opens browser with the default data dir, the default data dir will not be removed
      * after the browser closes.
      * */
-    val isDefault get() = this.contextDir == PrivacyContext.DEFAULT_CONTEXT_DIR
+    val isDefault get() = this.contextDir == DEFAULT_CONTEXT_DIR
     /**
      * If true, the browser profile opens browser with the prototype data dir.
      * Every change to the browser will be kept in the prototype data dir, and every temporary browser profile
      * uses a copy of the prototype data dir.
      * */
-    val isPrototype get() = this.contextDir == PrivacyContext.PROTOTYPE_CONTEXT_DIR
+    val isPrototype get() = this.contextDir == PROTOTYPE_CONTEXT_DIR
     /**
      * If true, the browser profile opens browser with one of a set of pre-created data dirs, the pre-created data dirs will
      * not be removed after the browser closes.

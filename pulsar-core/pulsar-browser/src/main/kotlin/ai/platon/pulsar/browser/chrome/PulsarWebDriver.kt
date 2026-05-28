@@ -1,26 +1,28 @@
-package ai.platon.pulsar.browser.detail.cdt
+package ai.platon.pulsar.browser.chrome
 
 import ai.platon.cdt.kt.protocol.events.network.RequestWillBeSent
 import ai.platon.cdt.kt.protocol.events.network.ResponseReceived
 import ai.platon.cdt.kt.protocol.events.page.FrameNavigated
 import ai.platon.cdt.kt.protocol.events.page.WindowOpen
 import ai.platon.cdt.kt.protocol.types.fetch.RequestPattern
+import ai.platon.cdt.kt.protocol.types.network.Cookie
 import ai.platon.cdt.kt.protocol.types.network.ErrorReason
 import ai.platon.cdt.kt.protocol.types.network.LoadNetworkResourceOptions
 import ai.platon.cdt.kt.protocol.types.network.ResourceType
 import ai.platon.cdt.kt.protocol.types.runtime.CallArgument
-import ai.platon.pulsar.browser.chrome.IsolatedWorldManager
+import ai.platon.pulsar.browser.WebDriver
+import ai.platon.pulsar.browser.chrome.detail.ChromeNavigateEntry
+import ai.platon.pulsar.browser.chrome.detail.NetworkEvents
+import ai.platon.pulsar.browser.chrome.detail.NetworkManager
+import ai.platon.pulsar.browser.chrome.detail.RobustRPC
+import ai.platon.pulsar.browser.chrome.detail.WebDriverHelper
 import ai.platon.pulsar.browser.chrome.dom.SnapshotService
-import ai.platon.pulsar.browser.chrome.impl.EmulationHandler
-import ai.platon.pulsar.browser.chrome.impl.PageHandler
-import ai.platon.pulsar.browser.chrome.impl.ScreenshotHandler
-import ai.platon.pulsar.browser.chrome.impl.withNodeObjectId
-import ai.platon.pulsar.browser.detail.cdt.detail.NetworkManager
-import ai.platon.pulsar.browser.detail.cdt.detail.RobustRPC
-import ai.platon.pulsar.browser.detail.cdt.detail.WebDriverHelper
-import ai.platon.pulsar.browser.driver.AbstractWebDriver
-import ai.platon.pulsar.browser.driver.WebDriver
-import ai.platon.pulsar.browser.driver.WebDriverException
+import ai.platon.pulsar.browser.chrome.dom.model.*
+import ai.platon.pulsar.browser.chrome.impl.*
+import ai.platon.pulsar.browser.chrome.util.ChromeDriverException
+import ai.platon.pulsar.browser.chrome.util.ChromeIOException
+import ai.platon.pulsar.browser.chrome.util.Credentials
+import ai.platon.pulsar.browser.driver.*
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.math.geometric.OffsetD
@@ -31,9 +33,8 @@ import ai.platon.pulsar.driver.BrowserProtocol
 import ai.platon.pulsar.driver.BrowserTab
 import ai.platon.pulsar.driver.NetworkResourceResponse
 import ai.platon.pulsar.driver.NodeRef
-import ai.platon.pulsar.browser.chrome.dom.model.*
-import ai.platon.pulsar.browser.chrome.impl.*
 import com.fasterxml.jackson.annotation.JsonInclude
+import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.google.common.annotations.Beta
@@ -1438,7 +1439,7 @@ function() {
         // page url is normalized
         val pageUrl = entry.pageUrl
         val resourceUrl = event.response.url
-        val host = InternalURLUtil.getHost(pageUrl) ?: "unknown"
+        val host = URLUtils.getHostNameOrNull(pageUrl) ?: "unknown"
         val reportDir = messageWriter.baseDir.resolve("trace").resolve(host)
 
         if (!Files.exists(reportDir)) {
@@ -1603,7 +1604,7 @@ function() {
 
     private suspend fun restoreLocalStorage(
         localStorage: List<StorageStateEntryPayload>,
-        mapper: com.fasterxml.jackson.databind.ObjectMapper,
+        mapper: ObjectMapper,
     ) {
         val normalizedEntries = localStorage.map { entry ->
             val name = entry.name.trim()
@@ -1632,7 +1633,7 @@ function() {
         }
     }
 
-    private fun serialize(cookie: ai.platon.cdt.kt.protocol.types.network.Cookie): Map<String, String> {
+    private fun serialize(cookie: Cookie): Map<String, String> {
         val mapper = jacksonObjectMapper().setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
         return mapper.readValue(mapper.writeValueAsString(cookie))
     }

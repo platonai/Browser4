@@ -1,14 +1,11 @@
-package ai.platon.pulsar.browser.detail.cdt
+package ai.platon.pulsar.browser.chrome
 
 import ai.platon.pulsar.browser.AbstractBrowser
 import ai.platon.pulsar.browser.BrowserId
-import ai.platon.pulsar.browser.chrome.ChromeLauncher
-import ai.platon.pulsar.browser.chrome.RemoteChrome
-import ai.platon.pulsar.browser.chrome.impl.ChromeImpl
 import ai.platon.pulsar.browser.chrome.util.ChromeIOException
 import ai.platon.pulsar.browser.driver.AbstractWebDriver
 import ai.platon.pulsar.browser.driver.BrowserUnavailableException
-import ai.platon.pulsar.browser.driver.WebDriver
+import ai.platon.pulsar.browser.WebDriver
 import ai.platon.pulsar.browser.driver.WebDriverException
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.ResourceStatus
@@ -62,8 +59,8 @@ class PulsarBrowser(
         // launcher?.let { PulsarContexts.registerClosable(it, Int.MIN_VALUE) }
     }
 
-    constructor(port: Int, settings: BrowserSettings = BrowserSettings()) :
-            this(BrowserId.RANDOM_TEMP, ChromeImpl(port = port), settings, null)
+//    constructor(port: Int, settings: BrowserSettings = BrowserSettings()) :
+//            this(BrowserId.RANDOM_TEMP, ChromeImpl(port = port), settings, null)
 
     @Synchronized
     override fun healthy(): CheckState {

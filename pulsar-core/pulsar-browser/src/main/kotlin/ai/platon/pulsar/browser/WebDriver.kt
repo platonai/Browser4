@@ -1,6 +1,13 @@
-package ai.platon.pulsar.browser.driver
+package ai.platon.pulsar.browser
 
-import ai.platon.pulsar.browser.Browser
+import ai.platon.pulsar.browser.chrome.dom.model.BrowserUseState
+import ai.platon.pulsar.browser.chrome.dom.model.NanoDOMTree
+import ai.platon.pulsar.browser.chrome.dom.model.PageTarget
+import ai.platon.pulsar.browser.chrome.dom.model.SnapshotOptions
+import ai.platon.pulsar.browser.driver.JsEvaluation
+import ai.platon.pulsar.browser.driver.NavigateEntry
+import ai.platon.pulsar.browser.driver.NavigateHistory
+import ai.platon.pulsar.browser.driver.WebDriverException
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.ai.llm.MCP
 import ai.platon.pulsar.common.browser.BrowserType
@@ -11,10 +18,6 @@ import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.common.urls.Hyperlink
 import ai.platon.pulsar.driver.NetworkResourceResponse
 import ai.platon.pulsar.driver.NodeRef
-import ai.platon.pulsar.browser.chrome.dom.model.BrowserUseState
-import ai.platon.pulsar.browser.chrome.dom.model.NanoDOMTree
-import ai.platon.pulsar.browser.chrome.dom.model.PageTarget
-import ai.platon.pulsar.browser.chrome.dom.model.SnapshotOptions
 import com.google.common.annotations.Beta
 import org.jsoup.Connection
 import java.io.Closeable
@@ -520,7 +523,7 @@ interface WebDriver : Closeable {
      * driver.clearBrowserCookies()
      * ```
      *
-     * @see ai.platon.pulsar.browser.Browser.clearCookies
+     * @see Browser.clearCookies
      * */
     @Throws(WebDriverException::class)
     @MCP
@@ -1814,7 +1817,7 @@ interface WebDriver : Closeable {
      * returns detailed evaluation metadata (beta). @mcp
      *
      * @param expression The JavaScript expression to evaluate.
-     * @return A [JsEvaluation] object containing the result and metadata.
+     * @return A [ai.platon.pulsar.browser.driver.JsEvaluation] object containing the result and metadata.
      * */
     @Throws(WebDriverException::class)
     @MCP

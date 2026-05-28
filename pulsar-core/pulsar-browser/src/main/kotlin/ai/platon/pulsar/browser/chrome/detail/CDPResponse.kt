@@ -1,4 +1,4 @@
-package ai.platon.pulsar.browser.detail.cdt.detail
+package ai.platon.pulsar.browser.chrome.detail
 
 import ai.platon.cdt.kt.protocol.types.network.Response
 import ai.platon.pulsar.protocol.browser.driver.cdt.PulsarWebDriver

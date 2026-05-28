@@ -1,9 +1,10 @@
-package ai.platon.pulsar.browser.detail.cdt.detail
+package ai.platon.pulsar.browser.chrome.detail
 
 import ai.platon.cdt.kt.protocol.events.network.RequestWillBeSent
 import ai.platon.cdt.kt.protocol.events.network.RequestWillBeSentExtraInfo
 import ai.platon.cdt.kt.protocol.events.network.ResponseReceived
 import ai.platon.cdt.kt.protocol.events.page.FrameNavigated
+import ai.platon.cdt.kt.protocol.types.network.Cookie
 import ai.platon.cdt.kt.protocol.types.network.ResourceType
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.skeleton.browser.driver.NavigateEntry
@@ -98,7 +99,7 @@ class ChromeNavigateEntry(
         return cookies
     }
 
-    private fun serializeCookie(cookie: ai.platon.cdt.kt.protocol.types.network.Cookie): Map<String, String> {
+    private fun serializeCookie(cookie: Cookie): Map<String, String> {
         return cookieMapper.readValue(cookieMapper.writeValueAsString(cookie))
     }
 

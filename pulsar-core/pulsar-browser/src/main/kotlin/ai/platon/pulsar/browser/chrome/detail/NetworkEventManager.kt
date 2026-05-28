@@ -1,4 +1,4 @@
-package ai.platon.pulsar.browser.detail.cdt.detail
+package ai.platon.pulsar.browser.chrome.detail
 
 import ai.platon.cdt.kt.protocol.events.fetch.RequestPaused
 import ai.platon.cdt.kt.protocol.events.network.RequestWillBeSent

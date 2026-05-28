@@ -1,5 +1,7 @@
 package ai.platon.pulsar.browser
 
+import ai.platon.pulsar.browser.BrowserProfile.Companion.CONTEXT_DIR_PREFIX
+import ai.platon.pulsar.browser.BrowserProfile.Companion.PROTOTYPE_DATA_DIR
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.browser.fingerprint.Fingerprint
@@ -38,7 +40,7 @@ data class BrowserId(
     val userDataDir: Path
         get() = when {
             profile.isSystemDefault -> AppPaths.SYSTEM_DEFAULT_BROWSER_DATA_DIR_PLACEHOLDER
-            profile.isPrototype -> PrivacyContext.PROTOTYPE_DATA_DIR
+            profile.isPrototype -> PROTOTYPE_DATA_DIR
             else -> contextDir.resolve(browserType.name)
         }
     /**
@@ -47,7 +49,7 @@ data class BrowserId(
      * 1. prototype
      * 2. 07171ChsOE207
      * */
-    val display get() = contextDir.last().toString().substringAfter(PrivacyContext.CONTEXT_DIR_PREFIX)
+    val display get() = contextDir.last().toString().substringAfter(CONTEXT_DIR_PREFIX)
     /**
      * The constructor of the browser id.
      *
@@ -102,7 +104,7 @@ data class BrowserId(
         /**
          * Create a browser with random context dir.
          * */
-        val RANDOM_TEMP get() = createRandomTemp()
+//        val RANDOM_TEMP get() = createRandomTemp()
 
         fun createDefault() = BrowserId(BrowserProfile.createDefault())
 
@@ -116,9 +118,9 @@ data class BrowserId(
 
         fun createPrototype(browserType: BrowserType) = BrowserId(BrowserProfile.createPrototype(browserType))
 
-        fun createRandomTemp() = BrowserId(BrowserProfile.createRandomTemp())
-
-        fun createRandomTemp(browserType: BrowserType) = BrowserId(BrowserProfile.createRandomTemp(browserType))
+//        fun createRandomTemp() = BrowserId(BrowserProfile.createRandomTemp())
+//
+//        fun createRandomTemp(browserType: BrowserType) = BrowserId(BrowserProfile.createRandomTemp(browserType))
 
         fun createNextSequential() = BrowserId(BrowserProfile.createNextSequential())
 

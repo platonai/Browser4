@@ -1,6 +1,7 @@
 package ai.platon.pulsar.browser.driver
 
 import ai.platon.pulsar.browser.AbstractBrowser
+import ai.platon.pulsar.browser.WebDriver
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.urls.Hyperlink
 import ai.platon.pulsar.common.urls.URLUtils

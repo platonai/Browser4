@@ -1,5 +1,6 @@
 package ai.platon.pulsar.browser
 
+import ai.platon.pulsar.browser.BrowserId.Companion.createRandomTemp
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.browser.BrowserFiles
 import ai.platon.pulsar.driver.common.BrowserSettings
@@ -136,11 +137,11 @@ data class BrowserProfile(
             return create(browserType, NEXT_SEQUENTIAL_CONTEXT_DIR)
         }
 
-        fun createRandomTemp() = createRandomTemp(BrowserType.PULSAR_CHROME)
-
-        fun createRandomTemp(browserType: BrowserType): BrowserProfile {
-            BrowserSettings.withBrowserContextMode(BrowserProfileMode.TEMPORARY, browserType)
-            return create(browserType, createRandom(browserType))
-        }
+//        fun createRandomTemp() = createRandomTemp(BrowserType.PULSAR_CHROME)
+//
+//        fun createRandomTemp(browserType: BrowserType): BrowserProfile {
+//            BrowserSettings.withBrowserContextMode(BrowserProfileMode.TEMPORARY, browserType)
+//            return create(browserType, createRandom(browserType))
+//        }
     }
 }

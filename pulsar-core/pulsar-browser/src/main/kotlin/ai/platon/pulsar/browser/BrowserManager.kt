@@ -1,7 +1,6 @@
 package ai.platon.pulsar.browser
 
 import ai.platon.pulsar.browser.driver.BrowserLaunchException
-import ai.platon.pulsar.browser.driver.WebDriver
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.driver.common.BrowserSettings
 

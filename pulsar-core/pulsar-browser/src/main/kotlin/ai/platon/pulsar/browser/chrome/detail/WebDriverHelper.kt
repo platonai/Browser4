@@ -1,6 +1,7 @@
-package ai.platon.pulsar.browser.detail.cdt.detail
+package ai.platon.pulsar.browser.chrome.detail
 
 import ai.platon.cdt.kt.protocol.events.network.ResponseReceived
+import ai.platon.cdt.kt.protocol.types.network.Cookie
 import ai.platon.cdt.kt.protocol.types.network.ResourceType
 import ai.platon.cdt.kt.protocol.types.runtime.CallFunctionOn
 import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
@@ -93,7 +94,7 @@ class WebDriverHelper(
         }
     }
 
-    fun serialize(cookie: ai.platon.cdt.kt.protocol.types.network.Cookie): Map<String, String> {
+    fun serialize(cookie: Cookie): Map<String, String> {
         val mapper = jacksonObjectMapper().setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
         return mapper.readValue(mapper.writeValueAsString(cookie))
     }
