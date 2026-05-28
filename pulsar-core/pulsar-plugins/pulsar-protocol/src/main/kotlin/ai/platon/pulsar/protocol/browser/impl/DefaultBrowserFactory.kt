@@ -1,13 +1,13 @@
 package ai.platon.pulsar.protocol.browser.impl
 
+import ai.platon.pulsar.browser.Browser
+import ai.platon.pulsar.browser.BrowserId
+import ai.platon.pulsar.browser.BrowserLauncher
+import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.pulsar.chrome.util.ChromeOptions
 import ai.platon.pulsar.chrome.util.LauncherOptions
-import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.config.ImmutableConfig
-import ai.platon.pulsar.browser.Browser
-import ai.platon.pulsar.browser.BrowserLauncher
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 
 class DefaultBrowserFactory(
     conf: ImmutableConfig = ImmutableConfig(loadDefaults = true),

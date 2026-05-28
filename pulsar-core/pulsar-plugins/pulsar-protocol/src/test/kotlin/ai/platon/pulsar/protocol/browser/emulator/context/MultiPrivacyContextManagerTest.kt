@@ -1,8 +1,8 @@
 package ai.platon.pulsar.protocol.browser.emulator.context
 
-import ai.platon.pulsar.protocol.browser.DefaultWebDriverPoolManager
+import ai.platon.pulsar.browser.BrowserProfile
 import ai.platon.pulsar.common.config.ImmutableConfig
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserProfile
+import ai.platon.pulsar.protocol.browser.DefaultWebDriverPoolManager
 import org.apache.commons.io.FileUtils
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.*
@@ -12,22 +12,22 @@ import kotlin.io.path.notExists
 
 class MultiPrivacyContextManagerTest {
     private val manager = MultiPrivacyContextManager(DefaultWebDriverPoolManager(ImmutableConfig()))
-    private lateinit var agent: BrowserProfile
+    private lateinit var profile: BrowserProfile
 
     @BeforeEach
     fun setUp() {
-        agent = BrowserProfile.createRandomTemp()
+        profile = BrowserProfile.createRandomTemp()
     }
 
     @AfterEach
     fun tearDown() {
-        FileUtils.deleteDirectory(agent.contextDir.toFile())
-        assertTrue(agent.contextDir.notExists())
+        FileUtils.deleteDirectory(profile.contextDir.toFile())
+        assertTrue(profile.contextDir.notExists())
     }
 
     @Test
     fun testCreateUnmanagedContext() {
-        val context = manager.createUnmanagedContext(agent)
+        val context = manager.createUnmanagedContext(profile)
         assertNotNull(context)
         assertTrue(context.isReady)
         assertTrue(context.isActive)
