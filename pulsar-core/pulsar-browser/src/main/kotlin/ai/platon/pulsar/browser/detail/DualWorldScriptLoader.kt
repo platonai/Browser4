@@ -1,5 +1,7 @@
-package ai.platon.pulsar.browser.common
+package ai.platon.pulsar.browser.detail
 
+import ai.platon.pulsar.browser.common.BrowserSettings
+import ai.platon.pulsar.browser.common.ScriptConfuser
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.ResourceLoader
 import ai.platon.pulsar.common.config.AppConstants

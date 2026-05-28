@@ -1,5 +1,6 @@
-package ai.platon.pulsar.browser.common
+package ai.platon.pulsar.browser.detail
 
+import ai.platon.pulsar.browser.common.ScriptConfuser
 import org.apache.commons.lang3.RandomStringUtils
 
 open class SimpleScriptConfuser: ScriptConfuser {

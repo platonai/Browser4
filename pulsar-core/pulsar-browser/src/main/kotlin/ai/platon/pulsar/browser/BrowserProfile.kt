@@ -1,5 +1,7 @@
 package ai.platon.pulsar.browser
 
+import ai.platon.pulsar.browser.common.BrowserSettings
+import ai.platon.pulsar.browser.common.ProfilePaths
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.browser.fingerprint.Fingerprint
@@ -8,7 +10,6 @@ import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_CONTEXT_NUMBER
 import ai.platon.pulsar.common.config.CapabilityTypes.PRIVACY_AGENT_GENERATOR_CLASS
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.logging.ThrottlingLogger
-import ai.platon.pulsar.browser.common.BrowserSettings
 import java.nio.file.Path
 
 /**

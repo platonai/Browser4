@@ -1,19 +1,13 @@
 package ai.platon.pulsar.browser
 
-import ai.platon.pulsar.chrome.dom.SnapshotService
 import ai.platon.pulsar.browser.common.NavigateEntry
 import ai.platon.pulsar.browser.common.NavigateHistory
 import ai.platon.pulsar.browser.common.NetworkResourceHelper
 import ai.platon.pulsar.browser.common.WebDriverException
-import ai.platon.pulsar.common.AppContext
-import ai.platon.pulsar.common.CheckState
-import ai.platon.pulsar.common.DateTimes
-import ai.platon.pulsar.common.ResourceStatus
-import ai.platon.pulsar.common.getTracerOrNull
+import ai.platon.pulsar.browser.impl.NetworkResourceResponse
+import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.urls.Hyperlink
 import ai.platon.pulsar.common.urls.URLUtils
-import ai.platon.pulsar.common.warnForClose
-import ai.platon.pulsar.browser.impl.NetworkResourceResponse
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext

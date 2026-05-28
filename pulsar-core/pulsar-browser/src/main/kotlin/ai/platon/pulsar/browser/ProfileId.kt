@@ -1,5 +1,6 @@
 package ai.platon.pulsar.browser
 
+import ai.platon.pulsar.browser.common.ProfilePaths
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.browser.BrowserType
 import java.nio.file.Path

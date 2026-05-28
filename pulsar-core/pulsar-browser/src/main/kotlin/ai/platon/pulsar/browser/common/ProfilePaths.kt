@@ -1,4 +1,4 @@
-package ai.platon.pulsar.browser
+package ai.platon.pulsar.browser.common
 
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.browser.BrowserFiles
