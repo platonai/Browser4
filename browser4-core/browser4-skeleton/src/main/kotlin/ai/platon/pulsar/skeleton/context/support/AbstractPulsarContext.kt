@@ -1,6 +1,8 @@
 package ai.platon.pulsar.skeleton.context.support
 
+import ai.platon.browser4.common.B4Constants.SWARM_SESSION_LABEL
 import ai.platon.pulsar.common.*
+import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.urls.DegenerateUrl
@@ -15,11 +17,16 @@ import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.gora.generated.GWebPage
 import ai.platon.pulsar.persist.model.GoraWebPage
 import ai.platon.pulsar.skeleton.PulsarSettings
+import ai.platon.pulsar.skeleton.TaskLoops
+import ai.platon.pulsar.skeleton.browser.BrowserFetcher
+import ai.platon.pulsar.skeleton.browser.BrowserManager
+import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.common.urls.CombinedUrlNormalizer
 import ai.platon.pulsar.skeleton.common.urls.NormURL
 import ai.platon.pulsar.skeleton.context.PulsarContext
-import ai.platon.pulsar.skeleton.TaskLoops
+import ai.platon.pulsar.skeleton.session.AbstractPulsarSession
+import ai.platon.pulsar.skeleton.session.PulsarSession
 import ai.platon.pulsar.skeleton.workflow.common.FetchState
 import ai.platon.pulsar.skeleton.workflow.common.GlobalCache
 import ai.platon.pulsar.skeleton.workflow.common.GlobalCacheFactory
@@ -27,13 +34,7 @@ import ai.platon.pulsar.skeleton.workflow.component.BatchFetchComponent
 import ai.platon.pulsar.skeleton.workflow.component.LoadComponent
 import ai.platon.pulsar.skeleton.workflow.component.ParseComponent
 import ai.platon.pulsar.skeleton.workflow.component.UpdateComponent
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserFactory
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserFetcher
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserManager
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 import ai.platon.pulsar.skeleton.workflow.filter.ChainedUrlNormalizer
-import ai.platon.pulsar.skeleton.session.AbstractPulsarSession
-import ai.platon.pulsar.skeleton.session.PulsarSession
 import org.slf4j.LoggerFactory
 import org.springframework.beans.BeansException
 import org.springframework.beans.factory.BeanCreationException
@@ -104,6 +105,7 @@ abstract class AbstractPulsarContext(
      * */
     private val abnormalPage
         get() = when {
+            !isActive -> null
             loadComponentOrNull != null -> null // everything is OK
             else -> GoraWebPage.NIL
         }
@@ -113,6 +115,7 @@ abstract class AbstractPulsarContext(
      * */
     private val abnormalPages: List<WebPage>?
         get() = when {
+            !isActive -> listOf()
             loadComponentOrNull != null -> null // everything is OK
             else -> listOf()
         }
@@ -120,7 +123,7 @@ abstract class AbstractPulsarContext(
     /**
      * Flag that indicates whether this context is currently active.
      * */
-    override val isActive get() = !closed.get() && applicationContext.isActive
+    override val isActive get() = !closed.get() && applicationContext.isActive && AppContext.isActive
 
     /**
      * The context id
@@ -164,8 +167,6 @@ abstract class AbstractPulsarContext(
     open val browserFetcher: BrowserFetcher get() = getBean()
 
     override val globalCache: GlobalCache get() = globalCacheFactory.globalCache
-
-    override val browserFactory: BrowserFactory get() = getBean()
 
     override val browserManager: BrowserManager get() = getBean()
 
@@ -221,6 +222,20 @@ abstract class AbstractPulsarContext(
 
     override fun getOrCreateSession(settings: PulsarSettings): PulsarSession =
         sessions.values.firstOrNull() ?: createSession()
+
+    /**
+     * Create a pulsar session
+     * */
+    override fun ensureSwarmSession(settings: PulsarSettings): PulsarSession {
+        val lastProfileMode = settings.profileMode
+        val profileMode = when (lastProfileMode) {
+            BrowserProfileMode.SEQUENTIAL -> BrowserProfileMode.SEQUENTIAL
+            BrowserProfileMode.TEMPORARY -> BrowserProfileMode.TEMPORARY
+            else -> BrowserProfileMode.SEQUENTIAL
+        }
+        val settings = settings.copy(label = SWARM_SESSION_LABEL, profileMode = profileMode)
+        return getOrCreateSession(settings)
+    }
 
     /**
      * Close the given session
@@ -326,8 +341,14 @@ abstract class AbstractPulsarContext(
     /**
      * Check the fetch state of a page.
      * */
-    override fun fetchState(page: WebPage, options: LoadOptions) =
-        loadComponentOrNull?.fetchState(page, options) ?: CheckState(FetchState.DO_NOT_FETCH, "closed")
+    override fun fetchState(page: WebPage, options: LoadOptions): CheckState {
+        if (!isActive) {
+            return CheckState(FetchState.DO_NOT_FETCH, "closed")
+        }
+
+        val fetchState = loadComponentOrNull?.fetchState(page, options)
+        return fetchState ?: CheckState(FetchState.DO_NOT_FETCH, "closed")
+    }
 
     /**
      * Scan pages in the storage.
@@ -375,7 +396,7 @@ abstract class AbstractPulsarContext(
      * @return The WebPage. If there is no web page at local storage nor remote location, [GoraWebPage.NIL] is returned.
      */
     @Throws(WebDBException::class)
-    override fun load(url: String, options: LoadOptions): WebPage {
+    override suspend fun load(url: String, options: LoadOptions): WebPage {
         val normURL = normalize(url, options)
         return abnormalPage ?: loadComponent.load(normURL)
     }
@@ -388,7 +409,7 @@ abstract class AbstractPulsarContext(
      * @return The WebPage. If there is no web page at local storage nor remote location, [GoraWebPage.NIL] is returned.
      */
     @Throws(WebDBException::class)
-    override fun load(url: URL, options: LoadOptions): WebPage {
+    override suspend fun load(url: URL, options: LoadOptions): WebPage {
         return abnormalPage ?: loadComponent.load(url, options)
     }
 
@@ -399,7 +420,7 @@ abstract class AbstractPulsarContext(
      * @return The WebPage. If there is no web page at local storage nor remote location, [GoraWebPage.NIL] is returned.
      */
     @Throws(WebDBException::class)
-    override fun load(url: NormURL): WebPage {
+    override suspend fun load(url: NormURL): WebPage {
         return abnormalPage ?: loadComponent.load(url)
     }
 
@@ -572,7 +593,7 @@ abstract class AbstractPulsarContext(
                 // When running via exec:java or other process starter,
                 // Pulsar-related classes are unloaded as the process exits.
                 // warnForClose("Exception while closing context | $this", e)
-            }  catch (ignored: LinkageError) {
+            } catch (ignored: LinkageError) {
                 // This prevents NoClassDefFoundError when classes have been unloaded
                 // (e.g., when running via maven exec:java)
                 // ignored
@@ -591,7 +612,8 @@ abstract class AbstractPulsarContext(
     }
 
     protected open fun doClose0() {
-        logger.info("Closing context #{} with {} sessions, {} additional closables | {}",
+        logger.info(
+            "Closing context #{} with {} sessions, {} additional closables | {}",
             id,
             sessions.size,
             closableObjects.size,

@@ -2,6 +2,8 @@ package ai.platon.pulsar.skeleton.common.options
 
 import ai.platon.pulsar.common.DateTimes
 import ai.platon.pulsar.common.browser.BrowserType
+import java.time.Duration
+import java.time.Instant
 import java.time.temporal.ChronoUnit
 
 /**
@@ -11,12 +13,12 @@ object LoadOptionDefaults {
     /**
      * The default expiry time, some time we may need expire all pages by default, for example, in test mode
      * */
-    val EXPIRES = ChronoUnit.DECADES.duration
+    val EXPIRES: Duration = ChronoUnit.DECADES.duration
 
     /**
      * The default time to expire
      * */
-    val EXPIRE_AT = DateTimes.doomsday
+    val EXPIRE_AT: Instant = DateTimes.doomsday
 
     /**
      * Lazy flush.

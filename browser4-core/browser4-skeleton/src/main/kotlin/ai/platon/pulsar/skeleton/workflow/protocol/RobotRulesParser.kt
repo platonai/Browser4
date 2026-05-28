@@ -68,7 +68,7 @@ abstract class RobotRulesParser(
         return robotParser.parseContent(url, content, contentType, robotName)
     }
 
-    fun getRobotRulesSet(protocol: Protocol, url: String): BaseRobotRules {
+    suspend fun getRobotRulesSet(protocol: Protocol, url: String): BaseRobotRules {
         val u = try {
             URI.create(url).toURL()
         } catch (e: Exception) {
@@ -77,7 +77,7 @@ abstract class RobotRulesParser(
         return getRobotRulesSet(protocol, u)
     }
 
-    abstract fun getRobotRulesSet(protocol: Protocol, url: URL): BaseRobotRules
+    abstract suspend fun getRobotRulesSet(protocol: Protocol, url: URL): BaseRobotRules
 
     companion object {
         /**
@@ -87,6 +87,7 @@ abstract class RobotRulesParser(
         @JvmField
         val EMPTY_RULES: BaseRobotRules = SimpleRobotRules(RobotRulesMode.ALLOW_ALL)
         val CACHE = Hashtable<String, BaseRobotRules>()
+
         /**
          * A [BaseRobotRules] object appropriate for use when the
          * `robots.txt` file is not fetched due to a `403/Forbidden`
@@ -94,6 +95,7 @@ abstract class RobotRulesParser(
          */
         var FORBID_ALL_RULES: BaseRobotRules = SimpleRobotRules(RobotRulesMode.ALLOW_NONE)
         private val robotParser = SimpleRobotRulesParser()
+
         /**
          * command-line main for testing
          */
@@ -110,8 +112,10 @@ abstract class RobotRulesParser(
 
             try {
                 val robotsBytes = Files.toByteArray(File(argv[0]))
-                val rules = robotParser.parseContent(argv[0], robotsBytes,
-                        "text/plain", argv[2])
+                val rules = robotParser.parseContent(
+                    argv[0], robotsBytes,
+                    "text/plain", argv[2]
+                )
                 val testsIn = LineNumberReader(FileReader(argv[1]))
                 var testPath: String? = testsIn.readLine().trim { it <= ' ' }
                 while (testPath != null) {

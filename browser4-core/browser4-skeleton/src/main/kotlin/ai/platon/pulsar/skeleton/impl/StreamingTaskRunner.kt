@@ -86,8 +86,8 @@ private class GlobalCrawlState {
 
     val globalLoadingUrls = ConcurrentSkipListSet<String>()
 
-    var contextLeakWaitingTime = Duration.ZERO
-    var proxyVendorWaitingTime = Duration.ZERO
+    var contextLeakWaitingTime: Duration = Duration.ZERO
+    var proxyVendorWaitingTime: Duration = Duration.ZERO
     var criticalWarning: CriticalWarning? = null
     var lastUrl = ""
     var lastHtmlIntegrity = ""
@@ -228,17 +228,17 @@ open class StreamingTaskRunner(
     /**
      * The out of work timeout.
      * */
-    val outOfWorkTimeout = Duration.ofMinutes(10)
+    val outOfWorkTimeout: Duration = Duration.ofMinutes(10)
 
     /**
      * The timeout for each fetch task.
      * */
-    val fetchTaskTimeout get() = sessionConfig.getDuration(FETCH_TASK_TIMEOUT, FETCH_TASK_TIMEOUT_DEFAULT)
+    val fetchTaskTimeout: Duration get() = sessionConfig.getDuration(FETCH_TASK_TIMEOUT, FETCH_TASK_TIMEOUT_DEFAULT)
 
     /**
      * The idle time during which there is no fetch tasks.
      * */
-    val idleTime get() = Duration.between(lastActiveTime, Instant.now())
+    val idleTime: Duration get() = Duration.between(lastActiveTime, Instant.now())
 
     /**
      * Check if the crawler is out of work (idle for long time).
@@ -249,7 +249,7 @@ open class StreamingTaskRunner(
      * Check if smart retry is enabled.
      *
      * If smart retry is enabled, tasks will be retried if it's canceled or marked as retry.
-     * A continuous crawl system should enable smart retry, while a simple demo can disable it.
+     * A continuous browser system should enable smart retry, while a simple demo can disable it.
      * */
     val isSmartRetryEnabled get() = sessionConfig.getBoolean(CRAWL_SMART_RETRY, true)
 
@@ -590,7 +590,7 @@ open class StreamingTaskRunner(
 
         val page = loadWithTimeout(url)
 
-        // A continuous crawl system should enable smart retry, while a simple demo can disable it
+        // A continuous browser system should enable smart retry, while a simple demo can disable it
         if (isSmartRetryEnabled) {
             handleRetry(url, page)
         }

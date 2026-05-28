@@ -50,6 +50,7 @@ data class PulsarSettings(
     val maxOpenTabs: Int? = null,
     val interactSettings: InteractSettings? = null,
     val profileMode: BrowserProfileMode? = null,
+    val label: String? = null,
 ) {
     fun overrideSystemProperties() {
         overrideConfigurationInternal(null)
@@ -81,6 +82,7 @@ data class PulsarSettings(
             val maxBrowsers: Int? = capabilities?.get("maxBrowsers")?.toString()?.toIntOrNull()
             val maxOpenTabs: Int? = capabilities?.get("maxOpenTabs")?.toString()?.toIntOrNull()
             val interactSettings: InteractSettings? = capabilities?.get("interactSettings")?.toString()?.let { InteractSettings.fromJsonOrNull(it) }
+            val interactLevel = parseInteractLevel(capabilities)
             val profileMode = capabilities?.get("profileMode")?.toString()?.let { BrowserProfileMode.fromString(it) }
 
             return PulsarSettings(
@@ -89,19 +91,42 @@ data class PulsarSettings(
                 maxBrowsers = maxBrowsers,
                 maxOpenTabs = maxOpenTabs,
                 profileMode = profileMode,
-                interactSettings = interactSettings,
+                interactSettings = interactSettings ?: InteractSettings.create(interactLevel ?: InteractLevel.DEFAULT),
             )
+        }
+
+        private fun parseInteractLevel(capabilities: Map<String, Any?>?): InteractLevel? {
+            val rawInteractLevel = sequenceOf("interactLevel", "interact-level")
+                .mapNotNull { capabilities?.get(it)?.toString()?.trim()?.takeIf(String::isNotEmpty) }
+                .firstOrNull()
+                ?: return null
+
+            val normalizedInteractLevel = normalizeInteractLevelAlias(rawInteractLevel)
+
+            return sequenceOf(normalizedInteractLevel, rawInteractLevel)
+                .filterNotNull()
+                .distinct()
+                .mapNotNull { value -> runCatching { InteractLevel.from(value) }.getOrNull() }
+                .firstOrNull()
+        }
+
+        private fun normalizeInteractLevelAlias(value: String): String {
+            val normalized = value.trim().uppercase().replace('-', '_').replace(' ', '_')
+            return when (normalized) {
+                "FASTEST" -> "FASTEST"
+                else -> normalized
+            }
         }
 
         @JvmStatic
         @JvmOverloads
-        fun withBrowserContextMode(contextMode: BrowserProfileMode, conf: MutableConfig? = null): Companion =
-            withBrowserContextMode(contextMode, BrowserType.DEFAULT, conf)
+        fun withBrowserContextMode(browserProfileMode: BrowserProfileMode, conf: MutableConfig? = null): Companion =
+            withBrowserContextMode(browserProfileMode, BrowserType.DEFAULT, conf)
 
         @JvmStatic
         @JvmOverloads
-        fun withBrowserContextMode(contextMode: BrowserProfileMode, browserType: BrowserType, conf: MutableConfig? = null): Companion {
-            BrowserSettings.withBrowserContextMode(contextMode, browserType, conf)
+        fun withBrowserContextMode(browserProfileMode: BrowserProfileMode, browserType: BrowserType, conf: MutableConfig? = null): Companion {
+            BrowserSettings.withBrowserContextMode(browserProfileMode, browserType, conf)
             return PulsarSettings
         }
 

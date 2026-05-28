@@ -19,10 +19,10 @@ import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.browser.BrowserFiles
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.browser.fingerprint.Fingerprint
+import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 import java.nio.file.Path
 import java.time.Duration
 
@@ -204,15 +204,6 @@ interface PrivacyContext: AutoCloseable {
      * @return The fetch result.
      * */
     suspend fun run(task: FetchTask, fetchFun: suspend (FetchTask, WebDriver) -> FetchResult): FetchResult
-    /**
-     * Run a task in the privacy context.
-     *
-     * @param task The task to run.
-     * @param fetchFun The fetch function to use.
-     * @return The fetch result.
-     * */
-    @Throws(Exception::class)
-    suspend fun doRun(task: FetchTask, fetchFun: suspend (FetchTask, WebDriver) -> FetchResult): FetchResult
     /**
      * Dismiss the privacy context.
      *

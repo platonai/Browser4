@@ -6,12 +6,12 @@ import java.time.Duration
 
 interface TaskRunner : AutoCloseable {
     /**
-     * The crawl id
+     * The browser id
      * */
     val id: Int
 
     /**
-     * The crawl name
+     * The browser name
      * */
     val name: String
 
