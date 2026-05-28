@@ -23,7 +23,6 @@ class BrowserProfileGeneratorFactoryTest {
         val generator2 = factory.generator
         assertTrue { generator === generator2 }
 
-
         // BrowserProfileGeneratorFactory.generators is a companion, and the conf from the last test case is used
         // might be a bug
         // assertTrue { generator2.conf === conf }
