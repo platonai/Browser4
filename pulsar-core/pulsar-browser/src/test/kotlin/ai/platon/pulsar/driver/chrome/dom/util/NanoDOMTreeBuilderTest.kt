@@ -2,11 +2,10 @@ package ai.platon.pulsar.driver.chrome.dom.util
 
 import ai.platon.pulsar.chrome.dom.model.CleanedDOMTreeNode
 import ai.platon.pulsar.chrome.dom.model.CompactRect
-import ai.platon.pulsar.chrome.dom.model.SerializableDOMTreeNode
 import ai.platon.pulsar.chrome.dom.model.NodeType
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertNotNull
-import org.junit.jupiter.api.Assertions.assertNull
+import ai.platon.pulsar.chrome.dom.model.SerializableDOMTreeNode
+import ai.platon.pulsar.chrome.dom.util.NanoDOMTreeBuilder
+import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 
@@ -129,7 +128,8 @@ class NanoDOMTreeBuilderTest {
         height: Double? = null,
         children: List<SerializableDOMTreeNode>? = null
     ): SerializableDOMTreeNode {
-        val bounds = if (y == null && height == null) null else CompactRect(x = 0.0, y = y, width = 100.0, height = height)
+        val bounds =
+            if (y == null && height == null) null else CompactRect(x = 0.0, y = y, width = 100.0, height = height)
 
         return SerializableDOMTreeNode(
             originalNode = cleanedNode(id = id, nodeName = nodeName, bounds = bounds),

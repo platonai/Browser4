@@ -1,15 +1,19 @@
 package ai.platon.pulsar.driver.chrome.dom
 
+import ai.platon.pulsar.chrome.dom.DOMStateBuilder
 import ai.platon.pulsar.chrome.dom.impl.OptimizedDOMTreeBuilder
-import ai.platon.pulsar.chrome.dom.model.*
+import ai.platon.pulsar.chrome.dom.model.DOMRect
+import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
+import ai.platon.pulsar.chrome.dom.model.NodeType
+import ai.platon.pulsar.chrome.dom.model.SnapshotNodeEx
 import org.junit.jupiter.api.Assertions.*
-import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.DisplayName
+import org.junit.jupiter.api.Test
 
 class OptimizedDOMTreeBuilderTest {
 
     @Test
-        @DisplayName("bbox filtering excludes contained non-exception children")
+    @DisplayName("bbox filtering excludes contained non-exception children")
     fun bboxFilteringExcludesContainedNonExceptionChildren() {
         // Parent propagating element: <div role="button"> with bounds 0,0,100x40
         val parent = MergedDOMTreeNode(
@@ -36,7 +40,7 @@ class OptimizedDOMTreeBuilderTest {
     }
 
     @Test
-        @DisplayName("interactive indices assigned only to visible and interactive nodes and appear in selector map")
+    @DisplayName("interactive indices assigned only to visible and interactive nodes and appear in selector map")
     fun interactiveIndicesAssignedOnlyToVisibleAndInteractiveNodesAndAppearInSelectorMap() {
         // Two interactive visible buttons
         val btn1 = MergedDOMTreeNode(
@@ -71,8 +75,8 @@ class OptimizedDOMTreeBuilderTest {
     }
 
     @Test
-        @DisplayName("optimizeTree prunes invisible non-scrollable parent with all children pruned")
-    fun optimizetreePrunesInvisibleNonScrollableParentWithAllChildrenPruned() {
+    @DisplayName("optimizeTree prunes invisible non-scrollable parent with all children pruned")
+    fun optimizeTreePrunesInvisibleNonScrollableParentWithAllChildrenPruned() {
         // Root visible container
         val root = MergedDOMTreeNode(
             nodeId = 1,

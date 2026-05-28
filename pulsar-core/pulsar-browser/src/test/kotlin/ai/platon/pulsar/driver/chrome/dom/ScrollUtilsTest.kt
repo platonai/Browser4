@@ -4,17 +4,15 @@ import ai.platon.pulsar.chrome.dom.model.DOMRect
 import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
 import ai.platon.pulsar.chrome.dom.model.SnapshotNodeEx
 import ai.platon.pulsar.chrome.dom.util.ScrollUtils
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertFalse
-import org.junit.jupiter.api.Assertions.assertTrue
-import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.DisplayName
+import org.junit.jupiter.api.Test
 
 class ScrollUtilsTest {
 
     @Test
-        @DisplayName("isActuallyScrollable returns true when scroll rect exceeds client rect")
-    fun isactuallyscrollableReturnsTrueWhenScrollRectExceedsClientRect() {
+    @DisplayName("isActuallyScrollable returns true when scroll rect exceeds client rect")
+    fun isActuallyScrollableReturnsTrueWhenScrollRectExceedsClientRect() {
         val node = MergedDOMTreeNode(
             nodeName = "DIV",
             snapshotNode = SnapshotNodeEx(
@@ -28,8 +26,8 @@ class ScrollUtilsTest {
     }
 
     @Test
-        @DisplayName("isActuallyScrollable returns false when overflow hidden")
-    fun isactuallyscrollableReturnsFalseWhenOverflowHidden() {
+    @DisplayName("isActuallyScrollable returns false when overflow hidden")
+    fun isActuallyScrollableReturnsFalseWhenOverflowHidden() {
         val node = MergedDOMTreeNode(
             nodeName = "DIV",
             snapshotNode = SnapshotNodeEx(
@@ -43,8 +41,8 @@ class ScrollUtilsTest {
     }
 
     @Test
-        @DisplayName("shouldShowScrollInfo hides nested scroll containers")
-    fun shouldshowscrollinfoHidesNestedScrollContainers() {
+    @DisplayName("shouldShowScrollInfo hides nested scroll containers")
+    fun shouldShowScrollInfoHidesNestedScrollContainers() {
         val outer = MergedDOMTreeNode(
             nodeName = "DIV",
             snapshotNode = SnapshotNodeEx(
@@ -67,8 +65,8 @@ class ScrollUtilsTest {
     }
 
     @Test
-        @DisplayName("getScrollInfoText describes dominant scroll axes")
-    fun getscrollinfotextDescribesDominantScrollAxes() {
+    @DisplayName("getScrollInfoText describes dominant scroll axes")
+    fun getScrollInfoTextDescribesDominantScrollAxes() {
         val node = MergedDOMTreeNode(
             nodeName = "DIV",
             snapshotNode = SnapshotNodeEx(

@@ -1,5 +1,6 @@
 package ai.platon.pulsar.driver.chrome.dom.model
 
+import ai.platon.pulsar.chrome.dom.model.ViewportSpec
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.DisplayName

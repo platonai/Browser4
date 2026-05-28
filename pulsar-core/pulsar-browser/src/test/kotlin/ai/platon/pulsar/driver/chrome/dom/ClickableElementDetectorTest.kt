@@ -1,5 +1,6 @@
 package ai.platon.pulsar.driver.chrome.dom
 
+import ai.platon.pulsar.chrome.dom.ClickableElementDetector
 import ai.platon.pulsar.chrome.dom.model.DOMRect
 import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
 import ai.platon.pulsar.chrome.dom.model.SnapshotNodeEx

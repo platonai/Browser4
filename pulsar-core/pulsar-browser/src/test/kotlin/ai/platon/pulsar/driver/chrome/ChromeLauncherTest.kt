@@ -1,5 +1,6 @@
 package ai.platon.pulsar.driver.chrome
 
+import ai.platon.pulsar.chrome.ChromeLauncher
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
