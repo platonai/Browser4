@@ -558,7 +558,7 @@
         </surefire.excludedGroups>
 
         <spring-boot.version>4.0.5</spring-boot.version>
-        <browser4-base.version>4.7.10</browser4-base.version>
+        <browser4-base.version>4.7.14</browser4-base.version>
     </properties>
 
 </project>
