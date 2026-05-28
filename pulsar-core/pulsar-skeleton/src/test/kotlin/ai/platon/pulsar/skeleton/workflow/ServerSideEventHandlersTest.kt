@@ -36,7 +36,7 @@ class ServerSideEventHandlersTest {
 
     @Test
     @DisplayName("test DefaultServerSideEventHandlers emits crawl events")
-    fun testDefaultserversideeventhandlersEmitsCrawlEvents() = runBlocking {
+    fun testDefaultServerSideEventHandlersEmitsCrawlEvents() = runBlocking {
         val handlers = DefaultServerSideEventHandlers()
         val events = mutableListOf<ServerSideEvent>()
         val readyLatch = CompletableDeferred<Unit>()
@@ -51,7 +51,7 @@ class ServerSideEventHandlersTest {
 
         // Wait for collector to be ready
         readyLatch.await()
-        delay(50) // Give collector time to subscribe
+        delay(50.milliseconds) // Give collector time to subscribe
 
         // Emit events from within async to ensure proper suspension
         val emitJob = launch {
@@ -65,17 +65,17 @@ class ServerSideEventHandlersTest {
 
         assertEquals(2, events.size)
         assertEquals("onWillLoad", events[0].eventType)
-        assertEquals("crawl", events[0].eventPhase)
+        assertEquals("browser", events[0].eventPhase)
         assertEquals("https://example.com", events[0].url)
 
         assertEquals("onLoaded", events[1].eventType)
-        assertEquals("crawl", events[1].eventPhase)
+        assertEquals("browser", events[1].eventPhase)
         assertEquals("Page loaded successfully", events[1].message)
     }
 
     @Test
     @DisplayName("test DefaultServerSideEventHandlers emits load events")
-    fun testDefaultserversideeventhandlersEmitsLoadEvents() = runBlocking {
+    fun testDefaultServerSideEventHandlersEmitsLoadEvents() = runBlocking {
         val handlers = DefaultServerSideEventHandlers()
         val events = mutableListOf<ServerSideEvent>()
         val page = GoraWebPage.newWebPage("https://example.com", conf.toVolatileConfig())
@@ -111,7 +111,7 @@ class ServerSideEventHandlersTest {
 
     @Test
     @DisplayName("test DefaultServerSideEventHandlers emits browse events")
-    fun testDefaultserversideeventhandlersEmitsBrowseEvents() = runBlocking {
+    fun testDefaultServerSideEventHandlersEmitsBrowseEvents() = runBlocking {
         val handlers = DefaultServerSideEventHandlers()
         val events = mutableListOf<ServerSideEvent>()
         val page = GoraWebPage.newWebPage("https://example.com", conf.toVolatileConfig())
@@ -147,7 +147,7 @@ class ServerSideEventHandlersTest {
 
     @Test
     @DisplayName("test DefaultServerSideEventHandlers emits generic events")
-    fun testDefaultserversideeventhandlersEmitsGenericEvents() = runBlocking {
+    fun testDefaultServerSideEventHandlersEmitsGenericEvents() = runBlocking {
         val handlers = DefaultServerSideEventHandlers()
         val events = mutableListOf<ServerSideEvent>()
         val allEventsReceived = CompletableDeferred<Unit>()
@@ -158,7 +158,7 @@ class ServerSideEventHandlersTest {
             allEventsReceived.complete(Unit)
         }
 
-        delay(50) // Give collector time to subscribe
+        delay(50.milliseconds) // Give collector time to subscribe
 
         // Emit a generic event
         val emitJob = launch {
@@ -192,7 +192,7 @@ class ServerSideEventHandlersTest {
         handlers.onCrawlEvent("event1", "https://example.com")
         handlers.onCrawlEvent("event2", "https://example.com")
 
-        delay(50) // Ensure events are processed
+        delay(50.milliseconds) // Ensure events are processed
 
         // Start collecting - with replay = 0, should not receive old events
         val events = mutableListOf<ServerSideEvent>()
@@ -202,7 +202,7 @@ class ServerSideEventHandlersTest {
             allEventsReceived.complete(Unit)
         }
 
-        delay(50) // Give collector time to subscribe
+        delay(50.milliseconds) // Give collector time to subscribe
 
         // Emit new events
         val emitJob = launch {
