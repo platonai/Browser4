@@ -25,4 +25,6 @@ object B4Constants {
      * The SWARM session label
      * */
     const val SWARM_SESSION_LABEL = "SWARM"
+
+    const val VAR_IS_SCRAPE = "IS_SCRAPE"
 }
