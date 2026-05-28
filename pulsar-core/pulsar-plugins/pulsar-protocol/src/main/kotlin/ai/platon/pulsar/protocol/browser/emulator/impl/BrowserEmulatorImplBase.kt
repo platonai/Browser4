@@ -15,7 +15,9 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator.impl
 
+import ai.platon.pulsar.browser.AbstractWebDriver
 import ai.platon.pulsar.browser.common.BrowserSettings
+import ai.platon.pulsar.browser.common.WebDriverCancellationException
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.config.CapabilityTypes.FETCH_MAX_CONTENT_LENGTH
 import ai.platon.pulsar.common.config.CapabilityTypes.FETCH_PAGE_AUTO_EXPORT_LIMIT
@@ -23,13 +25,11 @@ import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.config.Parameterized
 import ai.platon.pulsar.common.event.AbstractEventEmitter
 import ai.platon.pulsar.common.urls.URLUtils
+import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.persist.PageDatum
 import ai.platon.pulsar.persist.ProtocolStatus
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.protocol.browser.emulator.*
-import ai.platon.pulsar.browser.driver.AbstractWebDriver
-import ai.platon.pulsar.browser.driver.WebDriver
-import ai.platon.pulsar.browser.driver.WebDriverCancellationException
 import ai.platon.pulsar.skeleton.common.files.ext.export
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask

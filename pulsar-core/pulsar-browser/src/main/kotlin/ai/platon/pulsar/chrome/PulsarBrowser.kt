@@ -10,6 +10,7 @@ import ai.platon.pulsar.browser.common.WebDriverException
 import ai.platon.pulsar.browser.impl.BrowserTab
 import ai.platon.pulsar.browser.impl.DevToolsConfig
 import ai.platon.pulsar.chrome.*
+import ai.platon.pulsar.chrome.impl.ChromeImpl
 import ai.platon.pulsar.chrome.impl.ChromeImpl.Companion.ABOUT_BLANK_PAGE
 import ai.platon.pulsar.chrome.impl.RemoteChromeProtocol
 import ai.platon.pulsar.chrome.util.ChromeDriverException
@@ -59,8 +60,8 @@ class PulsarBrowser(
         // launcher?.let { PulsarContexts.registerClosable(it, Int.MIN_VALUE) }
     }
 
-//    constructor(port: Int, settings: BrowserSettings = BrowserSettings()) :
-//            this(BrowserId.RANDOM_TEMP, ChromeImpl(port = port), settings, null)
+    constructor(port: Int, settings: BrowserSettings = BrowserSettings()) :
+            this(BrowserId.RANDOM_TEMP, ChromeImpl(port = port), settings, null)
 
     @Synchronized
     override fun healthy(): CheckState {

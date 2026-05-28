@@ -15,16 +15,16 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator
 
+import ai.platon.pulsar.browser.InteractSettings
 import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.pulsar.common.FlowState
 import ai.platon.pulsar.common.HttpHeaders
-import ai.platon.pulsar.browser.InteractSettings
+import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.persist.AbstractWebPage
 import ai.platon.pulsar.persist.PageDatum
 import ai.platon.pulsar.persist.ProtocolStatus
 import ai.platon.pulsar.persist.model.ActiveDOMMessage
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
-import ai.platon.pulsar.browser.driver.WebDriver
 import java.time.Duration
 import java.time.Instant
 
@@ -38,14 +38,17 @@ class NavigateTask constructor(
     val page get() = fetchTask.page
 
     val pageConf get() = fetchTask.page.conf
+
     /**
      * The page datum.
      * */
     val pageDatum = PageDatum(page)
+
     /**
      * The original content length, -1 means not specified, or we don't know.
      * */
     var originalContentLength = -1
+
     /**
      * The page source.
      * */
@@ -56,11 +59,11 @@ class NavigateTask constructor(
      * */
     val interactSettings: InteractSettings
         get() {
-        require(page is AbstractWebPage)
-        return page.getBeanOrNull(InteractSettings::class.java) as? InteractSettings
-            ?: page.conf.getBeanOrNull(InteractSettings::class.java)
-            ?: driver.browser.settings.interactSettings
-    }
+            require(page is AbstractWebPage)
+            return page.getBeanOrNull(InteractSettings::class.java) as? InteractSettings
+                ?: page.conf.getBeanOrNull(InteractSettings::class.java)
+                ?: driver.browser.settings.interactSettings
+        }
 
     init {
         pageDatum.headers[HttpHeaders.Q_REQUEST_TIME] = startTime.toEpochMilli().toString()
@@ -99,15 +102,15 @@ class InteractTask(
 }
 
 class BrowserErrorResponse(
-        val status: ProtocolStatus,
-        val activeDOMMessage: ActiveDOMMessage
+    val status: ProtocolStatus,
+    val activeDOMMessage: ActiveDOMMessage
 )
 
 interface Sleeper {
     fun sleep(duration: Duration)
 }
 
-class CancellableSleeper(val task: FetchTask): Sleeper {
+class CancellableSleeper(val task: FetchTask) : Sleeper {
     @Throws(NavigateTaskCancellationException::class)
     override fun sleep(duration: Duration) {
         try {

@@ -15,25 +15,25 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator.context
 
+import ai.platon.pulsar.browser.AbstractBrowser
+import ai.platon.pulsar.browser.BrowserId
+import ai.platon.pulsar.browser.common.BrowserUnavailableException
+import ai.platon.pulsar.browser.common.IllegalWebDriverStateException
+import ai.platon.pulsar.browser.common.WebDriverException
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.logging.ThrottlingLogger
 import ai.platon.pulsar.common.warnForClose
+import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager.Companion.DRIVER_FAST_CLOSE_TIME_OUT
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager.Companion.DRIVER_SAFE_CLOSE_TIME_OUT
 import ai.platon.pulsar.protocol.browser.emulator.WebDriverPoolException
 import ai.platon.pulsar.protocol.browser.emulator.WebDriverPoolExhaustedException
-import ai.platon.pulsar.browser.detail.AbstractBrowser
-import ai.platon.pulsar.browser.driver.BrowserUnavailableException
-import ai.platon.pulsar.browser.driver.IllegalWebDriverStateException
-import ai.platon.pulsar.browser.driver.WebDriver
-import ai.platon.pulsar.browser.driver.WebDriverException
 import ai.platon.pulsar.skeleton.common.AppSystemInfo
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 import com.codahale.metrics.Gauge
 import org.slf4j.LoggerFactory
 import java.time.Duration

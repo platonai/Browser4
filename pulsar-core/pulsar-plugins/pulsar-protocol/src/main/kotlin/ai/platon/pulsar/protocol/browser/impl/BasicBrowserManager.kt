@@ -1,20 +1,15 @@
 package ai.platon.pulsar.protocol.browser.impl
 
+import ai.platon.pulsar.browser.*
+import ai.platon.pulsar.browser.common.BrowserEvents
+import ai.platon.pulsar.browser.common.BrowserLaunchException
+import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.warnForClose
 import ai.platon.pulsar.common.warnInterruptible
-import ai.platon.pulsar.browser.common.BrowserSettings
-import ai.platon.pulsar.browser.Browser
-import ai.platon.pulsar.browser.BrowserFactory
-import ai.platon.pulsar.browser.BrowserManager
-import ai.platon.pulsar.browser.detail.AbstractBrowser
-import ai.platon.pulsar.browser.driver.AbstractWebDriver
-import ai.platon.pulsar.browser.driver.BrowserEvents
-import ai.platon.pulsar.browser.driver.BrowserLaunchException
-import ai.platon.pulsar.browser.driver.WebDriver
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
+import ai.platon.pulsar.core.api.WebDriver
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedDeque
 import java.util.concurrent.atomic.AtomicBoolean

@@ -1,11 +1,11 @@
 package ai.platon.pulsar.protocol.browser.driver
 
+import ai.platon.pulsar.browser.AbstractBrowser
+import ai.platon.pulsar.browser.Browser
+import ai.platon.pulsar.browser.BrowserId
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.warnInterruptible
-import ai.platon.pulsar.browser.Browser
-import ai.platon.pulsar.browser.detail.AbstractBrowser
 import ai.platon.pulsar.skeleton.common.AppSystemInfo
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 import kotlinx.coroutines.runBlocking
 
 /**

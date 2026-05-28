@@ -1,21 +1,25 @@
 package ai.platon.pulsar.protocol.browser.driver
 
+import ai.platon.pulsar.browser.AbstractWebDriver
+import ai.platon.pulsar.browser.BrowserId
+import ai.platon.pulsar.browser.common.BrowserLaunchException
+import ai.platon.pulsar.browser.common.BrowserUnavailableException
+import ai.platon.pulsar.browser.common.WebDriverException
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.concurrent.PreemptChannelSupport
 import ai.platon.pulsar.common.config.AppConstants.DEFAULT_BROWSER_MAX_OPEN_TABS
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_MAX_OPEN_TABS
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.config.Parameterized
+import ai.platon.pulsar.core.api.BrowserManager
+import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.protocol.browser.emulator.WebDriverPoolException
 import ai.platon.pulsar.protocol.browser.emulator.WebDriverPoolExhaustedException
 import ai.platon.pulsar.protocol.browser.impl.BasicBrowserManager
-import ai.platon.pulsar.browser.BrowserManager
-import ai.platon.pulsar.browser.driver.*
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import ai.platon.pulsar.skeleton.common.persist.ext.eventHandlers
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 import com.codahale.metrics.Gauge
 import com.google.common.annotations.Beta
 import kotlinx.coroutines.*
@@ -25,6 +29,7 @@ import java.time.Instant
 import java.util.concurrent.ConcurrentSkipListMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.collections.isNotEmpty
 
 /**
  * The web driver pool manager.

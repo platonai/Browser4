@@ -15,13 +15,16 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator.impl
 
-import ai.platon.pulsar.browser.common.BrowserSettings
+import ai.platon.pulsar.browser.AbstractWebDriver
+import ai.platon.pulsar.browser.DomSettlePolicy
+import ai.platon.pulsar.browser.common.*
+import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.config.AppConstants.VAR_CAPTURE
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.event.AbstractEventEmitter
-import ai.platon.pulsar.browser.DomSettlePolicy
+import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.persist.AbstractWebPage
 import ai.platon.pulsar.persist.ProtocolStatus
 import ai.platon.pulsar.persist.RetryScope
@@ -29,9 +32,7 @@ import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
 import ai.platon.pulsar.persist.model.ActiveDOMMessage
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager
-import ai.platon.pulsar.protocol.browser.driver.cdt.PulsarWebDriver
 import ai.platon.pulsar.protocol.browser.emulator.*
-import ai.platon.pulsar.browser.driver.*
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import ai.platon.pulsar.skeleton.common.persist.ext.browseEventHandlers
 import ai.platon.pulsar.skeleton.common.persist.ext.options

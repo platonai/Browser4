@@ -15,9 +15,9 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator
 
-import ai.platon.pulsar.browser.driver.WebDriverException
+import ai.platon.pulsar.browser.common.WebDriverException
 
-class NavigateTaskCancellationException: IllegalStateException {
+class NavigateTaskCancellationException : IllegalStateException {
     constructor() : super() {}
 
     constructor(message: String) : super(message) {
@@ -33,9 +33,9 @@ class NavigateTaskCancellationException: IllegalStateException {
 open class WebDriverPoolException(
     val browserId: String,
     override val message: String,
-): WebDriverException()
+) : WebDriverException()
 
 open class WebDriverPoolExhaustedException(
     browserId: String,
     message: String,
-): WebDriverPoolException(browserId, message)
+) : WebDriverPoolException(browserId, message)

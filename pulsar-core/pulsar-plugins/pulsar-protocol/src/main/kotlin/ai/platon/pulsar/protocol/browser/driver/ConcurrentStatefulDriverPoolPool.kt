@@ -1,10 +1,10 @@
 package ai.platon.pulsar.protocol.browser.driver
 
+import ai.platon.pulsar.browser.BrowserId
+import ai.platon.pulsar.browser.WebDriver
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.logging.ThrottlingLogger
 import ai.platon.pulsar.common.warnForClose
-import ai.platon.pulsar.browser.driver.WebDriver
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 import java.time.Duration
 import java.util.concurrent.ConcurrentSkipListMap
 import java.util.concurrent.ConcurrentSkipListSet
@@ -54,11 +54,16 @@ class ConcurrentStatefulDriverPoolPool {
                 .filter { it.second }
                 .joinToString(",") { it.first }
 
-            throttlingLogger.info("Driver pool can not offer any drivers | driverPoolState: {} | browserId: {}", state, browserId)
+            throttlingLogger.info(
+                "Driver pool can not offer any drivers | driverPoolState: {} | browserId: {}",
+                state,
+                browserId
+            )
         }
 
         return result
     }
+
     /**
      * Check if the browser has possibility to provide a webdriver for new tasks.
      *
@@ -67,6 +72,7 @@ class ConcurrentStatefulDriverPoolPool {
      * */
     @Synchronized
     fun hasPossibility(browserId: BrowserId) = !hasNoPossibility(browserId)
+
     /**
      * Return the number of new drivers can offer by the pool at the calling time point.
      *
@@ -89,6 +95,7 @@ class ConcurrentStatefulDriverPoolPool {
         val pool = _workingDriverPools[browserId] ?: return capacity
         return pool.numAvailable
     }
+
     /**
      * Check if a webdriver pool is full capacity, so it can not provide a webdriver for new tasks.
      * Note that if a driver pool is retired or closed, it's not full capacity.
@@ -141,7 +148,10 @@ class ConcurrentStatefulDriverPoolPool {
     }
 
     @Synchronized
-    fun computeIfAbsent(browserId: BrowserId, mappingFunction: (BrowserId) -> LoadingWebDriverPool): LoadingWebDriverPool {
+    fun computeIfAbsent(
+        browserId: BrowserId,
+        mappingFunction: (BrowserId) -> LoadingWebDriverPool
+    ): LoadingWebDriverPool {
         return _workingDriverPools.computeIfAbsent(browserId, mappingFunction)
     }
 

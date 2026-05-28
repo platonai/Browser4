@@ -21,7 +21,6 @@ import ai.platon.pulsar.persist.metadata.OpenPageCategory
 import ai.platon.pulsar.persist.metadata.PageCategory
 import java.util.concurrent.CopyOnWriteArrayList
 
-
 interface PageCategorySniffer {
     operator fun invoke(pageDatum: PageDatum): OpenPageCategory
 }

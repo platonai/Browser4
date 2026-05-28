@@ -1,15 +1,15 @@
 package ai.platon.pulsar.protocol.browser
 
+import ai.platon.pulsar.browser.Browser
+import ai.platon.pulsar.browser.BrowserId
+import ai.platon.pulsar.browser.common.BrowserLaunchException
+import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.pulsar.chrome.util.ChromeOptions
 import ai.platon.pulsar.chrome.util.LauncherOptions
-import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.protocol.browser.impl.AbstractBrowserFactory
 import ai.platon.pulsar.protocol.browser.impl.PulsarBrowserLauncher
-import ai.platon.pulsar.browser.Browser
-import ai.platon.pulsar.browser.driver.BrowserLaunchException
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 
 /**
  * A factory to create browser instances.
@@ -36,7 +36,8 @@ class PulsarBrowserFactory(
         browserId: BrowserId, launcherOptions: LauncherOptions, launchOptions: ChromeOptions
     ): Browser {
         require(browserId.browserType == browserType) {
-            "Browser type mismatch, expected $browserType, actual ${browserId.browserType}" }
+            "Browser type mismatch, expected $browserType, actual ${browserId.browserType}"
+        }
 
         return launcher.launch(browserId, launcherOptions, launchOptions)
     }

@@ -15,11 +15,13 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator.impl
 
+import ai.platon.pulsar.browser.common.BrowserErrorPageException
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.browser.BrowserErrorCode
 import ai.platon.pulsar.common.config.CapabilityTypes.PARSE_SUPPORT_ALL_CHARSETS
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.event.AbstractEventEmitter
+import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.persist.ProtocolStatus
 import ai.platon.pulsar.persist.RetryScope
 import ai.platon.pulsar.persist.WebPage
@@ -30,8 +32,6 @@ import ai.platon.pulsar.protocol.browser.emulator.BrowserResponseEvents
 import ai.platon.pulsar.protocol.browser.emulator.BrowserResponseHandler
 import ai.platon.pulsar.protocol.browser.emulator.NavigateTask
 import ai.platon.pulsar.protocol.browser.emulator.util.*
-import ai.platon.pulsar.browser.driver.BrowserErrorPageException
-import ai.platon.pulsar.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
 import ai.platon.pulsar.skeleton.workflow.protocol.Response

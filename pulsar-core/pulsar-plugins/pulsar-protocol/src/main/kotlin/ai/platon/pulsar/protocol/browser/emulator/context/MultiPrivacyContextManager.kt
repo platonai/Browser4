@@ -15,8 +15,11 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator.context
 
+import ai.platon.pulsar.browser.BrowserProfile
+import ai.platon.pulsar.browser.privacy.AbstractPrivacyContext
+import ai.platon.pulsar.browser.privacy.PrivacyContext
+import ai.platon.pulsar.browser.privacy.PrivacyException
 import ai.platon.pulsar.chrome.ChromeDestroyer
-import ai.platon.pulsar.protocol.browser.DefaultWebDriverPoolManager
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.browser.fingerprint.Fingerprint
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_CONTEXT_NUMBER
@@ -26,21 +29,18 @@ import ai.platon.pulsar.common.emoji.PopularEmoji
 import ai.platon.pulsar.common.logging.ThrottlingLogger
 import ai.platon.pulsar.common.proxy.ProxyPoolManager
 import ai.platon.pulsar.common.proxy.ProxyVendorException
+import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.persist.AbstractWebPage
 import ai.platon.pulsar.persist.RetryScope
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.model.GoraWebPage
+import ai.platon.pulsar.protocol.browser.DefaultWebDriverPoolManager
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager
 import ai.platon.pulsar.skeleton.CoreMetrics
-import ai.platon.pulsar.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.common.AppSystemInfo
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
-import ai.platon.pulsar.browser.privacy.AbstractPrivacyContext
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserProfile
-import ai.platon.pulsar.browser.privacy.PrivacyContext
-import ai.platon.pulsar.browser.privacy.PrivacyException
 import com.google.common.collect.Iterables
 import java.io.IOException
 import java.time.Duration
@@ -519,15 +519,23 @@ open class MultiPrivacyContextManager(
                 close(privacyContext)
                 "PRIVACY CX IDLE"
             }
+
             privacyContext.isClosed -> {
                 logger.info("Privacy context is closed, retrying task | #{} | {} | {}", task.id, state, url)
                 "PRIVACY CX CLOSED"
             }
+
             !privacyContext.isActive -> {
-                logger.info("Privacy context is inactive, close it and retrying task | #{} | {} | {}", task.id, state, url)
+                logger.info(
+                    "Privacy context is inactive, close it and retrying task | #{} | {} | {}",
+                    task.id,
+                    state,
+                    url
+                )
                 close(privacyContext)
                 "PRIVACY CX INACTIVE"
             }
+
             else -> null
         }
 

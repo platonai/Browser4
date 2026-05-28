@@ -17,15 +17,15 @@ package ai.platon.pulsar.protocol.browser.emulator
 
 import ai.platon.pulsar.common.HtmlIntegrity
 import ai.platon.pulsar.common.event.EventEmitter
-import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
-import ai.platon.pulsar.browser.driver.WebDriver
-import ai.platon.pulsar.skeleton.workflow.protocol.Response
+import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.persist.ProtocolStatus
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.protocol.browser.emulator.util.ChainedHtmlIntegrityChecker
 import ai.platon.pulsar.protocol.browser.emulator.util.ChainedPageCategorySniffer
 import ai.platon.pulsar.protocol.browser.emulator.util.HtmlIntegrityChecker
 import ai.platon.pulsar.protocol.browser.emulator.util.PageCategorySniffer
+import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
+import ai.platon.pulsar.skeleton.workflow.protocol.Response
 
 enum class BrowserResponseEvents {
     initPageCategorySniffer,
@@ -39,11 +39,12 @@ enum class BrowserResponseEvents {
  * The browser response handler. It's a component of the browser emulator, it's used to handle the response from
  * the browser.
  * */
-interface BrowserResponseHandler: EventEmitter<BrowserResponseEvents> {
+interface BrowserResponseHandler : EventEmitter<BrowserResponseEvents> {
     /**
      * TODO: a better extension point to add sniffers
      * */
     val pageCategorySniffer: ChainedPageCategorySniffer
+
     /**
      * TODO: a better extension point to add checkers
      * */

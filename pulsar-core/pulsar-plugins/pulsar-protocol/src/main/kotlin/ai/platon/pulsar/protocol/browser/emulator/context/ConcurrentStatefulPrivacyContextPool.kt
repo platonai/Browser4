@@ -15,6 +15,8 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator.context
 
+import ai.platon.pulsar.browser.BrowserProfile
+import ai.platon.pulsar.browser.privacy.PrivacyContext
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.proxy.ProxyException
@@ -22,8 +24,6 @@ import ai.platon.pulsar.common.proxy.ProxyPoolManager
 import ai.platon.pulsar.common.warnForClose
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager
 import ai.platon.pulsar.skeleton.CoreMetrics
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserProfile
-import ai.platon.pulsar.browser.privacy.PrivacyContext
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedDeque

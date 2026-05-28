@@ -1,21 +1,21 @@
 package ai.platon.pulsar.protocol.browser.emulator.context
 
+import ai.platon.pulsar.browser.BrowserProfile
 import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.pulsar.browser.common.UserAgent
-import ai.platon.pulsar.protocol.browser.DefaultWebDriverPoolManager
+import ai.platon.pulsar.browser.privacy.PrivacyContext
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.browser.fingerprint.Fingerprint
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.printlnPro
+import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.persist.WebPageExt
+import ai.platon.pulsar.protocol.browser.DefaultWebDriverPoolManager
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager
 import ai.platon.pulsar.skeleton.PulsarSettings
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
-import ai.platon.pulsar.browser.driver.WebDriver
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserProfile
-import ai.platon.pulsar.browser.privacy.PrivacyContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.apache.commons.lang3.RandomStringUtils

@@ -114,7 +114,7 @@ data class BrowserId(
         /**
          * Create a browser with random context dir.
          * */
-//        val RANDOM_TEMP get() = createRandomTemp()
+        val RANDOM_TEMP get() = createRandomTemp()
 
         fun createDefault() = BrowserId(BrowserProfile.createDefault())
 
@@ -128,9 +128,9 @@ data class BrowserId(
 
         fun createPrototype(browserType: BrowserType) = BrowserId(BrowserProfile.createPrototype(browserType))
 
-//        fun createRandomTemp() = BrowserId(BrowserProfile.createRandomTemp())
-//
-//        fun createRandomTemp(browserType: BrowserType) = BrowserId(BrowserProfile.createRandomTemp(browserType))
+        fun createRandomTemp() = BrowserId(BrowserProfile.createRandomTemp())
+
+        fun createRandomTemp(browserType: BrowserType) = BrowserId(BrowserProfile.createRandomTemp(browserType))
 
         fun createNextSequential() = BrowserId(BrowserProfile.createNextSequential())
 
