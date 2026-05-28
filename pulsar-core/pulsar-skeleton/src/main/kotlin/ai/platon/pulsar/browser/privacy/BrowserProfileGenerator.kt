@@ -1,8 +1,8 @@
-package ai.platon.pulsar.skeleton.workflow.fetch.privacy
+package ai.platon.pulsar.browser.privacy
 
+import ai.platon.pulsar.browser.BrowserProfile
 import ai.platon.pulsar.common.browser.BrowserFiles
 import ai.platon.pulsar.common.browser.fingerprint.Fingerprint
-import ai.platon.pulsar.common.config.CapabilityTypes
 import ai.platon.pulsar.common.config.CapabilityTypes.*
 import ai.platon.pulsar.common.config.ImmutableConfig
 import java.io.IOException
@@ -10,24 +10,29 @@ import java.nio.file.Files
 
 interface BrowserProfileGenerator {
     var conf: ImmutableConfig
+
     @Throws(Exception::class)
     operator fun invoke(fingerprint: Fingerprint): BrowserProfile
 }
 
-open class DefaultBrowserProfileGenerator: BrowserProfileGenerator {
+open class DefaultBrowserProfileGenerator : BrowserProfileGenerator {
     override var conf: ImmutableConfig = ImmutableConfig()
+
     @Throws(Exception::class)
-    override fun invoke(fingerprint: Fingerprint): BrowserProfile = BrowserProfile.createDefault(fingerprint.browserType)
+    override fun invoke(fingerprint: Fingerprint): BrowserProfile =
+        BrowserProfile.createDefault(fingerprint.browserType)
 }
 
-open class SystemDefaultBrowserProfileGenerator: BrowserProfileGenerator {
+open class SystemDefaultBrowserProfileGenerator : BrowserProfileGenerator {
     override var conf: ImmutableConfig = ImmutableConfig()
+
     @Throws(Exception::class)
     override fun invoke(fingerprint: Fingerprint) = BrowserProfile.createSystemDefault(fingerprint.browserType)
 }
 
-open class PrototypeBrowserProfileGenerator: BrowserProfileGenerator {
+open class PrototypeBrowserProfileGenerator : BrowserProfileGenerator {
     override var conf: ImmutableConfig = ImmutableConfig()
+
     @Throws(Exception::class)
     override fun invoke(fingerprint: Fingerprint) = BrowserProfile.createDefault(fingerprint.browserType)
 }
@@ -44,12 +49,13 @@ open class SequentialBrowserProfileGenerator(
         // PRIVACY_CONTEXT_NUMBER is deprecated, use BROWSER_CONTEXT_NUMBER instead
 //        val fallbackValue = conf.getInt(PRIVACY_CONTEXT_NUMBER, 2)
 //        val browserContextNumber = conf.getInt(BROWSER_CONTEXT_NUMBER, fallbackValue)
-        val browserContextNumber = conf.getWithFallback(BROWSER_CONTEXT_NUMBER, PRIVACY_CONTEXT_NUMBER)?.toIntOrNull() ?: 2
+        val browserContextNumber =
+            conf.getWithFallback(BROWSER_CONTEXT_NUMBER, PRIVACY_CONTEXT_NUMBER)?.toIntOrNull() ?: 2
 
         // The minimum number of sequential browser profiles, the active privacy contexts is chosen from them
         val minProfiles = conf.getInt(MIN_SEQUENTIAL_BROWSER_PROFILE_NUMBER, 10)
         // The maximum number of sequential browser profiles, the active privacy contexts is chosen from them
-        var maxProfiles = conf.getInt(CapabilityTypes.MAX_SEQUENTIAL_PRIVACY_AGENT_NUMBER, minProfiles)
+        var maxProfiles = conf.getInt(MAX_SEQUENTIAL_PRIVACY_AGENT_NUMBER, minProfiles)
         maxProfiles = maxProfiles.coerceAtLeast(browserContextNumber).coerceAtLeast(minProfiles)
 
         return maxProfiles
@@ -78,7 +84,7 @@ open class SequentialBrowserProfileGenerator(
  * If the prototype Chrome browser exists, it copies the prototype Chrome browser's user data directory, and inherits
  * the prototype Chrome browser's settings.
  * */
-open class RandomBrowserProfileGenerator: BrowserProfileGenerator {
+open class RandomBrowserProfileGenerator : BrowserProfileGenerator {
     override var conf: ImmutableConfig = ImmutableConfig.DEFAULT
 
     @Throws(IOException::class)

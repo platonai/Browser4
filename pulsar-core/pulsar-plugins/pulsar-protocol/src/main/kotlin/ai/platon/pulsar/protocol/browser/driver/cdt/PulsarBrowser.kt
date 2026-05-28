@@ -16,11 +16,11 @@ import ai.platon.pulsar.common.warnInterruptible
 import ai.platon.pulsar.browser.impl.BrowserTab
 import ai.platon.pulsar.browser.impl.DevToolsConfig
 import ai.platon.pulsar.chrome.impl.RemoteChromeProtocol
-import ai.platon.pulsar.skeleton.browser.detail.AbstractBrowser
-import ai.platon.pulsar.skeleton.browser.driver.AbstractWebDriver
-import ai.platon.pulsar.skeleton.browser.driver.BrowserUnavailableException
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
-import ai.platon.pulsar.skeleton.browser.driver.WebDriverException
+import ai.platon.pulsar.browser.detail.AbstractBrowser
+import ai.platon.pulsar.browser.driver.AbstractWebDriver
+import ai.platon.pulsar.browser.driver.BrowserUnavailableException
+import ai.platon.pulsar.browser.driver.WebDriver
+import ai.platon.pulsar.browser.driver.WebDriverException
 import ai.platon.pulsar.skeleton.common.AppSystemInfo
 import ai.platon.pulsar.skeleton.context.PulsarContexts
 import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId

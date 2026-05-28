@@ -5,7 +5,7 @@ import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId.Companion.SYSTEM_DEFAULT
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.PrivacyContext
+import ai.platon.pulsar.browser.privacy.PrivacyContext
 import java.nio.file.Files
 import kotlin.test.*
 

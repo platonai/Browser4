@@ -9,8 +9,8 @@ import ai.platon.pulsar.common.config.Parameterized
 import ai.platon.pulsar.protocol.browser.emulator.WebDriverPoolException
 import ai.platon.pulsar.protocol.browser.emulator.WebDriverPoolExhaustedException
 import ai.platon.pulsar.protocol.browser.impl.BasicBrowserManager
-import ai.platon.pulsar.skeleton.browser.BrowserManager
-import ai.platon.pulsar.skeleton.browser.driver.*
+import ai.platon.pulsar.browser.BrowserManager
+import ai.platon.pulsar.browser.driver.*
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import ai.platon.pulsar.skeleton.common.persist.ext.eventHandlers
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult

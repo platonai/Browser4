@@ -6,7 +6,7 @@ import ai.platon.pulsar.common.AppPaths.WEB_CACHE_DIR
 import ai.platon.pulsar.dom.Documents
 import ai.platon.pulsar.persist.AbstractWebPage
 import ai.platon.pulsar.persist.ProtocolStatus
-import ai.platon.pulsar.persist.WebPage
+import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.persist.metadata.Name
 import org.jsoup.nodes.Document
 import java.nio.file.Files

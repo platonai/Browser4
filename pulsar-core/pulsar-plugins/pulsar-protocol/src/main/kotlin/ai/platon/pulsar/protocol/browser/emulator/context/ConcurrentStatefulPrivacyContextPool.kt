@@ -23,7 +23,7 @@ import ai.platon.pulsar.common.warnForClose
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager
 import ai.platon.pulsar.skeleton.CoreMetrics
 import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserProfile
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.PrivacyContext
+import ai.platon.pulsar.browser.privacy.PrivacyContext
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedDeque

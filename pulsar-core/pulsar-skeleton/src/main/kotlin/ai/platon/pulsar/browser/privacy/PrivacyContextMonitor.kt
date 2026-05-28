@@ -1,4 +1,4 @@
-package ai.platon.pulsar.skeleton.workflow.fetch.privacy
+package ai.platon.pulsar.browser.privacy
 
 import ai.platon.pulsar.common.concurrent.GracefulScheduledExecutor
 import ai.platon.pulsar.common.getLogger
@@ -13,6 +13,6 @@ open class PrivacyContextMonitor(
     private val logger = getLogger(this)
 
     override fun run() {
-        kotlin.runCatching { privacyManager.maintain() }.onFailure { warnInterruptible(this, it) }
+        runCatching { privacyManager.maintain() }.onFailure { warnInterruptible(this, it) }
     }
 }

@@ -13,13 +13,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package ai.platon.pulsar.skeleton.workflow.fetch.privacy
+package ai.platon.pulsar.browser.privacy
 
+import ai.platon.pulsar.browser.BrowserProfile
+import ai.platon.pulsar.browser.ProfileId
+import ai.platon.pulsar.browser.WebDriver
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.browser.BrowserFiles
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.browser.fingerprint.Fingerprint
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
@@ -37,15 +39,17 @@ import java.time.Duration
  * which we call a privacy leak, the privacy context has to be dropped,
  * and Browser4 will visit the page in another privacy context.
  * */
-interface PrivacyContext: AutoCloseable {
+interface PrivacyContext : AutoCloseable {
     /**
      * The privacy context id.
      * */
     val id: ProfileId
+
     /**
      * The associated browser profile.
      * */
     val profile: BrowserProfile
+
     /**
      * Check whether the privacy context is at full capacity. If the privacy context is
      * indeed at full capacity, it should not be used for processing new tasks,
@@ -59,14 +63,17 @@ interface PrivacyContext: AutoCloseable {
      * @return True if the privacy context is running at full capacity, false otherwise.
      * */
     val isFullCapacity: Boolean
+
     /**
      * Check whether the privacy context is running under loaded.
      * */
     val isUnderLoaded: Boolean
+
     /**
      * Check whether the privacy context is idle.
      * */
     val isIdle: Boolean
+
     /**
      * Check whether the privacy context is retired.
      *
@@ -76,6 +83,7 @@ interface PrivacyContext: AutoCloseable {
      * @return `true` if the privacy context is retired, `false` otherwise.
      */
     val isRetired: Boolean
+
     /**
      * Check whether the privacy context is leaked.
      *
@@ -85,6 +93,7 @@ interface PrivacyContext: AutoCloseable {
      * @return `true` if the privacy context is leaked, `false` otherwise.
      */
     val isLeaked: Boolean
+
     /**
      * Check whether the privacy context is good.
      *
@@ -92,6 +101,7 @@ interface PrivacyContext: AutoCloseable {
      * 1. the fetch speed is good
      */
     val isGood: Boolean
+
     /**
      * Check whether the privacy context is active.
      *
@@ -105,10 +115,12 @@ interface PrivacyContext: AutoCloseable {
      * Note: this flag does not guarantee consistency, and can change immediately after it's read
      * */
     val isActive: Boolean
+
     /**
      * Check whether the privacy context is closed.
      * */
     val isClosed: Boolean
+
     /**
      * A ready privacy context is ready to serve tasks.
      *
@@ -125,38 +137,47 @@ interface PrivacyContext: AutoCloseable {
      * Note: this flag does not guarantee consistency, and can change immediately after it's read
      * */
     val isReady: Boolean
+
     /**
      * The failure rate of the privacy context.
      * */
     val failureRate: Float
+
     /**
      * Check whether the failure rate is high.
      * */
     val isHighFailureRate: Boolean
+
     /**
      * The idle time of the privacy context.
      * */
     val idleTime: Duration
+
     /**
      * The elapsed time of the privacy context.
      * */
     val elapsedTime: Duration
+
     /**
      * A readable privacy context display.
      * */
     val display: String
+
     /**
      * Get the readable privacy context state.
      * */
     val state: Map<String, Any?>
+
     /**
      * Get the readable privacy context state.
      * */
     val readableState: String
+
     /**
      * Build the privacy context status string.
      * */
     fun buildStatusString(): String
+
     /**
      * The promised workers (free web drivers) count.
      *
@@ -169,10 +190,12 @@ interface PrivacyContext: AutoCloseable {
      * @return the number of workers promised.
      * */
     fun promisedWebDriverCount(): Int
+
     /**
      * Check if the privacy context promises at least one worker to provide.
      * */
     fun hasWebDriverPromise(): Boolean
+
     /**
      * Open a page in the privacy context.
      *
@@ -180,6 +203,7 @@ interface PrivacyContext: AutoCloseable {
      * @return The fetch result.
      * */
     suspend fun open(url: String): FetchResult
+
     /**
      * Open a page in the privacy context.
      *
@@ -188,6 +212,7 @@ interface PrivacyContext: AutoCloseable {
      * @return The fetch result.
      * */
     suspend fun open(url: String, fetchFun: suspend (FetchTask, WebDriver) -> FetchResult): FetchResult
+
     /**
      * Open a page in the privacy context.
      *
@@ -196,6 +221,7 @@ interface PrivacyContext: AutoCloseable {
      * @return The fetch result.
      * */
     suspend fun open(url: String, options: LoadOptions): FetchResult
+
     /**
      * Run a task in the privacy context.
      *
@@ -204,6 +230,7 @@ interface PrivacyContext: AutoCloseable {
      * @return The fetch result.
      * */
     suspend fun run(task: FetchTask, fetchFun: suspend (FetchTask, WebDriver) -> FetchResult): FetchResult
+
     /**
      * Dismiss the privacy context.
      *
@@ -211,6 +238,7 @@ interface PrivacyContext: AutoCloseable {
      * It should be called when the privacy context is no longer needed.
      * */
     fun dismiss()
+
     /**
      * Maintain the privacy context.
      *
@@ -218,6 +246,7 @@ interface PrivacyContext: AutoCloseable {
      * It should be called periodically to keep the privacy context alive.
      * */
     fun maintain()
+
     /**
      * Build the privacy context report.
      *
@@ -232,7 +261,8 @@ interface PrivacyContext: AutoCloseable {
         const val CONTEXT_DIR_PREFIX = "cx."
 
         // NOTE: Chrome DevTools remote debugging requires a non-default data directory. Specify this using --user-data-dir.
-        val SYSTEM_DEFAULT_BROWSER_CONTEXT_DIR_PLACEHOLDER: Path = AppPaths.SYSTEM_DEFAULT_BROWSER_CONTEXT_DIR_PLACEHOLDER
+        val SYSTEM_DEFAULT_BROWSER_CONTEXT_DIR_PLACEHOLDER: Path =
+            AppPaths.SYSTEM_DEFAULT_BROWSER_CONTEXT_DIR_PLACEHOLDER
 
         // The default context directory, if you need a permanent and isolate context, use this one.
         // NOTE: the user-default context is not a default context.
@@ -241,12 +271,14 @@ interface PrivacyContext: AutoCloseable {
         // The prototype context directory, all privacy contexts copies browser data from the prototype.
         // A typical prototype data dir is: ~/.browser4/browser/chrome/prototype/google-chrome/
         val PROTOTYPE_DATA_DIR: Path = AppPaths.CHROME_DATA_DIR_PROTOTYPE
+
         // A context dir is the dir which contains the browser data dir, and supports different browsers.
         // For example: ~/.browser4/browser/chrome/prototype/
         val PROTOTYPE_CONTEXT_DIR: Path = AppPaths.CHROME_DATA_DIR_PROTOTYPE.parent
 
         // A random context directory, if you need a random temporary context, use this one
         val NEXT_SEQUENTIAL_CONTEXT_DIR get() = BrowserFiles.computeNextSequentialContextDir()
+
         // A random context directory, if you need a random temporary context, use this one
         val RANDOM_TEMP_CONTEXT_DIR get() = BrowserFiles.computeRandomTmpContextDir(browserType = BrowserType.PULSAR_CHROME)
 

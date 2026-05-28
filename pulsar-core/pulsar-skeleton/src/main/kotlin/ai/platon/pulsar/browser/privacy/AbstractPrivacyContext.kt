@@ -1,5 +1,8 @@
-package ai.platon.pulsar.skeleton.workflow.fetch.privacy
+package ai.platon.pulsar.browser.privacy
 
+import ai.platon.pulsar.browser.BrowserProfile
+import ai.platon.pulsar.browser.WebDriver
+import ai.platon.pulsar.browser.common.BrowserErrorPageException
 import ai.platon.pulsar.common.HtmlIntegrity
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.config.CapabilityTypes
@@ -9,8 +12,6 @@ import ai.platon.pulsar.common.proxy.ProxyRetiredException
 import ai.platon.pulsar.common.proxy.ProxyVendorException
 import ai.platon.pulsar.common.readable
 import ai.platon.pulsar.persist.RetryScope
-import ai.platon.pulsar.skeleton.browser.driver.BrowserErrorPageException
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
@@ -96,22 +97,26 @@ abstract class AbstractPrivacyContext(
         get() = conf.getDuration(CapabilityTypes.PRIVACY_CONTEXT_IDLE_TIMEOUT, PRIVACY_CONTEXT_IDLE_TIMEOUT_DEFAULT)
     private val idleTimeout: Duration get() = privacyContextIdleTimeout.coerceAtLeast(fetchTaskTimeout)
 
-    private val isLeaked0: Boolean get() {
-        return !profile.isPermanent && privacyLeakWarnings.get() >= maximumWarnings
-    }
+    private val isLeaked0: Boolean
+        get() {
+            return !profile.isPermanent && privacyLeakWarnings.get() >= maximumWarnings
+        }
 
-    private val isActive0: Boolean get() {
-        return !isClosed && !isLeaked && !isRetired
-    }
+    private val isActive0: Boolean
+        get() {
+            return !isClosed && !isLeaked && !isRetired
+        }
 
     /**
      * The privacy context is retired, and should be closed soon.
      * */
     protected var retired = false
+
     /**
      * The idle time of the privacy context.
      * */
     override val idleTime get() = Duration.between(lastActiveTime, Instant.now())
+
     /**
      * Whether the privacy context is idle.
      * */
@@ -125,13 +130,14 @@ abstract class AbstractPrivacyContext(
 
     override val isGood get() = meterSuccesses.meanRate >= minimumThroughput
 
-    override val isLeaked: Boolean get() {
-        val leaked = isLeaked0
-        if (leaked) {
-            throttlingLogger.warn("Privacy context is leaked | {}", state)
+    override val isLeaked: Boolean
+        get() {
+            val leaked = isLeaked0
+            if (leaked) {
+                throttlingLogger.warn("Privacy context is leaked | {}", state)
+            }
+            return leaked
         }
-        return leaked
-    }
 
     override val isRetired get() = retired
 
@@ -145,14 +151,15 @@ abstract class AbstractPrivacyContext(
 
     override val isUnderLoaded get() = !isFullCapacity
 
-    override val state: Map<String, Any?> get() {
-        return mapOf(
-            "id" to id, "seq" to seq, "display" to display, "startTime" to startTime,
-            "closed" to isClosed, "leaked" to isLeaked, "active" to isActive0,
-            "highFailure" to isHighFailureRate, "idle" to isIdle, "good" to isGood,
-            "ready" to isReady, "retired" to isRetired
-        )
-    }
+    override val state: Map<String, Any?>
+        get() {
+            return mapOf(
+                "id" to id, "seq" to seq, "display" to display, "startTime" to startTime,
+                "closed" to isClosed, "leaked" to isLeaked, "active" to isActive0,
+                "highFailure" to isHighFailureRate, "idle" to isIdle, "good" to isGood,
+                "ready" to isReady, "retired" to isRetired
+            )
+        }
 
     override val readableState: String get() = formatState()
 
@@ -274,11 +281,15 @@ abstract class AbstractPrivacyContext(
      * @return the fetch result
      * */
     @Throws(Exception::class)
-    protected abstract suspend fun doRun(task: FetchTask, fetchFun: suspend (FetchTask, WebDriver) -> FetchResult): FetchResult
+    protected abstract suspend fun doRun(
+        task: FetchTask,
+        fetchFun: suspend (FetchTask, WebDriver) -> FetchResult
+    ): FetchResult
 
     override fun buildStatusString(): String {
         return "$readableState | promised drivers: ${promisedWebDriverCount()}"
     }
+
     /**
      * Dismisses the privacy context and marks it as retired, indicating that it should be closed later.
      * This function sets the `retired` flag to `true`, signaling that the privacy context is no longer active
@@ -289,6 +300,7 @@ abstract class AbstractPrivacyContext(
     override fun dismiss() {
         retired = true
     }
+
     /**
      * Do the maintaining jobs.
      * */

@@ -6,10 +6,10 @@ import ai.platon.pulsar.chrome.util.LauncherOptions
 import ai.platon.pulsar.chrome.util.ChromeLaunchException
 import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.pulsar.protocol.browser.driver.cdt.PulsarBrowser
-import ai.platon.pulsar.skeleton.browser.Browser
-import ai.platon.pulsar.skeleton.browser.BrowserLauncher
-import ai.platon.pulsar.skeleton.browser.driver.BrowserLaunchException
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
+import ai.platon.pulsar.browser.Browser
+import ai.platon.pulsar.browser.BrowserId
+import ai.platon.pulsar.browser.BrowserLauncher
+import ai.platon.pulsar.browser.common.BrowserLaunchException
 
 /**
  * A factory implementation to create browser instances.

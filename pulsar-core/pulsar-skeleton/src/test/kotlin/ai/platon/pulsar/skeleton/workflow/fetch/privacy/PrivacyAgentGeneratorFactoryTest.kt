@@ -1,8 +1,11 @@
 package ai.platon.pulsar.skeleton.workflow.fetch.privacy
 
+import ai.platon.pulsar.browser.privacy.BrowserProfileGeneratorFactory
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.skeleton.PulsarSettings
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserProfileGeneratorFactory.Companion.BROWSER_CONTEXT_MODE_TO_AGENTS
+import ai.platon.pulsar.browser.privacy.BrowserProfileGeneratorFactory.Companion.BROWSER_CONTEXT_MODE_TO_AGENTS
+import ai.platon.pulsar.browser.privacy.PrototypeBrowserProfileGenerator
+import ai.platon.pulsar.browser.privacy.SystemDefaultBrowserProfileGenerator
 import org.junit.jupiter.api.Assertions.assertTrue
 import kotlin.test.Test
 

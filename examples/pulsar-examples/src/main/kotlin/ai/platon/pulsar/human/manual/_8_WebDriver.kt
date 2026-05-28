@@ -3,7 +3,7 @@ package ai.platon.pulsar.human.manual
 import ai.platon.pulsar.core.api.PulsarContexts
 import ai.platon.pulsar.core.api.PulsarSession
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
+import ai.platon.pulsar.browser.driver.WebDriver
 import org.slf4j.LoggerFactory
 
 /**

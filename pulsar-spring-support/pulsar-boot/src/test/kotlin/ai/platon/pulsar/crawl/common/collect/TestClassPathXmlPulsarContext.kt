@@ -5,7 +5,7 @@ import ai.platon.pulsar.protocol.browser.emulator.context.MultiPrivacyContextMan
 import ai.platon.pulsar.protocol.browser.emulator.impl.PrivacyManagedBrowserFetcher
 import ai.platon.pulsar.ql.context.SQLContexts
 import ai.platon.pulsar.skeleton.context.support.AbstractPulsarContext
-import ai.platon.pulsar.skeleton.browser.BrowserManager
+import ai.platon.pulsar.browser.BrowserManager
 import kotlin.test.*
 
 class TestClassPathXmlPulsarContext {

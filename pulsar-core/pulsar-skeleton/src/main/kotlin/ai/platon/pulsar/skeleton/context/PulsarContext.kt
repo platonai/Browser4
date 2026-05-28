@@ -1,18 +1,18 @@
 package ai.platon.pulsar.skeleton.context
 
+import ai.platon.pulsar.browser.Browser
+import ai.platon.pulsar.browser.BrowserManager
+import ai.platon.pulsar.browser.common.BrowserLaunchException
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.urls.UrlAware
+import ai.platon.pulsar.core.api.WebDriver
+import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.external.ModelResponse
-import ai.platon.pulsar.persist.WebPage
+import ai.platon.pulsar.loop.TaskLoops
 import ai.platon.pulsar.persist.gora.generated.GWebPage
 import ai.platon.pulsar.skeleton.PulsarSettings
-import ai.platon.pulsar.loop.TaskLoops
-import ai.platon.pulsar.skeleton.browser.Browser
-import ai.platon.pulsar.skeleton.browser.BrowserManager
-import ai.platon.pulsar.skeleton.browser.driver.BrowserLaunchException
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.common.urls.NormURL
 import ai.platon.pulsar.skeleton.session.PulsarSession

@@ -1,12 +1,13 @@
-package ai.platon.pulsar.skeleton.workflow.fetch.privacy
+package ai.platon.pulsar.browser.privacy
 
+import ai.platon.pulsar.browser.BrowserProfile
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.browser.fingerprint.Fingerprint
 import ai.platon.pulsar.common.config.CapabilityTypes.PRIVACY_CONTEXT_CLOSE_LAZY
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.warnForClose
-import ai.platon.pulsar.persist.WebPage
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
+import ai.platon.pulsar.core.api.WebDriver
+import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.skeleton.common.AppSystemInfo
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
@@ -27,7 +28,7 @@ import kotlin.time.Duration.Companion.milliseconds
  */
 abstract class AbstractPrivacyManager(
     override val conf: ImmutableConfig
-): PrivacyManager {
+) : PrivacyManager {
     private val logger = LoggerFactory.getLogger(AbstractPrivacyManager::class.java)
     private val closed = AtomicBoolean()
 
@@ -105,7 +106,10 @@ abstract class AbstractPrivacyManager(
      * @return The result of the fetch task.
      */
     @Throws(Exception::class)
-    abstract override suspend fun run(task: FetchTask, fetchFun: suspend (FetchTask, WebDriver) -> FetchResult): FetchResult
+    abstract override suspend fun run(
+        task: FetchTask,
+        fetchFun: suspend (FetchTask, WebDriver) -> FetchResult
+    ): FetchResult
 
     /**
      * Attempts to get the next ready privacy context for a given page, fingerprint, and task.
@@ -133,7 +137,11 @@ abstract class AbstractPrivacyManager(
      * @param task The fetch task associated with the context.
      * @return The next under-loaded privacy context, or null if none is available.
      */
-    abstract fun tryGetNextUnderLoadedPrivacyContext(page: WebPage, fingerprint: Fingerprint, task: FetchTask): PrivacyContext?
+    abstract fun tryGetNextUnderLoadedPrivacyContext(
+        page: WebPage,
+        fingerprint: Fingerprint,
+        task: FetchTask
+    ): PrivacyContext?
 
     /**
      * Gets or creates a privacy context for the given browser profile.
@@ -186,7 +194,7 @@ abstract class AbstractPrivacyManager(
      * @param privacyContext The privacy context to close.
      */
     override fun close(privacyContext: PrivacyContext) {
-        kotlin.runCatching { doClose(privacyContext) }.onFailure { warnForClose(this, it) }
+        runCatching { doClose(privacyContext) }.onFailure { warnForClose(this, it) }
     }
 
     /**
@@ -283,7 +291,7 @@ abstract class AbstractPrivacyManager(
     private fun reportHistoricalContexts() {
         val maximumRecords = 15
         val historicalContexts = zombieContexts.filter { it.profile.isTemporary } +
-            deadContexts.filter { it.profile.isTemporary }
+                deadContexts.filter { it.profile.isTemporary }
         if (historicalContexts.isNotEmpty()) {
             val prefix = "The latest temporary context throughput: "
             val postfix = " (success/min)"

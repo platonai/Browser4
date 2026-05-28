@@ -15,7 +15,7 @@ import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.common.urls.UrlAware
 import ai.platon.pulsar.persist.AbstractWebPage
 import ai.platon.pulsar.persist.WebDBException
-import ai.platon.pulsar.persist.WebPage
+import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.skeleton.common.AppSystemInfo
 import ai.platon.pulsar.skeleton.common.message.PageLoadStatusFormatter
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
@@ -23,7 +23,7 @@ import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.context.PulsarContexts
 import ai.platon.pulsar.skeleton.context.support.AbstractPulsarContext
 import ai.platon.pulsar.skeleton.workflow.common.url.ListenableUrl
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.AbstractPrivacyContext
+import ai.platon.pulsar.browser.privacy.AbstractPrivacyContext
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import com.codahale.metrics.Gauge
 import kotlinx.coroutines.*

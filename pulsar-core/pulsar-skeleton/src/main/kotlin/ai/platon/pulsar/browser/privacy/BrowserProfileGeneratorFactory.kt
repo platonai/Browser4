@@ -1,4 +1,4 @@
-package ai.platon.pulsar.skeleton.workflow.fetch.privacy
+package ai.platon.pulsar.browser.privacy
 
 import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.pulsar.common.SParser
@@ -71,7 +71,7 @@ class BrowserProfileGeneratorFactory(val conf: ImmutableConfig) {
      * The default class is `DefaultPageEvent`.
      *
      * Set the class:
-     * `System.setProperty(CapabilityTypes.PRIVACY_AGENT_GENERATOR_CLASS, "ai.platon.pulsar.skeleton.workflow.fetch.privacy.DefaultBrowserProfileGenerator")`
+     * `System.setProperty(CapabilityTypes.PRIVACY_AGENT_GENERATOR_CLASS, "ai.platon.pulsar.browser.privacy.DefaultBrowserProfileGenerator")`
      * */
     private fun forName(conf: ImmutableConfig, className: String): BrowserProfileGenerator {
         val defaultClazz = DefaultBrowserProfileGenerator::class.java

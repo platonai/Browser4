@@ -24,11 +24,11 @@ import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager.Companion.D
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager.Companion.DRIVER_SAFE_CLOSE_TIME_OUT
 import ai.platon.pulsar.protocol.browser.emulator.WebDriverPoolException
 import ai.platon.pulsar.protocol.browser.emulator.WebDriverPoolExhaustedException
-import ai.platon.pulsar.skeleton.browser.detail.AbstractBrowser
-import ai.platon.pulsar.skeleton.browser.driver.BrowserUnavailableException
-import ai.platon.pulsar.skeleton.browser.driver.IllegalWebDriverStateException
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
-import ai.platon.pulsar.skeleton.browser.driver.WebDriverException
+import ai.platon.pulsar.browser.detail.AbstractBrowser
+import ai.platon.pulsar.browser.driver.BrowserUnavailableException
+import ai.platon.pulsar.browser.driver.IllegalWebDriverStateException
+import ai.platon.pulsar.browser.driver.WebDriver
+import ai.platon.pulsar.browser.driver.WebDriverException
 import ai.platon.pulsar.skeleton.common.AppSystemInfo
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult

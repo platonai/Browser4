@@ -1,4 +1,4 @@
-package ai.platon.pulsar.skeleton.browser
+package ai.platon.pulsar.skeleton.workflow.fetch
 
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.persist.WebPage

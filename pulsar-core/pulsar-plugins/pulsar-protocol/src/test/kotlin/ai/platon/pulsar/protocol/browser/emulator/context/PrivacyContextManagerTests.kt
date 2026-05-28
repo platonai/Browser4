@@ -13,9 +13,9 @@ import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager
 import ai.platon.pulsar.skeleton.PulsarSettings
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
+import ai.platon.pulsar.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserProfile
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.PrivacyContext
+import ai.platon.pulsar.browser.privacy.PrivacyContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.apache.commons.lang3.RandomStringUtils

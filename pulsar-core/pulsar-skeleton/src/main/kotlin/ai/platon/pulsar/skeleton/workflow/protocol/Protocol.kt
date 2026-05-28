@@ -1,6 +1,6 @@
 package ai.platon.pulsar.skeleton.workflow.protocol
 
-import ai.platon.pulsar.persist.WebPage
+import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.skeleton.workflow.common.LazyConfigurable
 import crawlercommons.robots.BaseRobotRules
 

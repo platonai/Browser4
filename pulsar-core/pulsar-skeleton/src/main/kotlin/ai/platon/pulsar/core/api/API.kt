@@ -15,9 +15,9 @@ typealias CrawlEventHandlers = ai.platon.pulsar.skeleton.event.CrawlEventHandler
 typealias LoadEventHandlers = ai.platon.pulsar.skeleton.event.LoadEventHandlers
 typealias BrowserEventHandlers = ai.platon.pulsar.skeleton.event.BrowseEventHandlers
 
-typealias BrowserManager = ai.platon.pulsar.skeleton.browser.BrowserManager
-typealias Browser = ai.platon.pulsar.skeleton.browser.Browser
-typealias WebDriver = ai.platon.pulsar.skeleton.browser.driver.WebDriver
+typealias BrowserManager = ai.platon.pulsar.browser.BrowserManager
+typealias Browser = ai.platon.pulsar.browser.Browser
+typealias WebDriver = ai.platon.pulsar.browser.WebDriver
 typealias PageSnapshot = ai.platon.pulsar.persist.PageSnapshot
 typealias WebPage = ai.platon.pulsar.persist.WebPage
 typealias ProtocolStatus = ai.platon.pulsar.persist.ProtocolStatus

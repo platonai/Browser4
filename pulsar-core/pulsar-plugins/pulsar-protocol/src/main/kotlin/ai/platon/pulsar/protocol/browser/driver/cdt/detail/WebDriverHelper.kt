@@ -11,10 +11,10 @@ import ai.platon.pulsar.common.MultiSinkMessageWriter
 import ai.platon.pulsar.common.alwaysFalse
 import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.common.warnInterruptible
-import ai.platon.pulsar.skeleton.browser.driver.JsEvaluation
-import ai.platon.pulsar.skeleton.browser.driver.JsException
-import ai.platon.pulsar.skeleton.browser.driver.NavigateEntry
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
+import ai.platon.pulsar.browser.driver.JsEvaluation
+import ai.platon.pulsar.browser.driver.JsException
+import ai.platon.pulsar.browser.driver.NavigateEntry
+import ai.platon.pulsar.browser.driver.WebDriver
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue

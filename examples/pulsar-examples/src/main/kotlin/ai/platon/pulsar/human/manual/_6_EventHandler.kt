@@ -7,7 +7,7 @@ import ai.platon.pulsar.skeleton.PulsarSettings
 import ai.platon.pulsar.skeleton.context.PulsarContexts
 import ai.platon.pulsar.skeleton.event.impl.DefaultPageEventHandlers
 import ai.platon.pulsar.skeleton.workflow.common.url.ListenableHyperlink
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
+import ai.platon.pulsar.browser.driver.WebDriver
 import java.util.concurrent.atomic.AtomicInteger
 
 /**

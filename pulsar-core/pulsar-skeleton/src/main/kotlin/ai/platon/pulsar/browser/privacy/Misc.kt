@@ -1,4 +1,4 @@
-package ai.platon.pulsar.skeleton.workflow.fetch.privacy
+package ai.platon.pulsar.browser.privacy
 
 enum class CloseStrategy {
     ASAP,

@@ -1,5 +1,6 @@
 package ai.platon.pulsar.skeleton.workflow.fetch.privacy
 
+import ai.platon.pulsar.browser.privacy.SequentialBrowserProfileGenerator
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.browser.fingerprint.Fingerprint

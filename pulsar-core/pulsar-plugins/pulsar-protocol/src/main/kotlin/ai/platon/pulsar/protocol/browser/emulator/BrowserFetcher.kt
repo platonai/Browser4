@@ -15,10 +15,10 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator
 
-import ai.platon.pulsar.skeleton.browser.BrowserFetcher
+import ai.platon.pulsar.skeleton.workflow.fetch.BrowserFetcher
 import ai.platon.pulsar.skeleton.workflow.fetch.Fetcher
 import ai.platon.pulsar.skeleton.workflow.fetch.WebDriverFetcher
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.PrivacyManager
+import ai.platon.pulsar.browser.privacy.PrivacyManager
 
 /**
  * Created by Vincent on 18-1-1.

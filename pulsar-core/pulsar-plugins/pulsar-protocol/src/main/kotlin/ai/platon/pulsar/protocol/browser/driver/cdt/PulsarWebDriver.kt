@@ -26,7 +26,7 @@ import ai.platon.pulsar.chrome.impl.*
 import ai.platon.pulsar.chrome.util.ChromeDriverException
 import ai.platon.pulsar.chrome.util.ChromeIOException
 import ai.platon.pulsar.protocol.browser.driver.cdt.detail.*
-import ai.platon.pulsar.skeleton.browser.driver.*
+import ai.platon.pulsar.browser.driver.*
 import ai.platon.pulsar.skeleton.workflow.common.InternalURLUtil
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper

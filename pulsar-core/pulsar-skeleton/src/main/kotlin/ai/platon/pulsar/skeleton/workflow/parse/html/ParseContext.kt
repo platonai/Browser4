@@ -2,7 +2,7 @@ package ai.platon.pulsar.skeleton.workflow.parse.html
 
 import ai.platon.pulsar.skeleton.workflow.parse.ParseResult
 import ai.platon.pulsar.dom.FeaturedDocument
-import ai.platon.pulsar.persist.WebPage
+import ai.platon.pulsar.core.api.WebPage
 
 /**
  * Created by Vincent on 17-7-28.

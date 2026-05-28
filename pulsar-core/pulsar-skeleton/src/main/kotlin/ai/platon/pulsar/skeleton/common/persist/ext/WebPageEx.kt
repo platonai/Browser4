@@ -1,7 +1,7 @@
 package ai.platon.pulsar.skeleton.common.persist.ext
 
 import ai.platon.pulsar.common.PulsarParams.VAR_LOAD_OPTIONS
-import ai.platon.pulsar.persist.WebPage
+import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.persist.WebPageExt
 import ai.platon.pulsar.persist.model.GoraWebPage
 import ai.platon.pulsar.skeleton.common.options.LoadOptions

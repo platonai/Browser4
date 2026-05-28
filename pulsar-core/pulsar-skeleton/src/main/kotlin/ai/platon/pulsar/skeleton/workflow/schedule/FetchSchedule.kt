@@ -1,7 +1,7 @@
 package ai.platon.pulsar.skeleton.workflow.schedule
 
 import ai.platon.pulsar.common.config.Parameterized
-import ai.platon.pulsar.persist.WebPage
+import ai.platon.pulsar.core.api.WebPage
 import java.time.Duration
 import java.time.Instant
 
