@@ -15,6 +15,7 @@ import java.nio.file.Files
 import java.time.Duration
 import java.time.LocalDateTime
 import java.time.temporal.ChronoUnit
+import java.util.Timer
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -121,13 +122,13 @@ open class MetricsSystem(
     private val jobIdent = conf[CapabilityTypes.PARAM_JOB_NAME, DateTimes.now("HHmm")]
     private val reportDir = AppPaths.METRICS_DIR.resolve(timeIdent).resolve(jobIdent)
 
-    val name = AppContext.APP_NAME
-    val initialDelay = conf.getDuration("metrics.report.initial.delay", Duration.ofMinutes(3))
-    val csvReportInterval = conf.getDuration("metrics.csv.report.interval", Duration.ofMinutes(5))
-    val slf4jReportInterval = conf.getDuration("metrics.slf4j.report.interval", Duration.ofMinutes(2))
+    val name: String = AppContext.APP_NAME
+    val initialDelay: Duration = conf.getDuration("metrics.report.initial.delay", Duration.ofMinutes(3))
+    val csvReportInterval: Duration = conf.getDuration("metrics.csv.report.interval", Duration.ofMinutes(5))
+    val slf4jReportInterval: Duration = conf.getDuration("metrics.slf4j.report.interval", Duration.ofMinutes(2))
     val graphiteReportInterval = conf.getDuration("metrics.graphite.report.interval", Duration.ofMinutes(2))
-    val counterReportInterval = conf.getDuration("metrics.counter.report.interval", Duration.ofSeconds(30))
-    val graphiteServer = conf.get("graphite.server", "crawl2")
+    val counterReportInterval: Duration = conf.getDuration("metrics.counter.report.interval", Duration.ofSeconds(30))
+    val graphiteServer = conf["graphite.server", "crawl2"]
     val graphiteServerPort = conf.getInt("graphite.server.port", 2004)
     val batchSize = conf.getInt("graphite.pickled.batch.size", 100)
 
@@ -161,8 +162,8 @@ open class MetricsSystem(
             .filter(MetricFilters.notContains(SHADOW_METRIC_SYMBOL))
             .build(pickled)
     }
-    private val hourlyTimer = java.util.Timer("MetricHourly", true)
-    private val dailyTimer = java.util.Timer("MetricDaily", true)
+    private val hourlyTimer = Timer("MetricHourly", true)
+    private val dailyTimer = Timer("MetricDaily", true)
 
     private val closed = AtomicBoolean()
 

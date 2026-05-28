@@ -68,6 +68,11 @@ abstract class AbstractPulsarSession(
 
     override val configuration get() = context.configuration
 
+    /**
+     * A label used to identify the session
+     * */
+    override var label: String = ""
+
     override val display get() = "$id"
 
     private val closed = AtomicBoolean()
@@ -394,7 +399,7 @@ abstract class AbstractPulsarSession(
 
     override fun parse(page: WebPage, noCache: Boolean) = parse0(page, noCache)
 
-    override suspend fun loadDocument(url: String) = parse(load(url))
+    override fun loadDocument(url: String) = runBlocking { parse(load(url)) }
 
     override suspend fun loadDocument(url: String, args: String) = parse(load(url, args))
 

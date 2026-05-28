@@ -16,6 +16,9 @@ import ai.platon.pulsar.persist.gora.generated.GWebPage
 import ai.platon.pulsar.persist.model.GoraWebPage
 import ai.platon.pulsar.skeleton.PulsarSettings
 import ai.platon.pulsar.skeleton.TaskLoops
+import ai.platon.pulsar.skeleton.browser.BrowserFetcher
+import ai.platon.pulsar.skeleton.browser.BrowserManager
+import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.common.urls.CombinedUrlNormalizer
 import ai.platon.pulsar.skeleton.common.urls.NormURL
@@ -23,15 +26,12 @@ import ai.platon.pulsar.skeleton.context.PulsarContext
 import ai.platon.pulsar.skeleton.session.AbstractPulsarSession
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import ai.platon.pulsar.skeleton.workflow.common.FetchState
-import ai.platon.pulsar.skeleton.common.GlobalCache
-import ai.platon.pulsar.skeleton.common.GlobalCacheFactory
+import ai.platon.pulsar.skeleton.workflow.common.GlobalCache
+import ai.platon.pulsar.skeleton.workflow.common.GlobalCacheFactory
 import ai.platon.pulsar.skeleton.workflow.component.BatchFetchComponent
 import ai.platon.pulsar.skeleton.workflow.component.LoadComponent
 import ai.platon.pulsar.skeleton.workflow.component.ParseComponent
 import ai.platon.pulsar.skeleton.workflow.component.UpdateComponent
-import ai.platon.pulsar.skeleton.browser.BrowserFetcher
-import ai.platon.pulsar.skeleton.browser.BrowserManager
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.workflow.filter.ChainedUrlNormalizer
 import org.slf4j.LoggerFactory
 import org.springframework.beans.BeansException
@@ -103,6 +103,7 @@ abstract class AbstractPulsarContext(
      * */
     private val abnormalPage
         get() = when {
+            !isActive -> null
             loadComponentOrNull != null -> null // everything is OK
             else -> GoraWebPage.NIL
         }
@@ -112,6 +113,7 @@ abstract class AbstractPulsarContext(
      * */
     private val abnormalPages: List<WebPage>?
         get() = when {
+            !isActive -> listOf()
             loadComponentOrNull != null -> null // everything is OK
             else -> listOf()
         }
@@ -119,7 +121,7 @@ abstract class AbstractPulsarContext(
     /**
      * Flag that indicates whether this context is currently active.
      * */
-    override val isActive get() = !closed.get() && applicationContext.isActive
+    override val isActive get() = !closed.get() && applicationContext.isActive && AppContext.isActive
 
     /**
      * The context id
@@ -217,7 +219,7 @@ abstract class AbstractPulsarContext(
     abstract override fun createSession(settings: PulsarSettings): PulsarSession
 
     override fun getOrCreateSession(settings: PulsarSettings): PulsarSession =
-        sessions.values.firstOrNull() ?: createSession()
+        sessions.values.firstOrNull() ?: createSession(settings)
 
     /**
      * Close the given session
@@ -323,8 +325,14 @@ abstract class AbstractPulsarContext(
     /**
      * Check the fetch state of a page.
      * */
-    override fun fetchState(page: WebPage, options: LoadOptions) =
-        loadComponentOrNull?.fetchState(page, options) ?: CheckState(FetchState.DO_NOT_FETCH, "closed")
+    override fun fetchState(page: WebPage, options: LoadOptions): CheckState {
+        if (!isActive) {
+            return CheckState(FetchState.DO_NOT_FETCH, "closed")
+        }
+
+        val fetchState = loadComponentOrNull?.fetchState(page, options)
+        return fetchState ?: CheckState(FetchState.DO_NOT_FETCH, "closed")
+    }
 
     /**
      * Scan pages in the storage.
@@ -372,7 +380,7 @@ abstract class AbstractPulsarContext(
      * @return The WebPage. If there is no web page at local storage nor remote location, [GoraWebPage.NIL] is returned.
      */
     @Throws(WebDBException::class)
-    override fun load(url: String, options: LoadOptions): WebPage {
+    override suspend fun load(url: String, options: LoadOptions): WebPage {
         val normURL = normalize(url, options)
         return abnormalPage ?: loadComponent.load(normURL)
     }
@@ -385,7 +393,7 @@ abstract class AbstractPulsarContext(
      * @return The WebPage. If there is no web page at local storage nor remote location, [GoraWebPage.NIL] is returned.
      */
     @Throws(WebDBException::class)
-    override fun load(url: URL, options: LoadOptions): WebPage {
+    override suspend fun load(url: URL, options: LoadOptions): WebPage {
         return abnormalPage ?: loadComponent.load(url, options)
     }
 
@@ -396,7 +404,7 @@ abstract class AbstractPulsarContext(
      * @return The WebPage. If there is no web page at local storage nor remote location, [GoraWebPage.NIL] is returned.
      */
     @Throws(WebDBException::class)
-    override fun load(url: NormURL): WebPage {
+    override suspend fun load(url: NormURL): WebPage {
         return abnormalPage ?: loadComponent.load(url)
     }
 

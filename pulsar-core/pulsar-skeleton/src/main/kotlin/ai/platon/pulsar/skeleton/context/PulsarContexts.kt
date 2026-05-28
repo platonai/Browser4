@@ -2,6 +2,7 @@ package ai.platon.pulsar.skeleton.context
 
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.warnForClose
+import ai.platon.pulsar.skeleton.context.PulsarContexts.shutdown
 import ai.platon.pulsar.skeleton.context.support.AbstractPulsarContext
 import ai.platon.pulsar.skeleton.context.support.BasicPulsarContext
 import ai.platon.pulsar.skeleton.context.support.ClassPathXmlPulsarContext
@@ -17,12 +18,12 @@ import org.springframework.context.support.AbstractApplicationContext
  * - Capture of live web pages into a local `WebPage`
  * - Parsing a `WebPage` into a lightweight `Document`
  * - Event handlers across the WebPage lifecycle
- * - One-line scrapers & full crawler (fetching, parsing, scheduling, priorities, crawl pool, plugins)
+ * - One-line scrapers & full crawler (fetching, parsing, scheduling, priorities, browser pool, plugins)
  * - Basic LLM support for interacting with pages or documents
  *
  * Additional context types:
  * - `SQLContexts`: enables X‑SQL for advanced web page modeling
- * - `PulsarContexts`: enables agentic/browser‑based agents (`PulsarSession`)
+ * - `AgenticContexts`: enables agentic/browser‑based agents (`AgenticSession`)
  *
  * This object coordinates the active context, shutdown hooks, and session creation.
  *
@@ -146,10 +147,6 @@ object PulsarContexts {
     @JvmStatic
     @Throws(Exception::class)
     fun getOrCreateSession() = getOrCreate().getOrCreateSession()
-
-    @JvmStatic
-    @Throws(Exception::class)
-    fun launchDefaultBrowser() = getOrCreate().launchDefaultBrowser()
 
     /**
      * Waits for all submitted URLs to be processed.

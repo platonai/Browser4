@@ -1,23 +1,28 @@
 package ai.platon.pulsar.skeleton.browser.driver
 
-import ai.platon.pulsar.driver.NetworkResourceResponse
-import ai.platon.pulsar.driver.NodeRef
-import ai.platon.pulsar.driver.chrome.dom.model.NanoDOMTree
-import ai.platon.pulsar.driver.common.BrowserSettings
+import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.ai.llm.MCP
-import ai.platon.pulsar.common.serialize.json.Pson
-import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.math.geometric.PointD
 import ai.platon.pulsar.common.math.geometric.RectD
+import ai.platon.pulsar.common.serialize.json.Pson
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.common.urls.Hyperlink
 import ai.platon.pulsar.dom.nodes.GeoAnchor
+import ai.platon.pulsar.driver.NetworkResourceResponse
+import ai.platon.pulsar.driver.NodeRef
+import ai.platon.pulsar.driver.chrome.dom.model.BrowserUseState
+import ai.platon.pulsar.driver.chrome.dom.model.NanoDOMTree
+import ai.platon.pulsar.driver.chrome.dom.model.PageTarget
+import ai.platon.pulsar.driver.chrome.dom.model.SnapshotOptions
+import ai.platon.pulsar.driver.common.BrowserSettings
 import ai.platon.pulsar.external.ModelResponse
 import ai.platon.pulsar.skeleton.browser.detail.AbstractBrowser
 import com.google.common.annotations.Beta
 import org.jsoup.Connection
 import java.io.Closeable
 import java.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * [WebDriver] defines a concise interface to visit and manipulate webpages. @mcp
@@ -137,9 +142,14 @@ interface WebDriver : Closeable {
     val parentSid: Int
 
     /**
-     * The guid of the driver.
+     * The GUID of the driver.
      * */
     val guid: String
+
+    /**
+     * The readable state
+     * */
+    val readableState: String
 
     /**
      * The browser of the driver.
@@ -207,6 +217,18 @@ interface WebDriver : Closeable {
      * ```
      * */
     val timeoutPolicy: Map<String, Duration>
+
+    /**
+     * Quick check if the connection to the backend tab is open.
+     * */
+    val isOpen: Boolean
+
+    /**
+     * Check if this driver is healthy.
+     *
+     * This is a heavy operation and should be called with low frequency.
+     * */
+    suspend fun healthy(): CheckState
 
     /**
      * Adds a script which would be evaluated whenever the page is navigated. @mcp
@@ -441,7 +463,14 @@ interface WebDriver : Closeable {
      * @return A [NanoDOMTree] representing the current page state, or null if retrieval fails.
      * */
     @MCP
+    @Throws(WebDriverException::class)
     suspend fun nanoDOMTree(): NanoDOMTree?
+
+    @Throws(WebDriverException::class)
+    suspend fun browserUseState(
+        target: PageTarget = PageTarget(),
+        snapshotOptions: SnapshotOptions = SnapshotOptions()
+    ): BrowserUseState
 
     /**
      * Interact with an AI model using the context of the element selected by [selector]. @mcp
@@ -499,6 +528,25 @@ interface WebDriver : Closeable {
     @Throws(WebDriverException::class)
     @MCP
     suspend fun clearBrowserCookies()
+
+    /**
+     * Saves the current browser storage state, including cookies and the active origin's localStorage, as JSON. @mcp
+     *
+     * @return A JSON string that can later be passed to [loadStorageState].
+     */
+    @Throws(WebDriverException::class)
+    @MCP
+    suspend fun saveStorageState(): String
+
+    /**
+     * Loads a previously saved browser storage state JSON, restoring cookies and localStorage. @mcp
+     *
+     * @param state A JSON string produced by [saveStorageState].
+     * @return A JSON summary of the restored cookies, origins, and localStorage entries.
+     */
+    @Throws(WebDriverException::class)
+    @MCP
+    suspend fun loadStorageState(state: String): String
 
     /**
      * Wait until the element identified by the selector becomes present in the DOM or timeout. @mcp
@@ -1212,6 +1260,38 @@ interface WebDriver : Closeable {
     suspend fun scrollToViewport(n: Double, smooth: Boolean = true): Double
 
     /**
+     * The mouse wheels down for [count] times. @mcp
+     *
+     * ```kotlin
+     * driver.mouseWheelDown(3)
+     * ```
+     *
+     * @param count The times to wheel down.
+     * @param deltaX The distance to wheel horizontally.
+     * @param deltaY The distance to wheel vertically.
+     * @param delayMillis The delay time in milliseconds.
+     */
+    @Throws(WebDriverException::class)
+    @MCP
+    suspend fun mouseWheelDown(count: Int = 1, deltaX: Double = 0.0, deltaY: Double = 150.0, delayMillis: Long = 0)
+
+    /**
+     * The mouse wheels up for [count] times. @mcp
+     *
+     * ```kotlin
+     * driver.mouseWheelUp(3)
+     * ```
+     *
+     * @param count The times to wheel up.
+     * @param deltaX The distance to wheel horizontally.
+     * @param deltaY The distance to wheel vertically.
+     * @param delayMillis The delay time in milliseconds.
+     */
+    @Throws(WebDriverException::class)
+    @MCP
+    suspend fun mouseWheelUp(count: Int = 1, deltaX: Double = 0.0, deltaY: Double = -150.0, delayMillis: Long = 0)
+
+    /**
      * Scrolls the mouse wheel by the provided deltas. @mcp
      *
      * Positive [deltaY] scrolls down and negative [deltaY] scrolls up.
@@ -1279,6 +1359,7 @@ interface WebDriver : Closeable {
 //    @Throws(WebDriverException::class)
 //    @MCP
 //    suspend fun mouseUp(x: Double, y: Double, button: String = "left", modifier: String? = null)
+
 
     /**
      * The mouse moves to the element with [selector]. @mcp
@@ -1929,7 +2010,7 @@ interface WebDriver : Closeable {
      * @param millis The amount of time to delay, in milliseconds.
      * */
     @MCP
-    suspend fun delay(millis: Long = 1000) = kotlinx.coroutines.delay(millis)
+    suspend fun delay(millis: Long = 1000) = kotlinx.coroutines.delay(millis.milliseconds)
 
     /**
      * Delay for a given amount of time. @mcp
@@ -1937,7 +2018,7 @@ interface WebDriver : Closeable {
      * @param duration The amount of time to delay.
      * */
     @MCP
-    suspend fun delay(duration: Duration) = kotlinx.coroutines.delay(duration.toMillis())
+    suspend fun delay(duration: Duration) = kotlinx.coroutines.delay(duration.toMillis().milliseconds)
 
     /**
      * Delay for a given amount of time. @mcp
@@ -1945,7 +2026,8 @@ interface WebDriver : Closeable {
      * @param duration The amount of time to delay.
      * */
     @MCP
-    suspend fun delay(duration: kotlin.time.Duration) = kotlinx.coroutines.delay(duration.inWholeMilliseconds)
+    suspend fun delay(duration: kotlin.time.Duration) =
+        kotlinx.coroutines.delay(duration.inWholeMilliseconds.milliseconds)
 
     /**
      * Upload files to the element located by [selector]. @mcp

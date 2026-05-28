@@ -21,6 +21,9 @@ open class BasicPulsarContext(
 
     @Throws(Exception::class)
     override fun createSession(settings: PulsarSettings): BasicPulsarSession {
-        return createSession().also { settings.overrideConfiguration(it.sessionConfig) }
+        val session = BasicPulsarSession(this, configuration.toVolatileConfig())
+        settings.label?.let { session.label = it }
+        settings.overrideConfiguration(session.sessionConfig)
+        return session.also { sessions[it.id] = it }
     }
 }

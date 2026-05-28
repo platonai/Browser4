@@ -1,15 +1,19 @@
 package ai.platon.pulsar.skeleton.browser.driver
 
-import ai.platon.pulsar.driver.NetworkResourceResponse
+import ai.platon.pulsar.driver.chrome.NetworkResourceResponse
 import ai.platon.pulsar.driver.chrome.dom.SnapshotService
-import ai.platon.pulsar.common.*
+import ai.platon.pulsar.common.AppContext
+import ai.platon.pulsar.common.CheckState
+import ai.platon.pulsar.common.DateTimes
+import ai.platon.pulsar.common.ResourceStatus
+import ai.platon.pulsar.common.getTracerOrNull
 import ai.platon.pulsar.common.urls.Hyperlink
 import ai.platon.pulsar.common.urls.URLUtils
+import ai.platon.pulsar.common.warnForClose
 import ai.platon.pulsar.dom.nodes.GeoAnchor
 import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.external.ModelResponse
 import ai.platon.pulsar.skeleton.browser.detail.AbstractBrowser
-import com.google.common.annotations.Beta
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
@@ -153,10 +157,7 @@ abstract class AbstractWebDriver(
 
     open val chatModel get() = ChatModelFactory.getOrCreateOrNull(config)
     open val implementation: Any = this
-
-    // TODO: Will move to WebDriver
-    @Beta
-    open val snapshotService: SnapshotService? = null
+    abstract val snapshotService: SnapshotService
 
     /** Idle timeout before a READY driver is considered stale and eligible for recycling/retirement. */
     var idleTimeout: Duration = Duration.ofMinutes(10)
@@ -180,7 +181,9 @@ abstract class AbstractWebDriver(
     val isCrashed get() = crashed.get()
 
     /** Human-readable composite status string (e.g. WORKING,IDLE or READY,REUSED). */
-    val status: String
+    val status: String get() = readableState
+
+    override val readableState: String
         get() {
             val sb = StringBuilder()
             val st = state.get() ?: return ""
@@ -527,6 +530,9 @@ abstract class AbstractWebDriver(
     override suspend fun waitUntil(timeout: Duration, predicate: suspend () -> Boolean) =
         waitUntil("waitUtil", timeout, predicate)
 
+
+
+
     /**
      * Generate a random delay in milliseconds for an action.
      * @param action Named action bucket (fallbacks: specific -> default -> provided fallback range).
@@ -688,18 +694,34 @@ abstract class AbstractWebDriver(
         return session
     }
 
-    fun checkState(action: String = ""): Boolean {
-        if (!isActive) {
-            return false
-        }
-        if (isCanceled) {
-            return false
-        }
+    fun quickCheckHealthy(action: String = ""): CheckState {
         if (action.isNotBlank()) {
             lastActiveTime = Instant.now()
             navigateEntry.refresh(action)
         }
-        return isActive
+
+        if (!isActive) {
+            return CheckState(ResourceStatus.SC_SERVICE_UNAVAILABLE, "WebDriver is not active")
+        }
+
+        if (isCanceled) {
+            return CheckState(ResourceStatus.SC_SERVICE_UNAVAILABLE, "WebDriver is canceled")
+        }
+
+        if (isQuit) {
+            return CheckState(ResourceStatus.SC_SERVICE_UNAVAILABLE, "WebDriver is quit")
+        }
+
+        if (isCrashed) {
+            return CheckState(ResourceStatus.SC_SERVICE_UNAVAILABLE, "WebDriver is crashed")
+        }
+
+        if (!isOpen) {
+            return CheckState(ResourceStatus.SC_SERVICE_UNAVAILABLE,
+                "WebDriver is not open - the connection to the backend tab is lost")
+        }
+
+        return CheckState(0)
     }
 
     protected fun reportInjectedJs(scripts: String) {

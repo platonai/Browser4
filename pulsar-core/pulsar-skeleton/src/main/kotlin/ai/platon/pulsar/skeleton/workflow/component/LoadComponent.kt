@@ -15,6 +15,7 @@ import ai.platon.pulsar.persist.*
 import ai.platon.pulsar.persist.gora.generated.GWebPage
 import ai.platon.pulsar.persist.model.ActiveDOMStat
 import ai.platon.pulsar.persist.model.GoraWebPage
+import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.common.AppStatusTracker
 import ai.platon.pulsar.skeleton.common.message.PageLoadStatusFormatter
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
@@ -25,11 +26,10 @@ import ai.platon.pulsar.skeleton.event.PageEventHandlers
 import ai.platon.pulsar.skeleton.event.PulsarEventBus
 import ai.platon.pulsar.skeleton.workflow.common.FetchEntry
 import ai.platon.pulsar.skeleton.workflow.common.FetchState
-import ai.platon.pulsar.skeleton.common.GlobalCacheFactory
+import ai.platon.pulsar.skeleton.workflow.common.GlobalCacheFactory
 import ai.platon.pulsar.skeleton.workflow.common.url.CompletableHyperlink
 import ai.platon.pulsar.skeleton.workflow.common.url.ListenableUrl
 import ai.platon.pulsar.skeleton.workflow.common.url.toCompletableListenableHyperlink
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.workflow.parse.ParseResult
 import org.slf4j.LoggerFactory
 import java.net.URL
@@ -152,9 +152,7 @@ class LoadComponent(
      * @return The page
      * */
     @Throws(Exception::class)
-    fun load(url: URL, options: LoadOptions): WebPage {
-        return abnormalPage ?: loadWithRetry(NormURL(url, options))
-    }
+    suspend fun load(url: URL, options: LoadOptions): WebPage = load(NormURL(url, options))
 
     /**
      * Load a page specified by [normURL].
@@ -173,9 +171,7 @@ class LoadComponent(
      * @return The page
      * */
     @Throws(Exception::class)
-    fun load(normURL: NormURL): WebPage {
-        return abnormalPage ?: loadWithRetry(normURL)
-    }
+    suspend fun load(normURL: NormURL): WebPage = loadDeferred(normURL)
 
     /**
      * Load a page specified by [normURL].
@@ -198,21 +194,6 @@ class LoadComponent(
     @Throws(Exception::class)
     suspend fun loadDeferred(normURL: NormURL): WebPage {
         return abnormalPage ?: loadWithRetryDeferred(normURL)
-    }
-
-    @Throws(Exception::class)
-    fun loadWithRetry(normURL: NormURL): WebPage {
-        var page = loadWithEventHandlers(normURL)
-
-        if (URLUtils.isInternal(normURL.urlString)) {
-            normURL.options.nJitRetry = 1
-        }
-
-        var n = normURL.options.nJitRetry
-        while (page.protocolStatus.isRetry && n-- > 0) {
-            page = loadWithEventHandlers(normURL)
-        }
-        return page
     }
 
     @Throws(Exception::class)
@@ -280,20 +261,6 @@ class LoadComponent(
         return linkFutures
     }
 
-    /**
-     * Load a webpage from local storage, or if it doesn't exist in local storage,
-     * fetch it from the Internet, unless the fetch component is disabled.
-     * */
-    @Throws(Exception::class)
-    private fun loadWithEventHandlers(normURL: NormURL): WebPage {
-        val page = createPageShellOrNilWithEventHandlers(normURL)
-        if (page.isInternal) {
-            return page
-        }
-
-        return loadNormalURLWithEventHandlers(normURL, page)
-    }
-
     @Throws(Exception::class)
     private suspend fun loadWithEventHandlersDeferred(normURL: NormURL): WebPage {
         val page = createPageShellOrNilWithEventHandlers(normURL)
@@ -302,20 +269,6 @@ class LoadComponent(
         }
 
         return loadNormalURLWithEventHandlersDeferred(normURL, page)
-    }
-
-    @Throws(Exception::class)
-    private fun loadNormalURLWithEventHandlers(normURL: NormURL, page: WebPage): WebPage {
-        require(page.isNotNil) { "Page should not be nil | ${page.configuredUrl}" }
-        require(page.isNotInternal) { "Page should not be internal | ${page.configuredUrl}" }
-
-        onWillLoad(normURL, page)
-
-        fetchContentIfNecessary(normURL, page)
-
-        onLoaded(page, normURL)
-
-        return page
     }
 
     @Throws(Exception::class)
@@ -352,21 +305,6 @@ class LoadComponent(
         }
 
         return page
-    }
-
-    @Throws(Exception::class)
-    private fun fetchContentIfNecessary(normURL: NormURL, page: WebPage) {
-        require(page is AbstractWebPage)
-        require(page.isNotInternal) { "Page should not be internal | ${page.configuredUrl}" }
-
-        // double check is OK
-        if (page.isInternal) {
-            return
-        }
-
-        if (page.removeVar(VAR_REFRESH) != null) {
-            fetchContent(page, normURL)
-        }
     }
 
     @Throws(Exception::class)
@@ -639,29 +577,6 @@ class LoadComponent(
         page.setVar(VAR_PREV_FETCH_TIME_BEFORE_UPDATE, page.prevFetchTime)
         globalCache.fetchingCache.add(page.url)
         logger.takeIf { it.isDebugEnabled }?.debug("Loading url | {} {}", page.url, page.args)
-    }
-
-    @Throws(Exception::class)
-    private fun fetchContent(page: WebPage, normURL: NormURL) {
-        if (page.isInternal) {
-            // No need to fetch internal pages
-            // No fetch event handlers should be handled for internal pages
-            return
-        }
-
-        try {
-            beforeFetch(page, normURL.options)
-
-            require(page.conf == normURL.options.conf)
-//            require(normURL.options.eventHandler != null)
-//            require(page.conf.getBeanOrNull(PulsarEventHandler::class) != null)
-
-            tracer?.trace("Fetching with fetch component ... | {}", page.configuredUrl)
-
-            fetchComponent.fetchContent(page)
-        } finally {
-            afterFetch(page, normURL.options)
-        }
     }
 
     @Throws(Exception::class)

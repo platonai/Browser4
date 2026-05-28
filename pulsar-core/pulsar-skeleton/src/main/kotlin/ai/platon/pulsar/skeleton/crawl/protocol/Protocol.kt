@@ -1,8 +1,9 @@
-package ai.platon.pulsar.skeleton.workflow.protocol
+package ai.platon.pulsar.skeleton.crawl.protocol
 
-import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.skeleton.workflow.common.LazyConfigurable
+import ai.platon.pulsar.skeleton.workflow.protocol.ProtocolOutput
+import ai.platon.pulsar.skeleton.workflow.protocol.Response
 import crawlercommons.robots.BaseRobotRules
 
 /**
@@ -11,10 +12,6 @@ import crawlercommons.robots.BaseRobotRules
 interface Protocol : LazyConfigurable, AutoCloseable {
 
     fun setResponse(response: Response) {}
-
-    fun getResponses(pages: Collection<WebPage>, volatileConfig: VolatileConfig): Collection<Response> {
-        return emptyList()
-    }
 
     /**
      * Reset the protocol environment, so the peer host view the client as a new one
@@ -35,12 +32,6 @@ interface Protocol : LazyConfigurable, AutoCloseable {
      * Returns the [ProtocolOutput] for a fetch list entry.
      */
     @Throws(Exception::class)
-    fun getProtocolOutput(page: WebPage): ProtocolOutput
-
-    /**
-     * Returns the [ProtocolOutput] for a fetch list entry.
-     */
-    @Throws(Exception::class)
     suspend fun getProtocolOutputDeferred(page: WebPage): ProtocolOutput
 
     /**
@@ -49,7 +40,7 @@ interface Protocol : LazyConfigurable, AutoCloseable {
      * @param page The Web page
      * @return robot rules (specific for this url or default), never null
      */
-    fun getRobotRules(page: WebPage): BaseRobotRules
+    suspend fun getRobotRules(page: WebPage): BaseRobotRules
 
     override fun close() {}
 }

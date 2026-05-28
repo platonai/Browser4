@@ -38,7 +38,7 @@ open class SequentialBrowserProfileGenerator(
     // should be late initialized
     override var conf: ImmutableConfig = ImmutableConfig()
 
-    private fun computeMaxAgentCount(): Int {
+    private fun computeMaxProfileCount(): Int {
         // The number of allowed active privacy contexts
 
         // PRIVACY_CONTEXT_NUMBER is deprecated, use BROWSER_CONTEXT_NUMBER instead
@@ -47,27 +47,27 @@ open class SequentialBrowserProfileGenerator(
         val browserContextNumber = conf.getWithFallback(BROWSER_CONTEXT_NUMBER, PRIVACY_CONTEXT_NUMBER)?.toIntOrNull() ?: 2
 
         // The minimum number of sequential browser profiles, the active privacy contexts is chosen from them
-        val minAgents = conf.getInt(MIN_SEQUENTIAL_BROWSER_PROFILE_NUMBER, 10)
+        val minProfiles = conf.getInt(MIN_SEQUENTIAL_PRIVACY_AGENT_NUMBER, 10)
         // The maximum number of sequential browser profiles, the active privacy contexts is chosen from them
-        var maxAgents = conf.getInt(CapabilityTypes.MAX_SEQUENTIAL_PRIVACY_AGENT_NUMBER, minAgents)
-        maxAgents = maxAgents.coerceAtLeast(browserContextNumber).coerceAtLeast(minAgents)
+        var maxProfiles = conf.getInt(CapabilityTypes.MAX_SEQUENTIAL_PRIVACY_AGENT_NUMBER, minProfiles)
+        maxProfiles = maxProfiles.coerceAtLeast(browserContextNumber).coerceAtLeast(minProfiles)
 
-        return maxAgents
+        return maxProfiles
     }
 
     @Throws(IOException::class)
     override fun invoke(fingerprint: Fingerprint): BrowserProfile {
         // The number of allowed active privacy contexts
-        val maxAgents = computeMaxAgentCount()
+        val maxProfiles = computeMaxProfileCount()
 
-        val contextDir = BrowserFiles.computeNextSequentialContextDir(group, fingerprint, maxAgents)
+        val contextDir = BrowserFiles.computeNextSequentialContextDir(group, fingerprint, maxProfiles)
         // logger.info("Use sequential browser profile | $contextDir")
 
         require(Files.exists(contextDir)) { "The context dir does not exist: $contextDir" }
 
-        val agent = BrowserProfile(contextDir, fingerprint)
+        val profile = BrowserProfile(contextDir, fingerprint)
 
-        return agent
+        return profile
     }
 }
 

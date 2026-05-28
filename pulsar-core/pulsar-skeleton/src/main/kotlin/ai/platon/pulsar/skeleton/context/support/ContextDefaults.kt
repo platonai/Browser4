@@ -3,7 +3,7 @@ package ai.platon.pulsar.skeleton.context.support
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.persist.WebDb
 import ai.platon.pulsar.skeleton.TaskLoops
-import ai.platon.pulsar.skeleton.common.GlobalCacheFactory
+import ai.platon.pulsar.skeleton.workflow.common.GlobalCacheFactory
 import ai.platon.pulsar.skeleton.workflow.component.BatchFetchComponent
 import ai.platon.pulsar.skeleton.workflow.component.LoadComponent
 import ai.platon.pulsar.skeleton.workflow.component.ParseComponent

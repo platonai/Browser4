@@ -1,10 +1,10 @@
 package ai.platon.pulsar.skeleton.browser
 
+import ai.platon.pulsar.driver.chrome.common.ChromeOptions
+import ai.platon.pulsar.driver.chrome.common.LauncherOptions
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.config.ImmutableConfig
-import ai.platon.pulsar.driver.chrome.ChromeOptions
-import ai.platon.pulsar.driver.chrome.LauncherOptions
 import ai.platon.pulsar.driver.common.BrowserSettings
 import ai.platon.pulsar.skeleton.browser.driver.BrowserLaunchException
 import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId

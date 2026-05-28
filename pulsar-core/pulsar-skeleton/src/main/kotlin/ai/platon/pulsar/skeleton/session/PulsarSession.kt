@@ -7,15 +7,15 @@ import ai.platon.pulsar.common.urls.UrlAware
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.external.ModelResponse
 import ai.platon.pulsar.persist.WebPage
+import ai.platon.pulsar.skeleton.browser.Browser
+import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.common.urls.NormURL
 import ai.platon.pulsar.skeleton.context.PulsarContext
-import ai.platon.pulsar.skeleton.browser.Browser
 import ai.platon.pulsar.skeleton.event.PageEventHandlers
-import ai.platon.pulsar.skeleton.common.DocumentCatch
-import ai.platon.pulsar.skeleton.common.GlobalCache
-import ai.platon.pulsar.skeleton.common.PageCatch
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
+import ai.platon.pulsar.skeleton.workflow.common.DocumentCatch
+import ai.platon.pulsar.skeleton.workflow.common.GlobalCache
+import ai.platon.pulsar.skeleton.workflow.common.PageCatch
 import com.google.common.annotations.Beta
 import org.jsoup.nodes.Element
 import java.nio.ByteBuffer
@@ -163,6 +163,11 @@ interface PulsarSession : AutoCloseable {
      * The universally unique identifier (UUID). A UUID represents a 128-bit value.
      * */
     val uuid: String
+
+    /**
+     * A label used to identify the session
+     * */
+    val label: String
 
     /**
      * A short descriptive display text.

@@ -1,17 +1,17 @@
 package ai.platon.pulsar.skeleton.event
 
 /**
- * Event handlers during the crawl phase of the webpage lifecycle.
+ * Event handlers during the browser phase of the webpage lifecycle.
  *
- * Crawl event handlers are triggered at the beginning and end of the crawl iteration,
+ * Crawl event handlers are triggered at the beginning and end of the browser iteration,
  * wrapping around the load and browse phases. They are ideal for:
  * - Filtering or modifying URLs before processing
- * - Handling crawl results after page loading
- * - Implementing crawl-level logic (e.g., rate limiting, deduplication)
+ * - Handling browser results after page loading
+ * - Implementing browser-level logic (e.g., rate limiting, deduplication)
  *
  * ## Event Execution Order
  * ```
- * crawl.onWillLoad → [Load Phase] → [Browse Phase] → crawl.onLoaded
+ * browser.onWillLoad → [Load Phase] → [Browse Phase] → browser.onLoaded
  * ```
  *
  * ## Example Usage
@@ -40,7 +40,7 @@ interface CrawlEventHandlers {
      * This is the first event in the page lifecycle. Use this handler to:
      * - Filter URLs (return `null` to skip)
      * - Modify URL properties before loading
-     * - Log or track crawl progress
+     * - Log or track browser progress
      *
      * ## Signature
      * `(UrlAware) -> UrlAware?`
@@ -84,12 +84,12 @@ interface CrawlEventHandlers {
     val onLoaded: UrlAwareWebPageEventHandler
 
     /**
-     * Chains another crawl event handler to the tail of this one.
+     * Chains another browser event handler to the tail of this one.
      *
      * Chained handlers execute in order: this handler's callbacks run first,
      * then the other handler's callbacks.
      *
-     * @param other The crawl event handlers to chain
+     * @param other The browser event handlers to chain
      * @return This handler instance for fluent chaining
      */
     fun chain(other: CrawlEventHandlers): CrawlEventHandlers
@@ -121,7 +121,7 @@ interface CrawlEventHandlers {
  *
  * @see PageEventHandlers for the complete event handler hierarchy
  * @see BrowseEventHandlers for browser interaction events
- * @see CrawlEventHandlers for crawl-level events
+ * @see CrawlEventHandlers for browser-level events
  */
 interface LoadEventHandlers {
 
@@ -317,7 +317,7 @@ interface LoadEventHandlers {
  *
  * @see PageEventHandlers for the complete event handler hierarchy
  * @see LoadEventHandlers for load-phase events
- * @see CrawlEventHandlers for crawl-level events
+ * @see CrawlEventHandlers for browser-level events
  * @see WebDriver for available browser automation methods
  */
 interface BrowseEventHandlers {
@@ -572,12 +572,12 @@ interface BrowseEventHandlers {
  *    - URL normalization, fetching, parsing, document handling
  * 2. **[BrowseEventHandlers]** - Events during the interactive browsing stage
  *    - Browser launch, navigation, scrolling, custom RPA actions
- * 3. **[CrawlEventHandlers]** - Events in the crawl stage (before and after loading)
+ * 3. **[CrawlEventHandlers]** - Events in the browser stage (before and after loading)
  *    - URL filtering, result handling
  *
  * ## Complete Event Lifecycle (Execution Order)
  * ```
- * 1.  crawl.onWillLoad
+ * 1.  browser.onWillLoad
  * 2.  load.onNormalize
  * 3.  load.onWillLoad
  * 4.  load.onWillFetch
@@ -604,7 +604,7 @@ interface BrowseEventHandlers {
  * 25. load.onHTMLDocumentParsed       <-- Best for data extraction
  * 26. load.onParsed
  * 27. load.onLoaded
- * 28. crawl.onLoaded
+ * 28. browser.onLoaded
  * ```
  *
  * ## Usage Patterns
@@ -641,7 +641,7 @@ interface BrowseEventHandlers {
  *
  * @see LoadEventHandlers for load-phase events
  * @see BrowseEventHandlers for browser interaction events
- * @see CrawlEventHandlers for crawl-level events
+ * @see CrawlEventHandlers for browser-level events
  * @see PulsarEventBus for setting global handlers
  */
 interface PageEventHandlers {
@@ -664,7 +664,7 @@ interface PageEventHandlers {
     var browseEventHandlers: BrowseEventHandlers
 
     /**
-     * Event handlers during the crawl stage.
+     * Event handlers during the browser stage.
      *
      * Wraps around load/browse phases for URL filtering and result handling.
      *
@@ -723,7 +723,7 @@ interface PageEventHandlers {
     /**
      * Chains another page event handler to the tail of this one.
      *
-     * All handler groups (load, browse, crawl) are chained together.
+     * All handler groups (load, browse, browser) are chained together.
      * Chained handlers execute in order: this handler's callbacks first,
      * then the other handler's callbacks.
      *

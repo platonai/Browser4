@@ -5,6 +5,7 @@ import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.stringify
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.metadata.FetchMode
+import ai.platon.pulsar.skeleton.crawl.protocol.Protocol
 import org.apache.commons.lang3.StringUtils
 import org.slf4j.LoggerFactory
 import java.util.*
@@ -38,6 +39,13 @@ class ProtocolFactory(private val immutableConfig: ImmutableConfig) : AutoClosea
             .also { logger.debug(it) }
     }
 
+    /**
+     * Get the protocol for a page.
+     *
+     * Using major protocol/sub protocol is a good idea, for example:
+     * selenium:http://www.baidu.com/
+     * jdbc:h2:tcp://localhost/~/test
+     */
     fun getProtocol(page: WebPage): Protocol {
         val fetchMode = FetchMode.BROWSER
         page.fetchMode = fetchMode

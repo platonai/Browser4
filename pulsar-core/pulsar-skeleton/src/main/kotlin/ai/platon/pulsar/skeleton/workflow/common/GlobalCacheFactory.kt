@@ -1,4 +1,4 @@
-package ai.platon.pulsar.skeleton.common
+package ai.platon.pulsar.skeleton.workflow.common
 
 import ai.platon.pulsar.common.config.ImmutableConfig
 

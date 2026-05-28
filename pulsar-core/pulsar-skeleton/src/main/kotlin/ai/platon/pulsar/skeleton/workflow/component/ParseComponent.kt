@@ -3,7 +3,7 @@ package ai.platon.pulsar.skeleton.workflow.component
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.model.GoraWebPage
-import ai.platon.pulsar.skeleton.common.GlobalCacheFactory
+import ai.platon.pulsar.skeleton.workflow.common.GlobalCacheFactory
 import ai.platon.pulsar.skeleton.workflow.parse.PageParser
 import ai.platon.pulsar.skeleton.workflow.parse.ParseResult
 import java.util.concurrent.atomic.AtomicInteger

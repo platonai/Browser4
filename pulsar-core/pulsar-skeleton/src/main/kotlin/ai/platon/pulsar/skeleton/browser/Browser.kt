@@ -1,6 +1,7 @@
 package ai.platon.pulsar.skeleton.browser
 
 import ai.platon.pulsar.driver.common.BrowserSettings
+import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.skeleton.browser.driver.NavigateHistory
 import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.browser.driver.WebDriverException
@@ -88,6 +89,13 @@ interface Browser : AutoCloseable {
      * The status of this browser.
      * */
     val readableState: String
+
+    /**
+     * Check if this driver is healthy.
+     *
+     * This is a heavy operation and should be called with low frequency.
+     * */
+    fun healthy(): CheckState
 
     /**
      * Create a new driver.
