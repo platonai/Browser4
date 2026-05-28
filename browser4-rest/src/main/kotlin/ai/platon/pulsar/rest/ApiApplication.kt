@@ -7,10 +7,8 @@ import ai.platon.pulsar.skeleton.workflow.common.GlobalCacheFactory
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
 import org.springframework.context.annotation.ComponentScan
-import org.springframework.context.annotation.ImportResource
 
 @SpringBootApplication
-@ImportResource("classpath:rest-beans/app-context.xml")
 @ComponentScan(
     "ai.platon.browser4.boot.autoconfigure",
     "ai.platon.pulsar.rest"
