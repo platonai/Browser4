@@ -9,10 +9,8 @@ import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
 import org.springframework.context.annotation.ComponentScan
-import org.springframework.context.annotation.ImportResource
 
 @SpringBootApplication
-@ImportResource("classpath:browser4-beans/app-context.xml")
 @ComponentScan(
     "ai.platon.browser4.boot.autoconfigure",
     "ai.platon.pulsar.rest",
@@ -44,7 +42,10 @@ class Browser4Application(
             }
 
             logger.info("Welcome to Browser4! (pid={}) \n{}", pid, help)
-            logger.info("To stop Browser4: press Ctrl+C in the console, or send a SIGTERM/stop the process (pid={}).", pid)
+            logger.info(
+                "To stop Browser4: press Ctrl+C in the console, or send a SIGTERM/stop the process (pid={}).",
+                pid
+            )
         } catch (e: Exception) {
             logger.error("Failed to display help message", e)
         }

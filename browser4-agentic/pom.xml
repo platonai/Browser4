@@ -41,7 +41,7 @@
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>browser4-beans</artifactId>
+            <artifactId>browser4-boot</artifactId>
         </dependency>
 
         <dependency>

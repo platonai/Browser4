@@ -24,7 +24,6 @@
     <packaging>pom</packaging>
 
     <modules>
-        <module>browser4-beans</module>
         <module>browser4-boot</module>
     </modules>
 </project>
