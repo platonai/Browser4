@@ -1,7 +1,5 @@
 package ai.platon.pulsar.browser
 
-import ai.platon.pulsar.browser.BrowserProfile.Companion.CONTEXT_DIR_PREFIX
-import ai.platon.pulsar.browser.BrowserProfile.Companion.PROTOTYPE_DATA_DIR
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.browser.fingerprint.Fingerprint
@@ -21,53 +19,60 @@ import java.nio.file.Path
 data class BrowserId(
     val contextDir: Path,
     val fingerprint: Fingerprint
-): Comparable<BrowserId> {
+) : Comparable<BrowserId> {
     /**
      * The browser type of the browser.
      * */
     val browserType: BrowserType get() = fingerprint.browserType
+
     /**
      * The browser profile of the browser.
      * */
     val profile = BrowserProfile(contextDir, fingerprint)
+
     /**
      * The creation time of the browser.
      * */
     val createTime = System.currentTimeMillis()
+
     /**
      * The user data directory of the browser.
      * */
     val userDataDir: Path
         get() = when {
             profile.isSystemDefault -> AppPaths.SYSTEM_DEFAULT_BROWSER_DATA_DIR_PLACEHOLDER
-            profile.isPrototype -> PROTOTYPE_DATA_DIR
+            profile.isPrototype -> ProfilePaths.PROTOTYPE_DATA_DIR
             else -> contextDir.resolve(browserType.name)
         }
+
     /**
      * A human-readable short display of the context.
      * For example,
      * 1. prototype
      * 2. 07171ChsOE207
      * */
-    val display get() = contextDir.last().toString().substringAfter(CONTEXT_DIR_PREFIX)
+    val display get() = contextDir.last().toString().substringAfter(ProfilePaths.CONTEXT_DIR_PREFIX)
+
     /**
      * The constructor of the browser id.
      *
      * @param profile The browser profile of the browser.
      * */
-    constructor(profile: BrowserProfile): this(profile.contextDir, profile.fingerprint)
+    constructor(profile: BrowserProfile) : this(profile.contextDir, profile.fingerprint)
+
     /**
      * The constructor of the browser id.
      *
      * @param contextDir The context directory of the browser.
      * @param browserType The browser type of the browser.
      * */
-    constructor(contextDir: Path, browserType: BrowserType): this(contextDir, Fingerprint(browserType))
+    constructor(contextDir: Path, browserType: BrowserType) : this(contextDir, Fingerprint(browserType))
 
     fun hasProxy() = fingerprint.hasProxy()
     fun setProxy(schema: String, hostPort: String, username: String?, password: String?) {
         fingerprint.setProxy(schema, hostPort, username, password)
     }
+
     fun setProxy(proxy: ProxyEntry) = fingerprint.setProxy(proxy)
 
     fun unsetProxy() = fingerprint.unsetProxy()
@@ -89,18 +94,22 @@ data class BrowserId(
          * Represent the real user's default browser.
          * */
         val SYSTEM_DEFAULT get() = createSystemDefault()
+
         /**
          * Represent the default browser.
          * */
         val DEFAULT get() = createDefault()
+
         /**
          * Represent the prototype browser.
          * */
         val PROTOTYPE get() = createPrototype()
+
         /**
          * Represent a browser with a sequential context dir.
          * */
         val NEXT_SEQUENTIAL get() = createNextSequential()
+
         /**
          * Create a browser with random context dir.
          * */

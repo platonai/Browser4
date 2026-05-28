@@ -1,9 +1,5 @@
 package ai.platon.pulsar.browser
 
-import ai.platon.pulsar.browser.BrowserId.Companion.createRandomTemp
-import ai.platon.pulsar.common.AppPaths
-import ai.platon.pulsar.common.browser.BrowserFiles
-import ai.platon.pulsar.driver.common.BrowserSettings
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.browser.fingerprint.Fingerprint
@@ -12,6 +8,7 @@ import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_CONTEXT_NUMBER
 import ai.platon.pulsar.common.config.CapabilityTypes.PRIVACY_AGENT_GENERATOR_CLASS
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.logging.ThrottlingLogger
+import ai.platon.pulsar.driver.common.BrowserSettings
 import java.nio.file.Path
 
 /**
@@ -55,29 +52,6 @@ data class BrowserProfile(
         private val logger = getLogger(this)
         private val throttlingLogger = ThrottlingLogger(logger)
 
-        // The prefix for all temporary privacy contexts. System context, prototype context and default context are not
-        // required to start with the prefix.
-        const val CONTEXT_DIR_PREFIX = "cx."
-
-        // NOTE: Chrome DevTools remote debugging requires a non-default data directory. Specify this using --user-data-dir.
-        val SYSTEM_DEFAULT_BROWSER_CONTEXT_DIR_PLACEHOLDER: Path = AppPaths.SYSTEM_DEFAULT_BROWSER_CONTEXT_DIR_PLACEHOLDER
-
-        // The default context directory, if you need a permanent and isolate context, use this one.
-        // NOTE: the user-default context is not a default context.
-        val DEFAULT_CONTEXT_DIR: Path = AppPaths.CONTEXT_DEFAULT_DIR
-
-        // The prototype context directory, all privacy contexts copies browser data from the prototype.
-        // A typical prototype data dir is: ~/.browser4/browser/chrome/prototype/google-chrome/
-        val PROTOTYPE_DATA_DIR: Path = AppPaths.CHROME_DATA_DIR_PROTOTYPE
-        // A context dir is the dir which contains the browser data dir, and supports different browsers.
-        // For example: ~/.browser4/browser/chrome/prototype/
-        val PROTOTYPE_CONTEXT_DIR: Path = AppPaths.CHROME_DATA_DIR_PROTOTYPE.parent
-
-        // A random context directory, if you need a random temporary context, use this one
-        val NEXT_SEQUENTIAL_CONTEXT_DIR get() = BrowserFiles.computeNextSequentialContextDir()
-        // A random context directory, if you need a random temporary context, use this one
-        val RANDOM_TEMP_CONTEXT_DIR get() = BrowserFiles.computeRandomTmpContextDir(browserType = BrowserType.PULSAR_CHROME)
-
         /**
          * The random browser profile opens browser with a random data dir.
          * */
@@ -101,7 +75,7 @@ data class BrowserProfile(
             BrowserSettings.withBrowserContextMode(BrowserProfileMode.SYSTEM_DEFAULT, browserType)
             require(System.getProperty(BROWSER_CONTEXT_NUMBER).toIntOrNull() == 1)
             require(System.getProperty(PRIVACY_AGENT_GENERATOR_CLASS).contains("SystemDefaultBrowserProfileGenerator"))
-            return create(browserType, SYSTEM_DEFAULT_BROWSER_CONTEXT_DIR_PLACEHOLDER)
+            return create(browserType, ProfilePaths.SYSTEM_DEFAULT_BROWSER_CONTEXT_DIR_PLACEHOLDER)
         }
 
         fun createDefault(): BrowserProfile {
@@ -114,7 +88,7 @@ data class BrowserProfile(
             BrowserSettings.withBrowserContextMode(BrowserProfileMode.DEFAULT, browserType)
             require(System.getProperty(BROWSER_CONTEXT_NUMBER).toIntOrNull() == 1)
             require(System.getProperty(PRIVACY_AGENT_GENERATOR_CLASS).contains("DefaultBrowserProfileGenerator"))
-            return create(browserType, DEFAULT_CONTEXT_DIR)
+            return create(browserType, ProfilePaths.DEFAULT_CONTEXT_DIR)
         }
 
         fun createPrototype(): BrowserProfile {
@@ -127,21 +101,21 @@ data class BrowserProfile(
             BrowserSettings.withBrowserContextMode(BrowserProfileMode.PROTOTYPE, browserType)
             require(System.getProperty(BROWSER_CONTEXT_NUMBER).toIntOrNull() == 1)
             require(System.getProperty(PRIVACY_AGENT_GENERATOR_CLASS).contains("PrototypeBrowserProfileGenerator"))
-            return create(browserType, PROTOTYPE_CONTEXT_DIR)
+            return create(browserType, ProfilePaths.PROTOTYPE_CONTEXT_DIR)
         }
 
         fun createNextSequential() = createNextSequential(BrowserType.PULSAR_CHROME)
 
         fun createNextSequential(browserType: BrowserType): BrowserProfile {
             BrowserSettings.withBrowserContextMode(BrowserProfileMode.SEQUENTIAL, browserType)
-            return create(browserType, NEXT_SEQUENTIAL_CONTEXT_DIR)
+            return create(browserType, ProfilePaths.NEXT_SEQUENTIAL_CONTEXT_DIR)
         }
 
-//        fun createRandomTemp() = createRandomTemp(BrowserType.PULSAR_CHROME)
-//
-//        fun createRandomTemp(browserType: BrowserType): BrowserProfile {
-//            BrowserSettings.withBrowserContextMode(BrowserProfileMode.TEMPORARY, browserType)
-//            return create(browserType, createRandom(browserType))
-//        }
+        fun createRandomTemp() = createRandomTemp(BrowserType.PULSAR_CHROME)
+
+        fun createRandomTemp(browserType: BrowserType): BrowserProfile {
+            BrowserSettings.withBrowserContextMode(BrowserProfileMode.TEMPORARY, browserType)
+            return create(browserType, ProfilePaths.createRandom(browserType))
+        }
     }
 }

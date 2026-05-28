@@ -1,7 +1,7 @@
 package ai.platon.pulsar.browser
 
-import ai.platon.pulsar.browser.driver.NavigateHistory
-import ai.platon.pulsar.browser.driver.WebDriverException
+import ai.platon.pulsar.browser.detail.NavigateHistory
+import ai.platon.pulsar.browser.detail.WebDriverException
 import ai.platon.pulsar.driver.common.BrowserSettings
 import ai.platon.pulsar.common.CheckState
 

@@ -15,7 +15,7 @@ import ai.platon.pulsar.common.math.geometric.OffsetD
 import ai.platon.pulsar.common.math.geometric.PointD
 import ai.platon.pulsar.common.math.geometric.RectD
 import ai.platon.pulsar.common.urls.URLUtils
-import ai.platon.pulsar.driver.BrowserProtocol
+import ai.platon.pulsar.browser.impl.BrowserProtocol
 import ai.platon.pulsar.driver.BrowserTab
 import ai.platon.pulsar.driver.NetworkResourceResponse
 import ai.platon.pulsar.driver.NodeRef

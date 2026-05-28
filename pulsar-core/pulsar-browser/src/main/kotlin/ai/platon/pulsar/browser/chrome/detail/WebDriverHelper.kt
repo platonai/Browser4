@@ -9,7 +9,7 @@ import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.MultiSinkMessageWriter
 import ai.platon.pulsar.common.alwaysFalse
 import ai.platon.pulsar.common.warnInterruptible
-import ai.platon.pulsar.driver.BrowserProtocol
+import ai.platon.pulsar.browser.impl.BrowserProtocol
 import ai.platon.pulsar.browser.chrome.impl.PageHandler
 import ai.platon.pulsar.skeleton.browser.driver.JsEvaluation
 import ai.platon.pulsar.skeleton.browser.driver.JsException

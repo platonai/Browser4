@@ -1,4 +1,4 @@
-package ai.platon.pulsar.browser.driver
+package ai.platon.pulsar.browser.detail
 
 import ai.platon.pulsar.driver.NetworkResourceResponse
 import org.jsoup.Connection
@@ -81,4 +81,12 @@ object NetworkResourceHelper {
         headers["Q-client"] = "Jsoup"
         return NetworkResourceResponse(success, 0, "", httpStatusCode, stream, headers)
     }
+}
+
+enum class BrowserEvents {
+    initialize,
+    willNavigate,
+    willMaintain,
+    maintain,
+    didMaintain
 }

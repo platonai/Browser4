@@ -1,7 +1,7 @@
 package ai.platon.pulsar.browser.chrome
 
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.driver.BrowserProtocol
+import ai.platon.pulsar.browser.impl.BrowserProtocol
 import ai.platon.pulsar.driver.common.BrowserSettings
 import org.apache.commons.lang3.StringUtils
 

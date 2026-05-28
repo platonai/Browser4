@@ -1,9 +1,11 @@
 package ai.platon.pulsar.browser
 
-import ai.platon.pulsar.browser.driver.*
+import ai.platon.pulsar.browser.detail.BrowserEvents
+import ai.platon.pulsar.browser.detail.NavigateEntry
+import ai.platon.pulsar.browser.detail.NavigateHistory
+import ai.platon.pulsar.browser.detail.WebDriverException
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.event.AbstractEventEmitter
-import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.warnForClose
 import ai.platon.pulsar.driver.common.BrowserSettings
 import java.time.Duration
@@ -18,10 +20,8 @@ abstract class AbstractBrowser(
 ) : Browser, AutoCloseable, AbstractEventEmitter<BrowserEvents>() {
     companion object {
         protected val SEQUENCER = AtomicInteger()
-        val DEFAULT_USER_AGENT = "Browser4 Agent/1.0"
+        const val DEFAULT_USER_AGENT = "Browser4 Agent/1.0"
     }
-
-    private val logger = getLogger(this)
 
     /**
      * All drivers, including the recovered drivers and the reused drivers.

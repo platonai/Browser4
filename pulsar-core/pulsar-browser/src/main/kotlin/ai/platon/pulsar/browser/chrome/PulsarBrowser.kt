@@ -3,10 +3,10 @@ package ai.platon.pulsar.browser.chrome
 import ai.platon.pulsar.browser.AbstractBrowser
 import ai.platon.pulsar.browser.BrowserId
 import ai.platon.pulsar.browser.chrome.util.ChromeIOException
-import ai.platon.pulsar.browser.driver.AbstractWebDriver
-import ai.platon.pulsar.browser.driver.BrowserUnavailableException
+import ai.platon.pulsar.browser.AbstractWebDriver
+import ai.platon.pulsar.browser.detail.BrowserUnavailableException
 import ai.platon.pulsar.browser.WebDriver
-import ai.platon.pulsar.browser.driver.WebDriverException
+import ai.platon.pulsar.browser.detail.WebDriverException
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_REUSE_RECOVERED_DRIVERS

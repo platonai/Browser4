@@ -4,10 +4,10 @@ import ai.platon.pulsar.browser.chrome.dom.model.BrowserUseState
 import ai.platon.pulsar.browser.chrome.dom.model.NanoDOMTree
 import ai.platon.pulsar.browser.chrome.dom.model.PageTarget
 import ai.platon.pulsar.browser.chrome.dom.model.SnapshotOptions
-import ai.platon.pulsar.browser.driver.JsEvaluation
-import ai.platon.pulsar.browser.driver.NavigateEntry
-import ai.platon.pulsar.browser.driver.NavigateHistory
-import ai.platon.pulsar.browser.driver.WebDriverException
+import ai.platon.pulsar.browser.detail.JsEvaluation
+import ai.platon.pulsar.browser.detail.NavigateEntry
+import ai.platon.pulsar.browser.detail.NavigateHistory
+import ai.platon.pulsar.browser.detail.WebDriverException
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.ai.llm.MCP
 import ai.platon.pulsar.common.browser.BrowserType
@@ -1817,7 +1817,7 @@ interface WebDriver : Closeable {
      * returns detailed evaluation metadata (beta). @mcp
      *
      * @param expression The JavaScript expression to evaluate.
-     * @return A [ai.platon.pulsar.browser.driver.JsEvaluation] object containing the result and metadata.
+     * @return A [JsEvaluation] object containing the result and metadata.
      * */
     @Throws(WebDriverException::class)
     @MCP

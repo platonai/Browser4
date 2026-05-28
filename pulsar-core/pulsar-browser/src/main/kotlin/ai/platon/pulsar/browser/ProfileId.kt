@@ -1,8 +1,5 @@
 package ai.platon.pulsar.browser
 
-import ai.platon.pulsar.browser.BrowserProfile.Companion.CONTEXT_DIR_PREFIX
-import ai.platon.pulsar.browser.BrowserProfile.Companion.DEFAULT_CONTEXT_DIR
-import ai.platon.pulsar.browser.BrowserProfile.Companion.PROTOTYPE_CONTEXT_DIR
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.browser.BrowserType
 import java.nio.file.Path
@@ -10,7 +7,7 @@ import java.nio.file.Path
 data class ProfileId(
     val contextDir: Path,
     val browserType: BrowserType
-): Comparable<ProfileId> {
+) : Comparable<ProfileId> {
 
     val ident = contextDir.last().toString()
 
@@ -19,28 +16,33 @@ data class ProfileId(
         isDefault -> "default"
         isPrototype -> "prototype"
         ident.length <= 5 -> ident
-        else -> ident.substringAfter(CONTEXT_DIR_PREFIX)
+        else -> ident.substringAfter(ProfilePaths.CONTEXT_DIR_PREFIX)
     }
+
     /**
      * If true, the browser profile opens browser just like a real user does every day.
      * */
     val isSystemDefault get() = this.contextDir == AppPaths.SYSTEM_DEFAULT_BROWSER_CONTEXT_DIR_PLACEHOLDER
+
     /**
      * If true, the browser profile opens browser with the default data dir, the default data dir will not be removed
      * after the browser closes.
      * */
-    val isDefault get() = this.contextDir == DEFAULT_CONTEXT_DIR
+    val isDefault get() = this.contextDir == ProfilePaths.DEFAULT_CONTEXT_DIR
+
     /**
      * If true, the browser profile opens browser with the prototype data dir.
      * Every change to the browser will be kept in the prototype data dir, and every temporary browser profile
      * uses a copy of the prototype data dir.
      * */
-    val isPrototype get() = this.contextDir == PROTOTYPE_CONTEXT_DIR
+    val isPrototype get() = this.contextDir == ProfilePaths.PROTOTYPE_CONTEXT_DIR
+
     /**
      * If true, the browser profile opens browser with one of a set of pre-created data dirs, the pre-created data dirs will
      * not be removed after the browser closes.
      * */
     val isGroup get() = this.contextDir.startsWith(AppPaths.CONTEXT_GROUP_BASE_DIR)
+
     /**
      * Check if this browser is permanent.
      *
@@ -49,6 +51,7 @@ data class ProfileId(
      * - the user data will be deleted after the browser is closed
      * */
     val isTemporary get() = this.contextDir.startsWith(AppPaths.CONTEXT_TMP_DIR)
+
     /**
      * Check if this browser is permanent.
      *

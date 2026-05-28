@@ -5,12 +5,12 @@ import ai.platon.pulsar.browser.chrome.util.CDPReturnError
 import ai.platon.pulsar.browser.chrome.util.ChromeDriverException
 import ai.platon.pulsar.browser.chrome.util.ChromeIOException
 import ai.platon.pulsar.browser.chrome.util.ChromeRPCException
-import ai.platon.pulsar.browser.driver.AbstractWebDriver
-import ai.platon.pulsar.browser.driver.BrowserUnavailableException
-import ai.platon.pulsar.browser.driver.IllegalWebDriverStateException
+import ai.platon.pulsar.browser.AbstractWebDriver
+import ai.platon.pulsar.browser.detail.BrowserUnavailableException
+import ai.platon.pulsar.browser.detail.IllegalWebDriverStateException
 import ai.platon.pulsar.browser.WebDriver
-import ai.platon.pulsar.browser.driver.WebDriverException
-import ai.platon.pulsar.browser.driver.WebDriverUnavailableException
+import ai.platon.pulsar.browser.detail.WebDriverException
+import ai.platon.pulsar.browser.detail.WebDriverUnavailableException
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.driver.NodeRef
 import kotlinx.coroutines.delay

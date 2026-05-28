@@ -2,7 +2,7 @@ package ai.platon.pulsar.browser.chrome.dom.impl
 
 import ai.platon.cdt.kt.protocol.types.dom.Node
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.driver.BrowserProtocol
+import ai.platon.pulsar.browser.impl.BrowserProtocol
 import ai.platon.pulsar.browser.chrome.dom.model.MergedDOMTreeNode
 import ai.platon.pulsar.browser.chrome.dom.model.NodeType
 import ai.platon.pulsar.browser.chrome.dom.model.PageTarget

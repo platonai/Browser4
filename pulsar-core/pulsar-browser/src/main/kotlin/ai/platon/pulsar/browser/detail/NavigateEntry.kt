@@ -1,4 +1,4 @@
-package ai.platon.pulsar.browser.driver
+package ai.platon.pulsar.browser.detail
 
 import ai.platon.pulsar.common.DateTimes
 import java.time.Instant

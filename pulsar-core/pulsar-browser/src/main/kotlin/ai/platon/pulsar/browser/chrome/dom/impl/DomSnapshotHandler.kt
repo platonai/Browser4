@@ -5,7 +5,7 @@ import ai.platon.cdt.kt.protocol.support.annotations.Optional
 import ai.platon.cdt.kt.protocol.support.annotations.ParamName
 import ai.platon.cdt.kt.protocol.types.domsnapshot.CaptureSnapshot
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.driver.BrowserProtocol
+import ai.platon.pulsar.browser.impl.BrowserProtocol
 import ai.platon.pulsar.browser.chrome.dom.model.DOMRect
 import ai.platon.pulsar.browser.chrome.dom.model.SnapshotNodeEx
 import ai.platon.pulsar.browser.chrome.dom.util.DomDebug

@@ -7,7 +7,7 @@ import ai.platon.cdt.kt.protocol.types.page.Viewport
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.math.geometric.RectD
-import ai.platon.pulsar.driver.BrowserProtocol
+import ai.platon.pulsar.browser.impl.BrowserProtocol
 import com.google.gson.Gson
 import kotlin.math.roundToInt
 

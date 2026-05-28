@@ -1,4 +1,4 @@
-package ai.platon.pulsar.browser.driver
+package ai.platon.pulsar.browser.detail
 
 import ai.platon.pulsar.browser.WebDriver
 import ai.platon.pulsar.common.browser.BrowserErrorCode

@@ -3,7 +3,6 @@ package ai.platon.pulsar.protocol.browser.driver.cdt
 import ai.platon.pulsar.browser.chrome.*
 import ai.platon.pulsar.browser.chrome.impl.ChromeImpl
 import ai.platon.pulsar.browser.chrome.impl.ChromeImpl.Companion.ABOUT_BLANK_PAGE
-import ai.platon.pulsar.driver.BrowserProtocol
 import ai.platon.pulsar.browser.chrome.util.ChromeDriverException
 import ai.platon.pulsar.browser.chrome.util.ChromeIOException
 import ai.platon.pulsar.browser.chrome.util.ChromeServiceException

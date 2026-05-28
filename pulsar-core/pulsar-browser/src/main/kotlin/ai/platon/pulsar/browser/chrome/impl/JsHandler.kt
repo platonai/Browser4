@@ -4,7 +4,7 @@ import ai.platon.cdt.kt.protocol.types.runtime.CallFunctionOn
 import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.js.JsUtils
-import ai.platon.pulsar.driver.BrowserProtocol
+import ai.platon.pulsar.browser.impl.BrowserProtocol
 import ai.platon.pulsar.browser.chrome.IsolatedWorldManager
 import ai.platon.pulsar.browser.chrome.util.ChromeDriverException
 
