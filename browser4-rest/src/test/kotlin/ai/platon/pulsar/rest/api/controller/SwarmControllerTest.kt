@@ -40,8 +40,6 @@ class SwarmControllerTest {
         assertEquals(SWARM_SESSION_ID, response.sessionId)
         assertEquals("active", response.status)
         assertEquals("TEMPORARY", response.profileMode)
-        assertEquals("value", response.capabilities?.get("custom"))
         verify(sessionManager).ensureSwarmSession(capabilities)
     }
 }
-

@@ -2,7 +2,9 @@ package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.rest.api.entities.SessionResponse
+import com.fasterxml.jackson.module.kotlin.readValue
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Tag
@@ -23,13 +25,16 @@ class SwarmControllerE2ETest : RestAPITestBase() {
     @Test
     @DisplayName("test open returns swarm session response")
     fun testOpenReturnsSwarmSessionResponse() {
-        val response = client.post().uri("/api/swarm")
+        val responseText = client.post().uri("/api/swarm")
             .body(mapOf("profileMode" to "TEMPORARY"))
             .exchange()
             .expectStatus().is2xxSuccessful
-            .expectBody<SessionResponse>()
+            .expectBody<String>()
             .returnResult()
             .responseBody
+        println(responseText)
+        val response: SessionResponse = pulsarObjectMapper().readValue(responseText!!)
+
         assertNotNull(response)
 
         assertEquals(SWARM_SESSION_ID, response.sessionId)

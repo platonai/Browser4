@@ -34,7 +34,7 @@ class SwarmController(
      * @param capabilities The capabilities to create or update the swarm session profile
      * */
     @PostMapping
-    fun open(@RequestBody capabilities: Map<String, Any?>): SessionResponse {
+    fun open(@RequestBody capabilities: Map<String, String?>?): SessionResponse {
         return sessionManager.ensureSwarmSession(capabilities).toSessionResponse()
     }
 

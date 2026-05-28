@@ -2,14 +2,14 @@ package ai.platon.pulsar.rest.mcp.controller
 
 import ai.platon.browser4.common.B4Constants
 import ai.platon.browser4.common.B4Constants.DEFAULT_SESSION_ID
+import ai.platon.pulsar.agent.tool.CommandToolExecutor
+import ai.platon.pulsar.agent.tool.UserCommandExecutor
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.common.brief
-import ai.platon.pulsar.agent.tool.UserCommandExecutor
-import ai.platon.pulsar.agent.tool.CommandToolExecutor
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.annotation.JsonSetter
@@ -284,7 +284,7 @@ class MCPToolController(
     // =========================================================================
 
     private fun handleOpenSession(request: MCPToolCallRequest): ResponseEntity<MCPToolCallResponse> {
-        val capabilities = request.arguments?.get("capabilities") as? Map<String, Any?>
+        val capabilities = request.arguments?.get("capabilities") as? Map<String, String?>
         val session = sessionManager.getOrCreateSession(capabilities)
 
         // Navigate to initial URL if provided

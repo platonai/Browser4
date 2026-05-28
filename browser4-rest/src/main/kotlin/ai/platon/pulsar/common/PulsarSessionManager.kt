@@ -37,7 +37,7 @@ class PulsarSessionManager(
      * It is created on demand and shared across all requests that do not specify a session ID.
      * The profile mode is pinned to DEFAULT.
      * */
-    fun ensureDefaultSession(capabilities: Map<String, Any?>? = null): ManagedSession {
+    fun ensureDefaultSession(capabilities: Map<String, String?>? = null): ManagedSession {
         val session = getOrCreateSession(DEFAULT_SESSION_ID, capabilities)
         val pulsarSession = session.agenticSession
 
@@ -61,7 +61,7 @@ class PulsarSessionManager(
      * The swarm session may launch multiple browser contexts, each browser context isolated and has its own profile,
      * but all browser contexts share the same session-level profile which is determined by the profile mode.
      * */
-    fun ensureSwarmSession(capabilities: Map<String, Any?>? = null): ManagedSession {
+    fun ensureSwarmSession(capabilities: Map<String, String?>? = null): ManagedSession {
         val sessionId = SWARM_SESSION_ID
         val normalizedCapabilities = normalizeCapabilities(sessionId, capabilities).toMutableMap()
         normalizedCapabilities[SESSION_ID_CAPABILITY] = sessionId
@@ -89,7 +89,7 @@ class PulsarSessionManager(
         return session
     }
 
-    fun getOrCreateSession(sessionId: String, capabilities: Map<String, Any?>? = null): ManagedSession {
+    fun getOrCreateSession(sessionId: String, capabilities: Map<String, String?>? = null): ManagedSession {
         val normalizedCapabilities = normalizeCapabilities(sessionId, capabilities)
         val session = sessions.computeIfAbsent(sessionId) {
             createManagedSession(sessionId, normalizedCapabilities)
@@ -107,7 +107,7 @@ class PulsarSessionManager(
      * @param capabilities Optional browser capabilities (browserName, etc.)
      * @return The created managed session.
      */
-    fun getOrCreateSession(capabilities: Map<String, Any?>? = null): ManagedSession {
+    fun getOrCreateSession(capabilities: Map<String, String?>? = null): ManagedSession {
         val normalizedCapabilities = normalizeCapabilities(capabilities = capabilities)
         val sessionId = normalizedCapabilities.getValue(SESSION_ID_CAPABILITY).toString()
         val session = sessions.computeIfAbsent(sessionId) {
@@ -168,7 +168,7 @@ class PulsarSessionManager(
 
     private fun resolveHealthySession(
         sessionId: String,
-        capabilities: Map<String, Any?>,
+        capabilities: Map<String, String?>,
         session: ManagedSession,
     ): ManagedSession {
         if (checkHealthyBlocking(session).isOK) {
@@ -185,7 +185,7 @@ class PulsarSessionManager(
         }
     }
 
-    private fun createManagedSession(sessionId: String, capabilities: Map<String, Any?>): ManagedSession {
+    private fun createManagedSession(sessionId: String, capabilities: Map<String, String?>): ManagedSession {
         val settings = PulsarSettings.parse(capabilities)
         val agenticSession = agenticContext.createSession(settings)
 
@@ -201,7 +201,7 @@ class PulsarSessionManager(
 
     private fun recreateUnhealthySession(
         sessionId: String,
-        capabilities: Map<String, Any?>,
+        capabilities: Map<String, String?>,
         staleSession: ManagedSession,
     ): ManagedSession {
         return sessions.compute(sessionId) { _, existingSession ->
@@ -240,8 +240,8 @@ class PulsarSessionManager(
 
     private fun normalizeCapabilities(
         explicitSessionId: String? = null,
-        capabilities: Map<String, Any?>?,
-    ): Map<String, Any?> {
+        capabilities: Map<String, String?>?,
+    ): Map<String, String?> {
         val normalizedCapabilities = LinkedHashMap(capabilities.orEmpty())
         val hasExplicitSessionId = !explicitSessionId.isNullOrBlank()
         val requestedSessionId = normalizedCapabilities[SESSION_ID_CAPABILITY]?.toString()?.trim()
@@ -397,7 +397,7 @@ class PulsarSessionManager(
 data class ManagedSession(
     val sessionId: String,
     val agenticSession: AgenticSession,
-    val capabilities: Map<String, Any?>?,
+    val capabilities: Map<String, String?>?,
     var url: String? = null,
     var status: String = "active", // active, paused, stopped
     val createdAt: Long = System.currentTimeMillis(),

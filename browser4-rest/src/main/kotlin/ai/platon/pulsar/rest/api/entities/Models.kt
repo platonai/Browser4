@@ -38,13 +38,13 @@ data class ScrapeStatusRequest(
 )
 
 data class SessionResponse(
-    val sessionId: String? = null,
-    val status: String? = null,
-    val profileMode: String? = null,
-    val capabilities: Map<String, Any?>? = null,
-    val url: String? = null,
-    val createdAt: Long? = null,
-    val lastAccessedAt: Long = 0,
+    var sessionId: String,
+    var status: String? = null,
+    var profileMode: String? = null,
+    var capabilities: Map<String, String?>? = null,
+    var url: String? = null,
+    var createdAt: Long? = null,
+    var lastAccessedAt: Long = 0,
 )
 
 fun ManagedSession.toSessionResponse(): SessionResponse {
@@ -52,7 +52,7 @@ fun ManagedSession.toSessionResponse(): SessionResponse {
     return SessionResponse(
         sessionId = sessionId,
         status = status,
-        profileMode = safeCapabilities?.get(PROFILE_MODE_CAPABILITY)?.toString(),
+        profileMode = safeCapabilities?.get(PROFILE_MODE_CAPABILITY),
         capabilities = safeCapabilities,
         url = url,
         createdAt = createdAt,
