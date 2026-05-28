@@ -4,7 +4,7 @@ import ai.platon.pulsar.browser.InteractSettings
 import ai.platon.pulsar.browser.detail.DualWorldScriptLoader
 import ai.platon.pulsar.browser.detail.ScriptLoader
 import ai.platon.pulsar.browser.detail.SimpleScriptConfuser
-import ai.platon.pulsar.chrome.ChromeOptions
+import ai.platon.pulsar.chrome.util.ChromeOptions
 import ai.platon.pulsar.common.Runtimes
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.browser.BrowserType
@@ -548,7 +548,7 @@ open class BrowserSettings constructor(
         return "${VIEWPORT.width}$delimiter${VIEWPORT.height}"
     }
 
-    open fun createChromeOptions(generalOptions: Map<String, Any>): ai.platon.pulsar.chrome.ChromeOptions {
+    open fun createChromeOptions(generalOptions: Map<String, Any>): ChromeOptions {
         val chromeOptions = ChromeOptions()
         chromeOptions.merge(generalOptions)
 

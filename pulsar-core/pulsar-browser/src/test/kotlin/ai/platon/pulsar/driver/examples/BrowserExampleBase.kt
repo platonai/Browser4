@@ -21,7 +21,7 @@ package ai.platon.pulsar.driver.examples
 
 import ai.platon.pulsar.chrome.ChromeLauncher
 import ai.platon.pulsar.browser.impl.DevToolsConfig
-import ai.platon.pulsar.chrome.ChromeOptions
+import ai.platon.pulsar.chrome.util.ChromeOptions
 import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.pulsar.common.browser.BrowserFiles
 import kotlinx.coroutines.runBlocking

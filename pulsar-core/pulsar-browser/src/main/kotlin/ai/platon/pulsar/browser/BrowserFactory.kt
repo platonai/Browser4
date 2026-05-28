@@ -5,6 +5,8 @@ import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.browser.common.BrowserSettings
+import ai.platon.pulsar.chrome.util.ChromeOptions
+import ai.platon.pulsar.chrome.util.LauncherOptions
 
 /**
  * A factory to create browser instances.
@@ -70,6 +72,6 @@ interface BrowserFactory {
      * */
     @Throws(BrowserLaunchException::class)
     fun launch(
-        browserId: BrowserId, launcherOptions: ai.platon.pulsar.chrome.LauncherOptions, launchOptions: ai.platon.pulsar.chrome.ChromeOptions
+        browserId: BrowserId, launcherOptions: LauncherOptions, launchOptions: ChromeOptions
     ): Browser
 }

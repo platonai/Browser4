@@ -1,8 +1,8 @@
 package ai.platon.pulsar.driver
 
 import ai.platon.pulsar.chrome.ChromeLauncher
-import ai.platon.pulsar.chrome.ChromeOptions
-import ai.platon.pulsar.chrome.LauncherOptions
+import ai.platon.pulsar.chrome.util.ChromeOptions
+import ai.platon.pulsar.chrome.util.LauncherOptions
 import ai.platon.pulsar.common.browser.BrowserFiles
 import ai.platon.pulsar.common.browser.BrowserFiles.CDP_URL_FILE_NAME
 import ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper

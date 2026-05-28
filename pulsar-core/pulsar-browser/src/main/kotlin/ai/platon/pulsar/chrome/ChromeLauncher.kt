@@ -2,6 +2,8 @@ package ai.platon.pulsar.chrome
 
 import ai.platon.pulsar.chrome.impl.ChromeImpl
 import ai.platon.pulsar.chrome.util.ChromeLaunchException
+import ai.platon.pulsar.chrome.util.ChromeOptions
+import ai.platon.pulsar.chrome.util.LauncherOptions
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.browser.BrowserFiles
 import ai.platon.pulsar.common.browser.Browsers
