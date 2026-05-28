@@ -2,7 +2,7 @@ package ai.platon.pulsar.skeleton.workflow.protocol.http
 
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.persist.model.GoraWebPage
-import ai.platon.pulsar.skeleton.crawl.protocol.Protocol
+import ai.platon.pulsar.skeleton.workflow.protocol.Protocol
 import ai.platon.pulsar.skeleton.workflow.protocol.Response
 import ai.platon.pulsar.skeleton.workflow.protocol.RobotRulesParser
 import crawlercommons.robots.BaseRobotRules

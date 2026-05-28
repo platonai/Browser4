@@ -1,11 +1,11 @@
-package ai.platon.pulsar.skeleton.impl
+package ai.platon.pulsar.loop.impl
 
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.collect.UrlFeeder
 import ai.platon.pulsar.common.config.CapabilityTypes.CRAWL_ENABLE_DEFAULT_DATA_COLLECTORS
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.warnForClose
-import ai.platon.pulsar.skeleton.TaskRunner
+import ai.platon.pulsar.loop.TaskRunner
 import ai.platon.pulsar.skeleton.context.PulsarContexts
 import ai.platon.pulsar.skeleton.context.support.AbstractPulsarContext
 import kotlinx.coroutines.*

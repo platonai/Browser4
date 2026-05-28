@@ -1,4 +1,4 @@
-package ai.platon.pulsar.skeleton
+package ai.platon.pulsar.loop
 
 import ai.platon.pulsar.common.urls.UrlAware
 import ai.platon.pulsar.persist.WebPage

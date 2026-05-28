@@ -10,7 +10,7 @@ import ai.platon.pulsar.persist.metadata.FetchMode
 import ai.platon.pulsar.persist.metadata.MultiMetadata
 import ai.platon.pulsar.persist.metadata.Name
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
-import ai.platon.pulsar.skeleton.crawl.protocol.Protocol
+import ai.platon.pulsar.skeleton.workflow.protocol.Protocol
 import ai.platon.pulsar.skeleton.workflow.common.MimeTypeResolver
 import ai.platon.pulsar.skeleton.workflow.protocol.ProtocolOutput
 import ai.platon.pulsar.skeleton.workflow.protocol.Response

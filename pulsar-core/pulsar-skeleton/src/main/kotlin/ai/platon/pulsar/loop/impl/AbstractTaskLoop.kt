@@ -1,11 +1,11 @@
-package ai.platon.pulsar.skeleton.impl
+package ai.platon.pulsar.loop.impl
 
 import ai.platon.pulsar.common.collect.UrlFeeder
 import ai.platon.pulsar.common.collect.collector.PriorityDataCollector
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.urls.UrlAware
-import ai.platon.pulsar.skeleton.TaskLoop
-import ai.platon.pulsar.skeleton.TaskRunner
+import ai.platon.pulsar.loop.TaskLoop
+import ai.platon.pulsar.loop.TaskRunner
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 

@@ -39,19 +39,19 @@
         <constructor-arg ref="conf" />
     </bean>
 
-    <bean id="globalCacheFactory" class="ai.platon.pulsar.skeleton.common.GlobalCacheFactory">
+    <bean id="globalCacheFactory" class="ai.platon.pulsar.skeleton.workflow.common.GlobalCacheFactory">
         <constructor-arg ref="conf"/>
     </bean>
 
     <bean id="globalCache" factory-bean="globalCacheFactory" factory-method="getGlobalCache"/>
 
-    <bean id="taskLoop" class="ai.platon.pulsar.skeleton.impl.StreamingTaskLoop">
+    <bean id="taskLoop" class="ai.platon.pulsar.loop.impl.StreamingTaskLoop">
         <constructor-arg ref="conf"/>
         <constructor-arg value="SpringStreamingTaskLoop"/>
     </bean>
 
     <!-- Do not auto start Main loops, the PulsarSession depended on might not be the correct one -->
-    <bean id="taskLoops" class="ai.platon.pulsar.skeleton.TaskLoops" destroy-method="stop">
+    <bean id="taskLoops" class="ai.platon.pulsar.loop.TaskLoops" destroy-method="stop">
         <constructor-arg name="loops">
             <list>
                 <ref bean="taskLoop" />

@@ -1,4 +1,4 @@
-package ai.platon.pulsar.skeleton.impl
+package ai.platon.pulsar.loop.impl
 
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.collect.ConcurrentLoadingIterable

@@ -1,9 +1,7 @@
-package ai.platon.pulsar.skeleton.crawl.protocol
+package ai.platon.pulsar.skeleton.workflow.protocol
 
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.skeleton.workflow.common.LazyConfigurable
-import ai.platon.pulsar.skeleton.workflow.protocol.ProtocolOutput
-import ai.platon.pulsar.skeleton.workflow.protocol.Response
 import crawlercommons.robots.BaseRobotRules
 
 /**
