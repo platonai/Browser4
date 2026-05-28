@@ -111,6 +111,9 @@
                      Only exclude E2E, SDK, and ManualOnly tests -->
                 <surefire.excludedGroups>E2E,E2ETest,SDK,ManualOnly</surefire.excludedGroups>
             </properties>
+            <modules>
+                <module>pulsar-tests/pulsar-it-tests</module>
+            </modules>
         </profile>
 
         <!-- Deployment profile -->
