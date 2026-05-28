@@ -1,6 +1,6 @@
 package ai.platon.pulsar.skeleton.browser.driver
 
-import ai.platon.pulsar.driver.chrome.dom.SnapshotService
+import ai.platon.pulsar.browser.chrome.dom.SnapshotService
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.DateTimes

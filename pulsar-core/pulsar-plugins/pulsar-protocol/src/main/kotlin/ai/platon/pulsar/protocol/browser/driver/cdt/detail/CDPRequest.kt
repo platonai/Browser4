@@ -1,6 +1,6 @@
 package ai.platon.pulsar.protocol.browser.driver.cdt.detail
 
-import ai.platon.pulsar.driver.chrome.util.ChromeRPCException
+import ai.platon.pulsar.browser.chrome.util.ChromeRPCException
 import ai.platon.cdt.kt.protocol.types.fetch.HeaderEntry
 import ai.platon.cdt.kt.protocol.types.network.ErrorReason
 import ai.platon.cdt.kt.protocol.types.network.Initiator

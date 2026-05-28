@@ -17,6 +17,10 @@
             <artifactId>pulsar-common</artifactId>
         </dependency>
         <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>pulsar-jsoup</artifactId>
+        </dependency>
+        <dependency>
             <groupId>ai.platon.cdt</groupId>
             <artifactId>cdt-kotlin-client</artifactId>
             <version>${cdt-kotlin-client.version}</version>
@@ -93,12 +97,6 @@
             <artifactId>mockito-junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
-
-        <!-- Kotlin-friendly mocking -->
-        <!-- (intentionally not used in this module; kept minimal) -->
-
-        <!-- Kotlin coroutines test utilities -->
-        <!-- (intentionally not used in this module; kept minimal) -->
     </dependencies>
 
     <properties>

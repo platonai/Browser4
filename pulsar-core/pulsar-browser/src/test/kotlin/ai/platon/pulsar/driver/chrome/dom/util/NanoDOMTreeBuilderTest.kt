@@ -1,9 +1,9 @@
 package ai.platon.pulsar.driver.chrome.dom.util
 
-import ai.platon.pulsar.driver.chrome.dom.model.CleanedDOMTreeNode
-import ai.platon.pulsar.driver.chrome.dom.model.CompactRect
-import ai.platon.pulsar.driver.chrome.dom.model.SerializableDOMTreeNode
-import ai.platon.pulsar.driver.chrome.dom.model.NodeType
+import ai.platon.pulsar.browser.chrome.dom.model.CleanedDOMTreeNode
+import ai.platon.pulsar.browser.chrome.dom.model.CompactRect
+import ai.platon.pulsar.browser.chrome.dom.model.SerializableDOMTreeNode
+import ai.platon.pulsar.browser.chrome.dom.model.NodeType
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull

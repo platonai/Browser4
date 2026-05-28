@@ -1,10 +1,10 @@
 package ai.platon.pulsar
 
-import ai.platon.pulsar.driver.chrome.dom.CDPSnapshotService
-import ai.platon.pulsar.driver.chrome.dom.model.MergedDOMTreeNode
-import ai.platon.pulsar.driver.chrome.dom.model.PageTarget
-import ai.platon.pulsar.driver.chrome.dom.model.SnapshotOptions
-import ai.platon.pulsar.driver.chrome.dom.util.DomDebug
+import ai.platon.pulsar.browser.chrome.dom.CDPSnapshotService
+import ai.platon.pulsar.browser.chrome.dom.model.MergedDOMTreeNode
+import ai.platon.pulsar.browser.chrome.dom.model.PageTarget
+import ai.platon.pulsar.browser.chrome.dom.model.SnapshotOptions
+import ai.platon.pulsar.browser.chrome.dom.util.DomDebug
 import ai.platon.pulsar.driver.common.BrowserSettings
 import ai.platon.pulsar.driver.common.SimpleScriptConfuser
 import ai.platon.pulsar.browser.FastWebDriverService

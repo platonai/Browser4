@@ -2,7 +2,7 @@ package ai.platon.pulsar.driver.common
 
 import ai.platon.pulsar.driver.DisplayMode
 import ai.platon.pulsar.driver.InteractSettings
-import ai.platon.pulsar.driver.chrome.ChromeOptions
+import ai.platon.pulsar.browser.chrome.ChromeOptions
 import ai.platon.pulsar.common.Runtimes
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.browser.BrowserType

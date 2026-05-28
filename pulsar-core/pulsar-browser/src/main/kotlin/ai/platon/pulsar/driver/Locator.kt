@@ -1,6 +1,6 @@
 package ai.platon.pulsar.driver
 
-import ai.platon.pulsar.driver.chrome.dom.model.MergedDOMTreeNode
+import ai.platon.pulsar.browser.chrome.dom.model.MergedDOMTreeNode
 import org.apache.commons.lang3.StringUtils
 
 open class Locator(
