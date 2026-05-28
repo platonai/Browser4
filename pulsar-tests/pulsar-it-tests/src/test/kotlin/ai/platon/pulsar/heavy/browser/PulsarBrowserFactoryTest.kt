@@ -1,5 +1,6 @@
 package ai.platon.pulsar.heavy.browser
 
+import ai.platon.pulsar.common.config.CapabilityTypes.MIN_SEQUENTIAL_BROWSER_PROFILE_NUMBER
 import ai.platon.pulsar.protocol.browser.PulsarBrowserFactory
 import ai.platon.pulsar.common.config.CapabilityTypes.MIN_SEQUENTIAL_PRIVACY_AGENT_NUMBER
 import ai.platon.pulsar.common.config.ImmutableConfig
@@ -32,7 +33,7 @@ class PulsarBrowserFactoryTest {
     @Test
     fun testLaunchNextSequentialBrowserManyTimes() {
         val conf = ImmutableConfig()
-        val maxAgents = conf.getInt(MIN_SEQUENTIAL_PRIVACY_AGENT_NUMBER, 10)
+        val maxAgents = conf.getInt(MIN_SEQUENTIAL_BROWSER_PROFILE_NUMBER, 10)
 
         for (i in 1..(maxAgents + 2)) {
             val browser = browserFactory.launchNextSequentialBrowser()
