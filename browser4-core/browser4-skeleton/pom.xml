@@ -31,10 +31,6 @@
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-browser</artifactId>
         </dependency>
-        <dependency>
-            <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-llm</artifactId>
-        </dependency>
 
         <dependency>
             <groupId>ai.platon.pulsar</groupId>

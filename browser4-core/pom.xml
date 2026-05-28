@@ -30,7 +30,6 @@
         <module>browser4-common</module>
         <module>browser4-resources</module>
         <module>browser4-plugins</module>
-        <module>pulsar-third</module>
         <module>browser4-skeleton</module>
         <module>browser4-browser</module>
         <module>browser4-spring-support</module>
