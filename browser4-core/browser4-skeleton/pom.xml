@@ -52,6 +52,10 @@
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-h2</artifactId>
         </dependency>
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>pulsar-llm</artifactId>
+        </dependency>
 
         <dependency>
             <groupId>dev.langchain4j</groupId>
