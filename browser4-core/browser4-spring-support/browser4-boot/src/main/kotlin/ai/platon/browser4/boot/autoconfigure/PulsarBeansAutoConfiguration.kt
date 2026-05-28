@@ -1,5 +1,6 @@
 package ai.platon.browser4.boot.autoconfigure
 
+import ai.platon.browser4.driver.common.BrowserSettings
 import ai.platon.pulsar.common.config.MutableConfig
 import ai.platon.pulsar.common.proxy.ProxyLoader
 import ai.platon.pulsar.common.proxy.ProxyLoaderFactory
@@ -23,6 +24,8 @@ import ai.platon.pulsar.skeleton.common.AppStatusTracker
 import ai.platon.pulsar.skeleton.common.message.MiscMessageWriter
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import ai.platon.pulsar.skeleton.impl.StreamingTaskLoop
+import ai.platon.pulsar.skeleton.workflow.common.GlobalCache
+import ai.platon.pulsar.skeleton.workflow.common.GlobalCacheFactory
 import ai.platon.pulsar.skeleton.workflow.component.BatchFetchComponent
 import ai.platon.pulsar.skeleton.workflow.component.LoadComponent
 import ai.platon.pulsar.skeleton.workflow.component.ParseComponent
@@ -35,6 +38,7 @@ import ai.platon.pulsar.skeleton.workflow.parse.html.PrimerHtmlParser
 import ai.platon.pulsar.skeleton.workflow.protocol.ProtocolFactory
 import ai.platon.pulsar.skeleton.workflow.schedule.DefaultFetchSchedule
 import ai.platon.pulsar.tools.TikaParser
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import org.springframework.context.annotation.Lazy

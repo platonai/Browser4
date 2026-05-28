@@ -32,6 +32,10 @@
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
+            <artifactId>browser4-protocol</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-ql</artifactId>
             <!-- Exclude the original version and use the browser4 managed ones -->
             <exclusions>
@@ -49,15 +53,14 @@
                 </exclusion>
             </exclusions>
         </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot</artifactId>
         </dependency>
-
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-autoconfigure</artifactId>
-            <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.springframework</groupId>
@@ -68,10 +71,6 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-test</artifactId>
             <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>ai.platon.pulsar</groupId>
-            <artifactId>browser4-agentic</artifactId>
         </dependency>
     </dependencies>
 </project>
