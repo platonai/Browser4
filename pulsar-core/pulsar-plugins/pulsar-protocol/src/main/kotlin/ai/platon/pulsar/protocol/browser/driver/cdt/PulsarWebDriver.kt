@@ -9,7 +9,6 @@ import ai.platon.cdt.kt.protocol.types.network.ErrorReason
 import ai.platon.cdt.kt.protocol.types.network.LoadNetworkResourceOptions
 import ai.platon.cdt.kt.protocol.types.network.ResourceType
 import ai.platon.cdt.kt.protocol.types.runtime.CallArgument
-import ai.platon.pulsar.browser.driver.chrome.ChromeTab
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.math.geometric.OffsetD
@@ -17,6 +16,7 @@ import ai.platon.pulsar.common.math.geometric.PointD
 import ai.platon.pulsar.common.math.geometric.RectD
 import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.driver.BrowserProtocol
+import ai.platon.pulsar.driver.BrowserTab
 import ai.platon.pulsar.driver.NetworkResourceResponse
 import ai.platon.pulsar.driver.NodeRef
 import ai.platon.pulsar.driver.chrome.IsolatedWorldManager
@@ -45,7 +45,7 @@ import kotlin.random.Random
 
 class PulsarWebDriver constructor(
     uniqueID: String,
-    val chromeTab: ChromeTab,
+    val chromeTab: BrowserTab,
     val browserProtocol: BrowserProtocol,
     override val browser: PulsarBrowser
 ) : AbstractWebDriver(uniqueID, browser) {

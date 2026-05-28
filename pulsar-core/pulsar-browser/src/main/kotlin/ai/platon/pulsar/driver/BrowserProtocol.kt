@@ -1,6 +1,16 @@
 package ai.platon.pulsar.driver
 
+import ai.platon.cdt.kt.protocol.events.console.MessageAdded
+import ai.platon.cdt.kt.protocol.events.fetch.AuthRequired
+import ai.platon.cdt.kt.protocol.events.fetch.RequestPaused
 import ai.platon.cdt.kt.protocol.events.input.DragIntercepted
+import ai.platon.cdt.kt.protocol.events.network.LoadingFailed
+import ai.platon.cdt.kt.protocol.events.network.LoadingFinished
+import ai.platon.cdt.kt.protocol.events.network.RequestServedFromCache
+import ai.platon.cdt.kt.protocol.events.network.RequestWillBeSent
+import ai.platon.cdt.kt.protocol.events.network.RequestWillBeSentExtraInfo
+import ai.platon.cdt.kt.protocol.events.network.ResponseReceived
+import ai.platon.cdt.kt.protocol.events.network.ResponseReceivedExtraInfo
 import ai.platon.cdt.kt.protocol.events.page.DocumentOpened
 import ai.platon.cdt.kt.protocol.events.page.FrameNavigated
 import ai.platon.cdt.kt.protocol.events.page.WindowOpen
@@ -12,6 +22,8 @@ import ai.platon.cdt.kt.protocol.types.dom.Node
 import ai.platon.cdt.kt.protocol.types.dom.PerformSearch
 import ai.platon.cdt.kt.protocol.types.dom.Rect
 import ai.platon.cdt.kt.protocol.types.domsnapshot.CaptureSnapshot
+import ai.platon.cdt.kt.protocol.types.fetch.AuthChallengeResponse
+import ai.platon.cdt.kt.protocol.types.fetch.HeaderEntry
 import ai.platon.cdt.kt.protocol.types.fetch.RequestPattern
 import ai.platon.cdt.kt.protocol.types.fetch.ResponseBody
 import ai.platon.cdt.kt.protocol.types.input.DispatchDragEventType
@@ -53,6 +65,8 @@ interface BrowserProtocol {
     suspend fun cssEnable(): Unit
     suspend fun fetchEnable(): Unit
     suspend fun fetchEnable(patterns: List<RequestPattern>, handleAuthRequests: Boolean): Unit
+    suspend fun securityEnable()
+
     suspend fun getFrameTree(): FrameTree
 
     suspend fun reload(): Unit
@@ -213,7 +227,52 @@ interface BrowserProtocol {
     suspend fun reloadPage(ignoreCache: Boolean? = null, scriptToEvaluateOnLoad: String? = null)
 
     suspend fun setCookies(cookies: List<Map<String, Any?>>)
-    
+
+    suspend fun setExtraHTTPHeaders(headers: Map<String, Any>)
+
+    suspend fun setCacheDisabled(cacheDisabled: Boolean)
+
+    fun onRequestWillBeSent(handler: suspend (RequestWillBeSent) -> Unit): EventListener
+
+    fun onRequestWillBeSentExtraInfo(handler: suspend (RequestWillBeSentExtraInfo) -> Unit): EventListener
+
+    fun onRequestServedFromCache(handler: suspend (RequestServedFromCache) -> Unit): EventListener
+
+    fun onResponseReceived(handler: suspend (ResponseReceived) -> Unit): EventListener
+
+    fun onResponseReceivedExtraInfo(handler: suspend (ResponseReceivedExtraInfo) -> Unit): EventListener
+
+    fun onLoadingFinished(handler: suspend (LoadingFinished) -> Unit): EventListener
+
+    fun onLoadingFailed(handler: suspend (LoadingFailed) -> Unit): EventListener
+
+    suspend fun continueRequest(
+        requestId: String,
+        url: String? = null,
+        method: String? = null,
+        postData: String? = null,
+        headers: List<HeaderEntry>? = null,
+    )
+
+    suspend fun continueWithAuth(requestId: String, authChallengeResponse: AuthChallengeResponse)
+
+    suspend fun fulfillRequest(
+        requestId: String,
+        responseCode: Int,
+        responseHeaders: List<HeaderEntry>? = null,
+        binaryResponseHeaders: String? = null,
+        body: String? = null,
+        responsePhrase: String? = null,
+    )
+
+    fun onRequestPaused(handler: suspend (RequestPaused) -> Unit): EventListener
+
+    fun onAuthRequired(handler: suspend (AuthRequired) -> Unit): EventListener
+
+    suspend fun setIgnoreCertificateErrors(ignore: Boolean)
+
+    fun onConsoleMessageAdded(handler: suspend (MessageAdded) -> Unit): EventListener
+
     fun awaitTermination(): Unit
 
     fun close(): Unit

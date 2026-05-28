@@ -1,31 +1,28 @@
 package ai.platon.pulsar.driver.chrome.impl
 
-import ai.platon.pulsar.driver.BrowserProtocol
-import ai.platon.pulsar.driver.chrome.RemoteDevTools
 import ai.platon.cdt.kt.protocol.ChromeDevTools
+import ai.platon.cdt.kt.protocol.events.console.MessageAdded
+import ai.platon.cdt.kt.protocol.events.fetch.AuthRequired
+import ai.platon.cdt.kt.protocol.events.fetch.RequestPaused
 import ai.platon.cdt.kt.protocol.events.input.DragIntercepted
+import ai.platon.cdt.kt.protocol.events.network.*
 import ai.platon.cdt.kt.protocol.events.page.DocumentOpened
 import ai.platon.cdt.kt.protocol.events.page.FrameNavigated
 import ai.platon.cdt.kt.protocol.events.page.WindowOpen
 import ai.platon.cdt.kt.protocol.types.dom.Rect
 import ai.platon.cdt.kt.protocol.types.domsnapshot.CaptureSnapshot
+import ai.platon.cdt.kt.protocol.types.fetch.AuthChallengeResponse
+import ai.platon.cdt.kt.protocol.types.fetch.HeaderEntry
 import ai.platon.cdt.kt.protocol.types.fetch.RequestPattern
-import ai.platon.cdt.kt.protocol.types.input.DispatchDragEventType
-import ai.platon.cdt.kt.protocol.types.input.DispatchKeyEventType
-import ai.platon.cdt.kt.protocol.types.input.DispatchMouseEventType
-import ai.platon.cdt.kt.protocol.types.input.DragData
-import ai.platon.cdt.kt.protocol.types.input.MouseButton
+import ai.platon.cdt.kt.protocol.types.input.*
 import ai.platon.cdt.kt.protocol.types.network.ErrorReason
 import ai.platon.cdt.kt.protocol.types.network.LoadNetworkResourceOptions
-import ai.platon.cdt.kt.protocol.types.page.CaptureScreenshotFormat
-import ai.platon.cdt.kt.protocol.types.page.Navigate
-import ai.platon.cdt.kt.protocol.types.page.ReferrerPolicy
-import ai.platon.cdt.kt.protocol.types.page.TransitionType
-import ai.platon.cdt.kt.protocol.types.page.Viewport
+import ai.platon.cdt.kt.protocol.types.page.*
 import ai.platon.cdt.kt.protocol.types.runtime.CallArgument
 import ai.platon.cdt.kt.protocol.types.runtime.CallFunctionOn
 import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
-import kotlin.invoke
+import ai.platon.pulsar.driver.BrowserProtocol
+import ai.platon.pulsar.driver.chrome.RemoteDevTools
 
 /**
  * CDP is the single access point for all Chrome DevTools Protocol (CDP) domain APIs.
@@ -35,7 +32,7 @@ import kotlin.invoke
  */
 class RemoteChromeProtocol(
     val devTools: ChromeDevTools
-): BrowserProtocol {
+) : BrowserProtocol {
     private data class EmptyResult(val ignored: String? = null)
 
     val remoteDevTools: RemoteDevTools =
@@ -68,6 +65,8 @@ class RemoteChromeProtocol(
     val emulation get() = devTools.emulation
     val accessibility get() = devTools.accessibility
     val domSnapshot get() = devTools.domSnapshot
+    val security get() = devTools.security
+    val console get() = devTools.console
 
     override suspend fun mainFrame() = page.getFrameTree().frame
 
@@ -78,15 +77,24 @@ class RemoteChromeProtocol(
     override suspend fun networkEnable() = network.enable()
     override suspend fun cssEnable() = css.enable()
     override suspend fun fetchEnable() = fetch.enable()
-    override suspend fun fetchEnable(patterns: List<RequestPattern>, handleAuthRequests: Boolean) = fetch.enable(patterns, handleAuthRequests)
+    override suspend fun fetchEnable(patterns: List<RequestPattern>, handleAuthRequests: Boolean) =
+        fetch.enable(patterns, handleAuthRequests)
+
+    override suspend fun securityEnable() {
+        security.enable()
+    }
+
     override suspend fun getFrameTree() = page.getFrameTree()
 
     override suspend fun reload() = page.reload()
     override suspend fun navigateToHistoryEntry(entryId: Int) = page.navigateToHistoryEntry(entryId)
-    override suspend fun handleJavaScriptDialog(accept: Boolean, promptText: String?) = page.handleJavaScriptDialog(accept, promptText)
+    override suspend fun handleJavaScriptDialog(accept: Boolean, promptText: String?) =
+        page.handleJavaScriptDialog(accept, promptText)
+
     override suspend fun bringToFront() = page.bringToFront()
     override suspend fun stopLoading() = page.stopLoading()
-    override suspend fun addScriptToEvaluateOnNewDocument(script: String) = page.addScriptToEvaluateOnNewDocument(script)
+    override suspend fun addScriptToEvaluateOnNewDocument(script: String) =
+        page.addScriptToEvaluateOnNewDocument(script)
 
     override fun onDocumentOpened(handler: suspend (DocumentOpened) -> Unit) = page.onDocumentOpened(handler)
     override fun onFrameNavigated(handler: suspend (FrameNavigated) -> Unit) = page.onFrameNavigated(handler)
@@ -236,14 +244,20 @@ class RemoteChromeProtocol(
     override suspend fun clearBrowserCookies() = network.clearBrowserCookies()
     override suspend fun setBlockedURLs(urls: List<String>) = network.setBlockedURLs(urls)
     override suspend fun getCookies() = network.getCookies()
-    override suspend fun deleteCookies(name: String, url: String?, domain: String?, path: String?) = network.deleteCookies(name, url, domain, path)
-    override suspend fun loadNetworkResource(frameId: String, url: String, options: LoadNetworkResourceOptions) = network.loadNetworkResource(frameId, url, options)
+    override suspend fun deleteCookies(name: String, url: String?, domain: String?, path: String?) =
+        network.deleteCookies(name, url, domain, path)
 
-    override suspend fun failRequest(requestId: String, errorReason: ErrorReason) = fetch.failRequest(requestId, errorReason)
+    override suspend fun loadNetworkResource(frameId: String, url: String, options: LoadNetworkResourceOptions) =
+        network.loadNetworkResource(frameId, url, options)
+
+    override suspend fun failRequest(requestId: String, errorReason: ErrorReason) =
+        fetch.failRequest(requestId, errorReason)
+
     override suspend fun getResponseBody(requestId: String) = fetch.getResponseBody(requestId)
 
     override suspend fun setFileInputFiles(files: List<String>, nodeId: Int) = dom.setFileInputFiles(files, nodeId)
-    override suspend fun getOuterHTML(nodeId: Int, backendNodeId: Int, objectId: String?) = dom.getOuterHTML(nodeId, backendNodeId, objectId)
+    override suspend fun getOuterHTML(nodeId: Int, backendNodeId: Int, objectId: String?) =
+        dom.getOuterHTML(nodeId, backendNodeId, objectId)
 
     override fun onDragIntercepted(handler: (DragIntercepted) -> Unit) = input.onDragIntercepted(handler)
 
@@ -322,7 +336,6 @@ class RemoteChromeProtocol(
         )
     }
 
-
     override suspend fun setInterceptDrags(enabled: Boolean) = input.setInterceptDrags(enabled)
 
     override suspend fun dispatchDragEvent(type: DispatchDragEventType, x: Double, y: Double, data: DragData) {
@@ -384,6 +397,63 @@ class RemoteChromeProtocol(
             ?: throw IllegalStateException("Remote DevTools is not available")
         remoteDevTools.invoke("Network.setCookies", mapOf("cookies" to cookies), EmptyResult::class)
     }
+
+    override suspend fun setExtraHTTPHeaders(headers: Map<String, Any>) = network.setExtraHTTPHeaders(headers)
+
+    override suspend fun setCacheDisabled(cacheDisabled: Boolean) = network.setCacheDisabled(cacheDisabled)
+
+    override fun onRequestWillBeSent(handler: suspend (RequestWillBeSent) -> Unit) =
+        network.onRequestWillBeSent(handler)
+
+    override fun onRequestWillBeSentExtraInfo(handler: suspend (RequestWillBeSentExtraInfo) -> Unit) =
+        network.onRequestWillBeSentExtraInfo(handler)
+
+    override fun onRequestServedFromCache(handler: suspend (RequestServedFromCache) -> Unit) =
+        network.onRequestServedFromCache(handler)
+
+    override fun onResponseReceived(handler: suspend (ResponseReceived) -> Unit) = network.onResponseReceived(handler)
+
+    override fun onResponseReceivedExtraInfo(handler: suspend (ResponseReceivedExtraInfo) -> Unit) =
+        network.onResponseReceivedExtraInfo(handler)
+
+    override fun onLoadingFinished(handler: suspend (LoadingFinished) -> Unit) = network.onLoadingFinished(handler)
+
+    override fun onLoadingFailed(handler: suspend (LoadingFailed) -> Unit) = network.onLoadingFailed(handler)
+
+    override suspend fun continueRequest(
+        requestId: String,
+        url: String?,
+        method: String?,
+        postData: String?,
+        headers: List<HeaderEntry>?,
+    ) = fetch.continueRequest(requestId, url, method, postData, headers)
+
+    override suspend fun continueWithAuth(requestId: String, authChallengeResponse: AuthChallengeResponse) =
+        fetch.continueWithAuth(requestId, authChallengeResponse)
+
+    override suspend fun fulfillRequest(
+        requestId: String,
+        responseCode: Int,
+        responseHeaders: List<HeaderEntry>?,
+        binaryResponseHeaders: String?,
+        body: String?,
+        responsePhrase: String?,
+    ) = fetch.fulfillRequest(
+        requestId,
+        responseCode,
+        responseHeaders,
+        binaryResponseHeaders,
+        body,
+        responsePhrase,
+    )
+
+    override fun onRequestPaused(handler: suspend (RequestPaused) -> Unit) = fetch.onRequestPaused(handler)
+
+    override fun onAuthRequired(handler: suspend (AuthRequired) -> Unit) = fetch.onAuthRequired(handler)
+
+    override suspend fun setIgnoreCertificateErrors(ignore: Boolean) = security.setIgnoreCertificateErrors(ignore)
+
+    override fun onConsoleMessageAdded(handler: suspend (MessageAdded) -> Unit) = console.onMessageAdded(handler)
 
     override fun awaitTermination() {
         remoteDevToolsOrNull?.awaitTermination()

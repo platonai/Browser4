@@ -33,17 +33,9 @@ class BrowserEmulatorProtocol : ForwardingProtocol() {
     private val browserEmulatorOrNull get() = if (context.isActive) browserEmulator else null
 
     @Throws(Exception::class)
-    override fun getResponse(page: WebPage, followRedirects: Boolean): Response? {
-        require(page.isNotInternal) { "Unexpected internal page ${page.url}" }
-        return super.getResponse(page, followRedirects)
-            ?: browserEmulatorOrNull?.fetchContent(page)
-            ?: ForwardingResponse.canceled(page)
-    }
-
-    @Throws(Exception::class)
     override suspend fun getResponseDeferred(page: WebPage, followRedirects: Boolean): Response? {
         require(page.isNotInternal) { "Unexpected internal page ${page.url}" }
-        return super.getResponse(page, followRedirects)
+        return super.getResponseDeferred(page, followRedirects)
             ?: browserEmulatorOrNull?.fetchContentDeferred(page)
             ?: ForwardingResponse.canceled(page)
     }
