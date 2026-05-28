@@ -9,6 +9,7 @@ import java.io.IOException
 import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.util.concurrent.TimeUnit
+
 /**
  * Destroys Chrome processes associated with a specific user data directory.
  */
@@ -28,7 +29,7 @@ class ChromeDestroyer(
         """.trimIndent()
     }
 
-    private val browserFileSystem = _root_ide_package_.ai.platon.pulsar.browser.chrome.BrowserFileSystem(userDataDir)
+    private val browserFileSystem = BrowserFileSystem(userDataDir)
 
     /**
      * Destroys the matching Chrome process forcibly and clears process markers.
@@ -193,7 +194,7 @@ class ChromeDestroyer(
     }
 
     private fun isCommandLineMatch(cmdLine: String): Boolean {
-        return _root_ide_package_.ai.platon.pulsar.browser.chrome.ChromeLauncher.commandLineContainsUserDataDir(
+        return ChromeLauncher.commandLineContainsUserDataDir(
             cmdLine,
             userDataDir.toAbsolutePath().toString(),
             ignoreCase = SystemUtils.IS_OS_WINDOWS
@@ -247,7 +248,7 @@ class ChromeDestroyer(
 
     private fun createWindowsProcessListingCommand(): String {
         val normalizedPath =
-            _root_ide_package_.ai.platon.pulsar.browser.chrome.ChromeLauncher.normalizeCommandText(userDataDir.toAbsolutePath().toString()).replace("'", "''")
+            ChromeLauncher.normalizeCommandText(userDataDir.toAbsolutePath().toString()).replace("'", "''")
         return $$"""
             $path = '$$normalizedPath'
             Get-CimInstance Win32_Process |
@@ -273,7 +274,7 @@ class ChromeDestroyer(
         excludedPids: Set<Long> = emptySet()
     ): Int {
         return lines.asSequence()
-            .mapNotNull(_root_ide_package_.ai.platon.pulsar.browser.chrome.ChromeLauncher::parseProcessListingLine)
+            .mapNotNull(ChromeLauncher::parseProcessListingLine)
             .filter { (_, cmdLine) -> isCommandLineMatch(cmdLine) }
             .map { (pid, _) -> pid }
             .filter { it !in excludedPids }
@@ -283,7 +284,7 @@ class ChromeDestroyer(
 
     private fun hasMatchingProcessFromListing(lines: List<String>): Boolean {
         return lines.asSequence()
-            .mapNotNull(_root_ide_package_.ai.platon.pulsar.browser.chrome.ChromeLauncher::parseProcessListingLine)
+            .mapNotNull(ChromeLauncher::parseProcessListingLine)
             .any { (_, cmdLine) -> isCommandLineMatch(cmdLine) }
     }
 

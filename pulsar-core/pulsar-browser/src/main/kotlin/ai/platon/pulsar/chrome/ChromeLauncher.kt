@@ -1,13 +1,13 @@
 package ai.platon.pulsar.chrome
 
+import ai.platon.pulsar.chrome.impl.ChromeImpl
+import ai.platon.pulsar.chrome.util.ChromeLaunchException
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.browser.BrowserFiles
 import ai.platon.pulsar.common.browser.Browsers
 import ai.platon.pulsar.common.concurrent.RuntimeShutdownHookRegistry
 import ai.platon.pulsar.common.concurrent.ShutdownHookRegistry
 import ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper
-import ai.platon.pulsar.chrome.impl.ChromeImpl
-import ai.platon.pulsar.chrome.util.ChromeLaunchException
 import org.apache.commons.lang3.SystemUtils
 import org.slf4j.LoggerFactory
 import java.io.BufferedReader
@@ -33,7 +33,7 @@ import kotlin.io.path.notExists
  * */
 class ChromeLauncher constructor(
     val userDataDir: Path = AppPaths.CONTEXT_DEFAULT_DIR.resolve("chrome"),
-    val options: ai.platon.pulsar.browser.chrome.LauncherOptions = _root_ide_package_.ai.platon.pulsar.browser.chrome.LauncherOptions(),
+    val options: LauncherOptions = LauncherOptions(),
     private val shutdownHookRegistry: ShutdownHookRegistry = RuntimeShutdownHookRegistry()
 ) : AutoCloseable {
 
@@ -82,8 +82,8 @@ class ChromeLauncher constructor(
 
     // The number of recent temporary user data directories to keep, the browser has to be closed
     private val recentNToKeep = 5
-    private val browserFileSystem = _root_ide_package_.ai.platon.pulsar.browser.chrome.BrowserFileSystem(userDataDir)
-    private val chromeDestroyer = _root_ide_package_.ai.platon.pulsar.browser.chrome.ChromeDestroyer(userDataDir)
+    private val browserFileSystem = BrowserFileSystem(userDataDir)
+    private val chromeDestroyer = ChromeDestroyer(userDataDir)
     private var process: Process? = null
 
     @Volatile
@@ -98,16 +98,19 @@ class ChromeLauncher constructor(
      *
      * This function prepares the user data directory and then launches the Chrome process with the given binary path and options.
      * If the preparation of the user data directory fails, a warning is logged but the process continues.
-     * The function returns a [ai.platon.pulsar.browser.chrome.RemoteChrome] instance that represents the launched Chrome process.
+     * The function returns a [RemoteChrome] instance that represents the launched Chrome process.
      *
      * @param chromeBinaryPath The path to the Chrome binary executable.
      * @param options The Chrome options to be used when launching the Chrome process.
-     * @return A [ai.platon.pulsar.browser.chrome.RemoteChrome] instance representing the launched Chrome process.
-     * @throws ai.platon.pulsar.browser.chrome.util.ChromeLaunchException If an error occurs during the Chrome process launch.
+     * @return A [RemoteChrome] instance representing the launched Chrome process.
+     * @throws ChromeLaunchException If an error occurs during the Chrome process launch.
      */
-    @Throws(_root_ide_package_.ai.platon.pulsar.browser.chrome.util.ChromeLaunchException::class)
+    @Throws(ChromeLaunchException::class)
     @Synchronized
-    fun launch(chromeBinaryPath: Path, options: ai.platon.pulsar.browser.chrome.ChromeOptions): ai.platon.pulsar.browser.chrome.RemoteChrome {
+    fun launch(
+        chromeBinaryPath: Path,
+        options: ChromeOptions
+    ): RemoteChrome {
         return browserFileSystem.withUserDataDirLock {
             // Destroy zombie Chrome processes associated with the user data directory if any
             if (chromeDestroyer.isZombie()) {
@@ -119,7 +122,7 @@ class ChromeLauncher constructor(
             if (existingPort > 0) {
                 logger.info("Found existing Chrome process on port: {} for userDataDir: {}", existingPort, userDataDir)
                 // logger.info("Reusing existing Chrome process feature is disabled temporarily")
-                return@withUserDataDirLock _root_ide_package_.ai.platon.pulsar.browser.chrome.impl.ChromeImpl(
+                return@withUserDataDirLock ChromeImpl(
                     existingPort
                 )
             }
@@ -137,7 +140,7 @@ class ChromeLauncher constructor(
                 try {
                     port = launchChromeProcess(chromeBinaryPath, userDataDir, options)
                     break
-                } catch (e: ai.platon.pulsar.browser.chrome.util.ChromeLaunchException) {
+                } catch (e: ChromeLaunchException) {
                     lastException = e
                     // If the profile is locked, wait for the previous process to exit
                     if (i < 5) {
@@ -154,7 +157,8 @@ class ChromeLauncher constructor(
             }
 
             if (port == 0) {
-                throw lastException ?: _root_ide_package_.ai.platon.pulsar.browser.chrome.util.ChromeLaunchException("Failed to launch chrome with unknown port")
+                throw lastException
+                    ?: ChromeLaunchException("Failed to launch chrome with unknown port")
             }
 
             val launchDuration = System.currentTimeMillis() - startTime
@@ -163,30 +167,31 @@ class ChromeLauncher constructor(
             generateLaunchReport(chromeBinaryPath, options, port, launchDuration)
 
             // Return a new instance of ChromeImpl initialized with port
-            _root_ide_package_.ai.platon.pulsar.browser.chrome.impl.ChromeImpl(port)
+            ChromeImpl(port)
         }
     }
 
     /**
      * Launch chrome
      * */
-    @Throws(_root_ide_package_.ai.platon.pulsar.browser.chrome.util.ChromeLaunchException::class)
+    @Throws(ChromeLaunchException::class)
     @Synchronized
-    fun launch(options: ai.platon.pulsar.browser.chrome.ChromeOptions) = launch(Browsers.searchChromeBinary(), options)
+    fun launch(options: ChromeOptions) = launch(Browsers.searchChromeBinary(), options)
 
     /**
      * Launch chrome
      * */
-    @Throws(_root_ide_package_.ai.platon.pulsar.browser.chrome.util.ChromeLaunchException::class)
+    @Throws(ChromeLaunchException::class)
     @Synchronized
     fun launch(headless: Boolean) =
-        launch(Browsers.searchChromeBinary(), _root_ide_package_.ai.platon.pulsar.browser.chrome.ChromeOptions()
-            .also { it.headless = headless })
+        launch(
+            Browsers.searchChromeBinary(), ChromeOptions()
+                .also { it.headless = headless })
 
     /**
      * Launch chrome
      * */
-    @Throws(_root_ide_package_.ai.platon.pulsar.browser.chrome.util.ChromeLaunchException::class)
+    @Throws(ChromeLaunchException::class)
     @Synchronized
     fun launch() = launch(true)
 
