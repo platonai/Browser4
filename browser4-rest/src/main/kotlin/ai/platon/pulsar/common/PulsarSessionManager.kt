@@ -8,6 +8,7 @@ import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.PerceptiveAgent
 import ai.platon.pulsar.agentic.context.AgenticContext
+import ai.platon.pulsar.agentic.context.AgenticContexts
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_CONTEXT_MODE
 import ai.platon.pulsar.core.api.PulsarSettings
@@ -62,13 +63,12 @@ class PulsarSessionManager(
      * */
     fun ensureSwarmSession(capabilities: Map<String, Any?>? = null): ManagedSession {
         val sessionId = SWARM_SESSION_ID
-        val normalizedCapabilities = normalizeCapabilities(sessionId, capabilities)
-        val settings = PulsarSettings.parse(normalizedCapabilities)
-        val agenticSession = agenticContext.ensureSwarmSession(settings)
+        val normalizedCapabilities = normalizeCapabilities(sessionId, capabilities).toMutableMap()
+        normalizedCapabilities[SESSION_ID_CAPABILITY] = sessionId
+        // normalizedCapabilities[BROWSER_PROFILE_MODE] = browserProfileMode
 
-        val session = sessions.computeIfAbsent(sessionId) {
-            ManagedSession(sessionId, agenticSession, capabilities)
-        }
+        val settings = PulsarSettings.parse(normalizedCapabilities)
+        val agenticSession = AgenticContexts.ensureSwarmSession(settings)
 
         // val pulsarSession = session.agenticSession
 
@@ -80,6 +80,10 @@ class PulsarSessionManager(
         val browserProfileMode = conf.getWithFallback(BROWSER_PROFILE_MODE, BROWSER_CONTEXT_MODE)
         require(browserProfileMode == BrowserProfileMode.SEQUENTIAL.name || browserProfileMode == BrowserProfileMode.TEMPORARY.name) {
             "Swarm session must have profile mode SEQUENTIAL or TEMPORARY, but got $browserProfileMode"
+        }
+
+        val session = sessions.computeIfAbsent(sessionId) {
+            ManagedSession(sessionId, agenticSession, normalizedCapabilities)
         }
 
         return session
@@ -245,7 +249,11 @@ class PulsarSessionManager(
             explicitSessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) -> DEFAULT_SESSION_ID
             explicitSessionId.equals(SWARM_SESSION_ID, ignoreCase = true) -> SWARM_SESSION_ID
             hasExplicitSessionId -> requireNotNull(explicitSessionId).trim()
-            requestedSessionId.isNullOrBlank() || requestedSessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) -> DEFAULT_SESSION_ID
+            requestedSessionId.isNullOrBlank() || requestedSessionId.equals(
+                DEFAULT_SESSION_ID,
+                ignoreCase = true
+            ) -> DEFAULT_SESSION_ID
+
             requestedSessionId.equals(SWARM_SESSION_ID, ignoreCase = true) -> SWARM_SESSION_ID
             else -> requestedSessionId
         }
@@ -261,8 +269,17 @@ class PulsarSessionManager(
                 BrowserProfileMode.SEQUENTIAL -> BrowserProfileMode.SEQUENTIAL
                 else -> BrowserProfileMode.SEQUENTIAL
             }
-            hasExplicitSessionId && sessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) -> BrowserProfileMode.DEFAULT
-            sessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) && requestedProfileMode == BrowserProfileMode.SEQUENTIAL -> BrowserProfileMode.SEQUENTIAL
+
+            hasExplicitSessionId && sessionId.equals(
+                DEFAULT_SESSION_ID,
+                ignoreCase = true
+            ) -> BrowserProfileMode.DEFAULT
+
+            sessionId.equals(
+                DEFAULT_SESSION_ID,
+                ignoreCase = true
+            ) && requestedProfileMode == BrowserProfileMode.SEQUENTIAL -> BrowserProfileMode.SEQUENTIAL
+
             sessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) -> BrowserProfileMode.DEFAULT
             requestedProfileMode == BrowserProfileMode.SEQUENTIAL -> BrowserProfileMode.SEQUENTIAL
             else -> BrowserProfileMode.SEQUENTIAL

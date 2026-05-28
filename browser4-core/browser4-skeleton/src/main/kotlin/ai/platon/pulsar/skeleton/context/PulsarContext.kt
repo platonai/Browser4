@@ -98,11 +98,6 @@ interface PulsarContext : java.lang.AutoCloseable {
     fun getOrCreateSession(settings: PulsarSettings): PulsarSession
 
     /**
-     * Create a pulsar session
-     * */
-    fun ensureSwarmSession(settings: PulsarSettings): PulsarSession
-
-    /**
      * Close a pulsar session
      * */
     fun closeSession(session: PulsarSession)

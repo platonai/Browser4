@@ -2,6 +2,7 @@ package ai.platon.pulsar.skeleton.context
 
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.warnForClose
+import ai.platon.pulsar.skeleton.context.PulsarContexts.shutdown
 import ai.platon.pulsar.skeleton.context.support.AbstractPulsarContext
 import ai.platon.pulsar.skeleton.context.support.BasicPulsarContext
 import ai.platon.pulsar.skeleton.context.support.ClassPathXmlPulsarContext

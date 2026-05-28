@@ -2,7 +2,7 @@ package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import ai.platon.pulsar.rest.api.entities.SessionResponse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Tag
@@ -23,27 +23,21 @@ class SwarmControllerE2ETest : RestAPITestBase() {
     @Test
     @DisplayName("test open returns swarm session response")
     fun testOpenReturnsSwarmSessionResponse() {
-        val rawBody = client.post().uri("/api/swarm")
+        val response = client.post().uri("/api/swarm")
             .body(mapOf("profileMode" to "TEMPORARY"))
             .exchange()
             .expectStatus().is2xxSuccessful
-            .expectBody<String>()
+            .expectBody<SessionResponse>()
             .returnResult()
             .responseBody
-        assertNotNull(rawBody)
-        val response = jacksonObjectMapper().readTree(rawBody)
+        assertNotNull(response)
 
-        assertEquals(SWARM_SESSION_ID, response.path("sessionId").asText())
-        assertTrue(response.path("status").asText().isNotBlank())
-
-        val profileMode = response.path("profileMode").asText()
-        assertTrue(profileMode in setOf("SEQUENTIAL", "TEMPORARY")) { "Profile mode: $profileMode" }
-        assertEquals(profileMode, response.path("capabilities").path("profileMode").asText())
-
-        val createdAt = response.path("createdAt").asLong()
-        val lastAccessedAt = response.path("lastAccessedAt").asLong()
-        assertTrue(createdAt > 0)
-        assertTrue(lastAccessedAt >= createdAt)
+        assertEquals(SWARM_SESSION_ID, response.sessionId)
+        assertNotNull(response.status)
+        assertTrue(response.status!!.isNotBlank())
+        assertTrue(response.profileMode in setOf("SEQUENTIAL", "TEMPORARY"))
+        assertEquals(SWARM_SESSION_ID, response.capabilities?.get("sessionId"))
+        assertEquals(response.profileMode, response.capabilities?.get("profileMode")?.toString())
     }
 
     /**

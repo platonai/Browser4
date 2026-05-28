@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.context
 
+import ai.platon.browser4.common.B4Constants.SWARM_SESSION_LABEL
 import ai.platon.browser4.driver.common.DisplayMode
 import ai.platon.browser4.driver.common.InteractSettings
 import ai.platon.pulsar.agentic.AgenticSession
@@ -10,6 +11,7 @@ import ai.platon.pulsar.agentic.context.AgenticContexts.shutdown
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.skeleton.PulsarSettings
 import ai.platon.pulsar.skeleton.context.PulsarContexts
+import ai.platon.pulsar.skeleton.context.support.AbstractPulsarContext
 import org.springframework.context.ApplicationContext
 import org.springframework.context.support.AbstractApplicationContext
 
@@ -142,11 +144,36 @@ object AgenticContexts {
         return getOrCreateSession(settings)
     }
 
+    /**
+     * Create a pulsar session
+     * */
+    @Synchronized
+    @JvmStatic
+    @Throws(Exception::class)
+    fun ensureSwarmSession(settings: PulsarSettings): AgenticSession {
+        val context = create() as AbstractPulsarContext
+        val swarmSession =
+            context.sessions.values.filterIsInstance<AgenticSession>().firstOrNull { it.label == SWARM_SESSION_LABEL }
+        if (swarmSession != null) {
+            return swarmSession
+        }
+
+        val lastProfileMode = settings.profileMode
+        val profileMode = when (lastProfileMode) {
+            BrowserProfileMode.SEQUENTIAL -> BrowserProfileMode.SEQUENTIAL
+            BrowserProfileMode.TEMPORARY -> BrowserProfileMode.TEMPORARY
+            else -> BrowserProfileMode.SEQUENTIAL
+        }
+        val settings = settings.copy(label = SWARM_SESSION_LABEL, profileMode = profileMode)
+        return createSession(settings)
+    }
+
     @Synchronized
     fun createAgent(settings: PulsarSettings): PerceptiveAgent = create().createSession(settings).companionAgent
 
     @Synchronized
-    fun getOrCreateAgent(settings: PulsarSettings): PerceptiveAgent = create().getOrCreateSession(settings).companionAgent
+    fun getOrCreateAgent(settings: PulsarSettings): PerceptiveAgent =
+        create().getOrCreateSession(settings).companionAgent
 
     @Synchronized
     fun createAgent(
@@ -156,7 +183,8 @@ object AgenticContexts {
         maxOpenTabs: Int? = null,
         interactSettings: InteractSettings? = null,
         profileMode: BrowserProfileMode? = null,
-    ): PerceptiveAgent = createSession(spa, headless, maxBrowsers, maxOpenTabs, interactSettings, profileMode).companionAgent
+    ): PerceptiveAgent =
+        createSession(spa, headless, maxBrowsers, maxOpenTabs, interactSettings, profileMode).companionAgent
 
     @Synchronized
     fun getOrCreateAgent(
@@ -166,7 +194,8 @@ object AgenticContexts {
         maxOpenTabs: Int? = null,
         interactSettings: InteractSettings? = null,
         profileMode: BrowserProfileMode? = null,
-    ): PerceptiveAgent = getOrCreateSession(spa, headless, maxBrowsers, maxOpenTabs, interactSettings, profileMode).companionAgent
+    ): PerceptiveAgent =
+        getOrCreateSession(spa, headless, maxBrowsers, maxOpenTabs, interactSettings, profileMode).companionAgent
 
     /**
      * A shorthand to get or create the companion agent and run a [task].

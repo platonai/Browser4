@@ -1,8 +1,6 @@
 package ai.platon.pulsar.skeleton.context.support
 
-import ai.platon.browser4.common.B4Constants.SWARM_SESSION_LABEL
 import ai.platon.pulsar.common.*
-import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.urls.DegenerateUrl
@@ -222,25 +220,6 @@ abstract class AbstractPulsarContext(
 
     override fun getOrCreateSession(settings: PulsarSettings): PulsarSession =
         sessions.values.firstOrNull() ?: createSession(settings)
-
-    /**
-     * Create a pulsar session
-     * */
-    override fun ensureSwarmSession(settings: PulsarSettings): PulsarSession {
-        val swarmSession = sessions.values.firstOrNull { it.label == SWARM_SESSION_LABEL }
-        if (swarmSession != null) {
-            return swarmSession
-        }
-
-        val lastProfileMode = settings.profileMode
-        val profileMode = when (lastProfileMode) {
-            BrowserProfileMode.SEQUENTIAL -> BrowserProfileMode.SEQUENTIAL
-            BrowserProfileMode.TEMPORARY -> BrowserProfileMode.TEMPORARY
-            else -> BrowserProfileMode.SEQUENTIAL
-        }
-        val settings = settings.copy(label = SWARM_SESSION_LABEL, profileMode = profileMode)
-        return createSession(settings)
-    }
 
     /**
      * Close the given session
