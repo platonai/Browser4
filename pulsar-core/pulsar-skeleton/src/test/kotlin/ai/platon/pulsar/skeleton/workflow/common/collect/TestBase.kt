@@ -5,7 +5,7 @@ import ai.platon.pulsar.common.collect.UrlTopic
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.urls.Hyperlink
-import ai.platon.pulsar.skeleton.common.GlobalCache
+import ai.platon.pulsar.skeleton.workflow.common.GlobalCache
 import kotlin.test.BeforeTest
 
 open class TestBase {

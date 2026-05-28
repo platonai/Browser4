@@ -36,6 +36,12 @@ import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
 import ai.platon.cdt.kt.protocol.types.runtime.RemoteObject
 
 interface BrowserProtocol {
+    val isOpen: Boolean
+
+    suspend fun isBrowserAlive(): Boolean
+    suspend fun isTargetAlive(): Boolean
+    suspend fun isV8Alive(): Boolean
+
     /** Returns the main frame, suspending until the frame tree is available. */
     suspend fun mainFrame(): Frame
 
@@ -204,6 +210,10 @@ interface BrowserProtocol {
         includeTextColorOpacities: Boolean? = null,
     ): CaptureSnapshot
 
+    suspend fun reloadPage(ignoreCache: Boolean? = null, scriptToEvaluateOnLoad: String? = null)
+
+    suspend fun setCookies(cookies: List<Map<String, Any?>>)
+    
     fun awaitTermination(): Unit
 
     fun close(): Unit

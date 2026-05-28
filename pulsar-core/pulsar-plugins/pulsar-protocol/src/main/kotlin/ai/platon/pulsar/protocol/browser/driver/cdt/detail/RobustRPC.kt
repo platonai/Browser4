@@ -4,17 +4,12 @@ import ai.platon.pulsar.driver.chrome.util.CDPReturnError
 import ai.platon.pulsar.driver.chrome.util.ChromeDriverException
 import ai.platon.pulsar.driver.chrome.util.ChromeIOException
 import ai.platon.pulsar.driver.chrome.util.ChromeRPCException
-import ai.platon.pulsar.common.AppContext
-import ai.platon.pulsar.common.brief
-import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.common.stringify
+import ai.platon.pulsar.common.*
+import ai.platon.pulsar.driver.NodeRef
 import ai.platon.pulsar.protocol.browser.driver.cdt.PulsarWebDriver
-import ai.platon.pulsar.skeleton.browser.driver.BrowserUnavailableException
-import ai.platon.pulsar.skeleton.browser.driver.IllegalWebDriverStateException
+import ai.platon.pulsar.skeleton.browser.driver.*
 import kotlinx.coroutines.delay
-import java.text.MessageFormat
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -33,53 +28,120 @@ class RobustRPC(
 
     private val logger = getLogger(this)
 
-    private val _isActive = AtomicBoolean(false)
-
-    val isActive get() = driver.isActive && _isActive.get()
-
     val rpcFailures = AtomicInteger()
     var maxRPCFailures = MAX_RPC_FAILURES
 
-    @Throws(ChromeRPCException::class)
-    suspend fun <T> invoke(action: String, block: suspend () -> T): T? {
-        if (!driver.checkState(action)) {
-            return null
-        }
+    @Throws(ChromeDriverException::class)
+    suspend fun invoke0(action: String, block: suspend () -> Unit) {
+        invokeWithRetry(action, block = block)
+    }
 
+    @Throws(ChromeDriverException::class)
+    suspend fun <T> invoke(action: String, block: suspend () -> T): T? {
+        return invokeWithRetry(action, block = block)
+    }
+
+    @Throws(ChromeDriverException::class)
+    suspend fun <T> invokeOnPage(
+        action: String,
+        url: String? = null,
+        message: String? = null,
+        block: suspend () -> T
+    ): T? {
         try {
-            return block().also { decreaseRPCFailures() }
-        } catch (e: ChromeRPCException) {
-            increaseRPCFailures()
+            return invokeWithRetry(action, url = url, block = block)
+        } catch (e: ChromeDriverException) {
+            handleChromeException(e, action, message)
+            logger.warn(
+                "Unexpected code path, will re-throw. Exception should be handled in handleChromeException " +
+                        "method, but still got an exception: [{}], message: [{}]", action, message, e
+            )
             throw e
         }
     }
 
-    @Throws(Exception::class)
-    suspend fun <T> invokeWithRetry(
+    @Throws(ChromeDriverException::class)
+    suspend fun <T> invokeOnElement(
+        selector: String,
+        action: String,
+        focus: Boolean = false,
+        scrollIntoView: Boolean = false,
+        message: String? = null,
+        block: suspend (NodeRef) -> T
+    ): T? {
+        try {
+            return invokeWithRetry(action) {
+                val node = if (focus) {
+                    driver.page.focusOnSelector(selector)
+                } else if (scrollIntoView) {
+                    driver.page.scrollIntoViewIfNeeded(selector)
+                } else {
+                    driver.page.queryLocator(selector)
+                }
+
+                if (node != null) {
+                    block(node)
+                } else {
+                    null
+                }
+            }
+        } catch (e: ChromeDriverException) {
+            handleChromeException(e, action, "selector: [$selector], focus: $focus, scrollIntoView: $scrollIntoView")
+            logger.warn(
+                "Unexpected code path, will re-throw. Exception should be handled in handleChromeException " +
+                        "method, but still got an exception: [{}], message: [{}]", action, message, e
+            )
+            throw e
+        }
+    }
+
+    @Throws(ChromeDriverException::class)
+    suspend fun <T> predicateOnPage(
+        action: String,
+        url: String? = null,
+        message: String? = null,
+        block: suspend () -> T
+    ): Boolean = invokeOnPage(action, url, message, block) != null
+
+    @Throws(ChromeDriverException::class)
+    suspend fun predicateOnElement(
+        selector: String,
+        action: String,
+        focus: Boolean = false,
+        scrollIntoView: Boolean = false,
+        message: String? = null,
+        predicate: suspend (NodeRef) -> Boolean
+    ): Boolean = invokeOnElement(selector, action, focus, scrollIntoView, message, predicate) == true
+
+    @Throws(WebDriverException::class)
+    private suspend fun <T> invokeWithRetry(
         action: String,
         maxRetry: Int = 2,
         url: String? = null,
         block: suspend () -> T
     ): T? {
-        if (!driver.checkState(action)) {
-            return null
-        }
-
-        if (!driver.devTools.isOpen) {
-            if (_isActive.compareAndSet(true, false)) {
-                logger.info("Devtools has been closed")
-            }
+        if (driver.quickCheckHealthy(action).isNotOK) {
             return null
         }
 
         var result = kotlin.runCatching { invokeDeferred0(action, url, block) }
             .onFailure {
-                logger.info("Oop, a bit slip-up executing action: " +
-                            "[$action], retrying 1/$maxRetry time ... | {}", it.brief())
+                logger.info(
+                    "Oop, a bit slip-up executing action: " +
+                            "[$action], retrying 1/$maxRetry time ... | {}", it.brief()
+                )
             }
 
         var i = 1
-        while (result.isFailure && i++ < maxRetry && driver.checkState()) {
+        while (result.isFailure && i++ < maxRetry && driver.quickCheckHealthy().isNotOK) {
+            val healthy = checkHealthy(driver)
+            if (healthy.isNotOK) {
+                throw WebDriverUnavailableException(
+                    "Driver is unhealthy, cannot execute action: [$action]" +
+                            " | state: ${driver.readableState} | healthy: $healthy"
+                ) as Throwable
+            }
+
             val exception = result.exceptionOrNull()
             // Check if this is a permanent error that shouldn't be retried
             if (exception != null && !isRetryableException(exception)) {
@@ -91,11 +153,24 @@ class RobustRPC(
                 .onFailure { logger.warn("Exception to execute action: [$action], retrying $i/$maxRetry times", it) }
         }
 
-        if (driver.checkState(action)) {
+        if (driver.quickCheckHealthy(action).isNotOK) {
             return result.getOrElse { throw it }
         }
 
         return null
+    }
+
+    @Throws(BrowserUnavailableException::class, WebDriverUnavailableException::class)
+    private suspend fun checkHealthy(driver: WebDriver): CheckState {
+        require(driver is AbstractWebDriver)
+
+        val healthy = driver.healthy()
+        if (!healthy.isOK) {
+            logger.warn("Driver {} is unhealthy | state: {} | healthy: {}", driver.id, driver.readableState, healthy)
+            throw WebDriverUnavailableException("Driver ${driver.id} is unhealthy | state: ${driver.readableState} | healthy: $healthy")
+        }
+
+        return healthy
     }
 
     /**
@@ -106,7 +181,7 @@ class RobustRPC(
      * - etc.
      */
     private fun isRetryableException(e: Throwable): Boolean {
-        // Non-retryable CDP errors
+        // Non-retryable BrowserProtocol errors
         if (e is CDPReturnError) {
             val errorMessage = e.errorMessage?.lowercase() ?: ""
             val message = e.message?.lowercase() ?: ""
@@ -137,6 +212,7 @@ class RobustRPC(
         return true
     }
 
+    @Throws(ChromeDriverException::class)
     suspend fun <T> invokeSilently(action: String, message: String? = null, block: suspend () -> T): T? {
         return try {
             invoke(action, block)
@@ -146,6 +222,7 @@ class RobustRPC(
         }
     }
 
+    @Throws(ChromeDriverException::class)
     suspend fun <T> invokeDeferredSilently(
         action: String, url: String? = null, message: String? = null, maxRetry: Int = 2, block: suspend () -> T
     ): T? {
@@ -158,7 +235,7 @@ class RobustRPC(
     }
 
     @Throws(IllegalWebDriverStateException::class, ChromeDriverException::class)
-    fun handleChromeException(e: ChromeDriverException, action: String? = null, message: String? = null) {
+    suspend fun handleChromeException(e: ChromeDriverException, action: String? = null, message: String? = null) {
         when (e) {
             is ChromeIOException -> {
                 handleChromeIOException(e, action, message)
@@ -173,24 +250,13 @@ class RobustRPC(
     }
 
     @Throws(BrowserUnavailableException::class, IllegalWebDriverStateException::class)
-    fun handleChromeIOException(e: ChromeIOException, action: String? = null, message: String? = null) {
+    suspend fun handleChromeIOException(e: ChromeIOException, action: String? = null, message: String? = null) {
         if (!AppContext.isActive) {
             logger.info("Ignored chrome IO exception because of system shutting down")
             return
         }
 
-        val message2 = MessageFormat.format(
-            "Browser unavailable: {0} ({1}/{2}) | {3}",
-            action, rpcFailures, maxRPCFailures, e.message
-        )
-
-        if (!e.isOpen) {
-            throw BrowserUnavailableException("Browser connection closed | $message2", e)
-        } else if (!driver.isConnectable) {
-            throw BrowserUnavailableException("Browser connection lost | $message2", e)
-        } else {
-            throw IllegalWebDriverStateException("Unknown chrome IO error | $message2", e)
-        }
+        checkHealthy(driver)
     }
 
     @Throws(IllegalWebDriverStateException::class)
@@ -214,7 +280,7 @@ class RobustRPC(
 
     @Throws(ChromeRPCException::class)
     private suspend fun <T> invokeDeferred0(action: String, url: String? = null, block: suspend () -> T): T? {
-        if (!driver.checkState(action)) {
+        if (driver.quickCheckHealthy(action).isNotOK) {
             return null
         }
 

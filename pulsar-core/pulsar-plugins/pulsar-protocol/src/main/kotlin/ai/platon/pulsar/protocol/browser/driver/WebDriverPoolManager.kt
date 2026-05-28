@@ -9,12 +9,8 @@ import ai.platon.pulsar.common.config.Parameterized
 import ai.platon.pulsar.protocol.browser.emulator.WebDriverPoolException
 import ai.platon.pulsar.protocol.browser.emulator.WebDriverPoolExhaustedException
 import ai.platon.pulsar.protocol.browser.impl.BasicBrowserManager
-import ai.platon.pulsar.skeleton.browser.driver.AbstractWebDriver
-import ai.platon.pulsar.skeleton.browser.driver.BrowserLaunchException
 import ai.platon.pulsar.skeleton.browser.BrowserManager
-import ai.platon.pulsar.skeleton.browser.driver.BrowserUnavailableException
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
-import ai.platon.pulsar.skeleton.browser.driver.WebDriverException
+import ai.platon.pulsar.skeleton.browser.driver.*
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import ai.platon.pulsar.skeleton.common.persist.ext.eventHandlers
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
@@ -276,9 +272,18 @@ open class WebDriverPoolManager constructor(
             try {
                 driverPoolCloser.closeGracefully(browserId)
             } catch (e: Exception) {
-                logger.warn("Failed to close the browser | {} | {}", browserId, e.message)
-                logger.error("Failed to close the browser", e)
+                logger.warn("Failed to close the browser gracefully | {}", browserId, e)
             }
+        }
+    }
+
+    fun closeBrowserAccompaniedDriverPoolForcibly(browserId: BrowserId, timeToWait: Duration) {
+        numReset.mark()
+
+        try {
+            driverPoolCloser.closeForcibly(browserId)
+        } catch (e: Exception) {
+            logger.warn("Failed to close the browser forcibly | {}", browserId, e)
         }
     }
 

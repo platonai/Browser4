@@ -1,6 +1,5 @@
 package ai.platon.pulsar.skeleton.browser.driver
 
-import ai.platon.pulsar.driver.chrome.NetworkResourceResponse
 import ai.platon.pulsar.driver.chrome.dom.SnapshotService
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.CheckState
@@ -11,6 +10,7 @@ import ai.platon.pulsar.common.urls.Hyperlink
 import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.common.warnForClose
 import ai.platon.pulsar.dom.nodes.GeoAnchor
+import ai.platon.pulsar.driver.NetworkResourceResponse
 import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.external.ModelResponse
 import ai.platon.pulsar.skeleton.browser.detail.AbstractBrowser

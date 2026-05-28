@@ -19,15 +19,18 @@ import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.PulsarParams.VAR_PRIVACY_CONTEXT_DISPLAY
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.logging.ThrottlingLogger
-import ai.platon.pulsar.common.proxy.*
+import ai.platon.pulsar.common.proxy.ProxyException
+import ai.platon.pulsar.common.proxy.ProxyParserFactory
+import ai.platon.pulsar.common.proxy.ProxyPoolManager
+import ai.platon.pulsar.common.proxy.ProxyVendorException
 import ai.platon.pulsar.persist.AbstractWebPage
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager
+import ai.platon.pulsar.skeleton.CoreMetrics
+import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.common.proxy.UniversalProxyParser
-import ai.platon.pulsar.skeleton.CoreMetrics
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.workflow.fetch.privacy.AbstractPrivacyContext
 import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserProfile
@@ -43,11 +46,12 @@ open class BrowserPrivacyContext(
     private val logger = getLogger(BrowserPrivacyContext::class)
     private val throttlingLogger = ThrottlingLogger(logger)
 
-    private val isActive0: Boolean get() {
-        val isProxyContextActive = proxyContext == null || proxyContext?.isActive == true
-        val isDriverContextActive = driverContext.isActive
-        return isProxyContextActive && isDriverContextActive && super.isActive
-    }
+    private val isActive0: Boolean
+        get() {
+            val isProxyContextActive = proxyContext == null || proxyContext?.isActive == true
+            val isDriverContextActive = driverContext.isActive
+            return isProxyContextActive && isDriverContextActive && super.isActive
+        }
 
     private val isRetired0: Boolean
         get() {
@@ -88,7 +92,7 @@ open class BrowserPrivacyContext(
     override suspend fun open(url: String): FetchResult {
         val task = FetchTask.create(url, conf.toVolatileConfig())
         val f = checkNotNull(webdriverFetcher) { "WebDriverFetcher is null" }
-        return doRun(task) { _, driver -> f.fetchDeferred(task, driver) }
+        return run(task) { _, driver -> f.fetchDeferred(task, driver) }
     }
 
     /**
@@ -99,7 +103,7 @@ open class BrowserPrivacyContext(
     override suspend fun open(url: String, options: LoadOptions): FetchResult {
         val task = FetchTask.create(url, options)
         val f = checkNotNull(webdriverFetcher) { "WebDriverFetcher is null" }
-        return doRun(task) { _, driver -> f.fetchDeferred(task, driver) }
+        return run(task) { _, driver -> f.fetchDeferred(task, driver) }
     }
 
     @Throws(ProxyVendorException::class)

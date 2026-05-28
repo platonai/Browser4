@@ -25,6 +25,7 @@ import ai.platon.cdt.kt.protocol.types.page.Viewport
 import ai.platon.cdt.kt.protocol.types.runtime.CallArgument
 import ai.platon.cdt.kt.protocol.types.runtime.CallFunctionOn
 import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
+import kotlin.invoke
 
 /**
  * CDP is the single access point for all Chrome DevTools Protocol (CDP) domain APIs.
@@ -35,11 +36,25 @@ import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
 class RemoteChromeProtocol(
     val devTools: ChromeDevTools
 ): BrowserProtocol {
+    private data class EmptyResult(val ignored: String? = null)
+
     val remoteDevTools: RemoteDevTools =
         (devTools as? RemoteDevTools) ?: error("CDP requires RemoteDevTools for this runtime")
 
     val remoteDevToolsOrNull: RemoteDevTools? get() = devTools as? RemoteDevTools
-    val isOpen: Boolean get() = remoteDevToolsOrNull?.isOpen ?: true
+    override val isOpen: Boolean get() = remoteDevToolsOrNull?.isOpen ?: true
+
+    override suspend fun isBrowserAlive(): Boolean {
+        return runCatching { browser.getVersion() }.isSuccess
+    }
+
+    override suspend fun isTargetAlive(): Boolean {
+        return runCatching { target.getTargets() }.isSuccess
+    }
+
+    override suspend fun isV8Alive(): Boolean {
+        return runCatching { runtime.evaluate("1+1") }.isSuccess
+    }
 
     val browser get() = devTools.browser
     val page get() = devTools.page
@@ -358,6 +373,16 @@ class RemoteChromeProtocol(
             includeBlendedBackgroundColors = includeBlendedBackgroundColors,
             includeTextColorOpacities = includeTextColorOpacities,
         )
+    }
+
+    override suspend fun reloadPage(ignoreCache: Boolean?, scriptToEvaluateOnLoad: String?) =
+        page.reload(ignoreCache, scriptToEvaluateOnLoad)
+
+
+    override suspend fun setCookies(cookies: List<Map<String, Any?>>) {
+        val remoteDevTools = remoteDevToolsOrNull
+            ?: throw IllegalStateException("Remote DevTools is not available")
+        remoteDevTools.invoke("Network.setCookies", mapOf("cookies" to cookies), EmptyResult::class)
     }
 
     override fun awaitTermination() {

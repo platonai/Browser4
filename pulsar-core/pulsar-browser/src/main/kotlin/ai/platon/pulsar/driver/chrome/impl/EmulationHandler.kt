@@ -732,9 +732,9 @@ class Keyboard(private val bp: BrowserProtocol) {
 }
 
 class EmulationHandler(
+    private val bp: BrowserProtocol? = null,
     private val keyboard: Keyboard?,
-    private val mouse: Mouse?,
-    private val bp: BrowserProtocol? = null
+    private val mouse: Mouse?
 ) {
     private val logger = getLogger(this)
     private val isActive get() = bp != null

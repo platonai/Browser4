@@ -7,17 +7,14 @@ import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.MultiSinkMessageWriter
 import ai.platon.pulsar.common.alwaysFalse
-import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.common.warnInterruptible
 import ai.platon.pulsar.driver.BrowserProtocol
-import ai.platon.pulsar.driver.NodeRef
 import ai.platon.pulsar.driver.chrome.impl.PageHandler
-import ai.platon.pulsar.driver.chrome.impl.RemoteChromeProtocol
-import ai.platon.pulsar.driver.chrome.util.ChromeDriverException
 import ai.platon.pulsar.skeleton.browser.driver.JsEvaluation
 import ai.platon.pulsar.skeleton.browser.driver.JsException
 import ai.platon.pulsar.skeleton.browser.driver.NavigateEntry
 import ai.platon.pulsar.skeleton.browser.driver.WebDriver
+import ai.platon.pulsar.skeleton.workflow.common.InternalURLUtil
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
@@ -25,12 +22,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.nio.file.Files
 
-
 class WebDriverHelper(
     val driver: WebDriver,
     val rpc: RobustRPC,
     val page: PageHandler,
-    val bp: BrowserProtocol?,
+    val browserProtocol: BrowserProtocol,
     val messageWriter: MultiSinkMessageWriter
 ) {
     suspend fun reportInterestingResources(entry: NavigateEntry, event: ResponseReceived) {
@@ -56,7 +52,7 @@ class WebDriverHelper(
         // page url is normalized
         val pageUrl = entry.pageUrl
         val resourceUrl = event.response.url
-        val host = URLUtils.getHostNameOrNull(pageUrl) ?: "unknown"
+        val host = InternalURLUtil.getHost(pageUrl) ?: "unknown"
         val reportDir = messageWriter.baseDir.resolve("trace").resolve(host)
 
         if (!Files.exists(reportDir)) {
@@ -84,10 +80,9 @@ class WebDriverHelper(
         val saveResourceBody =
             mimeType == "application/json" && event.response.encodedDataLength < 1_000_000 && alwaysFalse()
         if (saveResourceBody) {
-            val fetch = (bp as RemoteChromeProtocol).fetch
             val body = rpc.invokeSilently("getResponseBody") {
-                fetch.enable()
-                fetch.getResponseBody(event.requestId).body
+                browserProtocol.fetchEnable()
+                browserProtocol.getResponseBody(event.requestId).body
             }
             if (!body.isNullOrBlank()) {
                 suffix = "-" + event.type.name.lowercase() + "-body.txt"
@@ -102,61 +97,6 @@ class WebDriverHelper(
         val mapper = jacksonObjectMapper().setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
         return mapper.readValue(mapper.writeValueAsString(cookie))
     }
-
-    suspend fun <T> invokeOnPage(
-        name: String,
-        url: String? = null,
-        message: String? = null,
-        action: suspend () -> T
-    ): T? {
-        try {
-            return rpc.invokeWithRetry(name, url = url) {
-                action()
-            }
-        } catch (e: ChromeDriverException) {
-            rpc.handleChromeException(e, name, message)
-        }
-
-        return null
-    }
-
-    suspend fun <T> invokeOnElement(
-        selector: String,
-        name: String,
-        focus: Boolean = false,
-        scrollIntoView: Boolean = false,
-        action: suspend (NodeRef) -> T
-    ): T? {
-        try {
-            return rpc.invokeWithRetry(name) {
-                val node = if (focus) {
-                    page.focusOnSelector(selector)
-                } else if (scrollIntoView) {
-                    page.scrollIntoViewIfNeeded(selector)
-                } else {
-                    page.queryLocator(selector)
-                }
-
-                if (node != null) {
-                    action(node)
-                } else {
-                    null
-                }
-            }
-        } catch (e: ChromeDriverException) {
-            rpc.handleChromeException(e, name, "selector: [$selector], focus: $focus, scrollIntoView: $scrollIntoView")
-        }
-
-        return null
-    }
-
-    suspend fun predicateOnElement(
-        selector: String,
-        name: String,
-        focus: Boolean = false,
-        scrollIntoView: Boolean = false,
-        predicate: suspend (NodeRef) -> Boolean
-    ): Boolean = invokeOnElement(selector, name, focus, scrollIntoView, predicate) == true
 
     fun createJsEvaluate(evaluate: Evaluate?): JsEvaluation? {
         evaluate ?: return null

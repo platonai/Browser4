@@ -128,7 +128,7 @@ object AppContext {
      * */
     val APP_DATA_DIR_SPECIFIED = APP_DATA_DIR_SPECIFIED_RT
     /**
-     * The data directory used by the application, the default data dir is $HOME/.browser4.
+     * The data directory used by the application, the default data dir is $HOME/.pulsar.
      * Special users such as tomcat do not have its own home, $TMP_DIR/.$APP_NAME is used in such case.
      * */
     val APP_DATA_DIR_RT get() = when {

@@ -34,13 +34,6 @@ open class ForwardingProtocol : AbstractHttpProtocol() {
     }
 
     @Throws(Exception::class)
-    override fun getResponse(page: WebPage, followRedirects: Boolean): Response? {
-        val response = cache.remove(page.url)?.datum?: return null
-        logAfterRemoveResponse(page.url, response)
-        return response
-    }
-
-    @Throws(Exception::class)
     override suspend fun getResponseDeferred(page: WebPage, followRedirects: Boolean): Response? {
         // TODO: wait if not in the cache?
         val response = cache.remove(page.url)?.datum?: return null

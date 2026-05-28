@@ -399,7 +399,7 @@ abstract class AbstractPulsarSession(
 
     override fun parse(page: WebPage, noCache: Boolean) = parse0(page, noCache)
 
-    override fun loadDocument(url: String) = runBlocking { parse(load(url)) }
+    override suspend fun loadDocument(url: String) = parse(load(url))
 
     override suspend fun loadDocument(url: String, args: String) = parse(load(url, args))
 

@@ -47,7 +47,7 @@ open class SequentialBrowserProfileGenerator(
         val browserContextNumber = conf.getWithFallback(BROWSER_CONTEXT_NUMBER, PRIVACY_CONTEXT_NUMBER)?.toIntOrNull() ?: 2
 
         // The minimum number of sequential browser profiles, the active privacy contexts is chosen from them
-        val minProfiles = conf.getInt(MIN_SEQUENTIAL_PRIVACY_AGENT_NUMBER, 10)
+        val minProfiles = conf.getInt(MIN_SEQUENTIAL_BROWSER_PROFILE_NUMBER, 10)
         // The maximum number of sequential browser profiles, the active privacy contexts is chosen from them
         var maxProfiles = conf.getInt(CapabilityTypes.MAX_SEQUENTIAL_PRIVACY_AGENT_NUMBER, minProfiles)
         maxProfiles = maxProfiles.coerceAtLeast(browserContextNumber).coerceAtLeast(minProfiles)

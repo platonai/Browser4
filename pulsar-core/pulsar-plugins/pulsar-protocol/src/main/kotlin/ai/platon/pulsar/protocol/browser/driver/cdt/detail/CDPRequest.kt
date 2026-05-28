@@ -1,11 +1,11 @@
 package ai.platon.pulsar.protocol.browser.driver.cdt.detail
 
+import ai.platon.pulsar.driver.chrome.util.ChromeRPCException
 import ai.platon.cdt.kt.protocol.types.fetch.HeaderEntry
 import ai.platon.cdt.kt.protocol.types.network.ErrorReason
 import ai.platon.cdt.kt.protocol.types.network.Initiator
 import ai.platon.cdt.kt.protocol.types.network.Request
 import ai.platon.cdt.kt.protocol.types.network.ResourceType
-import ai.platon.pulsar.driver.chrome.util.ChromeRPCException
 import ai.platon.pulsar.common.http.HttpStatus
 import ai.platon.pulsar.protocol.browser.driver.cdt.PulsarWebDriver
 import java.lang.ref.WeakReference
@@ -62,8 +62,6 @@ class CDPRequest(
 
     val url get() = request.url
 
-    private val fetchAPI get() = driver.devTools.fetch.takeIf { isActive }
-
     fun finalizeInterceptions() {
     }
 
@@ -75,7 +73,7 @@ class CDPRequest(
             interceptionId ?: throw ChromeRPCException("InterceptionId is required by Fetch.continueRequest")
 
         try {
-            fetchAPI?.continueRequest(
+            driver.browserProtocol.continueRequest(
                 requestId,
                 overrides.url, overrides.method, postDataBinaryBase64, overrides.headers
             )
@@ -109,7 +107,7 @@ class CDPRequest(
         try {
             val responseBodyBase64 = Base64.getEncoder().encodeToString(responseBody)
             // Provides response to the request.
-            fetchAPI?.fulfillRequest(
+            driver.browserProtocol.fulfillRequest(
                 requestId,
                 responseCode, responseHeaders, binaryResponseHeaders, responseBodyBase64, httpStatus.reasonPhrase
             )
@@ -121,7 +119,7 @@ class CDPRequest(
     suspend fun abort(abortErrorReason: ErrorReason) {
         interceptionHandled = true
 
-        interceptionId?.let { fetchAPI?.failRequest(it, abortErrorReason) }
+        interceptionId?.let { driver.browserProtocol.failRequest(it, abortErrorReason) }
             ?: throw ChromeRPCException("HTTPRequest is missing _interceptionId needed for Fetch.failRequest")
     }
 

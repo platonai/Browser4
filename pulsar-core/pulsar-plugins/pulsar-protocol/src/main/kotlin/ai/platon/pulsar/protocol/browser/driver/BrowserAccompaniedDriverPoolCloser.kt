@@ -37,6 +37,11 @@ internal class BrowserAccompaniedDriverPoolCloser(
     }
 
     @Synchronized
+    fun closeForcibly(browserId: BrowserId) {
+        kotlin.runCatching { doClose(browserId) }.onFailure { warnInterruptible(this, it) }
+    }
+
+    @Synchronized
     fun closeOldestRetiredDriverPoolSafely() {
         val dyingDriverPool = findOldestRetiredDriverPoolOrNull()
 
