@@ -1,10 +1,11 @@
 package ai.platon.pulsar.agentic.context
 
 import ai.platon.browser4.common.B4Constants
-import ai.platon.pulsar.agentic.AgenticQLSession
-import ai.platon.pulsar.agentic.AgenticSession
-import ai.platon.pulsar.agentic.BasicAgenticSession
+import ai.platon.browser4.protocol.browser.DefaultBrowserManager
+import ai.platon.pulsar.agentic.*
+import ai.platon.pulsar.browser.BrowserManager
 import ai.platon.pulsar.common.config.CapabilityTypes
+import ai.platon.pulsar.common.config.MutableConfig
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.ql.SQLSession
 import ai.platon.pulsar.ql.SessionConfig
@@ -13,9 +14,11 @@ import ai.platon.pulsar.ql.context.AbstractH2SQLContext
 import ai.platon.pulsar.ql.context.SQLContext
 import ai.platon.pulsar.ql.h2.H2SessionDelegate
 import ai.platon.pulsar.skeleton.PulsarSettings
+import ai.platon.pulsar.skeleton.context.support.ContextDefaults
 import ai.platon.pulsar.skeleton.session.BasicPulsarSession
 import org.springframework.context.support.AbstractApplicationContext
 import org.springframework.context.support.ClassPathXmlApplicationContext
+import org.springframework.context.support.StaticApplicationContext
 
 interface AgenticContext : SQLContext {
     override fun createSession(): AgenticSession
@@ -30,23 +33,11 @@ abstract class AbstractAgenticContext(
 ) : AbstractH2SQLContext(applicationContext), AgenticContext {
     private val logger = getLogger(this)
 
-    /**
-     * Create a [BasicPulsarSession].
-     *
-     * > **NOTE:** The session is not a SQLSession, use [execute], [executeQuery] to access [ai.platon.pulsar.ql.SQLSession].
-     * */
-    @Throws(Exception::class)
-    override fun createSession(): AgenticSession {
-        val session = BasicAgenticSession(this, configuration.toVolatileConfig())
-        return session.also { sessions[it.id] = it }
-    }
+    val initConfiguration = MutableConfig(true)
 
-    override fun createSession(settings: PulsarSettings): AgenticSession {
-        val session = BasicAgenticSession(this, configuration.toVolatileConfig())
-        settings.label?.let { session.label = it }
-        settings.overrideConfiguration(session.sessionConfig)
-        return session.also { sessions[it.id] = it }
-    }
+    abstract override fun createSession(): AbstractAgenticSession
+
+    abstract override fun createSession(settings: PulsarSettings): AbstractAgenticSession
 
     override fun getOrCreateSession(): AgenticSession =
         sessions.values.filterIsInstance<AgenticSession>().firstOrNull() ?: createSession()
@@ -67,13 +58,102 @@ abstract class AbstractAgenticContext(
     }
 }
 
-open class QLAgenticContext(
+open class GenericAgenticContext(
     applicationContext: AbstractApplicationContext
 ) : AbstractAgenticContext(applicationContext) {
+
+    /**
+     * Create a [GenericAgenticSession].
+     *
+     * > **NOTE:** The session is not a SQLSession, use [execute], [executeQuery] to access [ai.platon.pulsar.ql.SQLSession].
+     * */
+    @Throws(Exception::class)
+    override fun createSession(): GenericAgenticSession {
+        val session = GenericAgenticSession(this, initConfiguration.toVolatileConfig())
+        return session.also { sessions[it.id] = it }
+    }
+
+    override fun createSession(settings: PulsarSettings): GenericAgenticSession {
+        val session = GenericAgenticSession(this, initConfiguration.toVolatileConfig())
+        settings.label?.let { session.label = it }
+        settings.overrideConfiguration(session.sessionConfig)
+        return session.also { sessions[it.id] = it }
+    }
+}
+
+typealias QLAgenticContext = GenericAgenticContext
+
+open class StaticAgenticContext : GenericAgenticContext(StaticApplicationContext()) {
+
+    private val defaults = ContextDefaults()
+
+    /**
+     * Create a [BasicPulsarSession].
+     *
+     * > **NOTE:** The session is not a SQLSession, use [execute], [executeQuery] to access [ai.platon.pulsar.ql.SQLSession].
+     * */
+    @Throws(Exception::class)
+    override fun createSession(): StaticAgenticSession {
+        val session = StaticAgenticSession(this, initConfiguration.toVolatileConfig())
+        return session.also { sessions[it.id] = it }
+    }
+
+    override fun createSession(settings: PulsarSettings): StaticAgenticSession {
+        val session = StaticAgenticSession(this, initConfiguration.toVolatileConfig())
+        settings.label?.let { session.label = it }
+        settings.overrideConfiguration(session.sessionConfig)
+        return session.also { sessions[it.id] = it }
+    }
+
+    /**
+     * The unmodified config
+     * */
+    override val configuration get() = defaults.configuration
+
+    /**
+     * Url normalizer
+     * */
+    override val urlNormalizer get() = defaults.urlNormalizer
+
+    /**
+     * The web db
+     * */
+    override val webDb get() = defaults.webDb
+
+    /**
+     * The global cache
+     * */
+    override val globalCacheFactory get() = defaults.globalCacheFactory
+
+    /**
+     * The fetch component
+     * */
+    override val fetchComponent get() = defaults.fetchComponent
+
+    /**
+     * The parse component
+     * */
+    override val parseComponent get() = defaults.parseComponent
+
+    /**
+     * The update component
+     * */
+    override val updateComponent get() = defaults.updateComponent
+
+    /**
+     * The load component
+     * */
+    override val loadComponent get() = defaults.loadComponent
+
+    override val browserManager: BrowserManager by lazy { DefaultBrowserManager(configuration) }
+
+    init {
+        applicationContext.refresh()
+    }
 }
 
 open class ClassPathXmlAgenticContext(configLocation: String) :
-    AbstractAgenticContext(ClassPathXmlApplicationContext(configLocation)) {
+    GenericAgenticContext(ClassPathXmlApplicationContext(configLocation)) {
 }
 
 open class DefaultClassPathXmlAgenticContext() : ClassPathXmlAgenticContext(

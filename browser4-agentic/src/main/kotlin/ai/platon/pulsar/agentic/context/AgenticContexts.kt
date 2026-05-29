@@ -53,7 +53,7 @@ object AgenticContexts {
 
     /**
      * Create or reuse an [AgenticContext] backed by a Spring [ApplicationContext].
-     * If the current active context is a [QLAgenticContext] with the same application context,
+     * If the current active context is a [GenericAgenticContext] with the same application context,
      * it will be reused.
      *
      * @param applicationContext The Spring application context.
@@ -62,11 +62,11 @@ object AgenticContexts {
     @Synchronized
     fun create(applicationContext: ApplicationContext): AgenticContext {
         val context = PulsarContexts.activeContext
-        if (context is QLAgenticContext && context.applicationContext == applicationContext) {
+        if (context is GenericAgenticContext && context.applicationContext == applicationContext) {
             return PulsarContexts.activeContext as AgenticContext
         }
 
-        return create(QLAgenticContext(applicationContext as AbstractApplicationContext))
+        return create(GenericAgenticContext(applicationContext as AbstractApplicationContext))
     }
 
     /**

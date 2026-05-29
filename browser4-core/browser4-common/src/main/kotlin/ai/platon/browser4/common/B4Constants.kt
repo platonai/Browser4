@@ -28,5 +28,5 @@ object B4Constants {
 
     const val VAR_IS_SCRAPE = "IS_SCRAPE"
 
-    const val BROWSER4_CONTEXT_CONFIG_LOCATION = "classpath*:/browser4-beans/app-context.xml"
+    const val BROWSER4_CONTEXT_CONFIG_LOCATION = "classpath:browser4-beans/app-context.xml"
 }

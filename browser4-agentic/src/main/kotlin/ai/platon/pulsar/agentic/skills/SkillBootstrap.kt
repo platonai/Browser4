@@ -5,8 +5,6 @@ import ai.platon.pulsar.agentic.skills.examples.WebScrapingSkill
 import ai.platon.pulsar.common.getLogger
 import jakarta.annotation.PostConstruct
 import kotlinx.coroutines.runBlocking
-import org.springframework.context.annotation.Lazy
-import org.springframework.stereotype.Component
 
 /**
  * Bootstrap component for automatically loading skills on system startup.
@@ -19,8 +17,6 @@ import org.springframework.stereotype.Component
  * The component is automatically initialized by Spring on application startup
  * using the @PostConstruct annotation.
  */
-@Component
-@Lazy(false)  // Ensure eager initialization to load skills on startup
 class SkillBootstrap {
     private val logger = getLogger(this)
     private val registry = SkillRegistry.instance
@@ -139,7 +135,12 @@ class SkillBootstrap {
 
             val skills = definitions
                 .sortedBy { it.skillId }
-                .map { DefinitionBackedSkill(it, DefinitionBackedSkill.Origin.FileSystem(skillsDir.resolve(it.skillId))) }
+                .map {
+                    DefinitionBackedSkill(
+                        it,
+                        DefinitionBackedSkill.Origin.FileSystem(skillsDir.resolve(it.skillId))
+                    )
+                }
 
             val results = loader.loadAll(skills, context)
             val successCount = results.values.count { it }

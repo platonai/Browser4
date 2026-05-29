@@ -1,5 +1,8 @@
 package ai.platon.pulsar.skeleton.context.support
 
+import ai.platon.pulsar.browser.BrowserFactory
+import ai.platon.pulsar.browser.manage.BasicBrowserManager
+import ai.platon.pulsar.browser.manage.PulsarBrowserFactory
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.loop.TaskLoops
 import ai.platon.pulsar.loop.impl.StreamingTaskLoop
@@ -17,10 +20,12 @@ class ContextDefaults {
      * The default unmodified config
      * */
     val configuration = ImmutableConfig(loadDefaults = true)
+
     /**
      * Url default normalizer
      * */
     val urlNormalizer = ChainedUrlNormalizer()
+
     /**
      * The default web db
      * */
@@ -30,23 +35,33 @@ class ContextDefaults {
      * The default global cache
      * */
     val globalCacheFactory = GlobalCacheFactory(configuration)
+
     /**
      * The default fetch component
      * */
     val fetchComponent = BatchFetchComponent(webDb, configuration)
+
     /**
      * The default parse component
      * */
     val parseComponent: ParseComponent = ParseComponent(globalCacheFactory, configuration)
+
     /**
      * The default update component
      * */
     val updateComponent = UpdateComponent(webDb, configuration)
+
     /**
      * The default load component
      * */
     val loadComponent = LoadComponent(
-        webDb, globalCacheFactory, fetchComponent, parseComponent, updateComponent, configuration)
+        webDb, globalCacheFactory, fetchComponent, parseComponent, updateComponent, configuration
+    )
+
+    val browserFactory: BrowserFactory = PulsarBrowserFactory(configuration)
+
+    val browserManager = BasicBrowserManager(browserFactory, configuration)
+
     /**
      * The default main loop
      * */
