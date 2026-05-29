@@ -1,13 +1,13 @@
 package ai.platon.pulsar.heavy.browser.driver
 
 import ai.platon.browser4.protocol.browser.DefaultWebDriverPoolManager
+import ai.platon.pulsar.browser.BrowserId
 import ai.platon.pulsar.common.LinkExtractors
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.protocol.browser.driver.LoadingWebDriverPool
 import ai.platon.pulsar.skeleton.common.AppSystemInfo
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach

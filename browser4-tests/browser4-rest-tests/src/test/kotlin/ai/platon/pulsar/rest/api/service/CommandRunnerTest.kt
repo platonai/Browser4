@@ -2,7 +2,8 @@ package ai.platon.pulsar.rest.api.service
 
 import ai.platon.browser4.boot.autoconfigure.test.PulsarTestContextInitializer
 import ai.platon.browser4.common.B4Constants.DEFAULT_SESSION_ID
-import ai.platon.browser4.driver.common.BrowserSettings
+import ai.platon.pulsar.agent.tool.UserCommandExecutor
+import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.printlnPro
@@ -15,7 +16,6 @@ import ai.platon.pulsar.rest.api.common.MockEcServerTestBase
 import ai.platon.pulsar.rest.api.config.MockEcServerConfiguration
 import ai.platon.pulsar.rest.api.entities.CommandRequest
 import ai.platon.pulsar.rest.api.entities.toCommandStatus
-import ai.platon.pulsar.agent.tool.UserCommandExecutor
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.*
 import org.junit.jupiter.api.Assertions.assertTrue
