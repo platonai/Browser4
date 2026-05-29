@@ -38,12 +38,20 @@
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-agentic</artifactId>
         </dependency>
+
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-ql</artifactId>
             <!-- Exclude the original version and use the browser4 managed ones -->
             <exclusions>
-
+                <exclusion>
+                    <groupId>ai.platon.pulsar</groupId>
+                    <artifactId>pulsar-browser</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>ai.platon.pulsar</groupId>
+                    <artifactId>pulsar-protocol</artifactId>
+                </exclusion>
                 <exclusion>
                     <groupId>ai.platon.pulsar</groupId>
                     <artifactId>pulsar-skeleton</artifactId>
