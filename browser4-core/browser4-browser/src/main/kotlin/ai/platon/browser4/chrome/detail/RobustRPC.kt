@@ -141,8 +141,9 @@ class RobustRPC(
                 )
             }
 
+        // If quick check fails, the driver is likely dead, no need to retry
         var i = 1
-        while (result.isFailure && i++ < maxRetry && driver.quickCheckHealthy().isNotOK) {
+        while (result.isFailure && i++ < maxRetry && driver.quickCheckHealthy().isOK) {
             val healthy = checkHealthy(driver)
             if (healthy.isNotOK) {
                 throw WebDriverUnavailableException(
@@ -162,11 +163,12 @@ class RobustRPC(
                 .onFailure { logger.warn("Exception to execute action: [$action], retrying $i/$maxRetry times", it) }
         }
 
-        if (driver.quickCheckHealthy(action).isOK) {
-            return result.getOrElse { throw it }
+        return if (driver.quickCheckHealthy(action).isOK) {
+            result.getOrElse { throw it }
+        } else {
+            // If quick check fails, the driver is likely dead, return null to avoid further exceptions
+            null
         }
-
-        return null
     }
 
     @Throws(BrowserUnavailableException::class, WebDriverUnavailableException::class)
