@@ -23,7 +23,7 @@ import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
-class ChromeImpl(
+internal class ChromeImpl(
     override var host: String = LOCALHOST,
     override var port: Int = 0
 ) : RemoteChrome {

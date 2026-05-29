@@ -27,8 +27,8 @@ data class LocatorAndCssSelector(
     val cssSelector: String?,
 )
 
-class PageHandler(
-    private val bp: BrowserProtocol,
+class PageHandler constructor(
+    private val browserProtocol: BrowserProtocol,
     private val isolatedWorldManager: IsolatedWorldManager,
 ) {
     companion object {
@@ -38,22 +38,22 @@ class PageHandler(
 
     private val logger = getLogger(this)
 
-    private val cp = bp as RemoteChromeProtocol
+    private val chromeProtocol = browserProtocol as RemoteChromeProtocol
 
-    private val isActive get() = AppContext.isActive && cp.isOpen
+    private val isActive get() = AppContext.isActive && chromeProtocol.isOpen
 
     private var lastBrowserUseState: BrowserUseState? = null
 
-    val snapshotService: SnapshotService by lazy { CDPSnapshotService(bp) }
+    val snapshotService: SnapshotService by lazy { CDPSnapshotService(browserProtocol) }
 
-    val jsHandler: JsHandler = JsHandler(bp, this, isolatedWorldManager)
+    val jsHandler: JsHandler = JsHandler(browserProtocol, this, isolatedWorldManager)
 
-    val mouse = Mouse(bp)
-    val keyboard = Keyboard(bp)
+    val mouse = Mouse(browserProtocol)
+    val keyboard = Keyboard(browserProtocol)
 
     @Throws(ChromeDriverException::class)
     suspend fun navigate(url: String): Navigate? {
-        return if (isActive) bp.navigate(url) else null
+        return if (isActive) browserProtocol.navigate(url) else null
     }
 
     @Throws(ChromeDriverException::class)
@@ -64,7 +64,7 @@ class PageHandler(
         frameId: String? = null,
         referrerPolicy: ReferrerPolicy? = null
     ): Navigate? {
-        return if (isActive) bp.navigate(url, referrer, transitionType, frameId, referrerPolicy) else null
+        return if (isActive) browserProtocol.navigate(url, referrer, transitionType, frameId, referrerPolicy) else null
     }
 
     suspend fun exists(locator: String): Boolean {
@@ -224,10 +224,10 @@ class PageHandler(
     @Throws(ChromeDriverException::class)
     private suspend fun resolveCSSSelectorAll(selector: String): List<NodeRef>? {
         if (!isActive) return null
-        val rootId = bp.getDocument().nodeId ?: return null
+        val rootId = browserProtocol.getDocument().nodeId
 
         val nodeIds = try {
-            bp.querySelectorAll(rootId, selector)
+            browserProtocol.querySelectorAll(rootId, selector)
         } catch (e: CDPReturnError) {
             if (e.errorCode != -32000L) {
                 logger.warn(
@@ -256,16 +256,16 @@ class PageHandler(
 
         return try {
             if (!isActive) return null
-            bp.getDocument()?.nodeId ?: return null
+            browserProtocol.getDocument().nodeId
 
-            val searchResult = bp.performSearch(xpath, true) ?: return null
+            val searchResult = browserProtocol.performSearch(xpath, true) ?: return null
             val nodeIds = if (searchResult.resultCount > 0) {
                 // Retrieve all matching nodes
                 val results =
-                    bp.getSearchResults(searchResult.searchId, fromIndex = 0, toIndex = searchResult.resultCount)
+                    browserProtocol.getSearchResults(searchResult.searchId, fromIndex = 0, toIndex = searchResult.resultCount)
                 // Clean up search results to avoid resource leak
                 try {
-                    bp.discardSearchResults(searchResult.searchId)
+                    browserProtocol.discardSearchResults(searchResult.searchId)
                 } catch (_: Exception) {
                 }
                 results
@@ -384,7 +384,7 @@ class PageHandler(
 
         // `attributes`: n1, v1, n2, v2, n3, v3, ...
         if (!isActive) return null
-        val attributes = bp.getAttributes(node.nodeId) ?: return null
+        val attributes = browserProtocol.getAttributes(node.nodeId) ?: return null
         val nameIndex = attributes.indexOf(attrName)
         if (nameIndex < 0) {
             return null
@@ -410,7 +410,7 @@ class PageHandler(
 
         var isVisible = true
 
-        val properties = if (isActive) bp.getComputedStyleForNode(node.nodeId) else null
+        val properties = if (isActive) browserProtocol.getComputedStyleForNode(node.nodeId) else null
         properties?.forEach { prop ->
             when (prop.name) {
                 "display" if prop.value == "none" -> isVisible = false
@@ -423,7 +423,7 @@ class PageHandler(
             isVisible = if (!isActive) {
                 false
             } else {
-                ClickableDOM.create(bp, node)?.isVisible() ?: false
+                ClickableDOM.create(browserProtocol, node)?.isVisible() ?: false
             }
         }
 
@@ -441,8 +441,8 @@ class PageHandler(
             return false
         }
 
-        return withNodeObjectId(bp, node) { objectId ->
-            val result = if (isActive) bp.callFunctionOn(
+        return withNodeObjectId(browserProtocol, node) { objectId ->
+            val result = if (isActive) browserProtocol.callFunctionOn(
                 CheckableElementJs.IS_CHECKED_FUNCTION_DECLARATION,
                 objectId = objectId,
                 returnByValue = true,
@@ -471,7 +471,7 @@ class PageHandler(
         val nodeRef = queryLocator(locator) ?: return null
 
         // Fix: Only use nodeId parameter, others should be null
-        if (isActive) bp.focus(nodeRef.nodeId)
+        if (isActive) browserProtocol.focus(nodeRef.nodeId)
 
         return nodeRef
     }
@@ -522,7 +522,7 @@ class PageHandler(
      */
     @Throws(ChromeDriverException::class)
     suspend fun scrollIntoViewIfNeeded(nodeRef: NodeRef, selector: String? = null, rect: Rect? = null): NodeRef? {
-        val node = if (isActive) bp.describeNode(
+        val node = if (isActive) browserProtocol.describeNode(
             nodeRef.nodeId,
             nodeRef.backendNodeId,
             nodeRef.objectId,
@@ -537,15 +537,15 @@ class PageHandler(
         // If a rect is provided, honor it via CDP; otherwise prefer smooth behavior via JS
         return try {
             if (rect != null) {
-                bp.scrollIntoViewIfNeeded(node.nodeId, rect = rect)
+                browserProtocol.scrollIntoViewIfNeeded(node.nodeId, rect = rect)
                 nodeRef
             } else {
                 if (trySmoothScroll(nodeRef)) nodeRef else {
-                    bp.scrollIntoViewIfNeeded(node.nodeId, rect = null)
+                    browserProtocol.scrollIntoViewIfNeeded(node.nodeId, rect = null)
                     nodeRef
                 }
             }
-        } catch (e: ChromeRPCException) {
+        } catch (_: ChromeRPCException) {
             // As a last resort, attempt legacy JS utility when a CSS selector is available
             if (!selector.isNullOrBlank()) {
                 val safeSelector = normalizeLocatorForJs(selector)
@@ -603,7 +603,7 @@ class PageHandler(
      */
     private suspend fun trySmoothScroll(nodeRef: NodeRef): Boolean {
         return try {
-            withNodeObjectId(bp, nodeRef) { objectId ->
+            withNodeObjectId(browserProtocol, nodeRef) { objectId ->
                 // Execute on the element itself to avoid selector issues; center for stability
                 val functionDeclaration = """
                     function() {
@@ -613,14 +613,14 @@ class PageHandler(
                         } catch (e) { return false; }
                     }
                 """.trimIndent()
-                bp.callFunctionOn(
+                browserProtocol.callFunctionOn(
                     functionDeclaration, objectId = objectId, returnByValue = true,
                     userGesture = true, awaitPromise = true
                 )
                 true
             } ?: false
-        } catch (e: Exception) {
-            // swallow and indicate failure; caller will fallback
+        } catch (_: Exception) {
+            // swallow and indicate failure; caller will fall back
             false
         }
     }
@@ -628,10 +628,10 @@ class PageHandler(
     @Throws(ChromeDriverException::class)
     private suspend fun resolveCSSSelector(cssSelector: String): NodeRef? {
         if (!isActive) return null
-        val rootId = bp.getDocument().nodeId
+        val rootId = browserProtocol.getDocument().nodeId
 
         val nodeId = try {
-            bp.querySelector(rootId, cssSelector)
+            browserProtocol.querySelector(rootId, cssSelector)
         } catch (e: CDPReturnError) {
             // code: -32000 message: "Could not find node with given id"
             // This exception is expected, will change this log to debug
@@ -670,15 +670,15 @@ class PageHandler(
 
         val nodeId = try {
             if (!isActive) return null
-            bp.getDocument()?.nodeId ?: return null
+            browserProtocol.getDocument().nodeId
 
-            val searchResult = bp.performSearch(xpath, true) ?: return null
+            val searchResult = browserProtocol.performSearch(xpath, true) ?: return null
             val nodeId = if (searchResult.resultCount > 0) {
                 // Only retrieve the first matching node if results exist
-                val results = bp.getSearchResults(searchResult.searchId, fromIndex = 0, toIndex = 1)
+                val results = browserProtocol.getSearchResults(searchResult.searchId, fromIndex = 0, toIndex = 1)
                 // Clean up search results to avoid resource leak
                 try {
-                    bp.discardSearchResults(searchResult.searchId)
+                    browserProtocol.discardSearchResults(searchResult.searchId)
                 } catch (_: Exception) {
                 }
                 results.firstOrNull()
@@ -732,14 +732,14 @@ class PageHandler(
                 // If nodeId is provided, we might not need to resolve it again unless we want to verify it exists
                 // But the original code resolved it. Let's keep the behavior but check if it's necessary.
                 // Resolving a nodeId returns a RemoteObject.
-                bp.resolveNodeByNodeId(nodeId)
+                browserProtocol.resolveNodeByNodeId(nodeId)
             } else if (backendNodeId != null && backendNodeId > 0) {
-                bp.resolveNodeByBackendNodeId(backendNodeId)
+                browserProtocol.resolveNodeByBackendNodeId(backendNodeId)
             } else {
                 return null
             }
 
-            val tempObjectId = remoteObject?.objectId
+            val tempObjectId = remoteObject.objectId
             if (tempObjectId == null) {
                 logger.warn("Failed to resolve node: {}, {}", nodeId, backendNodeId)
                 return null
@@ -748,11 +748,11 @@ class PageHandler(
             // Use DOM.requestNode to get the nodeId from the runtime object.
             // This is crucial when we started with a backendNodeId.
             // When started with nodeId, it should return the same nodeId.
-            val resolvedNodeId = bp.requestNode(tempObjectId) ?: 0
+            val resolvedNodeId = browserProtocol.requestNode(tempObjectId) ?: 0
 
             // Release the remote object to avoid memory leaks
             try {
-                bp.releaseObject(tempObjectId)
+                browserProtocol.releaseObject(tempObjectId)
             } catch (_: Exception) {
             }
 

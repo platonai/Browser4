@@ -29,7 +29,7 @@ import kotlin.time.Duration.Companion.milliseconds
  * Ktor-based WebSocket transport that supports Kotlin coroutines under the hood,
  * but exposes the legacy Transport interface for compatibility.
  */
-class KtorTransport : Transport {
+internal class KtorTransport : Transport {
     private val logger = getLogger(this)
     private val tracer = getTracerOrNull(this)
     private val closed = AtomicBoolean()

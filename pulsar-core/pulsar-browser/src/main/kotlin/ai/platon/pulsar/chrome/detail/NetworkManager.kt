@@ -27,7 +27,7 @@ internal class NetworkManager(
 
     val isActive get() = driver.isActive
 
-    private val cdp get() = driver.browserProtocol
+    private val browserProtocol get() = driver.browserProtocol
 
     private val networkEventManager = NetworkEventManager()
 
@@ -48,27 +48,27 @@ internal class NetworkManager(
     var userCacheDisabled = false
 
     init {
-        cdp.onRequestPaused(::onRequestPaused)
-        cdp.onAuthRequired(::onAuthRequired)
-        cdp.onRequestWillBeSent(::onRequestWillBeSent)
-        cdp.onRequestWillBeSentExtraInfo(::onRequestWillBeSentExtraInfo)
-        cdp.onRequestServedFromCache(::onRequestServedFromCache)
-        cdp.onResponseReceived(::onResponseReceived)
-        cdp.onLoadingFinished(::onLoadingFinished)
-        cdp.onLoadingFailed(::onLoadingFailed)
-        cdp.onResponseReceivedExtraInfo(::onResponseReceivedExtraInfo)
+        browserProtocol.onRequestPaused(::onRequestPaused)
+        browserProtocol.onAuthRequired(::onAuthRequired)
+        browserProtocol.onRequestWillBeSent(::onRequestWillBeSent)
+        browserProtocol.onRequestWillBeSentExtraInfo(::onRequestWillBeSentExtraInfo)
+        browserProtocol.onRequestServedFromCache(::onRequestServedFromCache)
+        browserProtocol.onResponseReceived(::onResponseReceived)
+        browserProtocol.onLoadingFinished(::onLoadingFinished)
+        browserProtocol.onLoadingFailed(::onLoadingFailed)
+        browserProtocol.onResponseReceivedExtraInfo(::onResponseReceivedExtraInfo)
     }
 
     suspend fun enable() {
         if (ignoreHTTPSErrors) {
             rpc.invokeSilently("setIgnoreCertificateErrors") {
-                cdp.securityEnable()
-                cdp.setIgnoreCertificateErrors(ignoreHTTPSErrors)
+                browserProtocol.securityEnable()
+                browserProtocol.setIgnoreCertificateErrors(ignoreHTTPSErrors)
             }
         }
 
         rpc.invokeSilently("enable") {
-            cdp.networkEnable()
+            browserProtocol.networkEnable()
         }
     }
 
@@ -82,7 +82,7 @@ internal class NetworkManager(
         headers.entries.associateTo(extraHTTPHeaders) { it.key.lowercase() to it.value }
 
         rpc.invoke("setExtraHTTPHeaders") {
-            cdp.setExtraHTTPHeaders(extraHTTPHeaders)
+            browserProtocol.setExtraHTTPHeaders(extraHTTPHeaders)
         }
     }
 
@@ -107,7 +107,7 @@ internal class NetworkManager(
         val authChallengeResponse = AuthChallengeResponse(response, credentials?.username, credentials?.password)
 
         rpc.invokeSilently("continueWithAuth", event.requestId) {
-            cdp.continueWithAuth(event.requestId, authChallengeResponse)
+            browserProtocol.continueWithAuth(event.requestId, authChallengeResponse)
         }
     }
 
@@ -122,7 +122,7 @@ internal class NetworkManager(
 
         if (!userRequestInterceptionEnabled && protocolRequestInterceptionEnabled) {
             rpc.invokeSilently("continueRequest", event.requestId) {
-                cdp.continueRequest(event.requestId)
+                browserProtocol.continueRequest(event.requestId)
             }
         }
 
@@ -348,7 +348,7 @@ internal class NetworkManager(
         if (enabled) {
             val pattern = RequestPattern("*")
             rpc.invokeSilently("enable") {
-                cdp.fetchEnable(listOf(pattern), true)
+                browserProtocol.fetchEnable(listOf(pattern), true)
             }
         } else {
             // TODO: there are other scenarios to keep request interception enabled.
@@ -373,7 +373,7 @@ internal class NetworkManager(
     private suspend fun updateProtocolCacheDisabled() {
         try {
             rpc.invoke("setCacheDisabled") {
-                cdp.setCacheDisabled(this.userCacheDisabled)
+                browserProtocol.setCacheDisabled(this.userCacheDisabled)
             }
         } catch (e: ChromeRPCException) {
             rpc.handleChromeException(e, "setCacheDisabled")

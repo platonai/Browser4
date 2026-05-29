@@ -54,7 +54,7 @@ import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.random.Random
 
-class PulsarWebDriver constructor(
+open class PulsarWebDriver constructor(
     uniqueID: String,
     val chromeTab: BrowserTab,
     val browserProtocol: BrowserProtocol,

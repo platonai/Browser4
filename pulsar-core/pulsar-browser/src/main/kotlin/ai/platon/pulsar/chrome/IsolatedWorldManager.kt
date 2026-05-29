@@ -20,8 +20,8 @@ import org.apache.commons.lang3.StringUtils
  * 5. Runtime doesn't break page behavior
  * 6. Runtime is observable, extensible, and evolvable
  */
-class IsolatedWorldManager(
-    val bp: BrowserProtocol,
+class IsolatedWorldManager constructor(
+    val browserProtocol: BrowserProtocol,
     val settings: BrowserSettings
 ) {
     companion object {
@@ -57,7 +57,7 @@ class IsolatedWorldManager(
      * @return The execution context ID of the created isolated world
      */
     suspend fun createIsolatedWorld(frameId: String? = null): Int {
-        val resolvedFrameId: String? = frameId ?: runCatching { bp.mainFrame().id }.getOrNull()
+        val resolvedFrameId: String? = frameId ?: runCatching { browserProtocol.mainFrame().id }.getOrNull()
 
         logger.debug(
             "Creating isolated world '{}' for frame: {}",
@@ -68,7 +68,7 @@ class IsolatedWorldManager(
         var lastError: Exception? = null
         repeat(DEFAULT_CREATE_WORLD_RETRIES) { attempt ->
             try {
-                val executionContextId = bp.createIsolatedWorld(
+                val executionContextId = browserProtocol.createIsolatedWorld(
                     frameId = resolvedFrameId ?: "main",
                     worldName = RUNTIME_WORLD_NAME,
                     grantUniveralAccess = true,
@@ -117,7 +117,7 @@ class IsolatedWorldManager(
      * @return The result of the evaluation
      */
     suspend fun evaluateInIsolatedWorld(script: String, contextId: Int? = null): Any? {
-        val result = bp.evaluate(
+        val result = browserProtocol.evaluate(
             expression = confuser.confuse(script),
             contextId = contextId,
             returnByValue = true,

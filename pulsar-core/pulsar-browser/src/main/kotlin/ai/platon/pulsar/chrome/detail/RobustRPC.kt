@@ -19,7 +19,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.time.Duration.Companion.milliseconds
 
 class RobustRPC(
-    private val driver: PulsarWebDriver
+    private val driver: WebDriver
 ) {
     companion object {
         private val logger = getLogger(this)
@@ -74,6 +74,8 @@ class RobustRPC(
         message: String? = null,
         block: suspend (NodeRef) -> T
     ): T? {
+        require(driver is PulsarWebDriver)
+
         try {
             return invokeWithRetry(action) {
                 val node = if (focus) {
@@ -125,6 +127,8 @@ class RobustRPC(
         url: String? = null,
         block: suspend () -> T
     ): T? {
+        require(driver is AbstractWebDriver)
+
         if (driver.quickCheckHealthy(action).isNotOK) {
             return null
         }
@@ -285,6 +289,8 @@ class RobustRPC(
 
     @Throws(ChromeRPCException::class)
     private suspend fun <T> invokeDeferred0(action: String, url: String? = null, block: suspend () -> T): T? {
+        require(driver is AbstractWebDriver)
+
         if (driver.quickCheckHealthy(action).isNotOK) {
             return null
         }
@@ -301,6 +307,7 @@ class RobustRPC(
 
     @Throws(ChromeIOException::class)
     private suspend fun fixCDTAgentIfNecessary(e: Exception) {
+        require(driver is PulsarWebDriver)
         if (e.toString().contains("agent was not enabled")) {
             logger.warn(e.stringify())
             try {

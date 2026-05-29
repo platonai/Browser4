@@ -25,7 +25,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.reflect.KClass
 
-class CachedDevToolsInvocationHandlerProxies(impl: Any) : SuspendAwareHandler(impl) {
+internal class CachedDevToolsInvocationHandlerProxies(impl: Any) : SuspendAwareHandler(impl) {
     val commandHandler: DevToolsInvocationHandler = DevToolsInvocationHandler(impl)
     val commands: MutableMap<Method, Any> = ConcurrentHashMap()
 
@@ -45,7 +45,7 @@ class CachedDevToolsInvocationHandlerProxies(impl: Any) : SuspendAwareHandler(im
     }
 }
 
-abstract class ChromeDevToolsImpl(
+internal abstract class ChromeDevToolsImpl(
     private val browserTransport: Transport,
     private val pageTransport: Transport,
     private val config: DevToolsConfig
