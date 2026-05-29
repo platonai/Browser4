@@ -1,8 +1,8 @@
 package ai.platon.pulsar.rest.api.service
 
 import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
-import ai.platon.browser4.common.B4LinkExtractors
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.*
+import ai.platon.pulsar.common.LinkExtractors
 import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.common.ai.llm.PromptTemplate
 import ai.platon.pulsar.common.ai.llm.PromptTemplateLoader
@@ -58,7 +58,7 @@ class ConversationService(
             return null
         }
 
-        val urls = B4LinkExtractors.fromText(request)
+        val urls = LinkExtractors.fromText(request)
         if (urls.isEmpty()) {
             return null
         }
