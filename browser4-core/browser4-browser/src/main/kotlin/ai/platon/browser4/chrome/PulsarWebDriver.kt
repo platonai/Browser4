@@ -83,9 +83,10 @@ open class PulsarWebDriver constructor(
 
     override val browserType: BrowserType = BrowserType.PULSAR_CHROME
 
-    private val isolatedWorldManager = IsolatedWorldManager(browserProtocol, settings)
-    val page = PageHandler(browserProtocol, isolatedWorldManager)
-    private val jsHandler get() = page.jsHandler
+    val page = PageHandler(browserProtocol, settings)
+
+    private val isolatedWorldManager get() = page.isolatedWorldManager
+    private val js get() = page.js
     private val mouse get() = page.mouse.takeIf { isActive }
     private val keyboard get() = page.keyboard.takeIf { isActive }
     private val screenshot = ScreenshotHandler(page, browserProtocol)
@@ -112,7 +113,7 @@ open class PulsarWebDriver constructor(
      * */
     override val implementation: Any get() = browserProtocol
 
-    override val snapshotService: SnapshotService get() = page.snapshotService
+    override val snapshotService: SnapshotService get() = page.snapshot
 
     init {
         fingerprintApplier?.invoke(this)
@@ -261,14 +262,14 @@ open class PulsarWebDriver constructor(
 
     @Throws(WebDriverException::class)
     override suspend fun evaluate(expression: String): Any? {
-        return rpc.invokeOnPage("evaluate") { jsHandler.evaluate(expression) }
+        return rpc.invokeOnPage("evaluate") { js.evaluate(expression) }
     }
 
     @Throws(WebDriverException::class)
     override suspend fun evaluateDetail(expression: String): JsEvaluation? {
         return rpc.invokeOnPage("evaluateDetail") {
             driverHelper.createJsEvaluate(
-                jsHandler.evaluateDetail(expression)
+                js.evaluateDetail(expression)
             )
         }
     }
@@ -276,14 +277,14 @@ open class PulsarWebDriver constructor(
     @Throws(WebDriverException::class)
     override suspend fun evaluateValue(expression: String): Any? {
         return rpc.invokeOnPage("evaluateValue") {
-            jsHandler.evaluateValue(expression)
+            js.evaluateValue(expression)
         }
     }
 
     @Throws(WebDriverException::class)
     override suspend fun evaluateValueDetail(expression: String): JsEvaluation? {
         return rpc.invokeOnPage("evaluateValueDetail") {
-            val evaluate = jsHandler.evaluateValueDetail(expression)
+            val evaluate = js.evaluateValueDetail(expression)
             driverHelper.createJsEvaluate(evaluate)
         }
     }
@@ -297,7 +298,7 @@ open class PulsarWebDriver constructor(
     override suspend fun evaluateValueDetail(selector: String, functionDeclaration: String): JsEvaluation? {
         return rpc.invokeOnPage("evaluateValue") {
             val normalizedFunctionDeclaration = normalizeElementFunctionDeclaration(functionDeclaration)
-            val callFunctionOn = jsHandler.callFunctionOn(selector, normalizedFunctionDeclaration)
+            val callFunctionOn = js.callFunctionOn(selector, normalizedFunctionDeclaration)
             driverHelper.createJsEvaluate(callFunctionOn)
         }
     }
@@ -910,7 +911,7 @@ open class PulsarWebDriver constructor(
     @Beta
     @Throws(WebDriverException::class)
     override suspend fun querySelectorAll(selector: String): List<NodeRef> {
-        return rpc.invokeOnPage("select") { page.queryLocatorAll(selector) } ?: listOf()
+        return rpc.invokeOnPage("select") { page.dom.queryLocatorAll(selector) } ?: listOf()
     }
 
     @Throws(WebDriverException::class)
@@ -963,13 +964,13 @@ function() {
 
     @Throws(WebDriverException::class)
     override suspend fun selectTextAll(selector: String): List<String> {
-        val safeSelector = page.normalizeLocatorForJs(selector)
+        val safeSelector = page.dom.normalizeLocator(selector, true)
         val json = evaluate("__pulsar_utils__.selectTextAll('$safeSelector')")?.toString() ?: "[]"
         return jacksonObjectMapper().readValue(json)
     }
 
     override suspend fun selectAttributes(selector: String): Map<String, String> {
-        val safeSelector = page.normalizeLocatorForJs(selector)
+        val safeSelector = page.dom.normalizeLocator(selector, true)
         val json = evaluate("__pulsar_utils__.selectAttributes('$safeSelector')")?.toString() ?: return mapOf()
         val attributes: List<String> = jacksonObjectMapper().readValue(json)
         return attributes.zipWithNext().associate { it }
@@ -978,7 +979,7 @@ function() {
     @Throws(WebDriverException::class)
     override suspend fun selectAttributeAll(selector: String, attrName: String, start: Int, limit: Int): List<String> {
         val end = start + limit
-        val safeSelector = page.normalizeLocatorForJs(selector)
+        val safeSelector = page.dom.normalizeLocator(selector, true)
 
         val expression = "__pulsar_utils__.selectAttributeAll('$safeSelector', '$attrName', $start, $end)"
         val json = evaluate(expression)?.toString() ?: return listOf()
@@ -987,20 +988,20 @@ function() {
 
     @Throws(WebDriverException::class)
     override suspend fun setAttribute(selector: String, attrName: String, attrValue: String) {
-        val safeSelector = page.normalizeLocatorForJs(selector)
+        val safeSelector = page.dom.normalizeLocator(selector, true)
         evaluate("__pulsar_utils__.setAttribute('$safeSelector', '$attrName', '$attrValue')")
     }
 
     @Throws(WebDriverException::class)
     override suspend fun setAttributeAll(selector: String, attrName: String, attrValue: String) {
-        val safeSelector = page.normalizeLocatorForJs(selector)
+        val safeSelector = page.dom.normalizeLocator(selector, true)
         evaluate("__pulsar_utils__.setAttributeAll('$safeSelector', '$attrName', '$attrValue')")
     }
 
     // --------------------------- Property helpers ---------------------------
     @Throws(WebDriverException::class)
     override suspend fun selectFirstPropertyValueOrNull(selector: String, propName: String): String? {
-        val safeSelector = page.normalizeLocatorForJs(selector)
+        val safeSelector = page.dom.normalizeLocator(selector, true)
         return evaluateValue("__pulsar_utils__.selectFirstPropertyValue('$safeSelector', '$propName')")?.toString()
     }
 
@@ -1009,7 +1010,7 @@ function() {
         selector: String, propName: String, start: Int, limit: Int
     ): List<String> {
         val end = start + limit
-        val safeSelector = page.normalizeLocatorForJs(selector)
+        val safeSelector = page.dom.normalizeLocator(selector, true)
         val expression = "__pulsar_utils__.selectPropertyValueAll('$safeSelector', '$propName', $start, $end)"
         val json = evaluate(expression)?.toString() ?: return listOf()
         return jacksonObjectMapper().readValue(json)
@@ -1017,25 +1018,25 @@ function() {
 
     @Throws(WebDriverException::class)
     override suspend fun setProperty(selector: String, propName: String, propValue: String) {
-        val safeSelector = page.normalizeLocatorForJs(selector)
+        val safeSelector = page.dom.normalizeLocator(selector, true)
         evaluate("__pulsar_utils__.setProperty('$safeSelector', '$propName', '$propValue')")
     }
 
     @Throws(WebDriverException::class)
     override suspend fun setPropertyAll(selector: String, propName: String, propValue: String) {
-        val safeSelector = page.normalizeLocatorForJs(selector)
+        val safeSelector = page.dom.normalizeLocator(selector, true)
         evaluate("__pulsar_utils__.setPropertyAll('$safeSelector', '$propName', '$propValue')")
     }
 
     @Throws(WebDriverException::class)
     override suspend fun clickTextMatches(selector: String, pattern: String, count: Int) {
-        val safeSelector = page.normalizeLocatorForJs(selector)
+        val safeSelector = page.dom.normalizeLocator(selector, true)
         evaluate("__pulsar_utils__.clickTextMatches('$safeSelector', '$pattern')")
     }
 
     @Throws(WebDriverException::class)
     override suspend fun clickMatches(selector: String, attrName: String, pattern: String, count: Int) {
-        val safeSelector = page.normalizeLocatorForJs(selector)
+        val safeSelector = page.dom.normalizeLocator(selector, true)
         evaluate("__pulsar_utils__.clickMatches('$safeSelector', '$attrName', '$pattern')")
     }
 
@@ -1127,7 +1128,7 @@ function() {
     override suspend fun nanoDOMTree(): NanoDOMTree? {
         return rpc.invokeOnPage("nanoDOMTree") {
             val snapshotOptions = SnapshotOptions()
-            val domState = page.snapshotService.getDOMState(snapshotOptions = snapshotOptions)
+            val domState = page.snapshot.getDOMState(snapshotOptions = snapshotOptions)
             domState.serializableTree.toNanoTreeInRange()
         }
     }
@@ -1135,7 +1136,7 @@ function() {
     @Throws(WebDriverException::class)
     override suspend fun browserUseState(target: PageTarget, snapshotOptions: SnapshotOptions): BrowserUseState {
         return rpc.invokeOnPage("browserUseState") {
-            page.snapshotService.getBrowserUseState(target, snapshotOptions)
+            page.snapshot.getBrowserUseState(target, snapshotOptions)
         }!!
     }
 
@@ -1690,7 +1691,7 @@ function() {
     }
 
     private suspend fun waitForScrollSettled(selector: String, timeout: Duration = Duration.ofMillis(5_000)) {
-        val safeSelector = page.normalizeLocatorForJs(selector)
+        val safeSelector = page.dom.normalizeLocator(selector, true)
         val stateKey = "__ps_scroll_${Random.nextLong(Long.MAX_VALUE).toString(16)}"
         val expression = """
 (() => {
