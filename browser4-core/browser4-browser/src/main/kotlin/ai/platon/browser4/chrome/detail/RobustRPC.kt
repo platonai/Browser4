@@ -162,7 +162,7 @@ class RobustRPC(
                 .onFailure { logger.warn("Exception to execute action: [$action], retrying $i/$maxRetry times", it) }
         }
 
-        if (driver.quickCheckHealthy(action).isNotOK) {
+        if (driver.quickCheckHealthy(action).isOK) {
             return result.getOrElse { throw it }
         }
 
