@@ -1,13 +1,14 @@
-package ai.platon.pulsar.browser.manage
+package ai.platon.browser4.chrome.manage
 
 import ai.platon.browser4.chrome.util.ChromeOptions
 import ai.platon.browser4.chrome.util.LauncherOptions
+import ai.platon.pulsar.browser.Browser
 import ai.platon.pulsar.browser.BrowserId
 import ai.platon.pulsar.browser.common.BrowserLaunchException
 import ai.platon.pulsar.browser.common.BrowserSettings
+import ai.platon.pulsar.browser.manage.AbstractBrowserFactory
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.config.ImmutableConfig
-import ai.platon.pulsar.core.api.Browser
 
 /**
  * A factory to create browser instances.

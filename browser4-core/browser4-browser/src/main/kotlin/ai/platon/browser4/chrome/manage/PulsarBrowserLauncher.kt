@@ -1,4 +1,4 @@
-package ai.platon.pulsar.browser.manage
+package ai.platon.browser4.chrome.manage
 
 import ai.platon.browser4.chrome.ChromeLauncher
 import ai.platon.browser4.chrome.PulsarBrowser

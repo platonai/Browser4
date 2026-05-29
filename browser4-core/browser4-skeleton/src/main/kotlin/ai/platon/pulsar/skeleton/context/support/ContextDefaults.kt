@@ -1,8 +1,8 @@
 package ai.platon.pulsar.skeleton.context.support
 
-import ai.platon.pulsar.browser.BrowserFactory
+import ai.platon.browser4.chrome.manage.PulsarBrowserFactory
 import ai.platon.pulsar.browser.manage.BasicBrowserManager
-import ai.platon.pulsar.browser.manage.PulsarBrowserFactory
+import ai.platon.pulsar.browser.manage.BrowserFactory
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.loop.TaskLoops
 import ai.platon.pulsar.loop.impl.StreamingTaskLoop
