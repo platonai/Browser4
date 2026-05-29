@@ -1,7 +1,7 @@
 package ai.platon.pulsar.rest
 
 import ai.platon.browser4.boot.autoconfigure.PulsarContextInitializer
-import ai.platon.pulsar.skeleton.TaskLoops
+import ai.platon.pulsar.loop.TaskLoops
 import ai.platon.pulsar.skeleton.workflow.common.GlobalCache
 import ai.platon.pulsar.skeleton.workflow.common.GlobalCacheFactory
 import org.springframework.boot.autoconfigure.SpringBootApplication

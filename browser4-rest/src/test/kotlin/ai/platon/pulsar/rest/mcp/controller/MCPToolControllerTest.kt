@@ -1,16 +1,16 @@
 package ai.platon.pulsar.rest.mcp.controller
 
+import ai.platon.pulsar.agent.tool.UserCommandExecutor
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.model.*
 import ai.platon.pulsar.agentic.tools.AgentToolManager
-import ai.platon.pulsar.common.PulsarSessionManager
+import ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner
 import ai.platon.pulsar.common.ManagedSession
+import ai.platon.pulsar.common.PulsarSessionManager
+import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.rest.api.entities.CommandResult
 import ai.platon.pulsar.rest.api.entities.CommandStatus
-import ai.platon.pulsar.agent.tool.UserCommandExecutor
-import ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import jakarta.servlet.http.HttpServletResponse
 import kotlinx.coroutines.runBlocking
@@ -18,12 +18,12 @@ import kotlinx.coroutines.sync.Mutex
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import org.mockito.kotlin.any
 import org.mockito.ArgumentCaptor
 import org.mockito.Mock
 import org.mockito.Mockito
 import org.mockito.Mockito.`when`
 import org.mockito.MockitoAnnotations
+import org.mockito.kotlin.any
 import org.springframework.http.HttpStatus
 import java.util.*
 

@@ -1,5 +1,6 @@
 package ai.platon.browser4.chrome.dom.model
 
+import ai.platon.pulsar.chrome.dom.model.NanoDOMTreeNode
 import java.util.*
 
 object NanoAriaSnapshotRenderer {

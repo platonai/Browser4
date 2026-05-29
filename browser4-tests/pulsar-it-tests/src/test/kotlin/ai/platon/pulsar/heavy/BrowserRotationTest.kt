@@ -1,14 +1,14 @@
 package ai.platon.pulsar.heavy
 
+import ai.platon.pulsar.browser.AbstractWebDriver
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.collect.UrlFeeder
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.common.sleepSeconds
 import ai.platon.pulsar.common.urls.URLUtils
+import ai.platon.pulsar.loop.TaskLoop
 import ai.platon.pulsar.persist.ProtocolStatus
 import ai.platon.pulsar.skeleton.PulsarSettings
-import ai.platon.pulsar.skeleton.TaskLoop
-import ai.platon.pulsar.skeleton.browser.driver.AbstractWebDriver
 import ai.platon.pulsar.skeleton.workflow.common.url.ListenableHyperlink
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
@@ -16,6 +16,7 @@ import org.junit.jupiter.api.*
 import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.deleteRecursively
 import kotlin.test.Test
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.toJavaDuration
 
@@ -109,7 +110,7 @@ class BrowserRotationTest : MassiveTestBase() {
         be.onDocumentFullyLoaded.addLast { page, driver ->
             val text = driver.selectFirstTextOrNull("body")
             // check text
-            delay(3000)
+            delay(3000.milliseconds)
         }
 
         be.onDidInteract.addLast { page, driver ->

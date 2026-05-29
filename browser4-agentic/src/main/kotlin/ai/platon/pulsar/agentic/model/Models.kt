@@ -1,19 +1,14 @@
 package ai.platon.pulsar.agentic.model
 
-import ai.platon.browser4.driver.chrome.dom.model.MergedDOMTreeNode
 import ai.platon.pulsar.agentic.ActResult
 import ai.platon.pulsar.agentic.ObserveResult
 import ai.platon.pulsar.agentic.common.AgentPaths
-import ai.platon.pulsar.common.MessageWriter
-import ai.platon.pulsar.common.Strings
-import ai.platon.pulsar.common.brief
-import ai.platon.pulsar.common.compactedBrief
-import ai.platon.pulsar.common.llmFriendlyBrief
+import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
+import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.serialize.json.Pson
 import ai.platon.pulsar.external.ModelResponse
 import com.fasterxml.jackson.annotation.JsonIgnore
 import com.fasterxml.jackson.annotation.JsonIncludeProperties
-import com.fasterxml.jackson.annotation.JsonPropertyOrder
 import org.apache.commons.lang3.StringUtils
 import java.nio.file.Path
 import java.time.Instant

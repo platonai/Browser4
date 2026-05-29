@@ -19,8 +19,8 @@
  */
 package ai.platon.browser4.driver.examples
 
+import ai.platon.browser4.chrome.ChromeLauncher
 import ai.platon.cdt.kt.protocol.events.tracing.DataCollected
-import ai.platon.browser4.driver.chrome.ChromeLauncher
 import com.fasterxml.jackson.databind.ObjectMapper
 import java.nio.file.Paths
 

@@ -1,6 +1,6 @@
 package ai.platon.pulsar.skeleton
 
-import ai.platon.browser4.driver.common.InteractSettings
+import ai.platon.pulsar.browser.InteractSettings
 import ai.platon.pulsar.common.browser.InteractLevel
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test

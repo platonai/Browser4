@@ -1,13 +1,13 @@
 package ai.platon.pulsar.skeleton.workflow.fetch.driver
 
 import ai.platon.pulsar.WebDriverTestBase
+import ai.platon.pulsar.browser.AbstractWebDriver
 import ai.platon.pulsar.common.AppFiles
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.emoji.PopularEmoji
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper
 import ai.platon.pulsar.persist.model.ActiveDOMMessage
-import ai.platon.pulsar.skeleton.browser.driver.AbstractWebDriver
 import kotlinx.coroutines.delay
 import org.junit.jupiter.api.Assumptions
 import org.junit.jupiter.api.Disabled

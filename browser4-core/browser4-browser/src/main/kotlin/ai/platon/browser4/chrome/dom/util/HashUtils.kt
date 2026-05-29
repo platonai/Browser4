@@ -1,7 +1,7 @@
 package ai.platon.browser4.chrome.dom.util
 
-import ai.platon.browser4.chrome.dom.model.MergedDOMTreeNode
-import ai.platon.browser4.chrome.dom.model.StaticAttributes
+import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
+import ai.platon.pulsar.chrome.dom.model.StaticAttributes
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 
@@ -43,6 +43,7 @@ object HashUtils {
         useParentBranch = false,
         useStaticAttributes = false
     )
+
     private fun sha256Hex(bytes: ByteArray): String {
         val md = MessageDigest.getInstance("SHA-256")
         val digest = md.digest(bytes)

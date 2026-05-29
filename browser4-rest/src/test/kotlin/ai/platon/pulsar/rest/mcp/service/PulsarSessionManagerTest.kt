@@ -6,9 +6,9 @@ import ai.platon.pulsar.agentic.context.AgenticContext
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.common.config.VolatileConfig
+import ai.platon.pulsar.core.api.Browser
+import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.skeleton.PulsarSettings
-import ai.platon.pulsar.skeleton.browser.Browser
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach

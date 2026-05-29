@@ -1,6 +1,6 @@
 package ai.platon.browser4.chrome.dom.util
 
-import ai.platon.browser4.chrome.dom.model.*
+import ai.platon.pulsar.chrome.dom.model.*
 import ai.platon.pulsar.common.Strings
 import org.apache.commons.lang3.StringUtils
 

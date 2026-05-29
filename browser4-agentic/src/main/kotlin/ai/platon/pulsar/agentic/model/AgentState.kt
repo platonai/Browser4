@@ -1,6 +1,6 @@
 package ai.platon.pulsar.agentic.model
 
-import ai.platon.browser4.driver.chrome.dom.model.BrowserUseState
+import ai.platon.pulsar.chrome.dom.model.BrowserUseState
 import ai.platon.pulsar.common.Strings
 import ai.platon.pulsar.common.compactedBrief
 import ai.platon.pulsar.common.serialize.json.Pson

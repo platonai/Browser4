@@ -1,7 +1,7 @@
 package ai.platon.browser4.chrome.dom.util
 
-import ai.platon.browser4.chrome.dom.model.DOMRect
-import ai.platon.browser4.chrome.dom.model.MergedDOMTreeNode
+import ai.platon.pulsar.chrome.dom.model.DOMRect
+import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
 import java.awt.*
 import java.awt.image.BufferedImage
 import java.io.ByteArrayInputStream
@@ -247,7 +247,9 @@ object HighlightUtils {
     private fun decodeImage(b64: String): BufferedImage? = try {
         val bytes = Base64.getDecoder().decode(b64)
         ImageIO.read(ByteArrayInputStream(bytes))
-    } catch (e: Exception) { null }
+    } catch (e: Exception) {
+        null
+    }
 
     private fun ensureARGB(src: BufferedImage): BufferedImage {
         if (src.type == BufferedImage.TYPE_INT_ARGB) return src
@@ -256,7 +258,9 @@ object HighlightUtils {
         try {
             enableQuality(g)
             g.drawImage(src, 0, 0, null)
-        } finally { g.dispose() }
+        } finally {
+            g.dispose()
+        }
         return dst
     }
 
@@ -267,13 +271,18 @@ object HighlightUtils {
         val b64 = Base64.getEncoder().encodeToString(baos.toByteArray())
         baos.close()
         b64
-    } catch (e: Exception) { null }
+    } catch (e: Exception) {
+        null
+    }
 
     private fun selectFont(g: Graphics2D, size: Int): Font {
         // Try a few common fonts; fall back to default
         val candidates = listOf("DejaVu Sans", "Arial", "Liberation Sans", "SansSerif")
         for (name in candidates) {
-            try { return Font(name, Font.BOLD, size) } catch (_: Exception) {}
+            try {
+                return Font(name, Font.BOLD, size)
+            } catch (_: Exception) {
+            }
         }
         return g.font.deriveFont(Font.BOLD, size.toFloat())
     }

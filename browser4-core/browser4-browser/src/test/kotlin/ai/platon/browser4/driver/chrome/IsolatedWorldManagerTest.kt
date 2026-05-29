@@ -1,8 +1,10 @@
 package ai.platon.browser4.driver.chrome
 
-import ai.platon.browser4.driver.chrome.protocol.BrowserProtocol
-import ai.platon.browser4.driver.common.BrowserSettings
+import ai.platon.browser4.chrome.IsolatedWorldManager
+import ai.platon.browser4.chrome.RemoteDevTools
+import ai.platon.browser4.chrome.impl.RemoteChromeProtocol
 import ai.platon.cdt.kt.protocol.types.page.*
+import ai.platon.pulsar.browser.common.BrowserSettings
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -31,7 +33,7 @@ class IsolatedWorldManagerTest {
     @Test
     fun testCreateIsolatedWorldUsesResolvedMainFrameId() {
         val devTools = mock<RemoteDevTools>()
-        val browserProtocol = BrowserProtocol(devTools)
+        val browserProtocol = RemoteChromeProtocol(devTools)
         val page = mock<ai.platon.cdt.kt.protocol.commands.Page>()
         whenever(devTools.page).thenReturn(page)
 
@@ -60,7 +62,7 @@ class IsolatedWorldManagerTest {
     @Test
     fun testCreateIsolatedWorldRejectsMissingFrameWhenTreeAvailable() {
         val devTools = mock<RemoteDevTools>()
-        val browserProtocol = BrowserProtocol(devTools)
+        val browserProtocol = RemoteChromeProtocol(devTools)
         val page = mock<ai.platon.cdt.kt.protocol.commands.Page>()
         whenever(devTools.page).thenReturn(page)
 

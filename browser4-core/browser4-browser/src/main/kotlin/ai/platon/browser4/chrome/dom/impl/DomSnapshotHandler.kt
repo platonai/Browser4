@@ -1,13 +1,13 @@
 package ai.platon.browser4.chrome.dom.impl
 
-import ai.platon.browser4.chrome.dom.model.DOMRect
-import ai.platon.browser4.chrome.dom.model.SnapshotNodeEx
 import ai.platon.browser4.chrome.dom.util.DomDebug
 import ai.platon.cdt.kt.protocol.support.annotations.Experimental
 import ai.platon.cdt.kt.protocol.support.annotations.Optional
 import ai.platon.cdt.kt.protocol.support.annotations.ParamName
 import ai.platon.cdt.kt.protocol.types.domsnapshot.CaptureSnapshot
 import ai.platon.pulsar.browser.impl.BrowserProtocol
+import ai.platon.pulsar.chrome.dom.model.DOMRect
+import ai.platon.pulsar.chrome.dom.model.SnapshotNodeEx
 import ai.platon.pulsar.common.getLogger
 
 /**

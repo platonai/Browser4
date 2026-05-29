@@ -5,9 +5,9 @@ import ai.platon.pulsar.WebDriverTestBase
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
+import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.persist.model.ActiveDOMMessage
 import ai.platon.pulsar.persist.model.ActiveDOMMetadata
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import com.fasterxml.jackson.module.kotlin.readValue
 import org.junit.jupiter.api.Assumptions
 import kotlin.test.Test

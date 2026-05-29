@@ -1,12 +1,15 @@
 package ai.platon.browser4.boot.autoconfigure
 
-import ai.platon.browser4.driver.common.BrowserSettings
+import ai.platon.pulsar.browser.common.BrowserSettings
+import ai.platon.pulsar.browser.privacy.PrivacyContextMonitor
 import ai.platon.pulsar.common.config.MutableConfig
 import ai.platon.pulsar.common.proxy.ProxyLoader
 import ai.platon.pulsar.common.proxy.ProxyLoaderFactory
 import ai.platon.pulsar.common.proxy.ProxyPoolManager
 import ai.platon.pulsar.common.proxy.ProxyPoolManagerFactory
 import ai.platon.pulsar.common.proxy.impl.LoadingProxyPool
+import ai.platon.pulsar.loop.TaskLoops
+import ai.platon.pulsar.loop.impl.StreamingTaskLoop
 import ai.platon.pulsar.persist.WebDb
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolMonitor
@@ -19,18 +22,15 @@ import ai.platon.pulsar.protocol.browser.impl.BasicBrowserManager
 import ai.platon.pulsar.protocol.browser.impl.BrowserMonitor
 import ai.platon.pulsar.protocol.browser.impl.DefaultBrowserFactory
 import ai.platon.pulsar.skeleton.CoreMetrics
-import ai.platon.pulsar.skeleton.TaskLoops
 import ai.platon.pulsar.skeleton.common.AppStatusTracker
 import ai.platon.pulsar.skeleton.common.message.MiscMessageWriter
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
-import ai.platon.pulsar.skeleton.impl.StreamingTaskLoop
 import ai.platon.pulsar.skeleton.workflow.common.GlobalCache
 import ai.platon.pulsar.skeleton.workflow.common.GlobalCacheFactory
 import ai.platon.pulsar.skeleton.workflow.component.BatchFetchComponent
 import ai.platon.pulsar.skeleton.workflow.component.LoadComponent
 import ai.platon.pulsar.skeleton.workflow.component.ParseComponent
 import ai.platon.pulsar.skeleton.workflow.component.UpdateComponent
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.PrivacyContextMonitor
 import ai.platon.pulsar.skeleton.workflow.parse.PageParser
 import ai.platon.pulsar.skeleton.workflow.parse.ParseFilters
 import ai.platon.pulsar.skeleton.workflow.parse.ParserFactory

@@ -1,6 +1,6 @@
 package ai.platon.browser4.chrome.dom.util
 
-import ai.platon.browser4.chrome.dom.model.MergedDOMTreeNode
+import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
 
 /**
  * Utility functions for scroll-related logic.
@@ -45,8 +45,8 @@ object ScrollUtils {
 
             // Only allow if any overflow property explicitly allows scrolling
             val allows = overflow in setOf("auto", "scroll", "overlay") ||
-                overflowX in setOf("auto", "scroll", "overlay") ||
-                overflowY in setOf("auto", "scroll", "overlay")
+                    overflowX in setOf("auto", "scroll", "overlay") ||
+                    overflowY in setOf("auto", "scroll", "overlay")
 
             return allows
         }
@@ -135,7 +135,8 @@ object ScrollUtils {
 
             // If ancestor scrolls in same direction, hide current node's scroll info
             if ((nodeHorizontalScroll && ancestorHorizontal) ||
-                (nodeVerticalScroll && ancestorVertical)) {
+                (nodeVerticalScroll && ancestorVertical)
+            ) {
                 return false
             }
         }

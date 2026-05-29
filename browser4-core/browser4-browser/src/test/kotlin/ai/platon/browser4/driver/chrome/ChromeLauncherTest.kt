@@ -1,5 +1,6 @@
 package ai.platon.browser4.driver.chrome
 
+import ai.platon.browser4.chrome.ChromeLauncher
 import ai.platon.pulsar.common.browser.BrowserFiles.PID_FILE_NAME
 import org.apache.commons.lang3.SystemUtils
 import java.nio.file.Files

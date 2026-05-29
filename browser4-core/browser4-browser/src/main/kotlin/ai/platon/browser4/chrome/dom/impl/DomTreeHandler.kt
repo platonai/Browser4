@@ -1,10 +1,10 @@
 package ai.platon.browser4.chrome.dom.impl
 
-import ai.platon.browser4.chrome.dom.model.MergedDOMTreeNode
-import ai.platon.browser4.chrome.dom.model.NodeType
-import ai.platon.browser4.chrome.dom.model.PageTarget
 import ai.platon.cdt.kt.protocol.types.dom.Node
 import ai.platon.pulsar.browser.impl.BrowserProtocol
+import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
+import ai.platon.pulsar.chrome.dom.model.NodeType
+import ai.platon.pulsar.chrome.dom.model.PageTarget
 import ai.platon.pulsar.common.getLogger
 
 typealias CdpNode = Node

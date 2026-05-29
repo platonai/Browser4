@@ -2,8 +2,8 @@ package ai.platon.pulsar.agentic.tools.builtin
 
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecGenerator
-import ai.platon.pulsar.skeleton.browser.driver.NavigateEntry
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
+import ai.platon.pulsar.browser.common.NavigateEntry
+import ai.platon.pulsar.core.api.WebDriver
 import kotlinx.coroutines.delay
 import java.time.Duration
 import java.util.concurrent.atomic.AtomicBoolean
@@ -781,18 +781,6 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
 
             "bringToFront" -> {
                 validateArgs(args, emptySet(), emptySet(), functionName); driver.bringToFront()
-            }
-
-            "chat" -> {
-                validateArgs(
-                    args,
-                    allowed("prompt", "selector"),
-                    setOf("prompt", "selector"),
-                    functionName
-                ); driver.chat(
-                    prompt = paramString(args, "prompt", functionName)!!,
-                    selector = paramString(args, "selector", functionName)!!
-                )
             }
 
             // Scrolling

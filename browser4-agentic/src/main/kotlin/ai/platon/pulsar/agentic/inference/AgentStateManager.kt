@@ -1,17 +1,17 @@
 package ai.platon.pulsar.agentic.inference
 
-import ai.platon.browser4.driver.chrome.dom.model.BrowserUseState
-import ai.platon.browser4.driver.chrome.dom.model.SnapshotOptions
-import ai.platon.browser4.driver.chrome.dom.model.TabState
+import ai.platon.browser4.chrome.PulsarWebDriver
 import ai.platon.pulsar.agentic.ActionOptions
 import ai.platon.pulsar.agentic.ObserveOptions
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.inference.detail.PageStateTracker
 import ai.platon.pulsar.agentic.model.*
+import ai.platon.pulsar.browser.AbstractWebDriver
+import ai.platon.pulsar.chrome.dom.model.BrowserUseState
+import ai.platon.pulsar.chrome.dom.model.SnapshotOptions
+import ai.platon.pulsar.chrome.dom.model.TabState
 import ai.platon.pulsar.common.MessageWriter
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.protocol.browser.driver.cdt.PulsarWebDriver
-import ai.platon.pulsar.skeleton.browser.driver.AbstractWebDriver
 import kotlinx.coroutines.withTimeout
 import java.nio.file.Path
 import java.time.Instant

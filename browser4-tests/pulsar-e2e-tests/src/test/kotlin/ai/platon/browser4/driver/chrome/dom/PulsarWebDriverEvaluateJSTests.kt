@@ -1,12 +1,12 @@
 package ai.platon.browser4.driver.chrome.dom
 
-import ai.platon.browser4.driver.common.B4JsUtils
 import ai.platon.pulsar.FastWebDriverService
 import ai.platon.pulsar.WebDriverTestBase
+import ai.platon.pulsar.browser.AbstractWebDriver
+import ai.platon.pulsar.browser.common.JsEvaluation
+import ai.platon.pulsar.common.js.JsUtils
 import ai.platon.pulsar.common.printlnPro
-import ai.platon.pulsar.skeleton.browser.driver.AbstractWebDriver
-import ai.platon.pulsar.skeleton.browser.driver.JsEvaluation
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
+import ai.platon.pulsar.core.api.WebDriver
 import org.junit.jupiter.api.assertNull
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -196,7 +196,7 @@ class PulsarWebDriverEvaluateJSTests : WebDriverTestBase() {
 }
         """.trimIndent()
 
-            val result = driver.evaluate(B4JsUtils.toIIFE(code))
+            val result = driver.evaluate(JsUtils.toIIFE(code))
             assertEquals(200, result)
 
             val code2 = """
@@ -208,7 +208,7 @@ class PulsarWebDriverEvaluateJSTests : WebDriverTestBase() {
             // converted to "// ❌ Unsupported format: not a valid JS function"
             // so it's an empty expressions sent to the browser
 
-            val result2 = driver.evaluateValueDetail(B4JsUtils.toIIFE(code2))
+            val result2 = driver.evaluateValueDetail(JsUtils.toIIFE(code2))
             printlnPro(result2)
             assertNotNull(result2)
             val exception = result2.exception
@@ -252,7 +252,7 @@ class PulsarWebDriverEvaluateJSTests : WebDriverTestBase() {
     fun testAlreadyInvokedIifeIsNotDoubleWrappedAndEvaluates() =
         runEnhancedWebDriverTest("$assetsBaseURL/dom.html", browser) { driver ->
             val iife = "(() => { return 3 })()"
-            val expression = B4JsUtils.toIIFE(iife)
+            val expression = JsUtils.toIIFE(iife)
             // should normalize with trailing semicolon
             assertTrue(expression.trim().endsWith(";"))
             val result = driver.evaluate(expression)
@@ -263,7 +263,7 @@ class PulsarWebDriverEvaluateJSTests : WebDriverTestBase() {
     fun testArrowFunctionWithArgumentsViaIife() =
         runEnhancedWebDriverTest("$assetsBaseURL/dom.html", browser) { driver ->
             val arrow = "x => x * 2"
-            val expression = B4JsUtils.toIIFE(arrow, "5")
+            val expression = JsUtils.toIIFE(arrow, "5")
             val result = driver.evaluate(expression)
             assertEquals(10, result)
         }
@@ -272,7 +272,7 @@ class PulsarWebDriverEvaluateJSTests : WebDriverTestBase() {
     fun testObjectLiteralIifeReturnsObjectByValue() =
         runEnhancedWebDriverTest("$assetsBaseURL/dom.html", browser) { driver ->
             val obj = "{ answer: 42, nested: { ok: true } }"
-            val expression = B4JsUtils.toIIFE(obj)
+            val expression = JsUtils.toIIFE(obj)
             val detail = driver.evaluateValueDetail(expression)
             assertNotNull(detail)
             assertNull(detail.exception)
@@ -290,11 +290,11 @@ class PulsarWebDriverEvaluateJSTests : WebDriverTestBase() {
     fun testPlainFunctionIifePassthrough() =
         runEnhancedWebDriverTest("$assetsBaseURL/dom.html", browser) { driver ->
             val funcIife = "(function(){ return 2 * 3 })()"
-            val expression = B4JsUtils.toIIFE(funcIife)
+            val expression = JsUtils.toIIFE(funcIife)
             var result = driver.evaluate(expression)
             assertEquals(6, result)
 
-            result = driver.evaluate(B4JsUtils.toExpression(funcIife))
+            result = driver.evaluate(JsUtils.toExpression(funcIife))
             assertEquals(6, result)
         }
 

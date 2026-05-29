@@ -2,10 +2,7 @@ package ai.platon.pulsar.browser
 
 import ai.platon.pulsar.WebDriverTestBase
 import ai.platon.pulsar.common.printlnPro
-import ai.platon.pulsar.protocol.browser.driver.cdt.PulsarWebDriver
-import ai.platon.pulsar.skeleton.browser.Browser
-import ai.platon.pulsar.skeleton.browser.driver.AbstractWebDriver
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
+import ai.platon.pulsar.core.api.WebDriver
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger
 import kotlinx.coroutines.runBlocking

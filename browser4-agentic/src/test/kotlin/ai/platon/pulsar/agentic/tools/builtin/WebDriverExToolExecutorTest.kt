@@ -1,15 +1,15 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
 import ai.platon.pulsar.agentic.model.ToolCall
-import ai.platon.pulsar.skeleton.browser.driver.AbstractWebDriver
+import ai.platon.pulsar.browser.AbstractWebDriver
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.DisplayName
+import org.junit.jupiter.api.Test
 
 class WebDriverExToolExecutorTest {
 

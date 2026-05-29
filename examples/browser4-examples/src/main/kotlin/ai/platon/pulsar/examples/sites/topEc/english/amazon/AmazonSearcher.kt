@@ -1,8 +1,8 @@
 package ai.platon.pulsar.examples.sites.topEc.english.amazon
 
+import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.dom.Documents
 import ai.platon.pulsar.persist.WebPage
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.context.PulsarContexts
 import ai.platon.pulsar.skeleton.event.WebPageWebDriverEventHandler
 

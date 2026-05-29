@@ -5,7 +5,6 @@ import ai.platon.browser4.chrome.dom.impl.AccessibilityHandler.AccessibilityTree
 import ai.platon.browser4.chrome.dom.impl.DomSnapshotHandler
 import ai.platon.browser4.chrome.dom.impl.DomTreeHandler
 import ai.platon.browser4.chrome.dom.impl.OptimizedDOMTreeBuilder
-import ai.platon.browser4.chrome.dom.model.*
 import ai.platon.browser4.chrome.dom.util.DomDebug
 import ai.platon.browser4.chrome.dom.util.HashUtils
 import ai.platon.browser4.chrome.dom.util.ScrollUtils
@@ -13,6 +12,7 @@ import ai.platon.browser4.chrome.dom.util.XPathUtils
 import ai.platon.cdt.kt.protocol.types.accessibility.AXNode
 import ai.platon.pulsar.browser.impl.BrowserProtocol
 import ai.platon.pulsar.chrome.dom.SnapshotService
+import ai.platon.pulsar.chrome.dom.model.*
 import ai.platon.pulsar.common.getLogger
 import java.awt.Dimension
 import java.util.*

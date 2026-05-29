@@ -1,16 +1,16 @@
 package ai.platon.pulsar
 
-import ai.platon.browser4.driver.chrome.dom.CDPSnapshotService
-import ai.platon.browser4.driver.chrome.dom.model.MergedDOMTreeNode
-import ai.platon.browser4.driver.chrome.dom.model.PageTarget
-import ai.platon.browser4.driver.chrome.dom.model.SnapshotOptions
-import ai.platon.browser4.driver.chrome.dom.util.DomDebug
-import ai.platon.browser4.driver.common.BrowserSettings
-import ai.platon.browser4.driver.common.SimpleScriptConfuser
+import ai.platon.browser4.chrome.dom.CDPSnapshotService
+import ai.platon.browser4.chrome.dom.util.DomDebug
+import ai.platon.pulsar.browser.BrowserId
+import ai.platon.pulsar.browser.common.BrowserSettings
+import ai.platon.pulsar.browser.common.SimpleScriptConfuser
+import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
+import ai.platon.pulsar.chrome.dom.model.PageTarget
+import ai.platon.pulsar.chrome.dom.model.SnapshotOptions
 import ai.platon.pulsar.common.printlnPro
-import ai.platon.pulsar.skeleton.browser.Browser
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
+import ai.platon.pulsar.core.api.Browser
+import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.util.server.EnableMockServerApplication
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.BeforeEach

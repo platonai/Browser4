@@ -2,7 +2,7 @@ package ai.platon.pulsar.agentic.skills.examples
 
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.skills.*
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
+import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import org.slf4j.LoggerFactory
 

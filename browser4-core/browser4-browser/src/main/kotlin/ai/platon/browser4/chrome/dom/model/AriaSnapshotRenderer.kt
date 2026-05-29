@@ -1,5 +1,8 @@
 package ai.platon.browser4.chrome.dom.model
 
+import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
+import ai.platon.pulsar.chrome.dom.model.NodeType
+import ai.platon.pulsar.chrome.dom.model.OptimizedDOMTreeNode
 import java.util.*
 
 object AriaSnapshotRenderer {

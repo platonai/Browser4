@@ -1,7 +1,7 @@
 package ai.platon.pulsar.browser.common
 
-import ai.platon.browser4.driver.common.InteractSettings
-import ai.platon.browser4.driver.common.DelayPreset
+import ai.platon.pulsar.browser.DelayPreset
+import ai.platon.pulsar.browser.InteractSettings
 import ai.platon.pulsar.common.browser.InteractLevel
 import ai.platon.pulsar.common.config.CapabilityTypes
 import ai.platon.pulsar.common.config.MutableConfig

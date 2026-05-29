@@ -2,10 +2,6 @@ package ai.platon.browser4.chrome.impl
 
 import ai.platon.browser4.chrome.IsolatedWorldManager
 import ai.platon.browser4.chrome.dom.CDPSnapshotService
-import ai.platon.browser4.chrome.dom.model.BrowserUseState
-import ai.platon.browser4.chrome.dom.model.ElementRefCriteria
-import ai.platon.browser4.chrome.dom.model.PageTarget
-import ai.platon.browser4.chrome.dom.model.SnapshotOptions
 import ai.platon.browser4.chrome.util.CDPReturnError
 import ai.platon.browser4.chrome.util.ChromeDriverException
 import ai.platon.browser4.chrome.util.ChromeRPCException
@@ -17,6 +13,10 @@ import ai.platon.pulsar.browser.common.Locator
 import ai.platon.pulsar.browser.impl.BrowserProtocol
 import ai.platon.pulsar.browser.impl.NodeRef
 import ai.platon.pulsar.chrome.dom.SnapshotService
+import ai.platon.pulsar.chrome.dom.model.BrowserUseState
+import ai.platon.pulsar.chrome.dom.model.ElementRefCriteria
+import ai.platon.pulsar.chrome.dom.model.PageTarget
+import ai.platon.pulsar.chrome.dom.model.SnapshotOptions
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.Strings
 import ai.platon.pulsar.common.brief
@@ -262,7 +262,11 @@ class PageHandler constructor(
             val nodeIds = if (searchResult.resultCount > 0) {
                 // Retrieve all matching nodes
                 val results =
-                    browserProtocol.getSearchResults(searchResult.searchId, fromIndex = 0, toIndex = searchResult.resultCount)
+                    browserProtocol.getSearchResults(
+                        searchResult.searchId,
+                        fromIndex = 0,
+                        toIndex = searchResult.resultCount
+                    )
                 // Clean up search results to avoid resource leak
                 try {
                     browserProtocol.discardSearchResults(searchResult.searchId)
