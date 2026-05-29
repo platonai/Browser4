@@ -45,6 +45,17 @@ open class BrowserSettings constructor(
          * */
         var SCRIPT_CONFUSER: ScriptConfuser = SimpleScriptConfuser()
 
+        var RANDOM_BROWSER_PROFILE_GENERATOR_CLASS_REFERENCE =
+            "ai.platon.pulsar.browser.privacy.RandomBrowserProfileGenerator"
+        var SEQUENTIAL_BROWSER_PROFILE_GENERATOR_CLASS_REFERENCE =
+            "ai.platon.pulsar.browser.privacy.SequentialBrowserProfileGenerator"
+        var PROTOTYPE_BROWSER_PROFILE_GENERATOR_CLASS_REFERENCE =
+            "ai.platon.pulsar.browser.privacy.PrototypeBrowserProfileGenerator"
+        var DEFAULT_BROWSER_PROFILE_GENERATOR_CLASS_REFERENCE =
+            "ai.platon.pulsar.browser.privacy.DefaultBrowserProfileGenerator"
+        var SYSTEM_DEFAULT_BROWSER_PROFILE_GENERATOR_CLASS_REFERENCE =
+            "ai.platon.pulsar.browser.privacy.SystemDefaultBrowserProfileGenerator"
+
         /**
          * Specify the browser type to fetch webpages.
          * */
@@ -64,7 +75,7 @@ open class BrowserSettings constructor(
 
         @JvmStatic
         fun overrideBrowserContextMode(sourceConf: ImmutableConfig, targetConf: MutableConfig? = null): Companion {
-            val modeString = sourceConf[BROWSER_CONTEXT_MODE]?.uppercase()
+            val modeString = sourceConf[BROWSER_PROFILE_MODE]?.uppercase()
             val browserType = sourceConf.getEnum(BROWSER_TYPE, BrowserType.DEFAULT)
             val mode = BrowserProfileMode.fromString(modeString)
             return withBrowserContextMode(mode, browserType, targetConf)
@@ -75,26 +86,34 @@ open class BrowserSettings constructor(
             withBrowserContextMode(contextMode, BrowserType.DEFAULT, conf)
 
         @JvmStatic
-        fun withBrowserContextMode(contextMode: BrowserProfileMode, browserType: BrowserType, conf: MutableConfig? = null): Companion {
+        fun withBrowserContextMode(
+            profileMode: BrowserProfileMode,
+            browserType: BrowserType,
+            conf: MutableConfig? = null
+        ): Companion {
             if (conf == null) {
-                System.setProperty(BROWSER_CONTEXT_MODE, contextMode.name)
+                System.setProperty(BROWSER_PROFILE_MODE, profileMode.name)
             } else {
-                conf[BROWSER_CONTEXT_MODE] = contextMode.name
+                conf[BROWSER_PROFILE_MODE] = profileMode.name
             }
 
-            when (contextMode) {
+            when (profileMode) {
                 BrowserProfileMode.SYSTEM_DEFAULT -> {
                     withSystemDefaultBrowserInternal(browserType, conf)
                 }
+
                 BrowserProfileMode.DEFAULT -> {
                     withDefaultBrowserInternal(browserType, conf)
                 }
+
                 BrowserProfileMode.PROTOTYPE -> {
                     withPrototypeBrowserInternal(browserType, conf)
                 }
+
                 BrowserProfileMode.TEMPORARY -> {
                     withTemporaryBrowserInternal(browserType, conf)
                 }
+
                 BrowserProfileMode.SEQUENTIAL -> {
                     withSequentialBrowsersInternal(browserType, 10, conf)
                 }
@@ -104,33 +123,33 @@ open class BrowserSettings constructor(
         }
 
         private fun withSystemDefaultBrowserInternal(browserType: BrowserType, conf: MutableConfig? = null): Companion {
-            val clazz = "ai.platon.pulsar.skeleton.workflow.fetch.privacy.SystemDefaultBrowserProfileGenerator"
+            val classReference = SYSTEM_DEFAULT_BROWSER_PROFILE_GENERATOR_CLASS_REFERENCE
             if (conf == null) {
-                System.setProperty(PRIVACY_AGENT_GENERATOR_CLASS, clazz)
+                System.setProperty(PRIVACY_AGENT_GENERATOR_CLASS, classReference)
             } else {
-                conf[PRIVACY_AGENT_GENERATOR_CLASS] = clazz
+                conf[PRIVACY_AGENT_GENERATOR_CLASS] = classReference
             }
             withBrowser(browserType, conf).maxBrowserContexts(1, conf).maxOpenTabs(50).withSPA(conf)
             return BrowserSettings
         }
 
         private fun withDefaultBrowserInternal(browserType: BrowserType, conf: MutableConfig? = null): Companion {
-            val clazz = "ai.platon.pulsar.skeleton.workflow.fetch.privacy.DefaultBrowserProfileGenerator"
+            val classReference = "ai.platon.pulsar.browser.privacy.DefaultBrowserProfileGenerator"
             if (conf == null) {
-                System.setProperty(PRIVACY_AGENT_GENERATOR_CLASS, clazz)
+                System.setProperty(PRIVACY_AGENT_GENERATOR_CLASS, classReference)
             } else {
-                conf[PRIVACY_AGENT_GENERATOR_CLASS] = clazz
+                conf[PRIVACY_AGENT_GENERATOR_CLASS] = classReference
             }
             withBrowser(browserType, conf).maxBrowserContexts(1, conf).maxOpenTabs(50).withSPA(conf)
             return BrowserSettings
         }
 
         private fun withPrototypeBrowserInternal(browserType: BrowserType, conf: MutableConfig? = null): Companion {
-            val clazz = "ai.platon.pulsar.skeleton.workflow.fetch.privacy.PrototypeBrowserProfileGenerator"
+            val classReference = PROTOTYPE_BROWSER_PROFILE_GENERATOR_CLASS_REFERENCE
             if (conf == null) {
-                System.setProperty(PRIVACY_AGENT_GENERATOR_CLASS, clazz)
+                System.setProperty(PRIVACY_AGENT_GENERATOR_CLASS, classReference)
             } else {
-                conf[PRIVACY_AGENT_GENERATOR_CLASS] = clazz
+                conf[PRIVACY_AGENT_GENERATOR_CLASS] = classReference
             }
             withBrowser(browserType, conf).maxBrowserContexts(1, conf).maxOpenTabs(50).withSPA(conf)
             return BrowserSettings
@@ -144,30 +163,34 @@ open class BrowserSettings constructor(
             return withSequentialBrowsersInternal(browserType, maxAgents, conf)
         }
 
-        private fun withSequentialBrowsersInternal(browserType: BrowserType, maxAgents: Int, conf: MutableConfig? = null): Companion {
+        private fun withSequentialBrowsersInternal(
+            browserType: BrowserType,
+            maxAgents: Int,
+            conf: MutableConfig? = null
+        ): Companion {
             withBrowser(browserType, conf)
             if (conf == null) {
-                System.setProperty(BROWSER_CONTEXT_MODE, "SEQUENTIAL")
+                System.setProperty(BROWSER_PROFILE_MODE, "SEQUENTIAL")
                 System.setProperty(MAX_SEQUENTIAL_PRIVACY_AGENT_NUMBER, "$maxAgents")
             } else {
-                conf[BROWSER_CONTEXT_MODE] = "SEQUENTIAL"
+                conf[BROWSER_PROFILE_MODE] = "SEQUENTIAL"
                 conf[MAX_SEQUENTIAL_PRIVACY_AGENT_NUMBER] = "$maxAgents"
             }
-            val clazz = "ai.platon.pulsar.skeleton.workflow.fetch.privacy.SequentialBrowserProfileGenerator"
+            val classReference = SEQUENTIAL_BROWSER_PROFILE_GENERATOR_CLASS_REFERENCE
             if (conf == null) {
-                System.setProperty(PRIVACY_AGENT_GENERATOR_CLASS, clazz)
+                System.setProperty(PRIVACY_AGENT_GENERATOR_CLASS, classReference)
             } else {
-                conf[PRIVACY_AGENT_GENERATOR_CLASS] = clazz
+                conf[PRIVACY_AGENT_GENERATOR_CLASS] = classReference
             }
             return BrowserSettings
         }
 
         private fun withTemporaryBrowserInternal(browserType: BrowserType, conf: MutableConfig? = null): Companion {
-            val clazz = "ai.platon.pulsar.skeleton.workflow.fetch.privacy.RandomBrowserProfileGenerator"
+            val classReference = RANDOM_BROWSER_PROFILE_GENERATOR_CLASS_REFERENCE
             if (conf == null) {
-                System.setProperty(PRIVACY_AGENT_GENERATOR_CLASS, clazz)
+                System.setProperty(PRIVACY_AGENT_GENERATOR_CLASS, classReference)
             } else {
-                conf[PRIVACY_AGENT_GENERATOR_CLASS] = clazz
+                conf[PRIVACY_AGENT_GENERATOR_CLASS] = classReference
             }
             withBrowser(browserType, conf)
             return BrowserSettings
@@ -238,7 +261,7 @@ open class BrowserSettings constructor(
             return BrowserSettings
         }
 
-        @Deprecated("Use maxBrowserContexts instead", ReplaceWith("BrowserSettings.maxBrowserContexts(n)" ))
+        @Deprecated("Use maxBrowserContexts instead", ReplaceWith("BrowserSettings.maxBrowserContexts(n)"))
         @JvmStatic
         fun maxBrowsers(n: Int, conf: MutableConfig? = null): Companion = maxBrowserContexts(n, conf)
 
@@ -265,6 +288,7 @@ open class BrowserSettings constructor(
 
             return BrowserSettings
         }
+
         /**
          * Set the max number to open tabs in each browser context
          * */
@@ -275,6 +299,7 @@ open class BrowserSettings constructor(
             System.setProperty(BROWSER_MAX_OPEN_TABS, "$n")
             return BrowserSettings
         }
+
         /**
          * Tell the system to work with single page application.
          * To collect SPA data, the execution needs to have no timeout limit.
@@ -292,6 +317,7 @@ open class BrowserSettings constructor(
             }
             return BrowserSettings
         }
+
         /**
          * Use the specified interact settings to interact with webpages.
          * */
@@ -304,6 +330,7 @@ open class BrowserSettings constructor(
 
             return BrowserSettings
         }
+
         /**
          * Enable url blocking. If url blocking is enabled and the blocking rules are set,
          * resources matching the rules will be blocked by the browser.
@@ -317,6 +344,7 @@ open class BrowserSettings constructor(
             }
             return BrowserSettings
         }
+
         /**
          * Enable url blocking with the given probability.
          * The probability must be in [0, 1].
@@ -331,6 +359,7 @@ open class BrowserSettings constructor(
             }
             return BrowserSettings
         }
+
         /**
          * Disable url blocking. If url blocking is disabled, blocking rules are ignored.
          * */
@@ -343,6 +372,7 @@ open class BrowserSettings constructor(
             }
             return BrowserSettings
         }
+
         /**
          * Block all images.
          * */
@@ -351,6 +381,7 @@ open class BrowserSettings constructor(
             enableUrlBlocking(conf)
             return BrowserSettings
         }
+
         /**
          * Enable user agent overriding.
          *
@@ -366,6 +397,7 @@ open class BrowserSettings constructor(
             }
             return BrowserSettings
         }
+
         /**
          * Disable user agent overriding.
          *
@@ -381,6 +413,7 @@ open class BrowserSettings constructor(
             }
             return BrowserSettings
         }
+
         /**
          * Export all pages automatically once they are fetched.
          *
@@ -399,6 +432,7 @@ open class BrowserSettings constructor(
             }
             return this
         }
+
         /**
          * Export at most [limit] pages once they are fetched.
          *
@@ -417,6 +451,7 @@ open class BrowserSettings constructor(
             }
             return this
         }
+
         /**
          * Disable original page content exporting.
          * */
@@ -430,6 +465,7 @@ open class BrowserSettings constructor(
             return this
         }
     }
+
     /**
      * The javascript to execute by Web browsers.
      * */
@@ -445,6 +481,7 @@ open class BrowserSettings constructor(
      * The supervisor process
      * */
     val supervisorProcess get() = config.get(BROWSER_LAUNCH_SUPERVISOR_PROCESS)
+
     /**
      * The supervisor process arguments
      * */
@@ -469,6 +506,7 @@ open class BrowserSettings constructor(
                 headless()
                 DisplayMode.HEADLESS
             }
+
             config[BROWSER_DISPLAY_MODE] != null -> config.getEnum(BROWSER_DISPLAY_MODE, DisplayMode.HEADLESS)
             else -> DisplayMode.GUI
         }
@@ -477,14 +515,17 @@ open class BrowserSettings constructor(
      * If true, the browser will run in supervised mode.
      * */
     val isSupervised get() = displayMode == DisplayMode.SUPERVISED
+
     /**
      * If true, the browser will run in headless mode.
      * */
     val isHeadless get() = displayMode == DisplayMode.HEADLESS
+
     /**
      * If true, the browser will run in GUI mode as normal.
      * */
     val isGUI get() = displayMode == DisplayMode.GUI
+
     /**
      * Check if it's SPA mode, SPA stands for Single Page Application.
      *
@@ -492,11 +533,13 @@ open class BrowserSettings constructor(
      * 1. execution of loads and fetches has no timeout limit, so we can interact with the page as long as we want.
      * */
     val isSPA get() = config.getBoolean(BROWSER_SPA_MODE, false)
+
     /**
      * The probability to block resource requests.
      * The probability must be in [0, 1].
      * */
     val resourceBlockProbability get() = config.getFloat(BROWSER_RESOURCE_BLOCK_PROBABILITY, 0.0f)
+
     /**
      * Check if user agent overriding is enabled. User agent overriding is disabled by default,
      * because inappropriate user agent overriding can be detected by the website,
@@ -523,14 +566,17 @@ open class BrowserSettings constructor(
      *     Page Loading Strategy</a>
      * */
     var pageLoadStrategy = "none"
+
     /**
      * The user agent to use.
      * */
     val userAgent = UserAgent()
+
     /**
      * The script confuser.
      * */
     val confuser = BrowserSettings.SCRIPT_CONFUSER
+
     /**
      * The script loader (legacy, single-world).
      * @deprecated Use dualWorldScriptLoader for dual-world architecture

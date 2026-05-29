@@ -3,7 +3,7 @@ package ai.platon.pulsar.skeleton.session
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.AppPaths.WEB_CACHE_DIR
 import ai.platon.pulsar.common.browser.BrowserProfileMode
-import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_CONTEXT_MODE
+import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_PROFILE_MODE
 import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.common.urls.PlainUrl
 import ai.platon.pulsar.common.urls.URLUtils
@@ -208,7 +208,7 @@ abstract class AbstractPulsarSession(
 
     override fun createBoundDriver(): WebDriver {
         synchronized(context) {
-            val mode = BrowserProfileMode.fromString(sessionConfig[BROWSER_CONTEXT_MODE])
+            val mode = BrowserProfileMode.fromString(sessionConfig[BROWSER_PROFILE_MODE])
             val driver = context.browserManager.launch(mode).newDriver()
             bindDriver(driver)
             return driver
