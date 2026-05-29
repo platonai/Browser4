@@ -1,4 +1,4 @@
-package ai.platon.browser4.driver.chrome.dom
+package ai.platon.browser4.chrome.dom
 
 import ai.platon.pulsar.WebDriverTestBase
 import ai.platon.pulsar.core.api.WebDriver

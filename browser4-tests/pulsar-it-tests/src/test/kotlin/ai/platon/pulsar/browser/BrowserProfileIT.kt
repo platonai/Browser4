@@ -1,13 +1,12 @@
 package ai.platon.pulsar.browser
 
 import ai.platon.pulsar.WebDriverTestBase
-import ai.platon.pulsar.common.browser.*
+import ai.platon.pulsar.common.browser.BrowserType
+import ai.platon.pulsar.common.browser.ProfileHealthMonitor
 import ai.platon.pulsar.common.browser.fingerprint.BasicFingerprintGenerator
 import ai.platon.pulsar.common.browser.fingerprint.Fingerprint
 import ai.platon.pulsar.common.browser.fingerprint.FingerprintDriftDetector
-import ai.platon.pulsar.common.browser.fingerprint.FingerprintGenerator
 import ai.platon.pulsar.common.browser.fingerprint.FingerprintValidator
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserProfile
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Disabled
 import org.junit.jupiter.api.DisplayName

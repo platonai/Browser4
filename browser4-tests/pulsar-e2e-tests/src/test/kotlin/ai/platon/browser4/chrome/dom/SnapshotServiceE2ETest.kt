@@ -1,11 +1,11 @@
-package ai.platon.browser4.driver.chrome.dom
+package ai.platon.browser4.chrome.dom
 
-import ai.platon.browser4.driver.chrome.dom.model.*
+import ai.platon.browser4.chrome.PulsarWebDriver
 import ai.platon.pulsar.WebDriverTestBase
+import ai.platon.pulsar.chrome.dom.model.*
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.serialize.json.Pson
 import ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper
-import ai.platon.pulsar.protocol.browser.driver.cdt.PulsarWebDriver
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName

@@ -1,8 +1,8 @@
 package ai.platon.browser4.driver.chrome
 
-import ai.platon.browser4.driver.chrome.ChromeLauncher
-import ai.platon.browser4.driver.chrome.common.ChromeOptions
-import ai.platon.browser4.driver.chrome.common.LauncherOptions
+import ai.platon.browser4.chrome.ChromeLauncher
+import ai.platon.browser4.chrome.util.ChromeOptions
+import ai.platon.browser4.chrome.util.LauncherOptions
 import ai.platon.pulsar.common.browser.BrowserFiles
 import ai.platon.pulsar.common.browser.BrowserFiles.CDP_URL_FILE_NAME
 import java.nio.file.Files

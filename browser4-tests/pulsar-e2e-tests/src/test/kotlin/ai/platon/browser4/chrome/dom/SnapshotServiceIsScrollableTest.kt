@@ -1,10 +1,10 @@
-package ai.platon.browser4.driver.chrome.dom
+package ai.platon.browser4.chrome.dom
 
-import ai.platon.browser4.driver.chrome.protocol.BrowserProtocol
-import ai.platon.browser4.driver.chrome.dom.model.ElementRefCriteria
-import ai.platon.browser4.driver.chrome.dom.model.SnapshotOptions
+import ai.platon.browser4.chrome.PulsarWebDriver
 import ai.platon.pulsar.WebDriverTestBase
-import ai.platon.pulsar.protocol.browser.driver.cdt.PulsarWebDriver
+import ai.platon.pulsar.browser.impl.BrowserProtocol
+import ai.platon.pulsar.chrome.dom.model.ElementRefCriteria
+import ai.platon.pulsar.chrome.dom.model.SnapshotOptions
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test

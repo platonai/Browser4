@@ -1,8 +1,8 @@
-package ai.platon.browser4.driver.chrome.dom
+package ai.platon.browser4.chrome.dom
 
-import ai.platon.browser4.driver.common.ScriptLoader
 import ai.platon.pulsar.FastWebDriverService
 import ai.platon.pulsar.WebDriverTestBase
+import ai.platon.pulsar.browser.common.ScriptLoader
 import ai.platon.pulsar.common.Strings
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.printlnPro

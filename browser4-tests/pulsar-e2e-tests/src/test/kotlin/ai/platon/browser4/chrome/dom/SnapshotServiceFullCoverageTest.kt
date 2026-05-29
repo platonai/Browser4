@@ -1,15 +1,14 @@
-package ai.platon.browser4.driver.chrome.dom
+package ai.platon.browser4.chrome.dom
 
-import ai.platon.browser4.driver.chrome.dom.model.ElementRefCriteria
-import ai.platon.browser4.driver.chrome.dom.model.MergedDOMTreeNode
-import ai.platon.browser4.driver.chrome.dom.model.PageTarget
-import ai.platon.browser4.driver.chrome.dom.model.SnapshotOptions
-import ai.platon.browser4.driver.chrome.dom.util.DomDebug
+import ai.platon.browser4.chrome.PulsarWebDriver
+import ai.platon.browser4.chrome.dom.util.DomDebug
 import ai.platon.pulsar.WebDriverTestBase
+import ai.platon.pulsar.chrome.dom.model.ElementRefCriteria
+import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
+import ai.platon.pulsar.chrome.dom.model.PageTarget
+import ai.platon.pulsar.chrome.dom.model.SnapshotOptions
 import ai.platon.pulsar.common.printlnPro
-import ai.platon.pulsar.protocol.browser.driver.cdt.PulsarWebDriver
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertNotNull
@@ -18,7 +17,6 @@ import java.nio.file.Paths
 import kotlin.io.path.createDirectories
 import kotlin.math.abs
 import kotlin.test.assertIs
-import kotlin.test.assertTrue
 
 class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
     private val testURL = interactiveDynamicURL
@@ -357,7 +355,7 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
 
     @Test
     @DisplayName("SnapshotNodeEx bounds and rects are populated correctly")
-    fun snapshotnodeexBoundsAndRectsArePopulatedCorrectly() = runEnhancedWebDriverTest(testURL) { driver ->
+    fun snapshotNodeExBoundsAndRectsArePopulatedCorrectly() = runEnhancedWebDriverTest(testURL) { driver ->
         assertIs<PulsarWebDriver>(driver)
         val service = CDPSnapshotService(driver.browserProtocol)
 
@@ -403,16 +401,16 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
         // Test clientRects property
         val clientRects = bodySnapshot.clientRects
         if (clientRects != null) {
-            assertTrue(clientRects.width >= 0, "Expected clientRects width to be non-negative")
-            assertTrue(clientRects.height >= 0, "Expected clientRects height to be non-negative")
+            assertTrue(clientRects.width > 0, "Expected clientRects width to be non-negative")
+            assertTrue(clientRects.height > 0, "Expected clientRects height to be non-negative")
             printlnPro("Body clientRects: x=${clientRects.x}, y=${clientRects.y}, width=${clientRects.width}, height=${clientRects.height}")
         }
 
         // Test scrollRects property
         val scrollRects = bodySnapshot.scrollRects
         if (scrollRects != null) {
-            assertTrue(scrollRects.width >= 0, "Expected scrollRects width to be non-negative")
-            assertTrue(scrollRects.height >= 0, "Expected scrollRects height to be non-negative")
+            assertTrue(scrollRects.width > 0, "Expected scrollRects width to be non-negative")
+            assertTrue(scrollRects.height > 0, "Expected scrollRects height to be non-negative")
             printlnPro("Body scrollRects: x=${scrollRects.x}, y=${scrollRects.y}, width=${scrollRects.width}, height=${scrollRects.height}")
         }
     }
@@ -475,18 +473,18 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
 
         // 1) Basic sanity on raw fields
         buttonSnapshot.bounds?.let { bounds ->
-            assertTrue(bounds.width >= 0, "Expected button bounds width to be non-negative")
-            assertTrue(bounds.height >= 0, "Expected button bounds height to be non-negative")
+            assertTrue(bounds.width > 0, "Expected button bounds width to be non-negative")
+            assertTrue(bounds.height > 0, "Expected button bounds height to be non-negative")
             printlnPro("Button bounds(raw from BrowserProtocol): x=${bounds.x}, y=${bounds.y}, width=${bounds.width}, height=${bounds.height}")
         }
         buttonSnapshot.absoluteBounds?.let { ab ->
-            assertTrue(ab.width >= 0)
-            assertTrue(ab.height >= 0)
+            assertTrue(ab.width > 0)
+            assertTrue(ab.height > 0)
             printlnPro("Button absoluteBounds(calculated): x=${ab.x}, y=${ab.y}, width=${ab.width}, height=${ab.height}")
         }
         buttonSnapshot.clientRects?.let { cr ->
-            assertTrue(cr.width >= 0)
-            assertTrue(cr.height >= 0)
+            assertTrue(cr.width > 0)
+            assertTrue(cr.height > 0)
             printlnPro("Button clientRects: x=${cr.x}, y=${cr.y}, width=${cr.width}, height=${cr.height}")
         }
 
@@ -628,8 +626,8 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
         // Test scrollRects - should be present for scrollable elements
         assertNotNull(snapshot.scrollRects, "Expected scroll container to have scrollRects")
         val scrollRects = snapshot.scrollRects!!
-        assertTrue(scrollRects.width >= 0, "Expected scroll container scrollRects width to be non-negative")
-        assertTrue(scrollRects.height >= 0, "Expected scroll container scrollRects height to be non-negative")
+        assertTrue(scrollRects.width > 0, "Expected scroll container scrollRects width to be non-negative")
+        assertTrue(scrollRects.height > 0, "Expected scroll container scrollRects height to be non-negative")
         printlnPro("ScrollContainer scrollRects: x=${scrollRects.x}, y=${scrollRects.y}, width=${scrollRects.width}, height=${scrollRects.height}")
 
         // ScrollRects height should typically be larger than bounds height for scrollable content
@@ -639,8 +637,8 @@ class SnapshotServiceFullCoverageTest : WebDriverTestBase() {
         // Test clientRects
         requireNotNull(snapshot.clientRects)
         val clientRects = snapshot.clientRects!!
-        assertTrue(clientRects.width >= 0, "Expected scroll container clientRects width to be non-negative")
-        assertTrue(clientRects.height >= 0, "Expected scroll container clientRects height to be non-negative")
+        assertTrue(clientRects.width > 0, "Expected scroll container clientRects width to be non-negative")
+        assertTrue(clientRects.height > 0, "Expected scroll container clientRects height to be non-negative")
         printlnPro("ScrollContainer clientRects: x=${clientRects.x}, y=${clientRects.y}, width=${clientRects.width}, height=${clientRects.height}")
     }
 }
