@@ -60,8 +60,8 @@ class DOMHandler(
         return resolveLocatorAll(locator)
     }
 
-    fun normalizeLocator(locator: String, escapeJs: Boolean = false): LocatorAndCssSelector? {
-        return if (escapeJs) {
+    fun normalizeLocator(locator: String, jsEscape: Boolean = false): LocatorAndCssSelector? {
+        return if (jsEscape) {
             normalizeLocatorForJs(locator)
         } else normalizeLocatorForNonJs(locator)
     }

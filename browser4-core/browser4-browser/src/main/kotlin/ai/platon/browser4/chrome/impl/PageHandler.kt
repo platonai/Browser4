@@ -8,7 +8,7 @@ import ai.platon.cdt.kt.protocol.types.dom.Rect
 import ai.platon.cdt.kt.protocol.types.page.Navigate
 import ai.platon.cdt.kt.protocol.types.page.ReferrerPolicy
 import ai.platon.cdt.kt.protocol.types.page.TransitionType
-import ai.platon.pulsar.browser.common.Locator
+import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.pulsar.browser.impl.BrowserProtocol
 import ai.platon.pulsar.browser.impl.NodeRef
 import ai.platon.pulsar.chrome.dom.SnapshotService
@@ -21,7 +21,7 @@ import ai.platon.pulsar.common.getLogger
 
 class PageHandler constructor(
     private val browserProtocol: BrowserProtocol,
-    private val isolatedWorldManager: IsolatedWorldManager,
+    private val settings: BrowserSettings,
 ) {
     companion object {
         // see org.w3c.dom.Node.ELEMENT_NODE
@@ -35,6 +35,8 @@ class PageHandler constructor(
     private val isActive get() = AppContext.isActive && chromeProtocol.isOpen
 
     private var lastBrowserUseState: BrowserUseState? = null
+
+    val isolatedWorldManager = IsolatedWorldManager(browserProtocol, settings)
 
     val snapshot: SnapshotService by lazy { CDPSnapshotService(browserProtocol) }
     val js: JsHandler = JsHandler(browserProtocol, this, isolatedWorldManager)

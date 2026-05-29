@@ -10,7 +10,7 @@ import ai.platon.pulsar.common.js.JsUtils
 
 class JsHandler(
     private val bp: BrowserProtocol,
-    private val pageHandler: PageHandler,
+    private val page: PageHandler,
     private val isolatedWorldManager: IsolatedWorldManager,
 ) {
     private val logger = getLogger(this)
@@ -49,7 +49,7 @@ class JsHandler(
 
     @Throws(ChromeDriverException::class)
     suspend fun callFunctionOn(selector: String, functionDeclaration: String): CallFunctionOn? {
-        val node = pageHandler.queryLocator(selector) ?: return null
+        val node = page.dom.queryLocator(selector) ?: return null
         val resolved = resolveNodeObjectId(bp, node) ?: return null
         return try {
             bp.callFunctionOn(functionDeclaration, objectId = resolved.objectId, returnByValue = true)
