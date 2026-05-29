@@ -1,9 +1,9 @@
 package ai.platon.pulsar.agentic.context
 
+import ai.platon.browser4.common.B4Constants
 import ai.platon.pulsar.agentic.AgenticQLSession
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.BasicAgenticSession
-import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.config.CapabilityTypes
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.ql.SQLSession
@@ -48,7 +48,8 @@ abstract class AbstractAgenticContext(
         return session.also { sessions[it.id] = it }
     }
 
-    override fun getOrCreateSession(): AgenticSession = sessions.values.filterIsInstance<AgenticSession>().firstOrNull() ?: createSession()
+    override fun getOrCreateSession(): AgenticSession =
+        sessions.values.filterIsInstance<AgenticSession>().firstOrNull() ?: createSession()
 
     override fun getOrCreateSession(settings: PulsarSettings): AgenticSession {
         // TODO: consider changed settings, for example, REST-level sessionId requires associated PulsarSession
@@ -78,6 +79,6 @@ open class ClassPathXmlAgenticContext(configLocation: String) :
 open class DefaultClassPathXmlAgenticContext() : ClassPathXmlAgenticContext(
     System.getProperty(
         CapabilityTypes.APPLICATION_CONTEXT_CONFIG_LOCATION,
-        AppConstants.AGENTIC_CONTEXT_CONFIG_LOCATION
+        B4Constants.BROWSER4_CONTEXT_CONFIG_LOCATION
     )
 )

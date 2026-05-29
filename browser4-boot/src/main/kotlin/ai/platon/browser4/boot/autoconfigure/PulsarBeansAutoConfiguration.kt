@@ -38,13 +38,13 @@ import ai.platon.pulsar.skeleton.workflow.parse.html.PrimerHtmlParser
 import ai.platon.pulsar.skeleton.workflow.protocol.ProtocolFactory
 import ai.platon.pulsar.skeleton.workflow.schedule.DefaultFetchSchedule
 import ai.platon.pulsar.tools.TikaParser
+import org.springframework.boot.autoconfigure.AutoConfiguration
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.context.annotation.Bean
-import org.springframework.context.annotation.Configuration
 import org.springframework.context.annotation.Lazy
 import org.springframework.core.env.Environment
 
-@Configuration(proxyBeanMethods = false)
+@AutoConfiguration
 @Lazy
 class PulsarBeansAutoConfiguration {
     @Bean(name = ["conf"])

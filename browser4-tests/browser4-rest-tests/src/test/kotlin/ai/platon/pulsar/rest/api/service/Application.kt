@@ -3,7 +3,6 @@ package ai.platon.pulsar.rest.api.service
 import ai.platon.browser4.boot.autoconfigure.test.PulsarTestContextInitializer
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.context.annotation.ComponentScan
-import org.springframework.context.annotation.ImportResource
 import org.springframework.test.context.ContextConfiguration
 
 @SpringBootApplication
@@ -12,5 +11,4 @@ import org.springframework.test.context.ContextConfiguration
     "ai.platon.pulsar.rest.api",
     "ai.platon.pulsar.rest.mcp",
 ])
-@ImportResource("classpath:rest-beans/app-context.xml")
 class ServiceApplication
