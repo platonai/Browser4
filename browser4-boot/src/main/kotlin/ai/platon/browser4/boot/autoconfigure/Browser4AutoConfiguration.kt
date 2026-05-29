@@ -41,12 +41,14 @@ import ai.platon.pulsar.tools.TikaParser
 import org.springframework.boot.autoconfigure.AutoConfiguration
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.context.annotation.Bean
+import org.springframework.context.annotation.Import
 import org.springframework.context.annotation.Lazy
 import org.springframework.core.env.Environment
 
 @AutoConfiguration
+@Import(PulsarContextConfiguration::class)
 @Lazy
-class PulsarBeansAutoConfiguration {
+class Browser4AutoConfiguration {
     @Bean(name = ["conf"])
     @ConditionalOnMissingBean(name = ["conf"])
     fun conf(environment: Environment): MutableConfig {
