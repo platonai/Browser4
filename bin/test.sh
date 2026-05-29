@@ -29,6 +29,7 @@ print_usage() {
   echo "  rest        Run REST module tests"
   echo "  skills      Run skills-focused agentic tests"
   echo "  mcp         Run MCP-focused agentic tests"
+  echo "  resume      Resume from the last failed module (-rf)"
   echo "  browser4    Run all Browser4 main tests (fast, rest, it, e2e)"
   echo "  b4          Alias for browser4"
   echo ""
@@ -41,6 +42,7 @@ print_usage() {
   echo "  test.sh mocksite -Dmock.site.port=18080"
   echo "  test.sh skills                     # Run skills-focused agentic tests"
   echo "  test.sh mcp                        # Run MCP-focused agentic tests"
+  echo "  test.sh resume                     # Resume from the last failed module"
   echo "  test.sh browser4                   # Run all Browser4 main tests"
   echo "  test.sh b4                         # Alias for browser4"
   echo "  test.sh it -pl browser4-core       # Pass additional Maven args through"
@@ -49,7 +51,7 @@ print_usage() {
 
 exit_unknown_test_type() {
   local test_type=$1
-  echo "Error: Unknown test type '$test_type'. Valid test types: fast, it, e2e, cli, mocksite, rest, skills, mcp, browser4, b4." >&2
+  echo "Error: Unknown test type '$test_type'. Valid test types: fast, it, e2e, cli, mocksite, rest, skills, mcp, resume, browser4, b4." >&2
   exit 1
 }
 
@@ -228,7 +230,128 @@ run_mocksiteboot() {
   fi
 }
 
-KnownTestTypes=(fast it e2e cli browser4-cli mocksite rest skills mcp browser4 b4)
+# Read the parent POM's <modules> section to get the reactor build order.
+# Modules are listed in the order they appear in <modules> (i.e. reactor order).
+get_reactor_module_order() {
+  local parent_pom="$repo_root/pom.xml"
+  local -a order=()
+  local in_modules=false
+
+  while IFS= read -r line; do
+    if [[ "$line" =~ \<modules\> ]]; then
+      in_modules=true
+      continue
+    fi
+    if [[ "$line" =~ \</modules\> ]]; then
+      break
+    fi
+    if [[ "$in_modules" == "true" ]]; then
+      if [[ "$line" =~ \<module\>(.+)\</module\> ]]; then
+        order+=("${BASH_REMATCH[1]}")
+      fi
+    fi
+  done < "$parent_pom"
+
+  printf '%s\n' "${order[@]}"
+}
+
+# Find the artifactId for a module directory by reading its pom.xml.
+# Skips the <parent> block to return the module's own artifactId.
+get_artifact_id_for_dir() {
+  local module_dir="$1"
+  local pom="$module_dir/pom.xml"
+  if [[ -f "$pom" ]]; then
+    local in_parent=false
+    while IFS= read -r line; do
+      if [[ "$line" =~ \<parent\> ]]; then
+        in_parent=true
+      elif [[ "$line" =~ \</parent\> ]]; then
+        in_parent=false
+      elif [[ "$in_parent" == "false" && "$line" =~ \<artifactId\>(.+)\</artifactId\> ]]; then
+        echo "${BASH_REMATCH[1]}"
+        return
+      fi
+    done < "$pom"
+  fi
+}
+
+run_resume_tests() {
+  echo "=========================================="
+  echo "Searching for failed modules to resume from..."
+  echo "=========================================="
+
+  # Collect all module directories that have failing test reports.
+  local -a failed_module_dirs=()
+  while IFS= read -r -d '' reports_dir; do
+    if grep -rq '<failure\|<error' "$reports_dir"/*.xml 2>/dev/null; then
+      # reports_dir is e.g. <repo>/browser4-core/target/surefire-reports
+      local parent_dir
+      parent_dir=$(dirname $(dirname "$reports_dir"))
+      failed_module_dirs+=("$parent_dir")
+    fi
+  done < <(find "$repo_root" -path "*/target/surefire-reports" -type d -print0 2>/dev/null)
+
+  if [[ ${#failed_module_dirs[@]} -eq 0 ]]; then
+    echo "No previous test failures found to resume from."
+    exit 0
+  fi
+
+  # Build a map: artifactId -> module directory
+  declare -A artifact_to_dir
+  for dir in "${failed_module_dirs[@]}"; do
+    local aid
+    aid=$(get_artifact_id_for_dir "$dir")
+    if [[ -n "$aid" ]]; then
+      artifact_to_dir["$aid"]="$dir"
+    fi
+  done
+
+  # Walk the reactor order from the parent POM to find the first failed module.
+  local resume_from=""
+  local -a reactor_order
+  mapfile -t reactor_order < <(get_reactor_module_order)
+
+  for module_path in "${reactor_order[@]}"; do
+    # module_path is a directory name (e.g. "browser4-core"). Resolve to full path.
+    local module_pom="$repo_root/$module_path/pom.xml"
+    if [[ -f "$module_pom" ]]; then
+      local aid
+      aid=$(get_artifact_id_for_dir "$repo_root/$module_path")
+      if [[ -n "$aid" && -n "${artifact_to_dir["$aid"]}" ]]; then
+        resume_from="$aid"
+        break
+      fi
+    fi
+  done
+
+  if [[ -z "$resume_from" ]]; then
+    echo "Could not match any failed module to the reactor order."
+    exit 1
+  fi
+
+  echo "Resuming from module: $resume_from"
+  echo ""
+
+  local -a mvn_test_args=("test" "-P=-examples" "-rf" ":$resume_from")
+  mvn_test_args+=("${AdditionalMvnArgs[@]}")
+
+  ./mvnw "${mvn_test_args[@]}"
+  local exit_code=$?
+  if [[ $exit_code -ne 0 ]]; then
+    echo ""
+    echo "=========================================="
+    echo "❌ Tests failed with exit code $exit_code"
+    echo "=========================================="
+    exit $exit_code
+  fi
+
+  echo ""
+  echo "=========================================="
+  echo "✅ Resume tests completed successfully"
+  echo "=========================================="
+}
+
+KnownTestTypes=(fast it e2e cli browser4-cli mocksite rest skills mcp resume browser4 b4)
 TestTypes=()
 MavenTests=()
 CLITests=()
@@ -245,7 +368,7 @@ while [[ $# -gt 0 ]]; do
     -h|-help|--help)
       print_usage
       ;;
-    fast|it|e2e|cli|browser4-cli|mocksite|rest|skills|mcp|browser4|b4)
+    fast|it|e2e|cli|browser4-cli|mocksite|rest|skills|mcp|browser4|b4|resume)
       if [[ "$ParsingTestTypes" == "true" ]]; then
         TestTypes+=("$1")
       else
@@ -265,6 +388,16 @@ done
 
 if [[ ${#TestTypes[@]} -eq 0 ]]; then
   TestTypes=(fast)
+fi
+
+# Handle 'resume' test type: find last failed module and resume with -rf
+if [[ " ${TestTypes[*]} " == *" resume "* ]]; then
+  if [[ ${#TestTypes[@]} -gt 1 ]]; then
+    echo "Error: 'resume' must be the only test type. It resumes from the last failed module." >&2
+    exit 1
+  fi
+  run_resume_tests
+  exit 0
 fi
 
 for type in "${TestTypes[@]}"; do
