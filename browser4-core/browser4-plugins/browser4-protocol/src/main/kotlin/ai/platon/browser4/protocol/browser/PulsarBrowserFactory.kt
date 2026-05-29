@@ -1,12 +1,12 @@
 package ai.platon.browser4.protocol.browser
 
+import ai.platon.browser4.chrome.util.ChromeOptions
+import ai.platon.browser4.chrome.util.LauncherOptions
 import ai.platon.browser4.protocol.browser.impl.AbstractBrowserFactory
 import ai.platon.browser4.protocol.browser.impl.PulsarBrowserLauncher
 import ai.platon.pulsar.browser.BrowserId
 import ai.platon.pulsar.browser.common.BrowserLaunchException
 import ai.platon.pulsar.browser.common.BrowserSettings
-import ai.platon.pulsar.chrome.util.ChromeOptions
-import ai.platon.pulsar.chrome.util.LauncherOptions
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.core.api.Browser

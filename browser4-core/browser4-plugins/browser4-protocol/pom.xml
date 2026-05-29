@@ -24,11 +24,11 @@
     <dependencies>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>browser4-skeleton</artifactId>
+            <artifactId>browser4-browser</artifactId>
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-protocol</artifactId>
+            <artifactId>browser4-skeleton</artifactId>
         </dependency>
 
         <dependency>
