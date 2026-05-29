@@ -12,6 +12,7 @@ import ai.platon.browser4.chrome.dom.util.ScrollUtils
 import ai.platon.browser4.chrome.dom.util.XPathUtils
 import ai.platon.cdt.kt.protocol.types.accessibility.AXNode
 import ai.platon.pulsar.browser.impl.BrowserProtocol
+import ai.platon.pulsar.chrome.dom.SnapshotService
 import ai.platon.pulsar.common.getLogger
 import java.awt.Dimension
 import java.util.*

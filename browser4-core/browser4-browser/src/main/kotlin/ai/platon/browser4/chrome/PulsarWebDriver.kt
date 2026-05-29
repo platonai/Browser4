@@ -1,8 +1,7 @@
 package ai.platon.browser4.chrome
 
 import ai.platon.browser4.chrome.detail.*
-import ai.platon.browser4.chrome.dom.SnapshotService
-import ai.platon.browser4.chrome.dom.model.*
+import ai.platon.browser4.chrome.dom.model.ViewportSpec
 import ai.platon.browser4.chrome.impl.*
 import ai.platon.browser4.chrome.util.ChromeDriverException
 import ai.platon.browser4.chrome.util.ChromeIOException
@@ -24,6 +23,11 @@ import ai.platon.pulsar.browser.impl.BrowserProtocol
 import ai.platon.pulsar.browser.impl.BrowserTab
 import ai.platon.pulsar.browser.impl.NetworkResourceResponse
 import ai.platon.pulsar.browser.impl.NodeRef
+import ai.platon.pulsar.chrome.dom.SnapshotService
+import ai.platon.pulsar.chrome.dom.model.BrowserUseState
+import ai.platon.pulsar.chrome.dom.model.NanoDOMTree
+import ai.platon.pulsar.chrome.dom.model.PageTarget
+import ai.platon.pulsar.chrome.dom.model.SnapshotOptions
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.math.geometric.OffsetD

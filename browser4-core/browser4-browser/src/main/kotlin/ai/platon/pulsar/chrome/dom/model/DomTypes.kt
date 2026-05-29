@@ -1,4 +1,4 @@
-package ai.platon.browser4.chrome.dom.model
+package ai.platon.pulsar.chrome.dom.model
 
 /**
  * Marker for target and session details.

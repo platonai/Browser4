@@ -2,7 +2,6 @@ package ai.platon.browser4.chrome.impl
 
 import ai.platon.browser4.chrome.IsolatedWorldManager
 import ai.platon.browser4.chrome.dom.CDPSnapshotService
-import ai.platon.browser4.chrome.dom.SnapshotService
 import ai.platon.browser4.chrome.dom.model.BrowserUseState
 import ai.platon.browser4.chrome.dom.model.ElementRefCriteria
 import ai.platon.browser4.chrome.dom.model.PageTarget
@@ -17,6 +16,7 @@ import ai.platon.cdt.kt.protocol.types.page.TransitionType
 import ai.platon.pulsar.browser.common.Locator
 import ai.platon.pulsar.browser.impl.BrowserProtocol
 import ai.platon.pulsar.browser.impl.NodeRef
+import ai.platon.pulsar.chrome.dom.SnapshotService
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.Strings
 import ai.platon.pulsar.common.brief
