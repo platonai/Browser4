@@ -1,9 +1,6 @@
 package ai.platon.pulsar.browser
 
 import ai.platon.pulsar.chrome.dom.model.BrowserUseState
-import ai.platon.pulsar.chrome.dom.model.NanoDOMTree
-import ai.platon.pulsar.chrome.dom.model.PageTarget
-import ai.platon.pulsar.chrome.dom.model.SnapshotOptions
 import ai.platon.pulsar.browser.common.JsEvaluation
 import ai.platon.pulsar.browser.common.NavigateEntry
 import ai.platon.pulsar.browser.common.NavigateHistory
@@ -470,7 +467,7 @@ interface WebDriver : Closeable {
     suspend fun browserUseState(
         target: ai.platon.pulsar.chrome.dom.model.PageTarget = _root_ide_package_.ai.platon.pulsar.chrome.dom.model.PageTarget(),
         snapshotOptions: ai.platon.pulsar.chrome.dom.model.SnapshotOptions = _root_ide_package_.ai.platon.pulsar.chrome.dom.model.SnapshotOptions()
-    ): ai.platon.pulsar.chrome.dom.model.BrowserUseState
+    ): BrowserUseState
 
     /**
      * Interact with an AI model using the context of the element selected by [selector]. @mcp

@@ -7,7 +7,6 @@ import ai.platon.pulsar.chrome.dom.model.InteractiveDOMTreeNodeList
 import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
 import ai.platon.pulsar.chrome.dom.model.PageTarget
 import ai.platon.pulsar.chrome.dom.model.SnapshotOptions
-import ai.platon.pulsar.chrome.dom.model.*
 
 /**
  * Kotlin-native snapshot service interface.
