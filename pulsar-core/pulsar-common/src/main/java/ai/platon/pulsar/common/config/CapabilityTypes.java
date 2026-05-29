@@ -118,7 +118,7 @@ public interface CapabilityTypes {
      * @deprecated Use {@code BROWSER_PROFILE_MODE} instead
      */
     @Deprecated
-    String BROWSER_CONTEXT_MODE = "browser.context.mode";
+    String BROWSER_CONTEXT_MODE = "browser.profile.mode";
     /**
      * The mode of browser profile, case-insensitive.
      * default, system_default, prototype, sequential, temporary

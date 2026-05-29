@@ -12,7 +12,7 @@ import kotlin.test.Test
 class BrowserProfileGeneratorFactoryTest {
     @Test
     fun testOverrideBrowserContextMode() {
-        System.setProperty("browser.context.mode", "prototype")
+        System.setProperty("browser.profile.mode", "prototype")
 
         val conf = ImmutableConfig()
         val factory = BrowserProfileGeneratorFactory(conf)
@@ -44,7 +44,7 @@ class BrowserProfileGeneratorFactoryTest {
         val factory = BrowserProfileGeneratorFactory(conf)
 
         for ((modeValue, expectedClass) in BROWSER_CONTEXT_MODE_TO_AGENTS.entries) {
-            System.setProperty("browser.context.mode", modeValue.name)
+            System.setProperty("browser.profile.mode", modeValue.name)
 
             val generator = factory.generator
             assertTrue(generator::class.java.isAssignableFrom(expectedClass.java)) {
