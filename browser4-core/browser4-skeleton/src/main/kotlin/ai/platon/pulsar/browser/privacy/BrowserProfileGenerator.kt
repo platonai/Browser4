@@ -91,4 +91,3 @@ open class RandomBrowserProfileGenerator : BrowserProfileGenerator {
     override fun invoke(fingerprint: Fingerprint): BrowserProfile =
         BrowserProfile(BrowserFiles.computeRandomTmpContextDir(), fingerprint)
 }
-

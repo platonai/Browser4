@@ -21,14 +21,14 @@ A sample `application.properties` is located at the project root. For privacy, r
 #### For desktop usage:
 
 ```properties
-# browser.context.mode=SYSTEM_DEFAULT # Optional: use your system's default browser profile
+# browser.profile.mode=SYSTEM_DEFAULT # Optional: use your system's default browser profile
 openrouter.api.key=
 ```
 
 #### [**Advanced**] For high-performance, parallel crawling:
 ```properties
 proxy.rotation.url=https://your-proxy-provider.com/rotation-endpoint
-browser.context.mode=SEQUENTIAL
+browser.profile.mode=SEQUENTIAL
 browser.context.number=2
 browser.max.active.tabs=8
 browser.display.mode=HEADLESS
@@ -136,7 +136,7 @@ docker run -d -p 8182:8182 `
 * **`openrouter.api.key`**
   Your OpenRouter API key. Check [LLM Configuration Guide](../docs/config/llm/llm-config.md) for more LLM providers.
 
-- **`browser.context.mode`** (`DEFAULT` | `SYSTEM_DEFAULT` | `PROTOTYPE` | `SEQUENTIAL` | `TEMPORARY`)
+- **`browser.profile.mode`** (`DEFAULT` | `SYSTEM_DEFAULT` | `PROTOTYPE` | `SEQUENTIAL` | `TEMPORARY`)
   Defines how the user data directory is assigned for each browser instance.
 
   - `DEFAULT`: Uses the default Browser4-managed user data directory.
@@ -171,7 +171,7 @@ docker run -d -p 8182:8182 `
     * `HEADLESS`: Runs without a graphical window.
     * `SUPERVISED`: Linux-only; uses Xvfb for headless GUI simulation.
 
-### 📦 `browser.context.mode` Comparison Table
+### 📦 `browser.profile.mode` Comparison Table
 
 | Mode           | Description                                                                 | User Data Directory Behavior                             | Use Case            |
 |----------------|-----------------------------------------------------------------------------|-----------------------------------------------------------|---------------------|

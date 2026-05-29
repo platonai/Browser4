@@ -219,7 +219,7 @@ Default: 8182
 openrouter.api.key=your-api-key
 
 # Browser context mode
-browser.context.mode=DEFAULT  # DEFAULT | SYSTEM_DEFAULT | SEQUENTIAL | TEMPORARY
+browser.profile.mode=DEFAULT  # DEFAULT | SYSTEM_DEFAULT | SEQUENTIAL | TEMPORARY
 
 # Display mode
 browser.display.mode=GUI  # GUI | HEADLESS | SUPERVISED

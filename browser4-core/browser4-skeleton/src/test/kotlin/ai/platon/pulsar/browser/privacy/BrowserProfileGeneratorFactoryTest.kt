@@ -5,15 +5,17 @@ import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.skeleton.PulsarSettings
 import org.junit.jupiter.api.Assertions
 import kotlin.test.Test
+import kotlin.test.assertEquals
 
 class BrowserProfileGeneratorFactoryTest {
     @Test
     fun testOverrideBrowserContextMode() {
-        System.setProperty("browser.context.mode", "prototype")
+        System.setProperty("browser.profile.mode", "prototype")
 
         val conf = ImmutableConfig()
         val factory = BrowserProfileGeneratorFactory(conf)
         val generator = factory.generator
+        assertEquals(PrototypeBrowserProfileGenerator::class, generator::class)
         Assertions.assertTrue(generator is PrototypeBrowserProfileGenerator)
 
         // cached
@@ -33,6 +35,7 @@ class BrowserProfileGeneratorFactoryTest {
         PulsarSettings.withSystemDefaultBrowser()
 
         val generator = factory.generator
+        assertEquals(SystemDefaultBrowserProfileGenerator::class, generator::class)
         Assertions.assertTrue(generator is SystemDefaultBrowserProfileGenerator)
     }
 
@@ -42,7 +45,7 @@ class BrowserProfileGeneratorFactoryTest {
         val factory = BrowserProfileGeneratorFactory(conf)
 
         for ((modeValue, expectedClass) in BROWSER_CONTEXT_MODE_TO_AGENTS.entries) {
-            System.setProperty("browser.context.mode", modeValue.name)
+            System.setProperty("browser.profile.mode", modeValue.name)
 
             val generator = factory.generator
             Assertions.assertTrue(generator::class.java.isAssignableFrom(expectedClass.java)) {
