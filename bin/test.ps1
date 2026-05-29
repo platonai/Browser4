@@ -35,7 +35,7 @@ function Print-Usage {
     Write-Host "  it          Run integration tests"
     Write-Host "  e2e         Run end-to-end tests"
     Write-Host "  cli         Run Rust Browser4 CLI tests from cli\browser4-cli"
-    Write-Host "  mocksite    Launch MockSiteBoot from browser4-tests\browser4-rest-tests"
+    Write-Host "  mock-site   Launch mock site from browser4-tests\browser4-rest-tests"
     Write-Host "  rest        Run REST module tests"
     Write-Host "  skills      Run skills-focused agentic tests"
     Write-Host "  mcp         Run MCP-focused agentic tests"
@@ -48,7 +48,7 @@ function Print-Usage {
     Write-Host "  test.ps1 e2e                        # Run end-to-end tests"
     Write-Host "  test.ps1 cli                        # Run Browser4 CLI tests"
     Write-Host "  test.ps1 cli -- --nocapture         # Pass extra cargo test args"
-    Write-Host "  test.ps1 mocksite -Dmock.site.port=18080"
+    Write-Host "  test.ps1 mock-site -Dmock.site.port=18080"
     Write-Host "  test.ps1 skills                     # Run skills-focused agentic tests"
     Write-Host "  test.ps1 mcp                        # Run MCP-focused agentic tests"
     Write-Host "  test.ps1 browser4                   # Run all Browser4 main tests"
@@ -58,7 +58,7 @@ function Print-Usage {
 }
 
 function Exit-UnknownTestType([string]$testType) {
-    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, mocksite, rest, skills, mcp, browser4, b4."
+    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, mock-site, rest, skills, mcp, browser4, b4."
     exit 1
 }
 
@@ -264,7 +264,7 @@ function Invoke-MockSiteBoot([string[]]$additionalArgs) {
     }
 }
 
-$knownTestTypes = @('fast', 'it', 'e2e', 'cli', 'browser4-cli', 'mocksite', 'rest', 'skills', 'mcp', 'browser4', 'b4')
+$knownTestTypes = @('fast', 'it', 'e2e', 'cli', 'browser4-cli', 'mock-site', 'rest', 'skills', 'mcp', 'browser4', 'b4')
 $testTypes = @()
 $additionalArgs = @()
 $parsingTestTypes = $true
@@ -312,7 +312,7 @@ foreach ($type in $testTypes) {
         continue
     }
 
-    if ($type -eq 'mocksite') {
+    if ($type -eq 'mock-site') {
         $launchTargets += $type
         continue
     }
@@ -325,7 +325,7 @@ $cliTests = $cliTests | Select-Object -Unique
 $launchTargets = $launchTargets | Select-Object -Unique
 
 if ($launchTargets.Count -gt 0 -and (($mavenTests.Count -gt 0) -or ($cliTests.Count -gt 0) -or ($launchTargets.Count -gt 1))) {
-    Write-Error "mocksite must be run by itself. Pass any Maven properties after it, for example: test.ps1 mocksite -Dmock.site.port=18080"
+    Write-Error "mock-site must be run by itself. Pass any Maven properties after it, for example: test.ps1 mock-site -Dmock.site.port=18080"
     exit 1
 }
 
@@ -337,7 +337,7 @@ if (($cliTests | Where-Object { $_ -in @('cli', 'browser4-cli') }).Count -gt 0) 
     Invoke-Browser4CliTests -additionalArgs $additionalArgs
 }
 
-if ($launchTargets -contains 'mocksite') {
+if ($launchTargets -contains 'mock-site') {
     Invoke-MockSiteBoot -additionalArgs $additionalArgs
 }
 
