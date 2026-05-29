@@ -116,7 +116,7 @@ class ChromeLauncher constructor(
         return browserFileSystem.withUserDataDirLock {
             // Destroy zombie Chrome processes associated with the user data directory if any
             if (chromeDestroyer.isZombie()) {
-                chromeDestroyer.destroy()
+                chromeDestroyer.destroyForcibly()
             }
 
             // Check if there's already an active Chrome process using this userDataDir
@@ -202,7 +202,7 @@ class ChromeLauncher constructor(
      * */
     @Synchronized
     fun destroyForcibly() {
-        chromeDestroyer.destroy(process?.pid())
+        chromeDestroyer.destroyForcibly(process?.pid())
     }
 
     /**
@@ -214,7 +214,7 @@ class ChromeLauncher constructor(
         this.process = null
         try {
             if (p != null && p.isAlive) {
-                Runtimes.destroyProcess(p, shutdownWaitTime = Duration.ofSeconds(3))
+                chromeDestroyer.destroyGracefully(p, shutdownWaitTime = Duration.ofSeconds(5))
                 if (p.isAlive) {
                     destroyForcibly()
                 }
