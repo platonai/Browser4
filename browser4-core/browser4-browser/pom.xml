@@ -14,11 +14,12 @@
     <dependencies>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-common</artifactId>
+            <artifactId>browser4-common</artifactId>
         </dependency>
+
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-browser</artifactId>
+            <artifactId>pulsar-common</artifactId>
         </dependency>
         <dependency>
             <groupId>ai.platon.cdt</groupId>
@@ -96,10 +97,6 @@
             <groupId>org.mockito</groupId>
             <artifactId>mockito-junit-jupiter</artifactId>
             <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>ai.platon.pulsar</groupId>
-            <artifactId>browser4-common</artifactId>
         </dependency>
 
         <!-- Kotlin-friendly mocking -->
