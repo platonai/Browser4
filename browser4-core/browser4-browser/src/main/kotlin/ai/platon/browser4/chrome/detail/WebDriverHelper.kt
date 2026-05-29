@@ -27,9 +27,10 @@ internal class WebDriverHelper(
     val driver: WebDriver,
     val rpc: RobustRPC,
     val page: PageHandler,
-    val browserProtocol: BrowserProtocol,
-    val messageWriter: MultiSinkMessageWriter
+    val browserProtocol: BrowserProtocol
 ) {
+    private val messageWriter = MultiSinkMessageWriter()
+
     suspend fun reportInterestingResources(entry: NavigateEntry, event: ResponseReceived) {
         runCatching { traceInterestingResources0(entry, event) }.onFailure { warnInterruptible(this, it) }
     }

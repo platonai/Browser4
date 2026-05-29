@@ -93,10 +93,10 @@ open class PulsarWebDriver constructor(
     private val emulator get() = EmulationHandler(browserProtocol, keyboard, mouse)
 
     private val rpc = RobustRPC(this)
-    private val networkManager by lazy { NetworkManager(this, rpc) }
+    private val networkManager by lazy { NetworkManager(rpc, browserProtocol) }
     private val messageWriter = MultiSinkMessageWriter()
 
-    private val driverHelper get() = WebDriverHelper(this, rpc, page, browserProtocol, messageWriter)
+    private val driverHelper get() = WebDriverHelper(this, rpc, page, browserProtocol)
 
     private val closed = AtomicBoolean()
 
@@ -129,8 +129,7 @@ open class PulsarWebDriver constructor(
 
         if (!browserProtocol.isTargetAlive()) {
             return CheckState(
-                ResourceStatus.SC_SERVICE_UNAVAILABLE,
-                "WebDriver service unavailable - the target page is not alive"
+                ResourceStatus.SC_SERVICE_UNAVAILABLE, "WebDriver service unavailable - the target page is not alive"
             )
         }
 
@@ -350,8 +349,7 @@ open class PulsarWebDriver constructor(
 
             browserProtocol.onDocumentOpened {
                 // keep oldUrl check for debugging / future use
-                @Suppress("UNUSED_VARIABLE")
-                val navigated = it.frame.url != oldUrl
+                @Suppress("UNUSED_VARIABLE") val navigated = it.frame.url != oldUrl
                 // emit(Navigation)
                 channel.trySend("navigated")
             }
@@ -667,10 +665,7 @@ open class PulsarWebDriver constructor(
     override suspend fun resize(width: Int, height: Int) {
         rpc.invokeOnPage("resize") {
             browserProtocol.setDeviceMetricsOverride(
-                width = width,
-                height = height,
-                deviceScaleFactor = 0.0,
-                mobile = false
+                width = width, height = height, deviceScaleFactor = 0.0, mobile = false
             )
         }
     }
@@ -857,8 +852,7 @@ open class PulsarWebDriver constructor(
 
                 if (startPoint == null) {
                     throw WebDriverException(
-                        "Element is not clickable/draggable: $selector | ${clickableResult.message}",
-                        driver = this
+                        "Element is not clickable/draggable: $selector | ${clickableResult.message}", driver = this
                     )
                 }
 
@@ -903,8 +897,7 @@ open class PulsarWebDriver constructor(
 
     @Throws(WebDriverException::class)
     override suspend fun ariaSnapshot(viewports: String): String {
-        val viewportIndices = ViewportSpec.parse(viewports)
-            ?: return ariaSnapshot()
+        val viewportIndices = ViewportSpec.parse(viewports) ?: return ariaSnapshot()
         return rpc.invokeDeferredSilently("ariaSnapshot") { page.ariaSnapshot(viewportIndices) } ?: ""
     }
 
@@ -950,9 +943,7 @@ function() {
                     """.trimIndent()
                     withNodeObjectId(browserProtocol, node) { objectId ->
                         val remoteObject = browserProtocol.callFunctionOn(
-                            functionDeclaration,
-                            objectId = objectId,
-                            returnByValue = true
+                            functionDeclaration, objectId = objectId, returnByValue = true
                         )
                         // TODO: performance issue for large text (memory copy)
                         remoteObject.result.value?.toString()
@@ -1406,8 +1397,7 @@ function() {
                 val targetFrameId = browserProtocol.getFrameTree().frame.id
                 val contextId = isolatedWorldManager.ensureRuntime(targetFrameId, isolatedWorldJs)
                 logger.debug(
-                    "Ensured Browser4 runtime in isolated world after main-frame navigation | frame={}",
-                    targetFrameId
+                    "Ensured Browser4 runtime in isolated world after main-frame navigation | frame={}", targetFrameId
                 )
             } else {
                 logger.warn("No isolated world JS found to re-inject after frame navigation")
@@ -1524,7 +1514,8 @@ function() {
                 isolatedWorldManager.injectRuntime(isolatedWorldJs, contextId)
                 logger.debug(
                     "Injected Browser4 runtime into Isolated World (context: {}) | {}",
-                    contextId, StringUtils.abbreviateMiddle(userTypedUrl, "...", 200)
+                    contextId,
+                    StringUtils.abbreviateMiddle(userTypedUrl, "...", 200)
                 )
                 val evaluate = browserProtocol.evaluate("typeof(__pulsar_utils__)", contextId = contextId)
                 if (evaluate.result.value != "function") {

@@ -1,18 +1,19 @@
 package ai.platon.browser4.chrome.detail
 
-import ai.platon.browser4.chrome.PulsarWebDriver
 import ai.platon.browser4.chrome.util.ChromeRPCException
 import ai.platon.cdt.kt.protocol.types.fetch.HeaderEntry
 import ai.platon.cdt.kt.protocol.types.network.ErrorReason
 import ai.platon.cdt.kt.protocol.types.network.Initiator
 import ai.platon.cdt.kt.protocol.types.network.Request
 import ai.platon.cdt.kt.protocol.types.network.ResourceType
+import ai.platon.pulsar.browser.WebDriver
+import ai.platon.pulsar.browser.impl.BrowserProtocol
 import ai.platon.pulsar.common.http.HttpStatus
 import java.lang.ref.WeakReference
 import java.util.*
 
 class CDPRequest(
-    val driver: PulsarWebDriver,
+    val browserProtocol: BrowserProtocol,
     /**
      * Request identifier.
      */
@@ -58,8 +59,6 @@ class CDPRequest(
 
     var interceptionHandled = false
 
-    val isActive get() = driver.isActive
-
     val url get() = request.url
 
     fun finalizeInterceptions() {
@@ -73,7 +72,7 @@ class CDPRequest(
             interceptionId ?: throw ChromeRPCException("InterceptionId is required by Fetch.continueRequest")
 
         try {
-            driver.browserProtocol.continueRequest(
+            browserProtocol.continueRequest(
                 requestId,
                 overrides.url, overrides.method, postDataBinaryBase64, overrides.headers
             )
@@ -107,7 +106,7 @@ class CDPRequest(
         try {
             val responseBodyBase64 = Base64.getEncoder().encodeToString(responseBody)
             // Provides response to the request.
-            driver.browserProtocol.fulfillRequest(
+            browserProtocol.fulfillRequest(
                 requestId,
                 responseCode, responseHeaders, binaryResponseHeaders, responseBodyBase64, httpStatus.reasonPhrase
             )
@@ -119,7 +118,7 @@ class CDPRequest(
     suspend fun abort(abortErrorReason: ErrorReason) {
         interceptionHandled = true
 
-        interceptionId?.let { driver.browserProtocol.failRequest(it, abortErrorReason) }
+        interceptionId?.let { browserProtocol.failRequest(it, abortErrorReason) }
             ?: throw ChromeRPCException("HTTPRequest is missing _interceptionId needed for Fetch.failRequest")
     }
 
