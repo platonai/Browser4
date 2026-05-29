@@ -68,8 +68,8 @@ class PulsarWebDriverCDPTests : WebDriverTestBase() {
     }
 
     @Test
-    @DisplayName("test evaluate")
-    fun testEvaluate() = runEnhancedWebDriverTest(testURL, browser) { driver ->
+    @DisplayName("test evaluate 1+1")
+    fun testEvaluate1Plus1() = runEnhancedWebDriverTest(testURL, browser) { driver ->
         val code = """1+1"""
 
         val result = driver.evaluate(code)
