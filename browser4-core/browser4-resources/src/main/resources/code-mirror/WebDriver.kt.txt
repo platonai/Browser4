@@ -1,12 +1,13 @@
-package ai.platon.pulsar.skeleton.browser.driver
+package ai.platon.pulsar.browser
 
-import ai.platon.browser4.driver.chrome.NetworkResourceResponse
-import ai.platon.browser4.driver.chrome.NodeRef
-import ai.platon.browser4.driver.chrome.dom.model.BrowserUseState
-import ai.platon.browser4.driver.chrome.dom.model.NanoDOMTree
-import ai.platon.browser4.driver.chrome.dom.model.PageTarget
-import ai.platon.browser4.driver.chrome.dom.model.SnapshotOptions
-import ai.platon.browser4.driver.common.BrowserSettings
+import ai.platon.pulsar.browser.common.JsEvaluation
+import ai.platon.pulsar.browser.common.NavigateEntry
+import ai.platon.pulsar.browser.common.NavigateHistory
+import ai.platon.pulsar.browser.common.WebDriverException
+import ai.platon.pulsar.browser.impl.NetworkResourceResponse
+import ai.platon.pulsar.browser.impl.NodeRef
+import ai.platon.pulsar.chrome.dom.model.BrowserUseState
+import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.ai.llm.MCP
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.math.geometric.PointD
@@ -14,9 +15,6 @@ import ai.platon.pulsar.common.math.geometric.RectD
 import ai.platon.pulsar.common.serialize.json.Pson
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.common.urls.Hyperlink
-import ai.platon.pulsar.dom.nodes.GeoAnchor
-import ai.platon.pulsar.external.ModelResponse
-import ai.platon.pulsar.skeleton.browser.detail.AbstractBrowser
 import com.google.common.annotations.Beta
 import org.jsoup.Connection
 import java.io.Closeable
@@ -127,7 +125,7 @@ import kotlin.time.Duration.Companion.milliseconds
  * @see [Document: referrer property](https://developer.mozilla.org/en-US/docs/Web/API/Document/referrer)
  * @see [Document: location property](https://developer.mozilla.org/en-US/docs/Web/API/Document/location)
  *
- * @see BrowserSettings
+ * @see ai.platon.pulsar.browser.common.BrowserSettings
  */
 interface WebDriver : Closeable {
     /**
@@ -154,7 +152,7 @@ interface WebDriver : Closeable {
      * The browser of the driver.
      * The browser defines methods and events to manipulate a real browser.
      * */
-    val browser: AbstractBrowser
+    val browser: Browser
 
     /**
      * Web pages for the page open from the current page, via window.open(), link click, form submission, etc.
@@ -217,14 +215,17 @@ interface WebDriver : Closeable {
      * */
     val timeoutPolicy: Map<String, Duration>
 
-    fun canConnect(): Boolean
+    /**
+     * Quick check if the connection to the backend tab is open.
+     * */
+    val isOpen: Boolean
 
     /**
      * Check if this driver is healthy.
      *
      * This is a heavy operation and should be called with low frequency.
      * */
-    fun healthy(): Boolean
+    suspend fun healthy(): CheckState
 
     /**
      * Adds a script which would be evaluated whenever the page is navigated. @mcp
@@ -456,14 +457,17 @@ interface WebDriver : Closeable {
      * The NanoDOMTree is based on the accessibility tree and enhanced with DOM and document snapshot information.
      * It is designed to be a compact representation suitable for AI processing and analysis.
      *
-     * @return A [NanoDOMTree] representing the current page state, or null if retrieval fails.
+     * @return A [ai.platon.pulsar.driver.chrome.dom.model.NanoDOMTree] representing the current page state, or null if retrieval fails.
      * */
     @MCP
     @Throws(WebDriverException::class)
-    suspend fun nanoDOMTree(): NanoDOMTree?
+    suspend fun nanoDOMTree(): ai.platon.pulsar.chrome.dom.model.NanoDOMTree?
 
     @Throws(WebDriverException::class)
-    suspend fun browserUseState(target: PageTarget = PageTarget(), snapshotOptions: SnapshotOptions = SnapshotOptions()): BrowserUseState
+    suspend fun browserUseState(
+        target: ai.platon.pulsar.chrome.dom.model.PageTarget = _root_ide_package_.ai.platon.pulsar.chrome.dom.model.PageTarget(),
+        snapshotOptions: ai.platon.pulsar.chrome.dom.model.SnapshotOptions = _root_ide_package_.ai.platon.pulsar.chrome.dom.model.SnapshotOptions()
+    ): BrowserUseState
 
     /**
      * Interact with an AI model using the context of the element selected by [selector]. @mcp
@@ -474,8 +478,8 @@ interface WebDriver : Closeable {
      * @param selector The selector of the element, multiple formats supported. Used as the context element.
      * @return A [ModelResponse] containing the model's answer.
      */
-    @MCP
-    suspend fun chat(prompt: String, selector: String): ModelResponse
+//    @MCP
+//    suspend fun chat(prompt: String, selector: String): ModelResponse
 
     /**
      * Returns the cookies of the current page. @mcp
@@ -1742,8 +1746,8 @@ interface WebDriver : Closeable {
      * @param limit The maximum number of elements to select.
      * @return The anchors.
      * */
-    @Throws(WebDriverException::class)
-    suspend fun selectAnchors(selector: String, offset: Int = 1, limit: Int = Int.MAX_VALUE): List<GeoAnchor>
+//    @Throws(WebDriverException::class)
+//    suspend fun selectAnchors(selector: String, offset: Int = 1, limit: Int = Int.MAX_VALUE): List<GeoAnchor>
 
     /**
      * Find image elements matching [selector].

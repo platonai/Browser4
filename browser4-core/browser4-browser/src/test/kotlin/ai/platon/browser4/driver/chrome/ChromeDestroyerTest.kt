@@ -33,7 +33,7 @@ class ChromeDestroyerTest {
 
             assertTrue(destroyer.isZombie())
         } finally {
-            destroyProcessIfAlive(process)
+            destroyForciblyProcessIfAlive(process)
             tempDir.toFile().deleteRecursively()
         }
     }
@@ -67,13 +67,13 @@ class ChromeDestroyerTest {
 
             assertFalse(destroyer.isZombie())
         } finally {
-            destroyProcessIfAlive(process)
+            destroyForciblyProcessIfAlive(process)
             tempDir.toFile().deleteRecursively()
         }
     }
 
     @Test
-    fun testDestroyUsesBackupPidMarkerWhenPrimaryPidIsUnavailable() {
+    fun testDestroyForciblyUsesBackupPidMarkerWhenPrimaryPidIsUnavailable() {
         val tempDir = Files.createTempDirectory("chrome-destroyer-test-")
         val userDataDir = tempDir.resolve("profile")
         val destroyer = ChromeDestroyer(userDataDir)
@@ -87,11 +87,11 @@ class ChromeDestroyerTest {
                 StandardOpenOption.TRUNCATE_EXISTING
             )
 
-            destroyer.destroy()
+            destroyer.destroyForcibly()
 
             assertTrue(process.waitFor(15, TimeUnit.SECONDS))
         } finally {
-            destroyProcessIfAlive(process)
+            destroyForciblyProcessIfAlive(process)
             tempDir.toFile().deleteRecursively()
         }
     }
@@ -105,12 +105,12 @@ class ChromeDestroyerTest {
 
         try {
             val pid = process.pid()
-            destroyProcessIfAlive(process)
+            destroyForciblyProcessIfAlive(process)
 
             assertFalse(process.isAlive, "helper zombie process should be terminated before invoking killProcess")
             assertEquals(0, destroyer.killProcess(listOf(pid)))
         } finally {
-            destroyProcessIfAlive(process)
+            destroyForciblyProcessIfAlive(process)
             tempDir.toFile().deleteRecursively()
         }
     }
@@ -124,7 +124,7 @@ class ChromeDestroyerTest {
 
         try {
             val pid = process.pid()
-            destroyProcessIfAlive(process)
+            destroyForciblyProcessIfAlive(process)
 
             assertFalse(process.isAlive, "helper zombie process should be terminated before invoking killProcessByPid")
 
@@ -134,7 +134,7 @@ class ChromeDestroyerTest {
             val killed = method.invoke(destroyer, pid, "test") as Boolean
             assertFalse(killed)
         } finally {
-            destroyProcessIfAlive(process)
+            destroyForciblyProcessIfAlive(process)
             tempDir.toFile().deleteRecursively()
         }
     }
@@ -199,7 +199,7 @@ class ChromeDestroyerTest {
         return process
     }
 
-    private fun destroyProcessIfAlive(process: Process) {
+    private fun destroyForciblyProcessIfAlive(process: Process) {
         if (process.isAlive) {
             process.destroyForcibly()
             process.waitFor(10, TimeUnit.SECONDS)

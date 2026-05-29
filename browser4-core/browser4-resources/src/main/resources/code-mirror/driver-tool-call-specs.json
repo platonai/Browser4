@@ -123,30 +123,11 @@
 }, {
   "domain" : "tab",
   "method" : "nanoDOMTree",
-  "returnType" : "NanoDOMTree?",
+  "returnType" : "ai.platon.pulsar.chrome.dom.model.NanoDOMTree?",
   "description" : "Retrieves a lightweight version of the DOM tree (NanoDOMTree).",
   "help" : "Retrieves a lightweight version of the DOM tree (NanoDOMTree).\n\nThe NanoDOMTree is based on the accessibility tree and enhanced with DOM and document snapshot information. It is designed to be a compact representation suitable for AI processing and analysis.",
   "expression" : "tab.nanoDOMTree()",
   "cli" : "browser4-cli tab nanoDOMTree "
-}, {
-  "domain" : "tab",
-  "method" : "chat",
-  "arguments" : [ {
-    "name" : "prompt",
-    "type" : "String",
-    "expression" : "prompt: String = ",
-    "cliOptions" : "--prompt=<String>, default="
-  }, {
-    "name" : "selector",
-    "type" : "String",
-    "expression" : "selector: String = ",
-    "cliOptions" : "--selector=<String>, default="
-  } ],
-  "returnType" : "ModelResponse",
-  "description" : "Interact with an AI model using the context of the element selected by [selector].",
-  "help" : "Interact with an AI model using the context of the element selected by [selector].\n\nThe AI model receives the element's content and structure as context along with the provided prompt.",
-  "expression" : "tab.chat(Arg(name=prompt, type=String, defaultValue=), Arg(name=selector, type=String, defaultValue=))",
-  "cli" : "browser4-cli tab chat --prompt=<String>, default= --selector=<String>, default="
 }, {
   "domain" : "tab",
   "method" : "getCookies",
@@ -195,6 +176,28 @@
   "help" : "Clears browser cookies.\n\n```kotlin driver.clearBrowserCookies() ```",
   "expression" : "tab.clearBrowserCookies()",
   "cli" : "browser4-cli tab clearBrowserCookies "
+}, {
+  "domain" : "tab",
+  "method" : "saveStorageState",
+  "returnType" : "String",
+  "description" : "Saves the current browser storage state, including cookies and the active origin's localStorage, as JSON.",
+  "help" : "Saves the current browser storage state, including cookies and the active origin's localStorage, as JSON.",
+  "expression" : "tab.saveStorageState()",
+  "cli" : "browser4-cli tab saveStorageState "
+}, {
+  "domain" : "tab",
+  "method" : "loadStorageState",
+  "arguments" : [ {
+    "name" : "state",
+    "type" : "String",
+    "expression" : "state: String = ",
+    "cliOptions" : "--state=<String>, default="
+  } ],
+  "returnType" : "String",
+  "description" : "Loads a previously saved browser storage state JSON, restoring cookies and localStorage.",
+  "help" : "Loads a previously saved browser storage state JSON, restoring cookies and localStorage.",
+  "expression" : "tab.loadStorageState(Arg(name=state, type=String, defaultValue=))",
+  "cli" : "browser4-cli tab loadStorageState --state=<String>, default="
 }, {
   "domain" : "tab",
   "method" : "waitForSelector",
