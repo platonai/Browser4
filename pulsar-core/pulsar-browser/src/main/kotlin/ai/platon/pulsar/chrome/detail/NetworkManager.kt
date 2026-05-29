@@ -18,7 +18,7 @@ import java.time.Duration
 import java.time.Instant
 import java.util.*
 
-internal class NetworkManager(
+class NetworkManager(
     private val driver: PulsarWebDriver,
     private val rpc: RobustRPC,
 ) : AbstractEventEmitter<NetworkEvents>() {
