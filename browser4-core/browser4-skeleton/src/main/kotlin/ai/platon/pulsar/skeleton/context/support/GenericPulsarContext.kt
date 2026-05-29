@@ -1,10 +1,10 @@
 package ai.platon.pulsar.skeleton.context.support
 
 import ai.platon.pulsar.browser.BrowserManager
-import org.springframework.context.support.StaticApplicationContext
+import org.springframework.context.support.GenericApplicationContext
 
 open class GenericPulsarContext(
-    applicationContext: StaticApplicationContext = StaticApplicationContext()
+    override val applicationContext: GenericApplicationContext = GenericApplicationContext()
 ) : BasicPulsarContext(applicationContext) {
     private val defaults = ContextDefaults()
 

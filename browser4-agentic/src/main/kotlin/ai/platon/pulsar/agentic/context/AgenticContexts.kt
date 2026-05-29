@@ -40,7 +40,7 @@ object AgenticContexts {
      */
     @Synchronized
     fun create(): AgenticContext = (PulsarContexts.activeContext as? AgenticContext)
-        ?: create(DefaultClassPathXmlAgenticContext())
+        ?: create(StaticAgenticContext())
 
     /**
      * Register and activate the given [context] as the global agentic context.
@@ -62,21 +62,12 @@ object AgenticContexts {
     @Synchronized
     fun create(applicationContext: ApplicationContext): AgenticContext {
         val context = PulsarContexts.activeContext
-        if (context is GenericAgenticContext && context.applicationContext == applicationContext) {
+        if (context is BasicAgenticContext && context.applicationContext == applicationContext) {
             return PulsarContexts.activeContext as AgenticContext
         }
 
-        return create(GenericAgenticContext(applicationContext as AbstractApplicationContext))
+        return create(BasicAgenticContext(applicationContext as AbstractApplicationContext))
     }
-
-    /**
-     * Create an [AgenticContext] from a classpath XML [contextLocation].
-     *
-     * @param contextLocation Classpath location of the Spring XML.
-     * @return The newly created [AgenticContext].
-     */
-    @Synchronized
-    fun create(contextLocation: String): AgenticContext = create(ClassPathXmlAgenticContext(contextLocation))
 
     /**
      * Create a new [AgenticSession] with the provided [settings].

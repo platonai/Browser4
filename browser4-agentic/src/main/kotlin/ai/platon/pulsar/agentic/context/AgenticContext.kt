@@ -18,6 +18,7 @@ import ai.platon.pulsar.skeleton.context.support.ContextDefaults
 import ai.platon.pulsar.skeleton.session.BasicPulsarSession
 import org.springframework.context.support.AbstractApplicationContext
 import org.springframework.context.support.ClassPathXmlApplicationContext
+import org.springframework.context.support.GenericApplicationContext
 import org.springframework.context.support.StaticApplicationContext
 
 interface AgenticContext : SQLContext {
@@ -58,10 +59,33 @@ abstract class AbstractAgenticContext(
     }
 }
 
-open class GenericAgenticContext(
-    applicationContext: AbstractApplicationContext
+open class BasicAgenticContext(
+    override val applicationContext: AbstractApplicationContext
 ) : AbstractAgenticContext(applicationContext) {
 
+    /**
+     * Create a [GenericAgenticSession].
+     *
+     * > **NOTE:** The session is not a SQLSession, use [execute], [executeQuery] to access [ai.platon.pulsar.ql.SQLSession].
+     * */
+    @Throws(Exception::class)
+    override fun createSession(): BasicAgenticSession {
+        val session = BasicAgenticSession(this, initConfiguration.toVolatileConfig())
+        return session.also { sessions[it.id] = it }
+    }
+
+    override fun createSession(settings: PulsarSettings): BasicAgenticSession {
+        val session = BasicAgenticSession(this, initConfiguration.toVolatileConfig())
+        settings.label?.let { session.label = it }
+        settings.overrideConfiguration(session.sessionConfig)
+        return session.also { sessions[it.id] = it }
+    }
+}
+
+open class GenericAgenticContext(
+    override val applicationContext: GenericApplicationContext,
+    autoRefresh: Boolean = true
+) : AbstractAgenticContext(applicationContext) {
     /**
      * Create a [GenericAgenticSession].
      *
@@ -79,12 +103,24 @@ open class GenericAgenticContext(
         settings.overrideConfiguration(session.sessionConfig)
         return session.also { sessions[it.id] = it }
     }
+
+    init {
+        if (autoRefresh) {
+            applicationContext.refresh()
+        }
+//        System.err.println("WARNING: Initialized static application context, " +
+//                "this context is designed for test purpose only. " +
+//                "Use @Browser4AutoConfiguration in spring-boot application for full functionality in production")
+    }
 }
 
 /**
  * Simple static agentic context, used for test only.
  * */
-open class StaticAgenticContext : GenericAgenticContext(StaticApplicationContext()) {
+open class StaticAgenticContext(
+    override val applicationContext: StaticApplicationContext = StaticApplicationContext(),
+    autoRefresh: Boolean = true
+) : GenericAgenticContext(applicationContext, false) {
 
     private val defaults = ContextDefaults()
 
@@ -149,15 +185,35 @@ open class StaticAgenticContext : GenericAgenticContext(StaticApplicationContext
     override val browserManager: BrowserManager by lazy { DefaultBrowserManager(configuration) }
 
     init {
-        applicationContext.refresh()
-        System.err.println("WARNING: Initialized static application context, " +
-                "this context is designed for test purpose only. " +
-                "Use @Browser4AutoConfiguration in spring-boot application for full functionality in production")
+        if (autoRefresh) {
+            applicationContext.refresh()
+        }
+//        System.err.println("WARNING: Initialized static application context, " +
+//                "this context is designed for test purpose only. " +
+//                "Use @Browser4AutoConfiguration in spring-boot application for full functionality in production")
     }
 }
 
 open class ClassPathXmlAgenticContext(configLocation: String) :
-    GenericAgenticContext(ClassPathXmlApplicationContext(configLocation)) {
+    AbstractAgenticContext(ClassPathXmlApplicationContext(configLocation)) {
+
+    /**
+     * Create a [BasicPulsarSession].
+     *
+     * > **NOTE:** The session is not a SQLSession, use [execute], [executeQuery] to access [ai.platon.pulsar.ql.SQLSession].
+     * */
+    @Throws(Exception::class)
+    override fun createSession(): BasicAgenticSession {
+        val session = BasicAgenticSession(this, initConfiguration.toVolatileConfig())
+        return session.also { sessions[it.id] = it }
+    }
+
+    override fun createSession(settings: PulsarSettings): BasicAgenticSession {
+        val session = BasicAgenticSession(this, initConfiguration.toVolatileConfig())
+        settings.label?.let { session.label = it }
+        settings.overrideConfiguration(session.sessionConfig)
+        return session.also { sessions[it.id] = it }
+    }
 }
 
 open class DefaultClassPathXmlAgenticContext() : ClassPathXmlAgenticContext(

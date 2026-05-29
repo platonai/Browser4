@@ -47,7 +47,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.reflect.KClass
 
 abstract class AbstractPulsarContext(
-    val applicationContext: AbstractApplicationContext
+    open val applicationContext: AbstractApplicationContext
 ) : PulsarContext, AutoCloseable {
 
     companion object {

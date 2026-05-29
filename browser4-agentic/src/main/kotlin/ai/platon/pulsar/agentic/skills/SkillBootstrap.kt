@@ -5,6 +5,7 @@ import ai.platon.pulsar.agentic.skills.examples.WebScrapingSkill
 import ai.platon.pulsar.common.getLogger
 import jakarta.annotation.PostConstruct
 import kotlinx.coroutines.runBlocking
+import org.springframework.stereotype.Component
 
 /**
  * Bootstrap component for automatically loading skills on system startup.
@@ -17,7 +18,8 @@ import kotlinx.coroutines.runBlocking
  * The component is automatically initialized by Spring on application startup
  * using the @PostConstruct annotation.
  */
-class SkillBootstrap {
+@Component
+class SkillBootstrap(val name: String = "SkillBootstrap") {
     private val logger = getLogger(this)
     private val registry = SkillRegistry.instance
     private val loader = SkillLoader(registry)

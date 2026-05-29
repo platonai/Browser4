@@ -3,7 +3,9 @@ package ai.platon.pulsar.skeleton.context.support
 import ai.platon.pulsar.skeleton.workflow.common.GlobalCache
 import org.springframework.context.support.StaticApplicationContext
 
-open class StaticPulsarContext: GenericPulsarContext(StaticApplicationContext()) {
+open class StaticPulsarContext(
+    override val applicationContext: StaticApplicationContext = StaticApplicationContext()
+): GenericPulsarContext(applicationContext) {
 
     private val defaults = ContextDefaults()
 
