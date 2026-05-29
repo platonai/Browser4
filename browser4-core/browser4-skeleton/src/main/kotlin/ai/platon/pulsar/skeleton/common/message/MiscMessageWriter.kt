@@ -1,7 +1,7 @@
 package ai.platon.pulsar.skeleton.common.message
 
 import ai.platon.pulsar.common.MultiSinkMessageWriter
-import ai.platon.pulsar.persist.WebPage
+import ai.platon.pulsar.core.api.WebPage
 
 /**
  * Created by Vincent on 16-10-12.

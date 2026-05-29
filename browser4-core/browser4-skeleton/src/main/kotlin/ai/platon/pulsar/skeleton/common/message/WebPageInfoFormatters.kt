@@ -4,8 +4,8 @@ import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.PulsarParams.*
 import ai.platon.pulsar.common.config.Params
 import ai.platon.pulsar.common.emoji.PopularEmoji
+import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.persist.AbstractWebPage
-import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.metadata.Name
 import ai.platon.pulsar.persist.model.ActiveDOMStat
 import ai.platon.pulsar.skeleton.common.persist.ext.options

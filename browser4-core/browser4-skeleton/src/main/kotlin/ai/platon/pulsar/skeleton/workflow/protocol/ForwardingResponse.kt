@@ -1,9 +1,9 @@
 package ai.platon.pulsar.skeleton.workflow.protocol
 
+import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.persist.PageDatum
 import ai.platon.pulsar.persist.ProtocolStatus
 import ai.platon.pulsar.persist.RetryScope
-import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.metadata.MultiMetadata
 
 /**

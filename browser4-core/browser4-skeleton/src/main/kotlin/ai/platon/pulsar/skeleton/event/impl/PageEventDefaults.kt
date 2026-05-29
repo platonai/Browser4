@@ -1,10 +1,10 @@
 package ai.platon.pulsar.skeleton.event.impl
 
-import ai.platon.browser4.common.B4ResourceLoader
+import ai.platon.pulsar.browser.rpa.BrowseRPA
+import ai.platon.pulsar.browser.rpa.DefaultBrowseRPA
+import ai.platon.pulsar.common.ResourceLoader
 import ai.platon.pulsar.common.config.CapabilityTypes
 import ai.platon.pulsar.common.config.ImmutableConfig
-import ai.platon.pulsar.skeleton.browser.rpa.BrowseRPA
-import ai.platon.pulsar.skeleton.browser.rpa.DefaultBrowseRPA
 import ai.platon.pulsar.skeleton.event.*
 import org.slf4j.LoggerFactory
 
@@ -138,7 +138,7 @@ class PageEventHandlersFactory(val conf: ImmutableConfig = ImmutableConfig()) {
         val clazz = try {
             // Get the value of the `name` property as a `Class`.
             // If the property is not set, or the class is not found, use the default class.
-            runCatching { B4ResourceLoader.loadUserClass<PageEventHandlers>(className) }.getOrNull()
+            runCatching { ResourceLoader.loadUserClass<PageEventHandlers>(className) }.getOrNull()
                 ?: defaultClazz
 //             conf.getClass(className, defaultClazz)
         } catch (e: Exception) {

@@ -5,12 +5,12 @@ import ai.platon.pulsar.common.HttpHeaders
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.persist.ProtocolStatus
 import ai.platon.pulsar.persist.RetryScope
-import ai.platon.pulsar.persist.WebPage
+import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.persist.metadata.FetchMode
 import ai.platon.pulsar.persist.metadata.MultiMetadata
 import ai.platon.pulsar.persist.metadata.Name
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
-import ai.platon.pulsar.skeleton.crawl.protocol.Protocol
+import ai.platon.pulsar.skeleton.workflow.protocol.Protocol
 import ai.platon.pulsar.skeleton.workflow.common.MimeTypeResolver
 import ai.platon.pulsar.skeleton.workflow.protocol.ProtocolOutput
 import ai.platon.pulsar.skeleton.workflow.protocol.Response

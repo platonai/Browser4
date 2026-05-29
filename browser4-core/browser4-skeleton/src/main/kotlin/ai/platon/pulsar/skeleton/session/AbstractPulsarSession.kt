@@ -1,5 +1,6 @@
 package ai.platon.pulsar.skeleton.session
 
+import ai.platon.pulsar.browser.Browser
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.AppPaths.WEB_CACHE_DIR
 import ai.platon.pulsar.common.browser.BrowserProfileMode
@@ -8,21 +9,19 @@ import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.common.urls.PlainUrl
 import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.common.urls.UrlAware
+import ai.platon.pulsar.core.api.WebDriver
+import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.dom.select.firstTextOrNull
 import ai.platon.pulsar.dom.select.selectFirstOrNull
 import ai.platon.pulsar.external.ModelResponse
-import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.model.GoraWebPage
-import ai.platon.pulsar.skeleton.browser.Browser
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.common.urls.NormURL
 import ai.platon.pulsar.skeleton.context.support.AbstractPulsarContext
 import ai.platon.pulsar.skeleton.event.PageEventHandlers
 import ai.platon.pulsar.skeleton.workflow.common.FetchEntry
 import ai.platon.pulsar.skeleton.workflow.common.url.ListenableHyperlink
-import kotlinx.coroutines.runBlocking
 import org.jsoup.nodes.Element
 import org.slf4j.LoggerFactory
 import java.nio.ByteBuffer
@@ -399,7 +398,7 @@ abstract class AbstractPulsarSession(
 
     override fun parse(page: WebPage, noCache: Boolean) = parse0(page, noCache)
 
-    override fun loadDocument(url: String) = runBlocking { parse(load(url)) }
+    override suspend fun loadDocument(url: String) = parse(load(url))
 
     override suspend fun loadDocument(url: String, args: String) = parse(load(url, args))
 

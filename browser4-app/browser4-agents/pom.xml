@@ -171,14 +171,7 @@
             <artifactId>pulsar-ql</artifactId>
             <!-- Exclude the original version and use the browser4 managed ones -->
             <exclusions>
-                <exclusion>
-                    <groupId>ai.platon.pulsar</groupId>
-                    <artifactId>pulsar-protocol</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>ai.platon.pulsar</groupId>
-                    <artifactId>pulsar-browser</artifactId>
-                </exclusion>
+
                 <exclusion>
                     <groupId>ai.platon.pulsar</groupId>
                     <artifactId>pulsar-skeleton</artifactId>
@@ -368,7 +361,7 @@
         <kotlin.version>2.2.21</kotlin.version>
         <spring-boot.version>4.0.5</spring-boot.version>
         <kotlin.compiler.jvmTarget>17</kotlin.compiler.jvmTarget>
-        <browser4-base.version>4.7.14</browser4-base.version>
+        <browser4-base.version>4.8.0</browser4-base.version>
 
         <!-- jpackage toggles (defaults keep normal builds unaffected) -->
         <jpackage.skip>true</jpackage.skip>

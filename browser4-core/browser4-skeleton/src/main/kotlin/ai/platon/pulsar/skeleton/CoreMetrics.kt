@@ -10,13 +10,13 @@ import ai.platon.pulsar.common.config.Parameterized
 import ai.platon.pulsar.common.config.Params
 import ai.platon.pulsar.common.emoji.PopularEmoji
 import ai.platon.pulsar.common.measure.ByteUnitConverter
+import ai.platon.pulsar.common.urls.URLUtils
+import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.persist.WebDb
-import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.skeleton.common.AppSystemInfo
 import ai.platon.pulsar.skeleton.common.message.MiscMessageWriter
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import ai.platon.pulsar.skeleton.session.AbstractPulsarSession
-import ai.platon.pulsar.skeleton.workflow.common.InternalURLUtil
 import ai.platon.pulsar.skeleton.workflow.component.LoadComponent
 import ai.platon.pulsar.skeleton.workflow.component.ParseComponent
 import ai.platon.pulsar.skeleton.workflow.fetch.UrlStat
@@ -24,7 +24,6 @@ import ai.platon.pulsar.skeleton.workflow.parse.html.JsoupParser
 import com.codahale.metrics.Gauge
 import com.google.common.collect.ConcurrentHashMultiset
 import org.slf4j.LoggerFactory
-import java.net.MalformedURLException
 import java.nio.file.Files
 import java.time.Duration
 import java.time.Instant
@@ -77,7 +76,6 @@ class CoreMetrics(
     }
 
     private val logger = LoggerFactory.getLogger(CoreMetrics::class.java)!!
-    val groupMode = InternalURLUtil.GroupMode.BY_HOST
     val maxHostFailureEvents = conf.getInt(FETCH_MAX_HOST_FAILURES, 20)
 
     /**
@@ -138,9 +136,6 @@ class CoreMetrics(
     val meterContentMBytes = registry.multiMetric(this, "contentBytes")
     val persistContentMBytes = registry.multiMetric(this, "persistContentMBytes")
     val meterContentBytes = registry.meter(this, "contentBytes")
-
-//    val dbGets = registry.multiMetric(this, "dbGets")
-//    val dbPuts = registry.multiMetric(this, "dbPuts")
 
     val histogramContentBytes = registry.histogram(this, "contentBytes")
     val pageImages = registry.histogram(this, "pageImages")
@@ -211,7 +206,7 @@ class CoreMetrics(
     fun isReachable(url: String) = !isUnreachable(url)
 
     fun isUnreachable(url: String): Boolean {
-        val host = InternalURLUtil.getHost(url, groupMode) ?: return true
+        val host = URLUtils.getHostName(url)
         return unreachableHosts.contains(host)
     }
 
@@ -243,7 +238,7 @@ class CoreMetrics(
      */
     fun trackSuccess(page: WebPage) {
         val url = page.url
-        val host = InternalURLUtil.getHost(url, groupMode) ?: throw MalformedURLException(url)
+        val host = URLUtils.getHostNameOrNull(url) ?: "unknown"
 
         // The host is reachable
         unreachableHosts.remove(host)
@@ -317,7 +312,7 @@ class CoreMetrics(
      * @return true if the host is unreachable
      */
     fun trackHostUnreachable(url: String, occurrences: Int = 1): Boolean {
-        val host = InternalURLUtil.getHost(url, groupMode)
+        val host = URLUtils.getHostNameOrNull(url)
         if (host.isNullOrEmpty()) {
             logger.warn("Malformed url identified as gone | <{}>", url)
             return false

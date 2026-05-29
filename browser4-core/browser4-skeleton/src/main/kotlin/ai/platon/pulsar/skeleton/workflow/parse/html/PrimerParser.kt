@@ -2,7 +2,7 @@ package ai.platon.pulsar.skeleton.workflow.parse.html
 
 import ai.platon.pulsar.common.Strings
 import ai.platon.pulsar.common.config.ImmutableConfig
-import ai.platon.pulsar.persist.WebPage
+import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.skeleton.workflow.parse.Parser
 import org.slf4j.LoggerFactory
 

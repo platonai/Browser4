@@ -1,14 +1,14 @@
 package ai.platon.pulsar.skeleton.session
 
+import ai.platon.pulsar.browser.Browser
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.common.urls.UrlAware
+import ai.platon.pulsar.core.api.WebDriver
+import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.external.ModelResponse
-import ai.platon.pulsar.persist.WebPage
-import ai.platon.pulsar.skeleton.browser.Browser
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.common.urls.NormURL
 import ai.platon.pulsar.skeleton.context.PulsarContext
@@ -1844,12 +1844,10 @@ interface PulsarSession : AutoCloseable {
      * val document = session.loadDocument("http://example.com")
      * ```
      *
-     * TODO: should be suspend but non-suspend version is required by pulsar-ql
-     *
      * @param url The url to load
      * @return The parsed HTML document
      * */
-    fun loadDocument(url: String): FeaturedDocument
+    suspend fun loadDocument(url: String): FeaturedDocument
 
     /**
      * Load or fetch a webpage and parse it into an HTML document
