@@ -6,6 +6,8 @@ import ai.platon.pulsar.browser.Browser
 import ai.platon.pulsar.browser.BrowserId
 import ai.platon.pulsar.browser.BrowserLauncher
 import ai.platon.pulsar.browser.common.BrowserSettings
+import ai.platon.pulsar.browser.manage.AbstractBrowserFactory
+import ai.platon.pulsar.browser.manage.PulsarBrowserLauncher
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.config.ImmutableConfig
 

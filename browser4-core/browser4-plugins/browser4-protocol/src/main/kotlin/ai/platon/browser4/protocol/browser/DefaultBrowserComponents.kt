@@ -15,8 +15,8 @@
  */
 package ai.platon.browser4.protocol.browser
 
-import ai.platon.browser4.protocol.browser.impl.BasicBrowserManager
 import ai.platon.browser4.protocol.browser.impl.DefaultBrowserFactory
+import ai.platon.pulsar.browser.manage.BasicBrowserManager
 import ai.platon.pulsar.browser.privacy.PrivacyManager
 import ai.platon.pulsar.common.ObjectCache
 import ai.platon.pulsar.common.config.ImmutableConfig

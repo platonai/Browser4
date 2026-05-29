@@ -1,4 +1,4 @@
-package ai.platon.pulsar.protocol.browser.impl
+package ai.platon.pulsar.browser.manage
 
 import ai.platon.browser4.chrome.util.ChromeOptions
 import ai.platon.browser4.chrome.util.LauncherOptions

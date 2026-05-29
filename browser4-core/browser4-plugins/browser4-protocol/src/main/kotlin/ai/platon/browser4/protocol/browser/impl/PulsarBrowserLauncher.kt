@@ -1,3 +1,5 @@
 package ai.platon.browser4.protocol.browser.impl
 
-typealias PulsarBrowserLauncher = ai.platon.pulsar.protocol.browser.impl.PulsarBrowserLauncher
+import ai.platon.pulsar.browser.manage.PulsarBrowserLauncher
+
+typealias PulsarBrowserLauncher = PulsarBrowserLauncher
