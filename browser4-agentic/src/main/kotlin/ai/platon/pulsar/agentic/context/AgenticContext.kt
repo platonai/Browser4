@@ -81,8 +81,9 @@ open class GenericAgenticContext(
     }
 }
 
-typealias QLAgenticContext = GenericAgenticContext
-
+/**
+ * Simple static agentic context, used for test only.
+ * */
 open class StaticAgenticContext : GenericAgenticContext(StaticApplicationContext()) {
 
     private val defaults = ContextDefaults()
@@ -149,6 +150,9 @@ open class StaticAgenticContext : GenericAgenticContext(StaticApplicationContext
 
     init {
         applicationContext.refresh()
+        System.err.println("WARNING: Initialized static application context, " +
+                "this context is designed for test purpose only. " +
+                "Use @Browser4AutoConfiguration in spring-boot application for full functionality in production")
     }
 }
 
