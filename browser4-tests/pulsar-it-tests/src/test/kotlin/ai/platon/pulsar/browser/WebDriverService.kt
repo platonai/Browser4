@@ -6,6 +6,7 @@ import kotlinx.coroutines.runBlocking
 import org.apache.commons.lang3.StringUtils
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import kotlin.test.assertEquals
+import kotlin.time.Duration.Companion.milliseconds
 
 open class WebDriverService(
     val browserFactory: BrowserFactory,
@@ -105,7 +106,7 @@ open class WebDriverService(
         var n = scrollCount
         while (n-- > 0) {
             driver.scrollDown(1)
-            delay(1000)
+            delay(1000.milliseconds)
         }
         driver.scrollToTop()
     }

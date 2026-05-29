@@ -214,7 +214,10 @@ class ChromeLauncher constructor(
         this.process = null
         try {
             if (p != null && p.isAlive) {
-                chromeDestroyer.destroy(p.pid())
+                Runtimes.destroyProcess(p, shutdownWaitTime = Duration.ofSeconds(3))
+                if (p.isAlive) {
+                    destroyForcibly()
+                }
             }
         } catch (t: Throwable) {
             warnForClose(this, t)

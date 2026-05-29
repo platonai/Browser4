@@ -1,10 +1,10 @@
 package ai.platon.pulsar.browser.common
 
+import ai.platon.browser4.chrome.util.ChromeOptions
 import ai.platon.pulsar.browser.InteractSettings
 import ai.platon.pulsar.browser.detail.DualWorldScriptLoader
 import ai.platon.pulsar.browser.detail.ScriptLoader
 import ai.platon.pulsar.browser.detail.SimpleScriptConfuser
-import ai.platon.pulsar.chrome.util.ChromeOptions
 import ai.platon.pulsar.common.Runtimes
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.browser.BrowserType

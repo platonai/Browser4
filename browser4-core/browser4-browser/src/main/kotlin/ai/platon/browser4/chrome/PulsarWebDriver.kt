@@ -275,7 +275,9 @@ open class PulsarWebDriver constructor(
 
     @Throws(WebDriverException::class)
     override suspend fun evaluateValue(expression: String): Any? {
-        return rpc.invokeOnPage("evaluateValue") { jsHandler.evaluateValue(expression) }
+        return rpc.invokeOnPage("evaluateValue") {
+            jsHandler.evaluateValue(expression)
+        }
     }
 
     @Throws(WebDriverException::class)
@@ -318,9 +320,10 @@ open class PulsarWebDriver constructor(
 
     @Throws(WebDriverException::class)
     override suspend fun exists(selector: String): Boolean {
-        return rpc.predicateOnPage("exists") {
-            page.exists(selector)
-        }
+//        return rpc.predicateOnPage("exists") {
+//            page.exists(selector)
+//        }
+        return page.exists(selector)
     }
 
     /**

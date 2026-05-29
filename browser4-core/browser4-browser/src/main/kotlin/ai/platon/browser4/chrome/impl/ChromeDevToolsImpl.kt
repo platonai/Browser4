@@ -24,6 +24,7 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.reflect.KClass
+import kotlin.time.Duration.Companion.milliseconds
 
 internal class CachedDevToolsInvocationHandlerProxies(impl: Any) : SuspendAwareHandler(impl) {
     val commandHandler: DevToolsInvocationHandler = DevToolsInvocationHandler(impl)
@@ -185,7 +186,7 @@ internal abstract class ChromeDevToolsImpl(
 
         // Await without blocking a thread; enforce the configured timeout.
         val timeoutMillis = config.readTimeout.toMillis()
-        val result = withTimeoutOrNull(timeoutMillis) { future.deferred.await() }
+        val result = withTimeoutOrNull(timeoutMillis.milliseconds) { future.deferred.await() }
         if (result == null) {
             // Ensure we don't leak the future if timed out
             dispatcher.unsubscribe(methodId)

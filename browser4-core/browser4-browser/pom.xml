@@ -22,6 +22,10 @@
             <artifactId>pulsar-common</artifactId>
         </dependency>
         <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>pulsar-jsoup</artifactId>
+        </dependency>
+        <dependency>
             <groupId>ai.platon.cdt</groupId>
             <artifactId>cdt-kotlin-client</artifactId>
             <version>${cdt-kotlin-client.version}</version>
