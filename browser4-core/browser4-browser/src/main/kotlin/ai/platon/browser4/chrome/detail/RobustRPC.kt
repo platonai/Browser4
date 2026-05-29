@@ -31,16 +31,20 @@ class RobustRPC(
         var MAX_RPC_FAILURES = 5
     }
 
-    private val logger = getLogger(this)
-
     val rpcFailures = AtomicInteger()
     var maxRPCFailures = MAX_RPC_FAILURES
 
+    /**
+     * Invoke an executable block without return value.
+     * */
     @Throws(ChromeDriverException::class)
     suspend fun invoke0(action: String, block: suspend () -> Unit) {
         invokeWithRetry(action, block = block)
     }
 
+    /**
+     * Invoke an executable block.
+     * */
     @Throws(ChromeDriverException::class)
     suspend fun <T> invoke(action: String, block: suspend () -> T): T? {
         return invokeWithRetry(action, block = block)
@@ -83,7 +87,7 @@ class RobustRPC(
                 } else if (scrollIntoView) {
                     driver.page.scrollIntoViewIfNeeded(selector)
                 } else {
-                    driver.page.queryLocator(selector)
+                    driver.page.dom.queryLocator(selector)
                 }
 
                 if (node != null) {
@@ -136,8 +140,7 @@ class RobustRPC(
         var result = runCatching { invokeDeferred0(action, url, block) }
             .onFailure {
                 logger.info(
-                    "Oop, a bit slip-up executing action: " +
-                            "[$action], retrying 1/$maxRetry time ... | {}", it.brief()
+                    "Oop, a bit slip-up executing action: [$action], retrying 1/$maxRetry time ... | {}", it.brief()
                 )
             }
 

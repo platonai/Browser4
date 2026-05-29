@@ -85,7 +85,7 @@ open class PulsarWebDriver constructor(
 
     private val isolatedWorldManager = IsolatedWorldManager(browserProtocol, settings)
     val page = PageHandler(browserProtocol, isolatedWorldManager)
-    private val jsHandler get() = page.jsHandler
+    private val jsHandler get() = page.js
     private val mouse get() = page.mouse.takeIf { isActive }
     private val keyboard get() = page.keyboard.takeIf { isActive }
     private val screenshot = ScreenshotHandler(page, browserProtocol)
@@ -112,7 +112,7 @@ open class PulsarWebDriver constructor(
      * */
     override val implementation: Any get() = browserProtocol
 
-    override val snapshotService: SnapshotService get() = page.snapshotService
+    override val snapshotService: SnapshotService get() = page.snapshot
 
     init {
         fingerprintApplier?.invoke(this)
@@ -1127,7 +1127,7 @@ function() {
     override suspend fun nanoDOMTree(): NanoDOMTree? {
         return rpc.invokeOnPage("nanoDOMTree") {
             val snapshotOptions = SnapshotOptions()
-            val domState = page.snapshotService.getDOMState(snapshotOptions = snapshotOptions)
+            val domState = page.snapshot.getDOMState(snapshotOptions = snapshotOptions)
             domState.serializableTree.toNanoTreeInRange()
         }
     }
@@ -1135,7 +1135,7 @@ function() {
     @Throws(WebDriverException::class)
     override suspend fun browserUseState(target: PageTarget, snapshotOptions: SnapshotOptions): BrowserUseState {
         return rpc.invokeOnPage("browserUseState") {
-            page.snapshotService.getBrowserUseState(target, snapshotOptions)
+            page.snapshot.getBrowserUseState(target, snapshotOptions)
         }!!
     }
 
