@@ -4,8 +4,8 @@ import ai.platon.pulsar.common.FlowState
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.config.Parameterized
 import ai.platon.pulsar.common.readable
-import ai.platon.pulsar.persist.ParseStatus
 import ai.platon.pulsar.core.api.WebPage
+import ai.platon.pulsar.persist.ParseStatus
 import ai.platon.pulsar.skeleton.common.message.MiscMessageWriter
 import ai.platon.pulsar.skeleton.common.persist.ext.loadEventHandlers
 import ai.platon.pulsar.skeleton.event.PulsarEventBus
@@ -17,6 +17,7 @@ import org.slf4j.LoggerFactory
 import java.time.Duration
 import java.util.concurrent.ConcurrentSkipListSet
 import kotlin.system.measureTimeMillis
+import kotlin.time.Duration.Companion.milliseconds
 
 class PageParser(
     val parserFactory: ParserFactory,
@@ -174,7 +175,7 @@ class PageParser(
 
     private fun runParser(p: Parser, page: WebPage): ParseResult {
         return runBlocking {
-            withTimeout(p.timeout.toMillis()) {
+            withTimeout(p.timeout.toMillis().milliseconds) {
                 val deferred = async { p.parse(page) }
                 deferred.await()
             }

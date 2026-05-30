@@ -606,7 +606,7 @@ open class StreamingTaskRunner(
         var page: WebPage? = null
         val timeout = fetchTaskTimeout.plusSeconds(30).toMillis()
         try {
-            page = withTimeout(timeout) {
+            page = withTimeout(timeout.milliseconds) {
                 loadWithMinorExceptionHandled(url)
             }
         } catch (e: TimeoutCancellationException) {

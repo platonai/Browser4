@@ -29,6 +29,7 @@ import java.time.Instant
 import java.util.concurrent.ConcurrentSkipListMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * The web driver pool manager.
@@ -539,7 +540,7 @@ open class WebDriverPoolManager constructor(
 
         return try {
             // The code that is executing inside the [block] is cancelled on timeout.
-            withTimeout(fetchTaskTimeout.toMillis()) {
+            withTimeout(fetchTaskTimeout.toMillis().milliseconds) {
                 runCancelable(task, driver)
             }
         } catch (e: TimeoutCancellationException) {
