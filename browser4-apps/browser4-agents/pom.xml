@@ -14,7 +14,7 @@
 
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>browser4-agents</artifactId>
-    <version>4.10.0-SNAPSHOT</version>
+    <version>4.10.0-native</version>
 
     <name>Browser4 Agents</name>
     <description>Browser4 Agents - browser agent for your AI</description>
