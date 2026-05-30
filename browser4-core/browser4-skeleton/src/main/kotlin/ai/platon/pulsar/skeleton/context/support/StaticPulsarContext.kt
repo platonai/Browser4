@@ -1,12 +1,17 @@
 package ai.platon.pulsar.skeleton.context.support
 
+import ai.platon.pulsar.common.getLogger
+import ai.platon.pulsar.common.logging.ThrottlingLogger
 import ai.platon.pulsar.skeleton.workflow.common.GlobalCache
 import org.springframework.context.support.StaticApplicationContext
 
 open class StaticPulsarContext(
     override val applicationContext: StaticApplicationContext = StaticApplicationContext(),
     autoRefresh: Boolean = true,
-): GenericPulsarContext(applicationContext, false) {
+) : GenericPulsarContext(applicationContext, false) {
+
+    private val logger = getLogger(StaticPulsarContext::class)
+    private val throttlingLogger = ThrottlingLogger(logger)
 
     private val defaults = ContextDefaults()
 
@@ -61,5 +66,7 @@ open class StaticPulsarContext(
         if (autoRefresh) {
             applicationContext.refresh()
         }
+
+        throttlingLogger.warn("WARMING: This context is used for TEST only")
     }
 }

@@ -13,7 +13,11 @@ import ai.platon.pulsar.skeleton.PulsarSettings
 import ai.platon.pulsar.skeleton.context.PulsarContexts
 import ai.platon.pulsar.skeleton.context.support.AbstractPulsarContext
 import org.springframework.context.ApplicationContext
+import org.springframework.context.annotation.AnnotationConfigApplicationContext
 import org.springframework.context.support.AbstractApplicationContext
+import org.springframework.context.support.ClassPathXmlApplicationContext
+import org.springframework.context.support.GenericApplicationContext
+import org.springframework.context.support.StaticApplicationContext
 
 /**
  * Coordinates creation and lifecycle of Pulsar agentic contexts and sessions.
@@ -39,8 +43,16 @@ object AgenticContexts {
      * @return The active or newly created [AgenticContext].
      */
     @Synchronized
-    fun create(): AgenticContext = (PulsarContexts.activeContext as? AgenticContext)
-        ?: create(StaticAgenticContext())
+    fun create(): AgenticContext {
+        return (PulsarContexts.activeContext as? AgenticContext)
+            ?: create(StaticAgenticContext())
+    }
+
+    @Synchronized
+    fun getOrCreate(): AgenticContext {
+        return (PulsarContexts.activeContext as? AgenticContext)
+            ?: getOrCreate(StaticAgenticContext())
+    }
 
     /**
      * Register and activate the given [context] as the global agentic context.
@@ -50,6 +62,9 @@ object AgenticContexts {
      */
     @Synchronized
     fun create(context: AgenticContext): AgenticContext = context.also { PulsarContexts.create(it) }
+
+    @Synchronized
+    fun getOrCreate(context: AgenticContext): AgenticContext = context.also { PulsarContexts.getOrCreate(it) }
 
     /**
      * Create or reuse an [AgenticContext] backed by a Spring [ApplicationContext].
@@ -61,12 +76,24 @@ object AgenticContexts {
      */
     @Synchronized
     fun create(applicationContext: ApplicationContext): AgenticContext {
+        return when (applicationContext) {
+            is ClassPathXmlApplicationContext -> create(ClassPathXmlAgenticContext(applicationContext))
+            is AnnotationConfigApplicationContext -> create(AnnotationConfigAgenticContext(applicationContext))
+            is StaticApplicationContext -> create(StaticAgenticContext(applicationContext))
+            is GenericApplicationContext -> create(GenericAgenticContext(applicationContext))
+            else -> create(BasicAgenticContext(applicationContext as AbstractApplicationContext))
+        }
+    }
+
+    @Synchronized
+    fun getOrCreate(applicationContext: ApplicationContext): AgenticContext {
         val context = PulsarContexts.activeContext
-        if (context is BasicAgenticContext && context.applicationContext == applicationContext) {
+
+        if ((context as? AbstractAgenticContext)?.applicationContext == applicationContext) {
             return PulsarContexts.activeContext as AgenticContext
         }
 
-        return create(BasicAgenticContext(applicationContext as AbstractApplicationContext))
+        return create(applicationContext)
     }
 
     /**

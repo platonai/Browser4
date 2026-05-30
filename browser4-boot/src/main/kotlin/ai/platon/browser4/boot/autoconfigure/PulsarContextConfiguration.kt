@@ -15,7 +15,7 @@ class PulsarContextConfiguration(
 ) {
     @Bean
     fun pulsarContext(): AgenticContext {
-        val context = AgenticContexts.create(applicationContext)
+        val context = AgenticContexts.getOrCreate(applicationContext)
         require(context is AbstractAgenticContext)
         require(context.applicationContext == applicationContext)
         return context

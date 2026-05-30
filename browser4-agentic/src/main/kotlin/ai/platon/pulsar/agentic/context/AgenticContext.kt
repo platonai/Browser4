@@ -168,7 +168,7 @@ open class StaticAgenticContext(
     override val browserManager: BrowserManager by lazy { DefaultBrowserManager(configuration) }
 
     /**
-     * Create a [BasicPulsarSession].
+     * Create a [StaticAgenticSession].
      *
      * > **NOTE:** The session is not a SQLSession, use [execute], [executeQuery] to access [ai.platon.pulsar.ql.SQLSession].
      * */
@@ -197,7 +197,9 @@ open class StaticAgenticContext(
 
 open class AnnotationConfigAgenticContext(
     override val applicationContext: AnnotationConfigApplicationContext,
-): AbstractAgenticContext(applicationContext) {
+) : AbstractAgenticContext(applicationContext) {
+
+    constructor(vararg componentClasses: Class<*>) : this(AnnotationConfigApplicationContext(*componentClasses))
 
     /**
      * Create a [BasicPulsarSession].
@@ -218,10 +220,14 @@ open class AnnotationConfigAgenticContext(
     }
 }
 
-class DefaultAnnotationConfigAgenticContext : AnnotationConfigAgenticContext(AnnotationConfigApplicationContext())
+class DefaultAnnotationConfigAgenticContext(
+    vararg componentClasses: Class<*>
+) : AnnotationConfigAgenticContext(*componentClasses)
 
-open class ClassPathXmlAgenticContext(configLocation: String) :
-    AbstractAgenticContext(ClassPathXmlApplicationContext(configLocation)) {
+open class ClassPathXmlAgenticContext(applicationContext: ClassPathXmlApplicationContext) :
+    AbstractAgenticContext(applicationContext) {
+
+    constructor(configLocation: String) : this(ClassPathXmlApplicationContext(configLocation))
 
     /**
      * Create a [BasicPulsarSession].

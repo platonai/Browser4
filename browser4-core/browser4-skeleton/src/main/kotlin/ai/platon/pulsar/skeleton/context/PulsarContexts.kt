@@ -3,12 +3,13 @@ package ai.platon.pulsar.skeleton.context
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.warnForClose
 import ai.platon.pulsar.skeleton.context.PulsarContexts.shutdown
-import ai.platon.pulsar.skeleton.context.support.AbstractPulsarContext
-import ai.platon.pulsar.skeleton.context.support.BasicPulsarContext
-import ai.platon.pulsar.skeleton.context.support.ClassPathXmlPulsarContext
-import ai.platon.pulsar.skeleton.context.support.StaticPulsarContext
+import ai.platon.pulsar.skeleton.context.support.*
 import org.springframework.context.ApplicationContext
+import org.springframework.context.annotation.AnnotationConfigApplicationContext
 import org.springframework.context.support.AbstractApplicationContext
+import org.springframework.context.support.ClassPathXmlApplicationContext
+import org.springframework.context.support.GenericApplicationContext
+import org.springframework.context.support.StaticApplicationContext
 
 /**
  * Manages the creation and lifecycle of Pulsar contexts and sessions.
@@ -23,7 +24,7 @@ import org.springframework.context.support.AbstractApplicationContext
  *
  * Additional context types:
  * - `SQLContexts`: enables X‑SQL for advanced web page modeling
- * - `AgenticContexts`: enables agentic/browser‑based agents (`AgenticSession`)
+ * - `PulsarContexts`: enables agentic/browser‑based agents (`AgenticSession`)
  *
  * This object coordinates the active context, shutdown hooks, and session creation.
  *
@@ -74,6 +75,8 @@ object PulsarContexts {
     @JvmStatic
     fun create(context: PulsarContext): PulsarContext {
         val activated = activeContext
+
+        // TODO: review the class check, is it a good choice to create at most one object for each context class?
         if (activated != null && activated::class == context::class && activated.isActive) {
             logger.info("Context is already activated | {}", activated::class)
             return activated
@@ -118,10 +121,27 @@ object PulsarContexts {
      * @param applicationContext The Spring application context
      * @return The active context
      */
+//    @Synchronized
+//    @JvmStatic
+//    fun create(applicationContext: ApplicationContext) =
+//        create(BasicPulsarContext(applicationContext as AbstractApplicationContext))
+
     @Synchronized
-    @JvmStatic
-    fun create(applicationContext: ApplicationContext) =
-        create(BasicPulsarContext(applicationContext as AbstractApplicationContext))
+    fun create(applicationContext: ApplicationContext): PulsarContext {
+        val context = activeContext
+
+        if (context is AbstractPulsarContext && context.applicationContext == applicationContext) {
+            return activeContext as PulsarContext
+        }
+
+        return when (applicationContext) {
+            is ClassPathXmlApplicationContext -> create(ClassPathXmlPulsarContext(applicationContext))
+            is AnnotationConfigApplicationContext -> create(AnnotationConfigPulsarContext(applicationContext))
+            is StaticApplicationContext -> create(StaticPulsarContext(applicationContext))
+            is GenericApplicationContext -> create(GenericPulsarContext(applicationContext))
+            else -> create(BasicPulsarContext(applicationContext as AbstractApplicationContext))
+        }
+    }
 
     @Synchronized
     @JvmStatic

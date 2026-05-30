@@ -7,6 +7,7 @@ open class GenericPulsarContext(
     override val applicationContext: GenericApplicationContext = GenericApplicationContext(),
     autoRefresh: Boolean = true
 ) : BasicPulsarContext(applicationContext) {
+
     private val defaults = ContextDefaults()
 
     /**

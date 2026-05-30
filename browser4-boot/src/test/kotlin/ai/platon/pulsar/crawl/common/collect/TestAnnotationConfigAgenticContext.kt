@@ -13,10 +13,7 @@ import kotlin.time.Duration.Companion.milliseconds
 
 class TestAnnotationConfigAgenticContext {
 
-    val context = DefaultAnnotationConfigAgenticContext().also {
-        it.applicationContext.register(Browser4AutoConfiguration::class.java)
-        it.applicationContext.refresh()
-    }
+    val context = DefaultAnnotationConfigAgenticContext(Browser4AutoConfiguration::class.java)
 
     @Test
     suspend fun whenCloseSession_thenBrowserClosed() {
