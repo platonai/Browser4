@@ -14,6 +14,6 @@ class BatchFetchComponent(
     immutableConfig: ImmutableConfig
 ) : FetchComponent(coreMetrics, protocolFactory, immutableConfig) {
     constructor(webDb: WebDb, immutableConfig: ImmutableConfig) : this(
-        webDb, GlobalCacheFactory(immutableConfig), null, ProtocolFactory(immutableConfig), immutableConfig
+        webDb, GlobalCacheFactory(immutableConfig), null, ProtocolFactory(listOf(), immutableConfig), immutableConfig
     )
 }
