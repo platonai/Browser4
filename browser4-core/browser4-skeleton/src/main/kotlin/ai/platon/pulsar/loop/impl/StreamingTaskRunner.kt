@@ -840,7 +840,7 @@ open class StreamingTaskRunner(
         val oneMinuteRate = globalState.globalMetrics.cancels.meter.oneMinuteRate
         if (isActive && oneMinuteRate >= 1.0) {
             globalState.criticalWarning = CriticalWarning.FAST_CANCELS
-            delay(1_000)
+            delay(1_000.milliseconds)
         }
     }
 

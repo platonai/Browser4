@@ -265,7 +265,7 @@ class Browser4AutoConfiguration {
         messageWriter: MiscMessageWriter,
         conf: MutableConfig,
     ): PageParser {
-        return PageParser(parserFactory = parserFactory, conf = conf, messageWriter = messageWriter)
+        return PageParser(parserFactory = parserFactory, conf = conf)
     }
 
     @Bean(name = ["privacyContextMonitor"], initMethod = "start", destroyMethod = "close")

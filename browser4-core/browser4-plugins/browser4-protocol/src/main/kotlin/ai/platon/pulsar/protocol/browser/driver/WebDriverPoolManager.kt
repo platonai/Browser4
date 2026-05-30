@@ -543,7 +543,7 @@ open class WebDriverPoolManager constructor(
             withTimeout(fetchTaskTimeout.toMillis().milliseconds) {
                 runCancelable(task, driver)
             }
-        } catch (e: TimeoutCancellationException) {
+        } catch (_: TimeoutCancellationException) {
             numTimeout.mark()
             val browserId = driver.browser.id
             logger.warn(
@@ -552,7 +552,8 @@ open class WebDriverPoolManager constructor(
             )
             null
         } finally {
-            _deferredTasks.remove(task.id)
+            val result = _deferredTasks.remove(task.id)
+            // require(result == deferred)
         }
     }
 
@@ -576,7 +577,8 @@ open class WebDriverPoolManager constructor(
             logger.info("Coroutine cancelled, return null result | {}", e.message)
             null
         } finally {
-            _deferredTasks.remove(task.id)
+            val result = _deferredTasks.remove(task.id)
+            // require(result == deferred)
         }
     }
 }
