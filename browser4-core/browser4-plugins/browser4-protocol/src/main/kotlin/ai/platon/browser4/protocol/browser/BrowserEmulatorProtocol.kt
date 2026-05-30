@@ -3,8 +3,6 @@ package ai.platon.browser4.protocol.browser
 import ai.platon.browser4.protocol.crowd.ForwardingProtocol
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.protocol.browser.emulator.IncognitoBrowserFetcher
-import ai.platon.pulsar.skeleton.context.PulsarContexts
-import ai.platon.pulsar.skeleton.workflow.protocol.ForwardingResponse
 import ai.platon.pulsar.skeleton.workflow.protocol.Response
 
 /**
@@ -22,33 +20,27 @@ import ai.platon.pulsar.skeleton.workflow.protocol.Response
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-class BrowserEmulatorProtocol : ForwardingProtocol() {
-    private val defaults by lazy { DefaultBrowserComponents(conf) }
-    private val context get() = PulsarContexts.getOrCreate()
+class BrowserEmulatorProtocol(
+    val browserEmulator: IncognitoBrowserFetcher
+) : ForwardingProtocol() {
 
-    private val browserEmulator: IncognitoBrowserFetcher by lazy {
-        context.getBeanOrNull(IncognitoBrowserFetcher::class) ?: defaults.incognitoBrowserFetcher
-    }
-
-    private val browserEmulatorOrNull get() = if (context.isActive) browserEmulator else null
+    override val name: String = "browser"
 
     @Throws(Exception::class)
     override suspend fun getResponseDeferred(page: WebPage, followRedirects: Boolean): Response? {
         require(page.isNotInternal) { "Unexpected internal page ${page.url}" }
-        return super.getResponseDeferred(page, followRedirects)
-            ?: browserEmulatorOrNull?.fetchContentDeferred(page)
-            ?: ForwardingResponse.canceled(page)
+        return super.getResponseDeferred(page, followRedirects) ?: browserEmulator.fetchContentDeferred(page)
     }
 
     override fun reset() {
-        browserEmulatorOrNull?.reset()
+        browserEmulator.reset()
     }
 
     override fun cancel(page: WebPage) {
-        browserEmulatorOrNull?.cancel(page)
+        browserEmulator.cancel(page)
     }
 
     override fun cancelAll() {
-        browserEmulatorOrNull?.cancelAll()
+        browserEmulator.cancelAll()
     }
 }

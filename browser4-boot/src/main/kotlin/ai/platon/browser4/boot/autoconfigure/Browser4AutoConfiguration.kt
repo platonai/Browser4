@@ -1,5 +1,6 @@
 package ai.platon.browser4.boot.autoconfigure
 
+import ai.platon.browser4.protocol.browser.BrowserEmulatorProtocol
 import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.pulsar.browser.manage.BasicBrowserManager
 import ai.platon.pulsar.browser.privacy.PrivacyContextMonitor
@@ -16,6 +17,7 @@ import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolMonitor
 import ai.platon.pulsar.protocol.browser.emulator.BrowserResponseHandler
 import ai.platon.pulsar.protocol.browser.emulator.BrowserResponseHandlerFactory
+import ai.platon.pulsar.protocol.browser.emulator.IncognitoBrowserFetcher
 import ai.platon.pulsar.protocol.browser.emulator.context.MultiPrivacyContextManager
 import ai.platon.pulsar.protocol.browser.emulator.impl.InteractiveBrowserEmulator
 import ai.platon.pulsar.protocol.browser.emulator.impl.PrivacyManagedBrowserFetcher
@@ -89,12 +91,6 @@ class Browser4AutoConfiguration {
         messageWriter: MiscMessageWriter,
     ): AppStatusTracker {
         return AppStatusTracker(metricsSystem, coreMetrics, messageWriter)
-    }
-
-    @Bean(name = ["protocolFactory"], destroyMethod = "close")
-    @ConditionalOnMissingBean(name = ["protocolFactory"])
-    fun protocolFactory(conf: MutableConfig): ProtocolFactory {
-        return ProtocolFactory(conf)
     }
 
     @Bean(name = ["globalCacheFactory"])
@@ -287,6 +283,23 @@ class Browser4AutoConfiguration {
     @ConditionalOnMissingBean(name = ["browserMonitor"])
     fun browserMonitor(browserManager: BasicBrowserManager): BrowserMonitor {
         return BrowserMonitor(browserManager, 30, 30)
+    }
+
+    @Bean(name = ["browserEmulatorProtocol"], destroyMethod = "close")
+    @ConditionalOnMissingBean(name = ["browserEmulatorProtocol"])
+    fun browserEmulatorProtocol(
+        browserFetcher: IncognitoBrowserFetcher,
+    ): BrowserEmulatorProtocol {
+        return BrowserEmulatorProtocol(browserFetcher)
+    }
+
+    @Bean(name = ["protocolFactory"], destroyMethod = "close")
+    @ConditionalOnMissingBean(name = ["protocolFactory"])
+    fun protocolFactory(
+        browserEmulatorProtocol: BrowserEmulatorProtocol,
+        conf: MutableConfig
+    ): ProtocolFactory {
+        return ProtocolFactory(listOf(browserEmulatorProtocol), conf)
     }
 
     @Bean(name = ["fetchComponent"], destroyMethod = "close")

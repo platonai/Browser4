@@ -28,6 +28,8 @@ open class ForwardingProtocol : AbstractHttpProtocol() {
     private val cacheCapacity = 200
     private val cache = ConcurrentExpiringLRUCache<String, Response>(cacheTTL, cacheCapacity)
 
+    override val name: String = "forward"
+
     override fun setResponse(response: Response) {
         cache.putDatum(response.url, response)
         logAfterPutResponse()
