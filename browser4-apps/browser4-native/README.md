@@ -80,7 +80,7 @@ mvnw package -Pwin-jpackage -Djpackage.appVersion=4.5.0 -DskipTests
 
 To customize the application icon:
 
-1. Create a directory: `browser4-app/browser4-agents/packaging/windows/`
+1. Create a directory: `browser4-apps/browser4-agents/packaging/windows/`
 2. Add your icon file: `Browser4.ico` (256x256 recommended)
 3. Uncomment and add the icon argument in pom.xml:
 

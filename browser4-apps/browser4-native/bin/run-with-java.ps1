@@ -30,5 +30,5 @@ Write-Info "native-image: $nativeVersion"
 
 Set-Location "D:\workspace\Browser4\Browser4-native";
 .\mvnw.cmd clean install -Pall-modules -DskipTests -am
-# .\mvnw.cmd -f browser4-app/browser4-native/pom.xml package -DskipTests -am
-.\mvnw.cmd -f browser4-app/browser4-native/pom.xml spring-boot:process-aot -DskipTests | Out-String
+# .\mvnw.cmd -f browser4-apps/browser4-native/pom.xml package -DskipTests -am
+.\mvnw.cmd -f browser4-apps/browser4-native/pom.xml spring-boot:process-aot -DskipTests | Out-String

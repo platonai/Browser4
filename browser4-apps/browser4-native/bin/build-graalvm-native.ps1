@@ -134,7 +134,7 @@ Import-VsBuildToolsEnvironment
 
 Write-Host ""
 Write-Host "Build Configuration:" -ForegroundColor Yellow
-Write-Host "  - Module: browser4-app/browser4-native" -ForegroundColor White
+Write-Host "  - Module: browser4-apps/browser4-native" -ForegroundColor White
 Write-Host "  - Profile: graalvm-native" -ForegroundColor White
 Write-Host "  - Skip Tests: $(!$WithTests)" -ForegroundColor White
 Write-Host "  - Check Only: $CheckOnly" -ForegroundColor White
@@ -148,7 +148,7 @@ if ($CheckOnly) {
 $mvnArgs = @(
     "clean",
     "package",
-    "-pl", "browser4-app/browser4-native",
+    "-pl", "browser4-apps/browser4-native",
     "-am",
     "-Pgraalvm-native"
 )

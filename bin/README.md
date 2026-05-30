@@ -7,7 +7,7 @@ This directory contains scripts for building, running, testing, and maintaining 
 ### `browser4.ps1`, `browser4.sh`
 
 Start the Browser4 server (Agentic Service).
-- Copies the built artifact from `browser4-app/browser4-agents/target/` to the root `target/` directory.
+- Copies the built artifact from `browser4-apps/browser4-agents/target/` to the root `target/` directory.
 - Runs the application using `java -jar`.
 - **Note:** You must build the project first (e.g., using `build` or `build-run`).
 
