@@ -618,7 +618,7 @@ fn build_maven_launch_spec(repo_root: &Path, port: u16) -> Result<ServerLaunchSp
         ));
     }
 
-    let module_dir = repo_root.join("browser4-app").join("browser4-agents");
+    let module_dir = repo_root.join("browser4-apps").join("browser4-agents");
     if !module_dir.join("pom.xml").is_file() {
         return Err(format!(
             "Browser4 agents module not found under {}",
@@ -1065,7 +1065,7 @@ fn browser4_jar_candidates(project_root: Option<&Path>) -> Vec<PathBuf> {
 
     if let Some(root) = project_root {
         candidates.push(
-            root.join("browser4-app")
+            root.join("browser4-apps")
                 .join("browser4-agents")
                 .join("target")
                 .join(BROWSER4_JAR_FILE_NAME),
@@ -1715,13 +1715,13 @@ mod tests {
 
     fn create_browser4_root(tmp: &TempDir) -> PathBuf {
         let root = tmp.path().join("Browser4");
-        create_dir_all(root.join("browser4-app").join("browser4-agents")).unwrap();
+        create_dir_all(root.join("browser4-apps").join("browser4-agents")).unwrap();
         create_dir_all(root.join("sdks").join("browser4-cli")).unwrap();
         write(root.join("ROOT.md"), "# Browser4\n").unwrap();
         write(root.join("VERSION"), "0.1.0\n").unwrap();
         write(root.join("pom.xml"), "<project />").unwrap();
         write(
-            root.join("browser4-app")
+            root.join("browser4-apps")
                 .join("browser4-agents")
                 .join("pom.xml"),
             "<project />",
@@ -2227,11 +2227,11 @@ mod tests {
     fn test_is_browser4_root_rejects_missing_root_marker() {
         let tmp = test_temp_dir();
         let root = tmp.path().join("Browser4");
-        create_dir_all(root.join("browser4-app").join("browser4-agents")).unwrap();
+        create_dir_all(root.join("browser4-apps").join("browser4-agents")).unwrap();
         create_dir_all(root.join("sdks").join("browser4-cli")).unwrap();
         write(root.join("pom.xml"), "<project />").unwrap();
         write(
-            root.join("browser4-app")
+            root.join("browser4-apps")
                 .join("browser4-agents")
                 .join("pom.xml"),
             "<project />",
@@ -2249,13 +2249,13 @@ mod tests {
     fn create_browser4_root_in(parent: &Path) -> PathBuf {
         let root = parent.join("Browser4");
         create_dir_all(&root).unwrap();
-        create_dir_all(root.join("browser4-app").join("browser4-agents")).unwrap();
+        create_dir_all(root.join("browser4-apps").join("browser4-agents")).unwrap();
         create_dir_all(root.join("sdks").join("browser4-cli")).unwrap();
         write(root.join("ROOT.md"), "# Browser4\n").unwrap();
         write(root.join("VERSION"), "0.1.0\n").unwrap();
         write(root.join("pom.xml"), "<project />").unwrap();
         write(
-            root.join("browser4-app")
+            root.join("browser4-apps")
                 .join("browser4-agents")
                 .join("pom.xml"),
             "<project />",

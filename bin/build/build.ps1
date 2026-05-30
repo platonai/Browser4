@@ -104,7 +104,7 @@ Function Invoke-CargoBuild {
 Function Copy-Browser4JarToTarget {
   param([string]$RepoRoot)
 
-  $sourceJar = Join-Path $RepoRoot 'browser4-app\browser4-agents\target\Browser4.jar'
+  $sourceJar = Join-Path $RepoRoot 'browser4-apps\browser4-agents\target\Browser4.jar'
   if (-not (Test-Path -LiteralPath $sourceJar)) {
     throw "Browser4.jar not found at $sourceJar"
   }

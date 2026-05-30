@@ -465,7 +465,7 @@ fn browser_marker_search_roots() -> Vec<PathBuf> {
             let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
                 continue;
             };
-            if !name.starts_with("browser4-app") {
+            if !name.starts_with("browser4-apps") {
                 continue;
             }
 
