@@ -15,7 +15,6 @@
  */
 package ai.platon.browser4.protocol.browser
 
-import ai.platon.browser4.protocol.browser.impl.DefaultBrowserFactory
 import ai.platon.pulsar.browser.manage.BasicBrowserManager
 import ai.platon.pulsar.browser.privacy.PrivacyManager
 import ai.platon.pulsar.common.ObjectCache
@@ -30,6 +29,7 @@ import ai.platon.pulsar.protocol.browser.emulator.context.MultiPrivacyContextMan
 import ai.platon.pulsar.protocol.browser.emulator.impl.BrowserResponseHandlerImpl
 import ai.platon.pulsar.protocol.browser.emulator.impl.InteractiveBrowserEmulator
 import ai.platon.pulsar.protocol.browser.emulator.impl.PrivacyManagedBrowserFetcher
+import ai.platon.pulsar.protocol.browser.impl.DefaultBrowserFactory
 
 class DefaultBrowserManager(conf: ImmutableConfig) : BasicBrowserManager(DefaultBrowserFactory(conf), conf)
 

@@ -103,11 +103,6 @@ object PulsarContexts {
      * @param applicationContext The Spring application context
      * @return The active context
      */
-//    @Synchronized
-//    @JvmStatic
-//    fun create(applicationContext: ApplicationContext) =
-//        create(BasicPulsarContext(applicationContext as AbstractApplicationContext))
-
     @Synchronized
     fun create(applicationContext: ApplicationContext): PulsarContext {
         return when (applicationContext) {
