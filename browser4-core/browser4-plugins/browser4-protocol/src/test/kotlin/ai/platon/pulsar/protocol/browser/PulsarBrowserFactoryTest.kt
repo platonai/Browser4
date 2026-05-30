@@ -1,6 +1,6 @@
 package ai.platon.pulsar.protocol.browser
 
-import ai.platon.browser4.protocol.browser.PulsarBrowserFactory
+import ai.platon.browser4.chrome.manage.PulsarBrowserFactory
 import ai.platon.pulsar.browser.BrowserId
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.core.api.Browser

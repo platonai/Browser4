@@ -31,7 +31,6 @@ import ai.platon.pulsar.skeleton.workflow.component.BatchFetchComponent
 import ai.platon.pulsar.skeleton.workflow.component.LoadComponent
 import ai.platon.pulsar.skeleton.workflow.component.ParseComponent
 import ai.platon.pulsar.skeleton.workflow.component.UpdateComponent
-import ai.platon.pulsar.skeleton.workflow.fetch.BrowserFetcher
 import ai.platon.pulsar.skeleton.workflow.filter.ChainedUrlNormalizer
 import org.slf4j.LoggerFactory
 import org.springframework.beans.BeansException
@@ -48,7 +47,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.reflect.KClass
 
 abstract class AbstractPulsarContext(
-    val applicationContext: AbstractApplicationContext
+    open val applicationContext: AbstractApplicationContext
 ) : PulsarContext, AutoCloseable {
 
     companion object {
@@ -161,8 +160,6 @@ abstract class AbstractPulsarContext(
     open val updateComponent: UpdateComponent get() = getBean()
 
     open val loadComponent: LoadComponent get() = getBean()
-
-    open val browserFetcher: BrowserFetcher get() = getBean()
 
     override val globalCache: GlobalCache get() = globalCacheFactory.globalCache
 

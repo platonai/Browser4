@@ -1,6 +1,5 @@
 package ai.platon.pulsar.agentic.tools
 
-import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.model.ToolCall
 import io.mockk.mockk

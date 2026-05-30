@@ -47,6 +47,12 @@
 
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
+            <artifactId>browser4-resources</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-ql</artifactId>
             <!-- Exclude the original version and use the browser4 managed ones -->
             <exclusions>

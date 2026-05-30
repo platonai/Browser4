@@ -39,6 +39,7 @@ function Print-Usage {
     Write-Host "  rest        Run REST module tests"
     Write-Host "  skills      Run skills-focused agentic tests"
     Write-Host "  mcp         Run MCP-focused agentic tests"
+    Write-Host "  resume      Resume from the last failed module (-rf)"
     Write-Host "  browser4    Run all Browser4 main tests (fast, rest, it, e2e)"
     Write-Host "  b4          Alias for browser4"
     Write-Host ""
@@ -51,6 +52,7 @@ function Print-Usage {
     Write-Host "  test.ps1 mock-site -Dmock.site.port=18080"
     Write-Host "  test.ps1 skills                     # Run skills-focused agentic tests"
     Write-Host "  test.ps1 mcp                        # Run MCP-focused agentic tests"
+    Write-Host "  test.ps1 resume                     # Resume from the last failed module"
     Write-Host "  test.ps1 browser4                   # Run all Browser4 main tests"
     Write-Host "  test.ps1 b4                         # Alias for browser4"
     Write-Host '  test.ps1 it -pl browser4-core       # Pass additional Maven args through'
@@ -58,7 +60,7 @@ function Print-Usage {
 }
 
 function Exit-UnknownTestType([string]$testType) {
-    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, mock-site, rest, skills, mcp, browser4, b4."
+    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, mock-site, rest, skills, mcp, resume, browser4, b4."
     exit 1
 }
 
@@ -264,7 +266,134 @@ function Invoke-MockSiteBoot([string[]]$additionalArgs) {
     }
 }
 
-$knownTestTypes = @('fast', 'it', 'e2e', 'cli', 'browser4-cli', 'mock-site', 'rest', 'skills', 'mcp', 'browser4', 'b4')
+# Read the parent POM's <modules> section to get the reactor build order.
+function Get-ReactorModuleOrder {
+    $parentPom = Join-Path $repoRoot 'pom.xml'
+    $order = @()
+    $inModules = $false
+
+    foreach ($line in (Get-Content $parentPom)) {
+        if ($line -match '<modules>') {
+            $inModules = $true
+            continue
+        }
+        if ($line -match '</modules>') {
+            break
+        }
+        if ($inModules -and ($line -match '<module>(.+)</module>')) {
+            $order += $Matches[1]
+        }
+    }
+
+    return $order
+}
+
+# Find the artifactId for a module directory by reading its pom.xml.
+# Skips the <parent> block to return the module's own artifactId.
+function Get-ArtifactIdForDir([string]$moduleDir) {
+    $pom = Join-Path $moduleDir 'pom.xml'
+    if (Test-Path $pom) {
+        $inParent = $false
+        foreach ($line in (Get-Content $pom)) {
+            if ($line -match '<parent>') {
+                $inParent = $true
+            }
+            elseif ($line -match '</parent>') {
+                $inParent = $false
+            }
+            elseif (-not $inParent -and ($line -match '<artifactId>([^<]+)</artifactId>')) {
+                return $Matches[1]
+            }
+        }
+    }
+    return $null
+}
+
+function Invoke-ResumeTests([string[]]$additionalArgs) {
+    Write-Host "=========================================="
+    Write-Host "Searching for failed modules to resume from..."
+    Write-Host "=========================================="
+
+    # Collect all module directories that have failing test reports.
+    $failedModuleDirs = @()
+    $reportsDirs = Get-ChildItem -Path $repoRoot -Recurse -Directory -Filter 'surefire-reports' -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match '\\target\\surefire-reports$' }
+
+    foreach ($dir in $reportsDirs) {
+        $hasFailure = Get-ChildItem -Path $dir.FullName -Filter '*.xml' -ErrorAction SilentlyContinue |
+            Where-Object { (Select-String -Path $_.FullName -Pattern '<failure|<error' -Quiet) } |
+            Select-Object -First 1
+
+        if ($hasFailure) {
+            # dir is <repo>\module\target\surefire-reports, parent of parent is module dir
+            $moduleDir = Split-Path -Parent (Split-Path -Parent $dir.FullName)
+            $failedModuleDirs += $moduleDir
+        }
+    }
+
+    if ($failedModuleDirs.Count -eq 0) {
+        Write-Host "No previous test failures found to resume from."
+        exit 0
+    }
+
+    # Build a hashtable: artifactId -> module directory
+    $artifactToDir = @{}
+    foreach ($dir in $failedModuleDirs) {
+        $aid = Get-ArtifactIdForDir $dir
+        if ($aid) {
+            $artifactToDir[$aid] = $dir
+        }
+    }
+
+    # Walk the reactor order from the parent POM to find the first failed module.
+    $resumeFrom = $null
+    $reactorOrder = Get-ReactorModuleOrder
+
+    foreach ($modulePath in $reactorOrder) {
+        $moduleDir = Join-Path $repoRoot $modulePath
+        if (Test-Path (Join-Path $moduleDir 'pom.xml')) {
+            $aid = Get-ArtifactIdForDir $moduleDir
+            if ($aid -and $artifactToDir.ContainsKey($aid)) {
+                $resumeFrom = $aid
+                break
+            }
+        }
+    }
+
+    if (-not $resumeFrom) {
+        Write-Host "Could not match any failed module to the reactor order."
+        exit 1
+    }
+
+    Write-Host "Resuming from module: $resumeFrom"
+    Write-Host ""
+
+    $mvnTestArgs = @('test', '-P=-examples', '-rf', ":$resumeFrom") + $additionalArgs
+
+    $mvnCmd = Join-Path $repoRoot 'mvnw.cmd'
+    try {
+        & $mvnCmd @mvnTestArgs
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -ne 0) {
+            Write-Host ""
+            Write-Host "=========================================="
+            Write-Host "❌ Tests failed with exit code $exitCode"
+            Write-Host "=========================================="
+            exit $exitCode
+        }
+
+        Write-Host ""
+        Write-Host "=========================================="
+        Write-Host "✅ Resume tests completed successfully"
+        Write-Host "=========================================="
+    }
+    catch {
+        Write-Error "Failed to execute resume tests: $_"
+        exit 1
+    }
+}
+
+$knownTestTypes = @('fast', 'it', 'e2e', 'cli', 'browser4-cli', 'mock-site', 'rest', 'skills', 'mcp', 'resume', 'browser4', 'b4')
 $testTypes = @()
 $additionalArgs = @()
 $parsingTestTypes = $true
@@ -295,6 +424,16 @@ foreach ($arg in $normalizedScriptArgs) {
 
 if ($testTypes.Count -eq 0) {
     $testTypes += 'fast'
+}
+
+# Handle 'resume' test type: find last failed module and resume with -rf
+if ($testTypes -contains 'resume') {
+    if ($testTypes.Count -gt 1) {
+        Write-Error "'resume' must be the only test type. It resumes from the last failed module."
+        exit 1
+    }
+    Invoke-ResumeTests -additionalArgs $additionalArgs
+    exit 0
 }
 
 $mavenTests = @()

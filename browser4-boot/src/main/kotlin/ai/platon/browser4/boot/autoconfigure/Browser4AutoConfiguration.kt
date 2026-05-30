@@ -1,6 +1,7 @@
 package ai.platon.browser4.boot.autoconfigure
 
 import ai.platon.pulsar.browser.common.BrowserSettings
+import ai.platon.pulsar.browser.manage.BasicBrowserManager
 import ai.platon.pulsar.browser.privacy.PrivacyContextMonitor
 import ai.platon.pulsar.common.config.MutableConfig
 import ai.platon.pulsar.common.proxy.ProxyLoader
@@ -18,7 +19,6 @@ import ai.platon.pulsar.protocol.browser.emulator.BrowserResponseHandlerFactory
 import ai.platon.pulsar.protocol.browser.emulator.context.MultiPrivacyContextManager
 import ai.platon.pulsar.protocol.browser.emulator.impl.InteractiveBrowserEmulator
 import ai.platon.pulsar.protocol.browser.emulator.impl.PrivacyManagedBrowserFetcher
-import ai.platon.pulsar.protocol.browser.impl.BasicBrowserManager
 import ai.platon.pulsar.protocol.browser.impl.BrowserMonitor
 import ai.platon.pulsar.protocol.browser.impl.DefaultBrowserFactory
 import ai.platon.pulsar.skeleton.CoreMetrics
@@ -38,15 +38,17 @@ import ai.platon.pulsar.skeleton.workflow.parse.html.PrimerHtmlParser
 import ai.platon.pulsar.skeleton.workflow.protocol.ProtocolFactory
 import ai.platon.pulsar.skeleton.workflow.schedule.DefaultFetchSchedule
 import ai.platon.pulsar.tools.TikaParser
+import org.springframework.boot.autoconfigure.AutoConfiguration
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.context.annotation.Bean
-import org.springframework.context.annotation.Configuration
+import org.springframework.context.annotation.Import
 import org.springframework.context.annotation.Lazy
 import org.springframework.core.env.Environment
 
-@Configuration(proxyBeanMethods = false)
+@AutoConfiguration
+@Import(PulsarContextConfiguration::class)
 @Lazy
-class PulsarBeansAutoConfiguration {
+class Browser4AutoConfiguration {
     @Bean(name = ["conf"])
     @ConditionalOnMissingBean(name = ["conf"])
     fun conf(environment: Environment): MutableConfig {

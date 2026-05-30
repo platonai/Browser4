@@ -13,10 +13,14 @@ import ai.platon.pulsar.skeleton.PulsarSettings
 import ai.platon.pulsar.skeleton.context.PulsarContexts
 import ai.platon.pulsar.skeleton.context.support.AbstractPulsarContext
 import org.springframework.context.ApplicationContext
+import org.springframework.context.annotation.AnnotationConfigApplicationContext
 import org.springframework.context.support.AbstractApplicationContext
+import org.springframework.context.support.ClassPathXmlApplicationContext
+import org.springframework.context.support.GenericApplicationContext
+import org.springframework.context.support.StaticApplicationContext
 
 /**
- * Coordinates creation and lifecycle of Pulsar agentic contexts and sessions.
+ * Coordinates creation and lifecycle of agentic contexts and sessions.
  *
  * What an AgenticSession provides:
  * - Agentic/browser-based agents
@@ -39,8 +43,14 @@ object AgenticContexts {
      * @return The active or newly created [AgenticContext].
      */
     @Synchronized
-    fun create(): AgenticContext = (PulsarContexts.activeContext as? AgenticContext)
-        ?: create(DefaultClassPathXmlAgenticContext())
+    fun create(): AgenticContext {
+        return create(StaticAgenticContext())
+    }
+
+    @Synchronized
+    fun getOrCreate(): AgenticContext {
+        return getActivatedContextOrNull() ?: create()
+    }
 
     /**
      * Register and activate the given [context] as the global agentic context.
@@ -49,11 +59,18 @@ object AgenticContexts {
      * @return The same [AgenticContext] for call chaining.
      */
     @Synchronized
-    fun create(context: AgenticContext): AgenticContext = context.also { PulsarContexts.create(it) }
+    fun create(context: AgenticContext): AgenticContext {
+        return PulsarContexts.create(context) as AgenticContext
+    }
+
+    @Synchronized
+    fun getOrCreate(context: AgenticContext): AgenticContext {
+        return getActivatedContextOrNull() ?: create(context)
+    }
 
     /**
      * Create or reuse an [AgenticContext] backed by a Spring [ApplicationContext].
-     * If the current active context is a [QLAgenticContext] with the same application context,
+     * If the current active context is a [GenericAgenticContext] with the same application context,
      * it will be reused.
      *
      * @param applicationContext The Spring application context.
@@ -61,22 +78,25 @@ object AgenticContexts {
      */
     @Synchronized
     fun create(applicationContext: ApplicationContext): AgenticContext {
-        val context = PulsarContexts.activeContext
-        if (context is QLAgenticContext && context.applicationContext == applicationContext) {
-            return PulsarContexts.activeContext as AgenticContext
+        return when (applicationContext) {
+            is ClassPathXmlApplicationContext -> create(ClassPathXmlAgenticContext(applicationContext))
+            is AnnotationConfigApplicationContext -> create(AnnotationConfigAgenticContext(applicationContext))
+            is StaticApplicationContext -> create(StaticAgenticContext(applicationContext))
+            is GenericApplicationContext -> create(GenericAgenticContext(applicationContext))
+            else -> create(BasicAgenticContext(applicationContext as AbstractApplicationContext))
         }
-
-        return create(QLAgenticContext(applicationContext as AbstractApplicationContext))
     }
 
-    /**
-     * Create an [AgenticContext] from a classpath XML [contextLocation].
-     *
-     * @param contextLocation Classpath location of the Spring XML.
-     * @return The newly created [AgenticContext].
-     */
     @Synchronized
-    fun create(contextLocation: String): AgenticContext = create(ClassPathXmlAgenticContext(contextLocation))
+    fun getOrCreate(applicationContext: ApplicationContext): AgenticContext {
+        val context = getActivatedContextOrNull()
+
+        if ((context as? AbstractAgenticContext)?.applicationContext == applicationContext) {
+            return context
+        }
+
+        return create(applicationContext)
+    }
 
     /**
      * Create a new [AgenticSession] with the provided [settings].
@@ -220,4 +240,13 @@ object AgenticContexts {
      * Close the context (alias of [shutdown]).
      */
     fun close() = shutdown()
+
+    private fun getActivatedContextOrNull(): AgenticContext? {
+        val activated = PulsarContexts.activeContext
+        if (activated is AgenticContext && activated.isActive) {
+            return activated
+        }
+
+        return null
+    }
 }

@@ -12,7 +12,7 @@ import com.google.gson.Gson
 import kotlin.math.roundToInt
 
 class ScreenshotHandler(
-    private val pageHandler: PageHandler,
+    private val page: PageHandler,
     private val bp: BrowserProtocol,
 ) {
     private val logger = getLogger(this)
@@ -56,7 +56,7 @@ class ScreenshotHandler(
     }
 
     suspend fun screenshot(selector: String): String? {
-        val node = pageHandler.queryLocator(selector)
+        val node = page.dom.queryLocator(selector)
         if (node == null) {
             logger.info("No such element <{}>", selector)
             return null
@@ -129,7 +129,7 @@ class ScreenshotHandler(
         }
 
         // must scroll to top to calculate the client rect
-        pageHandler.js.evaluate("__pulsar_utils__.scrollToTop()")
+        page.js.evaluate("__pulsar_utils__.scrollToTop()")
 
         val rect = calculateNodeClip0(node, selector)
 
@@ -155,12 +155,12 @@ class ScreenshotHandler(
         println("\n")
         println("===== $selector ${node.nodeId}")
 
-        var clientRects = pageHandler.js.evaluate("__pulsar_utils__.queryClientRects('$selector')")
+        var clientRects = page.js.evaluate("__pulsar_utils__.queryClientRects('$selector')")
         println(clientRects)
         var contentQuads = activeCdp()?.getContentQuads(node.nodeId)
         println(contentQuads)
 
-        var clientRect = pageHandler.js.evaluate("__pulsar_utils__.queryClientRect('$selector')")?.toString()
+        var clientRect = page.js.evaluate("__pulsar_utils__.queryClientRect('$selector')")?.toString()
 
         println("clientRect: ")
         println(clientRect)
@@ -170,14 +170,14 @@ class ScreenshotHandler(
         println(clickableDOM.clickablePoint())
 
         println("== scrollToTop ==")
-        pageHandler.js.evaluate("__pulsar_utils__.scrollToTop()")
+        page.js.evaluate("__pulsar_utils__.scrollToTop()")
 
-        clientRects = pageHandler.js.evaluate("__pulsar_utils__.queryClientRects('$selector')")
+        clientRects = page.js.evaluate("__pulsar_utils__.queryClientRects('$selector')")
         println(clientRects)
         contentQuads = activeCdp()?.getContentQuads(node.nodeId)
         println(contentQuads)
 
-        clientRect = pageHandler.js.evaluate("__pulsar_utils__.queryClientRect('$selector')")?.toString()
+        clientRect = page.js.evaluate("__pulsar_utils__.queryClientRect('$selector')")?.toString()
 
         println("clientRect: ")
         println(clientRect)

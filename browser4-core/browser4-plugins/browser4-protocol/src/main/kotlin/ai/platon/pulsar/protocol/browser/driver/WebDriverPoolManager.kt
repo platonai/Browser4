@@ -5,6 +5,7 @@ import ai.platon.pulsar.browser.BrowserId
 import ai.platon.pulsar.browser.common.BrowserLaunchException
 import ai.platon.pulsar.browser.common.BrowserUnavailableException
 import ai.platon.pulsar.browser.common.WebDriverException
+import ai.platon.pulsar.browser.manage.BasicBrowserManager
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.concurrent.PreemptChannelSupport
 import ai.platon.pulsar.common.config.AppConstants.DEFAULT_BROWSER_MAX_OPEN_TABS
@@ -15,7 +16,6 @@ import ai.platon.pulsar.core.api.BrowserManager
 import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.protocol.browser.emulator.WebDriverPoolException
 import ai.platon.pulsar.protocol.browser.emulator.WebDriverPoolExhaustedException
-import ai.platon.pulsar.protocol.browser.impl.BasicBrowserManager
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import ai.platon.pulsar.skeleton.common.persist.ext.eventHandlers
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
