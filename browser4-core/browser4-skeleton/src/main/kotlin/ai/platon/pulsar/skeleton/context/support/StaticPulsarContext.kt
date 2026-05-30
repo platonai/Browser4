@@ -4,8 +4,9 @@ import ai.platon.pulsar.skeleton.workflow.common.GlobalCache
 import org.springframework.context.support.StaticApplicationContext
 
 open class StaticPulsarContext(
-    override val applicationContext: StaticApplicationContext = StaticApplicationContext()
-): GenericPulsarContext(applicationContext) {
+    override val applicationContext: StaticApplicationContext = StaticApplicationContext(),
+    autoRefresh: Boolean = true,
+): GenericPulsarContext(applicationContext, false) {
 
     private val defaults = ContextDefaults()
 
@@ -57,6 +58,8 @@ open class StaticPulsarContext(
     override val taskLoops get() = defaults.taskLoops
 
     init {
-        applicationContext.refresh()
+        if (autoRefresh) {
+            applicationContext.refresh()
+        }
     }
 }

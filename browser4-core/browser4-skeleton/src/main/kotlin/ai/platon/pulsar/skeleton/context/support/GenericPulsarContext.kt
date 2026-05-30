@@ -4,7 +4,8 @@ import ai.platon.pulsar.browser.BrowserManager
 import org.springframework.context.support.GenericApplicationContext
 
 open class GenericPulsarContext(
-    override val applicationContext: GenericApplicationContext = GenericApplicationContext()
+    override val applicationContext: GenericApplicationContext = GenericApplicationContext(),
+    autoRefresh: Boolean = true
 ) : BasicPulsarContext(applicationContext) {
     private val defaults = ContextDefaults()
 
@@ -56,6 +57,8 @@ open class GenericPulsarContext(
     override val taskLoops get() = getBeanOrNull() ?: defaults.taskLoops
 
     init {
-        applicationContext.refresh()
+        if (autoRefresh) {
+            applicationContext.refresh()
+        }
     }
 }
