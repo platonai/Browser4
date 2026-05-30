@@ -24,7 +24,7 @@ import ai.platon.pulsar.skeleton.workflow.protocol.Response
  */
 class BrowserEmulatorProtocol : ForwardingProtocol() {
     private val defaults by lazy { DefaultBrowserComponents(conf) }
-    private val context get() = PulsarContexts.create()
+    private val context get() = PulsarContexts.getOrCreate()
 
     private val browserEmulator: IncognitoBrowserFetcher by lazy {
         context.getBeanOrNull(IncognitoBrowserFetcher::class) ?: defaults.incognitoBrowserFetcher

@@ -20,7 +20,7 @@ import org.springframework.context.support.GenericApplicationContext
 import org.springframework.context.support.StaticApplicationContext
 
 /**
- * Coordinates creation and lifecycle of Pulsar agentic contexts and sessions.
+ * Coordinates creation and lifecycle of agentic contexts and sessions.
  *
  * What an AgenticSession provides:
  * - Agentic/browser-based agents
@@ -44,14 +44,12 @@ object AgenticContexts {
      */
     @Synchronized
     fun create(): AgenticContext {
-        return (PulsarContexts.activeContext as? AgenticContext)
-            ?: create(StaticAgenticContext())
+        return create(StaticAgenticContext())
     }
 
     @Synchronized
     fun getOrCreate(): AgenticContext {
-        return (PulsarContexts.activeContext as? AgenticContext)
-            ?: getOrCreate(StaticAgenticContext())
+        return getActivatedContextOrNull() ?: create()
     }
 
     /**
@@ -61,10 +59,14 @@ object AgenticContexts {
      * @return The same [AgenticContext] for call chaining.
      */
     @Synchronized
-    fun create(context: AgenticContext): AgenticContext = context.also { PulsarContexts.create(it) }
+    fun create(context: AgenticContext): AgenticContext {
+        return PulsarContexts.create(context) as AgenticContext
+    }
 
     @Synchronized
-    fun getOrCreate(context: AgenticContext): AgenticContext = context.also { PulsarContexts.getOrCreate(it) }
+    fun getOrCreate(context: AgenticContext): AgenticContext {
+        return getActivatedContextOrNull() ?: create(context)
+    }
 
     /**
      * Create or reuse an [AgenticContext] backed by a Spring [ApplicationContext].
@@ -87,10 +89,10 @@ object AgenticContexts {
 
     @Synchronized
     fun getOrCreate(applicationContext: ApplicationContext): AgenticContext {
-        val context = PulsarContexts.activeContext
+        val context = getActivatedContextOrNull()
 
         if ((context as? AbstractAgenticContext)?.applicationContext == applicationContext) {
-            return PulsarContexts.activeContext as AgenticContext
+            return context
         }
 
         return create(applicationContext)
@@ -238,4 +240,13 @@ object AgenticContexts {
      * Close the context (alias of [shutdown]).
      */
     fun close() = shutdown()
+
+    private fun getActivatedContextOrNull(): AgenticContext? {
+        val activated = PulsarContexts.activeContext
+        if (activated is AgenticContext && activated.isActive) {
+            return activated
+        }
+
+        return null
+    }
 }

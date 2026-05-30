@@ -50,19 +50,14 @@ object PulsarContexts {
     @Synchronized
     @JvmStatic
     fun create(): PulsarContext {
-        val activated = activeContext
-        if (activated != null && activated.isActive) {
-            logger.debug("Context is already activated | {}#{}", activated::class, activated.id)
-            return activated
-        }
-
-        activeContext = create(StaticPulsarContext())
-        return activeContext!!
+        return create(StaticPulsarContext()).also { activeContext = it }
     }
 
     @Synchronized
     @JvmStatic
-    fun getOrCreate(): PulsarContext = create()
+    fun getOrCreate(): PulsarContext {
+        return getActivatedContextOrNull() ?: create()
+    }
 
     /**
      * Activates the given context unless an equivalent active context already exists; in that case the existing one is returned.
@@ -74,14 +69,6 @@ object PulsarContexts {
     @Synchronized
     @JvmStatic
     fun create(context: PulsarContext): PulsarContext {
-        val activated = activeContext
-
-        // TODO: review the class check, is it a good choice to create at most one object for each context class?
-        if (activated != null && activated::class == context::class && activated.isActive) {
-            logger.info("Context is already activated | {}", activated::class)
-            return activated
-        }
-
         contexts.add(context)
         activeContext = context
 
@@ -97,22 +84,17 @@ object PulsarContexts {
 
     @Synchronized
     @JvmStatic
-    fun getOrCreate(context: PulsarContext): PulsarContext = create(context)
+    fun getOrCreate(context: PulsarContext): PulsarContext {
+        val activated = getActivatedContextOrNull()
 
-    /**
-     * Creates and activates a new context from the given Spring XML location if none compatible is active;
-     * otherwise returns the existing active context.
-     *
-     * @param contextLocation The classpath location of the Spring XML context
-     * @return The active context
-     */
-    @Synchronized
-    @JvmStatic
-    fun create(contextLocation: String) = create(ClassPathXmlPulsarContext(contextLocation))
+        // TODO: review the class check, is it a good choice to create at most one object for each context class?
+        if (activated != null && activated::class == context::class && activated.isActive) {
+            logger.info("Context is already activated | {}", activated::class)
+            return activated
+        }
 
-    @Synchronized
-    @JvmStatic
-    fun getOrCreate(contextLocation: String): PulsarContext = create(contextLocation)
+        return create(context)
+    }
 
     /**
      * Creates and activates a new context backed by the provided Spring application context if none compatible is active;
@@ -128,12 +110,6 @@ object PulsarContexts {
 
     @Synchronized
     fun create(applicationContext: ApplicationContext): PulsarContext {
-        val context = activeContext
-
-        if (context is AbstractPulsarContext && context.applicationContext == applicationContext) {
-            return activeContext as PulsarContext
-        }
-
         return when (applicationContext) {
             is ClassPathXmlApplicationContext -> create(ClassPathXmlPulsarContext(applicationContext))
             is AnnotationConfigApplicationContext -> create(AnnotationConfigPulsarContext(applicationContext))
@@ -145,7 +121,30 @@ object PulsarContexts {
 
     @Synchronized
     @JvmStatic
-    fun getOrCreate(applicationContext: ApplicationContext) = create(applicationContext)
+    fun getOrCreate(applicationContext: ApplicationContext): PulsarContext {
+        val context = activeContext
+
+        if ((context as? AbstractPulsarContext)?.applicationContext == applicationContext) {
+            return activeContext as PulsarContext
+        }
+
+        return create(applicationContext)
+    }
+
+    /**
+     * Creates and activates a new context from the given Spring XML location if none compatible is active;
+     * otherwise returns the existing active context.
+     *
+     * @param contextLocation The classpath location of the Spring XML context
+     * @return The active context
+     */
+    @Synchronized
+    @JvmStatic
+    fun create(contextLocation: String) = create(ClassPathXmlApplicationContext(contextLocation))
+
+    @Synchronized
+    @JvmStatic
+    fun getOrCreate(contextLocation: String): PulsarContext = getOrCreate(ClassPathXmlApplicationContext(contextLocation))
 
     /**
      * Creates a `PulsarSession` using the active context (creating a default context if necessary).
@@ -155,7 +154,7 @@ object PulsarContexts {
     @Synchronized
     @JvmStatic
     @Throws(Exception::class)
-    fun createSession() = create().createSession()
+    fun createSession() = getOrCreate().createSession()
 
     /**
      * Returns the existing `PulsarSession` if present, otherwise creates one using the active context
@@ -208,4 +207,14 @@ object PulsarContexts {
     @Synchronized
     @JvmStatic
     fun close() = shutdown()
+
+    private fun getActivatedContextOrNull(): PulsarContext? {
+        val activated = activeContext
+        if (activated != null && activated.isActive) {
+            logger.debug("Context is already activated | {}#{}", activated::class, activated.id)
+            return activated
+        }
+
+        return null
+    }
 }
