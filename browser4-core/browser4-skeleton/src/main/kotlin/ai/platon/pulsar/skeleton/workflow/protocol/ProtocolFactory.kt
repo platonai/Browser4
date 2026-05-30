@@ -1,6 +1,5 @@
 package ai.platon.pulsar.skeleton.workflow.protocol
 
-import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.persist.metadata.FetchMode
 import org.apache.commons.lang3.StringUtils
@@ -15,16 +14,15 @@ import java.util.concurrent.atomic.AtomicBoolean
  * implement.
  */
 class ProtocolFactory(
-    private val initProtocols: List<Protocol> = emptyList(),
-    private val immutableConfig: ImmutableConfig
+    protocols: List<Protocol> = emptyList()
 ) : AutoCloseable {
     private val logger = LoggerFactory.getLogger(ProtocolFactory::class.java)
 
-    private val protocols: MutableMap<String, Protocol> = ConcurrentHashMap()
+    private val protocolMap: MutableMap<String, Protocol> = ConcurrentHashMap()
     private val closed = AtomicBoolean()
 
     init {
-        protocols.putAll(initProtocols.associateBy { it.name })
+        protocolMap.putAll(protocols.associateBy { it.name })
     }
 
     /**
@@ -53,7 +51,7 @@ class ProtocolFactory(
     fun getProtocol(url: String): Protocol? {
         val protocolName = StringUtils.substringBefore(url, ":")
         // sub protocol can be supported by main:sub://example.com later
-        return protocols[protocolName]
+        return protocolMap[protocolName]
     }
 
     fun getProtocol(mode: FetchMode): Protocol? {
@@ -62,14 +60,14 @@ class ProtocolFactory(
 
     override fun close() {
         if (closed.compareAndSet(false, true)) {
-            protocols.values.forEach { protocol: Protocol ->
+            protocolMap.values.forEach { protocol: Protocol ->
                 try {
                     protocol.close()
                 } catch (e: Throwable) {
                     logger.error(e.toString())
                 }
             }
-            protocols.clear()
+            protocolMap.clear()
         }
     }
 }

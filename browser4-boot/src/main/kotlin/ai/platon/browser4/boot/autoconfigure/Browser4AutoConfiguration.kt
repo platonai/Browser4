@@ -296,10 +296,9 @@ class Browser4AutoConfiguration {
     @Bean(name = ["protocolFactory"], destroyMethod = "close")
     @ConditionalOnMissingBean(name = ["protocolFactory"])
     fun protocolFactory(
-        browserEmulatorProtocol: BrowserEmulatorProtocol,
-        conf: MutableConfig
+        browserEmulatorProtocol: BrowserEmulatorProtocol
     ): ProtocolFactory {
-        return ProtocolFactory(listOf(browserEmulatorProtocol), conf)
+        return ProtocolFactory(listOf(browserEmulatorProtocol))
     }
 
     @Bean(name = ["fetchComponent"], destroyMethod = "close")

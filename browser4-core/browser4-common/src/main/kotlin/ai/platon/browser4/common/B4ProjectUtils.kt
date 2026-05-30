@@ -43,49 +43,6 @@ object B4ResourceLoader {
     }
 
     /**
-     * Load a class, but check if it is allowed to load this class first. To
-     * perform access rights checking, the system property h2.allowedClasses
-     * needs to be set to a list of class file name prefixes.
-     *
-     * @param className the name of the class
-     * @return the class object
-     */
-    @Throws(ClassNotFoundException::class)
-    fun <Z> loadUserClass(className: String): Class<Z> {
-        // Use provided class factory first.
-        for (classFactory in userClassFactories) {
-            if (classFactory.match(className)) {
-                try {
-                    val userClass = classFactory.loadClass(className)
-                    if (userClass != null) {
-                        @Suppress("UNCHECKED_CAST")
-                        return userClass as Class<Z>
-                    }
-                } catch (ignored: ClassNotFoundException) {
-                    // ignore, try other class loaders
-                } catch (e: Exception) {
-                    throw e
-                }
-            }
-        }
-
-        // Use local ClassLoader
-        return try {
-            @Suppress("UNCHECKED_CAST")
-            Class.forName(className) as Class<Z>
-        } catch (e: ClassNotFoundException) {
-            try {
-                @Suppress("UNCHECKED_CAST")
-                Class.forName(className, true, Thread.currentThread().contextClassLoader) as Class<Z>
-            } catch (e2: Exception) {
-                throw e2
-            }
-        } catch (e: Error) {
-            throw e
-        }
-    }
-
-    /**
      * Read all lines from one of the following resource: string, file by file name and resource by resource name
      * The front resource have higher priority
      */
