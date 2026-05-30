@@ -1,7 +1,6 @@
 package ai.platon.pulsar.chrome.dom
 
 import ai.platon.cdt.kt.protocol.types.accessibility.AXNode
-import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.browser.impl.BrowserProtocol
 import ai.platon.pulsar.chrome.dom.impl.AccessibilityHandler
 import ai.platon.pulsar.chrome.dom.impl.AccessibilityHandler.AccessibilityTreeResult
@@ -13,7 +12,8 @@ import ai.platon.pulsar.chrome.dom.util.DomDebug
 import ai.platon.pulsar.chrome.dom.util.HashUtils
 import ai.platon.pulsar.chrome.dom.util.ScrollUtils
 import ai.platon.pulsar.chrome.dom.util.XPathUtils
-import java.awt.Dimension
+import ai.platon.pulsar.common.getLogger
+import ai.platon.pulsar.common.math.geometric.DimI
 import java.util.*
 
 /**
@@ -542,7 +542,7 @@ class CDPSnapshotService(
         val scrollState = ScrollState(
             x = scrollX,
             y = scrollY,
-            viewport = Dimension(viewportWidth, viewportHeight),
+            viewport = DimI(viewportWidth, viewportHeight),
             totalHeight = totalHeight,
             scrollYRatio = scrollYRatio
         )

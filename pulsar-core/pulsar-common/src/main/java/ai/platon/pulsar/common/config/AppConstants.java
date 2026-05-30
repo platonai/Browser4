@@ -16,9 +16,10 @@
  */
 package ai.platon.pulsar.common.config;
 
+import ai.platon.pulsar.common.math.geometric.DimI;
+import ai.platon.pulsar.common.math.geometric.RectI;
 import ai.platon.pulsar.common.measure.ByteUnit;
 
-import java.awt.*;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -39,19 +40,23 @@ public interface AppConstants {
      * An example of the shortest accessible url: <a href="http://t.tt">http://t.tt</a>
      * <p>
      * Another example is <a href="http://a.co">http://a.co</a> (redirect to amazon.com)
-     * */
+     *
+     */
     String SHORTEST_VALID_URL = "http://t.tt";
     /**
      * The length of the shortest example url
-     * */
+     *
+     */
     int SHORTEST_VALID_URL_LENGTH = SHORTEST_VALID_URL.length();
     /**
      * The example url
-     * */
+     *
+     */
     String EXAMPLE_URL = "https://example.com";
     /**
      * The example url
-     * */
+     *
+     */
     List<String> SEARCH_ENGINE_URLS = List.of(
             "https://www.google.com/",
             "https://www.bing.com/",
@@ -63,36 +68,44 @@ public interface AppConstants {
     String SEARCH_ENGINE_EN_URL = "https://cn.bing.com/?ensearch=1";
     /**
      * The prefix of all pulsar specified urls
-     * */
+     *
+     */
     String INTERNAL_URL_PREFIX = "http://internal.platon.ai";
     /**
      * The url of the nil page
-     * */
+     *
+     */
     String NIL_PAGE_URL = INTERNAL_URL_PREFIX + "/nil";
 
     /**
      * Storage
-     * */
+     *
+     */
     String MEM_STORE_CLASS = "org.apache.gora.memory.store.MemStore";
-    /** A minimal file backend store */
+    /**
+     * A minimal file backend store
+     */
     String FILE_BACKEND_STORE_CLASS = "ai.platon.pulsar.persist.gora.FileBackendPageStore";
     String MONGO_STORE_CLASS = "org.apache.gora.mongodb.store.MongoStore";
     // schema version 1.10.x
 //    String WEBPAGE_SCHEMA = "webpage110";
     /**
      * Schema version 1.12.x, has to be compatible with webpage110
-     * */
+     *
+     */
     String WEBPAGE_SCHEMA = "webpage120";
 
     /**
      * Fetch
-     * */
+     *
+     */
     int DISTANCE_INFINITE = 10000;
     Duration FETCH_TASK_TIMEOUT_DEFAULT = Duration.ofMinutes(10);
 
     /**
      * Parse
-     * */
+     *
+     */
     Instant TCP_IP_STANDARDIZED_TIME = Instant.parse("1982-01-01T00:00:00Z");
     Instant MIN_ARTICLE_PUBLISH_TIME = Instant.parse("1995-01-01T00:00:00Z");
     Duration DEFAULT_MAX_PARSE_TIME = Duration.ofSeconds(60);
@@ -101,14 +114,16 @@ public interface AppConstants {
 
     /**
      * Local file commands
-     * */
+     *
+     */
     String CMD_PROXY_POOL_DUMP = "dump-proxy-pool";
 
     String CMD_PROXY_FORCE_IDLE = "IPS-force-idle";
 
     /**
      * Browser
-     * */
+     *
+     */
     int DEFAULT_BROWSER_MAX_OPEN_TABS = 50;
 
     double BROWSER_TAB_REQUIRED_MEMORY = ByteUnit.GIB.toBytes(1.5); // at least 1.5 GiB to open a new tab
@@ -119,7 +134,7 @@ public interface AppConstants {
 
     Duration POLLING_DRIVER_TIMEOUT_DEFAULT = Duration.ofSeconds(60);
 
-    Dimension DEFAULT_VIEWPORT = new Dimension(1920, 1080);
+    DimI DEFAULT_VIEWPORT = new DimI(1920, 1080);
     String PULSAR_META_INFORMATION_ID = "PulsarMetaInformation";
     String PULSAR_META_INFORMATION_SELECTOR = "#" + PULSAR_META_INFORMATION_ID;
     String PULSAR_SCRIPT_SECTION_ID = "PulsarScriptSection";
@@ -135,28 +150,32 @@ public interface AppConstants {
     String PULSAR_ATTR_ELEMENT_NODE_DATA = "nd";
 
     String BROWSER_INTERACTIVE_ELEMENTS_SELECTOR = "a, button, input, select, textarea, " +
-                "[role='button'], [role='link'], [onclick], [onmousedown], [onmouseup]";
+            "[role='button'], [role='link'], [onclick], [onmousedown], [onmouseup]";
 
     /**
      * Other notable properties:
      * overflow
      * text-overflow
-     * */
+     *
+     */
     String CLIENT_JS_PROPERTY_NAMES = "font-size, color, background-color";
 
     /**
      * Metrics
-     * */
+     *
+     */
     String DEFAULT_METRICS_NAME = "browser4";
 
     /**
      * SQL engine
-     * */
+     *
+     */
     String H2_SESSION_FACTORY = "ai.platon.pulsar.ql.h2.H2SessionFactory";
 
     /**
      * Local file base url, the host is a fake host.
-     * */
+     *
+     */
     String LOCAL_FILE_BASE_URL = "http://localfile.internal";
 
     String BROWSER_INTERNAL_BASE_URL = "http://browser.internal";

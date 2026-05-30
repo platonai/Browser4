@@ -13,6 +13,7 @@ import ai.platon.pulsar.common.config.CapabilityTypes.*
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.config.MutableConfig
 import ai.platon.pulsar.common.getLogger
+import ai.platon.pulsar.common.math.geometric.DimI
 import ai.platon.pulsar.common.proxy.ProxyEntry
 import java.net.URI
 import java.time.Duration
@@ -29,7 +30,7 @@ open class BrowserSettings constructor(
         /**
          * The viewport size for browser to rendering all webpages.
          * */
-        var VIEWPORT = DEFAULT_VIEWPORT!!
+        var VIEWPORT: DimI = DEFAULT_VIEWPORT!!
 
         /**
          * The screenshot quality.

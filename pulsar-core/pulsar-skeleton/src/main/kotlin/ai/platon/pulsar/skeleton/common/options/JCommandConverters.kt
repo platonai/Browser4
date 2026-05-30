@@ -3,12 +3,12 @@ package ai.platon.pulsar.skeleton.common.options
 import ai.platon.pulsar.common.SParser
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.browser.InteractLevel
+import ai.platon.pulsar.common.math.geometric.DimI
 import ai.platon.pulsar.persist.metadata.FetchMode
 import com.beust.jcommander.IStringConverter
 import org.apache.commons.lang3.StringUtils
 import org.apache.commons.lang3.math.NumberUtils
 import org.apache.commons.lang3.tuple.Pair
-import java.awt.Dimension
 import java.time.Duration
 import java.time.Instant
 import java.util.*
@@ -82,10 +82,10 @@ class IntRangeConverter : IStringConverter<IntRange> {
     }
 }
 
-class DimensionConverter : IStringConverter<Dimension> {
-    override fun convert(value: String): Dimension {
+class DimensionConverter : IStringConverter<DimI> {
+    override fun convert(value: String): DimI {
         val (a, b) = value.lowercase(Locale.getDefault()).split("x".toRegex())
-        return Dimension(a.toInt(), b.toInt())
+        return DimI(a.toInt(), b.toInt())
     }
 }
 
