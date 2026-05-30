@@ -13,11 +13,7 @@ import io.ktor.client.*
 import io.ktor.client.engine.cio.*
 import io.ktor.client.plugins.*
 import io.ktor.client.plugins.websocket.*
-import io.ktor.client.plugins.websocket.pingInterval
-import io.ktor.websocket.CloseReason
-import io.ktor.websocket.Frame
-import io.ktor.websocket.close
-import io.ktor.websocket.readText
+import io.ktor.websocket.*
 import kotlinx.coroutines.*
 import org.apache.commons.lang3.StringUtils
 import java.io.IOException
@@ -60,13 +56,13 @@ internal class KtorTransport : Transport {
         this.uri = normalizedUri
         try {
             client = HttpClient(CIO) {
-                HttpClientConfig.install(WebSockets.Plugin) {
+                install(WebSockets.Plugin) {
                     pingInterval = DEFAULT_PING_INTERVAL_MS.milliseconds
                 }
-                HttpClientConfig.install(HttpTimeout) {
-                    HttpTimeoutConfig.connectTimeoutMillis = DEFAULT_CONNECT_TIMEOUT_MS
-                    HttpTimeoutConfig.requestTimeoutMillis = DEFAULT_REQUEST_TIMEOUT_MS
-                    HttpTimeoutConfig.socketTimeoutMillis = DEFAULT_SOCKET_TIMEOUT_MS
+                install(HttpTimeout) {
+                    connectTimeoutMillis = DEFAULT_CONNECT_TIMEOUT_MS
+                    requestTimeoutMillis = DEFAULT_REQUEST_TIMEOUT_MS
+                    socketTimeoutMillis = DEFAULT_SOCKET_TIMEOUT_MS
                 }
                 engine {
                     endpoint {
