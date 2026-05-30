@@ -1935,7 +1935,7 @@ interface WebDriver : Closeable {
      * - `"2-4"` — return viewports 2, 3 and 4.
      *
      * Viewport indices are 1-based. The viewport height is determined by the browser's
-     * current viewport dimensions.
+     * current viewport DimIs.
      *
      * @param viewports A viewport specification string (e.g., `"3"`, `"1,3,5"`, `"2-4"`, `"all"`).
      * @return The ARIA snapshot YAML covering only the requested viewports.

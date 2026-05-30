@@ -9,7 +9,7 @@ import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
-import java.awt.Dimension
+import ai.platon.pulsar.common.math.geometric.DimI
 import java.util.*
 
 class TabSwitchTest {
@@ -28,7 +28,7 @@ class TabSwitchTest {
     private fun createTestScrollState() = ScrollState(
         x = 0.0,
         y = 0.0,
-        viewport = Dimension(1920, 1080),
+        viewport = DimI(1920, 1080),
         totalHeight = 2000.0,
         scrollYRatio = 0.5,
     )

@@ -21,7 +21,7 @@
 
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>browser4</artifactId>
-    <version>4.10.0-SNAPSHOT</version>
+    <version>4.10.0-native</version>
     <packaging>pom</packaging>
 
     <name>Browser4</name>
@@ -163,10 +163,10 @@
                 <module>browser4-agent-tools</module>
                 <module>browser4-rest</module>
 
-                <module>browser4-app</module>
+                <module>browser4-apps</module>
+                <module>browser4-tests</module>
 
                 <module>examples</module>
-                <module>browser4-tests</module>
             </modules>
         </profile>
 
@@ -176,7 +176,7 @@
                 <activeByDefault>true</activeByDefault>
             </activation>
             <modules>
-                <module>browser4-app/browser4-agents</module>
+                <module>browser4-apps/browser4-agents</module>
                 <module>examples/browser4-examples</module>
             </modules>
         </profile>
@@ -226,6 +226,13 @@
                     </plugin>
                 </plugins>
             </build>
+        </profile>
+
+        <profile>
+            <id>graalvm-native</id>
+            <modules>
+                <module>browser4-apps/browser4-native</module>
+            </modules>
         </profile>
 
     </profiles>
@@ -554,7 +561,7 @@
         </surefire.excludedGroups>
 
         <spring-boot.version>4.0.5</spring-boot.version>
-        <browser4-base.version>4.8.0</browser4-base.version>
+        <browser4-base.version>4.8.1</browser4-base.version>
     </properties>
 
 </project>

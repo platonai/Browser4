@@ -92,7 +92,7 @@ mvnw.cmd -q -DskipTests
 | `browser4-agentic`                     | AI agents implementation, MCP, skills registration |
 | `browser4-rest`                        | Spring Boot REST layer & command endpoints |
 | `cli/*`                                | Browser4 CLI + skill assets (`cli/browser4-cli`, `cli/skill`) |
-| `browser4-app/*`                       | Product packaging and the unified launcher (`browser4-app/browser4-agents`, `target/Browser4.jar`) |
+| `browser4-apps/*`                       | Product packaging and the unified launcher (`browser4-apps/browser4-agents`, `target/Browser4.jar`) |
 | `examples/*`                           | Runnable examples (`examples/browser4-examples`) |
 | `browser4-tests`                       | E2E & heavy integration & scenario tests |
 | `browser4-tests/browser4-tests-common` | Shared test base classes and utilities |

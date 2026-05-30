@@ -3,7 +3,7 @@
 //! Ensures a Browser4 server is running before executing commands.
 //! Only manages localhost instances; remote servers are not touched.
 //! When a local Browser4 checkout is available, startup prefers
-//! `mvn spring-boot:run` from the `browser4-app/browser4-agents` module so the CLI
+//! `mvn spring-boot:run` from the `browser4-apps/browser4-agents` module so the CLI
 //! uses the matching server version from source. If no checkout can be found,
 //! it falls back to the packaged Browser4 jar flow used by the standalone
 //! installer.
@@ -788,7 +788,7 @@ fn build_powershell_batch_invocation(program: &Path, args: &[String]) -> String 
 fn build_powershell_maven_invocation(program: &Path, runtime_args: &[String]) -> String {
     let install_args = vec![
         "-pl".to_string(),
-        "browser4-app/browser4-agents".to_string(),
+        "browser4-apps/browser4-agents".to_string(),
         "-am".to_string(),
         "-DskipTests".to_string(),
         "install".to_string(),
@@ -796,7 +796,7 @@ fn build_powershell_maven_invocation(program: &Path, runtime_args: &[String]) ->
     ];
     let mut run_args = vec![
         "-pl".to_string(),
-        "browser4-app/browser4-agents".to_string(),
+        "browser4-apps/browser4-agents".to_string(),
         "spring-boot:run".to_string(),
     ];
     run_args.extend_from_slice(runtime_args);
@@ -888,8 +888,8 @@ fn prepare_unix_maven_wrapper_launcher(
     let launcher_script_content = [
         "#!/bin/sh",
         "set -e",
-        &format!("'{mvnw_abs}' -pl browser4-app/browser4-agents -am -DskipTests install -q"),
-        &format!("'{mvnw_abs}' -pl browser4-app/browser4-agents spring-boot:run \"$@\""),
+        &format!("'{mvnw_abs}' -pl browser4-apps/browser4-agents -am -DskipTests install -q"),
+        &format!("'{mvnw_abs}' -pl browser4-apps/browser4-agents spring-boot:run \"$@\""),
         "",
     ]
     .join("\n");
@@ -2291,7 +2291,7 @@ mod tests {
 
         assert!(
             invocation.contains(&format!(
-                "& '{escaped_program}' '-pl' 'browser4-app/browser4-agents' '-am' '-DskipTests' 'install' '-q'"
+                "& '{escaped_program}' '-pl' 'browser4-apps/browser4-agents' '-am' '-DskipTests' 'install' '-q'"
             )),
             "expected Maven preinstall phase in invocation: {invocation}"
         );
@@ -2301,7 +2301,7 @@ mod tests {
         );
         assert!(
             invocation.contains(&format!(
-                "& '{escaped_program}' '-pl' 'browser4-app/browser4-agents' 'spring-boot:run' '{escaped_port_arg}'"
+                "& '{escaped_program}' '-pl' 'browser4-apps/browser4-agents' 'spring-boot:run' '{escaped_port_arg}'"
             )),
             "expected module-scoped spring-boot:run phase in invocation: {invocation}"
         );

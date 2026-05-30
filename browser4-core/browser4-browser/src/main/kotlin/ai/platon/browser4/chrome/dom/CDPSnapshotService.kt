@@ -14,7 +14,7 @@ import ai.platon.pulsar.browser.impl.BrowserProtocol
 import ai.platon.pulsar.chrome.dom.SnapshotService
 import ai.platon.pulsar.chrome.dom.model.*
 import ai.platon.pulsar.common.getLogger
-import java.awt.Dimension
+import ai.platon.pulsar.common.math.geometric.DimI
 import java.util.*
 
 /**
@@ -526,7 +526,7 @@ class CDPSnapshotService(
             (evalDouble("window.innerHeight || document.documentElement.clientHeight || document.body.clientHeight || 0")
                 ?: 0.0).toInt()
 
-        // Screen dimensions
+        // Screen DimIs
         val screenWidth = evalInt("(window.screen && window.screen.width) || 0") ?: 0
         val screenHeight = evalInt("(window.screen && window.screen.height) || 0") ?: 0
 
@@ -543,7 +543,7 @@ class CDPSnapshotService(
         val scrollState = ScrollState(
             x = scrollX,
             y = scrollY,
-            viewport = Dimension(viewportWidth, viewportHeight),
+            viewport = DimI(viewportWidth, viewportHeight),
             totalHeight = totalHeight,
             scrollYRatio = scrollYRatio
         )

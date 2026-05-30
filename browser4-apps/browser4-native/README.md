@@ -29,42 +29,6 @@ mvnw package -Pwin-jpackage -DskipTests
 
 This creates a portable Windows executable that can be distributed as a ZIP file. Users can run `Browser4.exe` directly without installing.
 
-### 2.5. Create a self-contained runtime bundle for `browser4-cli install`
-
-The release pipeline now publishes lightweight runtime bundles that contain:
-
-- `Browser4.jar`
-- a minimal `jlink`-built JRE under `jre/`
-
-Build one locally after packaging the jar:
-
-```powershell
-./mvnw.cmd -pl browser4-app/browser4-agents -am -DskipTests package
-pwsh ./browser4-app/browser4-agents/build-runtime-bundle.ps1 -Force
-```
-
-Typical outputs:
-
-- `target/runtime-bundle/browser4-runtime-windows-x64.zip`
-- `target/runtime-bundle/browser4-runtime-linux-x64.tar.gz`
-- `target/runtime-bundle/browser4-runtime-darwin-x64.tar.gz`
-- `target/runtime-bundle/browser4-runtime-darwin-arm64.tar.gz`
-
-These are the assets consumed by `browser4-cli install`, and after installation
-`browser4-cli open` launches the installed `Browser4.jar` with the bundled JRE.
-
-The release workflow now verifies each generated runtime bundle before publishing
-it by extracting the archive, checking the expected metadata/layout, starting
-`Browser4.jar` with the bundled JRE, and probing `/actuator/health`.
-
-The runtime bundle builder is optimized for standalone backend startup rather than local JDK development.
-It now:
-
-- keeps only the modules needed to launch `Browser4.jar`
-- strips debug attributes and uses stronger `jlink` compression
-- removes tool-oriented payload such as `javac`, `javadoc`, `jlink`, and related executables from the final image
-- disables the GraalVM JVMCI compiler in the linked runtime so the large `jvmcicompiler` payload can be omitted safely
-
 ### 3. Create Windows EXE Installer
 
 The EXE installer provides a traditional Windows installation experience:
@@ -116,7 +80,7 @@ mvnw package -Pwin-jpackage -Djpackage.appVersion=4.5.0 -DskipTests
 
 To customize the application icon:
 
-1. Create a directory: `browser4-app/browser4-agents/packaging/windows/`
+1. Create a directory: `browser4-apps/browser4-agents/packaging/windows/`
 2. Add your icon file: `Browser4.ico` (256x256 recommended)
 3. Uncomment and add the icon argument in pom.xml:
 
@@ -142,9 +106,6 @@ target/
 │   │       └── runtime/                      # Bundled JRE
 │   └── dist/                                 # Only if installer created
 │       └── Browser4-0.0.1.exe                # Windows installer
-├── runtime-bundle/
-│   ├── browser4-runtime-windows-x64.zip      # Browser4.jar + jlink JRE for browser4-cli install
-│   └── _work/                                # Temporary assembly workspace
 ```
 
 ## Running the Application

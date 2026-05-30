@@ -47,9 +47,9 @@ env:
   NETWORK_NAME: 'browser4_backend'
   DOCKER_USERNAME: galaxyeye88
   PRODUCTION_JAR_MODULE_NAME: browser4-agents
-  PRODUCTION_JAR_MODULE_PATH: browser4-app/browser4-agents
+  PRODUCTION_JAR_MODULE_PATH: browser4-apps/browser4-agents
   PRODUCTION_JAR_NAME: Browser4.jar
-  PRODUCTION_JAR_PATH: browser4-app/browser4-agents/target/Browser4.jar
+  PRODUCTION_JAR_PATH: browser4-apps/browser4-agents/target/Browser4.jar
   JAVA_VERSION: '17'
   NODE_VERSION: '24'
   MAVEN_OPTS: '-Xmx3g -XX:+UseG1GC'
@@ -741,29 +741,29 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: release-jar
-          path: browser4-app/browser4-agents/target/
+          path: browser4-apps/browser4-agents/target/
 
       - name: Build Browser4 runtime bundle
         shell: pwsh
         run: |
-          ./browser4-app/browser4-agents/build-runtime-bundle.ps1 `
+          ./browser4-apps/browser4-agents/build-runtime-bundle.ps1 `
             -JarPath "${{ env.PRODUCTION_JAR_PATH }}" `
-            -OutputDirectory "browser4-app/browser4-agents/target/runtime-release" `
+            -OutputDirectory "browser4-apps/browser4-agents/target/runtime-release" `
             -AssetName "${{ matrix.asset_name }}" `
             -Force
 
       - name: Verify Browser4 runtime bundle
         shell: pwsh
         run: |
-          ./browser4-app/browser4-agents/verify-runtime-bundle.ps1 `
-            -BundlePath "browser4-app/browser4-agents/target/runtime-release/${{ matrix.asset_name }}" `
+          ./browser4-apps/browser4-agents/verify-runtime-bundle.ps1 `
+            -BundlePath "browser4-apps/browser4-agents/target/runtime-release/${{ matrix.asset_name }}" `
             -ExpectedAssetName "${{ matrix.asset_name }}"
 
       - name: Upload runtime bundle artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: browser4-app/browser4-agents/target/runtime-release/${{ matrix.asset_name }}
+          path: browser4-apps/browser4-agents/target/runtime-release/${{ matrix.asset_name }}
           retention-days: 7
 
   publish-cli-npm:

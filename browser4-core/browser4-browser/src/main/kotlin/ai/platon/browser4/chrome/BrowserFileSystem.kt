@@ -366,16 +366,7 @@ class BrowserFileSystem(val userDataDir: Path) {
 
         repeat(5) { attempt ->
             try {
-                synchronized(intraProcessLock) {
-                    FileChannel.open(lockFile, StandardOpenOption.CREATE, StandardOpenOption.APPEND).use { channel ->
-                        val lock = channel.lock()
-                        try {
-                            return action()
-                        } finally {
-                            lock.release()
-                        }
-                    }
-                }
+                return acquireWithFileLock(lockFile, intraProcessLock, action)
             } catch (e: FileLockInterruptionException) {
                 Thread.currentThread().interrupt()
                 throw e
@@ -396,5 +387,18 @@ class BrowserFileSystem(val userDataDir: Path) {
         }
 
         throw IOException("Failed to acquire context lock | $lockFile", lastException)
+    }
+
+    private fun <T> acquireWithFileLock(lockFile: Path, intraProcessLock: Any, action: () -> T): T {
+        synchronized(intraProcessLock) {
+            FileChannel.open(lockFile, StandardOpenOption.CREATE, StandardOpenOption.APPEND).use { channel ->
+                val lock = channel.lock()
+                try {
+                    return action()
+                } finally {
+                    lock.release()
+                }
+            }
+        }
     }
 }
