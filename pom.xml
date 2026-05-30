@@ -163,7 +163,7 @@
                 <module>browser4-agent-tools</module>
                 <module>browser4-rest</module>
 
-                <module>browser4-app</module>
+                <module>browser4-apps</module>
 
                 <module>examples</module>
                 <module>browser4-tests</module>
@@ -226,6 +226,13 @@
                     </plugin>
                 </plugins>
             </build>
+        </profile>
+
+        <profile>
+            <id>graalvm-native</id>
+            <modules>
+                <module>browser4-apps/browser4-native</module>
+            </modules>
         </profile>
 
     </profiles>

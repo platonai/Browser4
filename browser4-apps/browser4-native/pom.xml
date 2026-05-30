@@ -14,7 +14,7 @@
 
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>browser4-native</artifactId>
-    <version>4.8.1-SNAPSHOT</version>
+    <version>4.10.0-native</version>
 
     <name>Browser4 Native Image</name>
     <description>Browser4 Agents Native Image - browser agent for your AI</description>
@@ -147,7 +147,7 @@
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-boot</artifactId>
+            <artifactId>browser4-boot</artifactId>
             <version>${project.version}</version>
             <scope>compile</scope>
         </dependency>
@@ -193,6 +193,7 @@
                             <fallback>false</fallback>
                             <buildArgs>
                                 <buildArg>--no-fallback</buildArg>
+                                <buildArg>-H:+ReportUnsupportedElementsAtRuntime</buildArg>
                             </buildArgs>
                             <verbose>true</verbose>
                         </configuration>

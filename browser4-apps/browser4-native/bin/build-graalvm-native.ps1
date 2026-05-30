@@ -9,6 +9,8 @@ param(
 
 $env:JAVA_HOME = "D:\Program Files\Java\graalvm-jdk-25.0.3+9.1"
 
+$repoRoot = git rev-parse --show-toplevel 2>$null
+
 $ErrorActionPreference = "Stop"
 
 function Write-Info([string]$Message) {
@@ -88,9 +90,8 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$repoRoot = Join-Path $scriptDir "..\..\.."
 $mvnWrapper = Join-Path $repoRoot "mvnw.cmd"
-$pomPath = Join-Path $scriptDir "..\pom.xml"
+$pomPath = Join-Path $repoRoot "browser4-apps\browser4-native\pom.xml"
 
 if (-not (Test-Path $mvnWrapper)) {
     Write-Err "Maven wrapper not found at: $mvnWrapper"

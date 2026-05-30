@@ -1,6 +1,6 @@
 package ai.platon.pulsar.app
 
-import ai.platon.pulsar.boot.autoconfigure.PulsarContextInitializer
+import ai.platon.browser4.boot.autoconfigure.PulsarContextInitializer
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import jakarta.annotation.PostConstruct
@@ -12,9 +12,7 @@ import org.springframework.context.annotation.ComponentScan
 import org.springframework.context.annotation.ImportResource
 
 @SpringBootApplication
-@ComponentScan(
-    "ai.platon.pulsar.boot.autoconfigure"
-)
+@Import(Browser4AutoConfiguration::class)
 class Browser4NativeImageApplication(
     val session: PulsarSession
 ) {
