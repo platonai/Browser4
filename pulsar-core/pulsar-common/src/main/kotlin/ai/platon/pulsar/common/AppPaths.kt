@@ -29,23 +29,6 @@ annotation class RequiredFile
 @Target(AnnotationTarget.FIELD)
 annotation class RequiredDirectory
 
-fun createRequiredResources(target: KClass<out Any>) {
-    val targetInstance = target.objectInstance ?: return
-
-    target.java.declaredFields
-        .filter { it.annotations.any { it is RequiredDirectory } }
-        .mapNotNull { it.isAccessible = true; it.get(targetInstance) as? Path }
-        .forEach { it.takeUnless { Files.exists(it) }?.let { Files.createDirectories(it) } }
-
-    target.java.declaredFields
-        .filter { it.annotations.any { it is RequiredFile } }
-        .mapNotNull { it.isAccessible = true; it.get(targetInstance) as? Path }
-        .forEach {
-            it.parent.takeUnless { Files.exists(it) }?.let { Files.createDirectories(it) }
-            it.takeUnless { Files.exists(it) }?.let { Files.createFile(it) }
-        }
-}
-
 /**
  * Created by Vincent on 18-3-23.
  * Copyright @ 2013-2023 Platon AI. All rights reserved
@@ -185,12 +168,31 @@ object AppPaths {
     private val procTmpDirStr get() = PROC_TMP_DIR.toString()
     private val homeDirStr get() = DATA_DIR.toString()
 
+    fun createRequiredResources(target: KClass<out Any>) {
+        val targetInstance = target.objectInstance ?: return
+
+        target.java.declaredFields
+            .filter { it.annotations.any { it is RequiredDirectory } }
+            .mapNotNull { it.isAccessible = true; it.get(targetInstance) as? Path }
+            .forEach { it.takeUnless { Files.exists(it) }?.let { Files.createDirectories(it) } }
+
+        target.java.declaredFields
+            .filter { it.annotations.any { it is RequiredFile } }
+            .mapNotNull { it.isAccessible = true; it.get(targetInstance) as? Path }
+            .forEach {
+                it.parent.takeUnless { Files.exists(it) }?.let { Files.createDirectories(it) }
+                it.takeUnless { Files.exists(it) }?.let { Files.createFile(it) }
+            }
+    }
+
     @Synchronized
     fun initialize() {
         if (initialized) {
             return
         }
 
+        // Known issue: failed to call AppPaths.createRequiredResources(AppPaths::class) in init block
+        // when building spring-boot native image
         createRequiredResources(AppPaths::class)
         initialized = true
     }
