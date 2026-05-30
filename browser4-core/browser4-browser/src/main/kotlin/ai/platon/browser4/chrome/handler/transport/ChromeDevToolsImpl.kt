@@ -9,11 +9,12 @@ import ai.platon.pulsar.browser.impl.DevToolsConfig
 import ai.platon.pulsar.browser.impl.MethodInvocation
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.readable
-import ai.platon.pulsar.common.sleepSeconds
 import ai.platon.pulsar.common.warnForClose
 import com.codahale.metrics.Gauge
 import com.codahale.metrics.SharedMetricRegistries
 import com.fasterxml.jackson.databind.JsonNode
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
 import java.io.IOException
@@ -25,6 +26,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.reflect.KClass
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 
 internal class CachedDevToolsInvocationHandlerProxies(impl: Any) : SuspendAwareHandler(impl) {
     val commandHandler: DevToolsInvocationHandler = DevToolsInvocationHandler(impl)
@@ -256,7 +258,7 @@ internal abstract class ChromeDevToolsImpl(
     override fun close() {
         if (closed.compareAndSet(false, true)) {
             // discard all furthers in dispatcher?
-            runCatching { doClose() }.onFailure { warnForClose(this, it) }
+            runCatching { runBlocking { doClose() } }.onFailure { warnForClose(this, it) }
 
             // Decrements the count of the latch, releasing all waiting threads if the count reaches zero.
             // If the current count is greater than zero then it is decremented. If the new count is zero then all
@@ -267,7 +269,7 @@ internal abstract class ChromeDevToolsImpl(
     }
 
     @Throws(Exception::class)
-    private fun doClose() {
+    private suspend fun doClose() {
         // Use shorter timeout if both transports are already closed/inactive
         // If either transport is still open, use full timeout for graceful shutdown
         val shutdownWaitTimeout = if (pageTransport.isOpen || browserTransport.isOpen) {
@@ -284,10 +286,10 @@ internal abstract class ChromeDevToolsImpl(
         browserTransport.close()
     }
 
-    private fun waitUntilIdle(timeout: Duration) {
+    private suspend fun waitUntilIdle(timeout: Duration) {
         val endTime = Instant.now().plus(timeout)
         while (dispatcher.hasFutures() && Instant.now().isBefore(endTime)) {
-            sleepSeconds(1)
+            delay(1.seconds)
         }
     }
 }

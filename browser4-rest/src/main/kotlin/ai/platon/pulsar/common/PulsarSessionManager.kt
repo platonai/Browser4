@@ -323,9 +323,9 @@ class PulsarSessionManager(
             val pulsarSession = session.agenticSession
             val browser = pulsarSession.boundBrowser
 
-            logger.info("---------------------MANAGED SESSION BEGIN----------------------------")
+            // logger.info("---------------------DELETE MANAGED SESSION BEGIN----------------------------")
             logger.info(
-                "Deleting session {}, closing pulsar session #{} {}",
+                "---- Deleting session `{}`, closing pulsar session #{} {}",
                 sessionId, pulsarSession.id, pulsarSession.display
             )
 
@@ -338,8 +338,8 @@ class PulsarSessionManager(
                 pulsarSession.context.browserManager.closeBrowser(browser)
             }
 
-            logger.info("Deleted session {} and released resources", sessionId)
-            logger.info("----------------------MANAGED SESSION END---------------------------")
+            logger.info("---- Deleted session `{}` and released resources", sessionId)
+            // logger.info("----------------------DELETE MANAGED SESSION END---------------------------")
         } catch (e: Exception) {
             logger.error("Error closing session {}: {}", sessionId, e.message, e)
         }

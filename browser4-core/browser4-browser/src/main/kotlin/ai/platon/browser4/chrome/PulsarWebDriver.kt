@@ -362,7 +362,7 @@ open class PulsarWebDriver constructor(
 
             channel.receive()
         } catch (e: ChromeDriverException) {
-            rpc.handleChromeException(e, "waitForNavigation $timeout")
+            rpc.interceptChromeException(e, "waitForNavigation $timeout")
         }
 
         return timeout - DateTimes.elapsedTime(startTime)
@@ -439,7 +439,7 @@ open class PulsarWebDriver constructor(
                 }
             }
         } catch (e: ChromeDriverException) {
-            rpc.handleChromeException(e, "mouseWheelDown")
+            rpc.interceptChromeException(e, "mouseWheelDown")
         }
     }
 
@@ -456,7 +456,7 @@ open class PulsarWebDriver constructor(
                 }
             }
         } catch (e: ChromeDriverException) {
-            rpc.handleChromeException(e, "mouseWheelUp")
+            rpc.interceptChromeException(e, "mouseWheelUp")
         }
     }
 
@@ -537,7 +537,7 @@ open class PulsarWebDriver constructor(
                 gap()
             }
         } catch (e: ChromeDriverException) {
-            rpc.handleChromeException(e, "moveMouseTo")
+            rpc.interceptChromeException(e, "moveMouseTo")
         }
     }
 
@@ -881,7 +881,7 @@ open class PulsarWebDriver constructor(
                 gap()
             }
         } catch (e: ChromeDriverException) {
-            rpc.handleChromeException(e, "dragAndDrop")
+            rpc.interceptChromeException(e, "dragAndDrop")
         }
     }
 
@@ -1046,7 +1046,7 @@ function() {
                 ClickableDOM.create(browserProtocol, node)?.clickablePoint()?.value
             }
         } catch (e: ChromeDriverException) {
-            rpc.handleChromeException(e, "clickablePoint")
+            rpc.interceptChromeException(e, "clickablePoint")
         }
 
         return null
@@ -1060,7 +1060,7 @@ function() {
                 ClickableDOM.create(browserProtocol, node)?.boundingBox()
             }
         } catch (e: ChromeDriverException) {
-            rpc.handleChromeException(e, "boundingBox")
+            rpc.interceptChromeException(e, "boundingBox")
         }
 
         return null
@@ -1078,7 +1078,7 @@ function() {
                 screenshot.screenshot(fullPage)
             }
         } catch (e: ChromeDriverException) {
-            rpc.handleChromeException(e, "screenshot")
+            rpc.interceptChromeException(e, "screenshot")
             null
         }
     }
@@ -1095,7 +1095,7 @@ function() {
             // Force the page stop all navigations and pending resource fetches.
             rpc.invokeOnPage("screenshot") { screenshot.screenshot(selector) }
         } catch (e: ChromeDriverException) {
-            rpc.handleChromeException(e, "screenshot")
+            rpc.interceptChromeException(e, "screenshot")
             null
         }
     }
@@ -1106,7 +1106,7 @@ function() {
             // Force the page stop all navigations and pending resource fetches.
             rpc.invokeOnPage("screenshot") { screenshot.screenshot(rect) }
         } catch (e: ChromeDriverException) {
-            rpc.handleChromeException(e, "screenshot")
+            rpc.interceptChromeException(e, "screenshot")
             null
         }
     }
@@ -1206,7 +1206,7 @@ function() {
             }
         } catch (e: ChromeDriverException) {
             try {
-                rpc.handleChromeException(e, "terminate")
+                rpc.interceptChromeException(e, "terminate")
             } catch (e: Exception) {
                 logger.error("[Unexpected]", e)
             }
@@ -1376,7 +1376,7 @@ function() {
         try {
             rpc.invoke("onFrameNavigated") { onFrameNavigated0(entry, event) }
         } catch (e: ChromeDriverException) {
-            rpc.handleChromeException(e, "terminate")
+            rpc.interceptChromeException(e, "terminate")
         }
     }
 

@@ -376,7 +376,7 @@ class NetworkManager(
                 browserProtocol.setCacheDisabled(this.userCacheDisabled)
             }
         } catch (e: ChromeRPCException) {
-            rpc.handleChromeException(e, "setCacheDisabled")
+            rpc.interceptChromeException(e, "setCacheDisabled")
         }
     }
 

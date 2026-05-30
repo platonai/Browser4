@@ -60,11 +60,7 @@ class RobustRPC(
         try {
             return invokeWithRetry(action, url = url, block = block)
         } catch (e: ChromeDriverException) {
-            handleChromeException(e, action, message)
-            logger.warn(
-                "Unexpected code path, will re-throw. Exception should be handled in handleChromeException " +
-                        "method, but still got an exception: [{}], message: [{}]", action, message, e
-            )
+            interceptChromeException(e, action, message)
             throw e
         }
     }
@@ -97,11 +93,7 @@ class RobustRPC(
                 }
             }
         } catch (e: ChromeDriverException) {
-            handleChromeException(e, action, "selector: [$selector], focus: $focus, scrollIntoView: $scrollIntoView")
-            logger.warn(
-                "Unexpected code path, will re-throw. Exception should be handled in handleChromeException " +
-                        "method, but still got an exception: [{}], message: [{}]", action, message, e
-            )
+            interceptChromeException(e, action, "selector: [$selector], focus: $focus, scrollIntoView: $scrollIntoView")
             throw e
         }
     }
@@ -231,7 +223,7 @@ class RobustRPC(
         return try {
             invoke(action, block)
         } catch (e: ChromeRPCException) {
-            handleChromeException(e, action, message)
+            interceptChromeException(e, action, message)
             null
         }
     }
@@ -243,13 +235,13 @@ class RobustRPC(
         return try {
             invokeWithRetry(action, maxRetry, url, block)
         } catch (e: ChromeRPCException) {
-            handleChromeException(e, action, message)
+            interceptChromeException(e, action, message)
             null
         }
     }
 
     @Throws(IllegalWebDriverStateException::class, ChromeDriverException::class)
-    suspend fun handleChromeException(e: ChromeDriverException, action: String? = null, message: String? = null) {
+    suspend fun interceptChromeException(e: ChromeDriverException, action: String? = null, message: String? = null) {
         when (e) {
             is ChromeIOException -> {
                 handleChromeIOException(e, action, message)
