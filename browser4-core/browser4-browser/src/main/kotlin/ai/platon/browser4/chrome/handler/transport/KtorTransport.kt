@@ -139,7 +139,7 @@ internal class KtorTransport : Transport {
             if (ws != null) {
                 runCatching {
                     runBlocking(Dispatchers.IO) {
-                        withTimeout(CLOSE_TIMEOUT_MS) {
+                        withTimeout(CLOSE_TIMEOUT_MS.milliseconds) {
                             ws.close(CloseReason(CloseReason.Codes.NORMAL, ""))
                         }
                     }
