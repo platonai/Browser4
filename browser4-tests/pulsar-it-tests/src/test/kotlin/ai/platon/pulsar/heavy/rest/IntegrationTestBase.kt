@@ -1,6 +1,6 @@
 package ai.platon.pulsar.heavy.rest
 
-import ai.platon.browser4.boot.autoconfigure.PulsarContextConfiguration
+import ai.platon.browser4.boot.autoconfigure.AgenticContextConfiguration
 import ai.platon.pulsar.agentic.BasicAgenticSession
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
 import ai.platon.pulsar.common.config.ImmutableConfig
@@ -17,7 +17,7 @@ import kotlin.test.BeforeTest
 import kotlin.test.assertTrue
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@Import(PulsarContextConfiguration::class)
+@Import(AgenticContextConfiguration::class)
 class IntegrationTestBase {
 
     @LocalServerPort

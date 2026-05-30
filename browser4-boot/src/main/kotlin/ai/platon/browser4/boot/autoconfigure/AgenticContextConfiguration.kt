@@ -10,11 +10,11 @@ import org.springframework.context.annotation.Configuration
 import org.springframework.context.annotation.Scope
 
 @Configuration
-class PulsarContextConfiguration(
+class AgenticContextConfiguration(
     val applicationContext: ApplicationContext
 ) {
     @Bean
-    fun pulsarContext(): AgenticContext {
+    fun agenticContext(): AgenticContext {
         val context = AgenticContexts.getOrCreate(applicationContext)
         require(context is AbstractAgenticContext)
         require(context.applicationContext == applicationContext)
@@ -23,8 +23,8 @@ class PulsarContextConfiguration(
 
     @Bean
     @Scope("prototype")
-    fun getPulsarSession(pulsarContext: AgenticContext): AgenticSession {
-        require(pulsarContext is AbstractAgenticContext)
-        return pulsarContext.createSession()
+    fun getAgenticSession(agenticContext: AgenticContext): AgenticSession {
+        require(agenticContext is AbstractAgenticContext)
+        return agenticContext.createSession()
     }
 }

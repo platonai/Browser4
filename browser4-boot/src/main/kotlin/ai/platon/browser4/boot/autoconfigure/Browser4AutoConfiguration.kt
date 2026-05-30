@@ -48,7 +48,7 @@ import org.springframework.context.annotation.Lazy
 import org.springframework.core.env.Environment
 
 @AutoConfiguration
-@Import(PulsarContextConfiguration::class)
+@Import(AgenticContextConfiguration::class)
 @Lazy
 class Browser4AutoConfiguration {
     @Bean(name = ["conf"])
