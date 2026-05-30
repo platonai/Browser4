@@ -5,7 +5,7 @@ import org.springframework.context.support.GenericApplicationContext
 
 open class GenericPulsarContext(
     override val applicationContext: GenericApplicationContext = GenericApplicationContext(),
-    autoRefresh: Boolean = true
+    autoRefresh: Boolean = false
 ) : BasicPulsarContext(applicationContext) {
 
     private val defaults = ContextDefaults()

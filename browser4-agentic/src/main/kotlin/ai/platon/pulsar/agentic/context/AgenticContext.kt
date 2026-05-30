@@ -85,7 +85,7 @@ open class BasicAgenticContext(
 
 open class GenericAgenticContext(
     override val applicationContext: GenericApplicationContext,
-    autoRefresh: Boolean = true
+    autoRefresh: Boolean = false
 ) : AbstractAgenticContext(applicationContext) {
     /**
      * Create a [GenericAgenticSession].
@@ -120,8 +120,8 @@ open class GenericAgenticContext(
  * */
 open class StaticAgenticContext(
     override val applicationContext: StaticApplicationContext = StaticApplicationContext(),
-    autoRefresh: Boolean = true
-) : GenericAgenticContext(applicationContext, false) {
+    autoRefresh: Boolean = false
+) : GenericAgenticContext(applicationContext, autoRefresh) {
 
     private val defaults = ContextDefaults()
 
@@ -183,15 +183,6 @@ open class StaticAgenticContext(
         settings.label?.let { session.label = it }
         settings.overrideConfiguration(session.sessionConfig)
         return session.also { sessions[it.id] = it }
-    }
-
-    init {
-        if (autoRefresh) {
-            applicationContext.refresh()
-        }
-//        System.err.println("WARNING: Initialized static application context, " +
-//                "this context is designed for test purpose only. " +
-//                "Use @Browser4AutoConfiguration in spring-boot application for full functionality in production")
     }
 }
 

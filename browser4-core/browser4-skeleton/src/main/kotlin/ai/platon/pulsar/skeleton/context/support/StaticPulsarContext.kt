@@ -7,8 +7,8 @@ import org.springframework.context.support.StaticApplicationContext
 
 open class StaticPulsarContext(
     override val applicationContext: StaticApplicationContext = StaticApplicationContext(),
-    autoRefresh: Boolean = true,
-) : GenericPulsarContext(applicationContext, false) {
+    autoRefresh: Boolean = false,
+) : GenericPulsarContext(applicationContext, autoRefresh) {
 
     private val logger = getLogger(StaticPulsarContext::class)
     private val throttlingLogger = ThrottlingLogger(logger)
@@ -61,12 +61,4 @@ open class StaticPulsarContext(
      * The main loop
      * */
     override val taskLoops get() = defaults.taskLoops
-
-    init {
-        if (autoRefresh) {
-            applicationContext.refresh()
-        }
-
-        throttlingLogger.warn("WARMING: This context is used for TEST only")
-    }
 }

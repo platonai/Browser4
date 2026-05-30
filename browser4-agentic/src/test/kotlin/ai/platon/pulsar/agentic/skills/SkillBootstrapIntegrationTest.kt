@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.skills
 
+import ai.platon.pulsar.agentic.context.AgenticContext
 import ai.platon.pulsar.agentic.context.GenericAgenticContext
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.*
@@ -15,7 +16,7 @@ import org.springframework.context.annotation.AnnotationConfigApplicationContext
  */
 class SkillBootstrapIntegrationTest {
 
-    private lateinit var context: GenericAgenticContext
+    private lateinit var context: AgenticContext
 
     @BeforeEach
     fun setup() {
