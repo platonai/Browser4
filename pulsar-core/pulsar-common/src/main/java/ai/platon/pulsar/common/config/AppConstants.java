@@ -17,7 +17,6 @@
 package ai.platon.pulsar.common.config;
 
 import ai.platon.pulsar.common.math.geometric.DimI;
-import ai.platon.pulsar.common.math.geometric.RectI;
 import ai.platon.pulsar.common.measure.ByteUnit;
 
 import java.time.Duration;

@@ -3,6 +3,7 @@ package ai.platon.pulsar.common.math.geometric
 import java.awt.Point
 import java.awt.Rectangle
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 data class GeoIntPoint(var x: Int, var y: Int): Comparable<GeoIntPoint> {
     constructor(point: Point) : this(point.x, point.y)
@@ -12,8 +13,8 @@ data class GeoIntPoint(var x: Int, var y: Int): Comparable<GeoIntPoint> {
     }
 
     fun align(gridWidth: Int = 0, gridHeight: Int = 0): GeoIntPoint {
-        val x2 = if (gridWidth == 0) x else Math.round(x.toFloat() / gridWidth) * gridWidth
-        val y2 = if (gridHeight == 0) y else Math.round(y.toFloat() / gridHeight) * gridHeight
+        val x2 = if (gridWidth == 0) x else (x.toFloat() / gridWidth).roundToInt() * gridWidth
+        val y2 = if (gridHeight == 0) y else (y.toFloat() / gridHeight).roundToInt() * gridHeight
         return GeoIntPoint(x2, y2)
     }
 
