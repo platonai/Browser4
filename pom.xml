@@ -164,9 +164,9 @@
                 <module>browser4-rest</module>
 
                 <module>browser4-apps</module>
+                <module>browser4-tests</module>
 
                 <module>examples</module>
-                <module>browser4-tests</module>
             </modules>
         </profile>
 

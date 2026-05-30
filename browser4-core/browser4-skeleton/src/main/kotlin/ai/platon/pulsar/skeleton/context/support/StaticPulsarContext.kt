@@ -7,7 +7,7 @@ import org.springframework.context.support.StaticApplicationContext
 
 open class StaticPulsarContext(
     override val applicationContext: StaticApplicationContext = StaticApplicationContext(),
-    autoRefresh: Boolean = true,
+    autoRefresh: Boolean = false,
 ) : GenericPulsarContext(applicationContext, false) {
 
     private val logger = getLogger(StaticPulsarContext::class)

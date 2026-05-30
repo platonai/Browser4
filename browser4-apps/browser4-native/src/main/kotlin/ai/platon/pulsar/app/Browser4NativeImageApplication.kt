@@ -1,5 +1,6 @@
 package ai.platon.pulsar.app
 
+import ai.platon.browser4.boot.autoconfigure.Browser4AutoConfiguration
 import ai.platon.browser4.boot.autoconfigure.PulsarContextInitializer
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.skeleton.session.PulsarSession
@@ -9,6 +10,7 @@ import org.springframework.boot.WebApplicationType
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
 import org.springframework.context.annotation.ComponentScan
+import org.springframework.context.annotation.Import
 import org.springframework.context.annotation.ImportResource
 
 @SpringBootApplication

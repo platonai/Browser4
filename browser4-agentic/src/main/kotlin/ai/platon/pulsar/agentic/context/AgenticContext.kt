@@ -85,7 +85,7 @@ open class BasicAgenticContext(
 
 open class GenericAgenticContext(
     override val applicationContext: GenericApplicationContext,
-    autoRefresh: Boolean = true
+    autoRefresh: Boolean = false
 ) : AbstractAgenticContext(applicationContext) {
     /**
      * Create a [GenericAgenticSession].
@@ -120,7 +120,7 @@ open class GenericAgenticContext(
  * */
 open class StaticAgenticContext(
     override val applicationContext: StaticApplicationContext = StaticApplicationContext(),
-    autoRefresh: Boolean = true
+    autoRefresh: Boolean = false
 ) : GenericAgenticContext(applicationContext, false) {
 
     private val defaults = ContextDefaults()
