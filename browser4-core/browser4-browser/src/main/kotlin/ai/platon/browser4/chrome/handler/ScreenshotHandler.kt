@@ -1,4 +1,4 @@
-package ai.platon.browser4.chrome.impl
+package ai.platon.browser4.chrome.handler
 
 import ai.platon.cdt.kt.protocol.types.page.CaptureScreenshotFormat
 import ai.platon.cdt.kt.protocol.types.page.Viewport

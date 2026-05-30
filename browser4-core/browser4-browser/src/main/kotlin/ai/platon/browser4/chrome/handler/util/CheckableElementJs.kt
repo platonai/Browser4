@@ -1,4 +1,4 @@
-package ai.platon.browser4.chrome.impl
+package ai.platon.browser4.chrome.handler.util
 
 /**
  * Shared JS function declarations for checkable elements.

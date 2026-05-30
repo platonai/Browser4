@@ -1,4 +1,4 @@
-package ai.platon.browser4.chrome.impl
+package ai.platon.browser4.chrome.handler
 
 import ai.platon.browser4.chrome.RemoteDevTools
 import ai.platon.cdt.kt.protocol.ChromeDevTools

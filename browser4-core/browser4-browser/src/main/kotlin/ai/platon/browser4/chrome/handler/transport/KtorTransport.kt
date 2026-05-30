@@ -1,4 +1,4 @@
-package ai.platon.browser4.chrome.impl
+package ai.platon.browser4.chrome.handler.transport
 
 import ai.platon.browser4.chrome.Transport
 import ai.platon.browser4.chrome.util.ChromeDriverException
@@ -13,7 +13,11 @@ import io.ktor.client.*
 import io.ktor.client.engine.cio.*
 import io.ktor.client.plugins.*
 import io.ktor.client.plugins.websocket.*
-import io.ktor.websocket.*
+import io.ktor.client.plugins.websocket.pingInterval
+import io.ktor.websocket.CloseReason
+import io.ktor.websocket.Frame
+import io.ktor.websocket.close
+import io.ktor.websocket.readText
 import kotlinx.coroutines.*
 import org.apache.commons.lang3.StringUtils
 import java.io.IOException
@@ -56,13 +60,13 @@ internal class KtorTransport : Transport {
         this.uri = normalizedUri
         try {
             client = HttpClient(CIO) {
-                install(WebSockets) {
+                HttpClientConfig.install(WebSockets.Plugin) {
                     pingInterval = DEFAULT_PING_INTERVAL_MS.milliseconds
                 }
-                install(HttpTimeout) {
-                    connectTimeoutMillis = DEFAULT_CONNECT_TIMEOUT_MS
-                    requestTimeoutMillis = DEFAULT_REQUEST_TIMEOUT_MS
-                    socketTimeoutMillis = DEFAULT_SOCKET_TIMEOUT_MS
+                HttpClientConfig.install(HttpTimeout) {
+                    HttpTimeoutConfig.connectTimeoutMillis = DEFAULT_CONNECT_TIMEOUT_MS
+                    HttpTimeoutConfig.requestTimeoutMillis = DEFAULT_REQUEST_TIMEOUT_MS
+                    HttpTimeoutConfig.socketTimeoutMillis = DEFAULT_SOCKET_TIMEOUT_MS
                 }
                 engine {
                     endpoint {
@@ -75,7 +79,7 @@ internal class KtorTransport : Transport {
 
             tracer?.trace("Connecting to ws {} ...", normalizedUri)
             val ws = runBlocking(Dispatchers.IO) {
-                withTimeout(DEFAULT_CONNECT_TIMEOUT_MS) {
+                withTimeout(DEFAULT_CONNECT_TIMEOUT_MS.milliseconds) {
                     client!!.webSocketSession(urlString = normalizedUri.toString())
                 }
             }
@@ -105,7 +109,11 @@ internal class KtorTransport : Transport {
             val open = isOpen
             when (e) {
                 is ChromeIOException -> throw e
-                is TimeoutCancellationException -> throw ChromeIOException("Timed out connecting to ws server | $normalizedUri", e, open)
+                is TimeoutCancellationException -> throw ChromeIOException(
+                    "Timed out connecting to ws server | $normalizedUri",
+                    e,
+                    open
+                )
                 is IOException -> throw ChromeIOException("Failed connecting to ws server | $normalizedUri", e, open)
                 else -> throw ChromeIOException("Failed connecting to ws server | $normalizedUri", e, open)
             }

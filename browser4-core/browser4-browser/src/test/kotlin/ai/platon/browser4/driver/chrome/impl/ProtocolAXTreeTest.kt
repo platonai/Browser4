@@ -19,7 +19,7 @@
  */
 package ai.platon.browser4.driver.chrome.impl
 
-import ai.platon.browser4.chrome.impl.EventDispatcher
+import ai.platon.browser4.chrome.handler.transport.EventDispatcher
 import ai.platon.browser4.common.B4ResourceLoader
 import ai.platon.cdt.kt.protocol.types.accessibility.AXNode
 import org.junit.jupiter.api.Assertions

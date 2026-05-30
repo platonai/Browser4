@@ -1,7 +1,6 @@
-package ai.platon.browser4.chrome.impl
+package ai.platon.browser4.chrome.handler.transport
 
 import ai.platon.browser4.chrome.RemoteDevTools
-import ai.platon.browser4.chrome.impl.EventDispatcher.Companion.ID_PROPERTY
 import ai.platon.browser4.chrome.util.ChromeIOException
 import ai.platon.browser4.chrome.util.ChromeRPCException
 import ai.platon.browser4.chrome.util.ReflectUtils
@@ -36,8 +35,8 @@ class DevToolsInvocationHandler(impl: Any) : SuspendAwareHandler(impl) {
          * */
         fun createMethodInvocation(method: String, params: Map<String, Any?>?): MethodInvocation {
             val params0 = (params ?: emptyMap()).toMutableMap()
-            val methodId = params0[ID_PROPERTY]?.toString()?.toLongOrNull() ?: nextId()
-            params0[ID_PROPERTY] = methodId.toString()
+            val methodId = params0[EventDispatcher.ID_PROPERTY]?.toString()?.toLongOrNull() ?: nextId()
+            params0[EventDispatcher.ID_PROPERTY] = methodId.toString()
 
             val params1: Map<String, Any> = params0.entries
                 .filter { it.value != null }

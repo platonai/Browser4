@@ -1,6 +1,6 @@
 package ai.platon.browser4.chrome.detail
 
-import ai.platon.browser4.chrome.impl.PageHandler
+import ai.platon.browser4.chrome.handler.PageHandler
 import ai.platon.cdt.kt.protocol.events.network.ResponseReceived
 import ai.platon.cdt.kt.protocol.types.network.Cookie
 import ai.platon.cdt.kt.protocol.types.network.ResourceType

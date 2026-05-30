@@ -1,6 +1,6 @@
 package ai.platon.browser4.chrome
 
-import ai.platon.browser4.chrome.impl.RemoteChromeProtocol
+import ai.platon.browser4.chrome.handler.RemoteChromeProtocol
 import ai.platon.browser4.chrome.util.ChromeOptions
 import ai.platon.browser4.chrome.util.LauncherOptions
 import ai.platon.pulsar.common.browser.BrowserFiles

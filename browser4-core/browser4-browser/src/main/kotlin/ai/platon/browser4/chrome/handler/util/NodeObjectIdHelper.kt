@@ -1,6 +1,7 @@
-package ai.platon.browser4.chrome.impl
+package ai.platon.browser4.chrome.handler.util
 
 import ai.platon.browser4.chrome.RemoteDevTools
+import ai.platon.browser4.chrome.handler.RemoteChromeProtocol
 import ai.platon.pulsar.browser.impl.BrowserProtocol
 import ai.platon.pulsar.browser.impl.NodeRef
 import ai.platon.pulsar.common.AppContext

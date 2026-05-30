@@ -2,7 +2,7 @@ package ai.platon.browser4.driver.chrome
 
 import ai.platon.browser4.chrome.IsolatedWorldManager
 import ai.platon.browser4.chrome.RemoteDevTools
-import ai.platon.browser4.chrome.impl.RemoteChromeProtocol
+import ai.platon.browser4.chrome.handler.RemoteChromeProtocol
 import ai.platon.cdt.kt.protocol.types.page.*
 import ai.platon.pulsar.browser.common.BrowserSettings
 import kotlinx.coroutines.runBlocking

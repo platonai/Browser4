@@ -1,4 +1,4 @@
-package ai.platon.browser4.chrome.impl
+package ai.platon.browser4.chrome.handler.transport
 
 import ai.platon.browser4.chrome.RemoteChrome
 import ai.platon.browser4.chrome.RemoteDevTools
@@ -7,6 +7,8 @@ import ai.platon.browser4.chrome.util.ChromeIOException
 import ai.platon.browser4.chrome.util.ChromeServiceException
 import ai.platon.browser4.chrome.util.ProxyClasses
 import ai.platon.browser4.chrome.util.SuspendAwareHandler
+import ai.platon.cdt.kt.protocol.support.types.EventHandler
+import ai.platon.cdt.kt.protocol.support.types.EventListener
 import ai.platon.pulsar.browser.impl.BrowserTab
 import ai.platon.pulsar.browser.impl.ChromeVersion
 import ai.platon.pulsar.browser.impl.DevToolsConfig
@@ -22,6 +24,25 @@ import java.net.HttpURLConnection
 import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+
+class DevToolsEventListener(
+    val key: String,
+    val handler: EventHandler<Any>,
+    val paramType: Class<*>,
+    private val devTools: RemoteDevTools
+): EventListener, Comparable<DevToolsEventListener> {
+    override fun off() {
+        unsubscribe()
+    }
+
+    override fun unsubscribe() {
+        devTools.removeEventListener(this)
+    }
+
+    override fun compareTo(other: DevToolsEventListener): Int {
+        return this.key.compareTo(other.key)
+    }
+}
 
 internal class ChromeImpl(
     override var host: String = LOCALHOST,

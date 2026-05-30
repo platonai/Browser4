@@ -2,7 +2,13 @@ package ai.platon.browser4.chrome
 
 import ai.platon.browser4.chrome.detail.*
 import ai.platon.browser4.chrome.dom.model.ViewportSpec
-import ai.platon.browser4.chrome.impl.*
+import ai.platon.browser4.chrome.handler.ClickableDOM
+import ai.platon.browser4.chrome.handler.EmulationHandler
+import ai.platon.browser4.chrome.handler.PageHandler
+import ai.platon.browser4.chrome.handler.ScreenshotHandler
+import ai.platon.browser4.chrome.handler.transport.ChromeImpl
+import ai.platon.browser4.chrome.handler.util.CheckableElementJs
+import ai.platon.browser4.chrome.handler.util.withNodeObjectId
 import ai.platon.browser4.chrome.util.ChromeDriverException
 import ai.platon.browser4.chrome.util.ChromeIOException
 import ai.platon.browser4.chrome.util.Credentials

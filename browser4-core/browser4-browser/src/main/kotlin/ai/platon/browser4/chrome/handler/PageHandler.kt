@@ -1,7 +1,9 @@
-package ai.platon.browser4.chrome.impl
+package ai.platon.browser4.chrome.handler
 
 import ai.platon.browser4.chrome.IsolatedWorldManager
 import ai.platon.browser4.chrome.dom.CDPSnapshotService
+import ai.platon.browser4.chrome.handler.util.CheckableElementJs
+import ai.platon.browser4.chrome.handler.util.withNodeObjectId
 import ai.platon.browser4.chrome.util.ChromeDriverException
 import ai.platon.browser4.chrome.util.ChromeRPCException
 import ai.platon.cdt.kt.protocol.types.dom.Rect

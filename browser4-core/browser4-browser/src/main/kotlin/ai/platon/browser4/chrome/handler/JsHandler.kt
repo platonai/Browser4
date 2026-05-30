@@ -1,6 +1,8 @@
-package ai.platon.browser4.chrome.impl
+package ai.platon.browser4.chrome.handler
 
 import ai.platon.browser4.chrome.IsolatedWorldManager
+import ai.platon.browser4.chrome.handler.util.releaseNodeObjectIfNeeded
+import ai.platon.browser4.chrome.handler.util.resolveNodeObjectId
 import ai.platon.browser4.chrome.util.ChromeDriverException
 import ai.platon.cdt.kt.protocol.types.runtime.CallFunctionOn
 import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
