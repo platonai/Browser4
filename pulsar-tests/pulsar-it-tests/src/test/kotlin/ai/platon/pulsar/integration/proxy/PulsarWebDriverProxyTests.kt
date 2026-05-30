@@ -1,14 +1,14 @@
 package ai.platon.pulsar.integration.proxy
 
 import ai.platon.pulsar.WebDriverTestBase
+import ai.platon.pulsar.browser.AbstractWebDriver
+import ai.platon.pulsar.browser.BrowserId
 import ai.platon.pulsar.common.NetUtil
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.common.proxy.ProxyEntry
 import ai.platon.pulsar.common.proxy.impl.ProxyHubLoader
 import ai.platon.pulsar.skeleton.PulsarSettings
-import ai.platon.pulsar.skeleton.browser.driver.AbstractWebDriver
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.apache.commons.io.FileUtils

@@ -1,7 +1,7 @@
 package ai.platon.pulsar.heavy.browser.emulator.context
 
-import ai.platon.pulsar.driver.common.BrowserSettings
-import ai.platon.pulsar.driver.common.UserAgent
+import ai.platon.pulsar.browser.common.BrowserSettings
+import ai.platon.pulsar.browser.common.UserAgent
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.browser.fingerprint.Fingerprint
 import ai.platon.pulsar.common.config.ImmutableConfig

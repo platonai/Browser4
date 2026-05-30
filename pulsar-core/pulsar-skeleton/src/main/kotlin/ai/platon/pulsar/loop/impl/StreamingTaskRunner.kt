@@ -316,8 +316,12 @@ open class StreamingTaskRunner(
     override fun report() {
         val sb = StringBuilder()
 
-        StreamingTaskRunner::class.memberProperties.filter { it.isAccessible }.forEach {
-            sb.append(it.name).append(": ").append(it.get(this)).append("\n")
+        try {
+            StreamingTaskRunner::class.memberProperties.filter { it.isAccessible }.forEach {
+                sb.append(it.name).append(": ").append(it.get(this)).append("\n")
+            }
+        } catch (_: Throwable) {
+            sb.append("message: unable to generate report via kotlin reflect")
         }
 
         logger.info(sb.toString())

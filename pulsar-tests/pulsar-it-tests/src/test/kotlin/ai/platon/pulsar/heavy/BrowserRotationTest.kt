@@ -1,14 +1,14 @@
 package ai.platon.pulsar.heavy
 
+import ai.platon.pulsar.browser.AbstractWebDriver
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.collect.UrlFeeder
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.common.sleepSeconds
 import ai.platon.pulsar.common.urls.URLUtils
+import ai.platon.pulsar.loop.TaskLoop
 import ai.platon.pulsar.persist.ProtocolStatus
 import ai.platon.pulsar.skeleton.PulsarSettings
-import ai.platon.pulsar.skeleton.TaskLoop
-import ai.platon.pulsar.skeleton.browser.driver.AbstractWebDriver
 import ai.platon.pulsar.skeleton.workflow.common.url.ListenableHyperlink
 import kotlinx.coroutines.delay
 import org.junit.jupiter.api.AfterEach

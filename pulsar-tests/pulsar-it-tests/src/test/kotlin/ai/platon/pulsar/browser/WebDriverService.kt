@@ -2,8 +2,6 @@ package ai.platon.pulsar.browser
 
 import ai.platon.pulsar.core.api.Browser
 import ai.platon.pulsar.core.api.WebDriver
-import ai.platon.pulsar.skeleton.browser.BrowserFactory
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.apache.commons.lang3.StringUtils

@@ -1,9 +1,8 @@
 package ai.platon.pulsar.basic.session
 
 import ai.platon.pulsar.basic.TestBase
+import ai.platon.pulsar.chrome.PulsarWebDriver
 import ai.platon.pulsar.common.LinkExtractors
-import ai.platon.pulsar.core.api.PulsarSession
-import ai.platon.pulsar.protocol.browser.driver.cdt.PulsarWebDriver
 import ai.platon.pulsar.ql.SQLSession
 import ai.platon.pulsar.skeleton.common.persist.ext.loadEventHandlers
 import org.junit.jupiter.api.BeforeEach

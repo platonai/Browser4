@@ -1,8 +1,5 @@
 package ai.platon.pulsar.rest
 
-import ai.platon.pulsar.skeleton.TaskLoops
-import ai.platon.pulsar.skeleton.common.GlobalCache
-import ai.platon.pulsar.skeleton.common.GlobalCacheFactory
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
 import org.springframework.context.annotation.ComponentScan
@@ -14,11 +11,7 @@ import org.springframework.context.annotation.ImportResource
     "ai.platon.pulsar.boot.autoconfigure",
     "ai.platon.pulsar.rest"
 )
-class ApiApplication(
-    val globalCache: GlobalCache,
-    val globalCacheFactory: GlobalCacheFactory,
-    val taskLoops: TaskLoops
-)
+class ApiApplication
 
 fun main(args: Array<String>) {
     runApplication<ApiApplication>(*args) {

@@ -3,7 +3,6 @@ package ai.platon.pulsar.common
 import com.google.common.base.Predicates
 import java.time.Duration
 import java.util.concurrent.TimeUnit
-import kotlin.reflect.full.memberProperties
 
 enum class FlowState {
     CONTINUE, BREAK;
@@ -30,7 +29,7 @@ class DescriptiveResult<T>(
     val value: T?,
     val message: String = "",
 ) {
-    constructor(message: String): this(null, message)
+    constructor(message: String) : this(null, message)
 
     operator fun component1() = value
     operator fun component2() = message
@@ -85,8 +84,10 @@ enum class Priority13(val value: Int) {
         @Throws(IllegalArgumentException::class)
         fun valueOf(value: Int): Priority13 {
             return entries.firstOrNull { it.value == value }
-                ?: throw IllegalArgumentException("Illegal priority value $value, " +
-                        "must be one of ${entries.map { it.value }}")
+                ?: throw IllegalArgumentException(
+                    "Illegal priority value $value, " +
+                        "must be one of ${entries.map { it.value }}"
+                )
         }
 
         fun valueOfOrNull(value: Int): Priority13? {
@@ -132,7 +133,7 @@ enum class Priority21(val value: Int) {
     LOWEST(Int.MAX_VALUE / 10)
 }
 
-interface StartStopRunnable: AutoCloseable {
+interface StartStopRunnable : AutoCloseable {
     val isRunning: Boolean
     fun start()
     fun stop()
@@ -144,10 +145,11 @@ interface StartStopRunnable: AutoCloseable {
     }
 
     @Throws(InterruptedException::class)
-    fun await() {}
+    fun await() {
+    }
 }
 
-class StartStopRunner(val runnable: StartStopRunnable): AutoCloseable {
+class StartStopRunner(val runnable: StartStopRunnable) : AutoCloseable {
     fun start() = runnable.start()
     fun stop() = runnable.stop()
     fun restart() = runnable.restart()
@@ -191,23 +193,6 @@ fun alwaysTrue(): Boolean {
     return Predicates.alwaysTrue<Boolean>().apply(true)
 }
 
-object ObjectConverter {
-
-    inline fun <reified T : Any> asMap(t: T) : Map<String, Any?> {
-        val props = T::class.memberProperties.associateBy { it.name }
-        return props.keys.associateWith { props[it]?.get(t) }
-    }
-
-    inline fun <reified T : Any> asQueryParameters(t: T, excludes: Iterable<String> = listOf()) : String {
-        val props = T::class.memberProperties.associateBy { it.name }
-        return props.entries.asSequence()
-                .filter { it.key !in excludes }
-                .map { it.key to props[it.key]?.get(t) }
-                .filter { it.second != null }
-                .joinToString("&") { (k, v) -> "$k=$v" }
-    }
-}
-
 /**
  * This annotation marks the API that is considered experimental.
  * The behavior of such API may be changed or the API may be removed completely in any further release.
@@ -239,7 +224,7 @@ annotation class ExperimentalApi
 class PrioriClosable(
     val priority: Int,
     val closeable: AutoCloseable,
-): Comparable<PrioriClosable>, AutoCloseable by closeable {
+) : Comparable<PrioriClosable>, AutoCloseable by closeable {
     override fun compareTo(other: PrioriClosable): Int {
         return priority.compareTo(other.priority)
     }

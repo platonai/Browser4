@@ -1,5 +1,6 @@
 package ai.platon.pulsar.common
 
+import ai.platon.pulsar.common.AppPaths.initialized
 import ai.platon.pulsar.common.DateTimes.PATH_SAFE_FORMATTER_11
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.concurrent.ConcurrentExpiringLRUCache
@@ -14,6 +15,7 @@ import java.nio.file.Paths
 import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.io.path.exists
 import kotlin.io.path.getLastModifiedTime
 import kotlin.io.path.isDirectory
@@ -27,12 +29,30 @@ annotation class RequiredFile
 @Target(AnnotationTarget.FIELD)
 annotation class RequiredDirectory
 
+fun createRequiredResources(target: KClass<out Any>) {
+    val targetInstance = target.objectInstance ?: return
+
+    target.java.declaredFields
+        .filter { it.annotations.any { it is RequiredDirectory } }
+        .mapNotNull { it.isAccessible = true; it.get(targetInstance) as? Path }
+        .forEach { it.takeUnless { Files.exists(it) }?.let { Files.createDirectories(it) } }
+
+    target.java.declaredFields
+        .filter { it.annotations.any { it is RequiredFile } }
+        .mapNotNull { it.isAccessible = true; it.get(targetInstance) as? Path }
+        .forEach {
+            it.parent.takeUnless { Files.exists(it) }?.let { Files.createDirectories(it) }
+            it.takeUnless { Files.exists(it) }?.let { Files.createFile(it) }
+        }
+}
+
 /**
  * Created by Vincent on 18-3-23.
  * Copyright @ 2013-2023 Platon AI. All rights reserved
  */
 object AppPaths {
 
+    private var initialized = false
     private val CACHE = ConcurrentExpiringLRUCache<String, Any>()
 
     val SYS_TMP_DIR: Path = Paths.get(AppContext.TMP_DIR)
@@ -165,25 +185,18 @@ object AppPaths {
     private val procTmpDirStr get() = PROC_TMP_DIR.toString()
     private val homeDirStr get() = DATA_DIR.toString()
 
-    fun createRequiredResources(target: KClass<out Any>) {
-        val targetInstance = target.objectInstance ?: return
+    @Synchronized
+    fun initialize() {
+        if (initialized) {
+            return
+        }
 
-        target.java.declaredFields
-            .filter { it.annotations.any { it is RequiredDirectory } }
-            .mapNotNull { it.isAccessible = true; it.get(targetInstance) as? Path }
-            .forEach { it.takeUnless { Files.exists(it) }?.let { Files.createDirectories(it) } }
-
-        target.java.declaredFields
-            .filter { it.annotations.any { it is RequiredFile } }
-            .mapNotNull { it.isAccessible = true; it.get(targetInstance) as? Path }
-            .forEach {
-                it.parent.takeUnless { Files.exists(it) }?.let { Files.createDirectories(it) }
-                it.takeUnless { Files.exists(it) }?.let { Files.createFile(it) }
-            }
+        createRequiredResources(AppPaths::class)
+        initialized = true
     }
 
     init {
-        createRequiredResources(AppPaths::class)
+        runCatching { initialize() }
     }
 
     /**

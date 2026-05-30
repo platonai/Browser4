@@ -314,34 +314,6 @@ object DomToH2Queries {
     }
 
     /**
-     * Get result set of a data class
-     * TODO: test is required
-     */
-    fun toResultSet(objects: Iterable<Any>): ResultSet {
-        val rs = SimpleResultSet()
-        val first = objects.firstOrNull() ?: return rs
-        val primaryConstructor = first::class.primaryConstructor ?: return rs
-
-        val propertyNames = primaryConstructor.parameters.mapIndexed { i, kParameter ->
-            kParameter.name ?: "C${1 + i}"
-        }
-        propertyNames.forEach {
-            rs.addColumn(it.uppercase(Locale.getDefault()))
-        }
-
-        val memberProperties = first::class.memberProperties.filter { it.name in propertyNames }
-        objects.forEach { obj ->
-            val values = memberProperties
-                .filter { it.name in propertyNames }
-                .map { it.getter.call(obj).toString() }
-                .toTypedArray()
-            rs.addRow(*values)
-        }
-
-        return rs
-    }
-
-    /**
      * Get result set for each field in Web page
      */
     fun toResultSet(page: WebPage): ResultSet {

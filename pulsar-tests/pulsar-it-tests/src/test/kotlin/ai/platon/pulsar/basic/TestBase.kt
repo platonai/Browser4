@@ -2,9 +2,9 @@ package ai.platon.pulsar.basic
 
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.getLogger
+import ai.platon.pulsar.loop.TaskLoops
 import ai.platon.pulsar.persist.WebDb
 import ai.platon.pulsar.persist.gora.FileBackendPageStore
-import ai.platon.pulsar.skeleton.TaskLoops
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import ai.platon.pulsar.util.server.EnableMockServerApplication
 import org.springframework.beans.factory.annotation.Autowired
