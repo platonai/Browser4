@@ -160,7 +160,7 @@ Browser4 CLI 专为 AI 智能体通过技能 (SKILLS) + CLI 使用而设计。
 
 关于 Docker 部署，请查看我们的 [Docker Hub 仓库](https://hub.docker.com/r/galaxyeye88/browser4)。
 
-**Windows 用户**：你也可以将 Browser4 构建为独立的 Windows 安装程序。详情请参阅 [Windows 安装程序指南](browser4-app/browser4-agents/README.md)。
+**Windows 用户**：你也可以将 Browser4 构建为独立的 Windows 安装程序。详情请参阅 [Windows 安装程序指南](browser4-apps/browser4-agents/README.md)。
 
 ---
 
