@@ -1,18 +1,19 @@
 package ai.platon.pulsar.rest.api.service
 
-import ai.platon.pulsar.agentic.AgenticSession
+import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agentic.BasicAgenticSession
-import ai.platon.pulsar.agentic.tools.high.crawl.ScrapeRequest
-import ai.platon.pulsar.agentic.tools.high.crawl.ScrapeResponse
-import ai.platon.pulsar.agentic.tools.high.crawl.common.DegenerateXSQLScrapeHyperlink
-import ai.platon.pulsar.agentic.tools.high.crawl.common.ScrapeAPIUtils
-import ai.platon.pulsar.agentic.tools.high.crawl.common.ScrapeHyperlink
-import ai.platon.pulsar.agentic.tools.high.crawl.common.XSQLScrapeHyperlink
-import ai.platon.pulsar.agentic.tools.high.crawl.refreshed
+import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
+import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
+import ai.platon.pulsar.agentic.tools.advanced.crawl.common.DegenerateXSQLScrapeHyperlink
+import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeAPIUtils
+import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeHyperlink
+import ai.platon.pulsar.agentic.tools.advanced.crawl.common.XSQLScrapeHyperlink
+import ai.platon.pulsar.agentic.tools.advanced.crawl.refreshed
 import ai.platon.pulsar.common.ResourceStatus
+import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
 import ai.platon.pulsar.rest.api.entities.ScrapeStatusRequest
-import ai.platon.pulsar.agentic.tools.high.command.CommandService.Companion.FLOW_POLLING_INTERVAL
+import ai.platon.pulsar.agent.tool.UserCommandExecutor.Companion.FLOW_POLLING_INTERVAL
 import jakarta.annotation.PreDestroy
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -25,12 +26,15 @@ import java.time.Instant
 import java.util.concurrent.ConcurrentSkipListMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
+import kotlin.time.Duration.Companion.milliseconds
 
 @Service
 class ScrapeService(
-    val session: AgenticSession
+    private val sessionManager: PulsarSessionManager
 ) {
     private val logger = LoggerFactory.getLogger(ScrapeService::class.java)
+
+    private val session get() = sessionManager.getOrCreateSession(SWARM_SESSION_ID).agenticSession
 
     /**
      * The response cache, the key is the id, the value is the response
@@ -76,6 +80,10 @@ class ScrapeService(
         responseCache[hyperlink.uuid] = hyperlink.response
         hyperlink.response.id = hyperlink.uuid
         require(session is BasicAgenticSession)
+        // TODO: the URLs submitted to the URLPool might not be processed by this session,
+        //      instead of which, SWARM session will handle the fetching, which means in-consistent browser settings.
+        //      the reserved solution is to add a session id to the hyperlink, so the scheduler can choose the corresponding
+        //      session to execute the hyperlink.
         session.submit(hyperlink)
         return hyperlink.uuid
     }
@@ -88,7 +96,6 @@ class ScrapeService(
             ScrapeResponse(request.id, ResourceStatus.SC_NOT_FOUND, ProtocolStatusCodes.SC_NOT_FOUND)
         }
     }
-
 
     fun streamEvents(id: String): Flux<ServerSentEvent<ScrapeResponse>> {
         return Flux.create<ScrapeResponse> { sink ->
@@ -113,7 +120,7 @@ class ScrapeService(
     fun commandStatusFlow(uuid: String): Flow<ScrapeResponse> = flow {
         var lastModifiedTime = Instant.EPOCH
         do {
-            delay(FLOW_POLLING_INTERVAL)
+            delay(FLOW_POLLING_INTERVAL.milliseconds)
 
             val status = responseCache[uuid] ?: ScrapeResponse.notFound(uuid)
             if (status.isDone) {
@@ -127,7 +134,6 @@ class ScrapeService(
             }
         } while (!status.isDone)
     }
-
 
     /**
      * Get the response count by status code

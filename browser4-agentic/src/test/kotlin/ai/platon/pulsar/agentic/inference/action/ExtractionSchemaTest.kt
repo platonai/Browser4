@@ -6,9 +6,9 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import org.junit.jupiter.api.Assertions
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
-import org.junit.jupiter.api.DisplayName
 
 class ExtractionSchemaTest {
 
@@ -96,6 +96,8 @@ class ExtractionSchemaTest {
         """.trimIndent()
 
         val schema = ExtractionSchema.parse(json)
+        assertEquals(1, schema.fields.size)
+        assertEquals("articles", schema.fields.first().name)
     }
 
     @Test
@@ -218,6 +220,70 @@ class ExtractionSchemaTest {
   ]
 }
         """.trimIndent()
+
+        val schema = ExtractionSchema.parse(json)
+        assertEquals(1, schema.fields.size)
+        val articles = schema.fields.first()
+        assertEquals("articles", articles.name)
+        assertEquals("array", articles.type)
+        assertEquals("object", articles.arrayElements?.type)
+        val articleItem = requireNotNull(articles.arrayElements)
+        assertTrue(articleItem.name.isNotBlank())
+        assertTrue(articleItem.objectMemberProperties.any { it.name == "title" && it.required })
+        assertTrue(articleItem.objectMemberProperties.any { it.name == "comments" && it.required })
+    }
+
+    @Test
+    @DisplayName("standard JSON Schema root object parses into extraction fields")
+    fun standardJsonSchemaRootObjectParsesIntoExtractionFields() {
+        val json = """
+            {
+              "type": "object",
+              "properties": {
+                "productName": {
+                  "type": "string",
+                  "description": "Product name"
+                },
+                "offers": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "price": {
+                        "type": "number",
+                        "description": "Offer price"
+                      }
+                    },
+                    "required": ["price"]
+                  }
+                }
+              },
+              "required": ["productName"]
+            }
+        """.trimIndent()
+
+        val schema = ExtractionSchema.parse(json)
+        assertEquals(2, schema.fields.size)
+        val productName = schema.fields.first { it.name == "productName" }
+        assertEquals("string", productName.type)
+        assertTrue(productName.required)
+
+        val offers = schema.fields.first { it.name == "offers" }
+        assertEquals("array", offers.type)
+        assertEquals("offersItem", offers.arrayElements?.name)
+        assertEquals("object", offers.arrayElements?.type)
+        assertTrue(offers.arrayElements!!.objectMemberProperties.any { it.name == "price" && it.type == "number" && it.required })
+    }
+
+    @Test
+    @DisplayName("minimal JSON Schema object without properties parses as empty schema")
+    fun minimalJsonSchemaObjectWithoutPropertiesParsesAsEmptySchema() {
+        val schema = ExtractionSchema.parse("""{"type":"object"}""")
+
+        assertTrue(schema.fields.isEmpty())
+        val root = mapper.readTree(schema.toJsonSchema())
+        assertEquals("object", root.get("type").asText())
+        assertEquals(0, root.get("properties").size())
     }
 
     @Test

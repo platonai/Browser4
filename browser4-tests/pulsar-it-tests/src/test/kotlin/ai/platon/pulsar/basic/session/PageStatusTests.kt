@@ -1,11 +1,15 @@
 package ai.platon.pulsar.basic.session
 
+import ai.platon.pulsar.basic.TestBase
+import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.common.sleepSeconds
 import ai.platon.pulsar.skeleton.common.persist.ext.options
-import ai.platon.pulsar.common.printlnPro
-import ai.platon.pulsar.basic.TestBase
+import kotlinx.coroutines.runBlocking
 import java.time.Instant
-import kotlin.test.*
+import kotlin.test.Ignore
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 @Ignore("Failed to test, ignore temporary")
 class PageStatusTests : TestBase() {
@@ -21,7 +25,7 @@ class PageStatusTests : TestBase() {
         var startTime = Instant.now()
         printlnPro("Start time: $startTime")
 
-        val page = session.load(url2, args = args)
+        val page = runBlocking { session.load(url2, args = args) }
         val prevFetchTime1 = page.prevFetchTime
         val fetchTime1 = page.fetchTime
         val fetchCount1 = page.fetchCount
@@ -40,7 +44,7 @@ class PageStatusTests : TestBase() {
 
         sleepSeconds(6)
         startTime = Instant.now()
-        val page2 = session.load(url, args = args)
+        val page2 = runBlocking { session.load(url, args = args) }
         val prevFetchTime2 = page2.prevFetchTime
         val fetchTime2 = page2.fetchTime
         val fetchCount2 = page2.fetchCount
@@ -65,7 +69,7 @@ class PageStatusTests : TestBase() {
         var startTime = Instant.now()
         printlnPro("Start time: $startTime")
 
-        val page = session.load(url2, options)
+        val page = runBlocking { session.load(url2, options) }
         val prevFetchTime1 = page.prevFetchTime
         val fetchTime1 = page.fetchTime
         val fetchCount1 = page.fetchCount
@@ -97,7 +101,7 @@ class PageStatusTests : TestBase() {
         assertTrue("Should be expired at ${options.expireAt} <- $now") {
             options.isExpired(page.prevFetchTime)
         }
-        val page2 = session.load(url, options)
+        val page2 = runBlocking { session.load(url, options) }
         val prevFetchTime2 = page2.prevFetchTime
         val fetchTime2 = page2.fetchTime
         val fetchCount2 = page2.fetchCount

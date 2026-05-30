@@ -15,14 +15,15 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator.context
 
-import ai.platon.pulsar.common.*
+import ai.platon.pulsar.browser.BrowserProfile
+import ai.platon.pulsar.browser.privacy.PrivacyContext
 import ai.platon.pulsar.common.config.ImmutableConfig
+import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.proxy.ProxyException
 import ai.platon.pulsar.common.proxy.ProxyPoolManager
-import ai.platon.pulsar.skeleton.CoreMetrics
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserProfile
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.PrivacyContext
+import ai.platon.pulsar.common.warnForClose
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager
+import ai.platon.pulsar.skeleton.CoreMetrics
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedDeque
@@ -41,9 +42,9 @@ class ConcurrentStatefulPrivacyContextPool(
      *
      * The predefined privacy agents for permanent contexts are:
      *
-     * 1. PrivacyAgent.USER_DEFAULT
-     * 2. PrivacyAgent.PROTOTYPE
-     * 2. PrivacyAgent.DEFAULT
+     * 1. BrowserProfile.USER_DEFAULT
+     * 2. BrowserProfile.PROTOTYPE
+     * 2. BrowserProfile.DEFAULT
      * */
     private val _permanentContexts = ConcurrentHashMap<BrowserProfile, PrivacyContext>()
 
@@ -131,10 +132,10 @@ class ConcurrentStatefulPrivacyContextPool(
 
     @Synchronized
     fun close(privacyContext: PrivacyContext) {
-        val privacyAgent = privacyContext.profile
+        val browserProfile = privacyContext.profile
 
-        _permanentContexts.remove(privacyAgent)
-        _temporaryContexts.remove(privacyAgent)
+        _permanentContexts.remove(browserProfile)
+        _temporaryContexts.remove(browserProfile)
 
         if (!_zombieContexts.contains(privacyContext)) {
             // every time we add the item to the head,

@@ -1,8 +1,8 @@
 package ai.platon.pulsar.examples.sites.simuwang
 
+import ai.platon.pulsar.ql.context.SQLContexts
 import ai.platon.pulsar.skeleton.event.impl.CloseMaskLayerHandler
 import ai.platon.pulsar.skeleton.event.impl.LoginHandler
-import ai.platon.pulsar.ql.context.SQLContexts
 
 class SiMuLoginHandler(
     loginUrl: String,
@@ -38,7 +38,7 @@ open class SiMuCrawler {
         it.eventHandlers.browseEventHandlers.onDocumentFullyLoaded.addLast(closeMaskLayerHandler)
     }
 
-    open fun crawl() {
+    open suspend fun crawl() {
         // load out pages
         val pages = session.loadOutPages(portalUrl, options)
         // parse to jsoup documents
@@ -50,4 +50,4 @@ open class SiMuCrawler {
     }
 }
 
-fun main() = SiMuCrawler().crawl()
+suspend fun main() = SiMuCrawler().crawl()

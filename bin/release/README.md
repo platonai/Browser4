@@ -1,7 +1,6 @@
 # Release Browser4
 
 - make sure all tests pass
-- merge current changes to master branch
-- run release-tag-add.ps1 or release-tag-add.sh to add a new git tag
+- run release-tag-add.ps1 to add a new git tag
 - wait for CI to build and publish to GitHub releases
-- run next-minor.ps1 or next-minor.sh to bump version for next development cycle
+- run bump-version-patch.ps1 to bump version for next bug fix cycle

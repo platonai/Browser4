@@ -408,7 +408,7 @@ __pulsar_utils__.scrollToViewport = function (n = 1) {
 };
 
 /**
- * @deprecated using CDP instead
+ * @deprecated using BrowserProtocol instead
  * */
 __pulsar_utils__.scrollToBottom = function() {
     if (!document || !document.documentElement || !document.body) {
@@ -427,7 +427,7 @@ __pulsar_utils__.scrollToBottom = function() {
 };
 
 /**
- * @deprecated using CDP instead
+ * @deprecated using BrowserProtocol instead
  * */
 __pulsar_utils__.scrollUp = function() {
     if (!__pulsar_utils__.data) {
@@ -439,14 +439,14 @@ __pulsar_utils__.scrollUp = function() {
 };
 
 /**
- * @deprecated using CDP instead
+ * @deprecated using BrowserProtocol instead
  * */
 __pulsar_utils__.scrollToTop = function() {
     window.scrollTo(0, 0)
 };
 
 /**
- * @deprecated using CDP instead
+ * @deprecated using BrowserProtocol instead
  * */
 __pulsar_utils__.scrollDown = function() {
     window.scrollBy(0, 500);
@@ -471,7 +471,7 @@ __pulsar_utils__.scrollDownN = function(scrollCount = 5) {
  *
  * @param  {String} selector
  * @return boolean
- * @deprecated use CDP instead
+ * @deprecated use BrowserProtocol instead
  */
 __pulsar_utils__.isVisible = function(selector) {
     let ele = document.querySelector(selector)
@@ -608,7 +608,7 @@ __pulsar_utils__.isElementChecked = function(element, strict = true) {
  *
  * @param {String} selector The element to scroll to
  * @param {Object} [options] Optional scroll options to override defaults
- * @deprecated use CDP instead
+ * @deprecated use BrowserProtocol instead
  * */
 __pulsar_utils__.scrollIntoView = function(selector, options) {
     try {
@@ -649,7 +649,7 @@ __pulsar_utils__.scrollIntoView = function(selector, options) {
  *
  * @param  {String} selector
  * @return
- * @deprecated use CDP instead
+ * @deprecated use BrowserProtocol instead
  */
 __pulsar_utils__.click = function(selector) {
     let ele = document.querySelector(selector)
@@ -758,7 +758,7 @@ __pulsar_utils__.uncheck = function(selector) {
  *
  * @param  {String} selector
  * @return {String}
- * @deprecated use CDP instead
+ * @deprecated use BrowserProtocol instead
  */
 __pulsar_utils__.outerHTML = function(selector) {
     let element = document.querySelector(selector)

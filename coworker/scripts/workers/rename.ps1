@@ -13,10 +13,10 @@ if (-not (Test-Path $FilePath)) {
 $inputPath = Resolve-Path $FilePath
 $FilePath = $inputPath.Path
 
-$ghCopilotHelper = Join-Path $PSScriptRoot "gh-copilot.ps1"
-. $ghCopilotHelper
+$agentHelper = Join-Path $PSScriptRoot "agent.ps1"
+. $agentHelper
 $repoRoot = Get-WorkspaceRoot
-$copilotCommand = Get-GHCopilotCommand -RepoRoot $repoRoot
+$agentCommand = Get-AgentCommand -RepoRoot $repoRoot
 
 function Get-GeneratedTaskName {
     param (
@@ -48,7 +48,7 @@ function Get-GeneratedTaskName {
 
     $namingPrompt = "Create a short, descriptive task name in English kebab-case (3-6 words max). Output only the name. DO NOT use any tools. DO NOT search for files. Just use the provided text. Title: $title Description: $description Prompt: $promptSample"
 
-    $copilotNameTimeoutSeconds = 120
+    $agentNameTimeoutSeconds = 120
     $Fallback = $title -replace '[\\/*?:"<>|]', '_'
     if ([string]::IsNullOrWhiteSpace($Fallback)) {
         $Fallback = "task"
@@ -57,47 +57,47 @@ function Get-GeneratedTaskName {
     try {
         $nameStdOut = [System.IO.Path]::GetTempFileName()
         $nameStdErr = [System.IO.Path]::GetTempFileName()
-        
+
         try {
-            $nameProcess = Start-GHCopilotProcess -Executable $copilotCommand.Executable -BaseArgs $copilotCommand.BaseArgs -Prompt $namingPrompt -WorkingDirectory $repoRoot -StdOutPath $nameStdOut -StdErrPath $nameStdErr -NoNewWindow
+            $nameProcess = Start-AgentProcess -Executable $agentCommand.Executable -BaseArgs $agentCommand.BaseArgs -Prompt $namingPrompt -WorkingDirectory $repoRoot -StdOutPath $nameStdOut -StdErrPath $nameStdErr -NoNewWindow
         } catch {
             Write-Host "DEBUG: Start-Process failed: $_"
             return "Error: Start-Process failed"
         }
-        
+
         try {
-            $null = Wait-Process -Id $nameProcess.Id -Timeout $copilotNameTimeoutSeconds -ErrorAction Stop
+            $null = Wait-Process -Id $nameProcess.Id -Timeout $agentNameTimeoutSeconds -ErrorAction Stop
         } catch {
             if (-not $nameProcess.HasExited) {
-                 & "Stop-Process" -Id $nameProcess.Id -Force -ErrorAction SilentlyContinue
-                 Write-Host "DEBUG: Timeout waiting for process"
-                 return "Error: Timeout"
+                & "Stop-Process" -Id $nameProcess.Id -Force -ErrorAction SilentlyContinue
+                Write-Host "DEBUG: Timeout waiting for process"
+                return "Error: Timeout"
             }
         }
 
         $rawName = ""
         if (Test-Path $nameStdOut) {
-            $lines = Get-Content -Path $nameStdOut | Where-Object { $_ -and $_.Trim() }
-            
-            $cleanLines = @($lines | Where-Object { 
-                $_ -notmatch '^\s*\u25CF' -and 
-                $_ -notmatch '^\s*\u0024' -and 
-                $_ -notmatch '^\s*\u2514' -and 
-                $_ -notmatch '^error:' -and 
-                $_ -notmatch '^Try ''copilot --help''' -and 
-                $_ -notmatch '^Total' -and 
-                $_ -notmatch '^API' -and 
-                $_ -notmatch '^Breakdown' -and
-                $_ -notmatch '^\s+gemini' -and
-                $_ -notmatch '^\s+gpt' -and
-                $_ -notmatch '^Days' -and
-                $_ -notmatch '^Hours' -and
-                $_ -notmatch '^Minutes' -and
-                $_ -notmatch '^Seconds' -and
-                $_ -notmatch '^Milliseconds' -and
-                $_ -notmatch '^Ticks'
+            $lines = Get-Content -Path $nameStdOut -Encoding UTF8 | Where-Object { $_ -and $_.Trim() }
+
+            $cleanLines = @($lines | Where-Object {
+                $_ -notmatch '^\s*\u25CF' -and
+                        $_ -notmatch '^\s*\u0024' -and
+                        $_ -notmatch '^\s*\u2514' -and
+                        $_ -notmatch '^error:' -and
+                        $_ -notmatch '^Try ''copilot --help''' -and
+                        $_ -notmatch '^Total' -and
+                        $_ -notmatch '^API' -and
+                        $_ -notmatch '^Breakdown' -and
+                        $_ -notmatch '^\s+gemini' -and
+                        $_ -notmatch '^\s+gpt' -and
+                        $_ -notmatch '^Days' -and
+                        $_ -notmatch '^Hours' -and
+                        $_ -notmatch '^Minutes' -and
+                        $_ -notmatch '^Seconds' -and
+                        $_ -notmatch '^Milliseconds' -and
+                        $_ -notmatch '^Ticks'
             })
-            
+
             if ($cleanLines.Count -gt 0) {
                 $rawName = $cleanLines[-1].Trim()
                 if ($rawName -match '^"(.*)"$') {
@@ -107,10 +107,10 @@ function Get-GeneratedTaskName {
         }
 
         if (Test-Path $nameStdErr) {
-             $errContent = Get-Content $nameStdErr
-             if ($errContent) {
-                 Write-Host "DEBUG: GH Stderr: $errContent"
-             }
+            $errContent = Get-Content -Path $nameStdErr -Encoding UTF8
+            if ($errContent) {
+                Write-Host "DEBUG: GH Stderr: $errContent"
+            }
         }
 
         Remove-Item $nameStdOut -ErrorAction SilentlyContinue
@@ -146,9 +146,9 @@ if (Test-Path -Path $FilePath -PathType Container) {
     $files = Get-ChildItem -Path $FilePath -File | Where-Object { $_.BaseName -match '^\d+$' }
     foreach ($file in $files) {
         Write-Host "Processing $($file.Name)..."
-        $content = Get-Content -Path $file.FullName -Raw
+        $content = Get-Content -Path $file.FullName -Raw -Encoding UTF8
         $newName = Get-GeneratedTaskName -Content $content -OriginalBaseName $file.BaseName -OriginalName $file.Name
-        
+
         if ($newName -ne $file.BaseName) {
             $newFileName = "$newName$($file.Extension)"
             $newPath = Join-Path $file.DirectoryName $newFileName
@@ -162,9 +162,8 @@ if (Test-Path -Path $FilePath -PathType Container) {
     }
 } else {
     # Single file mode
-    $content = Get-Content -Path $FilePath -Raw
+    $content = Get-Content -Path $FilePath -Raw -Encoding UTF8
     $fileItem = Get-Item $FilePath
     $newName = Get-GeneratedTaskName -Content $content -OriginalBaseName $fileItem.BaseName -OriginalName $fileItem.Name
     Write-Output $newName
 }
-

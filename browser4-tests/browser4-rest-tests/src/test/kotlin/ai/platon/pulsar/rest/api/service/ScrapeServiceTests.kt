@@ -1,7 +1,7 @@
 package ai.platon.pulsar.rest.api.service
 
-import ai.platon.pulsar.agentic.tools.high.crawl.ScrapeRequest
-import ai.platon.pulsar.boot.autoconfigure.test.PulsarTestContextInitializer
+import ai.platon.browser4.boot.autoconfigure.test.PulsarTestContextInitializer
+import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.common.DateTimes
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.printlnPro
@@ -43,7 +43,7 @@ class ScrapeServiceTests : MockEcServerTestBase() {
 
     @BeforeEach
     @DisplayName("Ensure resources are prepared")
-    fun ensureResourcesArePrepared() {
+    suspend fun ensureResourcesArePrepared() {
         super.setup() // Call parent setup to verify mock server is running
         TestHelper.ensurePage(productListURL)
         TestHelper.ensurePage(productDetailURL)

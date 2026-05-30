@@ -1,0 +1,23 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      browser4-cli:
+        specifier: ^0.1.5
+        version: 0.1.5
+
+packages:
+
+  browser4-cli@0.1.5:
+    resolution: {integrity: sha512-1QRrfDT93UMt5OPjQWSz82c4okiDgapRO7MgMTpru0UMwxRT+R+tM4QfNi4z3vZaOfH0guWdEYnozjD+ca3w0Q==}
+    hasBin: true
+
+snapshots:
+
+  browser4-cli@0.1.5: {}

@@ -1,5 +1,7 @@
 #!/bin/bash
 
+set -euo pipefail
+
 
 repoRoot=$(cd "$(dirname "$0")">/dev/null || exit 1; pwd)
 while [[ ! -f "$repoRoot/VERSION" && "$repoRoot" != "/" ]]; do
@@ -80,13 +82,43 @@ function invokeMavenBuild {
 
   pushd "$Directory" > /dev/null || exit 1
 
-  $MvnCmd "${MvnOptions[@]}"
-
-  if [[ $? -ne 0 ]]; then
-    echo "Warning: Maven command failed in $Directory"
-  fi
+  "$MvnCmd" "${MvnOptions[@]}"
 
   popd > /dev/null || exit 1
+}
+
+function invokeCargoBuild {
+  local Directory=$1
+  local RunTests=$2
+
+  if ! command -v cargo >/dev/null 2>&1; then
+    echo "Error: cargo is not installed or not in PATH"
+    exit 1
+  fi
+
+  pushd "$Directory" > /dev/null || exit 1
+
+  if [[ "$RunTests" == "true" ]]; then
+    cargo test --locked --bin browser4-cli
+  fi
+
+  cargo build --release --locked
+
+  popd > /dev/null || exit 1
+}
+
+function copyBrowser4JarToTarget {
+  local sourceJar="$repoRoot/browser4-app/browser4-agents/target/Browser4.jar"
+  local targetDir="$repoRoot/target"
+  local targetJar="$targetDir/Browser4.jar"
+
+  if [[ ! -f "$sourceJar" ]]; then
+    echo "Error: Browser4.jar not found at $sourceJar"
+    exit 1
+  fi
+
+  mkdir -p "$targetDir"
+  cp "$sourceJar" "$targetJar"
 }
 
 # Execute Maven package in the application home directory
@@ -94,3 +126,5 @@ MvnOptions+=("install")
 
 MvnOptions+=("${AdditionalMvnArgs[@]}")
 invokeMavenBuild "$repoRoot" "${MvnOptions[@]}"
+copyBrowser4JarToTarget
+invokeCargoBuild "$repoRoot/cli/browser4-cli" "$([[ "$SkipTests" == "true" ]] && echo false || echo true)"

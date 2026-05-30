@@ -90,7 +90,7 @@ class PulsarWebDriverXPathTests : WebDriverTestBase() {
             assertEquals("✉️ Email Validation", text)
         }
 
-    @Disabled("MAY NOT SUPPORTED BY CDP")
+    @Disabled("MAY NOT SUPPORTED BY BrowserProtocol")
     @Test
     @DisplayName("test selectFirstTextOrNull by xpath with parent")
     fun testSelectFirstTextOrNullByXpathWithParent() =
@@ -99,7 +99,7 @@ class PulsarWebDriverXPathTests : WebDriverTestBase() {
             assertEquals("""🔒 Contact Us""", text)
         }
 
-    @Disabled("MAY NOT SUPPORTED BY CDP")
+    @Disabled("MAY NOT SUPPORTED BY BrowserProtocol")
     @Test
     @DisplayName("test selectFirstTextOrNull by xpath with following-sibling")
     fun testSelectFirstTextOrNullByXpathWithFollowingSibling() =

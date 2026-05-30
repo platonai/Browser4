@@ -1,7 +1,0 @@
-## Daily Memory - 2026-03-11
-
-- **Cleared coworker log artifacts while preserving memory history:** Removed all non-memory files under `coworker/tasks/300logs` and pruned empty directories, leaving only `MEMORY*.md` files and their required parent folders. **Outcome:** The log area is reset without losing retained daily or monthly knowledge. **Learning:** For coworker maintenance, filtering on the durable `MEMORY*.md` naming convention is a safe cleanup boundary that avoids accidental knowledge loss.
-
-- **Brought monthly memory current through 2026-03-10:** Verified the monthly rollup had not yet incorporated the previous day's daily memory, then appended a new cumulative monthly update through `2026-03-10`. **Learning:** Monthly memory maintenance should explicitly check for the latest covered date before appending a new rollup, otherwise daily summaries can lag behind even when the source files already exist.
-
-- **Cleanup limitation noted for active session logs:** A final deletion retry showed two files still open by another process: `2026/03/11/092142-clear-coworker-logs.copilot.log.stdout` and `.stderr`. **Outcome:** All other non-memory logs were removed successfully, and the remaining pair appears to be transient runtime output for the active task session rather than retained historical logs. **Learning:** When cleaning live coworker log trees, perform the bulk cleanup first, then retry current-session artifacts separately because open handles can temporarily prevent deletion.

@@ -29,8 +29,8 @@ class TestLoadResources: WebDriverTestBase() {
         resourceUrls.forEach { webDB.delete(it) }
     }
 
-    @Test
-    fun testLoadResource() {
+    @org.junit.jupiter.api.Test
+    suspend fun testLoadResource() {
         resourceUrls.forEachIndexed { i, resourceUrl ->
             val referrer = URLUtils.getOrigin(resourceUrl)
             val page = session.loadResource(resourceUrl, referrer, "-refresh")

@@ -9,6 +9,7 @@ import java.net.UnknownHostException
 import java.util.concurrent.TimeoutException
 import kotlin.math.min
 import kotlin.math.pow
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Retry strategy with exponential backoff and jitter.
@@ -89,7 +90,7 @@ class RetryStrategy(
                         attempt + 1, maxRetries, delayMs, e.message
                     )
                     onRetry?.invoke(attempt, delayMs)
-                    delay(delayMs)
+                    delay(delayMs.milliseconds)
                 } else {
                     throw e
                 }

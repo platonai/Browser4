@@ -1,20 +1,13 @@
 package ai.platon.pulsar.agentic.agents
 
-import ai.platon.browser4.driver.chrome.dom.model.BrowserUseState
 import ai.platon.pulsar.agentic.AgenticSession
-import ai.platon.pulsar.agentic.model.ActionDescription
-import ai.platon.pulsar.agentic.model.AgentHistory
-import ai.platon.pulsar.agentic.model.AgentState
-import ai.platon.pulsar.agentic.model.ExecutionContext
-import ai.platon.pulsar.agentic.model.ObserveElement
-import ai.platon.pulsar.agentic.model.TcEvaluate
-import ai.platon.pulsar.agentic.model.ToolCall
-import ai.platon.pulsar.agentic.model.ToolCallResult
+import ai.platon.pulsar.agentic.model.*
+import ai.platon.pulsar.chrome.dom.model.BrowserUseState
 import io.mockk.mockk
-import kotlin.test.assertEquals
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
+import kotlin.test.assertEquals
 
 class RobustBrowserAgentTest {
     private val session = mockk<AgenticSession>(relaxed = true)

@@ -212,8 +212,8 @@ tab.hover(selector: String)
 tab.click(selector: String)                         // focus on an element with [selector] and click it
 tab.click(selector: String, modifier: String)       // focus on an element with [selector] and click it with modifier pressed
 tab.fill(selector: String, text: String)
-tab.type(selector: String, text: String)
-tab.press(selector: String, key: String)
+tab.type(text: String, selector: String? = null)
+tab.press(key: String, selector: String? = null)
 tab.check(selector: String)
 tab.uncheck(selector: String)
 tab.scrollTo(selector: String)
@@ -222,6 +222,8 @@ tab.scrollBy(pixels: Double = 200.0): Double
 tab.ariaSnapshot(viewports: String = "all")      // Returns the accessibility tree. viewports: "all", "3", "1,3,5", "2-4"
 tab.textContent(): String?                            // Returns the document's text content.
 tab.selectFirstTextOrNull(selector: String): String?  // Returns the first node's text content (descendants included). Returns null if no node.
+tab.eval(expression: String)
+tab.eval(expression: String, selector: String)
 tab.delay(millis: Long)
 
 // domain: browser

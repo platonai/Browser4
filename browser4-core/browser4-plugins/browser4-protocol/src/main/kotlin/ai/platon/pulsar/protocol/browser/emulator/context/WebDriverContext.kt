@@ -15,9 +15,16 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator.context
 
-import ai.platon.pulsar.common.*
+import ai.platon.pulsar.browser.AbstractBrowser
+import ai.platon.pulsar.browser.BrowserId
+import ai.platon.pulsar.browser.common.BrowserUnavailableException
+import ai.platon.pulsar.browser.common.IllegalWebDriverStateException
+import ai.platon.pulsar.browser.common.WebDriverException
+import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.logging.ThrottlingLogger
+import ai.platon.pulsar.common.warnForClose
+import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager.Companion.DRIVER_FAST_CLOSE_TIME_OUT
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager.Companion.DRIVER_SAFE_CLOSE_TIME_OUT
@@ -27,8 +34,6 @@ import ai.platon.pulsar.skeleton.common.AppSystemInfo
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.*
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 import com.codahale.metrics.Gauge
 import org.slf4j.LoggerFactory
 import java.time.Duration
@@ -47,14 +52,14 @@ open class WebDriverContext(
     val browserId: BrowserId,
     val driverPoolManager: WebDriverPoolManager,
     val conf: ImmutableConfig
-): AutoCloseable {
+) : AutoCloseable {
     companion object {
         private val numGlobalRunningTasks = AtomicInteger()
         private val globalTasks = MetricsSystem.reg.meter(this, "globalTasks")
         private val globalFinishedTasks = MetricsSystem.reg.meter(this, "globalFinishedTasks")
 
         init {
-            MetricsSystem.reg.register(this,"globalRunningTasks", Gauge { numGlobalRunningTasks.get() })
+            MetricsSystem.reg.register(this, "globalRunningTasks", Gauge { numGlobalRunningTasks.get() })
         }
     }
 
@@ -76,23 +81,27 @@ open class WebDriverContext(
      * 2. the application is active
      * 3. the browser is not in closed pool nor in retired pool
      * */
-    open val isActive: Boolean get() {
-        val active = !closed.get() && AppContext.isActive && driverPoolManager.hasPossibility(browserId)
+    open val isActive: Boolean
+        get() {
+            val active = !closed.get() && AppContext.isActive && driverPoolManager.hasPossibility(browserId)
 
-        if (!active) {
-            val state = listOf("closed" to closed.get(),
-                "hasPossibility" to driverPoolManager.hasPossibility(browserId)
-            ).map { it.first to if (it.second) "✓" else "✗" }
-                .joinToString(",") { it.first + ":" + it.second }
-            throttlingLogger.info("WebDriverContext is not active | $state | ${browserId.contextDir}")
+            if (!active) {
+                val state = listOf(
+                    "closed" to closed.get(),
+                    "hasPossibility" to driverPoolManager.hasPossibility(browserId)
+                ).map { it.first to if (it.second) "✓" else "✗" }
+                    .joinToString(",") { it.first + ":" + it.second }
+                throttlingLogger.info("WebDriverContext is not active | $state | ${browserId.contextDir}")
+            }
+
+            return active
         }
 
-        return active
-    }
     /**
      * Check if the driver context is retired.
      * */
     open val isRetired get() = driverPoolManager.isRetiredPool(browserId)
+
     /**
      * Check if the driver context is ready to serve
      * */
@@ -144,7 +153,10 @@ open class WebDriverContext(
         }
     }
 
-    private suspend fun doRunAndHandleWebDriverException(task: FetchTask, browseFun: suspend () -> FetchResult): FetchResult {
+    private suspend fun doRunAndHandleWebDriverException(
+        task: FetchTask,
+        browseFun: suspend () -> FetchResult
+    ): FetchResult {
         return try {
             browseFun()
         } catch (e: IllegalWebDriverStateException) {
@@ -152,7 +164,12 @@ open class WebDriverContext(
         } catch (e: WebDriverPoolExhaustedException) {
             if (AppContext.isActive) {
                 // log only when the application is active
-                val message = String.format("%s. [Exhausted] Retry task %s in crawl scope | cause by: %s", task.page.id, task.id, e.message)
+                val message = String.format(
+                    "%s. [Exhausted] Retry task %s in browser scope | cause by: %s",
+                    task.page.id,
+                    task.id,
+                    e.message
+                )
                 logger.warn(message)
             }
             FetchResult.crawlRetry(task, "Driver pool exhausted")
@@ -160,11 +177,16 @@ open class WebDriverContext(
             if (AppContext.isActive) {
                 // log only when the application is active
                 logger.warn("WebDriverPoolException | {} | {}", e.browserId, e.message)
-                logger.warn("{}. [WebDriverPoolException] Retry task {} in crawl scope", task.page.id, task.id)
+                logger.warn("{}. [WebDriverPoolException] Retry task {} in browser scope", task.page.id, task.id)
             }
             FetchResult.crawlRetry(task, "Driver pool exception")
         } catch (e: WebDriverException) {
-            logger.warn("{}. [WebDriverException] Retry task {} in crawl scope | caused by: {}", task.page.id, task.id, e.message)
+            logger.warn(
+                "{}. [WebDriverException] Retry task {} in browser scope | caused by: {}",
+                task.page.id,
+                task.id,
+                e.message
+            )
             logger.warn("Failed to execute fetch task", e)
             FetchResult.crawlRetry(task, e)
         }
@@ -183,14 +205,17 @@ open class WebDriverContext(
         val result = when {
             !AppContext.isActive -> FetchResult.canceled(task, reason)
             b?.isActive == true -> {
-                logger.warn("Closing illegal browser, retrying task #${task.page.id} in crawl scope | {} | {} | {}",
-                    b.readableState, e.message, task.page.url)
+                logger.warn(
+                    "Closing illegal browser, retrying task #${task.page.id} in browser scope | {} | {} | {}",
+                    b.readableState, e.message, task.page.url
+                )
                 FetchResult.crawlRetry(task, reason)
             }
+
             else -> FetchResult.canceled(task, reason)
         }
 
-        driverPoolManager.closeBrowserAccompaniedDriverPoolGracefully(browserId, DRIVER_FAST_CLOSE_TIME_OUT)
+        driverPoolManager.closeBrowserAccompaniedDriverPoolForcibly(browserId, DRIVER_FAST_CLOSE_TIME_OUT)
         return result
     }
 
@@ -218,40 +243,27 @@ open class WebDriverContext(
     }
 
     private fun closeContext() {
-        val asap = !AppContext.isActive || AppSystemInfo.isSystemOverCriticalLoad
-
-        logger.debug("Closing web driver context, asap: $asap")
-
-        // not shutdown, wait longer
-        if (asap) {
-            closeUnderlyingLayerGracefully()
-        } else {
-            // always close the context as soon as possible, just retry the unfinished tasks.
-            // waitUntilAllDoneNormally(Duration.ofMinutes(1))
-            // close underlying IO based modules asynchronously
-            closeUnderlyingLayerGracefully()
-        }
-
-        // No need to wait for the underlying layer to be closed, just close it
-        // waitUntilNoRunningTasks(Duration.ofSeconds(10))
+        closeUnderlyingLayer()
 
         val isShutdown = if (AppContext.isActive) "" else " (shutdown)"
         val display = browserId.display
         if (runningTasks.isNotEmpty()) {
-            logger.info("Still {} running tasks after context close$isShutdown | {} | {}",
-                runningTasks.size, runningTasks.joinToString { "${it.id}(${it.state})" }, display)
+            logger.info(
+                "Still {} running tasks after context close$isShutdown | {} | {}",
+                runningTasks.size, runningTasks.joinToString { "${it.id}(${it.state})" }, display
+            )
         } else {
             logger.info("Web driver context is closed successfully$isShutdown | {} | {}", display, browserId.contextDir)
         }
     }
 
-    private fun closeUnderlyingLayerGracefully() {
+    private fun closeUnderlyingLayer() {
         // Mark all working tasks to be canceled, so they return as soon as possible
         runningTasks.forEach { it.cancel() }
         // Cancel the browser, and all online drivers, and the worker coroutines with the drivers
         driverPoolManager.cancelAll(browserId)
 
-        driverPoolManager.closeBrowserAccompaniedDriverPoolGracefully(browserId, DRIVER_SAFE_CLOSE_TIME_OUT)
+        driverPoolManager.closeBrowserAccompaniedDriverPoolForcibly(browserId, DRIVER_SAFE_CLOSE_TIME_OUT)
     }
 
     private fun shutdownUnderlyingLayerImmediately() {
@@ -291,8 +303,11 @@ open class WebDriverContext(
         val display = browserId.display
         val message = when {
             AppSystemInfo.isCriticalMemory ->
-                String.format("Low memory (%s), close %d retired browsers immediately$isShutdown | $display",
-                    AppSystemInfo.formatAvailableMemory(), runningTasks.size)
+                String.format(
+                    "Low memory (%s), close %d retired browsers immediately$isShutdown | $display",
+                    AppSystemInfo.formatAvailableMemory(), runningTasks.size
+                )
+
             n <= 0L -> String.format("Timeout (still %d running tasks)$isShutdown | $display", runningTasks.size)
             n > 0 -> String.format("All tasks return in %d seconds$isShutdown | $display", timeout.seconds - n)
             else -> ""

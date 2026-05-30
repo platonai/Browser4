@@ -1,6 +1,6 @@
 package ai.platon.pulsar.heavy
 
-import ai.platon.browser4.driver.common.BrowserSettings
+import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.pulsar.common.LinkExtractors
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.printlnPro
@@ -28,7 +28,7 @@ fun main() {
         context.submitAll(document.selectHyperlinks("a[href~=/dp/]").take(topN2))
     }
 
-    // change to seeds100.txt to crawl more
+    // change to seeds100.txt to browser more
     val urls = LinkExtractors.fromResource("seeds100.txt")
         .take(topN)
         .map { ParsableHyperlink("$it -refresh", parseHandler) }

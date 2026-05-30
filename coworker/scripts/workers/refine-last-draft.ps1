@@ -2,10 +2,10 @@
 
 $ErrorActionPreference = "Stop"
 
-$ghCopilotHelper = Join-Path $PSScriptRoot "gh-copilot.ps1"
-. $ghCopilotHelper
+$agentHelper = Join-Path $PSScriptRoot "agent.ps1"
+. $agentHelper
 $repoRoot = Get-WorkspaceRoot
-$copilotCommand = Get-GHCopilotCommand -RepoRoot $repoRoot
+$agentCommand = Get-AgentCommand -RepoRoot $repoRoot
 
 $draftDir = Resolve-TasksPath '0draft'
 
@@ -27,8 +27,8 @@ Write-Host "Found latest draft: $draftPath"
 
 $prompt = "Refine the content of the draft file: $draftPath. Improve the writing, clarity, and structure."
 
-Write-Host "Starting GitHub Copilot to refine the draft..."
+Write-Host "Starting agent to refine the draft..."
 
-$process = Start-GHCopilotProcess -Executable $copilotCommand.Executable -BaseArgs $copilotCommand.BaseArgs -Prompt $prompt -AdditionalArguments @('--allow-all-tools', '--allow-all-paths') -WorkingDirectory $repoRoot -NoNewWindow
+$process = Start-AgentProcess -Executable $agentCommand.Executable -BaseArgs $agentCommand.BaseArgs -Prompt $prompt -AdditionalArguments @('--allow-all-tools', '--allow-all-paths') -WorkingDirectory $repoRoot -NoNewWindow
 $process.WaitForExit()
 exit $process.ExitCode

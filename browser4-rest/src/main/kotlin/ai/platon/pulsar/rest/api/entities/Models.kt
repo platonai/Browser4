@@ -1,16 +1,8 @@
 package ai.platon.pulsar.rest.api.entities
 
-import ai.platon.pulsar.agentic.tools.high.crawl.PageVisitRequest
+import ai.platon.browser4.common.B4Constants.PROFILE_MODE_CAPABILITY
+import ai.platon.pulsar.common.ManagedSession
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
-
-// Command-related types are now in browser4-tools module.
-// These typealiases maintain backward compatibility for REST layer consumers.
-typealias CommandRequest = PageVisitRequest
-typealias CommandResult = ai.platon.pulsar.agentic.tools.high.command.CommandResult
-typealias CommandAgentState = ai.platon.pulsar.agentic.tools.high.command.CommandAgentState
-typealias CommandAgentHistory = ai.platon.pulsar.agentic.tools.high.command.CommandAgentHistory
-typealias InstructResult = ai.platon.pulsar.agentic.tools.high.command.InstructResult
-typealias CommandStatus = ai.platon.pulsar.agentic.tools.high.command.CommandStatus
 
 /**
  * Request for chat
@@ -20,7 +12,7 @@ typealias CommandStatus = ai.platon.pulsar.agentic.tools.high.command.CommandSta
  * @property args The load arguments
  * @property actions Instructs, e.g. "click the button with id 'submit'", [actions]  are performed after the active DOM is ready
  * */
-data class PromptRequest(
+data class PromptRequest constructor(
     /**
      * The page url
      * */
@@ -44,6 +36,29 @@ data class PromptRequest(
 data class ScrapeStatusRequest(
     val id: String,
 )
+
+data class SessionResponse(
+    var sessionId: String,
+    var status: String? = null,
+    var profileMode: String? = null,
+    var capabilities: Map<String, String?>? = null,
+    var url: String? = null,
+    var createdAt: Long? = null,
+    var lastAccessedAt: Long = 0,
+)
+
+fun ManagedSession.toSessionResponse(): SessionResponse {
+    val safeCapabilities = capabilities?.toMap()
+    return SessionResponse(
+        sessionId = sessionId,
+        status = status,
+        profileMode = safeCapabilities?.get(PROFILE_MODE_CAPABILITY),
+        capabilities = safeCapabilities,
+        url = url,
+        createdAt = createdAt,
+        lastAccessedAt = lastAccessedAt,
+    )
+}
 
 /**
  * W3 resources

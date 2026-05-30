@@ -1,7 +1,7 @@
 package ai.platon.pulsar.agentic.tools.util
 
-import ai.platon.browser4.driver.chrome.dom.FBNLocator
 import ai.platon.pulsar.agentic.model.ToolCall
+import ai.platon.pulsar.browser.common.FBNLocator
 import ai.platon.pulsar.common.getLogger
 import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
@@ -57,7 +57,7 @@ class ActionValidator(
                 "scrollBy" -> validateScrollBy(toolCall.arguments)
                 "reload", "goBack", "goForward", "delay", "scrollToTop", "scrollToBottom", "scrollToMiddle", "scrollToViewport",
                 "currentUrl", "url", "documentURI", "baseURI", "referrer", "pageSource", "getCookies",
-                "textContent", "mouseWheelDown", "mouseWheelUp", "moveMouseTo", "dragAndDrop", "switchTab" -> true // These don't need validation
+                "textContent", "mouseWheelDown", "mouseWheelUp", "mouseMove", "dragAndDrop", "switchTab" -> true // These don't need validation
                 "writeString", "readString", "replaceContent" -> true
                 else -> {
                     if (denyUnknownActions) {

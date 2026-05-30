@@ -3,7 +3,7 @@ package ai.platon.pulsar.examples.sites.language
 import ai.platon.pulsar.skeleton.context.PulsarContexts
 import ai.platon.pulsar.skeleton.event.impl.CloseMaskLayerHandler
 
-fun main() {
+suspend fun main() {
     val portalUrl = "https://shopee.co.th/กระเป๋าเป้ผู้ชาย-cat.49.1037.10297?page=1"
     val args = """
         -i 1s -ii 1s -ol ".shopee-search-item-result__item a" -sc 10

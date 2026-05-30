@@ -1,7 +1,7 @@
 package ai.platon.pulsar.skeleton.workflow.protocol
 
+import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.persist.PageDatum
-import ai.platon.pulsar.persist.WebPage
 
 /**
  * A response interface. Makes all protocols model HTTP

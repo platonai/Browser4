@@ -4,9 +4,9 @@ import ai.platon.pulsar.common.config.AppConstants.PULSAR_DOCUMENT_NORMALIZED_UR
 import ai.platon.pulsar.common.config.AppConstants.PULSAR_META_INFORMATION_SELECTOR
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.urls.URLUtils
+import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.dom.select.selectFirstOrNull
-import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.skeleton.common.persist.ext.options
 import org.jsoup.Jsoup
 import org.slf4j.LoggerFactory

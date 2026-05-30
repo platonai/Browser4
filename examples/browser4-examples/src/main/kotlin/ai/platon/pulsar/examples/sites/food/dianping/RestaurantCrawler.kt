@@ -1,10 +1,13 @@
 package ai.platon.pulsar.examples.sites.food.dianping
 
-import ai.platon.pulsar.common.*
+import ai.platon.pulsar.common.AppFiles
+import ai.platon.pulsar.common.AppPaths
+import ai.platon.pulsar.common.brief
+import ai.platon.pulsar.common.getLogger
+import ai.platon.pulsar.core.api.WebDriver
+import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.context.PulsarContexts
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
-import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import com.google.gson.GsonBuilder
 import kotlinx.coroutines.Dispatchers
@@ -90,7 +93,7 @@ class RestaurantCrawler(
     }
 }
 
-fun main() {
+suspend fun main() {
     val url = "https://www.dianping.com/shop/Enk0gTkqu0Cyj7Ch"
     val args = "-i 1s -ignoreFailure -parse"
 

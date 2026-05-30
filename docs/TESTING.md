@@ -134,7 +134,6 @@ AND NOT ManualOnly
 | Unit        | `<module>/src/test`        |
 | Integration | `browser4-tests/*-it-tests`  |
 | E2E         | `browser4-tests/*-e2e-tests` |
-| SDK         | `sdks/*-tests`             |
 
 ---
 

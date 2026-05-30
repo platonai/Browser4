@@ -1,21 +1,22 @@
 package ai.platon.pulsar
 
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.Browser
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserFactory
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
+import ai.platon.pulsar.browser.BrowserId
+import ai.platon.pulsar.core.api.Browser
+import ai.platon.pulsar.core.api.BrowserManager
+import ai.platon.pulsar.core.api.WebDriver
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.apache.commons.lang3.StringUtils
 import org.junit.jupiter.api.Assumptions.assumeTrue
+import kotlin.time.Duration.Companion.milliseconds
 
 open class WebDriverService(
-    val browserFactory: BrowserFactory,
+    val browserManager: BrowserManager,
     val requiredPageSize: Int = 100
 ) {
     fun runWebDriverTest(block: suspend (driver: WebDriver) -> Unit) {
         runBlocking {
-            browserFactory.launchRandomTempBrowser().use {
+            browserManager.launchRandomTempBrowser().use {
                 it.newDriver().use { driver ->
                     block(driver)
                 }
@@ -25,7 +26,7 @@ open class WebDriverService(
 
     fun runWebDriverTest(browserId: BrowserId, block: suspend (driver: WebDriver) -> Unit) {
         runBlocking {
-            browserFactory.launch(browserId).use {
+            browserManager.launch(browserId, browserManager.settings).use {
                 it.newDriver().use { driver ->
                     block(driver)
                 }
@@ -35,7 +36,7 @@ open class WebDriverService(
 
     fun runWebDriverTest(url: String, block: suspend (driver: WebDriver) -> Unit) {
         runBlocking {
-            browserFactory.launchRandomTempBrowser().use {
+            browserManager.launchRandomTempBrowser().use {
                 it.newDriver().use { driver ->
                     open(url, driver)
                     block(driver)
@@ -55,7 +56,7 @@ open class WebDriverService(
 
     fun runEnhancedWebDriverTest(url: String, block: suspend (driver: WebDriver) -> Unit) {
         runBlocking {
-            browserFactory.launchRandomTempBrowser().use {
+            browserManager.launchRandomTempBrowser().use {
                 it.newDriver().use { driver ->
                     openEnhanced(url, driver)
 
@@ -120,7 +121,7 @@ open class WebDriverService(
         var n = scrollCount
         while (n-- > 0) {
             driver.scrollDown(1)
-            delay(1000)
+            delay(1000.milliseconds)
         }
         driver.scrollToTop()
 
@@ -131,9 +132,9 @@ open class WebDriverService(
 }
 
 open class FastWebDriverService(
-    browserFactory: BrowserFactory,
+    browserManager: BrowserManager,
     requiredPageSize: Int = 1
-) : WebDriverService(browserFactory, requiredPageSize) {
+) : WebDriverService(browserManager, requiredPageSize) {
     override suspend fun openEnhanced(url: String, driver: WebDriver, scrollCount: Int) {
         driver.navigate(url)
         driver.delay(1000)

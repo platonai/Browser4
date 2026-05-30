@@ -1,26 +1,23 @@
 package ai.platon.pulsar.skeleton.context.support
 
-import ai.platon.browser4.common.B4Constants.SWARM_SESSION_LABEL
+import ai.platon.pulsar.browser.BrowserManager
 import ai.platon.pulsar.common.*
-import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.urls.DegenerateUrl
 import ai.platon.pulsar.common.urls.Hyperlink
 import ai.platon.pulsar.common.urls.UrlAware
+import ai.platon.pulsar.core.api.WebDriver
+import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.external.ModelResponse
+import ai.platon.pulsar.loop.TaskLoops
 import ai.platon.pulsar.persist.WebDBException
 import ai.platon.pulsar.persist.WebDb
-import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.gora.generated.GWebPage
 import ai.platon.pulsar.persist.model.GoraWebPage
 import ai.platon.pulsar.skeleton.PulsarSettings
-import ai.platon.pulsar.skeleton.TaskLoops
-import ai.platon.pulsar.skeleton.browser.BrowserFetcher
-import ai.platon.pulsar.skeleton.browser.BrowserManager
-import ai.platon.pulsar.skeleton.browser.driver.WebDriver
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.common.urls.CombinedUrlNormalizer
 import ai.platon.pulsar.skeleton.common.urls.NormURL
@@ -50,7 +47,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.reflect.KClass
 
 abstract class AbstractPulsarContext(
-    val applicationContext: AbstractApplicationContext
+    open val applicationContext: AbstractApplicationContext
 ) : PulsarContext, AutoCloseable {
 
     companion object {
@@ -164,8 +161,6 @@ abstract class AbstractPulsarContext(
 
     open val loadComponent: LoadComponent get() = getBean()
 
-    open val browserFetcher: BrowserFetcher get() = getBean()
-
     override val globalCache: GlobalCache get() = globalCacheFactory.globalCache
 
     override val browserManager: BrowserManager get() = getBean()
@@ -221,21 +216,7 @@ abstract class AbstractPulsarContext(
     abstract override fun createSession(settings: PulsarSettings): PulsarSession
 
     override fun getOrCreateSession(settings: PulsarSettings): PulsarSession =
-        sessions.values.firstOrNull() ?: createSession()
-
-    /**
-     * Create a pulsar session
-     * */
-    override fun ensureSwarmSession(settings: PulsarSettings): PulsarSession {
-        val lastProfileMode = settings.profileMode
-        val profileMode = when (lastProfileMode) {
-            BrowserProfileMode.SEQUENTIAL -> BrowserProfileMode.SEQUENTIAL
-            BrowserProfileMode.TEMPORARY -> BrowserProfileMode.TEMPORARY
-            else -> BrowserProfileMode.SEQUENTIAL
-        }
-        val settings = settings.copy(label = SWARM_SESSION_LABEL, profileMode = profileMode)
-        return getOrCreateSession(settings)
-    }
+        sessions.values.firstOrNull() ?: createSession(settings)
 
     /**
      * Close the given session

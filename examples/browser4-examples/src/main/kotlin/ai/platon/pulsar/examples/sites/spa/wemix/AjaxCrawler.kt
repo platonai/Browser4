@@ -5,10 +5,10 @@ package ai.platon.pulsar.examples.sites.spa.wemix
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.stringify
+import ai.platon.pulsar.core.api.WebDriver
+import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.skeleton.context.PulsarContexts
 import ai.platon.pulsar.skeleton.event.WebPageWebDriverEventHandler
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
-import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import java.nio.file.Files
 import java.nio.file.Path
@@ -76,7 +76,7 @@ private class AjaxCrawler(
     /**
      * Crawl with api with a single page application
      * */
-    fun crawl() {
+    suspend fun crawl() {
         if (Files.exists(reportDirectory)) {
             return
         }
@@ -93,7 +93,7 @@ private class AjaxCrawler(
     }
 }
 
-fun main() {
+suspend fun main() {
     val session = PulsarContexts.createSession()
 
     IntRange(1, 80).forEach { i ->

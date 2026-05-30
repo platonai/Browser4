@@ -19,7 +19,7 @@ class TaobaoLoginHandler(
     submitSelector, warnUpUrl, activateSelector
 )
 
-fun main() {
+suspend fun main() {
     val portalUrl = "https://s.taobao.com/search?spm=a21bo.jianhua.201867-main.24.5af911d9wFOWsc&q=收纳"
     val args = "-i 1s -ii 5m -ol a[href~=detail] -ignoreFailure"
 

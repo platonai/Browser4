@@ -11,6 +11,8 @@ $ErrorActionPreference = 'Stop'
 $configScriptPath = Join-Path $PSScriptRoot 'config.ps1'
 . $configScriptPath
 
+Write-Host "Starting Coworker Scheduler (PID $PID)..."
+
 function Resolve-SchedulerPath {
     param(
         [Parameter(Mandatory = $true)]
@@ -26,22 +28,11 @@ function Resolve-SchedulerPath {
     }
 
     $configRelativePath = Join-Path $ConfigDirectory $Path
-    if (Test-Path $configRelativePath) {
-        return (Resolve-Path $configRelativePath).Path
+    if (Test-Path -LiteralPath $configRelativePath) {
+        return (Resolve-Path -LiteralPath $configRelativePath).Path
     }
 
     return [System.IO.Path]::GetFullPath((Join-Path $WorkspaceRoot $Path))
-}
-
-function Ensure-Directory {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Path
-    )
-
-    if (-not (Test-Path $Path)) {
-        New-Item -ItemType Directory -Path $Path -Force | Out-Null
-    }
 }
 
 function Test-PathHasPendingFiles {
@@ -84,26 +75,28 @@ function Get-TaskSnapshot {
         [hashtable]$TaskState
     )
 
-    return [pscustomobject]@{
-        Name                = $TaskState.Name
-        Description         = $TaskState.Description
-        Enabled             = $TaskState.Enabled
-        IntervalSeconds     = $TaskState.IntervalSeconds
-        DependsOn           = @($TaskState.DependsOn)
-        PendingPaths        = @($TaskState.PendingPaths)
-        ScriptPath          = $TaskState.ScriptPath
-        Arguments           = @($TaskState.Arguments)
-        Status              = $TaskState.Status
-        LastStartedUtc      = $TaskState.LastStartedUtc
-        LastFinishedUtc     = $TaskState.LastFinishedUtc
-        LastExitCode        = $TaskState.LastExitCode
-        LastDurationSeconds = $TaskState.LastDurationSeconds
-        CurrentPid          = $TaskState.CurrentPid
-        NextRunUtc          = $TaskState.NextRunUtc
-        StdOutLogPath       = $TaskState.StdOutLogPath
-        StdErrLogPath       = $TaskState.StdErrLogPath
-        RunCount            = $TaskState.RunCount
+    $snapshot = @{
+        'Name'                = $TaskState.Name
+        'Description'         = $TaskState.Description
+        'Enabled'             = $TaskState.Enabled
+        'IntervalSeconds'     = $TaskState.IntervalSeconds
+        'DependsOn'           = @($TaskState.DependsOn)
+        'PendingPaths'        = @($TaskState.PendingPaths)
+        'ScriptPath'          = $TaskState.ScriptPath
+        'Arguments'           = @($TaskState.Arguments)
+        'Status'              = $TaskState.Status
+        'LastStartedUtc'      = $TaskState.LastStartedUtc
+        'LastFinishedUtc'     = $TaskState.LastFinishedUtc
+        'LastExitCode'        = $TaskState.LastExitCode
+        'LastDurationSeconds' = $TaskState.LastDurationSeconds
+        'CurrentPid'          = $TaskState.CurrentPid
+        'NextRunUtc'          = $TaskState.NextRunUtc
+        'StdOutLogPath'       = $TaskState.StdOutLogPath
+        'StdErrLogPath'       = $TaskState.StdErrLogPath
+        'RunCount'            = $TaskState.RunCount
     }
+
+    return $snapshot
 }
 
 function Write-SchedulerStatus {
@@ -118,14 +111,47 @@ function Write-SchedulerStatus {
         [hashtable]$TaskStates
     )
 
-    $statusDocument = [pscustomobject]@{
-        GeneratedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
-        ConfigPath     = $ConfigPath
-        TickSeconds    = $TickSeconds
-        Tasks          = @($TaskStates.Values | Sort-Object Name | ForEach-Object { Get-TaskSnapshot -TaskState $_ })
+    $statusDocument = @{
+        'GeneratedAtUtc' = (Get-Date).ToUniversalTime().ToString('o')
+        'ConfigPath'     = $ConfigPath
+        'TickSeconds'    = $TickSeconds
+        'Tasks'          = @($TaskStates.Values | Sort-Object Name | ForEach-Object { Get-TaskSnapshot -TaskState $_ })
     }
 
     $statusDocument | ConvertTo-Json -Depth 8 | Set-Content -Path $StatusFile -Encoding UTF8
+}
+
+function Register-ScheduledTaskProcessExitEvent {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$TaskState,
+        [Parameter(Mandatory = $true)]
+        [System.Diagnostics.Process]$Process
+    )
+
+    if (-not $Process.EnableRaisingEvents) {
+        $Process.EnableRaisingEvents = $true
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($TaskState.ProcessExitSourceIdentifier)) {
+        Remove-CoworkerEventSubscription -SourceIdentifiers @($TaskState.ProcessExitSourceIdentifier)
+    }
+
+    $sourceIdentifier = 'coworker.scheduler.process.{0}.{1}' -f $TaskState.Name, $Process.Id
+    Register-ObjectEvent -InputObject $Process -EventName Exited -SourceIdentifier $sourceIdentifier | Out-Null
+    $TaskState.ProcessExitSourceIdentifier = $sourceIdentifier
+}
+
+function Clear-ScheduledTaskProcessExitEvent {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$TaskState
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($TaskState.ProcessExitSourceIdentifier)) {
+        Remove-CoworkerEventSubscription -SourceIdentifiers @($TaskState.ProcessExitSourceIdentifier)
+        $TaskState.ProcessExitSourceIdentifier = $null
+    }
 }
 
 function Start-ScheduledTaskRun {
@@ -142,19 +168,47 @@ function Start-ScheduledTaskRun {
 
     $startTime = (Get-Date).ToUniversalTime()
     $dateFolder = Join-Path $LogDirectory $startTime.ToString('yyyy\\MM\\dd')
-    Ensure-Directory -Path $dateFolder
+    Ensure-CoworkerDirectory -Path $dateFolder
 
     $timestamp = $startTime.ToString('HHmmss')
     $stdOutPath = Join-Path $dateFolder "$timestamp-$($TaskState.Name).stdout.log"
-    $stdErrPath = Join-Path $dateFolder "$timestamp-$($TaskState.Name).stderr.log"
-    $argumentList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $TaskState.ScriptPath) + @($TaskState.Arguments)
+    $stdErrPath = $null
+    $innerArgumentLiterals = @(
+        @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $TaskState.ScriptPath) + @($TaskState.Arguments) |
+            ForEach-Object { "'" + ([string]$_).Replace("'", "''") + "'" }
+    )
+    $wrappedCommand = @"
+`$ErrorActionPreference = 'Stop'
+`$transcriptPath = '$($stdOutPath.Replace("'", "''"))'
+`$powerShellExecutable = '$($PowerShellExecutable.Replace("'", "''"))'
+`$argumentList = @($($innerArgumentLiterals -join ', '))
+Start-Transcript -Path `$transcriptPath -Force | Out-Null
+try {
+    & `$powerShellExecutable @argumentList
+    `$exitCode = if (`$null -ne `$LASTEXITCODE) { [int]`$LASTEXITCODE } else { 0 }
+    exit `$exitCode
+}
+finally {
+    try {
+        Stop-Transcript | Out-Null
+    }
+    catch {
+    }
+}
+"@
+    $encodedCommand = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($wrappedCommand))
+    $argumentList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encodedCommand)
+
+    Write-Host "Starting task '$($TaskState.Name)' with command: $PowerShellExecutable $($argumentList -join ' ')"
+    Write-Host "Working directory: $WorkingDirectory"
+    Write-Host "Console transcript log: $stdOutPath"
 
     $process = Start-Process -FilePath $PowerShellExecutable `
         -ArgumentList $argumentList `
         -WorkingDirectory $WorkingDirectory `
-        -RedirectStandardOutput $stdOutPath `
-        -RedirectStandardError $stdErrPath `
         -PassThru
+
+    Register-ScheduledTaskProcessExitEvent -TaskState $TaskState -Process $process
 
     $TaskState.Process = $process
     $TaskState.Status = 'Running'
@@ -165,7 +219,7 @@ function Start-ScheduledTaskRun {
     $TaskState.StdErrLogPath = $stdErrPath
     $TaskState.RunCount = $TaskState.RunCount + 1
 
-    Write-Host ("[{0}] Started {1} (PID {2})" -f $startTime.ToString('o'), $TaskState.Name, $process.Id)
+    Write-CoworkerLog -Component 'scheduler' -Message ("Started {0} (PID {1})" -f $TaskState.Name, $process.Id)
 }
 
 function Update-ScheduledTaskRun {
@@ -188,11 +242,31 @@ function Update-ScheduledTaskRun {
     $TaskState.LastFinishedUtc = $finishedAt.ToString('o')
     $TaskState.LastExitCode = $TaskState.Process.ExitCode
     $TaskState.LastDurationSeconds = [Math]::Round(($finishedAt - $startedAt.UtcDateTime).TotalSeconds, 2)
-    $TaskState.Status = if ($TaskState.Process.ExitCode -eq 0) { 'Idle' } else { 'Failed' }
+    if ($TaskState.Process.ExitCode -eq 0) {
+        $TaskState.Status = 'Idle'
+    }
+    else {
+        $TaskState.Status = 'Failed'
+    }
+
     $TaskState.CurrentPid = $null
     $TaskState.Process = $null
+    Clear-ScheduledTaskProcessExitEvent -TaskState $TaskState
 
-    Write-Host ("[{0}] Finished {1} with exit code {2}" -f $finishedAt.ToString('o'), $TaskState.Name, $TaskState.LastExitCode)
+    foreach ($logPath in @($TaskState.StdOutLogPath, $TaskState.StdErrLogPath)) {
+        if (-not [string]::IsNullOrWhiteSpace($logPath)) {
+            Normalize-CoworkerLogFile -Path $logPath
+        }
+    }
+
+    if ($TaskState.LastExitCode -eq 0) {
+        $level = 'INFO'
+    }
+    else {
+        $level = 'ERROR'
+    }
+
+    Write-CoworkerLog -Component 'scheduler' -Level $level -Message ("Finished {0} with exit code {1}" -f $TaskState.Name, $TaskState.LastExitCode)
 }
 
 function Test-ScheduledTaskHasPendingInputs {
@@ -280,13 +354,105 @@ function Test-ScheduledTaskCanStart {
     return $true
 }
 
+function Register-SchedulerPendingPathWatchers {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$TaskStates
+    )
+
+    $registrations = @()
+    $uniquePaths = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+
+    foreach ($taskState in $TaskStates.Values) {
+        foreach ($pendingPath in @($taskState.PendingPaths)) {
+            if ([string]::IsNullOrWhiteSpace($pendingPath)) {
+                continue
+            }
+
+            if ($uniquePaths.Add($pendingPath)) {
+                $registrations += New-CoworkerFileWatcher -Path $pendingPath -SourcePrefix ("scheduler.$($taskState.Name)")
+            }
+        }
+    }
+
+    return @($registrations)
+}
+
+function Clear-SchedulerQueuedEvents {
+    while ($true) {
+        $queuedEvent = Wait-Event -Timeout 0
+        if ($null -eq $queuedEvent) {
+            break
+        }
+
+        Remove-Event -EventIdentifier $queuedEvent.EventIdentifier -ErrorAction SilentlyContinue
+    }
+}
+
+function Invoke-SchedulerPass {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$TaskStates,
+        [Parameter(Mandatory = $true)]
+        [string]$PowerShellExecutable,
+        [Parameter(Mandatory = $true)]
+        [string]$WorkingDirectory,
+        [Parameter(Mandatory = $true)]
+        [string]$LogDirectory,
+        [Parameter(Mandatory = $true)]
+        [string]$StatusFile,
+        [Parameter(Mandatory = $true)]
+        [string]$ResolvedConfigPath,
+        [Parameter(Mandatory = $true)]
+        [int]$TickSeconds,
+        [switch]$OnceMode
+    )
+
+    $now = (Get-Date).ToUniversalTime()
+    $runningCount = 0
+
+    foreach ($taskState in $TaskStates.Values) {
+        if (-not $taskState.Enabled) {
+            $taskState.Status = 'Disabled'
+            continue
+        }
+
+        Update-ScheduledTaskRun -TaskState $taskState
+        if ($null -ne $taskState.Process) {
+            $runningCount++
+        }
+    }
+
+    foreach ($taskState in $TaskStates.Values | Sort-Object Name) {
+        if (-not $taskState.Enabled -or $null -ne $taskState.Process) {
+            continue
+        }
+
+        if (Test-ScheduledTaskCanStart -TaskState $taskState -TaskStates $TaskStates -Now $now -OnceMode:$OnceMode) {
+            if (Test-ScheduledTaskHasPendingInputs -TaskState $taskState) {
+                Start-ScheduledTaskRun -TaskState $taskState -PowerShellExecutable $PowerShellExecutable -WorkingDirectory $WorkingDirectory -LogDirectory $LogDirectory
+                $runningCount++
+            }
+            else {
+                Set-ScheduledTaskWaitingForWork -TaskState $taskState -Now $now
+            }
+        }
+    }
+
+    Write-SchedulerStatus -StatusFile $StatusFile -ConfigPath $ResolvedConfigPath -TickSeconds $TickSeconds -TaskStates $TaskStates
+
+    return @{
+        'RunningCount' = $runningCount
+    }
+}
+
 $workspaceRoot = Get-WorkspaceRoot
 if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
     $ConfigPath = Join-Path $PSScriptRoot 'coworker-scheduler.config.psd1'
 }
 
 $resolvedConfigPath = Resolve-SchedulerPath -Path $ConfigPath -WorkspaceRoot $workspaceRoot -ConfigDirectory $PSScriptRoot
-if (-not (Test-Path $resolvedConfigPath)) {
+if (-not (Test-Path -LiteralPath $resolvedConfigPath)) {
     throw "Scheduler config not found: $resolvedConfigPath"
 }
 
@@ -302,8 +468,9 @@ $workingDirectory = Resolve-SchedulerPath -Path ([string](Get-CoworkerConfigValu
 $logDirectory = Resolve-SchedulerPath -Path ([string](Get-CoworkerConfigValue -Map $schedulerConfig -Key 'LogDirectory' -DefaultValue 'coworker\tasks\300logs\scheduler')) -WorkspaceRoot $workspaceRoot -ConfigDirectory (Split-Path -Parent $resolvedConfigPath)
 $statusFile = Resolve-SchedulerPath -Path ([string](Get-CoworkerConfigValue -Map $schedulerConfig -Key 'StatusFile' -DefaultValue 'logs\scheduled-tasks.status.json')) -WorkspaceRoot $workspaceRoot -ConfigDirectory (Split-Path -Parent $resolvedConfigPath)
 
-Ensure-Directory -Path $logDirectory
-Ensure-Directory -Path (Split-Path -Parent $statusFile)
+Ensure-CoworkerDirectory -Path $logDirectory
+Ensure-CoworkerDirectory -Path (Split-Path -Parent $statusFile)
+Ensure-CoworkerDirectory -Path $workingDirectory
 
 $taskStates = @{}
 foreach ($task in $config.Tasks) {
@@ -311,17 +478,19 @@ foreach ($task in $config.Tasks) {
     if ([string]::IsNullOrWhiteSpace($taskName)) {
         throw 'Each scheduled task must define Name.'
     }
+
     $intervalSeconds = [int](Get-CoworkerConfigValue -Map $task -Key 'IntervalSeconds' -DefaultValue 0)
     if ($intervalSeconds -le 0) {
         throw "Scheduled task '$taskName' must define IntervalSeconds."
     }
+
     $scriptPath = [string](Get-CoworkerConfigValue -Map $task -Key 'ScriptPath' -DefaultValue '')
     if ([string]::IsNullOrWhiteSpace($scriptPath)) {
         throw "Scheduled task '$taskName' must define ScriptPath."
     }
 
     $resolvedScriptPath = Resolve-SchedulerPath -Path $scriptPath -WorkspaceRoot $workspaceRoot -ConfigDirectory (Split-Path -Parent $resolvedConfigPath)
-    if (-not (Test-Path $resolvedScriptPath)) {
+    if (-not (Test-Path -LiteralPath $resolvedScriptPath)) {
         throw "Scheduled task '$taskName' script not found: $resolvedScriptPath"
     }
 
@@ -344,89 +513,74 @@ foreach ($task in $config.Tasks) {
     }
 
     $taskStates[$taskName] = @{
-        Name                = $taskName
-        Description         = [string](Get-CoworkerConfigValue -Map $task -Key 'Description' -DefaultValue '')
-        Enabled             = $enabled
-        IntervalSeconds     = $intervalSeconds
-        DependsOn           = $dependsOn
-        PendingPaths        = $pendingPaths
-        ScriptPath          = $resolvedScriptPath
-        Arguments           = @((Get-CoworkerConfigValue -Map $task -Key 'Arguments' -DefaultValue @()))
-        Status              = if ($enabled) { 'Idle' } else { 'Disabled' }
-        LastStartedUtc      = $null
-        LastFinishedUtc     = $null
-        LastExitCode        = $null
-        LastDurationSeconds = $null
-        CurrentPid          = $null
-        NextRunUtc          = (Get-Date).ToUniversalTime().ToString('o')
-        StdOutLogPath       = $null
-        StdErrLogPath       = $null
-        RunCount            = 0
-        Process             = $null
+        Name                        = $taskName
+        Description                 = [string](Get-CoworkerConfigValue -Map $task -Key 'Description' -DefaultValue '')
+        Enabled                     = $enabled
+        IntervalSeconds             = $intervalSeconds
+        DependsOn                   = $dependsOn
+        PendingPaths                = $pendingPaths
+        ScriptPath                  = $resolvedScriptPath
+        Arguments                   = @((Get-CoworkerConfigValue -Map $task -Key 'Arguments' -DefaultValue @()))
+        Status                      = if ($enabled) { 'Idle' } else { 'Disabled' }
+        LastStartedUtc              = $null
+        LastFinishedUtc             = $null
+        LastExitCode                = $null
+        LastDurationSeconds         = $null
+        CurrentPid                  = $null
+        NextRunUtc                  = (Get-Date).ToUniversalTime().ToString('o')
+        StdOutLogPath               = $null
+        StdErrLogPath               = $null
+        RunCount                    = 0
+        Process                     = $null
+        ProcessExitSourceIdentifier = $null
     }
 }
 
-Write-Host "Loaded scheduler config: $resolvedConfigPath"
-Write-Host "Task status file: $statusFile"
+Write-CoworkerLog -Component 'scheduler' -Message "Loaded scheduler config: $resolvedConfigPath"
+Write-CoworkerLog -Component 'scheduler' -Message "Task status file: $statusFile"
 
 if ($Once) {
     do {
-        $now = (Get-Date).ToUniversalTime()
-        $runningCount = 0
-        foreach ($taskState in $taskStates.Values) {
-            Update-ScheduledTaskRun -TaskState $taskState
-            if ($null -ne $taskState.Process) {
-                $runningCount++
+        $passResult = Invoke-SchedulerPass -TaskStates $taskStates -PowerShellExecutable $powerShellExecutable -WorkingDirectory $workingDirectory -LogDirectory $logDirectory -StatusFile $statusFile -ResolvedConfigPath $resolvedConfigPath -TickSeconds $tickSeconds -OnceMode
+        if ($passResult.RunningCount -gt 0) {
+            $eventRecord = Wait-Event -Timeout 1
+            if ($null -ne $eventRecord) {
+                Remove-Event -EventIdentifier $eventRecord.EventIdentifier -ErrorAction SilentlyContinue
             }
-        }
 
-        foreach ($taskState in $taskStates.Values | Sort-Object Name) {
-            if (Test-ScheduledTaskCanStart -TaskState $taskState -TaskStates $taskStates -Now $now -OnceMode) {
-                if (Test-ScheduledTaskHasPendingInputs -TaskState $taskState) {
-                    Start-ScheduledTaskRun -TaskState $taskState -PowerShellExecutable $powerShellExecutable -WorkingDirectory $workingDirectory -LogDirectory $logDirectory
-                    $runningCount++
-                }
-                else {
-                    Set-ScheduledTaskWaitingForWork -TaskState $taskState -Now $now
-                }
-            }
+            Clear-SchedulerQueuedEvents
         }
-
-        Write-SchedulerStatus -StatusFile $statusFile -ConfigPath $resolvedConfigPath -TickSeconds $tickSeconds -TaskStates $taskStates
-        if ($runningCount -gt 0) {
-            Start-Sleep -Seconds 1
-        }
-    } while ($runningCount -gt 0)
+    } while ($passResult.RunningCount -gt 0)
 
     $failed = $taskStates.Values | Where-Object { $_.Enabled -and $null -ne $_.LastExitCode -and $_.LastExitCode -ne 0 }
     exit $(if ($failed) { 1 } else { 0 })
 }
 
-while ($true) {
-    $now = (Get-Date).ToUniversalTime()
-
-    foreach ($taskState in $taskStates.Values) {
-        if (-not $taskState.Enabled) {
-            $taskState.Status = 'Disabled'
-            continue
-        }
-
-        Update-ScheduledTaskRun -TaskState $taskState
-
-        if ($null -ne $taskState.Process) {
-            continue
-        }
-
-        if (Test-ScheduledTaskCanStart -TaskState $taskState -TaskStates $taskStates -Now $now) {
-            if (Test-ScheduledTaskHasPendingInputs -TaskState $taskState) {
-                Start-ScheduledTaskRun -TaskState $taskState -PowerShellExecutable $powerShellExecutable -WorkingDirectory $workingDirectory -LogDirectory $logDirectory
-            }
-            else {
-                Set-ScheduledTaskWaitingForWork -TaskState $taskState -Now $now
-            }
-        }
+$watcherRegistrations = @()
+try {
+    $watcherRegistrations = @(Register-SchedulerPendingPathWatchers -TaskStates $taskStates)
+    foreach ($registration in $watcherRegistrations) {
+        Write-CoworkerLog -Component 'scheduler' -Level 'DEBUG' -Message ("Watching {0}" -f $registration.Path)
     }
 
-    Write-SchedulerStatus -StatusFile $statusFile -ConfigPath $resolvedConfigPath -TickSeconds $tickSeconds -TaskStates $taskStates
-    Start-Sleep -Seconds $tickSeconds
+    while ($true) {
+        [void](Invoke-SchedulerPass -TaskStates $taskStates -PowerShellExecutable $powerShellExecutable -WorkingDirectory $workingDirectory -LogDirectory $logDirectory -StatusFile $statusFile -ResolvedConfigPath $resolvedConfigPath -TickSeconds $tickSeconds)
+
+        $eventRecord = Wait-Event -Timeout $tickSeconds
+        if ($null -ne $eventRecord) {
+            Remove-Event -EventIdentifier $eventRecord.EventIdentifier -ErrorAction SilentlyContinue
+            Clear-SchedulerQueuedEvents
+        }
+    }
+}
+finally {
+    foreach ($taskState in $taskStates.Values) {
+        Clear-ScheduledTaskProcessExitEvent -TaskState $taskState
+    }
+
+    foreach ($registration in @($watcherRegistrations)) {
+        Remove-CoworkerFileWatcher -Registration $registration
+    }
+
+    Clear-SchedulerQueuedEvents
 }

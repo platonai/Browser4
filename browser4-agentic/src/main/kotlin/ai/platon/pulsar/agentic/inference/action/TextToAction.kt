@@ -1,8 +1,5 @@
 package ai.platon.pulsar.agentic.inference.action
 
-import ai.platon.browser4.driver.chrome.dom.Locator
-import ai.platon.browser4.driver.chrome.dom.model.MergedDOMTreeNode
-import ai.platon.browser4.driver.chrome.dom.model.SnapshotOptions
 import ai.platon.pulsar.agentic.inference.AgentMessageList
 import ai.platon.pulsar.agentic.inference.PromptBuilder.Companion.SINGLE_WEB_DRIVER_ACTION_GENERATION_PROMPT
 import ai.platon.pulsar.agentic.inference.PromptBuilder.Companion.buildObserveResultSchema
@@ -11,17 +8,20 @@ import ai.platon.pulsar.agentic.model.AgentState
 import ai.platon.pulsar.agentic.model.ObserveElement
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.tools.specs.ToolCallSpecificationRenderer
+import ai.platon.pulsar.browser.AbstractWebDriver
+import ai.platon.pulsar.browser.common.Locator
+import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
+import ai.platon.pulsar.chrome.dom.model.SnapshotOptions
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.Strings
 import ai.platon.pulsar.common.ai.llm.PromptTemplate
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
+import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.external.BrowserChatModel
 import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.external.ModelResponse
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import java.nio.file.Files
@@ -41,9 +41,9 @@ open class TextToAction(
      * @return The action description
      * */
     open suspend fun generateActions(
-        action: String, driver: ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver, screenshotB64: String? = null
+        action: String, driver: WebDriver, screenshotB64: String? = null
     ): List<ActionDescription> {
-        require(driver is ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver)
+        require(driver is AbstractWebDriver)
         val snapshotService = requireNotNull(driver.snapshotService)
 
         val snapshotOptions = SnapshotOptions(

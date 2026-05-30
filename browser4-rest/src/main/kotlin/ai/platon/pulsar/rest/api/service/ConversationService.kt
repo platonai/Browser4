@@ -1,7 +1,9 @@
 package ai.platon.pulsar.rest.api.service
 
-import ai.platon.pulsar.agentic.tools.high.crawl.common.*
+import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
+import ai.platon.pulsar.agentic.tools.advanced.crawl.common.*
 import ai.platon.pulsar.common.LinkExtractors
+import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.common.ai.llm.PromptTemplate
 import ai.platon.pulsar.common.ai.llm.PromptTemplateLoader
 import ai.platon.pulsar.common.serialize.json.JSONExtractor
@@ -11,15 +13,16 @@ import ai.platon.pulsar.rest.api.entities.CommandRequest
 import ai.platon.pulsar.rest.api.entities.CommandStatus
 import ai.platon.pulsar.rest.api.entities.PromptRequest
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
-import ai.platon.pulsar.skeleton.session.PulsarSession
 import com.fasterxml.jackson.module.kotlin.readValue
 import org.springframework.stereotype.Service
 
 @Service
 class ConversationService(
-    val session: PulsarSession,
+    val sessionManager: PulsarSessionManager,
     val loadService: LoadService,
 ) {
+    val session get() = sessionManager.getOrCreateSession(SWARM_SESSION_ID).agenticSession
+
     suspend fun chat(prompt: String): String {
         return session.chat(prompt).content
     }
@@ -59,6 +62,7 @@ class ConversationService(
         if (urls.isEmpty()) {
             return null
         }
+
         val url = urls.first()
 
         val json = convertPlainCommandToJSON(request, url)

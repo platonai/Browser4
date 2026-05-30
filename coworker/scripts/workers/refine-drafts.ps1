@@ -6,10 +6,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-. (Join-Path $PSScriptRoot 'gh-copilot.ps1')
+. (Join-Path $PSScriptRoot 'agent.ps1')
 
 $repoRoot = Get-WorkspaceRoot
-$copilotCommand = Get-GHCopilotCommand -RepoRoot $repoRoot
+$agentCommand = Get-AgentCommand -RepoRoot $repoRoot
 
 $refineRoot = Resolve-TasksPath '0draft\refine'
 $readyDir = Join-Path $refineRoot '1ready'
@@ -96,14 +96,14 @@ $draftContent
 --- END DRAFT ---
 "@
 
-    $refinedContent = Invoke-GHCopilot -Prompt $prompt -AdditionalArguments @('--allow-all-tools', '--allow-all-paths') -RepoRoot $repoRoot -WorkingDirectory $repoRoot -CaptureOutput
+    $refinedContent = Invoke-Agent -Prompt $prompt -AdditionalArguments @('--allow-all-tools', '--allow-all-paths') -RepoRoot $repoRoot -WorkingDirectory $repoRoot -CaptureOutput
     if ($LASTEXITCODE -ne 0) {
-        throw "GitHub Copilot exited with code $LASTEXITCODE while refining $($WorkingFile.Name)"
+        throw "Agent exited with code $LASTEXITCODE while refining $($WorkingFile.Name)"
     }
 
     $refinedContent = $refinedContent.Trim("`r", "`n")
     if ([string]::IsNullOrWhiteSpace($refinedContent)) {
-        throw "GitHub Copilot returned empty output for $($WorkingFile.Name)"
+        throw "Agent returned empty output for $($WorkingFile.Name)"
     }
 
     return $refinedContent

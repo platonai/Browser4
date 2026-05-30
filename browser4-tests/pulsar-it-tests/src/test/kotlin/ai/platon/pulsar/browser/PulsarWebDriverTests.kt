@@ -61,7 +61,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
         var n = 0
         while (n++ < 5) {
             // Move mouse away from the card to ensure it's not in hover state
-            driver.moveMouseTo(10.0, 10.0)
+            driver.mouseMove(10.0, 10.0)
             driver.delay(200)
 
             // Use getBoundingClientRect which IS affected by transform

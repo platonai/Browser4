@@ -1,12 +1,10 @@
 package ai.platon.pulsar.browser
 
-import ai.platon.browser4.driver.chrome.RemoteDevTools
+import ai.platon.browser4.chrome.PulsarWebDriver
+import ai.platon.cdt.kt.protocol.ChromeDevTools
 import ai.platon.pulsar.WebDriverTestBase
 import ai.platon.pulsar.common.printlnPro
-import ai.platon.pulsar.protocol.browser.driver.cdt.PulsarWebDriver
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.Browser
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
+import ai.platon.pulsar.core.api.WebDriver
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger
 import kotlinx.coroutines.runBlocking
@@ -70,8 +68,8 @@ class PulsarWebDriverCDPTests : WebDriverTestBase() {
     }
 
     @Test
-    @DisplayName("test evaluate")
-    fun testEvaluate() = runEnhancedWebDriverTest(testURL, browser) { driver ->
+    @DisplayName("test evaluate 1+1")
+    fun testEvaluate1Plus1() = runEnhancedWebDriverTest(testURL, browser) { driver ->
         val code = """1+1"""
 
         val result = driver.evaluate(code)
@@ -93,7 +91,7 @@ class PulsarWebDriverCDPTests : WebDriverTestBase() {
             browser.newDriver().use { driver ->
                 assertIs<PulsarWebDriver>(driver)
 
-                val devTools = driver.implementation as RemoteDevTools
+                val devTools = driver.implementation as ChromeDevTools
 
                 devTools.dom.onAttributeModified { e ->
                     val message = MessageFormat.format("> {0}. node changed | {1} := {2}", e.nodeId, e.name, e.value)
@@ -101,7 +99,7 @@ class PulsarWebDriverCDPTests : WebDriverTestBase() {
                 }
 
                 devTools.console.enable()
-                devTools.console.onMessageAdded { e ->
+                driver.browserProtocol.onConsoleMessageAdded { e ->
                     printlnPro(e.message)
                 }
 

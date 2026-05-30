@@ -1,8 +1,8 @@
 package ai.platon.pulsar.skeleton.workflow.common.url
 
 import ai.platon.pulsar.common.urls.Hyperlink
+import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.dom.FeaturedDocument
-import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.skeleton.event.PageEventHandlers
 import ai.platon.pulsar.skeleton.event.impl.DefaultPageEventHandlers
 import java.util.function.BiConsumer

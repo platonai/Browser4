@@ -2,8 +2,8 @@ package ai.platon.pulsar.skeleton.workflow.common
 
 import ai.platon.pulsar.common.PulsarParams
 import ai.platon.pulsar.common.config.VolatileConfig
+import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.persist.AbstractWebPage
-import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.model.GoraWebPage
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.common.urls.NormURL

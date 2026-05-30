@@ -1,24 +1,14 @@
 package ai.platon.pulsar.rest
 
-import ai.platon.pulsar.boot.autoconfigure.PulsarContextInitializer
-import ai.platon.pulsar.skeleton.TaskLoops
-import ai.platon.pulsar.skeleton.workflow.common.GlobalCache
-import ai.platon.pulsar.skeleton.workflow.common.GlobalCacheFactory
+import ai.platon.browser4.boot.autoconfigure.Browser4AutoConfiguration
+import ai.platon.browser4.boot.autoconfigure.PulsarContextInitializer
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
-import org.springframework.context.annotation.ComponentScan
-import org.springframework.context.annotation.ImportResource
+import org.springframework.context.annotation.Import
 
 @SpringBootApplication
-@ComponentScan(
-    "ai.platon.pulsar.boot.autoconfigure",
-    "ai.platon.pulsar.rest"
-)
-class ApiApplication(
-    val globalCache: GlobalCache,
-    val globalCacheFactory: GlobalCacheFactory,
-    val taskLoops: TaskLoops
-)
+@Import(Browser4AutoConfiguration::class)
+class ApiApplication
 
 fun main(args: Array<String>) {
     runApplication<ApiApplication>(*args) {

@@ -14,7 +14,7 @@
 
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>browser4-agents</artifactId>
-    <version>4.8.1-SNAPSHOT</version>
+    <version>4.10.0-SNAPSHOT</version>
 
     <name>Browser4 Agents</name>
     <description>Browser4 Agents - browser agent for your AI</description>
@@ -81,13 +81,6 @@
                         <goals>
                             <goal>repackage</goal>
                         </goals>
-                        <configuration>
-                            <!-- Keep the original thin JAR as the project artifact so that
-                                 GraalVM native-image can resolve classes from the root of
-                                 Browser4.jar.  The fat/executable JAR is written as
-                                 Browser4-exec.jar and can still be run directly. -->
-                            <classifier>exec</classifier>
-                        </configuration>
                     </execution>
                 </executions>
                 <configuration>
@@ -103,6 +96,10 @@
                     <source>9</source>
                     <target>9</target>
                 </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
             </plugin>
         </plugins>
     </build>
@@ -145,7 +142,7 @@
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-boot</artifactId>
+            <artifactId>browser4-boot</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
@@ -155,7 +152,7 @@
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>browser4-tools</artifactId>
+            <artifactId>browser4-agent-tools</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>
@@ -169,6 +166,7 @@
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-ql-common</artifactId>
         </dependency>
+
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-ql</artifactId>
@@ -176,11 +174,11 @@
             <exclusions>
                 <exclusion>
                     <groupId>ai.platon.pulsar</groupId>
-                    <artifactId>pulsar-protocol</artifactId>
+                    <artifactId>pulsar-browser</artifactId>
                 </exclusion>
                 <exclusion>
                     <groupId>ai.platon.pulsar</groupId>
-                    <artifactId>browser4-browser</artifactId>
+                    <artifactId>pulsar-protocol</artifactId>
                 </exclusion>
                 <exclusion>
                     <groupId>ai.platon.pulsar</groupId>
@@ -359,35 +357,6 @@
                 <jpackage.installer.skip>true</jpackage.installer.skip>
             </properties>
         </profile>
-
-        <!-- Build native executable with GraalVM (Windows/Linux/macOS) -->
-        <profile>
-            <id>graalvm-native</id>
-            <build>
-                <plugins>
-                    <plugin>
-                        <groupId>org.graalvm.buildtools</groupId>
-                        <artifactId>native-maven-plugin</artifactId>
-                        <version>${native-maven-plugin.version}</version>
-                        <extensions>true</extensions>
-                        <executions>
-                            <execution>
-                                <id>build-native</id>
-                                <phase>package</phase>
-                                <goals>
-                                    <goal>compile-no-fork</goal>
-                                </goals>
-                            </execution>
-                        </executions>
-                        <configuration>
-                            <mainClass>ai.platon.pulsar.app.Browser4LauncherKt</mainClass>
-                            <fallback>true</fallback>
-                            <verbose>true</verbose>
-                        </configuration>
-                    </plugin>
-                </plugins>
-            </build>
-        </profile>
     </profiles>
 
     <properties>
@@ -400,7 +369,7 @@
         <kotlin.version>2.2.21</kotlin.version>
         <spring-boot.version>4.0.5</spring-boot.version>
         <kotlin.compiler.jvmTarget>17</kotlin.compiler.jvmTarget>
-        <browser4-base.version>4.7.1</browser4-base.version>
+        <browser4-base.version>4.8.0</browser4-base.version>
 
         <!-- jpackage toggles (defaults keep normal builds unaffected) -->
         <jpackage.skip>true</jpackage.skip>
@@ -408,7 +377,5 @@
 
         <!-- jpackage requires a numeric/strict version; snapshots are not accepted -->
         <jpackage.appVersion>4.4.0</jpackage.appVersion>
-
-        <native-maven-plugin.version>0.10.6</native-maven-plugin.version>
     </properties>
 </project>

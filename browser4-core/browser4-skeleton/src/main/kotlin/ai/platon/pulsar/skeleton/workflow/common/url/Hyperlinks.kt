@@ -1,6 +1,6 @@
 package ai.platon.pulsar.skeleton.workflow.common.url
 
-import ai.platon.pulsar.persist.WebPage
+import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.persist.model.GoraWebPage
 import ai.platon.pulsar.skeleton.common.urls.NormURL
 import ai.platon.pulsar.skeleton.event.WebPageHandler

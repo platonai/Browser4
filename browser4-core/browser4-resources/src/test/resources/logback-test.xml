@@ -57,14 +57,14 @@
     <logger name="ai.platon.pulsar.net" level="INFO"/>
     <logger name="ai.platon.pulsar.browser" level="INFO"/>
     <logger name="ai.platon.pulsar.parse.html" level="INFO"/>
-    <logger name="ai.platon.pulsar.skeleton.workflow.parse" level="INFO"/>
+    <logger name="ai.platon.pulsar.skeleton.browser.parse" level="INFO"/>
     <logger name="ai.platon.pulsar.cli.shell" level="INFO"/>
-    <logger name="ai.platon.pulsar.skeleton.crawl" level="INFO"/>
-    <logger name="ai.platon.pulsar.skeleton.workflow.protocol" level="INFO"/>
+    <logger name="ai.platon.pulsar.skeleton.browser" level="INFO"/>
+    <logger name="ai.platon.pulsar.skeleton.browser.protocol" level="INFO"/>
     <logger name="ai.platon.pulsar.protocol.browser" level="INFO"/>
     <logger name="ai.platon.pulsar.protocol.browser.driver" level="INFO"/>
 
-    <logger name="ai.platon.pulsar.skeleton.workflow.component" level="INFO"/>
+    <logger name="ai.platon.pulsar.skeleton.browser.component" level="INFO"/>
     <logger name="ai.platon.pulsar.protocol.browser.emulator.BrowserEmulateEventHandler" level="INFO"/>
 
     <logger name="ai.platon.pulsar.protocol.browser.emulator.context" level="INFO"/>

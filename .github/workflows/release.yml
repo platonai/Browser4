@@ -1,4 +1,4 @@
-name: Release
+name: Release JAR, Docker, and CLI
 
 on:
   push:
@@ -8,83 +8,212 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (e.g., v1.0.0, v1.0.0-rc.1)'
+        description: 'Release tag to publish, e.g. v4.9.0 or v4.9.0-rc.1'
         required: true
         type: string
       skip_tests:
-        description: 'Skip tests during build'
+        description: 'Skip smoke tests and CLI E2E tests'
+        required: false
+        default: false
+        type: boolean
+      skip_cli_npm_publish:
+        description: 'Skip browser4-cli npm publish'
+        required: false
+        default: false
+        type: boolean
+      skip_cli_binary_build:
+        description: 'Skip building browser4-cli binaries'
+        required: false
+        default: false
+        type: boolean
+      skip_docker_push:
+        description: 'Skip pushing Docker images to Docker Hub and GHCR'
+        required: false
+        default: false
+        type: boolean
+      debug_mode:
+        description: 'Enable verbose diagnostics'
         required: false
         default: false
         type: boolean
 
-# Prevent concurrent releases
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.event.inputs.tag || github.ref }}
   cancel-in-progress: false
-
-permissions:
-  contents: write
-  packages: write
-  attestations: write
-  id-token: write  # For artifact attestation
 
 env:
   IMAGE_NAME: browser4
   CONTAINER_NAME: browser4
   NETWORK_NAME: 'browser4_backend'
   DOCKER_USERNAME: galaxyeye88
-  PRODUCTION_JAR_MODULE_NAME: 'browser4-agents'
-  PRODUCTION_JAR_MODULE_PATH: 'browser4-app/browser4-agents'
-  PRODUCTION_JAR_NAME: 'Browser4.jar'
-  PRODUCTION_JAR_PATH: 'browser4-app/browser4-agents/target/Browser4.jar'
+  PRODUCTION_JAR_MODULE_NAME: browser4-agents
+  PRODUCTION_JAR_MODULE_PATH: browser4-app/browser4-agents
+  PRODUCTION_JAR_NAME: Browser4.jar
+  PRODUCTION_JAR_PATH: browser4-app/browser4-agents/target/Browser4.jar
   JAVA_VERSION: '17'
+  NODE_VERSION: '24'
   MAVEN_OPTS: '-Xmx3g -XX:+UseG1GC'
+  CLI_PACKAGE_DIR: cli
+  CLI_PACKAGE_NAME: browser4-cli
+  CLI_MANIFEST_PATH: cli/browser4-cli/Cargo.toml
 
 jobs:
-  build-and-release:
+  prepare:
+    name: Prepare release metadata
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.prepare.outputs.tag }}
+      version: ${{ steps.prepare.outputs.version }}
+      is_prerelease: ${{ steps.prepare.outputs.is_prerelease }}
+      npm_version: ${{ steps.prepare.outputs.npm_version }}
+      cli_npm_lookup_status: ${{ steps.prepare.outputs.cli_npm_lookup_status }}
+      skip_tests: ${{ steps.prepare.outputs.skip_tests }}
+      skip_cli_npm_publish: ${{ steps.prepare.outputs.skip_cli_npm_publish }}
+      skip_cli_binary_build: ${{ steps.prepare.outputs.skip_cli_binary_build }}
+      skip_docker_push: ${{ steps.prepare.outputs.skip_docker_push }}
+      debug_mode: ${{ steps.prepare.outputs.debug_mode }}
+      cli_version: ${{ steps.prepare.outputs.cli_version }}
+      cli_should_build: ${{ steps.prepare.outputs.cli_should_build }}
+      cli_should_publish_npm: ${{ steps.prepare.outputs.cli_should_publish_npm }}
+      release_title: ${{ steps.prepare.outputs.release_title }}
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
 
-      - name: Validate Release Branch
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: https://registry.npmjs.org
+
+      - name: Prepare outputs
+        id: prepare
+        shell: bash
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag || '' }}
+          INPUT_SKIP_TESTS: ${{ github.event.inputs.skip_tests || 'false' }}
+          INPUT_SKIP_CLI_NPM_PUBLISH: ${{ github.event.inputs.skip_cli_npm_publish || 'false' }}
+          INPUT_SKIP_CLI_BINARY_BUILD: ${{ github.event.inputs.skip_cli_binary_build || 'false' }}
+          INPUT_SKIP_DOCKER_PUSH: ${{ github.event.inputs.skip_docker_push || 'false' }}
+          INPUT_DEBUG_MODE: ${{ github.event.inputs.debug_mode || 'false' }}
         run: |
-          echo "🔍 Validating release configuration..."
+          set -euo pipefail
 
-          # For non-prerelease, ensure we're releasing from master or can merge to master
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ github.event.inputs.tag }}"
+            TAG="$INPUT_TAG"
+            if [ -z "$TAG" ]; then
+              echo "❌ workflow_dispatch requires a tag input"
+              exit 1
+            fi
+            git rev-parse --verify "refs/tags/$TAG" >/dev/null 2>&1 || {
+              echo "❌ Tag not found in repository: $TAG"
+              exit 1
+            }
           else
-            TAG=${GITHUB_REF#refs/tags/}
+            TAG="${GITHUB_REF#refs/tags/}"
           fi
-          VERSION=${TAG#v}
 
-          # Dynamic prerelease detection
+          VERSION="${TAG#v}"
+
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+(\+.+)?)?$ ]]; then
+            echo "❌ Invalid version format: $VERSION"
+            echo "Expected: X.Y.Z or X.Y.Z-rc.N or X.Y.Z-rc.N+build.info"
+            exit 1
+          fi
+
           IS_PRERELEASE="false"
           if [[ "$VERSION" == *"-"* ]]; then
             IS_PRERELEASE="true"
           fi
 
-          if [ "$IS_PRERELEASE" = "false" ]; then
-            CURRENT_BRANCH=$(git branch --show-current || git rev-parse --abbrev-ref HEAD)
-            echo "Current branch: $CURRENT_BRANCH"
-            echo "Release type: Production"
+          CLI_VERSION=$(node -p "require('./${{ env.CLI_PACKAGE_DIR }}/package.json').version")
+          PACKAGE_NAME=$(node -p "require('./${{ env.CLI_PACKAGE_DIR }}/package.json').name")
 
-            # Check if master branch exists
-            if ! git ls-remote --exit-code --heads origin master >/dev/null 2>&1; then
-              echo "❌ Master branch does not exist"
-              exit 1
-            fi
-
-            echo "✅ Master branch exists and ready for merge"
+          NPM_VERSION="unknown"
+          CLI_NPM_LOOKUP_STATUS="failed"
+          if NPM_VERSION=$(npm view "$PACKAGE_NAME" version 2>/dev/null); then
+            CLI_NPM_LOOKUP_STATUS="success"
           else
-            echo "Release type: Prerelease (RC)"
-            echo "✅ Prerelease can be created from any branch"
+            echo "::warning::Unable to query npm version for $PACKAGE_NAME. npm publish will be skipped for this run."
           fi
+
+          CLI_SHOULD_BUILD="true"
+          if [ "$INPUT_SKIP_CLI_BINARY_BUILD" = "true" ]; then
+            CLI_SHOULD_BUILD="false"
+          fi
+
+          CLI_SHOULD_PUBLISH_NPM="false"
+          if [ "$CLI_SHOULD_BUILD" = "true" ] && [ "$INPUT_SKIP_CLI_NPM_PUBLISH" != "true" ] && [ "$CLI_NPM_LOOKUP_STATUS" = "success" ] && [ "$CLI_VERSION" != "$NPM_VERSION" ]; then
+            CLI_SHOULD_PUBLISH_NPM="true"
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "npm_version=$NPM_VERSION" >> "$GITHUB_OUTPUT"
+          echo "cli_npm_lookup_status=$CLI_NPM_LOOKUP_STATUS" >> "$GITHUB_OUTPUT"
+          echo "skip_tests=$INPUT_SKIP_TESTS" >> "$GITHUB_OUTPUT"
+          echo "skip_cli_npm_publish=$INPUT_SKIP_CLI_NPM_PUBLISH" >> "$GITHUB_OUTPUT"
+          echo "skip_cli_binary_build=$INPUT_SKIP_CLI_BINARY_BUILD" >> "$GITHUB_OUTPUT"
+          echo "skip_docker_push=$INPUT_SKIP_DOCKER_PUSH" >> "$GITHUB_OUTPUT"
+          echo "debug_mode=$INPUT_DEBUG_MODE" >> "$GITHUB_OUTPUT"
+          echo "cli_version=$CLI_VERSION" >> "$GITHUB_OUTPUT"
+          echo "cli_should_build=$CLI_SHOULD_BUILD" >> "$GITHUB_OUTPUT"
+          echo "cli_should_publish_npm=$CLI_SHOULD_PUBLISH_NPM" >> "$GITHUB_OUTPUT"
+          echo "release_title=🚀 Browser4 $VERSION" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## 🚀 Release Preparation"
+            echo ""
+            echo "- **Tag**: $TAG"
+            echo "- **Version**: $VERSION"
+            echo "- **Prerelease**: $IS_PRERELEASE"
+            echo "- **CLI Version**: $CLI_VERSION"
+            echo "- **npm Version**: $NPM_VERSION"
+            echo "- **npm Lookup Status**: $CLI_NPM_LOOKUP_STATUS"
+            echo "- **Build CLI Binaries**: $CLI_SHOULD_BUILD"
+            echo "- **Publish CLI to npm**: $CLI_SHOULD_PUBLISH_NPM"
+            echo "- **Skip Tests**: $INPUT_SKIP_TESTS"
+            echo "- **Skip Docker Push**: $INPUT_SKIP_DOCKER_PUSH"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build-core-and-docker:
+    name: Build core artifacts and Docker image
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      jar_name: ${{ steps.get_uberjar.outputs.uberjar_file }}
+      jar_path: ${{ steps.get_uberjar.outputs.uberjar_path }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Validate Release Configuration
+        shell: bash
+        run: |
+          echo "🔍 Validating release configuration..."
+          echo "Tag: ${{ needs.prepare.outputs.tag }}"
+          echo "Version: ${{ needs.prepare.outputs.version }}"
+          if [ "${{ needs.prepare.outputs.is_prerelease }}" = "true" ]; then
+            echo "Release type: Prerelease (RC)"
+          else
+            echo "Release type: Production"
+          fi
+          echo "✅ Valid release configuration detected"
 
       - name: Setup Environment
         id: setup
@@ -93,33 +222,15 @@ jobs:
           java_version: ${{ env.JAVA_VERSION }}
           enable_cache: 'true'
 
-      - name: Extract version from tag
-        id: tag
+      - name: Export release environment
+        shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ github.event.inputs.tag }}"
-          else
-            TAG=${GITHUB_REF#refs/tags/}
-          fi
-          VERSION=${TAG#v}
-
-          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+(\+.+)?)?$ ]]; then
-            echo "❌ Invalid version format: $VERSION"
-            echo "Expected: X.Y.Z or X.Y.Z-rc.N or X.Y.Z-rc.N+build.info"
-            exit 1
-          fi
-
-          # Dynamic prerelease detection
-          IS_PRERELEASE="false"
-          if [[ "$VERSION" == *"-"* ]]; then
-            IS_PRERELEASE="true"
-          fi
-
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-          echo "TAG=$TAG" >> $GITHUB_ENV
-          echo "IS_PRERELEASE=$IS_PRERELEASE" >> $GITHUB_ENV
+          echo "VERSION=${{ needs.prepare.outputs.version }}" >> "$GITHUB_ENV"
+          echo "TAG=${{ needs.prepare.outputs.tag }}" >> "$GITHUB_ENV"
+          echo "IS_PRERELEASE=${{ needs.prepare.outputs.is_prerelease }}" >> "$GITHUB_ENV"
 
       - name: Update Version
+        shell: bash
         run: |
           bin/release/update-versions.sh
 
@@ -133,126 +244,101 @@ jobs:
           timeout_minutes: '20'
           maven_args: '-B -V'
 
-      - name: Run Unit Tests (Release)
-        if: false && github.event.inputs.skip_tests != 'true' # Temporarily disabled to save time during release testing, can be re-enabled for full test coverage
-        uses: ./.github/actions/run-tests
-        with:
-          maven_profiles: ''
-          test_excludes: ''
-          excluded_groups: ''
-          run_pulsar_tests: 'false'
-          timeout_minutes: '45'
-          report_name: 'unit-test-reports'
-
-      - name: Run Integration Tests (Release)
-        if: false && github.event.inputs.skip_tests != 'true' # Temporarily disabled to save time during release testing, can be re-enabled for full test coverage
-        uses: ./.github/actions/run-tests
-        with:
-          maven_profiles: ''
-          test_excludes: ''
-          excluded_groups: ''
-          run_pulsar_tests: 'true'
-          timeout_minutes: '90'
-          report_name: 'integration-test-reports'
-
-
       - name: Cleanup Docker system to free space
+        shell: bash
         run: |
           docker system prune -af
           docker volume prune -f
-          # rm -rf ~/.m2/repository  # If you no longer need Maven cache
           sudo apt-get clean
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
           sudo df -h
+
+      - name: Compute build metadata
+        id: build-meta
+        shell: bash
+        run: echo "build_date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
 
       - name: Build Docker image
         id: docker-build
         uses: ./.github/actions/docker-build
         with:
           image_name: '${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}'
-          version: ${{ env.VERSION }}
+          version: ${{ needs.prepare.outputs.version }}
           dockerfile: 'Dockerfile'
           timeout_minutes: '25'
           build_args: |
-            VERSION=${{ env.VERSION }}
-            BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+            VERSION=${{ needs.prepare.outputs.version }}
+            BUILD_DATE=${{ steps.build-meta.outputs.build_date }}
             VCS_REF=${{ github.sha }}
 
       - name: Security Scan Docker Image
         if: success()
         continue-on-error: true
+        shell: bash
         run: |
           echo "::group::Security Scanning"
 
-          image="${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}"
+          image="${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.version }}"
 
-          # Try Docker Scout if available
           if command -v docker scout &> /dev/null; then
             echo "🔍 Running Docker Scout security scan..."
             docker scout cves "$image" --only-severity critical,high || echo "⚠️ Docker Scout scan completed with warnings"
           fi
 
-          # Try Trivy if available
           if command -v trivy &> /dev/null; then
             echo "🔍 Running Trivy security scan..."
             trivy image --severity HIGH,CRITICAL "$image" || echo "⚠️ Trivy scan completed with warnings"
           fi
 
           if ! command -v docker scout &> /dev/null && ! command -v trivy &> /dev/null; then
-            echo "ℹ️ No security scanning tools available (install docker scout or trivy for scanning)"
+            echo "ℹ️ No security scanning tools available"
           fi
 
           echo "::endgroup::"
 
       - name: Start Docker container for testing
-        if: success() && github.event.inputs.skip_tests != 'true'
+        if: success() && needs.prepare.outputs.skip_tests != 'true'
+        shell: bash
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           echo "🧪 Starting Docker container for testing..."
 
-          # Create network if it doesn't exist
           docker network create ${{ env.NETWORK_NAME }} || true
 
-          # Start container with health check
-          # --add-host allows the container to reach the test fixture server on the host
           docker run -d --rm \
             --name ${{ env.CONTAINER_NAME }} \
             --network ${{ env.NETWORK_NAME }} \
             -p 8182:8182 \
             --add-host=host.docker.internal:host-gateway \
-            -e OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }} \
+            -e OPENROUTER_API_KEY=${OPENROUTER_API_KEY} \
             --health-cmd="curl -f http://localhost:8182/actuator/health || exit 1" \
             --health-interval=10s \
             --health-timeout=5s \
             --health-retries=5 \
-            ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}
+            ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.version }}
 
-          # Wait for container to be healthy
           echo "⏳ Waiting for container to be healthy..."
-          timeout 120s bash -c 'until docker inspect --format="{{.State.Health.Status}}" ${{ env.CONTAINER_NAME }} | grep -q "healthy"; do sleep 5; done'
+          timeout 120s bash -c 'until docker inspect --format="{{.State.Health.Status}}" ${{ env.CONTAINER_NAME }} | grep -q "healthy"; do sleep 5; done' \
+            || { echo "❌ Container did not become healthy within 120s"; docker logs ${{ env.CONTAINER_NAME }}; exit 1; }
 
           echo "✅ Container is healthy and ready for testing"
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-
-
-
-
-
 
       - name: Setup Rust Toolchain
-        id: rust-setup
-        if: success() && github.event.inputs.skip_tests != 'true'
-        uses: dtolnay/rust-toolchain@stable
+        if: success() && needs.prepare.outputs.skip_tests != 'true'
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
+        with:
+          toolchain: stable
 
       - name: Cache Rust Build Artifacts
-        if: success() && github.event.inputs.skip_tests != 'true'
-        uses: Swatinem/rust-cache@v2
+        if: success() && needs.prepare.outputs.skip_tests != 'true'
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
-          workspaces: sdks/browser4-cli
+          workspaces: cli/browser4-cli
 
       - name: Run browser4-cli E2E Tests
         id: e2e-cli
-        if: success() && github.event.inputs.skip_tests != 'true'
+        if: success() && needs.prepare.outputs.skip_tests != 'true'
         timeout-minutes: 15
         shell: bash
         env:
@@ -260,20 +346,12 @@ jobs:
           BROWSER4_E2E_FIXTURE_HOST: host.docker.internal
         run: |
           echo "::group::🧪 browser4-cli E2E Tests"
-
-          # Run the CLI tests against the already-running Docker container
-          echo "Running browser4-cli E2E tests..."
-          echo "Working directory: $(pwd)"
-          cd sdks/browser4-cli
+          cd cli/browser4-cli
           cargo test --test e2e -- --nocapture
           cd "$(git rev-parse --show-toplevel)"
-
           echo "::endgroup::"
 
-
-
-
-      - name: Cleanup Docker Container
+      - name: Cleanup Docker test resources
         if: always()
         uses: ./.github/actions/cleanup-resources
         with:
@@ -282,48 +360,9 @@ jobs:
           cleanup_compose: 'false'
           cleanup_volumes: 'true'
 
-      - name: Check if already on master
-        id: check_master
-        if: success()
-        run: |
-          git fetch origin master
-          MAIN_SHA=$(git rev-parse origin/master)
-          CURRENT_SHA=$(git rev-parse HEAD)
-
-          if [ "$MAIN_SHA" = "$CURRENT_SHA" ]; then
-            echo "already_on_master=true" >> $GITHUB_OUTPUT
-            echo "✅ Current commit is already on master branch"
-          else
-            echo "already_on_master=false" >> $GITHUB_OUTPUT
-            echo "📝 Current commit needs to be merged to master"
-          fi
-
-      - name: Merge to master branch
-        id: merge_master
-        if: success() && env.IS_PRERELEASE == 'false' && steps.check_master.outputs.already_on_master == 'false'
-        run: |
-          echo "📦 Merging release to master branch..."
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          TAG="${{ env.TAG }}"
-          VERSION="${{ env.VERSION }}"
-
-          # Fetch and checkout master
-          git fetch origin master
-          git checkout master
-          git pull origin master
-
-          # Merge the tag
-          git merge --no-ff "$TAG" -m "chore: release $VERSION"
-
-          # Push to master
-          git push origin master
-
-          echo "✅ Successfully merged $TAG to master"
-
       - name: Build Browser4 JAR
         if: success()
+        shell: bash
         run: |
           JAR_PATH=${{ env.PRODUCTION_JAR_PATH }}
           JAR_NAME=${{ env.PRODUCTION_JAR_NAME }}
@@ -339,11 +378,13 @@ jobs:
             find . -name "*.jar" -type f | head -10
             exit 1
           fi
+
           echo "✅ $JAR_NAME built successfully"
 
       - name: Find and Validate JAR
         id: get_uberjar
         if: success()
+        shell: bash
         run: |
           JAR_PATH=${{ env.PRODUCTION_JAR_PATH }}
           JAR_NAME=${{ env.PRODUCTION_JAR_NAME }}
@@ -362,117 +403,105 @@ jobs:
           echo "📍 Path: $JAR_PATH"
           echo "📏 Size: $JAR_SIZE bytes ($(numfmt --to=iec --suffix=B $JAR_SIZE))"
 
-          # Validate JAR is not empty
           if [ "$JAR_SIZE" -lt 1000000 ]; then
             echo "❌ JAR file seems too small (< 1MB): $JAR_SIZE bytes"
             exit 1
           fi
 
-          echo "uberjar_file=$UBERJAR_FILE" >> $GITHUB_OUTPUT
-          echo "uberjar_path=$JAR_PATH" >> $GITHUB_OUTPUT
+          echo "uberjar_file=$UBERJAR_FILE" >> "$GITHUB_OUTPUT"
+          echo "uberjar_path=$JAR_PATH" >> "$GITHUB_OUTPUT"
 
           echo "::endgroup::"
 
       - name: Create Release Notes
+        if: success()
         uses: ./.github/actions/create-release-notes
         id: release-notes
         with:
-          version: ${{ env.VERSION }}
+          version: ${{ needs.prepare.outputs.version }}
           jar_name: ${{ steps.get_uberjar.outputs.uberjar_file }}
           jar_path: ${{ steps.get_uberjar.outputs.uberjar_path }}
           java_version: ${{ env.JAVA_VERSION }}+
           output_file: release_notes.md
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: ${{ steps.get_uberjar.outputs.uberjar_path }}
-          name: "🚀 Browser4 ${{ env.VERSION }}"
-          body_path: release_notes.md
-          tag_name: ${{ env.TAG }}
-          draft: false
-          prerelease: ${{ env.IS_PRERELEASE }}
-          generate_release_notes: true
-          make_latest: ${{ env.IS_PRERELEASE == 'false' }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Generate Artifact Attestation
+      - name: Append CLI notes
         if: success()
-        uses: actions/attest-build-provenance@v1
-        with:
-          subject-path: ${{ steps.get_uberjar.outputs.uberjar_path }}
-
-      - name: Verify Release
+        shell: bash
         run: |
-          echo "::group::✅ Release Verification"
+          cat >> release_notes.md <<EOF
 
-          JAR_SIZE=$(stat -c%s "${{ steps.get_uberjar.outputs.uberjar_path }}" 2>/dev/null || echo 0)
+          ## browser4-cli
 
-          echo "🎉 Release ${{ env.VERSION }} created successfully!"
-          echo ""
-          echo "📦 Release Details:"
-          echo "  - Tag: ${{ env.TAG }}"
-          echo "  - JAR: ${{ steps.get_uberjar.outputs.uberjar_file }}"
-          echo "  - Size: $(numfmt --to=iec --suffix=B $JAR_SIZE)"
-          echo "  - Prerelease: ${{ env.IS_PRERELEASE }}"
-          echo ""
-          echo "🔗 Release URL: https://github.com/${{ github.repository }}/releases/tag/${{ env.TAG }}"
-          echo ""
-          echo "📥 Download Command:"
-          echo "wget https://github.com/${{ github.repository }}/releases/download/${{ env.TAG }}/${{ steps.get_uberjar.outputs.uberjar_file }}"
+          This release also includes prebuilt \`browser4-cli\` binaries for:
+          - Linux x64
+          - Linux ARM64
+          - Linux musl x64
+          - Linux musl ARM64
+          - Windows x64
+          - macOS x64
+          - macOS ARM64
 
-          echo "::endgroup::"
+          npm package:
+          \`npm install -g browser4-cli\`
 
-      - name: Release Summary
+          CLI package version in this release workflow:
+          - \`${{ needs.prepare.outputs.cli_version }}\`
+
+          ## Self-contained Browser4 runtime bundles
+
+          This release also includes self-contained Browser4 runtime bundles with:
+          - \`Browser4.jar\`
+          - a minimal \`jlink\`-built JRE
+
+          Supported release assets:
+          - \`browser4-runtime-windows-x64.zip\`
+          - \`browser4-runtime-linux-x64.tar.gz\`
+          - \`browser4-runtime-darwin-x64.tar.gz\`
+          - \`browser4-runtime-darwin-arm64.tar.gz\`
+
+          Recommended install flow:
+
+          \`browser4-cli install\`
+          EOF
+
+      - name: Upload JAR artifact
         if: success()
-        run: |
-          echo "::group::📊 Release Summary"
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-jar
+          path: ${{ steps.get_uberjar.outputs.uberjar_path }}
+          retention-days: 7
 
-          echo "## 🚀 Release ${{ env.VERSION }} Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          echo "### ✅ Build Status" >> $GITHUB_STEP_SUMMARY
-          echo "- **Version**: ${{ env.VERSION }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Tag**: ${{ env.TAG }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Prerelease**: ${{ env.IS_PRERELEASE }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          echo "### 📦 Artifacts" >> $GITHUB_STEP_SUMMARY
-          echo "- **JAR**: ${{ steps.get_uberjar.outputs.uberjar_file }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Docker Image**: ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **GHCR Image**: ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          echo "### 🔗 Links" >> $GITHUB_STEP_SUMMARY
-          echo "- [Release Page](https://github.com/${{ github.repository }}/releases/tag/${{ env.TAG }})" >> $GITHUB_STEP_SUMMARY
-          echo "- [Docker Hub](https://hub.docker.com/r/${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }})" >> $GITHUB_STEP_SUMMARY
-          echo "- [GitHub Container Registry](https://github.com/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}/pkgs/container/${{ env.IMAGE_NAME }})" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          echo "### 📊 Build Metrics" >> $GITHUB_STEP_SUMMARY
-          echo "- **Maven Build**: ${{ steps.maven-build.outputs.build_time }}s" >> $GITHUB_STEP_SUMMARY
-          echo "- **Docker Image Size**: ${{ steps.docker-build.outputs.image_size_mb }}MB" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-          echo "✅ Release pipeline completed successfully!" >> $GITHUB_STEP_SUMMARY
-
-          echo "::endgroup::"
+      - name: Upload release notes artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release_notes.md
+          retention-days: 7
 
       - name: Push Docker Images to Docker Hub
-        if: success()
+        if: success() && needs.prepare.outputs.skip_docker_push != 'true'
+        shell: bash
         run: |
-          echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+          echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ env.DOCKER_USERNAME }}" --password-stdin
 
-          # Tag images
-          docker tag ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }} ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+          IS_PRERELEASE="${{ needs.prepare.outputs.is_prerelease }}"
+          if [ "$IS_PRERELEASE" != "true" ]; then
+            docker tag ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.version }} ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+          fi
 
-          # Push with retry logic
+          push_images() {
+            docker push ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.version }} || return 1
+            if [ "$IS_PRERELEASE" != "true" ]; then
+              docker push ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest || return 1
+            fi
+            return 0
+          }
+
           max_retries=3
           for i in $(seq 1 $max_retries); do
-            if docker push ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }} && \
-               docker push ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest; then
+            if push_images; then
               echo "✅ Successfully pushed images to Docker Hub"
               break
             else
@@ -480,26 +509,35 @@ jobs:
                 echo "⚠️ Push failed, retrying ($i/$max_retries)..."
                 sleep 5
               else
-                echo "❌ Failed to push after $max_retries attempts"
+                echo "❌ Failed to push Docker Hub images after $max_retries attempts"
                 exit 1
               fi
             fi
           done
 
       - name: Push Docker Images to GitHub Container Registry
-        if: success()
+        if: success() && needs.prepare.outputs.skip_docker_push != 'true'
+        shell: bash
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-          # Tag images for GitHub Container Registry
-          docker tag ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }} ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}
-          docker tag ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }} ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest
+          IS_PRERELEASE="${{ needs.prepare.outputs.is_prerelease }}"
+          docker tag ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.version }} ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.version }}
+          if [ "$IS_PRERELEASE" != "true" ]; then
+            docker tag ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.version }} ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest
+          fi
 
-          # Push with retry logic
+          push_images() {
+            docker push ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.version }} || return 1
+            if [ "$IS_PRERELEASE" != "true" ]; then
+              docker push ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest || return 1
+            fi
+            return 0
+          }
+
           max_retries=3
           for i in $(seq 1 $max_retries); do
-            if docker push ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }} && \
-               docker push ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:latest; then
+            if push_images; then
               echo "✅ Successfully pushed images to GHCR"
               break
             else
@@ -507,19 +545,586 @@ jobs:
                 echo "⚠️ Push failed, retrying ($i/$max_retries)..."
                 sleep 5
               else
-                echo "❌ Failed to push after $max_retries attempts"
+                echo "❌ Failed to push GHCR images after $max_retries attempts"
                 exit 1
               fi
             fi
           done
 
-      - name: Cleanup on Failure
-        if: failure() && github.event_name == 'push'
+      - name: Core build summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## 📦 Core Build Summary"
+            echo ""
+            echo "- **Maven Build**: ${{ steps.maven-build.outcome }}"
+            echo "- **Docker Build**: ${{ steps.docker-build.outcome }}"
+            echo "- **CLI E2E**: ${{ steps.e2e-cli.outcome || 'skipped' }}"
+            echo "- **JAR**: ${{ steps.get_uberjar.outcome }}"
+            echo "- **Docker Push**: ${{ needs.prepare.outputs.skip_docker_push == 'true' && 'skipped' || 'enabled' }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build-cli-binaries:
+    name: Build ${{ matrix.name }}
+    needs: prepare
+    if: needs.prepare.outputs.cli_should_build == 'true'
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: browser4-cli-linux-x64
+            use_zigbuild: true
+          - name: Linux ARM64
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            binary: browser4-cli-linux-arm64
+            use_zigbuild: true
+          - name: Linux musl x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            binary: browser4-cli-linux-musl-x64
+            use_zigbuild: true
+          - name: Linux musl ARM64
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            binary: browser4-cli-linux-musl-arm64
+            use_zigbuild: true
+          - name: Windows x64
+            os: ubuntu-latest
+            target: x86_64-pc-windows-gnu
+            binary: browser4-cli-win32-x64.exe
+            use_zigbuild: false
+          - name: macOS x64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            binary: browser4-cli-darwin-x64
+            use_zigbuild: false
+          - name: macOS ARM64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            binary: browser4-cli-darwin-arm64
+            use_zigbuild: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Sync CLI version metadata
+        shell: bash
+        run: node cli/scripts/sync-version.js
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu gcc-x86-64-linux-gnu mingw-w64
+
+      - name: Install Zig
+        if: matrix.use_zigbuild
+        uses: goto-bus-stop/setup-zig@abea47f85e598557f500fa1fd2ab7464fcb39406  # v2.2.1
+        with:
+          version: '0.13.0'
+
+      - name: Install cargo-zigbuild
+        if: matrix.use_zigbuild
+        shell: bash
+        run: cargo install cargo-zigbuild
+
+      - name: Configure Rust linkers
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p ~/.cargo
+          cat >> ~/.cargo/config.toml << 'EOF'
+          [target.aarch64-unknown-linux-gnu]
+          linker = "aarch64-linux-gnu-gcc"
+
+          [target.x86_64-pc-windows-gnu]
+          linker = "x86_64-w64-mingw32-gcc"
+          EOF
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+        with:
+          workspaces: cli/browser4-cli
+
+      - name: Build with zigbuild
+        if: matrix.use_zigbuild
+        shell: bash
+        run: cargo zigbuild --release --manifest-path ${{ env.CLI_MANIFEST_PATH }} --target ${{ matrix.target }}
+
+      - name: Build with cargo
+        if: ${{ !matrix.use_zigbuild }}
+        shell: bash
+        run: cargo build --release --manifest-path ${{ env.CLI_MANIFEST_PATH }} --target ${{ matrix.target }}
+
+      - name: Copy binary artifact
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          if [[ "${{ matrix.target }}" == *"windows"* ]]; then
+            cp cli/browser4-cli/target/${{ matrix.target }}/release/browser4-cli.exe artifacts/${{ matrix.binary }}
+          else
+            cp cli/browser4-cli/target/${{ matrix.target }}/release/browser4-cli artifacts/${{ matrix.binary }}
+            chmod +x artifacts/${{ matrix.binary }}
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.binary }}
+          path: artifacts/${{ matrix.binary }}
+          retention-days: 7
+
+  build-runtime-bundles:
+    name: Build runtime bundle (${{ matrix.name }})
+    needs: [prepare, build-core-and-docker]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            asset_name: browser4-runtime-windows-x64.zip
+            artifact_name: browser4-runtime-windows-x64
+          - name: Linux x64
+            os: ubuntu-latest
+            asset_name: browser4-runtime-linux-x64.tar.gz
+            artifact_name: browser4-runtime-linux-x64
+          - name: macOS x64
+            os: macos-13
+            asset_name: browser4-runtime-darwin-x64.tar.gz
+            artifact_name: browser4-runtime-darwin-x64
+          - name: macOS ARM64
+            os: macos-14
+            asset_name: browser4-runtime-darwin-arm64.tar.gz
+            artifact_name: browser4-runtime-darwin-arm64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Setup Environment
+        uses: ./.github/actions/setup-environment
+        with:
+          java_version: ${{ env.JAVA_VERSION }}
+          enable_cache: 'true'
+
+      - name: Download Browser4 JAR artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-jar
+          path: browser4-app/browser4-agents/target/
+
+      - name: Build Browser4 runtime bundle
+        shell: pwsh
+        run: |
+          ./browser4-app/browser4-agents/build-runtime-bundle.ps1 `
+            -JarPath "${{ env.PRODUCTION_JAR_PATH }}" `
+            -OutputDirectory "browser4-app/browser4-agents/target/runtime-release" `
+            -AssetName "${{ matrix.asset_name }}" `
+            -Force
+
+      - name: Verify Browser4 runtime bundle
+        shell: pwsh
+        run: |
+          ./browser4-app/browser4-agents/verify-runtime-bundle.ps1 `
+            -BundlePath "browser4-app/browser4-agents/target/runtime-release/${{ matrix.asset_name }}" `
+            -ExpectedAssetName "${{ matrix.asset_name }}"
+
+      - name: Upload runtime bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: browser4-app/browser4-agents/target/runtime-release/${{ matrix.asset_name }}
+          retention-days: 7
+
+  publish-cli-npm:
+    name: Publish browser4-cli to npm
+    needs: [prepare, build-cli-binaries]
+    if: needs.prepare.outputs.cli_should_publish_npm == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: https://registry.npmjs.org
+
+      - name: Sync CLI version metadata
+        shell: bash
+        run: node cli/scripts/sync-version.js
+
+      - name: Re-check npm version before publish
+        id: cli_publish_check
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          eval "$(node cli/scripts/check-npm-publish-needed.js --shell)"
+
+          echo "package_name=$PACKAGE_NAME" >> "$GITHUB_OUTPUT"
+          echo "cli_version=$CLI_VERSION" >> "$GITHUB_OUTPUT"
+          echo "remote_version=$REMOTE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "lookup_status=$LOOKUP_STATUS" >> "$GITHUB_OUTPUT"
+          echo "should_publish=$SHOULD_PUBLISH" >> "$GITHUB_OUTPUT"
+
+          if [ "$SHOULD_PUBLISH" != "true" ]; then
+            echo "::notice::Skipping npm publish because $PACKAGE_NAME@$CLI_VERSION already exists on npm."
+          elif [ "$LOOKUP_STATUS" = "failed" ]; then
+            echo "::warning::Unable to query npm version for $PACKAGE_NAME before publish. Proceeding because the prepare job determined a publish was required."
+          fi
+
+          {
+            echo "## 🔎 CLI Publish Re-check"
+            echo ""
+            echo "- **Package**: $PACKAGE_NAME"
+            echo "- **Local CLI Version**: $CLI_VERSION"
+            echo "- **Remote npm Version**: $REMOTE_VERSION"
+            echo "- **Lookup Status**: $LOOKUP_STATUS"
+            echo "- **Will Publish**: $SHOULD_PUBLISH"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Download all CLI binary artifacts
+        if: steps.cli_publish_check.outputs.should_publish == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: browser4-cli-*
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Move binaries into CLI package bin directory
+        if: steps.cli_publish_check.outputs.should_publish == 'true'
+        shell: bash
+        run: |
+          mkdir -p cli/bin
+          find artifacts -maxdepth 1 -type f -name 'browser4-cli-*' -exec mv {} cli/bin/ \;
+          rm -rf artifacts
+          chmod +x cli/bin/browser4-cli-* 2>/dev/null || true
+          echo "Binaries in cli/bin/:"
+          ls -la cli/bin/
+
+      - name: Verify all packaged binaries exist
+        if: steps.cli_publish_check.outputs.should_publish == 'true'
+        shell: bash
+        run: |
+          EXPECTED_BINARIES=(
+            "browser4-cli-linux-x64"
+            "browser4-cli-linux-arm64"
+            "browser4-cli-linux-musl-x64"
+            "browser4-cli-linux-musl-arm64"
+            "browser4-cli-win32-x64.exe"
+            "browser4-cli-darwin-x64"
+            "browser4-cli-darwin-arm64"
+          )
+          MIN_SIZE=100000
+          ERRORS=0
+
+          for binary in "${EXPECTED_BINARIES[@]}"; do
+            if [ ! -f "cli/bin/$binary" ]; then
+              echo "ERROR: Missing cli/bin/$binary"
+              ERRORS=$((ERRORS + 1))
+            else
+              SIZE=$(stat -c%s "cli/bin/$binary" 2>/dev/null || stat -f%z "cli/bin/$binary")
+              if [ "$SIZE" -lt "$MIN_SIZE" ]; then
+                echo "ERROR: cli/bin/$binary is too small ($SIZE bytes, expected >= $MIN_SIZE)"
+                ERRORS=$((ERRORS + 1))
+              else
+                echo "OK: cli/bin/$binary ($SIZE bytes)"
+              fi
+            fi
+          done
+
+          if [ "$ERRORS" -gt 0 ]; then
+            echo "Error: $ERRORS binary issues found"
+            exit 1
+          fi
+
+          echo "All 7 platform binaries are present and valid"
+
+      - name: Publish to npm
+        if: steps.cli_publish_check.outputs.should_publish == 'true'
+        working-directory: ${{ env.CLI_PACKAGE_DIR }}
+        run: npm publish --provenance
+
+      - name: Verify npm package was published
+        if: steps.cli_publish_check.outputs.should_publish == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PACKAGE_NAME='${{ steps.cli_publish_check.outputs.package_name }}'
+          CLI_VERSION='${{ steps.cli_publish_check.outputs.cli_version }}'
+
+          for attempt in 1 2 3 4 5; do
+            PUBLISHED_VERSION=$(npm view "$PACKAGE_NAME@$CLI_VERSION" version 2>/dev/null || true)
+            if [ "$PUBLISHED_VERSION" = "$CLI_VERSION" ]; then
+              echo "Verified $PACKAGE_NAME@$CLI_VERSION on npm"
+              exit 0
+            fi
+
+            if [ "$attempt" -lt 5 ]; then
+              echo "npm registry has not reported $PACKAGE_NAME@$CLI_VERSION yet (attempt $attempt/5); retrying in 10s..."
+              sleep 10
+            fi
+          done
+
+          echo "Unable to verify $PACKAGE_NAME@$CLI_VERSION on npm after publish"
+          exit 1
+
+      - name: npm publish summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## 📦 CLI npm Publish"
+            echo ""
+            echo "- **CLI Version**: ${{ needs.prepare.outputs.cli_version }}"
+            echo "- **Remote npm Version (publish-time)**: ${{ steps.cli_publish_check.outputs.remote_version }}"
+            echo "- **Publish Re-check Status**: ${{ steps.cli_publish_check.outputs.lookup_status }}"
+            echo "- **Publish Executed**: ${{ steps.cli_publish_check.outputs.should_publish }}"
+            echo "- **Status**: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish-github-release:
+    name: Publish GitHub release
+    needs:
+      - prepare
+      - build-core-and-docker
+      - build-cli-binaries
+      - build-runtime-bundles
+      - publish-cli-npm
+    if: |
+      always() &&
+      needs.build-core-and-docker.result == 'success' &&
+      (needs.build-cli-binaries.result == 'success' || needs.build-cli-binaries.result == 'skipped') &&
+      needs.build-runtime-bundles.result == 'success' &&
+      (needs.publish-cli-npm.result == 'success' || needs.publish-cli-npm.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      attestations: write
+      id-token: write
+
+    steps:
+      - name: Download JAR artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-jar
+          path: release-assets/
+
+      - name: Download release notes
+        uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes/
+
+      - name: Download CLI artifacts
+        if: needs.prepare.outputs.cli_should_build == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: browser4-cli-*
+          path: release-assets/
+          merge-multiple: true
+
+      - name: Download runtime bundle artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: browser4-runtime-*
+          path: release-assets/
+          merge-multiple: true
+
+      - name: List release assets
+        shell: bash
+        run: |
+          echo "Release assets:"
+          ls -la release-assets/
+          echo ""
+          echo "Release notes:"
+          ls -la release-notes/
+
+      - name: Verify release assets
+        shell: bash
+        run: |
+          if [ ! -f "release-assets/${{ needs.build-core-and-docker.outputs.jar_name }}" ]; then
+            echo "❌ Missing JAR asset"
+            exit 1
+          fi
+
+          if [ "${{ needs.prepare.outputs.cli_should_build }}" = "true" ]; then
+            BINARY_COUNT=$(find release-assets -maxdepth 1 -type f -name 'browser4-cli-*' | wc -l)
+            if [ "$BINARY_COUNT" -lt 7 ]; then
+              echo "❌ Expected 7 CLI binaries, found $BINARY_COUNT"
+              ls -la release-assets/
+              exit 1
+            fi
+          fi
+
+          RUNTIME_BUNDLE_COUNT=$(find release-assets -maxdepth 1 -type f \( -name 'browser4-runtime-*.zip' -o -name 'browser4-runtime-*.tar.gz' \) | wc -l)
+          if [ "$RUNTIME_BUNDLE_COUNT" -lt 4 ]; then
+            echo "❌ Expected 4 Browser4 runtime bundles, found $RUNTIME_BUNDLE_COUNT"
+            ls -la release-assets/
+            exit 1
+          fi
+
+          echo "✅ Release assets verified"
+
+      - name: Build release asset manifest
+        id: asset_manifest
+        shell: bash
+        run: |
+          {
+            echo 'files<<EOF'
+            echo "release-assets/${{ needs.build-core-and-docker.outputs.jar_name }}"
+            if [ "${{ needs.prepare.outputs.cli_should_build }}" = "true" ]; then
+              find release-assets -maxdepth 1 -type f -name 'browser4-cli-*' | sort
+            fi
+            find release-assets -maxdepth 1 -type f \( -name 'browser4-runtime-*.zip' -o -name 'browser4-runtime-*.tar.gz' \) | sort
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
+        with:
+          files: ${{ steps.asset_manifest.outputs.files }}
+          name: ${{ needs.prepare.outputs.release_title }}
+          body_path: release-notes/release_notes.md
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          draft: false
+          prerelease: ${{ needs.prepare.outputs.is_prerelease == 'true' }}
+          generate_release_notes: true
+          make_latest: ${{ needs.prepare.outputs.is_prerelease == 'true' && 'false' || 'true' }}
+          overwrite_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate Artifact Attestation
+        if: success()
+        uses: actions/attest-build-provenance@ef244123eb79f2f7a7e75d99086184180e6d0018  # v1.4.4
+        with:
+          subject-path: release-assets/${{ needs.build-core-and-docker.outputs.jar_name }}
+
+      - name: Verify Release
+        shell: bash
+        run: |
+          echo "::group::✅ Release Verification"
+
+          JAR_SIZE=$(stat -c%s "release-assets/${{ needs.build-core-and-docker.outputs.jar_name }}" 2>/dev/null || echo 0)
+
+          echo "🎉 Release ${{ needs.prepare.outputs.version }} created successfully!"
+          echo ""
+          echo "📦 Release Details:"
+          echo "  - Tag: ${{ needs.prepare.outputs.tag }}"
+          echo "  - JAR: ${{ needs.build-core-and-docker.outputs.jar_name }}"
+          echo "  - Size: $(numfmt --to=iec --suffix=B $JAR_SIZE)"
+          echo "  - Prerelease: ${{ needs.prepare.outputs.is_prerelease }}"
+          echo "  - CLI Version: ${{ needs.prepare.outputs.cli_version }}"
+          echo "  - Runtime bundles:"
+          find release-assets -maxdepth 1 -type f \( -name 'browser4-runtime-*.zip' -o -name 'browser4-runtime-*.tar.gz' \) -printf '    - %f\n' | sort
+          echo ""
+          echo "🔗 Release URL: https://github.com/${{ github.repository }}/releases/tag/${{ needs.prepare.outputs.tag }}"
+          echo ""
+          echo "📥 Download Command:"
+          echo "wget https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare.outputs.tag }}/${{ needs.build-core-and-docker.outputs.jar_name }}"
+
+          echo "::endgroup::"
+
+      - name: Release Summary
+        if: success()
+        shell: bash
+        run: |
+          {
+            echo "## 🚀 Release ${{ needs.prepare.outputs.version }} Summary"
+            echo ""
+            echo "### ✅ Build Status"
+            echo "- **Version**: ${{ needs.prepare.outputs.version }}"
+            echo "- **Tag**: ${{ needs.prepare.outputs.tag }}"
+            echo "- **Prerelease**: ${{ needs.prepare.outputs.is_prerelease }}"
+            echo "- **Commit**: ${{ github.sha }}"
+            echo ""
+            echo "### 📦 Artifacts"
+            echo "- **JAR**: ${{ needs.build-core-and-docker.outputs.jar_name }}"
+            echo "- **Runtime Bundles**: browser4-runtime-windows-x64.zip, browser4-runtime-linux-x64.tar.gz, browser4-runtime-darwin-x64.tar.gz, browser4-runtime-darwin-arm64.tar.gz"
+            echo "- **CLI Version**: ${{ needs.prepare.outputs.cli_version }}"
+            echo "- **npm Version**: ${{ needs.prepare.outputs.npm_version }}"
+            echo "- **npm Lookup Status**: ${{ needs.prepare.outputs.cli_npm_lookup_status }}"
+            echo "- **Docker Image**: ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.version }}"
+            echo "- **GHCR Image**: ghcr.io/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.version }}"
+            echo ""
+            echo "### 🔗 Links"
+            echo "- [Release Page](https://github.com/${{ github.repository }}/releases/tag/${{ needs.prepare.outputs.tag }})"
+            echo "- [Docker Hub](https://hub.docker.com/r/${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }})"
+            echo "- [GitHub Container Registry](https://github.com/${{ github.repository_owner }}/${{ env.IMAGE_NAME }}/pkgs/container/${{ env.IMAGE_NAME }})"
+            echo ""
+            echo "### 📊 Job Results"
+            echo "- **Prepare**: ${{ needs.prepare.result }}"
+            echo "- **Core Build + Docker**: ${{ needs.build-core-and-docker.result }}"
+            echo "- **CLI Binary Build**: ${{ needs.build-cli-binaries.result }}"
+            echo "- **Runtime Bundle Build**: ${{ needs.build-runtime-bundles.result }}"
+            echo "- **CLI npm Publish**: ${{ needs.publish-cli-npm.result }}"
+            echo ""
+            echo "✅ Release pipeline completed successfully!"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  cleanup-on-failure:
+    name: Report failed release
+    needs:
+      - prepare
+      - build-core-and-docker
+      - build-cli-binaries
+      - build-runtime-bundles
+      - publish-cli-npm
+      - publish-github-release
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Cleanup failed tag
+        shell: bash
         run: |
           echo "⚠️ Release workflow failed!"
-          echo "Cleaning up tag ${{ env.TAG }}..."
-
-          # Delete remote tag if it was created by tag push
-          git push --delete origin ${{ env.TAG }} 2>/dev/null || echo "Tag cleanup skipped or already removed"
-
-          echo "::warning::Release failed. Tag ${{ env.TAG }} has been removed. Please fix issues and retry."
+          echo "Release tag: ${{ needs.prepare.outputs.tag }}"
+          echo "::warning::Release failed. Tag cleanup is intentionally disabled to avoid partially published artifacts becoming orphaned. Review the failed jobs before retrying."

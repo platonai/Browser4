@@ -1,24 +1,23 @@
 package ai.platon.pulsar.basic.session
 
+import ai.platon.browser4.chrome.PulsarWebDriver
 import ai.platon.pulsar.agentic.BasicAgenticSession
+import ai.platon.pulsar.basic.TestBase
 import ai.platon.pulsar.common.LinkExtractors
-import ai.platon.pulsar.protocol.browser.driver.cdt.PulsarWebDriver
 import ai.platon.pulsar.ql.SQLSession
 import ai.platon.pulsar.skeleton.common.persist.ext.loadEventHandlers
-import ai.platon.pulsar.skeleton.session.BasicPulsarSession
-import ai.platon.pulsar.basic.TestBase
 import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Tag
 import java.util.concurrent.CompletableFuture
 import kotlin.test.*
-import org.junit.jupiter.api.DisplayName
 
-class SessionLoadTests: TestBase() {
+class SessionLoadTests : TestBase() {
     private val url = "https://www.amazon.com/Best-Sellers-Beauty/zgbs/beauty"
     private val urls = LinkExtractors.fromResource("categories.txt")
 
     @BeforeEach
-    fun clearResources() {
+    suspend fun clearResources() {
         session.globalCache.resetCaches()
 
         session.delete(url)
@@ -138,9 +137,10 @@ class SessionLoadTests: TestBase() {
         logger.info("Tested - whenLoadAllAsyncSecondlyWithoutExpiry_thenPagesAreLoadedFromCache")
     }
 
-    @Test
-        @DisplayName("When loaded a HTML page then the navigate state are correct")
-    fun whenLoadedAHtmlPageThenTheNavigateStateAreCorrect() {
+
+    @org.junit.jupiter.api.Test
+    @DisplayName("When loaded a HTML page then the navigate state are correct")
+    suspend fun whenLoadedAHtmlPageThenTheNavigateStateAreCorrect() {
         logger.info("Testing - When loaded a HTML page then the navigate state are correct")
 
         val options = session.options("-refresh")

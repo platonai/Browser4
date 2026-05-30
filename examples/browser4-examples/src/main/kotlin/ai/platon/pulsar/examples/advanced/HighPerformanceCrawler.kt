@@ -1,6 +1,6 @@
 package ai.platon.pulsar.examples.advanced
 
-import ai.platon.browser4.driver.common.BlockRule
+import ai.platon.pulsar.browser.common.BlockRule
 import ai.platon.pulsar.common.LinkExtractors
 import ai.platon.pulsar.common.NetUtil
 import ai.platon.pulsar.common.config.CapabilityTypes.PROXY_ROTATION_URL

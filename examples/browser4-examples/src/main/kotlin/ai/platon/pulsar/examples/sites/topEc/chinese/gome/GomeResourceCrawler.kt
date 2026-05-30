@@ -2,7 +2,7 @@ package ai.platon.pulsar.examples.sites.topEc.chinese.gome
 
 import ai.platon.pulsar.skeleton.context.PulsarContexts
 
-fun main() {
+suspend fun main() {
     val portalUrl = "https://item.gome.com.cn/A0008106499-pop8020999364.html"
     val url = "https://item.gome.com.cn/robots.txt"
     val args = "-refresh"
@@ -13,6 +13,6 @@ fun main() {
     println(resource.protocolStatus)
     println(resource.headers)
     println(resource.contentAsString)
-    
+
     readlnOrNull()
 }

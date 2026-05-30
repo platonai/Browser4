@@ -1,6 +1,6 @@
 package ai.platon.pulsar.skeleton.common.options
 
-import ai.platon.browser4.driver.common.InteractSettings
+import ai.platon.pulsar.browser.InteractSettings
 import ai.platon.pulsar.common.DateTimes
 import ai.platon.pulsar.common.Priority13
 import ai.platon.pulsar.common.browser.InteractLevel
@@ -112,7 +112,7 @@ open class LoadOptions(
     @Parameter(
         names = ["-deadline", "--deadline"], converter = InstantConverter::class,
         description = "The task's deadline indicates the time by which it should be completed. If this deadline is surpassed, " +
-            " the task must be promptly discarded."
+                " the task must be promptly discarded."
     )
     var deadline: Instant = DateTimes.doomsday
 
@@ -137,7 +137,7 @@ open class LoadOptions(
     @Parameter(
         names = ["-readonly"],
         description = "Specify whether the load execution is read-only or not. " +
-            "When a load execution is read-only, it ensures that the webpage loaded remains unchanged by the execution."
+                "When a load execution is read-only, it ensures that the webpage loaded remains unchanged by the execution."
     )
     var readonly = false
 
@@ -195,7 +195,7 @@ open class LoadOptions(
     @Parameter(
         names = ["-i", "-expire", "-expires", "--expire"], converter = DurationConverter::class,
         description = "The expiry duration. " +
-            "If the expiry time is exceeded, the page should be fetched from the Internet."
+                "If the expiry time is exceeded, the page should be fetched from the Internet."
     )
     var expires = LoadOptionDefaults.expires
 
@@ -213,7 +213,7 @@ open class LoadOptions(
     @Parameter(
         names = ["-expireAt", "--expire-at"], converter = InstantConverter::class,
         description = "The expiry time point. " +
-            "If the expiry time is exceeded, the page should be fetched from the Internet."
+                "If the expiry time is exceeded, the page should be fetched from the Internet."
     )
     var expireAt = LoadOptionDefaults.expireAt
 
@@ -618,9 +618,9 @@ open class LoadOptions(
     @Parameter(
         names = ["-refresh", "--refresh"],
         description = "Refresh the fetch state of a page, clear the retry counters." +
-            " If true, the page should be fetched immediately." +
-            " The option can be explained as follows:" +
-            " -refresh = -ignoreFailure -i 0s and set page.fetchRetries = 0"
+                " If true, the page should be fetched immediately." +
+                " The option can be explained as follows:" +
+                " -refresh = -ignoreFailure -i 0s and set page.fetchRetries = 0"
     )
     var refresh = false
         set(value) {
@@ -649,7 +649,7 @@ open class LoadOptions(
     @Parameter(
         names = ["-nmr", "-nMaxRetry", "--n-max-retry"],
         description = "Retry to fetch at most n times, if page.fetchRetries > nMaxRetry," +
-            " the page is marked as gone and do not fetch it again until -refresh is set to clear page.fetchRetries"
+                " the page is marked as gone and do not fetch it again until -refresh is set to clear page.fetchRetries"
     )
     var nMaxRetry = 3
 
@@ -822,7 +822,7 @@ open class LoadOptions(
      * Additional constructor that copies settings from another LoadOptions instance.
      */
     protected constructor(args: String, other: LoadOptions) :
-        this(split(args), other.conf, other.rawEvent, other.rawItemEvent, other.referrer)
+            this(split(args), other.conf, other.rawEvent, other.rawItemEvent, other.referrer)
 
     /**
      * Checks if the parser phase should be activated based on current settings.
@@ -1010,7 +1010,7 @@ open class LoadOptions(
      * @return true if the option has its default value
      */
     open fun isDefault(optionName: String): Boolean {
-         val value = optionFieldsMap[optionName]?.also { it.isAccessible = true }?.get(this) ?: return false
+        val value = optionFieldsMap[optionName]?.also { it.isAccessible = true }?.get(this) ?: return false
         return value == defaultParams[optionName]
     }
 
@@ -1159,7 +1159,7 @@ open class LoadOptions(
                 val count = it.annotations.filterIsInstance<Parameter>().count { it.names.contains("-$name") }
                 require(count > 0) {
                     "Missing -$name option for field <$name>. " +
-                        "Every option with name `optionName` has to take a [Parameter] name [-optionName]."
+                            "Every option with name `optionName` has to take a [Parameter] name [-optionName]."
                 }
             }
 
@@ -1343,7 +1343,8 @@ open class LoadOptions(
          * @param conf the configuration to use
          * @return a new merged LoadOptions
          */
-        fun merge(args: String?, args2: String?, conf: VolatileConfig = VolatileConfig.UNSAFE) = parse("$args $args2", conf)
+        fun merge(args: String?, args2: String?, conf: VolatileConfig = VolatileConfig.UNSAFE) =
+            parse("$args $args2", conf)
 
         /**
          * Merges multiple argument strings, with later arguments taking precedence.
@@ -1352,7 +1353,8 @@ open class LoadOptions(
          * @param conf the configuration to use
          * @return the merged arguments string
          */
-        fun mergeArgs(vararg args: String?, conf: VolatileConfig = VolatileConfig.UNSAFE) = parse(args.joinToString(" "), conf).toString()
+        fun mergeArgs(vararg args: String?, conf: VolatileConfig = VolatileConfig.UNSAFE) =
+            parse(args.joinToString(" "), conf).toString()
 
         /**
          * Removes specified options from an arguments string.

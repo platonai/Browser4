@@ -7,8 +7,8 @@ import ai.platon.pulsar.common.concurrent.ConcurrentExpiringLRUCache.Companion.C
 import ai.platon.pulsar.common.config.CapabilityTypes.GLOBAL_DOCUMENT_CACHE_SIZE
 import ai.platon.pulsar.common.config.CapabilityTypes.GLOBAL_PAGE_CACHE_SIZE
 import ai.platon.pulsar.common.config.ImmutableConfig
+import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.dom.FeaturedDocument
-import ai.platon.pulsar.persist.WebPage
 import java.util.concurrent.ConcurrentSkipListSet
 
 typealias PageCatch = ConcurrentExpiringLRUCache<String, WebPage>

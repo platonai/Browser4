@@ -1,19 +1,19 @@
 package ai.platon.browser4.driver.chrome
 
-import ai.platon.browser4.driver.chrome.ChromeLauncher
-import ai.platon.browser4.driver.chrome.common.ChromeOptions
-import ai.platon.browser4.driver.chrome.common.LauncherOptions
+import ai.platon.browser4.chrome.ChromeLauncher
+import ai.platon.browser4.chrome.util.ChromeOptions
+import ai.platon.browser4.chrome.util.LauncherOptions
 import ai.platon.pulsar.common.browser.BrowserFiles
 import ai.platon.pulsar.common.browser.BrowserFiles.CDP_URL_FILE_NAME
 import java.nio.file.Files
 import java.nio.file.Path
 
 /**
- * Example demonstrating CDP URL tracking and browser reuse.
+ * Example demonstrating BrowserProtocol URL tracking and browser reuse.
  *
  * This example shows:
- * 1. How CDP URL is automatically saved when launching Chrome
- * 2. How to read the CDP URL from the file
+ * 1. How BrowserProtocol URL is automatically saved when launching Chrome
+ * 2. How to read the BrowserProtocol URL from the file
  * 3. How browser reuse works with the same userDataDir
  */
 fun main() {
@@ -21,7 +21,7 @@ fun main() {
     val cdpUrlPath = userDataDir.resolveSibling(CDP_URL_FILE_NAME)
 
     println("=".repeat(60))
-    println("CDP URL Tracking Example")
+    println("BrowserProtocol URL Tracking Example")
     println("=".repeat(60))
     println("User Data Dir: $userDataDir")
     println()
@@ -35,12 +35,12 @@ fun main() {
         println("✓ Chrome launched successfully")
         println("  Browser version: ${chrome.version.browser}")
 
-        // Read CDP URL from file
+        // Read BrowserProtocol URL from file
         if (Files.exists(cdpUrlPath)) {
             val cdpUrl = Files.readString(cdpUrlPath).trim()
-            println("  CDP URL saved: $cdpUrl")
+            println("  BrowserProtocol URL saved: $cdpUrl")
         } else {
-            println("  ✗ CDP URL file not found!")
+            println("  ✗ BrowserProtocol URL file not found!")
         }
 
         println()
@@ -50,14 +50,14 @@ fun main() {
         // In a real scenario, you might do something like:
          val launcher2 = ChromeLauncher(userDataDir, options = LauncherOptions())
          val chrome2 = launcher2.launch(ChromeOptions().apply { headless = true })
-        // This would reuse the existing browser and log the CDP URL
+        // This would reuse the existing browser and log the BrowserProtocol URL
 
         println()
-        println("Step 3: Checking CDP URL file...")
+        println("Step 3: Checking BrowserProtocol URL file...")
         if (Files.exists(cdpUrlPath)) {
             val cdpUrl = Files.readString(cdpUrlPath).trim()
-            println("  CDP URL: $cdpUrl")
-            println("  ✓ CDP URL is accessible and can be used to connect to the browser")
+            println("  BrowserProtocol URL: $cdpUrl")
+            println("  ✓ BrowserProtocol URL is accessible and can be used to connect to the browser")
         }
     }
 
@@ -70,7 +70,7 @@ fun main() {
 }
 
 /**
- * Helper function to demonstrate reading CDP URL from file.
+ * Helper function to demonstrate reading BrowserProtocol URL from file.
  */
 fun readCdpUrl(userDataDir: Path): String? {
     val cdpUrlPath = userDataDir.resolveSibling(CDP_URL_FILE_NAME)
@@ -81,7 +81,7 @@ fun readCdpUrl(userDataDir: Path): String? {
             null
         }
     } catch (e: Exception) {
-        println("Failed to read CDP URL: ${e.message}")
+        println("Failed to read BrowserProtocol URL: ${e.message}")
         null
     }
 }

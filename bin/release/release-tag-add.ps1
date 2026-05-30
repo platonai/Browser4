@@ -25,10 +25,6 @@ if (!(Test-Path ".git")) {
 
 # Check current branch
 $branch = git rev-parse --abbrev-ref HEAD
-if ($branch -notin @("main", "master")) {
-    Write-Error "Must be on main/master branch. Current: $branch"
-    exit 1
-}
 
 Write-Host "Current branch: $branch"
 

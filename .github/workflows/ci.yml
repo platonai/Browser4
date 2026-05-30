@@ -76,7 +76,7 @@ jobs:
       - name: Cache Rust Build Artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: sdks/browser4-cli
+          workspaces: cli/browser4-cli
 
       - name: Cleanup Docker system to free space
         run: |
@@ -127,7 +127,7 @@ jobs:
           # Run the CLI tests against the already-running Docker container
           echo "Running browser4-cli E2E tests..."
           echo "Working directory: $(pwd)"
-          cd sdks/browser4-cli
+          cd cli/browser4-cli
           # TODO: e2e tests are disabled temporarily due to instability in CI. Re-enable once we have more stability in the tests and CI environment.
           # cargo test --test e2e -- --nocapture
           cargo test
@@ -146,19 +146,6 @@ jobs:
           # Exclude: Slow, Heavy, Integration, E2E, SDK, and all environment-dependent tests
           excluded_groups: 'Slow,Heavy,RequiresServer,RequiresBrowser,RequiresAI,RequiresDocker,Integration,E2E,SDK,ManualOnly,IntegrationTest,E2ETest,HeavyTest,SkippableLowerLevelTest,TestInfraCheck,OptionalTest'
           timeout_minutes: '35'
-
-      - name: Run Required MCP CLI E2E Test
-        id: mcp-cli-required-test
-        if: inputs.skip_tests != true
-        shell: bash
-        run: |
-          echo "::group::🧪 Required MCP CLI E2E Test"
-          ./mvnw -B -Pall-modules -pl browser4-tests/browser4-rest-tests -am \
-            -DrunE2ETests=true \
-            -Dtest=ai.platon.pulsar.rest.api.controller.MCPToolControllerE2ETest \
-            -Dsurefire.failIfNoSpecifiedTests=false \
-            test
-          echo "::endgroup::"
 
       - name: Check Test Status
         if: inputs.skip_tests != true

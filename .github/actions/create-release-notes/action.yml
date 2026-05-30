@@ -74,6 +74,15 @@ runs:
 
         ## 🚀 Quick Start
 
+        ### Self-contained install
+
+        Use the CLI to download the matching Browser4 runtime bundle for your platform:
+
+        ```shell
+        browser4-cli install
+        browser4-cli open
+        ```
+
         ### CLI & SKILLS
 
         ```shell
@@ -107,12 +116,16 @@ runs:
         # Stop on the first batch failure
         browser4-cli batch --bail "open https://playwright.dev" "click e1" "screenshot"
 
-        # Pipe batch commands as JSON via stdin
+        # Advanced: pipe batch commands as JSON via stdin
         echo '[
-        ["open", "https://playwright.dev"],
-        ["snapshot"],
-        ["click", "e1"],
-        ["screenshot", "--filename=result.png"]
+          ["goto", "https://example.com/form-filling"],
+          ["click", "#reset-btn"],
+          ["fill", "#first-name", "Bob"],
+          ["fill", "#last-name", "Smith"],
+          ["fill", "#email", "bob@example.com"],
+          ["select", "#country", "uk"],
+          ["check", "#agree-terms"],
+          ["click", "#submit-btn"]
         ]' | browser4-cli batch --json
 
         # Close the session when done

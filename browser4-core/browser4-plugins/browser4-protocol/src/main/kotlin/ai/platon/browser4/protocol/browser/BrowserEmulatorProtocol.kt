@@ -24,7 +24,7 @@ import ai.platon.pulsar.skeleton.workflow.protocol.Response
  */
 class BrowserEmulatorProtocol : ForwardingProtocol() {
     private val defaults by lazy { DefaultBrowserComponents(conf) }
-    private val context get() = PulsarContexts.create()
+    private val context get() = PulsarContexts.getOrCreate()
 
     private val browserEmulator: IncognitoBrowserFetcher by lazy {
         context.getBeanOrNull(IncognitoBrowserFetcher::class) ?: defaults.incognitoBrowserFetcher
@@ -33,17 +33,9 @@ class BrowserEmulatorProtocol : ForwardingProtocol() {
     private val browserEmulatorOrNull get() = if (context.isActive) browserEmulator else null
 
     @Throws(Exception::class)
-    override fun getResponse(page: WebPage, followRedirects: Boolean): Response? {
-        require(page.isNotInternal) { "Unexpected internal page ${page.url}" }
-        return super.getResponse(page, followRedirects)
-            ?: browserEmulatorOrNull?.fetchContent(page)
-            ?: ForwardingResponse.canceled(page)
-    }
-
-    @Throws(Exception::class)
     override suspend fun getResponseDeferred(page: WebPage, followRedirects: Boolean): Response? {
         require(page.isNotInternal) { "Unexpected internal page ${page.url}" }
-        return super.getResponse(page, followRedirects)
+        return super.getResponseDeferred(page, followRedirects)
             ?: browserEmulatorOrNull?.fetchContentDeferred(page)
             ?: ForwardingResponse.canceled(page)
     }

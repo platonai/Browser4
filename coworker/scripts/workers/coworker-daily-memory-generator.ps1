@@ -4,7 +4,7 @@
 .SYNOPSIS
     Coworker Daily Memory Generator
 .DESCRIPTION
-    Analyzes daily logs and generates a memory summary using gh copilot.
+    Analyzes daily logs and generates a memory summary using the agent.
 .PARAMETER Date
     The date to generate memory for (format: YYYY-MM-DD). Defaults to today.
 #>
@@ -17,11 +17,11 @@ $ErrorActionPreference = "Stop"
 $configPath = Join-Path (Split-Path -Parent $PSScriptRoot) "config.ps1"
 . $configPath
 $repoRoot = Get-WorkspaceRoot
-$ghCopilotHelper = Join-Path $PSScriptRoot 'gh-copilot.ps1'
-. $ghCopilotHelper
-$copilotCommand = Get-GHCopilotCommand -RepoRoot $repoRoot
-$copilotExecutable = $copilotCommand.Executable
-$copilotBaseArgs = $copilotCommand.BaseArgs
+$agentHelper = Join-Path $PSScriptRoot 'agent.ps1'
+. $agentHelper
+$agentCommand = Get-AgentCommand -RepoRoot $repoRoot
+$agentExecutable = $agentCommand.Executable
+$agentBaseArgs = $agentCommand.BaseArgs
 
 $parsedDate = Get-Date $Date
 $year = $parsedDate.ToString("yyyy")
@@ -58,7 +58,7 @@ function Get-CleanPrompt {
 Get-ChildItem -Path $logDir -Filter "*.task.log" | ForEach-Object {
     $taskLog = $_
     $baseName = $taskLog.Name -replace ".task.log$", ""
-    $copilotLogPath = Join-Path $logDir "$baseName.copilot.log"
+    $agentLogPath = Join-Path $logDir "$baseName.agent.log"
 
     $logContent += "`n`n=== TASK: $baseName ===`n"
 
@@ -76,39 +76,39 @@ Get-ChildItem -Path $logDir -Filter "*.task.log" | ForEach-Object {
     $logContent += "$cleanPrompt`n"
 
     $logContent += "--- RESULT (Snippet) ---`n"
-    if (Test-Path $copilotLogPath) {
-        $copilotContent = @(Get-Content $copilotLogPath)
+    if (Test-Path $agentLogPath) {
+        $agentOutput = @(Get-Content $agentLogPath)
 
         $lastToolIndex = -1
-        for ($i = $copilotContent.Count - 1; $i -ge 0; $i--) {
-            if ($copilotContent[$i] -match "^● (Read|Edit|Run)") {
+        for ($i = $agentOutput.Count - 1; $i -ge 0; $i--) {
+            if ($agentOutput[$i] -match "^● (Read|Edit|Run)") {
                 $lastToolIndex = $i
                 break
             }
         }
 
-        $head = $copilotContent | Select-Object -First 10
+        $head = $agentOutput | Select-Object -First 10
         $tailContent = ""
 
         if ($lastToolIndex -ge 0) {
              # Take from the last tool execution to the end
-             $tailLines = $copilotContent | Select-Object -Skip $lastToolIndex
+             $tailLines = $agentOutput | Select-Object -Skip $lastToolIndex
              $tailContent = $tailLines -join "`n"
         } else {
              # Fallback: take last 100 lines if no tool found
-             $tailLines = $copilotContent | Select-Object -Last 100
+             $tailLines = $agentOutput | Select-Object -Last 100
              $tailContent = $tailLines -join "`n"
         }
 
-        $copilotOutput = ($head -join "`n") + "`n... [Intermediate logs skipped] ...`n" + $tailContent
+        $agentText = ($head -join "`n") + "`n... [Intermediate logs skipped] ...`n" + $tailContent
 
         # Truncate output to 20000 chars to avoid token limit if lines are very long
-        if ($copilotOutput.Length -gt 20000) {
-            $copilotOutput = $copilotOutput.Substring(0, 20000) + "... [Truncated]"
+        if ($agentText.Length -gt 20000) {
+            $agentText = $agentText.Substring(0, 20000) + "... [Truncated]"
         }
-        $logContent += "$copilotOutput`n"
+        $logContent += "$agentText`n"
     } else {
-        $logContent += "[Copilot log not found]`n"
+        $logContent += "[Agent log not found]`n"
     }
 }
 
@@ -207,12 +207,12 @@ CONSTRAINTS:
 
     # Use Start-Process to handle arguments safely
     $safePrompt = $prompt.Replace('"', '\"')
-    $copilotArgList = @($copilotBaseArgs + @(
+    $agentArgList = @($agentBaseArgs + @(
         '--',
         '-p',
         "`"$safePrompt`"",
         '--allow-all-tools'
     ))
 
-    Start-Process -FilePath $copilotExecutable -ArgumentList $copilotArgList -WorkingDirectory $repoRoot -NoNewWindow -Wait
+    Start-Process -FilePath $agentExecutable -ArgumentList $agentArgList -WorkingDirectory $repoRoot -NoNewWindow -Wait
 }

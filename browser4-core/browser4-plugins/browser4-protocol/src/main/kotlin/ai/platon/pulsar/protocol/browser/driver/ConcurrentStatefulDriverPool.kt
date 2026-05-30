@@ -1,11 +1,10 @@
 package ai.platon.pulsar.protocol.browser.driver
 
+import ai.platon.pulsar.browser.AbstractWebDriver
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.warnInterruptible
-import ai.platon.pulsar.protocol.browser.impl.BasicBrowserManager
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserManager
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
+import ai.platon.pulsar.core.api.BrowserManager
+import ai.platon.pulsar.core.api.WebDriver
 import kotlinx.coroutines.runBlocking
 import java.util.*
 import java.util.concurrent.ArrayBlockingQueue
@@ -22,14 +21,17 @@ class ConcurrentStatefulDriverPool(
      * Keep standby drivers
      * */
     private val _standbyDrivers = ArrayBlockingQueue<WebDriver>(2 * capacity)
+
     /**
      * Keep working drivers
      * */
     private val _workingDrivers = ConcurrentLinkedQueue<WebDriver>()
+
     /**
      * Keep retired drivers
      * */
     private val _retiredDrivers = ConcurrentLinkedQueue<WebDriver>()
+
     /**
      * Keep closed drivers
      * */
@@ -39,14 +41,17 @@ class ConcurrentStatefulDriverPool(
      * Keep standby drivers
      * */
     val standbyDrivers: Queue<WebDriver> get() = _standbyDrivers
+
     /**
      * Keep working drivers
      * */
     val workingDrivers: Queue<WebDriver> get() = _workingDrivers
+
     /**
      * Keep retired drivers
      * */
     val retiredDrivers: Queue<WebDriver> get() = _retiredDrivers
+
     /**
      * Keep closed drivers
      * */

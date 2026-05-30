@@ -1,5 +1,7 @@
 #!/usr/bin/env pwsh
 
+$ErrorActionPreference = "Stop"
+
 $repoRoot = (git rev-parse --show-toplevel 2>$null)
 Set-Location $repoRoot
 
@@ -53,32 +55,70 @@ if ($SkipTests)
 }
 
 # Function to execute Maven command in a given directory
-Function Invoke-MavenBuild
-{
-  param([string]$Directory, [Object]$MvnOptions)
+Function Invoke-MavenBuild {
+  param([string]$Directory, [Object[]]$BuildArgs)
 
-  try
-  {
-    Push-Location $Directory -ErrorAction Stop
+  Push-Location $Directory
+  try {
+    .\mvnw @BuildArgs
 
-    # . $MvnCmd @MvnOptions
-    .\mvnw @MvnOptions
-
-    if ($LASTEXITCODE -ne 0)
-    {
-      Write-Warning "Maven command failed in $Directory"
+    if ($LASTEXITCODE -ne 0) {
+      throw "Maven command failed in $Directory with exit code $LASTEXITCODE"
     }
-
+  }
+  finally {
     Pop-Location
   }
-  catch
-  {
-    Write-Error "Failed to change directory or execute Maven: $_"
+}
+
+Function Invoke-CargoBuild {
+  param(
+    [string]$Directory,
+    [bool]$RunTests
+  )
+
+  $cargoCmd = Get-Command cargo -ErrorAction SilentlyContinue
+  if (-not $cargoCmd) {
+    throw "cargo is not installed or not in PATH"
   }
+
+  Push-Location $Directory
+  try {
+    if ($RunTests) {
+      & cargo test --locked --bin browser4-cli
+      if ($LASTEXITCODE -ne 0) {
+        throw "Cargo test failed in $Directory with exit code $LASTEXITCODE"
+      }
+    }
+
+    & cargo build --release --locked
+    if ($LASTEXITCODE -ne 0) {
+      throw "Cargo build failed in $Directory with exit code $LASTEXITCODE"
+    }
+  }
+  finally {
+    Pop-Location
+  }
+}
+
+Function Copy-Browser4JarToTarget {
+  param([string]$RepoRoot)
+
+  $sourceJar = Join-Path $RepoRoot 'browser4-app\browser4-agents\target\Browser4.jar'
+  if (-not (Test-Path -LiteralPath $sourceJar)) {
+    throw "Browser4.jar not found at $sourceJar"
+  }
+
+  $targetDir = Join-Path $RepoRoot 'target'
+  $targetJar = Join-Path $targetDir 'Browser4.jar'
+  New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+  Copy-Item -LiteralPath $sourceJar -Destination $targetJar -Force
 }
 
 # Execute Maven package in the application home directory
 $MvnOptions += 'install'
 
 $MvnOptions += $AdditionalMvnArgs
-Invoke-MavenBuild -Directory $repoRoot -MvnOptions $MvnOptions
+Invoke-MavenBuild -Directory $repoRoot -BuildArgs $MvnOptions
+Copy-Browser4JarToTarget -RepoRoot $repoRoot
+Invoke-CargoBuild -Directory (Join-Path $repoRoot 'cli\browser4-cli') -RunTests (-not $SkipTests)

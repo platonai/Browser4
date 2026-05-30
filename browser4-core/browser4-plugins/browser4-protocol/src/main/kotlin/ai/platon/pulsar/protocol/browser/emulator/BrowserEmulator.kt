@@ -15,12 +15,12 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator
 
+import ai.platon.pulsar.browser.common.WebDriverException
 import ai.platon.pulsar.common.event.EventEmitter
+import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriverException
 
 enum class EmulateEvents {
     willNavigate,
@@ -48,7 +48,7 @@ enum class EmulateEvents {
  * 3. Mimic, a person who imitate mannerisms of others.
  * 4. Imitate is the most general of the four words, can be used in all the three senses.
  */
-interface BrowserEmulator: EventEmitter<EmulateEvents>, AutoCloseable {
+interface BrowserEmulator : EventEmitter<EmulateEvents>, AutoCloseable {
 
     /**
      * Fetch a page using a browser which can render the DOM and execute scripts.

@@ -5,7 +5,7 @@
 # ============================================================================
 # Purpose:
 #   Automatically processes task files in the 'created' directory
-#   and executes them using the Copilot tool. Task files are moved through
+#   and executes them using the agent tool. Task files are moved through
 #   a workflow: created -> working -> finished, with execution logs recorded.
 #
 # Task File Format (optional structured format):
@@ -27,6 +27,49 @@ param(
 # $env:GH_DEBUG = 'api'      # 打印 API 请求
 # $env:GH_DEBUG = '1'        # 打印调试信息
 
+function Write-ConsoleLine {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Message,
+        [System.ConsoleColor]$ForegroundColor,
+        [switch]$ErrorStream
+    )
+
+    $canUseHost = $false
+    try {
+        $canUseHost = [Environment]::UserInteractive -and $null -ne $Host -and $null -ne $Host.UI -and $null -ne $Host.UI.RawUI
+    }
+    catch {
+        $canUseHost = $false
+    }
+
+    if ($canUseHost) {
+        if ($PSBoundParameters.ContainsKey('ForegroundColor')) {
+            Write-Host $Message -ForegroundColor $ForegroundColor
+        } else {
+            Write-Host $Message
+        }
+        return
+    }
+
+    $isRedirected = if ($ErrorStream) { [Console]::IsErrorRedirected } else { [Console]::IsOutputRedirected }
+    if ($isRedirected) {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Message + [Environment]::NewLine)
+        $stream = if ($ErrorStream) { [Console]::OpenStandardError() } else { [Console]::OpenStandardOutput() }
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Flush()
+        return
+    }
+
+    if ($PSBoundParameters.ContainsKey('ForegroundColor')) {
+        Write-Host $Message -ForegroundColor $ForegroundColor
+    } else {
+        Write-Host $Message
+    }
+}
+
+Write-ConsoleLine -Message "Starting Coworker Task Runner..." -ForegroundColor Cyan
+
 $configScriptPath = Join-Path $PSScriptRoot 'config.ps1'
 . $configScriptPath
 
@@ -42,11 +85,13 @@ $repoRoot = Get-WorkspaceRoot
 
 $tasksRoot = Join-Path $repoRoot "coworker\tasks"
 $scriptsDir = $PSScriptRoot
-$ghCopilotHelper = Join-Path $scriptsDir "workers\gh-copilot.ps1"
-. $ghCopilotHelper
-$copilotCommand = Get-GHCopilotCommand -RepoRoot $repoRoot
-$copilotExecutable = $copilotCommand.Executable
-$copilotBaseArgs = $copilotCommand.BaseArgs
+$agentHelper = Join-Path $scriptsDir "workers\agent.ps1"
+. $agentHelper
+$targetRepoRoot = $repoRoot
+$agentCommand = $null
+$agentExecutable = $null
+$agentBaseArgs = @()
+$agentWorkingDirectory = $repoRoot
 $taskRoots = @(
     @{
         Prepare = (Join-Path $tasksRoot "0draft")
@@ -99,50 +144,26 @@ if (!(Test-Path $logsSubDir)) { New-Item -ItemType Directory -Path $logsSubDir |
 $scriptLogPath = Join-Path $logsSubDir "${currentTime}-coworker.log"
 $scriptStartTime = (Get-Date).ToUniversalTime()
 
-$copilotNameTimeoutSeconds = 60
-$copilotRunTimeoutSeconds = 6000
+$agentNameTimeoutSeconds = 60
+$agentRunTimeoutSeconds = 6000
 
-function New-CopilotPromptArguments {
+function New-AgentPromptArguments {
     param(
         [Parameter(Mandatory = $true)]
         [string]$Prompt,
         [string[]]$AdditionalArguments = @()
     )
 
-    return @(New-GHCopilotArguments -BaseArgs $script:copilotBaseArgs -Prompt $Prompt -AdditionalArguments $AdditionalArguments)
+    return @(New-AgentArguments -BaseArgs $script:agentBaseArgs -Prompt $Prompt -AdditionalArguments $AdditionalArguments)
 }
 
-function Format-CopilotCommand {
+function Format-AgentPromptCommand {
     param(
         [Parameter(Mandatory = $true)]
         [string[]]$Arguments
     )
 
-    return Format-GHCopilotCommand -Executable $script:copilotExecutable -Arguments $Arguments
-}
-
-function Write-ConsoleLine {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Message,
-        [System.ConsoleColor]$ForegroundColor,
-        [switch]$ErrorStream
-    )
-
-    $isRedirected = if ($ErrorStream) { [Console]::IsErrorRedirected } else { [Console]::IsOutputRedirected }
-    if ($isRedirected) {
-        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Message + [Environment]::NewLine)
-        $stream = if ($ErrorStream) { [Console]::OpenStandardError() } else { [Console]::OpenStandardOutput() }
-        $stream.Write($bytes, 0, $bytes.Length)
-        $stream.Flush()
-        return
-    }
-
-    if ($PSBoundParameters.ContainsKey('ForegroundColor')) {
-        Write-Host $Message -ForegroundColor $ForegroundColor
-    } else {
-        Write-Host $Message
-    }
+    return Format-AgentCommand -Executable $script:agentExecutable -Arguments $Arguments
 }
 
 # ============================================================================
@@ -161,7 +182,7 @@ function Write-LogMessage {
     $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')
     $logEntry = "[$timestamp] [$Level] $Message"
 
-    # Write to console
+    # Write to console (or redirected stdout when launched by scheduler)
     switch ($Level) {
         'INFO' { Write-ConsoleLine -Message $logEntry }
         'WARN' { Write-ConsoleLine -Message $logEntry -ForegroundColor Yellow }
@@ -186,71 +207,21 @@ function Write-LogVerbose {
     $logEntry | Out-File -FilePath $scriptLogPath -Append -Encoding UTF8
 }
 
-function Read-TaskFileContent {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Path
-    )
-
-    if (!(Test-Path -Path $Path -PathType Leaf)) {
-        throw "Task file not found: $Path"
-    }
-
-    $bytes = [System.IO.File]::ReadAllBytes($Path)
-    if ($bytes.Length -eq 0) {
-        return ""
-    }
-
-    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
-        return [System.Text.Encoding]::UTF8.GetString($bytes, 3, $bytes.Length - 3)
-    }
-
-    if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) {
-        return [System.Text.Encoding]::Unicode.GetString($bytes, 2, $bytes.Length - 2)
-    }
-
-    if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFE -and $bytes[1] -eq 0xFF) {
-        return [System.Text.Encoding]::BigEndianUnicode.GetString($bytes, 2, $bytes.Length - 2)
-    }
-
-    $strictUtf8 = [System.Text.UTF8Encoding]::new($false, $true)
-    try {
-        return $strictUtf8.GetString($bytes)
-    } catch {
-        [System.Text.Encoding]::RegisterProvider([System.Text.CodePagesEncodingProvider]::Instance)
-
-        $candidateCodePages = @(
-            [System.Globalization.CultureInfo]::CurrentCulture.TextInfo.ANSICodePage,
-            [Console]::InputEncoding.CodePage,
-            [Console]::OutputEncoding.CodePage
-        ) | Where-Object { $_ -gt 0 } | Select-Object -Unique
-
-        foreach ($codePage in $candidateCodePages) {
-            if ($codePage -eq 65001) {
-                continue
-            }
-
-            try {
-                return ([System.Text.Encoding]::GetEncoding($codePage)).GetString($bytes)
-            } catch {
-                Write-LogVerbose "Failed decoding $Path with code page ${codePage}: $_"
-            }
-        }
-
-        return [System.Text.Encoding]::UTF8.GetString($bytes)
-    }
+try {
+    $targetRepoRoot = Get-TargetRepositoryRoot
+    $agentCommand = Get-AgentCommand -RepoRoot $targetRepoRoot
+    $agentExecutable = $agentCommand.Executable
+    $agentBaseArgs = $agentCommand.BaseArgs
+    $agentWorkingDirectory = $agentCommand.WorkingDirectory
+}
+catch {
+    Write-LogMessage "Failed to resolve target repository root for task execution: $_" ERROR
+    exit 1
 }
 
-function Convert-TaskFileToUtf8 {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Path,
-        [Parameter(Mandatory = $true)]
-        [string]$Content
-    )
-
-    [System.IO.File]::WriteAllText($Path, $Content, [System.Text.UTF8Encoding]::new($false))
-}
+Write-LogMessage "Control repository root: $repoRoot" INFO
+Write-LogMessage "Target repository root: $targetRepoRoot" INFO
+Write-LogMessage "Agent working directory: $agentWorkingDirectory" INFO
 
 function Ensure-DraftPlaceholders {
     param(
@@ -292,29 +263,30 @@ Prompt: $promptSample
 "@
 
     try {
-        $nameArguments = New-CopilotPromptArguments -Prompt $namingPrompt
+        $nameArguments = New-AgentPromptArguments -Prompt $namingPrompt
 
-        Write-LogVerbose ("Executing GH Copilot for naming: {0}" -f (Format-CopilotCommand -Arguments $nameArguments))
+        Write-LogVerbose ("Executing Agent for naming: {0}" -f (Format-AgentPromptCommand -Arguments $nameArguments))
+        Write-LogVerbose "Naming agent working directory: $agentWorkingDirectory"
 
         $nameStdOut = [System.IO.Path]::GetTempFileName()
         $nameStdErr = [System.IO.Path]::GetTempFileName()
-        $nameProcess = Start-GHCopilotProcess -Executable $copilotExecutable -BaseArgs $copilotBaseArgs -Prompt $namingPrompt -WorkingDirectory $repoRoot -StdOutPath $nameStdOut -StdErrPath $nameStdErr -NoNewWindow
+        $nameProcess = Start-AgentProcess -Executable $agentExecutable -BaseArgs $agentBaseArgs -Prompt $namingPrompt -WorkingDirectory $agentWorkingDirectory -StdOutPath $nameStdOut -StdErrPath $nameStdErr -NoNewWindow
 
         $waited = $false
         try {
-            $null = Wait-Process -Id $nameProcess.Id -Timeout $copilotNameTimeoutSeconds -ErrorAction Stop
+            $null = Wait-Process -Id $nameProcess.Id -Timeout $agentNameTimeoutSeconds -ErrorAction Stop
             $waited = $true
         } catch {
             $waited = $false
-            Write-LogMessage "GH Copilot naming timed out after ${copilotNameTimeoutSeconds}s" WARN
+            Write-LogMessage "Agent naming timed out after ${agentNameTimeoutSeconds}s" WARN
         }
 
         if (-not $waited -or -not $nameProcess.HasExited) {
             Stop-Process -Id $nameProcess.Id -Force -ErrorAction SilentlyContinue
 
             if (Test-Path $nameStdErr) {
-                $errContent = Get-Content $nameStdErr
-                Write-LogVerbose "Naming Copilot STDERR (Timeout): $errContent"
+                $errContent = Get-Content -Path $nameStdErr -Encoding UTF8
+                Write-LogVerbose "Naming agent STDERR (Timeout): $errContent"
             }
 
             Remove-Item $nameStdOut -ErrorAction SilentlyContinue
@@ -325,15 +297,15 @@ Prompt: $promptSample
         $rawName = ""
         if (Test-Path $nameStdOut) {
             $rawName = (Get-Content -Path $nameStdOut -Encoding UTF8 | Where-Object { $_ -and $_.Trim() } | Select-Object -First 1)
-            Write-LogVerbose "Naming Copilot STDOUT: $rawName"
+            Write-LogVerbose "Naming agent STDOUT: $rawName"
         } else {
-            Write-LogVerbose "Naming Copilot STDOUT file not found"
+            Write-LogVerbose "Naming agent STDOUT file not found"
         }
 
         if (Test-Path $nameStdErr) {
             $errContent = Get-Content $nameStdErr -Encoding UTF8
             if ($errContent) {
-                Write-LogVerbose "Naming Copilot STDERR: $errContent"
+                Write-LogVerbose "Naming agent STDERR: $errContent"
             }
         }
 
@@ -341,12 +313,12 @@ Prompt: $promptSample
         Remove-Item $nameStdErr -ErrorAction SilentlyContinue
 
         if ($nameProcess.ExitCode -ne 0) {
-            Write-LogVerbose "Naming Copilot exited with code $($nameProcess.ExitCode)"
+            Write-LogVerbose "Naming agent exited with code $($nameProcess.ExitCode)"
             return $Fallback
         }
 
         if ([string]::IsNullOrWhiteSpace($rawName)) {
-            Write-LogVerbose "Naming Copilot returned empty name"
+            Write-LogVerbose "Naming agent returned empty name"
             return $Fallback
         }
 
@@ -423,14 +395,14 @@ foreach ($taskRoot in $taskRoots) {
     Ensure-DraftPlaceholders -DraftDirectory $draftDir
 
     # 1. Process 0draft
-    $prepareFiles = Get-CoworkerQueueFiles -Path $draftDir
+    $prepareFiles = Get-ChildItem -Path $draftDir -File
     foreach ($file in $prepareFiles) {
         Write-LogMessage "[PREPARE] Task: $($file.Name)" INFO
     }
 
     # 2. Process 3_1complete (newly added to show pending reviews)
     if (Test-Path $finishedDir) {
-        $finishedFiles = Get-CoworkerQueueFiles -Path $finishedDir -Recurse
+        $finishedFiles = Get-ChildItem -Path $finishedDir -Recurse -File
         foreach ($file in $finishedFiles) {
             # Only show files from the last 24 hours to avoid noise
             if ($file.LastWriteTimeUtc -ge (Get-Date).ToUniversalTime().AddDays(-1)) {
@@ -440,7 +412,7 @@ foreach ($taskRoot in $taskRoots) {
     }
 
     # 3. Process 4review
-    $reviewFiles = Get-CoworkerQueueFiles -Path $reviewDir
+    $reviewFiles = Get-ChildItem -Path $reviewDir -File
     foreach ($file in $reviewFiles) {
         Write-LogMessage "[REVIEW] Task: $($file.Name)" INFO
     }
@@ -448,7 +420,7 @@ foreach ($taskRoot in $taskRoots) {
     # 4. Process 5approved
     # If there are any files in 5approved or its subdirectories, move them to 6git-pushed with date-based organization, and then call the commit script
     if (Test-Path $approvedDir) {
-        $approvedFiles = Get-CoworkerQueueFiles -Path $approvedDir -Recurse
+        $approvedFiles = Get-ChildItem -Path $approvedDir -Recurse -File
         if ($approvedFiles.Count -gt 0) {
             # Move files to pushed directory
             foreach ($file in $approvedFiles) {
@@ -484,7 +456,7 @@ foreach ($taskRoot in $taskRoots) {
     # 4. Process 6git-pushed (last 2 days)
     # Recursively find files in 6git-pushed
     if (Test-Path $pushedDir) {
-        $pushedFiles = Get-CoworkerQueueFiles -Path $pushedDir -Recurse
+        $pushedFiles = Get-ChildItem -Path $pushedDir -Recurse -File
         $twoDaysAgo = (Get-Date).ToUniversalTime().AddDays(-2)
         foreach ($file in $pushedFiles) {
             if ($file.LastWriteTimeUtc -ge $twoDaysAgo) {
@@ -493,7 +465,7 @@ foreach ($taskRoot in $taskRoots) {
         }
     }
 
-    $files = Get-CoworkerQueueFiles -Path $createdDir
+    $files = Get-ChildItem -Path $createdDir -File
 
     # Process each task file found in the created directory
     foreach ($file in $files) {
@@ -502,15 +474,14 @@ foreach ($taskRoot in $taskRoots) {
         $descriptiveName = ""
 
         # Read content for fallback title
-        $content = Read-TaskFileContent -Path $file.FullName
-        Convert-TaskFileToUtf8 -Path $file.FullName -Content $content
+        $content = Get-Content -Path $file.FullName -Raw -Encoding UTF8
         $safeTitle = $file.BaseName -replace '[\\/*?:"<>|]', '_'
         if ([string]::IsNullOrWhiteSpace($safeTitle)) { $safeTitle = "task" }
 
         # Check if the file needs renaming (numeric or generic names, or always rename?)
         # User implies "numeric filenames are treated as random filenames... coworker needs to rename these"
-        # The current implementation attempts to rename ALL files using gh copilot via rename.ps1.
-        # This seems to cover the requirement "1.md, 2.md... are treated as random... rename these".
+        # The current implementation attempts to rename ALL files using the agent via rename.ps1.
+        # This seems to cover the requirement "improve-coworker-daily-memory-generator.md, 2.md... are treated as random... rename these".
 
         Write-LogVerbose "renameScript path: $renameScript"
         Write-LogVerbose "Test-Path renameScript: $(Test-Path $renameScript)"
@@ -633,11 +604,12 @@ Do not move **this** task file, just execute the task based on its content, the 
         if (!(Test-Path $logsSubDir)) { New-Item -ItemType Directory -Path $logsSubDir | Out-Null }
 
         $taskLogPath = Join-Path $logsSubDir "${currentTime}-${workingBaseName}.task.log"
-        $copilotLogPath = Join-Path $logsSubDir "${currentTime}-${workingBaseName}.copilot.log"
+        $agentLogPath = Join-Path $logsSubDir "${currentTime}-${workingBaseName}.agent.log"
 
         Write-LogVerbose "Task log will be written to: $taskLogPath"
 
-        Write-LogMessage "Executing Copilot for task: $workingBaseName" INFO
+        Write-LogMessage "Executing agent for task: $workingBaseName" INFO
+        Write-LogMessage "Task repositories -> control: $repoRoot | target: $targetRepoRoot | Agent cwd: $agentWorkingDirectory" INFO
         Write-LogVerbose "Prompt length: $($prompt.Length) characters"
 
         # Record task execution details to task log
@@ -645,25 +617,29 @@ Do not move **this** task file, just execute the task based on its content, the 
 Task: $title
 Description: $description
 Original File: $($file.Name)
+Control Repo: $repoRoot
+Target Repo: $targetRepoRoot
+Agent Working Directory: $agentWorkingDirectory
 Started: $((Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss'))
 Prompt:
 $prompt
 ---
-Copilot Execution Output:
+Agent Execution Output:
 "@ | Out-File -FilePath $taskLogPath -Encoding UTF8
 
         try {
-            $copilotArguments = New-CopilotPromptArguments -Prompt $prompt -AdditionalArguments @('--allow-all-tools', '--allow-all-paths')
+            $agentArguments = New-AgentPromptArguments -Prompt $prompt -AdditionalArguments @('--allow-all-tools', '--allow-all-paths')
 
-            # Define paths for temporary output and error logs (for copilot external tool)
-            $stdOutLog = $copilotLogPath + ".stdout"
-            $stdErrLog = $copilotLogPath + ".stderr"
+            # Define paths for temporary output and error logs (for agent external tool)
+            $stdOutLog = $agentLogPath + ".stdout"
+            $stdErrLog = $agentLogPath + ".stderr"
 
-            Write-LogMessage "=== Starting Copilot execution ===" INFO
+            Write-LogMessage "=== Starting agent execution ===" INFO
+            Write-LogVerbose "Task agent working directory: $agentWorkingDirectory"
 
-            # Execute Copilot tool with the task prompt
+            # Execute agent tool with the task prompt
             # Capture both standard output and error output to separate files
-            $process = Start-GHCopilotProcess -Executable $copilotExecutable -BaseArgs $copilotBaseArgs -Prompt $prompt -AdditionalArguments @('--allow-all-tools', '--allow-all-paths') -WorkingDirectory $repoRoot -StdOutPath $stdOutLog -StdErrPath $stdErrLog -NoNewWindow
+            $process = Start-AgentProcess -Executable $agentExecutable -BaseArgs $agentBaseArgs -Prompt $prompt -AdditionalArguments @('--allow-all-tools', '--allow-all-paths') -WorkingDirectory $agentWorkingDirectory -StdOutPath $stdOutLog -StdErrPath $stdErrLog -NoNewWindow
 
             $lastOutputLineCount = 0
 
@@ -691,10 +667,10 @@ Copilot Execution Output:
                     $startTime = $process.StartTime
                     if ($null -ne $startTime) {
                         $elapsed = (Get-Date) - $startTime
-                        if ($elapsed.TotalSeconds -gt $copilotRunTimeoutSeconds) {
+                        if ($elapsed.TotalSeconds -gt $agentRunTimeoutSeconds) {
                             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
-                            Write-LogMessage "Copilot timed out after ${copilotRunTimeoutSeconds}s" WARN
-                            Write-ConsoleLine -Message "[TIMEOUT] Copilot execution exceeded ${copilotRunTimeoutSeconds}s timeout" -ForegroundColor Yellow
+                            Write-LogMessage "Agent timed out after ${agentRunTimeoutSeconds}s" WARN
+                            Write-ConsoleLine -Message "[TIMEOUT] Agent execution exceeded ${agentRunTimeoutSeconds}s timeout" -ForegroundColor Yellow
                             break
                         }
                     }
@@ -729,15 +705,15 @@ Copilot Execution Output:
                 }
             }
 
-            # Combine copilot stdout and stderr logs into the copilot-specific log
+            # Combine agent stdout and stderr logs into the agent-specific log
             # First append stdout if it exists
-            if (Test-Path $stdOutLog) { Get-Content $stdOutLog -Encoding UTF8 | Out-File -FilePath $copilotLogPath -Append -Encoding UTF8 }
+            if (Test-Path $stdOutLog) { Get-Content $stdOutLog -Encoding UTF8 | Out-File -FilePath $agentLogPath -Append -Encoding UTF8 }
             # Then append stderr if it exists and contains content
             if (Test-Path $stdErrLog) {
                 $errContent = Get-Content $stdErrLog -Encoding UTF8
                 if ($errContent) {
-                    "`r`n=== COPILOT STDERR ===`r`n" | Out-File -FilePath $copilotLogPath -Append -Encoding UTF8
-                    $errContent | Out-File -FilePath $copilotLogPath -Append -Encoding UTF8
+                    "`r`n=== AGENT STDERR ===`r`n" | Out-File -FilePath $agentLogPath -Append -Encoding UTF8
+                    $errContent | Out-File -FilePath $agentLogPath -Append -Encoding UTF8
                 }
             }
 
@@ -745,26 +721,26 @@ Copilot Execution Output:
             Remove-Item $stdOutLog -ErrorAction SilentlyContinue
             Remove-Item $stdErrLog -ErrorAction SilentlyContinue
 
-            Write-LogMessage "Copilot execution finished with exit code $($process.ExitCode)" INFO
-            Write-LogMessage "=== Copilot execution completed ===" INFO
-            Write-LogVerbose "Copilot external tool log: $copilotLogPath"
+            Write-LogMessage "Agent execution finished with exit code $($process.ExitCode)" INFO
+            Write-LogMessage "=== Agent execution completed ===" INFO
+            Write-LogVerbose "Agent external tool log: $agentLogPath"
 
-            # Append copilot result to task log
+            # Append agent result to task log
             @"
 
-Copilot Exit Code: $($process.ExitCode)
-Copilot Log: $copilotLogPath
+Agent Exit Code: $($process.ExitCode)
+Agent Log: $agentLogPath
 "@ | Out-File -FilePath $taskLogPath -Append -Encoding UTF8
 
-            # Warn if Copilot exited with an error code
+            # Warn if agent exited with an error code
             if ($process.ExitCode -ne 0) {
-                Write-LogMessage "Warning: Copilot exited with non-zero code. Check log: $copilotLogPath" WARN
+                Write-LogMessage "Warning: agent exited with non-zero code. Check log: $agentLogPath" WARN
             }
         }
         catch {
-            # Handle any errors that occur during Copilot execution
-            Write-LogMessage "Failed to execute copilot: $_" ERROR
-            "Error executing copilot: $_" | Out-File -FilePath $taskLogPath -Append -Encoding UTF8
+            # Handle any errors that occur during agent execution
+            Write-LogMessage "Failed to execute agent: $_" ERROR
+            "Error executing agent: $_" | Out-File -FilePath $taskLogPath -Append -Encoding UTF8
         }
 
         # Move completed task from working directory to finished or approved directory

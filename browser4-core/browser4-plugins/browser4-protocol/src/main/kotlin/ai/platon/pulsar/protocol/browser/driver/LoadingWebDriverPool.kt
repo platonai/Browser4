@@ -1,5 +1,10 @@
 package ai.platon.pulsar.protocol.browser.driver
 
+import ai.platon.pulsar.browser.AbstractWebDriver
+import ai.platon.pulsar.browser.BrowserId
+import ai.platon.pulsar.browser.common.BrowserLaunchException
+import ai.platon.pulsar.browser.common.WebDriverCancellationException
+import ai.platon.pulsar.browser.common.WebDriverException
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.config.AppConstants.DEFAULT_BROWSER_MAX_OPEN_TABS
@@ -10,15 +15,15 @@ import ai.platon.pulsar.common.config.MutableConfig
 import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.common.readable
 import ai.platon.pulsar.common.stringify
+import ai.platon.pulsar.core.api.Browser
+import ai.platon.pulsar.core.api.BrowserManager
+import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.protocol.browser.emulator.WebDriverPoolExhaustedException
 import ai.platon.pulsar.skeleton.common.AppSystemInfo
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.Browser
 import ai.platon.pulsar.skeleton.event.BrowseEventHandlers
 import ai.platon.pulsar.skeleton.event.PulsarEventBus
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.*
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 import org.slf4j.LoggerFactory
 import java.time.Duration
 import java.time.Instant
@@ -33,7 +38,6 @@ import java.util.concurrent.atomic.AtomicInteger
 class LoadingWebDriverPool constructor(
     val browserId: BrowserId,
     val browserManager: BrowserManager,
-    val browserFactory: BrowserFactory,
     val immutableConfig: ImmutableConfig
 ) : AutoCloseable {
     companion object {
@@ -231,7 +235,7 @@ class LoadingWebDriverPool constructor(
      * */
     @Throws(BrowserLaunchException::class, WebDriverPoolExhaustedException::class)
     suspend fun poll(priority: Int, conf: MutableConfig, event: BrowseEventHandlers?, page: WebPage): WebDriver {
-        val settings = browserFactory.settings
+        val settings = browserManager.settings
         val timeout = settings.pollingDriverTimeout
 
         // NOTE: concurrency note - if multiple threads come to the code snippet,
@@ -367,7 +371,7 @@ class LoadingWebDriverPool constructor(
      * */
     @Throws(BrowserLaunchException::class)
     private fun resourceSafeCreateDriverIfNecessary(priority: Int, conf: MutableConfig) {
-        synchronized(browserFactory) {
+        synchronized(browserManager) {
             if (!isActive) {
                 return
             }
@@ -428,10 +432,10 @@ class LoadingWebDriverPool constructor(
         logger.debug("Launch browser and new driver | {}", browserId)
 
         // Use BrowserFactory's default settings
-        val settings = browserFactory.settings
+        val settings = browserManager.settings
         //  Launch a browser. If the browser with the id is already launched, return the existing one.
-        val browser = _browser ?: browserFactory.launch(browserId, settings)
-        // val browser = _browser ?: driverFactory.launchBrowser(browserId, conf)
+        // val browser = _browser ?: browserFactory.launch(browserId, settings)
+        val browser = _browser ?: browserManager.launch(browserId, settings)
         check(browser.isActive)
         // open a new tab about:blank
         val driver = browser.newDriver()

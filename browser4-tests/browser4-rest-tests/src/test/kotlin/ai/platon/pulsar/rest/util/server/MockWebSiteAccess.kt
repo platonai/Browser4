@@ -98,7 +98,5 @@ class MockWebSiteAccess {
      * */
     protected val amazonProductCopyUrl get() = "$baseURL/amazon/product.htm"
 
-    protected val walmartUrl = "https://www.walmart.com/ip/584284401"
-
     protected val asin get() = e2eProductUrl.substringAfterLast("/dp/")
 }

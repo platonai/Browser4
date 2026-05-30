@@ -1,14 +1,13 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
 import ai.platon.pulsar.agentic.model.ToolSpec
-import ai.platon.pulsar.agentic.tools.AgentToolExecutor
+import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.common.getLogger
 import kotlin.reflect.KClass
 
 class SystemToolExecutor(
-    val agentToolExecutor: AgentToolExecutor
+    val agentToolManager: AgentToolManager
 ) : AbstractToolExecutor() {
-    private val logger = getLogger(this)
 
     override val domain = "system"
 
@@ -28,7 +27,7 @@ class SystemToolExecutor(
     }
 
     fun help(domain: String, method: String): String {
-        return agentToolExecutor.help(domain, method)
+        return agentToolManager.help(domain, method)
     }
 
     /**
@@ -38,7 +37,7 @@ class SystemToolExecutor(
     @Throws(IllegalArgumentException::class)
     override suspend fun callFunctionOn(
         domain: String, functionName: String, args: Map<String, Any?>, receiver: Any
-    ): Any? {
+    ): Any {
         require(domain == this.domain) { "Unsupported domain: $domain" }
         require(functionName.isNotBlank()) { "Function name must not be blank" }
 

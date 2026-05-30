@@ -3,7 +3,7 @@ package ai.platon.pulsar.agentic.mcp.server
 import ai.platon.pulsar.agentic.model.TcEvaluate
 import ai.platon.pulsar.agentic.model.ToolCallResult
 import ai.platon.pulsar.agentic.model.ToolSpec
-import ai.platon.pulsar.agentic.tools.AgentToolExecutor
+import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
 import io.mockk.coEvery
 import io.mockk.every
@@ -13,21 +13,13 @@ import io.modelcontextprotocol.kotlin.sdk.client.StdioClientTransport
 import io.modelcontextprotocol.kotlin.sdk.server.StdioServerTransport
 import io.modelcontextprotocol.kotlin.sdk.types.Implementation
 import io.modelcontextprotocol.kotlin.sdk.types.TextContent
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.*
 import kotlinx.io.asSink
 import kotlinx.io.asSource
 import kotlinx.io.buffered
 import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Assertions.assertNotNull
-import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Tag
@@ -39,7 +31,7 @@ import java.io.PipedOutputStream
  * End-to-end tests for [Browser4MCPServer].
  *
  * These tests exercise the **full MCP protocol stack** by connecting a real MCP client
- * to a [Browser4MCPServer] (constructed from a mocked [AgentToolExecutor]) over in-process
+ * to a [Browser4MCPServer] (constructed from a mocked [AgentToolManager]) over in-process
  * STDIO pipes.  Unlike the unit tests in [Browser4MCPServerTest] (which call tool handlers
  * directly), these tests go through:
  *
@@ -47,8 +39,8 @@ import java.io.PipedOutputStream
  * 2. `tools/list` request → response
  * 3. `tools/call` request → response (success and error cases)
  *
- * The [AgentToolExecutor] is mocked: executor specs drive tool registration, and
- * [AgentToolExecutor.execute] is mocked to simulate tool execution results.
+ * The [AgentToolManager] is mocked: executor specs drive tool registration, and
+ * [AgentToolManager.execute] is mocked to simulate tool execution results.
  *
  * ## Transport
  * Two `PipedInputStream`/`PipedOutputStream` pairs create a bidirectional channel:
@@ -63,7 +55,7 @@ import java.io.PipedOutputStream
 @DisplayName("Browser4MCPServer E2E (full MCP protocol, AgentToolManager-based)")
 class Browser4MCPServerE2ETest {
 
-    private lateinit var toolManager: AgentToolExecutor
+    private lateinit var toolManager: AgentToolManager
     private lateinit var driverExecutor: ToolExecutor
     private lateinit var mcpServer: Browser4MCPServer
     private lateinit var client: Client
@@ -100,7 +92,7 @@ class Browser4MCPServerE2ETest {
         )
 
         toolManager = mockk(relaxed = true)
-        every { toolManager.concreteExecutors } returns listOf(driverExecutor)
+        every { toolManager.registeredExecutors } returns listOf(driverExecutor).associateBy { it.domain }
 
         mcpServer = Browser4MCPServer(
             toolManager = toolManager,
@@ -259,13 +251,13 @@ class Browser4MCPServerE2ETest {
     @Test
     @DisplayName("AgentToolManager exception propagates as isError=true over MCP")
     fun managerExceptionPropagatesAsErrorViaMCP() = runBlocking {
-        coEvery { toolManager.execute(any()) } throws RuntimeException("CDP disconnected")
+        coEvery { toolManager.execute(any()) } throws RuntimeException("BrowserProtocol disconnected")
 
         val result = client.callTool("navigate", mapOf("url" to "https://example.com"))
         assertTrue(result.isError == true,
             "Expected isError=true when AgentToolManager throws")
         val text = (result.content.firstOrNull() as? TextContent)?.text
-        assertTrue(text?.contains("CDP disconnected") == true,
+        assertTrue(text?.contains("BrowserProtocol disconnected") == true,
             "Expected error message in result, got: $text")
     }
 

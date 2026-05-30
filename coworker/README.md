@@ -1,10 +1,9 @@
-# Builtin AI Coworker
+# AI Coworker
 
-The Builtin AI Coworker is an agent that assists you with various tasks in your repository. It processes task files that you create, executes them, and can commit changes back to your repository.
+The AI Coworker is an agent that assists you with various tasks in a target repository.
+It processes task files that you create, executes them, and can commit changes back to your repository.
 
 ## How to Use
-
-Start Assistant → Batch Draft Tasks → Copy to Execution Directory → Assistant Executes Tasks [→ View Results → Review] → Move to Approval Directory → Auto-Submit and Push
 
 1. run `coworker-scheduler.ps1` to start recurring automation
 2. draft tasks in `0draft` (or anywhere)
@@ -47,6 +46,15 @@ GitHub CLI (`gh`) must be installed and authenticated.
 
 See https://github.com/cli/cli#installation for installation instructions.
 
+## Configuration
+
+Coworker keeps its control data in the current repository, but task execution can target a different repository. Configure both in `coworker/scripts/config.psd1`:
+
+- `Paths.WorkspaceRoot` keeps `coworker/tasks`, logs, and memory rooted in this repository.
+- `Paths.TargetRepositoryRoot` sets the repository where task-mode `gh copilot` runs. When omitted, task execution falls back to `WorkspaceRoot` for backward compatibility.
+
+The default target repository path is `D:\workspace\Browser4\Browser4-4.6`. Coworker validates that configured target directory before starting a task run, and task logs record the control repo plus the actual Copilot working directory.
+
 ## Tags
 
 You can use tags in task files to provide additional context or control behavior.
@@ -80,9 +88,9 @@ After tasks are approved, push changes to your repository using the git-sync scr
 
 ## Unified Scheduler (PowerShell)
 
-Use the unified scheduler when you want a single Windows Task Scheduler trigger to manage all recurring coworker jobs. The scheduler launches each configured task in its own PowerShell process, records stdout/stderr logs, and continuously writes task status to `logs/scheduled-tasks.status.json`.
+Use the unified scheduler when you want a single Windows Task Scheduler trigger to manage all recurring coworker jobs. The scheduler launches each configured task in its own PowerShell process, keeps the live output in that worker terminal, records a console transcript log, continuously writes task status to `logs/scheduled-tasks.status.json`, and uses filesystem events to react to queue changes without polling task folders.
 
-Task definitions live in `coworker/scripts/coworker-scheduler.config.psd1`. Each entry can be enabled or disabled independently and sets its own `IntervalSeconds`, script path, arguments, optional `DependsOn` task ordering, and optional `PendingPaths` input queues. When `PendingPaths` is configured, the scheduler checks those files/folders and skips spawning a PowerShell child process until work is actually present.
+Task definitions live in `coworker/scripts/coworker-scheduler.config.psd1`. Each entry can be enabled or disabled independently and sets its own `IntervalSeconds`, script path, arguments, optional `DependsOn` task ordering, and optional `PendingPaths` input queues. When `PendingPaths` is configured, the scheduler watches those files/folders and skips spawning a PowerShell child process until work is actually present.
 
 **Windows (PowerShell):**
 
@@ -93,21 +101,21 @@ Task definitions live in `coworker/scripts/coworker-scheduler.config.psd1`. Each
 
 Default scheduled tasks:
 
-- `coworker` — processes queued coworker tasks after task-source monitoring
-- `draft-refinement` — processes the draft refinement queue
+- `coworker` — runs `coworker.ps1` when `1created` or `5approved` receives work
+- `draft-refinement` — runs `workers/refine-drafts.ps1` when the draft refinement queue receives work
 - `process-task-source` — polls configured task sources and dispatches new tasks when enabled
 
-The scheduler invokes the legacy one-shot implementations from `coworker/scripts/deprecated/`. The clearer PowerShell entry points are `coworker/scripts/process-coworker-queue.ps1`, `coworker/scripts/process-draft-refinement-queue.ps1`, and `coworker/scripts/process-task-source.ps1`. The older `run_*_periodically.ps1` names remain as compatibility shims and print a deprecation warning before delegating.
+The scheduler now launches the direct worker entry points from `coworker/scripts/coworker-scheduler.config.psd1`, so it can return to watching for the next filesystem event immediately after spawning a worker. The compatibility queue processors remain available for direct manual use, and the older `run_*_periodically.ps1` names remain as compatibility shims that delegate with a deprecation warning.
 
 ## Legacy Queue Processors
 
-For direct one-shot or looped execution, use the clearer legacy queue processors:
+For direct one-shot or looped execution outside the unified scheduler, use the clearer queue processors:
 
 - `coworker/scripts/process-coworker-queue.ps1`
 - `coworker/scripts/process-draft-refinement-queue.ps1`
 - `coworker/scripts/process-task-source.ps1`
 
-The scheduler-backed implementations live in:
+Deprecated scheduler-backed implementations live in:
 
 - `coworker/scripts/deprecated/process-coworker-queue.ps1`
 - `coworker/scripts/deprecated/process-draft-refinement-queue.ps1`
@@ -135,8 +143,6 @@ Draft refinement uses a dedicated pipeline under `coworker/tasks/0draft/refine/`
 - `2working` — drafts currently being refined
 - `3done` — refined drafts ready for review
 
-Each refinement run also makes sure `1ready\1.md` through `1ready\5.md` exist as blank placeholders. Empty placeholders are ignored until you add draft content, so the scheduler does not keep reprocessing them.
-
 You can refine a single file or every file in a folder. When a folder is provided, files are processed one by one.
 
 **Windows (PowerShell):**
@@ -154,3 +160,4 @@ You can refine a single file or every file in a folder. When a folder is provide
 ./coworker/scripts/workers/refine-drafts.sh ./coworker/tasks/0draft/refine/1ready
 pwsh ./coworker/scripts/process-draft-refinement-queue.ps1 -Once
 ```
+

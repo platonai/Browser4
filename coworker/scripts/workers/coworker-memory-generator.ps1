@@ -26,8 +26,8 @@ $ErrorActionPreference = "Stop"
 $configPath = Join-Path (Split-Path -Parent $PSScriptRoot) "config.ps1"
 . $configPath
 $repoRoot = Get-WorkspaceRoot
-$ghCopilotHelper = Join-Path $PSScriptRoot 'gh-copilot.ps1'
-. $ghCopilotHelper
+$agentHelper = Join-Path $PSScriptRoot 'agent.ps1'
+. $agentHelper
 
 $parsedDate = Get-Date $Date
 $year = $parsedDate.ToString("yyyy")
@@ -36,8 +36,8 @@ $day = $parsedDate.ToString("dd")
 
 $logsBaseDir = Resolve-TasksPath '300logs'
 
-# Function to run gh copilot
-function Invoke-CoworkerMemoryCopilot {
+# Function to invoke the agent
+function Invoke-CoworkerMemoryAgent {
     param(
         [string]$Prompt,
         [switch]$CaptureOutput
@@ -49,7 +49,7 @@ function Invoke-CoworkerMemoryCopilot {
         $Prompt = $Prompt.Substring(0, 25000) + " ... [Truncated]"
     }
 
-    return Invoke-GHCopilot -Prompt $Prompt -AdditionalArguments @('--allow-all-tools') -RepoRoot $repoRoot -WorkingDirectory $repoRoot -CaptureOutput:$CaptureOutput
+    return Invoke-Agent -Prompt $Prompt -AdditionalArguments @('--allow-all-tools') -RepoRoot $repoRoot -WorkingDirectory $repoRoot -CaptureOutput:$CaptureOutput
 }
 
 if ($Type -eq "daily") {
@@ -121,7 +121,7 @@ DAILY MEMORIES:
 $combinedContent
 "@
 
-    Invoke-CoworkerMemoryCopilot -Prompt $prompt
+    Invoke-CoworkerMemoryAgent -Prompt $prompt
 }
 elseif ($Type -eq "yearly") {
     $targetDir = "$logsBaseDir\$year"
@@ -184,7 +184,7 @@ MONTHLY MEMORIES:
 $combinedContent
 "@
 
-    Invoke-CoworkerMemoryCopilot -Prompt $prompt
+    Invoke-CoworkerMemoryAgent -Prompt $prompt
 }
 elseif ($Type -eq "global") {
     $targetFile = "$logsBaseDir\MEMORY.md"
@@ -210,7 +210,7 @@ elseif ($Type -eq "global") {
         $combinedContent += "`n`n=== MEMORY: $($file.Name) ===`n$content"
     }
 
-    Invoke-CoworkerMemoryCopilot -Prompt $prompt
+    Invoke-CoworkerMemoryAgent -Prompt $prompt
 }
 elseif ($Type -eq "init") {
     $year = $parsedDate.ToString("yyyy")
@@ -246,11 +246,11 @@ elseif ($Type -eq "init") {
             # Compress
             $compressPrompt = "Compress the following daily memory content to under 3000 characters. Preserve key insights and structural learnings. content:`n$dailyContent"
 
-            # Compress using gh copilot and capture the replacement markdown for the memory file.
-            $compressedContent = Invoke-CoworkerMemoryCopilot -Prompt $compressPrompt -CaptureOutput
+            # Compress using the agent and capture the replacement markdown for the memory file.
+            $compressedContent = Invoke-CoworkerMemoryAgent -Prompt $compressPrompt -CaptureOutput
 
             if (-not [string]::IsNullOrWhiteSpace($compressedContent)) {
-                 # The output might contain explanation text. Copilot CLI usually just answers if prompted correctly.
+                 # The output might contain explanation text. The agent usually just answers if prompted correctly.
                  # But sometimes it chats.
                  # Assuming it returns markdown.
                  $compressedContent | Out-File -FilePath $memoryDayPath -Encoding UTF8 -Force

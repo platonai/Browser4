@@ -94,14 +94,25 @@ if ($NEXT_SNAPSHOT_VERSION -notmatch "^\d+\.\d+\.\d+-SNAPSHOT$") {
 Write-Host "Current version: $SNAPSHOT_VERSION"
 Write-Host "New version: $NEXT_SNAPSHOT_VERSION"
 
+$isWindowsHost = $PSVersionTable.PSEdition -eq 'Desktop' -or $IsWindows
 
 
 # Update VERSION file
 $NEXT_SNAPSHOT_VERSION | Set-Content "$repoRoot\VERSION"
 
 # Update pom.xml files using Maven
-$mvnCmd = if ($IsWindows) { "$repoRoot\mvnw.cmd" } else { "$repoRoot\mvnw" }
-& $mvnCmd versions:set -DnewVersion=$NEXT_SNAPSHOT_VERSION -DprocessAllModules -DgenerateBackupPoms=false
+$mvnCmd = if ($isWindowsHost) { Join-Path $repoRoot "mvnw.cmd" } else { Join-Path $repoRoot "mvnw" }
+$mvnArgs = @(
+    'versions:set'
+    "-DnewVersion=$NEXT_SNAPSHOT_VERSION"
+    '-DprocessAllModules'
+    '-DgenerateBackupPoms=false'
+)
+if ($isWindowsHost) {
+    & cmd /c $mvnCmd @mvnArgs
+} else {
+    & $mvnCmd @mvnArgs
+}
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Maven versions:set command failed. Reverting VERSION file."
     $SNAPSHOT_VERSION | Set-Content "$repoRoot\VERSION"
@@ -112,22 +123,6 @@ if ($LASTEXITCODE -ne 0) {
 $pomXmlPath = "$repoRoot\pom.xml"
 if (Test-Path $pomXmlPath) {
     ((Get-Content $pomXmlPath -Raw) -replace "<tag>v$VERSION</tag>", "<tag>v$NEXT_VERSION</tag>") | Set-Content $pomXmlPath
-}
-
-# Files containing the version number to upgrade
-$VERSION_AWARE_FILES = @(
-    "$repoRoot\README.md",
-    "$repoRoot\README.zh.md"
-)
-
-# Replace version numbers in files
-foreach ($F in $VERSION_AWARE_FILES) {
-    if (Test-Path $F) {
-        $content = Get-Content $F -Raw
-        $content = $content -replace $SNAPSHOT_VERSION, $NEXT_SNAPSHOT_VERSION
-        $content = $content -replace "v[0-9]+\.[0-9]+\.[0-9]+", "v$NEXT_VERSION"
-        $content | Set-Content $F
-    }
 }
 
 # Commit changes

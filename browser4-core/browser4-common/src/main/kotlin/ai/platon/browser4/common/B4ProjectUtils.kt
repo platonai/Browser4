@@ -334,7 +334,9 @@ object B4ProjectUtils {
 
     const val CODE_MIRROR_DIR = "code-mirror"
 
-    const val CODE_RESOURCE_DIR = "browser4-core/browser4-resources/src/main/resources/$CODE_MIRROR_DIR"
+    const val RESOURCE_PATH = "browser4-core/browser4-resources/src/main/resources"
+
+    const val CODE_RESOURCE_DIR = "$RESOURCE_PATH/$CODE_MIRROR_DIR"
 
     fun isInJar(): Boolean {
         val location = this::class.java.protectionDomain.codeSource.location

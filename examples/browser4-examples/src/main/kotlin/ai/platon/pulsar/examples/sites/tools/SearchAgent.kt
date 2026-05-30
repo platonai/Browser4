@@ -10,6 +10,7 @@ import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.ql.context.SQLContexts
 import ai.platon.pulsar.skeleton.context.PulsarContexts
+import kotlinx.coroutines.runBlocking
 import org.apache.hc.core5.net.URIBuilder
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -27,7 +28,7 @@ class SearchAgent {
     private val session = context.createSession()
     private val proxyPool get() = context.getBean(ProxyPool::class)
 
-    fun search() {
+    suspend fun search() {
 //        val proxyLoader = TemporaryProxyLoader(proxyPool)
 //        proxyLoader.loadProxies()
 
@@ -39,7 +40,7 @@ class SearchAgent {
             contactNames.forEach { contactName ->
                 val keyword = "$businessName $contactName"
                 if (async) {
-                    val degeneratedHyperlink = DegenerateHyperlink(bingBaseUrl, "bing.com") { bing(keyword) }
+                    val degeneratedHyperlink = DegenerateHyperlink(bingBaseUrl, "bing.com") { runBlocking { bing(keyword) } }
                     session.submit(degeneratedHyperlink)
                     submittedDegeneratedLinks.incrementAndGet()
                 } else {
@@ -51,7 +52,7 @@ class SearchAgent {
         PulsarContexts.await()
     }
 
-    fun bing(keyword: String, async: Boolean = true) {
+    suspend fun bing(keyword: String, async: Boolean = true) {
         val url = URIBuilder("$bingBaseUrl/search").addParameter("q", keyword).build().toURL()
 
         val options = session.options(args)
@@ -86,7 +87,7 @@ class SearchAgent {
         submittedSearchTasks.incrementAndGet()
     }
 
-    fun google(keyword: String, async: Boolean = true) {
+    suspend fun google(keyword: String, async: Boolean = true) {
         val builder = URIBuilder("$googleBaseUrl/search")
         builder.addParameter("q", keyword)
         val url = builder.build().toURL().toString()
@@ -134,7 +135,7 @@ class SearchAgent {
     }
 }
 
-fun main() {
+suspend fun main() {
     val agent = SearchAgent()
     agent.search()
 

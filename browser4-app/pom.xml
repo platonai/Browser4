@@ -14,11 +14,11 @@
 
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>browser4-app</artifactId>
-    <version>4.8.1-SNAPSHOT</version>
+    <version>4.10.0-SNAPSHOT</version>
 
     <packaging>pom</packaging>
 
-    <name>Browser4</name>
+    <name>Browser4 Apps</name>
 
     <modules>
         <module>browser4-agents</module>

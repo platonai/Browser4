@@ -1,14 +1,15 @@
 package ai.platon.pulsar.agentic.inference.detail
 
 import ai.platon.browser4.common.B4ResourceLoader
-import ai.platon.browser4.driver.chrome.dom.model.BrowserUseState
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.agents.AgentConfig
+import ai.platon.pulsar.chrome.dom.model.BrowserUseState
 import ai.platon.pulsar.common.getLogger
 import kotlinx.coroutines.delay
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.collections.ArrayDeque
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Tracks page state changes to detect loops and ensure DOM stability.
@@ -209,10 +210,10 @@ class PageStateTracker(
                     stableCount = 0
                 }
 
-                delay(checkIntervalMs)
+                delay(checkIntervalMs.milliseconds)
             } catch (e: Exception) {
                 logger.warn("Error checking DOM stability: ${e.message}")
-                delay(checkIntervalMs)
+                delay(checkIntervalMs.milliseconds)
             }
         }
 

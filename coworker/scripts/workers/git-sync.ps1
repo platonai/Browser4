@@ -1,9 +1,9 @@
 #!/usr/bin/env pwsh
 
-$ghCopilotHelper = Join-Path $PSScriptRoot "gh-copilot.ps1"
-. $ghCopilotHelper
+$agentHelper = Join-Path $PSScriptRoot "agent.ps1"
+. $agentHelper
 $repoRoot = Get-WorkspaceRoot
-$copilotCommand = Get-GHCopilotCommand -RepoRoot $repoRoot
+$agentCommand = Get-AgentCommand -RepoRoot $repoRoot
 
 $prompt = @"
 Commit all changes in "$repoRoot".
@@ -12,10 +12,10 @@ Then push to remote.
 If conflicts occur, resolve them automatically.
 "@
 
-$copilotArguments = New-GHCopilotArguments -BaseArgs $copilotCommand.BaseArgs -Prompt $prompt -AdditionalArguments @('--allow-all-tools')
+$agentArguments = New-AgentArguments -BaseArgs $agentCommand.BaseArgs -Prompt $prompt -AdditionalArguments @('--allow-all-tools')
 
 Write-Host "Running:"
-Write-Host (Format-GHCopilotCommand -Executable $copilotCommand.Executable -Arguments $copilotArguments)
+Write-Host (Format-AgentCommand -Executable $agentCommand.Executable -Arguments $agentArguments)
 
-Invoke-GHCopilot -Prompt $prompt -AdditionalArguments @('--allow-all-tools') -RepoRoot $repoRoot -WorkingDirectory $repoRoot
+Invoke-Agent -Prompt $prompt -AdditionalArguments @('--allow-all-tools') -RepoRoot $repoRoot -WorkingDirectory $repoRoot
 exit $LASTEXITCODE
