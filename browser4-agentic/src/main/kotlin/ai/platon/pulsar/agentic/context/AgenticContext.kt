@@ -3,6 +3,7 @@ package ai.platon.pulsar.agentic.context
 import ai.platon.browser4.common.B4Constants
 import ai.platon.browser4.protocol.browser.DefaultBrowserManager
 import ai.platon.pulsar.agentic.*
+import ai.platon.pulsar.agentic.context.sql.AbstractBrowser4H2SQLContext
 import ai.platon.pulsar.browser.BrowserManager
 import ai.platon.pulsar.common.config.CapabilityTypes
 import ai.platon.pulsar.common.config.MutableConfig
@@ -32,7 +33,7 @@ interface AgenticContext : SQLContext {
 
 abstract class AbstractAgenticContext(
     applicationContext: AbstractApplicationContext
-) : AbstractH2SQLContext(applicationContext), AgenticContext {
+) : AbstractBrowser4H2SQLContext(applicationContext), AgenticContext {
     private val logger = getLogger(this)
 
     val initConfiguration = MutableConfig(true)
@@ -47,16 +48,6 @@ abstract class AbstractAgenticContext(
     override fun getOrCreateSession(settings: PulsarSettings): AgenticSession {
         // TODO: consider changed settings, for example, REST-level sessionId requires associated PulsarSession
         return sessions.values.filterIsInstance<AgenticSession>().firstOrNull() ?: createSession()
-    }
-
-    @Throws(Exception::class)
-    override fun createSession(sessionDelegate: SessionDelegate): SQLSession {
-        require(sessionDelegate is H2SessionDelegate)
-        val session = sqlSessions.computeIfAbsent(sessionDelegate.id) {
-            AgenticQLSession(this, sessionDelegate, SessionConfig(sessionDelegate, configuration))
-        }
-        logger.info("AgenticQLSession is created | #{}/{}/{}", session.id, sessionDelegate.id, id)
-        return session as AgenticQLSession
     }
 }
 

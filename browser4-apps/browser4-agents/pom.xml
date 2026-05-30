@@ -369,7 +369,7 @@
         <kotlin.version>2.2.21</kotlin.version>
         <spring-boot.version>4.0.5</spring-boot.version>
         <kotlin.compiler.jvmTarget>17</kotlin.compiler.jvmTarget>
-        <browser4-base.version>4.8.0</browser4-base.version>
+        <browser4-base.version>4.8.1</browser4-base.version>
 
         <!-- jpackage toggles (defaults keep normal builds unaffected) -->
         <jpackage.skip>true</jpackage.skip>

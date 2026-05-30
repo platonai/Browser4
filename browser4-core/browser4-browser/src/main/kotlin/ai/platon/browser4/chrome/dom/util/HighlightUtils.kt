@@ -2,6 +2,7 @@ package ai.platon.browser4.chrome.dom.util
 
 import ai.platon.pulsar.chrome.dom.model.DOMRect
 import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
+import ai.platon.pulsar.common.math.geometric.DimI
 import java.awt.*
 import java.awt.image.BufferedImage
 import java.io.ByteArrayInputStream
@@ -63,7 +64,7 @@ object HighlightUtils {
                         devicePixelRatio = devicePixelRatio,
                         font = font,
                         filterHighlightIds = filterHighlightIds,
-                        imageSize = Dimension(imgWidth, imgHeight)
+                        imageSize = DimI(imgWidth, imgHeight)
                     )
                 }
             } finally {
@@ -84,7 +85,7 @@ object HighlightUtils {
         devicePixelRatio: Double,
         font: Font,
         filterHighlightIds: Boolean,
-        imageSize: Dimension,
+        imageSize: DimI,
     ) {
         val bounds: DOMRect = element.absolutePosition ?: return
 
@@ -145,7 +146,7 @@ object HighlightUtils {
         text: String?,
         baseFont: Font,
         elementTag: String,
-        imageSize: Dimension,
+        imageSize: DimI,
         devicePixelRatio: Double,
     ) {
         val (x, y, w, h) = arrayOf(rect.x, rect.y, rect.width, rect.height)
