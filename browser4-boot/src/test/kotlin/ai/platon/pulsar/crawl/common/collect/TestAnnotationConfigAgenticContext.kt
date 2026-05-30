@@ -1,23 +1,25 @@
 package ai.platon.pulsar.crawl.common.collect
 
-import ai.platon.pulsar.agentic.context.AgenticContexts
+import ai.platon.browser4.boot.autoconfigure.Browser4AutoConfiguration
+import ai.platon.pulsar.agentic.context.DefaultAnnotationConfigAgenticContext
 import ai.platon.pulsar.core.api.BrowserManager
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager
 import ai.platon.pulsar.protocol.browser.emulator.context.MultiPrivacyContextManager
 import ai.platon.pulsar.protocol.browser.emulator.impl.PrivacyManagedBrowserFetcher
-import ai.platon.pulsar.skeleton.context.support.AbstractPulsarContext
 import kotlinx.coroutines.delay
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import kotlin.time.Duration.Companion.milliseconds
 
-class TestClassPathXmlPulsarContext {
+class TestAnnotationConfigAgenticContext {
 
-    val context = AgenticContexts.create()
+    val context = DefaultAnnotationConfigAgenticContext().also {
+        it.applicationContext.register(Browser4AutoConfiguration::class.java)
+        it.applicationContext.refresh()
+    }
 
     @Test
     suspend fun whenCloseSession_thenBrowserClosed() {
-        assertTrue(context is AbstractPulsarContext)
         val session = context.getOrCreateSession()
 
         val page = session.load("https://example.com", "-refresh")
@@ -26,9 +28,9 @@ class TestClassPathXmlPulsarContext {
         val globalCache = context.globalCache
         assertFalse(globalCache.urlPool.hasMore())
 
-        assertNotNull(context.getBeanOrNull(BrowserManager::class))
         val browserManager = context.getBeanOrNull(BrowserManager::class)
         assertNotNull(browserManager)
+        assertNotNull(context.getBeanOrNull(BrowserManager::class))
 
         assertNotNull(context.getBeanOrNull(PrivacyManagedBrowserFetcher::class))
         assertNotNull(context.getBeanOrNull(MultiPrivacyContextManager::class))
