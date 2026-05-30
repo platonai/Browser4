@@ -50,7 +50,7 @@ object PulsarContexts {
     @Synchronized
     @JvmStatic
     fun create(): PulsarContext {
-        return create(StaticPulsarContext()).also { activeContext = it }
+        return create(StaticPulsarContext(autoRefresh = true)).also { activeContext = it }
     }
 
     @Synchronized

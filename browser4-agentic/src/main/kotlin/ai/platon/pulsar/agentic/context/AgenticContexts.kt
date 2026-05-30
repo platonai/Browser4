@@ -44,7 +44,7 @@ object AgenticContexts {
      */
     @Synchronized
     fun create(): AgenticContext {
-        return create(StaticAgenticContext())
+        return create(StaticAgenticContext(autoRefresh = true))
     }
 
     @Synchronized
