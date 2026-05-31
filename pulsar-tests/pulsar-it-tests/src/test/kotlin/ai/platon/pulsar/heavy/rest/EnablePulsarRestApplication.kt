@@ -1,13 +1,10 @@
 package ai.platon.pulsar.heavy.rest
 
+import ai.platon.pulsar.boot.autoconfigure.PulsarAutoConfiguration
+import ai.platon.pulsar.rest.ApiApplication
 import org.springframework.boot.autoconfigure.SpringBootApplication
-import org.springframework.context.annotation.ComponentScan
-import org.springframework.context.annotation.ImportResource
+import org.springframework.context.annotation.Import
 
 @SpringBootApplication
-@ImportResource("classpath:rest-beans/app-context.xml")
-@ComponentScan(
-    "ai.platon.pulsar.boot.autoconfigure",
-    "ai.platon.pulsar.rest"
-)
+@Import(PulsarAutoConfiguration::class, ApiApplication::class)
 class EnablePulsarRestApplication

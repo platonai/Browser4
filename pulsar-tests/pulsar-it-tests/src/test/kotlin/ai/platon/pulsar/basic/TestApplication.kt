@@ -1,8 +1,9 @@
 package ai.platon.pulsar.basic
 
+import ai.platon.pulsar.boot.autoconfigure.PulsarAutoConfiguration
 import org.springframework.boot.autoconfigure.SpringBootApplication
-import org.springframework.context.annotation.ImportResource
+import org.springframework.context.annotation.Import
 
 @SpringBootApplication
-@ImportResource("classpath:test-beans/app-context.xml")
+@Import(PulsarAutoConfiguration::class)
 class TestApplication

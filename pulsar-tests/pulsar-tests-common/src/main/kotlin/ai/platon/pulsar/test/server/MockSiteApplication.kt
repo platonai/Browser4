@@ -1,14 +1,12 @@
 package ai.platon.pulsar.test.server
 
+import ai.platon.pulsar.boot.autoconfigure.PulsarAutoConfiguration
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
-import org.springframework.context.annotation.Profile
+import org.springframework.context.annotation.Import
 
-@SpringBootApplication(
-    scanBasePackages = [
-        "ai.platon.pulsar.test.server",
-    ]
-)
+@SpringBootApplication
+@Import(PulsarAutoConfiguration::class)
 class MockSiteApplication
 
 fun main() {

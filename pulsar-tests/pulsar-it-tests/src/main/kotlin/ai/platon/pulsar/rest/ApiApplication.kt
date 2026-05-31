@@ -1,16 +1,12 @@
 package ai.platon.pulsar.rest
 
+import ai.platon.pulsar.boot.autoconfigure.PulsarAutoConfiguration
 import org.springframework.boot.autoconfigure.SpringBootApplication
 import org.springframework.boot.runApplication
-import org.springframework.context.annotation.ComponentScan
-import org.springframework.context.annotation.ImportResource
+import org.springframework.context.annotation.Import
 
 @SpringBootApplication
-@ImportResource("classpath:rest-beans/app-context.xml")
-@ComponentScan(
-    "ai.platon.pulsar.boot.autoconfigure",
-    "ai.platon.pulsar.rest"
-)
+@Import(PulsarAutoConfiguration::class)
 class ApiApplication
 
 fun main(args: Array<String>) {
