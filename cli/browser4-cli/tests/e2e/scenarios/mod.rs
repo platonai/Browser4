@@ -68,6 +68,14 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_fn: browser::test_interaction_commands,
     },
     ScenarioDef {
+        name: "test_e2e_pointer_commands",
+        short_name: "test_pointer_commands",
+        requires_browser4: true,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: browser::test_pointer_commands,
+    },
+    ScenarioDef {
         name: "test_e2e_eval_command",
         short_name: "test_eval_command",
         requires_browser4: true,

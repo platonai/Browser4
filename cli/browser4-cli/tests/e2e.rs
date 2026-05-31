@@ -2475,6 +2475,7 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "press",
         "keydown",
         "keyup",
+        // test_pointer_commands
         "click",
         "dblclick",
         "hover",
