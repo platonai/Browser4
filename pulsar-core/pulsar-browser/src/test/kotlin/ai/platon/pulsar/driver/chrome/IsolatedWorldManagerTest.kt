@@ -1,10 +1,10 @@
 package ai.platon.pulsar.driver.chrome
 
-import ai.platon.pulsar.chrome.impl.RemoteChromeProtocol
 import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.cdt.kt.protocol.types.page.*
 import ai.platon.pulsar.chrome.IsolatedWorldManager
 import ai.platon.pulsar.chrome.RemoteDevTools
+import ai.platon.pulsar.chrome.handler.RemoteChromeProtocol
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows

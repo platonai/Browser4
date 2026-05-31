@@ -1,11 +1,11 @@
 package ai.platon.pulsar.basic.session
 
+import ai.platon.pulsar.basic.TestBase
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.config.AppConstants.LOCAL_FILE_BASE_URL
+import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.persist.model.WebPageFormatter
-import ai.platon.pulsar.common.printlnPro
-import ai.platon.pulsar.basic.TestBase
 import com.google.gson.Gson
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import java.nio.file.Files
@@ -15,7 +15,9 @@ import kotlin.test.*
  * Created by Vincent on 16-7-20.
  * Copyright @ 2013-2016 Platon AI. All rights reserved
  */
-class PulsarSessionTests: TestBase() {
+//@SpringBootTest
+//@Import(PulsarAutoConfiguration::class)
+class PulsarSessionTests : TestBase() {
     private val timestamp = System.currentTimeMillis()
     private val url = "https://www.amazon.com/Best-Sellers/zgbs?t=$timestamp"
     private val url2 = "https://www.amazon.com/Best-Sellers-Beauty/zgbs/beauty?t=$timestamp"

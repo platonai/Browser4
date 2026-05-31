@@ -1,5 +1,6 @@
 package ai.platon.pulsar.basic
 
+import ai.platon.pulsar.boot.autoconfigure.PulsarAutoConfiguration
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.loop.TaskLoops
@@ -9,8 +10,10 @@ import ai.platon.pulsar.skeleton.session.PulsarSession
 import ai.platon.pulsar.util.server.EnableMockServerApplication
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.context.annotation.Import
 
 @SpringBootTest(classes = [EnableMockServerApplication::class])
+@Import(PulsarAutoConfiguration::class)
 class TestBase {
     val logger get() = getLogger(this)
 

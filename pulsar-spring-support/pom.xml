@@ -23,7 +23,6 @@
     <packaging>pom</packaging>
 
     <modules>
-        <module>pulsar-beans</module>
         <module>pulsar-boot</module>
     </modules>
 </project>

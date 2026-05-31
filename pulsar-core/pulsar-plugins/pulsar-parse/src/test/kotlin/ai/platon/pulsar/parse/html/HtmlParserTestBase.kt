@@ -28,7 +28,8 @@ class HtmlParserTestBase {
     companion object {
         val LOG = LoggerFactory.getLogger(HtmlParserTestBase::class.java)
         const val encodingTestKeywords = "français, español, русский язык, čeština, ελληνικά"
-        const val encodingTestBody = "<ul>\n  <li>français\n  <li>español\n  <li>русский язык\n  <li>čeština\n  <li>ελληνικά\n</ul>"
+        const val encodingTestBody =
+            "<ul>\n  <li>français\n  <li>español\n  <li>русский язык\n  <li>čeština\n  <li>ελληνικά\n</ul>"
         const val encodingTestBody2 = "<div>" +
                 "  <div>" +
                 "    <ul class='u1'><li>first item</li><li>second item</li></ul>" +
@@ -43,7 +44,8 @@ class HtmlParserTestBase {
                 + "<meta name=\"keywords\" content=\"" + encodingTestKeywords + "\"/>\n"
                 + "</head>\n<body>" + encodingTestBody + encodingTestBody2 + "</body>\n</html>")
         const val exampleUrl = AppConstants.EXAMPLE_URL
-        var encodingTestPages = arrayOf(arrayOf(
+        var encodingTestPages = arrayOf(
+            arrayOf(
                 "HTML4, utf-8, meta http-equiv, no quotes",
                 "utf-8",
                 "success",
@@ -52,7 +54,7 @@ class HtmlParserTestBase {
                         + "<html>\n<head>\n"
                         + "<meta http-equiv=Content-Type content=\"text/html; charset=utf-8\" />"
                         + encodingTestContent
-        ), arrayOf(
+            ), arrayOf(
                 "HTML4, utf-8, meta http-equiv, single quotes",
                 "utf-8",
                 "success",
@@ -61,7 +63,7 @@ class HtmlParserTestBase {
                         + "<html>\n<head>\n"
                         + "<meta http-equiv='Content-Type' content='text/html; charset=utf-8' />"
                         + encodingTestContent
-        ), arrayOf(
+            ), arrayOf(
                 "XHTML, utf-8, meta http-equiv, double quotes",
                 "utf-8",
                 "success",
@@ -69,22 +71,23 @@ class HtmlParserTestBase {
                         + "<html>\n<head>\n"
                         + "<meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\" />"
                         + encodingTestContent
-        ), arrayOf(
+            ), arrayOf(
                 "HTML5, utf-8, meta charset",
                 "utf-8",
                 "success",
                 "<!DOCTYPE html>\n<html>\n<head>\n" + "<meta charset=\"utf-8\">"
                         + encodingTestContent
-        ), arrayOf(
+            ), arrayOf(
                 "HTML5, utf-8, BOM",
                 "utf-8",
                 "success",
                 "\ufeff<!DOCTYPE html>\n<html>\n<head>\n$encodingTestContent"
-        ), arrayOf(
+            ), arrayOf(
                 "HTML5, utf-16, BOM",
                 "utf-16",
                 "failed",
                 "\ufeff<!DOCTYPE html>\n<html>\n<head>\n$encodingTestContent"
-        ))
+            )
+        )
     }
 }

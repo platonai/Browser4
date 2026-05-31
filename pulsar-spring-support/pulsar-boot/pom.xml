@@ -35,10 +35,6 @@
             <artifactId>pulsar-ql</artifactId>
         </dependency>
         <dependency>
-            <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-beans</artifactId>
-        </dependency>
-        <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot</artifactId>
         </dependency>

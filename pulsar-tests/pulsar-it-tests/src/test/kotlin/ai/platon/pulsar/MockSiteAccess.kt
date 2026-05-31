@@ -1,5 +1,6 @@
 package ai.platon.pulsar
 
+import ai.platon.pulsar.boot.autoconfigure.PulsarAutoConfiguration
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.core.api.PulsarSession
@@ -9,11 +10,13 @@ import ai.platon.pulsar.util.server.EnableMockServerApplication
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.context.annotation.Import
 
 @SpringBootTest(
     classes = [EnableMockServerApplication::class],
     webEnvironment = SpringBootTest.WebEnvironment.DEFINED_PORT
 )
+@Import(PulsarAutoConfiguration::class)
 class MockSiteAccess {
 
     @Autowired

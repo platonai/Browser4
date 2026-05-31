@@ -20,9 +20,8 @@
 package ai.platon.pulsar.driver.chrome.impl
 
 import ai.platon.cdt.kt.protocol.types.accessibility.AXNode
-import ai.platon.pulsar.chrome.impl.EventDispatcher
+import ai.platon.pulsar.chrome.handler.transport.EventDispatcher
 import ai.platon.pulsar.common.ResourceLoader
-import ai.platon.pulsar.common.printlnPro
 import org.junit.jupiter.api.Assertions
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test

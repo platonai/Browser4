@@ -36,11 +36,6 @@
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-beans</artifactId>
-            <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-boot</artifactId>
             <version>${project.version}</version>
         </dependency>
