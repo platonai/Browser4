@@ -87,8 +87,17 @@ class MockSiteStarter: AutoCloseable {
             val u = URI.create(pageUrl).toURL()
             val effectivePort = if (u.port != -1) u.port else (System.getProperty("mock.site.port")?.toIntOrNull()
                 ?: System.getenv("MOCK_SITE_PORT")?.toIntOrNull() ?: 8182)
-            val hostPort = URL(u.protocol, u.host, effectivePort, "/")
-            val health = URL(u.protocol, u.host, effectivePort, options.healthPath)
+            // val hostPort = URL(u.protocol, u.host, effectivePort, "/")
+            val hostPort = URI(
+                u.protocol,
+                null,
+                u.host,
+                effectivePort,
+                "/",
+                null,
+                null
+            ).toURL()
+            val health = URI(u.protocol, null, u.host, effectivePort, options.healthPath, null, null).toURL()
             health to hostPort
         } catch (e: Exception) {
             if (options.verbose) logger.error("[DemoSiteStarter] Invalid URL: $pageUrl | ${e.message}")
