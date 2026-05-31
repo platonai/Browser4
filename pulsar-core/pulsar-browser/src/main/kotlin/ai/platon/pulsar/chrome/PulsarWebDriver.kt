@@ -961,13 +961,13 @@ function() {
 
     @Throws(WebDriverException::class)
     override suspend fun selectTextAll(selector: String): List<String> {
-        val safeSelector = page.dom.normalizeLocator(selector, true)
+        val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
         val json = evaluate("__pulsar_utils__.selectTextAll('$safeSelector')")?.toString() ?: "[]"
         return jacksonObjectMapper().readValue(json)
     }
 
     override suspend fun selectAttributes(selector: String): Map<String, String> {
-        val safeSelector = page.dom.normalizeLocator(selector, true)
+        val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
         val json = evaluate("__pulsar_utils__.selectAttributes('$safeSelector')")?.toString() ?: return mapOf()
         val attributes: List<String> = jacksonObjectMapper().readValue(json)
         return attributes.zipWithNext().associate { it }
@@ -976,7 +976,7 @@ function() {
     @Throws(WebDriverException::class)
     override suspend fun selectAttributeAll(selector: String, attrName: String, start: Int, limit: Int): List<String> {
         val end = start + limit
-        val safeSelector = page.dom.normalizeLocator(selector, true)
+        val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
 
         val expression = "__pulsar_utils__.selectAttributeAll('$safeSelector', '$attrName', $start, $end)"
         val json = evaluate(expression)?.toString() ?: return listOf()
@@ -985,20 +985,20 @@ function() {
 
     @Throws(WebDriverException::class)
     override suspend fun setAttribute(selector: String, attrName: String, attrValue: String) {
-        val safeSelector = page.dom.normalizeLocator(selector, true)
+        val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
         evaluate("__pulsar_utils__.setAttribute('$safeSelector', '$attrName', '$attrValue')")
     }
 
     @Throws(WebDriverException::class)
     override suspend fun setAttributeAll(selector: String, attrName: String, attrValue: String) {
-        val safeSelector = page.dom.normalizeLocator(selector, true)
+        val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
         evaluate("__pulsar_utils__.setAttributeAll('$safeSelector', '$attrName', '$attrValue')")
     }
 
     // --------------------------- Property helpers ---------------------------
     @Throws(WebDriverException::class)
     override suspend fun selectFirstPropertyValueOrNull(selector: String, propName: String): String? {
-        val safeSelector = page.dom.normalizeLocator(selector, true)
+        val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
         return evaluateValue("__pulsar_utils__.selectFirstPropertyValue('$safeSelector', '$propName')")?.toString()
     }
 
@@ -1007,7 +1007,7 @@ function() {
         selector: String, propName: String, start: Int, limit: Int
     ): List<String> {
         val end = start + limit
-        val safeSelector = page.dom.normalizeLocator(selector, true)
+        val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
         val expression = "__pulsar_utils__.selectPropertyValueAll('$safeSelector', '$propName', $start, $end)"
         val json = evaluate(expression)?.toString() ?: return listOf()
         return jacksonObjectMapper().readValue(json)
@@ -1015,28 +1015,27 @@ function() {
 
     @Throws(WebDriverException::class)
     override suspend fun setProperty(selector: String, propName: String, propValue: String) {
-        val safeSelector = page.dom.normalizeLocator(selector, true)
+        val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
         evaluate("__pulsar_utils__.setProperty('$safeSelector', '$propName', '$propValue')")
     }
 
     @Throws(WebDriverException::class)
     override suspend fun setPropertyAll(selector: String, propName: String, propValue: String) {
-        val safeSelector = page.dom.normalizeLocator(selector, true)
+        val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
         evaluate("__pulsar_utils__.setPropertyAll('$safeSelector', '$propName', '$propValue')")
     }
 
     @Throws(WebDriverException::class)
     override suspend fun clickTextMatches(selector: String, pattern: String, count: Int) {
-        val safeSelector = page.dom.normalizeLocator(selector, true)
+        val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
         evaluate("__pulsar_utils__.clickTextMatches('$safeSelector', '$pattern')")
     }
 
     @Throws(WebDriverException::class)
     override suspend fun clickMatches(selector: String, attrName: String, pattern: String, count: Int) {
-        val safeSelector = page.dom.normalizeLocator(selector, true)
+        val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
         evaluate("__pulsar_utils__.clickMatches('$safeSelector', '$attrName', '$pattern')")
     }
-
 
     @Throws(WebDriverException::class)
     override suspend fun clickablePoint(selector: String): PointD? {
@@ -1688,7 +1687,7 @@ function() {
     }
 
     private suspend fun waitForScrollSettled(selector: String, timeout: Duration = Duration.ofMillis(5_000)) {
-        val safeSelector = page.dom.normalizeLocator(selector, true)
+        val safeSelector = page.dom.normalizeSelector(selector, true) ?: selector
         val stateKey = "__ps_scroll_${Random.nextLong(Long.MAX_VALUE).toString(16)}"
         val expression = """
 (() => {
