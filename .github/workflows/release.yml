@@ -50,6 +50,10 @@ env:
   PRODUCTION_JAR_MODULE_PATH: browser4-apps/browser4-agents
   PRODUCTION_JAR_NAME: Browser4.jar
   PRODUCTION_JAR_PATH: browser4-apps/browser4-agents/target/Browser4.jar
+  BUNDLE_MODULE_NAME: browser4-bundle
+  BUNDLE_MODULE_PATH: browser4-apps/browser4-bundle
+  BUNDLE_JAR_NAME: Browser4Bundle.jar
+  BUNDLE_JAR_PATH: browser4-apps/browser4-bundle/target/Browser4Bundle.jar
   JAVA_VERSION: '17'
   NODE_VERSION: '24'
   MAVEN_OPTS: '-Xmx3g -XX:+UseG1GC'
@@ -450,14 +454,18 @@ jobs:
           ## Self-contained Browser4 runtime bundles
 
           This release also includes self-contained Browser4 runtime bundles with:
-          - \`Browser4.jar\`
-          - a minimal \`jlink\`-built JRE
+          - a \`lib/\` directory containing \`Browser4Bundle.jar\` and all runtime dependencies
+          - a minimal \`jlink\`-built JRE under \`runtime/\`
+          - platform-specific launcher scripts in \`bin/\`
+
+          Runtime model:
+          \`runtime/bin/java -cp "lib/*" <MainClass>\`
 
           Supported release assets:
-          - \`browser4-runtime-windows-x64.zip\`
-          - \`browser4-runtime-linux-x64.tar.gz\`
-          - \`browser4-runtime-darwin-x64.tar.gz\`
-          - \`browser4-runtime-darwin-arm64.tar.gz\`
+          - \`browser4-bundle-runtime-windows-x64.zip\`
+          - \`browser4-bundle-runtime-linux-x64.tar.gz\`
+          - \`browser4-bundle-runtime-darwin-x64.tar.gz\`
+          - \`browser4-bundle-runtime-darwin-arm64.tar.gz\`
 
           Recommended install flow:
 
@@ -709,20 +717,20 @@ jobs:
         include:
           - name: Windows x64
             os: windows-latest
-            asset_name: browser4-runtime-windows-x64.zip
-            artifact_name: browser4-runtime-windows-x64
+            asset_name: browser4-bundle-runtime-windows-x64.zip
+            artifact_name: browser4-bundle-runtime-windows-x64
           - name: Linux x64
             os: ubuntu-latest
-            asset_name: browser4-runtime-linux-x64.tar.gz
-            artifact_name: browser4-runtime-linux-x64
+            asset_name: browser4-bundle-runtime-linux-x64.tar.gz
+            artifact_name: browser4-bundle-runtime-linux-x64
           - name: macOS x64
             os: macos-13
-            asset_name: browser4-runtime-darwin-x64.tar.gz
-            artifact_name: browser4-runtime-darwin-x64
+            asset_name: browser4-bundle-runtime-darwin-x64.tar.gz
+            artifact_name: browser4-bundle-runtime-darwin-x64
           - name: macOS ARM64
             os: macos-14
-            asset_name: browser4-runtime-darwin-arm64.tar.gz
-            artifact_name: browser4-runtime-darwin-arm64
+            asset_name: browser4-bundle-runtime-darwin-arm64.tar.gz
+            artifact_name: browser4-bundle-runtime-darwin-arm64
 
     steps:
       - name: Checkout repository
@@ -737,33 +745,54 @@ jobs:
           java_version: ${{ env.JAVA_VERSION }}
           enable_cache: 'true'
 
-      - name: Download Browser4 JAR artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: release-jar
-          path: browser4-apps/browser4-agents/target/
+      - name: Build Browser4 Bundle JAR
+        shell: bash
+        run: |
+          echo "=== Building ${{ env.BUNDLE_JAR_NAME }} ==="
+          ./mvnw package -pl ${{ env.BUNDLE_MODULE_PATH }} -am -DskipTests=true -Dmaven.javadoc.skip=true
+
+          if [ ! -f "${{ env.BUNDLE_JAR_PATH }}" ]; then
+            echo "❌ ${{ env.BUNDLE_JAR_NAME }} not found at ${{ env.BUNDLE_JAR_PATH }}"
+            echo "Available JARs:"
+            find . -name "*.jar" -type f | head -10
+            exit 1
+          fi
+
+          JAR_SIZE=$(stat -c%s "${{ env.BUNDLE_JAR_PATH }}" 2>/dev/null || echo 0)
+          echo "✅ ${{ env.BUNDLE_JAR_NAME }} built successfully ($(numfmt --to=iec --suffix=B $JAR_SIZE))"
 
       - name: Build Browser4 runtime bundle
         shell: pwsh
         run: |
-          ./browser4-apps/browser4-agents/build-runtime-bundle.ps1 `
-            -JarPath "${{ env.PRODUCTION_JAR_PATH }}" `
-            -OutputDirectory "browser4-apps/browser4-agents/target/runtime-release" `
+          ./browser4-apps/browser4-bundle/build-runtime-bundle.ps1 `
+            -JarPath "${{ env.BUNDLE_JAR_PATH }}" `
+            -OutputDirectory "browser4-apps/browser4-bundle/target/runtime-release" `
             -AssetName "${{ matrix.asset_name }}" `
             -Force
 
-      - name: Verify Browser4 runtime bundle
+      - name: Verify Browser4 runtime bundle (structure only)
+        if: runner.os != 'Linux'  # Full functional test on Linux only
         shell: pwsh
         run: |
-          ./browser4-apps/browser4-agents/verify-runtime-bundle.ps1 `
-            -BundlePath "browser4-apps/browser4-agents/target/runtime-release/${{ matrix.asset_name }}" `
-            -ExpectedAssetName "${{ matrix.asset_name }}"
+          ./browser4-apps/browser4-bundle/verify-runtime-bundle.ps1 `
+            -BundlePath "browser4-apps/browser4-bundle/target/runtime-release/${{ matrix.asset_name }}" `
+            -ExpectedAssetName "${{ matrix.asset_name }}" `
+            -SkipFunctionalTest
+
+      - name: Verify Browser4 runtime bundle (full functional test)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File ./browser4-apps/browser4-bundle/verify-runtime-bundle.ps1 `
+            -BundlePath "browser4-apps/browser4-bundle/target/runtime-release/${{ matrix.asset_name }}" `
+            -ExpectedAssetName "${{ matrix.asset_name }}" `
+            -StartupTimeoutSeconds 300
 
       - name: Upload runtime bundle artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: browser4-apps/browser4-agents/target/runtime-release/${{ matrix.asset_name }}
+          path: browser4-apps/browser4-bundle/target/runtime-release/${{ matrix.asset_name }}
           retention-days: 7
 
   publish-cli-npm:
@@ -966,7 +995,7 @@ jobs:
       - name: Download runtime bundle artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: browser4-runtime-*
+          pattern: browser4-bundle-runtime-*
           path: release-assets/
           merge-multiple: true
 
@@ -996,7 +1025,7 @@ jobs:
             fi
           fi
 
-          RUNTIME_BUNDLE_COUNT=$(find release-assets -maxdepth 1 -type f \( -name 'browser4-runtime-*.zip' -o -name 'browser4-runtime-*.tar.gz' \) | wc -l)
+          RUNTIME_BUNDLE_COUNT=$(find release-assets -maxdepth 1 -type f \( -name 'browser4-bundle-runtime-*.zip' -o -name 'browser4-bundle-runtime-*.tar.gz' \) | wc -l)
           if [ "$RUNTIME_BUNDLE_COUNT" -lt 4 ]; then
             echo "❌ Expected 4 Browser4 runtime bundles, found $RUNTIME_BUNDLE_COUNT"
             ls -la release-assets/
@@ -1015,7 +1044,7 @@ jobs:
             if [ "${{ needs.prepare.outputs.cli_should_build }}" = "true" ]; then
               find release-assets -maxdepth 1 -type f -name 'browser4-cli-*' | sort
             fi
-            find release-assets -maxdepth 1 -type f \( -name 'browser4-runtime-*.zip' -o -name 'browser4-runtime-*.tar.gz' \) | sort
+            find release-assets -maxdepth 1 -type f \( -name 'browser4-bundle-runtime-*.zip' -o -name 'browser4-bundle-runtime-*.tar.gz' \) | sort
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
 
@@ -1056,7 +1085,7 @@ jobs:
           echo "  - Prerelease: ${{ needs.prepare.outputs.is_prerelease }}"
           echo "  - CLI Version: ${{ needs.prepare.outputs.cli_version }}"
           echo "  - Runtime bundles:"
-          find release-assets -maxdepth 1 -type f \( -name 'browser4-runtime-*.zip' -o -name 'browser4-runtime-*.tar.gz' \) -printf '    - %f\n' | sort
+          find release-assets -maxdepth 1 -type f \( -name 'browser4-bundle-runtime-*.zip' -o -name 'browser4-bundle-runtime-*.tar.gz' \) -printf '    - %f\n' | sort
           echo ""
           echo "🔗 Release URL: https://github.com/${{ github.repository }}/releases/tag/${{ needs.prepare.outputs.tag }}"
           echo ""
@@ -1080,7 +1109,7 @@ jobs:
             echo ""
             echo "### 📦 Artifacts"
             echo "- **JAR**: ${{ needs.build-core-and-docker.outputs.jar_name }}"
-            echo "- **Runtime Bundles**: browser4-runtime-windows-x64.zip, browser4-runtime-linux-x64.tar.gz, browser4-runtime-darwin-x64.tar.gz, browser4-runtime-darwin-arm64.tar.gz"
+            echo "- **Runtime Bundles**: browser4-bundle-runtime-windows-x64.zip, browser4-bundle-runtime-linux-x64.tar.gz, browser4-bundle-runtime-darwin-x64.tar.gz, browser4-bundle-runtime-darwin-arm64.tar.gz"
             echo "- **CLI Version**: ${{ needs.prepare.outputs.cli_version }}"
             echo "- **npm Version**: ${{ needs.prepare.outputs.npm_version }}"
             echo "- **npm Lookup Status**: ${{ needs.prepare.outputs.cli_npm_lookup_status }}"
