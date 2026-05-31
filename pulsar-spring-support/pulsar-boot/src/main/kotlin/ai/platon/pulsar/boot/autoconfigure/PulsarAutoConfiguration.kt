@@ -1,6 +1,5 @@
 package ai.platon.pulsar.boot.autoconfigure
 
-import ai.platon.pulsar.protocol.browser.BrowserEmulatorProtocol
 import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.pulsar.browser.manage.BasicBrowserManager
 import ai.platon.pulsar.browser.privacy.PrivacyContextMonitor
@@ -13,6 +12,7 @@ import ai.platon.pulsar.common.proxy.impl.LoadingProxyPool
 import ai.platon.pulsar.loop.TaskLoops
 import ai.platon.pulsar.loop.impl.StreamingTaskLoop
 import ai.platon.pulsar.persist.WebDb
+import ai.platon.pulsar.protocol.browser.BrowserEmulatorProtocol
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolMonitor
 import ai.platon.pulsar.protocol.browser.emulator.BrowserResponseHandler
@@ -23,6 +23,7 @@ import ai.platon.pulsar.protocol.browser.emulator.impl.InteractiveBrowserEmulato
 import ai.platon.pulsar.protocol.browser.emulator.impl.PrivacyManagedBrowserFetcher
 import ai.platon.pulsar.protocol.browser.impl.BrowserMonitor
 import ai.platon.pulsar.protocol.browser.impl.DefaultBrowserFactory
+import ai.platon.pulsar.ql.context.SQLContext
 import ai.platon.pulsar.skeleton.CoreMetrics
 import ai.platon.pulsar.skeleton.common.AppStatusTracker
 import ai.platon.pulsar.skeleton.common.message.MiscMessageWriter
@@ -107,8 +108,8 @@ class PulsarAutoConfiguration {
 
     @Bean(name = ["taskLoop"])
     @ConditionalOnMissingBean(name = ["taskLoop"])
-    fun taskLoop(conf: MutableConfig): StreamingTaskLoop {
-        return StreamingTaskLoop(conf, "SpringStreamingTaskLoop")
+    fun taskLoop(conf: MutableConfig, pulsarContext: SQLContext): StreamingTaskLoop {
+        return StreamingTaskLoop(pulsarContext, conf, "SpringStreamingTaskLoop")
     }
 
     @Bean(name = ["taskLoops"], destroyMethod = "stop")
