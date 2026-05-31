@@ -53,7 +53,7 @@ open class BasicAgenticContext(
 ) : AbstractAgenticContext(applicationContext) {
 
     /**
-     * Create a [GenericAgenticSession].
+     * Create a [BasicAgenticSession] that accepts a [AbstractApplicationContext].
      *
      * > **NOTE:** The session is not a SQLSession, use [execute], [executeQuery] to access [ai.platon.pulsar.ql.SQLSession].
      * */
