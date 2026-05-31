@@ -1,10 +1,11 @@
 package ai.platon.pulsar.agentic.context.sql
 
+import ai.platon.pulsar.agentic.AgenticQLSession
+import ai.platon.pulsar.agentic.BasicAgenticSession
 import ai.platon.pulsar.ql.SQLSession
 import ai.platon.pulsar.ql.SessionConfig
 import ai.platon.pulsar.ql.SessionDelegate
 import ai.platon.pulsar.ql.h2.H2MemoryDb
-import ai.platon.pulsar.ql.h2.H2SQLSession
 import ai.platon.pulsar.ql.h2.H2SessionDelegate
 import ai.platon.pulsar.skeleton.session.BasicPulsarSession
 import ai.platon.pulsar.skeleton.session.PulsarSession
@@ -26,10 +27,10 @@ abstract class AbstractBrowser4H2SQLContext(
     override fun createSession(sessionDelegate: SessionDelegate): SQLSession {
         require(sessionDelegate is H2SessionDelegate)
         val session = sqlSessions.computeIfAbsent(sessionDelegate.id) {
-            H2SQLSession(this, sessionDelegate, SessionConfig(sessionDelegate, configuration))
+            AgenticQLSession(this, sessionDelegate, SessionConfig(sessionDelegate, configuration))
         }
         logger.info("SQLSession is created | #{}/{}/{}", session.id, sessionDelegate.id, id)
-        return session as H2SQLSession
+        return session as AgenticQLSession
     }
 
     /**
@@ -39,7 +40,7 @@ abstract class AbstractBrowser4H2SQLContext(
      * */
     @Throws(Exception::class)
     override fun createSession(): PulsarSession {
-        val session = BasicPulsarSession(this, configuration.toVolatileConfig())
+        val session = BasicAgenticSession(this, configuration.toVolatileConfig())
         return session.also { sessions[it.id] = it }
     }
 }

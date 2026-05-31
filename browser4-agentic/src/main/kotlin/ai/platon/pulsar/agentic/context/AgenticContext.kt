@@ -7,15 +7,11 @@ import ai.platon.pulsar.agentic.context.sql.AbstractBrowser4H2SQLContext
 import ai.platon.pulsar.browser.BrowserManager
 import ai.platon.pulsar.common.config.CapabilityTypes
 import ai.platon.pulsar.common.config.MutableConfig
-import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.ql.SQLSession
-import ai.platon.pulsar.ql.SessionConfig
 import ai.platon.pulsar.ql.SessionDelegate
-import ai.platon.pulsar.ql.context.AbstractH2SQLContext
 import ai.platon.pulsar.ql.context.SQLContext
-import ai.platon.pulsar.ql.h2.H2SessionDelegate
 import ai.platon.pulsar.skeleton.PulsarSettings
-import ai.platon.pulsar.skeleton.context.support.ContextDefaults
+import ai.platon.pulsar.skeleton.context.support.TrivialContextDefaults
 import ai.platon.pulsar.skeleton.session.BasicPulsarSession
 import org.springframework.context.annotation.AnnotationConfigApplicationContext
 import org.springframework.context.support.AbstractApplicationContext
@@ -34,7 +30,6 @@ interface AgenticContext : SQLContext {
 abstract class AbstractAgenticContext(
     applicationContext: AbstractApplicationContext
 ) : AbstractBrowser4H2SQLContext(applicationContext), AgenticContext {
-    private val logger = getLogger(this)
 
     val initConfiguration = MutableConfig(true)
 
@@ -56,7 +51,7 @@ open class BasicAgenticContext(
 ) : AbstractAgenticContext(applicationContext) {
 
     /**
-     * Create a [GenericAgenticSession].
+     * Create a [BasicAgenticSession] that accepts a [AbstractApplicationContext].
      *
      * > **NOTE:** The session is not a SQLSession, use [execute], [executeQuery] to access [ai.platon.pulsar.ql.SQLSession].
      * */
@@ -107,14 +102,14 @@ open class GenericAgenticContext(
 }
 
 /**
- * Simple static agentic context, used for test only.
+ * Simple static agentic context, components might be incomplete or trivial, used for test only.
  * */
 open class StaticAgenticContext(
     override val applicationContext: StaticApplicationContext = StaticApplicationContext(),
     autoRefresh: Boolean = false
 ) : GenericAgenticContext(applicationContext, false) {
 
-    private val defaults = ContextDefaults()
+    private val defaults by lazy { TrivialContextDefaults(this) }
 
     /**
      * The unmodified config

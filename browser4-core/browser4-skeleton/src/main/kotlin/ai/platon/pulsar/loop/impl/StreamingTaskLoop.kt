@@ -5,8 +5,8 @@ import ai.platon.pulsar.common.collect.UrlFeeder
 import ai.platon.pulsar.common.config.CapabilityTypes.CRAWL_ENABLE_DEFAULT_DATA_COLLECTORS
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.warnForClose
+import ai.platon.pulsar.core.api.PulsarContext
 import ai.platon.pulsar.loop.TaskRunner
-import ai.platon.pulsar.skeleton.context.PulsarContexts
 import ai.platon.pulsar.skeleton.context.support.AbstractPulsarContext
 import kotlinx.coroutines.*
 import org.slf4j.LoggerFactory
@@ -14,6 +14,7 @@ import java.util.concurrent.ConcurrentSkipListMap
 import java.util.concurrent.CountDownLatch
 
 open class StreamingTaskLoop(
+    val context: PulsarContext,
     /**
      * The unmodified configuration load from file
      * */
@@ -39,8 +40,6 @@ open class StreamingTaskLoop(
      * A UrlFeeder is a wrapper to globalCache.urlPool
      * */
     override val urlFeeder: UrlFeeder get() = getOrCreateUrlFeeder()
-
-    private val context get() = PulsarContexts.getOrCreate()
 
     init {
         logger.info("Main loop is created | #{} | {}@{}", id, name, hashCode())

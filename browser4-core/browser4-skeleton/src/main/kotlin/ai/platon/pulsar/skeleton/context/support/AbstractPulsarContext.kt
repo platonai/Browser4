@@ -240,7 +240,7 @@ abstract class AbstractPulsarContext(
     override fun normalize(url: String, options: LoadOptions, toItemOption: Boolean): NormURL {
         val url0 = try {
             url.takeIf { it.contains("://") } ?: String(Base64.getUrlDecoder().decode(url))
-        } catch (e: IllegalArgumentException) {
+        } catch (_: IllegalArgumentException) {
             logger.warn("Invalid URL, will goto the default search engine {}", Strings.compactInline(url))
             if (AppContext.isCN) AppConstants.SEARCH_ENGINE_URL else AppConstants.SEARCH_ENGINE_EN_URL
         }
@@ -425,13 +425,11 @@ abstract class AbstractPulsarContext(
      */
     @Throws(WebDBException::class)
     override fun loadAll(urls: Iterable<String>, options: LoadOptions): List<WebPage> {
-        startLoopIfNecessary()
         return abnormalPages ?: loadComponent.loadAll(normalize(urls, options))
     }
 
     @Throws(WebDBException::class)
     override fun loadAll(urls: Iterable<NormURL>): List<WebPage> {
-        startLoopIfNecessary()
         return abnormalPages ?: loadComponent.loadAll(urls)
     }
 
@@ -551,7 +549,7 @@ abstract class AbstractPulsarContext(
             if (shutdownHook != null) {
                 try {
                     Runtime.getRuntime().removeShutdownHook(shutdownHook)
-                } catch (ex: IllegalStateException) {
+                } catch (_: IllegalStateException) {
                     // ignore - VM is already shutting down
                 }
             }
@@ -574,7 +572,7 @@ abstract class AbstractPulsarContext(
                 // When running via exec:java or other process starter,
                 // Pulsar-related classes are unloaded as the process exits.
                 // warnForClose("Exception while closing context | $this", e)
-            } catch (ignored: LinkageError) {
+            } catch (_: LinkageError) {
                 // This prevents NoClassDefFoundError when classes have been unloaded
                 // (e.g., when running via maven exec:java)
                 // ignored

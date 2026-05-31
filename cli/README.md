@@ -145,6 +145,28 @@ The tables below mirror the commands surfaced by the global `browser4-cli help` 
 
 Use `tab-list` first to find the zero-based tab index you want to select or close.
 
+#### Browser storage
+
+| Command | Description |
+|---|---|
+| `state-save <path>` | Save cookies and localStorage to a JSON file |
+| `state-load <path>` | Restore cookies and localStorage from a saved state file |
+| `cookie-list` | List all cookies (optionally filtered by `--domain` / `--path`) |
+| `cookie-get <name>` | Get a cookie by name |
+| `cookie-set <name> <value>` | Set a cookie (optional `--path`, `--domain`) |
+| `cookie-delete <name>` | Delete a cookie by name |
+| `cookie-clear` | Clear all cookies for the current page |
+| `localstorage-list` | List all localStorage entries |
+| `localstorage-get <key>` | Get a localStorage value by key |
+| `localstorage-set <key> <value>` | Set a localStorage key-value pair |
+| `localstorage-delete <key>` | Delete a localStorage key |
+| `localstorage-clear` | Clear all localStorage entries |
+| `sessionstorage-list` | List all sessionStorage entries |
+| `sessionstorage-get <key>` | Get a sessionStorage value by key |
+| `sessionstorage-set <key> <value>` | Set a sessionStorage key-value pair |
+| `sessionstorage-delete <key>` | Delete a sessionStorage key |
+| `sessionstorage-clear` | Clear all sessionStorage entries |
+
 #### Browser sessions
 
 | Command | Description |
@@ -154,6 +176,18 @@ Use `tab-list` first to find the zero-based tab index you want to select or clos
 | `kill-all` | Forcefully stop `Browser4.jar` / the Browser4 backend and kill Browser4 browser processes |
 
 Use `close-all` for session cleanup when you want to keep the current Browser4 service running. Use `kill-all` only when you explicitly want to stop the backend and clean up tracked Browser4 processes.
+
+#### Server management
+
+| Command | Description |
+|---|---|
+| `install` | Download the self-contained Browser4 runtime bundle (JAR + bundled JRE) from GitHub Releases |
+| `upgrade` | Upgrade `browser4-cli` itself to the latest release (requires `cargo`) |
+| `stop` | Kill the Browser4 backend after closing all sessions |
+| `status` | Check whether the Browser4 backend is reachable and healthy |
+
+When a local Browser4 checkout is detected with the `browser4-bundle` module present,
+`install` auto-builds the runtime bundle from source instead of downloading.
 
 ### Advanced commands
 

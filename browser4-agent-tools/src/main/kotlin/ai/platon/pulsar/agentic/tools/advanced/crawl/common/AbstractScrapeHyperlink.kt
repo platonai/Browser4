@@ -1,5 +1,6 @@
 package ai.platon.pulsar.agentic.tools.advanced.crawl.common
 
+import ai.platon.pulsar.agentic.context.sql.AbstractBrowser4SQLContext
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
 import ai.platon.pulsar.common.AppContext
@@ -8,7 +9,6 @@ import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.ql.common.ResultSets
-import ai.platon.pulsar.ql.context.AbstractSQLContext
 import ai.platon.pulsar.ql.h2.utils.ResultSetUtils
 import ai.platon.pulsar.skeleton.event.PageEventHandlers
 import ai.platon.pulsar.skeleton.session.PulsarSession
@@ -24,7 +24,7 @@ import kotlin.system.measureTimeMillis
 open class ScrapeHyperlink(
     url: String,
     val uuid: String = UUID.randomUUID().toString()
-): CompletableListenableHyperlink<ScrapeResponse>(url) {
+) : CompletableListenableHyperlink<ScrapeResponse>(url) {
     val response = ScrapeResponse()
 }
 
@@ -37,7 +37,7 @@ abstract class AbstractScrapeHyperlink(
 
     private val logger = getLogger(XSQLScrapeHyperlink::class)
 
-    protected val sqlContext get() = session.context as AbstractSQLContext
+    protected val sqlContext get() = session.context as AbstractBrowser4SQLContext
     protected val connectionPool get() = sqlContext.connectionPool
     protected val randomConnection get() = sqlContext.randomConnection
     private val isCompleted = AtomicBoolean()

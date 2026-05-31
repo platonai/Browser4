@@ -680,7 +680,7 @@ pub(super) fn test_swarm_session_and_agent_tools(ctx: &mut E2ECtx) {
         .iter()
         .find(|call| call.tool == "agent_extract")
         .expect("expected agent_extract call");
-    assert_eq!(extract_call.arguments["sessionId"], "swarm-session-1");
+    assert_eq!(extract_call.arguments["sessionId"], "SWARM");
     assert_eq!(extract_call.arguments["instruction"], "product name, price");
     assert_eq!(extract_call.arguments["schema"], "{\"type\":\"object\"}");
 
@@ -688,7 +688,7 @@ pub(super) fn test_swarm_session_and_agent_tools(ctx: &mut E2ECtx) {
         .iter()
         .find(|call| call.tool == "agent_summarize")
         .expect("expected agent_summarize call");
-    assert_eq!(summarize_call.arguments["sessionId"], "swarm-session-1");
+    assert_eq!(summarize_call.arguments["sessionId"], "SWARM");
     assert_eq!(
         summarize_call.arguments["instruction"],
         "summarize the page marker"
@@ -851,7 +851,7 @@ pub(super) fn test_swarm_submission_commands(ctx: &mut E2ECtx) {
     assert!(
         swarm_submit_result
             .stdout
-            .contains("Submitted: https://example.com/direct"),
+            .contains("Task Submitted: https://example.com/direct"),
         "Expected direct URL submission output in:\n{}",
         swarm_submit_result.stdout
     );

@@ -566,7 +566,9 @@ fn normalize_process_text(value: &str) -> String {
 
 fn command_line_matches_browser4_server(command_line: &str) -> bool {
     let normalized = normalize_process_text(command_line);
-    normalized.contains("browser4.jar") || normalized.contains("browser4launcherkt")
+    normalized.contains("browser4.jar")
+        || normalized.contains("browser4launcherkt")
+        || normalized.contains("browser4bundleapplicationkt")
 }
 
 fn find_browser4_server_processes() -> Vec<u32> {
@@ -576,7 +578,10 @@ fn find_browser4_server_processes() -> Vec<u32> {
     {
         use std::process::Command;
         if let Ok(output) = Command::new("pgrep")
-            .args(["-f", r"browser4\.jar|browser4launcherkt"])
+            .args([
+                "-f",
+                r"browser4\.jar|browser4launcherkt|browser4bundleapplicationkt",
+            ])
             .output()
         {
             pids.extend(parse_pid_list(&output.stdout));
@@ -591,7 +596,7 @@ fn find_browser4_server_processes() -> Vec<u32> {
                 Where-Object {
                     $_.Name -match '^(java|javaw)\.exe$' -and
                     -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and
-                    $_.CommandLine -match '(?i)(Browser4\.jar|\bBrowser4LauncherKt\b)'
+                    $_.CommandLine -match '(?i)(Browser4\.jar|\bBrowser4LauncherKt\b|\bBrowser4BundleApplicationKt\b)'
                 } |
                 Select-Object -ExpandProperty ProcessId
         "#;
@@ -1047,12 +1052,14 @@ mod tests {
     }
 
     #[test]
-    fn test_command_line_matches_browser4_server_for_jar_and_launcher() {
+    fn test_command_line_matches_browser4_server_for_jar_launcher_and_bundle() {
         let jar = r#""C:/Java/bin/java.exe" -jar D:/browser4/Browser4.jar --server.port=8182"#;
         let launcher = r#""C:/Java/bin/java.exe" -cp @C:/Temp/spring-boot.argfile Browser4LauncherKt --server.port=8182"#;
+        let bundle = r#""D:/runtime/bin/java.exe" -cp D:/lib/* ai.platon.pulsar.apps.Browser4BundleApplicationKt --server.port=8182"#;
 
         assert!(command_line_matches_browser4_server(jar));
         assert!(command_line_matches_browser4_server(launcher));
+        assert!(command_line_matches_browser4_server(bundle));
     }
 
     #[test]

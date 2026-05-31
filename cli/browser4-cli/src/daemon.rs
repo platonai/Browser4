@@ -35,7 +35,6 @@ const BROWSER4_MAIN_CLASS: &str = "ai.platon.pulsar.apps.Browser4BundleApplicati
 const BROWSER4_INSTALL_METADATA_FILE_NAME: &str = "browser4-installation.json";
 const BROWSER4_RELEASES_BASE_URL: &str = "https://github.com/platonai/Browser4/releases";
 const BROWSER4_RELEASES_BASE_URL_ENV: &str = "BROWSER4_RELEASES_BASE_URL";
-const BROWSER4_JAVA_PATH_ENV: &str = "BROWSER4_JAVA_PATH";
 const ROOT_SEARCH_START_DIR_ENV: &str = "BROWSER4_CLI_INVOKE_DIR";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -236,18 +235,8 @@ fn browser4_install_dir() -> PathBuf {
     resolve_default_state_dir().join(CLI_LIB_DIR_COMPONENT)
 }
 
-fn default_browser4_jre_dir() -> PathBuf {
-    browser4_install_dir().join(BROWSER4_RUNTIME_DIR_NAME)
-}
-
 fn browser4_java_executable_name() -> &'static str {
     if cfg!(windows) { "java.exe" } else { "java" }
-}
-
-fn default_browser4_java_path() -> PathBuf {
-    default_browser4_jre_dir()
-        .join("bin")
-        .join(browser4_java_executable_name())
 }
 
 fn browser4_install_metadata_path() -> PathBuf {
@@ -259,26 +248,6 @@ fn java_path_in_install_dir(install_dir: &Path) -> PathBuf {
         .join(BROWSER4_RUNTIME_DIR_NAME)
         .join("bin")
         .join(browser4_java_executable_name())
-}
-
-fn browser4_java_override_path() -> Option<PathBuf> {
-    let override_path = env::var(BROWSER4_JAVA_PATH_ENV).ok()?;
-    let trimmed = override_path.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    Some(PathBuf::from(trimmed))
-}
-
-fn installed_browser4_java_path() -> Option<PathBuf> {
-    let path = default_browser4_java_path();
-    path.is_file().then_some(path)
-}
-
-fn resolve_browser4_java_command() -> PathBuf {
-    browser4_java_override_path()
-        .or_else(installed_browser4_java_path)
-        .unwrap_or_else(|| PathBuf::from("java"))
 }
 
 pub fn read_installed_browser4_runtime_metadata() -> Option<InstalledBrowser4RuntimeMetadata> {
@@ -721,34 +690,6 @@ fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> Serve
             port
         ),
     }
-}
-
-fn java_jar_argument_path(jar_path: &Path) -> String {
-    #[cfg(windows)]
-    {
-        normalize_windows_verbatim_path_for_java(jar_path)
-    }
-
-    #[cfg(not(windows))]
-    {
-        jar_path.to_string_lossy().to_string()
-    }
-}
-
-#[cfg(windows)]
-fn normalize_windows_verbatim_path_for_java(path: &Path) -> String {
-    let raw = path.to_string_lossy();
-    if let Some(without_prefix) = raw.strip_prefix(r"\\?\UNC\") {
-        return format!(r"\\{without_prefix}");
-    }
-    if let Some(without_prefix) = raw.strip_prefix(r"\\?\") {
-        return without_prefix.to_string();
-    }
-    raw.to_string()
-}
-
-fn default_server_working_dir() -> PathBuf {
-    env::current_dir().unwrap_or_else(|_| resolve_default_state_dir())
 }
 
 fn command_for_launch_spec(
@@ -1289,18 +1230,6 @@ async fn find_or_install_runtime() -> Result<InstalledBrowser4Runtime, String> {
     // Download and install the runtime bundle
     install_browser4_runtime(None, false).await
 }
-
-fn browser4_jar_override_path() -> Option<PathBuf> {
-    let override_path = env::var("BROWSER4_JAR_PATH").ok()?;
-    let trimmed = override_path.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let path = PathBuf::from(trimmed);
-    path.exists().then_some(path)
-}
-
 
 async fn start_server(
     launch_spec: &ServerLaunchSpec,
@@ -2095,42 +2024,6 @@ mod tests {
     }
 
     #[test]
-    fn test_default_browser4_java_path_uses_state_dir_override() {
-        let tmp = test_temp_dir();
-        let expected = tmp
-            .path()
-            .canonicalize()
-            .unwrap()
-            .join("lib")
-            .join("runtime")
-            .join("bin")
-            .join(browser4_java_executable_name());
-
-        unsafe {
-            env::set_var("BROWSER4_CLI_STATE_DIR", tmp.path().as_os_str());
-        }
-        let actual = default_browser4_java_path();
-        unsafe {
-            env::remove_var("BROWSER4_CLI_STATE_DIR");
-        }
-
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn test_browser4_jar_override_path_ignores_blank_values() {
-        unsafe {
-            env::set_var("BROWSER4_JAR_PATH", "   ");
-        }
-        let actual = browser4_jar_override_path();
-        unsafe {
-            env::remove_var("BROWSER4_JAR_PATH");
-        }
-
-        assert_eq!(actual, None);
-    }
-
-    #[test]
     fn test_browser4_release_download_url_defaults_to_latest() {
         let previous = env::var(BROWSER4_RELEASES_BASE_URL_ENV).ok();
         unsafe {
@@ -2229,25 +2122,6 @@ mod tests {
             .ends_with(Path::new("lib").join("runtime").join("bin").join(browser4_java_executable_name())));
         assert!(runtime.reused_existing);
     }
-
-    #[test]
-    fn test_resolve_browser4_java_command_prefers_installed_runtime_java() {
-        let tmp = test_temp_dir();
-
-        unsafe {
-            env::set_var("BROWSER4_CLI_STATE_DIR", tmp.path().as_os_str());
-        }
-        let installed_java = default_browser4_java_path();
-        create_dir_all(installed_java.parent().unwrap()).unwrap();
-        write(&installed_java, "java").unwrap();
-        let actual = resolve_browser4_java_command();
-        unsafe {
-            env::remove_var("BROWSER4_CLI_STATE_DIR");
-        }
-
-        assert_eq!(actual, installed_java.canonicalize().unwrap());
-    }
-
 
     #[test]
     fn test_server_startup_log_dir_uses_provided_log_dir() {
@@ -2510,26 +2384,6 @@ mod tests {
                 wrapper.to_string_lossy().replace('\'', "''"),
                 args[0].replace('\'', "''")
             )
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn test_normalize_windows_verbatim_path_for_java_drive_path() {
-        let path = PathBuf::from(r"\\?\C:\temp\Browser4.jar");
-        assert_eq!(
-            normalize_windows_verbatim_path_for_java(&path),
-            r"C:\temp\Browser4.jar"
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn test_normalize_windows_verbatim_path_for_java_unc_path() {
-        let path = PathBuf::from(r"\\?\UNC\server\share\Browser4.jar");
-        assert_eq!(
-            normalize_windows_verbatim_path_for_java(&path),
-            r"\\server\share\Browser4.jar"
         );
     }
 

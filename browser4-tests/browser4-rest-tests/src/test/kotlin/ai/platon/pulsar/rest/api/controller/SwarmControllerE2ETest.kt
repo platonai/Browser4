@@ -42,7 +42,7 @@ class SwarmControllerE2ETest : RestAPITestBase() {
         assertTrue(response.status!!.isNotBlank())
         assertTrue(response.profileMode in setOf("SEQUENTIAL", "TEMPORARY"))
         assertEquals(SWARM_SESSION_ID, response.capabilities?.get("sessionId"))
-        assertEquals(response.profileMode, response.capabilities?.get("profileMode")?.toString())
+        assertEquals(response.profileMode, response.capabilities?.get("profileMode"))
     }
 
     /**

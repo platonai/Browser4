@@ -8,7 +8,7 @@ open class GenericPulsarContext(
     autoRefresh: Boolean = false
 ) : BasicPulsarContext(applicationContext) {
 
-    private val defaults = ContextDefaults()
+    private val defaults by lazy { TrivialContextDefaults(this) }
 
     /**
      * The unmodified config

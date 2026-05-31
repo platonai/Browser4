@@ -311,7 +311,7 @@ class PageHandler constructor(
             // As a last resort, attempt legacy JS utility when a CSS selector is available
             // TODO: check if it is necessary to fallback to use JavaScript to scrollIntoView
             if (!selector.isNullOrBlank()) {
-                val safeSelector = dom.normalizeLocator(selector, true)
+                val safeSelector = dom.normalizeSelector(selector, true) ?: selector
                 js.evaluate("__pulsar_utils__.scrollIntoView($safeSelector)")
             }
             nodeRef

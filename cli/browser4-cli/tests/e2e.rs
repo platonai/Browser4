@@ -17,6 +17,7 @@
 //! cargo test --test e2e -- --nocapture --batch-only
 //! cargo test --test e2e -- --nocapture --scenario=test_e2e_agent_task_commands
 //! cargo test --test e2e -- --nocapture --scenario=test_e2e_batch_*
+//! cargo test --test e2e -- --nocapture --scenario=test_e2e_swarm_*
 //! cargo test --test e2e -- --nocapture --scenario-from=test_e2e_mouse_and_dialog
 //! cargo test --test e2e -- --nocapture --scenario-from=test_e2e_navigation_and_storage --scenario-limit=5
 //! cargo test --test e2e -- --nocapture --failed
@@ -25,7 +26,7 @@
 //!
 //! The `--failed` selector reruns scenario names stored by the previous run in
 //! `%TEMP%/browser4/browser4-cli/e2e/last-failed-scenarios.json`.
-//! By default the full e2e run skips batch-command scenarios; pass
+//! By default, the full e2e run skips batch-command scenarios; pass
 //! `--enable-batch-scenario` to include them, or `--batch-only` to run only
 //! batch-command scenarios.
 //!
@@ -514,7 +515,17 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                     let session_id = {
                         let mut guard = state.lock().expect("mock Browser4 state mutex poisoned");
                         let session_id = if guard.queued_open_session_ids.is_empty() {
-                            "swarm-session-1".to_string()
+                            // SWARM sessions must return the fixed session ID "SWARM".
+                            let requested_session_id = arguments
+                                .get("capabilities")
+                                .and_then(|caps| caps.get("sessionId"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or_default();
+                            if requested_session_id.eq_ignore_ascii_case("SWARM") {
+                                "SWARM".to_string()
+                            } else {
+                                "swarm-session-1".to_string()
+                            }
                         } else {
                             guard.queued_open_session_ids.remove(0)
                         };
@@ -650,7 +661,8 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                 &format!(r#""{}""#, task_id),
             );
         }
-        _ if method == "POST" && (route == "/api/x/submit" || route == "/api/x/s") => {
+        _ if method == "POST"
+            && (route == "/api/x/submit" || route == "/api/x/s" || route == "/api/swarm/submit") => {
             let payload = String::from_utf8_lossy(&body).trim().to_string();
             let task_id = {
                 let mut guard = state.lock().expect("mock Browser4 state mutex poisoned");
@@ -691,12 +703,11 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
             .to_string();
             write_http_response(&mut stream, "200 OK", "application/json", &response);
         }
-        _ if method == "GET" && route.starts_with("/api/x/") && route.ends_with("/status") => {
-            let Some(task_id) = route
-                .strip_prefix("/api/x/")
-                .and_then(|rest| rest.strip_suffix("/status"))
-                .map(|value| value.trim_end_matches('/'))
-                .filter(|value| !value.is_empty())
+        _ if method == "GET"
+            && (route.starts_with("/api/x/") || route.starts_with("/api/swarm/"))
+            && route.ends_with("/status") =>
+        {
+            let Some(task_id) = extract_swarm_task_id(route, "/status")
             else {
                 write_http_response(&mut stream, "404 Not Found", "text/plain", "not found");
                 return;
@@ -745,12 +756,11 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                 &response,
             );
         }
-        _ if method == "GET" && route.starts_with("/api/x/") && route.ends_with("/result") => {
-            let Some(task_id) = route
-                .strip_prefix("/api/x/")
-                .and_then(|rest| rest.strip_suffix("/result"))
-                .map(|value| value.trim_end_matches('/'))
-                .filter(|value| !value.is_empty())
+        _ if method == "GET"
+            && (route.starts_with("/api/x/") || route.starts_with("/api/swarm/"))
+            && route.ends_with("/result") =>
+        {
+            let Some(task_id) = extract_swarm_task_id(route, "/result")
             else {
                 write_http_response(&mut stream, "404 Not Found", "text/plain", "not found");
                 return;
@@ -784,6 +794,18 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
             "not found",
         ),
     }
+}
+
+fn extract_swarm_task_id(route: &str, suffix: &str) -> Option<String> {
+    for prefix in ["/api/x/", "/api/swarm/"] {
+        if let Some(rest) = route.strip_prefix(prefix) {
+            return rest
+                .strip_suffix(suffix)
+                .map(|value| value.trim_end_matches('/').to_string())
+                .filter(|value| !value.is_empty());
+        }
+    }
+    None
 }
 
 fn mock_browser_tool_text(tool: &str, arguments: &serde_json::Value) -> String {
@@ -1852,6 +1874,69 @@ fn extract_tab_index(output: &str, url: &str) -> usize {
 }
 
 // ---------------------------------------------------------------------------
+// Swarm / agent helpers
+// ---------------------------------------------------------------------------
+
+fn extract_swarm_submissions(output: &str) -> Vec<(String, String)> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let rest = line.strip_prefix("Task Submitted: ")?;
+            let (url, task_id) = rest.split_once(" -> Task ID: ")?;
+            let url = url.trim();
+            let task_id = task_id.trim();
+            if url.is_empty() || task_id.is_empty() {
+                return None;
+            }
+            Some((url.to_string(), task_id.to_string()))
+        })
+        .collect()
+}
+
+fn parse_json_output(stdout: &str, command_name: &str) -> serde_json::Value {
+    let payload = strip_snapshot_output(stdout);
+    serde_json::from_str(&payload).unwrap_or_else(|error| {
+        panic!("Expected JSON payload from {command_name}, got:\n{payload}\nparse error: {error}")
+    })
+}
+
+fn swarm_done_flag(payload: &serde_json::Value) -> Option<bool> {
+    payload
+        .get("isDone")
+        .and_then(|value| value.as_bool())
+        .or_else(|| payload.get("done").and_then(|value| value.as_bool()))
+}
+
+fn wait_for_swarm_result(ctx: &mut E2ECtx, task_id: &str, timeout_ms: u64) -> serde_json::Value {
+    let started_at = Instant::now();
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    let mut last_payload = String::new();
+
+    while Instant::now() < deadline {
+        let result = run_checked_cli_process(ctx, &["swarm", "result", task_id]);
+        let payload = strip_snapshot_output(&result.stdout);
+        last_payload = payload.clone();
+        let parsed = parse_json_output(&result.stdout, "swarm result");
+        if parsed["id"].as_str() == Some(task_id) && swarm_done_flag(&parsed) == Some(true) {
+            ctx.record_step(
+                format!(
+                    "wait for swarm result {task_id} done (timeout={}ms)",
+                    timeout_ms
+                ),
+                started_at.elapsed(),
+            );
+            return parsed;
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+
+    panic!(
+        "Timed out after {timeout_ms}ms waiting for swarm result '{task_id}' to complete. Last payload:\n{last_payload}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // State helpers
 // ---------------------------------------------------------------------------
 
@@ -2272,11 +2357,11 @@ fn start_mock_swarm_session(ctx: &mut E2ECtx) -> MockBrowser4Server {
     assert!(
         swarm_create_result
             .stdout
-            .contains("Swarm session created: swarm-session-1"),
+            .contains("Swarm session created: SWARM"),
         "Expected swarm session creation output in:\n{}",
         swarm_create_result.stdout
     );
-    assert_eq!(read_persisted_session_id(&ctx.state_dir), "swarm-session-1");
+    assert_eq!(read_persisted_session_id(&ctx.state_dir), "SWARM");
 
     mock_server
 }
@@ -3265,6 +3350,25 @@ fn main() {
     println!("running {total_tests} tests");
 
     let mut resources = create_e2e_test_resources();
+
+    // Sweep orphaned Browser4 processes from previous runs before starting.
+    // This is a safety net: even if the final cleanup of a prior run was
+    // skipped (e.g. Ctrl+C), the next run starts from a clean slate.
+    let pre_sweep_started_at = Instant::now();
+    let pre_sweep_result = stop_browser4_server_forcibly();
+    if pre_sweep_result.shutdown.stopped_pids.is_empty()
+        && pre_sweep_result.browser_kill.killed_pids.is_empty()
+    {
+        // nothing to clean up — don't add a timing entry
+    } else {
+        eprintln!(
+            "[pre-sweep] cleaned up {} server(s) and {} browser(s) from previous runs ({:.2}s)",
+            pre_sweep_result.shutdown.stopped_pids.len(),
+            pre_sweep_result.browser_kill.killed_pids.len(),
+            pre_sweep_started_at.elapsed().as_secs_f64()
+        );
+    }
+
     let run_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut timings: Vec<TimingReport> = Vec::with_capacity(total_tests);
         let mut scenario_failures: Vec<(String, FailureDetail)> = Vec::new();

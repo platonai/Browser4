@@ -57,7 +57,7 @@ open class IntegrationTestBase {
 
     @BeforeTest
     fun setup() {
-        assertTrue("Session should be BasicAgenticSession, actual ${session.javaClass}") { session is GenericAgenticSession }
+        assertTrue("Session should be GenericAgenticSession, actual ${session.javaClass}") { session is  GenericAgenticSession }
         BrowserSettings.withBrowserContextMode(BrowserProfileMode.TEMPORARY)
         assertTrue("Server port should have been injected and > 0, but was $serverPort") { serverPort > 0 }
     }

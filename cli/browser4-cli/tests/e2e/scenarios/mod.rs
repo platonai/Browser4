@@ -1,6 +1,8 @@
+pub(crate) mod agent;
 pub(crate) mod batch;
 pub(crate) mod browser;
 pub(crate) mod mock_server;
+pub(crate) mod swarm;
 
 use super::*;
 
@@ -89,7 +91,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         requires_browser4: true,
         restart_browser4: false,
         test_count: 1,
-        test_fn: browser::test_agent_run_live_or_missing_llm_key,
+        test_fn: agent::test_agent_run_live_or_missing_llm_key,
     },
     ScenarioDef {
         name: "test_e2e_swarm_submission_commands_live",
@@ -97,7 +99,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         requires_browser4: true,
         restart_browser4: false,
         test_count: 1,
-        test_fn: browser::test_swarm_submission_commands_live,
+        test_fn: swarm::test_swarm_submission_commands_live,
     },
     ScenarioDef {
         name: "test_e2e_wait_for_state_failure_modes",

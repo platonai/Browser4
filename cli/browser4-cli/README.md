@@ -1,77 +1,50 @@
-# Browser4 CLI
+# Browser4 CLI (development)
 
-A command-line interface for controlling a [Browser4](https://github.com/platonai/Browser4) server. Designed for use by AI agents through SKILLS + CLI.
+Rust CLI binary for controlling a [Browser4](https://github.com/platonai/Browser4) server.
+See [`cli/README.md`](../README.md) for the user-facing documentation.
 
 ## Build
 
 ```bash
-cd cli/browser4-cli
 cargo build --release
-# Binary is at target/release/browser4-cli
-# Or install to Cargo bin directory (%USERPROFILE%\.cargo\bin on Windows, ~/.cargo/bin on Unix):
+# Binary: target/release/browser4-cli
 cargo install --path .
 ```
 
-Or run directly:
+## Architecture
 
-```bash
-cargo run -- <command> [args] [options]
-```
-
-## Usage
-
-```
-browser4-cli <command> [args] [options]
-browser4-cli -s=<session> <command> [args] [options]
-```
-
-### Global options
-
-| Flag | Description |
+| Module | Purpose |
 |---|---|
-| `--help [command]` | Print help (optionally for a specific command) |
-| `--version` | Print version |
-| `-s=<name>` | Named session label |
-| `--server=<url>` | Override Browser4 server URL |
-
-Sessions are persisted independently per name. Omitting `-s` uses the
-default session (`~/.browser4/cli-state.json`). With `-s=<name>`, a
-separate state file is stored under `~/.browser4/sessions/<name>.json`.
-`open` without `-s` reuses the default session if one exists; with
-`-s=<name>` it switches to or creates the named session.
-
-## Install Browser4 backend runtime
-
-`browser4-cli install` downloads a self-contained Browser4 runtime bundle from GitHub Releases.
-The bundle includes both `Browser4.jar` and a bundled minimal `jlink` JRE under the CLI state
-directory, so later `browser4-cli open` invocations can launch Browser4 without relying on a
-system-wide Java installation.
-
-```bash
-# install the latest runtime bundle for the current OS/architecture
-browser4-cli install
-
-# install a specific release tag
-browser4-cli install --tag=v4.9.3
-
-# force a tagged reinstall
-browser4-cli install --tag=4.9.3 --force
-
-# after installation, open uses the bundled JRE automatically
-browser4-cli open
-```
+| `src/main.rs` | Entry point, command dispatch, session lifecycle |
+| `src/commands.rs` | Command definitions (name, args, options, MCP tool mapping) |
+| `src/args.rs` | CLI argument parsing |
+| `src/http.rs` | HTTP client for `/mcp/call-tool` |
+| `src/state.rs` | Persistent CLI state (`~/.browser4/cli-state.json`) |
+| `src/daemon.rs` | Local Browser4 server auto-start (Maven / jar / download) |
+| `src/managed_processes.rs` | Server process registry and force-cleanup |
+| `src/snapshot.rs` | Snapshot & screenshot file helpers |
+| `src/help.rs` | Help text generation |
 
 ## Testing
 
 ```bash
-## Run all tests (unit + end-to-end):
+# All tests
 cargo test
 
-## Run only the end-to-end tests and print their output:
+# End-to-end tests with output
 cargo test --test e2e -- --nocapture
 
-## Run a specific end-to-end test scenario:
+# Specific scenario
 cargo test --test e2e -- --nocapture --scenario=test_e2e_batch_form_submission
+
+# Pattern match
+cargo test --test e2e -- --nocapture --scenario=test_e2e_swarm_*
+
+# Rerun failures
+cargo test --test e2e -- --nocapture --failed
+
+# Include batch scenarios (skipped by default)
+cargo test --test e2e -- --nocapture --enable-batch-scenario
 ```
 
 ## License

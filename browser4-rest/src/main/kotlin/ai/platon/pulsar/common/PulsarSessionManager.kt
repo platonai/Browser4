@@ -7,6 +7,7 @@ import ai.platon.browser4.common.B4Constants.SESSION_ID_CAPABILITY
 import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.PerceptiveAgent
+import ai.platon.pulsar.agentic.context.AbstractAgenticContext
 import ai.platon.pulsar.agentic.context.AgenticContext
 import ai.platon.pulsar.agentic.context.AgenticContexts
 import ai.platon.pulsar.common.browser.BrowserProfileMode
@@ -33,24 +34,6 @@ class PulsarSessionManager(
     private val sessions = ConcurrentHashMap<String, ManagedSession>()
 
     /**
-     * The default session is a special session that can be accessed without specifying a session ID.
-     * It is created on demand and shared across all requests that do not specify a session ID.
-     * The profile mode is pinned to DEFAULT.
-     * */
-    fun ensureDefaultSession(capabilities: Map<String, String?>? = null): ManagedSession {
-        val session = getOrCreateSession(DEFAULT_SESSION_ID, capabilities)
-        val pulsarSession = session.agenticSession
-
-        val conf = pulsarSession.sessionConfig
-        val browserProfileMode = conf.getWithFallback(BROWSER_PROFILE_MODE, BROWSER_CONTEXT_MODE)
-        require(browserProfileMode == BrowserProfileMode.DEFAULT.name) {
-            "Default session must have profile mode DEFAULT, but got $browserProfileMode"
-        }
-
-        return session
-    }
-
-    /**
      * The swarm session is a special session that used for swarm use cases. It is created on demand and shared
      * across all requests that specify the swarm session ID. The profile mode is pinned to SEQUENTIAL or TEMPORARY
      * based on the input capabilities, but defaults to SEQUENTIAL if not specified or invalid. The swarm session
@@ -68,7 +51,7 @@ class PulsarSessionManager(
         // normalizedCapabilities[BROWSER_PROFILE_MODE] = browserProfileMode
 
         val settings = PulsarSettings.parse(normalizedCapabilities)
-        val agenticSession = AgenticContexts.ensureSwarmSession(settings)
+        val agenticSession = AgenticContexts.ensureSwarmSession(settings, (agenticContext as AbstractAgenticContext).applicationContext)
 
         // val pulsarSession = session.agenticSession
 
@@ -90,6 +73,13 @@ class PulsarSessionManager(
     }
 
     fun getOrCreateSession(sessionId: String, capabilities: Map<String, String?>? = null): ManagedSession {
+        // Route SWARM sessions before computeIfAbsent — ensureSwarmSession
+        // internally calls computeIfAbsent, and ConcurrentHashMap forbids
+        // nested computeIfAbsent on the same key.
+        if (sessionId.equals(SWARM_SESSION_ID, ignoreCase = true)) {
+            return ensureSwarmSession(capabilities)
+        }
+
         val normalizedCapabilities = normalizeCapabilities(sessionId, capabilities)
         val session = sessions.computeIfAbsent(sessionId) {
             createManagedSession(sessionId, normalizedCapabilities)
@@ -110,6 +100,12 @@ class PulsarSessionManager(
     fun getOrCreateSession(capabilities: Map<String, String?>? = null): ManagedSession {
         val normalizedCapabilities = normalizeCapabilities(capabilities = capabilities)
         val sessionId = normalizedCapabilities.getValue(SESSION_ID_CAPABILITY).toString()
+
+        // Route SWARM sessions before computeIfAbsent (see explanation above).
+        if (sessionId.equals(SWARM_SESSION_ID, ignoreCase = true)) {
+            return ensureSwarmSession(capabilities)
+        }
+
         val session = sessions.computeIfAbsent(sessionId) {
             createManagedSession(sessionId, normalizedCapabilities)
         }
@@ -244,11 +240,11 @@ class PulsarSessionManager(
     ): Map<String, String?> {
         val normalizedCapabilities = LinkedHashMap(capabilities.orEmpty())
         val hasExplicitSessionId = !explicitSessionId.isNullOrBlank()
-        val requestedSessionId = normalizedCapabilities[SESSION_ID_CAPABILITY]?.toString()?.trim()
+        val requestedSessionId = normalizedCapabilities[SESSION_ID_CAPABILITY]?.trim()
         val sessionId = when {
             explicitSessionId.equals(DEFAULT_SESSION_ID, ignoreCase = true) -> DEFAULT_SESSION_ID
             explicitSessionId.equals(SWARM_SESSION_ID, ignoreCase = true) -> SWARM_SESSION_ID
-            hasExplicitSessionId -> requireNotNull(explicitSessionId).trim()
+            hasExplicitSessionId -> explicitSessionId.trim()
             requestedSessionId.isNullOrBlank() || requestedSessionId.equals(
                 DEFAULT_SESSION_ID,
                 ignoreCase = true
