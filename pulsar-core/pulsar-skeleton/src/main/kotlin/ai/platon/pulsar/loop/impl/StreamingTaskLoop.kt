@@ -6,9 +6,7 @@ import ai.platon.pulsar.common.config.CapabilityTypes.CRAWL_ENABLE_DEFAULT_DATA_
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.warnForClose
 import ai.platon.pulsar.core.api.PulsarContext
-import ai.platon.pulsar.core.api.PulsarSession
 import ai.platon.pulsar.loop.TaskRunner
-import ai.platon.pulsar.skeleton.context.PulsarContexts
 import ai.platon.pulsar.skeleton.context.support.AbstractPulsarContext
 import kotlinx.coroutines.*
 import org.slf4j.LoggerFactory
