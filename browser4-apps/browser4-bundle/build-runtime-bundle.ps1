@@ -3,7 +3,7 @@ param(
     [string]$OutputDirectory = (Join-Path $PSScriptRoot "target/runtime-bundle"),
     [string]$AssetName,
     [string]$MainClass = '',
-    [switch]$Force
+    [switch]$Force = $true
 )
 
 Set-StrictMode -Version Latest
@@ -62,6 +62,95 @@ function Remove-ArchiveSuffix([string]$name) {
     return [System.IO.Path]::GetFileNameWithoutExtension($name)
 }
 
+# --------------------------------------------------------------------------
+# JDK auto-detection — scan known install directories for jpackage (JDK 16+),
+# pick the highest version, and set JAVA_HOME accordingly before any tool use.
+# --------------------------------------------------------------------------
+
+function Get-JDKVersion([string]$jdkHome) {
+    # Fast path: parse <jdk>/release — no process spawn, I/O only.
+    $releaseFile = Join-Path $jdkHome 'release'
+    if (-not (Test-Path $releaseFile)) { return $null }
+
+    $content = Get-Content -LiteralPath $releaseFile -Raw -ErrorAction SilentlyContinue
+    if ($content -match 'JAVA_VERSION="([^"]+)"') {
+        $versionStr = $Matches[1]
+        # Normalise "17", "17.0.14", "17.0.14+7" etc.
+        if ($versionStr -match '^(\d+)(?:\.(\d+))?(?:\.(\d+))?') {
+            $major = [int]$Matches[1]
+            $minor = if ($Matches[2]) { [int]$Matches[2] } else { 0 }
+            $build = if ($Matches[3]) { [int]$Matches[3] } else { 0 }
+            return [version]"$major.$minor.$build"
+        }
+    }
+    return $null
+}
+
+function Find-BestJDK {
+    # Scans common JDK install roots for jpackage (JDK 16+ marker),
+    # returns the path of the highest-version JDK >= 16, or $null.
+    $minMajor = 16
+    $bestHome = $null
+    $bestVersion = [version]'0.0'
+
+    # Collect search roots — one filesystem scan per root, shallow.
+    $searchRoots = [System.Collections.Generic.List[string]]::new()
+    if (Get-IsWindows) {
+        foreach ($base in @($env:ProgramFiles, ${env:ProgramFiles(x86)}, "$env:SystemDrive\Java")) {
+            if ($base) { $searchRoots.Add($base) }
+        }
+        # Also cover each drive: <drive>:\<sub> AND <drive>:\Program Files\<sub>
+        Get-PSDrive -PSProvider FileSystem | ForEach-Object {
+            $pf = Join-Path $_.Root 'Program Files'
+            foreach ($sub in @('Java', 'OpenLogic', 'Eclipse Adoptium', 'Microsoft', 'Zulu', 'Corretto')) {
+                $searchRoots.Add((Join-Path $_.Root $sub))
+                $searchRoots.Add((Join-Path $pf $sub))
+            }
+        }
+    } elseif (Get-IsMacOS) {
+        $searchRoots.Add('/Library/Java/JavaVirtualMachines')
+        if ($env:HOME) { $searchRoots.Add((Join-Path $env:HOME '.sdkman/candidates/java')) }
+    } else {
+        foreach ($sub in @('/usr/lib/jvm', '/usr/java')) { $searchRoots.Add($sub) }
+        if ($env:HOME) { $searchRoots.Add((Join-Path $env:HOME '.sdkman/candidates/java')) }
+    }
+    $searchRoots = $searchRoots | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
+
+    foreach ($root in $searchRoots) {
+        $jdkDirs = Get-ChildItem -Path $root -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match 'jdk|graalvm|openjdk|zulu|temurin|corretto|sapmachine' }
+        foreach ($jdkDir in $jdkDirs) {
+            $jpkg = if (Get-IsWindows) { Join-Path $jdkDir.FullName 'bin\jpackage.exe' }
+                     else { Join-Path $jdkDir.FullName 'bin/jpackage' }
+            if (-not (Test-Path $jpkg)) { continue }
+
+            $ver = Get-JDKVersion -jdkHome $jdkDir.FullName
+            if ($ver -and $ver.Major -ge $minMajor -and $ver -gt $bestVersion) {
+                $bestVersion = $ver
+                $bestHome = $jdkDir.FullName
+            }
+        }
+    }
+
+    return $bestHome
+}
+
+function Resolve-JavaHome {
+    $best = Find-BestJDK
+    if ($best) {
+        Write-Host "Auto-selected JDK for bundle build: $best ($(Get-JDKVersion -jdkHome $best))" -ForegroundColor Cyan
+        $env:JAVA_HOME = $best
+        return $best
+    }
+
+    if ($env:JAVA_HOME) {
+        Write-Host "No JDK >= 16 found via auto-detection; using JAVA_HOME from environment: $env:JAVA_HOME" -ForegroundColor Yellow
+    } else {
+        Write-Host "No JDK >= 16 found; relying on PATH resolution (jlink --compress zip-9 requires JDK 21+)." -ForegroundColor Yellow
+    }
+    return $env:JAVA_HOME
+}
+
 function Resolve-ToolPath([string]$toolName) {
     $toolFileName = if (Get-IsWindows) { "$toolName.exe" } else { $toolName }
     if ($env:JAVA_HOME) {
@@ -76,7 +165,7 @@ function Resolve-ToolPath([string]$toolName) {
         return $command.Source
     }
 
-    throw "Required tool '$toolName' was not found. Ensure JDK 17+ is installed and JAVA_HOME is configured."
+    throw "Required tool '$toolName' was not found. Ensure JDK 16+ is installed and JAVA_HOME is configured."
 }
 
 function Get-JavaVersionText {
@@ -106,7 +195,13 @@ function Get-JavaVersionText {
 
 function Ensure-CleanDirectory([string]$path) {
     if (Test-Path $path) {
-        Remove-Item -Recurse -Force $path
+        # Use \\?\ prefix to bypass Windows MAX_PATH (260 char) limit.
+        $longPath = if (Get-IsWindows -and -not $path.StartsWith('\\?\' -as [String])) { "\\?\$path" } else { $path }
+        Remove-Item -LiteralPath $longPath -Recurse -Force -ErrorAction SilentlyContinue
+        # If the long-path removal left empty directories behind, clean up via normal path.
+        if (Test-Path $path) {
+            Remove-Item -Recurse -Force $path -ErrorAction SilentlyContinue
+        }
     }
     New-Item -ItemType Directory -Force -Path $path | Out-Null
 }
@@ -134,7 +229,8 @@ function Get-BundleMetadataJson(
 
 function Remove-IfExists([string]$path) {
     if (Test-Path $path) {
-        Remove-Item -LiteralPath $path -Force -Recurse
+        $longPath = if (Get-IsWindows -and -not $path.StartsWith('\\?\' -as [String])) { "\\?\$path" } else { $path }
+        Remove-Item -LiteralPath $longPath -Force -Recurse -ErrorAction SilentlyContinue
     }
 }
 
@@ -285,6 +381,9 @@ New-Item -ItemType Directory -Force -Path $resolvedOutputDirectory | Out-Null
 Ensure-CleanDirectory $workDirectory
 Ensure-CleanDirectory $bundleDirectory
 Ensure-CleanDirectory $libDirectory
+
+# Auto-detect best JDK before resolving jdeps/jlink.
+$null = Resolve-JavaHome
 
 $jdeps = Resolve-ToolPath 'jdeps'
 $jlink = Resolve-ToolPath 'jlink'
