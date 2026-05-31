@@ -11,7 +11,6 @@ import ai.platon.pulsar.browser.common.DisplayMode
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.skeleton.PulsarSettings
 import ai.platon.pulsar.skeleton.context.PulsarContexts
-import ai.platon.pulsar.skeleton.context.support.AbstractPulsarContext
 import org.springframework.context.ApplicationContext
 import org.springframework.context.annotation.AnnotationConfigApplicationContext
 import org.springframework.context.support.AbstractApplicationContext
@@ -35,6 +34,7 @@ import org.springframework.context.support.StaticApplicationContext
  * - This object works with the global [PulsarContexts] to manage the active context and shutdown hooks.
  * - Use [createSession] / [getOrCreateSession] for convenient session bootstrap.
  */
+@Suppress("unused")
 object AgenticContexts {
     /**
      * Create or return the active [AgenticContext].
@@ -170,8 +170,8 @@ object AgenticContexts {
     @Synchronized
     @JvmStatic
     @Throws(Exception::class)
-    fun ensureSwarmSession(settings: PulsarSettings): AgenticSession {
-        val context = create() as AbstractPulsarContext
+    fun ensureSwarmSession(settings: PulsarSettings, applicationContext: ApplicationContext): AgenticSession {
+        val context = getOrCreate(applicationContext) as AbstractAgenticContext
         val swarmSession =
             context.sessions.values.filterIsInstance<AgenticSession>().firstOrNull { it.label == SWARM_SESSION_LABEL }
         if (swarmSession != null) {
@@ -185,7 +185,7 @@ object AgenticContexts {
             else -> BrowserProfileMode.SEQUENTIAL
         }
         val settings = settings.copy(label = SWARM_SESSION_LABEL, profileMode = profileMode)
-        return createSession(settings)
+        return context.createSession(settings)
     }
 
     @Synchronized

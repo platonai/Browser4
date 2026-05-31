@@ -12,7 +12,6 @@ import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
 import ai.platon.pulsar.rest.api.entities.ScrapeStatusRequest
 import org.apache.commons.collections4.MultiMapUtils
-import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import java.util.concurrent.ConcurrentSkipListMap
 
@@ -20,7 +19,6 @@ import java.util.concurrent.ConcurrentSkipListMap
 class SwarmService(
     private val sessionManager: PulsarSessionManager
 ) {
-    private val logger = LoggerFactory.getLogger(SwarmService::class.java)
 
     val session get() = sessionManager.ensureSwarmSession().agenticSession
 
@@ -41,7 +39,7 @@ class SwarmService(
         val hyperlink = createScrapeHyperlink(request)
         responseCache[hyperlink.uuid] = hyperlink.response
         hyperlink.response.id = hyperlink.uuid
-        require(session is GenericAgenticSession)
+        require(session is GenericAgenticSession) { "The session should be a GenericAgenticSession, but actual is ${session::class}, detail: ${session.display}" }
         session.submit(hyperlink)
         return hyperlink.uuid
     }
@@ -74,7 +72,7 @@ class SwarmService(
             DegenerateXSQLScrapeHyperlink(request, session)
         }
 
-        link.eventHandlers.crawlEventHandlers.onLoaded.addLast { url, page ->
+        link.eventHandlers.crawlEventHandlers.onLoaded.addLast { _, _ ->
             responseCache[link.uuid] = link.response
             responseStatusIndex[link.response.statusCode].add(link.uuid)
             null

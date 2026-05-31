@@ -7,7 +7,6 @@ import ai.platon.pulsar.agentic.context.sql.AbstractBrowser4H2SQLContext
 import ai.platon.pulsar.browser.BrowserManager
 import ai.platon.pulsar.common.config.CapabilityTypes
 import ai.platon.pulsar.common.config.MutableConfig
-import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.ql.SQLSession
 import ai.platon.pulsar.ql.SessionDelegate
 import ai.platon.pulsar.ql.context.SQLContext
@@ -31,7 +30,6 @@ interface AgenticContext : SQLContext {
 abstract class AbstractAgenticContext(
     applicationContext: AbstractApplicationContext
 ) : AbstractBrowser4H2SQLContext(applicationContext), AgenticContext {
-    private val logger = getLogger(this)
 
     val initConfiguration = MutableConfig(true)
 
@@ -111,7 +109,7 @@ open class StaticAgenticContext(
     autoRefresh: Boolean = false
 ) : GenericAgenticContext(applicationContext, false) {
 
-    private val defaults = TrivialContextDefaults()
+    private val defaults by lazy { TrivialContextDefaults(this) }
 
     /**
      * The unmodified config

@@ -7,6 +7,7 @@ import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.loop.TaskLoops
 import ai.platon.pulsar.loop.impl.StreamingTaskLoop
 import ai.platon.pulsar.persist.WebDb
+import ai.platon.pulsar.skeleton.context.PulsarContext
 import ai.platon.pulsar.skeleton.workflow.common.GlobalCacheFactory
 import ai.platon.pulsar.skeleton.workflow.component.BatchFetchComponent
 import ai.platon.pulsar.skeleton.workflow.component.LoadComponent
@@ -14,7 +15,7 @@ import ai.platon.pulsar.skeleton.workflow.component.ParseComponent
 import ai.platon.pulsar.skeleton.workflow.component.UpdateComponent
 import ai.platon.pulsar.skeleton.workflow.filter.ChainedUrlNormalizer
 
-class TrivialContextDefaults {
+class TrivialContextDefaults(val context: PulsarContext) {
 
     /**
      * The default unmodified config
@@ -65,5 +66,5 @@ class TrivialContextDefaults {
     /**
      * The default main loop
      * */
-    val taskLoops = TaskLoops(StreamingTaskLoop(configuration))
+    val taskLoops = TaskLoops(StreamingTaskLoop(context, configuration))
 }

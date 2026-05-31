@@ -22,6 +22,14 @@
 
     <modules>
         <module>browser4-agents</module>
-        <module>browser4-bundle</module>
     </modules>
+
+    <profiles>
+        <profile>
+            <id>bundle</id>
+            <modules>
+                <module>browser4-bundle</module>
+            </modules>
+        </profile>
+    </profiles>
 </project>

@@ -1,6 +1,7 @@
 package ai.platon.browser4.boot.autoconfigure
 
 import ai.platon.browser4.protocol.browser.BrowserEmulatorProtocol
+import ai.platon.pulsar.agentic.context.AgenticContext
 import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.pulsar.browser.manage.BasicBrowserManager
 import ai.platon.pulsar.browser.privacy.PrivacyContextMonitor
@@ -107,8 +108,8 @@ class Browser4AutoConfiguration {
 
     @Bean(name = ["taskLoop"])
     @ConditionalOnMissingBean(name = ["taskLoop"])
-    fun taskLoop(conf: MutableConfig): StreamingTaskLoop {
-        return StreamingTaskLoop(conf, "SpringStreamingTaskLoop")
+    fun taskLoop(context: AgenticContext, conf: MutableConfig): StreamingTaskLoop {
+        return StreamingTaskLoop(context, conf, "SpringStreamingTaskLoop")
     }
 
     @Bean(name = ["taskLoops"], destroyMethod = "stop")
@@ -258,7 +259,6 @@ class Browser4AutoConfiguration {
     @ConditionalOnMissingBean(name = ["pageParser"])
     fun pageParser(
         parserFactory: ParserFactory,
-        messageWriter: MiscMessageWriter,
         conf: MutableConfig,
     ): PageParser {
         return PageParser(parserFactory = parserFactory, conf = conf)
