@@ -71,6 +71,24 @@ impl RuntimeBundlePlatform {
             | RuntimeBundlePlatform::MacOsArm64 => RuntimeBundleArchiveKind::TarGz,
         }
     }
+
+    /// The directory name inside `_work/` — the asset name without the archive
+    /// extension (e.g. `browser4-bundle-runtime-windows-x64`).
+    fn bundle_dir_name(self) -> String {
+        let asset = self.asset_name();
+        if let Some(name) = asset.strip_suffix(".zip") {
+            name.to_string()
+        } else if let Some(name) = asset.strip_suffix(".tar.gz") {
+            name.to_string()
+        } else {
+            asset
+        }
+    }
+
+    /// Build script filename relative to `browser4-apps/browser4-bundle/`.
+    fn build_script_name(self) -> &'static str {
+        "build-runtime-bundle.ps1"
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1038,6 +1056,205 @@ fn should_skip_browser4_root_search(path: &Path) -> bool {
     )
 }
 
+/// Attempt to auto-build the local runtime bundle from source when running in a
+/// Browser4 repository checkout.  Returns `Ok(None)` when auto-build is not
+/// applicable (no bundle module, build script missing, or build failed) so the
+/// caller can fall back to the download path.
+async fn try_build_local_runtime_bundle(
+    root: &Path,
+) -> Result<Option<InstalledBrowser4Runtime>, String> {
+    let bundle_module_dir = root.join("browser4-apps").join("browser4-bundle");
+    if !bundle_module_dir.is_dir() {
+        return Ok(None);
+    }
+
+    let platform = detect_current_runtime_bundle_platform()?;
+    let bundle_dir_name = platform.bundle_dir_name();
+    let bundle_runtime_dir = bundle_module_dir.join("target").join("runtime-bundle");
+    let work_dir = bundle_runtime_dir
+        .join("_work")
+        .join(&bundle_dir_name)
+        .join(&bundle_dir_name);
+    let lib_dir = work_dir.join("lib");
+    let java_path = work_dir
+        .join("runtime")
+        .join("bin")
+        .join(browser4_java_executable_name());
+
+    // Already built — nothing to do.
+    if lib_dir.is_dir() && java_path.is_file() {
+        return Ok(Some(InstalledBrowser4Runtime {
+            tag: "local".to_string(),
+            asset_name: String::new(),
+            download_url: String::new(),
+            install_dir: work_dir,
+            lib_dir,
+            jar_path: PathBuf::new(),
+            java_path,
+            reused_existing: true,
+        }));
+    }
+
+    let build_script = bundle_module_dir.join(platform.build_script_name());
+    if !build_script.is_file() {
+        eprintln!(
+            "Build script not found at {}; skipping local bundle build.",
+            build_script.display()
+        );
+        return Ok(None);
+    }
+
+    eprintln!(
+        "Building local Browser4 runtime bundle from {} ...",
+        bundle_module_dir.display()
+    );
+
+    // Step 1 – ensure the fat JAR exists (idempotent Maven package).
+    let mvn_program = resolve_maven_program(root);
+    let mvn_status = tokio::task::spawn_blocking({
+        let mvn_program = mvn_program.clone();
+        let root = root.to_path_buf();
+        move || {
+            std::process::Command::new(&mvn_program)
+                .args([
+                    "package",
+                    "-pl",
+                    "browser4-apps/browser4-bundle",
+                    "-am",
+                    "-DskipTests",
+                    "-q",
+                ])
+                .current_dir(&root)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::piped())
+                .status()
+        }
+    })
+    .await
+    .map_err(|e| format!("Maven package task panicked: {e}"))?;
+
+    match mvn_status {
+        Ok(status) if status.success() => {}
+        Ok(status) => {
+            eprintln!(
+                "Maven package for browser4-bundle exited with {}; falling back to download.",
+                status.code().map_or_else(|| "signal".to_string(), |c| c.to_string())
+            );
+            return Ok(None);
+        }
+        Err(error) => {
+            eprintln!(
+                "Failed to run Maven for browser4-bundle ({error}); falling back to download."
+            );
+            return Ok(None);
+        }
+    }
+
+    // Step 2 – run the platform build script.
+    let build_result = if cfg!(windows) {
+        run_bundle_build_script("powershell.exe", &build_script, &bundle_module_dir).await
+    } else {
+        // PowerShell Core may be installed as `pwsh` on Linux / macOS.
+        run_bundle_build_script("pwsh", &build_script, &bundle_module_dir).await
+    };
+
+    match build_result {
+        Ok(()) => {}
+        Err(error) => {
+            eprintln!(
+                "Runtime bundle build script failed: {error}; falling back to download."
+            );
+            return Ok(None);
+        }
+    }
+
+    // Verify the expected output was produced.
+    if lib_dir.is_dir() && java_path.is_file() {
+        eprintln!(
+            "Local Browser4 runtime bundle built successfully at {}.",
+            bundle_runtime_dir.display()
+        );
+        return Ok(Some(InstalledBrowser4Runtime {
+            tag: "local".to_string(),
+            asset_name: String::new(),
+            download_url: String::new(),
+            install_dir: work_dir,
+            lib_dir,
+            jar_path: PathBuf::new(),
+            java_path,
+            reused_existing: true,
+        }));
+    }
+
+    eprintln!(
+        "Runtime bundle build completed but expected layout under {} was not found; falling back to download.",
+        work_dir.display()
+    );
+    Ok(None)
+}
+
+/// Resolve the Maven launcher (`mvnw` / `mvnw.cmd` / `mvn`) relative to the
+/// Browser4 repository root.  Prefers the checked-in wrapper when available.
+fn resolve_maven_program(root: &Path) -> PathBuf {
+    let wrapper_name = if cfg!(windows) { "mvnw.cmd" } else { "mvnw" };
+    let wrapper = root.join(wrapper_name);
+    if wrapper.exists() {
+        return wrapper;
+    }
+    if cfg!(windows) {
+        PathBuf::from("mvn.cmd")
+    } else {
+        PathBuf::from("mvn")
+    }
+}
+
+/// Run the bundle build script and wait for it to finish.
+async fn run_bundle_build_script(
+    shell: &str,
+    script: &Path,
+    working_dir: &Path,
+) -> Result<(), String> {
+    let script_path = script.to_path_buf();
+    let working_dir = working_dir.to_path_buf();
+    let shell_owned = shell.to_string();
+    let shell_for_error = shell_owned.clone();
+
+    let output = tokio::task::spawn_blocking(move || {
+        std::process::Command::new(&shell_owned)
+            .args([
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                &script_path.to_string_lossy(),
+            ])
+            .current_dir(&working_dir)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    })
+    .await
+    .map_err(|e| format!("build script task panicked: {e}"))?;
+
+    match output {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(format!(
+                "build script exited with {}: {}",
+                output
+                    .status
+                    .code()
+                    .map_or_else(|| "signal".to_string(), |c| c.to_string()),
+                stderr.trim()
+            ))
+        }
+        Err(error) => Err(format!("failed to spawn build script ({shell_for_error}): {error}")),
+    }
+}
+
 async fn find_or_install_runtime() -> Result<InstalledBrowser4Runtime, String> {
     // Check for an already-installed runtime (from prior `install` command)
     if install_dir_contains_runtime(&browser4_install_dir()) {
@@ -1051,46 +1268,20 @@ async fn find_or_install_runtime() -> Result<InstalledBrowser4Runtime, String> {
         }
     }
 
-    // Check for a local project build
+    // Check for a local project build (or auto-build it).
     let project_root = find_browser4_root();
     if let Some(root) = &project_root {
-        let bundle_runtime_dir = root
-            .join("browser4-apps")
-            .join("browser4-bundle")
-            .join("target")
-            .join("runtime-bundle");
-        if bundle_runtime_dir.is_dir() {
-            eprintln!(
-                "Found local Browser4 bundle build at {}.",
-                bundle_runtime_dir.display()
-            );
-            // Use the local build directly — create an ephemeral runtime from it
-            let lib_dir = bundle_runtime_dir
-                .join("_work")
-                .join("browser4-bundle-runtime-windows-x64")
-                .join("browser4-bundle-runtime-windows-x64")
-                .join("lib");
-            let java_path = bundle_runtime_dir
-                .join("_work")
-                .join("browser4-bundle-runtime-windows-x64")
-                .join("browser4-bundle-runtime-windows-x64")
-                .join("runtime")
-                .join("bin")
-                .join(browser4_java_executable_name());
-            if lib_dir.is_dir() && java_path.is_file() {
-                return Ok(InstalledBrowser4Runtime {
-                    tag: "local".to_string(),
-                    asset_name: String::new(),
-                    download_url: String::new(),
-                    install_dir: bundle_runtime_dir
-                        .join("_work")
-                        .join("browser4-bundle-runtime-windows-x64")
-                        .join("browser4-bundle-runtime-windows-x64"),
-                    lib_dir,
-                    jar_path: PathBuf::new(),
-                    java_path,
-                    reused_existing: true,
-                });
+        match try_build_local_runtime_bundle(root).await {
+            Ok(Some(runtime)) => return Ok(runtime),
+            Ok(None) => {
+                eprintln!(
+                    "Local Browser4 bundle is not available; falling back to download."
+                );
+            }
+            Err(error) => {
+                eprintln!(
+                    "Local Browser4 bundle check failed: {error}; falling back to download."
+                );
             }
         }
     }
