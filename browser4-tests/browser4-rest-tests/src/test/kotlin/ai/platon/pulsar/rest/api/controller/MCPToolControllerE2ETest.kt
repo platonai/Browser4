@@ -622,7 +622,26 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
     }
 
     @Test
-    @DisplayName("mouse, dialog, and tab tools match the interactive CLI scenarios")
+    @DisplayName("mouse wheel tool matches the interactive CLI scenario")
+    fun testMouseWheelCommand() {
+        val sessionId = openResizedInteractiveSession()
+
+        assertNotError(callTool("mousemove", mapOf("sessionId" to sessionId, "x" to 120, "y" to 120)))
+        waitForState(sessionId, "Expected mousemove to update lastMouse") {
+            it["lastMouse"][0].asInt() == 120 && it["lastMouse"][1].asInt() == 120
+        }
+
+        runToolAndWaitForState(
+            sessionId = sessionId,
+            toolName = "mousewheel",
+            arguments = mapOf("sessionId" to sessionId, "deltaX" to 0, "deltaY" to 16),
+            failureMessage = "Expected mousewheel to update lastWheel",
+            predicate = { it["lastWheel"][0].asInt() == 160 && it["lastWheel"][1].asInt() == 0 }
+        )
+    }
+
+    @Test
+    @DisplayName("mouse move/down/up, dialog, and tab tools match the interactive CLI scenarios")
     fun testMouseDialogAndTabCommands() {
         val sessionId = openResizedInteractiveSession()
 
@@ -649,13 +668,6 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
             predicate = { it["mouseUpCount"].asInt() >= mouseUpBefore + 1 }
         )
 
-        runToolAndWaitForState(
-            sessionId = sessionId,
-            toolName = "mousewheel",
-            arguments = mapOf("sessionId" to sessionId, "deltaX" to 0, "deltaY" to 160),
-            failureMessage = "Expected mousewheel to update lastWheel",
-            predicate = { it["lastWheel"][0].asInt() == 160 && it["lastWheel"][1].asInt() == 0 }
-        )
 
         evalText(
             sessionId,
