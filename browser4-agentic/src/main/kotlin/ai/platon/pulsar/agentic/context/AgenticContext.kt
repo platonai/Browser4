@@ -9,13 +9,10 @@ import ai.platon.pulsar.common.config.CapabilityTypes
 import ai.platon.pulsar.common.config.MutableConfig
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.ql.SQLSession
-import ai.platon.pulsar.ql.SessionConfig
 import ai.platon.pulsar.ql.SessionDelegate
-import ai.platon.pulsar.ql.context.AbstractH2SQLContext
 import ai.platon.pulsar.ql.context.SQLContext
-import ai.platon.pulsar.ql.h2.H2SessionDelegate
 import ai.platon.pulsar.skeleton.PulsarSettings
-import ai.platon.pulsar.skeleton.context.support.ContextDefaults
+import ai.platon.pulsar.skeleton.context.support.TrivialContextDefaults
 import ai.platon.pulsar.skeleton.session.BasicPulsarSession
 import org.springframework.context.annotation.AnnotationConfigApplicationContext
 import org.springframework.context.support.AbstractApplicationContext
@@ -107,14 +104,14 @@ open class GenericAgenticContext(
 }
 
 /**
- * Simple static agentic context, used for test only.
+ * Simple static agentic context, components might be incomplete or trivial, used for test only.
  * */
 open class StaticAgenticContext(
     override val applicationContext: StaticApplicationContext = StaticApplicationContext(),
     autoRefresh: Boolean = false
 ) : GenericAgenticContext(applicationContext, false) {
 
-    private val defaults = ContextDefaults()
+    private val defaults = TrivialContextDefaults()
 
     /**
      * The unmodified config

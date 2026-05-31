@@ -14,7 +14,7 @@ import ai.platon.pulsar.skeleton.workflow.component.ParseComponent
 import ai.platon.pulsar.skeleton.workflow.component.UpdateComponent
 import ai.platon.pulsar.skeleton.workflow.filter.ChainedUrlNormalizer
 
-class ContextDefaults {
+class TrivialContextDefaults {
 
     /**
      * The default unmodified config

@@ -13,7 +13,7 @@ open class StaticPulsarContext(
     private val logger = getLogger(StaticPulsarContext::class)
     private val throttlingLogger = ThrottlingLogger(logger)
 
-    private val defaults = ContextDefaults()
+    private val defaults = TrivialContextDefaults()
 
     /**
      * The unmodified config
