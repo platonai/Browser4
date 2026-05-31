@@ -1030,38 +1030,6 @@ pub(super) fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
         "Expected mouseup to increment mouseUpCount",
     );
 
-    let wheel_args = ["mousewheel", "160", "0"];
-    let wheel_started_at = std::time::Instant::now();
-    let wheel_result = run_cli_process(ctx, &wheel_args);
-    ctx.record_step(
-        format_cli_step_label(&wheel_args, false, false),
-        wheel_started_at.elapsed(),
-    );
-    if wheel_result.exit_code != 0 {
-        eprintln!(
-            "mousewheel command failed in e2e scenario; using eval fallback. stderr: {}",
-            wheel_result.stderr
-        );
-        run_command(
-            ctx,
-            &[
-                "eval",
-                "(() => { const area = document.getElementById('mouse-area'); if (!area) return 'missing-mouse-area'; const evt = new WheelEvent('wheel', { deltaY: 160, deltaX: 0, bubbles: true }); area.dispatchEvent(evt); return 'wheel-fallback-dispatched'; })()",
-            ],
-        );
-    }
-    let wheel_state = wait_for_state_or_abort(
-        ctx,
-        |s| s["lastWheel"][0].as_i64() == Some(160) && s["lastWheel"][1].as_i64() == Some(0),
-        2_000,
-        "Expected mousewheel to update lastWheel to [160, 0]",
-    );
-    assert!(
-        wheel_state["lastWheel"][0].as_i64() == Some(160)
-            && wheel_state["lastWheel"][1].as_i64() == Some(0),
-        "Expected lastWheel to equal [160, 0], got {wheel_state:#?}"
-    );
-
     eval_text(
         ctx,
         "(() => { setTimeout(() => document.getElementById('prompt-target').click(), 100); return 'scheduled'; })()",
@@ -1086,6 +1054,27 @@ pub(super) fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
         |s| s["confirmResult"].as_str() == Some("dismissed"),
         2_000,
         "Expected dialog-dismiss to set confirmResult to 'dismissed'",
+    );
+
+    run_command(ctx, &["close"]);
+}
+
+pub(super) fn test_mousewheel(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    open_resized_interactive_page(ctx);
+
+    run_command(ctx, &["mousewheel", "160", "0"]);
+    let wheel_state = wait_for_state_or_abort(
+        ctx,
+        |s| s["lastWheel"][0].as_i64() == Some(160) && s["lastWheel"][1].as_i64() == Some(0),
+        2_000,
+        "Expected mousewheel to update lastWheel to [160, 0]",
+    );
+    assert!(
+        wheel_state["lastWheel"][0].as_i64() == Some(160)
+            && wheel_state["lastWheel"][1].as_i64() == Some(0),
+        "Expected lastWheel to equal [160, 0], got {wheel_state:#?}"
     );
 
     run_command(ctx, &["close"]);

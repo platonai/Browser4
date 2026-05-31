@@ -2504,9 +2504,10 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "mousemove",
         "mousedown",
         "mouseup",
-        "mousewheel",
         "dialog-accept",
         "dialog-dismiss",
+        // test_mousewheel
+        "mousewheel",
         // test_tab_commands
         "tab-list",
         "tab-new",

@@ -116,6 +116,14 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_fn: browser::test_mouse_and_dialog,
     },
     ScenarioDef {
+        name: "test_e2e_mousewheel",
+        short_name: "test_mousewheel",
+        requires_browser4: true,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: browser::test_mousewheel,
+    },
+    ScenarioDef {
         name: "test_e2e_tab_commands",
         short_name: "test_tab_commands",
         requires_browser4: true,
