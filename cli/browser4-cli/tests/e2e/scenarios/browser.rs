@@ -637,6 +637,14 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
         "Expected keyup to record a final 'up:Shift' key event",
     );
 
+    run_command(ctx, &["close"]);
+}
+
+pub(super) fn test_pointer_commands(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    open_resized_interactive_page(ctx);
+
     run_command(ctx, &["click", "#click-target"]);
     wait_for_state_or_abort(
         ctx,
