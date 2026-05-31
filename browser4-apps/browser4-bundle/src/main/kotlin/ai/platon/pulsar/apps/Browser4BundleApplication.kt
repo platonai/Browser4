@@ -1,6 +1,6 @@
 package ai.platon.pulsar.apps
 
-import ai.platon.browser4.boot.autoconfigure.PulsarContextInitializer
+import ai.platon.browser4.boot.autoconfigure.AgenticContextInitializer
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.rest.ApiApplication
@@ -74,7 +74,7 @@ class Browser4BundleApplication(
 
 fun runBrowser4BundleApplication(args: Array<String>) {
     runApplication<Browser4BundleApplication>(*args) {
-        addInitializers(PulsarContextInitializer())
+        addInitializers(AgenticContextInitializer())
         setAdditionalProfiles("bundle", "private", "advanced")
         setLogStartupInfo(true)
     }
