@@ -73,22 +73,6 @@
                 </configuration>
             </plugin>
             <plugin>
-                <groupId>org.springframework.boot</groupId>
-                <artifactId>spring-boot-maven-plugin</artifactId>
-                <version>${spring-boot.version}</version>
-                <executions>
-                    <execution>
-                        <goals>
-                            <goal>repackage</goal>
-                        </goals>
-                    </execution>
-                </executions>
-                <configuration>
-                    <mainClass>ai.platon.pulsar.apps.Browser4LauncherKt</mainClass>
-                    <addResources>true</addResources>
-                </configuration>
-            </plugin>
-            <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>${version.maven-compiler-plugin}</version>
@@ -218,10 +202,6 @@
         <spring-boot.version>4.0.5</spring-boot.version>
         <kotlin.compiler.jvmTarget>17</kotlin.compiler.jvmTarget>
         <browser4-base.version>4.8.2</browser4-base.version>
-
-        <!-- jpackage toggles (defaults keep normal builds unaffected) -->
-        <jpackage.skip>true</jpackage.skip>
-        <jpackage.installer.skip>true</jpackage.installer.skip>
 
         <!-- jpackage requires a numeric/strict version; snapshots are not accepted -->
         <jpackage.appVersion>4.4.0</jpackage.appVersion>

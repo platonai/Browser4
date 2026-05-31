@@ -72,7 +72,7 @@ class Browser4BundleApplication(
     }
 }
 
-fun runBrowser4AgentsApplication(args: Array<String>) {
+fun runBrowser4BundleApplication(args: Array<String>) {
     runApplication<Browser4BundleApplication>(*args) {
         addInitializers(PulsarContextInitializer())
         setAdditionalProfiles("bundle", "private", "advanced")
@@ -80,4 +80,4 @@ fun runBrowser4AgentsApplication(args: Array<String>) {
     }
 }
 
-fun main(args: Array<String>) = runBrowser4AgentsApplication(args)
+fun main(args: Array<String>) = runBrowser4BundleApplication(args)
