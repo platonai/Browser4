@@ -29,8 +29,9 @@ const MAVEN_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(300);
 const SERVER_READY_INITIAL_QUIET_WAIT: Duration = Duration::from_secs(5);
 const CLI_TEMP_DIR_COMPONENTS: [&str; 2] = ["tmp", "cli"];
 const CLI_LIB_DIR_COMPONENT: &str = "lib";
-const BROWSER4_JAR_FILE_NAME: &str = "Browser4.jar";
-const BROWSER4_JRE_DIR_NAME: &str = "jre";
+const BROWSER4_LIB_DIR_NAME: &str = "lib";
+const BROWSER4_RUNTIME_DIR_NAME: &str = "runtime";
+const BROWSER4_MAIN_CLASS: &str = "ai.platon.pulsar.apps.Browser4BundleApplicationKt";
 const BROWSER4_INSTALL_METADATA_FILE_NAME: &str = "browser4-installation.json";
 const BROWSER4_RELEASES_BASE_URL: &str = "https://github.com/platonai/Browser4/releases";
 const BROWSER4_RELEASES_BASE_URL_ENV: &str = "BROWSER4_RELEASES_BASE_URL";
@@ -54,10 +55,10 @@ enum RuntimeBundlePlatform {
 impl RuntimeBundlePlatform {
     fn asset_name(self) -> String {
         match self {
-            RuntimeBundlePlatform::WindowsX64 => "browser4-runtime-windows-x64.zip",
-            RuntimeBundlePlatform::LinuxX64 => "browser4-runtime-linux-x64.tar.gz",
-            RuntimeBundlePlatform::MacOsX64 => "browser4-runtime-darwin-x64.tar.gz",
-            RuntimeBundlePlatform::MacOsArm64 => "browser4-runtime-darwin-arm64.tar.gz",
+            RuntimeBundlePlatform::WindowsX64 => "browser4-bundle-runtime-windows-x64.zip",
+            RuntimeBundlePlatform::LinuxX64 => "browser4-bundle-runtime-linux-x64.tar.gz",
+            RuntimeBundlePlatform::MacOsX64 => "browser4-bundle-runtime-darwin-x64.tar.gz",
+            RuntimeBundlePlatform::MacOsArm64 => "browser4-bundle-runtime-darwin-arm64.tar.gz",
         }
         .to_string()
     }
@@ -73,11 +74,11 @@ impl RuntimeBundlePlatform {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-struct InstalledBrowser4RuntimeMetadata {
-    tag: String,
-    asset_name: String,
-    download_url: String,
-    installed_at: String,
+pub struct InstalledBrowser4RuntimeMetadata {
+    pub tag: String,
+    pub asset_name: String,
+    pub download_url: String,
+    pub installed_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,6 +87,7 @@ pub struct InstalledBrowser4Runtime {
     pub asset_name: String,
     pub download_url: String,
     pub install_dir: PathBuf,
+    pub lib_dir: PathBuf,
     pub jar_path: PathBuf,
     pub java_path: PathBuf,
     pub reused_existing: bool,
@@ -217,7 +219,7 @@ fn browser4_install_dir() -> PathBuf {
 }
 
 fn default_browser4_jre_dir() -> PathBuf {
-    browser4_install_dir().join(BROWSER4_JRE_DIR_NAME)
+    browser4_install_dir().join(BROWSER4_RUNTIME_DIR_NAME)
 }
 
 fn browser4_java_executable_name() -> &'static str {
@@ -236,7 +238,7 @@ fn browser4_install_metadata_path() -> PathBuf {
 
 fn java_path_in_install_dir(install_dir: &Path) -> PathBuf {
     install_dir
-        .join(BROWSER4_JRE_DIR_NAME)
+        .join(BROWSER4_RUNTIME_DIR_NAME)
         .join("bin")
         .join(browser4_java_executable_name())
 }
@@ -261,14 +263,29 @@ fn resolve_browser4_java_command() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("java"))
 }
 
-fn read_installed_browser4_runtime_metadata() -> Option<InstalledBrowser4RuntimeMetadata> {
+pub fn read_installed_browser4_runtime_metadata() -> Option<InstalledBrowser4RuntimeMetadata> {
     let path = browser4_install_metadata_path();
     let contents = fs::read_to_string(path).ok()?;
     serde_json::from_str(&contents).ok()
 }
 
 fn install_dir_contains_runtime(install_dir: &Path) -> bool {
-    install_dir.join(BROWSER4_JAR_FILE_NAME).is_file() && java_path_in_install_dir(install_dir).is_file()
+    let lib_dir = install_dir.join(BROWSER4_LIB_DIR_NAME);
+    let has_lib = lib_dir.is_dir()
+        && std::fs::read_dir(&lib_dir)
+            .map(|mut entries| entries.any(|entry| {
+                entry
+                    .ok()
+                    .map(|e| {
+                        e.path()
+                            .extension()
+                            .map(|ext| ext == "jar")
+                            .unwrap_or(false)
+                    })
+                    .unwrap_or(false)
+            }))
+            .unwrap_or(false);
+    has_lib && java_path_in_install_dir(install_dir).is_file()
 }
 
 fn materialize_installed_runtime(
@@ -276,11 +293,13 @@ fn materialize_installed_runtime(
     reused_existing: bool,
 ) -> InstalledBrowser4Runtime {
     let install_dir = browser4_install_dir();
+    let lib_dir = install_dir.join(BROWSER4_LIB_DIR_NAME);
     InstalledBrowser4Runtime {
         tag: metadata.tag,
         asset_name: metadata.asset_name,
         download_url: metadata.download_url,
-        jar_path: install_dir.join(BROWSER4_JAR_FILE_NAME),
+        lib_dir: lib_dir.clone(),
+        jar_path: lib_dir,
         java_path: java_path_in_install_dir(&install_dir),
         install_dir,
         reused_existing,
@@ -434,7 +453,7 @@ fn extract_tar_gz_archive(archive_path: &Path, destination_dir: &Path) -> Result
 }
 
 fn is_runtime_bundle_root(path: &Path) -> bool {
-    path.join(BROWSER4_JAR_FILE_NAME).is_file() && java_path_in_install_dir(path).is_file()
+    install_dir_contains_runtime(path)
 }
 
 fn resolve_runtime_bundle_root(extracted_dir: &Path) -> Result<PathBuf, String> {
@@ -451,8 +470,7 @@ fn resolve_runtime_bundle_root(extracted_dir: &Path) -> Result<PathBuf, String> 
     }
 
     Err(format!(
-        "Downloaded Browser4 runtime bundle did not contain {} and a bundled JRE under {}.",
-        BROWSER4_JAR_FILE_NAME,
+        "Downloaded Browser4 runtime bundle did not contain lib/ and runtime/ directories under {}.",
         extracted_dir.display()
     ))
 }
@@ -512,29 +530,35 @@ fn commit_installed_browser4_runtime(
     metadata: InstalledBrowser4RuntimeMetadata,
 ) -> Result<InstalledBrowser4Runtime, String> {
     let install_dir = browser4_install_dir();
-    let target_jar = install_dir.join(BROWSER4_JAR_FILE_NAME);
-    let target_jre = install_dir.join(BROWSER4_JRE_DIR_NAME);
-    let source_jar = extracted_root.join(BROWSER4_JAR_FILE_NAME);
-    let source_jre = extracted_root.join(BROWSER4_JRE_DIR_NAME);
+    let target_runtime = install_dir.join(BROWSER4_RUNTIME_DIR_NAME);
+    let target_lib = install_dir.join(BROWSER4_LIB_DIR_NAME);
+    let target_bin = install_dir.join("bin");
+    let source_runtime = extracted_root.join(BROWSER4_RUNTIME_DIR_NAME);
+    let source_lib = extracted_root.join(BROWSER4_LIB_DIR_NAME);
+    let source_bin = extracted_root.join("bin");
 
-    if !source_jar.is_file() {
+    if !source_runtime.is_dir() {
         return Err(format!(
-            "Downloaded Browser4 runtime bundle is missing {}",
-            source_jar.display()
+            "Downloaded Browser4 runtime bundle is missing runtime/ JRE directory {}",
+            source_runtime.display()
         ));
     }
-    if !source_jre.is_dir() {
+    if !source_lib.is_dir() {
         return Err(format!(
-            "Downloaded Browser4 runtime bundle is missing bundled JRE directory {}",
-            source_jre.display()
+            "Downloaded Browser4 runtime bundle is missing lib/ directory {}",
+            source_lib.display()
         ));
     }
 
     fs::create_dir_all(&install_dir).map_err(|e| e.to_string())?;
-    remove_path_if_exists(&target_jre)?;
-    remove_path_if_exists(&target_jar)?;
-    copy_dir_recursive(&source_jre, &target_jre)?;
-    fs::copy(&source_jar, &target_jar).map_err(|e| e.to_string())?;
+    remove_path_if_exists(&target_runtime)?;
+    remove_path_if_exists(&target_lib)?;
+    remove_path_if_exists(&target_bin)?;
+    copy_dir_recursive(&source_runtime, &target_runtime)?;
+    copy_dir_recursive(&source_lib, &target_lib)?;
+    if source_bin.is_dir() {
+        copy_dir_recursive(&source_bin, &target_bin)?;
+    }
     write_installed_browser4_runtime_metadata(&metadata)?;
 
     Ok(materialize_installed_runtime(metadata, false))
@@ -606,8 +630,8 @@ async fn resolve_server_launch_spec(
         }
     }
 
-    let jar_path = find_or_download_jar().await?;
-    Ok(build_jar_launch_spec(&jar_path, port))
+    let runtime = find_or_install_runtime().await?;
+    Ok(build_jar_launch_spec(&runtime, port))
 }
 
 fn build_maven_launch_spec(repo_root: &Path, port: u16) -> Result<ServerLaunchSpec, String> {
@@ -650,25 +674,31 @@ fn build_maven_launch_spec(repo_root: &Path, port: u16) -> Result<ServerLaunchSp
     })
 }
 
-fn build_jar_launch_spec(jar_path: &Path, port: u16) -> ServerLaunchSpec {
-    let program = resolve_browser4_java_command();
+fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> ServerLaunchSpec {
+    let program = runtime.java_path.clone();
     let program_display = program.display().to_string();
+    let classpath_arg = if cfg!(windows) {
+        format!(
+            "{}\\*",
+            runtime.lib_dir.display()
+        )
+    } else {
+        format!("{}/*", runtime.lib_dir.display())
+    };
     ServerLaunchSpec {
         kind: ServerLaunchKind::Jar,
         program,
         args: vec![
-            "-jar".to_string(),
-            java_jar_argument_path(jar_path),
+            "-cp".to_string(),
+            classpath_arg,
+            BROWSER4_MAIN_CLASS.to_string(),
             format!("--server.port={port}"),
         ],
-        working_dir: jar_path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(default_server_working_dir),
-        registry_target: jar_path.to_path_buf(),
+        working_dir: runtime.install_dir.clone(),
+        registry_target: runtime.lib_dir.clone(),
         description: format!(
-            "Starting server from Browser4.jar at {} using {} on port {}...",
-            jar_path.display(),
+            "Starting server from Browser4 runtime at {} using {} on port {}...",
+            runtime.install_dir.display(),
             program_display,
             port
         ),
@@ -1008,45 +1038,65 @@ fn should_skip_browser4_root_search(path: &Path) -> bool {
     )
 }
 
-async fn find_or_download_jar() -> Result<PathBuf, String> {
-    if let Some(configured_path) = browser4_jar_override_path() {
-        return Ok(configured_path);
+async fn find_or_install_runtime() -> Result<InstalledBrowser4Runtime, String> {
+    // Check for an already-installed runtime (from prior `install` command)
+    if install_dir_contains_runtime(&browser4_install_dir()) {
+        if let Some(metadata) = read_installed_browser4_runtime_metadata() {
+            eprintln!(
+                "Using installed Browser4 runtime {} from {}.",
+                metadata.tag,
+                browser4_install_dir().display()
+            );
+            return Ok(materialize_installed_runtime(metadata, true));
+        }
     }
 
+    // Check for a local project build
     let project_root = find_browser4_root();
-    let candidates = browser4_jar_candidates(project_root.as_deref());
-
-    eprintln!("Project root: {:?}", project_root);
-
-    for candidate in candidates {
-        eprintln!("Checking for Browser4.jar at {}...", candidate.display());
-
-        if candidate.exists() {
-            return Ok(candidate);
+    if let Some(root) = &project_root {
+        let bundle_runtime_dir = root
+            .join("browser4-apps")
+            .join("browser4-bundle")
+            .join("target")
+            .join("runtime-bundle");
+        if bundle_runtime_dir.is_dir() {
+            eprintln!(
+                "Found local Browser4 bundle build at {}.",
+                bundle_runtime_dir.display()
+            );
+            // Use the local build directly — create an ephemeral runtime from it
+            let lib_dir = bundle_runtime_dir
+                .join("_work")
+                .join("browser4-bundle-runtime-windows-x64")
+                .join("browser4-bundle-runtime-windows-x64")
+                .join("lib");
+            let java_path = bundle_runtime_dir
+                .join("_work")
+                .join("browser4-bundle-runtime-windows-x64")
+                .join("browser4-bundle-runtime-windows-x64")
+                .join("runtime")
+                .join("bin")
+                .join(browser4_java_executable_name());
+            if lib_dir.is_dir() && java_path.is_file() {
+                return Ok(InstalledBrowser4Runtime {
+                    tag: "local".to_string(),
+                    asset_name: String::new(),
+                    download_url: String::new(),
+                    install_dir: bundle_runtime_dir
+                        .join("_work")
+                        .join("browser4-bundle-runtime-windows-x64")
+                        .join("browser4-bundle-runtime-windows-x64"),
+                    lib_dir,
+                    jar_path: PathBuf::new(),
+                    java_path,
+                    reused_existing: true,
+                });
+            }
         }
     }
 
-    match install_browser4_runtime(None, false).await {
-        Ok(runtime) => {
-            eprintln!(
-                "Installed self-contained Browser4 runtime {} at {}.",
-                runtime.tag,
-                runtime.install_dir.display()
-            );
-            return Ok(runtime.jar_path);
-        }
-        Err(error) => {
-            eprintln!(
-                "Failed to install bundled Browser4 runtime automatically: {}",
-                error
-            );
-            eprintln!("Falling back to Browser4.jar-only download.");
-        }
-    }
-
-    let download_path = default_browser4_jar_path();
-    download_jar(&download_path).await?;
-    Ok(download_path)
+    // Download and install the runtime bundle
+    install_browser4_runtime(None, false).await
 }
 
 fn browser4_jar_override_path() -> Option<PathBuf> {
@@ -1060,45 +1110,6 @@ fn browser4_jar_override_path() -> Option<PathBuf> {
     path.exists().then_some(path)
 }
 
-fn browser4_jar_candidates(project_root: Option<&Path>) -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-
-    if let Some(root) = project_root {
-        candidates.push(
-            root.join("browser4-apps")
-                .join("browser4-agents")
-                .join("target")
-                .join(BROWSER4_JAR_FILE_NAME),
-        );
-        candidates.push(root.join("target").join(BROWSER4_JAR_FILE_NAME));
-    }
-
-    candidates.push(default_browser4_jar_path());
-    candidates
-}
-
-fn default_browser4_jar_path() -> PathBuf {
-    resolve_default_state_dir()
-        .join(CLI_LIB_DIR_COMPONENT)
-        .join(BROWSER4_JAR_FILE_NAME)
-}
-
-async fn download_jar(target_path: &Path) -> Result<(), String> {
-    if let Some(dir) = target_path.parent() {
-        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-
-    let url = "https://github.com/platonai/Browser4/releases/latest/download/Browser4.jar";
-    eprintln!("Downloading Browser4.jar from {}...", url);
-    let downloaded = download_file(url, target_path).await?;
-
-    eprintln!(
-        "Download complete ({} bytes, final URL: {}).",
-        downloaded.bytes_written,
-        downloaded.final_url
-    );
-    Ok(())
-}
 
 async fn start_server(
     launch_spec: &ServerLaunchSpec,
@@ -1893,27 +1904,6 @@ mod tests {
     }
 
     #[test]
-    fn test_default_browser4_jar_path_uses_state_dir_override() {
-        let tmp = test_temp_dir();
-        let expected = tmp
-            .path()
-            .canonicalize()
-            .unwrap()
-            .join("lib")
-            .join("Browser4.jar");
-
-        unsafe {
-            env::set_var("BROWSER4_CLI_STATE_DIR", tmp.path().as_os_str());
-        }
-        let actual = default_browser4_jar_path();
-        unsafe {
-            env::remove_var("BROWSER4_CLI_STATE_DIR");
-        }
-
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
     fn test_default_browser4_java_path_uses_state_dir_override() {
         let tmp = test_temp_dir();
         let expected = tmp
@@ -1921,7 +1911,7 @@ mod tests {
             .canonicalize()
             .unwrap()
             .join("lib")
-            .join("jre")
+            .join("runtime")
             .join("bin")
             .join(browser4_java_executable_name());
 
@@ -2002,12 +1992,14 @@ mod tests {
     fn test_runtime_bundle_root_detection_accepts_nested_folder() {
         let tmp = test_temp_dir();
         let extracted = tmp.path().join("extract");
-        let bundle_root = extracted.join("browser4-runtime-windows-x64");
-        fs::create_dir_all(bundle_root.join("jre").join("bin")).unwrap();
-        write(bundle_root.join(BROWSER4_JAR_FILE_NAME), "jar").unwrap();
+        let bundle_root = extracted.join("browser4-bundle-runtime-windows-x64");
+        fs::create_dir_all(bundle_root.join("runtime").join("bin")).unwrap();
+        fs::create_dir_all(bundle_root.join("lib")).unwrap();
+        // Create a jar file in lib/ to satisfy install_dir_contains_runtime
+        write(bundle_root.join("lib").join("test.jar"), "jar").unwrap();
         write(
             bundle_root
-                .join("jre")
+                .join("runtime")
                 .join("bin")
                 .join(browser4_java_executable_name()),
             "java",
@@ -2039,10 +2031,11 @@ mod tests {
             env::remove_var("BROWSER4_CLI_STATE_DIR");
         }
 
-        assert!(runtime.jar_path.ends_with(Path::new("lib").join("Browser4.jar")));
+        // In the new model, jar_path = lib_dir (the lib/ directory)
+        assert!(runtime.lib_dir.ends_with("lib"));
         assert!(runtime
             .java_path
-            .ends_with(Path::new("lib").join("jre").join("bin").join(browser4_java_executable_name())));
+            .ends_with(Path::new("lib").join("runtime").join("bin").join(browser4_java_executable_name())));
         assert!(runtime.reused_existing);
     }
 

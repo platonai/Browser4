@@ -1222,6 +1222,71 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
+        // ---- Server Admin ----
+        CommandDef {
+            name: "upgrade",
+            description: "Upgrade Browser4 to the latest version (or a specified release tag)",
+            category: Category::Browsers,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef {
+                name: "tag",
+                description: "Release tag to upgrade to, e.g. v4.11.0 (defaults to latest release)",
+                optional: true,
+            }],
+            options: &[
+                OptionDef {
+                    name: "force",
+                    description: "Force re-download even when the requested version is already installed",
+                    is_bool: true,
+                },
+            ],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut params = json!({});
+                if let Some(tag) = get_opt_str(args, "tag") {
+                    params["tag"] = json!(tag);
+                }
+                if let Some(force) = get_bool(args, "force") {
+                    params["force"] = json!(force);
+                }
+                params
+            },
+        },
+        CommandDef {
+            name: "stop",
+            description: "Gracefully stop the Browser4 server",
+            category: Category::Browsers,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "status",
+            description: "Show Browser4 server status (version, port, health)",
+            category: Category::Browsers,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef {
+                    name: "server",
+                    description: "Server URL to check (defaults to saved or http://127.0.0.1:8182)",
+                    is_bool: false,
+                },
+            ],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut params = json!({});
+                if let Some(server) = get_opt_str(args, "server") {
+                    params["server"] = json!(server);
+                }
+                params
+            },
+        },
         // ---- Agent ----
         CommandDef {
             name: "extract",

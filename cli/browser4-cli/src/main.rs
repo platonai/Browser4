@@ -2345,9 +2345,104 @@ async fn handle_install(tool_params: &Value) -> Result<(), String> {
     }
     println!("- Tag: {}", runtime.tag);
     println!("- Asset: {}", runtime.asset_name);
-    println!("- JAR: {}", runtime.jar_path.display());
+    println!("- Install dir: {}", runtime.install_dir.display());
+    println!("- Lib dir: {}", runtime.lib_dir.display());
     println!("- Java: {}", runtime.java_path.display());
     println!("- Source: {}", runtime.download_url);
+    Ok(())
+}
+
+async fn handle_upgrade(tool_params: &Value) -> Result<(), String> {
+    let tag = tool_params.get("tag").and_then(|value| value.as_str());
+    let force = tool_params
+        .get("force")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+
+    eprintln!("Upgrading Browser4 runtime...");
+    let runtime = install_browser4_runtime(tag, force).await?;
+
+    if runtime.reused_existing && !force {
+        println!("Browser4 is already at the latest version ({}).", runtime.tag);
+        return Ok(());
+    }
+
+    println!("Browser4 upgraded successfully to {}.", runtime.tag);
+    println!("- Install dir: {}", runtime.install_dir.display());
+    println!("- Lib dir: {}", runtime.lib_dir.display());
+    println!("- Java: {}", runtime.java_path.display());
+    println!("Restart the server to use the new version: browser4-cli stop && browser4-cli open");
+    Ok(())
+}
+
+async fn handle_stop() -> Result<(), String> {
+    let result = stop_browser4_server_forcibly();
+    let shutdown_result = result.shutdown;
+    finalize_global_cleanup("Stopped", &shutdown_result);
+
+    if !shutdown_result.fallback_killed_server_pids.is_empty() {
+        let pids: Vec<String> = shutdown_result
+            .fallback_killed_server_pids
+            .iter()
+            .map(|p| p.to_string())
+            .collect();
+        println!(
+            "Fallback-killed Browser4 backend process(es): {}",
+            pids.join(", ")
+        );
+    }
+
+    if shutdown_result.stopped_pids.is_empty()
+        && shutdown_result.missing_pids.is_empty()
+        && shutdown_result.forced_pids.is_empty()
+        && shutdown_result.fallback_killed_server_pids.is_empty()
+    {
+        println!("No Browser4 server was running.");
+    } else {
+        println!("Browser4 server stopped.");
+    }
+    Ok(())
+}
+
+async fn handle_status(client: &Client, base_url: &str) -> Result<(), String> {
+    println!("Browser4 Status");
+    println!("===============");
+    println!("CLI version: {}", VERSION);
+    println!("Server URL: {}", base_url);
+
+    // Check installed runtime
+    if let Some(metadata) = daemon::read_installed_browser4_runtime_metadata() {
+        println!("Installed version: {}", metadata.tag);
+        println!("Installed at: {}", metadata.installed_at);
+    } else {
+        println!("Installed version: not installed (run 'browser4-cli install')");
+    }
+
+    // Check server health
+    let health_url = format!("{base_url}/actuator/health");
+    match client.get(&health_url).send().await {
+        Ok(response) => {
+            if response.status().is_success() {
+                match response.text().await {
+                    Ok(body) if body.contains("\"status\":\"UP\"") => {
+                        println!("Server health: UP");
+                    }
+                    Ok(body) => {
+                        println!("Server health: NOT READY ({})", body);
+                    }
+                    Err(e) => {
+                        println!("Server health: ERROR ({})", e);
+                    }
+                }
+            } else {
+                println!("Server health: DOWN (HTTP {})", response.status());
+            }
+        }
+        Err(_) => {
+            println!("Server health: UNREACHABLE (no response from {})", base_url);
+        }
+    }
+
     Ok(())
 }
 
@@ -2357,6 +2452,9 @@ fn should_ensure_server_running(command: &str) -> bool {
         && command != "kill-all"
         && command != "list"
         && command != "install"
+        && command != "upgrade"
+        && command != "stop"
+        && command != "status"
 }
 
 // ---------------------------------------------------------------------------
@@ -3230,6 +3328,15 @@ async fn run(
         }
         "install" => {
             handle_install(&tool_params).await?;
+        }
+        "upgrade" => {
+            handle_upgrade(&tool_params).await?;
+        }
+        "stop" => {
+            handle_stop().await?;
+        }
+        "status" => {
+            handle_status(&client, &base_url).await?;
         }
         "delete-data" => {
             handle_delete_data(&client, &base_url, global.session_name.as_deref()).await?;
