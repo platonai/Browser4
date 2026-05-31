@@ -258,7 +258,6 @@ class Browser4AutoConfiguration {
     @ConditionalOnMissingBean(name = ["pageParser"])
     fun pageParser(
         parserFactory: ParserFactory,
-        messageWriter: MiscMessageWriter,
         conf: MutableConfig,
     ): PageParser {
         return PageParser(parserFactory = parserFactory, conf = conf)
