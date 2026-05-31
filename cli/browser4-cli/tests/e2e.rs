@@ -2510,6 +2510,10 @@ fn excluded_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "kill-all",
         // One-time setup / external download — not suitable for e2e
         "install",
+        // Server lifecycle commands — not suitable for in-server e2e
+        "status",
+        "stop",
+        "upgrade",
     ]
     .into();
 

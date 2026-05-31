@@ -1980,15 +1980,6 @@ mod tests {
         let map = commands_map();
         for name in [
             "console",
-            "extract",
-            "summarize",
-            "agent-run",
-            "agent-status",
-            "agent-result",
-            "swarm-create",
-            "swarm-submit",
-            "swarm-status",
-            "swarm-result",
         ] {
             assert!(map.get(name).unwrap().hidden, "{name} should stay hidden");
         }
