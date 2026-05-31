@@ -157,7 +157,7 @@ java -jar target/Browser4.jar --app=mcp
 ```
 
 `target/Browser4.jar` is a Spring Boot executable jar, so launch it with `java -jar`.
-Direct classpath invocation such as `java -cp target/Browser4.jar ai.platon.pulsar.app.Browser4Launcher`
+Direct classpath invocation such as `java -cp target/Browser4.jar ai.platon.pulsar.apps.Browser4Launcher`
 will not work because application classes are packaged under `BOOT-INF\classes`.
 
 ### From App-Image

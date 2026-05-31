@@ -84,7 +84,7 @@
                     </execution>
                 </executions>
                 <configuration>
-                    <mainClass>ai.platon.pulsar.app.Browser4LauncherKt</mainClass>
+                    <mainClass>ai.platon.pulsar.apps.Browser4LauncherKt</mainClass>
                     <addResources>true</addResources>
                 </configuration>
             </plugin>
