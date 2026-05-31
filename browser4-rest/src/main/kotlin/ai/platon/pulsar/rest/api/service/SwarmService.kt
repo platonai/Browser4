@@ -1,14 +1,14 @@
 package ai.platon.pulsar.rest.api.service
 
-import ai.platon.pulsar.agentic.BasicAgenticSession
+import ai.platon.pulsar.agentic.GenericAgenticSession
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.DegenerateXSQLScrapeHyperlink
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeAPIUtils
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeHyperlink
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.XSQLScrapeHyperlink
-import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.PulsarSessionManager
+import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
 import ai.platon.pulsar.rest.api.entities.ScrapeStatusRequest
 import org.apache.commons.collections4.MultiMapUtils
@@ -41,7 +41,7 @@ class SwarmService(
         val hyperlink = createScrapeHyperlink(request)
         responseCache[hyperlink.uuid] = hyperlink.response
         hyperlink.response.id = hyperlink.uuid
-        require(session is BasicAgenticSession)
+        require(session is GenericAgenticSession)
         session.submit(hyperlink)
         return hyperlink.uuid
     }
