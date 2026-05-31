@@ -1,8 +1,9 @@
-package ai.platon.pulsar.protocol.browser.emulator.context
+package ai.platon.pulsar.protocol.browser.context
 
 import ai.platon.pulsar.browser.BrowserProfile
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.protocol.browser.DefaultWebDriverPoolManager
+import ai.platon.pulsar.protocol.browser.emulator.context.MultiPrivacyContextManager
 import org.apache.commons.io.FileUtils
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.*

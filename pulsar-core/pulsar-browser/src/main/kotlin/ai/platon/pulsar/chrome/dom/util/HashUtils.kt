@@ -43,6 +43,7 @@ object HashUtils {
         useParentBranch = false,
         useStaticAttributes = false
     )
+
     private fun sha256Hex(bytes: ByteArray): String {
         val md = MessageDigest.getInstance("SHA-256")
         val digest = md.digest(bytes)

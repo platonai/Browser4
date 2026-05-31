@@ -11,11 +11,11 @@ import ai.platon.pulsar.common.config.CapabilityTypes.LOAD_DEACTIVATE_FETCH_COMP
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.measure.ByteUnitConverter
 import ai.platon.pulsar.common.urls.URLUtils
+import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.persist.*
 import ai.platon.pulsar.persist.gora.generated.GWebPage
 import ai.platon.pulsar.persist.model.ActiveDOMStat
 import ai.platon.pulsar.persist.model.GoraWebPage
-import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.skeleton.common.AppStatusTracker
 import ai.platon.pulsar.skeleton.common.message.PageLoadStatusFormatter
 import ai.platon.pulsar.skeleton.common.options.LoadOptions

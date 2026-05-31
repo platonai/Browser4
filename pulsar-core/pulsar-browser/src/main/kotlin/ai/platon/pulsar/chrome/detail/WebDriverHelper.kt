@@ -1,5 +1,6 @@
 package ai.platon.pulsar.chrome.detail
 
+import ai.platon.pulsar.chrome.handler.PageHandler
 import ai.platon.cdt.kt.protocol.events.network.ResponseReceived
 import ai.platon.cdt.kt.protocol.types.network.Cookie
 import ai.platon.cdt.kt.protocol.types.network.ResourceType
@@ -10,7 +11,6 @@ import ai.platon.pulsar.browser.common.JsEvaluation
 import ai.platon.pulsar.browser.common.JsException
 import ai.platon.pulsar.browser.common.NavigateEntry
 import ai.platon.pulsar.browser.impl.BrowserProtocol
-import ai.platon.pulsar.chrome.impl.PageHandler
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.MultiSinkMessageWriter
 import ai.platon.pulsar.common.alwaysFalse
@@ -27,9 +27,10 @@ internal class WebDriverHelper(
     val driver: WebDriver,
     val rpc: RobustRPC,
     val page: PageHandler,
-    val browserProtocol: BrowserProtocol,
-    val messageWriter: MultiSinkMessageWriter
+    val browserProtocol: BrowserProtocol
 ) {
+    private val messageWriter = MultiSinkMessageWriter()
+
     suspend fun reportInterestingResources(entry: NavigateEntry, event: ResponseReceived) {
         runCatching { traceInterestingResources0(entry, event) }.onFailure { warnInterruptible(this, it) }
     }

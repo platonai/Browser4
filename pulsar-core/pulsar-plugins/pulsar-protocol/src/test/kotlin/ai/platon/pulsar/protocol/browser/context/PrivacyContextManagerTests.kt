@@ -1,4 +1,4 @@
-package ai.platon.pulsar.protocol.browser.emulator.context
+package ai.platon.pulsar.protocol.browser.context
 
 import ai.platon.pulsar.browser.BrowserProfile
 import ai.platon.pulsar.browser.common.BrowserSettings
@@ -13,6 +13,7 @@ import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.persist.WebPageExt
 import ai.platon.pulsar.protocol.browser.DefaultWebDriverPoolManager
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager
+import ai.platon.pulsar.protocol.browser.emulator.context.MultiPrivacyContextManager
 import ai.platon.pulsar.skeleton.PulsarSettings
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
@@ -55,7 +56,7 @@ class PrivacyContextManagerTests {
 
     @Test
     fun testPrivacyContextReport() {
-        var report = String.format(
+        val report = String.format(
             "Privacy context has lived for %s | %s | %s" +
                     " | success: %s(%s pages/s) | small: %s(%s) | traffic: %s(%s/s) | tasks: %s total run: %s | proxy: %s",
             // Privacy context has lived for {} | {} | {}

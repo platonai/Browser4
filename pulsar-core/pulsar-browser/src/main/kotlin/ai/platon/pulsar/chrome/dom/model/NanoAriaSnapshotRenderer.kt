@@ -1,6 +1,7 @@
 package ai.platon.pulsar.chrome.dom.model
 
-import java.util.Locale
+import ai.platon.pulsar.chrome.dom.model.NanoDOMTreeNode
+import java.util.*
 
 object NanoAriaSnapshotRenderer {
     fun render(root: NanoDOMTreeNode): String {

@@ -1,17 +1,18 @@
 package ai.platon.pulsar.chrome.dom
 
-import ai.platon.cdt.kt.protocol.types.accessibility.AXNode
-import ai.platon.pulsar.browser.impl.BrowserProtocol
 import ai.platon.pulsar.chrome.dom.impl.AccessibilityHandler
 import ai.platon.pulsar.chrome.dom.impl.AccessibilityHandler.AccessibilityTreeResult
 import ai.platon.pulsar.chrome.dom.impl.DomSnapshotHandler
 import ai.platon.pulsar.chrome.dom.impl.DomTreeHandler
 import ai.platon.pulsar.chrome.dom.impl.OptimizedDOMTreeBuilder
-import ai.platon.pulsar.chrome.dom.model.*
 import ai.platon.pulsar.chrome.dom.util.DomDebug
 import ai.platon.pulsar.chrome.dom.util.HashUtils
 import ai.platon.pulsar.chrome.dom.util.ScrollUtils
 import ai.platon.pulsar.chrome.dom.util.XPathUtils
+import ai.platon.cdt.kt.protocol.types.accessibility.AXNode
+import ai.platon.pulsar.browser.impl.BrowserProtocol
+import ai.platon.pulsar.chrome.dom.SnapshotService
+import ai.platon.pulsar.chrome.dom.model.*
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.math.geometric.DimI
 import java.util.*
@@ -525,7 +526,7 @@ class CDPSnapshotService(
             (evalDouble("window.innerHeight || document.documentElement.clientHeight || document.body.clientHeight || 0")
                 ?: 0.0).toInt()
 
-        // Screen dimensions
+        // Screen DimIs
         val screenWidth = evalInt("(window.screen && window.screen.width) || 0") ?: 0
         val screenHeight = evalInt("(window.screen && window.screen.height) || 0") ?: 0
 

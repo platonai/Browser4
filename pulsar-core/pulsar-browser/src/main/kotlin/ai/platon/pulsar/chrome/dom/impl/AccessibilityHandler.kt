@@ -2,8 +2,8 @@ package ai.platon.pulsar.chrome.dom.impl
 
 import ai.platon.cdt.kt.protocol.types.accessibility.AXNode
 import ai.platon.cdt.kt.protocol.types.page.FrameTree
-import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.browser.impl.BrowserProtocol
+import ai.platon.pulsar.common.getLogger
 
 class AccessibilityHandler(
     private val bp: BrowserProtocol

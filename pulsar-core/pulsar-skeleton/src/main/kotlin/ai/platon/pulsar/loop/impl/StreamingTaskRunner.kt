@@ -1,5 +1,6 @@
 package ai.platon.pulsar.loop.impl
 
+import ai.platon.pulsar.browser.privacy.AbstractPrivacyContext
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.collect.ConcurrentLoadingIterable
 import ai.platon.pulsar.common.collect.DelayUrl
@@ -13,18 +14,17 @@ import ai.platon.pulsar.common.urls.CallableDegenerateUrl
 import ai.platon.pulsar.common.urls.DegenerateUrl
 import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.common.urls.UrlAware
+import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.persist.AbstractWebPage
 import ai.platon.pulsar.persist.WebDBException
-import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.skeleton.common.AppSystemInfo
 import ai.platon.pulsar.skeleton.common.message.PageLoadStatusFormatter
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.context.PulsarContexts
 import ai.platon.pulsar.skeleton.context.support.AbstractPulsarContext
-import ai.platon.pulsar.skeleton.workflow.common.url.ListenableUrl
-import ai.platon.pulsar.browser.privacy.AbstractPrivacyContext
 import ai.platon.pulsar.skeleton.session.PulsarSession
+import ai.platon.pulsar.skeleton.workflow.common.url.ListenableUrl
 import com.codahale.metrics.Gauge
 import kotlinx.coroutines.*
 import org.apache.commons.lang3.RandomStringUtils
@@ -316,12 +316,8 @@ open class StreamingTaskRunner(
     override fun report() {
         val sb = StringBuilder()
 
-        try {
-            StreamingTaskRunner::class.memberProperties.filter { it.isAccessible }.forEach {
-                sb.append(it.name).append(": ").append(it.get(this)).append("\n")
-            }
-        } catch (_: Throwable) {
-            sb.append("message: unable to generate report via kotlin reflect")
+        StreamingTaskRunner::class.memberProperties.filter { it.isAccessible }.forEach {
+            sb.append(it.name).append(": ").append(it.get(this)).append("\n")
         }
 
         logger.info(sb.toString())
@@ -610,7 +606,7 @@ open class StreamingTaskRunner(
         var page: WebPage? = null
         val timeout = fetchTaskTimeout.plusSeconds(30).toMillis()
         try {
-            page = withTimeout(timeout) {
+            page = withTimeout(timeout.milliseconds) {
                 loadWithMinorExceptionHandled(url)
             }
         } catch (e: TimeoutCancellationException) {
@@ -844,7 +840,7 @@ open class StreamingTaskRunner(
         val oneMinuteRate = globalState.globalMetrics.cancels.meter.oneMinuteRate
         if (isActive && oneMinuteRate >= 1.0) {
             globalState.criticalWarning = CriticalWarning.FAST_CANCELS
-            delay(1_000)
+            delay(1_000.milliseconds)
         }
     }
 

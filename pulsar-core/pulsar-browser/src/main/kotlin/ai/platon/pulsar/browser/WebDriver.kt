@@ -1,10 +1,12 @@
 package ai.platon.pulsar.browser
 
-import ai.platon.pulsar.chrome.dom.model.BrowserUseState
 import ai.platon.pulsar.browser.common.JsEvaluation
 import ai.platon.pulsar.browser.common.NavigateEntry
 import ai.platon.pulsar.browser.common.NavigateHistory
 import ai.platon.pulsar.browser.common.WebDriverException
+import ai.platon.pulsar.browser.impl.NetworkResourceResponse
+import ai.platon.pulsar.browser.impl.NodeRef
+import ai.platon.pulsar.chrome.dom.model.BrowserUseState
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.ai.llm.MCP
 import ai.platon.pulsar.common.browser.BrowserType
@@ -13,8 +15,6 @@ import ai.platon.pulsar.common.math.geometric.RectD
 import ai.platon.pulsar.common.serialize.json.Pson
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.common.urls.Hyperlink
-import ai.platon.pulsar.browser.impl.NetworkResourceResponse
-import ai.platon.pulsar.browser.impl.NodeRef
 import com.google.common.annotations.Beta
 import org.jsoup.Connection
 import java.io.Closeable
@@ -1935,7 +1935,7 @@ interface WebDriver : Closeable {
      * - `"2-4"` — return viewports 2, 3 and 4.
      *
      * Viewport indices are 1-based. The viewport height is determined by the browser's
-     * current viewport dimensions.
+     * current viewport DimIs.
      *
      * @param viewports A viewport specification string (e.g., `"3"`, `"1,3,5"`, `"2-4"`, `"all"`).
      * @return The ARIA snapshot YAML covering only the requested viewports.

@@ -1,6 +1,5 @@
 package ai.platon.pulsar.skeleton.context.support
 
-import ai.platon.pulsar.skeleton.workflow.fetch.BrowserFetcher
 import ai.platon.pulsar.browser.BrowserManager
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.config.AppConstants
@@ -48,7 +47,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.reflect.KClass
 
 abstract class AbstractPulsarContext(
-    val applicationContext: AbstractApplicationContext
+    open val applicationContext: AbstractApplicationContext
 ) : PulsarContext, AutoCloseable {
 
     companion object {
@@ -161,8 +160,6 @@ abstract class AbstractPulsarContext(
     open val updateComponent: UpdateComponent get() = getBean()
 
     open val loadComponent: LoadComponent get() = getBean()
-
-    open val browserFetcher: BrowserFetcher get() = getBean()
 
     override val globalCache: GlobalCache get() = globalCacheFactory.globalCache
 

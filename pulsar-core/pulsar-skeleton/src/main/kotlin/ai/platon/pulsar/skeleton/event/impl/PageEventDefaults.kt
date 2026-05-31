@@ -1,10 +1,10 @@
 package ai.platon.pulsar.skeleton.event.impl
 
+import ai.platon.pulsar.browser.rpa.BrowseRPA
+import ai.platon.pulsar.browser.rpa.DefaultBrowseRPA
 import ai.platon.pulsar.common.ResourceLoader
 import ai.platon.pulsar.common.config.CapabilityTypes
 import ai.platon.pulsar.common.config.ImmutableConfig
-import ai.platon.pulsar.browser.rpa.BrowseRPA
-import ai.platon.pulsar.browser.rpa.DefaultBrowseRPA
 import ai.platon.pulsar.skeleton.event.*
 import org.slf4j.LoggerFactory
 

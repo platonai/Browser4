@@ -1,10 +1,10 @@
 package ai.platon.pulsar.chrome
 
+import ai.platon.pulsar.chrome.util.ChromeIOException
+import ai.platon.pulsar.chrome.util.ChromeServiceException
 import ai.platon.cdt.kt.protocol.ChromeDevTools
 import ai.platon.cdt.kt.protocol.support.types.EventHandler
 import ai.platon.cdt.kt.protocol.support.types.EventListener
-import ai.platon.pulsar.chrome.util.ChromeIOException
-import ai.platon.pulsar.chrome.util.ChromeServiceException
 import ai.platon.pulsar.browser.impl.BrowserTab
 import ai.platon.pulsar.browser.impl.ChromeVersion
 import ai.platon.pulsar.browser.impl.DevToolsConfig

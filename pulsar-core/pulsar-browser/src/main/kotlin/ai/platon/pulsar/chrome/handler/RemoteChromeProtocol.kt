@@ -1,5 +1,6 @@
-package ai.platon.pulsar.chrome.impl
+package ai.platon.pulsar.chrome.handler
 
+import ai.platon.pulsar.chrome.RemoteDevTools
 import ai.platon.cdt.kt.protocol.ChromeDevTools
 import ai.platon.cdt.kt.protocol.events.console.MessageAdded
 import ai.platon.cdt.kt.protocol.events.fetch.AuthRequired
@@ -21,7 +22,6 @@ import ai.platon.cdt.kt.protocol.types.page.*
 import ai.platon.cdt.kt.protocol.types.runtime.CallArgument
 import ai.platon.cdt.kt.protocol.types.runtime.CallFunctionOn
 import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
-import ai.platon.pulsar.chrome.RemoteDevTools
 import ai.platon.pulsar.browser.impl.BrowserProtocol
 
 /**
@@ -39,7 +39,7 @@ class RemoteChromeProtocol(
         (devTools as? RemoteDevTools) ?: error("CDP requires RemoteDevTools for this runtime")
 
     val remoteDevToolsOrNull: RemoteDevTools? get() = devTools as? RemoteDevTools
-    override val isOpen: Boolean get() = remoteDevToolsOrNull?.isOpen ?: true
+    override val isOpen: Boolean get() = remoteDevToolsOrNull?.isOpen ?: false
 
     override suspend fun isBrowserAlive(): Boolean {
         return runCatching { browser.getVersion() }.isSuccess

@@ -1,4 +1,4 @@
-package ai.platon.pulsar.chrome.impl
+package ai.platon.pulsar.chrome.handler.util
 
 /**
  * Shared JS function declarations for checkable elements.

@@ -1,4 +1,4 @@
-package ai.platon.pulsar.chrome.impl
+package ai.platon.pulsar.chrome.handler.transport
 
 import ai.platon.pulsar.chrome.Transport
 import ai.platon.pulsar.chrome.util.ChromeDriverException
@@ -11,7 +11,7 @@ import ai.platon.pulsar.common.warnForClose
 import com.codahale.metrics.SharedMetricRegistries
 import io.ktor.client.*
 import io.ktor.client.engine.cio.*
-import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.plugins.*
 import io.ktor.client.plugins.websocket.*
 import io.ktor.websocket.*
 import kotlinx.coroutines.*
@@ -22,7 +22,6 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 import java.util.function.Consumer
-import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 
 /**
@@ -57,7 +56,7 @@ internal class KtorTransport : Transport {
         this.uri = normalizedUri
         try {
             client = HttpClient(CIO) {
-                install(WebSockets) {
+                install(WebSockets.Plugin) {
                     pingInterval = DEFAULT_PING_INTERVAL_MS.milliseconds
                 }
                 install(HttpTimeout) {
@@ -76,7 +75,7 @@ internal class KtorTransport : Transport {
 
             tracer?.trace("Connecting to ws {} ...", normalizedUri)
             val ws = runBlocking(Dispatchers.IO) {
-                withTimeout(DEFAULT_CONNECT_TIMEOUT_MS) {
+                withTimeout(DEFAULT_CONNECT_TIMEOUT_MS.milliseconds) {
                     client!!.webSocketSession(urlString = normalizedUri.toString())
                 }
             }
@@ -106,7 +105,11 @@ internal class KtorTransport : Transport {
             val open = isOpen
             when (e) {
                 is ChromeIOException -> throw e
-                is TimeoutCancellationException -> throw ChromeIOException("Timed out connecting to ws server | $normalizedUri", e, open)
+                is TimeoutCancellationException -> throw ChromeIOException(
+                    "Timed out connecting to ws server | $normalizedUri",
+                    e,
+                    open
+                )
                 is IOException -> throw ChromeIOException("Failed connecting to ws server | $normalizedUri", e, open)
                 else -> throw ChromeIOException("Failed connecting to ws server | $normalizedUri", e, open)
             }
@@ -136,7 +139,7 @@ internal class KtorTransport : Transport {
             if (ws != null) {
                 runCatching {
                     runBlocking(Dispatchers.IO) {
-                        withTimeout(CLOSE_TIMEOUT_MS) {
+                        withTimeout(CLOSE_TIMEOUT_MS.milliseconds) {
                             ws.close(CloseReason(CloseReason.Codes.NORMAL, ""))
                         }
                     }

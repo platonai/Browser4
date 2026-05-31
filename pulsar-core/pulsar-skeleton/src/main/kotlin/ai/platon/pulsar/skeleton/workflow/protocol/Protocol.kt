@@ -9,6 +9,8 @@ import crawlercommons.robots.BaseRobotRules
  */
 interface Protocol : LazyConfigurable, AutoCloseable {
 
+    val name: String
+
     fun setResponse(response: Response) {}
 
     /**

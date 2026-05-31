@@ -1,14 +1,16 @@
 package ai.platon.pulsar.chrome.dom.model
 
-import ai.platon.pulsar.browser.common.BrowserSettings.Companion.VIEWPORT
-import ai.platon.pulsar.browser.common.FBNLocator
-import ai.platon.pulsar.browser.common.LocatorMap
 import ai.platon.pulsar.chrome.dom.DOMSerializer
+import ai.platon.pulsar.chrome.dom.model.AriaSnapshotRenderer
+import ai.platon.pulsar.chrome.dom.model.NanoAriaSnapshotRenderer
 import ai.platon.pulsar.chrome.dom.util.CSSSelectorUtils
 import ai.platon.pulsar.chrome.dom.util.DOMUtils
 import ai.platon.pulsar.chrome.dom.util.InteractiveNodeListBuilder
 import ai.platon.pulsar.chrome.dom.util.InteractiveNodeListBuilder.Companion.estimatedSize
 import ai.platon.pulsar.chrome.dom.util.NanoDOMTreeBuilder
+import ai.platon.pulsar.browser.common.BrowserSettings.Companion.VIEWPORT
+import ai.platon.pulsar.browser.common.FBNLocator
+import ai.platon.pulsar.browser.common.LocatorMap
 import ai.platon.pulsar.common.math.geometric.DimI
 import ai.platon.pulsar.common.math.roundTo
 import ai.platon.pulsar.common.serialize.json.Pson
@@ -560,9 +562,8 @@ data class DOMState constructor(
     val optimizedDOMTree: OptimizedDOMTree? = null
 ) {
     @get:JsonIgnore
-    val ariaSnapshot: String
-        get() = optimizedDOMTree?.let(AriaSnapshotRenderer::render)
-            ?: serializableTree.toNanoTreeUnfiltered().ariaSnapshot
+    val ariaSnapshot: String get() = optimizedDOMTree?.let(AriaSnapshotRenderer::render)
+        ?: serializableTree.toNanoTreeUnfiltered().ariaSnapshot
 
     fun getAbsoluteFBNLocator(locator: String?): FBNLocator? {
         if (locator == null) {

@@ -1,6 +1,9 @@
 package ai.platon.pulsar.chrome.dom.model
 
-import java.util.Locale
+import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
+import ai.platon.pulsar.chrome.dom.model.NodeType
+import ai.platon.pulsar.chrome.dom.model.OptimizedDOMTreeNode
+import java.util.*
 
 object AriaSnapshotRenderer {
     fun render(root: OptimizedDOMTreeNode): String {

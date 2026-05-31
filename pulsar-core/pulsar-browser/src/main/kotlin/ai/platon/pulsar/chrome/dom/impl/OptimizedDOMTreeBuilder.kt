@@ -104,7 +104,8 @@ class OptimizedDOMTreeBuilder(
 
                 // Force visible if has aria-/pseudo validation-like attributes
                 if (!isVisible && node.attributes.isNotEmpty()) {
-                    val hasValidationAttrs = node.attributes.keys.any { it.startsWith("aria-", true) || it.startsWith("pseudo", true) }
+                    val hasValidationAttrs =
+                        node.attributes.keys.any { it.startsWith("aria-", true) || it.startsWith("pseudo", true) }
                     if (hasValidationAttrs) isVisible = true
                 }
 
@@ -150,7 +151,8 @@ class OptimizedDOMTreeBuilder(
             newNode.originalNode.isScrollable == true ||
             newNode.originalNode.nodeType == NodeType.TEXT_NODE ||
             newNode.children.isNotEmpty() ||
-            isAlwaysKeptControl(newNode.originalNode)) {
+            isAlwaysKeptControl(newNode.originalNode)
+        ) {
             newNode
         } else null
     }
@@ -161,7 +163,11 @@ class OptimizedDOMTreeBuilder(
         return filterRecursive(node, activeBounds = null, depth = 0)
     }
 
-    private fun filterRecursive(node: OptimizedDOMTreeNode, activeBounds: PropagatingBounds?, depth: Int): OptimizedDOMTreeNode {
+    private fun filterRecursive(
+        node: OptimizedDOMTreeNode,
+        activeBounds: PropagatingBounds?,
+        depth: Int
+    ): OptimizedDOMTreeNode {
         var excluded = false
         // Exclude if sufficiently contained in active bounds
         if (activeBounds != null && shouldExcludeChild(node, activeBounds)) {
@@ -171,7 +177,12 @@ class OptimizedDOMTreeBuilder(
         // Start new propagation if this node matches
         val newBounds = if (isPropagatingElement(node.originalNode)) {
             node.originalNode.snapshotNode?.bounds?.let {
-                PropagatingBounds(tag = node.originalNode.nodeName.lowercase(), bounds = it, nodeId = node.originalNode.nodeId, depth = depth)
+                PropagatingBounds(
+                    tag = node.originalNode.nodeName.lowercase(),
+                    bounds = it,
+                    nodeId = node.originalNode.nodeId,
+                    depth = depth
+                )
             }
         } else null
 

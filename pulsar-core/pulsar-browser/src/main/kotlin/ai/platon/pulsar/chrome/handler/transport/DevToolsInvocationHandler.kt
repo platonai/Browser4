@@ -1,17 +1,16 @@
-package ai.platon.pulsar.chrome.impl
+package ai.platon.pulsar.chrome.handler.transport
 
+import ai.platon.pulsar.chrome.RemoteDevTools
+import ai.platon.pulsar.chrome.util.ChromeIOException
+import ai.platon.pulsar.chrome.util.ChromeRPCException
+import ai.platon.pulsar.chrome.util.ReflectUtils
+import ai.platon.pulsar.chrome.util.SuspendAwareHandler
 import ai.platon.cdt.kt.protocol.support.annotations.EventName
 import ai.platon.cdt.kt.protocol.support.annotations.ParamName
 import ai.platon.cdt.kt.protocol.support.annotations.ReturnTypeParameter
 import ai.platon.cdt.kt.protocol.support.annotations.Returns
 import ai.platon.cdt.kt.protocol.support.types.EventHandler
 import ai.platon.cdt.kt.protocol.support.types.EventListener
-import ai.platon.pulsar.chrome.RemoteDevTools
-import ai.platon.pulsar.chrome.impl.EventDispatcher.Companion.ID_PROPERTY
-import ai.platon.pulsar.chrome.util.ChromeIOException
-import ai.platon.pulsar.chrome.util.ChromeRPCException
-import ai.platon.pulsar.chrome.util.ReflectUtils
-import ai.platon.pulsar.chrome.util.SuspendAwareHandler
 import ai.platon.pulsar.browser.impl.MethodInvocation
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -36,8 +35,8 @@ class DevToolsInvocationHandler(impl: Any) : SuspendAwareHandler(impl) {
          * */
         fun createMethodInvocation(method: String, params: Map<String, Any?>?): MethodInvocation {
             val params0 = (params ?: emptyMap()).toMutableMap()
-            val methodId = params0[ID_PROPERTY]?.toString()?.toLongOrNull() ?: nextId()
-            params0[ID_PROPERTY] = methodId.toString()
+            val methodId = params0[EventDispatcher.ID_PROPERTY]?.toString()?.toLongOrNull() ?: nextId()
+            params0[EventDispatcher.ID_PROPERTY] = methodId.toString()
 
             val params1: Map<String, Any> = params0.entries
                 .filter { it.value != null }

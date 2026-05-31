@@ -6,18 +6,13 @@ import javassist.Modifier
 import javassist.util.proxy.MethodHandler
 import javassist.util.proxy.ProxyFactory
 import kotlinx.coroutines.*
-import java.lang.reflect.InvocationHandler
-import java.lang.reflect.Method
-import java.lang.reflect.ParameterizedType
-import java.lang.reflect.Proxy
-import java.lang.reflect.Type
-import java.lang.reflect.WildcardType
+import java.lang.reflect.*
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED
 import kotlin.coroutines.resume
+import kotlin.reflect.KVariance
 import kotlin.reflect.full.callSuspend
 import kotlin.reflect.full.declaredFunctions
-import kotlin.reflect.KVariance
 
 open class SuspendAwareHandler(private val impl: Any) : InvocationHandler {
     private val eventHandlerScope = CoroutineScope(SupervisorJob() + Dispatchers.Default + CoroutineName("CDTHandler"))

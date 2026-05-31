@@ -2,7 +2,7 @@ package ai.platon.pulsar.chrome.dom.util
 
 import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
 import ai.platon.pulsar.chrome.dom.model.NodeType
-import java.util.Locale
+import java.util.*
 
 object CSSSelectorUtils {
 

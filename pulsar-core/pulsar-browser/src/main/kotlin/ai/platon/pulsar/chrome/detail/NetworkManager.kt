@@ -1,5 +1,7 @@
 package ai.platon.pulsar.chrome.detail
 
+import ai.platon.pulsar.chrome.util.ChromeRPCException
+import ai.platon.pulsar.chrome.util.Credentials
 import ai.platon.cdt.kt.protocol.events.fetch.AuthRequired
 import ai.platon.cdt.kt.protocol.events.fetch.RequestPaused
 import ai.platon.cdt.kt.protocol.events.network.*
@@ -7,9 +9,7 @@ import ai.platon.cdt.kt.protocol.types.fetch.AuthChallengeResponse
 import ai.platon.cdt.kt.protocol.types.fetch.AuthChallengeResponseResponse
 import ai.platon.cdt.kt.protocol.types.fetch.RequestPattern
 import ai.platon.cdt.kt.protocol.types.network.Response
-import ai.platon.pulsar.chrome.PulsarWebDriver
-import ai.platon.pulsar.chrome.util.ChromeRPCException
-import ai.platon.pulsar.chrome.util.Credentials
+import ai.platon.pulsar.browser.impl.BrowserProtocol
 import ai.platon.pulsar.common.DateTimes
 import ai.platon.pulsar.common.event.AbstractEventEmitter
 import ai.platon.pulsar.common.getLogger
@@ -19,15 +19,13 @@ import java.time.Instant
 import java.util.*
 
 class NetworkManager(
-    private val driver: PulsarWebDriver,
     private val rpc: RobustRPC,
+    private val browserProtocol: BrowserProtocol,
 ) : AbstractEventEmitter<NetworkEvents>() {
     private val logger = getLogger(this)
     private val tracer get() = logger.takeIf { it.isTraceEnabled }
 
-    val isActive get() = driver.isActive
-
-    private val browserProtocol get() = driver.browserProtocol
+    val isActive get() = browserProtocol.isOpen
 
     private val networkEventManager = NetworkEventManager()
 
@@ -223,7 +221,8 @@ class NetworkManager(
 
         require(requestId == event.requestId) { "Inconsistent request id: <${event.requestId}> <- <$requestId>" }
         val allowInterception = userRequestInterceptionEnabled
-        val request = CDPRequest(driver, requestId, event.request, fetchRequestId, allowInterception, redirectChain)
+        val request =
+            CDPRequest(browserProtocol, requestId, event.request, fetchRequestId, allowInterception, redirectChain)
         request.also {
             it.loaderId = event.loaderId
             it.documentURL = event.documentURL
@@ -301,7 +300,8 @@ class NetworkManager(
         // for the interception by the user.
         val frame = event.frameId
         val interceptionId = event.requestId
-        val request = CDPRequest(driver, event.requestId, event.request, interceptionId, userRequestInterceptionEnabled)
+        val request =
+            CDPRequest(browserProtocol, event.requestId, event.request, interceptionId, userRequestInterceptionEnabled)
         request.also {
 //            it.loaderId = event.loaderId
 //            it.documentURL = event.documentURL
@@ -320,14 +320,14 @@ class NetworkManager(
             logger.debug("Unexpected extraInfo events for request | {} events | {}", extraInfos.size, requestId)
         }
 
-        val response = CDPResponse(driver, request, event.response)
+        val response = CDPResponse(browserProtocol, request, event.response)
         request.response = response
 
         emit(NetworkEvents.Response, response)
     }
 
     private fun handleRequestRedirect(request: CDPRequest, underlyingResponse: Response) {
-        val response = CDPResponse(driver, request, underlyingResponse)
+        val response = CDPResponse(browserProtocol, request, underlyingResponse)
         request.response = response
         request.redirectChain.add(WeakReference(request))
         forgetRequest(request, false)
@@ -376,7 +376,7 @@ class NetworkManager(
                 browserProtocol.setCacheDisabled(this.userCacheDisabled)
             }
         } catch (e: ChromeRPCException) {
-            rpc.handleChromeException(e, "setCacheDisabled")
+            rpc.interceptChromeException(e, "setCacheDisabled")
         }
     }
 

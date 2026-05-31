@@ -1,9 +1,10 @@
-package ai.platon.pulsar.chrome.impl
+package ai.platon.pulsar.chrome.handler.util
 
 import ai.platon.pulsar.chrome.RemoteDevTools
-import ai.platon.pulsar.common.AppContext
+import ai.platon.pulsar.chrome.handler.RemoteChromeProtocol
 import ai.platon.pulsar.browser.impl.BrowserProtocol
 import ai.platon.pulsar.browser.impl.NodeRef
+import ai.platon.pulsar.common.AppContext
 
 /**
  * Result of resolving a DOM node to a temporary or pre-existing runtime object id.

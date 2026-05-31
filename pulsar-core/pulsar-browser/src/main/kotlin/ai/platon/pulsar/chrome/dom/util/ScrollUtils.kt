@@ -13,7 +13,7 @@ object ScrollUtils {
      * Rules:
      * - Respect CDP isScrollable early return
      * - Require snapshot and rects
-     * - Compare scrollRect vs clientRect dimensions (+1 tolerance)
+     * - Compare scrollRect vs clientRect DimIs (+1 tolerance)
      * - Allow scrolling only if CSS overflow allows (auto/scroll/overlay)
      * - If no CSS info, allow only common scrollable container tags
      */
@@ -45,8 +45,8 @@ object ScrollUtils {
 
             // Only allow if any overflow property explicitly allows scrolling
             val allows = overflow in setOf("auto", "scroll", "overlay") ||
-                overflowX in setOf("auto", "scroll", "overlay") ||
-                overflowY in setOf("auto", "scroll", "overlay")
+                    overflowX in setOf("auto", "scroll", "overlay") ||
+                    overflowY in setOf("auto", "scroll", "overlay")
 
             return allows
         }
@@ -83,7 +83,7 @@ object ScrollUtils {
             }
         }
 
-        // Regular elements - show dimensions
+        // Regular elements - show DimIs
         return buildString {
             append("scrollable")
 
@@ -135,7 +135,8 @@ object ScrollUtils {
 
             // If ancestor scrolls in same direction, hide current node's scroll info
             if ((nodeHorizontalScroll && ancestorHorizontal) ||
-                (nodeVerticalScroll && ancestorVertical)) {
+                (nodeVerticalScroll && ancestorVertical)
+            ) {
                 return false
             }
         }

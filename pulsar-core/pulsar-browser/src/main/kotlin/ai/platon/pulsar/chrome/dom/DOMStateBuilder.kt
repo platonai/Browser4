@@ -1,10 +1,10 @@
 package ai.platon.pulsar.chrome.dom
 
+import ai.platon.pulsar.chrome.dom.util.ScrollUtils
 import ai.platon.pulsar.browser.common.FBNLocator
 import ai.platon.pulsar.browser.common.Locator
 import ai.platon.pulsar.browser.common.LocatorMap
 import ai.platon.pulsar.chrome.dom.model.*
-import ai.platon.pulsar.chrome.dom.util.ScrollUtils
 
 /**
  * Builds the compact `DOMState` representation that Browser4 ships to agents and serializers.
@@ -82,7 +82,10 @@ object DOMStateBuilder {
         return DOMState(serializableDOMTree, interactiveNodes, frameIds, legacySelectorMap, locatorMap, root)
     }
 
-    private fun collectInteractiveNodes(root: SerializableDOMTree, interactiveNodes: MutableList<SerializableDOMTreeNode>) {
+    private fun collectInteractiveNodes(
+        root: SerializableDOMTree,
+        interactiveNodes: MutableList<SerializableDOMTreeNode>
+    ) {
         root.takeIf { it.interactiveIndex != null }?.let { interactiveNodes.add(it) }
         root.children?.forEach {
             collectInteractiveNodes(it, interactiveNodes)
@@ -154,7 +157,14 @@ object DOMStateBuilder {
 
         // Clean original node with enhanced attribute casing alignment
         val cleanedOriginal =
-            cleanOriginalNodeEnhanced(node.originalNode, includeAttributes, options, includeOrder, frameIds, topViewportHeight)
+            cleanOriginalNodeEnhanced(
+                node.originalNode,
+                includeAttributes,
+                options,
+                includeOrder,
+                frameIds,
+                topViewportHeight
+            )
 
         val showScrollInfo = ScrollUtils.shouldShowScrollInfo(node.originalNode, ancestors)
         val scrollInfoText = if (showScrollInfo) {

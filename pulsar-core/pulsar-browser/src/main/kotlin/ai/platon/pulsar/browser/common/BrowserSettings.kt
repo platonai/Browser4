@@ -1,10 +1,10 @@
 package ai.platon.pulsar.browser.common
 
+import ai.platon.pulsar.chrome.util.ChromeOptions
 import ai.platon.pulsar.browser.InteractSettings
 import ai.platon.pulsar.browser.detail.DualWorldScriptLoader
 import ai.platon.pulsar.browser.detail.ScriptLoader
 import ai.platon.pulsar.browser.detail.SimpleScriptConfuser
-import ai.platon.pulsar.chrome.util.ChromeOptions
 import ai.platon.pulsar.common.Runtimes
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.browser.BrowserType
@@ -13,7 +13,6 @@ import ai.platon.pulsar.common.config.CapabilityTypes.*
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.config.MutableConfig
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.common.math.geometric.DimI
 import ai.platon.pulsar.common.proxy.ProxyEntry
 import java.net.URI
 import java.time.Duration
@@ -30,7 +29,7 @@ open class BrowserSettings constructor(
         /**
          * The viewport size for browser to rendering all webpages.
          * */
-        var VIEWPORT: DimI = DEFAULT_VIEWPORT!!
+        var VIEWPORT = DEFAULT_VIEWPORT!!
 
         /**
          * The screenshot quality.

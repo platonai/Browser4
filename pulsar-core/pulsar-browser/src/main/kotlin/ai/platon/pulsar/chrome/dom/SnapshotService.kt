@@ -1,21 +1,21 @@
 package ai.platon.pulsar.chrome.dom
 
-import ai.platon.pulsar.chrome.dom.model.BrowserUseState
-import ai.platon.pulsar.chrome.dom.model.DOMState
-import ai.platon.pulsar.chrome.dom.model.ElementRefCriteria
-import ai.platon.pulsar.chrome.dom.model.InteractiveDOMTreeNodeList
-import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
-import ai.platon.pulsar.chrome.dom.model.PageTarget
-import ai.platon.pulsar.chrome.dom.model.SnapshotOptions
+import ai.platon.pulsar.chrome.dom.model.*
 
 /**
  * Kotlin-native snapshot service interface.
  */
 interface SnapshotService {
 
-    suspend fun getBrowserUseState(target: PageTarget = PageTarget(), snapshotOptions: SnapshotOptions = SnapshotOptions()): BrowserUseState
+    suspend fun getBrowserUseState(
+        target: PageTarget = PageTarget(),
+        snapshotOptions: SnapshotOptions = SnapshotOptions()
+    ): BrowserUseState
 
-    suspend fun getDOMState(target: PageTarget = PageTarget(), snapshotOptions: SnapshotOptions = SnapshotOptions()): DOMState
+    suspend fun getDOMState(
+        target: PageTarget = PageTarget(),
+        snapshotOptions: SnapshotOptions = SnapshotOptions()
+    ): DOMState
 
     /**
      * Find an element by various criteria (CSS selector, XPath, element hash).

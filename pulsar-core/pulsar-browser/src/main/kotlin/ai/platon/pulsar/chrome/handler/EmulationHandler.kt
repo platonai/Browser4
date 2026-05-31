@@ -1,8 +1,11 @@
-package ai.platon.pulsar.chrome.impl
+package ai.platon.pulsar.chrome.handler
 
+import ai.platon.pulsar.chrome.handler.util.withNodeObjectId
 import ai.platon.cdt.kt.protocol.types.input.DispatchDragEventType
 import ai.platon.cdt.kt.protocol.types.input.DispatchKeyEventType
 import ai.platon.cdt.kt.protocol.types.input.DragData
+import ai.platon.pulsar.browser.impl.BrowserProtocol
+import ai.platon.pulsar.browser.impl.NodeRef
 import ai.platon.pulsar.common.DescriptiveResult
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.io.KeyboardModifier
@@ -13,8 +16,6 @@ import ai.platon.pulsar.common.math.geometric.DimD
 import ai.platon.pulsar.common.math.geometric.OffsetD
 import ai.platon.pulsar.common.math.geometric.PointD
 import ai.platon.pulsar.common.math.geometric.RectD
-import ai.platon.pulsar.browser.impl.BrowserProtocol
-import ai.platon.pulsar.browser.impl.NodeRef
 import kotlinx.coroutines.delay
 import org.apache.commons.lang3.SystemUtils
 import org.apache.commons.math3.util.Precision

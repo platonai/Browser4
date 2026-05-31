@@ -1,5 +1,10 @@
 package ai.platon.pulsar.chrome.detail
 
+import ai.platon.pulsar.chrome.PulsarWebDriver
+import ai.platon.pulsar.chrome.util.CDPReturnError
+import ai.platon.pulsar.chrome.util.ChromeDriverException
+import ai.platon.pulsar.chrome.util.ChromeIOException
+import ai.platon.pulsar.chrome.util.ChromeRPCException
 import ai.platon.pulsar.browser.AbstractWebDriver
 import ai.platon.pulsar.browser.WebDriver
 import ai.platon.pulsar.browser.common.BrowserUnavailableException
@@ -7,11 +12,6 @@ import ai.platon.pulsar.browser.common.IllegalWebDriverStateException
 import ai.platon.pulsar.browser.common.WebDriverException
 import ai.platon.pulsar.browser.common.WebDriverUnavailableException
 import ai.platon.pulsar.browser.impl.NodeRef
-import ai.platon.pulsar.chrome.PulsarWebDriver
-import ai.platon.pulsar.chrome.util.CDPReturnError
-import ai.platon.pulsar.chrome.util.ChromeDriverException
-import ai.platon.pulsar.chrome.util.ChromeIOException
-import ai.platon.pulsar.chrome.util.ChromeRPCException
 import ai.platon.pulsar.common.*
 import kotlinx.coroutines.delay
 import java.util.concurrent.ConcurrentHashMap
@@ -31,16 +31,20 @@ class RobustRPC(
         var MAX_RPC_FAILURES = 5
     }
 
-    private val logger = getLogger(this)
-
     val rpcFailures = AtomicInteger()
     var maxRPCFailures = MAX_RPC_FAILURES
 
+    /**
+     * Invoke an executable block without return value.
+     * */
     @Throws(ChromeDriverException::class)
     suspend fun invoke0(action: String, block: suspend () -> Unit) {
         invokeWithRetry(action, block = block)
     }
 
+    /**
+     * Invoke an executable block.
+     * */
     @Throws(ChromeDriverException::class)
     suspend fun <T> invoke(action: String, block: suspend () -> T): T? {
         return invokeWithRetry(action, block = block)
@@ -56,11 +60,7 @@ class RobustRPC(
         try {
             return invokeWithRetry(action, url = url, block = block)
         } catch (e: ChromeDriverException) {
-            handleChromeException(e, action, message)
-            logger.warn(
-                "Unexpected code path, will re-throw. Exception should be handled in handleChromeException " +
-                        "method, but still got an exception: [{}], message: [{}]", action, message, e
-            )
+            interceptChromeException(e, action, message)
             throw e
         }
     }
@@ -83,7 +83,7 @@ class RobustRPC(
                 } else if (scrollIntoView) {
                     driver.page.scrollIntoViewIfNeeded(selector)
                 } else {
-                    driver.page.queryLocator(selector)
+                    driver.page.dom.queryLocator(selector)
                 }
 
                 if (node != null) {
@@ -93,11 +93,7 @@ class RobustRPC(
                 }
             }
         } catch (e: ChromeDriverException) {
-            handleChromeException(e, action, "selector: [$selector], focus: $focus, scrollIntoView: $scrollIntoView")
-            logger.warn(
-                "Unexpected code path, will re-throw. Exception should be handled in handleChromeException " +
-                        "method, but still got an exception: [{}], message: [{}]", action, message, e
-            )
+            interceptChromeException(e, action, "selector: [$selector], focus: $focus, scrollIntoView: $scrollIntoView")
             throw e
         }
     }
@@ -120,7 +116,6 @@ class RobustRPC(
         predicate: suspend (NodeRef) -> Boolean
     ): Boolean = invokeOnElement(selector, action, focus, scrollIntoView, message, predicate) == true
 
-
     @Throws(WebDriverException::class)
     private suspend fun <T> invokeWithRetry(
         action: String,
@@ -137,8 +132,7 @@ class RobustRPC(
         var result = runCatching { invokeDeferred0(action, url, block) }
             .onFailure {
                 logger.info(
-                    "Oop, a bit slip-up executing action: " +
-                            "[$action], retrying 1/$maxRetry time ... | {}", it.brief()
+                    "Oop, a bit slip-up executing action: [$action], retrying 1/$maxRetry time ... | {}", it.brief()
                 )
             }
 
@@ -229,7 +223,7 @@ class RobustRPC(
         return try {
             invoke(action, block)
         } catch (e: ChromeRPCException) {
-            handleChromeException(e, action, message)
+            interceptChromeException(e, action, message)
             null
         }
     }
@@ -241,13 +235,13 @@ class RobustRPC(
         return try {
             invokeWithRetry(action, maxRetry, url, block)
         } catch (e: ChromeRPCException) {
-            handleChromeException(e, action, message)
+            interceptChromeException(e, action, message)
             null
         }
     }
 
     @Throws(IllegalWebDriverStateException::class, ChromeDriverException::class)
-    suspend fun handleChromeException(e: ChromeDriverException, action: String? = null, message: String? = null) {
+    suspend fun interceptChromeException(e: ChromeDriverException, action: String? = null, message: String? = null) {
         when (e) {
             is ChromeIOException -> {
                 handleChromeIOException(e, action, message)

@@ -16,9 +16,9 @@
 package ai.platon.pulsar.protocol.crowd
 
 import ai.platon.pulsar.common.concurrent.ConcurrentExpiringLRUCache
+import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.skeleton.workflow.protocol.Response
 import ai.platon.pulsar.skeleton.workflow.protocol.http.AbstractHttpProtocol
-import ai.platon.pulsar.persist.WebPage
 import org.slf4j.LoggerFactory
 import java.time.Duration
 
@@ -28,6 +28,8 @@ open class ForwardingProtocol : AbstractHttpProtocol() {
     private val cacheCapacity = 200
     private val cache = ConcurrentExpiringLRUCache<String, Response>(cacheTTL, cacheCapacity)
 
+    override val name: String = "forward"
+
     override fun setResponse(response: Response) {
         cache.putDatum(response.url, response)
         logAfterPutResponse()
@@ -36,7 +38,7 @@ open class ForwardingProtocol : AbstractHttpProtocol() {
     @Throws(Exception::class)
     override suspend fun getResponseDeferred(page: WebPage, followRedirects: Boolean): Response? {
         // TODO: wait if not in the cache?
-        val response = cache.remove(page.url)?.datum?: return null
+        val response = cache.remove(page.url)?.datum ?: return null
         logAfterRemoveResponse(page.url, response)
         return response
     }

@@ -8,6 +8,7 @@ import java.io.BufferedReader
 import java.io.IOException
 import java.nio.file.NoSuchFileException
 import java.nio.file.Path
+import java.time.Duration
 import java.util.concurrent.TimeUnit
 
 /**
@@ -31,12 +32,16 @@ class ChromeDestroyer(
 
     private val browserFileSystem = BrowserFileSystem(userDataDir)
 
+    fun destroyGracefully(process: Process, shutdownWaitTime: Duration) {
+        Runtimes.destroyProcess(process, shutdownWaitTime)
+    }
+
     /**
      * Destroys the matching Chrome process forcibly and clears process markers.
      *
      * @param primaryPid Preferred pid to destroy before scanning the system process list.
      */
-    fun destroy(primaryPid: Long? = null) {
+    fun destroyForcibly(primaryPid: Long? = null) {
         try {
             val candidatePids = distinctPositivePids(primaryPid, readRecordedPid())
 
@@ -88,7 +93,7 @@ class ChromeDestroyer(
 
     fun destroyZombie() {
         if (isZombie()) {
-            destroy()
+            destroyForcibly()
         }
     }
 

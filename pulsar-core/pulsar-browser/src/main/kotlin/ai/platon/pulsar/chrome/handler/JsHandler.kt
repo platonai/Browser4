@@ -1,16 +1,18 @@
-package ai.platon.pulsar.chrome.impl
+package ai.platon.pulsar.chrome.handler
 
+import ai.platon.pulsar.chrome.IsolatedWorldManager
+import ai.platon.pulsar.chrome.handler.util.releaseNodeObjectIfNeeded
+import ai.platon.pulsar.chrome.handler.util.resolveNodeObjectId
+import ai.platon.pulsar.chrome.util.ChromeDriverException
 import ai.platon.cdt.kt.protocol.types.runtime.CallFunctionOn
 import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
+import ai.platon.pulsar.browser.impl.BrowserProtocol
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.js.JsUtils
-import ai.platon.pulsar.browser.impl.BrowserProtocol
-import ai.platon.pulsar.chrome.IsolatedWorldManager
-import ai.platon.pulsar.chrome.util.ChromeDriverException
 
 class JsHandler(
     private val bp: BrowserProtocol,
-    private val pageHandler: PageHandler,
+    private val page: PageHandler,
     private val isolatedWorldManager: IsolatedWorldManager,
 ) {
     private val logger = getLogger(this)
@@ -49,7 +51,7 @@ class JsHandler(
 
     @Throws(ChromeDriverException::class)
     suspend fun callFunctionOn(selector: String, functionDeclaration: String): CallFunctionOn? {
-        val node = pageHandler.queryLocator(selector) ?: return null
+        val node = page.dom.queryLocator(selector) ?: return null
         val resolved = resolveNodeObjectId(bp, node) ?: return null
         return try {
             bp.callFunctionOn(functionDeclaration, objectId = resolved.objectId, returnByValue = true)

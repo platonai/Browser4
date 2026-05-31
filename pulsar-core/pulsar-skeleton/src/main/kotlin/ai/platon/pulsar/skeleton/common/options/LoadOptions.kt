@@ -1,5 +1,6 @@
 package ai.platon.pulsar.skeleton.common.options
 
+import ai.platon.pulsar.browser.InteractSettings
 import ai.platon.pulsar.common.DateTimes
 import ai.platon.pulsar.common.Priority13
 import ai.platon.pulsar.common.browser.InteractLevel
@@ -7,7 +8,6 @@ import ai.platon.pulsar.common.config.CapabilityTypes
 import ai.platon.pulsar.common.config.Params
 import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.dom.select.appendSelectorIfMissing
-import ai.platon.pulsar.browser.InteractSettings
 import ai.platon.pulsar.persist.metadata.FetchMode
 import ai.platon.pulsar.skeleton.common.ApiPublic
 import ai.platon.pulsar.skeleton.event.PageEventHandlers

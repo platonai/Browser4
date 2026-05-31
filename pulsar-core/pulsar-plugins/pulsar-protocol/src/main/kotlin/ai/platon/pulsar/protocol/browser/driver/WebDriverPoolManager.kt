@@ -5,6 +5,7 @@ import ai.platon.pulsar.browser.BrowserId
 import ai.platon.pulsar.browser.common.BrowserLaunchException
 import ai.platon.pulsar.browser.common.BrowserUnavailableException
 import ai.platon.pulsar.browser.common.WebDriverException
+import ai.platon.pulsar.browser.manage.BasicBrowserManager
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.concurrent.PreemptChannelSupport
 import ai.platon.pulsar.common.config.AppConstants.DEFAULT_BROWSER_MAX_OPEN_TABS
@@ -15,7 +16,6 @@ import ai.platon.pulsar.core.api.BrowserManager
 import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.protocol.browser.emulator.WebDriverPoolException
 import ai.platon.pulsar.protocol.browser.emulator.WebDriverPoolExhaustedException
-import ai.platon.pulsar.protocol.browser.impl.BasicBrowserManager
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import ai.platon.pulsar.skeleton.common.persist.ext.eventHandlers
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
@@ -29,7 +29,7 @@ import java.time.Instant
 import java.util.concurrent.ConcurrentSkipListMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
-import kotlin.collections.isNotEmpty
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * The web driver pool manager.
@@ -540,10 +540,10 @@ open class WebDriverPoolManager constructor(
 
         return try {
             // The code that is executing inside the [block] is cancelled on timeout.
-            withTimeout(fetchTaskTimeout.toMillis()) {
+            withTimeout(fetchTaskTimeout.toMillis().milliseconds) {
                 runCancelable(task, driver)
             }
-        } catch (e: TimeoutCancellationException) {
+        } catch (_: TimeoutCancellationException) {
             numTimeout.mark()
             val browserId = driver.browser.id
             logger.warn(
@@ -552,7 +552,8 @@ open class WebDriverPoolManager constructor(
             )
             null
         } finally {
-            _deferredTasks.remove(task.id)
+            val result = _deferredTasks.remove(task.id)
+            // require(result == deferred)
         }
     }
 
@@ -576,7 +577,8 @@ open class WebDriverPoolManager constructor(
             logger.info("Coroutine cancelled, return null result | {}", e.message)
             null
         } finally {
-            _deferredTasks.remove(task.id)
+            val result = _deferredTasks.remove(task.id)
+            // require(result == deferred)
         }
     }
 }

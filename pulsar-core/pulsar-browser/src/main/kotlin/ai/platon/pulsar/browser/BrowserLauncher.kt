@@ -1,8 +1,8 @@
 package ai.platon.pulsar.browser
 
-import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.pulsar.chrome.util.ChromeOptions
 import ai.platon.pulsar.chrome.util.LauncherOptions
+import ai.platon.pulsar.browser.common.BrowserSettings
 
 interface BrowserLauncher {
     fun connect(port: Int, settings: BrowserSettings = BrowserSettings()): Browser

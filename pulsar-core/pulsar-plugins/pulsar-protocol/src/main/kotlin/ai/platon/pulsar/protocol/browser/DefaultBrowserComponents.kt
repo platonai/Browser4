@@ -15,9 +15,12 @@
  */
 package ai.platon.pulsar.protocol.browser
 
+import ai.platon.pulsar.browser.manage.BasicBrowserManager
+import ai.platon.pulsar.browser.privacy.PrivacyManager
 import ai.platon.pulsar.common.ObjectCache
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.getLogger
+import ai.platon.pulsar.core.api.BrowserManager
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager
 import ai.platon.pulsar.protocol.browser.emulator.BrowserEmulator
 import ai.platon.pulsar.protocol.browser.emulator.IncognitoBrowserFetcher
@@ -26,10 +29,7 @@ import ai.platon.pulsar.protocol.browser.emulator.context.MultiPrivacyContextMan
 import ai.platon.pulsar.protocol.browser.emulator.impl.BrowserResponseHandlerImpl
 import ai.platon.pulsar.protocol.browser.emulator.impl.InteractiveBrowserEmulator
 import ai.platon.pulsar.protocol.browser.emulator.impl.PrivacyManagedBrowserFetcher
-import ai.platon.pulsar.protocol.browser.impl.BasicBrowserManager
 import ai.platon.pulsar.protocol.browser.impl.DefaultBrowserFactory
-import ai.platon.pulsar.browser.BrowserManager
-import ai.platon.pulsar.browser.privacy.PrivacyManager
 
 class DefaultBrowserManager(conf: ImmutableConfig) : BasicBrowserManager(DefaultBrowserFactory(conf), conf)
 
@@ -79,7 +79,7 @@ class DefaultBrowserComponents(val conf: ImmutableConfig = ImmutableConfig.DEFAU
     private val cache = ObjectCache.get(conf)
 
     val incognitoBrowserFetcher: IncognitoBrowserFetcher = cache.computeIfAbsent<IncognitoBrowserFetcher> {
-        logger.info("Creating DefaultPrivacyManagedBrowserFetcher")
+        logger.info("Creating DefaultPrivacyManagedBrowserFetcher, the default one should be used only for test and develop")
         DefaultPrivacyManagedBrowserFetcher(conf)
     }
 
