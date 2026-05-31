@@ -17,6 +17,7 @@
 //! cargo test --test e2e -- --nocapture --batch-only
 //! cargo test --test e2e -- --nocapture --scenario=test_e2e_agent_task_commands
 //! cargo test --test e2e -- --nocapture --scenario=test_e2e_batch_*
+//! cargo test --test e2e -- --nocapture --scenario=test_e2e_swarm_*
 //! cargo test --test e2e -- --nocapture --scenario-from=test_e2e_mouse_and_dialog
 //! cargo test --test e2e -- --nocapture --scenario-from=test_e2e_navigation_and_storage --scenario-limit=5
 //! cargo test --test e2e -- --nocapture --failed
@@ -25,7 +26,7 @@
 //!
 //! The `--failed` selector reruns scenario names stored by the previous run in
 //! `%TEMP%/browser4/browser4-cli/e2e/last-failed-scenarios.json`.
-//! By default the full e2e run skips batch-command scenarios; pass
+//! By default, the full e2e run skips batch-command scenarios; pass
 //! `--enable-batch-scenario` to include them, or `--batch-only` to run only
 //! batch-command scenarios.
 //!

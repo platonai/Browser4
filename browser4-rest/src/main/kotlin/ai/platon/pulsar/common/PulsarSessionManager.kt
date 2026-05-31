@@ -186,6 +186,12 @@ class PulsarSessionManager(
     }
 
     private fun createManagedSession(sessionId: String, capabilities: Map<String, String?>): ManagedSession {
+        // SWARM sessions use a dedicated creation path that sets up the
+        // AgenticSession with the SWARM label and the correct profile mode.
+        if (sessionId.equals(SWARM_SESSION_ID, ignoreCase = true)) {
+            return ensureSwarmSession(capabilities)
+        }
+
         val settings = PulsarSettings.parse(capabilities)
         val agenticSession = agenticContext.createSession(settings)
 
