@@ -851,7 +851,7 @@ pub(super) fn test_swarm_submission_commands(ctx: &mut E2ECtx) {
     assert!(
         swarm_submit_result
             .stdout
-            .contains("Submitted: https://example.com/direct"),
+            .contains("Task Submitted: https://example.com/direct"),
         "Expected direct URL submission output in:\n{}",
         swarm_submit_result.stdout
     );

@@ -1874,6 +1874,69 @@ fn extract_tab_index(output: &str, url: &str) -> usize {
 }
 
 // ---------------------------------------------------------------------------
+// Swarm / agent helpers
+// ---------------------------------------------------------------------------
+
+fn extract_swarm_submissions(output: &str) -> Vec<(String, String)> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let rest = line.strip_prefix("Task Submitted: ")?;
+            let (url, task_id) = rest.split_once(" -> Task ID: ")?;
+            let url = url.trim();
+            let task_id = task_id.trim();
+            if url.is_empty() || task_id.is_empty() {
+                return None;
+            }
+            Some((url.to_string(), task_id.to_string()))
+        })
+        .collect()
+}
+
+fn parse_json_output(stdout: &str, command_name: &str) -> serde_json::Value {
+    let payload = strip_snapshot_output(stdout);
+    serde_json::from_str(&payload).unwrap_or_else(|error| {
+        panic!("Expected JSON payload from {command_name}, got:\n{payload}\nparse error: {error}")
+    })
+}
+
+fn swarm_done_flag(payload: &serde_json::Value) -> Option<bool> {
+    payload
+        .get("isDone")
+        .and_then(|value| value.as_bool())
+        .or_else(|| payload.get("done").and_then(|value| value.as_bool()))
+}
+
+fn wait_for_swarm_result(ctx: &mut E2ECtx, task_id: &str, timeout_ms: u64) -> serde_json::Value {
+    let started_at = Instant::now();
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    let mut last_payload = String::new();
+
+    while Instant::now() < deadline {
+        let result = run_checked_cli_process(ctx, &["swarm", "result", task_id]);
+        let payload = strip_snapshot_output(&result.stdout);
+        last_payload = payload.clone();
+        let parsed = parse_json_output(&result.stdout, "swarm result");
+        if parsed["id"].as_str() == Some(task_id) && swarm_done_flag(&parsed) == Some(true) {
+            ctx.record_step(
+                format!(
+                    "wait for swarm result {task_id} done (timeout={}ms)",
+                    timeout_ms
+                ),
+                started_at.elapsed(),
+            );
+            return parsed;
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+
+    panic!(
+        "Timed out after {timeout_ms}ms waiting for swarm result '{task_id}' to complete. Last payload:\n{last_payload}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // State helpers
 // ---------------------------------------------------------------------------
 
