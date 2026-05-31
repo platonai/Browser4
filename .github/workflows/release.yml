@@ -55,6 +55,7 @@ env:
   BUNDLE_JAR_NAME: Browser4Bundle.jar
   BUNDLE_JAR_PATH: browser4-apps/browser4-bundle/target/Browser4Bundle.jar
   JAVA_VERSION: '17'
+  BUNDLE_JAVA_VERSION: '25'
   NODE_VERSION: '24'
   MAVEN_OPTS: '-Xmx3g -XX:+UseG1GC'
   CLI_PACKAGE_DIR: cli
@@ -739,10 +740,10 @@ jobs:
           fetch-depth: 0
           ref: ${{ needs.prepare.outputs.tag }}
 
-      - name: Setup Environment
+      - name: Setup Environment (JDK ${{ env.BUNDLE_JAVA_VERSION }} for jlink)
         uses: ./.github/actions/setup-environment
         with:
-          java_version: ${{ env.JAVA_VERSION }}
+          java_version: ${{ env.BUNDLE_JAVA_VERSION }}
           enable_cache: 'true'
 
       - name: Build Browser4 Bundle JAR
@@ -781,9 +782,9 @@ jobs:
 
       - name: Verify Browser4 runtime bundle (full functional test)
         if: runner.os == 'Linux'
-        shell: bash
+        shell: pwsh
         run: |
-          pwsh -NoProfile -ExecutionPolicy Bypass -File ./browser4-apps/browser4-bundle/verify-runtime-bundle.ps1 `
+          ./browser4-apps/browser4-bundle/verify-runtime-bundle.ps1 `
             -BundlePath "browser4-apps/browser4-bundle/target/runtime-release/${{ matrix.asset_name }}" `
             -ExpectedAssetName "${{ matrix.asset_name }}" `
             -StartupTimeoutSeconds 300
