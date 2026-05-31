@@ -1,7 +1,6 @@
 package ai.platon.pulsar.heavy.rest
 
 import ai.platon.browser4.boot.autoconfigure.AgenticContextConfiguration
-import ai.platon.pulsar.agentic.BasicAgenticSession
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.sleepSeconds
@@ -10,6 +9,7 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.test.web.server.LocalServerPort
 import org.springframework.context.annotation.Import
+import org.springframework.context.support.AbstractApplicationContext
 import org.springframework.http.ResponseEntity
 import org.springframework.test.web.servlet.client.RestTestClient
 import org.springframework.test.web.servlet.client.expectBody
@@ -46,7 +46,7 @@ class IntegrationTestBase {
 
     @BeforeTest
     fun setup() {
-        assertTrue("Session should be BasicAgenticSession, actual ${session.javaClass}") { session is BasicAgenticSession }
+        assertTrue("Session should be AbstractApplicationContext, actual ${session.javaClass}") { session is AbstractApplicationContext }
     }
 
     /**
