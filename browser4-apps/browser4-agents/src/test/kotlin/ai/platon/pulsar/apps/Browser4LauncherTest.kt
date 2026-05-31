@@ -1,4 +1,4 @@
-package ai.platon.pulsar.app
+package ai.platon.pulsar.apps
 
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals

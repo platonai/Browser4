@@ -1,4 +1,4 @@
-package ai.platon.pulsar.app
+package ai.platon.pulsar.apps
 
 import ai.platon.browser4.boot.autoconfigure.PulsarContextInitializer
 import ai.platon.pulsar.common.getLogger

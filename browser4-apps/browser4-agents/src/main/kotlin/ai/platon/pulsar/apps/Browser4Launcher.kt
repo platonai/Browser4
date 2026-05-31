@@ -1,4 +1,4 @@
-package ai.platon.pulsar.app
+package ai.platon.pulsar.apps
 
 import ai.platon.pulsar.agentic.mcp.server.runBrowser4MCPServer
 

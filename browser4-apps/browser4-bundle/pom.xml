@@ -13,15 +13,15 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>ai.platon.pulsar</groupId>
-    <artifactId>browser4-agents</artifactId>
+    <artifactId>browser4-bundle</artifactId>
     <version>4.10.0-SNAPSHOT</version>
 
-    <name>Browser4 Agents</name>
-    <description>Browser4 Agents - browser agent for your AI</description>
+    <name>Browser4 Bundle</name>
+    <description>Browser4 Bundle - browser agent for your AI</description>
 
     <build>
         <defaultGoal>package</defaultGoal>
-        <finalName>Browser4</finalName>
+        <finalName>Browser4Bundle</finalName>
         <plugins>
             <plugin>
                 <groupId>org.jetbrains.kotlin</groupId>
@@ -187,7 +187,6 @@
             </exclusions>
         </dependency>
 
-
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
@@ -207,157 +206,6 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
-
-    <profiles>
-
-        <!-- Profile to build Windows app-image and installer using jpackage -->
-        <profile>
-            <id>win-jpackage</id>
-            <build>
-                <plugins>
-                    <!-- Ensure we have a staged input dir for jpackage -->
-                    <plugin>
-                        <groupId>org.apache.maven.plugins</groupId>
-                        <artifactId>maven-resources-plugin</artifactId>
-                        <version>3.3.1</version>
-                        <executions>
-                            <execution>
-                                <id>stage-jpackage-input</id>
-                                <phase>package</phase>
-                                <goals>
-                                    <goal>copy-resources</goal>
-                                </goals>
-                                <configuration>
-                                    <outputDirectory>${project.build.directory}/jpackage/input</outputDirectory>
-                                    <resources>
-                                        <resource>
-                                            <directory>${project.build.directory}</directory>
-                                            <includes>
-                                                <include>${project.build.finalName}.jar</include>
-                                            </includes>
-                                        </resource>
-                                        <!-- Extra launch scripts placed next to Browser4.exe in app-image -->
-                                        <resource>
-                                            <directory>${project.basedir}/src/main/packaging</directory>
-                                            <includes>
-                                                <include>Browser4.ps1</include>
-                                                <include>Browser4.cmd</include>
-                                            </includes>
-                                            <filtering>false</filtering>
-                                        </resource>
-                                    </resources>
-                                </configuration>
-                            </execution>
-                        </executions>
-                    </plugin>
-
-                    <!-- Invoke JDK 17+ jpackage to produce a self-contained Windows executable -->
-                    <plugin>
-                        <groupId>org.codehaus.mojo</groupId>
-                        <artifactId>exec-maven-plugin</artifactId>
-                        <version>1.6.0</version>
-                        <executions>
-                            <!-- Portable app-image: target/jpackage/app-image/Browser4/Browser4.exe -->
-                            <execution>
-                                <id>jpackage-app-image</id>
-                                <phase>package</phase>
-                                <goals>
-                                    <goal>exec</goal>
-                                </goals>
-                                <configuration>
-                                    <executable>jpackage</executable>
-                                    <workingDirectory>${project.basedir}</workingDirectory>
-                                    <arguments>
-                                        <argument>--type</argument>
-                                        <argument>app-image</argument>
-
-                                        <argument>--name</argument>
-                                        <argument>${project.build.finalName}</argument>
-
-                                        <argument>--app-version</argument>
-                                        <argument>${jpackage.appVersion}</argument>
-
-                                        <argument>--vendor</argument>
-                                        <argument>platon.ai</argument>
-
-                                        <argument>--input</argument>
-                                        <argument>${project.build.directory}/jpackage/input</argument>
-
-                                        <argument>--main-jar</argument>
-                                        <argument>${project.build.finalName}.jar</argument>
-
-                                        <argument>--dest</argument>
-                                        <argument>${project.build.directory}/jpackage/app-image</argument>
-
-                                        <!-- Keep a console so you can see logs on double-click during development -->
-                                        <argument>--win-console</argument>
-
-                                        <!-- Default JVM flags -->
-                                        <argument>--java-options</argument>
-                                        <argument>-Dfile.encoding=UTF-8</argument>
-
-                                        <!-- Icon is optional; add icon argument back once you have packaging/windows/Browser4.ico -->
-                                    </arguments>
-                                    <!-- Allow build without icon file (icon is optional) -->
-                                    <skip>${jpackage.skip}</skip>
-                                </configuration>
-                            </execution>
-
-                            <!-- Installer exe: target/jpackage/dist/Browser4-<version>.exe (requires WiX v3 on PATH) -->
-                            <execution>
-                                <id>jpackage-installer-exe</id>
-                                <phase>package</phase>
-                                <goals>
-                                    <goal>exec</goal>
-                                </goals>
-                                <configuration>
-                                    <executable>jpackage</executable>
-                                    <workingDirectory>${project.basedir}</workingDirectory>
-                                    <arguments>
-                                        <argument>--type</argument>
-                                        <argument>exe</argument>
-
-                                        <argument>--name</argument>
-                                        <argument>${project.build.finalName}</argument>
-
-                                        <argument>--app-version</argument>
-                                        <argument>${jpackage.appVersion}</argument>
-
-                                        <argument>--vendor</argument>
-                                        <argument>platon.ai</argument>
-
-                                        <argument>--input</argument>
-                                        <argument>${project.build.directory}/jpackage/input</argument>
-
-                                        <argument>--main-jar</argument>
-                                        <argument>${project.build.finalName}.jar</argument>
-
-                                        <argument>--dest</argument>
-                                        <argument>${project.build.directory}/jpackage/dist</argument>
-
-                                        <argument>--win-console</argument>
-
-                                        <argument>--java-options</argument>
-                                        <argument>-Dfile.encoding=UTF-8</argument>
-
-                                        <!-- Icon is optional; add icon argument back once you have packaging/windows/Browser4.ico -->
-                                    </arguments>
-                                    <!-- Off by default because it needs WiX; enable with -Djpackage.installer=true -->
-                                    <skip>${jpackage.installer.skip}</skip>
-                                </configuration>
-                            </execution>
-                        </executions>
-                    </plugin>
-                </plugins>
-            </build>
-            <properties>
-                <!-- On by default for this profile -->
-                <jpackage.skip>false</jpackage.skip>
-                <!-- Installer is off by default (WiX dependency). Set -Djpackage.installer.skip=false to enable. -->
-                <jpackage.installer.skip>true</jpackage.installer.skip>
-            </properties>
-        </profile>
-    </profiles>
 
     <properties>
         <!-- Suppress warning: [WARNING] Using platform encoding (GBK actually) to copy filtered resources -->
