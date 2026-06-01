@@ -298,7 +298,11 @@ jobs:
 
           image="${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.version }}"
 
-          if command -v docker scout &> /dev/null; then
+          has_docker_scout() {
+            docker scout version >/dev/null 2>&1
+          }
+
+          if has_docker_scout; then
             echo "🔍 Running Docker Scout security scan..."
             docker scout cves "$image" --only-severity critical,high || echo "⚠️ Docker Scout scan completed with warnings"
           fi
@@ -308,7 +312,7 @@ jobs:
             trivy image --severity HIGH,CRITICAL "$image" || echo "⚠️ Trivy scan completed with warnings"
           fi
 
-          if ! command -v docker scout &> /dev/null && ! command -v trivy &> /dev/null; then
+          if ! has_docker_scout && ! command -v trivy &> /dev/null; then
             echo "ℹ️ No security scanning tools available"
           fi
 
@@ -754,27 +758,49 @@ jobs:
           fetch-depth: 0
           ref: ${{ needs.prepare.outputs.tag }}
 
-      - name: Setup Environment (JDK ${{ env.BUNDLE_JAVA_VERSION }} for jlink)
-        uses: ./.github/actions/setup-environment
+      - name: Setup JDK ${{ env.BUNDLE_JAVA_VERSION }} for jlink
+        uses: actions/setup-java@v4
         with:
-          java_version: ${{ env.BUNDLE_JAVA_VERSION }}
-          enable_cache: 'true'
+          distribution: temurin
+          java-version: ${{ env.BUNDLE_JAVA_VERSION }}
+          cache: maven
+
+      - name: Prepare bundle build environment
+        shell: pwsh
+        run: |
+          if ($IsWindows) {
+            Write-Host "Using Windows Maven wrapper" -ForegroundColor Cyan
+          }
+          else {
+            chmod +x ./mvnw
+            Write-Host "Ensured execute permission for mvnw" -ForegroundColor Cyan
+          }
+
+          java -version
 
       - name: Build Browser4 Bundle JAR
-        shell: bash
+        shell: pwsh
         run: |
-          echo "=== Building ${{ env.BUNDLE_JAR_NAME }} ==="
-          ./mvnw package -pl ${{ env.BUNDLE_MODULE_PATH }} -am -DskipTests=true -Dmaven.javadoc.skip=true
+          Write-Host "=== Building ${{ env.BUNDLE_JAR_NAME }} ===" -ForegroundColor Cyan
 
-          if [ ! -f "${{ env.BUNDLE_JAR_PATH }}" ]; then
-            echo "❌ ${{ env.BUNDLE_JAR_NAME }} not found at ${{ env.BUNDLE_JAR_PATH }}"
-            echo "Available JARs:"
-            find . -name "*.jar" -type f | head -10
-            exit 1
-          fi
+          $mavenCommand = if ($IsWindows) { '.\mvnw.cmd' } else { './mvnw' }
+          & $mavenCommand package -pl '${{ env.BUNDLE_MODULE_PATH }}' -am -DskipTests=true -Dmaven.javadoc.skip=true
+          if ($LASTEXITCODE -ne 0) {
+            throw "Bundle jar build failed with exit code $LASTEXITCODE"
+          }
 
-          JAR_SIZE=$(stat -c%s "${{ env.BUNDLE_JAR_PATH }}" 2>/dev/null || echo 0)
-          echo "✅ ${{ env.BUNDLE_JAR_NAME }} built successfully ($(numfmt --to=iec --suffix=B $JAR_SIZE))"
+          $jarPath = '${{ env.BUNDLE_JAR_PATH }}'
+          if (-not (Test-Path -LiteralPath $jarPath -PathType Leaf)) {
+            Write-Host "❌ ${{ env.BUNDLE_JAR_NAME }} not found at $jarPath" -ForegroundColor Red
+            Write-Host 'Available JARs:' -ForegroundColor Yellow
+            Get-ChildItem -Path . -Recurse -Filter '*.jar' -File | Select-Object -First 10 | ForEach-Object {
+              Write-Host "  $($_.FullName)"
+            }
+            throw "Missing runtime bundle jar at $jarPath"
+          }
+
+          $jarSizeBytes = (Get-Item -LiteralPath $jarPath).Length
+          Write-Host "✅ ${{ env.BUNDLE_JAR_NAME }} built successfully ($jarSizeBytes bytes)" -ForegroundColor Green
 
       - name: Build Browser4 runtime bundle
         shell: pwsh
