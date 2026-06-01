@@ -182,12 +182,17 @@ Use `close-all` for session cleanup when you want to keep the current Browser4 s
 | Command | Description |
 |---|---|
 | `install` | Download the self-contained Browser4 runtime bundle (JAR + bundled JRE) from GitHub Releases |
-| `upgrade` | Upgrade `browser4-cli` itself to the latest release (requires `cargo`) |
+| `upgrade` | Upgrade the Browser4 runtime bundle to the latest version (or a specified release tag) |
 | `stop` | Kill the Browser4 backend after closing all sessions |
 | `status` | Check whether the Browser4 backend is reachable and healthy |
 
+`install` and `upgrade` both manage the Browser4 runtime bundle — a self-contained
+distribution that includes `Browser4.jar` and a minimal JRE. Neither requires `cargo`
+or a Rust toolchain; the runtime is a Java application downloaded from GitHub Releases.
+
 When a local Browser4 checkout is detected with the `browser4-bundle` module present,
-`install` auto-builds the runtime bundle from source instead of downloading.
+`install` and `upgrade` auto-build the runtime bundle from source (via Maven) instead
+of downloading.
 
 ### Advanced commands
 
@@ -259,7 +264,7 @@ browser4-cli agent result agent-task-1
 #### 1. Submit an autonomous agent task
 
 ```shell
-browser4-cli agent run "Open example.com and summarize the hero section"
+browser4-cli agent run "Open browser4.io and summarize the hero section"
 ```
 
 Typical output:
@@ -310,10 +315,10 @@ browser4-cli swarm submit https://example.com
 
 | Step | Command | What it does |
 |---|---|---|
-| 1 | `swarm create` | Opens a swarm scrape session and persists the returned session ID in the current CLI slot |
-| 2 | `swarm submit [url]` | Submits one direct URL plus any URLs from `--seed-file` as scrape jobs through `ScrapeController.submit(payload)` |
-| 3 | `swarm status <id>` | Calls `ScrapeController.getStatus(id)` and prints the returned scrape job status JSON |
-| 4 | `swarm result <id>` | Calls `ScrapeController.getResult(id)` and prints the returned scrape job result JSON |
+| 1 | `swarm create` | Creates a swarm scrape session with parallel browser contexts |
+| 2 | `swarm submit [url]` | Submits a URL, X-SQL payload, or seed file as scrape jobs |
+| 3 | `swarm status <id>` | Prints the status of a previously submitted scrape job |
+| 4 | `swarm result <id>` | Prints the final result of a completed scrape job |
 
 ### Notes
 
@@ -373,19 +378,12 @@ browser4-cli swarm status scrape-task-4
 browser4-cli swarm result scrape-task-4
 ```
 
-The status and result commands print the scrape job response payload as-is. In
-the current backend, `getResult(id)` returns the same response envelope type as
-`getStatus(id)`.
-
 ## Element References
 
 The `snapshot` command returns an accessibility tree where every interactive
 node is labeled with a short identifier such as `e15`. Pass this identifier
-directly to commands like `click`, `type`, or `press`; the CLI automatically
-converts it to the `backend:15` selector format required by the server.
-
-You can also pass plain CSS selectors (e.g. `.my-button`, `#search-input`) or
-fully-qualified `backend:<N>` refs directly.
+directly to commands like `click`, `type`, or `press`. You can also use plain
+CSS selectors (e.g. `.my-button`, `#search-input`).
 
 ## State Persistence
 
@@ -406,34 +404,16 @@ fields such as:
 
 ### Session state transitions
 
-The `with_session()` helper in `src/main.rs` is the central session lifecycle
-gate for commands that require an active Browser4 session.
+| Command | Behavior |
+|---|---|
+| `open` | Creates a new session, or reuses an existing active one. Stale sessions are automatically refreshed. |
+| `open -s=<name>` | Same as `open` but scoped to a named session slot. |
+| `goto <url>` | Reuses the current session if active; otherwise opens a fresh one before navigating. |
+| `close` | Closes the current session (no-op if none active). |
+| `close-all` / `kill-all` / `stop` | Clears all persisted session state. |
 
-| Situation | Persisted state transition | Result |
-|---|---|---|
-| No persisted session | No state change | `require_session()` fails with `No active session. Run "browser4-cli open" first.` |
-| `open` succeeds (no existing session) | `create_session()` writes a fresh state file with new `sessionId`, current `baseUrl`, and clears `activeSelector` / `lastMousePosition` | A new active session becomes the current CLI session |
-| `open` when a saved session exists and the backend still reports it `active` | No state change — keeps the existing `sessionId` | The existing session is reused; subsequent commands target the same session |
-| `open` when a saved session exists but is missing or no longer `active` in the backend | `invalidate_session()` clears the stale saved `sessionId`, `activeSelector`, and `lastMousePosition`, then `create_session()` writes a fresh session | The stale session is refreshed automatically by opening a new one |
-| `open -s=<name>` | Reads/writes the named session state file | Opens, reuses, or refreshes the named session for that slot; subsequent `-s=<name>` commands use the same slot |
-| Command succeeds through `with_session()` | `sessionId` stays unchanged | The command uses the persisted session normally |
-| Command fails because the server reports a stale / expired session and `recover_stale = false` | `invalidate_session()` clears `sessionId`, `activeSelector`, and `lastMousePosition`, while keeping `baseUrl` | The command fails with `Saved session expired. Run "browser4-cli open" first.` |
-| `goto` is invoked but the saved session is missing or no longer `active` in the backend | `invalidate_session()` clears any stale saved `sessionId`, then `create_session()` writes a fresh session before navigation continues | `goto` automatically refreshes the session and proceeds to the requested URL |
-| `close` with an active session | `clear_state()` removes only the current session state file after best-effort remote close | The selected default or named session is fully cleared |
-| `close` with no persisted `sessionId` | `clear_state()` best-effort removes the current session slot | Prints `No active session. Run "browser4-cli open" first.` and exits successfully as a no-op |
-| `close-all` / `kill-all` | `clear_all_state()` removes the default state file and all named session files | All persisted CLI session files are cleared |
-
-Notes:
-
-- `goto` first tries to reuse the current backend-`active` session. If the saved
-  session is missing, stale, or the backend had been stopped, it automatically
-  opens a fresh session for the current slot before navigating.
-- `open` first checks whether the saved session for the current slot is still
-  backend-`active`. It reuses active sessions and refreshes stale ones by
-  creating a new session for the same slot.
-- `list` reads persisted session files and compares them with live backend
-  sessions to show both the current status (`Active`, `Stale`, or `Unknown`)
-  and whether the next `open` will `Reuse` or `Refresh` that slot.
+The `list` command shows each session's status: **Active** (backend confirms),
+**Stale** (backend has stopped it), or **Unknown** (backend unreachable).
 
 ## Runtime Temp Files
 
