@@ -372,21 +372,51 @@ jobs:
 
           docker network create ${{ env.NETWORK_NAME }} || true
 
-          docker run -d --rm \
+          docker run -d \
             --name ${{ env.CONTAINER_NAME }} \
             --network ${{ env.NETWORK_NAME }} \
             -p 8182:8182 \
             --add-host=host.docker.internal:host-gateway \
-            -e OPENROUTER_API_KEY=${OPENROUTER_API_KEY} \
+            -e OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" \
             --health-cmd="curl -f http://localhost:8182/actuator/health || exit 1" \
             --health-interval=10s \
             --health-timeout=5s \
             --health-retries=5 \
             ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.version }}
 
+          docker ps -a --filter "name=${{ env.CONTAINER_NAME }}"
+
           echo "⏳ Waiting for container to be healthy..."
-          timeout 120s bash -c 'until docker inspect --format="{{.State.Health.Status}}" ${{ env.CONTAINER_NAME }} | grep -q "healthy"; do sleep 5; done' \
-            || { echo "❌ Container did not become healthy within 120s"; docker logs ${{ env.CONTAINER_NAME }}; exit 1; }
+          timeout 120s bash -c '
+            while true; do
+              status=$(docker inspect --format="{{.State.Status}}" ${{ env.CONTAINER_NAME }} 2>/dev/null || echo "missing")
+              health=$(docker inspect --format="{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}" ${{ env.CONTAINER_NAME }} 2>/dev/null || echo "missing")
+
+              echo "container status=$status health=$health"
+
+              if [ "$status" = "missing" ]; then
+                echo "❌ Container disappeared before becoming healthy"
+                exit 1
+              fi
+
+              if [ "$status" = "exited" ] || [ "$status" = "dead" ]; then
+                echo "❌ Container exited before becoming healthy"
+                docker logs ${{ env.CONTAINER_NAME }} || true
+                exit 1
+              fi
+
+              if [ "$health" = "healthy" ]; then
+                exit 0
+              fi
+
+              sleep 5
+            done
+          ' || {
+            echo "❌ Container did not become healthy within 120s"
+            docker ps -a --filter "name=${{ env.CONTAINER_NAME }}"
+            docker logs ${{ env.CONTAINER_NAME }} || true
+            exit 1
+          }
 
           echo "✅ Container is healthy and ready for testing"
 
