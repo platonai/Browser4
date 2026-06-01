@@ -107,6 +107,7 @@ cargo test --test e2e -- --nocapture
 cargo test --test e2e -- --nocapture --scenario=test_e2e_batch_form_submission
 
 # Wildcard — match multiple scenarios
+cargo test --test e2e -- --nocapture --scenario=*open*
 cargo test --test e2e -- --nocapture --scenario=test_e2e_swarm_*
 
 # Re-run scenarios that failed last time
