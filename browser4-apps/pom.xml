@@ -22,10 +22,10 @@
 
     <profiles>
         <profile>
-            <id>standalone</id>
+            <id>asset-standalone</id>
             <activation>
                 <property>
-                    <name>standalone</name>
+                    <name>build-standalone</name>
                     <value>true</value>
                 </property>
             </activation>
@@ -34,10 +34,10 @@
             </modules>
         </profile>
         <profile>
-            <id>bundle</id>
+            <id>asset-bundle</id>
             <activation>
                 <property>
-                    <name>bundle</name>
+                    <name>build-bundle</name>
                     <value>true</value>
                 </property>
             </activation>
