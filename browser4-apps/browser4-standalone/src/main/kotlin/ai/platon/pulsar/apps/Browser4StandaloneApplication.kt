@@ -75,7 +75,7 @@ class Browser4StandaloneApplication(
 fun runBrowser4StandaloneApplication(args: Array<String>) {
     runApplication<Browser4StandaloneApplication>(*args) {
         addInitializers(AgenticContextInitializer())
-        setAdditionalProfiles("agents", "private", "advanced")
+        setAdditionalProfiles("standalone", "private", "advanced")
         setLogStartupInfo(true)
     }
 }
