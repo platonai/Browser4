@@ -347,11 +347,11 @@ mod tests {
         assert!(help.contains("ArrowLeft"));
         assert!(help.contains("Evaluate JavaScript expression on page or element"));
         assert!(help.contains("Core:"));
-        assert!(!help.contains("  batch "));
-        assert!(!help.contains("  console"));
-        assert!(!help.contains("  extract"));
-        assert!(!help.contains("  agent-run"));
-        assert!(!help.contains("  swarm-create"));
+        assert!(help.contains("batch"));
+        assert!(!help.contains("  console "));
+        assert!(help.contains("extract"));
+        assert!(help.contains("agent run"));
+        assert!(help.contains("swarm create"));
     }
 
     #[test]

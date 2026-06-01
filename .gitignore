@@ -130,3 +130,4 @@ application-private.properties
 browser4-cli-linux-arm64
 browser4-cli-linux-x64
 browser4-cli-win32-x64.exe
+/cli/browser4-cli/coverage-html/
