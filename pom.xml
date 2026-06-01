@@ -176,7 +176,6 @@
                 <activeByDefault>true</activeByDefault>
             </activation>
             <modules>
-                <module>browser4-apps/browser4-agents</module>
                 <module>examples/browser4-examples</module>
             </modules>
         </profile>

@@ -34,12 +34,6 @@
                         <goals>
                             <goal>compile</goal>
                         </goals>
-                        <configuration>
-                            <sourceDirs>
-                                <sourceDir>target/generated-sources/annotations</sourceDir>
-                                <sourceDir>src/main/kotlin</sourceDir>
-                            </sourceDirs>
-                        </configuration>
                     </execution>
                     <execution>
                         <id>test-compile</id>
@@ -172,7 +166,6 @@
             <artifactId>browser4-rest</artifactId>
             <version>${project.version}</version>
         </dependency>
-
 
         <dependency>
             <groupId>ai.platon.pulsar</groupId>

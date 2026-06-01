@@ -20,13 +20,27 @@
 
     <name>Browser4 Apps</name>
 
-    <modules>
-        <module>browser4-agents</module>
-    </modules>
-
     <profiles>
         <profile>
+            <id>standalone</id>
+            <activation>
+                <property>
+                    <name>standalone</name>
+                    <value>true</value>
+                </property>
+            </activation>
+            <modules>
+                <module>browser4-standalone</module>
+            </modules>
+        </profile>
+        <profile>
             <id>bundle</id>
+            <activation>
+                <property>
+                    <name>bundle</name>
+                    <value>true</value>
+                </property>
+            </activation>
             <modules>
                 <module>browser4-bundle</module>
             </modules>
