@@ -1,8 +1,15 @@
 #!/usr/bin/env pwsh
+$ErrorActionPreference = 'Stop'
 
-cargo run -- open
-cargo run -- swarm create
-$output = cargo run --quiet -- swarm submit "https://example.com" 2>&1
+$cli = if ($env:BROWSER4_CLI_BIN) {
+    { & $env:BROWSER4_CLI_BIN $args }
+} else {
+    { cargo run --quiet -- $args }
+}
+
+& $cli open
+& $cli swarm create
+$output = & $cli swarm submit "https://example.com" 2>&1
 $output = ($output | Out-String).Trim()
 $submittedLine = $output -split "`r?`n" | Where-Object { $_ -match 'Task ID:\s*\S+' } | Select-Object -First 1
 if (-not $submittedLine) {
@@ -19,7 +26,7 @@ $taskId = $taskIdMatch.Groups[1].Value
 Write-Host "Waiting for agent task $taskId to finish..."
 
 for ($i = 1; $i -le 20; $i++) {
-    $status = cargo run --quiet -- swarm status $taskId 2>&1
+    $status = & $cli swarm status $taskId 2>&1
     $status = ($status | Out-String).Trim()
     Write-Host $status
 
