@@ -471,19 +471,15 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: true,
             args: &[
-                // Note: the argument names and server parameter names are intentionally
-                // cross-mapped to match the behaviour of the TypeScript browser4-cli:
-                // the first positional arg (dx) is mapped to `deltaY` and the second (dy)
-                // to `deltaX`.
-                ArgDef { name: "dx", description: "Y delta", optional: false },
-                ArgDef { name: "dy", description: "X delta", optional: false },
+                ArgDef { name: "dx", description: "Horizontal scroll delta (deltaX)", optional: false },
+                ArgDef { name: "dy", description: "Vertical scroll delta (deltaY)", optional: false },
             ],
             options: &[],
             tool_name_fn: |_| "browser_mouse_wheel".to_string(),
             tool_params_fn: |args| {
                 json!({
-                    "deltaY": get_number_value(args, "dx").unwrap_or_else(|| json!(0)),
-                    "deltaX": get_number_value(args, "dy").unwrap_or_else(|| json!(0)),
+                    "deltaX": get_number_value(args, "dx").unwrap_or_else(|| json!(0)),
+                    "deltaY": get_number_value(args, "dy").unwrap_or_else(|| json!(0)),
                 })
             },
         },
@@ -1933,8 +1929,8 @@ mod tests {
         args.insert("dx".to_string(), json!(1.5));
         args.insert("dy".to_string(), json!(-2.25));
         let params = (cmd.tool_params_fn)(&args);
-        assert_eq!(params["deltaY"], json!(1.5));
-        assert_eq!(params["deltaX"], json!(-2.25));
+        assert_eq!(params["deltaX"], json!(1.5));
+        assert_eq!(params["deltaY"], json!(-2.25));
     }
 
     #[test]

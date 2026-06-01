@@ -636,7 +636,7 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
             toolName = "mousewheel",
             arguments = mapOf("sessionId" to sessionId, "deltaX" to 0, "deltaY" to 16),
             failureMessage = "Expected mousewheel to update lastWheel",
-            predicate = { it["lastWheel"][0].asInt() == 16 && it["lastWheel"][1].asInt() == 0 }
+            predicate = { it["lastWheel"][0].asInt() == 0 && it["lastWheel"][1].asInt() == 16 }
         )
     }
 
