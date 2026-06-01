@@ -28,7 +28,7 @@ cd browser4-tests/browser4-rest-tests
 Or from the repo root via the shared helper:
 
 ```shell
-./bin/test.sh mocksiteboot -Dmock.site.port=18080
+./bin/test.sh mock-site -Dmock.site.port=18080
 ```
 
 Environment variable alternatives:
