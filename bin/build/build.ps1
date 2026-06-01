@@ -101,24 +101,9 @@ Function Invoke-CargoBuild {
   }
 }
 
-Function Copy-Browser4JarToTarget {
-  param([string]$RepoRoot)
-
-  $sourceJar = Join-Path $RepoRoot 'browser4-apps\browser4-agents\target\Browser4.jar'
-  if (-not (Test-Path -LiteralPath $sourceJar)) {
-    throw "Browser4.jar not found at $sourceJar"
-  }
-
-  $targetDir = Join-Path $RepoRoot 'target'
-  $targetJar = Join-Path $targetDir 'Browser4.jar'
-  New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
-  Copy-Item -LiteralPath $sourceJar -Destination $targetJar -Force
-}
-
 # Execute Maven package in the application home directory
 $MvnOptions += 'install'
 
 $MvnOptions += $AdditionalMvnArgs
 Invoke-MavenBuild -Directory $repoRoot -BuildArgs $MvnOptions
-Copy-Browser4JarToTarget -RepoRoot $repoRoot
 Invoke-CargoBuild -Directory (Join-Path $repoRoot 'cli\browser4-cli') -RunTests (-not $SkipTests)

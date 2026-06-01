@@ -20,30 +20,8 @@
 
     <name>Browser4 Apps</name>
 
-    <profiles>
-        <profile>
-            <id>asset-standalone</id>
-            <activation>
-                <property>
-                    <name>build-standalone</name>
-                    <value>true</value>
-                </property>
-            </activation>
-            <modules>
-                <module>browser4-standalone</module>
-            </modules>
-        </profile>
-        <profile>
-            <id>asset-bundle</id>
-            <activation>
-                <property>
-                    <name>build-bundle</name>
-                    <value>true</value>
-                </property>
-            </activation>
-            <modules>
-                <module>browser4-bundle</module>
-            </modules>
-        </profile>
-    </profiles>
+    <modules>
+        <module>browser4-bundle</module>
+        <module>browser4-standalone</module>
+    </modules>
 </project>
