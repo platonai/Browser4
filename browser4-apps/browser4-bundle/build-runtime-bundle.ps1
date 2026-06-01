@@ -424,8 +424,36 @@ $javaVersionText = Get-JavaVersionText
 $isGraalVmRuntime = $javaVersionText -match 'GraalVM'
 
 # --------------------------------------------------------------------------
+# Progress tracking
+# --------------------------------------------------------------------------
+$buildPhases = @(
+    @{ Label = 'Collecting runtime dependencies (Maven)' },
+    @{ Label = 'Copying application JAR' },
+    @{ Label = 'Computing JRE modules (jdeps)' },
+    @{ Label = 'Generating bundled JRE (jlink)' },
+    @{ Label = 'Writing launch scripts' },
+    @{ Label = 'Packaging bundle archive' }
+)
+$totalPhases = $buildPhases.Count
+$phaseIndex = 0
+
+function Write-BuildProgress {
+    param([string]$Status)
+    $percent = [math]::Round(($phaseIndex / $totalPhases) * 100)
+    $activity = "Building Browser4 runtime bundle: $AssetName"
+    Write-Progress -Activity $activity -Status $Status -PercentComplete $percent
+}
+
+function Complete-BuildProgress {
+    Write-Progress -Activity "Building Browser4 runtime bundle: $AssetName" -Completed
+}
+
+# --------------------------------------------------------------------------
 # Collect dependencies via Maven
 # --------------------------------------------------------------------------
+$phaseIndex = 1
+Write-BuildProgress -Status $buildPhases[$phaseIndex - 1].Label
+
 $mvnCommand = Get-Command mvn -ErrorAction SilentlyContinue
 if (-not $mvnCommand) {
     # Check common locations
@@ -456,6 +484,9 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # Copy the application jar into lib/
+$phaseIndex = 2
+Write-BuildProgress -Status $buildPhases[$phaseIndex - 1].Label
+
 $appJarFileName = [System.IO.Path]::GetFileName($resolvedJarPath)
 Copy-Item -LiteralPath $resolvedJarPath -Destination (Join-Path $libDirectory $appJarFileName) -Force
 
@@ -465,6 +496,9 @@ Write-Host "Collected $libJarCount jars in lib/" -ForegroundColor Green
 # --------------------------------------------------------------------------
 # Compute required JRE modules with jdeps
 # --------------------------------------------------------------------------
+$phaseIndex = 3
+Write-BuildProgress -Status $buildPhases[$phaseIndex - 1].Label
+
 Write-Host "Running jdeps to compute Browser4 runtime modules..." -ForegroundColor Cyan
 
 # Create a temp directory for extracted app classes (jdeps works best with classes)
@@ -530,6 +564,9 @@ if ($modules.Count -eq 0) {
 # --------------------------------------------------------------------------
 # Generate bundled JRE with jlink
 # --------------------------------------------------------------------------
+$phaseIndex = 4
+Write-BuildProgress -Status $buildPhases[$phaseIndex - 1].Label
+
 Write-Host "Running jlink with modules: $($modules -join ',')" -ForegroundColor Cyan
 $jlinkArgs = @(
     '--add-modules', ($modules -join ','),
@@ -555,6 +592,9 @@ Remove-SafeRuntimePayload $runtimeDirectory
 # --------------------------------------------------------------------------
 # Write launch scripts and metadata
 # --------------------------------------------------------------------------
+$phaseIndex = 5
+Write-BuildProgress -Status $buildPhases[$phaseIndex - 1].Label
+
 Write-Host "Writing launch scripts..." -ForegroundColor Cyan
 Write-LaunchScripts -bundleDirectory $bundleDirectory -mainClass $MainClass
 
@@ -565,6 +605,9 @@ Set-Content -LiteralPath (Join-Path $bundleDirectory 'runtime-bundle.json') `
 # --------------------------------------------------------------------------
 # Package the bundle archive
 # --------------------------------------------------------------------------
+$phaseIndex = 6
+Write-BuildProgress -Status $buildPhases[$phaseIndex - 1].Label
+
 if (Test-Path $assetPath) {
     Remove-Item -Force $assetPath
 }
@@ -597,5 +640,7 @@ if ((Get-ChildItem -Path $libDirectory -File -Filter '*.jar' | Measure-Object).C
     throw "No jars found in lib/ directory"
 }
 
+Complete-BuildProgress
+
 $assetSize = [math]::Round(((Get-Item $assetPath).Length / 1MB), 2)
-Write-Host "Browser4 bundle runtime bundle created: $assetPath ($assetSize MB)" -ForegroundColor Green
+Write-Host "Browser4 runtime bundle created: $assetPath ($assetSize MB)" -ForegroundColor Green
