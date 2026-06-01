@@ -10,7 +10,7 @@ import java.io.File
  * Tests for comparing JSON vs Kotlin format for Agent Tool descriptions.
  *
  * This test generates sample output files that can be used to compare the two formats.
- * Output files are saved to the project root's docs-dev/data/tool-format-comparison directory.
+ * Output files are saved to the project root's target/data/tool-format-comparison directory.
  *
  * The output directory can be overridden via the `tool.format.comparison.output.dir` system property.
  */
@@ -18,7 +18,7 @@ class ToolFormatComparisonTest {
 
     companion object {
         private const val OUTPUT_DIR_PROPERTY = "tool.format.comparison.output.dir"
-        private const val DEFAULT_OUTPUT_SUBDIR = "docs-dev/data/tool-format-comparison"
+        private const val DEFAULT_OUTPUT_SUBDIR = "target/data/tool-format-comparison"
     }
 
     /**

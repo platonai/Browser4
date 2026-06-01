@@ -740,10 +740,63 @@ fn should_skip_browser4_root_search(path: &Path) -> bool {
     )
 }
 
+/// Check whether a valid runtime bundle already exists at the given paths.
+///
+/// A valid bundle must have a populated `lib/` directory (at least one jar) and
+/// a `runtime/bin/java` launcher produced by jlink.
+fn existing_runtime_bundle(
+    lib_dir: &Path,
+    java_path: &Path,
+    work_dir: &Path,
+) -> Option<InstalledBrowser4Runtime> {
+    let has_jars = lib_dir.is_dir()
+        && std::fs::read_dir(lib_dir)
+            .map(|mut entries| {
+                entries.any(|entry| {
+                    entry
+                        .ok()
+                        .map(|e| {
+                            e.path()
+                                .extension()
+                                .map(|ext| ext == "jar")
+                                .unwrap_or(false)
+                        })
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false);
+
+    if has_jars && java_path.is_file() {
+        Some(InstalledBrowser4Runtime {
+            tag: "local".to_string(),
+            asset_name: String::new(),
+            download_url: String::new(),
+            install_dir: work_dir.to_path_buf(),
+            lib_dir: lib_dir.to_path_buf(),
+            jar_path: PathBuf::new(),
+            java_path: java_path.to_path_buf(),
+            reused_existing: true,
+        })
+    } else {
+        None
+    }
+}
+
+/// Check whether the Maven-built fat JAR is present and has valid content.
+fn maven_jar_exists(bundle_module_dir: &Path) -> bool {
+    let jar = bundle_module_dir.join("target").join("Browser4Bundle.jar");
+    jar.is_file() && jar.metadata().map(|m| m.len() > 10_240).unwrap_or(false)
+}
+
 /// Attempt to auto-build the local runtime bundle from source when running in a
 /// Browser4 repository checkout.  Returns `Ok(None)` when auto-build is not
 /// applicable (no bundle module, build script missing, or build failed) so the
 /// caller can fall back to the download path.
+///
+/// Each build step is independently skippable when its output already exists:
+/// 1. Maven `package` is skipped when `target/Browser4Bundle.jar` is valid.
+/// 2. The platform build script is skipped when the runtime bundle already
+///    contains `lib/*.jar` and `runtime/bin/java`.
 async fn try_build_local_runtime_bundle(
     root: &Path,
 ) -> Result<Option<InstalledBrowser4Runtime>, String> {
@@ -765,25 +818,13 @@ async fn try_build_local_runtime_bundle(
         .join("bin")
         .join(browser4_java_executable_name());
 
-    // Already built — nothing to do.  Also verify that the bundle JAR has
-    // actual class content (>10 KiB); a stub without compiled classes is
-    // typically only a few KiB and indicates a stale or broken build.
-    let bundle_jar = lib_dir.join("Browser4Bundle.jar");
-    if lib_dir.is_dir()
-        && java_path.is_file()
-        && bundle_jar.is_file()
-        && bundle_jar.metadata().map(|m| m.len() > 10_240).unwrap_or(false)
-    {
-        return Ok(Some(InstalledBrowser4Runtime {
-            tag: "local".to_string(),
-            asset_name: String::new(),
-            download_url: String::new(),
-            install_dir: work_dir,
-            lib_dir,
-            jar_path: PathBuf::new(),
-            java_path,
-            reused_existing: true,
-        }));
+    // Fast path: runtime bundle already assembled — nothing to do.
+    if let Some(runtime) = existing_runtime_bundle(&lib_dir, &java_path, &work_dir) {
+        eprintln!(
+            "Using existing local Browser4 runtime bundle at {}.",
+            work_dir.display()
+        );
+        return Ok(Some(runtime));
     }
 
     let build_script = bundle_module_dir.join(platform.build_script_name());
@@ -795,55 +836,67 @@ async fn try_build_local_runtime_bundle(
         return Ok(None);
     }
 
-    eprintln!(
-        "Building local Browser4 runtime bundle from {} ...",
-        bundle_module_dir.display()
-    );
+    // Step 1 – ensure the fat JAR exists.  Skip Maven when the JAR from a
+    // previous build is still present; this saves 10–30 s on every invocation
+    // when only the runtime assembly step needs to be re-run.
+    if maven_jar_exists(&bundle_module_dir) {
+        eprintln!(
+            "Using existing Browser4 bundle JAR at {}; skipping Maven package.",
+            bundle_module_dir.join("target").join("Browser4Bundle.jar").display()
+        );
+    } else {
+        eprintln!(
+            "Building local Browser4 runtime bundle from {} ...",
+            bundle_module_dir.display()
+        );
+        let mvn_program = resolve_maven_program(root);
+        let mvn_status = tokio::task::spawn_blocking({
+            let mvn_program = mvn_program.clone();
+            let root = root.to_path_buf();
+            move || {
+                std::process::Command::new(&mvn_program)
+                    .args([
+                        "package",
+                        "-Pall-modules",
+                        "-pl",
+                        "browser4-apps/browser4-bundle",
+                        "-am",
+                        "-DskipTests",
+                        "-q",
+                    ])
+                    .current_dir(&root)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::piped())
+                    .status()
+            }
+        })
+        .await
+        .map_err(|e| format!("Maven package task panicked: {e}"))?;
 
-    // Step 1 – ensure the fat JAR exists (idempotent Maven package).
-    let mvn_program = resolve_maven_program(root);
-    let mvn_status = tokio::task::spawn_blocking({
-        let mvn_program = mvn_program.clone();
-        let root = root.to_path_buf();
-        move || {
-            std::process::Command::new(&mvn_program)
-                .args([
-                    "package",
-                    "-Pall-modules",
-                    "-pl",
-                    "browser4-apps/browser4-bundle",
-                    "-am",
-                    "-DskipTests",
-                    "-q",
-                ])
-                .current_dir(&root)
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::piped())
-                .status()
-        }
-    })
-    .await
-    .map_err(|e| format!("Maven package task panicked: {e}"))?;
-
-    match mvn_status {
-        Ok(status) if status.success() => {}
-        Ok(status) => {
-            eprintln!(
-                "Maven package for browser4-bundle exited with {}; falling back to download.",
-                status.code().map_or_else(|| "signal".to_string(), |c| c.to_string())
-            );
-            return Ok(None);
-        }
-        Err(error) => {
-            eprintln!(
-                "Failed to run Maven for browser4-bundle ({error}); falling back to download."
-            );
-            return Ok(None);
+        match mvn_status {
+            Ok(status) if status.success() => {}
+            Ok(status) => {
+                eprintln!(
+                    "Maven package for browser4-bundle exited with {}; falling back to download.",
+                    status.code().map_or_else(|| "signal".to_string(), |c| c.to_string())
+                );
+                return Ok(None);
+            }
+            Err(error) => {
+                eprintln!(
+                    "Failed to run Maven for browser4-bundle ({error}); falling back to download."
+                );
+                return Ok(None);
+            }
         }
     }
 
-    // Step 2 – run the platform build script.
+    // Step 2 – run the platform build script (jlink + assembly).
+    eprintln!(
+        "Assembling Browser4 runtime bundle from {} ...",
+        bundle_module_dir.display()
+    );
     let build_result = if cfg!(windows) {
         run_bundle_build_script("powershell.exe", &build_script, &bundle_module_dir).await
     } else {
@@ -862,21 +915,12 @@ async fn try_build_local_runtime_bundle(
     }
 
     // Verify the expected output was produced.
-    if lib_dir.is_dir() && java_path.is_file() {
+    if let Some(runtime) = existing_runtime_bundle(&lib_dir, &java_path, &work_dir) {
         eprintln!(
             "Local Browser4 runtime bundle built successfully at {}.",
             bundle_runtime_dir.display()
         );
-        return Ok(Some(InstalledBrowser4Runtime {
-            tag: "local".to_string(),
-            asset_name: String::new(),
-            download_url: String::new(),
-            install_dir: work_dir,
-            lib_dir,
-            jar_path: PathBuf::new(),
-            java_path,
-            reused_existing: true,
-        }));
+        return Ok(Some(runtime));
     }
 
     eprintln!(
