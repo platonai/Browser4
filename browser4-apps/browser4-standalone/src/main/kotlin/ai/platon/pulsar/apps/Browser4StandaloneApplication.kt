@@ -13,10 +13,10 @@ import org.springframework.context.annotation.Import
 
 @SpringBootApplication
 @Import(ApiApplication::class)
-class Browser4Application(
+class Browser4StandaloneApplication(
     val session: PulsarSession
 ) {
-    private val logger = getLogger(Browser4Application::class)
+    private val logger = getLogger(Browser4StandaloneApplication::class)
 
     @Value("\${server.port:8182}")
     var port: Int = 8182
@@ -72,12 +72,12 @@ class Browser4Application(
     }
 }
 
-fun runBrowser4AgentsApplication(args: Array<String>) {
-    runApplication<Browser4Application>(*args) {
+fun runBrowser4StandaloneApplication(args: Array<String>) {
+    runApplication<Browser4StandaloneApplication>(*args) {
         addInitializers(AgenticContextInitializer())
         setAdditionalProfiles("agents", "private", "advanced")
         setLogStartupInfo(true)
     }
 }
 
-fun main(args: Array<String>) = runBrowser4AgentsApplication(args)
+fun main(args: Array<String>) = runBrowser4StandaloneApplication(args)

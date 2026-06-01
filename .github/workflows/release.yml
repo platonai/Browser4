@@ -329,10 +329,8 @@ jobs:
           fi
 
           # Validate the JAR contains the expected Spring Boot application.
-          # The authoritative check is MANIFEST.MF Start-Class — the class
-          # Spring Boot actually launches.  The Kotlin class is named
-          # Browser4Application, but the file-level main() lives in
-          # Browser4StandaloneApplicationKt (after the source file).
+          # Check MANIFEST.MF Start-Class — the authoritative source for what
+          # Spring Boot launches.
           EXPECTED_START_CLASS="ai.platon.pulsar.apps.Browser4StandaloneApplicationKt"
 
           jar xf "$JAR_PATH" META-INF/MANIFEST.MF 2>/dev/null || true
