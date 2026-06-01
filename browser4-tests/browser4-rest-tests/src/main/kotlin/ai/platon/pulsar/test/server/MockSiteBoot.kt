@@ -7,7 +7,7 @@ import java.time.Duration
  *
  * Usage examples:
  *   ./mvnw -pl browser4-tests/browser4-rest-tests -am -DskipTests spring-boot:run
- *   ./bin/test.sh mocksiteboot -Dmock.site.port=18080
+ *   ./bin/test.sh mock-site -Dmock.site.port=18080
  *
  * System properties / environment variables:
  *   -Dmock.site.port=9090 (or env MOCK_SITE_PORT)  Desired port (default 8080, 0 = random)

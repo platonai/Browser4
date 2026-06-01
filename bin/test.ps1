@@ -60,7 +60,7 @@ function Print-Usage {
 }
 
 function Exit-UnknownTestType([string]$testType) {
-    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, mock-site, rest, skills, mcp, resume, browser4, b4."
+    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, mock-site, rest, skills, mcp, resume, browser4, b4. Aliases: mocksite, mocksiteboot."
     exit 1
 }
 
@@ -393,7 +393,7 @@ function Invoke-ResumeTests([string[]]$additionalArgs) {
     }
 }
 
-$knownTestTypes = @('fast', 'it', 'e2e', 'cli', 'browser4-cli', 'mock-site', 'rest', 'skills', 'mcp', 'resume', 'browser4', 'b4')
+$knownTestTypes = @('fast', 'it', 'e2e', 'cli', 'browser4-cli', 'mock-site', 'mocksite', 'mocksiteboot', 'rest', 'skills', 'mcp', 'resume', 'browser4', 'b4')
 $testTypes = @()
 $additionalArgs = @()
 $parsingTestTypes = $true
@@ -451,8 +451,8 @@ foreach ($type in $testTypes) {
         continue
     }
 
-    if ($type -eq 'mock-site') {
-        $launchTargets += $type
+    if ($type -in @('mock-site', 'mocksite', 'mocksiteboot')) {
+        $launchTargets += 'mock-site'
         continue
     }
 

@@ -51,7 +51,7 @@ print_usage() {
 
 exit_unknown_test_type() {
   local test_type=$1
-  echo "Error: Unknown test type '$test_type'. Valid test types: fast, it, e2e, cli, mocksite, rest, skills, mcp, resume, browser4, b4." >&2
+  echo "Error: Unknown test type '$test_type'. Valid test types: fast, it, e2e, cli, mock-site, rest, skills, mcp, resume, browser4, b4 (aliases: mocksite, mocksiteboot)." >&2
   exit 1
 }
 
@@ -351,7 +351,7 @@ run_resume_tests() {
   echo "=========================================="
 }
 
-KnownTestTypes=(fast it e2e cli browser4-cli mocksite rest skills mcp resume browser4 b4)
+KnownTestTypes=(fast it e2e cli browser4-cli mock-site mocksite mocksiteboot rest skills mcp resume browser4 b4)
 TestTypes=()
 MavenTests=()
 CLITests=()
@@ -368,7 +368,7 @@ while [[ $# -gt 0 ]]; do
     -h|-help|--help)
       print_usage
       ;;
-    fast|it|e2e|cli|browser4-cli|mocksite|rest|skills|mcp|browser4|b4|resume)
+    fast|it|e2e|cli|browser4-cli|mock-site|mocksite|mocksiteboot|rest|skills|mcp|browser4|b4|resume)
       if [[ "$ParsingTestTypes" == "true" ]]; then
         TestTypes+=("$1")
       else
@@ -405,8 +405,8 @@ for type in "${TestTypes[@]}"; do
     MavenTests+=(fast it e2e rest)
   elif [[ "$type" == "cli" || "$type" == "browser4-cli" ]]; then
     CLITests+=("$type")
-  elif [[ "$type" == "mocksite" ]]; then
-    LaunchTargets+=("$type")
+  elif [[ "$type" == "mock-site" || "$type" == "mocksite" || "$type" == "mocksiteboot" ]]; then
+    LaunchTargets+=("mock-site")
   else
     MavenTests+=("$type")
   fi
@@ -461,7 +461,7 @@ done
 LaunchTargets=("${UniqueLaunchTargets[@]}")
 
 if [[ ${#LaunchTargets[@]} -gt 0 && ( ${#MavenTests[@]} -gt 0 || ${#CLITests[@]} -gt 0 || ${#LaunchTargets[@]} -gt 1 ) ]]; then
-  echo "Error: mocksite must be run by itself. Pass any Maven properties after it, for example: test.sh mocksite -Dmock.site.port=18080" >&2
+  echo "Error: mock-site must be run by itself. Pass any Maven properties after it, for example: test.sh mock-site -Dmock.site.port=18080" >&2
   exit 1
 fi
 
@@ -479,7 +479,7 @@ done
 
 for launch_target in "${LaunchTargets[@]}"; do
   case "$launch_target" in
-    mocksite)
+    mock-site)
       run_mocksiteboot
       ;;
   esac
