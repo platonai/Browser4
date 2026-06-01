@@ -289,6 +289,188 @@ fn serve_fixture_request(mut stream: std::net::TcpStream, pages: Arc<FixturePage
 }
 
 // ---------------------------------------------------------------------------
+// Fake runtime bundle builder (for install / upgrade e2e tests)
+// ---------------------------------------------------------------------------
+
+/// Build a minimal fake runtime bundle archive (zip format) that satisfies
+/// `install_dir_contains_runtime` checks: a `lib/` dir with a jar file and
+/// a `runtime/bin/` dir with a platform-appropriate java executable.
+///
+/// Returns the archive bytes and the bundle root directory name inside the
+/// archive (e.g. `browser4-bundle-runtime-windows-x64`).
+fn build_fake_runtime_bundle(tag: &str) -> (Vec<u8>, String) {
+    let platform = if cfg!(windows) {
+        "windows-x64"
+    } else if cfg!(target_os = "macos") {
+        if cfg!(target_arch = "aarch64") { "darwin-arm64" } else { "darwin-x64" }
+    } else {
+        "linux-x64"
+    };
+    let dir_name = format!("browser4-bundle-runtime-{platform}");
+    let java_name = if cfg!(windows) { "java.exe" } else { "java" };
+
+    let mut buffer = Vec::new();
+    {
+        let mut zip_writer = zip::ZipWriter::new(std::io::Cursor::new(&mut buffer));
+        let options = zip::write::SimpleFileOptions::default();
+
+        // lib/sample.jar (a minimal non-empty file)
+        zip_writer
+            .start_file(
+                format!("{dir_name}/lib/browser4-core.jar"),
+                options,
+            )
+            .unwrap();
+        zip_writer.write_all(b"fake-jar-content").unwrap();
+
+        // runtime/bin/java
+        zip_writer
+            .start_file(
+                format!("{dir_name}/runtime/bin/{java_name}"),
+                options,
+            )
+            .unwrap();
+        zip_writer.write_all(b"fake-java-binary").unwrap();
+
+        // bin/ launcher script (needed for bundle validation)
+        zip_writer
+            .start_file(format!("{dir_name}/bin/launcher"), options)
+            .unwrap();
+        zip_writer.write_all(b"#!/bin/sh\necho fake").unwrap();
+
+        // Write the tag into a VERSION file so we can verify correct extraction.
+        zip_writer
+            .start_file(format!("{dir_name}/VERSION"), options)
+            .unwrap();
+        zip_writer.write_all(tag.as_bytes()).unwrap();
+
+        zip_writer.finish().unwrap();
+    }
+    (buffer, dir_name)
+}
+
+// ---------------------------------------------------------------------------
+// Minimal HTTP server that serves fake runtime bundles for install/upgrade e2e
+// ---------------------------------------------------------------------------
+
+struct FixtureDownloadServer {
+    port: u16,
+    shutdown: Arc<AtomicBool>,
+    /// Recorded request paths.
+    requests: Arc<Mutex<Vec<String>>>,
+}
+
+impl FixtureDownloadServer {
+    fn start(bundle_bytes: Vec<u8>) -> Self {
+        let listener =
+            TcpListener::bind("127.0.0.1:0").expect("fixture download server bind failed");
+        let port = listener.local_addr().unwrap().port();
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let flag = shutdown.clone();
+        let reqs = requests.clone();
+        let bytes = Arc::new(bundle_bytes);
+
+        thread::spawn(move || {
+            listener
+                .set_nonblocking(true)
+                .expect("fixture download server set_nonblocking failed");
+            loop {
+                if flag.load(Ordering::Relaxed) {
+                    break;
+                }
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        let b = bytes.clone();
+                        let r = reqs.clone();
+                        thread::spawn(move || serve_download_request(stream, b, r));
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[fixture download server] accept error (continuing): {e}"
+                        );
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                }
+            }
+        });
+
+        Self {
+            port,
+            shutdown,
+            requests,
+        }
+    }
+
+    fn base_url(&self) -> String {
+        format!("http://127.0.0.1:{}/releases", self.port)
+    }
+
+    fn snapshot_requests(&self) -> Vec<String> {
+        self.requests
+            .lock()
+            .expect("download requests mutex poisoned")
+            .clone()
+    }
+}
+
+impl Drop for FixtureDownloadServer {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+    }
+}
+
+fn serve_download_request(
+    mut stream: TcpStream,
+    bundle_bytes: Arc<Vec<u8>>,
+    requests: Arc<Mutex<Vec<String>>>,
+) {
+    let mut buf = vec![0u8; 8192];
+    let n = match stream.read(&mut buf) {
+        Ok(n) => n,
+        Err(_) => return,
+    };
+
+    let request = std::str::from_utf8(&buf[..n]).unwrap_or("");
+    let first_line = request.lines().next().unwrap_or("");
+    let path = first_line
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or("/");
+
+    requests
+        .lock()
+        .expect("download requests mutex poisoned")
+        .push(path.to_string());
+
+    // Serve 404 for HEAD requests or non-GET methods (simulating GitHub).
+    let method = first_line.split_whitespace().next().unwrap_or("");
+    if method != "GET" {
+        write_http_response(&mut stream, "405 Method Not Allowed", "text/plain", "");
+        return;
+    }
+
+    // GitHub-style paths:
+    //   /releases/latest/download/{asset}
+    //   /releases/download/{tag}/{asset}
+    // Serve the same fake bundle for all paths that match the pattern.
+    if path.contains("/download/") {
+        let body_len = bundle_bytes.len();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body_len
+        );
+        let _ = stream.write_all(response.as_bytes());
+        let _ = stream.write_all(&bundle_bytes);
+    } else {
+        write_http_response(&mut stream, "404 Not Found", "text/plain", "not found");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Mock Browser4 server for Agent/Collective E2E coverage
 // ---------------------------------------------------------------------------
 
@@ -1307,6 +1489,15 @@ struct E2ECtx {
     state_dir: PathBuf,
     upload_file_path: PathBuf,
     step_timings: Vec<TimedStep>,
+    /// Extra environment variables to set for every CLI child process.
+    extra_env: Vec<(String, String)>,
+}
+
+impl E2ECtx {
+    fn set_env(&mut self, key: &str, value: &str) {
+        self.extra_env.retain(|(k, _)| k != key);
+        self.extra_env.push((key.to_string(), value.to_string()));
+    }
 }
 
 impl E2ECtx {
@@ -1588,6 +1779,11 @@ fn run_cli_process_internal(
     // Always anchor Browser4.jar root search to the CLI launch directory,
     // not the isolated temporary workspace used for test artifacts.
     command.env(ROOT_SEARCH_START_DIR_ENV, &ctx.invocation_dir);
+
+    // Apply scenario-specific extra env vars (e.g. BROWSER4_RELEASES_BASE_URL).
+    for (key, value) in &ctx.extra_env {
+        command.env(key, value);
+    }
 
     let output = if let Some(payload) = stdin_payload {
         let mut child = command
@@ -2456,6 +2652,7 @@ fn create_e2e_test_resources() -> E2ETestResources {
             state_dir,
             upload_file_path,
             step_timings: Vec::new(),
+            extra_env: Vec::new(),
         },
     }
 }
@@ -2673,13 +2870,7 @@ fn run_final_cleanup() -> Result<Vec<TimedStep>, String> {
 /// added to `commands.rs` without appearing here *or* in the tested set, the
 /// build will fail.
 fn excluded_commands(include_batch_command: bool) -> HashSet<&'static str> {
-    let mut commands: HashSet<&'static str> = [
-        // One-time setup / external download — not suitable for e2e
-        "install",
-        // Requires external network download — tested via unit tests only
-        "upgrade",
-    ]
-    .into();
+    let mut commands: HashSet<&'static str> = [].into();
 
     if !include_batch_command {
         commands.insert("batch");
@@ -2705,6 +2896,9 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "stop",
         // test_status_*
         "status",
+        // test_install_*, test_upgrade_*
+        "install",
+        "upgrade",
         // test_navigation_and_storage
         "goto",
         "go-back",

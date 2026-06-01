@@ -1824,3 +1824,200 @@ pub(super) fn test_swarm_command_help_and_validation(ctx: &mut E2ECtx) {
         submit_failure_output
     );
 }
+
+// ---------------------------------------------------------------------------
+// install / upgrade (mock download server)
+// ---------------------------------------------------------------------------
+
+const INSTALL_TAG: &str = "--tag=v4.10.0";
+
+pub(super) fn test_install_downloads_and_installs(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let (bundle_bytes, _dir_name) = build_fake_runtime_bundle("v4.10.0");
+    let download_server = FixtureDownloadServer::start(bundle_bytes);
+    ctx.set_env("BROWSER4_RELEASES_BASE_URL", &download_server.base_url());
+
+    // Use --tag so the download URL contains the real tag (without a GitHub
+    // redirect, parse_release_tag_from_url needs the tag in the path).
+    let result = run_command(ctx, &["install", INSTALL_TAG]);
+    assert_eq!(result.exit_code, 0, "expected install to succeed:\n{}", result.stderr);
+    assert!(
+        result.stdout.contains("installed successfully"),
+        "Expected 'installed successfully' in:\n{}",
+        result.stdout
+    );
+    assert!(
+        result.stdout.contains("v4.10.0"),
+        "Expected tag in output:\n{}",
+        result.stdout
+    );
+
+    // Verify the download server received a request.
+    let requests = download_server.snapshot_requests();
+    assert!(
+        requests.iter().any(|p| p.contains("/download/")),
+        "Expected at least one download request, got: {:?}",
+        requests
+    );
+
+    // Verify the metadata file was written.
+    let metadata_path = ctx.state_dir.join("lib").join("browser4-installation.json");
+    assert!(
+        metadata_path.exists(),
+        "Expected install metadata at {}",
+        metadata_path.display()
+    );
+
+    // Verify the runtime was extracted (lib/ dir with jar).
+    let lib_dir = ctx.state_dir.join("lib").join("lib");
+    assert!(lib_dir.is_dir(), "Expected lib/lib dir after install");
+}
+
+pub(super) fn test_install_skips_when_already_installed(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let (bundle_bytes, _dir_name) = build_fake_runtime_bundle("v4.10.0");
+    let download_server = FixtureDownloadServer::start(bundle_bytes);
+    ctx.set_env("BROWSER4_RELEASES_BASE_URL", &download_server.base_url());
+
+    // First install.
+    let first = run_command(ctx, &["install", INSTALL_TAG]);
+    assert_eq!(first.exit_code, 0);
+
+    // Second install — should skip download (already has v4.10.0).
+    let second = run_command(ctx, &["install", INSTALL_TAG]);
+    assert_eq!(second.exit_code, 0);
+    assert!(
+        second.stdout.contains("already installed"),
+        "Expected 'already installed' in:\n{}",
+        second.stdout
+    );
+}
+
+pub(super) fn test_install_force_re_downloads(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let (bundle_bytes, _dir_name) = build_fake_runtime_bundle("v4.10.0");
+    let download_server = FixtureDownloadServer::start(bundle_bytes);
+    ctx.set_env("BROWSER4_RELEASES_BASE_URL", &download_server.base_url());
+
+    // First install.
+    run_command(ctx, &["install", INSTALL_TAG]);
+
+    let requests_before = download_server.snapshot_requests().len();
+
+    // Second install with --force — should download again.
+    let result = run_command(ctx, &["install", INSTALL_TAG, "--force"]);
+    assert_eq!(result.exit_code, 0);
+    assert!(
+        result.stdout.contains("installed successfully"),
+        "Expected 'installed successfully' with --force:\n{}",
+        result.stdout
+    );
+
+    let requests_after = download_server.snapshot_requests().len();
+    assert!(
+        requests_after > requests_before,
+        "Expected additional download request with --force"
+    );
+}
+
+pub(super) fn test_install_specific_tag(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let (bundle_bytes, _dir_name) = build_fake_runtime_bundle("v4.9.3");
+    let download_server = FixtureDownloadServer::start(bundle_bytes);
+    ctx.set_env("BROWSER4_RELEASES_BASE_URL", &download_server.base_url());
+
+    let result = run_command(ctx, &["install", "--tag=v4.9.3"]);
+    assert_eq!(result.exit_code, 0, "expected install --tag to succeed:\n{}", result.stderr);
+    assert!(
+        result.stdout.contains("installed successfully"),
+        "Expected 'installed successfully' in:\n{}",
+        result.stdout
+    );
+
+    // Verify the download URL contained the requested tag.
+    let requests = download_server.snapshot_requests();
+    let has_tagged_url = requests.iter().any(|p| p.contains("v4.9.3"));
+    assert!(
+        has_tagged_url,
+        "Expected download request containing v4.9.3, got: {:?}",
+        requests
+    );
+}
+
+pub(super) fn test_upgrade_already_latest(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let (bundle_bytes, _dir_name) = build_fake_runtime_bundle("v4.10.0");
+    let download_server = FixtureDownloadServer::start(bundle_bytes);
+    ctx.set_env("BROWSER4_RELEASES_BASE_URL", &download_server.base_url());
+
+    // Install first.
+    run_command(ctx, &["install", INSTALL_TAG]);
+
+    // Upgrade to same version — should say already latest.
+    let result = run_command(ctx, &["upgrade", INSTALL_TAG]);
+    assert_eq!(result.exit_code, 0);
+    assert!(
+        result.stdout.contains("already at the latest version"),
+        "Expected 'already at the latest version' in:\n{}",
+        result.stdout
+    );
+}
+
+pub(super) fn test_upgrade_to_new_version(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    // Install an older version first.
+    let (old_bundle, _) = build_fake_runtime_bundle("v4.9.0");
+    let server1 = FixtureDownloadServer::start(old_bundle);
+    ctx.set_env("BROWSER4_RELEASES_BASE_URL", &server1.base_url());
+    run_command(ctx, &["install", "--tag=v4.9.0"]);
+    drop(server1);
+
+    // Now upgrade to a newer version.
+    let (new_bundle, _) = build_fake_runtime_bundle("v4.10.0");
+    let server2 = FixtureDownloadServer::start(new_bundle);
+    ctx.set_env("BROWSER4_RELEASES_BASE_URL", &server2.base_url());
+
+    let result = run_command(ctx, &["upgrade"]);
+    assert_eq!(result.exit_code, 0);
+    assert!(
+        result.stdout.contains("upgraded successfully"),
+        "Expected 'upgraded successfully' in:\n{}",
+        result.stdout
+    );
+    assert!(
+        result.stdout.contains("Restart the server"),
+        "Expected restart hint in:\n{}",
+        result.stdout
+    );
+}
+
+pub(super) fn test_install_download_failure(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    // Start a download server but don't register any bundle — all paths 404.
+    // Actually, the fixture server serves 200 for /download/ paths.  To
+    // simulate a failure, we point at a free port where nothing listens.
+    let free_port = find_free_port();
+    ctx.set_env(
+        "BROWSER4_RELEASES_BASE_URL",
+        &format!("http://127.0.0.1:{free_port}/releases"),
+    );
+
+    let result = run_command_allowing_failure(ctx, &["install"]);
+    // install should fail because the server is unreachable.
+    assert_ne!(
+        result.exit_code, 0,
+        "Expected install to fail when download server is unreachable"
+    );
+    let combined = format!("{}\n{}", result.stdout, result.stderr);
+    assert!(
+        combined.contains("error") || combined.contains("Error") || combined.contains("failed"),
+        "Expected error message in:\n{combined}"
+    );
+}

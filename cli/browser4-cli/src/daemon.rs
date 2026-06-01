@@ -2086,4 +2086,172 @@ mod tests {
         .unwrap();
         root
     }
+
+    // -------------------------------------------------------------------
+    // normalize_release_tag
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_normalize_release_tag_empty_or_latest_returns_none() {
+        assert_eq!(normalize_release_tag(None), None);
+        assert_eq!(normalize_release_tag(Some("")), None);
+        assert_eq!(normalize_release_tag(Some("  ")), None);
+        assert_eq!(normalize_release_tag(Some("latest")), None);
+        assert_eq!(normalize_release_tag(Some("LATEST")), None);
+    }
+
+    #[test]
+    fn test_normalize_release_tag_adds_v_prefix() {
+        assert_eq!(normalize_release_tag(Some("4.9.3")).as_deref(), Some("v4.9.3"));
+        assert_eq!(normalize_release_tag(Some("4.10.0")).as_deref(), Some("v4.10.0"));
+    }
+
+    #[test]
+    fn test_normalize_release_tag_keeps_existing_v_prefix() {
+        assert_eq!(normalize_release_tag(Some("v4.9.3")).as_deref(), Some("v4.9.3"));
+        assert_eq!(normalize_release_tag(Some("v4.10.0")).as_deref(), Some("v4.10.0"));
+    }
+
+    #[test]
+    fn test_normalize_release_tag_trims_whitespace() {
+        assert_eq!(normalize_release_tag(Some("  v4.9.3  ")).as_deref(), Some("v4.9.3"));
+        assert_eq!(normalize_release_tag(Some("  4.10.0\t")).as_deref(), Some("v4.10.0"));
+    }
+
+    // -------------------------------------------------------------------
+    // parse_release_tag_from_url (additional edge cases)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_release_tag_from_url_latest_pattern() {
+        // When called on a "latest" URL (before redirect), the segment after
+        // "download" is the asset filename, not a tag.  In practice this
+        // function is only called on the redirect-final URL which always has
+        // a real tag, so this edge case is harmless.
+        let tag = parse_release_tag_from_url(
+            "https://github.com/platonai/Browser4/releases/latest/download/browser4-runtime.zip",
+        );
+        assert_eq!(tag.as_deref(), Some("browser4-runtime.zip"));
+    }
+
+    #[test]
+    fn test_parse_release_tag_from_url_non_release_url_returns_none() {
+        assert_eq!(parse_release_tag_from_url("https://example.com/other/path"), None);
+        assert_eq!(
+            parse_release_tag_from_url("https://github.com/platonai/Browser4/releases/tag/v4.9.3"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_parse_release_tag_from_url_malformed_url_returns_none() {
+        assert_eq!(parse_release_tag_from_url("not-a-url"), None);
+        assert_eq!(parse_release_tag_from_url(""), None);
+    }
+
+    // -------------------------------------------------------------------
+    // install_dir_contains_runtime
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_install_dir_contains_runtime_valid() {
+        let tmp = test_temp_dir();
+        let lib_dir = tmp.path().join("lib");
+        fs::create_dir_all(&lib_dir).unwrap();
+        write(lib_dir.join("browser4.jar"), "jar-content").unwrap();
+        let runtime_bin = tmp.path().join("runtime").join("bin");
+        fs::create_dir_all(&runtime_bin).unwrap();
+        write(runtime_bin.join(browser4_java_executable_name()), "java").unwrap();
+        assert!(install_dir_contains_runtime(tmp.path()));
+    }
+
+    #[test]
+    fn test_install_dir_contains_runtime_missing_lib_dir() {
+        let tmp = test_temp_dir();
+        assert!(!install_dir_contains_runtime(tmp.path()));
+    }
+
+    #[test]
+    fn test_install_dir_contains_runtime_missing_java() {
+        let tmp = test_temp_dir();
+        fs::create_dir_all(tmp.path().join("lib")).unwrap();
+        write(tmp.path().join("lib").join("browser4.jar"), "jar").unwrap();
+        assert!(!install_dir_contains_runtime(tmp.path()));
+    }
+
+    #[test]
+    fn test_install_dir_contains_runtime_empty_lib_dir() {
+        let tmp = test_temp_dir();
+        fs::create_dir_all(tmp.path().join("lib")).unwrap();
+        let runtime_bin = tmp.path().join("runtime").join("bin");
+        fs::create_dir_all(&runtime_bin).unwrap();
+        write(runtime_bin.join(browser4_java_executable_name()), "java").unwrap();
+        // No jar files in lib/
+        assert!(!install_dir_contains_runtime(tmp.path()));
+    }
+
+    // -------------------------------------------------------------------
+    // read_installed_browser4_runtime_metadata
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_metadata_round_trip() {
+        let tmp = test_temp_dir();
+        let metadata_path = tmp.path().join("lib").join("browser4-installation.json");
+        fs::create_dir_all(metadata_path.parent().unwrap()).unwrap();
+        let metadata = InstalledBrowser4RuntimeMetadata {
+            tag: "v4.9.3".to_string(),
+            asset_name: "browser4-runtime-linux-x64.tar.gz".to_string(),
+            download_url: "https://example.com/releases/download/v4.9.3/bundle.tar.gz"
+                .to_string(),
+            installed_at: "2026-06-01T00:00:00Z".to_string(),
+        };
+        let json = serde_json::to_string_pretty(&metadata).unwrap();
+        fs::write(&metadata_path, json).unwrap();
+
+        let previous = env::var("BROWSER4_CLI_STATE_DIR").ok();
+        unsafe { env::set_var("BROWSER4_CLI_STATE_DIR", tmp.path().as_os_str()); }
+        let read = read_installed_browser4_runtime_metadata();
+        // restore
+        match previous {
+            Some(v) => unsafe { env::set_var("BROWSER4_CLI_STATE_DIR", v) },
+            None => unsafe { env::remove_var("BROWSER4_CLI_STATE_DIR") },
+        }
+        assert!(read.is_some());
+        let read = read.unwrap();
+        assert_eq!(read.tag, "v4.9.3");
+        assert_eq!(read.asset_name, "browser4-runtime-linux-x64.tar.gz");
+        assert_eq!(read.installed_at, "2026-06-01T00:00:00Z");
+    }
+
+    #[test]
+    fn test_metadata_missing_file_returns_none() {
+        let tmp = test_temp_dir();
+        let previous = env::var("BROWSER4_CLI_STATE_DIR").ok();
+        unsafe { env::set_var("BROWSER4_CLI_STATE_DIR", tmp.path().as_os_str()); }
+        let read = read_installed_browser4_runtime_metadata();
+        match previous {
+            Some(v) => unsafe { env::set_var("BROWSER4_CLI_STATE_DIR", v) },
+            None => unsafe { env::remove_var("BROWSER4_CLI_STATE_DIR") },
+        }
+        assert!(read.is_none());
+    }
+
+    #[test]
+    fn test_metadata_corrupted_json_returns_none() {
+        let tmp = test_temp_dir();
+        let metadata_path = tmp.path().join("lib").join("browser4-installation.json");
+        fs::create_dir_all(metadata_path.parent().unwrap()).unwrap();
+        fs::write(&metadata_path, "not valid json {{{").unwrap();
+
+        let previous = env::var("BROWSER4_CLI_STATE_DIR").ok();
+        unsafe { env::set_var("BROWSER4_CLI_STATE_DIR", tmp.path().as_os_str()); }
+        let read = read_installed_browser4_runtime_metadata();
+        match previous {
+            Some(v) => unsafe { env::set_var("BROWSER4_CLI_STATE_DIR", v) },
+            None => unsafe { env::remove_var("BROWSER4_CLI_STATE_DIR") },
+        }
+        assert!(read.is_none());
+    }
+
 }

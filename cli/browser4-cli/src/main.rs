@@ -39,7 +39,7 @@ use args::{
 use commands::commands_map;
 use daemon::{
     ensure_server_running, init_root_search_start_dir_from_startup, install_browser4_runtime,
-    resolve_base_url,
+    resolve_base_url, InstalledBrowser4Runtime,
 };
 use help::{generate_command_help, generate_help};
 use http::{
@@ -2330,6 +2330,24 @@ async fn handle_swarm_result(
     Ok(())
 }
 
+/// Format the output lines for `handle_install`.  Extracted as a pure function
+/// so the branching logic can be unit-tested without network I/O.
+fn format_install_output(runtime: &InstalledBrowser4Runtime) -> Vec<String> {
+    let mut lines = Vec::new();
+    if runtime.reused_existing {
+        lines.push("Browser4 runtime already installed.".to_string());
+    } else {
+        lines.push("Browser4 runtime installed successfully.".to_string());
+    }
+    lines.push(format!("- Tag: {}", runtime.tag));
+    lines.push(format!("- Asset: {}", runtime.asset_name));
+    lines.push(format!("- Install dir: {}", runtime.install_dir.display()));
+    lines.push(format!("- Lib dir: {}", runtime.lib_dir.display()));
+    lines.push(format!("- Java: {}", runtime.java_path.display()));
+    lines.push(format!("- Source: {}", runtime.download_url));
+    lines
+}
+
 async fn handle_install(tool_params: &Value) -> Result<(), String> {
     let tag = tool_params.get("tag").and_then(|value| value.as_str());
     let force = tool_params
@@ -2337,19 +2355,29 @@ async fn handle_install(tool_params: &Value) -> Result<(), String> {
         .and_then(|value| value.as_bool())
         .unwrap_or(false);
     let runtime = install_browser4_runtime(tag, force).await?;
-
-    if runtime.reused_existing {
-        println!("Browser4 runtime already installed.");
-    } else {
-        println!("Browser4 runtime installed successfully.");
+    for line in format_install_output(&runtime) {
+        println!("{}", line);
     }
-    println!("- Tag: {}", runtime.tag);
-    println!("- Asset: {}", runtime.asset_name);
-    println!("- Install dir: {}", runtime.install_dir.display());
-    println!("- Lib dir: {}", runtime.lib_dir.display());
-    println!("- Java: {}", runtime.java_path.display());
-    println!("- Source: {}", runtime.download_url);
     Ok(())
+}
+
+/// Format the output lines for `handle_upgrade`.  Extracted as a pure function
+/// so the branching logic can be unit-tested without network I/O.
+fn format_upgrade_output(runtime: &InstalledBrowser4Runtime, force: bool) -> Vec<String> {
+    if runtime.reused_existing && !force {
+        return vec![format!(
+            "Browser4 is already at the latest version ({}).",
+            runtime.tag
+        )];
+    }
+    vec![
+        format!("Browser4 upgraded successfully to {}.", runtime.tag),
+        format!("- Install dir: {}", runtime.install_dir.display()),
+        format!("- Lib dir: {}", runtime.lib_dir.display()),
+        format!("- Java: {}", runtime.java_path.display()),
+        "Restart the server to use the new version: browser4-cli stop && browser4-cli open"
+            .to_string(),
+    ]
 }
 
 async fn handle_upgrade(tool_params: &Value) -> Result<(), String> {
@@ -2361,17 +2389,9 @@ async fn handle_upgrade(tool_params: &Value) -> Result<(), String> {
 
     eprintln!("Upgrading Browser4 runtime...");
     let runtime = install_browser4_runtime(tag, force).await?;
-
-    if runtime.reused_existing && !force {
-        println!("Browser4 is already at the latest version ({}).", runtime.tag);
-        return Ok(());
+    for line in format_upgrade_output(&runtime, force) {
+        println!("{}", line);
     }
-
-    println!("Browser4 upgraded successfully to {}.", runtime.tag);
-    println!("- Install dir: {}", runtime.install_dir.display());
-    println!("- Lib dir: {}", runtime.lib_dir.display());
-    println!("- Java: {}", runtime.java_path.display());
-    println!("Restart the server to use the new version: browser4-cli stop && browser4-cli open");
     Ok(())
 }
 
@@ -4464,5 +4484,63 @@ mod tests {
         // None (missing status) defaults to true — backend records without
         // explicit status fields are treated as active.
         assert!(session_status_is_active(None));
+    }
+
+    // -------------------------------------------------------------------
+    // format_install_output / format_upgrade_output
+    // -------------------------------------------------------------------
+
+    fn make_test_runtime(reused: bool) -> InstalledBrowser4Runtime {
+        InstalledBrowser4Runtime {
+            tag: "v4.10.0".to_string(),
+            asset_name: "browser4-bundle-runtime-linux-x64.tar.gz".to_string(),
+            download_url: "https://github.com/platonai/Browser4/releases/download/v4.10.0/bundle.tar.gz".to_string(),
+            install_dir: PathBuf::from("/tmp/browser4/lib"),
+            lib_dir: PathBuf::from("/tmp/browser4/lib"),
+            jar_path: PathBuf::from("/tmp/browser4/lib/browser4.jar"),
+            java_path: PathBuf::from("/tmp/browser4/lib/runtime/bin/java"),
+            reused_existing: reused,
+        }
+    }
+
+    #[test]
+    fn test_format_install_output_reused() {
+        let runtime = make_test_runtime(true);
+        let lines = format_install_output(&runtime);
+        assert!(lines[0].contains("already installed"), "expected 'already installed', got: {:?}", lines);
+        assert!(lines.iter().any(|l| l.contains("v4.10.0")), "expected tag in output");
+        assert!(lines.iter().any(|l| l.contains("- Install dir:")), "expected install dir");
+    }
+
+    #[test]
+    fn test_format_install_output_fresh() {
+        let runtime = make_test_runtime(false);
+        let lines = format_install_output(&runtime);
+        assert!(lines[0].contains("installed successfully"), "expected 'installed successfully', got: {:?}", lines);
+    }
+
+    #[test]
+    fn test_format_upgrade_output_already_latest() {
+        let runtime = make_test_runtime(true);
+        let lines = format_upgrade_output(&runtime, false);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("already at the latest version"), "got: {}", lines[0]);
+        assert!(lines[0].contains("v4.10.0"), "expected tag in message: {}", lines[0]);
+    }
+
+    #[test]
+    fn test_format_upgrade_output_fresh_install() {
+        let runtime = make_test_runtime(false);
+        let lines = format_upgrade_output(&runtime, false);
+        assert!(lines[0].contains("upgraded successfully"), "got: {}", lines[0]);
+        assert!(lines.iter().any(|l| l.contains("Restart the server")));
+    }
+
+    #[test]
+    fn test_format_upgrade_output_force_reinstall() {
+        let runtime = make_test_runtime(true); // reused_existing = true
+        let lines = format_upgrade_output(&runtime, true); // force = true → not "already latest"
+        assert!(lines[0].contains("upgraded successfully"), "force=true should not print 'already latest': {:?}", lines);
+        assert!(lines.iter().any(|l| l.contains("Restart the server")));
     }
 }
