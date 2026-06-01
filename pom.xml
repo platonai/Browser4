@@ -21,7 +21,7 @@
 
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>browser4</artifactId>
-    <version>4.10.0-rc.1</version>
+    <version>4.10.0-rc.2</version>
     <packaging>pom</packaging>
 
     <name>Browser4</name>
