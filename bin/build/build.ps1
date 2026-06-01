@@ -28,7 +28,7 @@ foreach ($Arg in $args)
     '-clean' {
       $PerformClean = $true;
     }
-    { '-t', '-test' } {
+    { $_ -in '-t', '-test' } {
       $SkipTests = $false;
     }
     { $_ -in "-h", "-help", "--help" } {
