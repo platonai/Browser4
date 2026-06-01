@@ -17,7 +17,7 @@ COPY . .
 RUN ls -la && ls -la bin && find . -name "*.sh" -exec chmod +x {} \;
 
 # Build the application with Maven cache mount
-RUN --mount=type=cache,target=/root/.m2 mvn clean package -DskipTests -Dmaven.javadoc.skip=true -B -V && \
+RUN --mount=type=cache,target=/root/.m2 mvn clean package -Pall-modules -DskipTests -Dmaven.javadoc.skip=true -B -V && \
     echo "Build completed successfully"
 
 # Copy JAR for use in the next stage with better error handling
