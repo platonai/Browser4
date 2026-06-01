@@ -466,7 +466,7 @@ jobs:
           MODULE_PATH=${{ env.PRODUCTION_JAR_MODULE_PATH }}
 
           echo "=== Building Browser4 JAR ==="
-          ./mvnw package -rf :$MODULE_NAME -pl ${MODULE_PATH} -DskipTests=true -Dmaven.javadoc.skip=true
+          ./mvnw package -rf :$MODULE_NAME -pl ${MODULE_PATH} -Pall-modules -DskipTests=true -Dmaven.javadoc.skip=true
 
           if [ ! -f "$JAR_PATH" ]; then
             echo "❌ $JAR_NAME not found at $JAR_PATH"
@@ -859,7 +859,7 @@ jobs:
           Write-Host "=== Building ${{ env.BUNDLE_JAR_NAME }} ===" -ForegroundColor Cyan
 
           $mavenCommand = if ($IsWindows) { '.\mvnw.cmd' } else { './mvnw' }
-          & $mavenCommand package -pl '${{ env.BUNDLE_MODULE_PATH }}' -am -DskipTests=true -Dmaven.javadoc.skip=true
+          & $mavenCommand package -pl '${{ env.BUNDLE_MODULE_PATH }}' -am -Pall-modules -DskipTests=true -Dmaven.javadoc.skip=true
           if ($LASTEXITCODE -ne 0) {
             throw "Bundle jar build failed with exit code $LASTEXITCODE"
           }
