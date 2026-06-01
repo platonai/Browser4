@@ -27,24 +27,100 @@ cargo install --path .
 
 ## Testing
 
-```bash
-# All tests
-cargo test
+### Filtering by target
 
-# End-to-end tests with output
+`browser4-cli` has 3 test targets, defined in `Cargo.toml`:
+
+| Command | Target |
+|------|-------------|
+| `cargo test` | All 3 targets |
+| `cargo test --lib` | Only `#[cfg(test)] mod tests` in `src/lib.rs` |
+| `cargo test --bin browser4-cli` | Only `#[cfg(test)]` blocks in `src/main.rs` and other `src/*.rs` files |
+| `cargo test --test e2e` | Only `tests/e2e.rs` (uses a custom harness) |
+
+`--lib` and `--bin` can be combined:
+```bash
+# Run all unit tests (lib + bin), skip e2e
+cargo test --lib --bin browser4-cli
+
+# Run e2e tests separately (slower, requires a running backend)
+cargo test --test e2e -- --nocapture
+```
+
+> [!TIP]
+> `cargo test` runs all 3 targets by default.  Use `--lib --bin browser4-cli`
+> during development to stay in the fast feedback loop.  Reach for
+> `--test e2e` only when you specifically need integration coverage.
+
+### Filtering by test name / module
+
+```bash
+# Exact match on function name
+cargo test test_mousewheel_params_preserve_decimal_numbers
+
+# Substring match — any test whose name contains "mousewheel"
+cargo test mousewheel
+
+# Filter by module path prefix
+cargo test daemon::tests
+
+# Module + function
+cargo test daemon::tests::test_find_browser4_root
+
+# Multiple patterns (OR semantics)
+cargo test mousewheel keypress
+```
+
+### Filtering by test attribute
+
+```bash
+# Run only tests marked with #[ignore]
+cargo test -- --ignored
+
+# Run both normal and ignored tests
+cargo test -- --include-ignored
+```
+
+### Controlling output
+
+```bash
+# Show println! output (captured by default)
+cargo test -- --nocapture
+
+# Show full output even for passing tests
+cargo test -- --show-output
+
+# Limit concurrency
+cargo test -- --test-threads=1
+```
+
+### e2e-specific
+
+e2e uses a custom harness (`harness = false`). Arguments after `--` are forwarded to
+`tests/e2e.rs`'s `main()`:
+
+```bash
+# Basics
 cargo test --test e2e -- --nocapture
 
-# Specific scenario
+# Run a specific scenario (exact match)
 cargo test --test e2e -- --nocapture --scenario=test_e2e_batch_form_submission
 
-# Pattern match
+# Wildcard — match multiple scenarios
 cargo test --test e2e -- --nocapture --scenario=test_e2e_swarm_*
 
-# Rerun failures
+# Re-run scenarios that failed last time
 cargo test --test e2e -- --nocapture --failed
 
-# Include batch scenarios (skipped by default)
+# Enable batch / swarm scenarios (skipped by default)
 cargo test --test e2e -- --nocapture --enable-batch-scenario
+cargo test --test e2e -- --nocapture --enable-swarm-scenario
+
+# Combine flags
+cargo test --test e2e -- --nocapture --failed --enable-batch-scenario
+
+# List all available scenarios without running them
+cargo test --test e2e -- --list
 ```
 
 ## License
