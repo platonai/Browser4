@@ -328,25 +328,30 @@ jobs:
             exit 1
           fi
 
-          # Verify the standalone main class is present in the JAR.
-          MAIN_CLASS="Browser4StandaloneApplication"
-          if jar tf "$JAR_PATH" | grep -q "$MAIN_CLASS"; then
-            echo "✅ JAR contains $MAIN_CLASS"
-          else
-            echo "❌ JAR does not contain $MAIN_CLASS — wrong JAR was built or selected"
-            echo "Classes in JAR matching 'Application':"
-            jar tf "$JAR_PATH" | grep -i 'Application' || echo "(none)"
-            exit 1
-          fi
+          # Validate the JAR contains the expected Spring Boot application.
+          # The authoritative check is MANIFEST.MF Start-Class — the class
+          # Spring Boot actually launches.  The Kotlin class is named
+          # Browser4Application, but the file-level main() lives in
+          # Browser4StandaloneApplicationKt (after the source file).
+          EXPECTED_START_CLASS="ai.platon.pulsar.apps.Browser4StandaloneApplicationKt"
 
-          # Verify MANIFEST.MF has the correct Start-Class for Spring Boot.
-          if jar tf "$JAR_PATH" | grep -q 'MANIFEST.MF'; then
-            jar xf "$JAR_PATH" META-INF/MANIFEST.MF 2>/dev/null || true
-            if [ -f META-INF/MANIFEST.MF ]; then
-              echo "--- MANIFEST.MF ---"
-              grep -E '^(Main-Class|Start-Class)' META-INF/MANIFEST.MF || echo "(no Main-Class/Start-Class entry)"
-              echo "--- END MANIFEST.MF ---"
+          jar xf "$JAR_PATH" META-INF/MANIFEST.MF 2>/dev/null || true
+          if [ -f META-INF/MANIFEST.MF ]; then
+            echo "--- MANIFEST.MF ---"
+            grep -E '^(Main-Class|Start-Class)' META-INF/MANIFEST.MF || echo "(no Main-Class/Start-Class entry)"
+            echo "--- END MANIFEST.MF ---"
+
+            ACTUAL_START_CLASS=$(grep '^Start-Class:' META-INF/MANIFEST.MF | sed 's/Start-Class: //' | tr -d '[:space:]')
+            if [ "$ACTUAL_START_CLASS" = "$EXPECTED_START_CLASS" ]; then
+              echo "✅ Start-Class is correct: $ACTUAL_START_CLASS"
+            else
+              echo "❌ Wrong Start-Class — expected '$EXPECTED_START_CLASS', got '$ACTUAL_START_CLASS'"
+              echo "    The JAR at $JAR_PATH was not built from browser4-standalone."
+              exit 1
             fi
+          else
+            echo "❌ No MANIFEST.MF found in JAR — not a valid Spring Boot fat JAR"
+            exit 1
           fi
 
           echo "::endgroup::"

@@ -30,9 +30,13 @@ RUN --mount=type=cache,target=/root/.m2 \
 COPY ${STANDALONE_MODULE}/target/Browser4.jar /build/app.jar
 
 # Validate the JAR before proceeding to the runtime stage.
-RUN jar tf /build/app.jar | grep -q 'Browser4StandaloneApplication' || \
-    (echo "ERROR: /build/app.jar does not contain Browser4StandaloneApplication class" && exit 1) && \
-    echo "JAR validated: contains Browser4StandaloneApplication"
+# The Kotlin class is Browser4Application; the file-level main() lives in
+# Browser4StandaloneApplicationKt.  Check MANIFEST.MF Start-Class instead of
+# grepping for a class file name.
+RUN jar xf /build/app.jar META-INF/MANIFEST.MF && \
+    grep -q 'Start-Class: ai.platon.pulsar.apps.Browser4StandaloneApplicationKt' META-INF/MANIFEST.MF || \
+    (echo "ERROR: /build/app.jar has wrong Start-Class — not built from browser4-standalone" && exit 1) && \
+    echo "JAR validated: Start-Class is Browser4StandaloneApplicationKt"
 
 # Stage 2: Run stage
 FROM eclipse-temurin:21-jre-alpine AS runner
