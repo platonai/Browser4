@@ -17,12 +17,13 @@ COPY . .
 RUN ls -la && ls -la bin && find . -name "*.sh" -exec chmod +x {} \;
 
 # Build the standalone application with Maven cache mount.
-# We explicitly build browser4-standalone (and its dependencies via -am) rather
-# than all modules to avoid producing Browser4Bundle.jar, which has a name that
-# overlaps with the `Browser4*.jar` glob and could be picked up non-deterministically.
+# browser4-apps is only in the `all-modules` profile (not the default reactor),
+# so we activate the profile to make it visible, then scope the build to only
+# browser4-standalone plus its dependencies via -pl + -am.  This avoids building
+# browser4-bundle (whose Browser4Bundle.jar would collide with Browser4.jar in a glob).
 ARG STANDALONE_MODULE=browser4-apps/browser4-standalone
 RUN --mount=type=cache,target=/root/.m2 \
-    mvn clean package -pl ${STANDALONE_MODULE} -am -DskipTests -Dmaven.javadoc.skip=true -B -V && \
+    mvn clean package -Pall-modules -pl ${STANDALONE_MODULE} -am -DskipTests -Dmaven.javadoc.skip=true -B -V && \
     echo "Build completed successfully"
 
 # Copy the standalone JAR using its exact known path — no glob / find needed.
