@@ -2,7 +2,9 @@ package ai.platon.pulsar.rest.mcp.service
 
 import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agentic.AgenticSession
-import ai.platon.pulsar.agentic.context.AgenticContext
+import ai.platon.pulsar.agentic.GenericAgenticSession
+import ai.platon.pulsar.agentic.context.AgenticContexts
+import ai.platon.pulsar.agentic.context.GenericAgenticContext
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.common.config.VolatileConfig
@@ -10,6 +12,7 @@ import ai.platon.pulsar.core.api.Browser
 import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.skeleton.PulsarSettings
 import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -18,20 +21,29 @@ import org.mockito.Mockito
 import org.mockito.Mockito.times
 import org.mockito.Mockito.verify
 import org.mockito.MockitoAnnotations
+import org.springframework.context.support.GenericApplicationContext
 
 class PulsarSessionManagerTest {
     @Mock
-    private lateinit var agenticContext: AgenticContext
+    private lateinit var agenticContext: GenericAgenticContext
 
     private lateinit var sessionManager: PulsarSessionManager
 
     @BeforeEach
     fun setUp() {
         MockitoAnnotations.openMocks(this)
+        val appContext = Mockito.mock(GenericApplicationContext::class.java)
+        Mockito.`when`(agenticContext.applicationContext).thenReturn(appContext)
+        AgenticContexts.create(agenticContext)
         Mockito.doAnswer {
             mockAgenticSession()
         }.`when`(agenticContext).createSession(Mockito.any(PulsarSettings::class.java) ?: PulsarSettings())
         sessionManager = PulsarSessionManager(agenticContext)
+    }
+
+    @AfterEach
+    fun tearDown() {
+        AgenticContexts.close()
     }
 
     @Test
@@ -208,7 +220,7 @@ class PulsarSessionManagerTest {
         browser: Browser? = null,
         driver: WebDriver? = null,
     ): AgenticSession {
-        val session = Mockito.mock(AgenticSession::class.java)
+        val session = Mockito.mock(GenericAgenticSession::class.java)
         Mockito.`when`(session.isActive).thenReturn(isActive)
         Mockito.`when`(session.boundBrowser).thenReturn(browser)
         Mockito.`when`(session.boundDriver).thenReturn(driver)
