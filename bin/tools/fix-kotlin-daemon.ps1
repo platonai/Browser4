@@ -116,8 +116,8 @@ try {
     }
 
     if ($RunInstallCheck) {
-        Write-Step "Running install check for browser4-apps/browser4-agents (this can take time)..."
-        & .\mvnw.cmd -pl browser4-apps/browser4-agents -am -DskipTests install -q
+        Write-Step "Running install check for browser4-apps/browser4-standalone (this can take time)..."
+        & .\mvnw.cmd -pl browser4-apps/browser4-standalone -am -DskipTests install -q
     }
 }
 finally {

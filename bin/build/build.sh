@@ -108,7 +108,7 @@ function invokeCargoBuild {
 }
 
 function copyBrowser4JarToTarget {
-  local sourceJar="$repoRoot/browser4-apps/browser4-agents/target/Browser4.jar"
+  local sourceJar="$repoRoot/browser4-apps/browser4-standalone/target/Browser4.jar"
   local targetDir="$repoRoot/target"
   local targetJar="$targetDir/Browser4.jar"
 

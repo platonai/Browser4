@@ -41,7 +41,7 @@ ENV JAVA_OPTS="-Xms2G -Xmx10G -XX:+UseG1GC" \
 
 # Copy pre-built JAR from local build
 # Make sure to build the JAR first with: ./mvnw clean package -DskipTests
-COPY browser4-apps/browser4-agents/target/Browser4.jar app.jar
+COPY browser4-apps/browser4-standalone/target/Browser4.jar app.jar
 
 # Expose port (documentation only)
 EXPOSE 8182

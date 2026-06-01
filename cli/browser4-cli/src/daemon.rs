@@ -3,7 +3,7 @@
 //! Ensures a Browser4 server is running before executing commands.
 //! Only manages localhost instances; remote servers are not touched.
 //! When a local Browser4 checkout is available, startup prefers
-//! `mvn spring-boot:run` from the `browser4-apps/browser4-agents` module so the CLI
+//! `mvn spring-boot:run` from the `browser4-apps/browser4-standalone` module so the CLI
 //! uses the matching server version from source. If no checkout can be found,
 //! it falls back to the packaged Browser4 jar flow used by the standalone
 //! installer.
@@ -629,7 +629,7 @@ fn build_maven_launch_spec(repo_root: &Path, port: u16) -> Result<ServerLaunchSp
         ));
     }
 
-    let module_dir = repo_root.join("browser4-apps").join("browser4-agents");
+    let module_dir = repo_root.join("browser4-apps").join("browser4-standalone");
     if !module_dir.join("pom.xml").is_file() {
         return Err(format!(
             "Browser4 agents module not found under {}",
@@ -777,7 +777,7 @@ fn build_powershell_batch_invocation(program: &Path, args: &[String]) -> String 
 fn build_powershell_maven_invocation(program: &Path, runtime_args: &[String]) -> String {
     let install_args = vec![
         "-pl".to_string(),
-        "browser4-apps/browser4-agents".to_string(),
+        "browser4-apps/browser4-standalone".to_string(),
         "-am".to_string(),
         "-DskipTests".to_string(),
         "install".to_string(),
@@ -785,7 +785,7 @@ fn build_powershell_maven_invocation(program: &Path, runtime_args: &[String]) ->
     ];
     let mut run_args = vec![
         "-pl".to_string(),
-        "browser4-apps/browser4-agents".to_string(),
+        "browser4-apps/browser4-standalone".to_string(),
         "spring-boot:run".to_string(),
     ];
     run_args.extend_from_slice(runtime_args);
@@ -877,8 +877,8 @@ fn prepare_unix_maven_wrapper_launcher(
     let launcher_script_content = [
         "#!/bin/sh",
         "set -e",
-        &format!("'{mvnw_abs}' -pl browser4-apps/browser4-agents -am -DskipTests install -q"),
-        &format!("'{mvnw_abs}' -pl browser4-apps/browser4-agents spring-boot:run \"$@\""),
+        &format!("'{mvnw_abs}' -pl browser4-apps/browser4-standalone -am -DskipTests install -q"),
+        &format!("'{mvnw_abs}' -pl browser4-apps/browser4-standalone spring-boot:run \"$@\""),
         "",
     ]
     .join("\n");
@@ -1846,14 +1846,14 @@ mod tests {
 
     fn create_browser4_root(tmp: &TempDir) -> PathBuf {
         let root = tmp.path().join("Browser4");
-        create_dir_all(root.join("browser4-apps").join("browser4-agents")).unwrap();
+        create_dir_all(root.join("browser4-apps").join("browser4-standalone")).unwrap();
         create_dir_all(root.join("sdks").join("browser4-cli")).unwrap();
         write(root.join("ROOT.md"), "# Browser4\n").unwrap();
         write(root.join("VERSION"), "0.1.0\n").unwrap();
         write(root.join("pom.xml"), "<project />").unwrap();
         write(
             root.join("browser4-apps")
-                .join("browser4-agents")
+                .join("browser4-standalone")
                 .join("pom.xml"),
             "<project />",
         )
@@ -2285,12 +2285,12 @@ mod tests {
     fn test_is_browser4_root_rejects_missing_root_marker() {
         let tmp = test_temp_dir();
         let root = tmp.path().join("Browser4");
-        create_dir_all(root.join("browser4-apps").join("browser4-agents")).unwrap();
+        create_dir_all(root.join("browser4-apps").join("browser4-standalone")).unwrap();
         create_dir_all(root.join("sdks").join("browser4-cli")).unwrap();
         write(root.join("pom.xml"), "<project />").unwrap();
         write(
             root.join("browser4-apps")
-                .join("browser4-agents")
+                .join("browser4-standalone")
                 .join("pom.xml"),
             "<project />",
         )
@@ -2307,14 +2307,14 @@ mod tests {
     fn create_browser4_root_in(parent: &Path) -> PathBuf {
         let root = parent.join("Browser4");
         create_dir_all(&root).unwrap();
-        create_dir_all(root.join("browser4-apps").join("browser4-agents")).unwrap();
+        create_dir_all(root.join("browser4-apps").join("browser4-standalone")).unwrap();
         create_dir_all(root.join("sdks").join("browser4-cli")).unwrap();
         write(root.join("ROOT.md"), "# Browser4\n").unwrap();
         write(root.join("VERSION"), "0.1.0\n").unwrap();
         write(root.join("pom.xml"), "<project />").unwrap();
         write(
             root.join("browser4-apps")
-                .join("browser4-agents")
+                .join("browser4-standalone")
                 .join("pom.xml"),
             "<project />",
         )
@@ -2349,7 +2349,7 @@ mod tests {
 
         assert!(
             invocation.contains(&format!(
-                "& '{escaped_program}' '-pl' 'browser4-apps/browser4-agents' '-am' '-DskipTests' 'install' '-q'"
+                "& '{escaped_program}' '-pl' 'browser4-apps/browser4-standalone' '-am' '-DskipTests' 'install' '-q'"
             )),
             "expected Maven preinstall phase in invocation: {invocation}"
         );
@@ -2359,7 +2359,7 @@ mod tests {
         );
         assert!(
             invocation.contains(&format!(
-                "& '{escaped_program}' '-pl' 'browser4-apps/browser4-agents' 'spring-boot:run' '{escaped_port_arg}'"
+                "& '{escaped_program}' '-pl' 'browser4-apps/browser4-standalone' 'spring-boot:run' '{escaped_port_arg}'"
             )),
             "expected module-scoped spring-boot:run phase in invocation: {invocation}"
         );

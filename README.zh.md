@@ -160,7 +160,7 @@ Browser4 CLI 专为 AI 智能体通过技能 (SKILLS) + CLI 使用而设计。
 
 关于 Docker 部署，请查看我们的 [Docker Hub 仓库](https://hub.docker.com/r/galaxyeye88/browser4)。
 
-**Windows 用户**：你也可以将 Browser4 构建为独立的 Windows 安装程序。详情请参阅 [Windows 安装程序指南](browser4-apps/browser4-agents/README.md)。
+**Windows 用户**：你也可以将 Browser4 构建为独立的 Windows 安装程序。详情请参阅 [Windows 安装程序指南](browser4-apps/browser4-standalone/README.md)。
 
 ---
 
@@ -327,7 +327,7 @@ curl -L -o PulsarRPAPro.jar https://github.com/platonai/PulsarRPAPro/releases/do
 | `browser4-core`      | 核心引擎：会话、调度、DOM、浏览器控制            |
 | `browser4-agentic`   | 智能体实现、MCP 和技能注册                      |
 | `browser4-rest`      | Spring Boot REST 层和命令端点                  |
-| `browser4-agents`    | 智能体和爬虫编排，包含产品打包                    |
+| `browser4-standalone`    | 智能体和爬虫编排，包含产品打包                    |
 | `examples`           | 可运行的示例和演示                              |
 | `browser4-tests`     | 端到端测试、重量级集成测试和场景测试              |
 
