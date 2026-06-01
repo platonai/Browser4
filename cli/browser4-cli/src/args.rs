@@ -15,8 +15,6 @@ pub struct GlobalFlags {
     pub session_name: Option<String>,
     /// `--server=<url>` or `--server <url>` server override
     pub server_url: Option<String>,
-    /// `--use-maven-startup` enables local Maven-based server startup.
-    pub use_maven_startup: bool,
     /// Remaining arguments (command + its args/options)
     pub args: Vec<String>,
 }
@@ -33,7 +31,6 @@ pub struct BatchArgs {
 /// Recognises:
 /// - `-s=<name>`, `-s <name>`, `--session=<name>`, `--session <name>` → session name
 /// - `--server=<url>` or `--server <url>` → server URL override
-/// - `--use-maven-startup` → opt in to local Maven `spring-boot:run` startup
 /// - `--version` / `-v` → version flag (returned in `args`)
 /// - Everything else is forwarded unchanged in `args`
 pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
@@ -65,8 +62,6 @@ pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
                 i += 1;
                 flags.server_url = Some(argv[i].clone());
             }
-        } else if arg == "--use-maven-startup" {
-            flags.use_maven_startup = true;
         } else {
             flags.args.push(arg.clone());
         }
@@ -379,29 +374,6 @@ mod tests {
         let flags = parse_global_flags(&argv);
         assert_eq!(flags.server_url.as_deref(), Some("http://localhost:9090"));
         assert_eq!(flags.args, vec!["open"]);
-    }
-
-    #[test]
-    fn test_parse_global_flags_use_maven_startup() {
-        let argv = vec![
-            "--use-maven-startup".to_string(),
-            "open".to_string(),
-            "https://example.com".to_string(),
-        ];
-
-        let flags = parse_global_flags(&argv);
-
-        assert!(flags.use_maven_startup);
-        assert_eq!(flags.args, vec!["open", "https://example.com"]);
-    }
-
-    #[test]
-    fn test_parse_global_flags_use_maven_startup_defaults_false() {
-        let argv = vec!["open".to_string()];
-
-        let flags = parse_global_flags(&argv);
-
-        assert!(!flags.use_maven_startup);
     }
 
     #[test]

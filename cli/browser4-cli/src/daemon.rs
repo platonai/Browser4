@@ -2,11 +2,11 @@
 //!
 //! Ensures a Browser4 server is running before executing commands.
 //! Only manages localhost instances; remote servers are not touched.
-//! When a local Browser4 checkout is available, startup prefers
-//! `mvn spring-boot:run` from the `browser4-apps/browser4-standalone` module so the CLI
-//! uses the matching server version from source. If no checkout can be found,
-//! it falls back to the packaged Browser4 jar flow used by the standalone
-//! installer.
+//! The server is launched from the `browser4-apps/browser4-bundle` runtime
+//! bundle — a self-contained distribution with a minimal jlink JRE and all
+//! dependency jars. When running inside a Browser4 repository checkout the
+//! bundle is auto-built from source; otherwise it falls back to downloading
+//! a pre-built release.
 
 use std::env;
 use std::fs;
@@ -24,8 +24,7 @@ use crate::managed_processes::{register_managed_server_process, ManagedServerPro
 use crate::state::{read_state, resolve_default_state_dir};
 
 const EXISTING_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(120);
-const JAR_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(60);
-const MAVEN_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(300);
+const JAR_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(120);
 const SERVER_READY_INITIAL_QUIET_WAIT: Duration = Duration::from_secs(5);
 const CLI_TEMP_DIR_COMPONENTS: [&str; 2] = ["tmp", "cli"];
 const CLI_LIB_DIR_COMPONENT: &str = "lib";
@@ -136,7 +135,7 @@ pub fn init_root_search_start_dir_from_startup() {
 /// Ensure the Browser4 server is running, starting it if necessary.
 ///
 /// Only acts on `localhost` / `127.0.0.1` URLs.
-pub async fn ensure_server_running(base_url: &str, use_maven_startup: bool) -> Result<(), String> {
+pub async fn ensure_server_running(base_url: &str) -> Result<(), String> {
     // Skip remote servers
     if !base_url.contains("localhost") && !base_url.contains("127.0.0.1") {
         return Ok(());
@@ -145,7 +144,7 @@ pub async fn ensure_server_running(base_url: &str, use_maven_startup: bool) -> R
     let port = extract_port(base_url);
     if !is_local_port_open(base_url) {
         eprintln!("Browser4 server not running. Starting...");
-        let launch_spec = resolve_server_launch_spec(port, use_maven_startup).await?;
+        let launch_spec = resolve_server_launch_spec(port).await?;
         eprintln!("{}", launch_spec.description);
         return start_server(&launch_spec, base_url, port).await;
     }
@@ -166,7 +165,7 @@ pub async fn ensure_server_running(base_url: &str, use_maven_startup: bool) -> R
 
     eprintln!("Browser4 server not running. Starting...");
 
-    let launch_spec = resolve_server_launch_spec(port, use_maven_startup).await?;
+    let launch_spec = resolve_server_launch_spec(port).await?;
     eprintln!("{}", launch_spec.description);
 
     start_server(&launch_spec, base_url, port).await
@@ -200,7 +199,6 @@ fn is_local_port_open(base_url: &str) -> bool {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ServerLaunchKind {
-    Maven,
     Jar,
 }
 
@@ -601,64 +599,9 @@ pub async fn install_browser4_runtime(
     install_result
 }
 
-async fn resolve_server_launch_spec(
-    port: u16,
-    use_maven_startup: bool,
-) -> Result<ServerLaunchSpec, String> {
-    if let Some(repo_root) = find_browser4_root_for_enabled_maven_launch(use_maven_startup) {
-        match build_maven_launch_spec(&repo_root, port) {
-            Ok(spec) => return Ok(spec),
-            Err(error) => {
-                eprintln!(
-                    "Falling back to Browser4.jar startup because Maven launch spec failed: {}",
-                    error
-                );
-            }
-        }
-    }
-
+async fn resolve_server_launch_spec(port: u16) -> Result<ServerLaunchSpec, String> {
     let runtime = find_or_install_runtime().await?;
     Ok(build_jar_launch_spec(&runtime, port))
-}
-
-fn build_maven_launch_spec(repo_root: &Path, port: u16) -> Result<ServerLaunchSpec, String> {
-    if !repo_root.is_dir() {
-        return Err(format!(
-            "Browser4 root does not exist: {}",
-            repo_root.display()
-        ));
-    }
-
-    let module_dir = repo_root.join("browser4-apps").join("browser4-standalone");
-    if !module_dir.join("pom.xml").is_file() {
-        return Err(format!(
-            "Browser4 agents module not found under {}",
-            module_dir.display()
-        ));
-    }
-
-    let wrapper_name = if cfg!(windows) { "mvnw.cmd" } else { "mvnw" };
-    let wrapper_path = repo_root.join(wrapper_name);
-    let program = if wrapper_path.exists() {
-        wrapper_path
-    } else if cfg!(windows) {
-        PathBuf::from("mvn.cmd")
-    } else {
-        PathBuf::from("mvn")
-    };
-
-    Ok(ServerLaunchSpec {
-        kind: ServerLaunchKind::Maven,
-        program: program.clone(),
-        args: vec![format!("-Dspring-boot.run.arguments=--server.port={port}")],
-        working_dir: repo_root.to_path_buf(),
-        registry_target: program,
-        description: format!(
-            "Starting server via Maven spring-boot:run from {} on port {}...",
-            module_dir.display(),
-            port
-        ),
-    })
 }
 
 fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> ServerLaunchSpec {
@@ -695,41 +638,7 @@ fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> Serve
 fn command_for_launch_spec(
     launch_spec: &ServerLaunchSpec,
 ) -> Result<PreparedLaunchCommand, String> {
-    #[cfg(windows)]
-    if launch_spec.kind == ServerLaunchKind::Maven && is_windows_batch_program(&launch_spec.program)
-    {
-        let invocation = build_powershell_maven_invocation(&launch_spec.program, &launch_spec.args);
-        let mut command = Command::new("powershell.exe");
-        command
-            .args(["-NoProfile", "-NonInteractive", "-Command", &invocation])
-            .current_dir(&launch_spec.working_dir)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        return Ok(PreparedLaunchCommand {
-            command,
-            cleanup_dir: None,
-        });
-    }
-
-    #[cfg(not(windows))]
-    let (program, cleanup_dir) = if launch_spec.kind == ServerLaunchKind::Maven
-        && launch_spec
-            .program
-            .file_name()
-            .and_then(|name| name.to_str())
-            == Some("mvnw")
-        && launch_spec.program.is_file()
-    {
-        prepare_unix_maven_wrapper_launcher(launch_spec)?
-    } else {
-        (launch_spec.program.clone(), None)
-    };
-
-    #[cfg(windows)]
-    let (program, cleanup_dir) = (launch_spec.program.clone(), None);
-
-    let mut command = Command::new(&program);
+    let mut command = Command::new(&launch_spec.program);
     command
         .args(&launch_spec.args)
         .current_dir(&launch_spec.working_dir)
@@ -738,165 +647,12 @@ fn command_for_launch_spec(
         .stderr(Stdio::null());
     Ok(PreparedLaunchCommand {
         command,
-        cleanup_dir,
+        cleanup_dir: None,
     })
 }
 
-fn launch_ready_timeout(launch_spec: &ServerLaunchSpec) -> Duration {
-    if launch_spec.kind == ServerLaunchKind::Maven {
-        MAVEN_SERVER_READY_TIMEOUT
-    } else {
-        JAR_SERVER_READY_TIMEOUT
-    }
-}
-
-#[cfg(windows)]
-fn is_windows_batch_program(program: &Path) -> bool {
-    matches!(
-        program.extension().and_then(|extension| extension.to_str()),
-        Some("cmd" | "bat")
-    )
-}
-
-#[cfg(windows)]
-fn escape_powershell_single_quoted(value: &str) -> String {
-    value.replace('\'', "''")
-}
-
-#[cfg(windows)]
-fn build_powershell_batch_invocation(program: &Path, args: &[String]) -> String {
-    std::iter::once(program.to_string_lossy().to_string())
-        .chain(args.iter().cloned())
-        .map(|value| format!("'{}'", escape_powershell_single_quoted(&value)))
-        .collect::<Vec<_>>()
-        .join(" ")
-        .pipe(|command| format!("& {command}"))
-}
-
-#[cfg(windows)]
-fn build_powershell_maven_invocation(program: &Path, runtime_args: &[String]) -> String {
-    let install_args = vec![
-        "-pl".to_string(),
-        "browser4-apps/browser4-standalone".to_string(),
-        "-am".to_string(),
-        "-DskipTests".to_string(),
-        "install".to_string(),
-        "-q".to_string(),
-    ];
-    let mut run_args = vec![
-        "-pl".to_string(),
-        "browser4-apps/browser4-standalone".to_string(),
-        "spring-boot:run".to_string(),
-    ];
-    run_args.extend_from_slice(runtime_args);
-
-    let install_command = build_powershell_batch_invocation(program, &install_args);
-    let run_command = build_powershell_batch_invocation(program, &run_args);
-
-    format!("{install_command}; if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}; {run_command}")
-}
-
-#[cfg(not(windows))]
-fn prepare_unix_maven_wrapper_launcher(
-    launch_spec: &ServerLaunchSpec,
-) -> Result<(PathBuf, Option<PathBuf>), String> {
-    use std::os::unix::fs::{symlink, PermissionsExt};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let Some(repo_root) = launch_spec.program.parent() else {
-        return Ok((launch_spec.program.clone(), None));
-    };
-    let wrapper_support_dir = repo_root.join(".mvn");
-    if !wrapper_support_dir.is_dir() {
-        return Ok((launch_spec.program.clone(), None));
-    }
-
-    let launcher_base_dir = browser4_cli_temp_root_dir().join("launchers");
-    fs::create_dir_all(&launcher_base_dir).map_err(|e| {
-        format!(
-            "Failed to create Browser4 launcher directory {}: {e}",
-            launcher_base_dir.display()
-        )
-    })?;
-
-    let unique_suffix = format!(
-        "{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|e| format!("Failed to compute Browser4 launcher timestamp: {e}"))?
-            .as_nanos()
-    );
-    let launcher_dir = launcher_base_dir.join(format!("maven-wrapper-{unique_suffix}"));
-    fs::create_dir(&launcher_dir).map_err(|e| {
-        format!(
-            "Failed to create Browser4 Maven wrapper directory {}: {e}",
-            launcher_dir.display()
-        )
-    })?;
-
-    let launcher_wrapper_path = launcher_dir.join("mvnw");
-    let launcher_support_dir = launcher_dir.join(".mvn");
-    let wrapper_contents = fs::read(&launch_spec.program).map_err(|e| {
-        format!(
-            "Failed to read Maven wrapper {}: {e}",
-            launch_spec.program.display()
-        )
-    })?;
-    let normalized_wrapper_contents = wrapper_contents
-        .into_iter()
-        .filter(|byte| *byte != b'\r')
-        .collect::<Vec<_>>();
-    fs::write(&launcher_wrapper_path, normalized_wrapper_contents).map_err(|e| {
-        format!(
-            "Failed to write normalized Maven wrapper {}: {e}",
-            launcher_wrapper_path.display()
-        )
-    })?;
-    fs::set_permissions(&launcher_wrapper_path, fs::Permissions::from_mode(0o755)).map_err(
-        |e| {
-            format!(
-                "Failed to set executable permissions on normalized Maven wrapper {}: {e}",
-                launcher_wrapper_path.display()
-            )
-        },
-    )?;
-    symlink(&wrapper_support_dir, &launcher_support_dir).map_err(|e| {
-        format!(
-            "Failed to link Maven wrapper support directory {} -> {}: {e}",
-            launcher_support_dir.display(),
-            wrapper_support_dir.display()
-        )
-    })?;
-
-    // Use a single reactor spring-boot:run so Maven resolves sibling modules
-    // from the current checkout instead of falling back to stale installed jars.
-    let mvnw_abs = launcher_wrapper_path
-        .to_string_lossy()
-        .replace('\'', "'\\''");
-    let launcher_script_content = [
-        "#!/bin/sh",
-        "set -e",
-        &format!("'{mvnw_abs}' -pl browser4-apps/browser4-standalone -am -DskipTests install -q"),
-        &format!("'{mvnw_abs}' -pl browser4-apps/browser4-standalone spring-boot:run \"$@\""),
-        "",
-    ]
-    .join("\n");
-    let launcher_script_path = launcher_dir.join("browser4-start.sh");
-    fs::write(&launcher_script_path, launcher_script_content.as_bytes()).map_err(|e| {
-        format!(
-            "Failed to write Browser4 launcher script {}: {e}",
-            launcher_script_path.display()
-        )
-    })?;
-    fs::set_permissions(&launcher_script_path, fs::Permissions::from_mode(0o755)).map_err(|e| {
-        format!(
-            "Failed to set executable permissions on Browser4 launcher script {}: {e}",
-            launcher_script_path.display()
-        )
-    })?;
-
-    Ok((launcher_script_path, Some(launcher_dir)))
+fn launch_ready_timeout(_launch_spec: &ServerLaunchSpec) -> Duration {
+    JAR_SERVER_READY_TIMEOUT
 }
 
 fn find_browser4_root() -> Option<PathBuf> {
@@ -908,19 +664,6 @@ fn find_browser4_root() -> Option<PathBuf> {
 
     let current_dir = env::current_dir().ok()?;
     find_browser4_root_from(&current_dir, false)
-}
-
-fn find_browser4_root_for_maven_launch() -> Option<PathBuf> {
-    let current_dir = env::current_dir().ok()?;
-    find_browser4_root_from(&current_dir, false)
-}
-
-fn find_browser4_root_for_enabled_maven_launch(use_maven_startup: bool) -> Option<PathBuf> {
-    if !use_maven_startup {
-        return None;
-    }
-
-    find_browser4_root_for_maven_launch()
 }
 
 fn browser4_root_search_start_dir_from_env() -> Option<PathBuf> {
@@ -1022,8 +765,15 @@ async fn try_build_local_runtime_bundle(
         .join("bin")
         .join(browser4_java_executable_name());
 
-    // Already built — nothing to do.
-    if lib_dir.is_dir() && java_path.is_file() {
+    // Already built — nothing to do.  Also verify that the bundle JAR has
+    // actual class content (>10 KiB); a stub without compiled classes is
+    // typically only a few KiB and indicates a stale or broken build.
+    let bundle_jar = lib_dir.join("Browser4Bundle.jar");
+    if lib_dir.is_dir()
+        && java_path.is_file()
+        && bundle_jar.is_file()
+        && bundle_jar.metadata().map(|m| m.len() > 10_240).unwrap_or(false)
+    {
         return Ok(Some(InstalledBrowser4Runtime {
             tag: "local".to_string(),
             asset_name: String::new(),
@@ -1059,6 +809,7 @@ async fn try_build_local_runtime_bundle(
             std::process::Command::new(&mvn_program)
                 .args([
                     "package",
+                    "-Pall-modules",
                     "-pl",
                     "browser4-apps/browser4-bundle",
                     "-am",
@@ -1536,7 +1287,6 @@ fn server_startup_log_path(
     port: u16,
 ) -> PathBuf {
     let kind = match launch_spec.kind {
-        ServerLaunchKind::Maven => "maven",
         ServerLaunchKind::Jar => "jar",
     };
     let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
@@ -1833,9 +1583,9 @@ mod tests {
             .unwrap()
     }
 
-    fn sample_launch_spec(kind: ServerLaunchKind) -> ServerLaunchSpec {
+    fn sample_launch_spec() -> ServerLaunchSpec {
         ServerLaunchSpec {
-            kind,
+            kind: ServerLaunchKind::Jar,
             program: PathBuf::from("program"),
             args: vec!["arg1".to_string(), "arg2".to_string()],
             working_dir: PathBuf::from("."),
@@ -1846,18 +1596,10 @@ mod tests {
 
     fn create_browser4_root(tmp: &TempDir) -> PathBuf {
         let root = tmp.path().join("Browser4");
-        create_dir_all(root.join("browser4-apps").join("browser4-standalone")).unwrap();
         create_dir_all(root.join("sdks").join("browser4-cli")).unwrap();
         write(root.join("ROOT.md"), "# Browser4\n").unwrap();
         write(root.join("VERSION"), "0.1.0\n").unwrap();
         write(root.join("pom.xml"), "<project />").unwrap();
-        write(
-            root.join("browser4-apps")
-                .join("browser4-standalone")
-                .join("pom.xml"),
-            "<project />",
-        )
-        .unwrap();
         write(
             root.join("sdks").join("browser4-cli").join("Cargo.toml"),
             "[package]\nname = \"browser4-cli\"\n",
@@ -1933,15 +1675,6 @@ mod tests {
     }
 
     #[test]
-    fn test_find_browser4_root_for_enabled_maven_launch_requires_opt_in() {
-        assert_eq!(find_browser4_root_for_enabled_maven_launch(false), None);
-        assert_eq!(
-            find_browser4_root_for_enabled_maven_launch(true),
-            find_browser4_root_for_maven_launch()
-        );
-    }
-
-    #[test]
     fn test_is_local_port_open_detects_listener() {
         let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -1960,17 +1693,9 @@ mod tests {
     }
 
     #[test]
-    fn test_launch_ready_timeout_prefers_maven_processes() {
-        let mut maven_spec = sample_launch_spec(ServerLaunchKind::Maven);
-        maven_spec.program = PathBuf::from(if cfg!(windows) { "mvnw.cmd" } else { "mvnw" });
-        let mut jar_spec = sample_launch_spec(ServerLaunchKind::Jar);
-        jar_spec.program = PathBuf::from("java");
-
-        assert_eq!(
-            launch_ready_timeout(&maven_spec),
-            MAVEN_SERVER_READY_TIMEOUT
-        );
-        assert_eq!(launch_ready_timeout(&jar_spec), JAR_SERVER_READY_TIMEOUT);
+    fn test_launch_ready_timeout_uses_jar_timeout() {
+        let spec = sample_launch_spec();
+        assert_eq!(launch_ready_timeout(&spec), JAR_SERVER_READY_TIMEOUT);
     }
 
     #[test]
@@ -2145,24 +1870,15 @@ mod tests {
     #[test]
     fn test_server_startup_log_path_includes_launch_kind_and_port() {
         let tmp = test_temp_dir();
-        let maven_path = server_startup_log_path(
-            Some(tmp.path()),
-            &sample_launch_spec(ServerLaunchKind::Maven),
-            8182,
-        );
         let jar_path = server_startup_log_path(
             Some(tmp.path()),
-            &sample_launch_spec(ServerLaunchKind::Jar),
+            &sample_launch_spec(),
             9292,
         );
 
-        let maven_name = maven_path.file_name().unwrap().to_string_lossy();
         let jar_name = jar_path.file_name().unwrap().to_string_lossy();
 
-        assert!(maven_path.starts_with(tmp.path()));
         assert!(jar_path.starts_with(tmp.path()));
-        assert!(maven_name.starts_with("browser4-server-maven-port8182-"));
-        assert!(maven_name.ends_with(".log"));
         assert!(jar_name.starts_with("browser4-server-jar-port9292-"));
         assert!(jar_name.ends_with(".log"));
     }
@@ -2248,7 +1964,7 @@ mod tests {
         let tmp = test_temp_dir();
         let log = create_server_startup_log_in(
             Some(tmp.path()),
-            &sample_launch_spec(ServerLaunchKind::Maven),
+            &sample_launch_spec(),
             8123,
         )
         .expect("startup log creation should succeed");
@@ -2257,7 +1973,7 @@ mod tests {
         drop(log.stderr);
 
         let contents = fs::read_to_string(&log.path).expect("startup log should be readable");
-        assert!(contents.contains("Launching Browser4 Maven on port 8123"));
+        assert!(contents.contains("Launching Browser4 Jar on port 8123"));
         assert!(contents.contains("program: program"));
         assert!(contents.contains("args: arg1 arg2"));
     }
@@ -2267,7 +1983,7 @@ mod tests {
         let tmp = test_temp_dir();
         let log = create_server_startup_log_in(
             Some(tmp.path()),
-            &sample_launch_spec(ServerLaunchKind::Jar),
+            &sample_launch_spec(),
             8182,
         )
         .expect("startup log creation should succeed");
@@ -2326,155 +2042,4 @@ mod tests {
         .unwrap();
         root
     }
-
-    #[cfg(windows)]
-    #[test]
-    fn test_build_maven_launch_spec_prefers_windows_wrapper() {
-        let tmp = test_temp_dir();
-        let root = create_browser4_root(&tmp);
-        let wrapper = root.join("mvnw.cmd");
-        write(&wrapper, "@echo off\r\n").unwrap();
-        let port_arg = "-Dspring-boot.run.arguments=--server.port=8199".to_string();
-
-        let spec = build_maven_launch_spec(&root, 8199).unwrap();
-
-        assert_eq!(spec.kind, ServerLaunchKind::Maven);
-        assert_eq!(spec.program, wrapper);
-        assert_eq!(spec.working_dir, root);
-        assert_eq!(spec.args, vec![port_arg.clone()]);
-
-        let invocation = build_powershell_maven_invocation(&spec.program, &spec.args);
-        let escaped_program = escape_powershell_single_quoted(&spec.program.to_string_lossy());
-        let escaped_port_arg = escape_powershell_single_quoted(&port_arg);
-
-        assert!(
-            invocation.contains(&format!(
-                "& '{escaped_program}' '-pl' 'browser4-apps/browser4-standalone' '-am' '-DskipTests' 'install' '-q'"
-            )),
-            "expected Maven preinstall phase in invocation: {invocation}"
-        );
-        assert!(
-            invocation.contains("if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }"),
-            "expected explicit Maven failure guard in invocation: {invocation}"
-        );
-        assert!(
-            invocation.contains(&format!(
-                "& '{escaped_program}' '-pl' 'browser4-apps/browser4-standalone' 'spring-boot:run' '{escaped_port_arg}'"
-            )),
-            "expected module-scoped spring-boot:run phase in invocation: {invocation}"
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn test_build_powershell_batch_invocation_escapes_dynamic_windows_paths() {
-        let tmp = test_temp_dir();
-        let wrapper_dir = tmp.path().join("team's tools");
-        create_dir_all(&wrapper_dir).unwrap();
-        let wrapper = wrapper_dir.join("mvnw.cmd");
-        write(&wrapper, "@echo off\r\n").unwrap();
-        let args = ["-Dflag=team's-value".to_string()];
-
-        let invocation = build_powershell_batch_invocation(&wrapper, &args);
-
-        assert_eq!(
-            invocation,
-            format!(
-                "& '{}' '{}'",
-                wrapper.to_string_lossy().replace('\'', "''"),
-                args[0].replace('\'', "''")
-            )
-        );
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn test_build_maven_launch_spec_prefers_unix_wrapper() {
-        let tmp = test_temp_dir();
-        let root = create_browser4_root(&tmp);
-        let wrapper = root.join("mvnw");
-        write(&wrapper, "#!/usr/bin/env sh\n").unwrap();
-
-        let spec = build_maven_launch_spec(&root, 8199).unwrap();
-
-        assert_eq!(spec.kind, ServerLaunchKind::Maven);
-        assert_eq!(spec.program, wrapper);
-        assert_eq!(spec.working_dir, root);
-        assert_eq!(
-            spec.args,
-            vec!["-Dspring-boot.run.arguments=--server.port=8199"]
-        );
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn test_command_for_launch_spec_normalizes_unix_maven_wrapper() {
-        let tmp = test_temp_dir();
-        let root = create_browser4_root(&tmp);
-        create_dir_all(root.join(".mvn").join("wrapper")).unwrap();
-        let wrapper = root.join("mvnw");
-        write(&wrapper, "#!/bin/sh\r\nset -eu\r\n").unwrap();
-        write(
-            root.join(".mvn").join("wrapper").join("maven-wrapper.properties"),
-            "distributionUrl=https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/3.9.7/apache-maven-3.9.7-bin.zip\n",
-        )
-        .unwrap();
-
-        let spec = build_maven_launch_spec(&root, 8199).unwrap();
-        let prepared = command_for_launch_spec(&spec).unwrap();
-        let cleanup_dir = prepared
-            .cleanup_dir
-            .clone()
-            .expect("Unix wrapper launch should stage a normalized temp wrapper");
-        let prepared_program = PathBuf::from(Path::new(prepared.command.get_program()));
-
-        // The launcher script (not mvnw) is returned as the program
-        assert_ne!(prepared_program, wrapper);
-        assert_eq!(
-            prepared_program.file_name().and_then(|name| name.to_str()),
-            Some("browser4-start.sh")
-        );
-        assert_eq!(
-            prepared.command.get_current_dir(),
-            Some(spec.working_dir.as_path())
-        );
-        assert_eq!(
-            prepared
-                .command
-                .get_args()
-                .map(|arg| arg.to_string_lossy().into_owned())
-                .collect::<Vec<_>>(),
-            spec.args
-        );
-
-        // The normalized mvnw and .mvn symlink are staged in the same cleanup dir
-        let staged_mvnw = cleanup_dir.join("mvnw");
-        assert!(staged_mvnw.exists(), "normalized mvnw should be staged");
-        assert_eq!(
-            fs::read_to_string(&staged_mvnw).unwrap(),
-            "#!/bin/sh\nset -eu\n"
-        );
-        assert!(cleanup_dir.join(".mvn").exists());
-
-        // The launcher script should reference mvnw and both Maven phases
-        let script_content = fs::read_to_string(&prepared_program).unwrap();
-        assert!(
-            script_content.contains("-am -DskipTests install"),
-            "launcher script should contain install phase"
-        );
-        assert!(
-            script_content.contains("spring-boot:run"),
-            "launcher script should contain spring-boot:run"
-        );
-
-        cleanup_prepared_launch_dir(Some(cleanup_dir));
-    }
 }
-
-trait Pipe: Sized {
-    fn pipe<T, F: FnOnce(Self) -> T>(self, function: F) -> T {
-        function(self)
-    }
-}
-
-impl<T> Pipe for T {}

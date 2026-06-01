@@ -35,9 +35,7 @@
 //!    service (Docker-friendly; no JAR is needed).
 //! 2. `BROWSER4_E2E_SERVER_URL` environment variable – alias for the above.
 //! 3. Otherwise, each local run lets `browser4-cli` auto-start the backend.
-//!    By default, e2e forces the jar startup path (faster than Maven
-//!    `spring-boot:run`). Set `BROWSER4_E2E_USE_MAVEN_STARTUP=true` to opt in to
-//!    Maven startup checks.
+//!    The browser4-bundle runtime bundle is used for local backend startup.
 //!
 //! When running against an external Docker service, also set:
 //! - `BROWSER4_E2E_FIXTURE_HOST` – hostname/IP the Browser4 container uses to
