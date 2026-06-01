@@ -36,6 +36,11 @@ on:
         required: false
         default: false
         type: boolean
+      dry_run:
+        description: 'Validate the entire pipeline without publishing or pushing artifacts externally'
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: release-${{ github.event.inputs.tag || github.ref }}
@@ -79,6 +84,7 @@ jobs:
       skip_cli_binary_build: ${{ steps.prepare.outputs.skip_cli_binary_build }}
       skip_docker_push: ${{ steps.prepare.outputs.skip_docker_push }}
       debug_mode: ${{ steps.prepare.outputs.debug_mode }}
+      dry_run: ${{ steps.prepare.outputs.dry_run }}
       cli_version: ${{ steps.prepare.outputs.cli_version }}
       cli_should_build: ${{ steps.prepare.outputs.cli_should_build }}
       cli_should_publish_npm: ${{ steps.prepare.outputs.cli_should_publish_npm }}
@@ -107,6 +113,7 @@ jobs:
           INPUT_SKIP_CLI_BINARY_BUILD: ${{ github.event.inputs.skip_cli_binary_build || 'false' }}
           INPUT_SKIP_DOCKER_PUSH: ${{ github.event.inputs.skip_docker_push || 'false' }}
           INPUT_DEBUG_MODE: ${{ github.event.inputs.debug_mode || 'false' }}
+          INPUT_DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
         run: |
           set -euo pipefail
 
@@ -168,6 +175,7 @@ jobs:
           echo "skip_cli_binary_build=$INPUT_SKIP_CLI_BINARY_BUILD" >> "$GITHUB_OUTPUT"
           echo "skip_docker_push=$INPUT_SKIP_DOCKER_PUSH" >> "$GITHUB_OUTPUT"
           echo "debug_mode=$INPUT_DEBUG_MODE" >> "$GITHUB_OUTPUT"
+          echo "dry_run=$INPUT_DRY_RUN" >> "$GITHUB_OUTPUT"
           echo "cli_version=$CLI_VERSION" >> "$GITHUB_OUTPUT"
           echo "cli_should_build=$CLI_SHOULD_BUILD" >> "$GITHUB_OUTPUT"
           echo "cli_should_publish_npm=$CLI_SHOULD_PUBLISH_NPM" >> "$GITHUB_OUTPUT"
@@ -186,6 +194,11 @@ jobs:
             echo "- **Publish CLI to npm**: $CLI_SHOULD_PUBLISH_NPM"
             echo "- **Skip Tests**: $INPUT_SKIP_TESTS"
             echo "- **Skip Docker Push**: $INPUT_SKIP_DOCKER_PUSH"
+            echo "- **Dry Run**: $INPUT_DRY_RUN"
+            if [ "$INPUT_DRY_RUN" = "true" ]; then
+              echo ""
+              echo "> ⚠️ **DRY RUN MODE** — builds and tests will execute, but no artifacts will be published externally."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
   build-core-and-docker:
@@ -490,7 +503,7 @@ jobs:
           retention-days: 7
 
       - name: Push Docker Images to Docker Hub
-        if: success() && needs.prepare.outputs.skip_docker_push != 'true'
+        if: success() && needs.prepare.outputs.skip_docker_push != 'true' && needs.prepare.outputs.dry_run != 'true'
         shell: bash
         run: |
           echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ env.DOCKER_USERNAME }}" --password-stdin
@@ -525,7 +538,7 @@ jobs:
           done
 
       - name: Push Docker Images to GitHub Container Registry
-        if: success() && needs.prepare.outputs.skip_docker_push != 'true'
+        if: success() && needs.prepare.outputs.skip_docker_push != 'true' && needs.prepare.outputs.dry_run != 'true'
         shell: bash
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
@@ -571,7 +584,8 @@ jobs:
             echo "- **Docker Build**: ${{ steps.docker-build.outcome }}"
             echo "- **CLI E2E**: ${{ steps.e2e-cli.outcome || 'skipped' }}"
             echo "- **JAR**: ${{ steps.get_uberjar.outcome }}"
-            echo "- **Docker Push**: ${{ needs.prepare.outputs.skip_docker_push == 'true' && 'skipped' || 'enabled' }}"
+            echo "- **Docker Push**: ${{ needs.prepare.outputs.skip_docker_push == 'true' && 'skipped' || needs.prepare.outputs.dry_run == 'true' && 'skipped (dry-run)' || 'enabled' }}"
+            echo "- **Dry Run**: ${{ needs.prepare.outputs.dry_run == 'true' && '✅ active' || 'no' }}"
           } >> "$GITHUB_STEP_SUMMARY"
 
   build-cli-binaries:
@@ -799,7 +813,7 @@ jobs:
   publish-cli-npm:
     name: Publish browser4-cli to npm
     needs: [prepare, build-cli-binaries]
-    if: needs.prepare.outputs.cli_should_publish_npm == 'true'
+    if: needs.prepare.outputs.cli_should_publish_npm == 'true' && needs.prepare.outputs.dry_run != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -942,6 +956,10 @@ jobs:
         if: always()
         shell: bash
         run: |
+          if [ "${{ needs.prepare.outputs.dry_run }}" = "true" ]; then
+            echo "## 📦 CLI npm Publish (skipped — dry-run)"
+            exit 0
+          fi
           {
             echo "## 📦 CLI npm Publish"
             echo ""
@@ -962,6 +980,7 @@ jobs:
       - publish-cli-npm
     if: |
       always() &&
+      needs.prepare.outputs.dry_run != 'true' &&
       needs.build-core-and-docker.result == 'success' &&
       (needs.build-cli-binaries.result == 'success' || needs.build-cli-binaries.result == 'skipped') &&
       needs.build-runtime-bundles.result == 'success' &&
