@@ -211,6 +211,39 @@ function Get-PathSeparator {
     return ':'
 }
 
+function Test-ValidJar([string]$jarPath) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+    $archive = $null
+    try {
+        $archive = [System.IO.Compression.ZipFile]::OpenRead($jarPath)
+        return $true
+    }
+    catch {
+        Write-Warning "Skipping invalid jar for jdeps: $jarPath"
+        return $false
+    }
+    finally {
+        if ($archive) {
+            $archive.Dispose()
+        }
+    }
+}
+
+function Get-JdepsClassPath([string]$libDirectory) {
+    $validJars = @(
+        Get-ChildItem -Path $libDirectory -File -Filter '*.jar' -ErrorAction SilentlyContinue |
+            Where-Object { Test-ValidJar $_.FullName } |
+            Select-Object -ExpandProperty FullName
+    )
+
+    if ($validJars.Count -eq 0) {
+        return $null
+    }
+
+    return ($validJars -join (Get-PathSeparator))
+}
+
 function Get-BundleMetadataJson(
     [string]$assetName,
     [string[]]$modules,
@@ -440,6 +473,10 @@ Ensure-CleanDirectory $appClassesDir
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 [System.IO.Compression.ZipFile]::ExtractToDirectory($resolvedJarPath, $appClassesDir)
 
+
+
+
+
 $jdepsArgs = @(
     '-q',
     '--ignore-missing-deps',
@@ -448,7 +485,10 @@ $jdepsArgs = @(
     '--print-module-deps'
 )
 if ($libJarCount -gt 0) {
-    $jdepsArgs += @('--class-path', (Join-Path $libDirectory '*'))
+    $jdepsClassPath = Get-JdepsClassPath -libDirectory $libDirectory
+    if (-not [string]::IsNullOrWhiteSpace($jdepsClassPath)) {
+        $jdepsArgs += @('--class-path', $jdepsClassPath)
+    }
 }
 $jdepsArgs += $appClassesDir
 
@@ -456,6 +496,11 @@ $jdepsOutput = & $jdeps @jdepsArgs
 if ($LASTEXITCODE -ne 0) {
     throw "jdeps failed with exit code $LASTEXITCODE"
 }
+
+
+
+
+
 
 $recommendedModules = @(
     'java.management',
