@@ -306,6 +306,51 @@ jobs:
           timeout_minutes: '20'
           maven_args: '-B -V'
 
+      - name: Validate Standalone JAR
+        id: validate-jar
+        shell: bash
+        run: |
+          echo "::group::🔍 Validating Standalone JAR"
+          JAR_PATH="${{ env.PRODUCTION_JAR_PATH }}"
+
+          if [ ! -f "$JAR_PATH" ]; then
+            echo "❌ Standalone JAR not found: $JAR_PATH"
+            echo "Available JAR files:"
+            find . -name "*.jar" -type f | sort
+            exit 1
+          fi
+
+          JAR_SIZE=$(stat -c%s "$JAR_PATH" 2>/dev/null || echo 0)
+          echo "📏 JAR size: $JAR_SIZE bytes ($(numfmt --to=iec --suffix=B $JAR_SIZE 2>/dev/null || echo "$JAR_SIZE bytes"))"
+
+          if [ "$JAR_SIZE" -lt 1000000 ]; then
+            echo "❌ JAR file is too small (< 1 MiB). The build may have produced an empty or incomplete artifact."
+            exit 1
+          fi
+
+          # Verify the standalone main class is present in the JAR.
+          MAIN_CLASS="Browser4StandaloneApplication"
+          if jar tf "$JAR_PATH" | grep -q "$MAIN_CLASS"; then
+            echo "✅ JAR contains $MAIN_CLASS"
+          else
+            echo "❌ JAR does not contain $MAIN_CLASS — wrong JAR was built or selected"
+            echo "Classes in JAR matching 'Application':"
+            jar tf "$JAR_PATH" | grep -i 'Application' || echo "(none)"
+            exit 1
+          fi
+
+          # Verify MANIFEST.MF has the correct Start-Class for Spring Boot.
+          if jar tf "$JAR_PATH" | grep -q 'MANIFEST.MF'; then
+            jar xf "$JAR_PATH" META-INF/MANIFEST.MF 2>/dev/null || true
+            if [ -f META-INF/MANIFEST.MF ]; then
+              echo "--- MANIFEST.MF ---"
+              grep -E '^(Main-Class|Start-Class)' META-INF/MANIFEST.MF || echo "(no Main-Class/Start-Class entry)"
+              echo "--- END MANIFEST.MF ---"
+            fi
+          fi
+
+          echo "::endgroup::"
+
       - name: Cleanup Docker system to free space
         shell: bash
         run: |

@@ -16,15 +16,22 @@ COPY . .
 
 RUN ls -la && ls -la bin && find . -name "*.sh" -exec chmod +x {} \;
 
-# Build the application with Maven cache mount
-RUN --mount=type=cache,target=/root/.m2 mvn clean package -Pall-modules -DskipTests -Dmaven.javadoc.skip=true -B -V && \
+# Build the standalone application with Maven cache mount.
+# We explicitly build browser4-standalone (and its dependencies via -am) rather
+# than all modules to avoid producing Browser4Bundle.jar, which has a name that
+# overlaps with the `Browser4*.jar` glob and could be picked up non-deterministically.
+ARG STANDALONE_MODULE=browser4-apps/browser4-standalone
+RUN --mount=type=cache,target=/root/.m2 \
+    mvn clean package -pl ${STANDALONE_MODULE} -am -DskipTests -Dmaven.javadoc.skip=true -B -V && \
     echo "Build completed successfully"
 
-# Copy JAR for use in the next stage with better error handling
-RUN JAR_FILE=$(find . -name "Browser4*.jar" -type f | head -n 1) && \
-    test -n "$JAR_FILE" || (echo "ERROR: Browser4 JAR file not found" && exit 1) && \
-    cp "$JAR_FILE" /build/app.jar && \
-    echo "Successfully copied JAR: $JAR_FILE"
+# Copy the standalone JAR using its exact known path — no glob / find needed.
+COPY ${STANDALONE_MODULE}/target/Browser4.jar /build/app.jar
+
+# Validate the JAR before proceeding to the runtime stage.
+RUN jar tf /build/app.jar | grep -q 'Browser4StandaloneApplication' || \
+    (echo "ERROR: /build/app.jar does not contain Browser4StandaloneApplication class" && exit 1) && \
+    echo "JAR validated: contains Browser4StandaloneApplication"
 
 # Stage 2: Run stage
 FROM eclipse-temurin:21-jre-alpine AS runner
