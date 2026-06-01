@@ -7,10 +7,11 @@ on:
       - 'v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+'
       - 'v[0-9]+.[0-9]+.[0-9]+-alpha.[0-9]+'
       - 'v[0-9]+.[0-9]+.[0-9]+-beta.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-dry_run.[0-9]+'
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag to publish, e.g. v4.9.0 or v4.9.0-rc.1'
+        description: 'Release tag to publish, e.g. v4.9.0, v4.9.0-rc.1, v4.9.0-alpha.1, or v4.9.0-dry_run.1'
         required: true
         type: string
       skip_tests:
@@ -87,6 +88,7 @@ jobs:
       skip_docker_push: ${{ steps.prepare.outputs.skip_docker_push }}
       debug_mode: ${{ steps.prepare.outputs.debug_mode }}
       dry_run: ${{ steps.prepare.outputs.dry_run }}
+      should_publish_artifacts: ${{ steps.prepare.outputs.should_publish_artifacts }}
       cli_version: ${{ steps.prepare.outputs.cli_version }}
       cli_should_build: ${{ steps.prepare.outputs.cli_should_build }}
       cli_should_publish_npm: ${{ steps.prepare.outputs.cli_should_publish_npm }}
@@ -135,15 +137,38 @@ jobs:
 
           VERSION="${TAG#v}"
 
-          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+(\+.+)?)?$ ]]; then
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc|dry_run)\.[0-9]+(\+.+)?)?$ ]]; then
             echo "❌ Invalid version format: $VERSION"
-            echo "Expected: X.Y.Z or X.Y.Z-rc.N or X.Y.Z-rc.N+build.info"
+            echo "Expected: X.Y.Z, X.Y.Z-alpha.N, X.Y.Z-beta.N, X.Y.Z-rc.N, X.Y.Z-dry_run.N, or prerelease variants with +build.info"
             exit 1
           fi
 
           IS_PRERELEASE="false"
           if [[ "$VERSION" == *"-"* ]]; then
             IS_PRERELEASE="true"
+          fi
+
+          EFFECTIVE_DRY_RUN="$INPUT_DRY_RUN"
+          IS_ALPHA="false"
+          IS_DRY_RUN_TAG="false"
+          IS_FORCED_DRY_RUN_TAG="false"
+          FORCED_DRY_RUN_TAG_KIND=""
+          if [[ "$VERSION" =~ -(alpha|dry_run)\.[0-9]+(\+.+)?$ ]]; then
+            IS_FORCED_DRY_RUN_TAG="true"
+            FORCED_DRY_RUN_TAG_KIND="${BASH_REMATCH[1]}"
+            EFFECTIVE_DRY_RUN="true"
+          fi
+
+          if [ "$FORCED_DRY_RUN_TAG_KIND" = "alpha" ]; then
+            IS_ALPHA="true"
+          fi
+          if [ "$FORCED_DRY_RUN_TAG_KIND" = "dry_run" ]; then
+            IS_DRY_RUN_TAG="true"
+          fi
+
+          SHOULD_PUBLISH_ARTIFACTS="true"
+          if [ "$EFFECTIVE_DRY_RUN" = "true" ]; then
+            SHOULD_PUBLISH_ARTIFACTS="false"
           fi
 
           CLI_VERSION=$(node -p "require('./${{ env.CLI_PACKAGE_DIR }}/package.json').version")
@@ -177,7 +202,8 @@ jobs:
           echo "skip_cli_binary_build=$INPUT_SKIP_CLI_BINARY_BUILD" >> "$GITHUB_OUTPUT"
           echo "skip_docker_push=$INPUT_SKIP_DOCKER_PUSH" >> "$GITHUB_OUTPUT"
           echo "debug_mode=$INPUT_DEBUG_MODE" >> "$GITHUB_OUTPUT"
-          echo "dry_run=$INPUT_DRY_RUN" >> "$GITHUB_OUTPUT"
+          echo "dry_run=$EFFECTIVE_DRY_RUN" >> "$GITHUB_OUTPUT"
+          echo "should_publish_artifacts=$SHOULD_PUBLISH_ARTIFACTS" >> "$GITHUB_OUTPUT"
           echo "cli_version=$CLI_VERSION" >> "$GITHUB_OUTPUT"
           echo "cli_should_build=$CLI_SHOULD_BUILD" >> "$GITHUB_OUTPUT"
           echo "cli_should_publish_npm=$CLI_SHOULD_PUBLISH_NPM" >> "$GITHUB_OUTPUT"
@@ -189,15 +215,31 @@ jobs:
             echo "- **Tag**: $TAG"
             echo "- **Version**: $VERSION"
             echo "- **Prerelease**: $IS_PRERELEASE"
+            echo "- **Forced Dry-Run Tag**: $IS_FORCED_DRY_RUN_TAG"
+            echo "- **Alpha Release**: $IS_ALPHA"
+            echo "- **Dry-Run Tag**: $IS_DRY_RUN_TAG"
             echo "- **CLI Version**: $CLI_VERSION"
             echo "- **npm Version**: $NPM_VERSION"
             echo "- **npm Lookup Status**: $CLI_NPM_LOOKUP_STATUS"
             echo "- **Build CLI Binaries**: $CLI_SHOULD_BUILD"
             echo "- **Publish CLI to npm**: $CLI_SHOULD_PUBLISH_NPM"
+            echo "- **Publish Build Artifacts**: $SHOULD_PUBLISH_ARTIFACTS"
             echo "- **Skip Tests**: $INPUT_SKIP_TESTS"
             echo "- **Skip Docker Push**: $INPUT_SKIP_DOCKER_PUSH"
-            echo "- **Dry Run**: $INPUT_DRY_RUN"
-            if [ "$INPUT_DRY_RUN" = "true" ]; then
+            echo "- **Dry Run**: $EFFECTIVE_DRY_RUN"
+            if [ "$IS_FORCED_DRY_RUN_TAG" = "true" ]; then
+              echo ""
+              echo "> ℹ️ **FORCED DRY-RUN TAG DETECTED** — $FORCED_DRY_RUN_TAG_KIND tags automatically enable dry-run mode, so external artifact publishing is skipped."
+            fi
+            if [ "$IS_ALPHA" = "true" ]; then
+              echo ""
+              echo "> ℹ️ **ALPHA TAG DETECTED** — alpha releases are forced into dry-run mode, so external artifact publishing is skipped."
+            fi
+            if [ "$IS_DRY_RUN_TAG" = "true" ]; then
+              echo ""
+              echo "> ℹ️ **DRY_RUN TAG DETECTED** — dry_run tags automatically enable dry-run mode, so external artifact publishing is skipped."
+            fi
+            if [ "$EFFECTIVE_DRY_RUN" = "true" ]; then
               echo ""
               echo "> ⚠️ **DRY RUN MODE** — builds and tests will execute, but no artifacts will be published externally."
             fi
@@ -493,7 +535,7 @@ jobs:
           EOF
 
       - name: Upload JAR artifact
-        if: success()
+        if: success() && needs.prepare.outputs.should_publish_artifacts == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: release-jar
@@ -501,7 +543,7 @@ jobs:
           retention-days: 7
 
       - name: Upload release notes artifact
-        if: success()
+        if: success() && needs.prepare.outputs.should_publish_artifacts == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: release-notes
@@ -720,6 +762,7 @@ jobs:
           fi
 
       - name: Upload artifact
+        if: needs.prepare.outputs.should_publish_artifacts == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.binary }}
@@ -832,6 +875,7 @@ jobs:
             -StartupTimeoutSeconds 300
 
       - name: Upload runtime bundle artifact
+        if: needs.prepare.outputs.should_publish_artifacts == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
