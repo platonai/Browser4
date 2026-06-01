@@ -1,22 +1,30 @@
 #!/usr/bin/env pwsh
+$ErrorActionPreference = 'Stop'
 
-cargo run -- open https://www.amazon.com/
-sleep 5
-cargo run -- snapshot
+# Prefer the pre-built binary (set by multi-scenarios.ps1) over `cargo run`.
+$cli = if ($env:BROWSER4_CLI_BIN) {
+    { & $env:BROWSER4_CLI_BIN $args }
+} else {
+    { cargo run --quiet -- $args }
+}
 
-cargo run -- list
-cargo run -- goto https://www.amazon.com/s?k=pens
+& $cli open https://www.amazon.com/
 sleep 5
-cargo run -- snapshot
-cargo run -- close
-cargo run -- list
+& $cli snapshot
+
+& $cli list
+& $cli goto https://www.amazon.com/s?k=pens
+sleep 5
+& $cli snapshot
+& $cli close
+& $cli list
 
 sleep 5
-cargo run -- goto https://www.amazon.com/s?k=shoes
-cargo run -- snapshot
-cargo run -- close
-cargo run -- list
+& $cli goto https://www.amazon.com/s?k=shoes
+& $cli snapshot
+& $cli close
+& $cli list
 
-cargo run -- open https://www.amazon.com/
+& $cli open https://www.amazon.com/
 sleep 5
-cargo run -- list
+& $cli list

@@ -1,8 +1,15 @@
 #!/usr/bin/env pwsh
+$ErrorActionPreference = 'Stop'
 
-cargo run --quiet -- open
+$cli = if ($env:BROWSER4_CLI_BIN) {
+    { & $env:BROWSER4_CLI_BIN $args }
+} else {
+    { cargo run --quiet -- $args }
+}
 
-$agentRunOutput = cargo run --quiet -- agent run "https://www.hua.com/flower/" 2>&1
+& $cli open
+
+$agentRunOutput = & $cli agent run "https://www.hua.com/flower/" 2>&1
 $agentRunText = ($agentRunOutput | Out-String).Trim()
 $agentRunText
 
@@ -15,7 +22,7 @@ $success = $false
 $lastStatusText = ''
 
 for ($attempt = 1; $attempt -le 60; $attempt++) {
-	$statusOutput = cargo run --quiet -- agent status $taskId 2>&1
+	$statusOutput = & $cli agent status $taskId 2>&1
 	$lastStatusText = ($statusOutput | Out-String).Trim()
 	$lastStatusText
 
@@ -45,6 +52,6 @@ for ($attempt = 1; $attempt -le 60; $attempt++) {
     sleep 5
 }
 
-$agentResultOutput = cargo run --quiet -- agent result $taskId 2>&1
+$agentResultOutput = & $cli agent result $taskId 2>&1
 Write-Host 'Final agent result:'
 $agentResultOutput
