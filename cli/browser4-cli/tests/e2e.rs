@@ -197,7 +197,9 @@ impl FixtureServer {
         });
 
         thread::spawn(move || {
-            listener.set_nonblocking(true).ok();
+            listener
+                .set_nonblocking(true)
+                .expect("fixture server set_nonblocking failed");
             loop {
                 if flag.load(Ordering::Relaxed) {
                     break;
@@ -210,7 +212,10 @@ impl FixtureServer {
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(5));
                     }
-                    Err(_) => break,
+                    Err(e) => {
+                        eprintln!("[fixture server] accept error (listener continues): {e}");
+                        thread::sleep(Duration::from_millis(5));
+                    }
                 }
             }
         });
@@ -355,7 +360,9 @@ impl MockBrowser4Server {
         let shared_state = state.clone();
 
         thread::spawn(move || {
-            listener.set_nonblocking(true).ok();
+            listener
+                .set_nonblocking(true)
+                .expect("mock Browser4 server set_nonblocking failed");
             loop {
                 if flag.load(Ordering::Relaxed) {
                     break;
@@ -368,7 +375,12 @@ impl MockBrowser4Server {
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(5));
                     }
-                    Err(_) => break,
+                    Err(e) => {
+                        eprintln!(
+                            "[mock Browser4 server] accept error (listener continues): {e}"
+                        );
+                        thread::sleep(Duration::from_millis(5));
+                    }
                 }
             }
         });
@@ -926,18 +938,31 @@ fn read_http_request(stream: &mut TcpStream) -> Option<(String, String, Vec<u8>)
     let mut buffer = Vec::new();
     let mut content_length = 0usize;
     let mut header_end = None;
+    let mut empty_read_attempts = 0u32;
+    const MAX_EMPTY_READ_ATTEMPTS: u32 = 200; // 2 s with 10 ms sleep per attempt
 
     loop {
         let mut chunk = [0u8; 4096];
         match stream.read(&mut chunk) {
             Ok(0) => break,
-            Ok(n) => buffer.extend_from_slice(&chunk[..n]),
+            Ok(n) => {
+                empty_read_attempts = 0;
+                buffer.extend_from_slice(&chunk[..n]);
+            }
             Err(ref e)
                 if e.kind() == std::io::ErrorKind::WouldBlock
                     || e.kind() == std::io::ErrorKind::TimedOut =>
             {
                 if buffer.is_empty() {
-                    return None;
+                    empty_read_attempts += 1;
+                    if empty_read_attempts >= MAX_EMPTY_READ_ATTEMPTS {
+                        eprintln!(
+                            "[read_http_request] giving up after {MAX_EMPTY_READ_ATTEMPTS} empty reads"
+                        );
+                        return None;
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                    continue;
                 }
                 continue;
             }
@@ -992,7 +1017,84 @@ fn write_http_response(stream: &mut TcpStream, status: &str, content_type: &str,
         body.len(),
         body
     );
-    let _ = stream.write_all(response.as_bytes());
+    if let Err(e) = stream.write_all(response.as_bytes()) {
+        eprintln!(
+            "[write_http_response] failed to write response (status={status}): {e}"
+        );
+    }
+    // Best-effort flush: ignore errors since the connection is about to close.
+    let _ = stream.flush();
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests for internal HTTP helpers
+// ---------------------------------------------------------------------------
+
+/// Validate `read_http_request` and `write_http_response` core behaviours.
+///
+/// These tests use real TCP sockets to exercise the read/write helpers under
+/// conditions that the mock-server scenarios depend on.  They run once at
+/// startup (after coverage checks) and panic on failure so regressions are
+/// caught before any scenario runs.
+fn verify_internal_http_helpers() {
+    // ── round-trip: write a request, read it back ──────────────────────
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind for http helper test");
+    let port = listener.local_addr().unwrap().port();
+
+    let client_thread = thread::spawn(move || {
+        let mut stream = TcpStream::connect(format!("127.0.0.1:{port}"))
+            .expect("connect for http helper test");
+        // Write a minimal POST request with a JSON body.
+        let body = r#"{"tool":"open_session","arguments":{"url":"https://example.com"}}"#;
+        let request = format!(
+            "POST /mcp/call-tool HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(request.as_bytes()).expect("write request");
+        // Read back the response to drain it.
+        let mut buf = vec![0u8; 4096];
+        let _ = stream.read(&mut buf);
+    });
+
+    let (mut server_stream, _) = listener.accept().expect("accept for http helper test");
+    let parsed = read_http_request(&mut server_stream)
+        .expect("read_http_request should parse a well-formed request");
+    assert_eq!(parsed.0, "POST", "method mismatch");
+    assert_eq!(parsed.1, "/mcp/call-tool", "path mismatch");
+    let parsed_body = String::from_utf8(parsed.2).expect("body is valid UTF-8");
+    assert!(
+        parsed_body.contains("open_session"),
+        "body should contain open_session, got: {parsed_body}"
+    );
+
+    // Send a response back so the client thread can finish.
+    write_http_response(&mut server_stream, "200 OK", "application/json", r#"{"ok":true}"#);
+    drop(server_stream);
+    client_thread.join().expect("client thread should finish");
+
+    // ── empty stream returns None ─────────────────────────────────────
+    let listener2 = TcpListener::bind("127.0.0.1:0").expect("bind for empty-stream test");
+    let port2 = listener2.local_addr().unwrap().port();
+
+    let client_thread2 = thread::spawn(move || {
+        let _stream = TcpStream::connect(format!("127.0.0.1:{port2}"))
+            .expect("connect for empty-stream test");
+        // Immediately drop the stream — server sees EOF / WouldBlock then EOF.
+    });
+
+    let (mut server_stream2, _) = listener2.accept().expect("accept for empty-stream test");
+    // Wait a bit for the client to close.
+    thread::sleep(Duration::from_millis(50));
+    let result = read_http_request(&mut server_stream2);
+    assert!(
+        result.is_none(),
+        "read_http_request should return None for an empty/closed stream, got: {result:?}"
+    );
+    // Should not hang — we hit the max-empty-read-attempts path.
+
+    drop(server_stream2);
+    client_thread2.join().expect("client thread 2 should finish");
 }
 
 // ---------------------------------------------------------------------------
@@ -3352,6 +3454,10 @@ fn main() {
     }
 
     println!("running {total_tests} tests");
+
+    // Validate internal HTTP helpers before any scenario touches the mock
+    // server.  Panics early so regressions are obvious.
+    verify_internal_http_helpers();
 
     let mut resources = create_e2e_test_resources();
 
