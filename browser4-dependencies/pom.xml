@@ -17,7 +17,7 @@
     <groupId>ai.platon</groupId>
     <artifactId>browser4-dependencies</artifactId>
     <name>Browser4 Dependencies</name>
-    <version>4.10.0-SNAPSHOT</version>
+    <version>4.10.0-rc.1</version>
     <packaging>pom</packaging>
 
     <description>Pulsar Dependencies</description>
@@ -550,6 +550,7 @@
                         <extensions>true</extensions>
                         <configuration>
                             <publishingServerId>central</publishingServerId>
+                            <autoPublish>true</autoPublish>
                         </configuration>
                     </plugin>
                 </plugins>
