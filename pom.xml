@@ -170,6 +170,24 @@
             </modules>
         </profile>
 
+        <!-- Targeted profiles that add only one browser4-apps submodule to the
+             default reactor.  Use these instead of -Pall-modules when you need
+             exactly one app JAR without building the sibling module. -->
+
+        <profile>
+            <id>asset-standalone</id>
+            <modules>
+                <module>browser4-apps/browser4-standalone</module>
+            </modules>
+        </profile>
+
+        <profile>
+            <id>asset-bundle</id>
+            <modules>
+                <module>browser4-apps/browser4-bundle</module>
+            </modules>
+        </profile>
+
         <profile>
             <id>examples</id>
             <activation>
