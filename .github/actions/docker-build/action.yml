@@ -397,6 +397,10 @@ runs:
 
         image_name="${{ inputs.image_name }}:${{ inputs.version }}"
 
+        has_docker_scout() {
+          docker scout version >/dev/null 2>&1
+        }
+
         echo "🔍 Running image quality checks..."
 
         # Check for common security issues
@@ -427,7 +431,7 @@ runs:
         # Docker Scout scan if available
         echo ""
         echo "🔍 Security Scanning:"
-        if command -v docker scout &> /dev/null; then
+        if has_docker_scout; then
           echo "Running Docker Scout security scan..."
           if timeout 60 docker scout quickview "$image_name" 2>/dev/null; then
             echo "✅ Security scan completed"
