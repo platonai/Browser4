@@ -1980,4 +1980,94 @@ mod tests {
             assert!(map.get(name).unwrap().hidden, "{name} should stay hidden");
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Session-lifecycle command definitions
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_upgrade_params_capture_tag_and_force() {
+        let map = commands_map();
+        let cmd = map.get("upgrade").expect("upgrade command must exist");
+        assert!(!cmd.hidden);
+        assert_eq!(cmd.category, Category::Browsers);
+
+        // With no args → empty params.
+        let args: HashMap<String, Value> = HashMap::new();
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.get("tag").is_none());
+        assert!(params.get("force").is_none());
+
+        // With tag.
+        let mut args = HashMap::new();
+        args.insert("tag".to_string(), json!("v4.11.0"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["tag"], "v4.11.0");
+
+        // With --force.
+        let mut args = HashMap::new();
+        args.insert("force".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["force"], true);
+
+        // With both tag and --force.
+        let mut args = HashMap::new();
+        args.insert("tag".to_string(), json!("v4.11.0"));
+        args.insert("force".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["tag"], "v4.11.0");
+        assert_eq!(params["force"], true);
+
+        assert!((cmd.tool_name_fn)(&args).is_empty());
+    }
+
+    #[test]
+    fn test_stop_command_no_args() {
+        let map = commands_map();
+        let cmd = map.get("stop").expect("stop command must exist");
+        assert!(!cmd.hidden);
+        assert_eq!(cmd.args.len(), 0);
+        assert_eq!(cmd.options.len(), 0);
+        let args: HashMap<String, Value> = HashMap::new();
+        assert!((cmd.tool_name_fn)(&args).is_empty());
+    }
+
+    #[test]
+    fn test_status_command_server_option() {
+        let map = commands_map();
+        let cmd = map.get("status").expect("status command must exist");
+        assert!(!cmd.hidden);
+        assert_eq!(cmd.args.len(), 0);
+        assert_eq!(cmd.options.len(), 1);
+        assert_eq!(cmd.options[0].name, "server");
+    }
+
+    #[test]
+    fn test_close_all_no_args() {
+        let map = commands_map();
+        let cmd = map.get("close-all").expect("close-all command must exist");
+        assert!(!cmd.hidden);
+        assert_eq!(cmd.args.len(), 0);
+        assert_eq!(cmd.options.len(), 0);
+    }
+
+    #[test]
+    fn test_kill_all_no_args() {
+        let map = commands_map();
+        let cmd = map.get("kill-all").expect("kill-all command must exist");
+        assert!(!cmd.hidden);
+        assert_eq!(cmd.args.len(), 0);
+        assert_eq!(cmd.options.len(), 0);
+    }
+
+    #[test]
+    fn test_list_command_all_option() {
+        let map = commands_map();
+        let cmd = map.get("list").expect("list command must exist");
+        assert!(!cmd.hidden);
+        assert_eq!(cmd.args.len(), 0);
+        assert_eq!(cmd.options.len(), 1);
+        assert_eq!(cmd.options[0].name, "all");
+        assert!(cmd.options[0].is_bool);
+    }
 }

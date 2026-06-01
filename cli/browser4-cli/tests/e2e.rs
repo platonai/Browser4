@@ -309,6 +309,9 @@ struct MockBrowser4State {
     listed_sessions: Vec<MockListedSession>,
     queued_open_session_ids: Vec<String>,
     queued_tool_failures: Vec<MockToolFailure>,
+    health_status: Option<(u16, String, String)>, // (status_code, content_type, body)
+    close_session_calls: Vec<String>,
+    close_all_sessions_calls: Vec<serde_json::Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -435,6 +438,30 @@ impl MockBrowser4Server {
                 message: message.to_string(),
             });
     }
+
+    /// Configure a custom response for `GET /actuator/health`.
+    fn set_health_response(&self, status_code: u16, content_type: &str, body: &str) {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .health_status = Some((status_code, content_type.to_string(), body.to_string()));
+    }
+
+    /// Remove the health response override so the mock falls back to the
+    /// default `{"status":"UP"}` behaviour.
+    fn clear_health_response(&self) {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .health_status = None;
+    }
+
+    /// Shut down the mock server's listener thread without dropping the recorded
+    /// state. After calling this, further requests will fail with a connection
+    /// error (simulating an unreachable backend).
+    fn shutdown(&self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+    }
 }
 
 impl Drop for MockBrowser4Server {
@@ -451,12 +478,29 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
     let route = path.split('?').next().unwrap_or(path.as_str());
 
     match (method.as_str(), route) {
-        ("GET", "/actuator/health") => write_http_response(
-            &mut stream,
-            "200 OK",
-            "application/json",
-            r#"{"status":"UP"}"#,
-        ),
+        ("GET", "/actuator/health") => {
+            let guard = state.lock().expect("mock Browser4 state mutex poisoned");
+            if let Some((status_code, ref content_type, ref body)) = guard.health_status {
+                let status_text = match status_code {
+                    200 => "200 OK",
+                    503 => "503 Service Unavailable",
+                    other => {
+                        eprintln!(
+                            "[mock Browser4 server] unsupported health status {other}, using 200 OK"
+                        );
+                        "200 OK"
+                    }
+                };
+                write_http_response(&mut stream, status_text, content_type, body);
+            } else {
+                write_http_response(
+                    &mut stream,
+                    "200 OK",
+                    "application/json",
+                    r#"{"status":"UP"}"#,
+                );
+            }
+        }
         ("GET", "/mcp/tools") => write_http_response(
             &mut stream,
             "200 OK",
@@ -484,6 +528,23 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                     tool: tool.clone(),
                     arguments: arguments.clone(),
                 });
+
+            // Record session-close operations before the failure check so
+            // tests can verify they were attempted even when the mock returns
+            // an error response.
+            let mut guard = state.lock().expect("mock Browser4 state mutex poisoned");
+            match tool.as_str() {
+                "close_session" => {
+                    if let Some(sid) = arguments.get("sessionId").and_then(|v| v.as_str()) {
+                        guard.close_session_calls.push(sid.to_string());
+                    }
+                }
+                "close_all_sessions" => {
+                    guard.close_all_sessions_calls.push(arguments.clone());
+                }
+                _ => {}
+            }
+            drop(guard);
 
             if let Some(message) = {
                 let mut guard = state.lock().expect("mock Browser4 state mutex poisoned");
@@ -634,6 +695,12 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                     format!("result for {task_id}")
                 }
                 "command_batch" => mock_command_batch_response(&arguments),
+                "close_session" => {
+                    "Session closed.".to_string()
+                }
+                "close_all_sessions" => {
+                    "All sessions closed.".to_string()
+                }
                 "agent_extract" => {
                     r#"{"items":[{"title":"Mock Product","price":"$19.99"}]}"#.to_string()
                 }
@@ -2607,14 +2674,9 @@ fn run_final_cleanup() -> Result<Vec<TimedStep>, String> {
 /// build will fail.
 fn excluded_commands(include_batch_command: bool) -> HashSet<&'static str> {
     let mut commands: HashSet<&'static str> = [
-        // Destructive across concurrent sessions — would make the suite flaky
-        "close-all",
-        "kill-all",
         // One-time setup / external download — not suitable for e2e
         "install",
-        // Server lifecycle commands — not suitable for in-server e2e
-        "status",
-        "stop",
+        // Requires external network download — tested via unit tests only
         "upgrade",
     ]
     .into();
@@ -2635,6 +2697,14 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "open",
         "list",
         "close",
+        // test_close_*, test_close_all_*
+        "close-all",
+        // test_kill_all_*
+        "kill-all",
+        // test_stop_*
+        "stop",
+        // test_status_*
+        "status",
         // test_navigation_and_storage
         "goto",
         "go-back",

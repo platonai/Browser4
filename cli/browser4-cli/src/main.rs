@@ -4364,4 +4364,105 @@ mod tests {
 
         assert_eq!(extract_missing_llm_configuration_message(&status), None);
     }
+
+    // -----------------------------------------------------------------------
+    // is_backend_unreachable_error
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn is_backend_unreachable_detects_connection_refused() {
+        assert!(is_backend_unreachable_error("Connection refused (os error 61)"));
+        assert!(is_backend_unreachable_error("connection refused"));
+    }
+
+    #[test]
+    fn is_backend_unreachable_detects_tcp_errors() {
+        assert!(is_backend_unreachable_error("tcp connect error"));
+        assert!(is_backend_unreachable_error("error sending request"));
+        assert!(is_backend_unreachable_error("failed to connect to the server"));
+    }
+
+    #[test]
+    fn is_backend_unreachable_detects_timeout() {
+        assert!(is_backend_unreachable_error("request timed out after 30s"));
+    }
+
+    #[test]
+    fn is_backend_unreachable_rejects_other_errors() {
+        assert!(!is_backend_unreachable_error("invalid URL"));
+        assert!(!is_backend_unreachable_error("session not found"));
+        assert!(!is_backend_unreachable_error("browser_navigate failed"));
+    }
+
+    // -----------------------------------------------------------------------
+    // get_session_id_for_close (additional edge cases)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn get_session_id_for_close_handles_whitespace_only_session_id() {
+        let state = CliState {
+            session_id: Some("   ".to_string()),
+            ..CliState::default()
+        };
+        assert_eq!(get_session_id_for_close(&state), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // session_status helpers
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn list_session_status_active() {
+        let records = vec![BackendSessionRecord {
+            session_id: "s1".to_string(),
+            status: Some("active".to_string()),
+        }];
+        assert_eq!(list_session_status(Some(&records), "s1"), "Active");
+    }
+
+    #[test]
+    fn list_session_status_stopped() {
+        let records = vec![BackendSessionRecord {
+            session_id: "s1".to_string(),
+            status: Some("stopped".to_string()),
+        }];
+        assert_eq!(list_session_status(Some(&records), "s1"), "Stale");
+    }
+
+    #[test]
+    fn list_session_status_unknown_session_id() {
+        let records = vec![BackendSessionRecord {
+            session_id: "s1".to_string(),
+            status: Some("active".to_string()),
+        }];
+        // s2 is not in the backend records → Stale
+        assert_eq!(list_session_status(Some(&records), "s2"), "Stale");
+    }
+
+    #[test]
+    fn list_session_status_no_backend() {
+        // Backend unreachable → Unknown
+        assert_eq!(list_session_status(None, "s1"), "Unknown");
+    }
+
+    #[test]
+    fn list_session_status_empty_backend() {
+        // Backend returned no sessions → Stale
+        assert_eq!(list_session_status(Some(&[]), "s1"), "Stale");
+    }
+
+    // -----------------------------------------------------------------------
+    // session_status_is_active
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn session_status_is_active_variants() {
+        assert!(session_status_is_active(Some("active")));
+        assert!(session_status_is_active(Some("ACTIVE")));
+        assert!(!session_status_is_active(Some("stopped")));
+        assert!(!session_status_is_active(Some("error")));
+        // None (missing status) defaults to true — backend records without
+        // explicit status fields are treated as active.
+        assert!(session_status_is_active(None));
+    }
 }
