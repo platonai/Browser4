@@ -864,8 +864,10 @@ jobs:
           Write-Host "=== Building ${{ env.BUNDLE_JAR_NAME }} ===" -ForegroundColor Cyan
 
           $mavenCommand = if ($IsWindows) { '.\mvnw.cmd' } else { './mvnw' }
+          # Use 'install' (not 'package') — build-runtime-bundle.ps1 later runs
+          # dependency:copy-dependencies which needs artifacts in ~/.m2/repository.
           $mvnArgs = @(
-              'package',
+              'install',
               '-pl', '${{ env.BUNDLE_MODULE_PATH }}',
               '-am',
               '-Passet-bundle',
