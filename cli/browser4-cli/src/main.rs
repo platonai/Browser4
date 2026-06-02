@@ -138,6 +138,57 @@ macro_rules! cli_println {
     };
 }
 
+// ---------------------------------------------------------------------------
+// Exit codes
+// ---------------------------------------------------------------------------
+
+/// Normalised exit codes reported by every command path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+enum ExitCode {
+    #[allow(dead_code)]
+    /// Command completed successfully.
+    Success = 0,
+    /// Catch-all for unexpected internal errors.
+    General = 1,
+    /// Invalid arguments, unknown command, bad URL, missing required args.
+    Usage = 2,
+    /// No active session, session expired, session conflict.
+    Session = 3,
+    /// Server unreachable, health-check timeout, daemon startup failure.
+    Server = 4,
+    /// One or more commands in a batch failed (processing itself succeeded).
+    BatchPartial = 5,
+}
+
+/// Normalised error type that pairs a machine-readable exit code with a
+/// human-readable message.
+#[derive(Debug, Clone)]
+struct CliError(ExitCode, String);
+
+impl CliError {
+    fn code(&self) -> ExitCode { self.0 }
+    fn message(&self) -> &str { &self.1 }
+}
+
+impl std::fmt::Display for CliError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.1.fmt(f)
+    }
+}
+
+impl From<String> for CliError {
+    fn from(message: String) -> Self {
+        CliError(ExitCode::General, message)
+    }
+}
+
+impl From<&str> for CliError {
+    fn from(message: &str) -> Self {
+        CliError(ExitCode::General, message.to_string())
+    }
+}
+
 /// Commands that should NOT trigger a post-command snapshot.
 fn no_snapshot_commands() -> HashSet<&'static str> {
     [
@@ -3245,7 +3296,7 @@ fn resolve_batch_commands(
     Ok((batch_args.bail, commands))
 }
 
-async fn handle_batch(global: &args::GlobalFlags) -> Result<(), String> {
+async fn handle_batch(global: &args::GlobalFlags) -> Result<(), CliError> {
     let (bail, commands) = resolve_batch_commands(global)?;
     let base_url = resolve_base_url(global.server_url.as_deref(), global.session_name.as_deref());
 
@@ -3277,10 +3328,11 @@ async fn handle_batch(global: &args::GlobalFlags) -> Result<(), String> {
         let raw = submit_batch_commands(&client, &base_url, payload).await?;
         let raw_trimmed = raw.trim();
         if raw_trimmed.is_empty() {
-            return Err(
+            return Err(CliError(
+                ExitCode::Server,
                 "Batch backend returned an empty payload. Check that Browser4 server and CLI versions are compatible."
                     .to_string(),
-            );
+            ));
         }
         let preview = if raw_trimmed.chars().count() > 240 {
             let head = raw_trimmed.chars().take(240).collect::<String>();
@@ -3345,11 +3397,11 @@ async fn handle_batch(global: &args::GlobalFlags) -> Result<(), String> {
                             stop_processing = true;
                             break;
                         }
-                        return Err(format!(
+                        return Err(CliError(ExitCode::Server, format!(
                             "Batch backend response was missing command {} ({}).",
                             index + 1,
                             display
-                        ));
+                        )));
                     };
 
                     if result.ok {
@@ -3396,7 +3448,7 @@ async fn handle_batch(global: &args::GlobalFlags) -> Result<(), String> {
     if failures.is_empty() {
         Ok(())
     } else {
-        Err(format!("{} batch command(s) failed.", failures.len()))
+        Err(CliError(ExitCode::BatchPartial, format!("{} batch command(s) failed.", failures.len())))
     }
 }
 
@@ -3409,21 +3461,25 @@ async fn main() {
     let json_mode = global.json;
     let (command, effective_global, from_spaced_prefix) = normalize_command_invocation(&global);
 
-    if let Err(e) = run(&command, &effective_global, from_spaced_prefix).await {
+    if let Err(err) = run(&command, &effective_global, from_spaced_prefix).await {
         if json_mode {
-            // In JSON mode, emit a structured error envelope.
+            // Use println! directly -- cli_println! checks json_active()
+            // which is true here (json_init was called inside run()),
+            // and we MUST emit the JSON error envelope regardless.
             let error = serde_json::json!({
-                "message": e,
-                "code": "COMMAND_FAILED"
+                "message": err.message(),
+                "code": if err.code() == ExitCode::Usage { "USAGE_ERROR" }
+                        else if err.code() == ExitCode::Session { "SESSION_ERROR" }
+                        else { "COMMAND_FAILED" }
             });
-            cli_println!(
+            println!(
                 "{}",
                 json_envelope("error", &command, serde_json::json!({}), Some(error))
             );
         } else {
-            eprintln!("{}", format_cli_error_output(&e));
+            eprintln!("{}", format_cli_error_output(err.message()));
         }
-        std::process::exit(1);
+        std::process::exit(err.code() as i32);
     }
 }
 
@@ -3455,7 +3511,7 @@ async fn run(
     command: &str,
     global: &args::GlobalFlags,
     from_spaced_prefix: bool,
-) -> Result<(), String> {
+) -> Result<(), CliError> {
     // Initialise JSON output accumulator when --json is active.
     if global.json {
         json_init();
@@ -3473,10 +3529,10 @@ async fn run(
         } else {
             if let Some(target) = global.args.get(1) {
                 if let Some(preferred) = preferred_spaced_command_form(target) {
-                    return Err(format!(
+                    return Err(CliError(ExitCode::Usage, format!(
                         "Unsupported command form: {}. Use 'browser4-cli help {}' instead.",
                         target, preferred
-                    ));
+                    )));
                 }
             }
             global.args.get(1).cloned()
@@ -3497,18 +3553,18 @@ async fn run(
 
     if !from_spaced_prefix {
         if let Some(preferred) = preferred_spaced_command_form(command) {
-            return Err(format!(
+            return Err(CliError(ExitCode::Usage, format!(
                 "Unsupported command form: {}. Use 'browser4-cli {}' instead.",
                 command, preferred
-            ));
+            )));
         }
     }
 
     if let Some(preferred) = preferred_prefixed_group_form(command) {
-        return Err(format!(
+        return Err(CliError(ExitCode::Usage, format!(
             "Unsupported command form: {}. Use 'browser4-cli {}' instead.",
             command, preferred
-        ));
+        )));
     }
 
     // Resolve base URL: --server flag > persisted state > default
@@ -3537,10 +3593,10 @@ async fn run(
     let cmd_def = match cmd_map.get(command) {
         Some(def) => def,
         None => {
-            return Err(format!(
+            return Err(CliError(ExitCode::Usage, format!(
                 "Unknown command: {}. Run 'browser4-cli help' for usage.",
                 command
-            ));
+            )));
         }
     };
 
