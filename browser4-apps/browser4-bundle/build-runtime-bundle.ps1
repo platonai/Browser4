@@ -400,7 +400,7 @@ $bundleModule = 'browser4-apps/browser4-bundle'
 # that are not published to Maven Central.  This is idempotent — on the
 # second run Maven only touches unchanged files.
 Write-Host "Ensuring core modules are installed to ~/.m2 ..."
-$coreArgs = @('install', '-DskipTests', '-Dmaven.javadoc.skip=true', '-q')
+$coreArgs = @('install', '-DskipTests', '-Dmaven.javadoc.skip=true')
 & $mvnCmd @coreArgs
 if ($LASTEXITCODE -ne 0) { throw "Core modules install failed with exit code $LASTEXITCODE" }
 
