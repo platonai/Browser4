@@ -94,6 +94,7 @@ fn json_field(key: &str, value: serde_json::Value) {
 }
 
 /// True when `--json` mode is active.
+#[allow(dead_code)]
 fn json_active() -> bool {
     JSON_OUTPUT.with(|cell| cell.borrow().is_some())
 }
@@ -101,6 +102,38 @@ fn json_active() -> bool {
 /// Take the accumulated JSON fields and tear down the accumulator.
 fn json_finish() -> Option<serde_json::Map<String, serde_json::Value>> {
     JSON_OUTPUT.with(|cell| cell.borrow_mut().take())
+}
+
+// ---------------------------------------------------------------------------
+// Quiet output support (-q / --quiet global flag)
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    /// When `-q` / `--quiet` is active, normal output is suppressed.
+    /// Errors still go to stderr.
+    static QUIET: RefCell<bool> = RefCell::new(false);
+}
+
+fn quiet_init(quiet: bool) {
+    QUIET.with(|cell| *cell.borrow_mut() = quiet);
+}
+
+fn quiet_active() -> bool {
+    QUIET.with(|cell| *cell.borrow())
+}
+
+/// Print to stdout unless `-q` / `--quiet` is active.
+macro_rules! cli_println {
+    () => {
+        if !$crate::quiet_active() {
+            ::std::println!();
+        }
+    };
+    ($($arg:tt)*) => {
+        if !$crate::quiet_active() {
+            ::std::println!($($arg)*);
+        }
+    };
 }
 
 /// Commands that should NOT trigger a post-command snapshot.
@@ -548,11 +581,11 @@ async fn post_command_snapshot(client: &Client, base_url: &str, session_id: &str
         return;
     }
 
-    println!("### Page");
-    println!("- Page URL: {}", url_result);
-    println!("- Page Title: {}", title_result);
-    println!("### Snapshot");
-    println!("[Snapshot]({})", out_path.display());
+    cli_println!("### Page");
+    cli_println!("- Page URL: {}", url_result);
+    cli_println!("- Page Title: {}", title_result);
+    cli_println!("### Snapshot");
+    cli_println!("[Snapshot]({})", out_path.display());
 }
 
 // ---------------------------------------------------------------------------
@@ -577,7 +610,7 @@ async fn get_or_create_navigation_session(
         let capabilities = build_open_session_capabilities(tool_params);
         let new_id =
             create_session(client, base_url, &state, session_name, Some(capabilities)).await?;
-        println!("Session opened: {}", new_id);
+        cli_println!("Session opened: {}", new_id);
         new_id
     };
 
@@ -608,10 +641,10 @@ async fn handle_open(
         match navigate_result {
             Ok(result) => {
                 if reused_existing_session {
-                    println!("Session already open: {}", session_id);
+                    cli_println!("Session already open: {}", session_id);
                 }
                 if !result.is_empty() {
-                    println!("{}", result);
+                    cli_println!("{}", result);
                 }
                 post_command_snapshot(client, base_url, &session_id).await;
             }
@@ -639,7 +672,7 @@ async fn handle_open(
                 let retry_id =
                     create_session(client, base_url, &state, session_name, Some(capabilities))
                         .await?;
-                println!("Session opened: {}", retry_id);
+                cli_println!("Session opened: {}", retry_id);
                 params["sessionId"] = json!(retry_id);
                 let retry_result = call_tool(client, base_url, tool_name, params)
                     .await
@@ -652,13 +685,13 @@ async fn handle_open(
                         )
                     })?;
                 if !retry_result.is_empty() {
-                    println!("{}", retry_result);
+                    cli_println!("{}", retry_result);
                 }
                 post_command_snapshot(client, base_url, &retry_id).await;
             }
         }
     } else if reused_existing_session {
-        println!("Session already open: {}", session_id);
+        cli_println!("Session already open: {}", session_id);
     }
     Ok(())
 }
@@ -682,14 +715,14 @@ async fn handle_goto(
     match navigate_result {
         Ok(result) => {
             if !result.is_empty() {
-                println!("{}", result);
+                cli_println!("{}", result);
             }
             post_command_snapshot(client, base_url, &session_id).await;
         }
         Err(err) => {
             if !should_retry_open_after_navigation_error(&err, reused_existing_session) {
                 let should_suggest_refresh = should_retry_open_after_navigation_error(&err, true);
-                println!(
+                cli_println!(
                     "{}",
                     format_navigation_failure_message(
                         target_url,
@@ -712,20 +745,20 @@ async fn handle_goto(
             let capabilities = build_open_session_capabilities(tool_params);
             let retry_id =
                 create_session(client, base_url, &state, session_name, Some(capabilities)).await?;
-            println!("Session opened: {}", retry_id);
+            cli_println!("Session opened: {}", retry_id);
             params["sessionId"] = json!(retry_id.clone());
 
             match call_tool(client, base_url, tool_name, params).await {
                 Ok(result) => {
                     if !result.is_empty() {
-                        println!("{}", result);
+                        cli_println!("{}", result);
                     }
                     post_command_snapshot(client, base_url, &retry_id).await;
                 }
                 Err(retry_err) => {
                     let should_suggest_refresh =
                         should_retry_open_after_navigation_error(&retry_err, true);
-                    println!(
+                    cli_println!(
                         "{}",
                         format_navigation_failure_message(
                             target_url,
@@ -809,7 +842,7 @@ async fn handle_close(
     )
     .await;
     clear_state(None, session_name);
-    println!("Session closed.");
+    cli_println!("Session closed.");
     json_field("closed", json!(true));
     Ok(())
 }
@@ -859,12 +892,12 @@ async fn handle_kill_all() -> Result<(), String> {
         .map(|p| p.to_string())
         .collect();
     if !server_pids.is_empty() {
-        println!("✅ Server stopped (pid(s): {})", server_pids.join(", "));
+        cli_println!("✅ Server stopped (pid(s): {})", server_pids.join(", "));
     } else if shutdown_result.remaining_pids.is_empty()
         && shutdown_result.missing_pids.is_empty()
         && shutdown_result.forced_pids.is_empty()
     {
-        println!("✅ No Browser4 server was running.");
+        cli_println!("✅ No Browser4 server was running.");
     }
 
     if !shutdown_result.fallback_killed_server_pids.is_empty() {
@@ -873,7 +906,7 @@ async fn handle_kill_all() -> Result<(), String> {
             .iter()
             .map(|p| p.to_string())
             .collect();
-        println!(
+        cli_println!(
             "⚠  Fallback-killed server process(es): {}",
             pids.join(", ")
         );
@@ -888,7 +921,7 @@ async fn handle_kill_all() -> Result<(), String> {
                 .iter()
                 .map(|p| p.to_string())
                 .collect();
-            println!("✅ Killed browser process(es): {}", pids.join(", "));
+            cli_println!("✅ Killed browser process(es): {}", pids.join(", "));
         }
         if !browser_result.remaining_pids.is_empty() {
             let pids: Vec<String> = browser_result
@@ -902,11 +935,11 @@ async fn handle_kill_all() -> Result<(), String> {
             ));
         }
     } else {
-        println!("ℹ  No Browser4 browser processes found.");
+        cli_println!("ℹ  No Browser4 browser processes found.");
     }
 
-    println!();
-    println!("✅ kill-all complete.");
+    cli_println!();
+    cli_println!("✅ kill-all complete.");
     Ok(())
 }
 
@@ -1126,13 +1159,13 @@ async fn close_all_sessions_across_servers(client: &Client, base_url: &str) -> C
 
 fn log_close_all_summary(summary: &CloseAllSummary, command_name: &str) {
     if summary.results.is_empty() {
-        println!(
+        cli_println!(
             "No reachable Browser4 servers responded to {}.",
             command_name
         );
     } else {
         for result in &summary.results {
-            println!("{}", result);
+            cli_println!("{}", result);
         }
     }
 
@@ -1149,19 +1182,19 @@ fn finalize_global_cleanup(action: &str, result: &ShutdownResult) {
 fn log_shutdown_result(action: &str, result: &ShutdownResult) {
     if !result.stopped_pids.is_empty() {
         let pids: Vec<String> = result.stopped_pids.iter().map(|p| p.to_string()).collect();
-        println!("{} Browser4 process(es): {}", action, pids.join(", "));
+        cli_println!("{} Browser4 process(es): {}", action, pids.join(", "));
     } else if result.missing_pids.is_empty() {
-        println!("No tracked Browser4 processes found.");
+        cli_println!("No tracked Browser4 processes found.");
     }
 
     if !result.missing_pids.is_empty() {
         let pids: Vec<String> = result.missing_pids.iter().map(|p| p.to_string()).collect();
-        println!("Already stopped Browser4 process(es): {}", pids.join(", "));
+        cli_println!("Already stopped Browser4 process(es): {}", pids.join(", "));
     }
 
     if !result.forced_pids.is_empty() && action == "Stopped" {
         let pids: Vec<String> = result.forced_pids.iter().map(|p| p.to_string()).collect();
-        println!(
+        cli_println!(
             "Forced Browser4 process(es) after graceful timeout: {}",
             pids.join(", ")
         );
@@ -1195,11 +1228,11 @@ async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
             Err(error) => return Err(error),
         };
 
-    println!(
+    cli_println!(
         "{:<20} | {:<40} | {:<8} | {}",
         "Name", "Session ID", "Status", "Next open"
     );
-    println!("{:-<20}-+-{:-<40}-+-{:-<8}-+-{:-<9}", "", "", "", "");
+    cli_println!("{:-<20}-+-{:-<40}-+-{:-<8}-+-{:-<9}", "", "", "", "");
 
     let mut json_sessions: Vec<serde_json::Value> = Vec::new();
     let backend_reachable = backend_sessions.is_some();
@@ -1220,7 +1253,7 @@ async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
                                     backend_sessions.as_deref(),
                                     &sid,
                                 );
-                                println!(
+                                cli_println!(
                                     "{:<20} | {:<40} | {:<8} | {}",
                                     name, sid, status, next_open
                                 );
@@ -1243,7 +1276,7 @@ async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
     if let Some(sid) = default_state.session_id {
         let status = list_session_status(backend_sessions.as_deref(), &sid);
         let next_open = list_session_next_open_action(backend_sessions.as_deref(), &sid);
-        println!(
+        cli_println!(
             "{:<20} | {:<40} | {:<8} | {}",
             "(default)", sid, status, next_open
         );
@@ -1259,7 +1292,7 @@ async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
     json_field("backend_reachable", json!(backend_reachable));
 
     if let Some(note) = backend_note {
-        println!("\n{}", note);
+        cli_println!("\n{}", note);
     }
 
     Ok(())
@@ -1435,9 +1468,9 @@ async fn handle_delete_data(
     })
     .await?;
     if result.is_empty() {
-        println!("Session data deleted.");
+        cli_println!("Session data deleted.");
     } else {
-        println!("{}", result);
+        cli_println!("{}", result);
     }
     Ok(())
 }
@@ -1485,7 +1518,7 @@ async fn handle_state_save(
     let formatted = serde_json::to_string_pretty(&state_json)
         .map_err(|e| format!("Failed to format storage state JSON: {e}"))?;
     save_snapshot(&output_path, &formatted).map_err(|e| e.to_string())?;
-    println!("Storage state saved: {}", output_path.display());
+    cli_println!("Storage state saved: {}", output_path.display());
     Ok(())
 }
 
@@ -1530,7 +1563,7 @@ async fn handle_state_load(
     .await?;
     let summary: StorageStateLoadSummary = serde_json::from_str(&result)
         .map_err(|e| format!("Browser4 returned an invalid storage-state load summary: {e}"))?;
-    println!(
+    cli_println!(
         "Storage state loaded: {} (cookies: {}, origins: {}, localStorage entries: {})",
         input_path.display(),
         summary.cookies,
@@ -1563,7 +1596,7 @@ async fn handle_cookie_list(
                     .unwrap_or(true)
         })
         .collect::<Vec<_>>();
-    println!(
+    cli_println!(
         "{}",
         serde_json::to_string_pretty(&cookies)
             .map_err(|e| format!("Failed to format cookies: {e}"))?
@@ -1591,7 +1624,7 @@ async fn handle_cookie_get(
         })
         .cloned()
         .ok_or_else(|| format!("Cookie not found: {target_name}"))?;
-    println!(
+    cli_println!(
         "{}",
         serde_json::to_string_pretty(&cookie)
             .map_err(|e| format!("Failed to format cookie: {e}"))?
@@ -1668,7 +1701,7 @@ async fn handle_cookie_set(
     )
     .await?;
     let _: StorageStateLoadSummary = parse_json_output(&result, "cookie-set summary")?;
-    println!("Cookie set: {}", name);
+    cli_println!("Cookie set: {}", name);
     Ok(())
 }
 
@@ -1700,7 +1733,7 @@ async fn handle_cookie_delete(
         payload["path"] = json!(path);
     }
     let _ = call_session_tool(client, base_url, session_name, tool_name, payload).await?;
-    println!("Cookie deleted: {}", name);
+    cli_println!("Cookie deleted: {}", name);
     Ok(())
 }
 
@@ -1711,7 +1744,7 @@ async fn handle_cookie_clear(
     session_name: Option<&str>,
 ) -> Result<(), String> {
     let _ = call_session_tool(client, base_url, session_name, tool_name, json!({})).await?;
-    println!("Cookies cleared.");
+    cli_println!("Cookies cleared.");
     Ok(())
 }
 
@@ -1732,7 +1765,7 @@ async fn handle_storage_list(
         &raw,
         &format!("{} list JSON", storage_area_label(storage_area)),
     )?;
-    println!(
+    cli_println!(
         "{}",
         serde_json::to_string_pretty(&parsed).map_err(|e| format!(
             "Failed to format {} list: {e}",
@@ -1771,7 +1804,7 @@ async fn handle_storage_get(
             key
         ));
     }
-    println!("{}", result.value);
+    cli_println!("{}", result.value);
     Ok(())
 }
 
@@ -1808,7 +1841,7 @@ async fn handle_storage_set(
             key
         ));
     }
-    println!("{} key set: {}", storage_area_label(storage_area), key);
+    cli_println!("{} key set: {}", storage_area_label(storage_area), key);
     Ok(())
 }
 
@@ -1840,9 +1873,9 @@ async fn handle_storage_delete(
         &format!("{} delete result", storage_area_label(storage_area)),
     )?;
     if result.existed {
-        println!("{} key deleted: {}", storage_area_label(storage_area), key);
+        cli_println!("{} key deleted: {}", storage_area_label(storage_area), key);
     } else {
-        println!(
+        cli_println!(
             "{} key not present: {}",
             storage_area_label(storage_area),
             key
@@ -1868,7 +1901,7 @@ async fn handle_storage_clear(
         &raw,
         &format!("{} clear result", storage_area_label(storage_area)),
     )?;
-    println!(
+    cli_println!(
         "{} cleared: {} entrie(s).",
         storage_area_label(storage_area),
         result.cleared
@@ -1936,11 +1969,11 @@ async fn handle_snapshot(
     let out_path = resolve_output_path(filename.as_deref(), "snapshot", "yml");
     save_snapshot(&out_path, snap).map_err(|e| e.to_string())?;
 
-    println!("### Page");
-    println!("- Page URL: {}", url);
-    println!("- Page Title: {}", title);
-    println!("### Snapshot");
-    println!("[Snapshot]({})", out_path.display());
+    cli_println!("### Page");
+    cli_println!("- Page URL: {}", url);
+    cli_println!("- Page Title: {}", title);
+    cli_println!("### Snapshot");
+    cli_println!("[Snapshot]({})", out_path.display());
     Ok(())
 }
 
@@ -1979,7 +2012,7 @@ async fn handle_screenshot(
 
     let out_path = resolve_output_path(filename.as_deref(), "screenshot", "png");
     save_binary(&out_path, &bytes).map_err(|e| e.to_string())?;
-    println!("[Screenshot]({})", out_path.display());
+    cli_println!("[Screenshot]({})", out_path.display());
     Ok(())
 }
 
@@ -2008,7 +2041,7 @@ async fn handle_tool_command(
     .await?;
 
     if !result.is_empty() {
-        println!("{}", result);
+        cli_println!("{}", result);
     }
     // Structured JSON fields for eval-like commands.
     if tool_name == "browser_evaluate" {
@@ -2167,9 +2200,9 @@ async fn handle_agent_run(
             message
         ));
     }
-    println!("Task submitted: {}", task_id);
+    cli_println!("Task submitted: {}", task_id);
     json_field("task_id", json!(&task_id));
-    println!(
+    cli_println!(
         "Use 'browser4-cli agent status {}' to check progress.",
         task_id
     );
@@ -2251,7 +2284,7 @@ async fn handle_agent_status(
     }
 
     let result = get_command_status(client, base_url, id).await?;
-    println!("{}", result);
+    cli_println!("{}", result);
     json_field("task_id", json!(id));
     json_field("raw", json!(serde_json::from_str::<Value>(&result).unwrap_or(Value::String(result.clone()))));
     Ok(())
@@ -2272,7 +2305,7 @@ async fn handle_agent_result(
     }
 
     let result = get_command_result(client, base_url, id).await?;
-    println!("{}", result);
+    cli_println!("{}", result);
     json_field("task_id", json!(id));
     json_field("raw", json!(&result));
     Ok(())
@@ -2322,7 +2355,7 @@ async fn handle_swarm_create(
     state.base_url = base_url.to_string();
     write_state(&state, None, session_name).map_err(|e| e.to_string())?;
 
-    println!("Swarm session created: {}", session_id);
+    cli_println!("Swarm session created: {}", session_id);
     Ok(())
 }
 
@@ -2403,7 +2436,7 @@ async fn handle_swarm_submit(
 
         let result = submit_swarm_payload(client, base_url, &command).await?;
         let task_id = result.trim().trim_matches('"').to_string();
-        println!("Task Submitted: {} -> Task ID: {}", u, task_id);
+        cli_println!("Task Submitted: {} -> Task ID: {}", u, task_id);
         json_submissions.push(json!({
             "url": u,
             "task_id": task_id,
@@ -2412,7 +2445,7 @@ async fn handle_swarm_submit(
     json_field("submissions", json!(json_submissions));
 
     if urls.len() > 1 {
-        println!("{} URL(s) submitted.", urls.len());
+        cli_println!("{} URL(s) submitted.", urls.len());
     }
     Ok(())
 }
@@ -2432,7 +2465,7 @@ async fn handle_swarm_status(
     }
 
     let result = get_swarm_status(client, base_url, id).await?;
-    println!("{}", result);
+    cli_println!("{}", result);
     json_field("task_id", json!(id));
     json_field("raw", json!(serde_json::from_str::<Value>(&result).unwrap_or(Value::String(result.clone()))));
     Ok(())
@@ -2453,7 +2486,7 @@ async fn handle_swarm_result(
     }
 
     let result = get_swarm_result(client, base_url, id).await?;
-    println!("{}", result);
+    cli_println!("{}", result);
     json_field("task_id", json!(id));
     json_field("raw", json!(serde_json::from_str::<Value>(&result).unwrap_or(Value::String(result.clone()))));
     Ok(())
@@ -2485,7 +2518,7 @@ async fn handle_install(tool_params: &Value) -> Result<(), String> {
         .unwrap_or(false);
     let runtime = install_browser4_runtime(tag, force).await?;
     for line in format_install_output(&runtime) {
-        println!("{}", line);
+        cli_println!("{}", line);
     }
     json_field("tag", json!(&runtime.tag));
     json_field("asset_name", json!(&runtime.asset_name));
@@ -2524,7 +2557,7 @@ async fn handle_upgrade(tool_params: &Value) -> Result<(), String> {
     eprintln!("Upgrading Browser4 runtime...");
     let runtime = install_browser4_runtime(tag, force).await?;
     for line in format_upgrade_output(&runtime, force) {
-        println!("{}", line);
+        cli_println!("{}", line);
     }
     json_field("tag", json!(&runtime.tag));
     json_field("asset_name", json!(&runtime.asset_name));
@@ -2557,7 +2590,7 @@ async fn handle_stop() -> Result<(), String> {
             .iter()
             .map(|p| p.to_string())
             .collect();
-        println!(
+        cli_println!(
             "Fallback-killed Browser4 backend process(es): {}",
             pids.join(", ")
         );
@@ -2568,30 +2601,30 @@ async fn handle_stop() -> Result<(), String> {
         && shutdown_result.forced_pids.is_empty()
         && shutdown_result.fallback_killed_server_pids.is_empty()
     {
-        println!("No Browser4 server was running.");
+        cli_println!("No Browser4 server was running.");
     } else {
-        println!("Browser4 server stopped.");
+        cli_println!("Browser4 server stopped.");
     }
     Ok(())
 }
 
 async fn handle_status(client: &Client, base_url: &str) -> Result<(), String> {
-    println!("Browser4 Status");
-    println!("===============");
-    println!("CLI version: {}", VERSION);
-    println!("Server URL: {}", base_url);
+    cli_println!("Browser4 Status");
+    cli_println!("===============");
+    cli_println!("CLI version: {}", VERSION);
+    cli_println!("Server URL: {}", base_url);
 
     json_field("cli_version", json!(VERSION));
     json_field("server_url", json!(base_url));
 
     // Check installed runtime
     if let Some(metadata) = daemon::read_installed_browser4_runtime_metadata() {
-        println!("Installed version: {}", metadata.tag);
-        println!("Installed at: {}", metadata.installed_at);
+        cli_println!("Installed version: {}", metadata.tag);
+        cli_println!("Installed at: {}", metadata.installed_at);
         json_field("installed_version", json!(&metadata.tag));
         json_field("installed_at", json!(&metadata.installed_at));
     } else {
-        println!("Installed version: not installed (run 'browser4-cli install')");
+        cli_println!("Installed version: not installed (run 'browser4-cli install')");
         json_field("installed_version", json!(null));
         json_field("installed_at", json!(null));
     }
@@ -2604,25 +2637,25 @@ async fn handle_status(client: &Client, base_url: &str) -> Result<(), String> {
             if response.status().is_success() {
                 match response.text().await {
                     Ok(body) if body.contains("\"status\":\"UP\"") => {
-                        println!("Server health: UP");
+                        cli_println!("Server health: UP");
                         health = "UP";
                     }
                     Ok(body) => {
-                        println!("Server health: NOT READY ({})", body);
+                        cli_println!("Server health: NOT READY ({})", body);
                         health = "NOT_READY";
                     }
                     Err(e) => {
-                        println!("Server health: ERROR ({})", e);
+                        cli_println!("Server health: ERROR ({})", e);
                         health = "ERROR";
                     }
                 }
             } else {
-                println!("Server health: DOWN (HTTP {})", response.status());
+                cli_println!("Server health: DOWN (HTTP {})", response.status());
                 health = "DOWN";
             }
         }
         Err(_) => {
-            println!("Server health: UNREACHABLE (no response from {})", base_url);
+            cli_println!("Server health: UNREACHABLE (no response from {})", base_url);
             health = "UNREACHABLE";
         }
     }
@@ -2694,6 +2727,7 @@ fn normalize_command_invocation(global: &args::GlobalFlags) -> (String, args::Gl
             session_name: global.session_name.clone(),
             server_url: global.server_url.clone(),
             json: global.json,
+            quiet: global.quiet,
             args: rewritten,
         };
         (cmd, new_global, true)
@@ -3129,7 +3163,7 @@ fn render_batch_result(
                 .map(str::trim)
                 .filter(|text| !text.is_empty())
             {
-                println!("{}", text);
+                cli_println!("{}", text);
             }
         }
         PlannedBatchOutput::Snapshot { path } => {
@@ -3137,17 +3171,17 @@ fn render_batch_result(
                 "Batch snapshot response was missing snapshot content.".to_string()
             })?;
             save_snapshot(path, snapshot).map_err(|e| e.to_string())?;
-            println!("### Page");
-            println!(
+            cli_println!("### Page");
+            cli_println!(
                 "- Page URL: {}",
                 result.page_url.as_deref().unwrap_or_default()
             );
-            println!(
+            cli_println!(
                 "- Page Title: {}",
                 result.page_title.as_deref().unwrap_or_default()
             );
-            println!("### Snapshot");
-            println!("[Snapshot]({})", path.display());
+            cli_println!("### Snapshot");
+            cli_println!("[Snapshot]({})", path.display());
         }
         PlannedBatchOutput::Screenshot { path } => {
             let encoded = result
@@ -3158,7 +3192,7 @@ fn render_batch_result(
                 .decode(encoded.trim())
                 .map_err(|e| format!("Failed to decode screenshot: {e}"))?;
             save_binary(path, &bytes).map_err(|e| e.to_string())?;
-            println!("[Screenshot]({})", path.display());
+            cli_println!("[Screenshot]({})", path.display());
         }
     }
 
@@ -3364,7 +3398,7 @@ async fn main() {
                 "message": e,
                 "code": "COMMAND_FAILED"
             });
-            println!(
+            cli_println!(
                 "{}",
                 json_envelope("error", &command, serde_json::json!({}), Some(error))
             );
@@ -3408,6 +3442,8 @@ async fn run(
     if global.json {
         json_init();
     }
+    // Initialise quiet mode when -q / --quiet is active.
+    quiet_init(global.quiet);
 
     // Handle help or no command — these always print human-readable text.
     if command.is_empty() || command == "help" || command == "--help" || command == "-h" {
@@ -3433,7 +3469,7 @@ async fn run(
 
     // Handle version
     if command == "--version" || command == "-v" || command == "version" {
-        println!("browser4-cli {}", VERSION);
+        cli_println!("browser4-cli {}", VERSION);
         return Ok(());
     }
 
@@ -3808,7 +3844,7 @@ async fn run(
         }
         _ => {
             if tool_name.is_empty() {
-                println!("Command '{}' is not yet implemented.", command);
+                cli_println!("Command '{}' is not yet implemented.", command);
                 return Ok(());
             }
             handle_tool_command(
@@ -3835,7 +3871,7 @@ async fn run(
     // Emit JSON envelope when --json is active.
     if global.json {
         if let Some(fields) = json_finish() {
-            println!(
+            cli_println!(
                 "{}",
                 json_envelope("ok", command, serde_json::Value::Object(fields), None)
             );
@@ -3850,14 +3886,14 @@ fn print_help(command_name: Option<&str>) {
         if name != "--help" {
             let cmd_map = commands_map();
             if let Some(cmd) = cmd_map.get(name) {
-                println!("{}", generate_command_help(cmd));
+                cli_println!("{}", generate_command_help(cmd));
                 return;
             } else {
                 eprintln!("Unknown command: {}", name);
             }
         }
     }
-    println!("{}", generate_help());
+    cli_println!("{}", generate_help());
 }
 
 #[cfg(test)]
@@ -4338,6 +4374,7 @@ mod tests {
             session_name: None,
             server_url: None,
             json: false,
+            quiet: false,
             args: vec![
                 "agent".to_string(),
                 "status".to_string(),
@@ -4359,6 +4396,7 @@ mod tests {
             session_name: None,
             server_url: None,
             json: false,
+            quiet: false,
             args: vec!["agent-run".to_string(), "task".to_string()],
         };
 

@@ -17,6 +17,8 @@ pub struct GlobalFlags {
     pub server_url: Option<String>,
     /// `--json` — emit machine-parseable JSON to stdout
     pub json: bool,
+    /// `-q` / `--quiet` — suppress normal output, only show errors
+    pub quiet: bool,
     /// Remaining arguments (command + its args/options)
     pub args: Vec<String>,
 }
@@ -65,6 +67,8 @@ pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
             }
         } else if !seen_command && arg == "--json" {
             flags.json = true;
+        } else if !seen_command && (arg == "-q" || arg == "--quiet") {
+            flags.quiet = true;
         } else if arg.starts_with("--server=") {
             flags.server_url = Some(arg["--server=".len()..].to_string());
         } else if arg == "--server" {
