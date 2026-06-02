@@ -416,21 +416,34 @@ jobs:
 
           docker network create ${{ env.NETWORK_NAME }} || true
 
+          # Override JAVA_OPTS for CI — the Dockerfile default (-Xmx10G)
+          # exceeds GitHub Actions' 7 GB runner memory and will crash the JVM.
           docker run -d \
             --name ${{ env.CONTAINER_NAME }} \
             --network ${{ env.NETWORK_NAME }} \
             -p 8182:8182 \
             --add-host=host.docker.internal:host-gateway \
             -e OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" \
+            -e JAVA_OPTS="-Xms512M -Xmx3G -XX:+UseG1GC" \
             --health-cmd="curl -f http://localhost:8182/actuator/health || exit 1" \
             --health-interval=10s \
             --health-timeout=5s \
-            --health-retries=5 \
+            --health-retries=8 \
             ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.version }}
 
+          echo "📋 Container status after launch:"
           docker ps -a --filter "name=${{ env.CONTAINER_NAME }}"
 
-          echo "⏳ Waiting for container to be healthy..."
+          # Quick check: did the container even start?
+          sleep 3
+          early_status=$(docker inspect --format="{{.State.Status}}" ${{ env.CONTAINER_NAME }} 2>/dev/null || echo "missing")
+          if [ "$early_status" = "exited" ] || [ "$early_status" = "dead" ]; then
+            echo "❌ Container exited immediately (exit code $(docker inspect --format='{{.State.ExitCode}}' ${{ env.CONTAINER_NAME }})):"
+            docker logs ${{ env.CONTAINER_NAME }} || true
+            exit 1
+          fi
+
+          echo "⏳ Waiting for container to be healthy (up to 120s) ..."
           timeout 120s bash -c '
             while true; do
               status=$(docker inspect --format="{{.State.Status}}" ${{ env.CONTAINER_NAME }} 2>/dev/null || echo "missing")
@@ -444,7 +457,7 @@ jobs:
               fi
 
               if [ "$status" = "exited" ] || [ "$status" = "dead" ]; then
-                echo "❌ Container exited before becoming healthy"
+                echo "❌ Container exited (code $(docker inspect --format='{{.State.ExitCode}}' ${{ env.CONTAINER_NAME }})) before becoming healthy"
                 docker logs ${{ env.CONTAINER_NAME }} || true
                 exit 1
               fi
@@ -458,6 +471,7 @@ jobs:
           ' || {
             echo "❌ Container did not become healthy within 120s"
             docker ps -a --filter "name=${{ env.CONTAINER_NAME }}"
+            echo "--- container logs ---"
             docker logs ${{ env.CONTAINER_NAME }} || true
             exit 1
           }
