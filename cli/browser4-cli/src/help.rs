@@ -281,7 +281,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - URLs plus load options are forwarded as a raw payload string to `ScrapeController.submit(payload)`."
+            "  - URLs plus load options are forwarded as a raw payload string to `SwarmController.submit(payload)`."
                 .to_string(),
         );
         lines.push(String::new());
@@ -295,7 +295,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     if cmd.name == "swarm-status" {
         lines.push("Notes:".to_string());
         lines.push(
-            "  - Reads the scrape job status from `ScrapeController.getStatus(id)` and prints the returned JSON payload."
+            "  - Reads the scrape job status from `SwarmController.getStatus(id)` and prints the returned JSON payload."
                 .to_string(),
         );
         lines.push(String::new());
@@ -306,7 +306,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     if cmd.name == "swarm-result" {
         lines.push("Notes:".to_string());
         lines.push(
-            "  - Reads the scrape job result from `ScrapeController.getResult(id)` and prints the returned payload."
+            "  - Reads the scrape job result from `SwarmController.getResult(id)` and prints the returned payload."
                 .to_string(),
         );
         lines.push(String::new());
@@ -521,7 +521,7 @@ mod tests {
         assert!(help.contains("--expires"));
         assert!(help.contains("blank lines and lines beginning with `#` are ignored"));
         assert!(help.contains("submits each entry as a scrape job"));
-        assert!(help.contains("ScrapeController.submit(payload)"));
+        assert!(help.contains("SwarmController.submit(payload)"));
         assert!(help.contains("browser4-cli swarm submit https://example.com/direct"));
         assert!(!help.contains("browser4-cli swarm-submit"));
     }
@@ -534,7 +534,7 @@ mod tests {
         let status_help = generate_command_help(status);
         assert!(status_help.contains("browser4-cli swarm status <id>"));
         assert!(status_help.contains("scrape job status"));
-        assert!(status_help.contains("ScrapeController.getStatus(id)"));
+        assert!(status_help.contains("SwarmController.getStatus(id)"));
         assert!(status_help.contains("browser4-cli swarm status scrape-task-4"));
         assert!(!status_help.contains("browser4-cli swarm-status"));
 
@@ -542,7 +542,7 @@ mod tests {
         let result_help = generate_command_help(result);
         assert!(result_help.contains("browser4-cli swarm result <id>"));
         assert!(result_help.contains("scrape job result"));
-        assert!(result_help.contains("ScrapeController.getResult(id)"));
+        assert!(result_help.contains("SwarmController.getResult(id)"));
         assert!(result_help.contains("browser4-cli swarm result scrape-task-4"));
         assert!(!result_help.contains("browser4-cli swarm-result"));
     }

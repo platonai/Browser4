@@ -300,10 +300,10 @@ Notes:
   with `#` are ignored.
 - `swarm submit` forwards load-option style flags such as `--deadline`,
   `--expires`, `--refresh`, `--parse`, and `--store-content` into the raw
-  submission payload sent to `ScrapeController.submit(payload)`.
+  submission payload sent to `SwarmController.submit(payload)`.
 - Capture the job ID printed by `swarm submit`, then use
   `swarm status` and `swarm result` to follow the async scrape job via
-  `ScrapeController.getStatus(id)` and `ScrapeController.getResult(id)`.
+  `SwarmController.getStatus(id)` and `SwarmController.getResult(id)`.
 
 Example seed file:
 
