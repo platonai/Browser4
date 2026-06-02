@@ -46,6 +46,11 @@ pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
         }
     }
 
+    // `--json` is only a global flag when it appears *before* the command
+    // name.  After the command it is passed through so sub-commands like
+    // `batch --json` (stdin JSON input) are not shadowed by the global flag.
+    let mut seen_command = false;
+
     let mut i = 0;
     while i < argv.len() {
         let arg = &argv[i];
@@ -58,7 +63,7 @@ pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
                 i += 1;
                 flags.session_name = Some(argv[i].clone());
             }
-        } else if arg == "--json" {
+        } else if !seen_command && arg == "--json" {
             flags.json = true;
         } else if arg.starts_with("--server=") {
             flags.server_url = Some(arg["--server=".len()..].to_string());
@@ -68,6 +73,10 @@ pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
                 flags.server_url = Some(argv[i].clone());
             }
         } else {
+            // First non-flag argument is the command name.
+            if !arg.starts_with('-') {
+                seen_command = true;
+            }
             flags.args.push(arg.clone());
         }
         i += 1;
