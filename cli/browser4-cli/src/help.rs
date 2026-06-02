@@ -58,6 +58,18 @@ pub fn generate_help() -> String {
     lines.push("\nGlobal options:".to_string());
     lines.push(format_with_gap("  --help [command]", "print help", 30));
     lines.push(format_with_gap("  --version", "print version", 30));
+    lines.push(format_with_gap(
+        "  --json",
+        "emit machine-parseable JSON to stdout",
+        30,
+    ));
+    lines.push(format_with_gap(
+        "  -q, --quiet",
+        "suppress normal output, only show errors",
+        30,
+    ));
+    lines.push(format_with_gap("  -s=<name>", "named session label", 30));
+    lines.push(format_with_gap("  --server=<url>", "override Browser4 server URL", 30));
 
     // for developer only
     // lines.push(format_with_gap(
@@ -352,6 +364,10 @@ mod tests {
         assert!(help.contains("extract"));
         assert!(help.contains("agent run"));
         assert!(help.contains("swarm create"));
+        assert!(help.contains("--json"));
+        assert!(help.contains("machine-parseable JSON"));
+        assert!(help.contains("-q, --quiet"));
+        assert!(help.contains("suppress normal output"));
     }
 
     #[test]

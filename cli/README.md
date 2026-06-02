@@ -68,6 +68,16 @@ browser4-cli -s=<session> <command> [args] [options]
 | `--version`        | Print version                                  |
 | `-s=<name>`        | Named session label                            |
 | `--server=<url>`   | Override Browser4 server URL                   |
+| `--json`           | Emit machine-parseable JSON to stdout          |
+| `-q`, `--quiet`    | Suppress normal output, only show errors       |
+
+`--json` switches every command's stdout from human-readable text to a
+single-line JSON envelope (`{"status":"ok","command":"<name>","output":{...}}`).
+Omit `--json` for the default human-readable output.
+
+`-q` / `--quiet` suppresses all normal stdout output.  Errors and
+progress messages still go to stderr.  Combine with `--json` for
+silent-on-success scripting: `browser4-cli --json -q open`.
 
 Sessions are persisted independently per name. Omitting `-s` uses the
 default session (`~/.browser4/cli-state.json`). With `-s=<name>`, a
