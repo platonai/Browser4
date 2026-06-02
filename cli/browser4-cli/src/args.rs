@@ -15,6 +15,8 @@ pub struct GlobalFlags {
     pub session_name: Option<String>,
     /// `--server=<url>` or `--server <url>` server override
     pub server_url: Option<String>,
+    /// `--json` — emit machine-parseable JSON to stdout
+    pub json: bool,
     /// Remaining arguments (command + its args/options)
     pub args: Vec<String>,
 }
@@ -31,6 +33,7 @@ pub struct BatchArgs {
 /// Recognises:
 /// - `-s=<name>`, `-s <name>`, `--session=<name>`, `--session <name>` → session name
 /// - `--server=<url>` or `--server <url>` → server URL override
+/// - `--json` → emit machine-parseable JSON to stdout
 /// - `--version` / `-v` → version flag (returned in `args`)
 /// - Everything else is forwarded unchanged in `args`
 pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
@@ -55,6 +58,8 @@ pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
                 i += 1;
                 flags.session_name = Some(argv[i].clone());
             }
+        } else if arg == "--json" {
+            flags.json = true;
         } else if arg.starts_with("--server=") {
             flags.server_url = Some(arg["--server=".len()..].to_string());
         } else if arg == "--server" {

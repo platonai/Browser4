@@ -63,6 +63,46 @@ const AGENT_RUN_FAILURE_POLL_ATTEMPTS: usize = 5;
 const AGENT_RUN_FAILURE_POLL_INTERVAL_MS: u64 = 250;
 const SWARM_SESSION_ID: &str = "SWARM";
 
+// ---------------------------------------------------------------------------
+// JSON output support (--json global flag)
+// ---------------------------------------------------------------------------
+
+use std::cell::RefCell;
+
+thread_local! {
+    /// When `--json` is active, handlers write structured fields here instead
+    /// of (or in addition to) printing human-readable text.  `None` means
+    /// human-output mode (the default).
+    static JSON_OUTPUT: RefCell<Option<serde_json::Map<String, serde_json::Value>>> =
+        RefCell::new(None);
+}
+
+/// Initialise the JSON output accumulator for the current command.
+fn json_init() {
+    JSON_OUTPUT.with(|cell| {
+        *cell.borrow_mut() = Some(serde_json::Map::new());
+    });
+}
+
+/// Store a field in the JSON output.  No-op when `--json` is not active.
+fn json_field(key: &str, value: serde_json::Value) {
+    JSON_OUTPUT.with(|cell| {
+        if let Some(ref mut map) = *cell.borrow_mut() {
+            map.insert(key.to_string(), value);
+        }
+    });
+}
+
+/// True when `--json` mode is active.
+fn json_active() -> bool {
+    JSON_OUTPUT.with(|cell| cell.borrow().is_some())
+}
+
+/// Take the accumulated JSON fields and tear down the accumulator.
+fn json_finish() -> Option<serde_json::Map<String, serde_json::Value>> {
+    JSON_OUTPUT.with(|cell| cell.borrow_mut().take())
+}
+
 /// Commands that should NOT trigger a post-command snapshot.
 fn no_snapshot_commands() -> HashSet<&'static str> {
     [
@@ -554,6 +594,9 @@ async fn handle_open(
     let (state, session_id, reused_existing_session) =
         get_or_create_navigation_session(client, base_url, tool_params, session_name).await?;
 
+    json_field("session_id", json!(&session_id));
+    json_field("reused", json!(reused_existing_session));
+
     let url = tool_params
         .get("url")
         .and_then(|u| u.as_str())
@@ -752,8 +795,11 @@ async fn handle_close(
     let Some(session_id) = get_session_id_for_close(&state).map(str::to_string) else {
         clear_state(None, session_name);
         eprintln!("{}", no_active_session_message());
+        json_field("session_id", json!(null));
+        json_field("closed", json!(false));
         return Ok(());
     };
+    json_field("session_id", json!(&session_id));
     // Ignore errors — session might already be closed
     let _ = call_tool(
         client,
@@ -764,6 +810,7 @@ async fn handle_close(
     .await;
     clear_state(None, session_name);
     println!("Session closed.");
+    json_field("closed", json!(true));
     Ok(())
 }
 
@@ -774,6 +821,9 @@ async fn handle_close_all(client: &Client, base_url: &str) -> Result<(), String>
     // backend process alive so callers can continue using the same service and
     // reserve JVM shutdown for the explicit `kill-all` flow.
     clear_all_state(None);
+
+    json_field("results", json!(close_summary.results));
+    json_field("errors", json!(close_summary.errors));
 
     log_close_all_summary(&close_summary, "close-all");
     Ok(())
@@ -786,6 +836,19 @@ async fn handle_kill_all() -> Result<(), String> {
     let result = stop_browser4_server_forcibly();
     let shutdown_result = result.shutdown;
     finalize_global_cleanup("Killed", &shutdown_result);
+
+    // JSON fields
+    {
+        let server_pids: Vec<u32> = shutdown_result.stopped_pids.clone();
+        json_field("server_pids", json!(server_pids));
+        let browser_result = &result.browser_kill;
+        json_field("browser_pids_killed", json!(browser_result.killed_pids));
+        json_field("browser_pids_remaining", json!(browser_result.remaining_pids));
+        json_field(
+            "fallback_killed_pids",
+            json!(shutdown_result.fallback_killed_server_pids),
+        );
+    }
 
     eprintln!();
 
@@ -1138,6 +1201,9 @@ async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
     );
     println!("{:-<20}-+-{:-<40}-+-{:-<8}-+-{:-<9}", "", "", "", "");
 
+    let mut json_sessions: Vec<serde_json::Value> = Vec::new();
+    let backend_reachable = backend_sessions.is_some();
+
     // List named sessions
     let state_dir = resolve_default_state_dir().join("sessions");
     if state_dir.exists() {
@@ -1158,6 +1224,12 @@ async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
                                     "{:<20} | {:<40} | {:<8} | {}",
                                     name, sid, status, next_open
                                 );
+                                json_sessions.push(json!({
+                                    "name": name.to_string(),
+                                    "session_id": sid,
+                                    "status": status.to_lowercase(),
+                                    "next_open": next_open.to_lowercase(),
+                                }));
                             }
                         }
                     }
@@ -1175,7 +1247,16 @@ async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
             "{:<20} | {:<40} | {:<8} | {}",
             "(default)", sid, status, next_open
         );
+        json_sessions.push(json!({
+            "name": "(default)",
+            "session_id": sid,
+            "status": status.to_lowercase(),
+            "next_open": next_open.to_lowercase(),
+        }));
     }
+
+    json_field("sessions", json!(json_sessions));
+    json_field("backend_reachable", json!(backend_reachable));
 
     if let Some(note) = backend_note {
         println!("\n{}", note);
@@ -1929,6 +2010,16 @@ async fn handle_tool_command(
     if !result.is_empty() {
         println!("{}", result);
     }
+    // Structured JSON fields for eval-like commands.
+    if tool_name == "browser_evaluate" {
+        json_field("result", json!(&result));
+        if let Some(expression) = tool_params.get("expression").and_then(|v| v.as_str()) {
+            json_field("expression", json!(expression));
+        }
+        if let Some(r) = tool_params.get("ref").and_then(|v| v.as_str()) {
+            json_field("ref", json!(r));
+        }
+    }
     persist_active_selector(base_url, session_name, tracked_selector(tool_params))?;
     Ok(())
 }
@@ -2077,6 +2168,7 @@ async fn handle_agent_run(
         ));
     }
     println!("Task submitted: {}", task_id);
+    json_field("task_id", json!(&task_id));
     println!(
         "Use 'browser4-cli agent status {}' to check progress.",
         task_id
@@ -2160,6 +2252,8 @@ async fn handle_agent_status(
 
     let result = get_command_status(client, base_url, id).await?;
     println!("{}", result);
+    json_field("task_id", json!(id));
+    json_field("raw", json!(serde_json::from_str::<Value>(&result).unwrap_or(Value::String(result.clone()))));
     Ok(())
 }
 
@@ -2179,6 +2273,8 @@ async fn handle_agent_result(
 
     let result = get_command_result(client, base_url, id).await?;
     println!("{}", result);
+    json_field("task_id", json!(id));
+    json_field("raw", json!(&result));
     Ok(())
 }
 
@@ -2297,6 +2393,7 @@ async fn handle_swarm_submit(
     let opts_str = load_opts.join(" ");
 
     // Submit each URL through the scrape REST API.
+    let mut json_submissions: Vec<serde_json::Value> = Vec::new();
     for u in &urls {
         let command = if opts_str.is_empty() {
             u.clone()
@@ -2307,7 +2404,12 @@ async fn handle_swarm_submit(
         let result = submit_swarm_payload(client, base_url, &command).await?;
         let task_id = result.trim().trim_matches('"').to_string();
         println!("Task Submitted: {} -> Task ID: {}", u, task_id);
+        json_submissions.push(json!({
+            "url": u,
+            "task_id": task_id,
+        }));
     }
+    json_field("submissions", json!(json_submissions));
 
     if urls.len() > 1 {
         println!("{} URL(s) submitted.", urls.len());
@@ -2331,6 +2433,8 @@ async fn handle_swarm_status(
 
     let result = get_swarm_status(client, base_url, id).await?;
     println!("{}", result);
+    json_field("task_id", json!(id));
+    json_field("raw", json!(serde_json::from_str::<Value>(&result).unwrap_or(Value::String(result.clone()))));
     Ok(())
 }
 
@@ -2350,6 +2454,8 @@ async fn handle_swarm_result(
 
     let result = get_swarm_result(client, base_url, id).await?;
     println!("{}", result);
+    json_field("task_id", json!(id));
+    json_field("raw", json!(serde_json::from_str::<Value>(&result).unwrap_or(Value::String(result.clone()))));
     Ok(())
 }
 
@@ -2381,6 +2487,11 @@ async fn handle_install(tool_params: &Value) -> Result<(), String> {
     for line in format_install_output(&runtime) {
         println!("{}", line);
     }
+    json_field("tag", json!(&runtime.tag));
+    json_field("asset_name", json!(&runtime.asset_name));
+    json_field("install_dir", json!(runtime.install_dir.display().to_string()));
+    json_field("reused_existing", json!(runtime.reused_existing));
+    json_field("source_url", json!(&runtime.download_url));
     Ok(())
 }
 
@@ -2415,6 +2526,11 @@ async fn handle_upgrade(tool_params: &Value) -> Result<(), String> {
     for line in format_upgrade_output(&runtime, force) {
         println!("{}", line);
     }
+    json_field("tag", json!(&runtime.tag));
+    json_field("asset_name", json!(&runtime.asset_name));
+    json_field("install_dir", json!(runtime.install_dir.display().to_string()));
+    json_field("reused_existing", json!(runtime.reused_existing));
+    json_field("source_url", json!(&runtime.download_url));
     Ok(())
 }
 
@@ -2425,6 +2541,13 @@ async fn handle_stop() -> Result<(), String> {
     let result = stop_browser4_server_forcibly();
     let shutdown_result = result.shutdown;
     finalize_global_cleanup("Stopped", &shutdown_result);
+
+    let server_was_running = !(shutdown_result.stopped_pids.is_empty()
+        && shutdown_result.missing_pids.is_empty()
+        && shutdown_result.forced_pids.is_empty()
+        && shutdown_result.fallback_killed_server_pids.is_empty());
+    json_field("server_was_running", json!(server_was_running));
+    json_field("server_pids", json!(shutdown_result.stopped_pids));
 
     eprintln!();
 
@@ -2458,38 +2581,52 @@ async fn handle_status(client: &Client, base_url: &str) -> Result<(), String> {
     println!("CLI version: {}", VERSION);
     println!("Server URL: {}", base_url);
 
+    json_field("cli_version", json!(VERSION));
+    json_field("server_url", json!(base_url));
+
     // Check installed runtime
     if let Some(metadata) = daemon::read_installed_browser4_runtime_metadata() {
         println!("Installed version: {}", metadata.tag);
         println!("Installed at: {}", metadata.installed_at);
+        json_field("installed_version", json!(&metadata.tag));
+        json_field("installed_at", json!(&metadata.installed_at));
     } else {
         println!("Installed version: not installed (run 'browser4-cli install')");
+        json_field("installed_version", json!(null));
+        json_field("installed_at", json!(null));
     }
 
     // Check server health
     let health_url = format!("{base_url}/actuator/health");
+    let health;
     match client.get(&health_url).send().await {
         Ok(response) => {
             if response.status().is_success() {
                 match response.text().await {
                     Ok(body) if body.contains("\"status\":\"UP\"") => {
                         println!("Server health: UP");
+                        health = "UP";
                     }
                     Ok(body) => {
                         println!("Server health: NOT READY ({})", body);
+                        health = "NOT_READY";
                     }
                     Err(e) => {
                         println!("Server health: ERROR ({})", e);
+                        health = "ERROR";
                     }
                 }
             } else {
                 println!("Server health: DOWN (HTTP {})", response.status());
+                health = "DOWN";
             }
         }
         Err(_) => {
             println!("Server health: UNREACHABLE (no response from {})", base_url);
+            health = "UNREACHABLE";
         }
     }
+    json_field("health", json!(health));
 
     Ok(())
 }
@@ -2556,6 +2693,7 @@ fn normalize_command_invocation(global: &args::GlobalFlags) -> (String, args::Gl
         let new_global = args::GlobalFlags {
             session_name: global.session_name.clone(),
             server_url: global.server_url.clone(),
+            json: global.json,
             args: rewritten,
         };
         (cmd, new_global, true)
@@ -3216,10 +3354,23 @@ async fn main() {
 
     let raw_args: Vec<String> = std::env::args().skip(1).collect();
     let global = parse_global_flags(&raw_args);
+    let json_mode = global.json;
     let (command, effective_global, from_spaced_prefix) = normalize_command_invocation(&global);
 
     if let Err(e) = run(&command, &effective_global, from_spaced_prefix).await {
-        eprintln!("{}", format_cli_error_output(&e));
+        if json_mode {
+            // In JSON mode, emit a structured error envelope.
+            let error = serde_json::json!({
+                "message": e,
+                "code": "COMMAND_FAILED"
+            });
+            println!(
+                "{}",
+                json_envelope("error", &command, serde_json::json!({}), Some(error))
+            );
+        } else {
+            eprintln!("{}", format_cli_error_output(&e));
+        }
         std::process::exit(1);
     }
 }
@@ -3232,12 +3383,33 @@ fn format_cli_error_output(error: &str) -> String {
     }
 }
 
+fn json_envelope(
+    status: &str,
+    command: &str,
+    output: serde_json::Value,
+    error: Option<serde_json::Value>,
+) -> String {
+    let mut envelope = serde_json::Map::new();
+    envelope.insert("status".to_string(), json!(status));
+    envelope.insert("command".to_string(), json!(command));
+    if let Some(err) = error {
+        envelope.insert("error".to_string(), err);
+    }
+    envelope.insert("output".to_string(), output);
+    serde_json::Value::Object(envelope).to_string()
+}
+
 async fn run(
     command: &str,
     global: &args::GlobalFlags,
     from_spaced_prefix: bool,
 ) -> Result<(), String> {
-    // Handle help or no command
+    // Initialise JSON output accumulator when --json is active.
+    if global.json {
+        json_init();
+    }
+
+    // Handle help or no command — these always print human-readable text.
     if command.is_empty() || command == "help" || command == "--help" || command == "-h" {
         // Resolve spaced prefixed help targets such as
         // `help swarm create` / `help agent run`.
@@ -3657,6 +3829,16 @@ async fn run(
         let state = read_state(None, global.session_name.as_deref());
         if let Some(session_id) = state.session_id {
             post_command_snapshot(&client, &base_url, &session_id).await;
+        }
+    }
+
+    // Emit JSON envelope when --json is active.
+    if global.json {
+        if let Some(fields) = json_finish() {
+            println!(
+                "{}",
+                json_envelope("ok", command, serde_json::Value::Object(fields), None)
+            );
         }
     }
 
@@ -4155,6 +4337,7 @@ mod tests {
         let global = args::GlobalFlags {
             session_name: None,
             server_url: None,
+            json: false,
             args: vec![
                 "agent".to_string(),
                 "status".to_string(),
@@ -4175,6 +4358,7 @@ mod tests {
         let global = args::GlobalFlags {
             session_name: None,
             server_url: None,
+            json: false,
             args: vec!["agent-run".to_string(), "task".to_string()],
         };
 
