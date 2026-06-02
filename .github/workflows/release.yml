@@ -880,19 +880,19 @@ jobs:
 
           $mavenCommand = if ($IsWindows) { '.\mvnw.cmd' } else { './mvnw' }
 
-          # Step 1: Install browser4-dependencies (the project BOM) first.
-          # All other modules depend on it for managed versions, and it isn't
-          # published to Maven Central, so it must be in ~/.m2 before anything
-          # can resolve.
-          Write-Host "  [1/2] Installing browser4-dependencies ..."
-          & $mavenCommand install -pl browser4-dependencies -DskipTests -Dmaven.javadoc.skip=true -q
+          # Install the entire project reactor to ~/.m2.  The bundle module and
+          # its transitive dependencies (browser4-resources, browser4-skeleton,
+          # browser4-agentic, etc.) are not published to Maven Central, so they
+          # must be locally installed before build-runtime-bundle.ps1 can run
+          # dependency:copy-dependencies (which resolves from ~/.m2).
+          Write-Host "  [1/2] Installing all core modules ..."
+          & $mavenCommand install -DskipTests -Dmaven.javadoc.skip=true -q
           if ($LASTEXITCODE -ne 0) {
-            throw "browser4-dependencies install failed with exit code $LASTEXITCODE"
+            throw "Core modules install failed with exit code $LASTEXITCODE"
           }
 
-          # Step 2: Install the bundle module and its reactor dependencies.
-          # Use 'install' (not 'package') — build-runtime-bundle.ps1 later runs
-          # dependency:copy-dependencies which needs artifacts in ~/.m2/repository.
+          # Step 2: Install the bundle module itself (needs asset-bundle profile
+          # to be visible in the reactor).
           Write-Host "  [2/2] Installing ${{ env.BUNDLE_MODULE_PATH }} ..."
           $mvnArgs = @(
               'install',
