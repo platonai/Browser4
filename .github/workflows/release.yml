@@ -886,7 +886,8 @@ jobs:
           # must be locally installed before build-runtime-bundle.ps1 can run
           # dependency:copy-dependencies (which resolves from ~/.m2).
           Write-Host "  [1/2] Installing all core modules ..."
-          & $mavenCommand install -DskipTests -Dmaven.javadoc.skip=true -q
+          $coreArgs = @('install', '-DskipTests', '-Dmaven.javadoc.skip=true', '-q')
+          & $mavenCommand @coreArgs
           if ($LASTEXITCODE -ne 0) {
             throw "Core modules install failed with exit code $LASTEXITCODE"
           }
