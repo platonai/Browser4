@@ -864,7 +864,15 @@ jobs:
           Write-Host "=== Building ${{ env.BUNDLE_JAR_NAME }} ===" -ForegroundColor Cyan
 
           $mavenCommand = if ($IsWindows) { '.\mvnw.cmd' } else { './mvnw' }
-          & $mavenCommand package -pl '${{ env.BUNDLE_MODULE_PATH }}' -am -Passet-bundle -DskipTests=true -Dmaven.javadoc.skip=true
+          $mvnArgs = @(
+              'package',
+              '-pl', '${{ env.BUNDLE_MODULE_PATH }}',
+              '-am',
+              '-Passet-bundle',
+              '-DskipTests=true',
+              '-Dmaven.javadoc.skip=true'
+          )
+          & $mavenCommand @mvnArgs
           if ($LASTEXITCODE -ne 0) {
             throw "Bundle jar build failed with exit code $LASTEXITCODE"
           }
