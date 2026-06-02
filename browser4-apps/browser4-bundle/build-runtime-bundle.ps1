@@ -389,8 +389,30 @@ set "MAIN_CLASS=$mainClass"
 # Main script
 # ============================================================================
 
+# Auto-build the bundle JAR if it doesn't exist yet.
 if (-not (Test-Path $JarPath)) {
-    throw "Browser4 bundle jar not found: $JarPath"
+    Write-Host "Bundle JAR not found, building from source ..." -ForegroundColor Yellow
+
+    $repoRoot = git rev-parse --show-toplevel
+    $mvnCmd = if (Get-IsWindows) { Join-Path $repoRoot 'mvnw.cmd' } else { Join-Path $repoRoot 'mvnw' }
+    $bundleModule = 'browser4-apps/browser4-bundle'
+
+    # Install all core modules first (needed for dependency resolution).
+    Write-Host "  Installing core modules ..."
+    $coreArgs = @('install', '-DskipTests', '-Dmaven.javadoc.skip=true', '-q')
+    & $mvnCmd @coreArgs
+    if ($LASTEXITCODE -ne 0) { throw "Core modules install failed with exit code $LASTEXITCODE" }
+
+    # Build and install the bundle module.
+    Write-Host "  Building $bundleModule ..."
+    $bundleArgs = @('install', '-pl', $bundleModule, '-am', '-Passet-bundle', '-DskipTests', '-Dmaven.javadoc.skip=true', '-q')
+    & $mvnCmd @bundleArgs
+    if ($LASTEXITCODE -ne 0) { throw "Bundle JAR build failed with exit code $LASTEXITCODE" }
+
+    if (-not (Test-Path $JarPath)) {
+        throw "Bundle JAR still not found after build: $JarPath"
+    }
+    Write-Host "  Bundle JAR built successfully." -ForegroundColor Green
 }
 
 $resolvedJarPath = (Resolve-Path $JarPath).Path

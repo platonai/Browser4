@@ -873,54 +873,6 @@ jobs:
 
           java -version
 
-      - name: Build Browser4 Bundle JAR
-        shell: pwsh
-        run: |
-          Write-Host "=== Building ${{ env.BUNDLE_JAR_NAME }} ===" -ForegroundColor Cyan
-
-          $mavenCommand = if ($IsWindows) { '.\mvnw.cmd' } else { './mvnw' }
-
-          # Install the entire project reactor to ~/.m2.  The bundle module and
-          # its transitive dependencies (browser4-resources, browser4-skeleton,
-          # browser4-agentic, etc.) are not published to Maven Central, so they
-          # must be locally installed before build-runtime-bundle.ps1 can run
-          # dependency:copy-dependencies (which resolves from ~/.m2).
-          Write-Host "  [1/2] Installing all core modules ..."
-          $coreArgs = @('install', '-DskipTests', '-Dmaven.javadoc.skip=true', '-q')
-          & $mavenCommand @coreArgs
-          if ($LASTEXITCODE -ne 0) {
-            throw "Core modules install failed with exit code $LASTEXITCODE"
-          }
-
-          # Step 2: Install the bundle module itself (needs asset-bundle profile
-          # to be visible in the reactor).
-          Write-Host "  [2/2] Installing ${{ env.BUNDLE_MODULE_PATH }} ..."
-          $mvnArgs = @(
-              'install',
-              '-pl', '${{ env.BUNDLE_MODULE_PATH }}',
-              '-am',
-              '-Passet-bundle',
-              '-DskipTests=true',
-              '-Dmaven.javadoc.skip=true'
-          )
-          & $mavenCommand @mvnArgs
-          if ($LASTEXITCODE -ne 0) {
-            throw "Bundle jar build failed with exit code $LASTEXITCODE"
-          }
-
-          $jarPath = '${{ env.BUNDLE_JAR_PATH }}'
-          if (-not (Test-Path -LiteralPath $jarPath -PathType Leaf)) {
-            Write-Host "❌ ${{ env.BUNDLE_JAR_NAME }} not found at $jarPath" -ForegroundColor Red
-            Write-Host 'Available JARs:' -ForegroundColor Yellow
-            Get-ChildItem -Path . -Recurse -Filter '*.jar' -File | Select-Object -First 10 | ForEach-Object {
-              Write-Host "  $($_.FullName)"
-            }
-            throw "Missing runtime bundle jar at $jarPath"
-          }
-
-          $jarSizeBytes = (Get-Item -LiteralPath $jarPath).Length
-          Write-Host "✅ ${{ env.BUNDLE_JAR_NAME }} built successfully ($jarSizeBytes bytes)" -ForegroundColor Green
-
       - name: Build Browser4 runtime bundle
         shell: pwsh
         run: |
