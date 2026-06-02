@@ -101,6 +101,7 @@ function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
 
     if ($hasIT) { $mvnTestArgs += '-DrunITs=true' }
     if ($hasE2E) { $mvnTestArgs += '-DrunE2ETests=true' }
+    if ($hasIT -or $hasE2E -or $hasRest) { $mvnTestArgs += '-Ptests-browser4' }
 
     $modules = @()
     if ($hasSkills -or $hasMcp) {

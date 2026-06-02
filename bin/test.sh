@@ -86,6 +86,9 @@ run_maven_tests() {
 
   [[ "$has_it" == "true" ]] && mvn_test_args+=("-DrunITs=true")
   [[ "$has_e2e" == "true" ]] && mvn_test_args+=("-DrunE2ETests=true")
+  if [[ "$has_it" == "true" || "$has_e2e" == "true" || "$has_rest" == "true" ]]; then
+    mvn_test_args+=("-Ptests-browser4")
+  fi
   if [[ "$has_skills" == "true" || "$has_mcp" == "true" ]]; then
     modules+=("browser4-agentic")
 
