@@ -231,6 +231,10 @@ function Test-ValidJar([string]$jarPath) {
 }
 
 function Get-JdepsClassPath([string]$libDirectory) {
+    # Use wildcard classpath (lib/*) instead of listing every JAR individually.
+    # Joining all JAR paths into a single argument easily exceeds the Windows
+    # command-line length limit (~32K chars) when the dependency tree is deep.
+    # Java / jdeps resolve wildcard classpaths natively.
     $validJars = @(
         Get-ChildItem -Path $libDirectory -File -Filter '*.jar' -ErrorAction SilentlyContinue |
             Where-Object { Test-ValidJar $_.FullName } |
@@ -241,7 +245,9 @@ function Get-JdepsClassPath([string]$libDirectory) {
         return $null
     }
 
-    return ($validJars -join (Get-PathSeparator))
+    # Normalize to forward slashes for Java compatibility on all platforms.
+    $normalizedPath = $libDirectory -replace '\\', '/'
+    return "$normalizedPath/*"
 }
 
 function Get-BundleMetadataJson(

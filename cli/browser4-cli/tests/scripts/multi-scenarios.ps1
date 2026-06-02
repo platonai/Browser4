@@ -51,7 +51,8 @@ param(
     [switch] $Release,
     [switch] $SkipBuild,
     [switch] $SkipServerBuild,
-    [switch] $ForceServerBuild
+    [switch] $ForceServerBuild,
+    [string] $RuntimeBundleHome = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -68,10 +69,42 @@ if (-not $RepoRoot) { throw 'Cannot find repo root (no pom.xml found up the tree
 $BinaryName = if ($IsWindows) { 'browser4-cli.exe' } else { 'browser4-cli' }
 $Profile = if ($Release) { 'release' } else { 'debug' }
 $BinaryPath = "$ProjectDir\target\$Profile\$BinaryName"
+$ScenarioTimeoutSeconds = 300   # per-scenario timeout (5 min)
+$ServerLogTailLines = 1000      # lines to tail from pulsar.log on failure
+
+# Auto-detect RuntimeBundleHome when not explicitly provided.
+if (-not $RuntimeBundleHome) {
+    $bundleTargetDir = Join-Path $RepoRoot 'browser4-apps\browser4-bundle\target\runtime-bundle'
+    if (Test-Path $bundleTargetDir) {
+        $candidate = Get-ChildItem -Path $bundleTargetDir -Recurse -Directory -Filter 'logs' -ErrorAction SilentlyContinue `
+            | Where-Object { Test-Path (Join-Path $_.FullName 'pulsar.log') } `
+            | Select-Object -First 1
+        if ($candidate) {
+            $RuntimeBundleHome = Split-Path -Parent $candidate.FullName
+        }
+    }
+}
 
 # -------------------------------------------------------------------
 # Helpers
 # -------------------------------------------------------------------
+
+<#
+.SYNOPSIS
+    Return the last $TailLines lines from the server-side pulsar.log.
+    Returns $null when the log file cannot be found.
+#>
+function Get-ServerLogTail {
+    param([string]$BundleHome, [int]$TailLines = 1000)
+    if (-not $BundleHome) { return $null }
+    $logPath = Join-Path $BundleHome 'logs\pulsar.log'
+    if (-not (Test-Path $logPath)) { return $null }
+    try {
+        return Get-Content -Path $logPath -Tail $TailLines -ErrorAction Stop | Out-String
+    } catch {
+        return "!!! Could not read server log: $($_.Exception.Message)"
+    }
+}
 
 <#
 .SYNOPSIS
@@ -85,6 +118,7 @@ function Get-SourceFingerprint {
     foreach ($dir in $Paths) {
         if (-not (Test-Path $dir)) { continue }
         Get-ChildItem -Path $dir -Recurse -File -ErrorAction SilentlyContinue `
+            | Where-Object { $_.DirectoryName -notmatch '(^|[\\/])target([\\/]|$)' } `
             | Sort-Object FullName `
             | ForEach-Object {
                 $null = $sb.AppendLine("$($_.FullName)|$($_.LastWriteTimeUtc.Ticks)|$($_.Length)")
@@ -173,7 +207,7 @@ function Invoke-ServerBuildIfNeeded {
     $null = New-Item -Path (Split-Path $fingerprintFile) -ItemType Directory -Force -ErrorAction SilentlyContinue
     Set-Content -Path $fingerprintFile -Value $newFingerprint -NoNewline
 
-    Write-Host "  ✅ Server build complete  ($($sw.Elapsed.TotalSeconds.ToString('F1'))s)" -ForegroundColor Green
+    Write-Host ("  ✅ Server build complete  ({0:F1}s)" -f $sw.Elapsed.TotalSeconds) -ForegroundColor Green
 }
 
 # -------------------------------------------------------------------
@@ -225,6 +259,10 @@ $TotalPasses = 0
 $TotalFailures = 0
 $IterationTimings = [System.Collections.ArrayList]::new()
 
+# Per-scenario log directory.
+$LogDir = Join-Path $ScriptDir 'logs'
+$null = New-Item -Path $LogDir -ItemType Directory -Force -ErrorAction SilentlyContinue
+
 for ($iteration = 1; $iteration -le $Iterations; $iteration++) {
     Write-Host "`n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
     Write-Host "  Iteration $iteration / $Iterations" -ForegroundColor Cyan
@@ -253,17 +291,100 @@ for ($iteration = 1; $iteration -le $Iterations; $iteration++) {
         } else {
             'powershell.exe'
         }
-        $proc = Start-Process -FilePath $pwshPath `
-            -ArgumentList '-NoProfile', '-NonInteractive', '-File', $scenarioPath `
-            -PassThru -Wait -NoNewWindow
+        # Launch via .NET Process class: stdin pipe is closed immediately so
+        # child reads return EOF.  stdout/stderr are captured for the log file.
+        $logName = "iter{0:D3}_{1}" -f $iteration, [IO.Path]::GetFileNameWithoutExtension($scenario)
+        $logFile = Join-Path $LogDir "$logName.log"
+        $psi = [Diagnostics.ProcessStartInfo]@{
+            FileName               = $pwshPath
+            Arguments              = "-NoProfile -NonInteractive -File `"$scenarioPath`""
+            UseShellExecute        = $false
+            CreateNoWindow         = $true
+            RedirectStandardInput  = $true
+            RedirectStandardOutput = $true
+            RedirectStandardError  = $true
+        }
+        $proc = [Diagnostics.Process]::Start($psi)
+        $proc.StandardInput.Close()
 
+        # Read streams asynchronously while the process runs.
+        $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+        $stderrTask = $proc.StandardError.ReadToEndAsync()
+
+        # Wait with timeout.
+        if (-not $proc.WaitForExit($ScenarioTimeoutSeconds * 1000)) {
+            Write-Host ("⏱  TIMEOUT ({0}s) — killing process tree" -f $ScenarioTimeoutSeconds) -ForegroundColor Red
+            $proc.Kill($true)
+            $proc.WaitForExit(5000) | Out-Null
+            $sw.Stop()
+            try { $stdout = $stdoutTask.Result } catch { $stdout = '<timeout — no output captured>' }
+            try { $stderr = $stderrTask.Result } catch { $stderr = '' }
+            $serverLog = Get-ServerLogTail -BundleHome $RuntimeBundleHome -TailLines $ServerLogTailLines
+            @"
+=== Scenario : $scenario
+=== Iteration: $iteration
+=== Started  : $($iterStarted.ToString('yyyy-MM-dd HH:mm:ss'))
+=== Status   : TIMEOUT ($ScenarioTimeoutSeconds s)
+=== Elapsed  : $('{0:F1}' -f $sw.Elapsed.TotalSeconds)s
+=== ExitCode : (killed)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STDOUT:
+$stdout
+STDERR:
+$stderr
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SERVER LOG (last $ServerLogTailLines lines – $RuntimeBundleHome\logs\pulsar.log):
+$serverLog
+"@ | Set-Content -Path $logFile
+            # Print server log tail to console on failure.
+            if ($serverLog) { Write-Host "`n  ── SERVER LOG TAIL ──" -ForegroundColor Red; Write-Host $serverLog -ForegroundColor DarkYellow }
+            Write-Host "  📄 $logName.log" -ForegroundColor DarkGray
+            $iterFailures++
+            continue
+        }
         $sw.Stop()
+        $stdout = $stdoutTask.Result
+        $stderr = $stderrTask.Result
+
+        # Echo captured output to console (non-real-time, but captured in full).
+        if ($stdout) { Write-Host $stdout }
+        if ($stderr) { Write-Host $stderr -ForegroundColor DarkYellow }
 
         if ($proc.ExitCode -eq 0) {
-            Write-Host "✅  $($sw.Elapsed.TotalSeconds.ToString('F1'))s" -ForegroundColor Green
+            # Write log file (success – no server log needed).
+            @"
+=== Scenario : $scenario
+=== Iteration: $iteration
+=== Started  : $($iterStarted.ToString('yyyy-MM-dd HH:mm:ss'))
+=== Elapsed  : $('{0:F1}' -f $sw.Elapsed.TotalSeconds)s
+=== ExitCode : $($proc.ExitCode)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STDOUT:
+$stdout
+STDERR:
+$stderr
+"@ | Set-Content -Path $logFile
+            Write-Host ("✅  {0:F1}s  📄 {1}.log" -f $sw.Elapsed.TotalSeconds, $logName) -ForegroundColor Green
             $iterPasses++
         } else {
-            Write-Host "❌  exit=$($proc.ExitCode)  $($sw.Elapsed.TotalSeconds.ToString('F1'))s" -ForegroundColor Red
+            $serverLog = Get-ServerLogTail -BundleHome $RuntimeBundleHome -TailLines $ServerLogTailLines
+            @"
+=== Scenario : $scenario
+=== Iteration: $iteration
+=== Started  : $($iterStarted.ToString('yyyy-MM-dd HH:mm:ss'))
+=== Elapsed  : $('{0:F1}' -f $sw.Elapsed.TotalSeconds)s
+=== ExitCode : $($proc.ExitCode)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+STDOUT:
+$stdout
+STDERR:
+$stderr
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SERVER LOG (last $ServerLogTailLines lines – $RuntimeBundleHome\logs\pulsar.log):
+$serverLog
+"@ | Set-Content -Path $logFile
+            if ($serverLog) { Write-Host "`n  ── SERVER LOG TAIL ──" -ForegroundColor Red; Write-Host $serverLog -ForegroundColor DarkYellow }
+            Write-Host ("❌  exit=$($proc.ExitCode)  {0:F1}s  📄 {1}.log" -f $sw.Elapsed.TotalSeconds, $logName) -ForegroundColor Red
             $iterFailures++
         }
     }
@@ -280,7 +401,9 @@ for ($iteration = 1; $iteration -le $Iterations; $iteration++) {
     $TotalFailures += $iterFailures
 
     Write-Host "  ──────────────────────────────────────────────" -ForegroundColor DarkGray
-    Write-Host "  Passes: $iterPasses  Failures: $iterFailures  Elapsed: $($iterElapsed.ToString('mm\:ss'))" -ForegroundColor $(if ($iterFailures -eq 0) { 'Green' } else { 'Red' })
+    $elapsedStr = $iterElapsed.ToString('mm\:ss')
+    $color = if ($iterFailures -eq 0) { 'Green' } else { 'Red' }
+    Write-Host "  Passes: $iterPasses  Failures: $iterFailures  Elapsed: $elapsedStr" -ForegroundColor $color
 }
 
 # -------------------------------------------------------------------
@@ -297,15 +420,15 @@ Write-Host "  Scenarios  : $($Scenarios.Count) ($($Scenarios -join ', '))"
 Write-Host "  Total runs : $($TotalPasses + $TotalFailures)"
 Write-Host "  Passes     : $TotalPasses" -ForegroundColor $(if ($TotalPasses -gt 0) { 'Green' } else { 'Red' })
 Write-Host "  Failures   : $TotalFailures" -ForegroundColor $(if ($TotalFailures -eq 0) { 'Green' } else { 'Red' })
-Write-Host "  Started    : $($SuiteStartedAt.ToString('yyyy-MM-dd HH:mm:ss'))"
-Write-Host "  Finished   : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-Write-Host "  Elapsed    : $($SuiteElapsed.ToString('hh\:mm\:ss'))"
+Write-Host ("  Started    : {0:yyyy-MM-dd HH:mm:ss}" -f $SuiteStartedAt)
+Write-Host ("  Finished   : {0:yyyy-MM-dd HH:mm:ss}" -f (Get-Date))
+Write-Host ("  Elapsed    : {0:hh\:mm\:ss}" -f $SuiteElapsed)
 
 $failedIters = $IterationTimings | Where-Object { $_.Failures -gt 0 }
 if ($failedIters) {
     Write-Host "`n  Failed iterations:" -ForegroundColor Red
     foreach ($f in $failedIters) {
-        Write-Host "    Iter $($f.Iteration): $($f.Failures) failures in $($f.Elapsed.ToString('mm\:ss'))" -ForegroundColor Red
+        Write-Host ("    Iter $($f.Iteration): $($f.Failures) failures in {0:mm\:ss}" -f $f.Elapsed) -ForegroundColor Red
     }
 }
 

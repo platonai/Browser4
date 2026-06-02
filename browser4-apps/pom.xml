@@ -20,8 +20,4 @@
 
     <name>Browser4 Apps</name>
 
-    <modules>
-        <module>browser4-bundle</module>
-        <module>browser4-standalone</module>
-    </modules>
 </project>
