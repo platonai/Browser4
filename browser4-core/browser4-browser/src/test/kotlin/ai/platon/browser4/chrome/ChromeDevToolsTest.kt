@@ -4,8 +4,8 @@ import ai.platon.browser4.chrome.handler.RemoteChromeProtocol
 import ai.platon.browser4.chrome.util.LauncherOptions
 import ai.platon.pulsar.browser.impl.BrowserProtocol
 import ai.platon.pulsar.common.browser.BrowserFiles
+import ai.platon.pulsar.common.serialize.json.Pson
 import ai.platon.pulsar.common.sleepSeconds
-import com.google.gson.Gson
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Test
 import kotlin.test.AfterTest
@@ -28,7 +28,7 @@ class ChromeDevToolsTest {
         chrome = launcher.launch()
 
         val tab = chrome.createTab()
-        val versionString = Gson().toJson(chrome.version)
+        val versionString = Pson.toJson(chrome.version)
         assertTrue(!chrome.version.browser.isNullOrBlank())
         assertTrue(versionString.contains("Mozilla"))
 

@@ -1,10 +1,12 @@
 package ai.platon.pulsar.skeleton.workflow.common.urls
 
-import ai.platon.pulsar.skeleton.common.options.LoadOptions
-import ai.platon.pulsar.common.urls.*
-import ai.platon.pulsar.skeleton.common.urls.CombinedUrlNormalizer
 import ai.platon.pulsar.common.printlnPro
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
+import ai.platon.pulsar.common.urls.*
+import ai.platon.pulsar.skeleton.common.options.LoadOptions
+import ai.platon.pulsar.skeleton.common.urls.CombinedUrlNormalizer
 import ai.platon.pulsar.skeleton.workflow.common.url.ParsableHyperlink
+import com.fasterxml.jackson.module.kotlin.readValue
 import com.google.gson.GsonBuilder
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -40,19 +42,20 @@ class HyperlinkTests {
     @Test
     fun testSerialization() {
         val u1 = Hyperlink(UrlCommon.urlString1)
-        val gson = GsonBuilder().create()
-        val json = gson.toJson(u1)
+        val json = pulsarObjectMapper().writeValueAsString(u1)
         printlnPro(json)
         assertTrue { json.contains(UrlCommon.urlString1) }
-        val u2 = gson.fromJson(json, Hyperlink::class.java)
+        val u2 = pulsarObjectMapper().readValue<Hyperlink>(json)
         printlnPro(u2)
         assertEquals(UrlCommon.urlString1, u2.url)
     }
 
     @Test
     fun testHyperlinkDatumSerialization() {
-        val u1 = Hyperlink(UrlCommon.urlString1, "fully", 100, args = "-i 1s",
-            referrer = "http://bar.tt/", href = "http://foo.com/sp?se=1")
+        val u1 = Hyperlink(
+            UrlCommon.urlString1, "fully", 100, args = "-i 1s",
+            referrer = "http://bar.tt/", href = "http://foo.com/sp?se=1"
+        )
         val gson = GsonBuilder().create()
         val json = gson.toJson(u1.data())
         printlnPro(json)

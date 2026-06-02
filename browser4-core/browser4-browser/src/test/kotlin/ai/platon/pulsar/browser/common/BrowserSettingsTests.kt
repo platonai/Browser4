@@ -23,7 +23,6 @@ class BrowserSettingsTests {
         assertNotNull(json)
 
         val settings2: InteractSettings = pulsarObjectMapper().readValue(json)
-//        val settings2 = Gson().fromJson(json, InteractSettings::class.java)
         assertEquals(settings.toString(), settings2.toString())
     }
 
@@ -120,7 +119,6 @@ class BrowserSettingsTests {
         assertNotNull(json)
 
         val settings2: InteractSettings = pulsarObjectMapper().readValue(json)
-//        val settings2 = Gson().fromJson(json, InteractSettings::class.java)
         assertEquals(settings.toString(), settings2.toString())
     }
 }

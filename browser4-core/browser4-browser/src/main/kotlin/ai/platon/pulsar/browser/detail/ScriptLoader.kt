@@ -6,7 +6,7 @@ import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.ResourceLoader
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.getLogger
-import com.google.gson.GsonBuilder
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import java.nio.file.Files
 import kotlin.io.path.isReadable
 import kotlin.io.path.listDirectoryEntries
@@ -91,7 +91,7 @@ open class ScriptLoader(
 
     private fun generatePredefinedJsConfig(): String {
         // Note: Json-2.6.2 does not recognize MutableMap, but knows Map
-        val configs = GsonBuilder().create().toJson(jsInitParameters.toMap())
+        val configs = pulsarObjectMapper().writeValueAsString(jsInitParameters.toMap())
 
         // set predefined variables shared between JavaScript and jvm program
         val configVar = confuser.confuse("__pulsar_CONFIGS")

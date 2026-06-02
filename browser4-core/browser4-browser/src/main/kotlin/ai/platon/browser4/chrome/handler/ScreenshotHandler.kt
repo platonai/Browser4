@@ -8,7 +8,6 @@ import ai.platon.pulsar.browser.impl.NodeRef
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.math.geometric.RectD
-import com.google.gson.Gson
 import kotlin.math.roundToInt
 
 class ScreenshotHandler(
@@ -138,10 +137,6 @@ class ScreenshotHandler(
         val viewport = cdpActive.getLayoutMetrics().cssLayoutViewport
         val pageX = viewport.pageX
         val pageY = viewport.pageY
-
-        if (debugLevel > 50) {
-            println(Gson().toJson(viewport))
-        }
 
         return NodeClip(node, pageX, pageY, rect)
     }
