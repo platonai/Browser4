@@ -26,8 +26,10 @@ RUN --mount=type=cache,target=/root/.m2 \
     mvn clean package -Passet-standalone -DskipTests -Dmaven.javadoc.skip=true -B -V && \
     echo "Build completed successfully"
 
-# Copy the standalone JAR using its exact known path — no glob / find needed.
-COPY ${STANDALONE_MODULE}/target/Browser4.jar /build/app.jar
+# Copy the JAR that Maven just built inside the container.
+# Use RUN cp (not COPY) — COPY would pull from the Docker build context
+# (host filesystem), which does not have the freshly-built JAR.
+RUN cp ${STANDALONE_MODULE}/target/Browser4.jar /build/app.jar
 
 # Validate the JAR before proceeding to the runtime stage.
 RUN jar xf /build/app.jar META-INF/MANIFEST.MF && \
