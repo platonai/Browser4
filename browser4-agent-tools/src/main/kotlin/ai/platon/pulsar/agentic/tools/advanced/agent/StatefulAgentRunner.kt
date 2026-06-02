@@ -4,14 +4,16 @@ import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.event.AgentEventBus
 import ai.platon.pulsar.agentic.event.detail.DefaultServerSideAgentEventHandlers
 import ai.platon.pulsar.common.ResourceStatus
-import ai.platon.pulsar.common.concurrent.ConcurrentExpiringLRUCache
 import ai.platon.pulsar.common.getLogger
+import com.github.benmanes.caffeine.cache.Cache
+import com.github.benmanes.caffeine.cache.Caffeine
 import kotlinx.coroutines.*
-import java.time.Duration
+import java.io.Closeable
+import java.util.concurrent.TimeUnit
 
 class StatefulAgentRunner(
     val session: AgenticSession
-) {
+) : Closeable {
     private val logger = getLogger(StatefulAgentRunner::class)
 
     // Create a dedicated dispatcher for long-running command operations
@@ -21,12 +23,23 @@ class StatefulAgentRunner(
     )
 
     /**
-     * TODO: use UrlPool instead
+     * Size-bounded, time-expiring cache of agent task statuses.
+     *
+     * - Entries live at most 2 hours after last write.
+     * - At most 10 000 entries; Window TinyLFU eviction beyond that.
      * */
-    private val statusCache = ConcurrentExpiringLRUCache<String, AgentTaskStatus>(Duration.ofHours(2))
+    private val statusCache: Cache<String, AgentTaskStatus> = Caffeine.newBuilder()
+        .maximumSize(10_000)
+        .expireAfterWrite(2, TimeUnit.HOURS)
+        .recordStats()
+        .build()
 
     fun create(): AgentTaskStatus {
-        return createCachedStatus()
+        val status = AgentTaskStatus()
+        statusCache.put(status.id, status)
+        status.emitEvent("StatefulAgentRunner.created")
+        logger.debug("Created agent task status {}", status.id)
+        return status
     }
 
     /**
@@ -39,7 +52,7 @@ class StatefulAgentRunner(
      * @return AgentStatus containing the execution result.
      */
     suspend fun execute(plainCommand: String): AgentTaskStatus {
-        val status = createCachedStatus()
+        val status = create()
         execute(plainCommand, status)
         return status
     }
@@ -119,14 +132,27 @@ class StatefulAgentRunner(
         status.refresh(ResourceStatus.SC_OK)
     }
 
-    fun getStatus(id: String) = statusCache.getDatum(id)
+    fun getStatus(id: String) = statusCache.getIfPresent(id)
 
-    fun getResult(id: String) = statusCache.getDatum(id)?.agentHistory?.lastOrNull()
+    fun getResult(id: String) = statusCache.getIfPresent(id)?.agentHistory?.lastOrNull()
 
-    private fun createCachedStatus(): AgentTaskStatus {
-        val status = AgentTaskStatus()
-        statusCache.putDatum(status.id, status)
-        status.emitEvent("StatefulAgentRunner.created")
-        return status
+    /**
+     * Return cache statistics for observability.
+     * */
+    fun cacheStats(): Map<String, Any> {
+        val stats = statusCache.stats()
+        return mapOf(
+            "estimatedSize" to statusCache.estimatedSize(),
+            "hitCount" to stats.hitCount(),
+            "missCount" to stats.missCount(),
+            "hitRate" to "%.2f".format(stats.hitRate()),
+            "evictionCount" to stats.evictionCount(),
+        )
+    }
+
+    override fun close() {
+        commanderScope.cancel()
+        statusCache.invalidateAll()
+        logger.info("StatefulAgentRunner closed (session={})", session.uuid)
     }
 }

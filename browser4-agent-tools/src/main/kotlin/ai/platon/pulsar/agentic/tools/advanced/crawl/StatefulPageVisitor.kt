@@ -10,7 +10,6 @@ import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.ai.llm.PromptTemplate
 import ai.platon.pulsar.common.alwaysFalse
-import ai.platon.pulsar.common.concurrent.ConcurrentExpiringLRUCache
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.serialize.json.FlatJSONExtractor
 import ai.platon.pulsar.common.sql.SQLTemplate
@@ -23,10 +22,12 @@ import ai.platon.pulsar.skeleton.event.DefaultServerSideEventHandlers
 import ai.platon.pulsar.skeleton.event.PageEventHandlers
 import ai.platon.pulsar.skeleton.event.PulsarEventBus
 import ai.platon.pulsar.skeleton.event.impl.PageEventHandlersFactory
+import com.github.benmanes.caffeine.cache.Cache
+import com.github.benmanes.caffeine.cache.Caffeine
 import kotlinx.coroutines.*
 import java.io.Closeable
 import java.nio.file.Files
-import java.time.Duration
+import java.util.concurrent.TimeUnit
 import kotlin.io.path.writeText
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -38,15 +39,23 @@ class StatefulPageVisitor(
     private val scrapeService = ScrapeService(session)
 
     /**
-     * TODO: use UrlPool instead
+     * Size-bounded, time-expiring cache of page visit statuses.
+     *
+     * - Entries live at most 2 hours after last write (matches the original
+     *   [ai.platon.pulsar.common.concurrent.ConcurrentExpiringLRUCache] TTL).
+     * - At most 10 000 entries; Window TinyLFU eviction beyond that.
      * */
-    private val statusCache = ConcurrentExpiringLRUCache<String, PageVisitStatus>(Duration.ofHours(2))
+    private val statusCache: Cache<String, PageVisitStatus> = Caffeine.newBuilder()
+        .maximumSize(10_000)
+        .expireAfterWrite(2, TimeUnit.HOURS)
+        .recordStats()
+        .build()
 
     fun create(): PageVisitStatus {
         val status = PageVisitStatus()
-        // status.request = request
-        statusCache.putDatum(status.id, status)
+        statusCache.put(status.id, status)
         status.emitEvent("StatefulPageVisitor.onCreated")
+        logger.debug("Created page visit status {}", status.id)
         return status
     }
 
@@ -77,9 +86,23 @@ class StatefulPageVisitor(
         return status
     }
 
-    fun getStatus(id: String) = statusCache.getDatum(id)
+    fun getStatus(id: String) = statusCache.getIfPresent(id)
 
-    fun getResult(id: String) = statusCache.getDatum(id)?.pageVisitResult
+    fun getResult(id: String) = statusCache.getIfPresent(id)?.pageVisitResult
+
+    /**
+     * Return cache statistics for observability.
+     * */
+    fun cacheStats(): Map<String, Any> {
+        val stats = statusCache.stats()
+        return mapOf(
+            "estimatedSize" to statusCache.estimatedSize(),
+            "hitCount" to stats.hitCount(),
+            "missCount" to stats.missCount(),
+            "hitRate" to "%.2f".format(stats.hitRate()),
+            "evictionCount" to stats.evictionCount(),
+        )
+    }
 
     /**
      * Executes a command based on the provided PromptRequestL2 object.
@@ -131,6 +154,7 @@ class StatefulPageVisitor(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            logger.error("Page visit failed for command {} (url={})", status.id, request.url, e)
             status.message = e.message
             status.failed(ResourceStatus.SC_EXPECTATION_FAILED)
         } finally {
@@ -196,6 +220,7 @@ class StatefulPageVisitor(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            logger.error("Document analysis failed for command {} (url={})", status.id, request.url, e)
             status.message = e.message
             status.failed(ResourceStatus.SC_EXPECTATION_FAILED)
         }
@@ -212,7 +237,6 @@ class StatefulPageVisitor(
         var richText: String? = null
         var textContent: String? = null
         if (pageSummaryPrompt != null || dataExtractionRules != null) {
-            // TODO: DomUtils.selectNthScreenText
             textContent = when {
                 request.richText == true -> {
                     DomUtils.selectNthScreenRichText(screenNumber, document).also { richText = it }
@@ -220,7 +244,6 @@ class StatefulPageVisitor(
 
                 else -> {
                     document.text
-                    // DomUtils.selectNthScreenText(screenNumber, document)
                 }
             }
             status.emitEvent("textContent")
@@ -229,7 +252,7 @@ class StatefulPageVisitor(
                 if (document.body.numChars > 100) {
                     val path = document.export()
                     logger.warn(
-                        "Not textContent found on screen: {} but there are chars in body: {}, exported to {}",
+                        "No textContent found on screen: {} but there are chars in body: {}, exported to {}",
                         screenNumber, document.body.numChars, path.toUri()
                     )
                 }
@@ -300,7 +323,7 @@ class StatefulPageVisitor(
                 return null
             }
 
-            val inferred = chatWithLLMWithTimeout(resolvedRules, Duration.ofSeconds(45))
+            val inferred = chatWithLLMWithTimeout(resolvedRules, java.time.Duration.ofSeconds(45))
             if (inferred.isBlank()) {
                 logger.warn("URI regex inference timed out or returned empty")
                 return null
@@ -316,7 +339,7 @@ class StatefulPageVisitor(
         return RestAPIPromptUtils.normalizeURIExtractionRegex(resolvedRules)
     }
 
-    private suspend fun chatWithLLMWithTimeout(instruct: String, timeout: Duration): String {
+    private suspend fun chatWithLLMWithTimeout(instruct: String, timeout: java.time.Duration): String {
         val content = withTimeoutOrNull(timeout.toMillis().milliseconds) {
             chatWithLLM(instruct)
         }
@@ -340,23 +363,29 @@ class StatefulPageVisitor(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            // Avoid logging full prompt content (may be large / contain sensitive text).
             logger.error("Failed to chat with LLM | promptLength={}", instruct.length, e)
             return ""
         }
     }
 
-    private fun executeQuery(sql: String, status: PageVisitStatus) {
+    private suspend fun executeQuery(sql: String, status: PageVisitStatus) {
         val scrapeRequest = ScrapeRequest(sql)
         try {
-            val scrapeResponse = scrapeService.executeQuery(scrapeRequest)
+            val scrapeResponse = withContext(Dispatchers.IO) {
+                scrapeService.executeQuery(scrapeRequest)
+            }
             status.statusCode = scrapeResponse.statusCode
             status.ensurePageVisitResult().xsqlResultSet = scrapeResponse.resultSet
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
+            logger.error("Failed to execute X-SQL query for command {}", status.id, e)
             status.statusCode = ResourceStatus.SC_EXPECTATION_FAILED
         }
     }
 
     override fun close() {
+        statusCache.invalidateAll()
+        logger.info("StatefulPageVisitor closed (session={})", session.uuid)
     }
 }

@@ -5,9 +5,10 @@ import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitStatus
 import ai.platon.pulsar.agentic.tools.advanced.crawl.StatefulPageVisitor
 import ai.platon.pulsar.agentic.tools.advanced.crawl.failed
-import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.PulsarSessionManager
+import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.Strings
+import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.rest.api.entities.CommandResult
 import ai.platon.pulsar.rest.api.entities.CommandStatus
@@ -28,8 +29,8 @@ import kotlin.time.Duration.Companion.milliseconds
  * General-purpose command execution service for page visit and agent commands.
  *
  * This service orchestrates command execution through [StatefulPageVisitor] for page visits
- * and [StatefulAgentRunner] for agent-based commands. It can be used by both REST API
- * and agentic modules.
+ * and [StatefulAgentRunner] for agent-based commands.  It tracks task ownership so that
+ * status lookups hit the correct executor without creating unnecessary objects.
  *
  * @param commandNormalizer Optional normalizer that converts plain text commands into
  *        structured [PageVisitRequest] objects. If not provided, plain text commands
@@ -43,6 +44,8 @@ class UserCommandExecutor(
         const val FLOW_POLLING_INTERVAL = 1000L
     }
 
+    private val logger = getLogger(UserCommandExecutor::class)
+
     // Create a dedicated dispatcher for long-running command operations
     private val commandDispatcher = Dispatchers.IO.limitedParallelism(10)
 
@@ -53,11 +56,23 @@ class UserCommandExecutor(
     private val pageVisitors = ConcurrentHashMap<String, StatefulPageVisitor>()
     private val agentRunners = ConcurrentHashMap<String, StatefulAgentRunner>()
 
+    /**
+     * Tracks which executor owns each task ID so that [getStatus] can route
+     * directly to the right executor without probing both maps.
+     *
+     * Values: "page" or "agent".
+     * */
+    private val taskOwner = ConcurrentHashMap<String, String>()
+
     fun ensurePageVisitor(sessionId: String): StatefulPageVisitor =
-        pageVisitors.getOrPut(sessionId) { StatefulPageVisitor(sessionManager.getOrCreateSession(sessionId).agenticSession) }
+        pageVisitors.getOrPut(sessionId) {
+            StatefulPageVisitor(sessionManager.getOrCreateSession(sessionId).agenticSession)
+        }
 
     fun ensureAgentRunner(sessionId: String): StatefulAgentRunner =
-        agentRunners.getOrPut(sessionId) { StatefulAgentRunner(sessionManager.getOrCreateSession(sessionId).agenticSession) }
+        agentRunners.getOrPut(sessionId) {
+            StatefulAgentRunner(sessionManager.getOrCreateSession(sessionId).agenticSession)
+        }
 
     suspend fun executePageVisitCommand(
         sessionId: String,
@@ -71,6 +86,8 @@ class UserCommandExecutor(
         request: PageVisitRequest, eventHandlers: PageEventHandlers
     ): String {
         val status = ensurePageVisitor(sessionId).create()
+        taskOwner[status.id] = "page"
+        logger.info("Submitting page visit task {} (session={}, url={})", status.id, sessionId, request.url)
         commanderScope.launch { ensurePageVisitor(sessionId).visit(request, status, eventHandlers) }
         return status.id
     }
@@ -95,15 +112,10 @@ class UserCommandExecutor(
 
         val request = commandNormalizer?.normalize(plainCommand)
         return if (request != null) {
-            // Page visit execution
-            val status = ensurePageVisitor(sessionId).create()
             val eventHandlers = PageEventHandlersFactory.create()
-            ensurePageVisitor(sessionId).visit(request, status, eventHandlers)
-            status.toCommandStatus()
+            ensurePageVisitor(sessionId).visit(request, eventHandlers).toCommandStatus()
         } else {
-            // Open task execution
-            val agentStatus = ensureAgentRunner(sessionId).execute(plainCommand)
-            agentStatus.toCommandStatus()
+            ensureAgentRunner(sessionId).execute(plainCommand).toCommandStatus()
         }
     }
 
@@ -127,11 +139,12 @@ class UserCommandExecutor(
         if (command.isBlank()) {
             val status = ensurePageVisitor(sessionId).create()
             status.failed(ResourceStatus.SC_BAD_REQUEST)
+            taskOwner[status.id] = "page"
             return status.id
         }
 
-        // 2. Only one single url with optional parameters
-        // it is better to use ScrapeController directly for this kind of commands which supports massive scraping
+        // 2. Single URL with optional parameters — use page visit directly
+        // For bulk scraping, use the ScrapeController instead.
         if (isConfiguredUrl(command)) {
             val session = sessionManager.getOrCreateSession(sessionId)
             val url = session.agenticSession.normalize(command)
@@ -148,7 +161,7 @@ class UserCommandExecutor(
             val eventHandlers = PageEventHandlersFactory.create()
             submitPageVisitCommand(sessionId, request, eventHandlers)
         } else {
-            // 4. Free command
+            // 4. Free-form agent command
             submitAgentTask(sessionId, command)
         }
     }
@@ -166,7 +179,7 @@ class UserCommandExecutor(
      * @param plainCommand The plain text command for the agent to execute.
      * @return CommandStatus containing the execution result.
      */
-    suspend fun executeAgentCommand(
+    suspend fun executeAgentTask(
         sessionId: String,
         plainCommand: String
     ): CommandStatus {
@@ -179,13 +192,40 @@ class UserCommandExecutor(
         plainCommand: String
     ): String {
         val status = ensureAgentRunner(sessionId).create()
+        taskOwner[status.id] = "agent"
+        logger.info("Submitting agent task {} (session={})", status.id, sessionId)
         commanderScope.launch { ensureAgentRunner(sessionId).execute(plainCommand, status) }
         return status.id
     }
 
+    /**
+     * Look up a command status by task ID.
+     *
+     * Uses [taskOwner] to route directly to the right executor.  Falls back to
+     * probing both page visitor and agent runner if the task isn't tracked
+     * (e.g. after a server restart).
+     *
+     * @return [CommandStatus] or null if the task ID is unknown.
+     */
     fun getStatus(sessionId: String, id: String): CommandStatus? {
-        return ensurePageVisitor(sessionId).getStatus(id)?.toCommandStatus()
-            ?: ensureAgentRunner(sessionId).getStatus(id)?.toCommandStatus()
+        return when (taskOwner[id]) {
+            "page" -> ensurePageVisitor(sessionId).getStatus(id)?.toCommandStatus()
+                ?: fallbackAgentStatus(sessionId, id)
+            "agent" -> ensureAgentRunner(sessionId).getStatus(id)?.toCommandStatus()
+                ?: fallbackPageStatus(sessionId, id)
+            else -> fallbackPageStatus(sessionId, id)
+                ?: fallbackAgentStatus(sessionId, id)
+        }
+    }
+
+    private fun fallbackPageStatus(sessionId: String, id: String): CommandStatus? {
+        if (!pageVisitors.containsKey(sessionId)) return null
+        return pageVisitors[sessionId]?.getStatus(id)?.toCommandStatus()
+    }
+
+    private fun fallbackAgentStatus(sessionId: String, id: String): CommandStatus? {
+        if (!agentRunners.containsKey(sessionId)) return null
+        return agentRunners[sessionId]?.getStatus(id)?.toCommandStatus()
     }
 
     fun getResult(sessionId: String, id: String): CommandResult? = getStatus(sessionId, id)?.commandResult
@@ -195,14 +235,15 @@ class UserCommandExecutor(
         do {
             delay(FLOW_POLLING_INTERVAL.milliseconds)
 
-            val status = getStatus(sessionId, id) ?: CommandStatus.notFound(id)
+            val status = getStatus(sessionId, id)
+                ?: CommandStatus.notFound(id).also { lastModifiedTime = Instant.EPOCH }
+
             if (status.refreshed(lastModifiedTime)) {
                 emit(status)
-                lastModifiedTime = status.lastModifiedTime
+                lastModifiedTime = status.lastModifiedTime ?: Instant.EPOCH
             }
 
             if (status.isDone) {
-                // emit a final event, it's OK to emit a duplicate event
                 emit(status)
             }
         } while (!status.isDone)
@@ -245,6 +286,16 @@ class UserCommandExecutor(
     fun launchScope(): CoroutineScope = commanderScope
 
     override fun close() {
+        val pageCount = pageVisitors.size
+        val agentCount = agentRunners.size
+        val taskCount = taskOwner.size
         commanderScope.cancel()
+        pageVisitors.values.forEach { runCatching { it.close() } }
+        agentRunners.values.forEach { runCatching { it.close() } }
+        pageVisitors.clear()
+        agentRunners.clear()
+        taskOwner.clear()
+        logger.info("UserCommandExecutor closed ({} page visitors, {} agent runners, {} tracked tasks)",
+            pageCount, agentCount, taskCount)
     }
 }
