@@ -581,6 +581,10 @@ async fn post_command_snapshot(client: &Client, base_url: &str, session_id: &str
         return;
     }
 
+    json_field("page_url", json!(&url_result));
+    json_field("page_title", json!(&title_result));
+    json_field("snapshot_path", json!(out_path.display().to_string()));
+
     cli_println!("### Page");
     cli_println!("- Page URL: {}", url_result);
     cli_println!("- Page Title: {}", title_result);
