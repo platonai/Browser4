@@ -44,6 +44,11 @@ on:
         required: false
         default: false
         type: boolean
+      bundle_only:
+        description: 'Run only the runtime-bundle build (skip Docker, CLI, publish)'
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: release-${{ github.event.inputs.tag || github.ref }}
@@ -88,6 +93,7 @@ jobs:
       skip_docker_push: ${{ steps.prepare.outputs.skip_docker_push }}
       debug_mode: ${{ steps.prepare.outputs.debug_mode }}
       dry_run: ${{ steps.prepare.outputs.dry_run }}
+      bundle_only: ${{ steps.prepare.outputs.bundle_only }}
       should_publish_artifacts: ${{ steps.prepare.outputs.should_publish_artifacts }}
       cli_version: ${{ steps.prepare.outputs.cli_version }}
       cli_should_build: ${{ steps.prepare.outputs.cli_should_build }}
@@ -118,6 +124,7 @@ jobs:
           INPUT_SKIP_DOCKER_PUSH: ${{ github.event.inputs.skip_docker_push || 'false' }}
           INPUT_DEBUG_MODE: ${{ github.event.inputs.debug_mode || 'false' }}
           INPUT_DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          INPUT_BUNDLE_ONLY: ${{ github.event.inputs.bundle_only || 'false' }}
         run: |
           set -euo pipefail
 
@@ -171,6 +178,8 @@ jobs:
             SHOULD_PUBLISH_ARTIFACTS="false"
           fi
 
+          BUNDLE_ONLY="$INPUT_BUNDLE_ONLY"
+
           CLI_VERSION=$(node -p "require('./${{ env.CLI_PACKAGE_DIR }}/package.json').version")
           PACKAGE_NAME=$(node -p "require('./${{ env.CLI_PACKAGE_DIR }}/package.json').name")
 
@@ -203,6 +212,7 @@ jobs:
           echo "skip_docker_push=$INPUT_SKIP_DOCKER_PUSH" >> "$GITHUB_OUTPUT"
           echo "debug_mode=$INPUT_DEBUG_MODE" >> "$GITHUB_OUTPUT"
           echo "dry_run=$EFFECTIVE_DRY_RUN" >> "$GITHUB_OUTPUT"
+          echo "bundle_only=$BUNDLE_ONLY" >> "$GITHUB_OUTPUT"
           echo "should_publish_artifacts=$SHOULD_PUBLISH_ARTIFACTS" >> "$GITHUB_OUTPUT"
           echo "cli_version=$CLI_VERSION" >> "$GITHUB_OUTPUT"
           echo "cli_should_build=$CLI_SHOULD_BUILD" >> "$GITHUB_OUTPUT"
@@ -248,6 +258,7 @@ jobs:
   build-core-and-docker:
     name: Build core artifacts and Docker image
     needs: prepare
+    if: needs.prepare.outputs.bundle_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
@@ -674,7 +685,7 @@ jobs:
   build-cli-binaries:
     name: Build ${{ matrix.name }}
     needs: prepare
-    if: needs.prepare.outputs.cli_should_build == 'true'
+    if: needs.prepare.outputs.cli_should_build == 'true' && needs.prepare.outputs.bundle_only != 'true'
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -807,6 +818,10 @@ jobs:
   build-runtime-bundles:
     name: Build runtime bundle (${{ matrix.name }})
     needs: [prepare, build-core-and-docker]
+    if: |
+      always() &&
+      needs.prepare.result == 'success' &&
+      (needs.build-core-and-docker.result == 'success' || needs.build-core-and-docker.result == 'skipped')
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -930,7 +945,7 @@ jobs:
   publish-cli-npm:
     name: Publish browser4-cli to npm
     needs: [prepare, build-cli-binaries]
-    if: needs.prepare.outputs.cli_should_publish_npm == 'true' && needs.prepare.outputs.dry_run != 'true'
+    if: needs.prepare.outputs.cli_should_publish_npm == 'true' && needs.prepare.outputs.dry_run != 'true' && needs.prepare.outputs.bundle_only != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1098,6 +1113,7 @@ jobs:
     if: |
       always() &&
       needs.prepare.outputs.dry_run != 'true' &&
+      needs.prepare.outputs.bundle_only != 'true' &&
       needs.build-core-and-docker.result == 'success' &&
       (needs.build-cli-binaries.result == 'success' || needs.build-cli-binaries.result == 'skipped') &&
       needs.build-runtime-bundles.result == 'success' &&
