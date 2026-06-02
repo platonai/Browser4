@@ -41,7 +41,7 @@ use daemon::{
     ensure_chrome_available, ensure_server_running, init_root_search_start_dir_from_startup,
     install_browser4_runtime, resolve_base_url, InstalledBrowser4Runtime,
 };
-use help::{generate_command_help, generate_help};
+use help::{generate_command_help, generate_help, generate_help_entry, public_command_name};
 use http::{
     call_tool, get_command_result, get_command_status, get_swarm_result, get_swarm_status,
     is_stale_session_error, make_client, submit_batch_commands, submit_plain_command,
@@ -3960,9 +3960,23 @@ fn print_help(command_name: Option<&str>) {
             if let Some(cmd) = cmd_map.get(name) {
                 cli_println!("{}", generate_command_help(cmd));
                 return;
-            } else {
-                eprintln!("Unknown command: {}", name);
             }
+            // Not an exact command — collect every command whose public
+            // name starts with this prefix (e.g. "swarm" matches
+            // "swarm create", "swarm submit", ...).
+            let matching: Vec<&crate::commands::CommandDef> = cmd_map
+                .values()
+                .filter(|c| !c.hidden && public_command_name(c.name).starts_with(name))
+                .collect();
+            if !matching.is_empty() {
+                let mut lines: Vec<String> = vec![format!("{} subcommands:\n", name)];
+                for cmd in matching {
+                    lines.push(generate_help_entry(cmd));
+                }
+                cli_println!("{}", lines.join("\n"));
+                return;
+            }
+            eprintln!("Unknown command: {}", name);
         }
     }
     cli_println!("{}", generate_help());

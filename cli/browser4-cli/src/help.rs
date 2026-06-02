@@ -2,7 +2,7 @@
 
 use crate::commands::{all_commands, CommandDef};
 
-fn public_command_name(name: &str) -> &str {
+pub fn public_command_name(name: &str) -> &str {
     match name {
         "agent-run" => "agent run",
         "agent-status" => "agent status",
@@ -317,7 +317,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     lines.join("\n")
 }
 
-fn generate_help_entry(cmd: &CommandDef) -> String {
+pub fn generate_help_entry(cmd: &CommandDef) -> String {
     let args_text = cmd
         .args
         .iter()
