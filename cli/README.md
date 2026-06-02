@@ -191,14 +191,15 @@ Use `close-all` for session cleanup when you want to keep the current Browser4 s
 
 | Command | Description |
 |---|---|
-| `install` | Download the self-contained Browser4 runtime bundle (JAR + bundled JRE) from GitHub Releases |
+| `install` | Download the self-contained Browser4 runtime bundle (dependency jars + bundled JRE + launcher scripts) from GitHub Releases |
 | `upgrade` | Upgrade the Browser4 runtime bundle to the latest version (or a specified release tag) |
 | `stop` | Kill the Browser4 backend after closing all sessions |
 | `status` | Check whether the Browser4 backend is reachable and healthy |
 
 `install` and `upgrade` both manage the Browser4 runtime bundle — a self-contained
-distribution that includes `Browser4.jar` and a minimal JRE. Neither requires `cargo`
-or a Rust toolchain; the runtime is a Java application downloaded from GitHub Releases.
+distribution that includes all dependency jars, a minimal `jlink`-built JRE, and
+platform launcher scripts. Neither requires `cargo` or a Rust toolchain; the runtime
+is a Java application downloaded from GitHub Releases.
 
 When a local Browser4 checkout is detected with the `browser4-bundle` module present,
 `install` and `upgrade` auto-build the runtime bundle from source (via Maven) instead

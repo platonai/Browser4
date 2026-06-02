@@ -210,7 +210,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - The bundle contains both `Browser4.jar` and a minimal `jlink`-built JRE used automatically by `browser4-cli open`."
+            "  - The bundle contains all dependency jars, a minimal `jlink`-built JRE, and platform launcher scripts."
                 .to_string(),
         );
         lines.push(String::new());
@@ -402,7 +402,7 @@ mod tests {
         let help = generate_command_help(install);
         assert!(help.contains("browser4-cli install"));
         assert!(help.contains("self-contained Browser4 runtime bundle"));
-        assert!(help.contains("`Browser4.jar` and a minimal `jlink`-built JRE"));
+        assert!(help.contains("dependency jars, a minimal `jlink`-built JRE"));
         assert!(help.contains("browser4-cli install --tag=v4.9.3"));
         assert!(help.contains("--force"));
     }

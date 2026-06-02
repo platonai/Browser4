@@ -242,7 +242,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "install",
-            description: "Install the self-contained Browser4 runtime bundle (Browser4.jar + bundled JRE)",
+            description: "Install the self-contained Browser4 runtime bundle (dependency jars + bundled JRE + launcher scripts)",
             category: Category::Install,
             hidden: false,
             batch_supported: false,
