@@ -23,7 +23,7 @@ RUN ls -la && ls -la bin && find . -name "*.sh" -exec chmod +x {} \;
 # Browser4.jar if selected by accident.
 ARG STANDALONE_MODULE=browser4-apps/browser4-standalone
 RUN --mount=type=cache,target=/root/.m2 \
-    mvn clean package -Passet-standalone -DskipTests -Dmaven.javadoc.skip=true -B -V && \
+    mvn clean package -Passet-standalone -DskipTests -D"maven.javadoc.skip=true" -B -V && \
     echo "Build completed successfully"
 
 # Copy the JAR that Maven just built inside the container.
