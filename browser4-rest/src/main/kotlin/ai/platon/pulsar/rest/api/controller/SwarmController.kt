@@ -8,7 +8,8 @@ import ai.platon.pulsar.rest.api.entities.ScrapeStatusRequest
 import ai.platon.pulsar.rest.api.entities.SessionResponse
 import ai.platon.pulsar.rest.api.entities.toSessionResponse
 import ai.platon.pulsar.rest.api.service.SwarmService
-import jakarta.servlet.http.HttpServletRequest
+import org.slf4j.LoggerFactory
+import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
 import org.springframework.web.bind.annotation.*
 
@@ -23,6 +24,8 @@ class SwarmController(
     val sessionManager: PulsarSessionManager,
     val swarmService: SwarmService
 ) {
+    private val logger = LoggerFactory.getLogger(SwarmController::class.java)
+
     /**
      * Create or get the swarm session. The swarm session is a special session that can be shared across multiple
      * requests and has non-permanent profiles.
@@ -45,7 +48,12 @@ class SwarmController(
      * */
     @PostMapping("submit")
     fun submit(@RequestBody payload: String): String {
+        if (payload.isBlank()) {
+            throw IllegalArgumentException("Request body must be a non-blank URL or X-SQL")
+        }
+
         val payload = payload.trim()
+        logger.info("Swarm submit: payload='{}'", payload.take(200))
 
         val sql = if (payload.startsWith("http")) {
             "select dom_base_uri(dom) as url from load_and_select('$payload', ':root')"
@@ -55,7 +63,7 @@ class SwarmController(
             throw IllegalArgumentException("Invalid URL or X-SQL: >>>$payload<<<")
         }
 
-        // return the UUID which can be used to retrieve the scrape result later
+        // Returns raw UUID string (not JSON-wrapped). CLI depends on this format.
         return swarmService.submit(ScrapeRequest(sql))
     }
 
@@ -66,7 +74,6 @@ class SwarmController(
     @GetMapping("count", consumes = [MediaType.ALL_VALUE])
     fun count(
         @RequestParam(value = "status", required = false) status: Int = 0,
-        httpRequest: HttpServletRequest,
     ): Int {
         return swarmService.count(status)
     }
@@ -78,8 +85,10 @@ class SwarmController(
     @GetMapping("status", consumes = [MediaType.ALL_VALUE], produces = [MediaType.APPLICATION_JSON_VALUE])
     fun status(
         @RequestParam(value = "uuid") uuid: String,
-        httpRequest: HttpServletRequest,
     ): ScrapeResponse {
+        if (uuid.isBlank()) {
+            throw IllegalArgumentException("uuid must not be blank")
+        }
         val request = ScrapeStatusRequest(uuid)
         return swarmService.getStatus(request)
     }
@@ -87,8 +96,10 @@ class SwarmController(
     @GetMapping("/{id}/status", consumes = [MediaType.ALL_VALUE], produces = [MediaType.APPLICATION_JSON_VALUE])
     fun getStatus(
         @PathVariable(value = "id") uuid: String,
-        httpRequest: HttpServletRequest,
     ): ScrapeResponse {
+        if (uuid.isBlank()) {
+            throw IllegalArgumentException("id must not be blank")
+        }
         val request = ScrapeStatusRequest(uuid)
         return swarmService.getStatus(request)
     }
@@ -96,8 +107,17 @@ class SwarmController(
     @GetMapping("/{id}/result", consumes = [MediaType.ALL_VALUE], produces = [MediaType.APPLICATION_JSON_VALUE])
     fun getResult(
         @PathVariable(value = "id") uuid: String,
-        httpRequest: HttpServletRequest,
     ): ScrapeResponse {
-        return getStatus(uuid, httpRequest)
+        if (uuid.isBlank()) {
+            throw IllegalArgumentException("id must not be blank")
+        }
+        return getStatus(uuid)
+    }
+
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    @ExceptionHandler(IllegalArgumentException::class)
+    fun handleBadRequest(e: IllegalArgumentException): Map<String, Any> {
+        logger.warn("Bad request: {}", e.message)
+        return mapOf("error" to "Bad Request", "message" to (e.message ?: ""))
     }
 }

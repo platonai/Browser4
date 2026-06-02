@@ -12,6 +12,7 @@ import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
 import ai.platon.pulsar.rest.api.entities.ScrapeStatusRequest
 import org.apache.commons.collections4.MultiMapUtils
+import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import java.util.concurrent.ConcurrentSkipListMap
 
@@ -19,6 +20,8 @@ import java.util.concurrent.ConcurrentSkipListMap
 class SwarmService(
     private val sessionManager: PulsarSessionManager
 ) {
+
+    private val logger = LoggerFactory.getLogger(SwarmService::class.java)
 
     val session get() = sessionManager.ensureSwarmSession().agenticSession
 
@@ -39,8 +42,12 @@ class SwarmService(
         val hyperlink = createScrapeHyperlink(request)
         responseCache[hyperlink.uuid] = hyperlink.response
         hyperlink.response.id = hyperlink.uuid
-        require(session is GenericAgenticSession) { "The session should be a GenericAgenticSession, but actual is ${session::class}, detail: ${session.display}" }
-        session.submit(hyperlink)
+        val s = session
+        require(s is GenericAgenticSession) {
+            "Expected GenericAgenticSession but got ${s::class.simpleName} (uuid=${s.uuid})"
+        }
+        s.submit(hyperlink)
+        logger.info("Swarm task submitted: {} sql={}", hyperlink.uuid, request.sql)
         return hyperlink.uuid
     }
 
@@ -49,6 +56,7 @@ class SwarmService(
      * */
     fun getStatus(request: ScrapeStatusRequest): ScrapeResponse {
         return responseCache.computeIfAbsent(request.id) {
+            logger.warn("Swarm task not found: {}", request.id)
             ScrapeResponse(request.id, ResourceStatus.SC_NOT_FOUND, ProtocolStatusCodes.SC_NOT_FOUND)
         }
     }
