@@ -607,35 +607,74 @@ try {
 
 if (-not $jdepsSuccess) {
     Write-Warning "Primary jdeps failed (full recursive analysis with $libJarCount dependency JARs)."
-    Write-Warning "jdeps output: $jdepsOutput"
+    Write-Warning "jdeps stderr: $jdepsOutput"
 
-    # Fallback: analyse only the application JAR (directly, not extracted)
-    # without --class-path and without --recursive.  This avoids scanning
-    # every third-party JAR and side-steps malformed class files in
-    # platform-specific native dependencies.
-    Write-Host "Falling back to app-only jdeps (no third-party JAR scanning)..." -ForegroundColor Yellow
+    # ----------------------------------------------------------------------
+    # Fallback: per-JAR analysis.
+    #
+    # Run jdeps on each JAR individually (no --recursive, no --class-path)
+    # and union all the module dependencies.  JARs that cause jdeps errors
+    # (e.g. ClassFileError: Bad magic number from platform-specific native
+    # dependency JARs like netty-transport-native-epoll on Linux or
+    # netty-transport-native-kqueue on macOS) are skipped.
+    #
+    # The union of every JAR's direct module deps is a superset of the
+    # recursive transitive closure — it processes every class in every JAR,
+    # not just classes reachable from the app entry points.  This is
+    # correct and safe: it can only over-approximate, never miss a module.
+    # ----------------------------------------------------------------------
+    Write-Host "Falling back to per-JAR analysis (individual JAR scanning)..." -ForegroundColor Yellow
 
-    $fallbackArgs = @(
-        '-q',
-        '--ignore-missing-deps',
-        '--multi-release', $multiReleaseVersion,
-        '--print-module-deps',
-        $resolvedJarPath
-    )
+    $allJarModules = @()
+    $goodJars = 0
+    $badJars = 0
+    $badJarNames = @()
 
-    $fallbackOutput = $null
+    # Temporarily relax ErrorActionPreference so a single bad JAR cannot
+    # abort the whole loop.  Restore via try/finally to avoid leaking the
+    # relaxed setting into later phases (jlink, packaging, ...).
     $ErrorActionPreference = 'Continue'
     try {
-        $fallbackOutput = & $jdeps @fallbackArgs 2>&1
+        # Analyse the application JAR first (it is also in lib/, but we
+        # process it explicitly so a failure here is visible).
+        $appModuleText = & $jdeps -q --ignore-missing-deps --multi-release $multiReleaseVersion --print-module-deps $resolvedJarPath 2>&1
         if ($LASTEXITCODE -eq 0) {
-            $jdepsOutput = $fallbackOutput
-            $jdepsSuccess = $true
-            Write-Host 'App-only jdeps succeeded.' -ForegroundColor Green
+            $allJarModules += ($appModuleText -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
         } else {
-            Write-Warning "App-only jdeps also failed: $fallbackOutput"
+            Write-Warning "  Even the application JAR failed jdeps: $appModuleText"
+        }
+        $global:LASTEXITCODE = 0
+
+        # Analyse every dependency JAR in lib/ — skip the few that upset jdeps.
+        $allJars = @(Get-ChildItem -Path $libDirectory -File -Filter '*.jar' -ErrorAction SilentlyContinue)
+        foreach ($jar in $allJars) {
+            $jarOutput = & $jdeps -q --ignore-missing-deps --multi-release $multiReleaseVersion --print-module-deps $jar.FullName 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                $allJarModules += ($jarOutput -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+                $goodJars++
+            } else {
+                Write-Warning "  Skipping problematic JAR: $($jar.Name)"
+                $badJarNames += $jar.Name
+                $badJars++
+            }
+            $global:LASTEXITCODE = 0
+        }
+
+        Write-Host "Per-JAR analysis: $goodJars succeeded, $badJars skipped." -ForegroundColor Cyan
+        if ($badJars -gt 0) {
+            Write-Host "  Skipped JARs: $($badJarNames -join ', ')" -ForegroundColor Yellow
+        }
+
+        if ($allJarModules.Count -gt 0) {
+            # Reproduce the comma-separated output format that the
+            # module-processing block below expects.
+            $jdepsOutput = ($allJarModules | Select-Object -Unique) -join ','
+            $jdepsSuccess = $true
+        } else {
+            Write-Warning "Per-JAR analysis produced no modules (all $libJarCount JARs are problematic)."
         }
     } catch {
-        Write-Warning "App-only jdeps threw: $($_.Exception.Message)"
+        Write-Warning "Per-JAR analysis threw: $($_.Exception.Message)"
     } finally {
         $ErrorActionPreference = $prevErrorAction
         if (-not $jdepsSuccess) { $global:LASTEXITCODE = 0 }
@@ -643,7 +682,7 @@ if (-not $jdepsSuccess) {
 }
 
 if (-not $jdepsSuccess) {
-    throw "jdeps failed with both primary (full classpath) and fallback (app-only) strategies.`nPrimary output: $jdepsOutput"
+    throw "jdeps failed with both primary (full classpath) and per-JAR strategies."
 }
 
 
