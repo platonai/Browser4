@@ -455,6 +455,17 @@ $jlink = Resolve-ToolPath 'jlink'
 $javaVersionText = Get-JavaVersionText
 $isGraalVmRuntime = $javaVersionText -match 'GraalVM'
 
+# Parse the JDK major version from java -version output as a fallback for
+# --multi-release (primary source is the release file read by Get-JDKVersion).
+# On some platforms / JDK distributions the release file may be in an
+# unexpected location, so this secondary check is essential.
+$javaVersionMajor = $null
+if ($javaVersionText -match 'version\s+"(\d+)') {
+    $javaVersionMajor = [int]$Matches[1]
+} elseif ($javaVersionText -match 'version\s+"[\d._]+-(\d+)') {
+    $javaVersionMajor = [int]$Matches[1]
+}
+
 # --------------------------------------------------------------------------
 # Progress tracking
 # --------------------------------------------------------------------------
@@ -546,11 +557,24 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 # Compute the multi-release version from the JDK being used.
 # This ensures jdeps processes multi-release JARs with the correct
 # version-specific class files for the target runtime.
+# Priority: 1) release file via Get-JDKVersion  2) java -version output
+#            3) hardcoded '17' as last resort
 $jdkVersion = Get-JDKVersion -jdkHome $env:JAVA_HOME
-$multiReleaseVersion = if ($jdkVersion) { [string]$jdkVersion.Major } else { '17' }
-Write-Host "Using multi-release version: $multiReleaseVersion (JDK: $($jdkVersion))" -ForegroundColor Cyan
+$detectedMajor = if ($jdkVersion) { $jdkVersion.Major } elseif ($javaVersionMajor) { $javaVersionMajor } else { $null }
+$multiReleaseVersion = if ($detectedMajor) { [string]$detectedMajor } else { '17' }
+Write-Host "Using multi-release version: $multiReleaseVersion (release-file: $($jdkVersion), java-cmd: $javaVersionMajor)" -ForegroundColor Cyan
 
-$jdepsArgs = @(
+# --------------------------------------------------------------------------
+# Primary jdeps strategy: full recursive analysis with class-path.
+# On some platforms, specific dependency JARs (e.g. native transports)
+# may contain class files that jdeps cannot parse.  When that happens we
+# fall back to analysing only the application classes.
+# --------------------------------------------------------------------------
+$jdepsOutput = $null
+$jdepsSuccess = $false
+
+# Build primary jdeps argument list
+$primaryJdepsArgs = @(
     '-q',
     '--ignore-missing-deps',
     '--multi-release', $multiReleaseVersion,
@@ -560,14 +584,66 @@ $jdepsArgs = @(
 if ($libJarCount -gt 0) {
     $jdepsClassPath = Get-JdepsClassPath -libDirectory $libDirectory
     if (-not [string]::IsNullOrWhiteSpace($jdepsClassPath)) {
-        $jdepsArgs += @('--class-path', $jdepsClassPath)
+        $primaryJdepsArgs += @('--class-path', $jdepsClassPath)
     }
 }
-$jdepsArgs += $appClassesDir
+$primaryJdepsArgs += $appClassesDir
 
-$jdepsOutput = & $jdeps @jdepsArgs
-if ($LASTEXITCODE -ne 0) {
-    throw "jdeps failed with exit code $LASTEXITCODE"
+# Run primary jdeps — capture all output (stdout + stderr) so we can
+# inspect failures without the ErrorActionPreference=Stop killing us.
+$prevErrorAction = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+    $jdepsOutput = & $jdeps @primaryJdepsArgs 2>&1
+    $jdepsSuccess = ($LASTEXITCODE -eq 0)
+} catch {
+    $jdepsOutput = $_.Exception.Message
+    $jdepsSuccess = $false
+} finally {
+    $ErrorActionPreference = $prevErrorAction
+    # Reset LASTEXITCODE so later non-zero checks are not poisoned
+    if (-not $jdepsSuccess) { $global:LASTEXITCODE = 0 }
+}
+
+if (-not $jdepsSuccess) {
+    Write-Warning "Primary jdeps failed (full recursive analysis with $libJarCount dependency JARs)."
+    Write-Warning "jdeps output: $jdepsOutput"
+
+    # Fallback: analyse only the application JAR (directly, not extracted)
+    # without --class-path and without --recursive.  This avoids scanning
+    # every third-party JAR and side-steps malformed class files in
+    # platform-specific native dependencies.
+    Write-Host "Falling back to app-only jdeps (no third-party JAR scanning)..." -ForegroundColor Yellow
+
+    $fallbackArgs = @(
+        '-q',
+        '--ignore-missing-deps',
+        '--multi-release', $multiReleaseVersion,
+        '--print-module-deps',
+        $resolvedJarPath
+    )
+
+    $fallbackOutput = $null
+    $ErrorActionPreference = 'Continue'
+    try {
+        $fallbackOutput = & $jdeps @fallbackArgs 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            $jdepsOutput = $fallbackOutput
+            $jdepsSuccess = $true
+            Write-Host 'App-only jdeps succeeded.' -ForegroundColor Green
+        } else {
+            Write-Warning "App-only jdeps also failed: $fallbackOutput"
+        }
+    } catch {
+        Write-Warning "App-only jdeps threw: $($_.Exception.Message)"
+    } finally {
+        $ErrorActionPreference = $prevErrorAction
+        if (-not $jdepsSuccess) { $global:LASTEXITCODE = 0 }
+    }
+}
+
+if (-not $jdepsSuccess) {
+    throw "jdeps failed with both primary (full classpath) and fallback (app-only) strategies.`nPrimary output: $jdepsOutput"
 }
 
 
