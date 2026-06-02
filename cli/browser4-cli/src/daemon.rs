@@ -692,13 +692,82 @@ pub fn ensure_chrome_available() -> Result<(), String> {
     }
 
     if cfg!(target_os = "windows") {
-        eprintln!("   Install Chrome manually:");
-        eprintln!("     winget install Google.Chrome");
-        eprintln!("   Or download from: https://www.google.com/chrome/");
-        return Ok(());
+        return install_chrome_windows();
     }
 
     Ok(())
+}
+
+fn install_chrome_windows() -> Result<(), String> {
+    // 1. Try winget first (built into Windows 10 1709+ / Windows 11).
+    if let Ok(output) = std::process::Command::new("winget")
+        .args(["--version"])
+        .output()
+    {
+        if output.status.success() {
+            eprintln!("   Installing Google Chrome via winget ...");
+            let status = std::process::Command::new("winget")
+                .args([
+                    "install",
+                    "--id",
+                    "Google.Chrome",
+                    "--silent",
+                    "--accept-package-agreements",
+                    "--accept-source-agreements",
+                ])
+                .status()
+                .map_err(|e| format!("Failed to run winget: {e}"))?;
+
+            if status.success() {
+                if find_chrome_executable().is_some() {
+                    eprintln!("✅ Google Chrome installed successfully via winget.");
+                    return Ok(());
+                }
+            }
+            eprintln!("   winget install failed or Chrome not found after install.");
+        }
+    }
+
+    // 2. Fallback: download and run the standalone installer.
+    eprintln!("   Downloading Google Chrome installer ...");
+    let temp_installer = std::env::temp_dir().join("chrome_installer.exe");
+    let url = "https://dl.google.com/chrome/install/latest/chrome_installer.exe";
+
+    // Use PowerShell to download (more reliable on Windows than relying on
+    // curl/wget being available).
+    let ps_script = format!(
+        "$ProgressPreference = 'SilentlyContinue'; \
+         Invoke-WebRequest -Uri '{url}' -OutFile '{}'; \
+         Start-Process -FilePath '{}' -ArgumentList '/silent /install' -Wait; \
+         Remove-Item '{}' -Force; \
+         exit (Test-Path '{}')",
+        temp_installer.display(),
+        temp_installer.display(),
+        temp_installer.display(),
+        "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    );
+
+    let status = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            &ps_script,
+        ])
+        .status()
+        .map_err(|e| format!("Failed to run PowerShell installer: {e}"))?;
+
+    if !status.success() {
+        let _ = fs::remove_file(&temp_installer);
+        return Err("Google Chrome installation via PowerShell failed.".to_string());
+    }
+
+    if find_chrome_executable().is_some() {
+        eprintln!("✅ Google Chrome installed successfully.");
+        Ok(())
+    } else {
+        Err("Google Chrome installation did not produce a usable binary.".to_string())
+    }
 }
 
 fn install_chrome_debian() -> Result<(), String> {
