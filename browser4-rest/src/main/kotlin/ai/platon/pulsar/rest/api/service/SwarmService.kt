@@ -11,10 +11,12 @@ import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
 import ai.platon.pulsar.rest.api.entities.ScrapeStatusRequest
+import com.github.benmanes.caffeine.cache.Cache
+import com.github.benmanes.caffeine.cache.Caffeine
 import org.apache.commons.collections4.MultiMapUtils
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
-import java.util.concurrent.ConcurrentSkipListMap
+import java.util.concurrent.TimeUnit
 
 @Service
 class SwarmService(
@@ -26,21 +28,42 @@ class SwarmService(
     val session get() = sessionManager.ensureSwarmSession().agenticSession
 
     /**
-     * The response cache, the key is the id, the value is the response
-     * */
-    private val responseCache = ConcurrentSkipListMap<String, ScrapeResponse>()
-
-    /**
-     * The response status map, the key is the status code, the value is the response's id
+     * The response status index, the key is the status code, the value is the response's id.
+     * Used for O(1) count-by-status queries.  Kept in sync with [responseCache] via the
+     * removal listener.
      * */
     private val responseStatusIndex = MultiMapUtils.newListValuedHashMap<Int, String>()
+
+    /**
+     * Size-bounded, time-expiring cache of swarm task responses.
+     *
+     * - Entries live at most 30 minutes after last write.
+     * - At most 10 000 entries; LRU eviction beyond that via Caffeine's
+     *   Window TinyLFU policy.
+     * - NOT_FOUND lookups are never cached — only real task responses go in.
+     * - Evicted entries are removed from [responseStatusIndex] by the removal listener.
+     * */
+    val responseCache: Cache<String, ScrapeResponse> = Caffeine.newBuilder()
+        .maximumSize(10_000)
+        .expireAfterWrite(30, TimeUnit.MINUTES)
+        .removalListener<String, ScrapeResponse> { key, value, cause ->
+            if (value != null && cause.wasEvicted()) {
+                responseStatusIndex[value.statusCode]?.remove(key)
+                logger.debug(
+                    "Evicted swarm task {} (status={}, cause={})",
+                    key, value.statusCode, cause
+                )
+            }
+        }
+        .recordStats()
+        .build()
 
     /**
      * Submit a scraping task
      * */
     fun submit(request: ScrapeRequest): String {
         val hyperlink = createScrapeHyperlink(request)
-        responseCache[hyperlink.uuid] = hyperlink.response
+        responseCache.put(hyperlink.uuid, hyperlink.response)
         hyperlink.response.id = hyperlink.uuid
         val s = session
         require(s is GenericAgenticSession) {
@@ -52,10 +75,11 @@ class SwarmService(
     }
 
     /**
-     * Get the response
+     * Get the response.  Does NOT cache NOT_FOUND results — only returns a
+     * placeholder if the task ID is genuinely unknown.
      * */
     fun getStatus(request: ScrapeStatusRequest): ScrapeResponse {
-        return responseCache.computeIfAbsent(request.id) {
+        return responseCache.getIfPresent(request.id) ?: run {
             logger.warn("Swarm task not found: {}", request.id)
             ScrapeResponse(request.id, ResourceStatus.SC_NOT_FOUND, ProtocolStatusCodes.SC_NOT_FOUND)
         }
@@ -66,9 +90,26 @@ class SwarmService(
      * */
     fun count(statusCode: Int): Int {
         return when (statusCode) {
-            0 -> responseCache.size
+            0 -> responseCache.estimatedSize().toInt()
             else -> responseStatusIndex[statusCode]?.size ?: 0
         }
+    }
+
+    /**
+     * Return cache statistics for observability.
+     * */
+    fun cacheStats(): Map<String, Any> {
+        val stats = responseCache.stats()
+        return mapOf(
+            "estimatedSize" to responseCache.estimatedSize(),
+            "hitCount" to stats.hitCount(),
+            "missCount" to stats.missCount(),
+            "hitRate" to "%.2f".format(stats.hitRate()),
+            "evictionCount" to stats.evictionCount(),
+            "averageLoadPenaltyNanos" to stats.averageLoadPenalty(),
+            "loadSuccessCount" to stats.loadSuccessCount(),
+            "loadFailureCount" to stats.loadFailureCount(),
+        )
     }
 
     private fun createScrapeHyperlink(request: ScrapeRequest): ScrapeHyperlink {
@@ -81,7 +122,7 @@ class SwarmService(
         }
 
         link.eventHandlers.crawlEventHandlers.onLoaded.addLast { _, _ ->
-            responseCache[link.uuid] = link.response
+            responseCache.put(link.uuid, link.response)
             responseStatusIndex[link.response.statusCode].add(link.uuid)
             null
         }
