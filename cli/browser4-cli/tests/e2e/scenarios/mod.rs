@@ -26,6 +26,12 @@ impl ScenarioDef {
     pub(super) fn is_batch_command_scenario(self) -> bool {
         self.name.contains("_batch_") || self.short_name.contains("batch")
     }
+
+    /// Install / upgrade scenarios download fake runtime bundles and extract
+    /// archives — they are disabled by default to keep the default suite fast.
+    pub(super) fn is_install_scenario(self) -> bool {
+        self.name.contains("_install_") || self.name.contains("_upgrade_")
+    }
 }
 
 pub(crate) const SCENARIOS: &[ScenarioDef] = &[

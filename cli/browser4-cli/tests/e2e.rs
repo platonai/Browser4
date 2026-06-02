@@ -3304,6 +3304,7 @@ struct RunOptions {
     list_only: bool,
     batch_only: bool,
     enable_batch_scenario: bool,
+    enable_install_scenario: bool,
 }
 
 fn parse_scenario_limit(raw: &str) -> usize {
@@ -3356,6 +3357,7 @@ fn parse_run_options() -> RunOptions {
     let mut list_only = false;
     let mut batch_only = false;
     let mut enable_batch_scenario = false;
+    let mut enable_install_scenario = false;
 
     while let Some(arg) = args.next() {
         if let Some(value) = arg.strip_prefix("--scenario=") {
@@ -3419,6 +3421,11 @@ fn parse_run_options() -> RunOptions {
             continue;
         }
 
+        if arg == "--enable-install-scenario" {
+            enable_install_scenario = true;
+            continue;
+        }
+
         if !arg.starts_with('-') {
             has_positional_filter = true;
         }
@@ -3447,6 +3454,7 @@ fn parse_run_options() -> RunOptions {
         list_only,
         batch_only,
         enable_batch_scenario,
+        enable_install_scenario,
     }
 }
 
@@ -3465,6 +3473,15 @@ fn exclude_batch_scenarios(
     selected_scenarios
         .into_iter()
         .filter(|scenario| !scenario.is_batch_command_scenario())
+        .collect()
+}
+
+fn exclude_install_scenarios(
+    selected_scenarios: Vec<scenarios::ScenarioDef>,
+) -> Vec<scenarios::ScenarioDef> {
+    selected_scenarios
+        .into_iter()
+        .filter(|scenario| !scenario.is_install_scenario())
         .collect()
 }
 
@@ -3657,6 +3674,24 @@ fn main() {
             println!(
                 "default e2e run skips {} batch scenario(s); pass --enable-batch-scenario or --batch-only to include them",
                 batch_scenarios.len()
+            );
+        }
+    }
+
+    // Install / upgrade scenarios are disabled by default (they download and
+    // extract archives).  Use --enable-install-scenario to include them.
+    if !has_explicit_scenario_filter && !run_options.enable_install_scenario {
+        let install_scenarios = selected_scenarios
+            .iter()
+            .copied()
+            .filter(|scenario| scenario.is_install_scenario())
+            .collect::<Vec<_>>();
+        selected_scenarios = exclude_install_scenarios(selected_scenarios);
+
+        if !install_scenarios.is_empty() {
+            println!(
+                "default e2e run skips {} install/upgrade scenario(s); pass --enable-install-scenario to include them",
+                install_scenarios.len()
             );
         }
     }
