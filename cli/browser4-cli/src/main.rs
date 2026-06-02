@@ -122,15 +122,17 @@ fn quiet_active() -> bool {
     QUIET.with(|cell| *cell.borrow())
 }
 
-/// Print to stdout unless `-q` / `--quiet` is active.
+/// Print to stdout unless `-q` / `--quiet` or `--json` is active.
+/// When `--json` is active all output must be machine-readable;
+/// human-oriented text is suppressed.
 macro_rules! cli_println {
     () => {
-        if !$crate::quiet_active() {
+        if !$crate::quiet_active() && !$crate::json_active() {
             ::std::println!();
         }
     };
     ($($arg:tt)*) => {
-        if !$crate::quiet_active() {
+        if !$crate::quiet_active() && !$crate::json_active() {
             ::std::println!($($arg)*);
         }
     };
@@ -1972,6 +1974,10 @@ async fn handle_snapshot(
 
     let out_path = resolve_output_path(filename.as_deref(), "snapshot", "yml");
     save_snapshot(&out_path, snap).map_err(|e| e.to_string())?;
+
+    json_field("page_url", json!(url));
+    json_field("page_title", json!(title));
+    json_field("snapshot_path", json!(out_path.display().to_string()));
 
     cli_println!("### Page");
     cli_println!("- Page URL: {}", url);

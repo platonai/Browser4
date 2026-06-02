@@ -244,7 +244,8 @@ class MCPToolController(
             return ResponseEntity.ok(mapOf("tools" to it))
         }
 
-        // Slow path: compute tool names under a lock so only one request creates a session
+        // Slow path: compute tool names under a lock so only one request
+        // initialises the cache.
         synchronized(this) {
             cachedToolNames?.let {
                 return ResponseEntity.ok(mapOf("tools" to it))
@@ -258,18 +259,21 @@ class MCPToolController(
                 "command_run", "command_batch", "command_status", "command_result"
             )
 
-            val activeSession = sessionManager.getAllSessions().firstOrNull()
-            val managedSession = activeSession ?: sessionManager.getOrCreateSession(null)
-            val deleteAfterListing = activeSession == null
+            // Include every frontend tool alias so the CLI readiness probe
+            // (which checks for "open_session" + "browser_navigate") passes
+            // without creating a throwaway session that would launch Chrome.
+            tools.addAll(FRONTEND_TOOL_NAME_ALIASES.keys)
 
-            try {
-                val agent = managedSession.agenticSession.companionAgent as? BasicBrowserAgent
-                if (agent != null) {
-                    tools.addAll(collectAdvertisedToolNames(agent.agentToolManager.getAllToolSpecs()))
-                }
-            } finally {
-                if (deleteAfterListing) {
-                    sessionManager.deleteSession(managedSession.sessionId)
+            val activeSession = sessionManager.getAllSessions().firstOrNull()
+            if (activeSession != null) {
+                // A real session already exists — enrich with per-agent tools.
+                try {
+                    val agent = activeSession.agenticSession.companionAgent as? BasicBrowserAgent
+                    if (agent != null) {
+                        tools.addAll(collectAdvertisedToolNames(agent.agentToolManager.getAllToolSpecs()))
+                    }
+                } catch (_: Exception) {
+                    // Session may be mid-initialisation; the static set is sufficient.
                 }
             }
 

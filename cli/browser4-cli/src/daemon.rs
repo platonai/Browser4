@@ -160,7 +160,36 @@ pub async fn ensure_server_running(base_url: &str) -> Result<(), String> {
             return wait_for_server_ready(&client, base_url, EXISTING_SERVER_READY_TIMEOUT, None)
                 .await;
         }
-        ServerState::Unreachable(_) => {}
+        ServerState::Unreachable(error) => {
+            // Port is open but the health endpoint didn't answer.  The
+            // server may be mid-startup (TCP bound, HTTP not ready).
+            // Wait a short grace period and retry once before assuming
+            // the port holder is not a Browser4 server.
+            eprintln!(
+                "Port {} is open but the health check failed ({}); retrying in 3 s...",
+                port,
+                truncate_status_for_log(&error),
+            );
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            match probe_server_state(&client, base_url).await {
+                ServerState::Ready => return Ok(()),
+                ServerState::Starting(_) => {
+                    return wait_for_server_ready(
+                        &client,
+                        base_url,
+                        EXISTING_SERVER_READY_TIMEOUT,
+                        None,
+                    )
+                    .await;
+                }
+                ServerState::Unreachable(_) => {
+                    eprintln!(
+                        "Port {} is still unreachable after retry; starting a new server.",
+                        port
+                    );
+                }
+            }
+        }
     }
 
     eprintln!("Browser4 server not running. Starting...");
@@ -1050,7 +1079,10 @@ fn existing_runtime_bundle(
 /// Check whether the Maven-built fat JAR is present and has valid content.
 fn maven_jar_exists(bundle_module_dir: &Path) -> bool {
     let jar = bundle_module_dir.join("target").join("Browser4Bundle.jar");
-    jar.is_file() && jar.metadata().map(|m| m.len() > 10_240).unwrap_or(false)
+    // The bundle JAR is a Spring Boot thin launcher (~8 KB); anything
+    // above 4 KB is a credible build artifact.  Stale / corrupt files
+    // are typically zero-length or a few hundred bytes.
+    jar.is_file() && jar.metadata().map(|m| m.len() > 4_096).unwrap_or(false)
 }
 
 /// Attempt to auto-build the local runtime bundle from source when running in a
