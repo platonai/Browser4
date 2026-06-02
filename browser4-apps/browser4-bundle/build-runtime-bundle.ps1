@@ -403,9 +403,10 @@ if (-not (Test-Path $JarPath)) {
     & $mvnCmd @coreArgs
     if ($LASTEXITCODE -ne 0) { throw "Core modules install failed with exit code $LASTEXITCODE" }
 
-    # Build and install the bundle module.
+    # Package the bundle module (no install — the CLI's `install` command
+    # calls this script and handles installation itself).
     Write-Host "  Building $bundleModule ..."
-    $bundleArgs = @('install', '-pl', $bundleModule, '-am', '-Passet-bundle', '-DskipTests', '-Dmaven.javadoc.skip=true', '-q')
+    $bundleArgs = @('package', '-pl', $bundleModule, '-am', '-Passet-bundle', '-DskipTests', '-Dmaven.javadoc.skip=true', '-q')
     & $mvnCmd @bundleArgs
     if ($LASTEXITCODE -ne 0) { throw "Bundle JAR build failed with exit code $LASTEXITCODE" }
 
