@@ -38,8 +38,8 @@ use args::{
 };
 use commands::commands_map;
 use daemon::{
-    ensure_server_running, init_root_search_start_dir_from_startup, install_browser4_runtime,
-    resolve_base_url, InstalledBrowser4Runtime,
+    ensure_chrome_available, ensure_server_running, init_root_search_start_dir_from_startup,
+    install_browser4_runtime, resolve_base_url, InstalledBrowser4Runtime,
 };
 use help::{generate_command_help, generate_help};
 use http::{
@@ -2520,6 +2520,14 @@ async fn handle_install(tool_params: &Value) -> Result<(), String> {
     for line in format_install_output(&runtime) {
         cli_println!("{}", line);
     }
+
+    // Check that a supported browser is available.  Auto-install Chrome on
+    // Debian/Ubuntu; print guidance on other platforms.  Failure is non-fatal
+    // — the runtime bundle is already installed at this point.
+    if let Err(e) = ensure_chrome_available() {
+        eprintln!("⚠  Chrome check failed: {e}");
+    }
+
     json_field("tag", json!(&runtime.tag));
     json_field("asset_name", json!(&runtime.asset_name));
     json_field("install_dir", json!(runtime.install_dir.display().to_string()));

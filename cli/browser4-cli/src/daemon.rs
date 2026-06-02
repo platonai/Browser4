@@ -599,6 +599,202 @@ pub async fn install_browser4_runtime(
     install_result
 }
 
+// ---------------------------------------------------------------------------
+// Chrome / Chromium detection and auto-install
+// ---------------------------------------------------------------------------
+
+/// Try to locate an installed Google Chrome or Chromium executable.
+pub fn find_chrome_executable() -> Option<std::path::PathBuf> {
+    let candidates: &[&str] = if cfg!(target_os = "windows") {
+        &[
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        ]
+    } else if cfg!(target_os = "macos") {
+        &[
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        ]
+    } else {
+        &[]
+    };
+
+    for path in candidates {
+        if std::path::Path::new(path).exists() {
+            return Some(std::path::PathBuf::from(path));
+        }
+    }
+
+    // Linux / fallback: check PATH
+    for name in &["google-chrome", "google-chrome-stable", "chromium-browser", "chromium"] {
+        if let Some(path) = find_in_path(name) {
+            return Some(path);
+        }
+    }
+
+    None
+}
+
+/// Search for an executable in the system PATH.
+fn find_in_path(name: &str) -> Option<std::path::PathBuf> {
+    let path_var = env::var_os("PATH")?;
+    let exe_extensions = if cfg!(target_os = "windows") {
+        vec![".exe", ".cmd", ".bat"]
+    } else {
+        vec![""]
+    };
+    for dir in env::split_paths(&path_var) {
+        for ext in &exe_extensions {
+            let candidate = dir.join(format!("{name}{ext}"));
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+/// Check whether Chrome or Chromium is available.  If not, attempt to install
+/// Google Chrome automatically (Debian/Ubuntu only).  Other platforms receive
+/// a warning with manual instructions.
+pub fn ensure_chrome_available() -> Result<(), String> {
+    if find_chrome_executable().is_some() {
+        eprintln!("✅ Google Chrome / Chromium is available.");
+        return Ok(());
+    }
+
+    eprintln!("⚠  Google Chrome not found.");
+
+    if cfg!(target_os = "linux") {
+        // Detect Debian-based / RHEL-based
+        let is_debian = std::path::Path::new("/etc/debian_version").exists();
+        let is_rhel = std::path::Path::new("/etc/redhat-release").exists();
+
+        if is_debian {
+            eprintln!("   Attempting auto-install on Debian/Ubuntu ...");
+            return install_chrome_debian();
+        }
+        if is_rhel {
+            eprintln!("   Attempting auto-install on RHEL/Fedora ...");
+            return install_chrome_rhel();
+        }
+
+        eprintln!("   Unsupported Linux distribution.");
+        eprintln!("   Install Chrome manually: https://www.google.com/chrome/");
+        return Ok(());
+    }
+
+    if cfg!(target_os = "macos") {
+        eprintln!("   Install Chrome manually:");
+        eprintln!("     brew install --cask google-chrome");
+        eprintln!("   Or download from: https://www.google.com/chrome/");
+        return Ok(());
+    }
+
+    if cfg!(target_os = "windows") {
+        eprintln!("   Install Chrome manually:");
+        eprintln!("     winget install Google.Chrome");
+        eprintln!("   Or download from: https://www.google.com/chrome/");
+        return Ok(());
+    }
+
+    Ok(())
+}
+
+fn install_chrome_debian() -> Result<(), String> {
+    let tmp_deb = std::env::temp_dir().join("google-chrome-stable.deb");
+    let url = "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb";
+
+    eprintln!("   Downloading {} ...", url);
+    let status = std::process::Command::new("wget")
+        .args(["-q", "--show-progress", "-O"])
+        .arg(&tmp_deb)
+        .arg(url)
+        .status()
+        .map_err(|e| format!("Failed to run wget: {e}"))?;
+
+    if !status.success() {
+        // Try curl as fallback
+        eprintln!("   wget failed, trying curl ...");
+        let status = std::process::Command::new("curl")
+            .args(["-fsSL", "-o"])
+            .arg(&tmp_deb)
+            .arg(url)
+            .status()
+            .map_err(|e| format!("Failed to run curl: {e}"))?;
+        if !status.success() {
+            let _ = fs::remove_file(&tmp_deb);
+            return Err("Failed to download Google Chrome. Install it manually.".to_string());
+        }
+    }
+
+    eprintln!("   Installing Google Chrome ...");
+    let status = std::process::Command::new("sudo")
+        .args(["dpkg", "-i"])
+        .arg(&tmp_deb)
+        .status()
+        .map_err(|e| format!("Failed to run dpkg: {e}"))?;
+
+    if !status.success() {
+        // Fix broken dependencies
+        eprintln!("   Fixing dependencies ...");
+        let _ = std::process::Command::new("sudo")
+            .args(["apt-get", "install", "-f", "-y"])
+            .status();
+    }
+
+    let _ = fs::remove_file(&tmp_deb);
+
+    if find_chrome_executable().is_some() {
+        eprintln!("✅ Google Chrome installed successfully.");
+        Ok(())
+    } else {
+        Err("Google Chrome installation did not produce a usable binary.".to_string())
+    }
+}
+
+fn install_chrome_rhel() -> Result<(), String> {
+    let tmp_rpm = std::env::temp_dir().join("google-chrome-stable.rpm");
+    let url = "https://dl.google.com/linux/direct/google-chrome-stable_current_x86_64.rpm";
+
+    eprintln!("   Downloading {} ...", url);
+    let status = std::process::Command::new("curl")
+        .args(["-fsSL", "-o"])
+        .arg(&tmp_rpm)
+        .arg(url)
+        .status()
+        .map_err(|e| format!("Failed to run curl: {e}"))?;
+
+    if !status.success() {
+        let _ = fs::remove_file(&tmp_rpm);
+        return Err("Failed to download Google Chrome. Install it manually.".to_string());
+    }
+
+    eprintln!("   Installing Google Chrome ...");
+    let status = std::process::Command::new("sudo")
+        .args(["dnf", "install", "-y"])
+        .arg(&tmp_rpm)
+        .status()
+        .map_err(|e| format!("Failed to run dnf: {e}"))?;
+
+    if !status.success() {
+        // Try yum as fallback
+        let _ = std::process::Command::new("sudo")
+            .args(["yum", "install", "-y"])
+            .arg(&tmp_rpm)
+            .status();
+    }
+
+    let _ = fs::remove_file(&tmp_rpm);
+
+    if find_chrome_executable().is_some() {
+        eprintln!("✅ Google Chrome installed successfully.");
+        Ok(())
+    } else {
+        Err("Google Chrome installation did not produce a usable binary.".to_string())
+    }
+}
+
 async fn resolve_server_launch_spec(port: u16) -> Result<ServerLaunchSpec, String> {
     let runtime = find_or_install_runtime().await?;
     Ok(build_jar_launch_spec(&runtime, port))
