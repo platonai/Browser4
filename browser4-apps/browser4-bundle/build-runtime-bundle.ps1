@@ -389,22 +389,25 @@ set "MAIN_CLASS=$mainClass"
 # Main script
 # ============================================================================
 
-# Auto-build the bundle JAR if it doesn't exist yet.
+# Resolve Maven command and repo root early — both the JAR auto-build and
+# dependency:copy-dependencies need them.
+$repoRoot = git rev-parse --show-toplevel
+$mvnCmd = if (Get-IsWindows) { Join-Path $repoRoot 'mvnw.cmd' } else { Join-Path $repoRoot 'mvnw' }
+$bundleModule = 'browser4-apps/browser4-bundle'
+
+# Install core modules to ~/.m2 so dependency:copy-dependencies can resolve
+# internal reactor artifacts (browser4-resources, browser4-skeleton, etc.)
+# that are not published to Maven Central.  This is idempotent — on the
+# second run Maven only touches unchanged files.
+Write-Host "Ensuring core modules are installed to ~/.m2 ..."
+$coreArgs = @('install', '-DskipTests', '-Dmaven.javadoc.skip=true', '-q')
+& $mvnCmd @coreArgs
+if ($LASTEXITCODE -ne 0) { throw "Core modules install failed with exit code $LASTEXITCODE" }
+
+# Auto-build the bundle JAR if it doesn't exist yet (package only — the
+# CLI handles installation via its own flow).
 if (-not (Test-Path $JarPath)) {
     Write-Host "Bundle JAR not found, building from source ..." -ForegroundColor Yellow
-
-    $repoRoot = git rev-parse --show-toplevel
-    $mvnCmd = if (Get-IsWindows) { Join-Path $repoRoot 'mvnw.cmd' } else { Join-Path $repoRoot 'mvnw' }
-    $bundleModule = 'browser4-apps/browser4-bundle'
-
-    # Install all core modules first (needed for dependency resolution).
-    Write-Host "  Installing core modules ..."
-    $coreArgs = @('install', '-DskipTests', '-Dmaven.javadoc.skip=true', '-q')
-    & $mvnCmd @coreArgs
-    if ($LASTEXITCODE -ne 0) { throw "Core modules install failed with exit code $LASTEXITCODE" }
-
-    # Package the bundle module (no install — the CLI's `install` command
-    # calls this script and handles installation itself).
     Write-Host "  Building $bundleModule ..."
     $bundleArgs = @('package', '-pl', $bundleModule, '-am', '-Passet-bundle', '-DskipTests', '-Dmaven.javadoc.skip=true', '-q')
     & $mvnCmd @bundleArgs

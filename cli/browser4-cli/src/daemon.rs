@@ -1151,18 +1151,14 @@ async fn try_build_local_runtime_bundle(
             let mvn_program = mvn_program.clone();
             let root = root.to_path_buf();
             move || {
-                // Use 'install' (not 'package') so all reactor dependencies
-                // land in ~/.m2 — build-runtime-bundle.ps1 runs
-                // dependency:copy-dependencies which resolves from there.
                 std::process::Command::new(&mvn_program)
                     .args([
-                        "install",
+                        "package",
                         "-Passet-bundle",
                         "-pl",
                         "browser4-apps/browser4-bundle",
                         "-am",
                         "-DskipTests",
-                        "-Dmaven.javadoc.skip=true",
                         "-q",
                     ])
                     .current_dir(&root)
