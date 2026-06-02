@@ -275,20 +275,42 @@ where
     SleepAfter: FnOnce(),
 {
     // Force-kill path should still attempt browser cleanup even if earlier steps panic.
+    eprintln!("  [1/5] Notifying reachable servers to close all sessions ...");
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(notify_close_all));
 
     // Pre-sweep catches already-orphaned browser processes before server shutdown.
+    eprintln!("  [2/5] Scanning for orphaned browser processes (pre-sweep) ...");
     let pre_browser_kill = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&kill_browsers))
         .unwrap_or_else(|_| BrowserKillResult::default());
+    eprintln!(
+        "        Found {} browser process(es), killed {}",
+        pre_browser_kill.killed_pids.len() + pre_browser_kill.remaining_pids.len(),
+        pre_browser_kill.killed_pids.len()
+    );
 
+    eprintln!("  [3/5] Stopping Browser4 server processes ...");
     let shutdown = std::panic::catch_unwind(std::panic::AssertUnwindSafe(stop_server))
         .unwrap_or_else(|_| ShutdownResult::default());
+    eprintln!(
+        "        Stopped {}, already stopped {}, forced {}, still running {}",
+        shutdown.stopped_pids.len(),
+        shutdown.missing_pids.len(),
+        shutdown.forced_pids.len(),
+        shutdown.remaining_pids.len()
+    );
 
     // Post-sweep catches browsers that spawn late during shutdown.
+    eprintln!("  [4/5] Scanning for remaining browser processes (post-sweep) ...");
     let post_browser_kill = std::panic::catch_unwind(std::panic::AssertUnwindSafe(kill_browsers))
         .unwrap_or_else(|_| BrowserKillResult::default());
+    eprintln!(
+        "        Found {} browser process(es), killed {}",
+        post_browser_kill.killed_pids.len() + post_browser_kill.remaining_pids.len(),
+        post_browser_kill.killed_pids.len()
+    );
     let browser_kill = merge_browser_kill_results(pre_browser_kill, post_browser_kill);
 
+    eprintln!("  [5/5] Waiting for processes to exit ...");
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(sleep_after));
 
     ForceStopBrowser4ServerResult {

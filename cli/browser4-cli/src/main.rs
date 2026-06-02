@@ -780,9 +780,29 @@ async fn handle_close_all(client: &Client, base_url: &str) -> Result<(), String>
 }
 
 async fn handle_kill_all() -> Result<(), String> {
+    eprintln!("🔪 Stopping Browser4 backend and cleaning up browser processes ...");
+    eprintln!();
+
     let result = stop_browser4_server_forcibly();
     let shutdown_result = result.shutdown;
     finalize_global_cleanup("Killed", &shutdown_result);
+
+    eprintln!();
+
+    // ── Summary ──
+    let server_pids: Vec<String> = shutdown_result
+        .stopped_pids
+        .iter()
+        .map(|p| p.to_string())
+        .collect();
+    if !server_pids.is_empty() {
+        println!("✅ Server stopped (pid(s): {})", server_pids.join(", "));
+    } else if shutdown_result.remaining_pids.is_empty()
+        && shutdown_result.missing_pids.is_empty()
+        && shutdown_result.forced_pids.is_empty()
+    {
+        println!("✅ No Browser4 server was running.");
+    }
 
     if !shutdown_result.fallback_killed_server_pids.is_empty() {
         let pids: Vec<String> = shutdown_result
@@ -791,36 +811,39 @@ async fn handle_kill_all() -> Result<(), String> {
             .map(|p| p.to_string())
             .collect();
         println!(
-            "Fallback-killed Browser4 backend process(es): {}",
+            "⚠  Fallback-killed server process(es): {}",
             pids.join(", ")
         );
     }
 
     let browser_result = result.browser_kill;
-    if !browser_result.killed_pids.is_empty() {
-        let pids: Vec<String> = browser_result
-            .killed_pids
-            .iter()
-            .map(|p| p.to_string())
-            .collect();
-        println!(
-            "Killed found Browser4 browser process(es): {}",
-            pids.join(", ")
-        );
+    let total_browsers = browser_result.killed_pids.len() + browser_result.remaining_pids.len();
+    if total_browsers > 0 {
+        if !browser_result.killed_pids.is_empty() {
+            let pids: Vec<String> = browser_result
+                .killed_pids
+                .iter()
+                .map(|p| p.to_string())
+                .collect();
+            println!("✅ Killed browser process(es): {}", pids.join(", "));
+        }
+        if !browser_result.remaining_pids.is_empty() {
+            let pids: Vec<String> = browser_result
+                .remaining_pids
+                .iter()
+                .map(|p| p.to_string())
+                .collect();
+            return Err(format!(
+                "❌ Browser cleanup incomplete. Remaining process(es): {}",
+                pids.join(", ")
+            ));
+        }
+    } else {
+        println!("ℹ  No Browser4 browser processes found.");
     }
 
-    if !browser_result.remaining_pids.is_empty() {
-        let pids: Vec<String> = browser_result
-            .remaining_pids
-            .iter()
-            .map(|p| p.to_string())
-            .collect();
-        return Err(format!(
-            "Browser cleanup incomplete. Remaining Browser4 browser process(es): {}",
-            pids.join(", ")
-        ));
-    }
-
+    println!();
+    println!("✅ kill-all complete.");
     Ok(())
 }
 
@@ -2396,9 +2419,14 @@ async fn handle_upgrade(tool_params: &Value) -> Result<(), String> {
 }
 
 async fn handle_stop() -> Result<(), String> {
+    eprintln!("🛑 Stopping Browser4 server ...");
+    eprintln!();
+
     let result = stop_browser4_server_forcibly();
     let shutdown_result = result.shutdown;
     finalize_global_cleanup("Stopped", &shutdown_result);
+
+    eprintln!();
 
     if !shutdown_result.fallback_killed_server_pids.is_empty() {
         let pids: Vec<String> = shutdown_result
