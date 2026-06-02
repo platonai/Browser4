@@ -3593,10 +3593,8 @@ async fn run(
     let cmd_def = match cmd_map.get(command) {
         Some(def) => def,
         None => {
-            return Err(CliError(ExitCode::Usage, format!(
-                "Unknown command: {}. Run 'browser4-cli help' for usage.",
-                command
-            )));
+            print_help(None);
+            return Ok(());
         }
     };
 
