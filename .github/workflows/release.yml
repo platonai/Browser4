@@ -253,10 +253,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-    outputs:
-      jar_name: ${{ steps.get_uberjar.outputs.uberjar_file }}
-      jar_path: ${{ steps.get_uberjar.outputs.uberjar_path }}
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -300,7 +296,7 @@ jobs:
         id: maven-build
         uses: ./.github/actions/maven-build
         with:
-          maven_profiles: 'all-modules'
+          maven_profiles: 'all-modules,asset-standalone'
           skip_tests: 'true'
           parallel_builds: 'true'
           timeout_minutes: '20'
@@ -504,67 +500,14 @@ jobs:
           cleanup_compose: 'false'
           cleanup_volumes: 'true'
 
-      - name: Build Browser4 JAR
-        if: success()
-        shell: bash
-        run: |
-          JAR_PATH=${{ env.PRODUCTION_JAR_PATH }}
-          JAR_NAME=${{ env.PRODUCTION_JAR_NAME }}
-          MODULE_NAME=${{ env.PRODUCTION_JAR_MODULE_NAME }}
-          MODULE_PATH=${{ env.PRODUCTION_JAR_MODULE_PATH }}
-
-          echo "=== Building Browser4 JAR ==="
-          ./mvnw package -Passet-standalone -DskipTests=true -Dmaven.javadoc.skip=true
-
-          if [ ! -f "$JAR_PATH" ]; then
-            echo "❌ $JAR_NAME not found at $JAR_PATH"
-            echo "Available JARs:"
-            find . -name "*.jar" -type f | head -10
-            exit 1
-          fi
-
-          echo "✅ $JAR_NAME built successfully"
-
-      - name: Find and Validate JAR
-        id: get_uberjar
-        if: success()
-        shell: bash
-        run: |
-          JAR_PATH=${{ env.PRODUCTION_JAR_PATH }}
-          JAR_NAME=${{ env.PRODUCTION_JAR_NAME }}
-
-          echo "::group::📦 JAR Discovery and Validation"
-
-          if [ ! -f "$JAR_PATH" ]; then
-            echo "❌ JAR file not found: $JAR_PATH"
-            exit 1
-          fi
-
-          JAR_SIZE=$(stat -c%s "$JAR_PATH" 2>/dev/null || echo 0)
-          UBERJAR_FILE=$(basename "$JAR_PATH")
-
-          echo "✅ Selected JAR: $UBERJAR_FILE"
-          echo "📍 Path: $JAR_PATH"
-          echo "📏 Size: $JAR_SIZE bytes ($(numfmt --to=iec --suffix=B $JAR_SIZE))"
-
-          if [ "$JAR_SIZE" -lt 1000000 ]; then
-            echo "❌ JAR file seems too small (< 1MB): $JAR_SIZE bytes"
-            exit 1
-          fi
-
-          echo "uberjar_file=$UBERJAR_FILE" >> "$GITHUB_OUTPUT"
-          echo "uberjar_path=$JAR_PATH" >> "$GITHUB_OUTPUT"
-
-          echo "::endgroup::"
-
       - name: Create Release Notes
         if: success()
         uses: ./.github/actions/create-release-notes
         id: release-notes
         with:
           version: ${{ needs.prepare.outputs.version }}
-          jar_name: ${{ steps.get_uberjar.outputs.uberjar_file }}
-          jar_path: ${{ steps.get_uberjar.outputs.uberjar_path }}
+          jar_name: ${{ env.PRODUCTION_JAR_NAME }}
+          jar_path: ${{ env.PRODUCTION_JAR_PATH }}
           java_version: ${{ env.JAVA_VERSION }}+
           output_file: release_notes.md
 
@@ -617,7 +560,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-jar
-          path: ${{ steps.get_uberjar.outputs.uberjar_path }}
+          path: ${{ env.PRODUCTION_JAR_PATH }}
           retention-days: 7
 
       - name: Upload release notes artifact
@@ -709,7 +652,7 @@ jobs:
             echo "- **Maven Build**: ${{ steps.maven-build.outcome }}"
             echo "- **Docker Build**: ${{ steps.docker-build.outcome }}"
             echo "- **CLI E2E**: ${{ steps.e2e-cli.outcome || 'skipped' }}"
-            echo "- **JAR**: ${{ steps.get_uberjar.outcome }}"
+            echo "- **JAR**: ${{ steps.validate-jar.outcome }}"
             echo "- **Docker Push**: ${{ needs.prepare.outputs.skip_docker_push == 'true' && 'skipped' || needs.prepare.outputs.dry_run == 'true' && 'skipped (dry-run)' || 'enabled' }}"
             echo "- **Dry Run**: ${{ needs.prepare.outputs.dry_run == 'true' && '✅ active' || 'no' }}"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -1181,7 +1124,7 @@ jobs:
       - name: Verify release assets
         shell: bash
         run: |
-          if [ ! -f "release-assets/${{ needs.build-core-and-docker.outputs.jar_name }}" ]; then
+          if [ ! -f "release-assets/${{ env.PRODUCTION_JAR_NAME }}" ]; then
             echo "❌ Missing JAR asset"
             exit 1
           fi
@@ -1210,7 +1153,7 @@ jobs:
         run: |
           {
             echo 'files<<EOF'
-            echo "release-assets/${{ needs.build-core-and-docker.outputs.jar_name }}"
+            echo "release-assets/${{ env.PRODUCTION_JAR_NAME }}"
             if [ "${{ needs.prepare.outputs.cli_should_build }}" = "true" ]; then
               find release-assets -maxdepth 1 -type f -name 'browser4-cli-*' | sort
             fi
@@ -1237,20 +1180,20 @@ jobs:
         if: success()
         uses: actions/attest-build-provenance@ef244123eb79f2f7a7e75d99086184180e6d0018  # v1.4.4
         with:
-          subject-path: release-assets/${{ needs.build-core-and-docker.outputs.jar_name }}
+          subject-path: release-assets/${{ env.PRODUCTION_JAR_NAME }}
 
       - name: Verify Release
         shell: bash
         run: |
           echo "::group::✅ Release Verification"
 
-          JAR_SIZE=$(stat -c%s "release-assets/${{ needs.build-core-and-docker.outputs.jar_name }}" 2>/dev/null || echo 0)
+          JAR_SIZE=$(stat -c%s "release-assets/${{ env.PRODUCTION_JAR_NAME }}" 2>/dev/null || echo 0)
 
           echo "🎉 Release ${{ needs.prepare.outputs.version }} created successfully!"
           echo ""
           echo "📦 Release Details:"
           echo "  - Tag: ${{ needs.prepare.outputs.tag }}"
-          echo "  - JAR: ${{ needs.build-core-and-docker.outputs.jar_name }}"
+          echo "  - JAR: ${{ env.PRODUCTION_JAR_NAME }}"
           echo "  - Size: $(numfmt --to=iec --suffix=B $JAR_SIZE)"
           echo "  - Prerelease: ${{ needs.prepare.outputs.is_prerelease }}"
           echo "  - CLI Version: ${{ needs.prepare.outputs.cli_version }}"
@@ -1260,7 +1203,7 @@ jobs:
           echo "🔗 Release URL: https://github.com/${{ github.repository }}/releases/tag/${{ needs.prepare.outputs.tag }}"
           echo ""
           echo "📥 Download Command:"
-          echo "wget https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare.outputs.tag }}/${{ needs.build-core-and-docker.outputs.jar_name }}"
+          echo "wget https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare.outputs.tag }}/${{ env.PRODUCTION_JAR_NAME }}"
 
           echo "::endgroup::"
 
@@ -1278,7 +1221,7 @@ jobs:
             echo "- **Commit**: ${{ github.sha }}"
             echo ""
             echo "### 📦 Artifacts"
-            echo "- **JAR**: ${{ needs.build-core-and-docker.outputs.jar_name }}"
+            echo "- **JAR**: ${{ env.PRODUCTION_JAR_NAME }}"
             echo "- **Runtime Bundles**: browser4-bundle-runtime-windows-x64.zip, browser4-bundle-runtime-linux-x64.tar.gz, browser4-bundle-runtime-darwin-x64.tar.gz, browser4-bundle-runtime-darwin-arm64.tar.gz"
             echo "- **CLI Version**: ${{ needs.prepare.outputs.cli_version }}"
             echo "- **npm Version**: ${{ needs.prepare.outputs.npm_version }}"
