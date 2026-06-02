@@ -543,10 +543,17 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 
 
+# Compute the multi-release version from the JDK being used.
+# This ensures jdeps processes multi-release JARs with the correct
+# version-specific class files for the target runtime.
+$jdkVersion = Get-JDKVersion -jdkHome $env:JAVA_HOME
+$multiReleaseVersion = if ($jdkVersion) { [string]$jdkVersion.Major } else { '17' }
+Write-Host "Using multi-release version: $multiReleaseVersion (JDK: $($jdkVersion))" -ForegroundColor Cyan
+
 $jdepsArgs = @(
     '-q',
     '--ignore-missing-deps',
-    '--multi-release', '17',
+    '--multi-release', $multiReleaseVersion,
     '--recursive',
     '--print-module-deps'
 )
