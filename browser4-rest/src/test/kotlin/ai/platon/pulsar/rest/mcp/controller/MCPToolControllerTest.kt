@@ -210,35 +210,22 @@ class MCPToolControllerTest {
         assertTrue(tools.contains("tab_new"))
         assertTrue(tools.contains("tab_close"))
         assertTrue(tools.contains("tab_list"))
-        assertFalse(tools.contains("browser_file_upload"))
+        // browser_file_upload is a FRONTEND_TOOL alias, always included.
+        assertTrue(tools.contains("browser_file_upload"))
     }
 
     @Test
-    fun `test list tools creates temporary session when no sessions are active`() {
-        val temporarySession = Mockito.mock(ManagedSession::class.java)
-        val temporaryAgenticSession = Mockito.mock(AgenticSession::class.java)
-        val temporaryAgent = Mockito.mock(BasicBrowserAgent::class.java)
-        val temporaryToolExecutor = Mockito.mock(AgentToolManager::class.java)
-
+    fun `test list tools returns static tools when no sessions are active`() {
         `when`(sessionManager.getAllSessions()).thenReturn(emptyList())
-        `when`(sessionManager.getOrCreateSession(null)).thenReturn(temporarySession)
-        `when`(temporarySession.sessionId).thenReturn("temporary-session")
-        `when`(temporarySession.agenticSession).thenReturn(temporaryAgenticSession)
-        `when`(temporaryAgenticSession.companionAgent).thenReturn(temporaryAgent)
-        `when`(temporaryAgent.agentToolManager).thenReturn(temporaryToolExecutor)
-        `when`(temporaryToolExecutor.getAllToolSpecs()).thenReturn(
-            mapOf(
-                "tab" to mapOf(
-                    "navigate" to ToolSpec(domain = "tab", method = "navigate", description = "desc"),
-                )
-            )
-        )
 
         val result = controller.listTools(response)
 
         assertEquals(HttpStatus.OK, result.statusCode)
-        Mockito.verify(sessionManager).getOrCreateSession(null)
-        Mockito.verify(sessionManager).deleteSession("temporary-session")
+        @Suppress("UNCHECKED_CAST")
+        val tools = ((result.body as Map<String, Any>)["tools"] as List<String>).toSet()
+        // Static tools + frontend aliases are always returned.
+        assertTrue(tools.contains("open_session"))
+        assertTrue(tools.contains("browser_navigate"))
     }
 
     @Test
