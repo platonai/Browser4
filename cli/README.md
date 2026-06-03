@@ -220,9 +220,10 @@ Query `browser4-cli help <command>` for the exact syntax when you need them.
 | `agent status <id>` | Check the status of a running agent task |
 | `agent result <id>` | Get the result of a completed agent task |
 | `swarm create` | Create a swarm scrape session with parallel browser contexts |
-| `swarm submit [url]` | Submit URL(s) or X-SQL payloads as scrape jobs |
-| `swarm status <id>` | Check the status of a scrape job |
-| `swarm result <id>` | Get the result of a completed scrape job |
+| `swarm submit [url]` | Submit URL(s) or raw X-SQL payloads as scrape jobs |
+| `swarm query <url>` | Run an X-SQL query against a loaded webpage |
+| `swarm status <id>` | Check the status of a scrape or query job |
+| `swarm result <id>` | Get the result of a completed job |
 
 ## Agent task workflow (`agent <subcommand>`)
 
@@ -315,79 +316,71 @@ If the backend returns a structured `CommandResult`, expect fields such as
 The `swarm` subcommands support a swarm scrape workflow where one CLI session
 coordinates multiple browser contexts in the Browser4 backend.
 
-Use the spaced `swarm <subcommand>` form:
+### Command overview
 
-```shell
-browser4-cli swarm create
-browser4-cli swarm submit https://example.com
-```
-
-### Command lifecycle
-
-| Step | Command | What it does |
+| Command | Purpose | Backend endpoint |
 |---|---|---|
-| 1 | `swarm create` | Creates a swarm scrape session with parallel browser contexts |
-| 2 | `swarm submit [url]` | Submits a URL, X-SQL payload, or seed file as scrape jobs |
-| 3 | `swarm status <id>` | Prints the status of a previously submitted scrape job |
-| 4 | `swarm result <id>` | Prints the final result of a completed scrape job |
+| `swarm create` | Create a swarm scrape session | `POST /api/swarm` |
+| `swarm submit <url>` | Scrape URLs or submit raw X-SQL | `POST /api/swarm/submit` |
+| `swarm query <url>` | Run X-SQL queries against loaded pages | `POST /api/swarm/query` |
+| `swarm status <id>` | Poll job status | `GET /api/swarm/{id}/status` |
+| `swarm result <id>` | Fetch completed job result | `GET /api/swarm/{id}/result` |
 
-### Notes
-
-- `swarm create` accepts backend capability hints such as `--profile-mode`,
-  `--max-open-tabs`, `--max-browser-contexts`, and `--display-mode`.
-- `swarm submit` accepts either a direct positional URL, `--seed-file`, or both.
-  Seed files are plain text files with one URL per line; blank lines and lines
-  starting with `#` are ignored.
-- `swarm submit` maps CLI flags like `--deadline`, `--expires`, `--refresh`,
-  `--parse`, and `--store-content` into the raw submission payload sent to the
-  scrape REST API.
-- `swarm status` and `swarm result` are read-only follow-up commands; keep the job ID
-  printed by `swarm submit`.
-
-### Use cases
-
-#### 1. Create a supervised swarm scrape session for manual monitoring
+### URL scraping with `swarm submit`
 
 ```shell
+# create a session
 browser4-cli swarm create \
   --profile-mode=TEMPORARY \
   --max-open-tabs=12 \
   --max-browser-contexts=3 \
   --display-mode=HEADLESS
-```
 
-Use this when you want multiple isolated browser contexts and you still want to
-watch the run visually.
-
-#### 2. Submit a seed crawl as scrape jobs
-
-```shell
+# submit URLs as scrape jobs
 browser4-cli swarm submit https://example.com/direct \
   --seed-file=./swarm-seeds.txt \
   --deadline=2026-03-30T00:00:00Z \
   --expires=1d \
-  --refresh \
-  --parse \
-  --store-content
-```
+  --refresh --parse --store-content
 
-Example `swarm-seeds.txt`:
-
-```text
-# campaign landing pages
-https://example.com/seed-1
-https://example.com/seed-2
-```
-
-This pattern is useful for warming caches, refreshing a URL list, or launching
-parallel collection across a curated seed set.
-
-#### 3. Poll and fetch the result
-
-```shell
+# poll and fetch the result
 browser4-cli swarm status scrape-task-4
 browser4-cli swarm result scrape-task-4
 ```
+
+### X-SQL queries with `swarm query`
+
+Run structured X-SQL queries against loaded webpages to extract data.
+
+```shell
+# Inline query:
+browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql "
+  SELECT
+    dom_base_uri(dom) AS url,
+    dom_first_text(dom, '#productTitle') AS title,
+    dom_first_slim_html(dom, 'img:expr(width > 400)') AS img
+  FROM load_and_select(@url, 'body');
+"
+
+# From a file:
+browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql @query.sql
+
+# With seed file and load options:
+browser4-cli swarm query --sql @query.sql --seed-file=./urls.txt --refresh --parse
+```
+
+### Notes
+
+- `swarm create` accepts backend capability hints: `--profile-mode`, `--max-open-tabs`,
+  `--max-browser-contexts`, `--display-mode`.
+- `swarm submit` and `swarm query` both accept a positional URL, `--seed-file`, or both.
+  Seed files use one URL per line; `#` comments and blank lines are ignored.
+- Both commands support load-option flags: `--deadline`, `--expires`, `--refresh`,
+  `--parse`, `--store-content`.
+- `swarm query --sql` is **required**; `swarm submit --sql` also works as a convenience.
+  Use `@url` in the X-SQL template; it is replaced with the target URL server-side.
+- Prefix the `--sql` value with `@` to read from a file (e.g. `--sql @query.sql`).
+- All commands return a task ID; use `swarm status` / `swarm result` to track progress.
 
 ## Element References
 

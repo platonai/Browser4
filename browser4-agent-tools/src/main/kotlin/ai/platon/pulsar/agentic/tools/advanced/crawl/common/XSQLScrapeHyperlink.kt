@@ -19,7 +19,7 @@ import ai.platon.pulsar.skeleton.event.impl.PageEventHandlersFactory
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import java.util.*
 
-open class XSQLScrapeHyperlink(
+open class XSQLHyperlink(
     request: ScrapeRequest,
     sql: NormXSQL,
     session: PulsarSession,
@@ -27,7 +27,7 @@ open class XSQLScrapeHyperlink(
 ) : AbstractScrapeHyperlink(request, sql, session, uuid) {
 
     class CrawlEventHandlers(
-        val hyperlink: XSQLScrapeHyperlink,
+        val hyperlink: XSQLHyperlink,
         val response: ScrapeResponse,
     ) : DefaultCrawlEventHandlers() {
         init {
@@ -45,7 +45,7 @@ open class XSQLScrapeHyperlink(
     }
 
     class LoadEventHandlers(
-        val hyperlink: XSQLScrapeHyperlink,
+        val hyperlink: XSQLHyperlink,
         val response: ScrapeResponse,
     ) : DefaultLoadEventHandlers() {
         init {
@@ -70,7 +70,7 @@ open class XSQLScrapeHyperlink(
         }
     }
 
-    private val logger = getLogger(XSQLScrapeHyperlink::class)
+    private val logger = getLogger(XSQLHyperlink::class)
 
     override var args: String? = "-parse ${sql.args}"
     override var eventHandlers = PageEventHandlersFactory.create(
@@ -106,3 +106,5 @@ open class XSQLScrapeHyperlink(
         response.refresh(response.statusCode, page.protocolStatus.minorCode, false)
     }
 }
+
+typealias XSQLScrapeHyperlink = XSQLHyperlink

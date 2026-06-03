@@ -45,7 +45,7 @@ use help::{generate_command_help, generate_help, generate_help_entry, public_com
 use http::{
     call_tool, get_command_result, get_command_status, get_swarm_result, get_swarm_status,
     is_stale_session_error, make_client, submit_batch_commands, submit_plain_command,
-    submit_swarm_payload,
+    submit_swarm_payload, submit_swarm_query,
 };
 use managed_processes::{
     read_managed_server_processes, stop_browser4_server_forcibly, ManagedServerProcess,
@@ -227,6 +227,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "agent-result",
         "swarm-create",
         "swarm-submit",
+        "swarm-query",
         "swarm-status",
         "swarm-result",
     ]
@@ -2430,10 +2431,24 @@ async fn handle_swarm_submit(
         .and_then(|v| v.as_str())
         .unwrap_or("");
     let seed_file = tool_params.get("seedFile").and_then(|v| v.as_str());
+    let query_raw = tool_params.get("sql").and_then(|v| v.as_str());
 
     if url.is_empty() && seed_file.is_none() {
         return Err("Either a URL or --seed-file is required.".to_string());
     }
+
+    // Read query from file if prefixed with @
+    let query = match query_raw {
+        Some(q) if q.starts_with('@') => {
+            let file_path = &q[1..];
+            Some(
+                std::fs::read_to_string(file_path)
+                    .map_err(|e| format!("Failed to read query file '{}': {}", file_path, e))?,
+            )
+        }
+        Some(q) => Some(q.to_string()),
+        None => None,
+    };
 
     // Collect URLs to submit
     let mut urls: Vec<String> = Vec::new();
@@ -2486,18 +2501,35 @@ async fn handle_swarm_submit(
     }
     let opts_str = load_opts.join(" ");
 
-    // Submit each URL through the scrape REST API.
+    // Submit each URL through the appropriate REST API.
     let mut json_submissions: Vec<serde_json::Value> = Vec::new();
     for u in &urls {
-        let command = if opts_str.is_empty() {
-            u.clone()
+        let (result, method) = if let Some(ref q) = query {
+            // X-SQL query mode: send structured JSON to /api/swarm/query
+            let payload = json!({
+                "url": u,
+                "args": opts_str,
+                "query": q,
+            });
+            (
+                submit_swarm_query(client, base_url, payload).await?,
+                "query",
+            )
         } else {
-            format!("{} {}", u, opts_str)
+            // Plain scrape mode: send URL with options to /api/swarm/submit
+            let command = if opts_str.is_empty() {
+                u.clone()
+            } else {
+                format!("{} {}", u, opts_str)
+            };
+            (
+                submit_swarm_payload(client, base_url, &command).await?,
+                "submit",
+            )
         };
 
-        let result = submit_swarm_payload(client, base_url, &command).await?;
         let task_id = result.trim().trim_matches('"').to_string();
-        cli_println!("Task Submitted: {} -> Task ID: {}", u, task_id);
+        cli_println!("Task Submitted: {} -> Task ID: {} (via {})", u, task_id, method);
         json_submissions.push(json!({
             "url": u,
             "task_id": task_id,
@@ -2507,6 +2539,114 @@ async fn handle_swarm_submit(
 
     if urls.len() > 1 {
         cli_println!("{} URL(s) submitted.", urls.len());
+    }
+    Ok(())
+}
+
+async fn handle_swarm_query(
+    client: &Client,
+    base_url: &str,
+    tool_params: &Value,
+) -> Result<(), String> {
+    let url = tool_params
+        .get("url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let seed_file = tool_params.get("seedFile").and_then(|v| v.as_str());
+    let query_raw = tool_params.get("sql").and_then(|v| v.as_str());
+
+    if url.is_empty() && seed_file.is_none() {
+        return Err("A URL or --seed-file is required.".to_string());
+    }
+    if query_raw.is_none() || query_raw.unwrap().is_empty() {
+        return Err("--sql is required. Provide an inline X-SQL query or @file.sql.".to_string());
+    }
+
+    // Read query from file if prefixed with @
+    let query = match query_raw {
+        Some(q) if q.starts_with('@') => {
+            let file_path = &q[1..];
+            Some(
+                std::fs::read_to_string(file_path)
+                    .map_err(|e| format!("Failed to read query file '{}': {}", file_path, e))?,
+            )
+        }
+        Some(q) => Some(q.to_string()),
+        None => None,
+    };
+
+    // Collect URLs to query
+    let mut urls: Vec<String> = Vec::new();
+    if !url.is_empty() {
+        urls.push(url.to_string());
+    }
+    if let Some(file_path) = seed_file {
+        let content = std::fs::read_to_string(file_path)
+            .map_err(|e| format!("Failed to read seed file '{}': {}", file_path, e))?;
+        for line in content.lines() {
+            let line = line.trim();
+            if !line.is_empty() && !line.starts_with('#') {
+                urls.push(line.to_string());
+            }
+        }
+    }
+
+    if urls.is_empty() {
+        return Err("No URLs to query.".to_string());
+    }
+
+    // Build load options string from flags
+    let mut load_opts = Vec::new();
+    if let Some(v) = tool_params.get("deadline").and_then(|v| v.as_str()) {
+        load_opts.push(format!("-deadline {}", v));
+    }
+    if let Some(v) = tool_params.get("expires").and_then(|v| v.as_str()) {
+        load_opts.push(format!("-expires {}", v));
+    }
+    if tool_params
+        .get("refresh")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        load_opts.push("-refresh".to_string());
+    }
+    if tool_params
+        .get("parse")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        load_opts.push("-parse".to_string());
+    }
+    if tool_params
+        .get("storeContent")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        load_opts.push("-storeContent".to_string());
+    }
+    let opts_str = load_opts.join(" ");
+
+    // Submit each URL via /api/swarm/query
+    let mut json_submissions: Vec<serde_json::Value> = Vec::new();
+    let q = query.expect("query was validated above");
+    for u in &urls {
+        let payload = json!({
+            "url": u,
+            "args": opts_str,
+            "query": q,
+        });
+        let result = submit_swarm_query(client, base_url, payload).await?;
+        let task_id = result.trim().trim_matches('"').to_string();
+        cli_println!("Query Submitted: {} -> Task ID: {}", u, task_id);
+        json_submissions.push(json!({
+            "url": u,
+            "task_id": task_id,
+        }));
+    }
+    json_field("submissions", json!(json_submissions));
+
+    if urls.len() > 1 {
+        cli_println!("{} URL(s) queried.", urls.len());
     }
     Ok(())
 }
@@ -2770,10 +2910,12 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "agent-result" => Some("agent result"),
         "swarm-create" => Some("swarm create"),
         "swarm-submit" => Some("swarm submit"),
+        "swarm-query" => Some("swarm query"),
         "swarm-status" => Some("swarm status"),
         "swarm-result" => Some("swarm result"),
         "co-create" => Some("swarm create"),
         "co-submit" => Some("swarm submit"),
+        "co-query" => Some("swarm query"),
         "co-status" => Some("swarm status"),
         "co-result" => Some("swarm result"),
         _ => None,
@@ -3133,8 +3275,8 @@ fn compile_batch_request(
                 }
             }
             "list" | "close-all" | "kill-all" | "delete-data" | "agent-run" | "agent-status"
-            | "agent-result" | "swarm-create" | "swarm-submit" | "swarm-status"
-            | "swarm-result" => {
+            | "agent-result" | "swarm-create" | "swarm-submit" | "swarm-query"
+            | "swarm-status" | "swarm-result" => {
                 if push_batch_local_failure(
                     &mut entries,
                     spec,
@@ -3907,6 +4049,9 @@ async fn run(
         }
         "swarm-submit" => {
             handle_swarm_submit(&client, &base_url, &tool_params).await?;
+        }
+        "swarm-query" => {
+            handle_swarm_query(&client, &base_url, &tool_params).await?;
         }
         "swarm-status" => {
             handle_swarm_status(&client, &base_url, &tool_params).await?;

@@ -267,7 +267,20 @@ Use the spaced `swarm <subcommand>` form:
 ```bash
 browser4-cli swarm create
 browser4-cli swarm submit https://example.com
+browser4-cli swarm query "https://..." --sql @query.sql
 ```
+
+### Command overview
+
+| Command | Purpose |
+|---|---|
+| `swarm create` | Create a swarm scrape session |
+| `swarm submit <url>` | Submit URLs or raw X-SQL for scraping |
+| `swarm query <url>` | Run an X-SQL query against a loaded webpage |
+| `swarm status <id>` | Poll a job by task ID |
+| `swarm result <id>` | Fetch a completed job's result |
+
+### URL scraping
 
 Recommended lifecycle:
 
@@ -293,16 +306,56 @@ browser4-cli swarm status scrape-task-4
 browser4-cli swarm result scrape-task-4
 ```
 
+### X-SQL query submissions
+
+Use `swarm query` to run an X-SQL query that extracts structured data from the
+loaded webpage. The `--sql` flag is **required**. The query uses `@url` as a
+placeholder for the target URL.
+
+```bash
+# Inline X-SQL query:
+browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql "
+  SELECT
+    dom_base_uri(dom) AS url,
+    dom_first_text(dom, '#productTitle') AS title,
+    dom_first_slim_html(dom, 'img:expr(width > 400)') AS img
+  FROM load_and_select(@url, 'body');
+"
+
+# Read query from a file:
+browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql @query.sql
+
+# With load options and a seed file:
+browser4-cli swarm query --sql @query.sql --seed-file=./urls.txt --refresh --parse
+```
+
+Example `query.sql`:
+
+```sql
+SELECT
+  dom_base_uri(dom) AS url,
+  dom_first_text(dom, '#productTitle') AS title,
+  dom_first_slim_html(dom, 'img:expr(width > 400)') AS img
+FROM load_and_select(@url, 'body');
+```
+
+`swarm query` sends a structured JSON body to `SwarmController.query(query)`.
+The `@url` placeholder is substituted with the target URL (and any load options)
+server-side.
+
+> **Tip:** `swarm submit --sql` also works as a convenience alias, but
+> `swarm query` is the preferred command for X-SQL queries.
+
 Notes:
 
 - `swarm submit` accepts a positional URL, `--seed-file`, or both.
+- `swarm query` accepts `--sql` (required), plus a URL, `--seed-file`, or both.
 - Seed files are plain text, one URL per line. Empty lines and lines beginning
   with `#` are ignored.
-- `swarm submit` forwards load-option style flags such as `--deadline`,
-  `--expires`, `--refresh`, `--parse`, and `--store-content` into the raw
-  submission payload sent to `SwarmController.submit(payload)`.
-- Capture the job ID printed by `swarm submit`, then use
-  `swarm status` and `swarm result` to follow the async scrape job via
+- Load-option style flags (`--deadline`, `--expires`, `--refresh`, `--parse`,
+  `--store-content`) work with both `swarm submit` and `swarm query`.
+- Capture the job ID printed by `swarm submit` or `swarm query`, then use
+  `swarm status` and `swarm result` to follow the async job via
   `SwarmController.getStatus(id)` and `SwarmController.getResult(id)`.
 
 Example seed file:
@@ -318,6 +371,7 @@ Typical use cases:
 - parallel refresh of a curated URL list
 - supervised fan-out browsing across multiple contexts
 - repeatable selector-based scraping jobs with explicit output artifacts
+- structured data extraction from web pages using X-SQL queries
 
 ## Installation
 

@@ -4,6 +4,7 @@ import org.apache.commons.lang3.StringUtils
 import java.util.*
 
 object APISQLUtils {
+    private val allowedStatements = arrayOf("select")
     private val forbiddenStatements = arrayOf("delete", "insert", "truncate", "drop")
 
     fun sanitize(sql: String?): String {
@@ -17,7 +18,7 @@ object APISQLUtils {
         }
 
         sql0 = sql0.removeSuffix(";")
-        val quoted = StringUtils.substringsBetween(sql0 , "'", "'")
+        val quoted = StringUtils.substringsBetween(sql0, "'", "'")
         quoted?.forEach { sql0 = sql0.replace(it, "") }
         if (sql0.contains(";")) {
             throw IllegalArgumentException("Only one statement is supported")
@@ -28,8 +29,8 @@ object APISQLUtils {
         }
 
         return sql.split("\n")
-                .filterNot { it.trim().startsWith("--") }
-                .joinToString("\n")
+            .filterNot { it.trim().startsWith("--") }
+            .joinToString("\n")
 
     }
 }

@@ -484,6 +484,7 @@ struct RecordedToolCall {
 struct MockBrowser4State {
     tool_calls: Vec<RecordedToolCall>,
     plain_commands: Vec<String>,
+    swarm_queries: Vec<serde_json::Value>,
     status_queries: Vec<String>,
     result_queries: Vec<String>,
     next_agent_task_id: usize,
@@ -928,6 +929,22 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
             let task_id = {
                 let mut guard = state.lock().expect("mock Browser4 state mutex poisoned");
                 guard.plain_commands.push(payload);
+                guard.next_swarm_task_id += 1;
+                format!("swarm-task-{}", guard.next_swarm_task_id)
+            };
+
+            write_http_response(
+                &mut stream,
+                "200 OK",
+                "application/json",
+                &serde_json::json!(task_id).to_string(),
+            );
+        }
+        _ if method == "POST" && route == "/api/swarm/query" => {
+            let query: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+            let task_id = {
+                let mut guard = state.lock().expect("mock Browser4 state mutex poisoned");
+                guard.swarm_queries.push(query);
                 guard.next_swarm_task_id += 1;
                 format!("swarm-task-{}", guard.next_swarm_task_id)
             };

@@ -9,6 +9,7 @@ pub fn public_command_name(name: &str) -> &str {
         "agent-result" => "agent result",
         "swarm-create" => "swarm create",
         "swarm-submit" => "swarm submit",
+        "swarm-query" => "swarm query",
         "swarm-status" => "swarm status",
         "swarm-result" => "swarm result",
         _ => name,
@@ -284,10 +285,106 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - URLs plus load options are forwarded as a raw payload string to `SwarmController.submit(payload)`."
                 .to_string(),
         );
+        lines.push(
+            "  - When `--sql` is provided, the CLI sends a structured JSON body to `SwarmController.query(query)`"
+                .to_string(),
+        );
+        lines.push(
+            "    instead of a raw string to `SwarmController.submit(payload)`."
+                .to_string(),
+        );
+        lines.push(
+            "  - `--sql` accepts inline X-SQL or a file path prefixed with `@` (e.g. `--sql @query.sql`)."
+                .to_string(),
+        );
+        lines.push(
+            "  - Use `@url` in the X-SQL as a placeholder for the target page URL."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push(
             "  browser4-cli swarm submit https://example.com/direct --seed-file=./swarm-seeds.txt --deadline=2026-03-30T00:00:00Z --expires=1d --refresh --parse --store-content"
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push(
+            "  # Submit with an inline X-SQL query:"
+                .to_string(),
+        );
+        lines.push(
+            r##"  browser4-cli swarm submit "https://www.amazon.com/dp/B08PP5MSVB" --sql ""##
+                .to_string()
+                + r#""SELECT dom_base_uri(dom) AS url, dom_first_text(dom, '#productTitle') AS title ""#
+                + r#""FROM load_and_select(@url, 'body')""#
+                + r#"""#
+        );
+        lines.push(String::new());
+        lines.push(
+            "  # Submit with a query file:"
+                .to_string(),
+        );
+        lines.push(
+            r##"  browser4-cli swarm submit "https://www.amazon.com/dp/B08PP5MSVB" --sql @query.sql"##
+                .to_string(),
+        );
+    }
+
+    if cmd.name == "swarm-query" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Submits an X-SQL query against a loaded webpage and returns structured data."
+                .to_string(),
+        );
+        lines.push(
+            "  - `--sql` is required. Accepts inline X-SQL or a file path prefixed with `@` (e.g. `--sql @query.sql`)."
+                .to_string(),
+        );
+        lines.push(
+            "  - Use `@url` in the X-SQL as a placeholder for the target page URL."
+                .to_string(),
+        );
+        lines.push(
+            "  - The CLI sends a structured JSON body to `SwarmController.query(query)`."
+                .to_string(),
+        );
+        lines.push(
+            "  - Accepts a direct URL, a `--seed-file`, or both, and runs the same query against each."
+                .to_string(),
+        );
+        lines.push(
+            "  - Seed files are plain text with one URL per line; blank lines and lines beginning with `#` are ignored."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push(
+            "  # Inline X-SQL:"
+                .to_string(),
+        );
+        lines.push(
+            r##"  browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql ""##
+                .to_string()
+                + r#""SELECT dom_base_uri(dom) AS url, dom_first_text(dom, '#productTitle') AS title ""#
+                + r#""FROM load_and_select(@url, 'body')""#
+                + r#"""#
+        );
+        lines.push(String::new());
+        lines.push(
+            "  # From a query file:"
+                .to_string(),
+        );
+        lines.push(
+            r##"  browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql @query.sql"##
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push(
+            "  # With seed file:"
+                .to_string(),
+        );
+        lines.push(
+            "  browser4-cli swarm query --sql @query.sql --seed-file=./swarm-seeds.txt --refresh --parse"
                 .to_string(),
         );
     }
@@ -524,6 +621,27 @@ mod tests {
         assert!(help.contains("SwarmController.submit(payload)"));
         assert!(help.contains("browser4-cli swarm submit https://example.com/direct"));
         assert!(!help.contains("browser4-cli swarm-submit"));
+        // --sql flag documentation
+        assert!(help.contains("SwarmController.query(query)"));
+        assert!(help.contains("--sql"));
+        assert!(help.contains("@url"));
+        assert!(help.contains("load_and_select"));
+        assert!(help.contains("query.sql"));
+    }
+
+    #[test]
+    fn test_generate_command_help_swarm_query() {
+        let cmds = all_commands();
+        let cmd = cmds.iter().find(|c| c.name == "swarm-query").unwrap();
+        let help = generate_command_help(cmd);
+        assert!(help.contains("browser4-cli swarm query"));
+        assert!(help.contains("--sql"));
+        assert!(help.contains("@url"));
+        assert!(help.contains("SwarmController.query(query)"));
+        assert!(help.contains("load_and_select"));
+        assert!(help.contains("query.sql"));
+        assert!(help.contains("seed file"));
+        assert!(help.contains("inline X-SQL"));
     }
 
     #[test]
