@@ -80,8 +80,7 @@ class ScrapeController(
      * */
     @GetMapping("count", consumes = [MediaType.ALL_VALUE])
     fun count(
-        @RequestParam(value = "status", required = false) status: Int = 0,
-        httpRequest: HttpServletRequest,
+        @RequestParam(value = "status", required = false) status: Int = 0
     ): Int {
         return scrapeService.count(status)
     }
@@ -92,10 +91,9 @@ class ScrapeController(
      * */
     @GetMapping("c", consumes = [MediaType.ALL_VALUE])
     fun countLegacy(
-        @RequestParam(value = "status", required = false) status: Int = 0,
-        httpRequest: HttpServletRequest,
+        @RequestParam(value = "status", required = false) status: Int = 0
     ): Int {
-        return count(status, httpRequest)
+        return count(status)
     }
 
     /**
@@ -104,8 +102,7 @@ class ScrapeController(
      * */
     @GetMapping("status", consumes = [MediaType.ALL_VALUE], produces = [MediaType.APPLICATION_JSON_VALUE])
     fun status(
-        @RequestParam(value = "uuid") uuid: String,
-        httpRequest: HttpServletRequest,
+        @RequestParam(value = "uuid") uuid: String
     ): ScrapeResponse {
         val request = ScrapeStatusRequest(uuid)
         return scrapeService.getStatus(request)

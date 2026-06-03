@@ -65,7 +65,7 @@ class SwarmControllerTest {
             controller.submit("   ")
         }
         assertEquals("Request body must be a non-blank URL or X-SQL", exception.message)
-        verify(swarmService, never()).submit(any())
+        verify(swarmService, never()).submit(any<ScrapeRequest>())
     }
 
     @Test
@@ -74,7 +74,7 @@ class SwarmControllerTest {
         val swarmService = Mockito.mock(SwarmService::class.java)
         val controller = SwarmController(sessionManager, swarmService)
 
-        Mockito.`when`(swarmService.submit(any())).thenReturn("mock-uuid")
+        Mockito.`when`(swarmService.submit(any<ScrapeRequest>())).thenReturn("mock-uuid")
 
         val result = controller.submit("https://example.com")
 
@@ -96,7 +96,7 @@ class SwarmControllerTest {
         assertThrows<IllegalArgumentException> {
             controller.submit("DROP TABLE users")
         }
-        verify(swarmService, never()).submit(any())
+        verify(swarmService, never()).submit(any<ScrapeRequest>())
     }
 
     // -----------------------------------------------------------------
