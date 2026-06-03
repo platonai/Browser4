@@ -1,6 +1,7 @@
 package ai.platon.pulsar.agentic.tools.advanced.crawl.service
 
 import ai.platon.pulsar.agentic.AgenticSession
+import ai.platon.pulsar.agentic.GenericAgenticSession
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
@@ -12,7 +13,6 @@ import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
-import ai.platon.pulsar.ql.SQLSession
 import ai.platon.pulsar.skeleton.event.PageEventHandlers
 import org.apache.commons.collections4.MultiMapUtils
 import org.slf4j.LoggerFactory
@@ -79,7 +79,7 @@ class ScrapeService(
     }
 
     private fun createScrapeHyperlink(request: ScrapeRequest): ScrapeHyperlink {
-        require(session is SQLSession) { "Session must be a SQLSession, but was ${session.javaClass}" }
+        require(session is GenericAgenticSession) { "Session must be a GenericAgenticSession, but was ${session.javaClass}" }
 
         val sql = request.sql
         val link = if (ScrapeAPIUtils.isScrapeUDF(sql)) {

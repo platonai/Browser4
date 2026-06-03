@@ -68,7 +68,7 @@ class SwarmService(
             "Expected GenericAgenticSession but got ${s::class.simpleName} (uuid=${s.uuid})"
         }
         s.submit(hyperlink)
-        logger.info("Swarm task submitted: {} sql={}", hyperlink.uuid, request.sql)
+        logger.debug("Swarm task submitted: {} sql={}", hyperlink.uuid, request.sql)
         return hyperlink.uuid
     }
 

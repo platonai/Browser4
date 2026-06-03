@@ -2,7 +2,6 @@ package ai.platon.pulsar.rest.api.service
 
 import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agent.tool.UserCommandExecutor.Companion.FLOW_POLLING_INTERVAL
-import ai.platon.pulsar.agentic.BasicAgenticSession
 import ai.platon.pulsar.agentic.GenericAgenticSession
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
@@ -80,12 +79,12 @@ class ScrapeService(
         val hyperlink = createScrapeHyperlink(request)
         responseCache[hyperlink.uuid] = hyperlink.response
         hyperlink.response.id = hyperlink.uuid
-        require(session is BasicAgenticSession)
-        // TODO: the URLs submitted to the URLPool might not be processed by this session,
-        //      instead of which, SWARM session will handle the fetching, which means in-consistent browser settings.
-        //      the reserved solution is to add a session id to the hyperlink, so the scheduler can choose the corresponding
-        //      session to execute the hyperlink.
-        session.submit(hyperlink)
+        val s = session
+        require(s is GenericAgenticSession) {
+            "Expected GenericAgenticSession but got ${s::class.simpleName} (uuid=${s.uuid})"
+        }
+        s.submit(hyperlink)
+        logger.info("Scrape task submitted: {} sql={}", hyperlink.uuid, request.sql)
         return hyperlink.uuid
     }
 
