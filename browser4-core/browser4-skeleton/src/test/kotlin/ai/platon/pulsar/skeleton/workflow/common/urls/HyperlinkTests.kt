@@ -41,13 +41,18 @@ class HyperlinkTests {
 
     @Test
     fun testSerialization() {
-        val u1 = Hyperlink(UrlCommon.urlString1)
+        // Non-empty text is required because pulsarObjectMapper uses NON_EMPTY inclusion,
+        // which omits empty strings from serialization, causing deserialization to fail
+        // on the non-nullable 'text' constructor parameter.
+        val u1 = Hyperlink(UrlCommon.urlString1, text = "hello", order = 1)
         val json = pulsarObjectMapper().writeValueAsString(u1)
         printlnPro(json)
         assertTrue { json.contains(UrlCommon.urlString1) }
         val u2 = pulsarObjectMapper().readValue<Hyperlink>(json)
         printlnPro(u2)
         assertEquals(UrlCommon.urlString1, u2.url)
+        assertEquals(u1.text, u2.text)
+        assertEquals(u1.order, u2.order)
     }
 
     @Test
