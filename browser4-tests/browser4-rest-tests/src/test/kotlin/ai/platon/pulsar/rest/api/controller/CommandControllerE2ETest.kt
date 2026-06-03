@@ -36,7 +36,7 @@ class CommandControllerE2ETest : RestAPITestBase() {
             async = false
         )
 
-        val status = client.post().uri("/api/commands")
+        val status = client.post().uri("/api/commands/json")
             .body(request)
             .exchange()
             .expectStatus().is2xxSuccessful
@@ -75,7 +75,7 @@ class CommandControllerE2ETest : RestAPITestBase() {
             async = false
         )
 
-        val status = client.post().uri("/api/commands")
+        val status = client.post().uri("/api/commands/json")
             .body(request)
             .exchange()
             .expectStatus().is2xxSuccessful

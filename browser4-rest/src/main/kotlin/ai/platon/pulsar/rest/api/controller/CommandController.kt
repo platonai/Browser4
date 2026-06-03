@@ -42,7 +42,7 @@ class CommandController(
         return submitJsonCommand(request)
     }
 
-    @PostMapping(value = ["", "/json"])
+    @PostMapping(value = ["/json"])
     suspend fun submitJsonCommand(@RequestBody request: PageVisitRequest): ResponseEntity<Any> {
         val sessionId = request.sessionId ?: DEFAULT_SESSION_ID
 
