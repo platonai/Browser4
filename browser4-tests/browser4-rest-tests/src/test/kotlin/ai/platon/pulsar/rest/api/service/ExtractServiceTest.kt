@@ -40,7 +40,7 @@ class ExtractServiceTest : MockEcServerTestBase() {
     }
 
     @Test
-        @DisplayName("test extract")
+    @DisplayName("test extract")
     fun testExtract() {
         val request = PromptRequest(MOCK_PRODUCT_DETAIL_URL, "title, price, images")
         val response = runBlocking { extractService.extract(request) }
@@ -49,7 +49,7 @@ class ExtractServiceTest : MockEcServerTestBase() {
     }
 
     @Test
-        @DisplayName("test extract with actions")
+    @DisplayName("test extract with actions")
     fun testExtractWithActions() {
         val actions = """
             move cursor to the element with id 'title' and click it
