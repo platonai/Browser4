@@ -118,6 +118,6 @@ open class GenericAgenticSession(
 class StaticAgenticSession(
     context: StaticAgenticContext,
     sessionConfig: VolatileConfig,
-): GenericAgenticSession(context, sessionConfig) {
+) : GenericAgenticSession(context, sessionConfig) {
 
 }
