@@ -22,7 +22,7 @@
     <name>Browser4 IT Tests</name>
 
     <build>
-        <defaultGoal>package</defaultGoal>
+        <defaultGoal>test</defaultGoal>
     </build>
 
     <dependencies>

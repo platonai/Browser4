@@ -22,7 +22,7 @@
     <name>Browser4 E2E Tests</name>
 
     <build>
-        <defaultGoal>package</defaultGoal>
+        <defaultGoal>test</defaultGoal>
     </build>
 
     <dependencies>

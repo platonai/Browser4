@@ -23,6 +23,8 @@
     <name>Browser4 Rest Tests</name>
 
     <build>
+        <defaultGoal>test</defaultGoal>
+
         <plugins>
             <plugin>
                 <groupId>org.springframework.boot</groupId>

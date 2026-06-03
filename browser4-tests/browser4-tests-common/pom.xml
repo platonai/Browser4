@@ -22,6 +22,8 @@
     <name>Browser4 Tests Common</name>
 
     <build>
+        <defaultGoal>install</defaultGoal>
+
         <plugins>
             <plugin>
                 <groupId>org.jetbrains.kotlin</groupId>
