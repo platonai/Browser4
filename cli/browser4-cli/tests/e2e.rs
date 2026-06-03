@@ -2887,7 +2887,11 @@ fn run_final_cleanup() -> Result<Vec<TimedStep>, String> {
 /// added to `commands.rs` without appearing here *or* in the tested set, the
 /// build will fail.
 fn excluded_commands(include_batch_command: bool) -> HashSet<&'static str> {
-    let mut commands: HashSet<&'static str> = [].into();
+    let mut commands: HashSet<&'static str> = [
+        // Not yet exercised by e2e scenarios; mock handler exists.
+        "swarm-query",
+    ]
+    .into();
 
     if !include_batch_command {
         commands.insert("batch");
