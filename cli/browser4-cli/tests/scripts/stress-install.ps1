@@ -52,10 +52,15 @@ $null = & chcp 65001
 # -------------------------------------------------------------------
 # CLI helper (same pattern as session-stress.ps1)
 # -------------------------------------------------------------------
+# Resolve the CLI Cargo.toml path (the script may be invoked from the repo root
+# which does not contain a Cargo.toml).
+$RepoRoot = git rev-parse --show-toplevel
+$CliManifest = Join-Path $RepoRoot 'cli/browser4-cli/Cargo.toml'
+
 $cli = if ($env:BROWSER4_CLI_BIN) {
-    { & $env:BROWSER4_CLI_BIN $args 2>$null }
+    { & $env:BROWSER4_CLI_BIN $args 2>&1 }
 } else {
-    { cargo run --quiet -- $args 2>$null }
+    { cargo run --manifest-path $CliManifest --quiet -- $args 2>&1 }
 }
 
 function Invoke-Cli {

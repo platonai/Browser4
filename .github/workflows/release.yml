@@ -47,7 +47,7 @@ on:
       bundle_only:
         description: 'Run only the runtime-bundle build (skip Docker, CLI, publish)'
         required: false
-        default: true # Temporary set as true for testing bundle-only workflow, to be flipped back to false after verification
+        default: false
         type: boolean
 
 concurrency:

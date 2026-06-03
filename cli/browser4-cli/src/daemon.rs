@@ -396,10 +396,17 @@ fn download_file_blocking(url: &str, target_path: &Path) -> Result<DownloadedFil
         .map_err(|e| format!("Download failed: {e}"))?;
 
     if !response.status().is_success() {
-        return Err(format!(
-            "Download failed with status: {}",
-            response.status()
-        ));
+        let status = response.status();
+        let mut msg = format!("Download failed with status: {status}\n  URL: {url}");
+        if status == reqwest::StatusCode::NOT_FOUND {
+            msg.push_str("\n\n  The runtime bundle asset was not found on the release.");
+            msg.push_str("\n  This may happen when the release does not include pre-built runtime bundles.");
+            msg.push_str("\n  Try one of the following:");
+            msg.push_str("\n    - Use a specific tag that includes runtime bundles: browser4-cli install --tag v4.8.0");
+            msg.push_str("\n    - Build the runtime from source inside the Browser4 repo and use --skip-install");
+            msg.push_str("\n    - Set BROWSER4_RELEASES_BASE_URL to a custom server hosting the runtime bundle");
+        }
+        return Err(msg);
     }
 
     let final_url = response.url().to_string();
