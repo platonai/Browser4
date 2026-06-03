@@ -1,5 +1,6 @@
 package ai.platon.pulsar.rest.api.service
 
+import ai.platon.browser4.boot.autoconfigure.Browser4AutoConfiguration
 import ai.platon.browser4.boot.autoconfigure.test.PulsarTestContextInitializer
 import ai.platon.browser4.common.B4Constants.DEFAULT_SESSION_ID
 import ai.platon.pulsar.agent.tool.UserCommandExecutor
@@ -32,7 +33,7 @@ import kotlin.time.Duration.Companion.minutes
 
 @SpringBootTest
 @ContextConfiguration(initializers = [PulsarTestContextInitializer::class])
-@Import(MockEcServerConfiguration::class)
+@Import(MockEcServerConfiguration::class, Browser4AutoConfiguration::class)
 @Tag("RequiresAI")
 class CommandRunnerTest : MockEcServerTestBase() {
 

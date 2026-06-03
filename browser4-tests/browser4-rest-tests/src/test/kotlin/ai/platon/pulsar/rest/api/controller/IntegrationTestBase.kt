@@ -1,6 +1,6 @@
 package ai.platon.pulsar.rest.api.controller
 
-import ai.platon.browser4.boot.autoconfigure.AgenticContextConfiguration
+import ai.platon.browser4.boot.autoconfigure.Browser4AutoConfiguration
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.GenericAgenticSession
 import ai.platon.pulsar.browser.common.BrowserSettings
@@ -20,7 +20,7 @@ import kotlin.test.assertTrue
     classes = [Application::class],
     webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT
 )
-@Import(AgenticContextConfiguration::class)
+@Import(Browser4AutoConfiguration::class)
 open class IntegrationTestBase {
 
     @LocalServerPort

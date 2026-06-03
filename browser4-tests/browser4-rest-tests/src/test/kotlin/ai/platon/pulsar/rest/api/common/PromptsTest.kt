@@ -5,13 +5,13 @@ import ai.platon.pulsar.common.ai.llm.PromptTemplate
 import ai.platon.pulsar.rest.api.TestHelper.MOCK_PRODUCT_DETAIL_URL
 import ai.platon.pulsar.rest.api.config.MockEcServerConfiguration
 import ai.platon.pulsar.rest.api.entities.CommandRequest
+import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.context.annotation.Import
 import org.springframework.test.context.ContextConfiguration
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
-import org.junit.jupiter.api.DisplayName
 
 const val PLACEHOLDER_PAGE_CONTENT = "page_content"
 
@@ -39,7 +39,7 @@ class PromptsTest : MockEcServerTestBase() {
 
     @Test
         @DisplayName("test pageSummaryPrompt")
-    fun testPagesummaryprompt() {
+    fun testPageSummaryPrompt() {
         // Test basic prompt normalization
         val pageSummaryPrompt = request.pageSummaryPrompt
         assertNotNull(pageSummaryPrompt)
