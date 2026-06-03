@@ -267,7 +267,16 @@ fun AgentTaskStatus.toCommandStatus(): CommandStatus {
 }
 
 fun PageVisitStatus.toCommandStatus(): CommandStatus {
-    val status = CommandStatus(this.id)
+    val status = CommandStatus(
+        this.id,
+        statusCode = this.statusCode,
+        event = this.event,
+        processState = this.processState,
+        pageStatusCode = this.pageStatusCode,
+        pageContentBytes = this.pageContentBytes,
+        message = this.message,
+        request = this.request
+    )
 
     // Transfer all basic status fields
     status.statusCode = this.statusCode
@@ -283,7 +292,6 @@ fun PageVisitStatus.toCommandStatus(): CommandStatus {
     status.request = this.request
 
     // instruct results -> command instruct results
-    @Suppress("UNCHECKED_CAST")
     val commandResults = instructResults.map { it.toInstructResult() }
     instructResults.forEachIndexed { index, _ ->
         val commandResult = commandResults.getOrNull(index)

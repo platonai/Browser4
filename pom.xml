@@ -131,6 +131,29 @@
             </modules>
         </profile>
 
+        <profile>
+            <id>examples</id>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
+            <modules>
+                <module>examples/browser4-examples</module>
+            </modules>
+        </profile>
+
+        <profile>
+            <id>tests-core</id>
+            <activation>
+                <property>
+                    <name>runCoreTests</name>
+                    <value>true</value>
+                </property>
+            </activation>
+            <properties>
+                <surefire.excludedGroups>ManualOnly</surefire.excludedGroups>
+            </properties>
+        </profile>
+
         <!-- Test execution profiles based on test-strategy.md -->
         <profile>
             <id>tests-integration</id>
@@ -164,19 +187,6 @@
         </profile>
 
         <profile>
-            <id>tests-core</id>
-            <activation>
-                <property>
-                    <name>runCoreTests</name>
-                    <value>true</value>
-                </property>
-            </activation>
-            <properties>
-                <surefire.excludedGroups>ManualOnly</surefire.excludedGroups>
-            </properties>
-        </profile>
-
-        <profile>
             <id>tests-rest</id>
             <activation>
                 <property>
@@ -187,16 +197,6 @@
             <properties>
                 <surefire.excludedGroups>ManualOnly</surefire.excludedGroups>
             </properties>
-        </profile>
-
-        <profile>
-            <id>examples</id>
-            <activation>
-                <activeByDefault>true</activeByDefault>
-            </activation>
-            <modules>
-                <module>examples/browser4-examples</module>
-            </modules>
         </profile>
 
         <profile>

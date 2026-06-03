@@ -6,7 +6,7 @@ import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.ResourceLoader
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.getLogger
-import com.google.gson.GsonBuilder
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import java.nio.file.Files
 import kotlin.io.path.isReadable
 import kotlin.io.path.listDirectoryEntries
@@ -24,8 +24,7 @@ import kotlin.io.path.listDirectoryEntries
  * 3. CDP can still access the runtime for browser automation
  */
 open class DualWorldScriptLoader(
-    val confuser: ScriptConfuser,
-    val jsPropertyNames: List<String>
+    val confuser: ScriptConfuser, val jsPropertyNames: List<String>
 ) {
     companion object {
         private val logger = getLogger(this)
@@ -178,7 +177,7 @@ open class DualWorldScriptLoader(
 
     private fun generatePredefinedJsConfig(): String {
         // Note: Json-2.6.2 does not recognize MutableMap, but knows Map
-        val configs = GsonBuilder().create().toJson(jsInitParameters.toMap())
+        val configs = pulsarObjectMapper().writeValueAsString(jsInitParameters.toMap())
 
         // Set predefined variables shared between javascript and jvm program
         val configVar = confuser.confuse("__pulsar_CONFIGS")
@@ -197,9 +196,7 @@ open class DualWorldScriptLoader(
     private fun loadExternalResource(subdirectory: String, cache: MutableMap<String, String>) {
         val dir = AppPaths.BROWSER_DATA_DIR.resolve("browser/js/preload/$subdirectory")
         if (Files.isDirectory(dir)) {
-            dir.listDirectoryEntries()
-                .filter { it.isReadable() }
-                .filter { it.toString().endsWith(".js") }
+            dir.listDirectoryEntries().filter { it.isReadable() }.filter { it.toString().endsWith(".js") }
                 .associateTo(cache) { it.toString() to Files.readString(it) }
         }
     }

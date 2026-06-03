@@ -2,44 +2,53 @@ package ai.platon.pulsar.skeleton.workflow.common
 
 import ai.platon.pulsar.common.collect.ConcurrentUrlPool
 import ai.platon.pulsar.common.collect.UrlPool
-import ai.platon.pulsar.common.concurrent.ConcurrentExpiringLRUCache
-import ai.platon.pulsar.common.concurrent.ConcurrentExpiringLRUCache.Companion.CACHE_CAPACITY
 import ai.platon.pulsar.common.config.CapabilityTypes.GLOBAL_DOCUMENT_CACHE_SIZE
 import ai.platon.pulsar.common.config.CapabilityTypes.GLOBAL_PAGE_CACHE_SIZE
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.dom.FeaturedDocument
-import java.util.concurrent.ConcurrentSkipListSet
+import com.github.benmanes.caffeine.cache.Cache
+import com.github.benmanes.caffeine.cache.Caffeine
+import java.util.concurrent.TimeUnit
 
-typealias PageCatch = ConcurrentExpiringLRUCache<String, WebPage>
+typealias PageCatch = CaffeineExpiringCache<String, WebPage>
 
-typealias DocumentCatch = ConcurrentExpiringLRUCache<String, FeaturedDocument>
+typealias DocumentCatch = CaffeineExpiringCache<String, FeaturedDocument>
 
+/**
+ * Lightweight "fetching" tracker backed by a Caffeine cache with time-based
+ * expiration.  Replaces the previous [java.util.concurrent.ConcurrentSkipListSet]
+ * so that URLs that are never removed (e.g. due to a bug or exception) expire
+ * automatically rather than leaking memory.
+ */
 class FetchingCache {
 
-    private val fetchingUrls = ConcurrentSkipListSet<String>()
+    private val cache: Cache<String, Boolean> = Caffeine.newBuilder()
+        .expireAfterWrite(10, TimeUnit.MINUTES)
+        .maximumSize(100_000)
+        .build()
 
-    fun isFetching(url: String) = fetchingUrls.contains(url)
+    fun isFetching(url: String) = cache.getIfPresent(url) != null
 
     fun add(url: String) {
-        fetchingUrls.add(url)
+        cache.put(url, true)
     }
 
     fun addAll(urls: Iterable<String>) {
-        fetchingUrls.addAll(urls)
+        urls.forEach { cache.put(it, true) }
     }
 
     fun remove(url: String) {
-        fetchingUrls.remove(url)
+        cache.invalidate(url)
     }
 
     fun removeAll(urls: Iterable<String>) {
-        fetchingUrls.removeAll(urls)
+        cache.invalidateAll(urls)
     }
 
-    fun clear() = fetchingUrls.clear()
+    fun clear() = cache.invalidateAll()
 
-    operator fun contains(url: String) = fetchingUrls.contains(url)
+    operator fun contains(url: String) = cache.getIfPresent(url) != null
 }
 
 /**
@@ -49,11 +58,11 @@ open class GlobalCache(val conf: ImmutableConfig) {
     /**
      * The page cache capacity
      * */
-    private val pageCacheCapacity = conf.getUint(GLOBAL_PAGE_CACHE_SIZE, CACHE_CAPACITY)
+    private val pageCacheCapacity = conf.getUint(GLOBAL_PAGE_CACHE_SIZE, CaffeineExpiringCache.DEFAULT_CAPACITY.toInt()).toLong()
     /**
      * The document cache capacity
      * */
-    private val documentCacheCapacity = conf.getUint(GLOBAL_DOCUMENT_CACHE_SIZE, CACHE_CAPACITY)
+    private val documentCacheCapacity = conf.getUint(GLOBAL_DOCUMENT_CACHE_SIZE, CaffeineExpiringCache.DEFAULT_CAPACITY.toInt()).toLong()
     /**
      * A url pool contains many url caches, the urls added to the pool will be processed in Main loops.
      * */
@@ -64,16 +73,18 @@ open class GlobalCache(val conf: ImmutableConfig) {
      * URLs are cached before being fetched and removed from the cache after retrieval.
      *
      * The cache is used to avoid fetching the same URL multiple times.
+     * Entries expire automatically after 10 minutes to prevent memory leaks from
+     * URLs that are never explicitly removed.
      * */
     open val fetchingCache = FetchingCache()
     /**
      * The global page cache, a page will be removed automatically if it's expired or the cache is full.
      * */
-    open val pageCache = PageCatch(capacity = pageCacheCapacity)
+    open val pageCache = PageCatch(ttl = CaffeineExpiringCache.DEFAULT_TTL, capacity = pageCacheCapacity)
     /**
      * The global document cache, a document will be removed automatically if it's expired or the cache is full.
      * */
-    open val documentCache = DocumentCatch(capacity = documentCacheCapacity)
+    open val documentCache = DocumentCatch(ttl = CaffeineExpiringCache.DEFAULT_TTL, capacity = documentCacheCapacity)
 
     /**
      * Reset all caches. After this operation, all caches will be empty.
@@ -120,4 +131,3 @@ open class GlobalCache(val conf: ImmutableConfig) {
         documentCache.remove(url)
     }
 }
-
