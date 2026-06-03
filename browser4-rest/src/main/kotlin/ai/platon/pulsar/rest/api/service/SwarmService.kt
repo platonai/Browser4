@@ -16,7 +16,6 @@ import com.github.benmanes.caffeine.cache.Caffeine
 import org.apache.commons.collections4.MultiMapUtils
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
-import java.util.concurrent.TimeUnit
 
 @Service
 class SwarmService(
@@ -37,15 +36,13 @@ class SwarmService(
     /**
      * Size-bounded, time-expiring cache of swarm task responses.
      *
-     * - Entries live at most 30 minutes after last write.
-     * - At most 10 000 entries; LRU eviction beyond that via Caffeine's
+     * - At most 100 000 entries; LRU eviction beyond that via Caffeine's
      *   Window TinyLFU policy.
      * - NOT_FOUND lookups are never cached — only real task responses go in.
      * - Evicted entries are removed from [responseStatusIndex] by the removal listener.
      * */
     val responseCache: Cache<String, ScrapeResponse> = Caffeine.newBuilder()
-        .maximumSize(10_000)
-        .expireAfterWrite(30, TimeUnit.MINUTES)
+        .maximumSize(100_000)
         .removalListener<String, ScrapeResponse> { key, value, cause ->
             if (value != null && cause.wasEvicted()) {
                 responseStatusIndex[value.statusCode]?.remove(key)
