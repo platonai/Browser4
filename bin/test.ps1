@@ -1,9 +1,12 @@
 #!/usr/bin/env pwsh
 
 param(
+    [switch]$DryRun,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$ScriptArgs
 )
+
+$script:DryRun = $DryRun
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = (git rev-parse --show-toplevel 2>$null)
@@ -28,7 +31,10 @@ if (-not (Test-Path (Join-Path $repoRoot 'VERSION'))) {
 Set-Location $repoRoot
 
 function Print-Usage {
-    Write-Host "Usage: test.ps1 [test-types...] [additional-args...]"
+    Write-Host "Usage: test.ps1 [-DryRun] [test-types...] [additional-args...]"
+    Write-Host ""
+    Write-Host "Options:"
+    Write-Host "  -DryRun     Print the final command without executing it"
     Write-Host ""
     Write-Host "Test Types:"
     Write-Host "  fast        Run fast unit tests only"
@@ -45,6 +51,8 @@ function Print-Usage {
     Write-Host ""
     Write-Host "Examples:"
     Write-Host "  test.ps1 fast                       # Run fast unit tests"
+    Write-Host "  test.ps1 -DryRun fast               # Show the Maven command for fast tests"
+    Write-Host "  test.ps1 -DryRun it -pl browser4-core  # Show the Maven command with extra args"
     Write-Host "  test.ps1 it                         # Run integration tests"
     Write-Host "  test.ps1 e2e                        # Run end-to-end tests"
     Write-Host "  test.ps1 cli                        # Run Browser4 CLI tests"
@@ -131,6 +139,15 @@ function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
 
     $mvnTestArgs += $additionalMvnArgs
 
+    if ($script:DryRun) {
+        Write-Host ""
+        Write-Host "=========================================="
+        Write-Host "[DRY RUN] Would execute:"
+        Write-Host "  $mvnCmd $($mvnTestArgs -join ' ')"
+        Write-Host "=========================================="
+        return
+    }
+
     try {
         & $mvnCmd @mvnTestArgs
         $exitCode = $LASTEXITCODE
@@ -181,6 +198,16 @@ function Invoke-Browser4CliTests([string[]]$additionalArgs) {
         }
 
         $cargoArgs = @('test') + $additionalArgs
+
+        if ($script:DryRun) {
+            Write-Host ""
+            Write-Host "=========================================="
+            Write-Host "[DRY RUN] Would execute in ${browser4CliDir}:"
+            Write-Host "  cargo $($cargoArgs -join ' ')"
+            Write-Host "=========================================="
+            return
+        }
+
         & cargo @cargoArgs
         $exitCode = $LASTEXITCODE
         if ($exitCode -ne 0) {
@@ -248,6 +275,16 @@ function Invoke-MockSiteBoot([string[]]$additionalArgs) {
 
     try {
         Push-Location $mockSiteModuleDir
+
+        if ($script:DryRun) {
+            Write-Host ""
+            Write-Host "=========================================="
+            Write-Host "[DRY RUN] Would execute in ${mockSiteModuleDir}:"
+            Write-Host "  $mvnCmd $($mvnArgs -join ' ')"
+            Write-Host "=========================================="
+            return
+        }
+
         & $mvnCmd @mvnArgs
         $exitCode = $LASTEXITCODE
         if ($exitCode -ne 0) {
@@ -372,6 +409,16 @@ function Invoke-ResumeTests([string[]]$additionalArgs) {
     $mvnTestArgs = @('test', '-P=-examples', '-rf', ":$resumeFrom") + $additionalArgs
 
     $mvnCmd = Join-Path $repoRoot 'mvnw.cmd'
+
+    if ($script:DryRun) {
+        Write-Host ""
+        Write-Host "=========================================="
+        Write-Host "[DRY RUN] Would execute:"
+        Write-Host "  $mvnCmd $($mvnTestArgs -join ' ')"
+        Write-Host "=========================================="
+        return
+    }
+
     try {
         & $mvnCmd @mvnTestArgs
         $exitCode = $LASTEXITCODE
@@ -408,6 +455,11 @@ if ($normalizedScriptArgs.Count -eq 0) {
 foreach ($arg in $normalizedScriptArgs) {
     if ($arg -in '-h', '-help', '--help') {
         Print-Usage
+    }
+
+    if ($arg -eq '--dry-run') {
+        $script:DryRun = $true
+        continue
     }
 
     if ($parsingTestTypes -and ($arg -in $knownTestTypes)) {
