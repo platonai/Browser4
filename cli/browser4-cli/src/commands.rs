@@ -1425,12 +1425,10 @@ pub fn all_commands() -> Vec<CommandDef> {
             args: &[ArgDef { name: "url", description: "Target page URL to load and run the query against", optional: false }],
             options: &[
                 OptionDef { name: "sql", description: "X-SQL query to execute. Use @url as placeholder for the target URL. Prefix with @ to read from file (e.g. --sql @query.sql)", is_bool: false },
-                OptionDef { name: "seed-file", description: "File containing URLs to submit, one per line", is_bool: false },
+                OptionDef { name: "seed-file", description: "File containing URLs to submit, one per line (direct path, no @ prefix)", is_bool: false },
                 OptionDef { name: "deadline", description: "Deadline for task completion (ISO 8601, e.g. 2026-02-24T23:59:59Z)", is_bool: false },
                 OptionDef { name: "expires", description: "Cache expiration duration (e.g. 1d, 1h)", is_bool: false },
                 OptionDef { name: "refresh", description: "Force a fresh fetch, ignoring cache", is_bool: true },
-                OptionDef { name: "parse", description: "Parse page immediately after fetching", is_bool: true },
-                OptionDef { name: "store-content", description: "Persist page content to storage", is_bool: true },
             ],
             tool_name_fn: |_| "swarm_query".to_string(),
             tool_params_fn: |args| {
@@ -1441,8 +1439,6 @@ pub fn all_commands() -> Vec<CommandDef> {
                 if let Some(v) = get_opt_str(args, "deadline") { p["deadline"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "expires") { p["expires"] = json!(v); }
                 if let Some(b) = get_bool(args, "refresh") { p["refresh"] = json!(b); }
-                if let Some(b) = get_bool(args, "parse") { p["parse"] = json!(b); }
-                if let Some(b) = get_bool(args, "store-content") { p["storeContent"] = json!(b); }
                 p
             },
         },

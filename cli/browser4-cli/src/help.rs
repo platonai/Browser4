@@ -356,6 +356,10 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - Seed files are plain text with one URL per line; blank lines and lines beginning with `#` are ignored."
                 .to_string(),
         );
+        lines.push(
+            "  - `--seed-file` takes a direct file path (no `@` prefix); only `--sql` uses `@` to disambiguate inline X-SQL from file paths."
+                .to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push(
@@ -384,7 +388,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  browser4-cli swarm query --sql @query.sql --seed-file=./swarm-seeds.txt --refresh --parse"
+            "  browser4-cli swarm query --sql @query.sql --seed-file=./swarm-seeds.txt --refresh"
                 .to_string(),
         );
     }
