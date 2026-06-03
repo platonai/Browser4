@@ -9,7 +9,6 @@ import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.dom.FeaturedDocument
 import com.github.benmanes.caffeine.cache.Cache
 import com.github.benmanes.caffeine.cache.Caffeine
-import java.util.concurrent.TimeUnit
 
 typealias PageCatch = CaffeineExpiringCache<String, WebPage>
 
@@ -24,7 +23,6 @@ typealias DocumentCatch = CaffeineExpiringCache<String, FeaturedDocument>
 class FetchingCache {
 
     private val cache: Cache<String, Boolean> = Caffeine.newBuilder()
-        .expireAfterWrite(10, TimeUnit.MINUTES)
         .maximumSize(100_000)
         .build()
 
@@ -58,11 +56,11 @@ open class GlobalCache(val conf: ImmutableConfig) {
     /**
      * The page cache capacity
      * */
-    private val pageCacheCapacity = conf.getUint(GLOBAL_PAGE_CACHE_SIZE, CaffeineExpiringCache.DEFAULT_CAPACITY.toInt()).toLong()
+    private val pageCacheCapacity = conf.getLong(GLOBAL_PAGE_CACHE_SIZE, CaffeineExpiringCache.DEFAULT_CAPACITY)
     /**
      * The document cache capacity
      * */
-    private val documentCacheCapacity = conf.getUint(GLOBAL_DOCUMENT_CACHE_SIZE, CaffeineExpiringCache.DEFAULT_CAPACITY.toInt()).toLong()
+    private val documentCacheCapacity = conf.getLong(GLOBAL_DOCUMENT_CACHE_SIZE, CaffeineExpiringCache.DEFAULT_CAPACITY)
     /**
      * A url pool contains many url caches, the urls added to the pool will be processed in Main loops.
      * */
@@ -73,8 +71,6 @@ open class GlobalCache(val conf: ImmutableConfig) {
      * URLs are cached before being fetched and removed from the cache after retrieval.
      *
      * The cache is used to avoid fetching the same URL multiple times.
-     * Entries expire automatically after 10 minutes to prevent memory leaks from
-     * URLs that are never explicitly removed.
      * */
     open val fetchingCache = FetchingCache()
     /**
