@@ -2,11 +2,13 @@
 
 param(
     [switch]$DryRun,
+    [switch]$Show,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$ScriptArgs
 )
 
 $script:DryRun = $DryRun
+$script:Show = $Show
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = (git rev-parse --show-toplevel 2>$null)
@@ -31,10 +33,11 @@ if (-not (Test-Path (Join-Path $repoRoot 'VERSION'))) {
 Set-Location $repoRoot
 
 function Print-Usage {
-    Write-Host "Usage: test.ps1 [-DryRun] [test-types...] [additional-args...]"
+    Write-Host "Usage: test.ps1 [-DryRun] [-Show] [test-types...] [additional-args...]"
     Write-Host ""
     Write-Host "Options:"
-    Write-Host "  -DryRun     Print the final command without executing it"
+    Write-Host "  -DryRun     Compile only (test-compile), do not run tests"
+    Write-Host "  -Show       Print the final Maven command, do not execute anything"
     Write-Host ""
     Write-Host "Test Types:"
     Write-Host "  fast        Run fast unit tests only"
@@ -98,7 +101,8 @@ function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
     Write-Host "Running Maven tests: $($testTypes -join ', ')"
     Write-Host "=========================================="
 
-    $mvnTestArgs = @('test', '-P=-examples')
+    $goal = if ($script:DryRun -and -not $script:Show) { 'test-compile' } else { 'test' }
+    $mvnTestArgs = @($goal, '-P=-examples')
 
     $hasFast = $testTypes -contains 'fast'
     $hasIT = $testTypes -contains 'it'
@@ -109,7 +113,7 @@ function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
 
     if ($hasIT) { $mvnTestArgs += '-DrunITs=true' }
     if ($hasE2E) { $mvnTestArgs += '-DrunE2ETests=true' }
-    if ($hasIT -or $hasE2E -or $hasRest) { $mvnTestArgs += '-Ptests-browser4' }
+    if ($hasRest) { $mvnTestArgs += '-DrunRestTests=true' }
 
     $modules = @()
     if ($hasSkills -or $hasMcp) {
@@ -139,13 +143,21 @@ function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
 
     $mvnTestArgs += $additionalMvnArgs
 
-    if ($script:DryRun) {
+    if ($script:Show) {
         Write-Host ""
         Write-Host "=========================================="
-        Write-Host "[DRY RUN] Would execute:"
+        Write-Host "[SHOW] Would execute:"
         Write-Host "  $mvnCmd $($mvnTestArgs -join ' ')"
         Write-Host "=========================================="
         return
+    }
+
+    if ($script:DryRun) {
+        Write-Host ""
+        Write-Host "=========================================="
+        Write-Host "[DRY RUN] Executing:"
+        Write-Host "  $mvnCmd $($mvnTestArgs -join ' ')"
+        Write-Host "=========================================="
     }
 
     try {
@@ -197,15 +209,28 @@ function Invoke-Browser4CliTests([string[]]$additionalArgs) {
             exit 1
         }
 
-        $cargoArgs = @('test') + $additionalArgs
+        if ($script:Show) {
+            $cargoArgs = @('test') + $additionalArgs
+            Write-Host ""
+            Write-Host "=========================================="
+            Write-Host "[SHOW] Would execute in ${browser4CliDir}:"
+            Write-Host "  cargo $($cargoArgs -join ' ')"
+            Write-Host "=========================================="
+            return
+        }
+
+        if ($script:DryRun) {
+            $cargoArgs = @('test', '--no-run') + $additionalArgs
+        } else {
+            $cargoArgs = @('test') + $additionalArgs
+        }
 
         if ($script:DryRun) {
             Write-Host ""
             Write-Host "=========================================="
-            Write-Host "[DRY RUN] Would execute in ${browser4CliDir}:"
+            Write-Host "[DRY RUN] Executing in ${browser4CliDir}:"
             Write-Host "  cargo $($cargoArgs -join ' ')"
             Write-Host "=========================================="
-            return
         }
 
         & cargo @cargoArgs
@@ -268,21 +293,36 @@ function Invoke-MockSiteBoot([string[]]$additionalArgs) {
         $mvnArgs += "-Dspring-boot.run.jvmArguments=$($mockSiteJvmArgs -join ' ')"
     }
 
-    $mvnArgs += @(
-        'package',
-        'spring-boot:run'
-    )
+    if ($script:Show) {
+        $mvnArgs += @('package', 'spring-boot:run')
+    } elseif ($script:DryRun) {
+        $mvnArgs += @('compile')
+    } else {
+        $mvnArgs += @(
+            'package',
+            'spring-boot:run'
+        )
+    }
 
     try {
         Push-Location $mockSiteModuleDir
 
+        if ($script:Show) {
+            Write-Host ""
+            Write-Host "=========================================="
+            Write-Host "[SHOW] Would execute in ${mockSiteModuleDir}:"
+            Write-Host "  $mvnCmd $($mvnArgs -join ' ')"
+            Write-Host "=========================================="
+            Pop-Location
+            return
+        }
+
         if ($script:DryRun) {
             Write-Host ""
             Write-Host "=========================================="
-            Write-Host "[DRY RUN] Would execute in ${mockSiteModuleDir}:"
+            Write-Host "[DRY RUN] Executing in ${mockSiteModuleDir}:"
             Write-Host "  $mvnCmd $($mvnArgs -join ' ')"
             Write-Host "=========================================="
-            return
         }
 
         & $mvnCmd @mvnArgs
@@ -406,17 +446,26 @@ function Invoke-ResumeTests([string[]]$additionalArgs) {
     Write-Host "Resuming from module: $resumeFrom"
     Write-Host ""
 
-    $mvnTestArgs = @('test', '-P=-examples', '-rf', ":$resumeFrom") + $additionalArgs
+    $goal = if ($script:DryRun -and -not $script:Show) { 'test-compile' } else { 'test' }
+    $mvnTestArgs = @($goal, '-P=-examples', '-rf', ":$resumeFrom") + $additionalArgs
 
     $mvnCmd = Join-Path $repoRoot 'mvnw.cmd'
+
+    if ($script:Show) {
+        Write-Host ""
+        Write-Host "=========================================="
+        Write-Host "[SHOW] Would execute:"
+        Write-Host "  $mvnCmd $($mvnTestArgs -join ' ')"
+        Write-Host "=========================================="
+        return
+    }
 
     if ($script:DryRun) {
         Write-Host ""
         Write-Host "=========================================="
-        Write-Host "[DRY RUN] Would execute:"
+        Write-Host "[DRY RUN] Executing:"
         Write-Host "  $mvnCmd $($mvnTestArgs -join ' ')"
         Write-Host "=========================================="
-        return
     }
 
     try {
@@ -459,6 +508,11 @@ foreach ($arg in $normalizedScriptArgs) {
 
     if ($arg -eq '--dry-run') {
         $script:DryRun = $true
+        continue
+    }
+
+    if ($arg -in '--show', '-Show') {
+        $script:Show = $true
         continue
     }
 

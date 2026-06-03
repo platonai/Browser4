@@ -18,10 +18,11 @@ fi
 cd "$repo_root" || exit 1
 
 print_usage() {
-  echo "Usage: test.sh [--dry-run] [test-types...] [additional-args...]"
+  echo "Usage: test.sh [--dry-run] [--show] [test-types...] [additional-args...]"
   echo ""
   echo "Options:"
-  echo "  --dry-run   Print the final command without executing it"
+  echo "  --dry-run   Compile only (test-compile), do not run tests"
+  echo "  --show      Print the final Maven command, do not execute anything"
   echo ""
   echo "Test Types:"
   echo "  fast        Run fast unit tests only"
@@ -62,7 +63,9 @@ exit_unknown_test_type() {
 
 run_maven_tests() {
   local -a test_types=("$@")
-  local -a mvn_test_args=("test" "-P=-examples")
+  local goal="test"
+  [[ "$DRY_RUN" == "true" && "$SHOW" != "true" ]] && goal="test-compile"
+  local -a mvn_test_args=("$goal" "-P=-examples")
   local -a modules=()
   local -a test_patterns=()
   local joined_modules=""
@@ -91,9 +94,7 @@ run_maven_tests() {
 
   [[ "$has_it" == "true" ]] && mvn_test_args+=("-DrunITs=true")
   [[ "$has_e2e" == "true" ]] && mvn_test_args+=("-DrunE2ETests=true")
-  if [[ "$has_it" == "true" || "$has_e2e" == "true" || "$has_rest" == "true" ]]; then
-    mvn_test_args+=("-Ptests-browser4")
-  fi
+  [[ "$has_rest" == "true" ]] && mvn_test_args+=("-DrunRestTests=true")
   if [[ "$has_skills" == "true" || "$has_mcp" == "true" ]]; then
     modules+=("browser4-agentic")
 
@@ -119,13 +120,21 @@ run_maven_tests() {
 
   mvn_test_args+=("${AdditionalMvnArgs[@]}")
 
-  if [[ "$DRY_RUN" == "true" ]]; then
+  if [[ "$SHOW" == "true" ]]; then
     echo ""
     echo "=========================================="
-    echo "[DRY RUN] Would execute:"
+    echo "[SHOW] Would execute:"
     echo "  ./mvnw ${mvn_test_args[*]}"
     echo "=========================================="
     return
+  fi
+
+  if [[ "$DRY_RUN" == "true" ]]; then
+    echo ""
+    echo "=========================================="
+    echo "[DRY RUN] Executing:"
+    echo "  ./mvnw ${mvn_test_args[*]}"
+    echo "=========================================="
   fi
 
   ./mvnw "${mvn_test_args[@]}"
@@ -170,17 +179,28 @@ run_browser4_cli_tests() {
     exit 1
   fi
 
-  if [[ "$DRY_RUN" == "true" ]]; then
+  if [[ "$SHOW" == "true" ]]; then
     echo ""
     echo "=========================================="
-    echo "[DRY RUN] Would execute in $browser4_cli_dir:"
+    echo "[SHOW] Would execute in $browser4_cli_dir:"
     echo "  cargo test ${AdditionalMvnArgs[*]}"
     echo "=========================================="
     popd > /dev/null || true
     return
   fi
 
-  cargo test "${AdditionalMvnArgs[@]}"
+  if [[ "$DRY_RUN" == "true" ]]; then
+    echo ""
+    echo "=========================================="
+    echo "[DRY RUN] Executing in $browser4_cli_dir:"
+    echo "  cargo test --no-run ${AdditionalMvnArgs[*]}"
+    echo "=========================================="
+  fi
+
+  local -a cargo_args=("test")
+  [[ "$DRY_RUN" == "true" ]] && cargo_args+=("--no-run")
+  cargo_args+=("${AdditionalMvnArgs[@]}")
+  cargo "${cargo_args[@]}"
   local exit_code=$?
   popd > /dev/null || true
 
@@ -242,18 +262,32 @@ run_mocksiteboot() {
     fi
   fi
 
-  mvn_args+=("package" "spring-boot:run")
+  if [[ "$SHOW" == "true" ]]; then
+    mvn_args+=("package" "spring-boot:run")
+  elif [[ "$DRY_RUN" == "true" ]]; then
+    mvn_args+=("compile")
+  else
+    mvn_args+=("package" "spring-boot:run")
+  fi
 
   pushd "$mocksite_module_dir" > /dev/null || exit 1
 
-  if [[ "$DRY_RUN" == "true" ]]; then
+  if [[ "$SHOW" == "true" ]]; then
     echo ""
     echo "=========================================="
-    echo "[DRY RUN] Would execute in $mocksite_module_dir:"
+    echo "[SHOW] Would execute in $mocksite_module_dir:"
     echo "  $repo_root/mvnw ${mvn_args[*]}"
     echo "=========================================="
     popd > /dev/null || true
     return
+  fi
+
+  if [[ "$DRY_RUN" == "true" ]]; then
+    echo ""
+    echo "=========================================="
+    echo "[DRY RUN] Executing in $mocksite_module_dir:"
+    echo "  $repo_root/mvnw ${mvn_args[*]}"
+    echo "=========================================="
   fi
 
   "$repo_root/mvnw" "${mvn_args[@]}"
@@ -370,16 +404,26 @@ run_resume_tests() {
   echo "Resuming from module: $resume_from"
   echo ""
 
-  local -a mvn_test_args=("test" "-P=-examples" "-rf" ":$resume_from")
+  local goal="test"
+  [[ "$DRY_RUN" == "true" && "$SHOW" != "true" ]] && goal="test-compile"
+  local -a mvn_test_args=("$goal" "-P=-examples" "-rf" ":$resume_from")
   mvn_test_args+=("${AdditionalMvnArgs[@]}")
+
+  if [[ "$SHOW" == "true" ]]; then
+    echo ""
+    echo "=========================================="
+    echo "[SHOW] Would execute:"
+    echo "  ./mvnw ${mvn_test_args[*]}"
+    echo "=========================================="
+    return
+  fi
 
   if [[ "$DRY_RUN" == "true" ]]; then
     echo ""
     echo "=========================================="
-    echo "[DRY RUN] Would execute:"
+    echo "[DRY RUN] Executing:"
     echo "  ./mvnw ${mvn_test_args[*]}"
     echo "=========================================="
-    return
   fi
 
   ./mvnw "${mvn_test_args[@]}"
@@ -406,6 +450,7 @@ LaunchTargets=()
 AdditionalMvnArgs=()
 ParsingTestTypes=true
 DRY_RUN=false
+SHOW=false
 
 if [[ $# -eq 0 ]]; then
   print_usage
@@ -418,6 +463,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dry-run)
       DRY_RUN=true
+      shift
+      ;;
+    --show)
+      SHOW=true
       shift
       ;;
     fast|it|e2e|cli|browser4-cli|mock-site|mocksite|mocksiteboot|rest|skills|mcp|browser4|b4|resume)

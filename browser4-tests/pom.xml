@@ -25,10 +25,4 @@
     <build>
         <defaultGoal>package</defaultGoal>
     </build>
-
-    <modules>
-        <module>browser4-rest-tests</module>
-        <module>pulsar-it-tests</module>
-        <module>pulsar-e2e-tests</module>
-    </modules>
 </project>

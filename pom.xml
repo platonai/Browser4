@@ -107,9 +107,18 @@
                 <module>browser4-rest</module>
 
                 <module>browser4-apps</module>
-                <module>browser4-tests</module>
 
                 <module>examples</module>
+            </modules>
+        </profile>
+
+        <profile>
+            <id>all-test-modules</id>
+            <modules>
+                <module>browser4-tests</module>
+                <module>browser4-tests/browser4-rest-tests</module>
+                <module>browser4-tests/pulsar-it-tests</module>
+                <module>browser4-tests/pulsar-e2e-tests</module>
             </modules>
         </profile>
 
@@ -154,6 +163,22 @@
             </properties>
         </profile>
 
+        <profile>
+            <id>tests-rest</id>
+            <activation>
+                <property>
+                    <name>runRestTests</name>
+                    <value>true</value>
+                </property>
+            </activation>
+            <modules>
+                <module>browser4-tests/browser4-rest-tests</module>
+            </modules>
+            <properties>
+                <surefire.excludedGroups>ManualOnly</surefire.excludedGroups>
+            </properties>
+        </profile>
+
         <!-- Test execution profiles based on test-strategy.md -->
         <profile>
             <id>tests-integration</id>
@@ -163,11 +188,14 @@
                     <value>true</value>
                 </property>
             </activation>
+            <modules>
+                <module>browser4-tests/pulsar-it-tests</module>
+            </modules>
             <properties>
                 <!-- Integration tests can be Slow/Heavy - this is expected behavior
                      Integration tests CAN require Browser/AI/Docker for service collaboration
                      Only exclude E2E, and ManualOnly tests -->
-                <surefire.excludedGroups>E2E,E2ETest,ManualOnly</surefire.excludedGroups>
+                <surefire.excludedGroups>ManualOnly</surefire.excludedGroups>
             </properties>
         </profile>
 
@@ -179,22 +207,12 @@
                     <value>true</value>
                 </property>
             </activation>
+            <modules>
+                <module>browser4-tests/pulsar-e2e-tests</module>
+            </modules>
             <properties>
                 <!-- E2E tests can be Heavy, RequiresBrowser, RequiresAI
                      Only exclude ManualOnly tests -->
-                <surefire.excludedGroups>ManualOnly</surefire.excludedGroups>
-            </properties>
-        </profile>
-
-        <profile>
-            <id>tests-rest</id>
-            <activation>
-                <property>
-                    <name>runRestTests</name>
-                    <value>true</value>
-                </property>
-            </activation>
-            <properties>
                 <surefire.excludedGroups>ManualOnly</surefire.excludedGroups>
             </properties>
         </profile>
@@ -205,10 +223,12 @@
                 <activeByDefault>false</activeByDefault>
             </activation>
             <modules>
-                <module>browser4-tests</module>
+                <module>browser4-tests/browser4-rest-tests</module>
+                <module>browser4-tests/pulsar-it-tests</module>
+                <module>browser4-tests/pulsar-e2e-tests</module>
             </modules>
             <properties>
-                <surefire.excludedGroups>None</surefire.excludedGroups>
+                <surefire.excludedGroups>ManualOnly</surefire.excludedGroups>
             </properties>
         </profile>
 
