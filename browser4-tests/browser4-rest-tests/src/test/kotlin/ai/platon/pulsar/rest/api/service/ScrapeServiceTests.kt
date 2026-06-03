@@ -1,5 +1,6 @@
 package ai.platon.pulsar.rest.api.service
 
+import ai.platon.browser4.boot.autoconfigure.Browser4AutoConfiguration
 import ai.platon.browser4.boot.autoconfigure.test.PulsarTestContextInitializer
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.common.DateTimes
@@ -28,7 +29,7 @@ import kotlin.test.assertTrue
 
 @SpringBootTest
 @ContextConfiguration(initializers = [PulsarTestContextInitializer::class])
-@Import(MockEcServerConfiguration::class)
+@Import(MockEcServerConfiguration::class, Browser4AutoConfiguration::class)
 class ScrapeServiceTests : MockEcServerTestBase() {
 
     private val productListURL = "http://localhost:18080/ec/b?node=1292115012"

@@ -3,6 +3,7 @@ package ai.platon.pulsar.rest.api.service
 import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agent.tool.UserCommandExecutor.Companion.FLOW_POLLING_INTERVAL
 import ai.platon.pulsar.agentic.BasicAgenticSession
+import ai.platon.pulsar.agentic.GenericAgenticSession
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.DegenerateXSQLScrapeHyperlink
@@ -13,7 +14,6 @@ import ai.platon.pulsar.agentic.tools.advanced.crawl.refreshed
 import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
-import ai.platon.pulsar.ql.SQLSession
 import ai.platon.pulsar.rest.api.entities.ScrapeStatusRequest
 import jakarta.annotation.PreDestroy
 import kotlinx.coroutines.*
@@ -147,14 +147,14 @@ class ScrapeService(
     }
 
     private fun createScrapeHyperlink(request: ScrapeRequest): ScrapeHyperlink {
-        require(session is SQLSession) { "Session must be a SQLSession, but was ${session.javaClass}" }
+        require(session is GenericAgenticSession) { "Session must be a GenericAgenticSession, but was ${session.javaClass}" }
 
         val sql = request.sql
         val link = if (ScrapeAPIUtils.isScrapeUDF(sql)) {
             val xSQL = ScrapeAPIUtils.normalize(sql)
-            XSQLScrapeHyperlink(request, xSQL, session as SQLSession)
+            XSQLScrapeHyperlink(request, xSQL, session)
         } else {
-            DegenerateXSQLScrapeHyperlink(request, session as SQLSession)
+            DegenerateXSQLScrapeHyperlink(request, session)
         }
 
         link.eventHandlers.crawlEventHandlers.onLoaded.addLast { _, _ ->
