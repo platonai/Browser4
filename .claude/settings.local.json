@@ -3,7 +3,9 @@
     "allow": [
       "Bash(cargo test *)",
       "Bash(pwsh *)",
-      "Bash([ -d \"$HOME/.m2/repository/ai/platon/pulsar/pulsar-boot\" ])"
+      "Bash([ -d \"$HOME/.m2/repository/ai/platon/pulsar/pulsar-boot\" ])",
+      "Bash(./gradlew :browser4-agent-tools:compileKotlin)",
+      "Bash(./mvnw compile *)"
     ]
   }
 }
