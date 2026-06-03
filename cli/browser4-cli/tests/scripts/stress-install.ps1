@@ -39,9 +39,13 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
-# Ensure the console uses UTF-8 so emoji / Unicode from the CLI binary
-# (e.g. check-mark, knife, info) survive the round-trip through
-# stdout capture -> Write-Host without turning into garbled glyphs.
+# Switch the console code page to UTF-8 (65001) so box-drawing glyphs,
+# emoji, and other Unicode characters render correctly.  On Chinese
+# Windows the default is 936 (GBK), which mangles UTF-8 byte sequences
+# into CJK gibberish.  `chcp` changes the *console's interpretation* of
+# output bytes; OutputEncoding / InputEncoding alone only affect .NET
+# stream encoding, not how the host renders them.
+$null = & chcp 65001
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 [Console]::InputEncoding  = [Text.Encoding]::UTF8
 
