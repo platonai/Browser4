@@ -437,7 +437,7 @@ After page load: click #title, then scroll to the middle.
         // Use a simple command that will trigger agent execution
         val plainCommand = "Search for test information"
 
-        val status = runBlocking { commandExecutor.executeAgentCommand(sessionId, plainCommand) }
+        val status = runBlocking { commandExecutor.executeAgentTask(sessionId, plainCommand) }
 
         printlnPro(Pson.toJson(status))
 
