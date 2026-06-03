@@ -837,10 +837,10 @@ jobs:
             os: ubuntu-latest
             asset_name: browser4-bundle-runtime-linux-x64.tar.gz
             artifact_name: browser4-bundle-runtime-linux-x64
-          - name: macOS x64
-            os: macos-13
-            asset_name: browser4-bundle-runtime-darwin-x64.tar.gz
-            artifact_name: browser4-bundle-runtime-darwin-x64
+          # - name: macOS x64
+          #   os: macos-13
+          #   asset_name: browser4-bundle-runtime-darwin-x64.tar.gz
+          #   artifact_name: browser4-bundle-runtime-darwin-x64
           - name: macOS ARM64
             os: macos-14
             asset_name: browser4-bundle-runtime-darwin-arm64.tar.gz
@@ -1145,8 +1145,8 @@ jobs:
           fi
 
           RUNTIME_BUNDLE_COUNT=$(find release-assets -maxdepth 1 -type f \( -name 'browser4-bundle-runtime-*.zip' -o -name 'browser4-bundle-runtime-*.tar.gz' \) | wc -l)
-          if [ "$RUNTIME_BUNDLE_COUNT" -lt 4 ]; then
-            echo "❌ Expected 4 Browser4 runtime bundles, found $RUNTIME_BUNDLE_COUNT"
+          if [ "$RUNTIME_BUNDLE_COUNT" -lt 3 ]; then
+            echo "❌ Expected 3 Browser4 runtime bundles, found $RUNTIME_BUNDLE_COUNT"
             ls -la release-assets/
             exit 1
           fi
