@@ -319,6 +319,22 @@ pub async fn submit_swarm_payload(
     .await
 }
 
+/// Submit a swarm X-SQL query through `SwarmController.query(query)`.
+pub async fn submit_swarm_query(
+    client: &Client,
+    base_url: &str,
+    query: serde_json::Value,
+) -> Result<String, String> {
+    let url = build_endpoint_url(base_url, "/api/swarm/query");
+    send_rest_request(
+        client
+            .post(url)
+            .header("Content-Type", "application/json; charset=utf-8")
+            .body(query.to_string()),
+    )
+    .await
+}
+
 /// Read swarm task status through `SwarmController.getStatus(id)`.
 pub async fn get_swarm_status(
     client: &Client,

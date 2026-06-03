@@ -1,12 +1,12 @@
 package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.browser4.common.B4Constants.DEFAULT_SESSION_ID
+import ai.platon.pulsar.agent.tool.UserCommandExecutor
 import ai.platon.pulsar.agentic.tools.advanced.crawl.PageVisitRequest
 import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.rest.api.entities.CommandResult
 import ai.platon.pulsar.rest.api.entities.CommandStatus
-import ai.platon.pulsar.agent.tool.UserCommandExecutor
 import ai.platon.pulsar.skeleton.event.impl.PageEventHandlersFactory
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.launchIn
@@ -39,6 +39,11 @@ class CommandController(
      * */
     @PostMapping(value = ["", "/"])
     suspend fun submitCommand(@RequestBody request: PageVisitRequest): ResponseEntity<Any> {
+        return submitJsonCommand(request)
+    }
+
+    @PostMapping(value = ["", "/json"])
+    suspend fun submitJsonCommand(@RequestBody request: PageVisitRequest): ResponseEntity<Any> {
         val sessionId = request.sessionId ?: DEFAULT_SESSION_ID
 
         val eventHandlers = PageEventHandlersFactory.create()
@@ -96,7 +101,10 @@ class CommandController(
     ): ResponseEntity<CommandStatus> {
         val sessionId = sessionId ?: DEFAULT_SESSION_ID
 
-        return ResponseEntity.ok(commandExecutor.getStatus(sessionId, id))
+        val status = commandExecutor.getStatus(sessionId, id)
+            ?: return ResponseEntity.notFound().build()
+
+        return ResponseEntity.ok(status)
     }
 
     @GetMapping(value = ["/{id}/result"])

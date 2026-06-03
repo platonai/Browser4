@@ -1,6 +1,7 @@
 package ai.platon.pulsar.rest.api.service
 
 import ai.platon.pulsar.agentic.GenericAgenticSession
+import ai.platon.pulsar.agentic.tools.advanced.crawl.QueryRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.DegenerateXSQLScrapeHyperlink
@@ -69,6 +70,13 @@ class SwarmService(
         s.submit(hyperlink)
         logger.info("Swarm task submitted: {} sql={}", hyperlink.uuid, request.sql)
         return hyperlink.uuid
+    }
+
+    /**
+     * Submit a scraping task
+     * */
+    fun submit(request: QueryRequest): String {
+        return submit(ScrapeRequest(request.toSQL()))
     }
 
     /**

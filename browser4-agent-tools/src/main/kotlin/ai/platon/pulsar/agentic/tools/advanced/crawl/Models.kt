@@ -1,6 +1,7 @@
 package ai.platon.pulsar.agentic.tools.advanced.crawl
 
 import ai.platon.pulsar.common.ResourceStatus
+import ai.platon.pulsar.common.sql.SQLTemplate
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.event.ServerSideEventHandlers
@@ -13,6 +14,22 @@ import java.util.*
 data class ScrapeRequest(
     var sql: String,
 )
+
+/**
+ * An X-SQL based query request.
+ *
+ * The query is an X-SQL with `@url` variable that can be used to refer to the URL and args passed in the request,
+ * e.g. `select dom_first_text(dom, '#title') as title from load_and_select('@url', ':root')`.
+ * */
+data class QueryRequest(
+    var url: String,
+    var args: String,
+    var query: String,
+) {
+    fun toSQL(): String {
+        return SQLTemplate(query).createSQL("$url $args")
+    }
+}
 
 data class ScrapeResponse(
     var id: String? = null,

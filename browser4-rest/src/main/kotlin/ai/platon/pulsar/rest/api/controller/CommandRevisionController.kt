@@ -5,7 +5,6 @@ import ai.platon.pulsar.common.LinkExtractors
 import ai.platon.pulsar.common.ai.llm.PromptTemplateLoader
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.rest.api.service.ConversationService
-import kotlinx.coroutines.runBlocking
 import org.springframework.http.MediaType
 import org.springframework.web.bind.annotation.*
 
@@ -39,6 +38,6 @@ class CommandRevisionController(
             )
         ).load().render()
 
-        return runBlocking { conversationService.chat(message) }
+        return conversationService.chat(message)
     }
 }

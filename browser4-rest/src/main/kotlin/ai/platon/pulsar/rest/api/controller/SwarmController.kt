@@ -1,5 +1,6 @@
 package ai.platon.pulsar.rest.api.controller
 
+import ai.platon.pulsar.agentic.tools.advanced.crawl.QueryRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
 import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeAPIUtils
@@ -65,6 +66,25 @@ class SwarmController(
 
         // Returns raw UUID string (not JSON-wrapped). CLI depends on this format.
         return swarmService.submit(ScrapeRequest(sql))
+    }
+
+    /**
+     * Submit an X-SQL query to execute against a loaded webpage.
+     *
+     * The query is an X-SQL statement with @url placeholder that will be substituted
+     * with the provided url and args. For example:
+     * ```
+     * SELECT dom_base_uri(dom) AS url, dom_first_text(dom, '#title') AS title
+     * FROM load_and_select(@url, 'body');
+     * ```
+     *
+     * @param query The query request containing url, args, and the X-SQL query
+     * @return The task UUID for tracking the query execution
+     */
+    @PostMapping("query")
+    fun query(@RequestBody query: QueryRequest): String {
+        logger.info("Swarm query: url='{}' query='{}'", query.url, query.query.take(200))
+        return swarmService.submit(query)
     }
 
     /**
