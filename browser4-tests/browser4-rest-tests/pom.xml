@@ -23,7 +23,7 @@
     <name>Browser4 Rest Tests</name>
 
     <build>
-        <defaultGoal>test</defaultGoal>
+        <defaultGoal>verify</defaultGoal>
 
         <plugins>
             <plugin>
