@@ -58,6 +58,13 @@ open class AbstractAgenticQLSession(
     }
 }
 
+/**
+ * An [AgenticQLSession] is a [ai.platon.pulsar.ql.SQLSession] that also implements [AgenticSession], allowing it to
+ * perform agentic actions in addition to SQL operations.
+ *
+ * > **NOTE:** This session is designed to work with H2 databases and is created by SQL engine, it is not intended to
+ * > be instantiated directly by users.
+ * */
 open class AgenticQLSession(
     context: AbstractBrowser4SQLContext,
     sessionDelegate: H2SessionDelegate,

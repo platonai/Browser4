@@ -45,6 +45,7 @@ abstract class AbstractBrowser4SQLContext(
     abstract val randomConnection: Connection
 
     init {
+        // Required by H2 database engine
         System.setProperty("h2.sessionFactory", AppConstants.H2_SESSION_FACTORY)
     }
 
