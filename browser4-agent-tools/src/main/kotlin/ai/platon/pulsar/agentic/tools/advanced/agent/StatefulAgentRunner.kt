@@ -7,7 +7,9 @@ import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.getLogger
 import com.github.benmanes.caffeine.cache.Cache
 import com.github.benmanes.caffeine.cache.Caffeine
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
 import java.io.Closeable
 import java.util.concurrent.TimeUnit
 
@@ -15,12 +17,6 @@ class StatefulAgentRunner(
     val session: AgenticSession
 ) : Closeable {
     private val logger = getLogger(StatefulAgentRunner::class)
-
-    // Create a dedicated dispatcher for long-running command operations
-    private val commandDispatcher = Dispatchers.IO.limitedParallelism(10)
-    private val commanderScope: CoroutineScope = CoroutineScope(
-        commandDispatcher + SupervisorJob() + CoroutineName("commander")
-    )
 
     /**
      * Size-bounded, time-expiring cache of agent task statuses.
@@ -38,7 +34,7 @@ class StatefulAgentRunner(
         val status = AgentTaskStatus()
         statusCache.put(status.id, status)
         status.emitEvent("StatefulAgentRunner.created")
-        logger.debug("Created agent task status {}", status.id)
+        logger.debug("Created agent task status {} (session={})", status.id, session.uuid)
         return status
     }
 
@@ -64,8 +60,10 @@ class StatefulAgentRunner(
      * to access the latest agent state via [AgentTaskStatus.agentState] during execution.
      *
      * This method creates and wires up ServerSideAgentEventHandlers for event collection,
-     * following the pattern from StatefulPageVisitor#doVisit. Multiple commands can run
-     * concurrently without cross-talk between SSE streams.
+     * following the pattern from StatefulPageVisitor#doVisit. A [supervisorScope] ensures
+     * the event collector is structured within this call — it is launched as a child,
+     * cancelled in the finally block, and the scope suspends until it terminates.
+     * Multiple commands can run concurrently without cross-talk between SSE streams.
      */
     suspend fun execute(plainCommand: String, status: AgentTaskStatus) {
         try {
@@ -75,34 +73,36 @@ class StatefulAgentRunner(
             val serverSideAgentEventHandlers = DefaultServerSideAgentEventHandlers()
             status.serverSideAgentEventHandlers = serverSideAgentEventHandlers
 
-            // Start a background job to collect events and update status
-            val eventCollectorJob = commanderScope.launch {
-                try {
-                    serverSideAgentEventHandlers.eventFlow.collect { event ->
-                        status.emitEvent(event.eventType)
-                        logger.info("Collected event {} for agent task {}", event.eventType, status.id)
+            supervisorScope {
+                // Start a child coroutine to collect events and update status
+                val eventCollectorJob = launch {
+                    try {
+                        serverSideAgentEventHandlers.eventFlow.collect { event ->
+                            status.emitEvent(event.eventType)
+                            logger.debug("Collected event {} for agent task {} (session={})", event.eventType, status.id, session.uuid)
+                        }
+                    } catch (e: CancellationException) {
+                        logger.debug("Event collector cancelled for agent task {}", status.id)
+                        throw e
+                    } catch (e: Exception) {
+                        logger.error("Error collecting events for agent task {} (session={})", status.id, session.uuid, e)
                     }
-                } catch (e: CancellationException) {
-                    logger.debug("Event collector cancelled for agent task {}", status.id)
-                    throw e
-                } catch (e: Exception) {
-                    logger.error("Error collecting events for agent task ${status.id}", e)
                 }
-            }
 
-            try {
-                // Bind server-side agent event handlers to THIS coroutine so multiple commands can run concurrently.
-                AgentEventBus.withServerSideAgentEventHandlers(serverSideAgentEventHandlers) {
-                    executeAgentCommand(plainCommand, status)
+                try {
+                    // Bind server-side agent event handlers to THIS coroutine so multiple commands can run concurrently.
+                    AgentEventBus.withServerSideAgentEventHandlers(serverSideAgentEventHandlers) {
+                        executeAgentCommand(plainCommand, status)
+                    }
+                } finally {
+                    // Cancel event collector when command completes
+                    eventCollectorJob.cancel()
                 }
-            } finally {
-                // Cancel event collector when command completes
-                eventCollectorJob.cancel()
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            logger.error("Failed to execute agent command: {}", plainCommand, e)
+            logger.error("Failed to execute agent command: {} (session={})", plainCommand, session.uuid, e)
             status.failed(ResourceStatus.SC_EXPECTATION_FAILED)
             status.message = e.message
         } finally {
@@ -134,7 +134,19 @@ class StatefulAgentRunner(
 
     fun getStatus(id: String) = statusCache.getIfPresent(id)
 
-    fun getResult(id: String) = statusCache.getIfPresent(id)?.agentHistory?.lastOrNull()
+    /**
+     * Returns the latest agent state for the given task ID, or null if the task
+     * is not found.  The returned state may be an intermediate state if the agent
+     * is still executing.
+     */
+    fun getLatestState(id: String) = statusCache.getIfPresent(id)?.agentState
+
+    /**
+     * Returns IDs of all statuses that are still in progress.
+     */
+    fun activeStatusIds(): List<String> = statusCache.asMap()
+        .filterValues { !it.isDone }
+        .keys.toList()
 
     /**
      * Return cache statistics for observability.
@@ -151,7 +163,6 @@ class StatefulAgentRunner(
     }
 
     override fun close() {
-        commanderScope.cancel()
         statusCache.invalidateAll()
         logger.info("StatefulAgentRunner closed (session={})", session.uuid)
     }
