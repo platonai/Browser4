@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
+import java.net.ServerSocket
 import java.time.Duration
 
 @Tag("TestInfraCheck")
@@ -19,7 +20,7 @@ class MockSiteLauncherPortTest {
     @Test
     @DisplayName("start with explicit port enforces that port")
     fun startWithExplicitPortEnforcesThatPort() {
-        val port = 19091
+        val port = findFreePort()
         MockSiteLauncher.start(port = port, enforcePort = true)
         val ready = MockSiteLauncher.awaitReady(Duration.ofSeconds(6))
         assertTrue(ready, "Server not ready on expected port $port")
@@ -29,12 +30,19 @@ class MockSiteLauncherPortTest {
     @Test
     @DisplayName("demo site starter extracts port from url and starts server")
     fun demoSiteStarterExtractsPortFromUrlAndStartsServer() {
-        val port = 19092
+        val port = findFreePort()
         val url = "http://localhost:$port/generated/tta/act/act-demo.html"
         MockSiteStarter().start(url)
         val ready = MockSiteLauncher.awaitReady(Duration.ofSeconds(6))
         assertTrue(ready, "Mock site not ready on extracted port $port")
         assertEquals(port, MockSiteLauncher.port(), "DemoSiteStarter should start server on extracted port")
+    }
+
+    companion object {
+        /** Find a port that is currently free on localhost to avoid port-in-use conflicts. */
+        private fun findFreePort(): Int {
+            return ServerSocket(0).use { it.localPort }
+        }
     }
 }
 

@@ -264,6 +264,16 @@ class MCPToolController(
             // without creating a throwaway session that would launch Chrome.
             tools.addAll(FRONTEND_TOOL_NAME_ALIASES.keys)
 
+            // Composite / convenience tools that map to underlying domain tools.
+            // These should always be advertised, even when no session is active.
+            tools.addAll(
+                listOf(
+                    "browser_click",
+                    "browser_handle_dialog",
+                    "browser_tabs",
+                )
+            )
+
             val activeSession = sessionManager.getAllSessions().firstOrNull()
             if (activeSession != null) {
                 // A real session already exists — enrich with per-agent tools.
