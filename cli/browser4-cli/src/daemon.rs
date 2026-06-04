@@ -11,7 +11,7 @@
 use std::env;
 use std::fs;
 use std::io;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
@@ -411,7 +411,39 @@ fn download_file_blocking(url: &str, target_path: &Path) -> Result<DownloadedFil
 
     let final_url = response.url().to_string();
     let mut file = fs::File::create(target_path).map_err(|e| e.to_string())?;
-    let bytes_written = io::copy(&mut response, &mut file).map_err(|e| e.to_string())?;
+
+    // Copy with progress reporting every 30 s so long-running downloads
+    // don't appear hung (stress tests rely on this).
+    let total_size = response.content_length();
+    let mut downloaded: u64 = 0;
+    let mut last_report = std::time::Instant::now();
+    let report_interval = std::time::Duration::from_secs(30);
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = response.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        file.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+        downloaded += n as u64;
+        if last_report.elapsed() >= report_interval {
+            if let Some(total) = total_size {
+                let pct = if total > 0 {
+                    (downloaded as f64 / total as f64) * 100.0
+                } else {
+                    0.0
+                };
+                eprintln!(
+                    "  Download progress: {} / {} bytes ({:.0}%)",
+                    downloaded, total, pct
+                );
+            } else {
+                eprintln!("  Download progress: {} bytes", downloaded);
+            }
+            last_report = std::time::Instant::now();
+        }
+    }
+    let bytes_written = downloaded;
     file.flush().map_err(|e| e.to_string())?;
 
     Ok(DownloadedFile {
@@ -585,6 +617,82 @@ fn commit_installed_browser4_runtime(
     Ok(materialize_installed_runtime(metadata, false))
 }
 
+// ---------------------------------------------------------------------------
+// Download cache — avoids re-downloading the same runtime bundle on every
+// `install --force` (stress tests exercise this path heavily).
+// ---------------------------------------------------------------------------
+
+const CLI_CACHE_DIR_COMPONENT: &str = "cache";
+const CLI_CACHE_DOWNLOADS_COMPONENT: &str = "downloads";
+
+fn browser4_download_cache_dir() -> PathBuf {
+    resolve_default_state_dir()
+        .join(CLI_CACHE_DIR_COMPONENT)
+        .join(CLI_CACHE_DOWNLOADS_COMPONENT)
+}
+
+/// Path where a downloaded archive for the given *normalized* tag and
+/// asset name would be cached.  Returns `None` when the tag is unknown
+/// (i.e. `latest`) — we don't cache those because "latest" drifts.
+fn cached_download_path(normalized_tag: &str, asset_name: &str) -> PathBuf {
+    browser4_download_cache_dir()
+        .join(normalized_tag)
+        .join(asset_name)
+}
+
+/// Copy `src` into the download cache so the next install of the same
+/// tag can skip the network fetch.  Errors are swallowed — a full cache
+/// is never fatal.
+fn try_cache_downloaded_archive(src: &Path, normalized_tag: &str, asset_name: &str) {
+    let dest = cached_download_path(normalized_tag, asset_name);
+    if dest.exists() {
+        return; // already cached
+    }
+    if let Some(parent) = dest.parent() {
+        if let Err(e) = fs::create_dir_all(parent) {
+            eprintln!("  (skipping download cache: cannot create cache dir: {e})");
+            return;
+        }
+    }
+    if let Err(e) = fs::copy(src, &dest) {
+        eprintln!("  (skipping download cache: copy failed: {e})");
+        return;
+    }
+    eprintln!("  Cached downloaded archive to {}", dest.display());
+}
+
+/// If a previously-downloaded archive for this tag+asset is cached,
+/// copy it into `dest_path` and return `true`.
+fn try_restore_from_download_cache(
+    normalized_tag: &str,
+    asset_name: &str,
+    dest_path: &Path,
+) -> bool {
+    let cached = cached_download_path(normalized_tag, asset_name);
+    if !cached.exists() {
+        return false;
+    }
+    if let Some(parent) = dest_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    match fs::copy(&cached, dest_path) {
+        Ok(bytes) => {
+            eprintln!(
+                "  Restored {} from download cache ({} bytes).",
+                asset_name, bytes
+            );
+            true
+        }
+        Err(e) => {
+            eprintln!(
+                "  Cached archive exists but copy failed ({}); will re-download.",
+                e
+            );
+            false
+        }
+    }
+}
+
 pub async fn install_browser4_runtime(
     tag: Option<&str>,
     force: bool,
@@ -609,25 +717,67 @@ pub async fn install_browser4_runtime(
     let archive_path = temp_dir.join(&asset_name);
     let extraction_dir = temp_dir.join("extract");
 
+    // If we have a concrete tag, try the download cache first so repeated
+    // `install --force` runs (like stress tests) don't re-fetch the same
+    // ~200 MB bundle from the network every time.
+    let cache_hit = match requested_tag.as_deref() {
+        Some(normalized) => try_restore_from_download_cache(normalized, &asset_name, &archive_path),
+        None => false,
+    };
+
     let install_result = async {
-        eprintln!("Downloading Browser4 runtime bundle from {}...", download_url);
-        let downloaded = download_file(&download_url, &archive_path).await?;
-        eprintln!(
-            "Downloaded {} bytes for Browser4 runtime bundle.",
-            downloaded.bytes_written
-        );
-        extract_runtime_bundle_archive(&archive_path, &extraction_dir, platform.archive_kind())?;
-        let extracted_root = resolve_runtime_bundle_root(&extraction_dir)?;
-        let resolved_tag = parse_release_tag_from_url(&downloaded.final_url)
-            .or(requested_tag)
-            .unwrap_or_else(|| "latest".to_string());
-        let metadata = InstalledBrowser4RuntimeMetadata {
-            tag: resolved_tag,
-            asset_name: asset_name.clone(),
-            download_url: downloaded.final_url,
-            installed_at: chrono::Utc::now().to_rfc3339(),
-        };
-        commit_installed_browser4_runtime(&extracted_root, metadata)
+        if cache_hit {
+            // Already staged in archive_path — skip download.
+            eprintln!(
+                "Using cached Browser4 runtime bundle for {} (skip download).",
+                asset_name
+            );
+            // We need a DownloadedFile for the metadata below.
+            // Reconstruct it from what we know.
+            let downloaded = DownloadedFile {
+                final_url: download_url.clone(),
+                bytes_written: fs::metadata(&archive_path)
+                    .map(|m| m.len())
+                    .unwrap_or(0),
+            };
+            extract_runtime_bundle_archive(&archive_path, &extraction_dir, platform.archive_kind())?;
+            let extracted_root = resolve_runtime_bundle_root(&extraction_dir)?;
+            let resolved_tag = requested_tag
+                .as_deref()
+                .map(String::from)
+                .unwrap_or_else(|| "latest".to_string());
+            let metadata = InstalledBrowser4RuntimeMetadata {
+                tag: resolved_tag,
+                asset_name: asset_name.clone(),
+                download_url: downloaded.final_url,
+                installed_at: chrono::Utc::now().to_rfc3339(),
+            };
+            commit_installed_browser4_runtime(&extracted_root, metadata)
+        } else {
+            eprintln!("Downloading Browser4 runtime bundle from {}...", download_url);
+            let downloaded = download_file(&download_url, &archive_path).await?;
+            eprintln!(
+                "Downloaded {} bytes for Browser4 runtime bundle.",
+                downloaded.bytes_written
+            );
+            // Cache the downloaded archive for future runs (only when we have
+            // a concrete tag — "latest" is too ephemeral).
+            if let Some(normalized) = requested_tag.as_deref() {
+                try_cache_downloaded_archive(&archive_path, normalized, &asset_name);
+            }
+            extract_runtime_bundle_archive(&archive_path, &extraction_dir, platform.archive_kind())?;
+            let extracted_root = resolve_runtime_bundle_root(&extraction_dir)?;
+            let resolved_tag = parse_release_tag_from_url(&downloaded.final_url)
+                .or(requested_tag)
+                .unwrap_or_else(|| "latest".to_string());
+            let metadata = InstalledBrowser4RuntimeMetadata {
+                tag: resolved_tag,
+                asset_name: asset_name.clone(),
+                download_url: downloaded.final_url,
+                installed_at: chrono::Utc::now().to_rfc3339(),
+            };
+            commit_installed_browser4_runtime(&extracted_root, metadata)
+        }
     }
     .await;
 

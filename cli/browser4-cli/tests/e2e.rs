@@ -292,9 +292,12 @@ fn serve_fixture_request(mut stream: std::net::TcpStream, pages: Arc<FixturePage
 // Fake runtime bundle builder (for install / upgrade e2e tests)
 // ---------------------------------------------------------------------------
 
-/// Build a minimal fake runtime bundle archive (zip format) that satisfies
+/// Build a minimal fake runtime bundle archive that satisfies
 /// `install_dir_contains_runtime` checks: a `lib/` dir with a jar file and
 /// a `runtime/bin/` dir with a platform-appropriate java executable.
+///
+/// On Windows the archive is a ZIP file; on all other platforms it is a
+/// tar.gz file — matching the real runtime bundle formats.
 ///
 /// Returns the archive bytes and the bundle root directory name inside the
 /// archive (e.g. `browser4-bundle-runtime-windows-x64`).
@@ -309,6 +312,14 @@ fn build_fake_runtime_bundle(tag: &str) -> (Vec<u8>, String) {
     let dir_name = format!("browser4-bundle-runtime-{platform}");
     let java_name = if cfg!(windows) { "java.exe" } else { "java" };
 
+    if cfg!(windows) {
+        build_fake_zip_bundle(tag, &dir_name, &java_name)
+    } else {
+        build_fake_tar_gz_bundle(tag, &dir_name, &java_name)
+    }
+}
+
+fn build_fake_zip_bundle(tag: &str, dir_name: &str, java_name: &str) -> (Vec<u8>, String) {
     let mut buffer = Vec::new();
     {
         let mut zip_writer = zip::ZipWriter::new(std::io::Cursor::new(&mut buffer));
@@ -316,19 +327,13 @@ fn build_fake_runtime_bundle(tag: &str) -> (Vec<u8>, String) {
 
         // lib/sample.jar (a minimal non-empty file)
         zip_writer
-            .start_file(
-                format!("{dir_name}/lib/browser4-core.jar"),
-                options,
-            )
+            .start_file(format!("{dir_name}/lib/browser4-core.jar"), options)
             .unwrap();
         zip_writer.write_all(b"fake-jar-content").unwrap();
 
         // runtime/bin/java
         zip_writer
-            .start_file(
-                format!("{dir_name}/runtime/bin/{java_name}"),
-                options,
-            )
+            .start_file(format!("{dir_name}/runtime/bin/{java_name}"), options)
             .unwrap();
         zip_writer.write_all(b"fake-java-binary").unwrap();
 
@@ -346,7 +351,54 @@ fn build_fake_runtime_bundle(tag: &str) -> (Vec<u8>, String) {
 
         zip_writer.finish().unwrap();
     }
-    (buffer, dir_name)
+    (buffer, dir_name.to_string())
+}
+
+fn build_fake_tar_gz_bundle(tag: &str, dir_name: &str, java_name: &str) -> (Vec<u8>, String) {
+    let mut buffer = Vec::new();
+    {
+        let gz_encoder =
+            flate2::write::GzEncoder::new(&mut buffer, flate2::Compression::default());
+        let mut tar_builder = tar::Builder::new(gz_encoder);
+
+        fn add_tar_entry(
+            builder: &mut tar::Builder<impl std::io::Write>,
+            path: &str,
+            data: &[u8],
+        ) {
+            let mut header = tar::Header::new_gnu();
+            header.set_path(path).unwrap();
+            header.set_size(data.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder.append_data(&mut header, path, data).unwrap();
+        }
+
+        add_tar_entry(
+            &mut tar_builder,
+            &format!("{dir_name}/lib/browser4-core.jar"),
+            b"fake-jar-content",
+        );
+        add_tar_entry(
+            &mut tar_builder,
+            &format!("{dir_name}/runtime/bin/{java_name}"),
+            b"fake-java-binary",
+        );
+        add_tar_entry(
+            &mut tar_builder,
+            &format!("{dir_name}/bin/launcher"),
+            b"#!/bin/sh\necho fake",
+        );
+        add_tar_entry(
+            &mut tar_builder,
+            &format!("{dir_name}/VERSION"),
+            tag.as_bytes(),
+        );
+
+        let gz_encoder = tar_builder.into_inner().unwrap();
+        gz_encoder.finish().unwrap();
+    }
+    (buffer, dir_name.to_string())
 }
 
 // ---------------------------------------------------------------------------

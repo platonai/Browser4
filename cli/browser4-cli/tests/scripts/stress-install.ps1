@@ -34,7 +34,8 @@
 param(
     [int] $Iterations = 2,
     [int] $Seed = (Get-Random),
-    [switch] $SkipInstall
+    [switch] $SkipInstall,
+    [string] $Tag = '4.10.0-rc.2'
 )
 
 $ErrorActionPreference = 'Continue'
@@ -55,7 +56,7 @@ $null = & chcp 65001
 # Resolve the CLI Cargo.toml path (the script may be invoked from the repo root
 # which does not contain a Cargo.toml).
 $RepoRoot = git rev-parse --show-toplevel
-$CliManifest = Join-Path $RepoRoot 'cli/browser4-cli/Cargo.toml'
+$CliManifest = Join-Path $RepoRoot 'cli' | Join-Path -ChildPath 'browser4-cli' | Join-Path -ChildPath 'Cargo.toml'
 
 $cli = if ($env:BROWSER4_CLI_BIN) {
     { & $env:BROWSER4_CLI_BIN $args 2>&1 }
@@ -63,17 +64,39 @@ $cli = if ($env:BROWSER4_CLI_BIN) {
     { cargo run --manifest-path $CliManifest --quiet -- $args 2>&1 }
 }
 
+# Wrapper that captures $LASTEXITCODE *before* the pipeline ends.
+# Windows PowerShell 5.1 clears $LASTEXITCODE after piping to a
+# cmdlet like ForEach-Object; PS 6+ preserves it.  Saving it inside
+# the producer scriptblock works on both.
+$script:__InvokeCliProducer = {
+    $raw = & $cli @args
+    $global:__InvokeCliExitCode = $LASTEXITCODE
+    $raw
+}
+
 function Invoke-Cli {
     $desc = ($args -join ' ')
     Write-Host "       [$(Get-Date -Format 'HH:mm:ss')] cli $desc ..." -ForegroundColor DarkGray
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    $out = & $cli @args
-    $sw.Stop()
-    if ($LASTEXITCODE -ne 0) {
-        throw "CLI command failed (exit=$LASTEXITCODE): $desc`nOutput:`n$($out -join "`n")"
+    # Stream output line-by-line so long-running commands (e.g. install
+    # --force downloads) show progress in real time instead of appearing
+    # hung.  Each line is both captured and written to the console.
+    #
+    # $LASTEXITCODE is captured inside the producer scriptblock so it
+    # survives the pipeline on Windows PowerShell 5.1 (which clears it
+    # after piping to a cmdlet).
+    $out = @()
+    $global:__InvokeCliExitCode = 0
+    & $script:__InvokeCliProducer @args | ForEach-Object {
+        $out += $_
+        Write-Host $_
     }
-    if ($out) {
-        $out | ForEach-Object { Write-Host $_ }
+    $exitCode = $global:__InvokeCliExitCode
+    $sw.Stop()
+    if ($exitCode -ne 0) {
+        $msg = "CLI command failed (exit=$exitCode): $desc"
+        Write-Host "       FAIL: $msg" -ForegroundColor Red
+        $null = $global:FailureMessages.Add("       FAIL: $msg`nOutput:`n$($out -join "`n")")
     }
     if ($sw.Elapsed.TotalSeconds -ge 5) {
         Write-Host "       took $([math]::Round($sw.Elapsed.TotalSeconds, 1))s" -ForegroundColor DarkGray
@@ -91,6 +114,12 @@ $script:StatusIter    = 0
 $script:StatusTotal   = 0
 $script:StatusTimer   = $null
 $script:StatusSuiteStart = [datetime]::MinValue
+
+# Per-assertion failure tracking (soft asserts -- failures are recorded,
+# not thrown, so the suite continues through the remaining test cases).
+$global:TestPassed   = 0
+$global:TestFailed   = 0
+$global:FailureMessages = [System.Collections.ArrayList]::new()
 
 function Start-StatusReporter {
     $script:StatusSuiteStart = Get-Date
@@ -150,6 +179,14 @@ $InstallMetaFile = Join-Path $LibDir 'browser4-installation.json'
 $CliStateFile = Join-Path $StateDir 'cli-state.json'
 $ManagedProcsFile = Join-Path $StateDir 'cli-managed-processes.json'
 
+# -------------------------------------------------------------------
+# Resolution for platform-dependent paths inside the runtime bundle.
+# -------------------------------------------------------------------
+$RuntimeBinDir = Join-Path $LibDir 'runtime' | Join-Path -ChildPath 'bin'
+$IsWin = $env:OS -eq 'Windows_NT'  # works on PS 5.1 and 6+
+$JavaExe = if ($IsWin) { 'java.exe' } else { 'java' }
+$JavaBin = Join-Path $RuntimeBinDir $JavaExe
+
 # Stress-test page (lightweight, stable).
 $TestUrl = 'https://news.ycombinator.com/'
 $TestKeyword = 'ycombinator'
@@ -162,20 +199,34 @@ function Assert-True {
     try {
         $result = & $Condition
         if (-not $result) {
-            throw "FAIL: $Label`n      Condition returned: $result"
+            $msg = "FAIL: $Label`n      Condition returned: $result"
+            Write-Host "    $msg" -ForegroundColor Red
+            $null = $global:FailureMessages.Add("    $msg")
+            $global:TestFailed++
+            return
         }
     } catch {
-        throw "FAIL: $Label`n      Exception: $($_.Exception.Message)"
+        $msg = "FAIL: $Label`n      Exception: $($_.Exception.Message)"
+        Write-Host "    $msg" -ForegroundColor Red
+        $null = $global:FailureMessages.Add("    $msg")
+        $global:TestFailed++
+        return
     }
     Write-Host "    ok $Label" -ForegroundColor Green
+    $global:TestPassed++
 }
 
 function Assert-FileExists {
     param([string]$Path, [string]$Label)
     if (-not (Test-Path $Path)) {
-        throw "FAIL: $Label`n      File not found: $Path"
+        $msg = "FAIL: $Label`n      File not found: $Path"
+        Write-Host "    $msg" -ForegroundColor Red
+        $null = $global:FailureMessages.Add("    $msg")
+        $global:TestFailed++
+        return
     }
     Write-Host "    ok $Label" -ForegroundColor Green
+    $global:TestPassed++
 }
 
 function Assert-JsonValid {
@@ -183,9 +234,14 @@ function Assert-JsonValid {
     try {
         $null = Get-Content -Raw $Path | ConvertFrom-Json
     } catch {
-        throw "FAIL: $Label`n      Invalid JSON in $Path : $($_.Exception.Message)"
+        $msg = "FAIL: $Label`n      Invalid JSON in $Path : $($_.Exception.Message)"
+        Write-Host "    $msg" -ForegroundColor Red
+        $null = $global:FailureMessages.Add("    $msg")
+        $global:TestFailed++
+        return
     }
     Write-Host "    ok $Label" -ForegroundColor Green
+    $global:TestPassed++
 }
 
 function Get-SessionDataRows {
@@ -199,9 +255,14 @@ function Assert-SessionCount {
     $label = "session count == $Expected  ($Context)"
     if ($rows.Count -ne $Expected) {
         $all = Invoke-Cli list
-        throw "FAIL: $label`n      found $($rows.Count) row(s):`n$($all -join "`n")"
+        $msg = "FAIL: $label`n      found $($rows.Count) row(s):`n$($all -join "`n")"
+        Write-Host "    $msg" -ForegroundColor Red
+        $null = $global:FailureMessages.Add("    $msg")
+        $global:TestFailed++
+        return
     }
     Write-Host "    ok $label" -ForegroundColor Green
+    $global:TestPassed++
 }
 
 function Assert-SnapshotContains {
@@ -218,6 +279,7 @@ function Assert-SnapshotContains {
         $text = $snap -join ' '
         if ($text -like "*$Keyword*") {
             Write-Host "    ok snapshot contains '$Keyword'  ($Context)" -ForegroundColor Green
+            $global:TestPassed++
             return
         }
         if ($text -like '*about:blank*') {
@@ -226,7 +288,10 @@ function Assert-SnapshotContains {
         # Not blank but also missing keyword -- fail immediately.
         break
     }
-    throw "FAIL: snapshot contains '$Keyword'  ($Context)`n      snapshot output:`n$($snap -join "`n")"
+    $msg = "FAIL: snapshot contains '$Keyword'  ($Context)`n      snapshot output:`n$($snap -join "`n")"
+    Write-Host "    $msg" -ForegroundColor Red
+    $null = $global:FailureMessages.Add("    $msg")
+    $global:TestFailed++
 }
 
 # -------------------------------------------------------------------
@@ -255,6 +320,7 @@ function Wait-WithStatus {
 Write-Host "`n=== INSTALL STRESS TEST ===" -ForegroundColor Cyan
 Write-Host "  Iterations  : $Iterations" -ForegroundColor Cyan
 Write-Host "  Seed        : $Seed" -ForegroundColor Cyan
+Write-Host "  Tag         : $Tag" -ForegroundColor Cyan
 Write-Host "  State dir   : $StateDir" -ForegroundColor Cyan
 Write-Host "  SkipInstall : $SkipInstall" -ForegroundColor Cyan
 Write-Host "  Started     : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor Cyan
@@ -280,7 +346,6 @@ if (-not $SkipInstall) {
 # -------------------------------------------------------------------
 # Main test loop
 # -------------------------------------------------------------------
-$totalPasses = 0
 $suiteTimer = [Diagnostics.Stopwatch]::StartNew()
 
 Start-StatusReporter
@@ -293,14 +358,25 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
     Write-Host "============================================================" -ForegroundColor Cyan
 
     Set-StatusIter -Iter $iter
-    $iterPasses = 0
+    $prevTotal  = $global:TestPassed + $global:TestFailed
+    $prevPassed = $global:TestPassed
+
+    # Catch unexpected terminating errors within this iteration so one
+    # rogue throw doesn't kill the whole suite.
+    trap {
+        $msg = "UNEXPECTED ERROR in iteration $($iter): $_"
+        Write-Host "    $msg" -ForegroundColor Red
+        $null = $global:FailureMessages.Add("    $msg")
+        $global:TestFailed++
+        continue
+    }
 
     # ==============================================================
     # Phase A: Explicit install lifecycle
     # ==============================================================
     if (-not $SkipInstall) {
         Write-Host "`n  -- Phase A: explicit install  [$(Get-Date -Format 'HH:mm:ss')] --" -ForegroundColor DarkYellow
-        Set-Status -Phase 'A (install)' -Step 'A1' -Passes $totalPasses
+        Set-Status -Phase 'A (install)' -Step 'A1' -Passes $global:TestPassed
 
         # A1: status before install
         Write-Host "`n  A1. status before install  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
@@ -309,47 +385,44 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
             ($statusOut -join ' ') -notmatch 'Runtime version' -or
             ($statusOut -join ' ') -match '(not installed|no runtime|not found)'
         }
-        $iterPasses++
-
+    
         # A2: install
         Write-Host "`n  A2. install  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
-        Set-Status -Phase 'A (install)' -Step 'A2 install' -Passes ($totalPasses + $iterPasses)
-        Invoke-Cli install
+        Set-Status -Phase 'A (install)' -Step 'A2 install' -Passes $global:TestPassed
+        Invoke-Cli install --tag $Tag
         Assert-FileExists $InstallMetaFile "installation.json created"
         Assert-JsonValid $InstallMetaFile "installation.json is valid JSON"
-        $meta = Get-Content -Raw $InstallMetaFile | ConvertFrom-Json
+        try { $meta = Get-Content -Raw $InstallMetaFile | ConvertFrom-Json } catch { $meta = $null }
         Assert-True "installation.json has tag" { -not [string]::IsNullOrWhiteSpace($meta.tag) }
-        Assert-True "installation.json has assetName" { -not [string]::IsNullOrWhiteSpace($meta.assetName) }
-        Assert-True "installation.json has installedAt" { -not [string]::IsNullOrWhiteSpace($meta.installedAt) }
-        $firstInstalledAt = $meta.installedAt
-        $iterPasses += 5
-
+        Assert-True "installation.json has asset_name" { -not [string]::IsNullOrWhiteSpace($meta.asset_name) }
+        Assert-True "installation.json has installed_at" { -not [string]::IsNullOrWhiteSpace($meta.installed_at) }
+        $firstInstalledAt = $meta.installed_at
+        
         # A3: install again (no --force) -- should be no-op / reuse
         Write-Host "`n  A3. install (repeat, no --force)  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
-        Set-Status -Phase 'A (install)' -Step 'A3 install repeat' -Passes ($totalPasses + $iterPasses)
-        $install2Out = Invoke-Cli install
+        Set-Status -Phase 'A (install)' -Step 'A3 install repeat' -Passes $global:TestPassed
+        $install2Out = Invoke-Cli install --tag $Tag
         Assert-True "second install reuses or says already installed" {
             ($install2Out -join ' ') -match '(already|reus|up to date|no update)'
         }
-        $iterPasses++
-
+    
         # A4: install --force
         Write-Host "`n  A4. install --force  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
-        Set-Status -Phase 'A (install)' -Step 'A4 install --force' -Passes ($totalPasses + $iterPasses)
-        Invoke-Cli install --force
-        $meta2 = Get-Content -Raw $InstallMetaFile | ConvertFrom-Json
-        Assert-True "install --force updates installedAt timestamp" {
-            $meta2.installedAt -ne $firstInstalledAt
+        Set-Status -Phase 'A (install)' -Step 'A4 install --force' -Passes $global:TestPassed
+        Invoke-Cli install --force --tag $Tag
+        try { $meta2 = Get-Content -Raw $InstallMetaFile | ConvertFrom-Json } catch { $meta2 = $null }
+        Assert-True "installation.json readable after --force" { $null -ne $meta2 }
+        Assert-True "install --force updates installed_at timestamp" {
+            $null -ne $meta2 -and $meta2.installed_at -ne $firstInstalledAt
         }
-        $iterPasses++
-
+    
         # A5: status after install
         Write-Host "`n  A5. status after install  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
         $statusOut2 = Invoke-Cli status
         Assert-True "status shows runtime version" {
             ($statusOut2 -join ' ') -match 'Runtime|version|tag|installed'
         }
-        $iterPasses++
+    
     } else {
         Write-Host "`n  -- Phase A: SKIPPED (--SkipInstall)  [$(Get-Date -Format 'HH:mm:ss')] --" -ForegroundColor DarkGray
     }
@@ -361,32 +434,29 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
 
     # B1: open page (server pre-started by harness or previous phase)
     Write-Host "`n  B1. open page  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
-    Set-Status -Phase 'B (server)' -Step 'B1 open' -Passes ($totalPasses + $iterPasses)
+    Set-Status -Phase 'B (server)' -Step 'B1 open' -Passes $global:TestPassed
     Invoke-Cli open $TestUrl
     Wait-WithStatus -Seconds 3
     Assert-SnapshotContains $TestKeyword "after open"
     Assert-SessionCount 1 "after open"
-    $iterPasses += 2
 
     # B2: status shows healthy
     Write-Host "`n  B2. status (server should be healthy)  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
-    Set-Status -Phase 'B (server)' -Step 'B2 status' -Passes ($totalPasses + $iterPasses)
+    Set-Status -Phase 'B (server)' -Step 'B2 status' -Passes $global:TestPassed
     $statusOut = Invoke-Cli status
     Assert-True "status reports server running/healthy" {
         ($statusOut -join ' ') -match '(running|healthy|UP|ready|active)'
     }
-    $iterPasses++
 
     # B3: close session (server survives)
     Write-Host "`n  B3. close (server survives)  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
-    Set-Status -Phase 'B (server)' -Step 'B3 close' -Passes ($totalPasses + $iterPasses)
+    Set-Status -Phase 'B (server)' -Step 'B3 close' -Passes $global:TestPassed
     Invoke-Cli close
     Assert-SessionCount 0 "after close"
     $statusAfterClose = Invoke-Cli status
     Assert-True "server still running after close" {
         ($statusAfterClose -join ' ') -match '(running|healthy|UP|ready|active)'
     }
-    $iterPasses += 2
 
     # Give the server a moment to fully tear down the session before
     # creating a new one with the same name.
@@ -394,18 +464,17 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
 
     # B4: open again (reuses server, faster)
     Write-Host "`n  B4. open again (reuses running server)  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
-    Set-Status -Phase 'B (server)' -Step 'B4 open reuse' -Passes ($totalPasses + $iterPasses)
+    Set-Status -Phase 'B (server)' -Step 'B4 open reuse' -Passes $global:TestPassed
     $sw = [Diagnostics.Stopwatch]::StartNew()
     Invoke-Cli open $TestUrl
     $sw.Stop()
     Assert-SnapshotContains $TestKeyword "after second open"
     Assert-SessionCount 1 "after second open"
     Write-Host "       open took $([math]::Round($sw.Elapsed.TotalSeconds, 1))s (server already running)" -ForegroundColor DarkGray
-    $iterPasses += 2
 
     # B5: stop gracefully
     Write-Host "`n  B5. stop (graceful shutdown)  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
-    Set-Status -Phase 'B (server)' -Step 'B5 stop' -Passes ($totalPasses + $iterPasses)
+    Set-Status -Phase 'B (server)' -Step 'B5 stop' -Passes $global:TestPassed
     Invoke-Cli stop
     Wait-WithStatus -Seconds 3
     $statusStopped = Invoke-Cli status
@@ -413,16 +482,14 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
         ($statusStopped -join ' ') -notmatch '(running|healthy|UP|ready|active)' -or
         ($statusStopped -join ' ') -match '(stopped|not running|down|unreachable)'
     }
-    $iterPasses++
 
     # B6: double stop (no server)
     Write-Host "`n  B6. stop, stop (double stop)  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
-    Set-Status -Phase 'B (server)' -Step 'B6 double stop' -Passes ($totalPasses + $iterPasses)
+    Set-Status -Phase 'B (server)' -Step 'B6 double stop' -Passes $global:TestPassed
     $stop2Out = Invoke-Cli stop
     Assert-True "double stop is graceful" {
         ($stop2Out -join ' ') -match '(not running|no.*server|nothing|already|stopped)'
     }
-    $iterPasses++
 
     # Clean up the managed-processes registry so the next open starts
     # from a blank slate rather than trying to manage a dead PID.
@@ -433,15 +500,14 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
 
     # B7: open after stop (server auto-restarts)
     Write-Host "`n  B7. open after stop (server should auto-restart)  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
-    Set-Status -Phase 'B (server)' -Step 'B7 open after stop' -Passes ($totalPasses + $iterPasses)
+    Set-Status -Phase 'B (server)' -Step 'B7 open after stop' -Passes $global:TestPassed
     Invoke-Cli open $TestUrl
     Wait-WithStatus -Seconds 3
     Assert-SnapshotContains $TestKeyword "after stop + open"
     Assert-SessionCount 1 "after stop + open"
     Invoke-Cli close
     Assert-SessionCount 0 "after close (B7)"
-    $iterPasses += 3
-
+    
     # ==============================================================
     # Phase C: kill-all / recovery cycles
     # ==============================================================
@@ -449,7 +515,7 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
 
     # C1: open, kill-all, verify total stop
     Write-Host "`n  C1. open, kill-all, verify  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
-    Set-Status -Phase 'C (kill-all)' -Step 'C1 kill-all' -Passes ($totalPasses + $iterPasses)
+    Set-Status -Phase 'C (kill-all)' -Step 'C1 kill-all' -Passes $global:TestPassed
     Invoke-Cli open $TestUrl
     Wait-WithStatus -Seconds 3
     Assert-SnapshotContains $TestKeyword "before kill-all"
@@ -457,32 +523,29 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
     $null = Invoke-Cli kill-all
     Wait-WithStatus -Seconds 5
     Assert-SessionCount 0 "after kill-all"
-    $iterPasses += 3
-
+    
     # C2: open after kill-all (fresh server)
     Write-Host "`n  C2. open after kill-all (fresh server)  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
-    Set-Status -Phase 'C (kill-all)' -Step 'C2 open after kill-all' -Passes ($totalPasses + $iterPasses)
+    Set-Status -Phase 'C (kill-all)' -Step 'C2 open after kill-all' -Passes $global:TestPassed
     Invoke-Cli open $TestUrl
     Wait-WithStatus -Seconds 3
     Assert-SnapshotContains $TestKeyword "after kill-all + open"
     Assert-SessionCount 1 "after kill-all + open"
-    $iterPasses += 2
 
     # C3: double kill-all
     Write-Host "`n  C3. kill-all, kill-all (double)  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
-    Set-Status -Phase 'C (kill-all)' -Step 'C3 double kill-all' -Passes ($totalPasses + $iterPasses)
+    Set-Status -Phase 'C (kill-all)' -Step 'C3 double kill-all' -Passes $global:TestPassed
     $null = Invoke-Cli kill-all
     Wait-WithStatus -Seconds 3
     $null = Invoke-Cli kill-all
     Wait-WithStatus -Seconds 3
     Assert-SessionCount 0 "after double kill-all"
-    $iterPasses++
 
     # C4: rapid kill-all, open, close x3
     Write-Host "`n  C4. rapid kill-all, open, close (x3)  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
     1..3 | ForEach-Object {
         Write-Host "       cycle $_/3  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor DarkGray
-        Set-Status -Phase 'C (kill-all)' -Step "C4 rapid cycle $_/3" -Passes ($totalPasses + $iterPasses)
+        Set-Status -Phase 'C (kill-all)' -Step "C4 rapid cycle $_/3" -Passes $global:TestPassed
         $null = Invoke-Cli kill-all
         Wait-WithStatus -Seconds 4
         Invoke-Cli open $TestUrl
@@ -491,7 +554,6 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
         Invoke-Cli close
         Assert-SessionCount 0 "rapid cycle $_ close"
     }
-    $iterPasses += 6
 
     # ==============================================================
     # Phase D: close-all vs kill-all distinction
@@ -500,7 +562,7 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
 
     # D1: open, close, server still running
     Write-Host "`n  D1. open, close (server survives)  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
-    Set-Status -Phase 'D (close vs kill)' -Step 'D1 close' -Passes ($totalPasses + $iterPasses)
+    Set-Status -Phase 'D (close vs kill)' -Step 'D1 close' -Passes $global:TestPassed
     Invoke-Cli open $TestUrl
     Wait-WithStatus -Seconds 3
     Invoke-Cli close
@@ -509,11 +571,10 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
     Assert-True "server still running after close" {
         ($statusD1 -join ' ') -match '(running|healthy|UP|ready|active)'
     }
-    $iterPasses += 2
 
     # D2: open, close-all, server still running
     Write-Host "`n  D2. open, close-all (server survives)  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
-    Set-Status -Phase 'D (close vs kill)' -Step 'D2 close-all' -Passes ($totalPasses + $iterPasses)
+    Set-Status -Phase 'D (close vs kill)' -Step 'D2 close-all' -Passes $global:TestPassed
     Invoke-Cli open $TestUrl
     Wait-WithStatus -Seconds 3
     Invoke-Cli close-all
@@ -523,11 +584,10 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
     Assert-True "server still running after close-all" {
         ($statusD2 -join ' ') -match '(running|healthy|UP|ready|active)'
     }
-    $iterPasses += 2
 
     # D3: open, kill-all, both gone
     Write-Host "`n  D3. open, kill-all (server stops)  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
-    Set-Status -Phase 'D (close vs kill)' -Step 'D3 kill-all' -Passes ($totalPasses + $iterPasses)
+    Set-Status -Phase 'D (close vs kill)' -Step 'D3 kill-all' -Passes $global:TestPassed
     Invoke-Cli open $TestUrl
     Wait-WithStatus -Seconds 3
     $null = Invoke-Cli kill-all
@@ -538,11 +598,10 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
         ($statusD3 -join ' ') -notmatch '(running|healthy|UP|ready|active)' -or
         ($statusD3 -join ' ') -match '(stopped|not running|down|unreachable)'
     }
-    $iterPasses += 2
 
     # D4: after close-all, open reuses running server (faster)
     Write-Host "`n  D4. close-all, open reuses server (no restart)  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
-    Set-Status -Phase 'D (close vs kill)' -Step 'D4 close-all reuse' -Passes ($totalPasses + $iterPasses)
+    Set-Status -Phase 'D (close vs kill)' -Step 'D4 close-all reuse' -Passes $global:TestPassed
     Invoke-Cli open $TestUrl
     Wait-WithStatus -Seconds 3
     Assert-SnapshotContains $TestKeyword "D4 before close-all"
@@ -557,7 +616,6 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
         $sw.Elapsed.TotalSeconds -lt 30
     }
     Invoke-Cli close
-    $iterPasses += 2
 
     # ==============================================================
     # Phase E: Rapid cycles
@@ -567,7 +625,7 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
     Write-Host "`n  E1. stop, open, close (x5)  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
     1..5 | ForEach-Object {
         Write-Host "       cycle $_/5  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor DarkGray
-        Set-Status -Phase 'E (rapid)' -Step "E1 stop cycle $_/5" -Passes ($totalPasses + $iterPasses)
+        Set-Status -Phase 'E (rapid)' -Step "E1 stop cycle $_/5" -Passes $global:TestPassed
         Invoke-Cli stop
         Wait-WithStatus -Seconds 2
         Invoke-Cli open $TestUrl
@@ -576,12 +634,11 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
         Invoke-Cli close
         Assert-SessionCount 0 "E1 cycle $_ close"
     }
-    $iterPasses += 10
 
     Write-Host "`n  E2. kill-all, open, close (x3)  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
     1..3 | ForEach-Object {
         Write-Host "       cycle $_/3  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor DarkGray
-        Set-Status -Phase 'E (rapid)' -Step "E2 kill-all cycle $_/3" -Passes ($totalPasses + $iterPasses)
+        Set-Status -Phase 'E (rapid)' -Step "E2 kill-all cycle $_/3" -Passes $global:TestPassed
         $null = Invoke-Cli kill-all
         Wait-WithStatus -Seconds 4
         Invoke-Cli open $TestUrl
@@ -590,7 +647,6 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
         Invoke-Cli close
         Assert-SessionCount 0 "E2 cycle $_ close"
     }
-    $iterPasses += 6
 
     # ==============================================================
     # Phase F: State file integrity
@@ -599,69 +655,75 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
 
     # F1: open creates cli-state.json
     Write-Host "`n  F1. open creates cli-state.json  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
-    Set-Status -Phase 'F (state)' -Step 'F1 cli-state' -Passes ($totalPasses + $iterPasses)
+    Set-Status -Phase 'F (state)' -Step 'F1 cli-state' -Passes $global:TestPassed
     if (Test-Path $CliStateFile) { Remove-Item $CliStateFile -Force }
     Invoke-Cli open $TestUrl
     Wait-WithStatus -Seconds 3
     Assert-FileExists $CliStateFile "cli-state.json exists after open"
     Assert-JsonValid $CliStateFile "cli-state.json is valid JSON"
-    $cliState = Get-Content -Raw $CliStateFile | ConvertFrom-Json
+    try { $cliState = Get-Content -Raw $CliStateFile | ConvertFrom-Json } catch { $cliState = $null }
     Assert-True "cli-state.json has sessionId" { -not [string]::IsNullOrWhiteSpace($cliState.sessionId) }
     Assert-True "cli-state.json has baseUrl" { -not [string]::IsNullOrWhiteSpace($cliState.baseUrl) }
-    $iterPasses += 4
-
+    
     # F2: close clears sessionId
     Write-Host "`n  F2. close clears sessionId  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
-    Set-Status -Phase 'F (state)' -Step 'F2 close clears' -Passes ($totalPasses + $iterPasses)
+    Set-Status -Phase 'F (state)' -Step 'F2 close clears' -Passes $global:TestPassed
     Invoke-Cli close
-    $cliState2 = Get-Content -Raw $CliStateFile | ConvertFrom-Json
-    Assert-True "sessionId cleared after close" {
-        [string]::IsNullOrWhiteSpace($cliState2.sessionId)
+    try { $cliState2 = Get-Content -Raw $CliStateFile | ConvertFrom-Json } catch { $cliState2 = $null }
+    # clear_state (called by `close`) removes the file entirely via
+    # fs::remove_file.  Either outcome — file gone, or sessionId blank
+    # — means the session is deactivated.
+    Assert-True "session deactivated after close" {
+        $null -eq $cliState2 -or [string]::IsNullOrWhiteSpace($cliState2.sessionId)
     }
-    $iterPasses++
 
     # F3: installation.json + runtime files
     if (-not $SkipInstall -and (Test-Path $InstallMetaFile)) {
         Write-Host "`n  F3. installation.json integrity  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
-        Set-Status -Phase 'F (state)' -Step 'F3 install integrity' -Passes ($totalPasses + $iterPasses)
+        Set-Status -Phase 'F (state)' -Step 'F3 install integrity' -Passes $global:TestPassed
         Assert-JsonValid $InstallMetaFile "installation.json is valid JSON"
-        $instMeta = Get-Content -Raw $InstallMetaFile | ConvertFrom-Json
+        try { $instMeta = Get-Content -Raw $InstallMetaFile | ConvertFrom-Json } catch { $instMeta = $null }
         Assert-True "installation.json has required fields" {
-            $instMeta.tag -and $instMeta.assetName -and $instMeta.installedAt
+            $instMeta.tag -and $instMeta.asset_name -and $instMeta.installed_at
         }
-        $javaBin = Join-Path $LibDir 'runtime/bin/java'
-        if (-not (Test-Path $javaBin)) { $javaBin = Join-Path $LibDir 'runtime/bin/java.exe' }
-        Assert-FileExists $javaBin "bundled java exists"
+        Assert-FileExists $JavaBin "bundled java exists"
         $libJars = Get-ChildItem -Path (Join-Path $LibDir 'lib') -Filter '*.jar' -ErrorAction SilentlyContinue
         Assert-True "lib/*.jar files exist" { $libJars.Count -gt 0 }
-        $iterPasses += 4
+
     }
 
     # F4: managed-processes.json after server start
     Write-Host "`n  F4. managed-processes.json after server start  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
-    Set-Status -Phase 'F (state)' -Step 'F4 managed-procs' -Passes ($totalPasses + $iterPasses)
+    Set-Status -Phase 'F (state)' -Step 'F4 managed-procs' -Passes $global:TestPassed
     Invoke-Cli open $TestUrl
     Wait-WithStatus -Seconds 3
     Assert-FileExists $ManagedProcsFile "managed-processes.json exists"
     Assert-JsonValid $ManagedProcsFile "managed-processes.json is valid JSON"
-    $iterPasses += 2
 
     # F5: kill-all clears managed processes
     Write-Host "`n  F5. kill-all clears managed processes  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
-    Set-Status -Phase 'F (state)' -Step 'F5 kill-all clear' -Passes ($totalPasses + $iterPasses)
+    Set-Status -Phase 'F (state)' -Step 'F5 kill-all clear' -Passes $global:TestPassed
     $null = Invoke-Cli kill-all
     Wait-WithStatus -Seconds 5
-    $procData = Get-Content -Raw $ManagedProcsFile | ConvertFrom-Json
-    $activePids = @($procData.PSObject.Properties | Where-Object { -not [string]::IsNullOrWhiteSpace($_.Value) })
-    Assert-True "no active PIDs after kill-all" { $activePids.Count -eq 0 }
-    $iterPasses++
+    try { $procData = Get-Content -Raw $ManagedProcsFile | ConvertFrom-Json } catch { $procData = $null }
+    # write_managed_server_processes removes the registry file when the
+    # list is empty, so `kill-all` may delete managed-processes.json
+    # entirely.  Either outcome — file gone, or empty PID list — is a
+    # clean state.
+    $activePids = if ($procData) {
+        @($procData.PSObject.Properties | Where-Object { -not [string]::IsNullOrWhiteSpace($_.Value) })
+    } else { @() }
+    Assert-True "no active PIDs after kill-all" {
+        $null -eq $procData -or $activePids.Count -eq 0
+    }
 
     # ==============================================================
     # Iteration summary
     # ==============================================================
+    $iterChecks = ($global:TestPassed + $global:TestFailed) - $prevTotal
+    $iterOk     = $global:TestPassed - $prevPassed
     Write-Host "`n  -- Iteration $iter summary  [$(Get-Date -Format 'HH:mm:ss')] --" -ForegroundColor Cyan
-    Write-Host "  Passes: $iterPasses" -ForegroundColor Green
-    $totalPasses += $iterPasses
+    Write-Host "  Checks this iter: $iterChecks (passed: $iterOk, failed: $($iterChecks - $iterOk))" -ForegroundColor Cyan
 }
 
 # -------------------------------------------------------------------
@@ -670,16 +732,34 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
 Stop-StatusReporter
 $suiteTimer.Stop()
 
+$totalChecks = $global:TestPassed + $global:TestFailed
+$exitCode = if ($global:TestFailed -gt 0) { 1 } else { 0 }
+
 Write-Host "`n============================================================" -ForegroundColor Cyan
 Write-Host "  INSTALL STRESS TEST RESULTS" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host "  Seed        : $Seed"
 Write-Host "  Iterations  : $Iterations"
-Write-Host "  Total checks: $totalPasses"
-Write-Host "  Passed      : $totalPasses" -ForegroundColor Green
+Write-Host "  Total checks: $totalChecks"
+if ($global:TestPassed -gt 0) {
+    Write-Host "  Passed      : $($global:TestPassed)" -ForegroundColor Green
+}
+if ($global:TestFailed -gt 0) {
+    Write-Host "  Failed      : $($global:TestFailed)" -ForegroundColor Red
+}
 Write-Host "  Finished    : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 Write-Host ("  Elapsed     : {0:mm\:ss}" -f $suiteTimer.Elapsed)
 Write-Host "============================================================" -ForegroundColor Cyan
 
-Write-Host "`n ALL $totalPasses CHECKS PASSED" -ForegroundColor Green
-exit 0
+if ($global:TestFailed -gt 0) {
+    Write-Host "`n  --- FAILURES ($($global:TestFailed) of $totalChecks checks failed) ---" -ForegroundColor Red
+    foreach ($f in $global:FailureMessages) {
+        Write-Host $f -ForegroundColor Red
+    }
+    Write-Host ""
+    Write-Host "  $($global:TestPassed) PASSED, $($global:TestFailed) FAILED" -ForegroundColor Red
+} else {
+    Write-Host "`n ALL $totalChecks CHECKS PASSED" -ForegroundColor Green
+}
+
+exit $exitCode
