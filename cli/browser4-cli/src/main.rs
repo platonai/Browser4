@@ -3755,9 +3755,7 @@ async fn run(
                         cli_println!("Session already open: {}", existing_id);
                     }
                     _ => {
-                        cli_println!(
-                            "Error: open requires a URL. Try: browser4-cli open <url>"
-                        );
+                        cli_println!("No URL provided. Try: browser4-cli open <url>");
                     }
                 }
             } else {
