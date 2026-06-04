@@ -114,7 +114,7 @@
         <version.maven-compiler-plugin>3.14.1</version.maven-compiler-plugin>
 
         <kotlin.version>2.2.21</kotlin.version>
-        <spring-boot.version>4.0.1</spring-boot.version>
+        <spring-boot.version>4.0.5</spring-boot.version>
         <browser4-base.version>4.7.10</browser4-base.version>
     </properties>
 </project>
