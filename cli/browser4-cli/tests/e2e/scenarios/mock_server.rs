@@ -1436,6 +1436,151 @@ pub(super) fn test_eval_command(ctx: &mut E2ECtx) {
     assert_eq!(eval_calls[1].arguments["ref"], "backend:5");
 }
 
+pub(super) fn test_eval_css_selector_passthrough(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let open_result = run_open_command(ctx);
+    assert!(
+        open_result
+            .stdout
+            .contains("Session opened: swarm-session-1"),
+        "Expected mocked session open output in:\n{}",
+        open_result.stdout
+    );
+
+    // CSS selectors should be passed through *without* the eN → backend:N
+    // conversion that happens for snapshot refs.
+    let css_eval = run_command(ctx, &["eval", "element => element.textContent", "#click-target"]);
+    assert_eq!(
+        strip_snapshot_output(&css_eval.stdout),
+        "Mock element text for #click-target"
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let eval_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "browser_evaluate")
+        .collect();
+    assert_eq!(eval_calls.len(), 1, "expected one browser_evaluate call");
+    assert_eq!(eval_calls[0].arguments["ref"], "#click-target");
+    assert!(
+        !eval_calls[0].arguments["ref"].as_str().unwrap().contains("backend:"),
+        "CSS selector ref should NOT be converted to backend:N, got {:?}",
+        eval_calls[0].arguments["ref"]
+    );
+}
+
+pub(super) fn test_eval_complex_expression_falls_to_default(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let open_result = run_open_command(ctx);
+    assert!(
+        open_result
+            .stdout
+            .contains("Session opened: swarm-session-1"),
+        "Expected mocked session open output in:\n{}",
+        open_result.stdout
+    );
+
+    // An expression that does not match any of the mock's hardcoded patterns
+    // should fall through to the default "mock evaluation result" text.
+    let result = run_command(
+        ctx,
+        &[
+            "eval",
+            "Array.from(document.querySelectorAll('button')).map(b => b.id)",
+        ],
+    );
+    assert_eq!(
+        strip_snapshot_output(&result.stdout),
+        "mock evaluation result"
+    );
+    assert!(
+        !result.stdout.contains("### Page"),
+        "eval should not print a post-command snapshot block:\n{}",
+        result.stdout
+    );
+}
+
+pub(super) fn test_eval_in_standalone_batch(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let mock_server = MockBrowser4Server::start();
+    ctx.browser4_base_url = mock_server.base_url();
+
+    let open_result = run_open_command(ctx);
+    assert!(
+        open_result
+            .stdout
+            .contains("Session opened: swarm-session-1"),
+        "Expected mocked session open output in:\n{}",
+        open_result.stdout
+    );
+
+    // Run a batch that contains two eval commands with different ref styles.
+    // Quote multi-word expressions inside batch commands so the parser sees
+    // them as single arguments.
+    let batch_result = run_command(
+        ctx,
+        &[
+            "batch",
+            "eval document.title",
+            "eval 'element => element.textContent' '#my-input'",
+        ],
+    );
+
+    let batch_output = strip_snapshot_output(&batch_result.stdout);
+    assert!(
+        batch_output.contains("Mock Browser4 Page"),
+        "Expected batch output to include the first eval result:\n{}",
+        batch_result.stdout
+    );
+    assert!(
+        batch_output.contains("Mock element text for #my-input"),
+        "Expected batch output to include the second eval result:\n{}",
+        batch_result.stdout
+    );
+
+    let tool_calls = mock_server.snapshot().tool_calls;
+    let batch_calls: Vec<_> = tool_calls
+        .iter()
+        .filter(|call| call.tool == "command_batch")
+        .collect();
+    assert_eq!(
+        batch_calls.len(),
+        1,
+        "Expected one command_batch call, got {:?}",
+        tool_calls
+    );
+
+    let steps = batch_calls[0].arguments["steps"]
+        .as_array()
+        .expect("expected command_batch steps array");
+    let eval_steps: Vec<_> = steps
+        .iter()
+        .filter(|s| s["tool"] == "browser_evaluate")
+        .collect();
+    assert_eq!(
+        eval_steps.len(),
+        2,
+        "Expected two browser_evaluate steps in batch, got {:?}",
+        steps
+    );
+    assert_eq!(eval_steps[0]["arguments"]["expression"], "document.title");
+    assert!(eval_steps[0]["arguments"].get("ref").is_none());
+    assert_eq!(
+        eval_steps[1]["arguments"]["expression"],
+        "element => element.textContent"
+    );
+    assert_eq!(eval_steps[1]["arguments"]["ref"], "#my-input");
+}
+
 pub(super) fn test_press_command_uses_direct_tool_dispatch(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 

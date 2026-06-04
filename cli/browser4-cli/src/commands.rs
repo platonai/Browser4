@@ -1951,6 +1951,63 @@ mod tests {
     }
 
     #[test]
+    fn test_eval_params_with_css_selector_ref() {
+        let map = commands_map();
+        let cmd = map.get("eval").unwrap();
+        let mut args = HashMap::new();
+        args.insert(
+            "expression".to_string(),
+            json!("element => element.value"),
+        );
+        args.insert("ref".to_string(), json!("#my-button"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["expression"], json!("element => element.value"));
+        assert_eq!(params["ref"], json!("#my-button"));
+    }
+
+    #[test]
+    fn test_eval_params_empty_expression() {
+        let map = commands_map();
+        let cmd = map.get("eval").unwrap();
+        let mut args = HashMap::new();
+        args.insert("expression".to_string(), json!(""));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["expression"], json!(""));
+        assert!(params.get("ref").is_none());
+    }
+
+    #[test]
+    fn test_eval_params_expression_with_template_literals() {
+        let map = commands_map();
+        let cmd = map.get("eval").unwrap();
+        let mut args = HashMap::new();
+        args.insert(
+            "expression".to_string(),
+            json!("element => `text: ${element.textContent}`"),
+        );
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(
+            params["expression"],
+            json!("element => `text: ${element.textContent}`")
+        );
+    }
+
+    #[test]
+    fn test_eval_not_hidden_and_batch_supported() {
+        let map = commands_map();
+        let cmd = map.get("eval").unwrap();
+        assert!(!cmd.hidden, "eval should not be hidden from help");
+        assert!(cmd.batch_supported, "eval should support batch mode");
+    }
+
+    #[test]
+    fn test_eval_category_core() {
+        let map = commands_map();
+        let cmd = map.get("eval").unwrap();
+        assert_eq!(cmd.category, Category::Core);
+    }
+
+    #[test]
     fn test_mousewheel_params_preserve_decimal_numbers() {
         let map = commands_map();
         let cmd = map.get("mousewheel").unwrap();

@@ -709,6 +709,103 @@ pub(super) fn test_eval_command(ctx: &mut E2ECtx) {
     run_command(ctx, &["close"]);
 }
 
+pub(super) fn test_eval_return_types(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    open_resized_interactive_page(ctx);
+
+    // --- number ---
+    let num = eval_text(ctx, "40 + 2");
+    // Server returns numbers as their decimal string representation.
+    let parsed_num: i64 = num
+        .trim()
+        .parse()
+        .unwrap_or_else(|_| panic!("Expected numeric result, got: {num}"));
+    assert_eq!(parsed_num, 42);
+
+    // --- boolean ---
+    let bool_val = eval_text(ctx, "true");
+    assert_eq!(bool_val.trim(), "true", "Expected boolean true, got: {bool_val}");
+
+    let bool_false = eval_text(ctx, "1 > 2");
+    assert_eq!(bool_false.trim(), "false", "Expected boolean false, got: {bool_false}");
+
+    // --- array (JSON) ---
+    let arr = eval_text(ctx, "[1, 2, 3]");
+    let parsed_arr: serde_json::Value = serde_json::from_str(arr.trim())
+        .unwrap_or_else(|_| panic!("Expected valid JSON array, got: {arr}"));
+    assert!(parsed_arr.is_array(), "Expected JSON array, got: {arr}");
+    assert_eq!(parsed_arr.as_array().unwrap().len(), 3);
+
+    // --- object (JSON) ---
+    let obj = eval_text(ctx, "({answer: 42, name: 'eval-test'})");
+    let parsed_obj: serde_json::Value = serde_json::from_str(obj.trim())
+        .unwrap_or_else(|_| panic!("Expected valid JSON object, got: {obj}"));
+    assert_eq!(parsed_obj["answer"].as_i64(), Some(42));
+    assert_eq!(parsed_obj["name"].as_str(), Some("eval-test"));
+
+    // --- null ---
+    let null_val = eval_text(ctx, "null");
+    assert_eq!(null_val.trim(), "null");
+
+    // --- undefined ---
+    // `void 0` evaluates to undefined in JS. Some servers serialize
+    // undefined as the empty string, others as "undefined".
+    let undef_val = eval_text(ctx, "void 0");
+    // Accept either "undefined" or "" as valid serializations.
+    let trimmed = undef_val.trim();
+    assert!(
+        trimmed == "undefined" || trimmed.is_empty(),
+        "Expected undefined or empty string for `void 0`, got: {undef_val}"
+    );
+
+    run_command(ctx, &["close"]);
+}
+
+pub(super) fn test_eval_css_selector_scoping(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    open_resized_interactive_page(ctx);
+
+    // Eval scoped to an element via id selector.
+    let button_tag = eval_text_for_target(
+        ctx,
+        "element => element.tagName",
+        "#click-target",
+    );
+    assert_eq!(button_tag.trim().to_uppercase(), "BUTTON");
+
+    // Eval scoped to an input element via id selector.
+    let input_tag = eval_text_for_target(
+        ctx,
+        "element => element.tagName",
+        "#type-target",
+    );
+    assert_eq!(input_tag.trim().to_uppercase(), "INPUT");
+
+    // Eval scoped to a <select> element.
+    let select_tag = eval_text_for_target(
+        ctx,
+        "element => element.tagName",
+        "#select-target",
+    );
+    assert_eq!(select_tag.trim().to_uppercase(), "SELECT");
+
+    // Eval that reads the element's own attribute.
+    let checkbox_type = eval_text_for_target(
+        ctx,
+        "element => element.getAttribute('type')",
+        "#check-target",
+    );
+    assert_eq!(checkbox_type.trim(), "checkbox");
+
+    // Eval without a ref at page scope should still work independently.
+    let title = eval_text(ctx, "document.title");
+    assert_eq!(title.trim(), INTERACTIVE_TITLE);
+
+    run_command(ctx, &["close"]);
+}
+
 pub(super) fn test_wait_for_state_failure_modes(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
     run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
