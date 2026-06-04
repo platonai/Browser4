@@ -385,7 +385,7 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
             ($statusOut -join ' ') -notmatch 'Runtime version' -or
             ($statusOut -join ' ') -match '(not installed|no runtime|not found)'
         }
-    
+
         # A2: install
         Write-Host "`n  A2. install  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
         Set-Status -Phase 'A (install)' -Step 'A2 install' -Passes $global:TestPassed
@@ -397,7 +397,7 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
         Assert-True "installation.json has asset_name" { -not [string]::IsNullOrWhiteSpace($meta.asset_name) }
         Assert-True "installation.json has installed_at" { -not [string]::IsNullOrWhiteSpace($meta.installed_at) }
         $firstInstalledAt = $meta.installed_at
-        
+
         # A3: install again (no --force) -- should be no-op / reuse
         Write-Host "`n  A3. install (repeat, no --force)  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
         Set-Status -Phase 'A (install)' -Step 'A3 install repeat' -Passes $global:TestPassed
@@ -405,7 +405,7 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
         Assert-True "second install reuses or says already installed" {
             ($install2Out -join ' ') -match '(already|reus|up to date|no update)'
         }
-    
+
         # A4: install --force
         Write-Host "`n  A4. install --force  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
         Set-Status -Phase 'A (install)' -Step 'A4 install --force' -Passes $global:TestPassed
@@ -415,14 +415,14 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
         Assert-True "install --force updates installed_at timestamp" {
             $null -ne $meta2 -and $meta2.installed_at -ne $firstInstalledAt
         }
-    
+
         # A5: status after install
         Write-Host "`n  A5. status after install  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
         $statusOut2 = Invoke-Cli status
         Assert-True "status shows runtime version" {
             ($statusOut2 -join ' ') -match 'Runtime|version|tag|installed'
         }
-    
+
     } else {
         Write-Host "`n  -- Phase A: SKIPPED (--SkipInstall)  [$(Get-Date -Format 'HH:mm:ss')] --" -ForegroundColor DarkGray
     }
@@ -507,7 +507,7 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
     Assert-SessionCount 1 "after stop + open"
     Invoke-Cli close
     Assert-SessionCount 0 "after close (B7)"
-    
+
     # ==============================================================
     # Phase C: kill-all / recovery cycles
     # ==============================================================
@@ -523,7 +523,7 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
     $null = Invoke-Cli kill-all
     Wait-WithStatus -Seconds 5
     Assert-SessionCount 0 "after kill-all"
-    
+
     # C2: open after kill-all (fresh server)
     Write-Host "`n  C2. open after kill-all (fresh server)  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
     Set-Status -Phase 'C (kill-all)' -Step 'C2 open after kill-all' -Passes $global:TestPassed
@@ -664,7 +664,7 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
     try { $cliState = Get-Content -Raw $CliStateFile | ConvertFrom-Json } catch { $cliState = $null }
     Assert-True "cli-state.json has sessionId" { -not [string]::IsNullOrWhiteSpace($cliState.sessionId) }
     Assert-True "cli-state.json has baseUrl" { -not [string]::IsNullOrWhiteSpace($cliState.baseUrl) }
-    
+
     # F2: close clears sessionId
     Write-Host "`n  F2. close clears sessionId  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
     Set-Status -Phase 'F (state)' -Step 'F2 close clears' -Passes $global:TestPassed
