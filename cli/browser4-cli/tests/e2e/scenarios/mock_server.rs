@@ -945,7 +945,7 @@ pub(super) fn test_open_reuses_existing_active_session(ctx: &mut E2ECtx) {
     mock_server.queue_open_session_ids(vec!["swarm-session-1", "swarm-session-2"]);
     ctx.browser4_base_url = mock_server.base_url();
 
-    let first_open = run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    let first_open = run_command(ctx, &["open", "https://example.com/", OPEN_PROFILE_MODE_ARG]);
     assert!(
         first_open
             .stdout
@@ -954,7 +954,7 @@ pub(super) fn test_open_reuses_existing_active_session(ctx: &mut E2ECtx) {
         first_open.stdout
     );
 
-    let second_open = run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    let second_open = run_command(ctx, &["open", "https://example.com/", OPEN_PROFILE_MODE_ARG]);
     assert!(
         second_open
             .stdout
@@ -990,7 +990,7 @@ pub(super) fn test_named_session_reuses_opened_session(ctx: &mut E2ECtx) {
     let mock_server = MockBrowser4Server::start();
     ctx.browser4_base_url = mock_server.base_url();
 
-    let open_result = run_command(ctx, &["-s=amazon", "open", OPEN_PROFILE_MODE_ARG]);
+    let open_result = run_command(ctx, &["-s=amazon", "open", "https://example.com/", OPEN_PROFILE_MODE_ARG]);
     assert!(
         open_result
             .stdout
@@ -1055,7 +1055,7 @@ pub(super) fn test_open_refreshes_inactive_saved_session(ctx: &mut E2ECtx) {
     mock_server.queue_open_session_ids(vec!["swarm-session-1", "swarm-session-2"]);
     ctx.browser4_base_url = mock_server.base_url();
 
-    let first_open = run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    let first_open = run_command(ctx, &["open", "https://example.com/", OPEN_PROFILE_MODE_ARG]);
     assert!(
         first_open
             .stdout
@@ -1066,7 +1066,7 @@ pub(super) fn test_open_refreshes_inactive_saved_session(ctx: &mut E2ECtx) {
 
     mock_server.set_listed_sessions(vec![MockListedSession::stopped("swarm-session-1")]);
 
-    let second_open = run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    let second_open = run_command(ctx, &["open", "https://example.com/", OPEN_PROFILE_MODE_ARG]);
     assert!(
         second_open
             .stdout
@@ -1101,7 +1101,7 @@ pub(super) fn test_open_reopens_saved_session_after_human_closed_tab(ctx: &mut E
     mock_server.queue_open_session_ids(vec!["swarm-session-1", "swarm-session-2"]);
     ctx.browser4_base_url = mock_server.base_url();
 
-    let first_open = run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    let first_open = run_command(ctx, &["open", "https://example.com/", OPEN_PROFILE_MODE_ARG]);
     assert!(
         first_open
             .stdout

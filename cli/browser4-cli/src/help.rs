@@ -200,8 +200,8 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli open".to_string());
         lines.push("  browser4-cli open https://browser4.io/".to_string());
+        lines.push("  browser4-cli open --headed https://browser4.io/".to_string());
     }
 
     if cmd.name == "install" {
@@ -228,7 +228,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - Next open shows whether `browser4-cli open` will Reuse the saved session or Refresh it."
+            "  - Next open shows whether `browser4-cli open <url>` will Reuse the saved session or Refresh it (a new session is created only when a URL is provided)."
                 .to_string(),
         );
         lines.push(String::new());
@@ -248,8 +248,8 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli open".to_string());
         lines.push("  browser4-cli goto https://browser4.io/".to_string());
+        lines.push("  browser4-cli -s mysession goto https://browser4.io/".to_string());
     }
 
     if cmd.name == "swarm-create" {

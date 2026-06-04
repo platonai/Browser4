@@ -275,7 +275,7 @@ fn no_active_session_message() -> String {
         "Session required",
         None,
         "No active session is currently stored for this CLI context.",
-        &["run `browser4-cli open` first."],
+        &["run `browser4-cli open <url>` first."],
     )
 }
 
@@ -284,7 +284,7 @@ fn saved_session_expired_message() -> String {
         "Session refresh needed",
         None,
         "The saved session expired or is no longer usable.",
-        &["run `browser4-cli open` to create a fresh session, then retry."],
+        &["run `browser4-cli open <url>` to create a fresh session, then retry."],
     )
 }
 
@@ -853,7 +853,7 @@ fn format_navigation_failure_message(
     let mut suggestions = Vec::new();
 
     if suggest_refresh {
-        suggestions.push("run `browser4-cli open` to refresh the session, then retry.".to_string());
+        suggestions.push("run `browser4-cli open <url>` to refresh the session, then retry.".to_string());
     }
 
     if is_timeout_error_message(error) {
@@ -2737,7 +2737,7 @@ fn format_upgrade_output(runtime: &InstalledBrowser4Runtime, force: bool) -> Vec
         format!("- Install dir: {}", runtime.install_dir.display()),
         format!("- Lib dir: {}", runtime.lib_dir.display()),
         format!("- Java: {}", runtime.java_path.display()),
-        "Restart the server to use the new version: browser4-cli stop && browser4-cli open"
+        "Restart the server to use the new version: browser4-cli stop && browser4-cli open <url>"
             .to_string(),
     ]
 }
@@ -3738,14 +3738,38 @@ async fn run(
     // Dispatch the command
     match command {
         "open" => {
-            handle_open(
-                &client,
-                &base_url,
-                &tool_name,
-                &tool_params,
-                global.session_name.as_deref(),
-            )
-            .await?;
+            // When called without a URL, do not launch a browser.
+            if parsed.get("url").is_none() {
+                let state = read_state(None, global.session_name.as_deref());
+                match find_reusable_persisted_session_id(
+                    &client,
+                    &base_url,
+                    &state,
+                    global.session_name.as_deref(),
+                )
+                .await
+                {
+                    Ok(Some(existing_id)) => {
+                        json_field("session_id", json!(&existing_id));
+                        json_field("reused", json!(true));
+                        cli_println!("Session already open: {}", existing_id);
+                    }
+                    _ => {
+                        cli_println!(
+                            "Usage: browser4-cli open <url>  —  open a browser and navigate to the given URL"
+                        );
+                    }
+                }
+            } else {
+                handle_open(
+                    &client,
+                    &base_url,
+                    &tool_name,
+                    &tool_params,
+                    global.session_name.as_deref(),
+                )
+                .await?;
+            }
         }
         "goto" => {
             handle_goto(
@@ -4466,7 +4490,7 @@ mod tests {
         assert!(message.contains("  URL: https://www.amazon.com/"));
         assert!(message.contains("  Session: default"));
         assert!(message.contains("💡 What to try"));
-        assert!(message.contains("run `browser4-cli open` to refresh the session"));
+        assert!(message.contains("run `browser4-cli open <url>` to refresh the session"));
         assert!(message.contains("🧾 Details"));
         assert!(message.contains("HTTP request failed [tool=browser_navigate]"));
     }
@@ -4496,7 +4520,7 @@ mod tests {
         assert!(message.contains("❌ Navigation failed"));
         assert!(!message.contains("💡 What to try"));
         assert!(message.contains("🧾 Details"));
-        assert!(!message.contains("run `browser4-cli open` to refresh the session"));
+        assert!(!message.contains("run `browser4-cli open <url>` to refresh the session"));
         assert!(!message.contains("BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS"));
     }
 
@@ -4506,7 +4530,7 @@ mod tests {
 
         assert!(message.contains("🔐 Session required"));
         assert!(message.contains("💡 What to try"));
-        assert!(message.contains("run `browser4-cli open` first."));
+        assert!(message.contains("run `browser4-cli open <url>` first."));
         assert!(message.contains("🧾 Details"));
         assert!(message.contains("No active session is currently stored"));
     }
@@ -4517,7 +4541,7 @@ mod tests {
 
         assert!(message.contains("🔐 Session refresh needed"));
         assert!(message.contains("saved session expired or is no longer usable"));
-        assert!(message.contains("run `browser4-cli open` to create a fresh session, then retry."));
+        assert!(message.contains("run `browser4-cli open <url>` to create a fresh session, then retry."));
     }
 
     #[test]

@@ -36,7 +36,7 @@ pub(super) fn test_session_lifecycle(ctx: &mut E2ECtx) {
         combined_output
     );
     assert!(
-        combined_output.contains("run `browser4-cli open` first."),
+        combined_output.contains("run `browser4-cli open <url>` first."),
         "Expected missing-session guidance in output:\n{}",
         combined_output
     );
@@ -159,7 +159,7 @@ pub(super) fn test_open_recovery_after_browser_kill(ctx: &mut E2ECtx) {
 
 pub(super) fn test_navigation_and_storage(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
 
     let interactive_url = ctx.interactive_url();
     let other_url = ctx.other_url();
@@ -618,7 +618,7 @@ pub(super) fn test_storage_state_commands(ctx: &mut E2ECtx) {
 
 pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
     open_resized_interactive_page(ctx);
 
     run_command(ctx, &["type", "hello world", "#type-target"]);
@@ -710,7 +710,7 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
 
 pub(super) fn test_pointer_commands(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
     open_resized_interactive_page(ctx);
 
     run_command(ctx, &["click", "#click-target"]);
@@ -753,7 +753,7 @@ pub(super) fn test_pointer_commands(ctx: &mut E2ECtx) {
 
 pub(super) fn test_eval_command(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
     open_resized_interactive_page(ctx);
 
     let title = eval_text(ctx, "document.title");
@@ -779,7 +779,7 @@ pub(super) fn test_eval_command(ctx: &mut E2ECtx) {
 
 pub(super) fn test_eval_return_types(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
     open_resized_interactive_page(ctx);
 
     // --- number ---
@@ -832,7 +832,7 @@ pub(super) fn test_eval_return_types(ctx: &mut E2ECtx) {
 
 pub(super) fn test_eval_css_selector_scoping(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
     open_resized_interactive_page(ctx);
 
     // Eval scoped to an element via id selector.
@@ -876,7 +876,7 @@ pub(super) fn test_eval_css_selector_scoping(ctx: &mut E2ECtx) {
 
 pub(super) fn test_wait_for_state_failure_modes(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
     goto_interactive_page(ctx);
 
     let error = wait_for_state(
@@ -921,7 +921,7 @@ pub(super) fn test_wait_for_state_failure_modes(ctx: &mut E2ECtx) {
 
 pub(super) fn test_form_controls_and_exports(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
     goto_interactive_page(ctx);
 
     run_command(ctx, &["select", "#select-target", "green"]);
@@ -1002,7 +1002,7 @@ pub(super) fn test_form_controls_and_exports(ctx: &mut E2ECtx) {
 
 pub(super) fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
     open_resized_interactive_page(ctx);
 
     run_command(ctx, &["mousemove", "120", "120"]);
@@ -1074,7 +1074,7 @@ pub(super) fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
 
 pub(super) fn test_mousewheel(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
     open_resized_interactive_page(ctx);
 
     run_command(ctx, &["mousewheel", "160", "0"]);
@@ -1095,7 +1095,7 @@ pub(super) fn test_mousewheel(ctx: &mut E2ECtx) {
 
 pub(super) fn test_tab_commands(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
 
     goto_interactive_page(ctx);
     let interactive_url = ctx.interactive_url();

@@ -1630,7 +1630,7 @@ impl E2ETestResources {
         let started_at = Instant::now();
         let startup_result = run_cli_process_with_live_output(
             &self.ctx,
-            &["open", OPEN_PROFILE_MODE_ARG, OPEN_INTERACT_LEVEL_ARG],
+            &["open", &self.ctx.interactive_url(), OPEN_PROFILE_MODE_ARG, OPEN_INTERACT_LEVEL_ARG],
         );
         let startup_log_hint = format_browser4_startup_log_hint(&startup_result.stderr);
         let started_via_maven = startup_result
@@ -2739,7 +2739,7 @@ fn goto_interactive_page(ctx: &mut E2ECtx) {
 fn run_open_command(ctx: &mut E2ECtx) -> CliRunResult {
     let result = run_command(
         ctx,
-        &["open", OPEN_PROFILE_MODE_ARG, OPEN_INTERACT_LEVEL_ARG],
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG, OPEN_INTERACT_LEVEL_ARG],
     );
     sleep(Duration::from_secs(2));
     return result;
