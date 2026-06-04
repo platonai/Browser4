@@ -34,39 +34,61 @@ class CommandController(
     /**
      * Execute a command with structured JSON input and output.
      *
-     * @param request The structured command request
-     * @return Structured command response
+     * Delegates to [submitJsonCommand].
+     *
+     * @param request The structured command request (see [PageVisitRequest]).
+     * @return For sync requests ([PageVisitRequest.async] is false/absent):
+     *         a [CommandStatus] JSON object with the full execution result.
+     *         For async requests ([PageVisitRequest.async] is true):
+     *         a JSON string containing the command ID for status polling.
+     * @see submitJsonCommand
      * */
     @PostMapping(value = ["", "/"])
     suspend fun submitCommand(@RequestBody request: PageVisitRequest): ResponseEntity<Any> {
         return submitJsonCommand(request)
     }
 
+    /**
+     * Execute a command with structured JSON input and output.
+     *
+     * This is the primary structured command endpoint. Based on the [PageVisitRequest.async] flag:
+     * - **Sync**  ([async]=false or absent): executes the page visit and returns the full
+     *   [CommandStatus] object, including extracted data, page summary, and fields.
+     * - **Async** ([async]=true): submits the command for background execution and returns
+     *   a plain-text command ID string. Use [getStatus] to poll for progress or
+     *   [streamEvents] for Server-Sent Events streaming.
+     *
+     * @param request The structured command request (see [PageVisitRequest]).
+     * @return [CommandStatus] for sync, command ID string for async.
+     * */
     @PostMapping(value = ["/json"])
     suspend fun submitJsonCommand(@RequestBody request: PageVisitRequest): ResponseEntity<Any> {
-        val sessionId = request.sessionId ?: DEFAULT_SESSION_ID
+        val effectiveSessionId = request.sessionId ?: DEFAULT_SESSION_ID
 
         val eventHandlers = PageEventHandlersFactory.create()
         val response = when {
-            request.isAsync() -> commandExecutor.submitPageVisitCommand(sessionId, request, eventHandlers)
-            else -> commandExecutor.executePageVisitCommand(sessionId, request, eventHandlers)
+            request.isAsync() -> commandExecutor.submitPageVisitCommand(effectiveSessionId, request, eventHandlers)
+            else -> commandExecutor.executePageVisitCommand(effectiveSessionId, request, eventHandlers)
         }
 
         return ResponseEntity.ok(response)
     }
 
     /**
-     * Execute a command with plain text input and output.
+     * Execute a command with plain text input.
      *
-     * When the command normalizer returns a valid PageVisitRequest,
-     * the command is executed using the standard command execution flow.
+     * When the command normalizer returns a valid [PageVisitRequest],
+     * the command is executed using the standard page visit flow.
      * When it returns null (meaning the command cannot be normalized to a URL-based command),
      * the command is executed using the agent's run method.
      *
-     * @param plainCommand The plain text command
-     * @param async Whether to execute the command asynchronously
-     * @param mode The execution mode, e.g., "sync" or "async". (Deprecated: use [async] instead)
-     * @return Command response (CommandStatus for sync execution, status ID string for async execution)
+     * @param plainCommand The plain text command (URL, X-SQL, or natural language instruction).
+     * @param sessionId Optional session identifier. Defaults to [DEFAULT_SESSION_ID].
+     * @param async If true, executes the command asynchronously and returns a command ID string.
+     *        If false/absent, executes synchronously and returns a [CommandStatus] object.
+     * @param mode Deprecated: use [async] instead. Recognized value: "async". Any other value
+     *        triggers a warning and falls back to sync execution.
+     * @return [CommandStatus] for sync, command ID string for async.
      * */
     @PostMapping("/plain")
     suspend fun submitPlainCommand(
@@ -76,19 +98,29 @@ class CommandController(
         @RequestParam(name = "mode") mode: String? = null,
     ): ResponseEntity<Any> {
         fun isAsync(): Boolean {
-            return when {
-                async == true -> true
-                mode?.lowercase() == "async" -> true
-                else -> false
+            val modeIsAsync = mode?.lowercase() == "async"
+
+            // Warn on conflicting async/mode parameters — async takes precedence
+            if (async != null && mode != null && async != modeIsAsync) {
+                logger.warn("Conflicting parameters: async=$async but mode='$mode'. " +
+                    "Using async=$async (mode is deprecated).")
             }
+
+            // Warn on unrecognized mode values (only when async is not set)
+            if (async == null && mode != null && !modeIsAsync) {
+                logger.warn("Unrecognized mode='$mode'. Mode parameter is deprecated; " +
+                    "use 'async' instead. Falling back to sync.")
+            }
+
+            return async ?: modeIsAsync
         }
 
-        val sessionId = sessionId ?: DEFAULT_SESSION_ID
+        val effectiveSessionId = sessionId ?: DEFAULT_SESSION_ID
 
         val response = if (isAsync()) {
-            commandExecutor.submitPlainCommand(sessionId, plainCommand)
+            commandExecutor.submitPlainCommand(effectiveSessionId, plainCommand)
         } else {
-            commandExecutor.executePlainCommand(sessionId, plainCommand)
+            commandExecutor.executePlainCommand(effectiveSessionId, plainCommand)
         }
 
         return ResponseEntity.ok(response)
@@ -99,9 +131,9 @@ class CommandController(
         @PathVariable id: String,
         @RequestParam(name = "sessionId") sessionId: String? = null,
     ): ResponseEntity<CommandStatus> {
-        val sessionId = sessionId ?: DEFAULT_SESSION_ID
+        val effectiveSessionId = sessionId ?: DEFAULT_SESSION_ID
 
-        val status = commandExecutor.getStatus(sessionId, id)
+        val status = commandExecutor.getStatus(effectiveSessionId, id)
             ?: return ResponseEntity.notFound().build()
 
         return ResponseEntity.ok(status)
@@ -112,9 +144,12 @@ class CommandController(
         @PathVariable id: String,
         @RequestParam(name = "sessionId") sessionId: String? = null,
     ): ResponseEntity<CommandResult> {
-        val sessionId = sessionId ?: DEFAULT_SESSION_ID
+        val effectiveSessionId = sessionId ?: DEFAULT_SESSION_ID
 
-        return ResponseEntity.ok(commandExecutor.getResult(sessionId, id))
+        val result = commandExecutor.getResult(effectiveSessionId, id)
+            ?: return ResponseEntity.notFound().build()
+
+        return ResponseEntity.ok(result)
     }
 
     @GetMapping(value = ["/{id}/stream"], produces = [MediaType.TEXT_EVENT_STREAM_VALUE])
@@ -122,10 +157,10 @@ class CommandController(
         @PathVariable id: String,
         @RequestParam(name = "sessionId") sessionId: String? = null,
     ): Flux<ServerSentEvent<CommandStatus>> {
-        val sessionId = sessionId ?: DEFAULT_SESSION_ID
+        val effectiveSessionId = sessionId ?: DEFAULT_SESSION_ID
 
         return Flux.create { sink ->
-            val job = commandExecutor.commandStatusFlow(sessionId, id)
+            val job = commandExecutor.commandStatusFlow(effectiveSessionId, id)
                 .onEach { sink.next(it) }
                 .onCompletion { sink.complete() }
                 .catch {

@@ -64,6 +64,15 @@ class UserCommandExecutor(
      * */
     private val taskOwner = ConcurrentHashMap<String, String>()
 
+    /**
+     * Lightweight cache for immediately-rejected commands (e.g. blank input)
+     * that don't need a full page visitor or agent runner.
+     *
+     * Entries persist until [close] to match the behaviour of the main status
+     * caches — callers can re-read a terminal status multiple times.
+     * */
+    private val rejectedStatuses = ConcurrentHashMap<String, CommandStatus>()
+
     fun ensurePageVisitor(sessionId: String): StatefulPageVisitor =
         pageVisitors.getOrPut(sessionId) {
             StatefulPageVisitor(sessionManager.getOrCreateSession(sessionId).agenticSession)
@@ -135,11 +144,10 @@ class UserCommandExecutor(
     ): String {
         val command = plainCommand.trim()
 
-        // 1. Bad command
+        // 1. Bad command — reject immediately without creating a page visitor
         if (command.isBlank()) {
-            val status = ensurePageVisitor(sessionId).create()
-            status.failed(ResourceStatus.SC_BAD_REQUEST)
-            taskOwner[status.id] = "page"
+            val status = CommandStatus(statusCode = ResourceStatus.SC_BAD_REQUEST, processState = "done")
+            rejectedStatuses[status.id] = status
             return status.id
         }
 
@@ -205,10 +213,19 @@ class UserCommandExecutor(
      * probing both page visitor and agent runner if the task isn't tracked
      * (e.g. after a server restart).
      *
+     * When a previously-tracked task ID is no longer present in any status cache
+     * (evicted due to TTL or capacity), the stale [taskOwner] entry is removed
+     * to prevent unbounded map growth.
+     *
      * @return [CommandStatus] or null if the task ID is unknown.
      */
     fun getStatus(sessionId: String, id: String): CommandStatus? {
-        return when (taskOwner[id]) {
+        // Check the lightweight rejected-statuses cache first — these are terminal
+        // statuses that were never registered with a page visitor or agent runner.
+        rejectedStatuses[id]?.let { return it }
+
+        val owner = taskOwner[id]
+        val status = when (owner) {
             "page" -> ensurePageVisitor(sessionId).getStatus(id)?.toCommandStatus()
                 ?: fallbackAgentStatus(sessionId, id)
             "agent" -> ensureAgentRunner(sessionId).getStatus(id)?.toCommandStatus()
@@ -216,6 +233,13 @@ class UserCommandExecutor(
             else -> fallbackPageStatus(sessionId, id)
                 ?: fallbackAgentStatus(sessionId, id)
         }
+
+        if (status == null && owner != null) {
+            logger.debug("Task {} (owner={}) not found in any status cache — evicting stale owner entry", id, owner)
+            taskOwner.remove(id)
+        }
+
+        return status
     }
 
     private fun fallbackPageStatus(sessionId: String, id: String): CommandStatus? {
@@ -238,12 +262,14 @@ class UserCommandExecutor(
             val status = getStatus(sessionId, id)
                 ?: CommandStatus.notFound(id).also { lastModifiedTime = Instant.EPOCH }
 
+            var emitted = false
             if (status.refreshed(lastModifiedTime)) {
                 emit(status)
                 lastModifiedTime = status.lastModifiedTime ?: Instant.EPOCH
+                emitted = true
             }
 
-            if (status.isDone) {
+            if (status.isDone && !emitted) {
                 emit(status)
             }
         } while (!status.isDone)
@@ -286,15 +312,24 @@ class UserCommandExecutor(
     fun launchScope(): CoroutineScope = commanderScope
 
     override fun close() {
+        commanderScope.cancel()
+
+        // Best-effort wait for in-flight coroutines to finish cleanly.
+        // A non-cooperative coroutine won't block shutdown — join() is wrapped.
+        runCatching {
+            runBlocking { commanderScope.coroutineContext[Job]?.join() }
+        }
+
         val pageCount = pageVisitors.size
         val agentCount = agentRunners.size
         val taskCount = taskOwner.size
-        commanderScope.cancel()
+
         pageVisitors.values.forEach { runCatching { it.close() } }
         agentRunners.values.forEach { runCatching { it.close() } }
         pageVisitors.clear()
         agentRunners.clear()
         taskOwner.clear()
+        rejectedStatuses.clear()
         logger.info("UserCommandExecutor closed ({} page visitors, {} agent runners, {} tracked tasks)",
             pageCount, agentCount, taskCount)
     }
