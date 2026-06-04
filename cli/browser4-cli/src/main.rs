@@ -3756,7 +3756,7 @@ async fn run(
                     }
                     _ => {
                         cli_println!(
-                            "Usage: browser4-cli open <url>  —  open a browser and navigate to the given URL"
+                            "Error: open requires a URL. Try: browser4-cli open <url>"
                         );
                     }
                 }
