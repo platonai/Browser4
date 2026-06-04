@@ -89,6 +89,74 @@ pub(super) fn test_newly_opened_session_shows_active(ctx: &mut E2ECtx) {
     run_command(ctx, &["close"]);
 }
 
+pub(super) fn test_open_recovery_after_browser_kill(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    // 1. Open a session with a URL (navigates immediately)
+    let interactive_url = ctx.interactive_url();
+    let open_result = run_command(
+        ctx,
+        &["open", &interactive_url, OPEN_PROFILE_MODE_ARG],
+    );
+    assert!(
+        open_result.stdout.contains("Session opened:"),
+        "Expected session to open with a URL. Output:\n{}",
+        open_result.stdout
+    );
+    // Give the browser a moment to finish launching.
+    sleep(Duration::from_secs(2));
+
+    // Verify the page loaded correctly.
+    let title = eval_text(ctx, "document.title");
+    assert_eq!(title.trim(), INTERACTIVE_TITLE);
+
+    // 2. Kill browser processes (not the server).
+    let kill_result = browser4_cli::managed_processes::kill_all_browsers();
+    if !kill_result.killed_pids.is_empty() {
+        eprintln!(
+            "[test_open_recovery_after_browser_kill] killed browser PIDs: {:?}",
+            kill_result.killed_pids
+        );
+    }
+    // Give the server a moment to detect the browser disconnection.
+    sleep(Duration::from_millis(1500));
+
+    // 3. Goto another URL — should re-launch the browser via stale-session recovery.
+    let other_url = ctx.other_url();
+    let goto_result = run_command(ctx, &["goto", &other_url]);
+    assert!(
+        !goto_result.stdout.is_empty(),
+        "Expected goto to produce page output after browser-kill recovery (got empty stdout)"
+    );
+
+    // Verify we landed on the target page.
+    wait_for_eval_text(
+        ctx,
+        "document.title",
+        OTHER_TITLE,
+        10_000,
+        "Expected goto to navigate to the other page after browser recovery",
+    );
+
+    // 4. Server should still be UP (only browsers were killed, not the server).
+    let status_result = run_command(ctx, &["status"]);
+    assert!(
+        status_result.stdout.contains("Server health: UP"),
+        "Expected 'Server health: UP' after browser kill. Status output:\n{}",
+        status_result.stdout
+    );
+
+    // 5. The recovered session should show as Active in list output.
+    let list_result = run_command(ctx, &["list"]);
+    assert!(
+        list_result.stdout.contains("Active"),
+        "Expected session to be 'Active' in list output after goto recovery:\n{}",
+        list_result.stdout
+    );
+
+    run_command(ctx, &["close"]);
+}
+
 pub(super) fn test_navigation_and_storage(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
     run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);

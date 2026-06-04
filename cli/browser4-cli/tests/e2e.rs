@@ -3323,9 +3323,13 @@ struct RunOptions {
     has_positional_filter: bool,
     fail_fast: bool,
     list_only: bool,
+    list_groups: bool,
     batch_only: bool,
     enable_batch_scenario: bool,
     enable_install_scenario: bool,
+    /// When non-empty, only scenarios matching at least one of these group
+    /// names are selected.  An empty Vec means no group filter is applied.
+    groups: Vec<String>,
 }
 
 fn parse_scenario_limit(raw: &str) -> usize {
@@ -3376,9 +3380,11 @@ fn parse_run_options() -> RunOptions {
     let mut fail_fast = false;
     let mut has_positional_filter = false;
     let mut list_only = false;
+    let mut list_groups = false;
     let mut batch_only = false;
     let mut enable_batch_scenario = false;
     let mut enable_install_scenario = false;
+    let mut groups: Vec<String> = Vec::new();
 
     while let Some(arg) = args.next() {
         if let Some(value) = arg.strip_prefix("--scenario=") {
@@ -3447,6 +3453,20 @@ fn parse_run_options() -> RunOptions {
             continue;
         }
 
+        if arg == "--list-groups" {
+            list_groups = true;
+            continue;
+        }
+
+        if let Some(value) = arg.strip_prefix("--group=") {
+            groups.push(value.to_string());
+            continue;
+        }
+        if arg == "--group" {
+            groups.push(parse_named_flag_value(&mut args, "--group"));
+            continue;
+        }
+
         if !arg.starts_with('-') {
             has_positional_filter = true;
         }
@@ -3473,9 +3493,11 @@ fn parse_run_options() -> RunOptions {
         has_positional_filter,
         fail_fast,
         list_only,
+        list_groups,
         batch_only,
         enable_batch_scenario,
         enable_install_scenario,
+        groups,
     }
 }
 
@@ -3597,6 +3619,23 @@ fn main() {
         .collect::<Vec<_>>()
         .join(", ");
 
+    if run_options.list_groups {
+        let mut group_set: std::collections::BTreeMap<&str, usize> =
+            std::collections::BTreeMap::new();
+        for scenario in all_scenarios {
+            let key = scenario.group.unwrap_or("<none>");
+            *group_set.entry(key).or_insert(0) += 1;
+        }
+        println!("Available groups (scenario count):");
+        for (group, count) in &group_set {
+            println!("  {}: {}", group, count);
+        }
+        println!(
+            "Use --group=<name> to filter by group (repeatable)."
+        );
+        return;
+    }
+
     let mut selected_scenarios: Vec<scenarios::ScenarioDef> = match run_options.scenario_filter {
         Some(ScenarioFilter::Scenario(filter)) => {
             let selected = resolve_scenarios_by_filter(&filter);
@@ -3683,7 +3722,7 @@ fn main() {
                 .collect::<Vec<_>>()
                 .join(", ")
         );
-    } else if !has_explicit_scenario_filter && !run_options.enable_batch_scenario {
+    } else if !has_explicit_scenario_filter && run_options.groups.is_empty() && !run_options.enable_batch_scenario {
         let batch_scenarios = selected_scenarios
             .iter()
             .copied()
@@ -3701,7 +3740,7 @@ fn main() {
 
     // Install / upgrade scenarios are disabled by default (they download and
     // extract archives).  Use --enable-install-scenario to include them.
-    if !has_explicit_scenario_filter && !run_options.enable_install_scenario {
+    if !has_explicit_scenario_filter && run_options.groups.is_empty() && !run_options.enable_install_scenario {
         let install_scenarios = selected_scenarios
             .iter()
             .copied()
@@ -3717,7 +3756,36 @@ fn main() {
         }
     }
 
-    let run_coverage = !has_explicit_scenario_filter && !run_options.batch_only;
+    // --group filtering: when one or more groups are specified, keep only
+    // scenarios that belong to at least one of the requested groups.
+    if !run_options.groups.is_empty() {
+        let group_set: std::collections::HashSet<&str> =
+            run_options.groups.iter().map(String::as_str).collect();
+        let before = selected_scenarios.len();
+        selected_scenarios.retain(|scenario| {
+            scenario
+                .group
+                .map_or(false, |g| group_set.contains(g))
+        });
+        println!(
+            "selected {} scenario(s) via --group={}: {} (filtered out {})",
+            selected_scenarios.len(),
+            run_options.groups.join(","),
+            selected_scenarios
+                .iter()
+                .map(|s| s.name)
+                .collect::<Vec<_>>()
+                .join(", "),
+            before.saturating_sub(selected_scenarios.len()),
+        );
+        assert!(
+            !selected_scenarios.is_empty(),
+            "No scenarios match the requested group(s) '{}'. Use --list-groups to see available groups.",
+            run_options.groups.join(",")
+        );
+    }
+
+    let run_coverage = !has_explicit_scenario_filter && run_options.groups.is_empty() && !run_options.batch_only;
 
     let selected_scenarios =
         apply_scenario_limit_filter(selected_scenarios, run_options.scenario_limit);
