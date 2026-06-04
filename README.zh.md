@@ -298,7 +298,7 @@ session.submitAll(links)
 **快速命令（PulsarRPAPro）：**
 ```bash
 # 注意：需要 MongoDB
-curl -L -o PulsarRPAPro.jar https://github.com/platonai/PulsarRPAPro/releases/download/v4.6.0/PulsarRPAPro.jar
+curl -L -o PulsarRPAPro.jar https://github.com/platonai/PulsarRPAPro/releases/download/v3.0.0/PulsarRPAPro.jar
 ```
 
 **集成状态：**
