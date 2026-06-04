@@ -252,6 +252,11 @@ data class PageVisitStatus(
     var lastModifiedTime: Instant? = null
     var finishTime: Instant? = null
 
+    /**
+     * Indicates whether the task has completed.
+     * Serialized as "isDone" in JSON — the Jackson Kotlin module preserves the Kotlin
+     * property name directly, unlike the Java Bean convention which would strip "is".
+     */
     val isDone: Boolean get() = processState == "done"
 
     /**
