@@ -78,7 +78,7 @@ data class PulsarSettings(
 
         fun parse(capabilities: Map<String, Any?>? = null): PulsarSettings {
             val spa: Boolean? = capabilities?.get("spa")?.toString()?.toBooleanStrictOrNull()
-            val displayMode: DisplayMode? = capabilities?.get("displayMode")?.toString()?.let { DisplayMode.fromString(it) }
+            val displayMode: DisplayMode? = parseDisplayMode(capabilities)
             val maxBrowsers: Int? = capabilities?.get("maxBrowsers")?.toString()?.toIntOrNull()
             val maxOpenTabs: Int? = capabilities?.get("maxOpenTabs")?.toString()?.toIntOrNull()
             val interactSettings: InteractSettings? = capabilities?.get("interactSettings")?.toString()?.let { InteractSettings.fromJsonOrNull(it) }
@@ -93,6 +93,34 @@ data class PulsarSettings(
                 profileMode = profileMode,
                 interactSettings = interactSettings ?: InteractSettings.create(interactLevel ?: InteractLevel.DEFAULT),
             )
+        }
+
+        /**
+         * Resolves the display mode from capabilities.
+         *
+         * Priority:
+         * 1. `displayMode` string (e.g. "GUI", "HEADLESS", "SUPERVISED") — takes highest priority.
+         * 2. `headed` boolean — true → GUI, false → HEADLESS.
+         * 3. Neither set → null (let [BrowserSettings] apply its default).
+         */
+        private fun parseDisplayMode(capabilities: Map<String, Any?>?): DisplayMode? {
+            // 1. Explicit displayMode string takes priority.
+            val displayMode = capabilities?.get("displayMode")?.toString()
+                ?.takeIf { it.isNotEmpty() }
+                ?.let { DisplayMode.fromString(it) }
+            if (displayMode != null) return displayMode
+
+            // 2. Fall back to the headed boolean flag.
+            if (capabilities?.containsKey("headed") == true) {
+                val headed = when (val v = capabilities["headed"]) {
+                    is Boolean -> v
+                    else -> v?.toString()?.toBooleanStrictOrNull() ?: return null
+                }
+                return if (headed) DisplayMode.GUI else DisplayMode.HEADLESS
+            }
+
+            // 3. Neither key is present — let BrowserSettings apply its default.
+            return null
         }
 
         private fun parseInteractLevel(capabilities: Map<String, Any?>?): InteractLevel? {

@@ -4343,6 +4343,37 @@ mod tests {
     }
 
     #[test]
+    fn build_open_session_capabilities_headed_true() {
+        let caps = build_open_session_capabilities_with_test_mode(
+            &json!({
+                "headed": true,
+            }),
+            false,
+        );
+
+        assert_eq!(caps["headed"], json!(true));
+    }
+
+    #[test]
+    fn build_open_session_capabilities_headless() {
+        let caps = build_open_session_capabilities_with_test_mode(
+            &json!({
+                "headed": false,
+            }),
+            false,
+        );
+
+        assert_eq!(caps["headed"], json!(false));
+    }
+
+    #[test]
+    fn build_open_session_capabilities_without_headed_does_not_set_key() {
+        let caps = build_open_session_capabilities_with_test_mode(&json!({}), false);
+
+        assert!(caps.get("headed").is_none());
+    }
+
+    #[test]
     fn build_open_session_request_defaults_to_default_session_id() {
         let request = build_open_session_request(None, None);
 

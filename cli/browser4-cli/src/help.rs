@@ -202,6 +202,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli open https://browser4.io/".to_string());
         lines.push("  browser4-cli open --headed https://browser4.io/".to_string());
+        lines.push("  browser4-cli open --headless https://browser4.io/".to_string());
     }
 
     if cmd.name == "install" {

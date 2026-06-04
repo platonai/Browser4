@@ -196,7 +196,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             args: &[ArgDef { name: "url", description: "The URL to navigate to", optional: true }],
             options: &[
                 OptionDef { name: "headed", description: "Run browser in headed mode", is_bool: true },
-                OptionDef { name: "persistent", description: "Use persistent browser profile", is_bool: true },
+                OptionDef { name: "headless", description: "Run browser in headless mode", is_bool: true },
                 OptionDef { name: "profile", description: "Path to browser profile directory", is_bool: false },
                 OptionDef { name: "profile-mode", description: "Browser profile mode (temporary, sequential, default)", is_bool: false },
                 OptionDef { name: "interact-level", description: "Interaction level for the new session (for example FASTEST, FAST, DEFAULT)", is_bool: false },
@@ -211,11 +211,11 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_params_fn: |args| {
                 let url = get_opt_str(args, "url").unwrap_or("about:blank");
                 let mut params = json!({ "url": url });
-                if let Some(h) = get_bool(args, "headed") {
-                    params["headed"] = json!(h);
-                }
-                if let Some(p) = get_bool(args, "persistent") {
-                    params["persistent"] = json!(p);
+                // --headless takes priority over --headed when both are passed.
+                if let Some(true) = get_bool(args, "headless") {
+                    params["headed"] = json!(false);
+                } else if let Some(true) = get_bool(args, "headed") {
+                    params["headed"] = json!(true);
                 }
                 if let Some(pf) = get_opt_str(args, "profile") {
                     params["profilePath"] = json!(pf);
@@ -1816,6 +1816,54 @@ mod tests {
         let params = (cmd.tool_params_fn)(&args);
 
         assert_eq!(params["interactLevel"], "FASTEST");
+    }
+
+    #[test]
+    fn test_open_params_with_headed() {
+        let map = commands_map();
+        let cmd = map.get("open").unwrap();
+        let mut args = HashMap::new();
+        args.insert("headed".to_string(), json!(true));
+
+        let params = (cmd.tool_params_fn)(&args);
+
+        assert_eq!(params["headed"], true);
+    }
+
+    #[test]
+    fn test_open_params_with_headless() {
+        let map = commands_map();
+        let cmd = map.get("open").unwrap();
+        let mut args = HashMap::new();
+        args.insert("headless".to_string(), json!(true));
+
+        let params = (cmd.tool_params_fn)(&args);
+
+        assert_eq!(params["headed"], false);
+    }
+
+    #[test]
+    fn test_open_params_headless_takes_priority_over_headed() {
+        let map = commands_map();
+        let cmd = map.get("open").unwrap();
+        let mut args = HashMap::new();
+        args.insert("headed".to_string(), json!(true));
+        args.insert("headless".to_string(), json!(true));
+
+        let params = (cmd.tool_params_fn)(&args);
+
+        assert_eq!(params["headed"], false);
+    }
+
+    #[test]
+    fn test_open_params_without_headed_or_headless_does_not_set_key() {
+        let map = commands_map();
+        let cmd = map.get("open").unwrap();
+        let args = HashMap::new();
+
+        let params = (cmd.tool_params_fn)(&args);
+
+        assert!(params.get("headed").is_none());
     }
 
     #[test]
