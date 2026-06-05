@@ -1905,6 +1905,115 @@ pub(super) fn test_swarm_submission_commands(ctx: &mut E2ECtx) {
     assert_eq!(snapshot.result_queries, vec!["swarm-job-42".to_string()]);
 }
 
+pub(super) fn test_swarm_query_commands(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let mock_server = start_mock_swarm_session(ctx);
+    assert_swarm_session_call(&mock_server);
+
+    let seed_file = ctx.workspace_dir.join("swarm-query-seeds.txt");
+    fs::write(
+        &seed_file,
+        b"# seed urls for query\nhttps://example.com/query-seed-1\n\nhttps://example.com/query-seed-2\n",
+    )
+    .expect("write seed file failed");
+    let seed_file_arg = format!("--seed-file={}", seed_file.to_string_lossy());
+
+    let query_sql = "select dom_base_uri(dom) as url from load_and_select('@url', ':root')";
+
+    let swarm_query_result = run_command(
+        ctx,
+        &[
+            "swarm",
+            "query",
+            "https://example.com/direct-query",
+            "--sql",
+            query_sql,
+            &seed_file_arg,
+            "--deadline=2026-03-30T00:00:00Z",
+            "--expires=1d",
+            "--refresh",
+        ],
+    );
+    assert!(
+        swarm_query_result
+            .stdout
+            .contains("Query Submitted: https://example.com/direct-query"),
+        "Expected direct URL query output in:\n{}",
+        swarm_query_result.stdout
+    );
+    assert!(
+        swarm_query_result.stdout.contains("3 URL(s) queried."),
+        "Expected aggregate query count in:\n{}",
+        swarm_query_result.stdout
+    );
+
+    let swarm_status_result = run_command(ctx, &["swarm", "status", "swarm-job-42"]);
+    let swarm_status_payload = strip_snapshot_output(&swarm_status_result.stdout);
+    assert!(
+        swarm_status_payload.contains(r#""id":"swarm-job-42""#),
+        "Expected query status payload to contain the task id in:\n{}",
+        swarm_status_result.stdout
+    );
+    assert!(
+        swarm_status_payload.contains(r#""isDone":false"#),
+        "Expected query status payload to remain in-progress in:\n{}",
+        swarm_status_result.stdout
+    );
+
+    let swarm_result_result = run_command(ctx, &["swarm", "result", "swarm-job-42"]);
+    let swarm_result_payload = strip_snapshot_output(&swarm_result_result.stdout);
+    assert!(
+        swarm_result_payload.contains(r#""id":"swarm-job-42""#),
+        "Expected query result payload to contain the task id in:\n{}",
+        swarm_result_result.stdout
+    );
+    assert!(
+        swarm_result_payload.contains(r#""isDone":true"#),
+        "Expected query result payload to be done in:\n{}",
+        swarm_result_result.stdout
+    );
+    assert!(
+        swarm_result_payload.contains(
+            r#""resultSet":[{"url":"https://mock.browser4.local/result/swarm-job-42"}]"#
+        ),
+        "Expected query result payload to contain a resultSet in:\n{}",
+        swarm_result_result.stdout
+    );
+
+    let snapshot = mock_server.snapshot();
+    // Verify that the X-SQL queries were submitted via /api/swarm/query (REST),
+    // not through MCP command_* calls.
+    assert_eq!(
+        snapshot.swarm_queries.len(),
+        3,
+        "Expected three swarm query submissions (1 direct + 2 seed), got {:?}",
+        snapshot.swarm_queries
+    );
+    // Each query payload should contain url, args, and query fields.
+    for (i, query) in snapshot.swarm_queries.iter().enumerate() {
+        assert!(
+            query.get("url").and_then(|v| v.as_str()).is_some(),
+            "Query {i} missing url field: {query}"
+        );
+        assert!(
+            query.get("query").and_then(|v| v.as_str()) == Some(query_sql),
+            "Query {i} missing or mismatched query field: {query}"
+        );
+    }
+    assert!(
+        snapshot
+            .tool_calls
+            .iter()
+            .all(|call| call.tool != "command_run"
+                && call.tool != "command_status"
+                && call.tool != "command_result"),
+        "Expected swarm query/status/result to avoid MCP command_* calls: {:?}",
+        snapshot.tool_calls
+    );
+    assert_eq!(snapshot.status_queries, vec!["swarm-job-42".to_string()]);
+    assert_eq!(snapshot.result_queries, vec!["swarm-job-42".to_string()]);
+}
+
 pub(super) fn test_swarm_command_help_and_validation(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
 

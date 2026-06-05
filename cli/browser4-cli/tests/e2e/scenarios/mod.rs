@@ -505,6 +505,16 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         level: ScenarioLevel::Basic,
     },
     ScenarioDef {
+        name: "test_e2e_swarm_query_commands",
+        short_name: "test_swarm_query_commands",
+        requires_browser4: false,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: mock_server::test_swarm_query_commands,
+        group: Some("swarm"),
+        level: ScenarioLevel::Basic,
+    },
+    ScenarioDef {
         name: "test_e2e_swarm_command_help_and_validation",
         short_name: "test_swarm_command_help_and_validation",
         requires_browser4: false,

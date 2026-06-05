@@ -809,6 +809,12 @@ pub(super) fn test_eval_return_types(ctx: &mut E2ECtx) {
     // The server may return either valid JSON ({"answer":42,"name":"eval-test"})
     // or a non-JSON representation ({answer=42, name=eval-test}) depending on
     // how the browser serializes JavaScript objects.
+    //
+    // TODO(server): The Browser4 server should consistently return valid JSON
+    // for JavaScript objects evaluated via browser_evaluate.  Currently it
+    // sometimes emits a Java-style Map.toString() representation (keys
+    // unquoted, = instead of :).  Once fixed server-side, this test should
+    // revert to requiring strict JSON parsing.
     let obj = eval_text(ctx, "({answer: 42, name: 'eval-test'})");
     let trimmed_obj = obj.trim();
     // Try JSON first; if that fails, verify the result contains the expected values.
