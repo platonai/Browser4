@@ -2321,12 +2321,12 @@ mod tests {
 
     fn create_browser4_root(tmp: &TempDir) -> PathBuf {
         let root = tmp.path().join("Browser4");
-        create_dir_all(root.join("sdks").join("browser4-cli")).unwrap();
+        create_dir_all(root.join("cli").join("browser4-cli")).unwrap();
         write(root.join("ROOT.md"), "# Browser4\n").unwrap();
         write(root.join("VERSION"), "0.1.0\n").unwrap();
         write(root.join("pom.xml"), "<project />").unwrap();
         write(
-            root.join("sdks").join("browser4-cli").join("Cargo.toml"),
+            root.join("cli").join("browser4-cli").join("Cargo.toml"),
             "[package]\nname = \"browser4-cli\"\n",
         )
         .unwrap();
@@ -2344,7 +2344,7 @@ mod tests {
     fn test_find_browser4_root_prefers_invocation_env_dir() {
         let tmp = test_temp_dir();
         let root = create_browser4_root(&tmp);
-        let nested = root.join("sdks").join("browser4-cli");
+        let nested = root.join("cli").join("browser4-cli");
 
         unsafe {
             env::set_var(ROOT_SEARCH_START_DIR_ENV, nested.as_os_str());
@@ -2361,7 +2361,7 @@ mod tests {
     fn test_find_browser4_root_from_nested_cli_dir() {
         let tmp = test_temp_dir();
         let root = create_browser4_root(&tmp);
-        let nested = root.join("sdks").join("browser4-cli").join("src");
+        let nested = root.join("cli").join("browser4-cli").join("src");
         create_dir_all(&nested).unwrap();
 
         assert_eq!(find_browser4_root_from(&nested, false), Some(root));
@@ -2731,7 +2731,7 @@ mod tests {
         let tmp = test_temp_dir();
         let root = tmp.path().join("Browser4");
         create_dir_all(root.join("browser4-apps").join("browser4-standalone")).unwrap();
-        create_dir_all(root.join("sdks").join("browser4-cli")).unwrap();
+        create_dir_all(root.join("cli").join("browser4-cli")).unwrap();
         write(root.join("pom.xml"), "<project />").unwrap();
         write(
             root.join("browser4-apps")
@@ -2741,7 +2741,7 @@ mod tests {
         )
         .unwrap();
         write(
-            root.join("sdks").join("browser4-cli").join("Cargo.toml"),
+            root.join("cli").join("browser4-cli").join("Cargo.toml"),
             "[package]\nname = \"browser4-cli\"\n",
         )
         .unwrap();
@@ -2753,7 +2753,7 @@ mod tests {
         let root = parent.join("Browser4");
         create_dir_all(&root).unwrap();
         create_dir_all(root.join("browser4-apps").join("browser4-standalone")).unwrap();
-        create_dir_all(root.join("sdks").join("browser4-cli")).unwrap();
+        create_dir_all(root.join("cli").join("browser4-cli")).unwrap();
         write(root.join("ROOT.md"), "# Browser4\n").unwrap();
         write(root.join("VERSION"), "0.1.0\n").unwrap();
         write(root.join("pom.xml"), "<project />").unwrap();
@@ -2765,7 +2765,7 @@ mod tests {
         )
         .unwrap();
         write(
-            root.join("sdks").join("browser4-cli").join("Cargo.toml"),
+            root.join("cli").join("browser4-cli").join("Cargo.toml"),
             "[package]\nname = \"browser4-cli\"\n",
         )
         .unwrap();

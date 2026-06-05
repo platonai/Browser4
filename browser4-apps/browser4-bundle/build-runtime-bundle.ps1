@@ -414,7 +414,8 @@ if ($LASTEXITCODE -ne 0) { throw "Core modules install failed with exit code $LA
 if (-not (Test-Path $JarPath)) {
     Write-Host "Bundle JAR not found, building from source ..." -ForegroundColor Yellow
     Write-Host "  Building $bundleModule ..."
-    $bundleArgs = @('package', '-pl', $bundleModule, '-am', '-Passet-bundle', '-DskipTests', '-Dmaven.javadoc.skip=true', '-q')
+    # Try again
+    $bundleArgs = @('install', '-pl', $bundleModule, '-am', '-Passet-bundle', '-DskipTests', '-Dmaven.javadoc.skip=true', '-q')
     & $mvnCmd @bundleArgs
     if ($LASTEXITCODE -ne 0) { throw "Bundle JAR build failed with exit code $LASTEXITCODE" }
 
