@@ -87,7 +87,23 @@ const LAST_FAILED_SCENARIOS_FILE: &str = "last-failed-scenarios.json";
 // ---------------------------------------------------------------------------
 
 fn cli_binary() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_browser4-cli"))
+    let path = PathBuf::from(env!("CARGO_BIN_EXE_browser4-cli"));
+    if path.exists() {
+        return path;
+    }
+    // The target directory may have been copied from another checkout
+    // (e.g. when reusing a build cache across worktrees or directory
+    // renames).  Fall back to a path derived from the running test
+    // binary's location.
+    let exe =
+        std::env::current_exe().expect("failed to determine current executable path");
+    // Test binary is at:  target/{profile}/deps/e2e-<hash>
+    // Main binary is at:   target/{profile}/browser4-cli
+    let target_dir = exe
+        .parent()                    // deps/
+        .and_then(|p| p.parent())   // debug/ or release/
+        .expect("failed to find target directory from test binary path");
+    target_dir.join("browser4-cli")
 }
 
 /// Returns the external Browser4 service URL if one has been provided via
@@ -129,7 +145,31 @@ const OTHER_FIXTURE_FILE: &str = "mcp-tool-controller-other-fixture.html";
 const FORM_FIXTURE_FILE: &str = "mcp-tool-controller-form-fixture.html";
 
 fn load_html_fixture(file_name: &str) -> String {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    let path = fixture_path(env!("CARGO_MANIFEST_DIR"), file_name);
+    if path.exists() {
+        return fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!(
+                "failed to load HTML fixture {file_name} from {}: {error}",
+                path.display()
+            )
+        });
+    }
+    // The manifest directory baked in at compile time may point to a
+    // different checkout when the target directory was copied as a build
+    // cache.  Fall back to the current working directory.
+    let cwd = std::env::current_dir().expect("failed to get current directory");
+    let fallback = fixture_path(&cwd.to_string_lossy(), file_name);
+    fs::read_to_string(&fallback).unwrap_or_else(|error| {
+        panic!(
+            "failed to load HTML fixture {file_name} from {} (also tried {}): {error}",
+            fallback.display(),
+            path.display()
+        )
+    })
+}
+
+fn fixture_path(base: &str, file_name: &str) -> PathBuf {
+    PathBuf::from(base)
         .join("..")
         .join("..")
         .join("browser4-tests")
@@ -139,14 +179,7 @@ fn load_html_fixture(file_name: &str) -> String {
         .join("resources")
         .join("static")
         .join("b4")
-        .join(file_name);
-
-    fs::read_to_string(&path).unwrap_or_else(|error| {
-        panic!(
-            "failed to load HTML fixture {file_name} from {}: {error}",
-            path.display()
-        )
-    })
+        .join(file_name)
 }
 
 // ---------------------------------------------------------------------------
