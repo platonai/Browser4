@@ -53,6 +53,7 @@ for ($attempt = 1; $attempt -le $MaxPollAttempts; $attempt++) {
     $lastStatusText = ($statusOutput | Out-String).Trim()
     $lastStatusText
 
+
     $status = Get-JsonFromOutput $lastStatusText
     if (-not $status) {
         Write-Host "Status poll ${attempt}/${MaxPollAttempts}: no valid JSON in output, retrying..."
