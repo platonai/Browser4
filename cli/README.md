@@ -93,9 +93,9 @@ The tables below mirror the commands surfaced by the global `browser4-cli help` 
 
 | Command | Description |
 |---|---|
-| `open [url]` | Open or switch to a browser session (optionally navigate to URL) |
+| `open [url]` | Open or switch to a browser session. Supports `--headed` (force visible window) and `--headless` (force headless). |
 | `close` | Close the active session |
-| `goto <url>` | Navigate to a URL using the current active session |
+| `goto <url>` | Navigate to a URL, auto-opening or refreshing the session if needed |
 | `click <ref> [button]` | Click an element |
 | `dblclick <ref> [button]` | Double-click an element |
 | `type <text> [ref]` | Type text into the focused element or an optional target element |
@@ -138,11 +138,11 @@ The tables below mirror the commands surfaced by the global `browser4-cli help` 
 | `mouseup [button]` | Release mouse button |
 | `mousewheel <dx> <dy>` | Scroll the mouse wheel |
 
-#### Save as
+#### Screenshots
 
 | Command | Description |
 |---|---|
-| `screenshot [ref]` | Take a screenshot |
+| `screenshot [ref]` | Take a screenshot (optionally of a specific element) |
 
 #### Tabs
 
@@ -191,8 +191,8 @@ Use `close-all` for session cleanup when you want to keep the current Browser4 s
 
 | Command | Description |
 |---|---|
-| `install` | Download the self-contained Browser4 runtime bundle (dependency jars + bundled JRE + launcher scripts) from GitHub Releases |
-| `upgrade` | Upgrade the Browser4 runtime bundle to the latest version (or a specified release tag) |
+| `install` | Download the Browser4 runtime bundle. Supports `--tag=<version>` to pin a release and `--force` to reinstall even when already present. |
+| `upgrade` | Upgrade the Browser4 runtime bundle to the latest version or a specified `--tag` |
 | `stop` | Kill the Browser4 backend after closing all sessions |
 | `status` | Check whether the Browser4 backend is reachable and healthy |
 
@@ -200,6 +200,9 @@ Use `close-all` for session cleanup when you want to keep the current Browser4 s
 distribution that includes all dependency jars, a minimal `jlink`-built JRE, and
 platform launcher scripts. Neither requires `cargo` or a Rust toolchain; the runtime
 is a Java application downloaded from GitHub Releases.
+
+Use `--tag=<version>` to pin a specific release (e.g. `--tag=v4.9.3`). Use `--force`
+to reinstall even when the same version is already present.
 
 When a local Browser4 checkout is detected with the `browser4-bundle` module present,
 `install` and `upgrade` auto-build the runtime bundle from source (via Maven) instead
@@ -446,10 +449,14 @@ After each command that modifies browser state, the CLI automatically:
 ## Examples
 
 ```shell
-# Open a new browser window
+# Open a new browser window (defaults to headed)
 browser4-cli open
 
-# Navigate to a page with the current active session
+# Open in headed or headless mode
+browser4-cli open --headed https://browser4.io
+browser4-cli open --headless https://browser4.io
+
+# Navigate to a page — auto-opens a session if none is active
 browser4-cli goto https://playwright.dev
 
 # Inspect the page — note the eN labels on interactive nodes
