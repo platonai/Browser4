@@ -1,5 +1,6 @@
 package ai.platon.pulsar.common
 
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ch.qos.logback.classic.PatternLayout
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.ConsoleAppender
@@ -73,14 +74,9 @@ open class StructuredLogger(
      */
     protected fun formatAsJson(data: Map<String, Any>): String {
         return try {
-            JsonParser.parseString(
-                data.entries.joinToString(",", "{", "}") { (k, v) ->
-                    """"$k":${formatJsonValue(v)}"""
-                }
-            ).toString()
-        } catch (e: Exception) {
-            // Fallback to simple string representation
-            data.toString()
+            return pulsarObjectMapper().writeValueAsString(data)
+        } catch (_: Exception) {
+            """{"error": "Failed to serialize object."}"""
         }
     }
 
