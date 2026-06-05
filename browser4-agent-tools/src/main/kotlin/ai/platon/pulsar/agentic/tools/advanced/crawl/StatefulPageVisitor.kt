@@ -131,7 +131,7 @@ class StatefulPageVisitor(
                     try {
                         serverSideEventHandlers.eventFlow.collect { event ->
                             status.emitEvent(event.eventType)
-                            logger.info("Collected event {} for command {}", event.eventType, status.id)
+                            logger.debug("Collected event {} for command {}", event.eventType, status.id)
                         }
                     } catch (e: CancellationException) {
                         logger.debug("Event collector cancelled for command {}", status.id)
