@@ -694,6 +694,18 @@ $recommendedModules = @(
     'java.management',
     'jdk.crypto.ec'
 )
+# On Linux and macOS the per-JAR jdeps fallback can miss modules that are
+# only reachable through reflective class-initialisation chains (e.g.
+# javax.naming.NamingException via logback → slf4j → commons-logging →
+# SpringApplication.<clinit>).  Add them explicitly so a jlink image built
+# from the fallback path can still boot.
+if (-not (Get-IsWindows)) {
+    $recommendedModules += @(
+        'java.naming',
+        'java.desktop',
+        'java.security.jgss'
+    )
+}
 $excludedModules = @(
     'jdk.attach',
     'jdk.jdi',
