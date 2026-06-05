@@ -1,29 +1,30 @@
 package ai.platon.pulsar.common
 
+import ai.platon.pulsar.common.serialize.json.Pson
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import com.google.common.collect.Sets
-import com.google.gson.Gson
-import com.google.gson.GsonBuilder
-import kotlin.test.*
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /**
  * Created by Vincent on 17-1-14.
  */
 class TestJson {
     var urls = arrayOf(
-            "http://sz.sxrb.com/sxxww/dspd/szpd/bwch/",
-            "http://sz.sxrb.com/sxxww/dspd/szpd/fcjjjc/",
-            "http://sz.sxrb.com/sxxww/dspd/szpd/hydt/",
-            "http://sz.sxrb.com/sxxww/dspd/szpd/jykj_0/",
-            "http://sz.sxrb.com/sxxww/dspd/szpd/qcjt/",
-            "http://sz.sxrb.com/sxxww/dspd/szpd/wsjk/",
-            "http://sz.sxrb.com/sxxww/dspd/szpd/wyss/",
-            "http://sz.sxrb.com/sxxww/dspd/szpd/zjaq/"
+        "http://sz.sxrb.com/sxxww/dspd/szpd/bwch/",
+        "http://sz.sxrb.com/sxxww/dspd/szpd/fcjjjc/",
+        "http://sz.sxrb.com/sxxww/dspd/szpd/hydt/",
+        "http://sz.sxrb.com/sxxww/dspd/szpd/jykj_0/",
+        "http://sz.sxrb.com/sxxww/dspd/szpd/qcjt/",
+        "http://sz.sxrb.com/sxxww/dspd/szpd/wsjk/",
+        "http://sz.sxrb.com/sxxww/dspd/szpd/wyss/",
+        "http://sz.sxrb.com/sxxww/dspd/szpd/zjaq/"
     )
 
     @Test
     fun testCollection() {
-        val gson = GsonBuilder().create()
-        val json = gson.toJson(Sets.newHashSet(*urls))
+        val json = Pson.toJson(Sets.newHashSet(*urls))
         urls.forEach { url ->
             assertTrue(url) { json.contains(url) }
         }
@@ -32,8 +33,7 @@ class TestJson {
     @Test
     fun testRawString() {
         val seed = "http://www.sxrb.com/sxxww/\t-i pt1s -p"
-        val gson = GsonBuilder().create()
-        assertEquals("\"http://www.sxrb.com/sxxww/\\t-i pt1s -p\"", gson.toJson(seed))
+        assertEquals("\"http://www.sxrb.com/sxxww/\\t-i pt1s -p\"", Pson.toJson(seed))
     }
 
     @Test
@@ -49,7 +49,7 @@ class TestJson {
                 ["/most-wished-for/",  100_000, 5, "x-asin-most-wished-for.sql", "asin_most_wished_for_sync"]
             ]
         """.trimIndent()
-        val array = Gson().fromJson(rules, Array<Array<Any>>::class.java)
+        val array = pulsarObjectMapper().readValue(rules, Array<Array<Any>>::class.java)
         assertTrue { array.size == 7 }
         assertEquals("500_000", array[0][1])
     }

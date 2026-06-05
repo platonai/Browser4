@@ -8,7 +8,7 @@ import ai.platon.pulsar.browser.impl.NodeRef
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.math.geometric.RectD
-import com.google.gson.Gson
+import ai.platon.pulsar.common.serialize.json.Pson
 import kotlin.math.roundToInt
 
 class ScreenshotHandler(
@@ -140,7 +140,7 @@ class ScreenshotHandler(
         val pageY = viewport.pageY
 
         if (debugLevel > 50) {
-            println(Gson().toJson(viewport))
+            println(Pson.toJson(viewport))
         }
 
         return NodeClip(node, pageX, pageY, rect)

@@ -1,12 +1,12 @@
 package ai.platon.pulsar.ql.h2.udfs
 
 import ai.platon.pulsar.common.RegexExtractor
+import ai.platon.pulsar.common.serialize.json.Pson
 import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.ql.common.annotation.UDFGroup
 import ai.platon.pulsar.ql.common.annotation.UDFunction
 import ai.platon.pulsar.ql.common.types.ValueStringJSON
 import com.google.common.annotations.Beta
-import com.google.gson.Gson
 import org.apache.commons.lang3.StringUtils
 import org.h2.value.*
 import java.sql.ResultSet
@@ -88,7 +88,7 @@ object CommonFunctions {
             map[k] = v
         }
 
-        return Gson().toJson(map)
+        return Pson.toJson(map)
     }
 
     @Beta

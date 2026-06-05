@@ -2,17 +2,16 @@ package ai.platon.pulsar.ql.h2.utils
 
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.getLogger
+import ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
-import ai.platon.pulsar.ql.common.PulsarDataTypesHandler
 import ai.platon.pulsar.ql.common.ResultSets
 import ai.platon.pulsar.ql.common.types.ValueDom
 import ai.platon.pulsar.ql.h2.addColumn
-import com.google.gson.GsonBuilder
+import ai.platon.pulsar.ql.h2.utils.ResultSetUtils.getTextEntityFromCurrentRecord
 import org.h2.tools.SimpleResultSet
 import org.h2.value.DataType
 import org.h2.value.Value
 import java.sql.*
-import java.util.*
 
 /**
  * Only for small result sets
@@ -260,11 +259,11 @@ object ResultSetUtils {
     @Throws(SQLException::class)
     fun toJson(resultSet: ResultSet, prettyPrinting: Boolean = false): String {
         val entities = getTextEntitiesFromResultSet(resultSet)
-        val builder = GsonBuilder().serializeNulls()
-        if (prettyPrinting) {
-            builder.setPrettyPrinting()
+        return if (prettyPrinting) {
+            prettyPulsarObjectMapper().writeValueAsString(entities)
+        } else {
+            pulsarObjectMapper().writeValueAsString(entities)
         }
-        return builder.create().toJson(entities)
     }
 
     @Throws(SQLException::class)
@@ -276,11 +275,12 @@ object ResultSetUtils {
                 "columnCount" to it.metaData.columnCount
             )
         }
-        val builder = GsonBuilder().serializeNulls()
-        if (prettyPrinting) {
-            builder.setPrettyPrinting()
+
+        return if (prettyPrinting) {
+            prettyPulsarObjectMapper().writeValueAsString(entities)
+        } else {
+            pulsarObjectMapper().writeValueAsString(entities)
         }
-        return builder.create().toJson(entities)
     }
 
     /**

@@ -5,9 +5,9 @@ import ai.platon.pulsar.chrome.util.ChromeOptions
 import ai.platon.pulsar.chrome.util.LauncherOptions
 import ai.platon.pulsar.common.browser.BrowserFiles
 import ai.platon.pulsar.common.browser.BrowserFiles.CDP_URL_FILE_NAME
+import ai.platon.pulsar.common.serialize.json.Pson
 import ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper
 import ai.platon.pulsar.common.sleepSeconds
-import com.google.gson.Gson
 import kotlinx.coroutines.runBlocking
 import java.nio.file.Files
 import kotlin.test.Test
@@ -51,7 +51,7 @@ class ChromeImplLauncherTest {
 
             val version = chrome.version
             val tab = chrome.createTab("https://www.baidu.com")
-            val versionString = Gson().toJson(chrome.version)
+            val versionString = Pson.toJson(chrome.version)
             assertTrue(!chrome.version.browser.isNullOrBlank())
             assertTrue(versionString.contains("Mozilla"))
 

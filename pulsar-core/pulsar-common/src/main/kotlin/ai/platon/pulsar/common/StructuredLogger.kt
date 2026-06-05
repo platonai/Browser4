@@ -3,7 +3,6 @@ package ai.platon.pulsar.common
 import ch.qos.logback.classic.PatternLayout
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.ConsoleAppender
-import com.google.gson.JsonParser
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import java.time.Instant

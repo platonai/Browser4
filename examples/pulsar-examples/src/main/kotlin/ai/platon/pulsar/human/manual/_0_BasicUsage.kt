@@ -1,8 +1,8 @@
 package ai.platon.pulsar.human.manual
 
+import ai.platon.pulsar.common.serialize.json.Pson
 import ai.platon.pulsar.skeleton.PulsarSettings
 import ai.platon.pulsar.skeleton.context.PulsarContexts
-import com.google.gson.Gson
 import kotlinx.coroutines.runBlocking
 
 /**
@@ -206,16 +206,15 @@ fun main() {
     // AI Note: Print URLs of all loaded out-pages
     println(pages.map { it.url })
 
-    val gson = Gson()
     println("== fields")
     // AI Note: Convert scraped fields to JSON for easy inspection
-    println(gson.toJson(fields))
+    println(Pson.toJson(fields))
 
     println("== fields2")
-    println(gson.toJson(fields2))
+    println(Pson.toJson(fields2))
 
     println("== fields3")
-    println(gson.toJson(fields3))
+    println(Pson.toJson(fields3))
 
     // =====================================================================
     // STEP 11: Graceful Shutdown

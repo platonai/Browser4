@@ -3,7 +3,6 @@ package ai.platon.pulsar.persist.model
 import ai.platon.pulsar.common.config.AppConstants.DEFAULT_VIEWPORT
 import ai.platon.pulsar.persist.gora.generated.GActiveDOMStat
 import ai.platon.pulsar.persist.gora.generated.GActiveDOMStatus
-import com.google.gson.Gson
 
 /**
  * Records the status of a DOM in a real browser.
@@ -134,17 +133,8 @@ data class ActiveDOMUrls(
      */
     var referrer: String = "",
 ) {
-    fun toJson(): String{
-        return gson.toJson(this)
-    }
-
     companion object {
-        private val gson = Gson()
         val DEFAULT = ActiveDOMUrls()
-
-        fun fromJson(json: String): ActiveDOMUrls {
-            return gson.fromJson(json, ActiveDOMUrls::class.java)
-        }
     }
 }
 
@@ -177,17 +167,8 @@ data class ActiveDOMStatTrace(
                 st.n, st.scroll, st.st, st.r, st.idl, s)
     }
 
-    fun toJson(): String{
-        return gson.toJson(this)
-    }
-
     companion object {
-        private val gson = Gson()
         val DEFAULT = ActiveDOMStatTrace()
-
-        fun fromJson(json: String): ActiveDOMStatTrace {
-            return gson.fromJson(json, ActiveDOMStatTrace::class.java)
-        }
     }
 }
 
@@ -214,17 +195,8 @@ data class ActiveDOMMessage(
     var urls: ActiveDOMUrls? = null,
     var metadata: ActiveDOMMetadata? = null,
 ) {
-    fun toJson(): String {
-        return gson.toJson(this)
-    }
-
     companion object {
-        private val gson = Gson()
         val DEFAULT = ActiveDOMMessage()
-
-        fun fromJson(json: String): ActiveDOMMessage {
-            return gson.fromJson(json, ActiveDOMMessage::class.java)
-        }
     }
 }
 
