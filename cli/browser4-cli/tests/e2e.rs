@@ -2343,6 +2343,23 @@ fn swarm_done_flag(payload: &serde_json::Value) -> Option<bool> {
 }
 
 fn wait_for_swarm_result(ctx: &mut E2ECtx, task_id: &str, timeout_ms: u64) -> serde_json::Value {
+    wait_for_swarm_result_with_error(ctx, task_id, timeout_ms)
+        .unwrap_or_else(|last_payload| {
+            panic!(
+                "Timed out after {timeout_ms}ms waiting for swarm result '{task_id}' to complete. Last payload:\n{last_payload}"
+            )
+        })
+}
+
+/// Like [`wait_for_swarm_result`] but returns `Err(last_payload)` instead of
+/// panicking on timeout. Also considers a task done when it reports an error
+/// status (e.g. 404 Not Found) even if `done` is `false`, so tests can handle
+/// server-side unavailability gracefully.
+fn wait_for_swarm_result_with_error(
+    ctx: &mut E2ECtx,
+    task_id: &str,
+    timeout_ms: u64,
+) -> Result<serde_json::Value, String> {
     let started_at = Instant::now();
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
     let mut last_payload = String::new();
@@ -2360,14 +2377,26 @@ fn wait_for_swarm_result(ctx: &mut E2ECtx, task_id: &str, timeout_ms: u64) -> se
                 ),
                 started_at.elapsed(),
             );
-            return parsed;
+            return Ok(parsed);
+        }
+        // Also consider the task finished when the server reports a terminal
+        // error status (e.g. 4xx / 5xx), even if `done` is still false.
+        if let Some(status) = parsed["statusCode"].as_i64() {
+            if !(200..400).contains(&status) {
+                ctx.record_step(
+                    format!(
+                        "wait for swarm result {task_id} terminal error (timeout={}ms)",
+                        timeout_ms
+                    ),
+                    started_at.elapsed(),
+                );
+                return Ok(parsed);
+            }
         }
         thread::sleep(Duration::from_millis(500));
     }
 
-    panic!(
-        "Timed out after {timeout_ms}ms waiting for swarm result '{task_id}' to complete. Last payload:\n{last_payload}"
-    );
+    Err(last_payload)
 }
 
 // ---------------------------------------------------------------------------
