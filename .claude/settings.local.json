@@ -13,7 +13,11 @@
       "Bash(git checkout *)",
       "Bash(git restore *)",
       "Bash(git add *)",
-      "Bash(git commit -m 'chore: add git permissions and e2e test runner improvements *)"
+      "Bash(git commit -m 'chore: add git permissions and e2e test runner improvements *)",
+      "Bash(xargs grep -l \"upgrade\")",
+      "Bash(grep -v \"fn \\\\|let \\\\|\\\\.state_dir\\\\|//\\\\|use \")",
+      "Bash(grep -v \"^.*//\")",
+      "Bash(git commit -m 'refactor\\(cli\\): separate runtime install from CLI state, add versioned layout *)"
     ]
   }
 }
