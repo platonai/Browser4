@@ -4,39 +4,15 @@ This directory contains scripts for building, running, testing, and maintaining 
 
 ## Root Scripts
 
-### `browser4.ps1`, `browser4.sh`
-
-Start the Browser4 server (Agentic Service).
-- Copies the built artifact from `browser4-app/browser4-agents/target/` to the root `target/` directory.
-- Runs the application using `java -jar`.
-- **Note:** You must build the project first (e.g., using `build` or `build-run`).
-
 ### `build.ps1`, `build.sh`
 
-Build the project using Maven.
-- Defaults to `mvnw install -DskipTests`.
+Build the project using Maven and Cargo.
+- Runs `./mvnw install` (Maven) + `cargo build --release` (CLI).
+- Defaults to `-DskipTests`.
 - Options:
     - `-clean`: Run `mvn clean` before building.
-    - `-test`: Enable tests (skips tests by default).
+    - `-test`: Enable tests (skipped by default).
 - Accepts standard Maven arguments (e.g., `-pl`, `-am`).
-
-### `build-run.ps1`, `build-run.sh`
-
-Build the project and then start the Browser4 server.
-- Combines `build` and `browser4` scripts.
-
-### `open-chrome.ps1`, `open-chrome.sh`
-
-Launch Google Chrome with a dedicated user data directory for Browser4.
-- **Default**: Compiles and runs `ai.platon.pulsar.tools.OpenChromeKt` using Maven.
-- **Fallback**: Launches Chrome executable directly if the Kotlin launcher fails.
-- **`--native`** (Unix) / **`-Native`** (Windows): Force native Chrome launch immediately.
-- Useful for debugging or maintaining a persistent browser session (`~/.browser4/browser/chrome/default/pulsar_chrome`).
-
-### `run-examples.ps1`
-
-Run Browser4 examples (`ai.platon.pulsar.examples.agent.Browser4AgentKt`).
-- Requires the project to be built or will attempt to run using `mvnw exec:java`.
 
 ### `test.ps1`, `test.sh`
 
@@ -51,7 +27,7 @@ Comprehensive test runner for the current Maven reactors plus the Browser4 CLI p
 - `fast`: Run fast unit tests (default)
 - `it`: Run integration tests
 - `e2e`: Run end-to-end tests
-- `mocksiteboot`: Launch `browser4-rest-tests`' standalone mock site server via `spring-boot:run`
+- `mock-site`: Launch `browser4-rest-tests`' standalone mock site server via `spring-boot:run` (`mocksite` and `mocksiteboot` are accepted as legacy aliases)
 - `rest`: Run REST module tests
 - `skills`: Run skills module tests
 - `mcp`: Run MCP module tests
@@ -65,7 +41,7 @@ Comprehensive test runner for the current Maven reactors plus the Browser4 CLI p
 ./bin/test.sh browser4                   # Run all main tests
 ./bin/test.sh cli                        # Run Browser4 CLI tests
 ./bin/test.sh cli -- --nocapture         # Pass extra cargo test args
-./bin/test.sh mocksiteboot -Dmock.site.port=18080
+./bin/test.sh mock-site -Dmock.site.port=18080
 ```
 
 ### `version.ps1`, `version.sh`
@@ -78,65 +54,90 @@ Print the version of Browser4.
 
 A text file containing seed URLs for testing or crawling.
 
+---
+
 ## Subdirectories
+
+### `build/`
+
+Build scripts with extended functionality.
+
+- **`build.ps1` / `build.sh`**: Full build pipeline — Maven + Spring Boot fat JAR + Cargo. Builds the entire project including the CLI, then copies `Browser4.jar` to `target/`.
+- **`spring-boot.ps1`**: Build then launch Browser4 via `mvnw spring-boot:run`. Convenient for development hot-reload workflows.
 
 ### `ci/`
 
-CI/CD related scripts for local and Docker builds.
-- `ci-local.ps1/sh`: Run CI checks locally.
-- `ci-docker-local.ps1/sh`: Run CI checks in Docker.
-- `e2e-local.sh`: Run E2E tests locally (similar to CI workflow).
-- Tag management: `ci-tag-add.ps1`, `ci-tags-rm.ps1/sh`.
+CI/CD helper scripts.
 
-### `legacy/`
+- **`ci-tag-add.ps1`**: Add a CI release tag.
+- **`ci-tags-rm.ps1`**: Remove CI release tags.
 
-Legacy scraping scripts (deprecated but preserved for reference).
-- `scrape.ps1/sh`: Scrape a webpage using Browser4.
-- `scrape-async.ps1/sh`: Scrape using async API.
+### `common/`
 
-### `python/`
+Shared PowerShell utility modules imported by other scripts.
 
-Python client scripts and examples.
-- `command-sse.py`: Example SSE client.
-- `experimental/`: Experimental scripts.
+- **`Util.ps1`**: Common utilities including `Fix-Encoding-UTF8` — sets the console code page and output encoding to UTF-8 to prevent mojibake in Windows PowerShell.
+
+### `git/`
+
+Git maintenance and housekeeping scripts.
+
+- **`clean-orphan-tags.ps1`**: Clean up orphaned git tags that no longer exist on the remote.
+- **`delete-copilot-branches.ps1`**: Delete local and remote branches matching the GitHub Copilot naming pattern (`copilot/*`).
+- **`git-config.ps1`**: Quick-set git HTTP/HTTPS proxy configuration.
+- **`remove-tags-before.ps1`**: Remove stable-version git tags older than a specified threshold (default: before `v4.0.0`). Supports remote deletion.
 
 ### `quality/`
 
 Code quality check scripts.
-- `check-links.sh/ps1`: Check documentation links for validity.
-- `fix-links.py`: Automatically fix broken links.
-- `quality-check.sh/ps1`: Run overall quality checks.
-- See `quality/README.md` for details.
+
+- **`fix-links.py`**: Automatically fix broken documentation links.
 
 ### `release/`
 
-Release management scripts.
-- `bump-version.ps1/sh`: Bump project version (minor/major).
-- `bump-version-patch.ps1/sh`: Bump project version (patch).
-- `update-versions.ps1/sh`: Update version strings across files.
+Release management scripts. See also [release/README.md](release/README.md) for the release workflow.
 
-### `script-tests/`
-
-Tests for validating the scripts in this directory.
-- `test.sh`: Main test script for bin scripts.
-
-### `tests/`
-
-End-to-end and integration test helper scripts.
-- `run-e2e-tests.sh`: Helper to run E2E tests.
-- `test-cdp-tracking.sh`: Test for CDP tracking functionality.
+- **`bump-version.ps1`**: Bump project version (minor/major).
+- **`bump-version-patch.ps1`**: Bump project version (patch).
+- **`release-tag-add.ps1`**: Interactive script to create and push a release tag. Validates the version in `VERSION`, shows changelog since the previous tag, and pushes to the specified remote.
+- **`update-versions.sh`**: Replace `-SNAPSHOT` version strings across `pom.xml`, `llm-config.md`, `README.md`, etc. Used by the CI release pipeline.
 
 ### `tools/`
 
-Utility scripts for development.
-- `install-depends.ps1/sh`: Install dependencies (like Chrome, Maven Wrapper).
-- `kill-browsers.ps1/sh`: Kill lingering browser processes.
-- `cloc.sh`, `sloc.sh`: Count lines of code.
-- `check-dependencies.ps1/sh`: Check for dependency updates/issues.
-- `dos2unix.sh`: Convert line endings.
-- `git/`: Git helper scripts (e.g., `rm-copilot-branches.ps1`).
+Utility scripts for development and system maintenance.
 
-### `git/`
+**Process Management:**
+- **`browser4-process-common.ps1`**: Shared module for detecting Browser4 Java and Chrome processes. Used by other process-management scripts.
+- **`kill-browsers.ps1` / `kill-browsers.sh`**: Kill browser processes (Chrome, Chromium, Edge) that were launched by Browser4.
+- **`kill-browsers-short.ps1`**: Minimal version — kills Chrome processes with `PULSAR_CHROME` in the command line.
+- **`kill-browser4-processes.ps1`**: Kill Browser4 Java server processes. Supports `-ListOnly` for inspection without termination.
+- **`list-browser4-processes.ps1`**: List all running Browser4 Java processes.
+- **`list-browsers.ps1`**: List all browser processes launched by Browser4.
 
-Root-level git maintenance scripts.
-- `clean-orphan-tags.ps1`: Clean up orphaned git tags.
+**Dependencies & Setup:**
+- **`install-depends.ps1` / `install-depends.sh`**: Install system dependencies (Chrome, Maven Wrapper, etc.).
+- **`check-dependencies.ps1` / `check-dependencies.sh`**: Check for dependency updates or issues.
+- **`fix-kotlin-daemon.ps1`**: Diagnose and fix stale Kotlin daemon processes. Kills orphaned daemon JVMs, cleans lock files in `%LOCALAPPDATA%\kotlin\daemon`, and optionally runs a Maven install check to verify the fix.
+
+**Housekeeping:**
+- **`clear-temp-dir.ps1`**: Targeted cleanup of temporary build artifacts (tomcat, chrome, test, `.jar`, `koltin`, playwright, VS installer residue). Supports `-MinAgeHours` (default 24h) and `-WhatIf` for preview.
+- **`remove-global-browser4-cli.ps1`**: Uninstall globally installed `browser4-cli` packages from npm, pnpm, Yarn, and cargo. Supports `-DryRun` and `-FailIfRemaining` for CI validation.
+- **`dos2unix.sh`**: Convert Windows line endings to Unix.
+
+**Proxy:**
+- **`proxy.sh`**: Set/unset/status HTTP(S) and SOCKS5 proxy environment variables, git config, and VS Code settings. Must be `source`d for environment variables to persist:
+  ```bash
+  source bin/tools/proxy.sh on
+  source bin/tools/proxy.sh off
+  source bin/tools/proxy.sh status
+  ```
+
+**Code Metrics:**
+- **`cloc.ps1`**: Count lines of code for a given git ref (defaults to HEAD).
+
+**Maven Configuration:**
+- **`maven/cn/settings.xml`**: Pre-configured Maven settings with Huawei Cloud mirror for faster builds in China.
+- **`maven/maven-settings.md`**: Instructions for using the Chinese Maven mirror.
+
+**Cron:**
+- **`cron/update_and_build.sh`**: Cron-compatible script for periodic git-pull + rebuild. Intended to be scheduled via crontab.

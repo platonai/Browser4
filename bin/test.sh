@@ -18,29 +18,37 @@ fi
 cd "$repo_root" || exit 1
 
 print_usage() {
-  echo "Usage: test.sh [test-types...] [additional-args...]"
+  echo "Usage: test.sh [--dry-run] [--show] [test-types...] [additional-args...]"
+  echo ""
+  echo "Options:"
+  echo "  --dry-run   Compile only (test-compile), do not run tests"
+  echo "  --show      Print the final Maven command, do not execute anything"
   echo ""
   echo "Test Types:"
   echo "  fast        Run fast unit tests only"
   echo "  it          Run integration tests"
   echo "  e2e         Run end-to-end tests"
   echo "  cli         Run Rust Browser4 CLI tests from cli/browser4-cli"
-  echo "  mocksite    Launch MockSiteBoot from browser4-tests/browser4-rest-tests"
+  echo "  mock-site   Launch mock site from browser4-tests\browser4-rest-tests"
   echo "  rest        Run REST module tests"
   echo "  skills      Run skills-focused agentic tests"
   echo "  mcp         Run MCP-focused agentic tests"
+  echo "  resume      Resume from the last failed module (-rf)"
   echo "  browser4    Run all Browser4 main tests (fast, rest, it, e2e)"
   echo "  b4          Alias for browser4"
   echo ""
   echo "Examples:"
   echo "  test.sh fast                       # Run fast unit tests"
+  echo "  test.sh --dry-run fast             # Show the Maven command for fast tests"
+  echo "  test.sh --dry-run it -pl browser4-core  # Show the Maven command with extra args"
   echo "  test.sh it                         # Run integration tests"
   echo "  test.sh e2e                        # Run end-to-end tests"
   echo "  test.sh cli                        # Run Browser4 CLI tests"
   echo "  test.sh cli -- --nocapture         # Pass extra cargo test args"
-  echo "  test.sh mocksite -Dmock.site.port=18080"
+  echo "  test.sh mock-site -Dmock.site.port=18080"
   echo "  test.sh skills                     # Run skills-focused agentic tests"
   echo "  test.sh mcp                        # Run MCP-focused agentic tests"
+  echo "  test.sh resume                     # Resume from the last failed module"
   echo "  test.sh browser4                   # Run all Browser4 main tests"
   echo "  test.sh b4                         # Alias for browser4"
   echo "  test.sh it -pl browser4-core       # Pass additional Maven args through"
@@ -49,13 +57,15 @@ print_usage() {
 
 exit_unknown_test_type() {
   local test_type=$1
-  echo "Error: Unknown test type '$test_type'. Valid test types: fast, it, e2e, cli, mocksite, rest, skills, mcp, browser4, b4." >&2
+  echo "Error: Unknown test type '$test_type'. Valid test types: fast, it, e2e, cli, mock-site, rest, skills, mcp, resume, browser4, b4 (aliases: mocksite, mocksiteboot)." >&2
   exit 1
 }
 
 run_maven_tests() {
   local -a test_types=("$@")
-  local -a mvn_test_args=("test" "-P=-examples")
+  local goal="test"
+  [[ "$DRY_RUN" == "true" && "$SHOW" != "true" ]] && goal="test-compile"
+  local -a mvn_test_args=("$goal" "-P=-examples")
   local -a modules=()
   local -a test_patterns=()
   local joined_modules=""
@@ -84,6 +94,7 @@ run_maven_tests() {
 
   [[ "$has_it" == "true" ]] && mvn_test_args+=("-DrunITs=true")
   [[ "$has_e2e" == "true" ]] && mvn_test_args+=("-DrunE2ETests=true")
+  [[ "$has_rest" == "true" ]] && mvn_test_args+=("-DrunRestTests=true")
   if [[ "$has_skills" == "true" || "$has_mcp" == "true" ]]; then
     modules+=("browser4-agentic")
 
@@ -108,6 +119,23 @@ run_maven_tests() {
   fi
 
   mvn_test_args+=("${AdditionalMvnArgs[@]}")
+
+  if [[ "$SHOW" == "true" ]]; then
+    echo ""
+    echo "=========================================="
+    echo "[SHOW] Would execute:"
+    echo "  ./mvnw ${mvn_test_args[*]}"
+    echo "=========================================="
+    return
+  fi
+
+  if [[ "$DRY_RUN" == "true" ]]; then
+    echo ""
+    echo "=========================================="
+    echo "[DRY RUN] Executing:"
+    echo "  ./mvnw ${mvn_test_args[*]}"
+    echo "=========================================="
+  fi
 
   ./mvnw "${mvn_test_args[@]}"
   local exit_code=$?
@@ -151,7 +179,28 @@ run_browser4_cli_tests() {
     exit 1
   fi
 
-  cargo test "${AdditionalMvnArgs[@]}"
+  if [[ "$SHOW" == "true" ]]; then
+    echo ""
+    echo "=========================================="
+    echo "[SHOW] Would execute in $browser4_cli_dir:"
+    echo "  cargo test ${AdditionalMvnArgs[*]}"
+    echo "=========================================="
+    popd > /dev/null || true
+    return
+  fi
+
+  if [[ "$DRY_RUN" == "true" ]]; then
+    echo ""
+    echo "=========================================="
+    echo "[DRY RUN] Executing in $browser4_cli_dir:"
+    echo "  cargo test --no-run ${AdditionalMvnArgs[*]}"
+    echo "=========================================="
+  fi
+
+  local -a cargo_args=("test")
+  [[ "$DRY_RUN" == "true" ]] && cargo_args+=("--no-run")
+  cargo_args+=("${AdditionalMvnArgs[@]}")
+  cargo "${cargo_args[@]}"
   local exit_code=$?
   popd > /dev/null || true
 
@@ -213,9 +262,34 @@ run_mocksiteboot() {
     fi
   fi
 
-  mvn_args+=("package" "spring-boot:run")
+  if [[ "$SHOW" == "true" ]]; then
+    mvn_args+=("package" "spring-boot:run")
+  elif [[ "$DRY_RUN" == "true" ]]; then
+    mvn_args+=("compile")
+  else
+    mvn_args+=("package" "spring-boot:run")
+  fi
 
   pushd "$mocksite_module_dir" > /dev/null || exit 1
+
+  if [[ "$SHOW" == "true" ]]; then
+    echo ""
+    echo "=========================================="
+    echo "[SHOW] Would execute in $mocksite_module_dir:"
+    echo "  $repo_root/mvnw ${mvn_args[*]}"
+    echo "=========================================="
+    popd > /dev/null || true
+    return
+  fi
+
+  if [[ "$DRY_RUN" == "true" ]]; then
+    echo ""
+    echo "=========================================="
+    echo "[DRY RUN] Executing in $mocksite_module_dir:"
+    echo "  $repo_root/mvnw ${mvn_args[*]}"
+    echo "=========================================="
+  fi
+
   "$repo_root/mvnw" "${mvn_args[@]}"
   local exit_code=$?
   popd > /dev/null || true
@@ -228,13 +302,155 @@ run_mocksiteboot() {
   fi
 }
 
-KnownTestTypes=(fast it e2e cli browser4-cli mocksite rest skills mcp browser4 b4)
+# Read the parent POM's <modules> section to get the reactor build order.
+# Modules are listed in the order they appear in <modules> (i.e. reactor order).
+get_reactor_module_order() {
+  local parent_pom="$repo_root/pom.xml"
+  local -a order=()
+  local in_modules=false
+
+  while IFS= read -r line; do
+    if [[ "$line" =~ \<modules\> ]]; then
+      in_modules=true
+      continue
+    fi
+    if [[ "$line" =~ \</modules\> ]]; then
+      break
+    fi
+    if [[ "$in_modules" == "true" ]]; then
+      if [[ "$line" =~ \<module\>(.+)\</module\> ]]; then
+        order+=("${BASH_REMATCH[1]}")
+      fi
+    fi
+  done < "$parent_pom"
+
+  printf '%s\n' "${order[@]}"
+}
+
+# Find the artifactId for a module directory by reading its pom.xml.
+# Skips the <parent> block to return the module's own artifactId.
+get_artifact_id_for_dir() {
+  local module_dir="$1"
+  local pom="$module_dir/pom.xml"
+  if [[ -f "$pom" ]]; then
+    local in_parent=false
+    while IFS= read -r line; do
+      if [[ "$line" =~ \<parent\> ]]; then
+        in_parent=true
+      elif [[ "$line" =~ \</parent\> ]]; then
+        in_parent=false
+      elif [[ "$in_parent" == "false" && "$line" =~ \<artifactId\>(.+)\</artifactId\> ]]; then
+        echo "${BASH_REMATCH[1]}"
+        return
+      fi
+    done < "$pom"
+  fi
+}
+
+run_resume_tests() {
+  echo "=========================================="
+  echo "Searching for failed modules to resume from..."
+  echo "=========================================="
+
+  # Collect all module directories that have failing test reports.
+  local -a failed_module_dirs=()
+  while IFS= read -r -d '' reports_dir; do
+    if grep -rq '<failure\|<error' "$reports_dir"/*.xml 2>/dev/null; then
+      # reports_dir is e.g. <repo>/browser4-core/target/surefire-reports
+      local parent_dir
+      parent_dir=$(dirname $(dirname "$reports_dir"))
+      failed_module_dirs+=("$parent_dir")
+    fi
+  done < <(find "$repo_root" -path "*/target/surefire-reports" -type d -print0 2>/dev/null)
+
+  if [[ ${#failed_module_dirs[@]} -eq 0 ]]; then
+    echo "No previous test failures found to resume from."
+    exit 0
+  fi
+
+  # Build a map: artifactId -> module directory
+  declare -A artifact_to_dir
+  for dir in "${failed_module_dirs[@]}"; do
+    local aid
+    aid=$(get_artifact_id_for_dir "$dir")
+    if [[ -n "$aid" ]]; then
+      artifact_to_dir["$aid"]="$dir"
+    fi
+  done
+
+  # Walk the reactor order from the parent POM to find the first failed module.
+  local resume_from=""
+  local -a reactor_order
+  mapfile -t reactor_order < <(get_reactor_module_order)
+
+  for module_path in "${reactor_order[@]}"; do
+    # module_path is a directory name (e.g. "browser4-core"). Resolve to full path.
+    local module_pom="$repo_root/$module_path/pom.xml"
+    if [[ -f "$module_pom" ]]; then
+      local aid
+      aid=$(get_artifact_id_for_dir "$repo_root/$module_path")
+      if [[ -n "$aid" && -n "${artifact_to_dir["$aid"]}" ]]; then
+        resume_from="$aid"
+        break
+      fi
+    fi
+  done
+
+  if [[ -z "$resume_from" ]]; then
+    echo "Could not match any failed module to the reactor order."
+    exit 1
+  fi
+
+  echo "Resuming from module: $resume_from"
+  echo ""
+
+  local goal="test"
+  [[ "$DRY_RUN" == "true" && "$SHOW" != "true" ]] && goal="test-compile"
+  local -a mvn_test_args=("$goal" "-P=-examples" "-rf" ":$resume_from")
+  mvn_test_args+=("${AdditionalMvnArgs[@]}")
+
+  if [[ "$SHOW" == "true" ]]; then
+    echo ""
+    echo "=========================================="
+    echo "[SHOW] Would execute:"
+    echo "  ./mvnw ${mvn_test_args[*]}"
+    echo "=========================================="
+    return
+  fi
+
+  if [[ "$DRY_RUN" == "true" ]]; then
+    echo ""
+    echo "=========================================="
+    echo "[DRY RUN] Executing:"
+    echo "  ./mvnw ${mvn_test_args[*]}"
+    echo "=========================================="
+  fi
+
+  ./mvnw "${mvn_test_args[@]}"
+  local exit_code=$?
+  if [[ $exit_code -ne 0 ]]; then
+    echo ""
+    echo "=========================================="
+    echo "❌ Tests failed with exit code $exit_code"
+    echo "=========================================="
+    exit $exit_code
+  fi
+
+  echo ""
+  echo "=========================================="
+  echo "✅ Resume tests completed successfully"
+  echo "=========================================="
+}
+
+KnownTestTypes=(fast it e2e cli browser4-cli mock-site mocksite mocksiteboot rest skills mcp resume browser4 b4)
 TestTypes=()
 MavenTests=()
 CLITests=()
 LaunchTargets=()
 AdditionalMvnArgs=()
 ParsingTestTypes=true
+DRY_RUN=false
+SHOW=false
 
 if [[ $# -eq 0 ]]; then
   print_usage
@@ -245,12 +461,21 @@ while [[ $# -gt 0 ]]; do
     -h|-help|--help)
       print_usage
       ;;
-    fast|it|e2e|cli|browser4-cli|mocksite|rest|skills|mcp|browser4|b4)
+    --dry-run)
+      DRY_RUN=true
+      shift
+      ;;
+    --show)
+      SHOW=true
+      shift
+      ;;
+    fast|it|e2e|cli|browser4-cli|mock-site|mocksite|mocksiteboot|rest|skills|mcp|browser4|b4|resume)
       if [[ "$ParsingTestTypes" == "true" ]]; then
         TestTypes+=("$1")
       else
         AdditionalMvnArgs+=("$1")
       fi
+      shift
       ;;
     *)
       if [[ "$ParsingTestTypes" == "true" && "$1" != -* ]]; then
@@ -258,13 +483,23 @@ while [[ $# -gt 0 ]]; do
       fi
       ParsingTestTypes=false
       AdditionalMvnArgs+=("$1")
+      shift
       ;;
   esac
-  shift
 done
 
 if [[ ${#TestTypes[@]} -eq 0 ]]; then
   TestTypes=(fast)
+fi
+
+# Handle 'resume' test type: find last failed module and resume with -rf
+if [[ " ${TestTypes[*]} " == *" resume "* ]]; then
+  if [[ ${#TestTypes[@]} -gt 1 ]]; then
+    echo "Error: 'resume' must be the only test type. It resumes from the last failed module." >&2
+    exit 1
+  fi
+  run_resume_tests
+  exit 0
 fi
 
 for type in "${TestTypes[@]}"; do
@@ -272,8 +507,8 @@ for type in "${TestTypes[@]}"; do
     MavenTests+=(fast it e2e rest)
   elif [[ "$type" == "cli" || "$type" == "browser4-cli" ]]; then
     CLITests+=("$type")
-  elif [[ "$type" == "mocksite" ]]; then
-    LaunchTargets+=("$type")
+  elif [[ "$type" == "mock-site" || "$type" == "mocksite" || "$type" == "mocksiteboot" ]]; then
+    LaunchTargets+=("mock-site")
   else
     MavenTests+=("$type")
   fi
@@ -328,7 +563,7 @@ done
 LaunchTargets=("${UniqueLaunchTargets[@]}")
 
 if [[ ${#LaunchTargets[@]} -gt 0 && ( ${#MavenTests[@]} -gt 0 || ${#CLITests[@]} -gt 0 || ${#LaunchTargets[@]} -gt 1 ) ]]; then
-  echo "Error: mocksite must be run by itself. Pass any Maven properties after it, for example: test.sh mocksite -Dmock.site.port=18080" >&2
+  echo "Error: mock-site must be run by itself. Pass any Maven properties after it, for example: test.sh mock-site -Dmock.site.port=18080" >&2
   exit 1
 fi
 
@@ -346,7 +581,7 @@ done
 
 for launch_target in "${LaunchTargets[@]}"; do
   case "$launch_target" in
-    mocksite)
+    mock-site)
       run_mocksiteboot
       ;;
   esac

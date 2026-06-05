@@ -1,17 +1,20 @@
 package ai.platon.pulsar.examples.sites.topEc.english.amazon.rpa
 
-import ai.platon.pulsar.common.*
+import ai.platon.pulsar.common.LinkExtractors
+import ai.platon.pulsar.common.Priority13
+import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.sql.SQLTemplate
 import ai.platon.pulsar.common.urls.Hyperlink
 import ai.platon.pulsar.common.urls.URLUtils
-import ai.platon.pulsar.skeleton.workflow.common.url.ListenableHyperlink
-import ai.platon.pulsar.skeleton.workflow.common.url.ParsableHyperlink
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
+import ai.platon.pulsar.common.warnInterruptible
+import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.examples.sites.topEc.english.amazon.AmazonUrls
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.ql.context.SQLContexts
 import ai.platon.pulsar.skeleton.PulsarSettings
+import ai.platon.pulsar.skeleton.workflow.common.url.ListenableHyperlink
+import ai.platon.pulsar.skeleton.workflow.common.url.ParsableHyperlink
 import java.sql.ResultSet
 
 class AsinSellerScraper {

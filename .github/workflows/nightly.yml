@@ -65,7 +65,7 @@ jobs:
         uses: ./.github/actions/run-tests
         with:
           # Nightly: All unit tests (Fast + Slow) + Integration tests
-          maven_profiles: 'all-modules,browser4-tests,integration-tests'
+          maven_profiles: 'all-main-modules,tests-browser4,tests-integration'
           # Include: Unit (Fast + Slow) + Integration
           # Exclude: E2E (manual only), SDK (separate workflows), ManualOnly
           excluded_groups: 'E2E,E2ETest,SDK,ManualOnly,RequiresAI'
@@ -151,7 +151,7 @@ jobs:
           echo "Running browser4-cli E2E tests..."
           echo "Working directory: $(pwd)"
           cd cli/browser4-cli
-          cargo test --test e2e -- --nocapture
+          cargo test --test e2e -- --nocapture --level=EXTENDED --enable-batch-scenario
           cd "$(git rev-parse --show-toplevel)"
 
           echo "::endgroup::"

@@ -1,15 +1,13 @@
 package ai.platon.pulsar.heavy.browser.driver
 
 import ai.platon.browser4.protocol.browser.DefaultWebDriverPoolManager
+import ai.platon.pulsar.browser.BrowserId
 import ai.platon.pulsar.common.LinkExtractors
-import ai.platon.pulsar.common.Runtimes
-import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.printlnPro
+import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.protocol.browser.driver.LoadingWebDriverPool
 import ai.platon.pulsar.skeleton.common.AppSystemInfo
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
@@ -56,10 +54,15 @@ class LoadingWebDriverPoolTest {
     @Tag("Heavy")
     @Test
     fun test_pollAndPutWebDrivers() {
-        val executor = Executors.newFixedThreadPool(pool.numDriverSlots)
+        val slots = pool.numDriverSlots
+        val executor = Executors.newFixedThreadPool(slots)
         val futures = mutableListOf<java.util.concurrent.Future<*>>()
 
         repeat(60) { round ->
+            if (futures.size >= slots) {
+                futures.removeAt(0).get()
+            }
+
             val driver = pool.poll()
 
             printlnPro("${round + 1}. Round ${round + 1} polling a driver")
@@ -76,10 +79,6 @@ class LoadingWebDriverPoolTest {
             }
 
             futures += future
-
-            if (futures.size >= pool.numDriverSlots) {
-                futures.removeAt(0).get()
-            }
         }
 
         futures.forEach { it.get() }

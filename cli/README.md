@@ -68,6 +68,16 @@ browser4-cli -s=<session> <command> [args] [options]
 | `--version`        | Print version                                  |
 | `-s=<name>`        | Named session label                            |
 | `--server=<url>`   | Override Browser4 server URL                   |
+| `--json`           | Emit machine-parseable JSON to stdout          |
+| `-q`, `--quiet`    | Suppress normal output, only show errors       |
+
+`--json` switches every command's stdout from human-readable text to a
+single-line JSON envelope (`{"status":"ok","command":"<name>","output":{...}}`).
+Omit `--json` for the default human-readable output.
+
+`-q` / `--quiet` suppresses all normal stdout output.  Errors and
+progress messages still go to stderr.  Combine with `--json` for
+silent-on-success scripting: `browser4-cli --json -q open`.
 
 Sessions are persisted independently per name. Omitting `-s` uses the
 default session (`~/.browser4/cli-state.json`). With `-s=<name>`, a
@@ -83,9 +93,9 @@ The tables below mirror the commands surfaced by the global `browser4-cli help` 
 
 | Command | Description |
 |---|---|
-| `open [url]` | Open or switch to a browser session (optionally navigate to URL) |
+| `open [url]` | Open or switch to a browser session. Supports `--headed` (force visible window) and `--headless` (force headless). |
 | `close` | Close the active session |
-| `goto <url>` | Navigate to a URL using the current active session |
+| `goto <url>` | Navigate to a URL, auto-opening or refreshing the session if needed |
 | `click <ref> [button]` | Click an element |
 | `dblclick <ref> [button]` | Double-click an element |
 | `type <text> [ref]` | Type text into the focused element or an optional target element |
@@ -128,12 +138,11 @@ The tables below mirror the commands surfaced by the global `browser4-cli help` 
 | `mouseup [button]` | Release mouse button |
 | `mousewheel <dx> <dy>` | Scroll the mouse wheel |
 
-#### Save as
+#### Screenshots
 
 | Command | Description |
 |---|---|
-| `screenshot [ref]` | Take a screenshot |
-| `pdf` | Save page as PDF |
+| `screenshot [ref]` | Take a screenshot (optionally of a specific element) |
 
 #### Tabs
 
@@ -146,6 +155,28 @@ The tables below mirror the commands surfaced by the global `browser4-cli help` 
 
 Use `tab-list` first to find the zero-based tab index you want to select or close.
 
+#### Browser storage
+
+| Command | Description |
+|---|---|
+| `state-save <path>` | Save cookies and localStorage to a JSON file |
+| `state-load <path>` | Restore cookies and localStorage from a saved state file |
+| `cookie-list` | List all cookies (optionally filtered by `--domain` / `--path`) |
+| `cookie-get <name>` | Get a cookie by name |
+| `cookie-set <name> <value>` | Set a cookie (optional `--path`, `--domain`) |
+| `cookie-delete <name>` | Delete a cookie by name |
+| `cookie-clear` | Clear all cookies for the current page |
+| `localstorage-list` | List all localStorage entries |
+| `localstorage-get <key>` | Get a localStorage value by key |
+| `localstorage-set <key> <value>` | Set a localStorage key-value pair |
+| `localstorage-delete <key>` | Delete a localStorage key |
+| `localstorage-clear` | Clear all localStorage entries |
+| `sessionstorage-list` | List all sessionStorage entries |
+| `sessionstorage-get <key>` | Get a sessionStorage value by key |
+| `sessionstorage-set <key> <value>` | Set a sessionStorage key-value pair |
+| `sessionstorage-delete <key>` | Delete a sessionStorage key |
+| `sessionstorage-clear` | Clear all sessionStorage entries |
+
 #### Browser sessions
 
 | Command | Description |
@@ -156,6 +187,26 @@ Use `tab-list` first to find the zero-based tab index you want to select or clos
 
 Use `close-all` for session cleanup when you want to keep the current Browser4 service running. Use `kill-all` only when you explicitly want to stop the backend and clean up tracked Browser4 processes.
 
+#### Server management
+
+| Command | Description |
+|---|---|
+| `install` | Download the Browser4 runtime bundle. Supports `--tag=<version>` to pin a release and `--force` to reinstall even when already present. |
+| `upgrade` | Upgrade the Browser4 runtime bundle to the latest version or a specified `--tag` |
+| `stop` | Kill the Browser4 backend after closing all sessions |
+| `status` | Check whether the Browser4 backend is reachable and healthy |
+
+`install` and `upgrade` both manage the Browser4 runtime bundle — a self-contained
+distribution that includes all dependency jars, a minimal `jlink`-built JRE, and
+platform launcher scripts. Neither requires `cargo` or a Rust toolchain; the runtime
+is a Java application downloaded from GitHub Releases.
+
+Use `--tag=<version>` to pin a specific release (e.g. `--tag=v4.9.3`). Use `--force`
+to reinstall even when the same version is already present.
+
+When a local Browser4 checkout is detected with the `browser4-bundle` module present,
+`install` and `upgrade` auto-build the runtime bundle from source (via Maven) instead
+of downloading.
 
 ### Advanced commands
 
@@ -164,28 +215,182 @@ Query `browser4-cli help <command>` for the exact syntax when you need them.
 
 | Command | Description |
 |---|---|
-| `batch [command...]` | Execute multiple commands in one invocation. Only DOM operations are supported (Core, Navigation, Keyboard, Mouse, Export, Tabs categories). Commands like `open`, `close`, `list`, `agent-run`, etc. are not allowed in batch mode. |
+| `batch [command...]` | Execute multiple commands in one invocation. Only DOM operations are supported (Core, Navigation, Keyboard, Mouse, Export, Tabs categories). Commands like `open`, `close`, `list`, `agent run`, etc. are not allowed in batch mode. |
 | `console [min-level]` | List console messages |
 | `extract <instruction>` | Extract structured data from the current page |
 | `summarize [instruction]` | Summarize page content using AI |
-| `agent-run <task>` | Run an autonomous agent task |
-| `agent-status <id>` | Check the status of a running agent task |
-| `agent-result <id>` | Get the result of a completed agent task |
-| `co-create` | Create a collective session with parallel browser contexts |
-| `co-submit [url]` | Submit URL(s) or tasks to the active collective session |
-| `co-scrape <url>` | Scrape data from a URL using CSS selectors |
-| `co-status <id>` | Check the status of a collective task |
-| `co-result <id>` | Get the result of a completed collective task |
+| `agent run <task>` | Run an autonomous agent task |
+| `agent status <id>` | Check the status of a running agent task |
+| `agent result <id>` | Get the result of a completed agent task |
+| `swarm create` | Create a swarm scrape session with parallel browser contexts |
+| `swarm submit [url]` | Submit URL(s) or raw X-SQL payloads as scrape jobs |
+| `swarm query <url>` | Run an X-SQL query against a loaded webpage |
+| `swarm status <id>` | Check the status of a scrape or query job |
+| `swarm result <id>` | Get the result of a completed job |
+
+## Agent task workflow (`agent <subcommand>`)
+
+The `agent-*` commands wrap the backend command agent's asynchronous task API.
+They are useful when you want Browser4 to plan and execute a natural-language
+task in the background instead of issuing one low-level browser action at a
+time.
+
+Like other advanced commands, they are intentionally omitted from the global
+`browser4-cli help` overview. Query `browser4-cli help agent run` (or
+`agent status` / `agent result`) when you need the exact syntax.
+
+Use the spaced `agent <subcommand>` form:
+
+```shell
+browser4-cli agent run "Open example.com and summarize the hero section"
+browser4-cli agent status agent-task-1
+browser4-cli agent result agent-task-1
+```
+
+### Command lifecycle
+
+| Step | Command | What it does |
+|---|---|---|
+| 1 | `agent run <task>` | Submits an asynchronous natural-language task through `command_run` and prints the returned task ID |
+| 2 | `agent status <id>` | Fetches the latest task status payload through `command_status` |
+| 3 | `agent result <id>` | Fetches the completed task result payload through `command_result` |
+
+### Notes
+
+- `agent run` is asynchronous: it returns immediately after the backend accepts
+  the task and prints a follow-up `agent status` command with the generated task
+  ID.
+- `agent status` prints the backend status payload as-is. In practice this is a
+  JSON object that commonly includes fields such as `id`, `status`,
+  `statusCode`, `processState`, `message`, `agentState`, `agentHistory`, and
+  `commandResult`.
+- `agent result` prints the backend result payload as-is. Depending on the task,
+  it may be plain text or structured JSON.
+- These commands are task-ID based and do not require an active CLI browser
+  session slot. The global `-s=<name>` option is therefore usually not relevant
+  for `agent-*` follow-up calls.
+- `agent` subcommands are not supported inside `batch` mode.
+- `agent run` performs a short post-submit status probe so obvious missing-LLM
+  configuration failures can be surfaced immediately instead of leaving you with
+  a task ID that will never succeed.
+
+### Use cases
+
+#### 1. Submit an autonomous agent task
+
+```shell
+browser4-cli agent run "Open browser4.io and summarize the hero section"
+```
+
+Typical output:
+
+```text
+Task submitted: agent-task-1
+Use 'browser4-cli agent status agent-task-1' to check progress.
+```
+
+#### 2. Poll task progress
+
+```shell
+browser4-cli agent status agent-task-1
+```
+
+Example status payload:
+
+```json
+{"id":"agent-task-1","status":"RUNNING"}
+```
+
+On a real Browser4 backend the payload can be richer and may include lifecycle
+details such as `processState`, agent history snapshots, or an embedded partial
+`commandResult`.
+
+#### 3. Read the final result
+
+```shell
+browser4-cli agent result agent-task-1
+```
+
+If the backend returns a structured `CommandResult`, expect fields such as
+`summary`, `pageSummary`, `fields`, `links`, or `xsqlResultSet`.
+
+## Swarm scrape workflow (`swarm <subcommand>`)
+
+The `swarm` subcommands support a swarm scrape workflow where one CLI session
+coordinates multiple browser contexts in the Browser4 backend.
+
+### Command overview
+
+| Command | Purpose | Backend endpoint |
+|---|---|---|
+| `swarm create` | Create a swarm scrape session | `POST /api/swarm` |
+| `swarm submit <url>` | Scrape URLs or submit raw X-SQL | `POST /api/swarm/submit` |
+| `swarm query <url>` | Run X-SQL queries against loaded pages | `POST /api/swarm/query` |
+| `swarm status <id>` | Poll job status | `GET /api/swarm/{id}/status` |
+| `swarm result <id>` | Fetch completed job result | `GET /api/swarm/{id}/result` |
+
+### URL scraping with `swarm submit`
+
+```shell
+# create a session
+browser4-cli swarm create \
+  --profile-mode=TEMPORARY \
+  --max-open-tabs=12 \
+  --max-browser-contexts=3 \
+  --display-mode=HEADLESS
+
+# submit URLs as scrape jobs
+browser4-cli swarm submit https://example.com/direct \
+  --seed-file=./swarm-seeds.txt \
+  --deadline=2026-03-30T00:00:00Z \
+  --expires=1d \
+  --refresh --parse --store-content
+
+# poll and fetch the result
+browser4-cli swarm status scrape-task-4
+browser4-cli swarm result scrape-task-4
+```
+
+### X-SQL queries with `swarm query`
+
+Run structured X-SQL queries against loaded webpages to extract data.
+
+```shell
+# Inline query:
+browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql "
+  SELECT
+    dom_base_uri(dom) AS url,
+    dom_first_text(dom, '#productTitle') AS title,
+    dom_first_slim_html(dom, 'img:expr(width > 400)') AS img
+  FROM load_and_select(@url, 'body');
+"
+
+# From a file:
+browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql @query.sql
+
+# With seed file and load options:
+browser4-cli swarm query --sql @query.sql --seed-file=./urls.txt --refresh --parse
+```
+
+### Notes
+
+- `swarm create` accepts backend capability hints: `--profile-mode`, `--max-open-tabs`,
+  `--max-browser-contexts`, `--display-mode`.
+- `swarm submit` and `swarm query` both accept a positional URL, `--seed-file`, or both.
+  Seed files use one URL per line; `#` comments and blank lines are ignored.
+- Both commands support load-option flags: `--deadline`, `--expires`, `--refresh`,
+  `--parse`, `--store-content`.
+- `swarm query --sql` is **required**; `swarm submit --sql` also works as a convenience.
+  Use `@url` in the X-SQL template; it is replaced with the target URL server-side.
+- Prefix the `--sql` value with `@` to read from a file (e.g. `--sql @query.sql`).
+- All commands return a task ID; use `swarm status` / `swarm result` to track progress.
 
 ## Element References
 
 The `snapshot` command returns an accessibility tree where every interactive
 node is labeled with a short identifier such as `e15`. Pass this identifier
-directly to commands like `click`, `type`, or `press`; the CLI automatically
-converts it to the `backend:15` selector format required by the server.
-
-You can also pass plain CSS selectors (e.g. `.my-button`, `#search-input`) or
-fully-qualified `backend:<N>` refs directly.
+directly to commands like `click`, `type`, or `press`. You can also use plain
+CSS selectors (e.g. `.my-button`, `#search-input`).
 
 ## State Persistence
 
@@ -206,41 +411,23 @@ fields such as:
 
 ### Session state transitions
 
-The `with_session()` helper in `src/main.rs` is the central session lifecycle
-gate for commands that require an active Browser4 session.
+| Command | Behavior |
+|---|---|
+| `open` | Creates a new session, or reuses an existing active one. Stale sessions are automatically refreshed. |
+| `open -s=<name>` | Same as `open` but scoped to a named session slot. |
+| `goto <url>` | Reuses the current session if active; otherwise opens a fresh one before navigating. |
+| `close` | Closes the current session (no-op if none active). |
+| `close-all` / `kill-all` / `stop` | Clears all persisted session state. |
 
-| Situation | Persisted state transition | Result |
-|---|---|---|
-| No persisted session | No state change | `require_session()` fails with `No active session. Run "browser4-cli open" first.` |
-| `open` succeeds (no existing session) | `create_session()` writes a fresh state file with new `sessionId`, current `baseUrl`, and clears `activeSelector` / `lastMousePosition` | A new active session becomes the current CLI session |
-| `open` when a saved session exists and the backend still reports it `active` | No state change — keeps the existing `sessionId` | The existing session is reused; subsequent commands target the same session |
-| `open` when a saved session exists but is missing or no longer `active` in the backend | `invalidate_session()` clears the stale saved `sessionId`, `activeSelector`, and `lastMousePosition`, then `create_session()` writes a fresh session | The stale session is refreshed automatically by opening a new one |
-| `open -s=<name>` | Reads/writes the named session state file | Opens, reuses, or refreshes the named session for that slot; subsequent `-s=<name>` commands use the same slot |
-| Command succeeds through `with_session()` | `sessionId` stays unchanged | The command uses the persisted session normally |
-| Command fails because the server reports a stale / expired session and `recover_stale = false` | `invalidate_session()` clears `sessionId`, `activeSelector`, and `lastMousePosition`, while keeping `baseUrl` | The command fails with `Saved session expired. Run "browser4-cli open" first.` |
-| `goto` is invoked but the saved session is missing or no longer `active` in the backend | `invalidate_session()` clears the saved `sessionId`, `activeSelector`, and `lastMousePosition` | The command fails with `No active session for "goto". Run "browser4-cli open" to create or refresh the session first.` |
-| `close` with an active session | `clear_state()` removes only the current session state file after best-effort remote close | The selected default or named session is fully cleared |
-| `close` with no persisted `sessionId` | `clear_state()` best-effort removes the current session slot | Prints `No active session. Run "browser4-cli open" first.` and exits successfully as a no-op |
-| `close-all` / `kill-all` | `clear_all_state()` removes the default state file and all named session files | All persisted CLI session files are cleared |
-
-Notes:
-
-- `goto` reuses only the current backend-`active` session. It does not create a
-  new session automatically; run `browser4-cli open` first if the saved session
-  is missing or stale.
-- `open` first checks whether the saved session for the current slot is still
-  backend-`active`. It reuses active sessions and refreshes stale ones by
-  creating a new session for the same slot.
-- `list` reads persisted session files and compares them with live backend
-  sessions to show both the current status (`Active`, `Stale`, or `Unknown`)
-  and whether the next `open` will `Reuse` or `Refresh` that slot.
+The `list` command shows each session's status: **Active** (backend confirms),
+**Stale** (backend has stopped it), or **Unknown** (backend unreachable).
 
 ## Runtime Temp Files
 
 `browser4-cli` keeps ephemeral runtime artifacts under the system temp directory:
 
-- Windows: `%TEMP%\.browser4\browser4-cli`
-- Linux/macOS: `${TMPDIR:-/tmp}/.browser4/browser4-cli`
+- Windows: `%TEMP%\browser4\browser4-cli`
+- Linux/macOS: `${TMPDIR:-/tmp}/browser4/browser4-cli`
 
 This temp subtree contains items such as:
 
@@ -248,7 +435,20 @@ This temp subtree contains items such as:
 - staged Maven wrapper launchers
 - Rust test scratch directories used by `browser4-cli` tests
 
-Persistent CLI state and the fallback `Browser4.jar` remain under `~/.browser4` by default.
+Persistent CLI state remains under `~/.browser4` by default.  The Browser4 runtime
+bundle (JRE, JARs, launchers) is stored separately in a platform-conventional
+data directory so that clearing CLI session state does not require re-downloading
+the ~200 MB runtime:
+
+- Linux:   `~/.local/share/browser4/runtime/<version>/`
+- macOS:   `~/Library/Application Support/browser4/runtime/<version>/`
+- Windows: `%APPDATA%/browser4/runtime/<version>/`
+
+The `current.tag` file in the `runtime/` directory records the active version.
+Override the runtime data root with the `BROWSER4_RUNTIME_DIR` environment variable.
+Downloaded archives are cached under the platform cache directory
+(`~/.cache/browser4/downloads/` on Linux, `~/Library/Caches/browser4/downloads/`
+on macOS, `%LOCALAPPDATA%/browser4/downloads/` on Windows).
 
 ## Snapshots
 
@@ -262,10 +462,14 @@ After each command that modifies browser state, the CLI automatically:
 ## Examples
 
 ```shell
-# Open a new browser window
+# Open a new browser window (defaults to headed)
 browser4-cli open
 
-# Navigate to a page with the current active session
+# Open in headed or headless mode
+browser4-cli open --headed https://browser4.io
+browser4-cli open --headless https://browser4.io
+
+# Navigate to a page — auto-opens a session if none is active
 browser4-cli goto https://playwright.dev
 
 # Inspect the page — note the eN labels on interactive nodes
@@ -353,6 +557,41 @@ cargo test --test e2e -- --nocapture
 
 ## Run a specific end-to-end test scenario:
 cargo test --test e2e -- --nocapture --scenario=test_e2e_batch_form_submission
+```
+
+## Publishing the CLI package
+
+For maintainers, the CLI package now uses an npm version guard before publish.
+
+The GitHub release workflow publishes the npm package via npm trusted publishing
+(GitHub Actions OIDC) instead of `NODE_AUTH_TOKEN`. This avoids CI failures caused
+by npm one-time-password challenges (`EOTP`).
+
+- Local release entrypoint: `npm run release`
+- Direct guarded publish entrypoint: `npm run publish:if-needed`
+- GitHub release workflow: re-checks npm immediately before the publish step
+
+If the local version in `cli/package.json` already matches the version currently
+published on npm, the publish step is skipped automatically.
+
+Examples:
+
+```bash
+# Check whether npm publish is needed
+node scripts/check-npm-publish-needed.js --json
+
+# Publish only when the local version differs from npm
+npm run publish:if-needed
+
+# Standard maintainer release command (also guarded)
+npm run release
+```
+
+For local testing, you can override the detected remote version:
+
+```bash
+BROWSER4_CLI_NPM_REMOTE_VERSION=0.1.7 node scripts/check-npm-publish-needed.js --json
+BROWSER4_CLI_NPM_REMOTE_VERSION=0.1.7 node scripts/publish-if-needed.js --dry-run
 ```
 
 ## License

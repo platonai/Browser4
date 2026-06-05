@@ -1,6 +1,6 @@
 package ai.platon.pulsar.rest.api.common
 
-import ai.platon.pulsar.boot.autoconfigure.test.PulsarTestContextInitializer
+import ai.platon.browser4.boot.autoconfigure.test.PulsarTestContextInitializer
 import ai.platon.pulsar.rest.api.config.MockEcServerConfiguration
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Tag
@@ -11,6 +11,7 @@ import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Import
 import org.springframework.test.context.ContextConfiguration
 import org.springframework.web.client.RestTemplate
+import org.springframework.web.client.getForEntity
 
 /**
  * Base test class that automatically starts the mock EC server before tests run.
@@ -38,10 +39,10 @@ abstract class MockEcServerTestBase {
     protected val mockProductDetailUrl = "$mockServerBaseUrl/ec/dp/B0E000001"
 
     @BeforeEach
-    open fun setup() {
+    fun setup() {
         // Verify mock server is running
         try {
-            val response = restTemplate.getForEntity("$mockServerBaseUrl/ec/", String::class.java)
+            val response = restTemplate.getForEntity<String>("$mockServerBaseUrl/ec/")
             if (response.statusCode.isError) {
                 throw RuntimeException("Mock EC server is not responding properly: ${response.statusCode}")
             }

@@ -1,9 +1,9 @@
 package ai.platon.pulsar.rest.api.controller
 
-import ai.platon.browser4.driver.common.BrowserSettings
+import ai.platon.browser4.boot.autoconfigure.Browser4AutoConfiguration
 import ai.platon.pulsar.agentic.AgenticSession
-import ai.platon.pulsar.agentic.BasicAgenticSession
-import ai.platon.pulsar.boot.autoconfigure.PulsarContextConfiguration
+import ai.platon.pulsar.agentic.GenericAgenticSession
+import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.config.ImmutableConfig
 import org.springframework.beans.factory.annotation.Autowired
@@ -20,7 +20,7 @@ import kotlin.test.assertTrue
     classes = [Application::class],
     webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT
 )
-@Import(PulsarContextConfiguration::class)
+@Import(Browser4AutoConfiguration::class)
 open class IntegrationTestBase {
 
     @LocalServerPort
@@ -57,7 +57,7 @@ open class IntegrationTestBase {
 
     @BeforeTest
     fun setup() {
-        assertTrue("Session should be BasicAgenticSession, actual ${session.javaClass}") { session is BasicAgenticSession }
+        assertTrue("Session should be GenericAgenticSession, actual ${session.javaClass}") { session is  GenericAgenticSession }
         BrowserSettings.withBrowserContextMode(BrowserProfileMode.TEMPORARY)
         assertTrue("Server port should have been injected and > 0, but was $serverPort") { serverPort > 0 }
     }

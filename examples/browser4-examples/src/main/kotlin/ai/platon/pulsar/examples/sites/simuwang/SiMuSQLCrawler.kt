@@ -16,7 +16,7 @@ from
     load_and_select('$portalUrl', '.ranking-table-tbody .ranking-table-tbody-tr')
         """.trimIndent()
 
-    override fun crawl() {
+    override suspend fun crawl() {
         // load the page and perform event handlers
         session.load(portalUrl, options)
         // note: event handlers are not performed in SQL mode
@@ -26,4 +26,4 @@ from
     }
 }
 
-fun main() = SiMuSQLCrawler().crawl()
+suspend fun main() = SiMuSQLCrawler().crawl()

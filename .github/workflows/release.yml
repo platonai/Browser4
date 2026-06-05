@@ -5,10 +5,13 @@ on:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
       - 'v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-alpha.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-beta.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-dry_run.[0-9]+'
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag to publish, e.g. v4.9.0 or v4.9.0-rc.1'
+        description: 'Release tag to publish, e.g. v4.9.0, v4.9.0-rc.1, v4.9.0-alpha.1, or v4.9.0-dry_run.1'
         required: true
         type: string
       skip_tests:
@@ -36,6 +39,16 @@ on:
         required: false
         default: false
         type: boolean
+      dry_run:
+        description: 'Validate the entire pipeline without publishing or pushing artifacts externally'
+        required: false
+        default: false
+        type: boolean
+      bundle_only:
+        description: 'Run only the runtime-bundle build (skip Docker, CLI, publish)'
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: release-${{ github.event.inputs.tag || github.ref }}
@@ -46,11 +59,16 @@ env:
   CONTAINER_NAME: browser4
   NETWORK_NAME: 'browser4_backend'
   DOCKER_USERNAME: galaxyeye88
-  PRODUCTION_JAR_MODULE_NAME: browser4-agents
-  PRODUCTION_JAR_MODULE_PATH: browser4-app/browser4-agents
+  PRODUCTION_JAR_MODULE_NAME: browser4-standalone
+  PRODUCTION_JAR_MODULE_PATH: browser4-apps/browser4-standalone
   PRODUCTION_JAR_NAME: Browser4.jar
-  PRODUCTION_JAR_PATH: browser4-app/browser4-agents/target/Browser4.jar
+  PRODUCTION_JAR_PATH: browser4-apps/browser4-standalone/target/Browser4.jar
+  BUNDLE_MODULE_NAME: browser4-bundle
+  BUNDLE_MODULE_PATH: browser4-apps/browser4-bundle
+  BUNDLE_JAR_NAME: Browser4Bundle.jar
+  BUNDLE_JAR_PATH: browser4-apps/browser4-bundle/target/Browser4Bundle.jar
   JAVA_VERSION: '17'
+  BUNDLE_JAVA_VERSION: '25'
   NODE_VERSION: '24'
   MAVEN_OPTS: '-Xmx3g -XX:+UseG1GC'
   CLI_PACKAGE_DIR: cli
@@ -74,6 +92,9 @@ jobs:
       skip_cli_binary_build: ${{ steps.prepare.outputs.skip_cli_binary_build }}
       skip_docker_push: ${{ steps.prepare.outputs.skip_docker_push }}
       debug_mode: ${{ steps.prepare.outputs.debug_mode }}
+      dry_run: ${{ steps.prepare.outputs.dry_run }}
+      bundle_only: ${{ steps.prepare.outputs.bundle_only }}
+      should_publish_artifacts: ${{ steps.prepare.outputs.should_publish_artifacts }}
       cli_version: ${{ steps.prepare.outputs.cli_version }}
       cli_should_build: ${{ steps.prepare.outputs.cli_should_build }}
       cli_should_publish_npm: ${{ steps.prepare.outputs.cli_should_publish_npm }}
@@ -102,6 +123,8 @@ jobs:
           INPUT_SKIP_CLI_BINARY_BUILD: ${{ github.event.inputs.skip_cli_binary_build || 'false' }}
           INPUT_SKIP_DOCKER_PUSH: ${{ github.event.inputs.skip_docker_push || 'false' }}
           INPUT_DEBUG_MODE: ${{ github.event.inputs.debug_mode || 'false' }}
+          INPUT_DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          INPUT_BUNDLE_ONLY: ${{ github.event.inputs.bundle_only || 'false' }}
         run: |
           set -euo pipefail
 
@@ -121,9 +144,9 @@ jobs:
 
           VERSION="${TAG#v}"
 
-          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+(\+.+)?)?$ ]]; then
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc|dry_run)\.[0-9]+(\+.+)?)?$ ]]; then
             echo "❌ Invalid version format: $VERSION"
-            echo "Expected: X.Y.Z or X.Y.Z-rc.N or X.Y.Z-rc.N+build.info"
+            echo "Expected: X.Y.Z, X.Y.Z-alpha.N, X.Y.Z-beta.N, X.Y.Z-rc.N, X.Y.Z-dry_run.N, or prerelease variants with +build.info"
             exit 1
           fi
 
@@ -131,6 +154,31 @@ jobs:
           if [[ "$VERSION" == *"-"* ]]; then
             IS_PRERELEASE="true"
           fi
+
+          EFFECTIVE_DRY_RUN="$INPUT_DRY_RUN"
+          IS_ALPHA="false"
+          IS_DRY_RUN_TAG="false"
+          IS_FORCED_DRY_RUN_TAG="false"
+          FORCED_DRY_RUN_TAG_KIND=""
+          if [[ "$VERSION" =~ -(alpha|dry_run)\.[0-9]+(\+.+)?$ ]]; then
+            IS_FORCED_DRY_RUN_TAG="true"
+            FORCED_DRY_RUN_TAG_KIND="${BASH_REMATCH[1]}"
+            EFFECTIVE_DRY_RUN="true"
+          fi
+
+          if [ "$FORCED_DRY_RUN_TAG_KIND" = "alpha" ]; then
+            IS_ALPHA="true"
+          fi
+          if [ "$FORCED_DRY_RUN_TAG_KIND" = "dry_run" ]; then
+            IS_DRY_RUN_TAG="true"
+          fi
+
+          SHOULD_PUBLISH_ARTIFACTS="true"
+          if [ "$EFFECTIVE_DRY_RUN" = "true" ]; then
+            SHOULD_PUBLISH_ARTIFACTS="false"
+          fi
+
+          BUNDLE_ONLY="$INPUT_BUNDLE_ONLY"
 
           CLI_VERSION=$(node -p "require('./${{ env.CLI_PACKAGE_DIR }}/package.json').version")
           PACKAGE_NAME=$(node -p "require('./${{ env.CLI_PACKAGE_DIR }}/package.json').name")
@@ -163,6 +211,9 @@ jobs:
           echo "skip_cli_binary_build=$INPUT_SKIP_CLI_BINARY_BUILD" >> "$GITHUB_OUTPUT"
           echo "skip_docker_push=$INPUT_SKIP_DOCKER_PUSH" >> "$GITHUB_OUTPUT"
           echo "debug_mode=$INPUT_DEBUG_MODE" >> "$GITHUB_OUTPUT"
+          echo "dry_run=$EFFECTIVE_DRY_RUN" >> "$GITHUB_OUTPUT"
+          echo "bundle_only=$BUNDLE_ONLY" >> "$GITHUB_OUTPUT"
+          echo "should_publish_artifacts=$SHOULD_PUBLISH_ARTIFACTS" >> "$GITHUB_OUTPUT"
           echo "cli_version=$CLI_VERSION" >> "$GITHUB_OUTPUT"
           echo "cli_should_build=$CLI_SHOULD_BUILD" >> "$GITHUB_OUTPUT"
           echo "cli_should_publish_npm=$CLI_SHOULD_PUBLISH_NPM" >> "$GITHUB_OUTPUT"
@@ -174,27 +225,45 @@ jobs:
             echo "- **Tag**: $TAG"
             echo "- **Version**: $VERSION"
             echo "- **Prerelease**: $IS_PRERELEASE"
+            echo "- **Forced Dry-Run Tag**: $IS_FORCED_DRY_RUN_TAG"
+            echo "- **Alpha Release**: $IS_ALPHA"
+            echo "- **Dry-Run Tag**: $IS_DRY_RUN_TAG"
             echo "- **CLI Version**: $CLI_VERSION"
             echo "- **npm Version**: $NPM_VERSION"
             echo "- **npm Lookup Status**: $CLI_NPM_LOOKUP_STATUS"
             echo "- **Build CLI Binaries**: $CLI_SHOULD_BUILD"
             echo "- **Publish CLI to npm**: $CLI_SHOULD_PUBLISH_NPM"
+            echo "- **Publish Build Artifacts**: $SHOULD_PUBLISH_ARTIFACTS"
             echo "- **Skip Tests**: $INPUT_SKIP_TESTS"
             echo "- **Skip Docker Push**: $INPUT_SKIP_DOCKER_PUSH"
+            echo "- **Dry Run**: $EFFECTIVE_DRY_RUN"
+            if [ "$IS_FORCED_DRY_RUN_TAG" = "true" ]; then
+              echo ""
+              echo "> ℹ️ **FORCED DRY-RUN TAG DETECTED** — $FORCED_DRY_RUN_TAG_KIND tags automatically enable dry-run mode, so external artifact publishing is skipped."
+            fi
+            if [ "$IS_ALPHA" = "true" ]; then
+              echo ""
+              echo "> ℹ️ **ALPHA TAG DETECTED** — alpha releases are forced into dry-run mode, so external artifact publishing is skipped."
+            fi
+            if [ "$IS_DRY_RUN_TAG" = "true" ]; then
+              echo ""
+              echo "> ℹ️ **DRY_RUN TAG DETECTED** — dry_run tags automatically enable dry-run mode, so external artifact publishing is skipped."
+            fi
+            if [ "$EFFECTIVE_DRY_RUN" = "true" ]; then
+              echo ""
+              echo "> ⚠️ **DRY RUN MODE** — builds and tests will execute, but no artifacts will be published externally."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
   build-core-and-docker:
     name: Build core artifacts and Docker image
     needs: prepare
+    if: needs.prepare.outputs.bundle_only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     permissions:
       contents: read
       packages: write
-    outputs:
-      jar_name: ${{ steps.get_uberjar.outputs.uberjar_file }}
-      jar_path: ${{ steps.get_uberjar.outputs.uberjar_path }}
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -238,11 +307,59 @@ jobs:
         id: maven-build
         uses: ./.github/actions/maven-build
         with:
-          maven_profiles: 'all-modules'
+          maven_profiles: 'all-main-modules,asset-standalone'
           skip_tests: 'true'
           parallel_builds: 'true'
           timeout_minutes: '20'
           maven_args: '-B -V'
+
+      - name: Validate Standalone JAR
+        id: validate-jar
+        shell: bash
+        run: |
+          echo "::group::🔍 Validating Standalone JAR"
+          JAR_PATH="${{ env.PRODUCTION_JAR_PATH }}"
+
+          if [ ! -f "$JAR_PATH" ]; then
+            echo "❌ Standalone JAR not found: $JAR_PATH"
+            echo "Available JAR files:"
+            find . -name "*.jar" -type f | sort
+            exit 1
+          fi
+
+          JAR_SIZE=$(stat -c%s "$JAR_PATH" 2>/dev/null || echo 0)
+          echo "📏 JAR size: $JAR_SIZE bytes ($(numfmt --to=iec --suffix=B $JAR_SIZE 2>/dev/null || echo "$JAR_SIZE bytes"))"
+
+          if [ "$JAR_SIZE" -lt 1000000 ]; then
+            echo "❌ JAR file is too small (< 1 MiB). The build may have produced an empty or incomplete artifact."
+            exit 1
+          fi
+
+          # Validate the JAR contains the expected Spring Boot application.
+          # Check MANIFEST.MF Start-Class — the authoritative source for what
+          # Spring Boot launches.
+          EXPECTED_START_CLASS="ai.platon.pulsar.apps.Browser4StandaloneApplicationKt"
+
+          jar xf "$JAR_PATH" META-INF/MANIFEST.MF 2>/dev/null || true
+          if [ -f META-INF/MANIFEST.MF ]; then
+            echo "--- MANIFEST.MF ---"
+            grep -E '^(Main-Class|Start-Class)' META-INF/MANIFEST.MF || echo "(no Main-Class/Start-Class entry)"
+            echo "--- END MANIFEST.MF ---"
+
+            ACTUAL_START_CLASS=$(grep '^Start-Class:' META-INF/MANIFEST.MF | sed 's/Start-Class: //' | tr -d '[:space:]')
+            if [ "$ACTUAL_START_CLASS" = "$EXPECTED_START_CLASS" ]; then
+              echo "✅ Start-Class is correct: $ACTUAL_START_CLASS"
+            else
+              echo "❌ Wrong Start-Class — expected '$EXPECTED_START_CLASS', got '$ACTUAL_START_CLASS'"
+              echo "    The JAR at $JAR_PATH was not built from browser4-standalone."
+              exit 1
+            fi
+          else
+            echo "❌ No MANIFEST.MF found in JAR — not a valid Spring Boot fat JAR"
+            exit 1
+          fi
+
+          echo "::endgroup::"
 
       - name: Cleanup Docker system to free space
         shell: bash
@@ -280,7 +397,11 @@ jobs:
 
           image="${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.version }}"
 
-          if command -v docker scout &> /dev/null; then
+          has_docker_scout() {
+            docker scout version >/dev/null 2>&1
+          }
+
+          if has_docker_scout; then
             echo "🔍 Running Docker Scout security scan..."
             docker scout cves "$image" --only-severity critical,high || echo "⚠️ Docker Scout scan completed with warnings"
           fi
@@ -290,7 +411,7 @@ jobs:
             trivy image --severity HIGH,CRITICAL "$image" || echo "⚠️ Trivy scan completed with warnings"
           fi
 
-          if ! command -v docker scout &> /dev/null && ! command -v trivy &> /dev/null; then
+          if ! has_docker_scout && ! command -v trivy &> /dev/null; then
             echo "ℹ️ No security scanning tools available"
           fi
 
@@ -306,21 +427,65 @@ jobs:
 
           docker network create ${{ env.NETWORK_NAME }} || true
 
-          docker run -d --rm \
+          # Override JAVA_OPTS for CI — the Dockerfile default (-Xmx10G)
+          # exceeds GitHub Actions' 7 GB runner memory and will crash the JVM.
+          docker run -d \
             --name ${{ env.CONTAINER_NAME }} \
             --network ${{ env.NETWORK_NAME }} \
             -p 8182:8182 \
             --add-host=host.docker.internal:host-gateway \
-            -e OPENROUTER_API_KEY=${OPENROUTER_API_KEY} \
+            -e OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" \
+            -e JAVA_OPTS="-Xms512M -Xmx3G -XX:+UseG1GC" \
             --health-cmd="curl -f http://localhost:8182/actuator/health || exit 1" \
             --health-interval=10s \
             --health-timeout=5s \
-            --health-retries=5 \
+            --health-retries=8 \
             ${{ env.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ needs.prepare.outputs.version }}
 
-          echo "⏳ Waiting for container to be healthy..."
-          timeout 120s bash -c 'until docker inspect --format="{{.State.Health.Status}}" ${{ env.CONTAINER_NAME }} | grep -q "healthy"; do sleep 5; done' \
-            || { echo "❌ Container did not become healthy within 120s"; docker logs ${{ env.CONTAINER_NAME }}; exit 1; }
+          echo "📋 Container status after launch:"
+          docker ps -a --filter "name=${{ env.CONTAINER_NAME }}"
+
+          # Quick check: did the container even start?
+          sleep 3
+          early_status=$(docker inspect --format="{{.State.Status}}" ${{ env.CONTAINER_NAME }} 2>/dev/null || echo "missing")
+          if [ "$early_status" = "exited" ] || [ "$early_status" = "dead" ]; then
+            echo "❌ Container exited immediately (exit code $(docker inspect --format='{{.State.ExitCode}}' ${{ env.CONTAINER_NAME }})):"
+            docker logs ${{ env.CONTAINER_NAME }} || true
+            exit 1
+          fi
+
+          echo "⏳ Waiting for container to be healthy (up to 120s) ..."
+          timeout 120s bash -c '
+            while true; do
+              status=$(docker inspect --format="{{.State.Status}}" ${{ env.CONTAINER_NAME }} 2>/dev/null || echo "missing")
+              health=$(docker inspect --format="{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}" ${{ env.CONTAINER_NAME }} 2>/dev/null || echo "missing")
+
+              echo "container status=$status health=$health"
+
+              if [ "$status" = "missing" ]; then
+                echo "❌ Container disappeared before becoming healthy"
+                exit 1
+              fi
+
+              if [ "$status" = "exited" ] || [ "$status" = "dead" ]; then
+                echo "❌ Container exited (code $(docker inspect --format='{{.State.ExitCode}}' ${{ env.CONTAINER_NAME }})) before becoming healthy"
+                docker logs ${{ env.CONTAINER_NAME }} || true
+                exit 1
+              fi
+
+              if [ "$health" = "healthy" ]; then
+                exit 0
+              fi
+
+              sleep 5
+            done
+          ' || {
+            echo "❌ Container did not become healthy within 120s"
+            docker ps -a --filter "name=${{ env.CONTAINER_NAME }}"
+            echo "--- container logs ---"
+            docker logs ${{ env.CONTAINER_NAME }} || true
+            exit 1
+          }
 
           echo "✅ Container is healthy and ready for testing"
 
@@ -347,7 +512,7 @@ jobs:
         run: |
           echo "::group::🧪 browser4-cli E2E Tests"
           cd cli/browser4-cli
-          cargo test --test e2e -- --nocapture
+          cargo test --test e2e -- --nocapture --level=EXTENDED --enable-batch-scenario
           cd "$(git rev-parse --show-toplevel)"
           echo "::endgroup::"
 
@@ -360,67 +525,14 @@ jobs:
           cleanup_compose: 'false'
           cleanup_volumes: 'true'
 
-      - name: Build Browser4 JAR
-        if: success()
-        shell: bash
-        run: |
-          JAR_PATH=${{ env.PRODUCTION_JAR_PATH }}
-          JAR_NAME=${{ env.PRODUCTION_JAR_NAME }}
-          MODULE_NAME=${{ env.PRODUCTION_JAR_MODULE_NAME }}
-          MODULE_PATH=${{ env.PRODUCTION_JAR_MODULE_PATH }}
-
-          echo "=== Building Browser4 JAR ==="
-          ./mvnw package -rf :$MODULE_NAME -pl ${MODULE_PATH} -DskipTests=true -Dmaven.javadoc.skip=true
-
-          if [ ! -f "$JAR_PATH" ]; then
-            echo "❌ $JAR_NAME not found at $JAR_PATH"
-            echo "Available JARs:"
-            find . -name "*.jar" -type f | head -10
-            exit 1
-          fi
-
-          echo "✅ $JAR_NAME built successfully"
-
-      - name: Find and Validate JAR
-        id: get_uberjar
-        if: success()
-        shell: bash
-        run: |
-          JAR_PATH=${{ env.PRODUCTION_JAR_PATH }}
-          JAR_NAME=${{ env.PRODUCTION_JAR_NAME }}
-
-          echo "::group::📦 JAR Discovery and Validation"
-
-          if [ ! -f "$JAR_PATH" ]; then
-            echo "❌ JAR file not found: $JAR_PATH"
-            exit 1
-          fi
-
-          JAR_SIZE=$(stat -c%s "$JAR_PATH" 2>/dev/null || echo 0)
-          UBERJAR_FILE=$(basename "$JAR_PATH")
-
-          echo "✅ Selected JAR: $UBERJAR_FILE"
-          echo "📍 Path: $JAR_PATH"
-          echo "📏 Size: $JAR_SIZE bytes ($(numfmt --to=iec --suffix=B $JAR_SIZE))"
-
-          if [ "$JAR_SIZE" -lt 1000000 ]; then
-            echo "❌ JAR file seems too small (< 1MB): $JAR_SIZE bytes"
-            exit 1
-          fi
-
-          echo "uberjar_file=$UBERJAR_FILE" >> "$GITHUB_OUTPUT"
-          echo "uberjar_path=$JAR_PATH" >> "$GITHUB_OUTPUT"
-
-          echo "::endgroup::"
-
       - name: Create Release Notes
         if: success()
         uses: ./.github/actions/create-release-notes
         id: release-notes
         with:
           version: ${{ needs.prepare.outputs.version }}
-          jar_name: ${{ steps.get_uberjar.outputs.uberjar_file }}
-          jar_path: ${{ steps.get_uberjar.outputs.uberjar_path }}
+          jar_name: ${{ env.PRODUCTION_JAR_NAME }}
+          jar_path: ${{ env.PRODUCTION_JAR_PATH }}
           java_version: ${{ env.JAVA_VERSION }}+
           output_file: release_notes.md
 
@@ -446,18 +558,38 @@ jobs:
 
           CLI package version in this release workflow:
           - \`${{ needs.prepare.outputs.cli_version }}\`
+
+          ## Self-contained Browser4 runtime bundles
+
+          This release also includes self-contained Browser4 runtime bundles with:
+          - a \`lib/\` directory containing \`Browser4Bundle.jar\` and all runtime dependencies
+          - a minimal \`jlink\`-built JRE under \`runtime/\`
+          - platform-specific launcher scripts in \`bin/\`
+
+          Runtime model:
+          \`runtime/bin/java -cp "lib/*" <MainClass>\`
+
+          Supported release assets:
+          - \`browser4-bundle-runtime-windows-x64.zip\`
+          - \`browser4-bundle-runtime-linux-x64.tar.gz\`
+          - \`browser4-bundle-runtime-darwin-x64.tar.gz\`
+          - \`browser4-bundle-runtime-darwin-arm64.tar.gz\`
+
+          Recommended install flow:
+
+          \`browser4-cli install\`
           EOF
 
       - name: Upload JAR artifact
-        if: success()
+        if: success() && needs.prepare.outputs.should_publish_artifacts == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: release-jar
-          path: ${{ steps.get_uberjar.outputs.uberjar_path }}
+          path: ${{ env.PRODUCTION_JAR_PATH }}
           retention-days: 7
 
       - name: Upload release notes artifact
-        if: success()
+        if: success() && needs.prepare.outputs.should_publish_artifacts == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: release-notes
@@ -465,7 +597,7 @@ jobs:
           retention-days: 7
 
       - name: Push Docker Images to Docker Hub
-        if: success() && needs.prepare.outputs.skip_docker_push != 'true'
+        if: success() && needs.prepare.outputs.skip_docker_push != 'true' && needs.prepare.outputs.dry_run != 'true'
         shell: bash
         run: |
           echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ env.DOCKER_USERNAME }}" --password-stdin
@@ -500,7 +632,7 @@ jobs:
           done
 
       - name: Push Docker Images to GitHub Container Registry
-        if: success() && needs.prepare.outputs.skip_docker_push != 'true'
+        if: success() && needs.prepare.outputs.skip_docker_push != 'true' && needs.prepare.outputs.dry_run != 'true'
         shell: bash
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
@@ -545,14 +677,15 @@ jobs:
             echo "- **Maven Build**: ${{ steps.maven-build.outcome }}"
             echo "- **Docker Build**: ${{ steps.docker-build.outcome }}"
             echo "- **CLI E2E**: ${{ steps.e2e-cli.outcome || 'skipped' }}"
-            echo "- **JAR**: ${{ steps.get_uberjar.outcome }}"
-            echo "- **Docker Push**: ${{ needs.prepare.outputs.skip_docker_push == 'true' && 'skipped' || 'enabled' }}"
+            echo "- **JAR**: ${{ steps.validate-jar.outcome }}"
+            echo "- **Docker Push**: ${{ needs.prepare.outputs.skip_docker_push == 'true' && 'skipped' || needs.prepare.outputs.dry_run == 'true' && 'skipped (dry-run)' || 'enabled' }}"
+            echo "- **Dry Run**: ${{ needs.prepare.outputs.dry_run == 'true' && '✅ active' || 'no' }}"
           } >> "$GITHUB_STEP_SUMMARY"
 
   build-cli-binaries:
     name: Build ${{ matrix.name }}
     needs: prepare
-    if: needs.prepare.outputs.cli_should_build == 'true'
+    if: needs.prepare.outputs.cli_should_build == 'true' && needs.prepare.outputs.bundle_only != 'true'
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
@@ -675,16 +808,110 @@ jobs:
           fi
 
       - name: Upload artifact
+        if: needs.prepare.outputs.should_publish_artifacts == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.binary }}
           path: artifacts/${{ matrix.binary }}
           retention-days: 7
 
+  build-runtime-bundles:
+    name: Build runtime bundle (${{ matrix.name }})
+    needs: [prepare, build-core-and-docker]
+    if: |
+      always() &&
+      needs.prepare.result == 'success' &&
+      (needs.build-core-and-docker.result == 'success' || needs.build-core-and-docker.result == 'skipped')
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            asset_name: browser4-bundle-runtime-windows-x64.zip
+            artifact_name: browser4-bundle-runtime-windows-x64
+          - name: Linux x64
+            os: ubuntu-latest
+            asset_name: browser4-bundle-runtime-linux-x64.tar.gz
+            artifact_name: browser4-bundle-runtime-linux-x64
+          # - name: macOS x64
+          #   os: macos-13
+          #   asset_name: browser4-bundle-runtime-darwin-x64.tar.gz
+          #   artifact_name: browser4-bundle-runtime-darwin-x64
+          - name: macOS ARM64
+            os: macos-14
+            asset_name: browser4-bundle-runtime-darwin-arm64.tar.gz
+            artifact_name: browser4-bundle-runtime-darwin-arm64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Setup JDK ${{ env.BUNDLE_JAVA_VERSION }} for jlink
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.BUNDLE_JAVA_VERSION }}
+          cache: maven
+
+      - name: Prepare bundle build environment
+        shell: pwsh
+        run: |
+          if ($IsWindows) {
+            Write-Host "Using Windows Maven wrapper" -ForegroundColor Cyan
+          }
+          else {
+            chmod +x ./mvnw
+            Write-Host "Ensured execute permission for mvnw" -ForegroundColor Cyan
+          }
+
+          java -version
+
+      - name: Build Browser4 runtime bundle
+        shell: pwsh
+        run: |
+          ./browser4-apps/browser4-bundle/build-runtime-bundle.ps1 `
+            -JarPath "${{ env.BUNDLE_JAR_PATH }}" `
+            -OutputDirectory "browser4-apps/browser4-bundle/target/runtime-release" `
+            -AssetName "${{ matrix.asset_name }}" `
+            -Force
+
+      - name: Verify Browser4 runtime bundle (structure only)
+        if: runner.os != 'Linux'  # Full functional test on Linux only
+        shell: pwsh
+        run: |
+          ./browser4-apps/browser4-bundle/verify-runtime-bundle.ps1 `
+            -BundlePath "browser4-apps/browser4-bundle/target/runtime-release/${{ matrix.asset_name }}" `
+            -ExpectedAssetName "${{ matrix.asset_name }}" `
+            -SkipFunctionalTest
+
+      - name: Verify Browser4 runtime bundle (full functional test)
+        if: runner.os == 'Linux'
+        shell: pwsh
+        run: |
+          ./browser4-apps/browser4-bundle/verify-runtime-bundle.ps1 `
+            -BundlePath "browser4-apps/browser4-bundle/target/runtime-release/${{ matrix.asset_name }}" `
+            -ExpectedAssetName "${{ matrix.asset_name }}" `
+            -StartupTimeoutSeconds 300
+
+      - name: Upload runtime bundle artifact
+        if: needs.prepare.outputs.should_publish_artifacts == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: browser4-apps/browser4-bundle/target/runtime-release/${{ matrix.asset_name }}
+          retention-days: 7
+
   publish-cli-npm:
     name: Publish browser4-cli to npm
     needs: [prepare, build-cli-binaries]
-    if: needs.prepare.outputs.cli_should_publish_npm == 'true'
+    if: needs.prepare.outputs.cli_should_publish_npm == 'true' && needs.prepare.outputs.dry_run != 'true' && needs.prepare.outputs.bundle_only != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -706,7 +933,38 @@ jobs:
         shell: bash
         run: node cli/scripts/sync-version.js
 
+      - name: Re-check npm version before publish
+        id: cli_publish_check
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          eval "$(node cli/scripts/check-npm-publish-needed.js --shell)"
+
+          echo "package_name=$PACKAGE_NAME" >> "$GITHUB_OUTPUT"
+          echo "cli_version=$CLI_VERSION" >> "$GITHUB_OUTPUT"
+          echo "remote_version=$REMOTE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "lookup_status=$LOOKUP_STATUS" >> "$GITHUB_OUTPUT"
+          echo "should_publish=$SHOULD_PUBLISH" >> "$GITHUB_OUTPUT"
+
+          if [ "$SHOULD_PUBLISH" != "true" ]; then
+            echo "::notice::Skipping npm publish because $PACKAGE_NAME@$CLI_VERSION already exists on npm."
+          elif [ "$LOOKUP_STATUS" = "failed" ]; then
+            echo "::warning::Unable to query npm version for $PACKAGE_NAME before publish. Proceeding because the prepare job determined a publish was required."
+          fi
+
+          {
+            echo "## 🔎 CLI Publish Re-check"
+            echo ""
+            echo "- **Package**: $PACKAGE_NAME"
+            echo "- **Local CLI Version**: $CLI_VERSION"
+            echo "- **Remote npm Version**: $REMOTE_VERSION"
+            echo "- **Lookup Status**: $LOOKUP_STATUS"
+            echo "- **Will Publish**: $SHOULD_PUBLISH"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Download all CLI binary artifacts
+        if: steps.cli_publish_check.outputs.should_publish == 'true'
         uses: actions/download-artifact@v4
         with:
           pattern: browser4-cli-*
@@ -714,6 +972,7 @@ jobs:
           merge-multiple: true
 
       - name: Move binaries into CLI package bin directory
+        if: steps.cli_publish_check.outputs.should_publish == 'true'
         shell: bash
         run: |
           mkdir -p cli/bin
@@ -724,6 +983,7 @@ jobs:
           ls -la cli/bin/
 
       - name: Verify all packaged binaries exist
+        if: steps.cli_publish_check.outputs.should_publish == 'true'
         shell: bash
         run: |
           EXPECTED_BINARIES=(
@@ -761,25 +1021,50 @@ jobs:
           echo "All 7 platform binaries are present and valid"
 
       - name: Publish to npm
+        if: steps.cli_publish_check.outputs.should_publish == 'true'
         working-directory: ${{ env.CLI_PACKAGE_DIR }}
         run: npm publish --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Verify npm auth
-        working-directory: ${{ env.CLI_PACKAGE_DIR }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm whoami
+      - name: Verify npm package was published
+        if: steps.cli_publish_check.outputs.should_publish == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PACKAGE_NAME='${{ steps.cli_publish_check.outputs.package_name }}'
+          CLI_VERSION='${{ steps.cli_publish_check.outputs.cli_version }}'
+
+          for attempt in 1 2 3 4 5; do
+            PUBLISHED_VERSION=$(npm view "$PACKAGE_NAME@$CLI_VERSION" version 2>/dev/null || true)
+            if [ "$PUBLISHED_VERSION" = "$CLI_VERSION" ]; then
+              echo "Verified $PACKAGE_NAME@$CLI_VERSION on npm"
+              exit 0
+            fi
+
+            if [ "$attempt" -lt 5 ]; then
+              echo "npm registry has not reported $PACKAGE_NAME@$CLI_VERSION yet (attempt $attempt/5); retrying in 10s..."
+              sleep 10
+            fi
+          done
+
+          echo "Unable to verify $PACKAGE_NAME@$CLI_VERSION on npm after publish"
+          exit 1
 
       - name: npm publish summary
         if: always()
         shell: bash
         run: |
+          if [ "${{ needs.prepare.outputs.dry_run }}" = "true" ]; then
+            echo "## 📦 CLI npm Publish (skipped — dry-run)"
+            exit 0
+          fi
           {
             echo "## 📦 CLI npm Publish"
             echo ""
             echo "- **CLI Version**: ${{ needs.prepare.outputs.cli_version }}"
+            echo "- **Remote npm Version (publish-time)**: ${{ steps.cli_publish_check.outputs.remote_version }}"
+            echo "- **Publish Re-check Status**: ${{ steps.cli_publish_check.outputs.lookup_status }}"
+            echo "- **Publish Executed**: ${{ steps.cli_publish_check.outputs.should_publish }}"
             echo "- **Status**: ${{ job.status }}"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -789,11 +1074,15 @@ jobs:
       - prepare
       - build-core-and-docker
       - build-cli-binaries
+      - build-runtime-bundles
       - publish-cli-npm
     if: |
       always() &&
+      needs.prepare.outputs.dry_run != 'true' &&
+      needs.prepare.outputs.bundle_only != 'true' &&
       needs.build-core-and-docker.result == 'success' &&
       (needs.build-cli-binaries.result == 'success' || needs.build-cli-binaries.result == 'skipped') &&
+      needs.build-runtime-bundles.result == 'success' &&
       (needs.publish-cli-npm.result == 'success' || needs.publish-cli-npm.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
@@ -822,6 +1111,13 @@ jobs:
           path: release-assets/
           merge-multiple: true
 
+      - name: Download runtime bundle artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: browser4-bundle-runtime-*
+          path: release-assets/
+          merge-multiple: true
+
       - name: List release assets
         shell: bash
         run: |
@@ -834,7 +1130,7 @@ jobs:
       - name: Verify release assets
         shell: bash
         run: |
-          if [ ! -f "release-assets/${{ needs.build-core-and-docker.outputs.jar_name }}" ]; then
+          if [ ! -f "release-assets/${{ env.PRODUCTION_JAR_NAME }}" ]; then
             echo "❌ Missing JAR asset"
             exit 1
           fi
@@ -848,6 +1144,13 @@ jobs:
             fi
           fi
 
+          RUNTIME_BUNDLE_COUNT=$(find release-assets -maxdepth 1 -type f \( -name 'browser4-bundle-runtime-*.zip' -o -name 'browser4-bundle-runtime-*.tar.gz' \) | wc -l)
+          if [ "$RUNTIME_BUNDLE_COUNT" -lt 3 ]; then
+            echo "❌ Expected 3 Browser4 runtime bundles, found $RUNTIME_BUNDLE_COUNT"
+            ls -la release-assets/
+            exit 1
+          fi
+
           echo "✅ Release assets verified"
 
       - name: Build release asset manifest
@@ -856,10 +1159,11 @@ jobs:
         run: |
           {
             echo 'files<<EOF'
-            echo "release-assets/${{ needs.build-core-and-docker.outputs.jar_name }}"
+            echo "release-assets/${{ env.PRODUCTION_JAR_NAME }}"
             if [ "${{ needs.prepare.outputs.cli_should_build }}" = "true" ]; then
               find release-assets -maxdepth 1 -type f -name 'browser4-cli-*' | sort
             fi
+            find release-assets -maxdepth 1 -type f \( -name 'browser4-bundle-runtime-*.zip' -o -name 'browser4-bundle-runtime-*.tar.gz' \) | sort
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
 
@@ -882,28 +1186,30 @@ jobs:
         if: success()
         uses: actions/attest-build-provenance@ef244123eb79f2f7a7e75d99086184180e6d0018  # v1.4.4
         with:
-          subject-path: release-assets/${{ needs.build-core-and-docker.outputs.jar_name }}
+          subject-path: release-assets/${{ env.PRODUCTION_JAR_NAME }}
 
       - name: Verify Release
         shell: bash
         run: |
           echo "::group::✅ Release Verification"
 
-          JAR_SIZE=$(stat -c%s "release-assets/${{ needs.build-core-and-docker.outputs.jar_name }}" 2>/dev/null || echo 0)
+          JAR_SIZE=$(stat -c%s "release-assets/${{ env.PRODUCTION_JAR_NAME }}" 2>/dev/null || echo 0)
 
           echo "🎉 Release ${{ needs.prepare.outputs.version }} created successfully!"
           echo ""
           echo "📦 Release Details:"
           echo "  - Tag: ${{ needs.prepare.outputs.tag }}"
-          echo "  - JAR: ${{ needs.build-core-and-docker.outputs.jar_name }}"
+          echo "  - JAR: ${{ env.PRODUCTION_JAR_NAME }}"
           echo "  - Size: $(numfmt --to=iec --suffix=B $JAR_SIZE)"
           echo "  - Prerelease: ${{ needs.prepare.outputs.is_prerelease }}"
           echo "  - CLI Version: ${{ needs.prepare.outputs.cli_version }}"
+          echo "  - Runtime bundles:"
+          find release-assets -maxdepth 1 -type f \( -name 'browser4-bundle-runtime-*.zip' -o -name 'browser4-bundle-runtime-*.tar.gz' \) -printf '    - %f\n' | sort
           echo ""
           echo "🔗 Release URL: https://github.com/${{ github.repository }}/releases/tag/${{ needs.prepare.outputs.tag }}"
           echo ""
           echo "📥 Download Command:"
-          echo "wget https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare.outputs.tag }}/${{ needs.build-core-and-docker.outputs.jar_name }}"
+          echo "wget https://github.com/${{ github.repository }}/releases/download/${{ needs.prepare.outputs.tag }}/${{ env.PRODUCTION_JAR_NAME }}"
 
           echo "::endgroup::"
 
@@ -921,7 +1227,8 @@ jobs:
             echo "- **Commit**: ${{ github.sha }}"
             echo ""
             echo "### 📦 Artifacts"
-            echo "- **JAR**: ${{ needs.build-core-and-docker.outputs.jar_name }}"
+            echo "- **JAR**: ${{ env.PRODUCTION_JAR_NAME }}"
+            echo "- **Runtime Bundles**: browser4-bundle-runtime-windows-x64.zip, browser4-bundle-runtime-linux-x64.tar.gz, browser4-bundle-runtime-darwin-x64.tar.gz, browser4-bundle-runtime-darwin-arm64.tar.gz"
             echo "- **CLI Version**: ${{ needs.prepare.outputs.cli_version }}"
             echo "- **npm Version**: ${{ needs.prepare.outputs.npm_version }}"
             echo "- **npm Lookup Status**: ${{ needs.prepare.outputs.cli_npm_lookup_status }}"
@@ -937,6 +1244,7 @@ jobs:
             echo "- **Prepare**: ${{ needs.prepare.result }}"
             echo "- **Core Build + Docker**: ${{ needs.build-core-and-docker.result }}"
             echo "- **CLI Binary Build**: ${{ needs.build-cli-binaries.result }}"
+            echo "- **Runtime Bundle Build**: ${{ needs.build-runtime-bundles.result }}"
             echo "- **CLI npm Publish**: ${{ needs.publish-cli-npm.result }}"
             echo ""
             echo "✅ Release pipeline completed successfully!"
@@ -948,6 +1256,7 @@ jobs:
       - prepare
       - build-core-and-docker
       - build-cli-binaries
+      - build-runtime-bundles
       - publish-cli-npm
       - publish-github-release
     if: failure()

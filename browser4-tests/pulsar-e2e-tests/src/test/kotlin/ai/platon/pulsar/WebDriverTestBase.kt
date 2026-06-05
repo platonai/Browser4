@@ -1,28 +1,29 @@
 package ai.platon.pulsar
 
-import ai.platon.browser4.driver.chrome.dom.CDPSnapshotService
-import ai.platon.browser4.driver.chrome.dom.model.MergedDOMTreeNode
-import ai.platon.browser4.driver.chrome.dom.model.PageTarget
-import ai.platon.browser4.driver.chrome.dom.model.SnapshotOptions
-import ai.platon.browser4.driver.chrome.dom.util.DomDebug
-import ai.platon.browser4.driver.common.BrowserSettings
-import ai.platon.browser4.driver.common.SimpleScriptConfuser
+import ai.platon.browser4.boot.autoconfigure.Browser4AutoConfiguration
+import ai.platon.browser4.chrome.dom.CDPSnapshotService
+import ai.platon.browser4.chrome.dom.util.DomDebug
+import ai.platon.pulsar.browser.BrowserId
+import ai.platon.pulsar.browser.common.BrowserSettings
+import ai.platon.pulsar.browser.common.SimpleScriptConfuser
+import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
+import ai.platon.pulsar.chrome.dom.model.PageTarget
+import ai.platon.pulsar.chrome.dom.model.SnapshotOptions
 import ai.platon.pulsar.common.printlnPro
-import ai.platon.pulsar.protocol.browser.impl.DefaultBrowserFactory
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.Browser
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserFactory
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
+import ai.platon.pulsar.core.api.Browser
+import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.util.server.EnableMockServerApplication
 import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.BeforeEach
 import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.context.annotation.Import
 import java.util.concurrent.atomic.AtomicBoolean
 
 @SpringBootTest(
     classes = [EnableMockServerApplication::class],
     webEnvironment = SpringBootTest.WebEnvironment.DEFINED_PORT
 )
+@Import(Browser4AutoConfiguration::class)
 open class WebDriverTestBase : MockSiteAccess() {
 
     companion object {

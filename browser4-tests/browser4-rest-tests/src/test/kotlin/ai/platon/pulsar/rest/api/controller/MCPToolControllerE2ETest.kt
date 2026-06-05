@@ -1,23 +1,18 @@
 package ai.platon.pulsar.rest.api.controller
 
+import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.external.ChatModelFactory
 import ai.platon.pulsar.rest.api.TestHelper.MOCK_PRODUCT_DETAIL_URL
 import ai.platon.pulsar.rest.mcp.controller.MCPToolCallResponse
 import ai.platon.pulsar.rest.mcp.controller.MCPToolController
-import ai.platon.pulsar.rest.mcp.service.SessionManager
 import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.node.ArrayNode
 import com.fasterxml.jackson.databind.node.ObjectNode
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.sun.net.httpserver.HttpServer
-import org.junit.jupiter.api.AfterEach
-import org.junit.jupiter.api.Assumptions
-import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.DisplayName
-import org.junit.jupiter.api.Tag
-import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.*
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.http.MediaType
@@ -54,7 +49,7 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
     private lateinit var conf: ImmutableConfig
 
     @Autowired
-    lateinit var sessionManager: SessionManager
+    lateinit var sessionManager: PulsarSessionManager
 
     private lateinit var fixtureServer: FixtureServer
     private lateinit var tempDir: Path
@@ -91,6 +86,8 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         "dialog-dismiss" to "browser_handle_dialog",
         "resize" to "browser_resize",
         "screenshot" to "browser_take_screenshot",
+        "state-save" to "browser_save_storage_state",
+        "state-load" to "browser_load_storage_state",
         "tab-list" to "browser_tabs",
         "tab-new" to "browser_tabs",
         "tab-close" to "browser_tabs",
@@ -218,6 +215,72 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         val deleteResponse = callTool("delete_session_data", mapOf("sessionId" to sessionId))
         assertNotError(deleteResponse)
         assertTrue(textContent(deleteResponse).contains("User data deleted"))
+    }
+
+    @Test
+    @DisplayName("storage state tools save and restore cookies plus localStorage")
+    fun testStorageStateTools() {
+        val sessionId = openAndNavigate(fixtureServer.interactiveUrl())
+        assertNotError(
+            callTool(
+                "browser_evaluate",
+                mapOf(
+                    "sessionId" to sessionId,
+                    "expression" to """
+                        (() => {
+                          document.cookie = 'savedCookie=saved-value; path=/';
+                          window.localStorage.setItem('savedKey', 'saved-value');
+                          return 'ok';
+                        })()
+                    """.trimIndent()
+                )
+            )
+        )
+
+        val savedStateResponse = callTool("browser_save_storage_state", mapOf("sessionId" to sessionId))
+        assertNotError(savedStateResponse)
+        val savedStateText = textContent(savedStateResponse)
+        val savedState = objectMapper.readTree(savedStateText)
+        assertTrue(savedState["cookies"].any { it["name"].asText() == "savedCookie" })
+        assertTrue(
+            savedState["origins"].any { origin ->
+                origin["origin"].asText() == fixtureServer.baseUrl &&
+                    origin["localStorage"].any { it["name"].asText() == "savedKey" && it["value"].asText() == "saved-value" }
+            }
+        )
+
+        assertNotError(callTool("delete_session_data", mapOf("sessionId" to sessionId)))
+        waitForEvalText(
+            sessionId,
+            "window.localStorage.getItem('savedKey') ?? ''",
+            "",
+            "Expected delete_session_data to clear localStorage before restore"
+        )
+
+        val loadResponse = callTool(
+            "browser_load_storage_state",
+            mapOf(
+                "sessionId" to sessionId,
+                "state" to savedStateText,
+            )
+        )
+        assertNotError(loadResponse)
+        val loadSummary = objectMapper.readTree(textContent(loadResponse))
+        assertEquals(1, loadSummary["origins"].asInt())
+        assertTrue(loadSummary["cookies"].asInt() >= 1)
+
+        waitForEvalText(
+            sessionId,
+            "window.localStorage.getItem('savedKey') ?? ''",
+            "saved-value",
+            "Expected browser_load_storage_state to restore localStorage"
+        )
+        waitForEvalText(
+            sessionId,
+            "document.cookie.includes('savedCookie=saved-value').toString()",
+            "true",
+            "Expected browser_load_storage_state to restore cookies"
+        )
     }
 
     @Test
@@ -559,7 +622,26 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
     }
 
     @Test
-    @DisplayName("mouse, dialog, and tab tools match the interactive CLI scenarios")
+    @DisplayName("mouse wheel tool matches the interactive CLI scenario")
+    fun testMouseWheelCommand() {
+        val sessionId = openResizedInteractiveSession()
+
+        assertNotError(callTool("mousemove", mapOf("sessionId" to sessionId, "x" to 120, "y" to 120)))
+        waitForState(sessionId, "Expected mousemove to update lastMouse") {
+            it["lastMouse"][0].asInt() == 120 && it["lastMouse"][1].asInt() == 120
+        }
+
+        runToolAndWaitForState(
+            sessionId = sessionId,
+            toolName = "mousewheel",
+            arguments = mapOf("sessionId" to sessionId, "deltaX" to 0, "deltaY" to 16),
+            failureMessage = "Expected mousewheel to update lastWheel",
+            predicate = { it["lastWheel"][0].asInt() == 0 && it["lastWheel"][1].asInt() == 16 }
+        )
+    }
+
+    @Test
+    @DisplayName("mouse move/down/up, dialog, and tab tools match the interactive CLI scenarios")
     fun testMouseDialogAndTabCommands() {
         val sessionId = openResizedInteractiveSession()
 
@@ -586,13 +668,6 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
             predicate = { it["mouseUpCount"].asInt() >= mouseUpBefore + 1 }
         )
 
-        runToolAndWaitForState(
-            sessionId = sessionId,
-            toolName = "mousewheel",
-            arguments = mapOf("sessionId" to sessionId, "deltaX" to 0, "deltaY" to 160),
-            failureMessage = "Expected mousewheel to update lastWheel",
-            predicate = { it["lastWheel"][0].asInt() == 160 && it["lastWheel"][1].asInt() == 0 }
-        )
 
         evalText(
             sessionId,
@@ -643,8 +718,8 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
 
     @Test
     @Tag("RequiresAI")
-    @DisplayName("agent extract/summarize and command run/status/result work through MCP")
-    fun testAgentAndCommandTools() {
+    @DisplayName("agent extract and summarize work through MCP")
+    fun testAgentExtractAndSummarizeTools() {
         Assumptions.assumeTrue(ChatModelFactory.isModelConfigured(conf))
 
         val sessionId = openAndNavigate(MOCK_PRODUCT_DETAIL_URL)
@@ -666,12 +741,17 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         )
         assertNotError(extractResponse)
         assertTrue(textContent(extractResponse).isNotBlank(), "Expected agent_extract to return extracted content")
+    }
 
+    @Test
+    @DisplayName("agent-run agent-status and agent-result aliases work through MCP command tools")
+    fun testAgentRunStatusAndResultTools() {
         val commandRun = callTool(
             "command_run",
-            mapOf("command" to MOCK_PRODUCT_DETAIL_URL, "async" to true)
+            mapOf("command" to fixtureServer.interactiveUrl(), "async" to true)
         )
         assertNotError(commandRun)
+
         val taskId = textContent(commandRun).removePrefix("\"").removeSuffix("\"").trim()
         assertTrue(taskId.isNotBlank(), "Expected command_run to return a task id")
 
@@ -681,7 +761,8 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
 
         val result = callTool("command_result", mapOf("id" to taskId))
         assertNotError(result)
-        assertTrue(textContent(result).isNotBlank(), "Expected command_result to return the completed result")
+        val resultPayload = textContent(result)
+        assertTrue(resultPayload.isNotBlank(), "Expected command_result to return the completed result")
     }
 
     @Test
@@ -748,7 +829,11 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         return sessionId
     }
 
-    private fun openTemporarySession(): String = openSession(mapOf("profileMode" to OPEN_PROFILE_MODE))
+    private fun openTemporarySession(): String = openSession(mapOf(
+        "sessionId" to "test",
+        "profileMode" to OPEN_PROFILE_MODE,
+        "interactLevel" to "FASTEST"
+    ))
 
     private fun navigate(sessionId: String, url: String) {
         val response = callTool("browser_navigate", mapOf("sessionId" to sessionId, "url" to url))
@@ -1112,4 +1197,5 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
             }
         }
     }
+
 }

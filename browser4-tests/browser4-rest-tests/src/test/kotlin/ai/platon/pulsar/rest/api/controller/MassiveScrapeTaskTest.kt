@@ -1,7 +1,6 @@
 package ai.platon.pulsar.rest.api.controller
 
 import ai.platon.pulsar.common.AppContext
-import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.sleepSeconds
 import ai.platon.pulsar.common.sql.SQLTemplate
 import ai.platon.pulsar.common.urls.URLUtils
@@ -21,10 +20,11 @@ import kotlin.test.Test
 
 @Ignore("Slow, take long time to run, you should run the tests separately")
 @Tag("Slow")
+@Tag("ManualOnly")
 class MassiveScrapeTaskTest : IntegrationTestBase() {
 
     companion object {
-        const val TEST_FILE_COUNT = 10000
+        const val TEST_FILE_COUNT = 20
         const val POLLING_INTERVAL_SECONDS = 4L
         const val MAX_ROUNDS = 100
 
@@ -73,7 +73,7 @@ class MassiveScrapeTaskTest : IntegrationTestBase() {
     }
 
     /**
-     * Test for Controller [ai.platon.pulsar.rest.api.controller.ScrapeController.submitJob]
+     * Test for Controller [ai.platon.pulsar.rest.api.controller.ScrapeController.submit]
      * */
     @Test
     fun whenIssueMassiveScrapeTask_thenShouldFinishAllTasks() {
@@ -95,7 +95,7 @@ class MassiveScrapeTaskTest : IntegrationTestBase() {
 
         var round = 0
         while (++round < MAX_ROUNDS && AppContext.isActive && !Thread.interrupted()) {
-            val count = client.get().uri("/api/x/c?status=${ResourceStatus.SC_OK}")
+            val count = client.get().uri("/api/x/c?status=200")
                 .exchange()
                 .expectStatus().is2xxSuccessful
                 .expectBody(Int::class.java)

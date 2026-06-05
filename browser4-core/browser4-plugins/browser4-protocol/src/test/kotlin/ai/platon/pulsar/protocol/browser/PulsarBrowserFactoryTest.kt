@@ -1,9 +1,9 @@
 package ai.platon.pulsar.protocol.browser
 
-import ai.platon.browser4.protocol.browser.PulsarBrowserFactory
+import ai.platon.browser4.chrome.manage.PulsarBrowserFactory
+import ai.platon.pulsar.browser.Browser
+import ai.platon.pulsar.browser.BrowserId
 import ai.platon.pulsar.common.AppPaths
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.Browser
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Disabled

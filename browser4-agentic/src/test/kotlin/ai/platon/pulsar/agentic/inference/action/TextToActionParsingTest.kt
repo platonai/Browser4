@@ -1,8 +1,8 @@
 package ai.platon.pulsar.agentic.inference.action
 
-import ai.platon.browser4.driver.chrome.dom.model.BrowserUseState
 import ai.platon.pulsar.agentic.model.ActionDescription
 import ai.platon.pulsar.agentic.model.AgentState
+import ai.platon.pulsar.chrome.dom.model.BrowserUseState
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.external.ModelResponse
 import ai.platon.pulsar.external.ResponseState

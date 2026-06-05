@@ -1,24 +1,24 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
 import ai.platon.pulsar.agentic.model.ToolCall
-import ai.platon.pulsar.agentic.tools.AgentToolExecutor
+import ai.platon.pulsar.agentic.tools.AgentToolManager
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
-import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.DisplayName
+import org.junit.jupiter.api.Test
 
 class SystemToolExecutorTest {
 
-    private lateinit var agentToolExecutor: AgentToolExecutor
+    private lateinit var agentToolManager: AgentToolManager
     private lateinit var executor: SystemToolExecutor
 
     @BeforeEach
     fun setUp() {
-        agentToolExecutor = mockk(relaxed = true)
-        executor = SystemToolExecutor(agentToolExecutor)
+        agentToolManager = mockk(relaxed = true)
+        executor = SystemToolExecutor(agentToolManager)
     }
 
     @Test
@@ -34,7 +34,7 @@ class SystemToolExecutorTest {
     @Test
         @DisplayName("help with domain and method delegates to agent tool manager")
     fun helpWithDomainAndMethodDelegatesToAgentToolManager() = runBlocking {
-        every { agentToolExecutor.help("fs", "writeString") } returns "File system help"
+        every { agentToolManager.help("fs", "writeString") } returns "File system help"
 
         val result = executor.help("fs", "writeString")
 
@@ -44,7 +44,7 @@ class SystemToolExecutorTest {
     @Test
         @DisplayName("system help method executes correctly")
     fun systemHelpMethodExecutesCorrectly() = runBlocking {
-        every { agentToolExecutor.help("tab", "click") } returns "Click help text"
+        every { agentToolManager.help("tab", "click") } returns "Click help text"
 
         val tc = ToolCall(
             domain = "system",

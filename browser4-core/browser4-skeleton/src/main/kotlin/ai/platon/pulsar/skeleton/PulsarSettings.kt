@@ -1,9 +1,9 @@
 package ai.platon.pulsar.skeleton
 
-import ai.platon.browser4.driver.common.BrowserSettings
-import ai.platon.browser4.driver.common.DisplayMode
-import ai.platon.browser4.driver.common.DomSettlePolicy
-import ai.platon.browser4.driver.common.InteractSettings
+import ai.platon.pulsar.browser.DomSettlePolicy
+import ai.platon.pulsar.browser.InteractSettings
+import ai.platon.pulsar.browser.common.BrowserSettings
+import ai.platon.pulsar.browser.common.DisplayMode
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.browser.InteractLevel
@@ -50,6 +50,7 @@ data class PulsarSettings(
     val maxOpenTabs: Int? = null,
     val interactSettings: InteractSettings? = null,
     val profileMode: BrowserProfileMode? = null,
+    val label: String? = null,
 ) {
     fun overrideSystemProperties() {
         overrideConfigurationInternal(null)
@@ -77,7 +78,7 @@ data class PulsarSettings(
 
         fun parse(capabilities: Map<String, Any?>? = null): PulsarSettings {
             val spa: Boolean? = capabilities?.get("spa")?.toString()?.toBooleanStrictOrNull()
-            val displayMode: DisplayMode? = capabilities?.get("displayMode")?.toString()?.let { DisplayMode.fromString(it) }
+            val displayMode: DisplayMode? = parseDisplayMode(capabilities)
             val maxBrowsers: Int? = capabilities?.get("maxBrowsers")?.toString()?.toIntOrNull()
             val maxOpenTabs: Int? = capabilities?.get("maxOpenTabs")?.toString()?.toIntOrNull()
             val interactSettings: InteractSettings? = capabilities?.get("interactSettings")?.toString()?.let { InteractSettings.fromJsonOrNull(it) }
@@ -92,6 +93,34 @@ data class PulsarSettings(
                 profileMode = profileMode,
                 interactSettings = interactSettings ?: InteractSettings.create(interactLevel ?: InteractLevel.DEFAULT),
             )
+        }
+
+        /**
+         * Resolves the display mode from capabilities.
+         *
+         * Priority:
+         * 1. `displayMode` string (e.g. "GUI", "HEADLESS", "SUPERVISED") — takes highest priority.
+         * 2. `headed` boolean — true → GUI, false → HEADLESS.
+         * 3. Neither set → null (let [BrowserSettings] apply its default).
+         */
+        private fun parseDisplayMode(capabilities: Map<String, Any?>?): DisplayMode? {
+            // 1. Explicit displayMode string takes priority.
+            val displayMode = capabilities?.get("displayMode")?.toString()
+                ?.takeIf { it.isNotEmpty() }
+                ?.let { DisplayMode.fromString(it) }
+            if (displayMode != null) return displayMode
+
+            // 2. Fall back to the headed boolean flag.
+            if (capabilities?.containsKey("headed") == true) {
+                val headed = when (val v = capabilities["headed"]) {
+                    is Boolean -> v
+                    else -> v?.toString()?.toBooleanStrictOrNull() ?: return null
+                }
+                return if (headed) DisplayMode.GUI else DisplayMode.HEADLESS
+            }
+
+            // 3. Neither key is present — let BrowserSettings apply its default.
+            return null
         }
 
         private fun parseInteractLevel(capabilities: Map<String, Any?>?): InteractLevel? {
@@ -119,13 +148,13 @@ data class PulsarSettings(
 
         @JvmStatic
         @JvmOverloads
-        fun withBrowserContextMode(contextMode: BrowserProfileMode, conf: MutableConfig? = null): Companion =
-            withBrowserContextMode(contextMode, BrowserType.DEFAULT, conf)
+        fun withBrowserContextMode(browserProfileMode: BrowserProfileMode, conf: MutableConfig? = null): Companion =
+            withBrowserContextMode(browserProfileMode, BrowserType.DEFAULT, conf)
 
         @JvmStatic
         @JvmOverloads
-        fun withBrowserContextMode(contextMode: BrowserProfileMode, browserType: BrowserType, conf: MutableConfig? = null): Companion {
-            BrowserSettings.withBrowserContextMode(contextMode, browserType, conf)
+        fun withBrowserContextMode(browserProfileMode: BrowserProfileMode, browserType: BrowserType, conf: MutableConfig? = null): Companion {
+            BrowserSettings.withBrowserContextMode(browserProfileMode, browserType, conf)
             return PulsarSettings
         }
 
@@ -230,7 +259,7 @@ data class PulsarSettings(
          * Use sequential browsers that inherits from the prototype browser’s environment. The sequential browsers are
          * permanent unless the context directories are deleted manually.
          *
-         * @param maxAgents The maximum number of sequential privacy agents, the active privacy contexts is chosen from them.
+         * @param maxAgents The maximum number of sequential browser profiles, the active privacy contexts is chosen from them.
          * @return the PulsarSettings itself
          * */
         @JvmStatic

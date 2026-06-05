@@ -1,6 +1,6 @@
 package ai.platon.pulsar.agentic.agents
 
-import ai.platon.browser4.driver.chrome.dom.util.DomDebug
+import ai.platon.browser4.chrome.dom.util.DomDebug
 import ai.platon.pulsar.agentic.*
 import ai.platon.pulsar.agentic.inference.detail.*
 import ai.platon.pulsar.agentic.model.ActionDescription
@@ -13,7 +13,6 @@ import ai.platon.pulsar.common.Strings
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.config.AppConstants.SEARCH_ENGINE_URLS
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.common.serialize.json.Pson
 import ai.platon.pulsar.external.ModelResponse
 import ai.platon.pulsar.external.ResponseState

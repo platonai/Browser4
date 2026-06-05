@@ -15,7 +15,7 @@
     <parent>
         <groupId>ai.platon.pulsar</groupId>
         <artifactId>browser4</artifactId>
-        <version>4.9.2-SNAPSHOT</version>
+        <version>4.10.0-rc.3</version>
         <relativePath>../../pom.xml</relativePath>
     </parent>
 
@@ -23,6 +23,8 @@
     <name>Browser4 Rest Tests</name>
 
     <build>
+        <defaultGoal>verify</defaultGoal>
+
         <plugins>
             <plugin>
                 <groupId>org.springframework.boot</groupId>
@@ -53,7 +55,11 @@
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-tests-common</artifactId>
         </dependency>
-
+        <!-- Jackson module for Kotlin support -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.module</groupId>
+            <artifactId>jackson-module-kotlin</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-test</artifactId>

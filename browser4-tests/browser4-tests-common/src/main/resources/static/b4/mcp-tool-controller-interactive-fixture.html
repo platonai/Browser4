@@ -165,7 +165,7 @@
       syncState();
     });
     mouseArea.addEventListener('wheel', (event) => {
-      window.__browser4State.lastWheel = [Math.round(event.deltaY), Math.round(event.deltaX)];
+      window.__browser4State.lastWheel = [Math.round(event.deltaX), Math.round(event.deltaY)];
       syncState();
     });
 

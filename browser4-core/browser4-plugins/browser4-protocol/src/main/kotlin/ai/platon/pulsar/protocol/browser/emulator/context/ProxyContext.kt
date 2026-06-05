@@ -18,10 +18,10 @@ package ai.platon.pulsar.protocol.browser.emulator.context
 import ai.platon.pulsar.common.DateTimes
 import ai.platon.pulsar.common.config.CapabilityTypes
 import ai.platon.pulsar.common.proxy.*
+import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 import com.codahale.metrics.Gauge
 import org.slf4j.LoggerFactory
 import java.time.Duration
@@ -34,7 +34,7 @@ open class ProxyContext(
     var proxyEntry: ProxyEntry? = null,
     private val proxyPoolManager: ProxyPoolManager,
     private val driverContext: WebDriverContext
-): AutoCloseable {
+) : AutoCloseable {
 
     companion object {
         val numProxyAbsence = AtomicInteger()
@@ -88,8 +88,10 @@ open class ProxyContext(
                     numProxyAbsence.set(0)
                     lastProxyAbsentTime = now
                 } else {
-                    throw ProxyVendorUntrustedException("No proxy available, the vendor is untrusted." +
-                            " Proxy is absent for $numProxyAbsence times from $lastProxyAbsentTime")
+                    throw ProxyVendorUntrustedException(
+                        "No proxy available, the vendor is untrusted." +
+                                " Proxy is absent for $numProxyAbsence times from $lastProxyAbsentTime"
+                    )
                 }
             }
         }
@@ -98,6 +100,7 @@ open class ProxyContext(
     private val logger = LoggerFactory.getLogger(ProxyContext::class.java)!!
 
     private val conf get() = proxyPoolManager.conf
+
     /**
      * If the number of success exceeds [maxFetchSuccess], emit a PrivacyRetry result
      * */
@@ -107,32 +110,35 @@ open class ProxyContext(
     private val closed = AtomicBoolean()
 
     val isEnabled get() = proxyPoolManager.isEnabled
-    val isRetired: Boolean get() {
-        val p = proxyEntry
-        if (p != null) {
-            if (p.isExpired) {
-                p.retire()
+    val isRetired: Boolean
+        get() {
+            val p = proxyEntry
+            if (p != null) {
+                if (p.isExpired) {
+                    p.retire()
+                }
+                return p.isRetired
             }
-            return p.isRetired
+            return false
         }
-        return false
-    }
     val isActive get() = proxyPoolManager.isActive && !closing.get() && !closed.get()
-    val isReady: Boolean get() {
-        val isProxyReady = proxyEntry == null || proxyEntry?.isReady == true
-        return isProxyReady && !isRetired && isActive
-    }
-    val state: Map<String, Any> get() {
-        return mapOf(
-            "proxyEntry" to (proxyEntry ?: "<no proxy>"),
-            "isRetired" to isRetired,
-            "isActive" to isActive,
-            "isReady" to isReady,
-            "numProxyAbsence" to numProxyAbsence.get(),
-            "numRunningTasks" to numRunningTasks.get(),
-            "maxAllowedProxyAbsence" to maxAllowedProxyAbsence
-        )
-    }
+    val isReady: Boolean
+        get() {
+            val isProxyReady = proxyEntry == null || proxyEntry?.isReady == true
+            return isProxyReady && !isRetired && isActive
+        }
+    val state: Map<String, Any>
+        get() {
+            return mapOf(
+                "proxyEntry" to (proxyEntry ?: "<no proxy>"),
+                "isRetired" to isRetired,
+                "isActive" to isActive,
+                "isReady" to isReady,
+                "numProxyAbsence" to numProxyAbsence.get(),
+                "numRunningTasks" to numRunningTasks.get(),
+                "maxAllowedProxyAbsence" to maxAllowedProxyAbsence
+            )
+        }
 
     init {
         maxAllowedProxyAbsence = conf.getInt(CapabilityTypes.PROXY_MAX_ALLOWED_PROXY_ABSENCE, 10)
@@ -145,7 +151,7 @@ open class ProxyContext(
      * */
     @Throws(ProxyVendorException::class)
     suspend fun run(task: FetchTask, browseFun: suspend (FetchTask, WebDriver) -> FetchResult): FetchResult {
-        return checkAbnormalResult(task) ?:run0(task, browseFun)
+        return checkAbnormalResult(task) ?: run0(task, browseFun)
     }
 
     open fun maintain() {
@@ -191,16 +197,19 @@ open class ProxyContext(
             is ProxyInsufficientBalanceException -> {
                 throw e
             }
+
             is ProxyRetiredException -> {
-                logger.warn("{}, context reset will be triggered | {}", e.message, task.proxyEntry?:"<no proxy>")
+                logger.warn("{}, context reset will be triggered | {}", e.message, task.proxyEntry ?: "<no proxy>")
                 FetchResult.privacyRetry(task, e)
             }
+
             is NoProxyException -> {
                 numProxyAbsence.incrementAndGet()
                 checkProxyAbsence()
                 logger.warn("No proxy available temporary the {}th times, cause: {}", numProxyAbsence, e.message)
                 FetchResult.crawlRetry(task, "No proxy")
             }
+
             else -> {
                 logger.warn("Task failed with proxy {}, cause: {}", proxyEntry, e.message)
                 FetchResult.privacyRetry(task, e)

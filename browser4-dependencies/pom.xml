@@ -17,7 +17,7 @@
     <groupId>ai.platon</groupId>
     <artifactId>browser4-dependencies</artifactId>
     <name>Browser4 Dependencies</name>
-    <version>4.9.2-SNAPSHOT</version>
+    <version>4.10.0-rc.3</version>
     <packaging>pom</packaging>
 
     <description>Pulsar Dependencies</description>
@@ -101,6 +101,13 @@
                 <groupId>org.apache.tika</groupId>
                 <artifactId>tika-parser-html-module</artifactId>
                 <version>${tika.version}</version>
+                <exclusions>
+                    <!-- Use pulsar-jsoup instead -->
+                    <exclusion>
+                        <groupId>org.jsoup</groupId>
+                        <artifactId>jsoup</artifactId>
+                    </exclusion>
+                </exclusions>
             </dependency>
 
             <dependency>
@@ -108,6 +115,7 @@
                 <artifactId>tika-parsers</artifactId>
                 <version>${tika.version}</version>
                 <exclusions>
+                    <!-- Use pulsar-jsoup instead -->
                     <exclusion>
                         <groupId>org.jsoup</groupId>
                         <artifactId>jsoup</artifactId>
@@ -542,6 +550,7 @@
                         <extensions>true</extensions>
                         <configuration>
                             <publishingServerId>central</publishingServerId>
+                            <autoPublish>true</autoPublish>
                         </configuration>
                     </plugin>
                 </plugins>

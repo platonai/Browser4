@@ -1,5 +1,10 @@
 package ai.platon.pulsar.protocol.browser.driver
 
+import ai.platon.pulsar.browser.AbstractWebDriver
+import ai.platon.pulsar.browser.BrowserId
+import ai.platon.pulsar.browser.common.BrowserLaunchException
+import ai.platon.pulsar.browser.common.WebDriverCancellationException
+import ai.platon.pulsar.browser.common.WebDriverException
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.config.AppConstants.DEFAULT_BROWSER_MAX_OPEN_TABS
@@ -10,15 +15,15 @@ import ai.platon.pulsar.common.config.MutableConfig
 import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.common.readable
 import ai.platon.pulsar.common.stringify
+import ai.platon.pulsar.core.api.Browser
+import ai.platon.pulsar.core.api.BrowserManager
+import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.protocol.browser.emulator.WebDriverPoolExhaustedException
 import ai.platon.pulsar.skeleton.common.AppSystemInfo
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.Browser
 import ai.platon.pulsar.skeleton.event.BrowseEventHandlers
 import ai.platon.pulsar.skeleton.event.PulsarEventBus
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.*
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.BrowserId
 import org.slf4j.LoggerFactory
 import java.time.Duration
 import java.time.Instant

@@ -39,34 +39,93 @@ runs:
         cache: ${{ inputs.enable_cache == 'true' && 'maven' || '' }}
 
     - name: Install Required Tools
-      shell: bash
+      shell: pwsh
       run: |
-        echo "::group::Installing Required Tools"
-        
-        # Install jq for JSON parsing
-        if ! command -v jq &> /dev/null; then
-          echo "Installing jq..."
-          sudo apt-get update -qq
-          sudo apt-get install -y jq
-        else
-          echo "✅ jq already installed: $(jq --version)"
-        fi
-        
-        # Install timeout command if not available
-        if ! command -v timeout &> /dev/null; then
-          echo "Installing coreutils..."
-          sudo apt-get install -y coreutils
-        else
-          echo "✅ timeout command available"
-        fi
-        
-        echo "::endgroup::"
+        Write-Host "::group::Installing Required Tools"
+
+        function Test-CommandAvailable([string]$Name) {
+          return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
+        }
+
+        function Install-WithApt([string[]]$Packages) {
+          & sudo apt-get update -qq
+          if ($LASTEXITCODE -ne 0) {
+            throw "apt-get update failed with exit code $LASTEXITCODE"
+          }
+          & sudo apt-get install -y @Packages
+          if ($LASTEXITCODE -ne 0) {
+            throw "apt-get install failed with exit code $LASTEXITCODE"
+          }
+        }
+
+        function Install-WithBrew([string[]]$Packages) {
+          & brew install @Packages
+          if ($LASTEXITCODE -ne 0) {
+            throw "brew install failed with exit code $LASTEXITCODE"
+          }
+        }
+
+        function Install-WithChoco([string[]]$Packages) {
+          & choco install -y --no-progress @Packages
+          if ($LASTEXITCODE -ne 0) {
+            throw "choco install failed with exit code $LASTEXITCODE"
+          }
+        }
+
+        if (Test-CommandAvailable 'jq') {
+          $jqVersion = & jq --version
+          Write-Host "✅ jq already installed: $jqVersion"
+        }
+        elseif ($IsLinux) {
+          Write-Host 'Installing jq with apt-get...' -ForegroundColor Cyan
+          Install-WithApt @('jq')
+        }
+        elseif ($IsMacOS) {
+          if (Test-CommandAvailable 'brew') {
+            Write-Host 'Installing jq with Homebrew...' -ForegroundColor Cyan
+            Install-WithBrew @('jq')
+          }
+          else {
+            Write-Warning 'jq is not installed and Homebrew is unavailable; continuing without automatic jq installation.'
+          }
+        }
+        elseif ($IsWindows) {
+          if (Test-CommandAvailable 'choco') {
+            Write-Host 'Installing jq with Chocolatey...' -ForegroundColor Cyan
+            Install-WithChoco @('jq')
+          }
+          else {
+            Write-Warning 'jq is not installed and Chocolatey is unavailable; continuing without automatic jq installation.'
+          }
+        }
+
+        if ((Test-CommandAvailable 'timeout') -or (Test-CommandAvailable 'gtimeout')) {
+          Write-Host '✅ timeout-compatible command available'
+        }
+        elseif ($IsLinux) {
+          Write-Host 'Installing coreutils with apt-get...' -ForegroundColor Cyan
+          Install-WithApt @('coreutils')
+        }
+        elseif ($IsMacOS) {
+          if (Test-CommandAvailable 'brew') {
+            Write-Host 'Installing coreutils with Homebrew...' -ForegroundColor Cyan
+            Install-WithBrew @('coreutils')
+          }
+          else {
+            Write-Warning 'timeout/gtimeout is not installed and Homebrew is unavailable; continuing without automatic coreutils installation.'
+          }
+        }
+        elseif ($IsWindows) {
+          Write-Host 'ℹ️ Skipping timeout installation on Windows; GNU timeout is not required by this setup step.'
+        }
+
+        Write-Host "::endgroup::"
 
     - name: Read Application Version
       shell: bash
       run: |
         echo "::group::Reading Application Version"
-        
+
         if [ -f VERSION ]; then
           VERSION=$(head -n 1 VERSION | tr -d '\n\r\t ')
           echo "VERSION=$VERSION" >> $GITHUB_ENV
@@ -85,7 +144,7 @@ runs:
             echo "⚠️ No VERSION file or pom.xml found"
           fi
         fi
-        
+
         echo "::endgroup::"
 
     - name: Cache Maven Dependencies
@@ -100,43 +159,117 @@ runs:
           ${{ runner.os }}-maven-
 
     - name: Setup Permissions
-      shell: bash
+      shell: pwsh
       run: |
-        echo "::group::Setting up Permissions"
-        
-        # Set execute permissions for shell scripts
-        if [ -d "bin/" ]; then
-          find bin/ -name "*.sh" -exec chmod +x {} \;
-          echo "✅ Set execute permissions for $(find bin/ -name "*.sh" | wc -l) script(s) in bin/"
-        fi
-        
-        if [ -d "scripts/" ]; then
-          find scripts/ -name "*.sh" -exec chmod +x {} \;
-          echo "✅ Set execute permissions for $(find scripts/ -name "*.sh" | wc -l) script(s) in scripts/"
-        fi
-        
-        # Set execute permissions for Maven wrapper
-        if [ -f "./mvnw" ]; then
-          chmod +x ./mvnw
-          echo "✅ Set execute permissions for Maven wrapper"
-        fi
-        
-        # Set execute permissions for Gradle wrapper if exists
-        if [ -f "./gradlew" ]; then
-          chmod +x ./gradlew
-          echo "✅ Set execute permissions for Gradle wrapper"
-        fi
-        
-        echo "::endgroup::"
+        Write-Host "::group::Setting up Permissions"
+
+        function Set-UnixExecuteBits([string]$RootPath) {
+          if (-not (Test-Path -LiteralPath $RootPath -PathType Container)) {
+            return
+          }
+
+          $scripts = Get-ChildItem -LiteralPath $RootPath -Recurse -File -Filter '*.sh'
+          foreach ($script in $scripts) {
+            & chmod +x $script.FullName
+            if ($LASTEXITCODE -ne 0) {
+              throw "chmod failed for $($script.FullName) with exit code $LASTEXITCODE"
+            }
+          }
+
+          Write-Host "✅ Set execute permissions for $($scripts.Count) script(s) in $RootPath"
+        }
+
+        if ($IsWindows) {
+          Write-Host 'ℹ️ Skipping chmod on Windows runners.'
+        }
+        else {
+          Set-UnixExecuteBits 'bin'
+          Set-UnixExecuteBits 'scripts'
+
+          if (Test-Path -LiteralPath './mvnw' -PathType Leaf) {
+            & chmod +x ./mvnw
+            if ($LASTEXITCODE -ne 0) {
+              throw "chmod failed for ./mvnw with exit code $LASTEXITCODE"
+            }
+            Write-Host '✅ Set execute permissions for Maven wrapper'
+          }
+
+          if (Test-Path -LiteralPath './gradlew' -PathType Leaf) {
+            & chmod +x ./gradlew
+            if ($LASTEXITCODE -ne 0) {
+              throw "chmod failed for ./gradlew with exit code $LASTEXITCODE"
+            }
+            Write-Host '✅ Set execute permissions for Gradle wrapper'
+          }
+        }
+
+        Write-Host "::endgroup::"
 
     - name: Display Environment Info
-      shell: bash
+      shell: pwsh
       run: |
-        echo "::group::Environment Information"
-        echo "🔧 Java Version: $(java -version 2>&1 | head -n 1)"
-        echo "🔧 Maven Version: $(./mvnw --version 2>/dev/null | head -n 1 || echo 'Maven wrapper not found')"
-        echo "🔧 Docker Version: $(docker --version 2>/dev/null || echo 'Docker not available')"
-        echo "🔧 Operating System: $(cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2 | tr -d '"')"
-        echo "🔧 Available Memory: $(free -h | grep '^Mem:' | awk '{print $2}')"
-        echo "🔧 Available Disk: $(df -h / | tail -1 | awk '{print $4}')"
-        echo "::endgroup::"
+        Write-Host "::group::Environment Information"
+
+        $javaVersionLine = (& java -version 2>&1 | Select-Object -First 1)
+        Write-Host "🔧 Java Version: $javaVersionLine"
+
+        if (Test-Path -LiteralPath './mvnw' -PathType Leaf) {
+          $mavenVersionLine = (& ./mvnw --version 2>&1 | Select-Object -First 1)
+        }
+        elseif (Test-Path -LiteralPath './mvnw.cmd' -PathType Leaf) {
+          $mavenVersionLine = (& ./mvnw.cmd --version 2>&1 | Select-Object -First 1)
+        }
+        else {
+          $mavenVersionLine = 'Maven wrapper not found'
+        }
+        Write-Host "🔧 Maven Version: $mavenVersionLine"
+
+        $dockerVersionLine = if (Get-Command docker -ErrorAction SilentlyContinue) {
+          & docker --version 2>&1
+        } else {
+          'Docker not available'
+        }
+        Write-Host "🔧 Docker Version: $dockerVersionLine"
+
+        $osDescription = [System.Runtime.InteropServices.RuntimeInformation]::OSDescription.Trim()
+        Write-Host "🔧 Operating System: $osDescription"
+
+        $computerSystem = if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) {
+          Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
+        } else {
+          $null
+        }
+        if ($computerSystem) {
+          $totalMemoryGiB = [math]::Round($computerSystem.TotalPhysicalMemory / 1GB, 2)
+          Write-Host "🔧 Available Memory: $totalMemoryGiB GiB total"
+        }
+        else {
+          try {
+            if ($IsLinux) {
+              $memLine = Get-Content -LiteralPath '/proc/meminfo' | Where-Object { $_ -like 'MemTotal:*' } | Select-Object -First 1
+              if ($memLine) {
+                $memKb = [double](($memLine -split '\s+')[1])
+                Write-Host ("🔧 Available Memory: {0} GiB total" -f [math]::Round($memKb / 1MB, 2))
+              }
+            }
+            elseif ($IsMacOS) {
+              $memBytes = [double](& sysctl -n hw.memsize)
+              Write-Host ("🔧 Available Memory: {0} GiB total" -f [math]::Round($memBytes / 1GB, 2))
+            }
+          }
+          catch {
+            Write-Host '🔧 Available Memory: unavailable'
+          }
+        }
+
+        try {
+          $driveName = if ($IsWindows) { (Get-Location).Drive.Name } else { '/' }
+          $disk = Get-PSDrive -Name $driveName -ErrorAction Stop
+          $freeGiB = [math]::Round($disk.Free / 1GB, 2)
+          Write-Host "🔧 Available Disk: $freeGiB GiB free on $driveName"
+        }
+        catch {
+          Write-Host '🔧 Available Disk: unavailable'
+        }
+
+        Write-Host "::endgroup::"

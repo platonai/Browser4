@@ -1,6 +1,6 @@
 package ai.platon.pulsar.agentic.skills
 
-import ai.platon.pulsar.agentic.context.AgenticContexts
+import ai.platon.pulsar.agentic.context.StaticAgenticContext
 import ai.platon.pulsar.agentic.event.AgenticEvents
 import ai.platon.pulsar.agentic.model.ActionDescription
 import ai.platon.pulsar.agentic.model.ToolCall
@@ -9,6 +9,7 @@ import kotlinx.coroutines.delay
 import org.junit.jupiter.api.*
 import org.junit.jupiter.api.Assertions.assertTrue
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * End-to-end test for skill registration and invocation.
@@ -28,6 +29,7 @@ import java.util.concurrent.ConcurrentHashMap
  */
 @Tag("E2ETest")
 @Tag("skills")
+@Tag("RequiresAI")
 class SkillRegistrationAndInvocationE2ETest {
 
     companion object {
@@ -72,7 +74,7 @@ class SkillRegistrationAndInvocationE2ETest {
     @Test
     @DisplayName("test skill registration and invocation through agent")
     suspend fun testSkillRegistrationAndInvocationThroughAgent() {
-        val session = AgenticContexts.getOrCreateSession()
+        val session = StaticAgenticContext(autoRefresh = true).createSession()
         val driver = session.createBoundDriver()
         val agent = session.companionAgent
         assertNotNull(agent, "Agent should be created")
@@ -87,7 +89,7 @@ class SkillRegistrationAndInvocationE2ETest {
         val history = agent.run(task)
 
         // Allow time for event processing
-        delay(500)
+        delay(500.milliseconds)
 
         // Step 5: Verify the agent ran and completed
         assertNotNull(history, "History should not be null")

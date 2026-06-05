@@ -70,6 +70,18 @@ mvnw.cmd -q -DskipTests
 - Windows: `bin/build.ps1 [-test]`
 - Linux/macOS: `bin/build.sh [-test]`
 
+> **Note for Linux/macOS:** Many scripts in this repo are PowerShell (`.ps1`) files (e.g., `bin/test.ps1`, `bin/build.ps1`). To run them on Linux/macOS, install PowerShell if not already installed, then use `pwsh`:
+> ```bash
+> # Install PowerShell (Ubuntu/Debian)
+> sudo apt-get install -y powershell
+> # Or via snap
+> sudo snap install powershell --classic
+>
+> # Run a PowerShell script
+> pwsh bin/test.ps1 fast
+> pwsh bin/build.ps1 -test
+> ```
+
 ## Project Structure
 
 | Module                                 | Description |
@@ -80,7 +92,7 @@ mvnw.cmd -q -DskipTests
 | `browser4-agentic`                     | AI agents implementation, MCP, skills registration |
 | `browser4-rest`                        | Spring Boot REST layer & command endpoints |
 | `cli/*`                                | Browser4 CLI + skill assets (`cli/browser4-cli`, `cli/skill`) |
-| `browser4-app/*`                       | Product packaging and the unified launcher (`browser4-app/browser4-agents`, `target/Browser4.jar`) |
+| `browser4-apps/*`                       | Product packaging and the unified launcher (`browser4-apps/browser4-standalone`, `target/Browser4.jar`) |
 | `examples/*`                           | Runnable examples (`examples/browser4-examples`) |
 | `browser4-tests`                       | E2E & heavy integration & scenario tests |
 | `browser4-tests/browser4-tests-common` | Shared test base classes and utilities |
@@ -153,17 +165,17 @@ To keep iteration fast, **don’t run full test suites by default**.
 - Default: `./mvnw` compile with tests skipped
 - Then: run the **smallest relevant** test scope (module/class) when logic changes
 - Upgrade scope when risk increases (cross-module, public API/DTO/serialization, Spring wiring, dependency bumps,
-  concurrency/I/O, browser/CDP lifecycle)
+  concurrency/I/O, browser/BrowserProtocol lifecycle)
 - Test scheduling is tag-driven; reuse the dimensions in `docs/TESTING.md` (`Unit`/`Integration`/`E2E`/`SDK`, `Fast`/`Slow`/`Heavy`, `Requires*`, `ManualOnly`) instead of inventing new tags
 
 See [TESTING.md](docs/TESTING.md) for details and trade-offs.
 
 ### Test Commands in This Repository
-- Use `bin/test.ps1` on Windows for scoped runs: `fast`, `it`, `e2e`, `rest`, `skills`, `mcp`, `cli`, `browser4`, `mocksite`
+- Use `bin/test.ps1` on Windows for scoped runs: `fast`, `it`, `e2e`, `rest`, `skills`, `mcp`, `cli`, `browser4`, `mock-site` (`mocksite` and `mocksiteboot` remain accepted aliases)
 - Maven profile switches in root `pom.xml` are property-driven: `-DrunITs=true`, `-DrunE2ETests=true`, `-DrunCoreTests=true`, `-DrunRestTests=true`
-- Use `bin/test.ps1 mocksite -Dmock.site.port=18080` to launch `MockSiteBoot` from `browser4-tests/browser4-rest-tests`; use `MockSiteLauncher` from `browser4-tests/browser4-tests-common` for in-process startup
+- Use `bin/test.ps1 mock-site -Dmock.site.port=18080` to launch `MockSiteBoot` from `browser4-tests/browser4-rest-tests`; use `MockSiteLauncher` from `browser4-tests/browser4-tests-common` for in-process startup
 - `cli/browser4-cli/tests/e2e.rs`: all e2e scenarios must start and depend on Browser4.jar; this includes single-scenario runs via `--scenario`.
-- `.github/workflows/ci.yml` builds with `all-modules`, starts the Dockerized app on port `8182`, runs `cargo test` in `cli/browser4-cli`, and keeps the main Maven test pass limited to fast/unit-style tags by excluding `Slow`, `Heavy`, `Integration`, `E2E`, `SDK`, `Requires*`, and `ManualOnly`.
+- `.github/workflows/ci.yml` builds with `all-main-modules`, starts the Dockerized app on port `8182`, runs `cargo test` in `cli/browser4-cli`, and keeps the main Maven test pass limited to fast/unit-style tags by excluding `Slow`, `Heavy`, `Integration`, `E2E`, `SDK`, `Requires*`, and `ManualOnly`.
 
 ### Test Location
 - Module unit tests: `src/test/kotlin/...`
@@ -207,7 +219,7 @@ Default: 8182
 openrouter.api.key=your-api-key
 
 # Browser context mode
-browser.context.mode=DEFAULT  # DEFAULT | SYSTEM_DEFAULT | SEQUENTIAL | TEMPORARY
+browser.profile.mode=DEFAULT  # DEFAULT | SYSTEM_DEFAULT | SEQUENTIAL | TEMPORARY
 
 # Display mode
 browser.display.mode=GUI  # GUI | HEADLESS | SUPERVISED
@@ -235,11 +247,12 @@ browser.display.mode=GUI  # GUI | HEADLESS | SUPERVISED
 
 | Issue | Solution                                                    |
 |-------|-------------------------------------------------------------|
+| `.ps1` scripts don't run on Linux | Install PowerShell: `sudo apt-get install -y powershell`, then `pwsh script.ps1` |
 | `mvnw` no execute permission | `chmod +x mvnw`                                             |
 | JDK version mismatch | Ensure JDK 17+ in `JAVA_HOME`                               |
 | Windows parameter escaping | Use `-D"key.with.dots=value"`                               |
 | Port 8182 in use | Override `server.port` or use root `application.properties` |
-| CDP retry log storms | Use existing retry utilities, lower log level               |
+| BrowserProtocol retry log storms | Use existing retry utilities, lower log level               |
 
 ## Documentation References
 
@@ -365,7 +378,7 @@ skillRegistry.register(CustomTool())
 - **Input Validation** - Always validate URLs and user inputs
 - **API Keys** - Never hardcode, use configuration
 - **XSS Prevention** - Sanitize extracted content
-- **CDP Security** - Handle Chrome DevTools Protocol errors gracefully
+- **BrowserProtocol Security** - Handle Chrome DevTools Protocol errors gracefully
 
 ### Debugging with Claude
 

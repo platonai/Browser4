@@ -1,4 +1,4 @@
 #!/bin/bash
 
-# Call bin/build/build.sh with all passed arguments
-bin/build/build.sh "$@"
+# Call bin/build/build.ps1 with all passed arguments
+pwsh bin/build/build.ps1 "$@"

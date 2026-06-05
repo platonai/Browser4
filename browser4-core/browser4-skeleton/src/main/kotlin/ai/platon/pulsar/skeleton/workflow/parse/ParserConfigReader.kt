@@ -1,10 +1,9 @@
 package ai.platon.pulsar.skeleton.workflow.parse
 
-import ai.platon.browser4.common.B4ResourceLoader
+import ai.platon.pulsar.common.ResourceLoader
 import ai.platon.pulsar.common.config.CapabilityTypes
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.getLogger
-import org.slf4j.LoggerFactory
 import org.w3c.dom.Document
 import org.w3c.dom.Element
 import org.xml.sax.InputSource
@@ -36,7 +35,7 @@ class ParserConfigReader {
         val fileResource = conf[PARSE_PLUGINS_FILE, "parse-plugins.xml"]
         var document: Document? = null
         try {
-            B4ResourceLoader.getResourceAsReader(fileResource, resourcePrefix).use { reader ->
+            ResourceLoader.getResourceAsReader(fileResource, resourcePrefix).use { reader ->
                 val inputSource = InputSource(reader)
                 val parser = DocumentBuilderFactory.newInstance().newDocumentBuilder()
                 document = parser.parse(inputSource)

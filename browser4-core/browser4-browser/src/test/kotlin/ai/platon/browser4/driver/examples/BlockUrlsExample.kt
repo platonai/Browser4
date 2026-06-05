@@ -9,7 +9,7 @@ import ai.platon.cdt.kt.protocol.events.page.FrameStoppedLoading
 import ai.platon.cdt.kt.protocol.events.page.LoadEventFired
 import ai.platon.pulsar.common.AppFiles
 import ai.platon.pulsar.common.AppPaths
-import com.google.gson.Gson
+import ai.platon.pulsar.common.serialize.json.Pson
 import java.util.concurrent.TimeUnit
 
 class BlockUrlsExample: BrowserExampleBase() {
@@ -82,7 +82,7 @@ class BlockUrlsExample: BrowserExampleBase() {
 
         page.navigate(testUrl)
 
-        println(Gson().toJson(chrome.version))
+        println(Pson.toJson(chrome.version))
 
 //        readLine()
     }

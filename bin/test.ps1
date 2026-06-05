@@ -1,9 +1,14 @@
 #!/usr/bin/env pwsh
 
 param(
+    [switch]$DryRun,
+    [switch]$Show,
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$ScriptArgs
 )
+
+$script:DryRun = $DryRun
+$script:Show = $Show
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = (git rev-parse --show-toplevel 2>$null)
@@ -28,29 +33,37 @@ if (-not (Test-Path (Join-Path $repoRoot 'VERSION'))) {
 Set-Location $repoRoot
 
 function Print-Usage {
-    Write-Host "Usage: test.ps1 [test-types...] [additional-args...]"
+    Write-Host "Usage: test.ps1 [-DryRun] [-Show] [test-types...] [additional-args...]"
+    Write-Host ""
+    Write-Host "Options:"
+    Write-Host "  -DryRun     Compile only (test-compile), do not run tests"
+    Write-Host "  -Show       Print the final Maven command, do not execute anything"
     Write-Host ""
     Write-Host "Test Types:"
     Write-Host "  fast        Run fast unit tests only"
     Write-Host "  it          Run integration tests"
     Write-Host "  e2e         Run end-to-end tests"
-    Write-Host "  cli         Run Rust Browser4 CLI tests from sdks\browser4-cli"
-    Write-Host "  mocksite    Launch MockSiteBoot from browser4-tests\browser4-rest-tests"
+    Write-Host "  cli         Run Rust Browser4 CLI tests from cli\browser4-cli"
+    Write-Host "  mock-site   Launch mock site from browser4-tests\browser4-rest-tests"
     Write-Host "  rest        Run REST module tests"
     Write-Host "  skills      Run skills-focused agentic tests"
     Write-Host "  mcp         Run MCP-focused agentic tests"
+    Write-Host "  resume      Resume from the last failed module (-rf)"
     Write-Host "  browser4    Run all Browser4 main tests (fast, rest, it, e2e)"
     Write-Host "  b4          Alias for browser4"
     Write-Host ""
     Write-Host "Examples:"
     Write-Host "  test.ps1 fast                       # Run fast unit tests"
+    Write-Host "  test.ps1 -DryRun fast               # Show the Maven command for fast tests"
+    Write-Host "  test.ps1 -DryRun it -pl browser4-core  # Show the Maven command with extra args"
     Write-Host "  test.ps1 it                         # Run integration tests"
     Write-Host "  test.ps1 e2e                        # Run end-to-end tests"
     Write-Host "  test.ps1 cli                        # Run Browser4 CLI tests"
     Write-Host "  test.ps1 cli -- --nocapture         # Pass extra cargo test args"
-    Write-Host "  test.ps1 mocksite -Dmock.site.port=18080"
+    Write-Host "  test.ps1 mock-site -Dmock.site.port=18080"
     Write-Host "  test.ps1 skills                     # Run skills-focused agentic tests"
     Write-Host "  test.ps1 mcp                        # Run MCP-focused agentic tests"
+    Write-Host "  test.ps1 resume                     # Resume from the last failed module"
     Write-Host "  test.ps1 browser4                   # Run all Browser4 main tests"
     Write-Host "  test.ps1 b4                         # Alias for browser4"
     Write-Host '  test.ps1 it -pl browser4-core       # Pass additional Maven args through'
@@ -58,7 +71,7 @@ function Print-Usage {
 }
 
 function Exit-UnknownTestType([string]$testType) {
-    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, mocksite, rest, skills, mcp, browser4, b4."
+    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, mock-site, rest, skills, mcp, resume, browser4, b4. Aliases: mocksite, mocksiteboot."
     exit 1
 }
 
@@ -88,7 +101,8 @@ function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
     Write-Host "Running Maven tests: $($testTypes -join ', ')"
     Write-Host "=========================================="
 
-    $mvnTestArgs = @('test', '-P=-examples')
+    $goal = if ($script:DryRun -and -not $script:Show) { 'test-compile' } else { 'test' }
+    $mvnTestArgs = @($goal, '-P=-examples')
 
     $hasFast = $testTypes -contains 'fast'
     $hasIT = $testTypes -contains 'it'
@@ -99,6 +113,7 @@ function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
 
     if ($hasIT) { $mvnTestArgs += '-DrunITs=true' }
     if ($hasE2E) { $mvnTestArgs += '-DrunE2ETests=true' }
+    if ($hasRest) { $mvnTestArgs += '-DrunRestTests=true' }
 
     $modules = @()
     if ($hasSkills -or $hasMcp) {
@@ -128,6 +143,23 @@ function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
 
     $mvnTestArgs += $additionalMvnArgs
 
+    if ($script:Show) {
+        Write-Host ""
+        Write-Host "=========================================="
+        Write-Host "[SHOW] Would execute:"
+        Write-Host "  $mvnCmd $($mvnTestArgs -join ' ')"
+        Write-Host "=========================================="
+        return
+    }
+
+    if ($script:DryRun) {
+        Write-Host ""
+        Write-Host "=========================================="
+        Write-Host "[DRY RUN] Executing:"
+        Write-Host "  $mvnCmd $($mvnTestArgs -join ' ')"
+        Write-Host "=========================================="
+    }
+
     try {
         & $mvnCmd @mvnTestArgs
         $exitCode = $LASTEXITCODE
@@ -151,7 +183,7 @@ function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
 }
 
 function Invoke-Browser4CliTests([string[]]$additionalArgs) {
-    $browser4CliDir = Join-Path $repoRoot 'sdks\browser4-cli'
+    $browser4CliDir = Join-Path $repoRoot 'cli\browser4-cli'
 
     Write-Host "=========================================="
     Write-Host "Running Browser4 CLI tests..."
@@ -177,7 +209,30 @@ function Invoke-Browser4CliTests([string[]]$additionalArgs) {
             exit 1
         }
 
-        $cargoArgs = @('test') + $additionalArgs
+        if ($script:Show) {
+            $cargoArgs = @('test') + $additionalArgs
+            Write-Host ""
+            Write-Host "=========================================="
+            Write-Host "[SHOW] Would execute in ${browser4CliDir}:"
+            Write-Host "  cargo $($cargoArgs -join ' ')"
+            Write-Host "=========================================="
+            return
+        }
+
+        if ($script:DryRun) {
+            $cargoArgs = @('test', '--no-run') + $additionalArgs
+        } else {
+            $cargoArgs = @('test') + $additionalArgs
+        }
+
+        if ($script:DryRun) {
+            Write-Host ""
+            Write-Host "=========================================="
+            Write-Host "[DRY RUN] Executing in ${browser4CliDir}:"
+            Write-Host "  cargo $($cargoArgs -join ' ')"
+            Write-Host "=========================================="
+        }
+
         & cargo @cargoArgs
         $exitCode = $LASTEXITCODE
         if ($exitCode -ne 0) {
@@ -238,13 +293,38 @@ function Invoke-MockSiteBoot([string[]]$additionalArgs) {
         $mvnArgs += "-Dspring-boot.run.jvmArguments=$($mockSiteJvmArgs -join ' ')"
     }
 
-    $mvnArgs += @(
-        'package',
-        'spring-boot:run'
-    )
+    if ($script:Show) {
+        $mvnArgs += @('package', 'spring-boot:run')
+    } elseif ($script:DryRun) {
+        $mvnArgs += @('compile')
+    } else {
+        $mvnArgs += @(
+            'package',
+            'spring-boot:run'
+        )
+    }
 
     try {
         Push-Location $mockSiteModuleDir
+
+        if ($script:Show) {
+            Write-Host ""
+            Write-Host "=========================================="
+            Write-Host "[SHOW] Would execute in ${mockSiteModuleDir}:"
+            Write-Host "  $mvnCmd $($mvnArgs -join ' ')"
+            Write-Host "=========================================="
+            Pop-Location
+            return
+        }
+
+        if ($script:DryRun) {
+            Write-Host ""
+            Write-Host "=========================================="
+            Write-Host "[DRY RUN] Executing in ${mockSiteModuleDir}:"
+            Write-Host "  $mvnCmd $($mvnArgs -join ' ')"
+            Write-Host "=========================================="
+        }
+
         & $mvnCmd @mvnArgs
         $exitCode = $LASTEXITCODE
         if ($exitCode -ne 0) {
@@ -264,7 +344,153 @@ function Invoke-MockSiteBoot([string[]]$additionalArgs) {
     }
 }
 
-$knownTestTypes = @('fast', 'it', 'e2e', 'cli', 'browser4-cli', 'mocksite', 'rest', 'skills', 'mcp', 'browser4', 'b4')
+# Read the parent POM's <modules> section to get the reactor build order.
+function Get-ReactorModuleOrder {
+    $parentPom = Join-Path $repoRoot 'pom.xml'
+    $order = @()
+    $inModules = $false
+
+    foreach ($line in (Get-Content $parentPom)) {
+        if ($line -match '<modules>') {
+            $inModules = $true
+            continue
+        }
+        if ($line -match '</modules>') {
+            break
+        }
+        if ($inModules -and ($line -match '<module>(.+)</module>')) {
+            $order += $Matches[1]
+        }
+    }
+
+    return $order
+}
+
+# Find the artifactId for a module directory by reading its pom.xml.
+# Skips the <parent> block to return the module's own artifactId.
+function Get-ArtifactIdForDir([string]$moduleDir) {
+    $pom = Join-Path $moduleDir 'pom.xml'
+    if (Test-Path $pom) {
+        $inParent = $false
+        foreach ($line in (Get-Content $pom)) {
+            if ($line -match '<parent>') {
+                $inParent = $true
+            }
+            elseif ($line -match '</parent>') {
+                $inParent = $false
+            }
+            elseif (-not $inParent -and ($line -match '<artifactId>([^<]+)</artifactId>')) {
+                return $Matches[1]
+            }
+        }
+    }
+    return $null
+}
+
+function Invoke-ResumeTests([string[]]$additionalArgs) {
+    Write-Host "=========================================="
+    Write-Host "Searching for failed modules to resume from..."
+    Write-Host "=========================================="
+
+    # Collect all module directories that have failing test reports.
+    $failedModuleDirs = @()
+    $reportsDirs = Get-ChildItem -Path $repoRoot -Recurse -Directory -Filter 'surefire-reports' -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match '\\target\\surefire-reports$' }
+
+    foreach ($dir in $reportsDirs) {
+        $hasFailure = Get-ChildItem -Path $dir.FullName -Filter '*.xml' -ErrorAction SilentlyContinue |
+            Where-Object { (Select-String -Path $_.FullName -Pattern '<failure|<error' -Quiet) } |
+            Select-Object -First 1
+
+        if ($hasFailure) {
+            # dir is <repo>\module\target\surefire-reports, parent of parent is module dir
+            $moduleDir = Split-Path -Parent (Split-Path -Parent $dir.FullName)
+            $failedModuleDirs += $moduleDir
+        }
+    }
+
+    if ($failedModuleDirs.Count -eq 0) {
+        Write-Host "No previous test failures found to resume from."
+        exit 0
+    }
+
+    # Build a hashtable: artifactId -> module directory
+    $artifactToDir = @{}
+    foreach ($dir in $failedModuleDirs) {
+        $aid = Get-ArtifactIdForDir $dir
+        if ($aid) {
+            $artifactToDir[$aid] = $dir
+        }
+    }
+
+    # Walk the reactor order from the parent POM to find the first failed module.
+    $resumeFrom = $null
+    $reactorOrder = Get-ReactorModuleOrder
+
+    foreach ($modulePath in $reactorOrder) {
+        $moduleDir = Join-Path $repoRoot $modulePath
+        if (Test-Path (Join-Path $moduleDir 'pom.xml')) {
+            $aid = Get-ArtifactIdForDir $moduleDir
+            if ($aid -and $artifactToDir.ContainsKey($aid)) {
+                $resumeFrom = $aid
+                break
+            }
+        }
+    }
+
+    if (-not $resumeFrom) {
+        Write-Host "Could not match any failed module to the reactor order."
+        exit 1
+    }
+
+    Write-Host "Resuming from module: $resumeFrom"
+    Write-Host ""
+
+    $goal = if ($script:DryRun -and -not $script:Show) { 'test-compile' } else { 'test' }
+    $mvnTestArgs = @($goal, '-P=-examples', '-rf', ":$resumeFrom") + $additionalArgs
+
+    $mvnCmd = Join-Path $repoRoot 'mvnw.cmd'
+
+    if ($script:Show) {
+        Write-Host ""
+        Write-Host "=========================================="
+        Write-Host "[SHOW] Would execute:"
+        Write-Host "  $mvnCmd $($mvnTestArgs -join ' ')"
+        Write-Host "=========================================="
+        return
+    }
+
+    if ($script:DryRun) {
+        Write-Host ""
+        Write-Host "=========================================="
+        Write-Host "[DRY RUN] Executing:"
+        Write-Host "  $mvnCmd $($mvnTestArgs -join ' ')"
+        Write-Host "=========================================="
+    }
+
+    try {
+        & $mvnCmd @mvnTestArgs
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -ne 0) {
+            Write-Host ""
+            Write-Host "=========================================="
+            Write-Host "❌ Tests failed with exit code $exitCode"
+            Write-Host "=========================================="
+            exit $exitCode
+        }
+
+        Write-Host ""
+        Write-Host "=========================================="
+        Write-Host "✅ Resume tests completed successfully"
+        Write-Host "=========================================="
+    }
+    catch {
+        Write-Error "Failed to execute resume tests: $_"
+        exit 1
+    }
+}
+
+$knownTestTypes = @('fast', 'it', 'e2e', 'cli', 'browser4-cli', 'mock-site', 'mocksite', 'mocksiteboot', 'rest', 'skills', 'mcp', 'resume', 'browser4', 'b4')
 $testTypes = @()
 $additionalArgs = @()
 $parsingTestTypes = $true
@@ -278,6 +504,16 @@ if ($normalizedScriptArgs.Count -eq 0) {
 foreach ($arg in $normalizedScriptArgs) {
     if ($arg -in '-h', '-help', '--help') {
         Print-Usage
+    }
+
+    if ($arg -eq '--dry-run') {
+        $script:DryRun = $true
+        continue
+    }
+
+    if ($arg -in '--show', '-Show') {
+        $script:Show = $true
+        continue
     }
 
     if ($parsingTestTypes -and ($arg -in $knownTestTypes)) {
@@ -297,6 +533,16 @@ if ($testTypes.Count -eq 0) {
     $testTypes += 'fast'
 }
 
+# Handle 'resume' test type: find last failed module and resume with -rf
+if ($testTypes -contains 'resume') {
+    if ($testTypes.Count -gt 1) {
+        Write-Error "'resume' must be the only test type. It resumes from the last failed module."
+        exit 1
+    }
+    Invoke-ResumeTests -additionalArgs $additionalArgs
+    exit 0
+}
+
 $mavenTests = @()
 $cliTests = @()
 $launchTargets = @()
@@ -312,8 +558,8 @@ foreach ($type in $testTypes) {
         continue
     }
 
-    if ($type -eq 'mocksite') {
-        $launchTargets += $type
+    if ($type -in @('mock-site', 'mocksite', 'mocksiteboot')) {
+        $launchTargets += 'mock-site'
         continue
     }
 
@@ -325,7 +571,7 @@ $cliTests = $cliTests | Select-Object -Unique
 $launchTargets = $launchTargets | Select-Object -Unique
 
 if ($launchTargets.Count -gt 0 -and (($mavenTests.Count -gt 0) -or ($cliTests.Count -gt 0) -or ($launchTargets.Count -gt 1))) {
-    Write-Error "mocksite must be run by itself. Pass any Maven properties after it, for example: test.ps1 mocksite -Dmock.site.port=18080"
+    Write-Error "mock-site must be run by itself. Pass any Maven properties after it, for example: test.ps1 mock-site -Dmock.site.port=18080"
     exit 1
 }
 
@@ -337,7 +583,7 @@ if (($cliTests | Where-Object { $_ -in @('cli', 'browser4-cli') }).Count -gt 0) 
     Invoke-Browser4CliTests -additionalArgs $additionalArgs
 }
 
-if ($launchTargets -contains 'mocksite') {
+if ($launchTargets -contains 'mock-site') {
     Invoke-MockSiteBoot -additionalArgs $additionalArgs
 }
 

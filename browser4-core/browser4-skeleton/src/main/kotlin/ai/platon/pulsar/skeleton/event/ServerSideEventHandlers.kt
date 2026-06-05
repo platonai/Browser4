@@ -1,6 +1,6 @@
 package ai.platon.pulsar.skeleton.event
 
-import ai.platon.pulsar.persist.WebPage
+import ai.platon.pulsar.core.api.WebPage
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -10,7 +10,7 @@ import java.time.Instant
  * Server-side event data structure.
  *
  * @property eventType The type of the event (e.g., "onWillLoad", "onFetched", "onHTMLDocumentParsed").
- * @property eventPhase The phase of the event (e.g., "crawl", "load", "browse").
+ * @property eventPhase The phase of the event (e.g., "browser", "load", "browse").
  * @property url The URL associated with the event, if applicable.
  * @property message Optional message or description of the event.
  * @property timestamp The timestamp when the event was created.
@@ -28,7 +28,7 @@ data class ServerSideEvent(
 /**
  * Server-side event handlers for capturing and broadcasting events during the page lifecycle.
  *
- * This interface defines methods for receiving events from various phases (crawl, load, browse)
+ * This interface defines methods for receiving events from various phases (browser, load, browse)
  * and forwarding them to subscribed listeners through a reactive stream.
  *
  * Events can be emitted at any point during the page processing lifecycle and will be
@@ -59,7 +59,7 @@ interface ServerSideEventHandlers {
     val eventFlow: SharedFlow<ServerSideEvent>
 
     /**
-     * Emits a crawl-phase event.
+     * Emits a browser-phase event.
      *
      * @param eventType The type of the event (e.g., "onWillLoad", "onLoaded").
      * @param url The URL associated with the event.
@@ -152,7 +152,7 @@ class DefaultServerSideEventHandlers(
     ) {
         emitEvent(ServerSideEvent(
             eventType = eventType,
-            eventPhase = "crawl",
+            eventPhase = "browser",
             url = url,
             message = message,
             metadata = metadata

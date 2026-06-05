@@ -22,7 +22,7 @@ package ai.platon.browser4.driver.examples
 import ai.platon.cdt.kt.protocol.events.overlay.ScreenshotRequested
 import ai.platon.cdt.kt.protocol.types.dom.RGBA
 import ai.platon.cdt.kt.protocol.types.overlay.HighlightConfig
-import com.google.gson.GsonBuilder
+import ai.platon.pulsar.common.serialize.json.Pson
 
 class OverlayExample : BrowserExampleBase() {
 
@@ -62,8 +62,7 @@ class OverlayExample : BrowserExampleBase() {
         overlay.highlightNode(highlightConfig, nodeId, null, null, selector)
 //        Thread.sleep(5000)
         val obj = overlay.getHighlightObjectForTest(nodeId)
-        val json = GsonBuilder().setPrettyPrinting().create().toJson(obj)
-        println(json)
+        println(Pson.toJson(obj))
     }
 }
 

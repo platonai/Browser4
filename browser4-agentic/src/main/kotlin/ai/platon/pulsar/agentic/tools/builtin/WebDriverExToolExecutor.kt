@@ -1,8 +1,8 @@
 package ai.platon.pulsar.agentic.tools.builtin
 
 import ai.platon.pulsar.agentic.model.ToolSpec
+import ai.platon.pulsar.browser.AbstractWebDriver
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver
 import kotlin.reflect.KClass
 
 class WebDriverExToolExecutor: AbstractToolExecutor() {
@@ -35,7 +35,7 @@ class WebDriverExToolExecutor: AbstractToolExecutor() {
     ): Any? {
         require(domain == this.domain) { "Unsupported domain: $domain" }
         require(functionName.isNotBlank()) { "Function name must not be blank" }
-        val driver = requireNotNull(receiver as? ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver) { "Target must be AbstractWebDriver" }
+        val driver = requireNotNull(receiver as? AbstractWebDriver) { "Target must be AbstractWebDriver" }
 
         return when (functionName) {
             "extract" -> {

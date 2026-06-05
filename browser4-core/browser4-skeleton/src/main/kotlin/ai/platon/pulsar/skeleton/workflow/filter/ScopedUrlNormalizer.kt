@@ -25,8 +25,7 @@ interface ScopedUrlNormalizer : NaiveUrlNormalizer {
     }
 }
 
-abstract class AbstractScopedUrlNormalizer :
-    ScopedUrlNormalizer {
+abstract class AbstractScopedUrlNormalizer : ScopedUrlNormalizer {
     override fun isRelevant(url: String, scope: String): Boolean = false
 
     override fun invoke(url: String?) = url?.let { normalize(it) }

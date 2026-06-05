@@ -4,9 +4,8 @@ import ai.platon.pulsar.common.FlowState
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.config.Parameterized
 import ai.platon.pulsar.common.readable
+import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.persist.ParseStatus
-import ai.platon.pulsar.persist.WebPage
-import ai.platon.pulsar.skeleton.common.message.MiscMessageWriter
 import ai.platon.pulsar.skeleton.common.persist.ext.loadEventHandlers
 import ai.platon.pulsar.skeleton.event.PulsarEventBus
 import ai.platon.pulsar.skeleton.workflow.common.LazyConfigurable
@@ -17,21 +16,15 @@ import org.slf4j.LoggerFactory
 import java.time.Duration
 import java.util.concurrent.ConcurrentSkipListSet
 import kotlin.system.measureTimeMillis
+import kotlin.time.Duration.Companion.milliseconds
 
 class PageParser(
     val parserFactory: ParserFactory,
-    override var conf: ImmutableConfig,
-    val messageWriter: MiscMessageWriter? = null
+    override var conf: ImmutableConfig
 ) : Parameterized, LazyConfigurable, AutoCloseable {
     private val logger = LoggerFactory.getLogger(PageParser::class.java)
 
     val unparsableTypes = ConcurrentSkipListSet<CharSequence>()
-
-    constructor(parserFactory: ParserFactory, conf: ImmutableConfig) : this(
-        parserFactory,
-        conf,
-        MiscMessageWriter()
-    )
 
     /**
      * @param conf The configuration
@@ -81,11 +74,6 @@ class PageParser(
         // If the parsing was successful, update the page's parse status and marks.
         if (parseResult.isParsed) {
             page.parseStatus = parseResult
-
-            // If the parsing result indicates success, perform additional actions.
-            if (parseResult.isSuccess) {
-                // do something
-            }
         }
 
         // Return the parsing result.
@@ -174,7 +162,7 @@ class PageParser(
 
     private fun runParser(p: Parser, page: WebPage): ParseResult {
         return runBlocking {
-            withTimeout(p.timeout.toMillis()) {
+            withTimeout(p.timeout.toMillis().milliseconds) {
                 val deferred = async { p.parse(page) }
                 deferred.await()
             }

@@ -14,7 +14,7 @@
     <parent>
         <groupId>ai.platon.pulsar</groupId>
         <artifactId>browser4</artifactId>
-        <version>4.9.2-SNAPSHOT</version>
+        <version>4.10.0-rc.3</version>
     </parent>
 
     <artifactId>browser4-tests</artifactId>
@@ -25,10 +25,4 @@
     <build>
         <defaultGoal>package</defaultGoal>
     </build>
-
-    <modules>
-        <module>browser4-rest-tests</module>
-        <module>pulsar-it-tests</module>
-        <module>pulsar-e2e-tests</module>
-    </modules>
 </project>

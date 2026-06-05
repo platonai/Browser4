@@ -275,20 +275,42 @@ where
     SleepAfter: FnOnce(),
 {
     // Force-kill path should still attempt browser cleanup even if earlier steps panic.
+    eprintln!("  [1/5] Notifying reachable servers to close all sessions ...");
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(notify_close_all));
 
     // Pre-sweep catches already-orphaned browser processes before server shutdown.
+    eprintln!("  [2/5] Scanning for orphaned browser processes (pre-sweep) ...");
     let pre_browser_kill = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&kill_browsers))
         .unwrap_or_else(|_| BrowserKillResult::default());
+    eprintln!(
+        "        Found {} browser process(es), killed {}",
+        pre_browser_kill.killed_pids.len() + pre_browser_kill.remaining_pids.len(),
+        pre_browser_kill.killed_pids.len()
+    );
 
+    eprintln!("  [3/5] Stopping Browser4 server processes ...");
     let shutdown = std::panic::catch_unwind(std::panic::AssertUnwindSafe(stop_server))
         .unwrap_or_else(|_| ShutdownResult::default());
+    eprintln!(
+        "        Stopped {}, already stopped {}, forced {}, still running {}",
+        shutdown.stopped_pids.len(),
+        shutdown.missing_pids.len(),
+        shutdown.forced_pids.len(),
+        shutdown.remaining_pids.len()
+    );
 
     // Post-sweep catches browsers that spawn late during shutdown.
+    eprintln!("  [4/5] Scanning for remaining browser processes (post-sweep) ...");
     let post_browser_kill = std::panic::catch_unwind(std::panic::AssertUnwindSafe(kill_browsers))
         .unwrap_or_else(|_| BrowserKillResult::default());
+    eprintln!(
+        "        Found {} browser process(es), killed {}",
+        post_browser_kill.killed_pids.len() + post_browser_kill.remaining_pids.len(),
+        post_browser_kill.killed_pids.len()
+    );
     let browser_kill = merge_browser_kill_results(pre_browser_kill, post_browser_kill);
 
+    eprintln!("  [5/5] Waiting for processes to exit ...");
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(sleep_after));
 
     ForceStopBrowser4ServerResult {
@@ -465,7 +487,7 @@ fn browser_marker_search_roots() -> Vec<PathBuf> {
             let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
                 continue;
             };
-            if !name.starts_with("browser4-app") {
+            if !name.starts_with("browser4-apps") {
                 continue;
             }
 
@@ -566,7 +588,9 @@ fn normalize_process_text(value: &str) -> String {
 
 fn command_line_matches_browser4_server(command_line: &str) -> bool {
     let normalized = normalize_process_text(command_line);
-    normalized.contains("browser4.jar") || normalized.contains("browser4launcherkt")
+    normalized.contains("browser4.jar")
+        || normalized.contains("browser4launcherkt")
+        || normalized.contains("browser4bundleapplicationkt")
 }
 
 fn find_browser4_server_processes() -> Vec<u32> {
@@ -576,7 +600,10 @@ fn find_browser4_server_processes() -> Vec<u32> {
     {
         use std::process::Command;
         if let Ok(output) = Command::new("pgrep")
-            .args(["-f", r"browser4\.jar|browser4launcherkt"])
+            .args([
+                "-f",
+                r"browser4\.jar|browser4launcherkt|browser4bundleapplicationkt",
+            ])
             .output()
         {
             pids.extend(parse_pid_list(&output.stdout));
@@ -591,7 +618,7 @@ fn find_browser4_server_processes() -> Vec<u32> {
                 Where-Object {
                     $_.Name -match '^(java|javaw)\.exe$' -and
                     -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and
-                    $_.CommandLine -match '(?i)(Browser4\.jar|\bBrowser4LauncherKt\b)'
+                    $_.CommandLine -match '(?i)(Browser4\.jar|\bBrowser4LauncherKt\b|\bBrowser4BundleApplicationKt\b)'
                 } |
                 Select-Object -ExpandProperty ProcessId
         "#;
@@ -1047,12 +1074,14 @@ mod tests {
     }
 
     #[test]
-    fn test_command_line_matches_browser4_server_for_jar_and_launcher() {
+    fn test_command_line_matches_browser4_server_for_jar_launcher_and_bundle() {
         let jar = r#""C:/Java/bin/java.exe" -jar D:/browser4/Browser4.jar --server.port=8182"#;
         let launcher = r#""C:/Java/bin/java.exe" -cp @C:/Temp/spring-boot.argfile Browser4LauncherKt --server.port=8182"#;
+        let bundle = r#""D:/runtime/bin/java.exe" -cp D:/lib/* ai.platon.pulsar.apps.Browser4BundleApplicationKt --server.port=8182"#;
 
         assert!(command_line_matches_browser4_server(jar));
         assert!(command_line_matches_browser4_server(launcher));
+        assert!(command_line_matches_browser4_server(bundle));
     }
 
     #[test]

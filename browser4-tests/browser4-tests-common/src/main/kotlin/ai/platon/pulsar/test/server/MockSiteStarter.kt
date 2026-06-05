@@ -39,35 +39,41 @@ class MockSiteStarter: AutoCloseable {
         var ok = wait(url)
 
         if (!ok) {
-            try {
-                val u = URI(url).toURL()
-                val configuredPort = System.getProperty("mock.site.port")?.toIntOrNull()
-                    ?: System.getenv("MOCK_SITE_PORT")?.toIntOrNull()
-                val desiredPort = when {
-                    u.port > 0 -> u.port
-                    configuredPort != null -> configuredPort
-                    else -> 8182 // primary fallback
-                }
-                val fallbackPorts = listOfNotNull(configuredPort, 8182, 8080).distinct()
-                logger.info("Attempting to auto-start MockSiteApplication on port $desiredPort (candidates=$fallbackPorts) ...")
-                MockSiteLauncher.start(port = desiredPort, enforcePort = true)
-                val ready = MockSiteLauncher.awaitReady(Duration.ofSeconds(10))
-                if (!ready && desiredPort != 0 && desiredPort != u.port && configuredPort == null) {
-                    // Try next fallback if first failed
-                    for (p in fallbackPorts) {
-                        if (p == desiredPort) continue
-                        logger.warn("Retry auto-start on fallback port $p ...")
-                        MockSiteLauncher.start(port = p, enforcePort = true)
-                        if (MockSiteLauncher.awaitReady(Duration.ofSeconds(6))) break
+            val u = URI(url).toURL()
+            val configuredPort = System.getProperty("mock.site.port")?.toIntOrNull()
+                ?: System.getenv("MOCK_SITE_PORT")?.toIntOrNull()
+            val desiredPort = when {
+                u.port > 0 -> u.port
+                configuredPort != null -> configuredPort
+                else -> 8182 // primary fallback
+            }
+            val fallbackPorts = (listOfNotNull(configuredPort, 8182, 8080) + desiredPort).distinct()
+            val attemptedPorts = mutableListOf<Int>()
+            var started = false
+
+            // Try desired port first, then fallbacks, then port=0 as last resort
+            val candidates = (listOf(desiredPort) + fallbackPorts.filter { it != desiredPort } + 0).distinct()
+            for (p in candidates) {
+                attemptedPorts.add(p)
+                try {
+                    logger.info("Attempting to start MockSiteApplication on port $p ...")
+                    MockSiteLauncher.start(port = p, enforcePort = true)
+                    if (MockSiteLauncher.awaitReady(Duration.ofSeconds(10))) {
+                        logger.info("Auto-start success on port ${MockSiteLauncher.port()}: ${MockSiteLauncher.baseUrl()}")
+                        started = true
+                        break
+                    } else {
+                        logger.warn("MockSiteApplication started on port ${MockSiteLauncher.port()} but not ready within timeout")
                     }
+                } catch (e: Exception) {
+                    logger.warn("Failed to start MockSiteApplication on port $p: ${e.message}")
                 }
-                if (MockSiteLauncher.isRunning()) {
-                    logger.info("Auto-start success: ${MockSiteLauncher.baseUrl()}")
-                } else {
-                    logger.warn("Auto-start attempted but site not ready within timeout")
-                }
-            } catch (e: Exception) {
-                logger.error("Failed to auto-start mock site: ${e.message}", e)
+            }
+
+            if (!started) {
+                val msg = "Failed to start mock site on any of these ports: $attemptedPorts"
+                logger.error(msg)
+                throw IllegalStateException(msg)
             }
         }
 

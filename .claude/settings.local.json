@@ -1,7 +1,19 @@
 {
   "permissions": {
     "allow": [
-      "Bash(cargo test *)"
+      "Bash(cargo test *)",
+      "Bash(pwsh *)",
+      "Bash([ -d \"$HOME/.m2/repository/ai/platon/pulsar/pulsar-boot\" ])",
+      "Bash(./gradlew :browser4-agent-tools:compileKotlin)",
+      "Bash(./mvnw compile *)",
+      "Skill(code-review)",
+      "Bash(git pull *)",
+      "Bash(git push *)",
+      "Bash(git stash *)",
+      "Bash(git checkout *)",
+      "Bash(git restore *)",
+      "Bash(git add *)",
+      "Bash(git commit -m 'chore: add git permissions and e2e test runner improvements *)"
     ]
   }
 }

@@ -1,7 +1,12 @@
 //! Persistent state management for the Browser4 CLI.
 //!
-//! State is stored under `~/.browser4` by default. The unnamed session uses
-//! `cli-state.json`, while named sessions use `sessions/<name>.json`.
+//! CLI session state is stored under `~/.browser4` by default. The unnamed
+//! session uses `cli-state.json`, while named sessions use `sessions/<name>.json`.
+//!
+//! The Browser4 runtime bundle (JRE, JARs, launchers) lives separately in a
+//! platform-conventional data directory (`~/.local/share/browser4/` on Linux,
+//! `~/Library/Application Support/browser4/` on macOS, `%APPDATA%/browser4/`
+//! on Windows).  See [`resolve_runtime_data_dir`].
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -58,6 +63,53 @@ pub fn resolve_default_state_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".browser4")
+}
+
+/// Resolve the directory for Browser4 runtime data (JRE, JARs, launchers).
+///
+/// Uses a platform-conventional location separate from CLI session state:
+/// - Linux:   `$XDG_DATA_HOME/browser4/`  (typically `~/.local/share/browser4/`)
+/// - macOS:   `~/Library/Application Support/browser4/`
+/// - Windows: `%APPDATA%/browser4/`
+///
+/// Honours `BROWSER4_RUNTIME_DIR` as an override.  When set and non-empty,
+/// that path is used directly.
+pub fn resolve_runtime_data_dir() -> PathBuf {
+    if let Ok(override_dir) = std::env::var("BROWSER4_RUNTIME_DIR") {
+        let trimmed = override_dir.trim().to_string();
+        if !trimmed.is_empty() {
+            return PathBuf::from(&trimmed)
+                .canonicalize()
+                .unwrap_or(PathBuf::from(trimmed));
+        }
+    }
+    dirs::data_dir()
+        .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
+        .join("browser4")
+}
+
+/// Resolve the directory for Browser4 download cache.
+///
+/// Uses the platform cache directory:
+/// - Linux:   `$XDG_CACHE_HOME/browser4/`  (typically `~/.cache/browser4/`)
+/// - macOS:   `~/Library/Caches/browser4/`
+/// - Windows: `%LOCALAPPDATA%/browser4/`
+///
+/// Honours `BROWSER4_RUNTIME_DIR` as an override — when set, the cache lives
+/// under `{BROWSER4_RUNTIME_DIR}/cache/` so everything stays together.
+pub fn resolve_runtime_cache_dir() -> PathBuf {
+    if let Ok(override_dir) = std::env::var("BROWSER4_RUNTIME_DIR") {
+        let trimmed = override_dir.trim().to_string();
+        if !trimmed.is_empty() {
+            let base = PathBuf::from(&trimmed)
+                .canonicalize()
+                .unwrap_or(PathBuf::from(trimmed));
+            return base.join("cache");
+        }
+    }
+    dirs::cache_dir()
+        .unwrap_or_else(|| dirs::data_dir().unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))))
+        .join("browser4")
 }
 
 fn state_file(state_dir: &Path, session_name: Option<&str>) -> PathBuf {

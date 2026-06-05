@@ -1,9 +1,9 @@
 package ai.platon.pulsar.agentic.common
 
 import ai.platon.pulsar.common.AppContext
-import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.DateTimes
 import ai.platon.pulsar.common.RequiredDirectory
+import ai.platon.pulsar.common.createRequiredResources
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Instant
@@ -17,7 +17,7 @@ object AgentPaths {
     val SKILLS_DIR: Path = AGENT_BASE_DIR.resolve("skills")
 
     init {
-        AppPaths.createRequiredResources(AgentPaths::class)
+        createRequiredResources(AgentPaths::class)
     }
 
     fun resolveTimedDirectory(time: Instant): Path {

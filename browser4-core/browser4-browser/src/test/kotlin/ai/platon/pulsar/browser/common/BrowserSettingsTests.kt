@@ -1,7 +1,7 @@
 package ai.platon.pulsar.browser.common
 
-import ai.platon.browser4.driver.common.InteractSettings
-import ai.platon.browser4.driver.common.DelayPreset
+import ai.platon.pulsar.browser.DelayPreset
+import ai.platon.pulsar.browser.InteractSettings
 import ai.platon.pulsar.common.browser.InteractLevel
 import ai.platon.pulsar.common.config.CapabilityTypes
 import ai.platon.pulsar.common.config.MutableConfig
@@ -23,7 +23,6 @@ class BrowserSettingsTests {
         assertNotNull(json)
 
         val settings2: InteractSettings = pulsarObjectMapper().readValue(json)
-//        val settings2 = Gson().fromJson(json, InteractSettings::class.java)
         assertEquals(settings.toString(), settings2.toString())
     }
 
@@ -120,7 +119,6 @@ class BrowserSettingsTests {
         assertNotNull(json)
 
         val settings2: InteractSettings = pulsarObjectMapper().readValue(json)
-//        val settings2 = Gson().fromJson(json, InteractSettings::class.java)
         assertEquals(settings.toString(), settings2.toString())
     }
 }

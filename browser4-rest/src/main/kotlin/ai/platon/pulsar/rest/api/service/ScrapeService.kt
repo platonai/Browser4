@@ -1,18 +1,19 @@
 package ai.platon.pulsar.rest.api.service
 
-import ai.platon.pulsar.agentic.AgenticSession
-import ai.platon.pulsar.agentic.BasicAgenticSession
-import ai.platon.pulsar.agentic.tools.high.crawl.ScrapeRequest
-import ai.platon.pulsar.agentic.tools.high.crawl.ScrapeResponse
-import ai.platon.pulsar.agentic.tools.high.crawl.common.DegenerateXSQLScrapeHyperlink
-import ai.platon.pulsar.agentic.tools.high.crawl.common.ScrapeAPIUtils
-import ai.platon.pulsar.agentic.tools.high.crawl.common.ScrapeHyperlink
-import ai.platon.pulsar.agentic.tools.high.crawl.common.XSQLScrapeHyperlink
-import ai.platon.pulsar.agentic.tools.high.crawl.refreshed
+import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
+import ai.platon.pulsar.agent.tool.UserCommandExecutor.Companion.FLOW_POLLING_INTERVAL
+import ai.platon.pulsar.agentic.GenericAgenticSession
+import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
+import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
+import ai.platon.pulsar.agentic.tools.advanced.crawl.common.DegenerateXSQLScrapeHyperlink
+import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeAPIUtils
+import ai.platon.pulsar.agentic.tools.advanced.crawl.common.ScrapeHyperlink
+import ai.platon.pulsar.agentic.tools.advanced.crawl.common.XSQLScrapeHyperlink
+import ai.platon.pulsar.agentic.tools.advanced.crawl.refreshed
+import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
 import ai.platon.pulsar.rest.api.entities.ScrapeStatusRequest
-import ai.platon.pulsar.agentic.tools.high.command.CommandService.Companion.FLOW_POLLING_INTERVAL
 import jakarta.annotation.PreDestroy
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -29,9 +30,11 @@ import kotlin.time.Duration.Companion.milliseconds
 
 @Service
 class ScrapeService(
-    val session: AgenticSession
+    private val sessionManager: PulsarSessionManager
 ) {
     private val logger = LoggerFactory.getLogger(ScrapeService::class.java)
+
+    private val session get() = sessionManager.getOrCreateSession(SWARM_SESSION_ID).agenticSession
 
     /**
      * The response cache, the key is the id, the value is the response
@@ -76,8 +79,12 @@ class ScrapeService(
         val hyperlink = createScrapeHyperlink(request)
         responseCache[hyperlink.uuid] = hyperlink.response
         hyperlink.response.id = hyperlink.uuid
-        require(session is BasicAgenticSession)
-        session.submit(hyperlink)
+        val s = session
+        require(s is GenericAgenticSession) {
+            "Expected GenericAgenticSession but got ${s::class.simpleName} (uuid=${s.uuid})"
+        }
+        s.submit(hyperlink)
+        logger.info("Scrape task submitted: {} sql={}", hyperlink.uuid, request.sql)
         return hyperlink.uuid
     }
 
@@ -89,7 +96,6 @@ class ScrapeService(
             ScrapeResponse(request.id, ResourceStatus.SC_NOT_FOUND, ProtocolStatusCodes.SC_NOT_FOUND)
         }
     }
-
 
     fun streamEvents(id: String): Flux<ServerSentEvent<ScrapeResponse>> {
         return Flux.create<ScrapeResponse> { sink ->
@@ -140,6 +146,8 @@ class ScrapeService(
     }
 
     private fun createScrapeHyperlink(request: ScrapeRequest): ScrapeHyperlink {
+        require(session is GenericAgenticSession) { "Session must be a GenericAgenticSession, but was ${session.javaClass}" }
+
         val sql = request.sql
         val link = if (ScrapeAPIUtils.isScrapeUDF(sql)) {
             val xSQL = ScrapeAPIUtils.normalize(sql)
@@ -148,7 +156,7 @@ class ScrapeService(
             DegenerateXSQLScrapeHyperlink(request, session)
         }
 
-        link.eventHandlers.crawlEventHandlers.onLoaded.addLast { url, page ->
+        link.eventHandlers.crawlEventHandlers.onLoaded.addLast { _, _ ->
             responseCache[link.uuid] = link.response
             responseStatusIndex[link.response.statusCode].add(link.uuid)
             null

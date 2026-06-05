@@ -21,7 +21,7 @@
 
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>browser4</artifactId>
-    <version>4.9.2-SNAPSHOT</version>
+    <version>4.10.0-rc.3</version>
     <packaging>pom</packaging>
 
     <name>Browser4</name>
@@ -89,46 +89,62 @@
         <module>browser4-dependencies</module>
         <module>browser4-tests/browser4-tests-common</module>
         <module>browser4-core</module>
-        <module>browser4-tools</module>
+        <module>browser4-agent-tools</module>
         <module>browser4-agentic</module>
+        <module>browser4-boot</module>
         <module>browser4-rest</module>
     </modules>
 
     <profiles>
-        <!-- Test execution profiles based on test-strategy.md -->
+
+        <!-- Add additional main modules to the default reactor -->
         <profile>
-            <id>integration-tests</id>
-            <activation>
-                <property>
-                    <name>runITs</name>
-                    <value>true</value>
-                </property>
-            </activation>
-            <properties>
-                <!-- Integration tests can be Slow/Heavy - this is expected behavior
-                     Integration tests CAN require Browser/AI/Docker for service collaboration
-                     Only exclude E2E, and ManualOnly tests -->
-                <surefire.excludedGroups>E2E,E2ETest,ManualOnly</surefire.excludedGroups>
-            </properties>
+            <id>all-main-modules</id>
+            <modules>
+                <module>browser4-apps</module>
+            </modules>
         </profile>
 
         <profile>
-            <id>e2e-tests</id>
-            <activation>
-                <property>
-                    <name>runE2ETests</name>
-                    <value>true</value>
-                </property>
-            </activation>
-            <properties>
-                <!-- E2E tests can be Heavy, RequiresBrowser, RequiresAI
-                     Only exclude ManualOnly tests -->
-                <surefire.excludedGroups>ManualOnly</surefire.excludedGroups>
-            </properties>
+            <id>all-test-modules</id>
+            <modules>
+                <module>browser4-tests</module>
+                <module>browser4-tests/browser4-rest-tests</module>
+                <module>browser4-tests/pulsar-it-tests</module>
+                <module>browser4-tests/pulsar-e2e-tests</module>
+            </modules>
+        </profile>
+
+        <!-- Targeted profiles that add only one browser4-apps submodule to the
+             default reactor.  Use these instead of -Pall-main-modules when you need
+             exactly one app JAR without building the sibling module. -->
+
+        <profile>
+            <id>asset-standalone</id>
+            <modules>
+                <module>browser4-apps/browser4-standalone</module>
+            </modules>
         </profile>
 
         <profile>
-            <id>core-tests</id>
+            <id>asset-bundle</id>
+            <modules>
+                <module>browser4-apps/browser4-bundle</module>
+            </modules>
+        </profile>
+
+        <profile>
+            <id>examples</id>
+            <activation>
+                <activeByDefault>true</activeByDefault>
+            </activation>
+            <modules>
+                <module>examples/browser4-examples</module>
+            </modules>
+        </profile>
+
+        <profile>
+            <id>tests-core</id>
             <activation>
                 <property>
                     <name>runCoreTests</name>
@@ -141,55 +157,71 @@
         </profile>
 
         <profile>
-            <id>rest-tests</id>
+            <id>tests-rest</id>
             <activation>
                 <property>
                     <name>runRestTests</name>
                     <value>true</value>
                 </property>
             </activation>
+            <modules>
+                <module>browser4-tests/browser4-rest-tests</module>
+            </modules>
             <properties>
                 <surefire.excludedGroups>ManualOnly</surefire.excludedGroups>
             </properties>
         </profile>
 
+        <!-- Test execution profiles based on test-strategy.md -->
         <profile>
-            <id>all-modules</id>
-            <modules>
-                <module>browser4-dependencies</module>
-                <module>browser4-core</module>
-                <module>browser4-tools</module>
-                <module>browser4-agentic</module>
-                <module>browser4-rest</module>
-
-                <module>browser4-app</module>
-
-                <module>examples</module>
-                <module>browser4-tests</module>
-            </modules>
-        </profile>
-
-        <profile>
-            <id>examples</id>
+            <id>tests-integration</id>
             <activation>
-                <activeByDefault>true</activeByDefault>
+                <property>
+                    <name>runITs</name>
+                    <value>true</value>
+                </property>
             </activation>
             <modules>
-                <module>browser4-app/browser4-agents</module>
-                <module>examples/browser4-examples</module>
+                <module>browser4-tests/pulsar-it-tests</module>
             </modules>
+            <properties>
+                <!-- Integration tests can be Slow/Heavy - this is expected behavior
+                     Integration tests CAN require Browser/AI/Docker for service collaboration
+                     Only exclude E2E, and ManualOnly tests -->
+                <surefire.excludedGroups>ManualOnly</surefire.excludedGroups>
+            </properties>
         </profile>
 
         <profile>
-            <id>browser4-tests</id>
+            <id>tests-e2e</id>
+            <activation>
+                <property>
+                    <name>runE2ETests</name>
+                    <value>true</value>
+                </property>
+            </activation>
+            <modules>
+                <module>browser4-tests/pulsar-e2e-tests</module>
+            </modules>
+            <properties>
+                <!-- E2E tests can be Heavy, RequiresBrowser, RequiresAI
+                     Only exclude ManualOnly tests -->
+                <surefire.excludedGroups>ManualOnly</surefire.excludedGroups>
+            </properties>
+        </profile>
+
+        <profile>
+            <id>tests-browser4</id>
             <activation>
                 <activeByDefault>false</activeByDefault>
             </activation>
             <modules>
-                <module>browser4-tests</module>
+                <module>browser4-tests/browser4-rest-tests</module>
+                <module>browser4-tests/pulsar-it-tests</module>
+                <module>browser4-tests/pulsar-e2e-tests</module>
             </modules>
             <properties>
-                <surefire.excludedGroups>None</surefire.excludedGroups>
+                <surefire.excludedGroups>ManualOnly</surefire.excludedGroups>
             </properties>
         </profile>
 
@@ -409,16 +441,6 @@
                 <artifactId>browser4-browser</artifactId>
                 <version>${project.version}</version>
             </dependency>
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-llm</artifactId>
-                <version>${project.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-beans</artifactId>
-                <version>${project.version}</version>
-            </dependency>
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
@@ -427,7 +449,7 @@
             </dependency>
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
-                <artifactId>browser4-tools</artifactId>
+                <artifactId>browser4-agent-tools</artifactId>
                 <version>${project.version}</version>
             </dependency>
             <dependency>
@@ -437,7 +459,7 @@
             </dependency>
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-boot</artifactId>
+                <artifactId>browser4-boot</artifactId>
                 <version>${project.version}</version>
             </dependency>
 
@@ -563,9 +585,7 @@
         </surefire.excludedGroups>
 
         <spring-boot.version>4.0.5</spring-boot.version>
-        <browser4-base.version>4.7.1</browser4-base.version>
+        <browser4-base.version>4.8.2</browser4-base.version>
     </properties>
 
 </project>
-
-

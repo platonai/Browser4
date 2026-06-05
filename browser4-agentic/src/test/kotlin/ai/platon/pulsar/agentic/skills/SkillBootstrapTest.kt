@@ -2,8 +2,8 @@ package ai.platon.pulsar.agentic.skills
 
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.*
-import org.junit.jupiter.api.Assertions.*
-import org.junit.jupiter.api.DisplayName
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 
 /**
  * Tests for SkillBootstrap component.
@@ -28,7 +28,7 @@ class SkillBootstrapTest {
     }
 
     @Test
-        @DisplayName("test bootstrap initializes example skills")
+    @DisplayName("test bootstrap initializes example skills")
     fun testBootstrapInitializesExampleSkills() {
         bootstrap.initialize()
 
@@ -42,7 +42,7 @@ class SkillBootstrapTest {
     }
 
     @Test
-        @DisplayName("test bootstrap loads skills in correct order")
+    @DisplayName("test bootstrap loads skills in correct order")
     fun testBootstrapLoadsSkillsInCorrectOrder() {
         bootstrap.initialize()
 
@@ -57,7 +57,7 @@ class SkillBootstrapTest {
     }
 
     @Test
-        @DisplayName("test bootstrap can be called multiple times")
+    @DisplayName("test bootstrap can be called multiple times")
     fun testBootstrapCanBeCalledMultipleTimes() {
         // First initialization
         bootstrap.initialize()
@@ -78,7 +78,7 @@ class SkillBootstrapTest {
     }
 
     @Test
-        @DisplayName("test bootstrap loads all example skills successfully")
+    @DisplayName("test bootstrap loads all example skills successfully")
     fun testBootstrapLoadsAllExampleSkillsSuccessfully() {
         bootstrap.initialize()
 
@@ -98,7 +98,7 @@ class SkillBootstrapTest {
     }
 
     @Test
-        @DisplayName("test example skills have correct metadata")
+    @DisplayName("test example skills have correct metadata")
     fun testExampleSkillsHaveCorrectMetadata() {
         bootstrap.initialize()
 

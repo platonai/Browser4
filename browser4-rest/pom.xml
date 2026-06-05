@@ -14,7 +14,7 @@
     <parent>
         <groupId>ai.platon.pulsar</groupId>
         <artifactId>browser4</artifactId>
-        <version>4.9.2-SNAPSHOT</version>
+        <version>4.10.0-rc.3</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
@@ -30,20 +30,14 @@
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-skeleton</artifactId>
-            <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-protocol</artifactId>
-            <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-beans</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-boot</artifactId>
+            <artifactId>browser4-boot</artifactId>
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
@@ -51,13 +45,14 @@
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>browser4-tools</artifactId>
+            <artifactId>browser4-agent-tools</artifactId>
         </dependency>
 
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-ql-common</artifactId>
         </dependency>
+
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-ql</artifactId>
@@ -65,11 +60,11 @@
             <exclusions>
                 <exclusion>
                     <groupId>ai.platon.pulsar</groupId>
-                    <artifactId>pulsar-protocol</artifactId>
+                    <artifactId>pulsar-browser</artifactId>
                 </exclusion>
                 <exclusion>
                     <groupId>ai.platon.pulsar</groupId>
-                    <artifactId>browser4-browser</artifactId>
+                    <artifactId>pulsar-protocol</artifactId>
                 </exclusion>
                 <exclusion>
                     <groupId>ai.platon.pulsar</groupId>
@@ -81,6 +76,10 @@
         <dependency>
             <groupId>com.google.guava</groupId>
             <artifactId>guava</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
         </dependency>
         <dependency>
             <groupId>com.google.code.gson</groupId>
@@ -145,6 +144,13 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.mockito.kotlin</groupId>
+            <artifactId>mockito-kotlin</artifactId>
+            <version>5.4.0</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

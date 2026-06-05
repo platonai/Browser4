@@ -123,30 +123,11 @@
 }, {
   "domain" : "tab",
   "method" : "nanoDOMTree",
-  "returnType" : "NanoDOMTree?",
+  "returnType" : "ai.platon.pulsar.chrome.dom.model.NanoDOMTree?",
   "description" : "Retrieves a lightweight version of the DOM tree (NanoDOMTree).",
   "help" : "Retrieves a lightweight version of the DOM tree (NanoDOMTree).\n\nThe NanoDOMTree is based on the accessibility tree and enhanced with DOM and document snapshot information. It is designed to be a compact representation suitable for AI processing and analysis.",
   "expression" : "tab.nanoDOMTree()",
   "cli" : "browser4-cli tab nanoDOMTree "
-}, {
-  "domain" : "tab",
-  "method" : "chat",
-  "arguments" : [ {
-    "name" : "prompt",
-    "type" : "String",
-    "expression" : "prompt: String = ",
-    "cliOptions" : "--prompt=<String>, default="
-  }, {
-    "name" : "selector",
-    "type" : "String",
-    "expression" : "selector: String = ",
-    "cliOptions" : "--selector=<String>, default="
-  } ],
-  "returnType" : "ModelResponse",
-  "description" : "Interact with an AI model using the context of the element selected by [selector].",
-  "help" : "Interact with an AI model using the context of the element selected by [selector].\n\nThe AI model receives the element's content and structure as context along with the provided prompt.",
-  "expression" : "tab.chat(Arg(name=prompt, type=String, defaultValue=), Arg(name=selector, type=String, defaultValue=))",
-  "cli" : "browser4-cli tab chat --prompt=<String>, default= --selector=<String>, default="
 }, {
   "domain" : "tab",
   "method" : "getCookies",
@@ -195,6 +176,28 @@
   "help" : "Clears browser cookies.\n\n```kotlin driver.clearBrowserCookies() ```",
   "expression" : "tab.clearBrowserCookies()",
   "cli" : "browser4-cli tab clearBrowserCookies "
+}, {
+  "domain" : "tab",
+  "method" : "saveStorageState",
+  "returnType" : "String",
+  "description" : "Saves the current browser storage state, including cookies and the active origin's localStorage, as JSON.",
+  "help" : "Saves the current browser storage state, including cookies and the active origin's localStorage, as JSON.",
+  "expression" : "tab.saveStorageState()",
+  "cli" : "browser4-cli tab saveStorageState "
+}, {
+  "domain" : "tab",
+  "method" : "loadStorageState",
+  "arguments" : [ {
+    "name" : "state",
+    "type" : "String",
+    "expression" : "state: String = ",
+    "cliOptions" : "--state=<String>, default="
+  } ],
+  "returnType" : "String",
+  "description" : "Loads a previously saved browser storage state JSON, restoring cookies and localStorage.",
+  "help" : "Loads a previously saved browser storage state JSON, restoring cookies and localStorage.",
+  "expression" : "tab.loadStorageState(Arg(name=state, type=String, defaultValue=))",
+  "cli" : "browser4-cli tab loadStorageState --state=<String>, default="
 }, {
   "domain" : "tab",
   "method" : "waitForSelector",
@@ -1022,25 +1025,6 @@
   "cli" : "browser4-cli tab mouseWheel --deltaX=<Double>, default=0.0 --deltaY=<Double>, default=150.0"
 }, {
   "domain" : "tab",
-  "method" : "moveMouseTo",
-  "arguments" : [ {
-    "name" : "x",
-    "type" : "Double",
-    "expression" : "x: Double = ",
-    "cliOptions" : "--x=<Double>, default="
-  }, {
-    "name" : "y",
-    "type" : "Double",
-    "expression" : "y: Double = ",
-    "cliOptions" : "--y=<Double>, default="
-  } ],
-  "returnType" : "Unit",
-  "description" : "The mouse moves to the position specified by [x] and [y].",
-  "help" : "The mouse moves to the position specified by [x] and [y].\n\n```kotlin driver.moveMouseTo(100.0, 200.0) ```",
-  "expression" : "tab.moveMouseTo(Arg(name=x, type=Double, defaultValue=), Arg(name=y, type=Double, defaultValue=))",
-  "cli" : "browser4-cli tab moveMouseTo --x=<Double>, default= --y=<Double>, default="
-}, {
-  "domain" : "tab",
   "method" : "mouseMove",
   "arguments" : [ {
     "name" : "x",
@@ -1599,7 +1583,7 @@
   } ],
   "returnType" : "String",
   "description" : "Return the ARIA snapshot (accessibility tree in YAML format) for the specified viewports.",
-  "help" : "Return the ARIA snapshot (accessibility tree in YAML format) for the specified viewports.\n\nThe [viewports] parameter controls which viewport(s) to include: - `\"all\"` — return the full-page snapshot (default). - `\"3\"` — return only viewport 3. - `\"1,3,5\"` — return viewports 1, 3 and 5. - `\"2-4\"` — return viewports 2, 3 and 4.\n\nViewport indices are 1-based. The viewport height is determined by the browser's current viewport dimensions.",
+  "help" : "Return the ARIA snapshot (accessibility tree in YAML format) for the specified viewports.\n\nThe [viewports] parameter controls which viewport(s) to include: - `\"all\"` — return the full-page snapshot (default). - `\"3\"` — return only viewport 3. - `\"1,3,5\"` — return viewports 1, 3 and 5. - `\"2-4\"` — return viewports 2, 3 and 4.\n\nViewport indices are 1-based. The viewport height is determined by the browser's current viewport DimIs.",
   "expression" : "tab.ariaSnapshot(Arg(name=viewports, type=String, defaultValue=))",
   "cli" : "browser4-cli tab ariaSnapshot --viewports=<String>, default="
 }, {

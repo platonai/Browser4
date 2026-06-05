@@ -3,7 +3,9 @@ package ai.platon.pulsar.agentic.tools.builtin
 import ai.platon.pulsar.agentic.PerceptiveAgent
 import ai.platon.pulsar.agentic.common.AgentFileSystem
 import ai.platon.pulsar.agentic.model.ToolCall
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
+import ai.platon.pulsar.browser.AbstractBrowser
+import ai.platon.pulsar.browser.AbstractWebDriver
+import ai.platon.pulsar.core.api.WebDriver
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -42,8 +44,8 @@ class ExecutorsNamedArgsTest {
 
     @Test
     fun browser_switchTab_with_tabId_string() {
-        val browser = mockk<ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractBrowser>(relaxed = true)
-        val driver = mockk<ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver>(relaxed = true)
+        val browser = mockk<AbstractBrowser>(relaxed = true)
+        val driver = mockk<AbstractWebDriver>(relaxed = true)
         every { browser.drivers } returns linkedMapOf("abc" to driver)
         val executor = BrowserToolExecutor()
         val tc = ToolCall(domain = "browser", method = "switchTab", arguments = mutableMapOf("tabId" to "abc"))

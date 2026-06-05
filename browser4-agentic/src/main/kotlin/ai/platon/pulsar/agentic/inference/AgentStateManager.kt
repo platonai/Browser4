@@ -1,28 +1,21 @@
 package ai.platon.pulsar.agentic.inference
 
-import ai.platon.browser4.driver.chrome.dom.model.BrowserUseState
-import ai.platon.browser4.driver.chrome.dom.model.SnapshotOptions
-import ai.platon.browser4.driver.chrome.dom.model.TabState
+import ai.platon.browser4.chrome.PulsarWebDriver
 import ai.platon.pulsar.agentic.ActionOptions
 import ai.platon.pulsar.agentic.ObserveOptions
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.inference.detail.PageStateTracker
-import ai.platon.pulsar.agentic.model.AgentHistory
-import ai.platon.pulsar.agentic.model.AgentState
-import ai.platon.pulsar.agentic.model.DetailedActResult
-import ai.platon.pulsar.agentic.model.ExecutionContext
-import ai.platon.pulsar.agentic.model.ObserveElement
-import ai.platon.pulsar.agentic.model.ProcessTrace
-import ai.platon.pulsar.agentic.model.ToolCall
-import ai.platon.pulsar.agentic.model.ToolCallResult
+import ai.platon.pulsar.agentic.model.*
+import ai.platon.pulsar.browser.AbstractWebDriver
+import ai.platon.pulsar.chrome.dom.model.BrowserUseState
+import ai.platon.pulsar.chrome.dom.model.SnapshotOptions
+import ai.platon.pulsar.chrome.dom.model.TabState
 import ai.platon.pulsar.common.MessageWriter
 import ai.platon.pulsar.common.getLogger
-import ai.platon.pulsar.protocol.browser.driver.cdt.PulsarWebDriver
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver
 import kotlinx.coroutines.withTimeout
 import java.nio.file.Path
 import java.time.Instant
-import java.util.UUID
+import java.util.*
 import kotlin.time.Duration.Companion.milliseconds
 
 const val AGENT_HISTORY_FILE_NAME = "state-history.jsonl"
@@ -484,7 +477,7 @@ class AgentStateManager(
 
         // Add timeout to prevent hanging on DOM snapshot operations
         return withTimeout(30_000.milliseconds) {
-            val baseState = driver.snapshotService.getBrowserUseState(snapshotOptions = snapshotOptions)
+            val baseState = driver.browserUseState(snapshotOptions = snapshotOptions)
             injectTabsInfo(baseState)
         }
     }
@@ -500,9 +493,9 @@ class AgentStateManager(
         // fetch all drivers
         browser.listDrivers()
         val tabs = browser.drivers
-            .filter { it.value is ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver && (it.value as ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver).isConnectable }
+            .filter { it.value is AbstractWebDriver && (it.value as AbstractWebDriver).isConnectable }
             .map { (tabId, driver) ->
-                require(driver is ai.platon.pulsar.skeleton.workflow.fetch.driver.AbstractWebDriver)
+                require(driver is AbstractWebDriver)
                 require(tabId == driver.guid) { "Tab ID mismatch: tabId=$tabId vs driver.id=${driver.guid}" }
 
                 val url = runCatching { driver.currentUrl() }

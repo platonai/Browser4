@@ -1,12 +1,9 @@
 package ai.platon.pulsar.skeleton.event
 
-import ai.platon.pulsar.persist.WebPage
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.ThreadContextElement
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import ai.platon.pulsar.core.api.WebPage
+import ai.platon.pulsar.skeleton.event.PulsarEventBus.serverSideEventHandlers
+import ai.platon.pulsar.skeleton.event.PulsarEventBus.withServerSideEventHandlers
+import kotlinx.coroutines.*
 import kotlin.coroutines.CoroutineContext
 
 /**
@@ -55,7 +52,7 @@ object PulsarEventBus {
     }
 
     /**
-     * Emits a crawl event to server-side event handlers in a non-blocking manner.
+     * Emits a browser event to server-side event handlers in a non-blocking manner.
      * This method can be called from any thread without blocking.
      */
     fun emitCrawlEvent(eventType: String, url: String? = null, message: String? = null) {

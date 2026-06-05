@@ -5,10 +5,10 @@
  * Run this script before building or releasing.
  */
 
-import { execSync } from "child_process";
-import { readFileSync, writeFileSync } from "fs";
-import { dirname, join } from "path";
-import { fileURLToPath } from "url";
+import {execSync} from "child_process";
+import {readFileSync, writeFileSync} from "fs";
+import {dirname, join} from "path";
+import {fileURLToPath} from "url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, "..");
@@ -47,7 +47,7 @@ if (cargoVersionRegex.test(cargoToml)) {
 // Update Cargo.lock to match Cargo.toml
 if (cargoTomlUpdated) {
   try {
-    execSync("cargo update -p browser4 --offline", {
+    execSync("cargo update -p browser4-cli --offline", {
       cwd: cliDir,
       stdio: "pipe",
     });
@@ -55,7 +55,7 @@ if (cargoTomlUpdated) {
   } catch {
     // --offline may fail if package not in cache, try without it
     try {
-      execSync("cargo update -p browser4", {
+      execSync("cargo update -p browser4-cli", {
         cwd: cliDir,
         stdio: "pipe",
       });

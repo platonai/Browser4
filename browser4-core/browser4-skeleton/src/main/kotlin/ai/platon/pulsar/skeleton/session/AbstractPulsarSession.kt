@@ -1,5 +1,6 @@
 package ai.platon.pulsar.skeleton.session
 
+import ai.platon.pulsar.browser.Browser
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.AppPaths.WEB_CACHE_DIR
 import ai.platon.pulsar.common.browser.BrowserProfileMode
@@ -8,20 +9,19 @@ import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.common.urls.PlainUrl
 import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.common.urls.UrlAware
+import ai.platon.pulsar.core.api.WebDriver
+import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.dom.select.firstTextOrNull
 import ai.platon.pulsar.dom.select.selectFirstOrNull
 import ai.platon.pulsar.external.ModelResponse
-import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.model.GoraWebPage
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.common.urls.NormURL
 import ai.platon.pulsar.skeleton.context.support.AbstractPulsarContext
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.Browser
 import ai.platon.pulsar.skeleton.event.PageEventHandlers
 import ai.platon.pulsar.skeleton.workflow.common.FetchEntry
 import ai.platon.pulsar.skeleton.workflow.common.url.ListenableHyperlink
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 import org.jsoup.nodes.Element
 import org.slf4j.LoggerFactory
 import java.nio.ByteBuffer
@@ -66,6 +66,11 @@ abstract class AbstractPulsarSession(
     override val uuid: String = UUID.randomUUID().toString()
 
     override val configuration get() = context.configuration
+
+    /**
+     * A label used to identify the session
+     * */
+    override var label: String = ""
 
     override val display get() = "$id"
 
@@ -179,9 +184,9 @@ abstract class AbstractPulsarSession(
 
     override fun fetchState(page: WebPage, options: LoadOptions) = context.fetchState(page, options)
 
-    override fun open(url: String): WebPage = load(url, "-refresh")
+    override suspend fun open(url: String): WebPage = load(url, "-refresh")
 
-    override fun open(url: String, eventHandlers: PageEventHandlers): WebPage =
+    override suspend fun open(url: String, eventHandlers: PageEventHandlers): WebPage =
         load(url, options("-refresh", eventHandlers))
 
     override suspend fun open(url: String, driver: WebDriver): WebPage {
@@ -241,19 +246,19 @@ abstract class AbstractPulsarSession(
         closableObjects.remove(browser)
     }
 
-    override fun load(url: String): WebPage = load(url, options())
+    override suspend fun load(url: String): WebPage = load(url, options())
 
-    override fun load(url: String, args: String): WebPage = load(url, options(args))
+    override suspend fun load(url: String, args: String): WebPage = load(url, options(args))
 
-    override fun load(url: String, options: LoadOptions): WebPage = load(normalize(url, options))
+    override suspend fun load(url: String, options: LoadOptions): WebPage = load(normalize(url, options))
 
-    override fun load(url: UrlAware): WebPage = load(normalize(url, options()))
+    override suspend fun load(url: UrlAware): WebPage = load(normalize(url, options()))
 
-    override fun load(url: UrlAware, args: String): WebPage = load(normalize(url, options(args)))
+    override suspend fun load(url: UrlAware, args: String): WebPage = load(normalize(url, options(args)))
 
-    override fun load(url: UrlAware, options: LoadOptions): WebPage = load(normalize(url, options))
+    override suspend fun load(url: UrlAware, options: LoadOptions): WebPage = load(normalize(url, options))
 
-    override fun load(url: NormURL): WebPage {
+    override suspend fun load(url: NormURL): WebPage {
         if (!enablePDCache) {
             return context.load(url)
         }
@@ -352,32 +357,32 @@ abstract class AbstractPulsarSession(
     override fun submitAll(urls: Collection<UrlAware>, args: String) =
         also { context.submitAll(urls.onEach { it.args = LoadOptions.normalize(it.args, args) }) }
 
-    override fun loadOutPages(portalUrl: String, args: String) = loadOutPages(portalUrl, options(args))
+    override suspend fun loadOutPages(portalUrl: String, args: String) = loadOutPages(portalUrl, options(args))
 
-    override fun loadOutPages(portalUrl: String, options: LoadOptions) = loadOutPages(PlainUrl(portalUrl), options)
+    override suspend fun loadOutPages(portalUrl: String, options: LoadOptions) = loadOutPages(PlainUrl(portalUrl), options)
 
-    override fun loadOutPages(portalUrl: UrlAware, args: String) = loadOutPages(portalUrl, options(args))
+    override suspend fun loadOutPages(portalUrl: UrlAware, args: String) = loadOutPages(portalUrl, options(args))
 
-    override fun loadOutPages(portalUrl: UrlAware, options: LoadOptions) = loadOutPages0(portalUrl, options)
+    override suspend fun loadOutPages(portalUrl: UrlAware, options: LoadOptions) = loadOutPages0(portalUrl, options)
 
-    override fun submitForOutPages(portalUrl: String, args: String) = submitForOutPages(portalUrl, options(args))
+    override suspend fun submitForOutPages(portalUrl: String, args: String) = submitForOutPages(portalUrl, options(args))
 
-    override fun submitForOutPages(portalUrl: String, options: LoadOptions) =
+    override suspend fun submitForOutPages(portalUrl: String, options: LoadOptions) =
         submitForOutPages(PlainUrl(portalUrl), options)
 
-    override fun submitForOutPages(portalUrl: UrlAware, args: String) = submitForOutPages(portalUrl, options(args))
+    override suspend fun submitForOutPages(portalUrl: UrlAware, args: String) = submitForOutPages(portalUrl, options(args))
 
-    override fun submitForOutPages(portalUrl: UrlAware, options: LoadOptions) = submitForOutPages0(portalUrl, options)
+    override suspend fun submitForOutPages(portalUrl: UrlAware, options: LoadOptions) = submitForOutPages0(portalUrl, options)
 
-    override fun loadOutPagesAsync(portalUrl: String, args: String) = loadOutPagesAsync(portalUrl, options(args))
+    override suspend fun loadOutPagesAsync(portalUrl: String, args: String) = loadOutPagesAsync(portalUrl, options(args))
 
-    override fun loadOutPagesAsync(portalUrl: String, options: LoadOptions) = loadOutPagesAsync0(portalUrl, options)
+    override suspend fun loadOutPagesAsync(portalUrl: String, options: LoadOptions) = loadOutPagesAsync0(portalUrl, options)
 
-    override fun loadResource(url: String, referrer: String) = loadResource(url, referrer, options())
+    override suspend fun loadResource(url: String, referrer: String) = loadResource(url, referrer, options())
 
-    override fun loadResource(url: String, referrer: String, args: String) = loadResource(url, referrer, options(args))
+    override suspend fun loadResource(url: String, referrer: String, args: String) = loadResource(url, referrer, options(args))
 
-    override fun loadResource(url: String, referrer: String, options: LoadOptions) =
+    override suspend fun loadResource(url: String, referrer: String, options: LoadOptions) =
         load(url, options.apply { isResource = true }.also { it.referrer = referrer })
 
     override suspend fun loadResourceDeferred(url: String, referrer: String) =
@@ -393,19 +398,19 @@ abstract class AbstractPulsarSession(
 
     override fun parse(page: WebPage, noCache: Boolean) = parse0(page, noCache)
 
-    override fun loadDocument(url: String) = parse(load(url))
+    override suspend fun loadDocument(url: String) = parse(load(url))
 
-    override fun loadDocument(url: String, args: String) = parse(load(url, args))
+    override suspend fun loadDocument(url: String, args: String) = parse(load(url, args))
 
-    override fun loadDocument(url: String, options: LoadOptions) = parse(load(url, options))
+    override suspend fun loadDocument(url: String, options: LoadOptions) = parse(load(url, options))
 
-    override fun loadDocument(url: UrlAware) = parse(load(url))
+    override suspend fun loadDocument(url: UrlAware) = parse(load(url))
 
-    override fun loadDocument(url: UrlAware, args: String) = parse(load(url, args))
+    override suspend fun loadDocument(url: UrlAware, args: String) = parse(load(url, args))
 
-    override fun loadDocument(url: UrlAware, options: LoadOptions) = parse(load(url, options))
+    override suspend fun loadDocument(url: UrlAware, options: LoadOptions) = parse(load(url, options))
 
-    override fun loadDocument(url: NormURL) = parse(load(url))
+    override suspend fun loadDocument(url: NormURL) = parse(load(url))
 
     override fun extract(document: FeaturedDocument, fieldSelectors: Iterable<String>): Map<String, String?> {
         return fieldSelectors.associateWith { document.selectFirstOrNull(it)?.text() }
@@ -435,27 +440,27 @@ abstract class AbstractPulsarSession(
         }
     }
 
-    override fun scrape(url: String, args: String, fieldSelectors: Iterable<String>): Map<String, String?> =
+    override suspend fun scrape(url: String, args: String, fieldSelectors: Iterable<String>): Map<String, String?> =
         scrape(url, options(args), fieldSelectors)
 
-    override fun scrape(url: String, options: LoadOptions, fieldSelectors: Iterable<String>): Map<String, String?> {
+    override suspend fun scrape(url: String, options: LoadOptions, fieldSelectors: Iterable<String>): Map<String, String?> {
         val document = loadDocument(url, options)
         return fieldSelectors.associateWith { document.selectFirstOrNull(it)?.text() }
     }
 
-    override fun scrape(url: String, args: String, fieldSelectors: Map<String, String>): Map<String, String?> =
+    override suspend fun scrape(url: String, args: String, fieldSelectors: Map<String, String>): Map<String, String?> =
         scrape(url, options(args), fieldSelectors)
 
-    override fun scrape(url: String, options: LoadOptions, fieldSelectors: Map<String, String>): Map<String, String?> {
+    override suspend fun scrape(url: String, options: LoadOptions, fieldSelectors: Map<String, String>): Map<String, String?> {
         val document = loadDocument(url, options)
         return fieldSelectors.entries.associate { it.key to document.selectFirstOrNull(it.value)?.text() }
     }
 
-    override fun scrape(
+    override suspend fun scrape(
         url: String, args: String, restrictSelector: String, fieldSelectors: Iterable<String>
     ): List<Map<String, String?>> = scrape(url, options(args), restrictSelector, fieldSelectors)
 
-    override fun scrape(
+    override suspend fun scrape(
         url: String, options: LoadOptions, restrictSelector: String, fieldSelectors: Iterable<String>
     ): List<Map<String, String?>> {
         return loadDocument(url, options).select(restrictSelector).map { ele ->
@@ -463,11 +468,11 @@ abstract class AbstractPulsarSession(
         }
     }
 
-    override fun scrape(
+    override suspend fun scrape(
         url: String, args: String, restrictSelector: String, fieldSelectors: Map<String, String>
     ): List<Map<String, String?>> = scrape(url, options(args), restrictSelector, fieldSelectors)
 
-    override fun scrape(
+    override suspend fun scrape(
         url: String, options: LoadOptions, restrictSelector: String, fieldSelectors: Map<String, String>
     ): List<Map<String, String?>> {
         return loadDocument(url, options).select(restrictSelector).map { ele ->
@@ -475,13 +480,13 @@ abstract class AbstractPulsarSession(
         }
     }
 
-    override fun scrapeOutPages(portalUrl: String, args: String, fieldSelectors: Iterable<String>) =
+    override suspend fun scrapeOutPages(portalUrl: String, args: String, fieldSelectors: Iterable<String>) =
         scrapeOutPages(portalUrl, args, ":root", fieldSelectors)
 
-    override fun scrapeOutPages(portalUrl: String, options: LoadOptions, fieldSelectors: Iterable<String>) =
+    override suspend fun scrapeOutPages(portalUrl: String, options: LoadOptions, fieldSelectors: Iterable<String>) =
         scrapeOutPages(portalUrl, options, ":root", fieldSelectors)
 
-    override fun scrapeOutPages(
+    override suspend fun scrapeOutPages(
         portalUrl: String, args: String, restrictSelector: String, fieldSelectors: Iterable<String>
     ): List<Map<String, String?>> {
         return loadOutPages(portalUrl, args).asSequence().map { parse(it) }
@@ -490,7 +495,7 @@ abstract class AbstractPulsarSession(
             .toList()
     }
 
-    override fun scrapeOutPages(
+    override suspend fun scrapeOutPages(
         portalUrl: String, options: LoadOptions, restrictSelector: String, fieldSelectors: Iterable<String>
     ): List<Map<String, String?>> {
         return loadOutPages(portalUrl, options).asSequence().map { parse(it) }
@@ -499,14 +504,14 @@ abstract class AbstractPulsarSession(
             .toList()
     }
 
-    override fun scrapeOutPages(portalUrl: String, args: String, fieldSelectors: Map<String, String>) =
+    override suspend fun scrapeOutPages(portalUrl: String, args: String, fieldSelectors: Map<String, String>) =
         scrapeOutPages(portalUrl, args, ":root", fieldSelectors)
 
-    override fun scrapeOutPages(
+    override suspend fun scrapeOutPages(
         portalUrl: String, options: LoadOptions, fieldSelectors: Map<String, String>
     ): List<Map<String, String?>> = scrapeOutPages(portalUrl, options, ":root", fieldSelectors)
 
-    override fun scrapeOutPages(
+    override suspend fun scrapeOutPages(
         portalUrl: String, args: String, restrictSelector: String, fieldSelectors: Map<String, String>
     ): List<Map<String, String?>> {
         return loadOutPages(portalUrl, args).asSequence().map { parse(it) }
@@ -515,7 +520,7 @@ abstract class AbstractPulsarSession(
             .toList()
     }
 
-    override fun scrapeOutPages(
+    override suspend fun scrapeOutPages(
         portalUrl: String, options: LoadOptions, restrictSelector: String, fieldSelectors: Map<String, String>
     ): List<Map<String, String?>> {
         return loadOutPages(portalUrl, options).asSequence().map { parse(it) }
@@ -545,33 +550,33 @@ abstract class AbstractPulsarSession(
 
     override fun data(name: String, value: Any) = run { dataCache[name] = value }
 
-    override fun delete(url: String) = ensureActive { context.delete(url) }
+    override suspend fun delete(url: String) = ensureActive { context.delete(url) }
 
-    override fun flush() = ensureActive { context.webDb.flush() }
+    override suspend fun flush() = ensureActive { context.webDb.flush() }
 
-    override fun persist(page: WebPage) = ensureActive { context.webDb.put(page) }
+    override suspend fun persist(page: WebPage) = ensureActive { context.webDb.put(page) }
 
-    override fun export(page: WebPage) = export(page, "")
+    override suspend fun export(page: WebPage) = export(page, "")
 
-    override fun export(page: WebPage, ident: String): Path {
+    override suspend fun export(page: WebPage, ident: String): Path {
         val filename = AppPaths.fromUri(page.url, "", ".htm")
         val path = WEB_CACHE_DIR.resolve("export").resolve(ident).resolve(filename)
         return AppFiles.saveTo(page.contentAsString, path, true)
     }
 
-    override fun exportTo(page: WebPage, path: Path): Path {
+    override suspend fun exportTo(page: WebPage, path: Path): Path {
         return AppFiles.saveTo(page.contentAsString, path, true)
     }
 
-    override fun export(doc: FeaturedDocument) = export(doc, "")
+    override suspend fun export(doc: FeaturedDocument) = export(doc, "")
 
-    override fun export(doc: FeaturedDocument, ident: String): Path {
+    override suspend fun export(doc: FeaturedDocument, ident: String): Path {
         val filename = AppPaths.fromUri(doc.baseURI, "", ".htm")
         val path = WEB_CACHE_DIR.resolve("export").resolve(ident).resolve(filename)
         return AppFiles.saveTo(doc.outerHtml, path, true)
     }
 
-    override fun exportTo(doc: FeaturedDocument, path: Path): Path {
+    override suspend fun exportTo(doc: FeaturedDocument, path: Path): Path {
         return AppFiles.saveTo(doc.outerHtml.toByteArray(), path, true)
     }
 
@@ -618,7 +623,7 @@ abstract class AbstractPulsarSession(
         return context.parse(page) ?: nil
     }
 
-    private fun loadAndCache(normURL: NormURL): WebPage {
+    private suspend fun loadAndCache(normURL: NormURL): WebPage {
         return context.load(normURL).also {
             pageCacheOrNull?.putDatum(it.url, it)
         }
@@ -696,7 +701,7 @@ abstract class AbstractPulsarSession(
         return link.substringBeforeLast("#")
     }
 
-    private fun loadOutPages0(portalUrl: UrlAware, options: LoadOptions): List<WebPage> {
+    private suspend fun loadOutPages0(portalUrl: UrlAware, options: LoadOptions): List<WebPage> {
         val normURL = normalize(portalUrl, options)
         val opts = normURL.options
 
@@ -714,7 +719,7 @@ abstract class AbstractPulsarSession(
         return loadAll(links, itemOpts)
     }
 
-    private fun submitForOutPages0(portalUrl: UrlAware, options: LoadOptions): AbstractPulsarSession {
+    private suspend fun submitForOutPages0(portalUrl: UrlAware, options: LoadOptions): AbstractPulsarSession {
         val normURL = normalize(portalUrl, options)
         val opts = normURL.options
         val selector = opts.outLinkSelectorOrNull ?: return this
@@ -732,7 +737,7 @@ abstract class AbstractPulsarSession(
         return this
     }
 
-    private fun loadOutPagesAsync0(portalUrl: String, options: LoadOptions): List<CompletableFuture<WebPage>> {
+    private suspend fun loadOutPagesAsync0(portalUrl: String, options: LoadOptions): List<CompletableFuture<WebPage>> {
         val normURL = normalize(portalUrl, options)
         val opts = normURL.options
         val itemOpts = normURL.options.createItemOptions()

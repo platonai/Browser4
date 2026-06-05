@@ -87,7 +87,6 @@ class AgentToolExecutor : AbstractToolExecutor() {
         }
     }
 
-
     fun coerceSchema(raw: Any?, functionName: String): ExtractionSchema {
         return try {
             coerceSchema0(raw, functionName)

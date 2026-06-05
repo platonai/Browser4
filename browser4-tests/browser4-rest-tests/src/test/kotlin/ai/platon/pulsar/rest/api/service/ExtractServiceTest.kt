@@ -1,6 +1,7 @@
 package ai.platon.pulsar.rest.api.service
 
-import ai.platon.pulsar.boot.autoconfigure.test.PulsarTestContextInitializer
+import ai.platon.browser4.boot.autoconfigure.Browser4AutoConfiguration
+import ai.platon.browser4.boot.autoconfigure.test.PulsarTestContextInitializer
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.external.ChatModelFactory
@@ -11,6 +12,7 @@ import ai.platon.pulsar.rest.api.entities.PromptRequest
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assumptions
 import org.junit.jupiter.api.BeforeEach
+import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Tag
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
@@ -18,12 +20,11 @@ import org.springframework.context.annotation.Import
 import org.springframework.test.context.ContextConfiguration
 import kotlin.test.Test
 import kotlin.test.assertTrue
-import org.junit.jupiter.api.DisplayName
 
 @Tag("Slow")
 @SpringBootTest
 @ContextConfiguration(initializers = [PulsarTestContextInitializer::class])
-@Import(MockEcServerConfiguration::class)
+@Import(MockEcServerConfiguration::class, Browser4AutoConfiguration::class)
 class ExtractServiceTest : MockEcServerTestBase() {
 
     @Autowired
@@ -39,7 +40,7 @@ class ExtractServiceTest : MockEcServerTestBase() {
     }
 
     @Test
-        @DisplayName("test extract")
+    @DisplayName("test extract")
     fun testExtract() {
         val request = PromptRequest(MOCK_PRODUCT_DETAIL_URL, "title, price, images")
         val response = runBlocking { extractService.extract(request) }
@@ -48,7 +49,7 @@ class ExtractServiceTest : MockEcServerTestBase() {
     }
 
     @Test
-        @DisplayName("test extract with actions")
+    @DisplayName("test extract with actions")
     fun testExtractWithActions() {
         val actions = """
             move cursor to the element with id 'title' and click it

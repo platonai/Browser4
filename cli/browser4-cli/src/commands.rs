@@ -20,7 +20,7 @@ pub enum Category {
     Config,
     Install,
     Agent,
-    Collective,
+    Swarm,
 }
 
 impl Category {
@@ -39,7 +39,7 @@ impl Category {
             Category::Config => "config",
             Category::Install => "install",
             Category::Agent => "agent",
-            Category::Collective => "collective",
+            Category::Swarm => "swarm",
         }
     }
 }
@@ -81,8 +81,6 @@ pub struct CommandDef {
     pub tool_params_fn: fn(&HashMap<String, Value>) -> Value,
 }
 
-
-
 // ---------------------------------------------------------------------------
 // Helper macros and builders
 // ---------------------------------------------------------------------------
@@ -93,6 +91,15 @@ fn get_str<'a>(map: &'a HashMap<String, Value>, key: &str) -> Option<&'a str> {
 
 fn get_opt_str<'a>(map: &'a HashMap<String, Value>, key: &str) -> Option<&'a str> {
     map.get(key).and_then(|v| v.as_str())
+}
+
+fn get_string_value(map: &HashMap<String, Value>, key: &str) -> Option<String> {
+    map.get(key).and_then(|value| match value {
+        Value::String(text) => Some(text.clone()),
+        Value::Number(number) => Some(number.to_string()),
+        Value::Bool(flag) => Some(flag.to_string()),
+        _ => None,
+    })
 }
 
 fn get_bool(map: &HashMap<String, Value>, key: &str) -> Option<bool> {
@@ -134,7 +141,10 @@ fn looks_like_selector_or_ref(value: &str) -> bool {
 fn resolve_key_and_ref(map: &HashMap<String, Value>) -> (String, Option<String>) {
     let positionals = raw_positionals(map);
     match positionals.as_slice() {
-        [single] => (single.clone(), get_opt_str(map, "ref").map(ToOwned::to_owned)),
+        [single] => (
+            single.clone(),
+            get_opt_str(map, "ref").map(ToOwned::to_owned),
+        ),
         [first, second, ..] => {
             if looks_like_selector_or_ref(first) && !looks_like_selector_or_ref(second) {
                 (second.clone(), Some(first.clone()))
@@ -152,7 +162,10 @@ fn resolve_key_and_ref(map: &HashMap<String, Value>) -> (String, Option<String>)
 fn resolve_text_and_ref(map: &HashMap<String, Value>) -> (String, Option<String>) {
     let positionals = raw_positionals(map);
     match positionals.as_slice() {
-        [single] => (single.clone(), get_opt_str(map, "ref").map(ToOwned::to_owned)),
+        [single] => (
+            single.clone(),
+            get_opt_str(map, "ref").map(ToOwned::to_owned),
+        ),
         [first, second, ..] => {
             if looks_like_selector_or_ref(first) && !looks_like_selector_or_ref(second) {
                 (second.clone(), Some(first.clone()))
@@ -183,9 +196,9 @@ pub fn all_commands() -> Vec<CommandDef> {
             args: &[ArgDef { name: "url", description: "The URL to navigate to", optional: true }],
             options: &[
                 OptionDef { name: "headed", description: "Run browser in headed mode", is_bool: true },
-                OptionDef { name: "persistent", description: "Use persistent browser profile", is_bool: true },
+                OptionDef { name: "headless", description: "Run browser in headless mode", is_bool: true },
                 OptionDef { name: "profile", description: "Path to browser profile directory", is_bool: false },
-                OptionDef { name: "profile-mode", description: "Browser profile mode (temporary, default, system_default, prototype)", is_bool: false },
+                OptionDef { name: "profile-mode", description: "Browser profile mode (temporary, sequential, default)", is_bool: false },
                 OptionDef { name: "interact-level", description: "Interaction level for the new session (for example FASTEST, FAST, DEFAULT)", is_bool: false },
             ],
             tool_name_fn: |args| {
@@ -198,11 +211,11 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_params_fn: |args| {
                 let url = get_opt_str(args, "url").unwrap_or("about:blank");
                 let mut params = json!({ "url": url });
-                if let Some(h) = get_bool(args, "headed") {
-                    params["headed"] = json!(h);
-                }
-                if let Some(p) = get_bool(args, "persistent") {
-                    params["persistent"] = json!(p);
+                // --headless takes priority over --headed when both are passed.
+                if let Some(true) = get_bool(args, "headless") {
+                    params["headed"] = json!(false);
+                } else if let Some(true) = get_bool(args, "headed") {
+                    params["headed"] = json!(true);
                 }
                 if let Some(pf) = get_opt_str(args, "profile") {
                     params["profilePath"] = json!(pf);
@@ -228,10 +241,41 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_params_fn: |_| json!({}),
         },
         CommandDef {
+            name: "install",
+            description: "Install the self-contained Browser4 runtime bundle (dependency jars + bundled JRE + launcher scripts)",
+            category: Category::Install,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef {
+                    name: "tag",
+                    description: "Release tag to install, for example v4.9.3 or 4.9.3 (defaults to latest release)",
+                    is_bool: false,
+                },
+                OptionDef {
+                    name: "force",
+                    description: "Force re-download even when the requested tagged runtime is already installed",
+                    is_bool: true,
+                },
+            ],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut params = json!({});
+                if let Some(tag) = get_opt_str(args, "tag") {
+                    params["tag"] = json!(tag);
+                }
+                if let Some(force) = get_bool(args, "force") {
+                    params["force"] = json!(force);
+                }
+                params
+            },
+        },
+        CommandDef {
             name: "batch",
             description: "Execute multiple commands in one invocation",
             category: Category::Core,
-            hidden: true,
+            hidden: false,
             batch_supported: false,
             args: &[ArgDef {
                 name: "command...",
@@ -255,7 +299,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "goto",
-            description: "Navigate to a URL using the current active session",
+            description: "Navigate to a URL, auto-opening or refreshing the session when needed",
             category: Category::Navigation,
             hidden: false,
             batch_supported: true,
@@ -427,19 +471,15 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: true,
             args: &[
-                // Note: the argument names and server parameter names are intentionally
-                // cross-mapped to match the behaviour of the TypeScript browser4-cli:
-                // the first positional arg (dx) is mapped to `deltaY` and the second (dy)
-                // to `deltaX`.
-                ArgDef { name: "dx", description: "Y delta", optional: false },
-                ArgDef { name: "dy", description: "X delta", optional: false },
+                ArgDef { name: "dx", description: "Horizontal scroll delta (deltaX)", optional: false },
+                ArgDef { name: "dy", description: "Vertical scroll delta (deltaY)", optional: false },
             ],
             options: &[],
             tool_name_fn: |_| "browser_mouse_wheel".to_string(),
             tool_params_fn: |args| {
                 json!({
-                    "deltaY": get_number_value(args, "dx").unwrap_or_else(|| json!(0)),
-                    "deltaX": get_number_value(args, "dy").unwrap_or_else(|| json!(0)),
+                    "deltaX": get_number_value(args, "dx").unwrap_or_else(|| json!(0)),
+                    "deltaY": get_number_value(args, "dy").unwrap_or_else(|| json!(0)),
                 })
             },
         },
@@ -565,7 +605,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "upload",
             description: "Upload one or multiple files",
             category: Category::Core,
-            hidden: false,
+            hidden: true,
             batch_supported: true,
             args: &[
                 ArgDef { name: "ref", description: "CSS selector or element reference for the file input", optional: false },
@@ -720,6 +760,332 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
+        // ---- Storage ----
+        CommandDef {
+            name: "state-save",
+            description: "Save cookies and localStorage to a JSON file",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef {
+                name: "filename",
+                description: "Optional file path. Defaults to storage-state-<timestamp>.json in the current directory",
+                optional: true,
+            }],
+            options: &[],
+            tool_name_fn: |_| "browser_save_storage_state".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(filename) = get_opt_str(args, "filename") {
+                    p["filename"] = json!(filename);
+                }
+                p
+            },
+        },
+        CommandDef {
+            name: "state-load",
+            description: "Load cookies and localStorage from a JSON file",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef {
+                name: "filename",
+                description: "Path to a storage-state JSON file",
+                optional: false,
+            }],
+            options: &[],
+            tool_name_fn: |_| "browser_load_storage_state".to_string(),
+            tool_params_fn: |args| {
+                json!({
+                    "filename": get_str(args, "filename").unwrap_or_default()
+                })
+            },
+        },
+        CommandDef {
+            name: "cookie-list",
+            description: "List browser cookies",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef { name: "domain", description: "Only include cookies with the exact domain", is_bool: false },
+                OptionDef { name: "path", description: "Only include cookies with the exact path", is_bool: false },
+            ],
+            tool_name_fn: |_| "browser_save_storage_state".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(domain) = get_opt_str(args, "domain") {
+                    p["domain"] = json!(domain);
+                }
+                if let Some(path) = get_opt_str(args, "path") {
+                    p["path"] = json!(path);
+                }
+                p
+            },
+        },
+        CommandDef {
+            name: "cookie-get",
+            description: "Get a cookie by name",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef {
+                name: "name",
+                description: "Cookie name",
+                optional: false,
+            }],
+            options: &[],
+            tool_name_fn: |_| "browser_save_storage_state".to_string(),
+            tool_params_fn: |args| {
+                json!({
+                    "name": get_string_value(args, "name").unwrap_or_default()
+                })
+            },
+        },
+        CommandDef {
+            name: "cookie-set",
+            description: "Set a browser cookie",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "name", description: "Cookie name", optional: false },
+                ArgDef { name: "value", description: "Cookie value", optional: false },
+            ],
+            options: &[
+                OptionDef { name: "domain", description: "Cookie domain", is_bool: false },
+                OptionDef { name: "path", description: "Cookie path", is_bool: false },
+                OptionDef { name: "expires", description: "Cookie expiration Unix timestamp", is_bool: false },
+                OptionDef { name: "httpOnly", description: "Mark the cookie as HttpOnly", is_bool: true },
+                OptionDef { name: "secure", description: "Mark the cookie as Secure", is_bool: true },
+                OptionDef { name: "sameSite", description: "Cookie SameSite policy (Strict, Lax, None)", is_bool: false },
+            ],
+            tool_name_fn: |_| "browser_load_storage_state".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({
+                    "name": get_string_value(args, "name").unwrap_or_default(),
+                    "value": get_string_value(args, "value").unwrap_or_default(),
+                });
+                if let Some(domain) = get_opt_str(args, "domain") {
+                    p["domain"] = json!(domain);
+                }
+                if let Some(path) = get_opt_str(args, "path") {
+                    p["path"] = json!(path);
+                }
+                if let Some(expires) = get_opt_str(args, "expires") {
+                    p["expires"] = json!(expires);
+                }
+                if let Some(http_only) = get_bool(args, "httpOnly") {
+                    p["httpOnly"] = json!(http_only);
+                }
+                if let Some(secure) = get_bool(args, "secure") {
+                    p["secure"] = json!(secure);
+                }
+                if let Some(same_site) = get_opt_str(args, "sameSite") {
+                    p["sameSite"] = json!(same_site);
+                }
+                p
+            },
+        },
+        CommandDef {
+            name: "cookie-delete",
+            description: "Delete a browser cookie by name",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef {
+                name: "name",
+                description: "Cookie name",
+                optional: false,
+            }],
+            options: &[
+                OptionDef { name: "domain", description: "Cookie domain override", is_bool: false },
+                OptionDef { name: "path", description: "Cookie path override", is_bool: false },
+            ],
+            tool_name_fn: |_| "delete_cookies".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({
+                    "name": get_string_value(args, "name").unwrap_or_default()
+                });
+                if let Some(domain) = get_opt_str(args, "domain") {
+                    p["domain"] = json!(domain);
+                }
+                if let Some(path) = get_opt_str(args, "path") {
+                    p["path"] = json!(path);
+                }
+                p
+            },
+        },
+        CommandDef {
+            name: "cookie-clear",
+            description: "Clear all browser cookies",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            tool_name_fn: |_| "clear_browser_cookies".to_string(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "localstorage-list",
+            description: "List localStorage entries",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            tool_name_fn: |_| "browser_evaluate".to_string(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "localstorage-get",
+            description: "Get a localStorage value by key",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef {
+                name: "key",
+                description: "localStorage key",
+                optional: false,
+            }],
+            options: &[],
+            tool_name_fn: |_| "browser_evaluate".to_string(),
+            tool_params_fn: |args| {
+                json!({
+                    "key": get_string_value(args, "key").unwrap_or_default()
+                })
+            },
+        },
+        CommandDef {
+            name: "localstorage-set",
+            description: "Set a localStorage value",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "key", description: "localStorage key", optional: false },
+                ArgDef { name: "value", description: "Value to store", optional: false },
+            ],
+            options: &[],
+            tool_name_fn: |_| "browser_evaluate".to_string(),
+            tool_params_fn: |args| {
+                json!({
+                    "key": get_string_value(args, "key").unwrap_or_default(),
+                    "value": get_string_value(args, "value").unwrap_or_default(),
+                })
+            },
+        },
+        CommandDef {
+            name: "localstorage-delete",
+            description: "Delete a localStorage entry",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef {
+                name: "key",
+                description: "localStorage key",
+                optional: false,
+            }],
+            options: &[],
+            tool_name_fn: |_| "browser_evaluate".to_string(),
+            tool_params_fn: |args| {
+                json!({
+                    "key": get_string_value(args, "key").unwrap_or_default()
+                })
+            },
+        },
+        CommandDef {
+            name: "localstorage-clear",
+            description: "Clear localStorage",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            tool_name_fn: |_| "browser_evaluate".to_string(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "sessionstorage-list",
+            description: "List sessionStorage entries",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            tool_name_fn: |_| "browser_evaluate".to_string(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "sessionstorage-get",
+            description: "Get a sessionStorage value by key",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef {
+                name: "key",
+                description: "sessionStorage key",
+                optional: false,
+            }],
+            options: &[],
+            tool_name_fn: |_| "browser_evaluate".to_string(),
+            tool_params_fn: |args| {
+                json!({
+                    "key": get_string_value(args, "key").unwrap_or_default()
+                })
+            },
+        },
+        CommandDef {
+            name: "sessionstorage-set",
+            description: "Set a sessionStorage value",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "key", description: "sessionStorage key", optional: false },
+                ArgDef { name: "value", description: "Value to store", optional: false },
+            ],
+            options: &[],
+            tool_name_fn: |_| "browser_evaluate".to_string(),
+            tool_params_fn: |args| {
+                json!({
+                    "key": get_string_value(args, "key").unwrap_or_default(),
+                    "value": get_string_value(args, "value").unwrap_or_default(),
+                })
+            },
+        },
+        CommandDef {
+            name: "sessionstorage-delete",
+            description: "Delete a sessionStorage entry",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef {
+                name: "key",
+                description: "sessionStorage key",
+                optional: false,
+            }],
+            options: &[],
+            tool_name_fn: |_| "browser_evaluate".to_string(),
+            tool_params_fn: |args| {
+                json!({
+                    "key": get_string_value(args, "key").unwrap_or_default()
+                })
+            },
+        },
+        CommandDef {
+            name: "sessionstorage-clear",
+            description: "Clear sessionStorage",
+            category: Category::Storage,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            tool_name_fn: |_| "browser_evaluate".to_string(),
+            tool_params_fn: |_| json!({}),
+        },
         // ---- Export ----
         CommandDef {
             name: "screenshot",
@@ -852,12 +1218,77 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
         },
+        // ---- Server Admin ----
+        CommandDef {
+            name: "upgrade",
+            description: "Upgrade Browser4 to the latest version (or a specified release tag)",
+            category: Category::Browsers,
+            hidden: false,
+            batch_supported: false,
+            args: &[ArgDef {
+                name: "tag",
+                description: "Release tag to upgrade to, e.g. v4.11.0 (defaults to latest release)",
+                optional: true,
+            }],
+            options: &[
+                OptionDef {
+                    name: "force",
+                    description: "Force re-download even when the requested version is already installed",
+                    is_bool: true,
+                },
+            ],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut params = json!({});
+                if let Some(tag) = get_opt_str(args, "tag") {
+                    params["tag"] = json!(tag);
+                }
+                if let Some(force) = get_bool(args, "force") {
+                    params["force"] = json!(force);
+                }
+                params
+            },
+        },
+        CommandDef {
+            name: "stop",
+            description: "Gracefully stop the Browser4 server",
+            category: Category::Browsers,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "status",
+            description: "Show Browser4 server status (version, port, health)",
+            category: Category::Browsers,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef {
+                    name: "server",
+                    description: "Server URL to check (defaults to saved or http://127.0.0.1:8182)",
+                    is_bool: false,
+                },
+            ],
+            tool_name_fn: |_| String::new(),
+            tool_params_fn: |args| {
+                let mut params = json!({});
+                if let Some(server) = get_opt_str(args, "server") {
+                    params["server"] = json!(server);
+                }
+                params
+            },
+        },
         // ---- Agent ----
         CommandDef {
             name: "extract",
             description: "Extract structured data from the current page",
             category: Category::Agent,
-            hidden: true,
+            hidden: false,
             batch_supported: false,
             args: &[ArgDef { name: "instruction", description: "What data to extract, e.g. 'product name, price, ratings'", optional: false }],
             options: &[
@@ -874,7 +1305,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "summarize",
             description: "Summarize page content using AI",
             category: Category::Agent,
-            hidden: true,
+            hidden: false,
             batch_supported: false,
             args: &[ArgDef { name: "instruction", description: "Summarization instruction, e.g. 'summarize the product reviews'", optional: true }],
             options: &[
@@ -892,7 +1323,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "agent-run",
             description: "Run an autonomous agent task (async, returns task ID)",
             category: Category::Agent,
-            hidden: true,
+            hidden: false,
             batch_supported: false,
             args: &[ArgDef { name: "task", description: "Natural language task for the agent to execute", optional: false }],
             options: &[],
@@ -905,9 +1336,9 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "agent-status",
             description: "Check the status of a running agent task",
             category: Category::Agent,
-            hidden: true,
+            hidden: false,
             batch_supported: false,
-            args: &[ArgDef { name: "id", description: "Task ID returned by agent-run", optional: false }],
+            args: &[ArgDef { name: "id", description: "Task ID returned by agent run", optional: false }],
             options: &[],
             tool_name_fn: |_| "command_status".to_string(),
             tool_params_fn: |args| {
@@ -918,25 +1349,25 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "agent-result",
             description: "Get the result of a completed agent task",
             category: Category::Agent,
-            hidden: true,
+            hidden: false,
             batch_supported: false,
-            args: &[ArgDef { name: "id", description: "Task ID returned by agent-run", optional: false }],
+            args: &[ArgDef { name: "id", description: "Task ID returned by agent run", optional: false }],
             options: &[],
             tool_name_fn: |_| "command_result".to_string(),
             tool_params_fn: |args| {
                 json!({ "id": get_str(args, "id").unwrap_or_default() })
             },
         },
-        // ---- Collective (co) ----
+        // ---- Swarm ----
         CommandDef {
-            name: "co-create",
-            description: "Create a collective session with parallel browser contexts",
-            category: Category::Collective,
-            hidden: true,
+            name: "swarm-create",
+            description: "Create a swarm scrape session with parallel browser contexts",
+            category: Category::Swarm,
+            hidden: false,
             batch_supported: false,
             args: &[],
             options: &[
-                OptionDef { name: "profile-mode", description: "Browser profile mode (temporary, default, system_default, prototype)", is_bool: false },
+                OptionDef { name: "profile-mode", description: "Browser profile mode (default: SEQUENTIAL; supported: SEQUENTIAL or TEMPORARY)", is_bool: false },
                 OptionDef { name: "max-open-tabs", description: "Maximum open tabs per browser context (default: 8)", is_bool: false },
                 OptionDef { name: "max-browser-contexts", description: "Number of isolated browser environments (default: 2)", is_bool: false },
                 OptionDef { name: "display-mode", description: "Display mode: GUI, HEADLESS, SUPERVISED", is_bool: false },
@@ -944,7 +1375,11 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_name_fn: |_| "open_session".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({});
-                if let Some(v) = get_opt_str(args, "profile-mode") { p["profileMode"] = json!(v); }
+                let profile_mode = get_opt_str(args, "profile-mode")
+                    .map(|value| value.trim().to_ascii_uppercase())
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| "SEQUENTIAL".to_string());
+                p["profileMode"] = json!(profile_mode);
                 if let Some(v) = get_opt_str(args, "max-open-tabs") { p["maxOpenTabs"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "max-browser-contexts") { p["maxBrowserContexts"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "display-mode") { p["displayMode"] = json!(v); }
@@ -952,14 +1387,15 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
-            name: "co-submit",
-            description: "Submit URL(s) or tasks to the active collective session",
-            category: Category::Collective,
-            hidden: true,
+            name: "swarm-submit",
+            description: "Submit URL(s) or X-SQL payloads as scrape jobs",
+            category: Category::Swarm,
+            hidden: false,
             batch_supported: false,
-            args: &[ArgDef { name: "url", description: "URL or task to submit", optional: true }],
+            args: &[ArgDef { name: "url", description: "URL or X-SQL payload to submit", optional: true }],
             options: &[
                 OptionDef { name: "seed-file", description: "File containing URLs to submit, one per line", is_bool: false },
+                OptionDef { name: "sql", description: "X-SQL query to execute against the page. Use @url as placeholder for the target URL. Prefix with @ to read from file (e.g. --sql @query.sql)", is_bool: false },
                 OptionDef { name: "deadline", description: "Deadline for task completion (ISO 8601, e.g. 2026-02-24T23:59:59Z)", is_bool: false },
                 OptionDef { name: "expires", description: "Cache expiration duration (e.g. 1d, 1h)", is_bool: false },
                 OptionDef { name: "refresh", description: "Force a fresh fetch, ignoring cache", is_bool: true },
@@ -971,6 +1407,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 let mut p = json!({});
                 if let Some(v) = get_opt_str(args, "url") { p["url"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "seed-file") { p["seedFile"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "sql") { p["sql"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "deadline") { p["deadline"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "expires") { p["expires"] = json!(v); }
                 if let Some(b) = get_bool(args, "refresh") { p["refresh"] = json!(b); }
@@ -980,26 +1417,25 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
-            name: "co-scrape",
-            description: "Scrape data from a URL using CSS selectors",
-            category: Category::Collective,
-            hidden: true,
+            name: "swarm-query",
+            description: "Submit an X-SQL query to extract structured data from a loaded webpage",
+            category: Category::Swarm,
+            hidden: false,
             batch_supported: false,
-            args: &[ArgDef { name: "url", description: "URL to scrape", optional: false }],
+            args: &[ArgDef { name: "url", description: "Target page URL to load and run the query against", optional: false }],
             options: &[
-                OptionDef { name: "selector", description: "CSS selector to extract elements", is_bool: false },
-                OptionDef { name: "attribute", description: "Element attribute to extract (e.g. textContent, href)", is_bool: false },
-                OptionDef { name: "output", description: "Output file path for scraped data", is_bool: false },
-                OptionDef { name: "deadline", description: "Deadline for task completion (ISO 8601)", is_bool: false },
+                OptionDef { name: "sql", description: "X-SQL query to execute. Use @url as placeholder for the target URL. Prefix with @ to read from file (e.g. --sql @query.sql)", is_bool: false },
+                OptionDef { name: "seed-file", description: "File containing URLs to submit, one per line (direct path, no @ prefix)", is_bool: false },
+                OptionDef { name: "deadline", description: "Deadline for task completion (ISO 8601, e.g. 2026-02-24T23:59:59Z)", is_bool: false },
                 OptionDef { name: "expires", description: "Cache expiration duration (e.g. 1d, 1h)", is_bool: false },
                 OptionDef { name: "refresh", description: "Force a fresh fetch, ignoring cache", is_bool: true },
             ],
-            tool_name_fn: |_| "command_run".to_string(),
+            tool_name_fn: |_| "swarm_query".to_string(),
             tool_params_fn: |args| {
-                let mut p = json!({ "url": get_str(args, "url").unwrap_or_default() });
-                if let Some(v) = get_opt_str(args, "selector") { p["selector"] = json!(v); }
-                if let Some(v) = get_opt_str(args, "attribute") { p["attribute"] = json!(v); }
-                if let Some(v) = get_opt_str(args, "output") { p["output"] = json!(v); }
+                let mut p = json!({});
+                if let Some(v) = get_opt_str(args, "url") { p["url"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "sql") { p["sql"] = json!(v); }
+                if let Some(v) = get_opt_str(args, "seed-file") { p["seedFile"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "deadline") { p["deadline"] = json!(v); }
                 if let Some(v) = get_opt_str(args, "expires") { p["expires"] = json!(v); }
                 if let Some(b) = get_bool(args, "refresh") { p["refresh"] = json!(b); }
@@ -1007,12 +1443,12 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
-            name: "co-status",
-            description: "Check the status of a collective task",
-            category: Category::Collective,
-            hidden: true,
+            name: "swarm-status",
+            description: "Check the status of a scrape job",
+            category: Category::Swarm,
+            hidden: false,
             batch_supported: false,
-            args: &[ArgDef { name: "id", description: "Task ID returned by co submit or co scrape", optional: false }],
+            args: &[ArgDef { name: "id", description: "Task ID returned by swarm submit", optional: false }],
             options: &[],
             tool_name_fn: |_| "command_status".to_string(),
             tool_params_fn: |args| {
@@ -1020,12 +1456,12 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
-            name: "co-result",
-            description: "Get the result of a completed collective task",
-            category: Category::Collective,
-            hidden: true,
+            name: "swarm-result",
+            description: "Get the result of a completed scrape job",
+            category: Category::Swarm,
+            hidden: false,
             batch_supported: false,
-            args: &[ArgDef { name: "id", description: "Task ID returned by co submit or co scrape", optional: false }],
+            args: &[ArgDef { name: "id", description: "Task ID returned by swarm submit", optional: false }],
             options: &[],
             tool_name_fn: |_| "command_result".to_string(),
             tool_params_fn: |args| {
@@ -1066,11 +1502,29 @@ mod tests {
         for expected in &[
             "open",
             "close",
+            "install",
             "batch",
             "goto",
             "click",
             "type",
             "fill",
+            "state-save",
+            "state-load",
+            "cookie-list",
+            "cookie-get",
+            "cookie-set",
+            "cookie-delete",
+            "cookie-clear",
+            "localstorage-list",
+            "localstorage-get",
+            "localstorage-set",
+            "localstorage-delete",
+            "localstorage-clear",
+            "sessionstorage-list",
+            "sessionstorage-get",
+            "sessionstorage-set",
+            "sessionstorage-delete",
+            "sessionstorage-clear",
             "snapshot",
             "screenshot",
             "extract",
@@ -1078,11 +1532,11 @@ mod tests {
             "agent-run",
             "agent-status",
             "agent-result",
-            "co-create",
-            "co-submit",
-            "co-scrape",
-            "co-status",
-            "co-result",
+            "swarm-create",
+            "swarm-submit",
+            "swarm-query",
+            "swarm-status",
+            "swarm-result",
         ] {
             assert!(map.contains_key(*expected), "Missing command: {}", expected);
         }
@@ -1112,6 +1566,21 @@ mod tests {
         let args = HashMap::new();
         assert!((cmd.tool_name_fn)(&args).is_empty());
         assert_eq!((cmd.tool_params_fn)(&args), json!({}));
+    }
+
+    #[test]
+    fn test_install_params_capture_tag_and_force() {
+        let map = commands_map();
+        let cmd = map.get("install").unwrap();
+        let mut args = HashMap::new();
+        args.insert("tag".to_string(), json!("4.9.3"));
+        args.insert("force".to_string(), json!(true));
+
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.get("tag").is_some());
+        assert_eq!(params["tag"], "4.9.3");
+        assert_eq!(params["force"], true);
+        assert!((cmd.tool_name_fn)(&args).is_empty());
     }
 
     #[test]
@@ -1171,6 +1640,85 @@ mod tests {
         assert_eq!((cmd.tool_name_fn)(&args), "agent_extract");
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["instruction"], "product name, price");
+    }
+
+    #[test]
+    fn test_state_load_tool_name_and_params() {
+        let map = commands_map();
+        let cmd = map.get("state-load").unwrap();
+        let mut args = HashMap::new();
+        args.insert("filename".to_string(), json!("auth-state.json"));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_load_storage_state");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["filename"], "auth-state.json");
+    }
+
+    #[test]
+    fn test_cookie_set_tool_name_and_params() {
+        let map = commands_map();
+        let cmd = map.get("cookie-set").unwrap();
+        let mut args = HashMap::new();
+        args.insert("name".to_string(), json!("session"));
+        args.insert("value".to_string(), json!("abc123"));
+        args.insert("path".to_string(), json!("/"));
+        args.insert("httpOnly".to_string(), json!(true));
+        args.insert("sameSite".to_string(), json!("Lax"));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_load_storage_state");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["name"], "session");
+        assert_eq!(params["value"], "abc123");
+        assert_eq!(params["path"], "/");
+        assert_eq!(params["httpOnly"], true);
+        assert_eq!(params["sameSite"], "Lax");
+    }
+
+    #[test]
+    fn test_cookie_delete_tool_name_and_params() {
+        let map = commands_map();
+        let cmd = map.get("cookie-delete").unwrap();
+        let mut args = HashMap::new();
+        args.insert("name".to_string(), json!("session"));
+        args.insert("domain".to_string(), json!("example.com"));
+        assert_eq!((cmd.tool_name_fn)(&args), "delete_cookies");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["name"], "session");
+        assert_eq!(params["domain"], "example.com");
+    }
+
+    #[test]
+    fn test_localstorage_set_params() {
+        let map = commands_map();
+        let cmd = map.get("localstorage-set").unwrap();
+        let mut args = HashMap::new();
+        args.insert("key".to_string(), json!("theme"));
+        args.insert("value".to_string(), json!("dark"));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_evaluate");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["key"], "theme");
+        assert_eq!(params["value"], "dark");
+    }
+
+    #[test]
+    fn test_sessionstorage_get_params() {
+        let map = commands_map();
+        let cmd = map.get("sessionstorage-get").unwrap();
+        let mut args = HashMap::new();
+        args.insert("key".to_string(), json!("step"));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_evaluate");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["key"], "step");
+    }
+
+    #[test]
+    fn test_sessionstorage_set_preserves_numeric_values_as_strings() {
+        let map = commands_map();
+        let cmd = map.get("sessionstorage-set").unwrap();
+        let mut args = HashMap::new();
+        args.insert("key".to_string(), json!("step"));
+        args.insert("value".to_string(), json!(3));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["key"], "step");
+        assert_eq!(params["value"], "3");
     }
 
     #[test]
@@ -1239,9 +1787,9 @@ mod tests {
     }
 
     #[test]
-    fn test_co_create_tool_name() {
+    fn test_swarm_create_tool_name() {
         let map = commands_map();
-        let cmd = map.get("co-create").unwrap();
+        let cmd = map.get("swarm-create").unwrap();
         let args = HashMap::new();
         assert_eq!((cmd.tool_name_fn)(&args), "open_session");
     }
@@ -1271,25 +1819,84 @@ mod tests {
     }
 
     #[test]
-    fn test_co_create_params_with_options() {
+    fn test_open_params_with_headed() {
         let map = commands_map();
-        let cmd = map.get("co-create").unwrap();
+        let cmd = map.get("open").unwrap();
+        let mut args = HashMap::new();
+        args.insert("headed".to_string(), json!(true));
+
+        let params = (cmd.tool_params_fn)(&args);
+
+        assert_eq!(params["headed"], true);
+    }
+
+    #[test]
+    fn test_open_params_with_headless() {
+        let map = commands_map();
+        let cmd = map.get("open").unwrap();
+        let mut args = HashMap::new();
+        args.insert("headless".to_string(), json!(true));
+
+        let params = (cmd.tool_params_fn)(&args);
+
+        assert_eq!(params["headed"], false);
+    }
+
+    #[test]
+    fn test_open_params_headless_takes_priority_over_headed() {
+        let map = commands_map();
+        let cmd = map.get("open").unwrap();
+        let mut args = HashMap::new();
+        args.insert("headed".to_string(), json!(true));
+        args.insert("headless".to_string(), json!(true));
+
+        let params = (cmd.tool_params_fn)(&args);
+
+        assert_eq!(params["headed"], false);
+    }
+
+    #[test]
+    fn test_open_params_without_headed_or_headless_does_not_set_key() {
+        let map = commands_map();
+        let cmd = map.get("open").unwrap();
+        let args = HashMap::new();
+
+        let params = (cmd.tool_params_fn)(&args);
+
+        assert!(params.get("headed").is_none());
+    }
+
+    #[test]
+    fn test_swarm_create_params_with_options() {
+        let map = commands_map();
+        let cmd = map.get("swarm-create").unwrap();
         let mut args = HashMap::new();
         args.insert("profile-mode".to_string(), json!("temporary"));
         args.insert("max-open-tabs".to_string(), json!("8"));
         args.insert("max-browser-contexts".to_string(), json!("2"));
         args.insert("display-mode".to_string(), json!("GUI"));
         let params = (cmd.tool_params_fn)(&args);
-        assert_eq!(params["profileMode"], "temporary");
+        assert_eq!(params["profileMode"], "TEMPORARY");
         assert_eq!(params["maxOpenTabs"], "8");
         assert_eq!(params["maxBrowserContexts"], "2");
         assert_eq!(params["displayMode"], "GUI");
     }
 
     #[test]
-    fn test_co_submit_tool_name_and_params() {
+    fn test_swarm_create_params_default_profile_mode_to_sequential() {
         let map = commands_map();
-        let cmd = map.get("co-submit").unwrap();
+        let cmd = map.get("swarm-create").unwrap();
+        let args = HashMap::new();
+
+        let params = (cmd.tool_params_fn)(&args);
+
+        assert_eq!(params["profileMode"], "SEQUENTIAL");
+    }
+
+    #[test]
+    fn test_swarm_submit_tool_name_and_params() {
+        let map = commands_map();
+        let cmd = map.get("swarm-submit").unwrap();
         let mut args = HashMap::new();
         args.insert(
             "url".to_string(),
@@ -1303,9 +1910,9 @@ mod tests {
     }
 
     #[test]
-    fn test_co_submit_with_seed_file() {
+    fn test_swarm_submit_with_seed_file() {
         let map = commands_map();
-        let cmd = map.get("co-submit").unwrap();
+        let cmd = map.get("swarm-submit").unwrap();
         let mut args = HashMap::new();
         args.insert("seed-file".to_string(), json!("seeds.txt"));
         let params = (cmd.tool_params_fn)(&args);
@@ -1313,9 +1920,9 @@ mod tests {
     }
 
     #[test]
-    fn test_co_submit_with_load_options() {
+    fn test_swarm_submit_with_load_options() {
         let map = commands_map();
-        let cmd = map.get("co-submit").unwrap();
+        let cmd = map.get("swarm-submit").unwrap();
         let mut args = HashMap::new();
         args.insert("url".to_string(), json!("https://example.com"));
         args.insert("refresh".to_string(), json!(true));
@@ -1330,29 +1937,9 @@ mod tests {
     }
 
     #[test]
-    fn test_co_scrape_tool_name_and_params() {
+    fn test_swarm_status_tool_name() {
         let map = commands_map();
-        let cmd = map.get("co-scrape").unwrap();
-        let mut args = HashMap::new();
-        args.insert(
-            "url".to_string(),
-            json!("https://www.amazon.com/dp/B08PP5MSVB"),
-        );
-        args.insert("selector".to_string(), json!(".product-title"));
-        args.insert("attribute".to_string(), json!("textContent"));
-        args.insert("output".to_string(), json!("title.txt"));
-        assert_eq!((cmd.tool_name_fn)(&args), "command_run");
-        let params = (cmd.tool_params_fn)(&args);
-        assert_eq!(params["url"], "https://www.amazon.com/dp/B08PP5MSVB");
-        assert_eq!(params["selector"], ".product-title");
-        assert_eq!(params["attribute"], "textContent");
-        assert_eq!(params["output"], "title.txt");
-    }
-
-    #[test]
-    fn test_co_status_tool_name() {
-        let map = commands_map();
-        let cmd = map.get("co-status").unwrap();
+        let cmd = map.get("swarm-status").unwrap();
         let mut args = HashMap::new();
         args.insert("id".to_string(), json!("abc-123"));
         assert_eq!((cmd.tool_name_fn)(&args), "command_status");
@@ -1361,9 +1948,9 @@ mod tests {
     }
 
     #[test]
-    fn test_co_result_tool_name() {
+    fn test_swarm_result_tool_name() {
         let map = commands_map();
-        let cmd = map.get("co-result").unwrap();
+        let cmd = map.get("swarm-result").unwrap();
         let mut args = HashMap::new();
         args.insert("id".to_string(), json!("abc-123"));
         assert_eq!((cmd.tool_name_fn)(&args), "command_result");
@@ -1412,6 +1999,63 @@ mod tests {
     }
 
     #[test]
+    fn test_eval_params_with_css_selector_ref() {
+        let map = commands_map();
+        let cmd = map.get("eval").unwrap();
+        let mut args = HashMap::new();
+        args.insert(
+            "expression".to_string(),
+            json!("element => element.value"),
+        );
+        args.insert("ref".to_string(), json!("#my-button"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["expression"], json!("element => element.value"));
+        assert_eq!(params["ref"], json!("#my-button"));
+    }
+
+    #[test]
+    fn test_eval_params_empty_expression() {
+        let map = commands_map();
+        let cmd = map.get("eval").unwrap();
+        let mut args = HashMap::new();
+        args.insert("expression".to_string(), json!(""));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["expression"], json!(""));
+        assert!(params.get("ref").is_none());
+    }
+
+    #[test]
+    fn test_eval_params_expression_with_template_literals() {
+        let map = commands_map();
+        let cmd = map.get("eval").unwrap();
+        let mut args = HashMap::new();
+        args.insert(
+            "expression".to_string(),
+            json!("element => `text: ${element.textContent}`"),
+        );
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(
+            params["expression"],
+            json!("element => `text: ${element.textContent}`")
+        );
+    }
+
+    #[test]
+    fn test_eval_not_hidden_and_batch_supported() {
+        let map = commands_map();
+        let cmd = map.get("eval").unwrap();
+        assert!(!cmd.hidden, "eval should not be hidden from help");
+        assert!(cmd.batch_supported, "eval should support batch mode");
+    }
+
+    #[test]
+    fn test_eval_category_core() {
+        let map = commands_map();
+        let cmd = map.get("eval").unwrap();
+        assert_eq!(cmd.category, Category::Core);
+    }
+
+    #[test]
     fn test_mousewheel_params_preserve_decimal_numbers() {
         let map = commands_map();
         let cmd = map.get("mousewheel").unwrap();
@@ -1419,8 +2063,8 @@ mod tests {
         args.insert("dx".to_string(), json!(1.5));
         args.insert("dy".to_string(), json!(-2.25));
         let params = (cmd.tool_params_fn)(&args);
-        assert_eq!(params["deltaY"], json!(1.5));
-        assert_eq!(params["deltaX"], json!(-2.25));
+        assert_eq!(params["deltaX"], json!(1.5));
+        assert_eq!(params["deltaY"], json!(-2.25));
     }
 
     #[test]
@@ -1448,18 +2092,18 @@ mod tests {
     }
 
     #[test]
-    fn test_collective_commands_in_collective_category() {
+    fn test_swarm_commands_in_swarm_category() {
         let cmds = all_commands();
-        let collective_cmds: Vec<&str> = cmds
+        let swarm_cmds: Vec<&str> = cmds
             .iter()
-            .filter(|c| c.category == Category::Collective)
+            .filter(|c| c.category == Category::Swarm)
             .map(|c| c.name)
             .collect();
-        assert!(collective_cmds.contains(&"co-create"));
-        assert!(collective_cmds.contains(&"co-submit"));
-        assert!(collective_cmds.contains(&"co-scrape"));
-        assert!(collective_cmds.contains(&"co-status"));
-        assert!(collective_cmds.contains(&"co-result"));
+        assert!(swarm_cmds.contains(&"swarm-create"));
+        assert!(swarm_cmds.contains(&"swarm-submit"));
+        assert!(swarm_cmds.contains(&"swarm-query"));
+        assert!(swarm_cmds.contains(&"swarm-status"));
+        assert!(swarm_cmds.contains(&"swarm-result"));
     }
 
     #[test]
@@ -1467,18 +2111,98 @@ mod tests {
         let map = commands_map();
         for name in [
             "console",
-            "extract",
-            "summarize",
-            "agent-run",
-            "agent-status",
-            "agent-result",
-            "co-create",
-            "co-submit",
-            "co-scrape",
-            "co-status",
-            "co-result",
         ] {
             assert!(map.get(name).unwrap().hidden, "{name} should stay hidden");
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Session-lifecycle command definitions
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_upgrade_params_capture_tag_and_force() {
+        let map = commands_map();
+        let cmd = map.get("upgrade").expect("upgrade command must exist");
+        assert!(!cmd.hidden);
+        assert_eq!(cmd.category, Category::Browsers);
+
+        // With no args → empty params.
+        let args: HashMap<String, Value> = HashMap::new();
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.get("tag").is_none());
+        assert!(params.get("force").is_none());
+
+        // With tag.
+        let mut args = HashMap::new();
+        args.insert("tag".to_string(), json!("v4.11.0"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["tag"], "v4.11.0");
+
+        // With --force.
+        let mut args = HashMap::new();
+        args.insert("force".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["force"], true);
+
+        // With both tag and --force.
+        let mut args = HashMap::new();
+        args.insert("tag".to_string(), json!("v4.11.0"));
+        args.insert("force".to_string(), json!(true));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["tag"], "v4.11.0");
+        assert_eq!(params["force"], true);
+
+        assert!((cmd.tool_name_fn)(&args).is_empty());
+    }
+
+    #[test]
+    fn test_stop_command_no_args() {
+        let map = commands_map();
+        let cmd = map.get("stop").expect("stop command must exist");
+        assert!(!cmd.hidden);
+        assert_eq!(cmd.args.len(), 0);
+        assert_eq!(cmd.options.len(), 0);
+        let args: HashMap<String, Value> = HashMap::new();
+        assert!((cmd.tool_name_fn)(&args).is_empty());
+    }
+
+    #[test]
+    fn test_status_command_server_option() {
+        let map = commands_map();
+        let cmd = map.get("status").expect("status command must exist");
+        assert!(!cmd.hidden);
+        assert_eq!(cmd.args.len(), 0);
+        assert_eq!(cmd.options.len(), 1);
+        assert_eq!(cmd.options[0].name, "server");
+    }
+
+    #[test]
+    fn test_close_all_no_args() {
+        let map = commands_map();
+        let cmd = map.get("close-all").expect("close-all command must exist");
+        assert!(!cmd.hidden);
+        assert_eq!(cmd.args.len(), 0);
+        assert_eq!(cmd.options.len(), 0);
+    }
+
+    #[test]
+    fn test_kill_all_no_args() {
+        let map = commands_map();
+        let cmd = map.get("kill-all").expect("kill-all command must exist");
+        assert!(!cmd.hidden);
+        assert_eq!(cmd.args.len(), 0);
+        assert_eq!(cmd.options.len(), 0);
+    }
+
+    #[test]
+    fn test_list_command_all_option() {
+        let map = commands_map();
+        let cmd = map.get("list").expect("list command must exist");
+        assert!(!cmd.hidden);
+        assert_eq!(cmd.args.len(), 0);
+        assert_eq!(cmd.options.len(), 1);
+        assert_eq!(cmd.options[0].name, "all");
+        assert!(cmd.options[0].is_bool);
     }
 }

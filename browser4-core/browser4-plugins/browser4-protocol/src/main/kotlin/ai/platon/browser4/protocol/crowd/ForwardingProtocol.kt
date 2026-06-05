@@ -15,18 +15,20 @@
  */
 package ai.platon.browser4.protocol.crowd
 
-import ai.platon.pulsar.common.concurrent.ConcurrentExpiringLRUCache
+import ai.platon.pulsar.persist.WebPage
+import ai.platon.pulsar.skeleton.workflow.common.CaffeineExpiringCache
 import ai.platon.pulsar.skeleton.workflow.protocol.Response
 import ai.platon.pulsar.skeleton.workflow.protocol.http.AbstractHttpProtocol
-import ai.platon.pulsar.persist.WebPage
 import org.slf4j.LoggerFactory
 import java.time.Duration
 
 open class ForwardingProtocol : AbstractHttpProtocol() {
     private val logger = LoggerFactory.getLogger(ForwardingProtocol::class.java)
     private val cacheTTL = Duration.ofMinutes(5)
-    private val cacheCapacity = 200
-    private val cache = ConcurrentExpiringLRUCache<String, Response>(cacheTTL, cacheCapacity)
+    private val cacheCapacity: Long = 200
+    private val cache = CaffeineExpiringCache<String, Response>(cacheTTL, cacheCapacity)
+
+    override val name: String = "forward"
 
     override fun setResponse(response: Response) {
         cache.putDatum(response.url, response)
@@ -34,16 +36,8 @@ open class ForwardingProtocol : AbstractHttpProtocol() {
     }
 
     @Throws(Exception::class)
-    override fun getResponse(page: WebPage, followRedirects: Boolean): Response? {
-        val response = cache.remove(page.url)?.datum?: return null
-        logAfterRemoveResponse(page.url, response)
-        return response
-    }
-
-    @Throws(Exception::class)
     override suspend fun getResponseDeferred(page: WebPage, followRedirects: Boolean): Response? {
-        // TODO: wait if not in the cache?
-        val response = cache.remove(page.url)?.datum?: return null
+        val response = cache.remove(page.url)?.datum ?: return null
         logAfterRemoveResponse(page.url, response)
         return response
     }

@@ -12,16 +12,17 @@ English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platon
     - [🌟 Introduction](#-introduction)
         - [✨ Key Capabilities](#-key-capabilities)
     - [💡 Usage Examples](#-usage-examples)
-        - [Browser Agents](#browser-agents)
-        - [Workflow Automation](#workflow-automation)
-        - [LLM + X-SQL](#llm--x-sql)
-        - [High-Speed Parallel Processing](#high-speed-parallel-processing)
+        - [Quick Start](#quick-start)
+        - [CLI \& SKILLS](#cli--skills)
+    - [Advanced commands](#advanced-commands)
+        - [Agent and Swarm CLI](#agent-and-swarm-cli)
+    - [🚀 Native API Quick Start](#-native-api-quick-start)
         - [Auto Extraction](#auto-extraction)
     - [📦 Modules Overview](#-modules-overview)
+    - [🤝 Support \& Community](#-support--community)
     - [📜 Documentation](#-documentation)
-    - [🔧 Proxies - Unblock Websites](#-proxies---unblock-websites)
-    - [✨ Features](#-features)
-    - [🤝 Support & Community](#-support--community)
+    - [🔧 Proxy Configuration - Unblock Website Access](#-proxy-configuration---unblock-website-access)
+    - [License](#license)
 <!-- /TOC -->
 
 ## 🌟 Introduction
@@ -52,8 +53,8 @@ Install https://raw.githubusercontent.com/platonai/Browser4/refs/heads/main/cli/
 4. write the result to a markdown file
 "@
 
-copilot --allow-all -p "$prompt"
-# claude --dangerously-skip-permissions "$prompt"
+copilot -p "$prompt"
+# claude "$prompt"
 ```
 
 ### CLI & SKILLS
@@ -71,10 +72,14 @@ npm install -g browser4-cli
 ```
 
 ```shell
-# Open a new browser window
+# Open browser4 without navigation
 browser4-cli open
 
-# Navigate to a page
+# Open in headed or headless mode
+browser4-cli open --headed https://browser4.io
+browser4-cli open --headless https://browser4.io
+
+# Navigate to a page — auto-opens a session if none is active
 browser4-cli goto https://playwright.dev
 
 # Inspect the page — note the eN labels on interactive nodes
@@ -101,7 +106,7 @@ browser4-cli batch "goto https://playwright.dev" "snapshot"
 # Stop on the first batch failure
 browser4-cli batch --bail "goto https://playwright.dev" "click e1" "screenshot"
 
-# Advanced: pipe batch commands as JSON via stdin
+# Advanced: pipe batch commands as JSON via stdin, useful for form filling and complex workflows
 echo '[
   ["goto", "https://example.com/form-filling"],
   ["click", "#reset-btn"],
@@ -117,17 +122,114 @@ echo '[
 browser4-cli close
 ```
 
-Build CLI from source:
+## Advanced commands
 
-[README.md](cli/browser4-cli/README.md)
+Some advanced commands are intentionally omitted from the global `browser4-cli help` summary.
+Query them explicitly when needed:
+
+```bash
+browser4-cli help batch
+browser4-cli help extract
+browser4-cli help summarize
+browser4-cli help agent run
+browser4-cli help swarm create
+```
 
 Browser4 CLI is designed for use by AI agents through SKILLS + CLI.
 
 [SKILL.md](cli/skill/SKILL.md)
 
+### Agent and Swarm CLI
+
+Browser4 CLI provides two high-level interfaces for complex, multi-step browser tasks beyond the standard single-action commands:
+
+**Agent CLI** (`agent <subcommand>`) — Submit a natural-language task and let Browser4's backend AI agent plan and execute it autonomously. The agent reasons about the page, decides which actions to take, and completes the task asynchronously. Use this when you have a goal but don't know the exact page structure, or need multi-step exploration without scripting every action.
+
+**Swarm CLI** (`swarm <subcommand>`) — Orchestrate parallel scraping and structured data extraction across multiple browser contexts. Built for high-throughput jobs: refreshing curated URL lists, supervised fan-out browsing, and repeatable selector-based scraping. Supports X-SQL for structured queries against loaded webpages.
+
+| Interface | Model | Use when |
+|---|---|---|
+| Standard commands | Single action per invocation | You know the exact refs/selectors and want precise control |
+| Agent CLI | Natural-language task → autonomous execution | You have a goal but don't know the page structure; multi-step exploration |
+| Swarm CLI | Parallel contexts + X-SQL queries | High-throughput scraping, structured extraction across many pages |
+
+#### Agent CLI examples
+
+Submit a natural-language task and let the backend agent reason, plan, and execute autonomously:
+
+```shell
+# Submit an autonomous task — returns a task ID immediately
+browser4-cli agent run "Open example.com, find the sign-up form, fill it with test data, and take a screenshot"
+
+# Poll progress with the returned task ID
+browser4-cli agent status agent-task-1
+
+# Read the final result once the task completes
+browser4-cli agent result agent-task-1
+```
+
+What happens under the hood:
+1. `agent run` sends the task to the Browser4 backend, which spawns an AI agent with tool access (navigate, click, type, snapshot, screenshot, extract, summarize, etc.).
+2. The agent iteratively explores the page, takes snapshots, decides on actions, and executes them until the task is complete.
+3. `agent status` returns the backend status payload (typically JSON with `id`, `status`, `statusCode`, `processState`, `agentState`, `agentHistory`, `commandResult`).
+4. `agent result` returns the final task output — plain text or structured JSON depending on the task.
+
+Key notes:
+- `agent run` is asynchronous: it returns immediately after the backend accepts the task.
+- `agent run` performs a quick post-submit probe so missing LLM/API key errors fail fast.
+- Agent commands are task-ID based and do not require an active CLI browser session slot.
+- Agent subcommands are not supported inside `batch` mode.
+
+#### Swarm CLI examples
+
+Create a swarm session, submit URLs for scraping, and collect results at scale:
+
+```shell
+# 1) Create a swarm scrape session with parallel browser contexts
+browser4-cli swarm create \
+  --profile-mode=TEMPORARY \
+  --max-open-tabs=12 \
+  --max-browser-contexts=3 \
+  --display-mode=HEADLESS
+
+# 2) Submit URLs as scrape jobs (direct URL + seed file)
+browser4-cli swarm submit https://example.com/direct \
+  --seed-file=./urls.txt \
+  --refresh --parse --store-content
+
+# 3) Poll and fetch the result
+browser4-cli swarm status scrape-task-4
+browser4-cli swarm result scrape-task-4
+```
+
+Run X-SQL queries to extract structured data from loaded webpages:
+
+```shell
+# Inline X-SQL query
+browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql "
+  SELECT
+    dom_base_uri(dom) AS url,
+    dom_first_text(dom, '#productTitle') AS title,
+    dom_first_slim_html(dom, 'img:expr(width > 400)') AS img
+  FROM load_and_select(@url, 'body');
+"
+
+# Read query from a file
+browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql @query.sql
+
+# With seed file and load options
+browser4-cli swarm query --sql @query.sql --seed-file=./urls.txt --refresh --parse
+```
+
+Key notes:
+- Seed files are plain text, one URL per line; `#` comments and blank lines are ignored.
+- Both `swarm submit` and `swarm query` accept `--seed-file`, `--deadline`, `--expires`, `--refresh`, `--parse`, `--store-content`.
+- All swarm commands return a task ID; track progress with `swarm status` / `swarm result`.
+- Use `@url` in X-SQL templates — it is replaced with the target URL server-side.
+
 ---
 
-## 🚀 Native API Quick Start
+## 🚀 Build from source
 
 **Prerequisites**: Java 17+
 
@@ -147,116 +249,6 @@ Browser4 CLI is designed for use by AI agents through SKILLS + CLI.
    ```
 
 ---
-
-### Browser Agents
-
-Autonomous agents that understand natural language instructions and execute complex browser workflows.
-
-```kotlin
-val agent = AgenticContexts.getOrCreateAgent()
-
-val task = """
-    1. go to amazon.com
-    2. search for pens to draw on whiteboards
-    3. compare the first 4 ones
-    4. write the result to a markdown file
-    """
-
-agent.run(task)
-```
-
-### Workflow Automation
-
-Low-level browser automation & data extraction with fine-grained control.
-
-**Features:**
-- Both live DOM access and offline snapshot parsing
-- Direct and full Chrome DevTools Protocol (CDP) control, coroutine safe
-- Precise element interactions (click, scroll, input)
-- Fast data extraction using CSS selectors/XPath
-
-```kotlin
-val session = AgenticContexts.getOrCreateSession()
-val agent = session.companionAgent
-val driver = session.getOrCreateBoundDriver()
-
-// Load the initial page referenced by your input URL
-var page = session.open(url)
-
-// Drive the browser with natural-language instructions
-agent.act("scroll to the comment section")
-// Read the first matching comment node directly from the live DOM
-val content = driver.selectFirstTextOrNull("#comments")
-
-// Snapshot the page to an in-memory document for offline parsing
-var document = session.parse(page)
-// Map CSS selectors to structured fields in one call
-var fields = session.extract(document, mapOf("title" to "#title"))
-
-// Let the companion agent execute a multi-step navigation/search flow
-val history = agent.run(
-    "Go to amazon.com, search for 'smart phone', open the product page with the highest ratings"
-)
-
-// Capture the updated browser state back into a PageSnapshot
-page = session.capture(driver)
-document = session.parse(page)
-// Extract additional attributes from the captured snapshot
-fields = session.extract(document, mapOf("ratings" to "#ratings"))
-```
-
-### LLM + X-SQL
-
-Ideal for high-complexity data-extraction pipelines with multiple-dozen entities and several hundred fields per entity.
-
-**Benefits:**
-- Extract 10x more entities and 100x more fields compared to traditional methods
-- Combine LLM intelligence with precise CSS selectors/XPath
-- SQL-like syntax for familiar data queries
-
-```kotlin
-val context = AgenticContexts.create()
-val sql = """
-select
-  llm_extract(dom, 'product name, price, ratings') as llm_extracted_data,
-  dom_first_text(dom, '#productTitle') as title,
-  dom_first_text(dom, '#bylineInfo') as brand,
-  dom_first_text(dom, '#price tr td:matches(^Price) ~ td, #corePrice_desktop tr td:matches(^Price) ~ td') as price,
-  dom_first_text(dom, '#acrCustomerReviewText') as ratings,
-  str_first_float(dom_first_text(dom, '#reviewsMedley .AverageCustomerReviews span:contains(out of)'), 0.0) as score
-from load_and_select('https://www.amazon.com/dp/B08PP5MSVB -i 1s -njr 3', 'body');
-"""
-val rs = context.executeQuery(sql)
-println(ResultSetFormatter(rs, withHeader = true))
-```
-
-Example code:
-
-* [X-SQL to scrape 100+ fields from an Amazon's product page](https://github.com/platonai/exotic-amazon/tree/main/src/main/resources/sites/amazon/crawl/parse/sql/crawl)
-* [X-SQLs to crawl all types of Amazon webpages](https://github.com/platonai/exotic-amazon/tree/main/src/main/resources/sites/amazon/crawl/parse/sql/crawl)
-
-### High-Speed Parallel Processing
-
-Achieve extreme throughput with parallel browser control and smart resource optimization.
-
-**Performance:**
-- 10k ~ 20k complex page visits per machine per day
-- Concurrent session management
-- Resource blocking for faster page loads
-
-```kotlin
-val args = "-refresh -dropContent -interactLevel fastest"
-val blockingUrls = listOf("*.png", "*.jpg")
-val links = LinkExtractors.fromResource("urls.txt")
-    .map { ListenableHyperlink(it, "", args = args) }
-    .onEach {
-        it.eventHandlers.browseEventHandlers.onWillNavigate.addLast { page, driver ->
-            driver.addBlockedURLs(blockingUrls)
-        }
-    }
-
-session.submitAll(links)
-```
 
 🎬 YouTube:
 [![Watch the video](https://img.youtube.com/vi/_BcryqWzVMI/0.jpg)](https://www.youtube.com/watch?v=_BcryqWzVMI)
@@ -311,49 +303,9 @@ curl -L -o PulsarRPAPro.jar https://github.com/platonai/PulsarRPAPro/releases/do
 | `browser4-core`    | Core engine: sessions, scheduling, DOM, browser control |
 | `browser4-agentic` | Agent implementation, MCP, and skill registration       |
 | `browser4-rest`    | Spring Boot REST layer & command endpoints              |
-| `browser4-agents`  | Agent & crawler orchestration with product packaging    |
+| `browser4-standalone`  | Agent & crawler orchestration with product packaging    |
 | `examples`         | Runnable examples and demos                             |
 | `browser4-tests`   | E2E & heavy integration & scenario tests                |
-
----
-
-## ✨ Features
-
-Status: [Available] in repo, [Experimental] in active iteration, [Planned] not in repo, [Indicative] performance target.
-
-### AI & Agents
-- [Available] Problem-solving autonomous browser agents
-- [Available] Parallel agent sessions
-- [Experimental] LLM-assisted page understanding & extraction
-
-### Browser Automation & RPA
-- [Available] Workflow-based browser actions
-- [Available] Precise coroutine-safe control (scroll, click, extract)
-- [Available] Flexible event handlers & lifecycle management
-
-### Data Extraction & Query
-- [Available] One-line data extraction commands
-- [Available] X-SQL extended query language for DOM/content
-- [Experimental] Structured + unstructured hybrid extraction (LLM & ML & selectors)
-
-### Performance & Scalability
-- [Available] High-efficiency parallel page rendering
-- [Available] Block-resistant design & smart retries
-- [Indicative] 100,000+ complex pages/day on modest hardware
-
-### Stealth & Reliability
-- [Experimental] Advanced anti-bot techniques
-- [Available] Proxy rotation via `PROXY_ROTATION_URL`
-- [Available] Resilient scheduling & quality assurance
-
-### Developer Experience
-- [Available] Simple API integration (REST, native, text commands)
-- [Available] Rich configuration layering
-- [Available] Clear structured logging & metrics
-
-### Storage & Monitoring
-- [Available] Local FS & MongoDB support (extensible)
-- [Available] Comprehensive logs & transparency
 
 ---
 

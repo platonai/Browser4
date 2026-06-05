@@ -2,34 +2,127 @@
 //!
 //! Ensures a Browser4 server is running before executing commands.
 //! Only manages localhost instances; remote servers are not touched.
-//! When a local Browser4 checkout is available, startup prefers
-//! `mvn spring-boot:run` from the `browser4-app/browser4-agents` module so the CLI
-//! uses the matching server version from source. If no checkout can be found,
-//! it falls back to the packaged Browser4 jar flow used by the standalone
-//! installer.
+//! The server is launched from the `browser4-apps/browser4-bundle` runtime
+//! bundle — a self-contained distribution with a minimal jlink JRE and all
+//! dependency jars. When running inside a Browser4 repository checkout the
+//! bundle is auto-built from source; otherwise it falls back to downloading
+//! a pre-built release.
 
 use std::env;
 use std::fs;
 use std::io;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 use reqwest::Client;
+use serde::{Deserialize, Serialize};
 
 use crate::managed_processes::{register_managed_server_process, ManagedServerProcess};
-use crate::state::{read_state, resolve_default_state_dir};
+use crate::state::{
+    read_state, resolve_default_state_dir, resolve_runtime_cache_dir, resolve_runtime_data_dir,
+};
 
 const EXISTING_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(120);
-const JAR_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(60);
-const MAVEN_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(300);
+const JAR_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(120);
 const SERVER_READY_INITIAL_QUIET_WAIT: Duration = Duration::from_secs(5);
 const CLI_TEMP_DIR_COMPONENTS: [&str; 2] = ["tmp", "cli"];
-const CLI_LIB_DIR_COMPONENT: &str = "lib";
-const BROWSER4_JAR_FILE_NAME: &str = "Browser4.jar";
+/// Subdirectory of the runtime data dir that holds versioned installs.
+const RUNTIME_VERSIONS_DIR_NAME: &str = "runtime";
+/// Symlink (or tag file on Windows) that points to the currently active version.
+const CURRENT_TAG_FILE_NAME: &str = "current.tag";
+/// Name of the directory inside each versioned install that holds dependency JARs.
+const BROWSER4_LIB_DIR_NAME: &str = "lib";
+/// Name of the directory inside each versioned install that holds the bundled JRE.
+const BROWSER4_RUNTIME_DIR_NAME: &str = "runtime";
+/// Subdirectory of the runtime data dir for cached downloads.
+const DOWNLOADS_DIR_NAME: &str = "downloads";
+const BROWSER4_MAIN_CLASS: &str = "ai.platon.pulsar.apps.Browser4BundleApplicationKt";
+const BROWSER4_INSTALL_METADATA_FILE_NAME: &str = "browser4-installation.json";
+const BROWSER4_RELEASES_BASE_URL: &str = "https://github.com/platonai/Browser4/releases";
+const BROWSER4_RELEASES_BASE_URL_ENV: &str = "BROWSER4_RELEASES_BASE_URL";
 const ROOT_SEARCH_START_DIR_ENV: &str = "BROWSER4_CLI_INVOKE_DIR";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeBundleArchiveKind {
+    Zip,
+    TarGz,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeBundlePlatform {
+    WindowsX64,
+    LinuxX64,
+    MacOsX64,
+    MacOsArm64,
+}
+
+impl RuntimeBundlePlatform {
+    fn asset_name(self) -> String {
+        match self {
+            RuntimeBundlePlatform::WindowsX64 => "browser4-bundle-runtime-windows-x64.zip",
+            RuntimeBundlePlatform::LinuxX64 => "browser4-bundle-runtime-linux-x64.tar.gz",
+            RuntimeBundlePlatform::MacOsX64 => "browser4-bundle-runtime-darwin-x64.tar.gz",
+            RuntimeBundlePlatform::MacOsArm64 => "browser4-bundle-runtime-darwin-arm64.tar.gz",
+        }
+        .to_string()
+    }
+
+    fn archive_kind(self) -> RuntimeBundleArchiveKind {
+        match self {
+            RuntimeBundlePlatform::WindowsX64 => RuntimeBundleArchiveKind::Zip,
+            RuntimeBundlePlatform::LinuxX64
+            | RuntimeBundlePlatform::MacOsX64
+            | RuntimeBundlePlatform::MacOsArm64 => RuntimeBundleArchiveKind::TarGz,
+        }
+    }
+
+    /// The directory name inside `_work/` — the asset name without the archive
+    /// extension (e.g. `browser4-bundle-runtime-windows-x64`).
+    fn bundle_dir_name(self) -> String {
+        let asset = self.asset_name();
+        if let Some(name) = asset.strip_suffix(".zip") {
+            name.to_string()
+        } else if let Some(name) = asset.strip_suffix(".tar.gz") {
+            name.to_string()
+        } else {
+            asset
+        }
+    }
+
+    /// Build script filename relative to `browser4-apps/browser4-bundle/`.
+    fn build_script_name(self) -> &'static str {
+        "build-runtime-bundle.ps1"
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InstalledBrowser4RuntimeMetadata {
+    pub tag: String,
+    pub asset_name: String,
+    pub download_url: String,
+    pub installed_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstalledBrowser4Runtime {
+    pub tag: String,
+    pub asset_name: String,
+    pub download_url: String,
+    pub install_dir: PathBuf,
+    pub lib_dir: PathBuf,
+    pub jar_path: PathBuf,
+    pub java_path: PathBuf,
+    pub reused_existing: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DownloadedFile {
+    final_url: String,
+    bytes_written: u64,
+}
 
 /// Capture process startup cwd once for Browser4 root discovery.
 ///
@@ -51,7 +144,7 @@ pub fn init_root_search_start_dir_from_startup() {
 /// Ensure the Browser4 server is running, starting it if necessary.
 ///
 /// Only acts on `localhost` / `127.0.0.1` URLs.
-pub async fn ensure_server_running(base_url: &str, use_maven_startup: bool) -> Result<(), String> {
+pub async fn ensure_server_running(base_url: &str) -> Result<(), String> {
     // Skip remote servers
     if !base_url.contains("localhost") && !base_url.contains("127.0.0.1") {
         return Ok(());
@@ -60,7 +153,7 @@ pub async fn ensure_server_running(base_url: &str, use_maven_startup: bool) -> R
     let port = extract_port(base_url);
     if !is_local_port_open(base_url) {
         eprintln!("Browser4 server not running. Starting...");
-        let launch_spec = resolve_server_launch_spec(port, use_maven_startup).await?;
+        let launch_spec = resolve_server_launch_spec(port).await?;
         eprintln!("{}", launch_spec.description);
         return start_server(&launch_spec, base_url, port).await;
     }
@@ -76,12 +169,41 @@ pub async fn ensure_server_running(base_url: &str, use_maven_startup: bool) -> R
             return wait_for_server_ready(&client, base_url, EXISTING_SERVER_READY_TIMEOUT, None)
                 .await;
         }
-        ServerState::Unreachable(_) => {}
+        ServerState::Unreachable(error) => {
+            // Port is open but the health endpoint didn't answer.  The
+            // server may be mid-startup (TCP bound, HTTP not ready).
+            // Wait a short grace period and retry once before assuming
+            // the port holder is not a Browser4 server.
+            eprintln!(
+                "Port {} is open but the health check failed ({}); retrying in 3 s...",
+                port,
+                truncate_status_for_log(&error),
+            );
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            match probe_server_state(&client, base_url).await {
+                ServerState::Ready => return Ok(()),
+                ServerState::Starting(_) => {
+                    return wait_for_server_ready(
+                        &client,
+                        base_url,
+                        EXISTING_SERVER_READY_TIMEOUT,
+                        None,
+                    )
+                    .await;
+                }
+                ServerState::Unreachable(_) => {
+                    eprintln!(
+                        "Port {} is still unreachable after retry; starting a new server.",
+                        port
+                    );
+                }
+            }
+        }
     }
 
     eprintln!("Browser4 server not running. Starting...");
 
-    let launch_spec = resolve_server_launch_spec(port, use_maven_startup).await?;
+    let launch_spec = resolve_server_launch_spec(port).await?;
     eprintln!("{}", launch_spec.description);
 
     start_server(&launch_spec, base_url, port).await
@@ -115,7 +237,6 @@ fn is_local_port_open(base_url: &str) -> bool {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ServerLaunchKind {
-    Maven,
     Jar,
 }
 
@@ -134,154 +255,1062 @@ struct PreparedLaunchCommand {
     cleanup_dir: Option<PathBuf>,
 }
 
-async fn resolve_server_launch_spec(
-    port: u16,
-    use_maven_startup: bool,
-) -> Result<ServerLaunchSpec, String> {
-    if let Some(repo_root) = find_browser4_root_for_enabled_maven_launch(use_maven_startup) {
-        match build_maven_launch_spec(&repo_root, port) {
-            Ok(spec) => return Ok(spec),
-            Err(error) => {
+fn detect_current_runtime_bundle_platform() -> Result<RuntimeBundlePlatform, String> {
+    match (env::consts::OS, env::consts::ARCH) {
+        ("windows", "x86_64") => Ok(RuntimeBundlePlatform::WindowsX64),
+        ("linux", "x86_64") => Ok(RuntimeBundlePlatform::LinuxX64),
+        ("macos", "x86_64") => Ok(RuntimeBundlePlatform::MacOsX64),
+        ("macos", "aarch64") => Ok(RuntimeBundlePlatform::MacOsArm64),
+        (os, arch) => Err(format!(
+            "browser4-cli install does not yet publish a bundled Browser4 runtime for {os}/{arch}. Please install Java 17+ and use the Browser4.jar release asset instead."
+        )),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Runtime data directory layout
+// ---------------------------------------------------------------------------
+//
+//   {runtime_data_dir}/                  e.g. ~/.local/share/browser4/
+//   ├── runtime/                         versioned installs
+//   │   ├── current.tag                  plain-text file: "v4.11.0"
+//   │   │                               (or symlink on Unix when possible)
+//   │   ├── v4.10.0/
+//   │   │   ├── lib/                     dependency JARs
+//   │   │   ├── runtime/                 bundled JRE
+//   │   │   ├── bin/                     launcher scripts
+//   │   │   └── browser4-installation.json
+//   │   └── v4.11.0/
+//   │       └── ...
+//   └── downloads/                       cached downloaded archives
+//       └── v4.10.0/
+//           └── browser4-bundle-runtime-….zip
+//
+// The `current.tag` file (or `current` symlink on Unix) is the single source
+// of truth for which version is active.  `browser4_install_dir()` resolves it
+// to the versioned directory.
+// ---------------------------------------------------------------------------
+
+/// The directory that holds versioned runtime installs.
+fn runtime_versions_dir() -> PathBuf {
+    resolve_runtime_data_dir().join(RUNTIME_VERSIONS_DIR_NAME)
+}
+
+/// Path to a specific versioned install directory.
+fn versioned_install_dir(tag: &str) -> PathBuf {
+    runtime_versions_dir().join(tag)
+}
+
+/// Path to the `current.tag` marker file that records the active version tag.
+fn current_tag_file_path() -> PathBuf {
+    runtime_versions_dir().join(CURRENT_TAG_FILE_NAME)
+}
+
+/// Read the currently active tag from the marker file.  Returns `None` when
+/// no runtime has been installed yet or the file is corrupt.
+fn read_current_tag() -> Option<String> {
+    let path = current_tag_file_path();
+    if !path.exists() {
+        return try_migrate_legacy_runtime().or_else(|| {
+            // No legacy install either — try to find any versioned directory.
+            find_newest_versioned_install()
+        });
+    }
+    let raw = fs::read_to_string(&path).ok()?;
+    let tag = raw.trim().to_string();
+    if tag.is_empty() { None } else { Some(tag) }
+}
+
+/// Record `tag` as the currently active version.
+///
+/// On Unix this also attempts to create a `current` symlink for convenience,
+/// but the `current.tag` file is always the authoritative source.
+fn write_current_tag(tag: &str) -> Result<(), String> {
+    let parent = runtime_versions_dir();
+    fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
+
+    let tag_path = current_tag_file_path();
+    fs::write(&tag_path, format!("{tag}\n")).map_err(|e| e.to_string())?;
+
+    // Best-effort symlink on Unix for shell-friendliness.
+    #[cfg(unix)]
+    {
+        let symlink_path = parent.join("current");
+        let target = versioned_install_dir(tag);
+        let _ = std::os::unix::fs::symlink(&target, &symlink_path);
+    }
+
+    Ok(())
+}
+
+/// Resolve the currently active runtime install directory.
+///
+/// Reads `current.tag`, validates the versioned directory exists, and returns
+/// its path.  Returns `None` when no runtime is installed.
+fn resolve_current_install_dir() -> Option<PathBuf> {
+    let tag = read_current_tag()?;
+    let dir = versioned_install_dir(&tag);
+    if install_dir_contains_runtime(&dir) {
+        Some(dir)
+    } else {
+        None
+    }
+}
+
+/// The active runtime install directory.  Panics when no runtime is installed
+/// — only call this after confirming a runtime exists.
+fn browser4_install_dir() -> PathBuf {
+    resolve_current_install_dir().unwrap_or_else(|| {
+        // Fallback: return the versions dir itself (caller will find nothing
+        // and trigger a download).
+        runtime_versions_dir()
+    })
+}
+
+/// Compare two version tags like "v4.10.0" and "v4.9.0" using natural
+/// numeric ordering so "v4.10.0" > "v4.9.0".
+fn compare_semver_tags(a: &str, b: &str) -> std::cmp::Ordering {
+    let a_parts: Vec<u64> = a
+        .trim_start_matches('v')
+        .split('.')
+        .filter_map(|s| s.parse::<u64>().ok())
+        .collect();
+    let b_parts: Vec<u64> = b
+        .trim_start_matches('v')
+        .split('.')
+        .filter_map(|s| s.parse::<u64>().ok())
+        .collect();
+    for (ap, bp) in a_parts.iter().zip(b_parts.iter()) {
+        match ap.cmp(bp) {
+            std::cmp::Ordering::Equal => continue,
+            other => return other,
+        }
+    }
+    a_parts.len().cmp(&b_parts.len())
+}
+
+/// Look for the newest versioned install directory when `current.tag` is
+/// missing (e.g. after manual cleanup or migration).
+fn find_newest_versioned_install() -> Option<String> {
+    let parent = runtime_versions_dir();
+    let entries = fs::read_dir(&parent).ok()?;
+    let mut tags: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            // Only consider directories that look like version tags (v*).
+            if name.starts_with('v') && install_dir_contains_runtime(&parent.join(&name)) {
+                Some(name)
+            } else {
+                None
+            }
+        })
+        .collect();
+    if tags.is_empty() {
+        return None;
+    }
+    // Sort by version using natural numeric ordering so v4.10.0 > v4.9.0.
+    tags.sort_by(|a, b| compare_semver_tags(a, b));
+    let newest = tags.last()?.clone();
+    // Re-write the marker file so the next lookup is fast.
+    let _ = write_current_tag(&newest);
+    Some(newest)
+}
+
+/// One-shot migration from the legacy `~/.browser4/lib/` layout to the new
+/// versioned layout under the platform data directory.  Reads the old
+/// metadata to determine the tag, moves the files, and writes `current.tag`.
+fn try_migrate_legacy_runtime() -> Option<String> {
+    let legacy_install_dir = resolve_default_state_dir().join("lib");
+    if !install_dir_contains_runtime(&legacy_install_dir) {
+        return None;
+    }
+
+    let legacy_metadata_path = legacy_install_dir.join(BROWSER4_INSTALL_METADATA_FILE_NAME);
+    let metadata: InstalledBrowser4RuntimeMetadata =
+        serde_json::from_str(&fs::read_to_string(&legacy_metadata_path).ok()?).ok()?;
+
+    let tag = metadata.tag;
+    let target_dir = versioned_install_dir(&tag);
+
+    // Don't overwrite if the target already exists.
+    if target_dir.exists() {
+        // Both exist — just set the current tag and clean up the legacy dir.
+        let _ = write_current_tag(&tag);
+        let _ = fs::remove_dir_all(&legacy_install_dir);
+        return Some(tag);
+    }
+
+    eprintln!(
+        "Migrating Browser4 runtime from legacy location {} to {}",
+        legacy_install_dir.display(),
+        target_dir.display()
+    );
+
+    // Move the legacy install into the versioned directory.
+    if let Some(parent) = target_dir.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    match fs::rename(&legacy_install_dir, &target_dir) {
+        Ok(()) => {
+            let _ = write_current_tag(&tag);
+            eprintln!("  Migration complete.");
+            Some(tag)
+        }
+        Err(e) => {
+            eprintln!(
+                "  Migration by rename failed ({}); copying instead...",
+                e
+            );
+            // Fallback: copy recursively.
+            copy_dir_recursive(&legacy_install_dir, &target_dir)
+                .ok()?;
+            let _ = fs::remove_dir_all(&legacy_install_dir);
+            let _ = write_current_tag(&tag);
+            Some(tag)
+        }
+    }
+}
+
+fn browser4_java_executable_name() -> &'static str {
+    if cfg!(windows) { "java.exe" } else { "java" }
+}
+
+fn browser4_install_metadata_path() -> PathBuf {
+    browser4_install_dir().join(BROWSER4_INSTALL_METADATA_FILE_NAME)
+}
+
+fn java_path_in_install_dir(install_dir: &Path) -> PathBuf {
+    install_dir
+        .join(BROWSER4_RUNTIME_DIR_NAME)
+        .join("bin")
+        .join(browser4_java_executable_name())
+}
+
+pub fn read_installed_browser4_runtime_metadata() -> Option<InstalledBrowser4RuntimeMetadata> {
+    let path = browser4_install_metadata_path();
+    let contents = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&contents).ok()
+}
+
+/// Read metadata from a specific install directory (does not go through `current.tag`).
+fn read_installed_browser4_runtime_metadata_for(
+    install_dir: &Path,
+) -> Option<InstalledBrowser4RuntimeMetadata> {
+    let path = install_dir.join(BROWSER4_INSTALL_METADATA_FILE_NAME);
+    let contents = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&contents).ok()
+}
+
+fn install_dir_contains_runtime(install_dir: &Path) -> bool {
+    let lib_dir = install_dir.join(BROWSER4_LIB_DIR_NAME);
+    let has_lib = lib_dir.is_dir()
+        && std::fs::read_dir(&lib_dir)
+            .map(|mut entries| entries.any(|entry| {
+                entry
+                    .ok()
+                    .map(|e| {
+                        e.path()
+                            .extension()
+                            .map(|ext| ext == "jar")
+                            .unwrap_or(false)
+                    })
+                    .unwrap_or(false)
+            }))
+            .unwrap_or(false);
+    has_lib && java_path_in_install_dir(install_dir).is_file()
+}
+
+fn materialize_installed_runtime(
+    metadata: InstalledBrowser4RuntimeMetadata,
+    reused_existing: bool,
+) -> InstalledBrowser4Runtime {
+    let install_dir = versioned_install_dir(&metadata.tag);
+    let lib_dir = install_dir.join(BROWSER4_LIB_DIR_NAME);
+    InstalledBrowser4Runtime {
+        tag: metadata.tag,
+        asset_name: metadata.asset_name,
+        download_url: metadata.download_url,
+        lib_dir: lib_dir.clone(),
+        jar_path: lib_dir,
+        java_path: java_path_in_install_dir(&install_dir),
+        install_dir,
+        reused_existing,
+    }
+}
+
+fn normalize_release_tag(tag: Option<&str>) -> Option<String> {
+    let trimmed = tag?.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("latest") {
+        return None;
+    }
+    if trimmed.starts_with('v') {
+        Some(trimmed.to_string())
+    } else {
+        Some(format!("v{trimmed}"))
+    }
+}
+
+fn browser4_releases_base_url() -> String {
+    env::var(BROWSER4_RELEASES_BASE_URL_ENV)
+        .ok()
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| BROWSER4_RELEASES_BASE_URL.to_string())
+}
+
+fn browser4_release_download_url(tag: Option<&str>, asset_name: &str) -> String {
+    let base = browser4_releases_base_url();
+    match normalize_release_tag(tag) {
+        Some(tag) => format!("{base}/download/{tag}/{asset_name}"),
+        None => format!("{base}/latest/download/{asset_name}"),
+    }
+}
+
+fn parse_release_tag_from_url(url: &str) -> Option<String> {
+    let parsed = reqwest::Url::parse(url).ok()?;
+    let segments = parsed.path_segments()?.collect::<Vec<_>>();
+    let download_index = segments.iter().position(|segment| *segment == "download")?;
+    segments.get(download_index + 1).map(|segment| (*segment).to_string())
+}
+
+fn create_runtime_install_temp_dir() -> Result<PathBuf, String> {
+    let path = browser4_cli_temp_root_dir()
+        .join("install")
+        .join(format!(
+            "runtime-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ")
+        ));
+    fs::create_dir_all(&path).map_err(|e| {
+        format!(
+            "Failed to create Browser4 runtime install temp directory {}: {e}",
+            path.display()
+        )
+    })?;
+    Ok(path)
+}
+
+async fn download_file(url: &str, target_path: &Path) -> Result<DownloadedFile, String> {
+    let url = url.to_string();
+    let target_path = target_path.to_path_buf();
+    tokio::task::spawn_blocking(move || download_file_blocking(&url, &target_path))
+        .await
+        .map_err(|e| format!("Download task join failed: {e}"))?
+}
+
+fn download_file_blocking(url: &str, target_path: &Path) -> Result<DownloadedFile, String> {
+    if let Some(dir) = target_path.parent() {
+        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(1800))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let mut response = client
+        .get(url)
+        .send()
+        .map_err(|e| format!("Download failed: {e}"))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let mut msg = format!("Download failed with status: {status}\n  URL: {url}");
+        if status == reqwest::StatusCode::NOT_FOUND {
+            msg.push_str("\n\n  The runtime bundle asset was not found on the release.");
+            msg.push_str("\n  This may happen when the release does not include pre-built runtime bundles.");
+            msg.push_str("\n  Try one of the following:");
+            msg.push_str("\n    - Use a specific tag that includes runtime bundles: browser4-cli install --tag v4.8.0");
+            msg.push_str("\n    - Build the runtime from source inside the Browser4 repo and use --skip-install");
+            msg.push_str("\n    - Set BROWSER4_RELEASES_BASE_URL to a custom server hosting the runtime bundle");
+        }
+        return Err(msg);
+    }
+
+    let final_url = response.url().to_string();
+    let mut file = fs::File::create(target_path).map_err(|e| e.to_string())?;
+
+    // Copy with progress reporting every 30 s so long-running downloads
+    // don't appear hung (stress tests rely on this).
+    let total_size = response.content_length();
+    let mut downloaded: u64 = 0;
+    let mut last_report = std::time::Instant::now();
+    let report_interval = std::time::Duration::from_secs(30);
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = response.read(&mut buf).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        file.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+        downloaded += n as u64;
+        if last_report.elapsed() >= report_interval {
+            if let Some(total) = total_size {
+                let pct = if total > 0 {
+                    (downloaded as f64 / total as f64) * 100.0
+                } else {
+                    0.0
+                };
                 eprintln!(
-                    "Falling back to Browser4.jar startup because Maven launch spec failed: {}",
-                    error
+                    "  Download progress: {} / {} bytes ({:.0}%)",
+                    downloaded, total, pct
                 );
+            } else {
+                eprintln!("  Download progress: {} bytes", downloaded);
+            }
+            last_report = std::time::Instant::now();
+        }
+    }
+    let bytes_written = downloaded;
+    file.flush().map_err(|e| e.to_string())?;
+
+    Ok(DownloadedFile {
+        final_url,
+        bytes_written,
+    })
+}
+
+fn extract_runtime_bundle_archive(
+    archive_path: &Path,
+    destination_dir: &Path,
+    archive_kind: RuntimeBundleArchiveKind,
+) -> Result<(), String> {
+    fs::create_dir_all(destination_dir).map_err(|e| e.to_string())?;
+    match archive_kind {
+        RuntimeBundleArchiveKind::Zip => extract_zip_archive(archive_path, destination_dir),
+        RuntimeBundleArchiveKind::TarGz => extract_tar_gz_archive(archive_path, destination_dir),
+    }
+}
+
+fn extract_zip_archive(archive_path: &Path, destination_dir: &Path) -> Result<(), String> {
+    let file = fs::File::open(archive_path).map_err(|e| e.to_string())?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(|e| e.to_string())?;
+        let Some(relative_path) = entry.enclosed_name().map(|path| path.to_path_buf()) else {
+            continue;
+        };
+        let output_path = destination_dir.join(relative_path);
+
+        if entry.is_dir() {
+            fs::create_dir_all(&output_path).map_err(|e| e.to_string())?;
+            continue;
+        }
+
+        if let Some(parent) = output_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+
+        let mut output = fs::File::create(&output_path).map_err(|e| e.to_string())?;
+        io::copy(&mut entry, &mut output).map_err(|e| e.to_string())?;
+
+        #[cfg(unix)]
+        if let Some(mode) = entry.unix_mode() {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&output_path, fs::Permissions::from_mode(mode))
+                .map_err(|e| e.to_string())?;
+        }
+    }
+
+    Ok(())
+}
+
+fn extract_tar_gz_archive(archive_path: &Path, destination_dir: &Path) -> Result<(), String> {
+    let file = fs::File::open(archive_path).map_err(|e| e.to_string())?;
+    let decoder = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(decoder);
+    archive.unpack(destination_dir).map_err(|e| e.to_string())
+}
+
+fn is_runtime_bundle_root(path: &Path) -> bool {
+    install_dir_contains_runtime(path)
+}
+
+fn resolve_runtime_bundle_root(extracted_dir: &Path) -> Result<PathBuf, String> {
+    if is_runtime_bundle_root(extracted_dir) {
+        return Ok(extracted_dir.to_path_buf());
+    }
+
+    for entry in fs::read_dir(extracted_dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if path.is_dir() && is_runtime_bundle_root(&path) {
+            return Ok(path);
+        }
+    }
+
+    Err(format!(
+        "Downloaded Browser4 runtime bundle did not contain lib/ and runtime/ directories under {}.",
+        extracted_dir.display()
+    ))
+}
+
+fn remove_path_if_exists(path: &Path) -> Result<(), String> {
+    if path.is_dir() {
+        fs::remove_dir_all(path).map_err(|e| e.to_string())?;
+    } else if path.exists() {
+        fs::remove_file(path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<(), String> {
+    fs::create_dir_all(destination).map_err(|e| e.to_string())?;
+    for entry in fs::read_dir(source).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        let file_type = entry.file_type().map_err(|e| e.to_string())?;
+        if file_type.is_dir() {
+            copy_dir_recursive(&source_path, &destination_path)?;
+        } else {
+            if let Some(parent) = destination_path.parent() {
+                fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            fs::copy(&source_path, &destination_path).map_err(|e| e.to_string())?;
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = fs::metadata(&source_path)
+                    .map_err(|e| e.to_string())?
+                    .permissions()
+                    .mode();
+                fs::set_permissions(&destination_path, fs::Permissions::from_mode(mode))
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn write_installed_browser4_runtime_metadata(
+    metadata: &InstalledBrowser4RuntimeMetadata,
+) -> Result<(), String> {
+    let path = browser4_install_metadata_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let contents = serde_json::to_string_pretty(metadata).map_err(|e| e.to_string())?;
+    fs::write(path, contents).map_err(|e| e.to_string())
+}
+
+fn commit_installed_browser4_runtime(
+    extracted_root: &Path,
+    metadata: InstalledBrowser4RuntimeMetadata,
+) -> Result<InstalledBrowser4Runtime, String> {
+    let install_dir = versioned_install_dir(&metadata.tag);
+    let target_runtime = install_dir.join(BROWSER4_RUNTIME_DIR_NAME);
+    let target_lib = install_dir.join(BROWSER4_LIB_DIR_NAME);
+    let target_bin = install_dir.join("bin");
+    let source_runtime = extracted_root.join(BROWSER4_RUNTIME_DIR_NAME);
+    let source_lib = extracted_root.join(BROWSER4_LIB_DIR_NAME);
+    let source_bin = extracted_root.join("bin");
+
+    if !source_runtime.is_dir() {
+        return Err(format!(
+            "Downloaded Browser4 runtime bundle is missing runtime/ JRE directory {}",
+            source_runtime.display()
+        ));
+    }
+    if !source_lib.is_dir() {
+        return Err(format!(
+            "Downloaded Browser4 runtime bundle is missing lib/ directory {}",
+            source_lib.display()
+        ));
+    }
+
+    fs::create_dir_all(&install_dir).map_err(|e| e.to_string())?;
+    remove_path_if_exists(&target_runtime)?;
+    remove_path_if_exists(&target_lib)?;
+    remove_path_if_exists(&target_bin)?;
+    copy_dir_recursive(&source_runtime, &target_runtime)?;
+    copy_dir_recursive(&source_lib, &target_lib)?;
+    if source_bin.is_dir() {
+        copy_dir_recursive(&source_bin, &target_bin)?;
+    }
+    // Write the current-tag marker *before* write_installed_browser4_runtime_metadata
+    // because browser4_install_metadata_path() resolves through the current tag.
+    write_current_tag(&metadata.tag)?;
+    write_installed_browser4_runtime_metadata(&metadata)?;
+
+    Ok(materialize_installed_runtime(metadata, false))
+}
+
+// ---------------------------------------------------------------------------
+// Download cache — avoids re-downloading the same runtime bundle on every
+// `install --force` (stress tests exercise this path heavily).
+// ---------------------------------------------------------------------------
+
+fn browser4_download_cache_dir() -> PathBuf {
+    resolve_runtime_cache_dir().join(DOWNLOADS_DIR_NAME)
+}
+
+/// Path where a downloaded archive for the given *normalized* tag and
+/// asset name would be cached.  Returns `None` when the tag is unknown
+/// (i.e. `latest`) — we don't cache those because "latest" drifts.
+fn cached_download_path(normalized_tag: &str, asset_name: &str) -> PathBuf {
+    browser4_download_cache_dir()
+        .join(normalized_tag)
+        .join(asset_name)
+}
+
+/// Copy `src` into the download cache so the next install of the same
+/// tag can skip the network fetch.  Errors are swallowed — a full cache
+/// is never fatal.
+fn try_cache_downloaded_archive(src: &Path, normalized_tag: &str, asset_name: &str) {
+    let dest = cached_download_path(normalized_tag, asset_name);
+    if dest.exists() {
+        return; // already cached
+    }
+    if let Some(parent) = dest.parent() {
+        if let Err(e) = fs::create_dir_all(parent) {
+            eprintln!("  (skipping download cache: cannot create cache dir: {e})");
+            return;
+        }
+    }
+    if let Err(e) = fs::copy(src, &dest) {
+        eprintln!("  (skipping download cache: copy failed: {e})");
+        return;
+    }
+    eprintln!("  Cached downloaded archive to {}", dest.display());
+}
+
+/// If a previously-downloaded archive for this tag+asset is cached,
+/// copy it into `dest_path` and return `true`.
+fn try_restore_from_download_cache(
+    normalized_tag: &str,
+    asset_name: &str,
+    dest_path: &Path,
+) -> bool {
+    let cached = cached_download_path(normalized_tag, asset_name);
+    if !cached.exists() {
+        return false;
+    }
+    if let Some(parent) = dest_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    match fs::copy(&cached, dest_path) {
+        Ok(bytes) => {
+            eprintln!(
+                "  Restored {} from download cache ({} bytes).",
+                asset_name, bytes
+            );
+            true
+        }
+        Err(e) => {
+            eprintln!(
+                "  Cached archive exists but copy failed ({}); will re-download.",
+                e
+            );
+            false
+        }
+    }
+}
+
+pub async fn install_browser4_runtime(
+    tag: Option<&str>,
+    force: bool,
+) -> Result<InstalledBrowser4Runtime, String> {
+    let platform = detect_current_runtime_bundle_platform()?;
+    let requested_tag = normalize_release_tag(tag);
+    if !force {
+        if let Some(requested_tag) = requested_tag.as_deref() {
+            let versioned_dir = versioned_install_dir(requested_tag);
+            if install_dir_contains_runtime(&versioned_dir) {
+                if let Some(existing_metadata) = read_installed_browser4_runtime_metadata_for(&versioned_dir) {
+                    // Ensure this version is also marked as current.
+                    if read_current_tag().as_deref() != Some(requested_tag) {
+                        let _ = write_current_tag(requested_tag);
+                    }
+                    return Ok(materialize_installed_runtime(existing_metadata, true));
+                }
             }
         }
     }
 
-    let jar_path = find_or_download_jar().await?;
-    Ok(build_jar_launch_spec(&jar_path, port))
-}
+    let asset_name = platform.asset_name();
+    let download_url = browser4_release_download_url(tag, &asset_name);
+    let temp_dir = create_runtime_install_temp_dir()?;
+    let archive_path = temp_dir.join(&asset_name);
+    let extraction_dir = temp_dir.join("extract");
 
-fn build_maven_launch_spec(repo_root: &Path, port: u16) -> Result<ServerLaunchSpec, String> {
-    if !repo_root.is_dir() {
-        return Err(format!(
-            "Browser4 root does not exist: {}",
-            repo_root.display()
-        ));
-    }
-
-    let module_dir = repo_root.join("browser4-app").join("browser4-agents");
-    if !module_dir.join("pom.xml").is_file() {
-        return Err(format!(
-            "Browser4 agents module not found under {}",
-            module_dir.display()
-        ));
-    }
-
-    let wrapper_name = if cfg!(windows) { "mvnw.cmd" } else { "mvnw" };
-    let wrapper_path = repo_root.join(wrapper_name);
-    let program = if wrapper_path.exists() {
-        wrapper_path
-    } else if cfg!(windows) {
-        PathBuf::from("mvn.cmd")
-    } else {
-        PathBuf::from("mvn")
+    // If we have a concrete tag, try the download cache first so repeated
+    // `install --force` runs (like stress tests) don't re-fetch the same
+    // ~200 MB bundle from the network every time.
+    let cache_hit = match requested_tag.as_deref() {
+        Some(normalized) => try_restore_from_download_cache(normalized, &asset_name, &archive_path),
+        None => false,
     };
 
-    Ok(ServerLaunchSpec {
-        kind: ServerLaunchKind::Maven,
-        program: program.clone(),
-        args: vec![format!("-Dspring-boot.run.arguments=--server.port={port}")],
-        working_dir: repo_root.to_path_buf(),
-        registry_target: program,
-        description: format!(
-            "Starting server via Maven spring-boot:run from {} on port {}...",
-            module_dir.display(),
-            port
-        ),
-    })
+    let install_result = async {
+        if cache_hit {
+            // Already staged in archive_path — skip download.
+            eprintln!(
+                "Using cached Browser4 runtime bundle for {} (skip download).",
+                asset_name
+            );
+            // We need a DownloadedFile for the metadata below.
+            // Reconstruct it from what we know.
+            let downloaded = DownloadedFile {
+                final_url: download_url.clone(),
+                bytes_written: fs::metadata(&archive_path)
+                    .map(|m| m.len())
+                    .unwrap_or(0),
+            };
+            extract_runtime_bundle_archive(&archive_path, &extraction_dir, platform.archive_kind())?;
+            let extracted_root = resolve_runtime_bundle_root(&extraction_dir)?;
+            let resolved_tag = requested_tag
+                .as_deref()
+                .map(String::from)
+                .unwrap_or_else(|| "latest".to_string());
+            let metadata = InstalledBrowser4RuntimeMetadata {
+                tag: resolved_tag,
+                asset_name: asset_name.clone(),
+                download_url: downloaded.final_url,
+                installed_at: chrono::Utc::now().to_rfc3339(),
+            };
+            commit_installed_browser4_runtime(&extracted_root, metadata)
+        } else {
+            eprintln!("Downloading Browser4 runtime bundle from {}...", download_url);
+            let downloaded = download_file(&download_url, &archive_path).await?;
+            eprintln!(
+                "Downloaded {} bytes for Browser4 runtime bundle.",
+                downloaded.bytes_written
+            );
+            // Cache the downloaded archive for future runs (only when we have
+            // a concrete tag — "latest" is too ephemeral).
+            if let Some(normalized) = requested_tag.as_deref() {
+                try_cache_downloaded_archive(&archive_path, normalized, &asset_name);
+            }
+            extract_runtime_bundle_archive(&archive_path, &extraction_dir, platform.archive_kind())?;
+            let extracted_root = resolve_runtime_bundle_root(&extraction_dir)?;
+            let resolved_tag = parse_release_tag_from_url(&downloaded.final_url)
+                .or(requested_tag)
+                .unwrap_or_else(|| "latest".to_string());
+            let metadata = InstalledBrowser4RuntimeMetadata {
+                tag: resolved_tag,
+                asset_name: asset_name.clone(),
+                download_url: downloaded.final_url,
+                installed_at: chrono::Utc::now().to_rfc3339(),
+            };
+            commit_installed_browser4_runtime(&extracted_root, metadata)
+        }
+    }
+    .await;
+
+    cleanup_prepared_launch_dir(Some(temp_dir));
+    install_result
 }
 
-fn build_jar_launch_spec(jar_path: &Path, port: u16) -> ServerLaunchSpec {
+// ---------------------------------------------------------------------------
+// Chrome / Chromium detection and auto-install
+// ---------------------------------------------------------------------------
+
+/// Try to locate an installed Google Chrome or Chromium executable.
+pub fn find_chrome_executable() -> Option<std::path::PathBuf> {
+    let candidates: &[&str] = if cfg!(target_os = "windows") {
+        &[
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        ]
+    } else if cfg!(target_os = "macos") {
+        &[
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        ]
+    } else {
+        &[]
+    };
+
+    for path in candidates {
+        if std::path::Path::new(path).exists() {
+            return Some(std::path::PathBuf::from(path));
+        }
+    }
+
+    // Linux / fallback: check PATH
+    for name in &["google-chrome", "google-chrome-stable", "chromium-browser", "chromium"] {
+        if let Some(path) = find_in_path(name) {
+            return Some(path);
+        }
+    }
+
+    None
+}
+
+/// Search for an executable in the system PATH.
+fn find_in_path(name: &str) -> Option<std::path::PathBuf> {
+    let path_var = env::var_os("PATH")?;
+    let exe_extensions = if cfg!(target_os = "windows") {
+        vec![".exe", ".cmd", ".bat"]
+    } else {
+        vec![""]
+    };
+    for dir in env::split_paths(&path_var) {
+        for ext in &exe_extensions {
+            let candidate = dir.join(format!("{name}{ext}"));
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+/// Check whether Chrome or Chromium is available.  If not, attempt to install
+/// Google Chrome automatically (Debian/Ubuntu only).  Other platforms receive
+/// a warning with manual instructions.
+pub fn ensure_chrome_available() -> Result<(), String> {
+    if find_chrome_executable().is_some() {
+        eprintln!("✅ Google Chrome / Chromium is available.");
+        return Ok(());
+    }
+
+    eprintln!("⚠  Google Chrome not found.");
+
+    if cfg!(target_os = "linux") {
+        // Detect Debian-based / RHEL-based
+        let is_debian = std::path::Path::new("/etc/debian_version").exists();
+        let is_rhel = std::path::Path::new("/etc/redhat-release").exists();
+
+        if is_debian {
+            eprintln!("   Attempting auto-install on Debian/Ubuntu ...");
+            return install_chrome_debian();
+        }
+        if is_rhel {
+            eprintln!("   Attempting auto-install on RHEL/Fedora ...");
+            return install_chrome_rhel();
+        }
+
+        eprintln!("   Unsupported Linux distribution.");
+        eprintln!("   Install Chrome manually: https://www.google.com/chrome/");
+        return Ok(());
+    }
+
+    if cfg!(target_os = "macos") {
+        eprintln!("   Install Chrome manually:");
+        eprintln!("     brew install --cask google-chrome");
+        eprintln!("   Or download from: https://www.google.com/chrome/");
+        return Ok(());
+    }
+
+    if cfg!(target_os = "windows") {
+        return install_chrome_windows();
+    }
+
+    Ok(())
+}
+
+fn install_chrome_windows() -> Result<(), String> {
+    // 1. Try winget first (built into Windows 10 1709+ / Windows 11).
+    if let Ok(output) = std::process::Command::new("winget")
+        .args(["--version"])
+        .output()
+    {
+        if output.status.success() {
+            eprintln!("   Installing Google Chrome via winget ...");
+            let status = std::process::Command::new("winget")
+                .args([
+                    "install",
+                    "--id",
+                    "Google.Chrome",
+                    "--silent",
+                    "--accept-package-agreements",
+                    "--accept-source-agreements",
+                ])
+                .status()
+                .map_err(|e| format!("Failed to run winget: {e}"))?;
+
+            if status.success() {
+                if find_chrome_executable().is_some() {
+                    eprintln!("✅ Google Chrome installed successfully via winget.");
+                    return Ok(());
+                }
+            }
+            eprintln!("   winget install failed or Chrome not found after install.");
+        }
+    }
+
+    // 2. Fallback: download and run the standalone installer.
+    eprintln!("   Downloading Google Chrome installer ...");
+    let temp_installer = std::env::temp_dir().join("chrome_installer.exe");
+    let url = "https://dl.google.com/chrome/install/latest/chrome_installer.exe";
+
+    // Use PowerShell to download (more reliable on Windows than relying on
+    // curl/wget being available).
+    let ps_script = format!(
+        "$ProgressPreference = 'SilentlyContinue'; \
+         Invoke-WebRequest -Uri '{url}' -OutFile '{}'; \
+         Start-Process -FilePath '{}' -ArgumentList '/silent /install' -Wait; \
+         Remove-Item '{}' -Force; \
+         exit (Test-Path '{}')",
+        temp_installer.display(),
+        temp_installer.display(),
+        temp_installer.display(),
+        "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+    );
+
+    let status = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            &ps_script,
+        ])
+        .status()
+        .map_err(|e| format!("Failed to run PowerShell installer: {e}"))?;
+
+    if !status.success() {
+        let _ = fs::remove_file(&temp_installer);
+        return Err("Google Chrome installation via PowerShell failed.".to_string());
+    }
+
+    if find_chrome_executable().is_some() {
+        eprintln!("✅ Google Chrome installed successfully.");
+        Ok(())
+    } else {
+        Err("Google Chrome installation did not produce a usable binary.".to_string())
+    }
+}
+
+fn install_chrome_debian() -> Result<(), String> {
+    let tmp_deb = std::env::temp_dir().join("google-chrome-stable.deb");
+    let url = "https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb";
+
+    eprintln!("   Downloading {} ...", url);
+    let status = std::process::Command::new("wget")
+        .args(["-q", "--show-progress", "-O"])
+        .arg(&tmp_deb)
+        .arg(url)
+        .status()
+        .map_err(|e| format!("Failed to run wget: {e}"))?;
+
+    if !status.success() {
+        // Try curl as fallback
+        eprintln!("   wget failed, trying curl ...");
+        let status = std::process::Command::new("curl")
+            .args(["-fsSL", "-o"])
+            .arg(&tmp_deb)
+            .arg(url)
+            .status()
+            .map_err(|e| format!("Failed to run curl: {e}"))?;
+        if !status.success() {
+            let _ = fs::remove_file(&tmp_deb);
+            return Err("Failed to download Google Chrome. Install it manually.".to_string());
+        }
+    }
+
+    eprintln!("   Installing Google Chrome ...");
+    let status = std::process::Command::new("sudo")
+        .args(["dpkg", "-i"])
+        .arg(&tmp_deb)
+        .status()
+        .map_err(|e| format!("Failed to run dpkg: {e}"))?;
+
+    if !status.success() {
+        // Fix broken dependencies
+        eprintln!("   Fixing dependencies ...");
+        let _ = std::process::Command::new("sudo")
+            .args(["apt-get", "install", "-f", "-y"])
+            .status();
+    }
+
+    let _ = fs::remove_file(&tmp_deb);
+
+    if find_chrome_executable().is_some() {
+        eprintln!("✅ Google Chrome installed successfully.");
+        Ok(())
+    } else {
+        Err("Google Chrome installation did not produce a usable binary.".to_string())
+    }
+}
+
+fn install_chrome_rhel() -> Result<(), String> {
+    let tmp_rpm = std::env::temp_dir().join("google-chrome-stable.rpm");
+    let url = "https://dl.google.com/linux/direct/google-chrome-stable_current_x86_64.rpm";
+
+    eprintln!("   Downloading {} ...", url);
+    let status = std::process::Command::new("curl")
+        .args(["-fsSL", "-o"])
+        .arg(&tmp_rpm)
+        .arg(url)
+        .status()
+        .map_err(|e| format!("Failed to run curl: {e}"))?;
+
+    if !status.success() {
+        let _ = fs::remove_file(&tmp_rpm);
+        return Err("Failed to download Google Chrome. Install it manually.".to_string());
+    }
+
+    eprintln!("   Installing Google Chrome ...");
+    let status = std::process::Command::new("sudo")
+        .args(["dnf", "install", "-y"])
+        .arg(&tmp_rpm)
+        .status()
+        .map_err(|e| format!("Failed to run dnf: {e}"))?;
+
+    if !status.success() {
+        // Try yum as fallback
+        let _ = std::process::Command::new("sudo")
+            .args(["yum", "install", "-y"])
+            .arg(&tmp_rpm)
+            .status();
+    }
+
+    let _ = fs::remove_file(&tmp_rpm);
+
+    if find_chrome_executable().is_some() {
+        eprintln!("✅ Google Chrome installed successfully.");
+        Ok(())
+    } else {
+        Err("Google Chrome installation did not produce a usable binary.".to_string())
+    }
+}
+
+async fn resolve_server_launch_spec(port: u16) -> Result<ServerLaunchSpec, String> {
+    let runtime = find_or_install_runtime().await?;
+    Ok(build_jar_launch_spec(&runtime, port))
+}
+
+fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> ServerLaunchSpec {
+    let program = runtime.java_path.clone();
+    let program_display = program.display().to_string();
+    let classpath_arg = if cfg!(windows) {
+        format!(
+            "{}\\*",
+            runtime.lib_dir.display()
+        )
+    } else {
+        format!("{}/*", runtime.lib_dir.display())
+    };
     ServerLaunchSpec {
         kind: ServerLaunchKind::Jar,
-        program: PathBuf::from("java"),
+        program,
         args: vec![
-            "-jar".to_string(),
-            java_jar_argument_path(jar_path),
+            "-cp".to_string(),
+            classpath_arg,
+            BROWSER4_MAIN_CLASS.to_string(),
             format!("--server.port={port}"),
         ],
-        working_dir: jar_path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(default_server_working_dir),
-        registry_target: jar_path.to_path_buf(),
+        working_dir: runtime.install_dir.clone(),
+        registry_target: runtime.lib_dir.clone(),
         description: format!(
-            "Starting server from Browser4.jar at {} on port {}...",
-            jar_path.display(),
+            "Starting server from Browser4 runtime at {} using {} on port {}...",
+            runtime.install_dir.display(),
+            program_display,
             port
         ),
     }
-}
-
-fn java_jar_argument_path(jar_path: &Path) -> String {
-    #[cfg(windows)]
-    {
-        normalize_windows_verbatim_path_for_java(jar_path)
-    }
-
-    #[cfg(not(windows))]
-    {
-        jar_path.to_string_lossy().to_string()
-    }
-}
-
-#[cfg(windows)]
-fn normalize_windows_verbatim_path_for_java(path: &Path) -> String {
-    let raw = path.to_string_lossy();
-    if let Some(without_prefix) = raw.strip_prefix(r"\\?\UNC\") {
-        return format!(r"\\{without_prefix}");
-    }
-    if let Some(without_prefix) = raw.strip_prefix(r"\\?\") {
-        return without_prefix.to_string();
-    }
-    raw.to_string()
-}
-
-fn default_server_working_dir() -> PathBuf {
-    env::current_dir().unwrap_or_else(|_| resolve_default_state_dir())
 }
 
 fn command_for_launch_spec(
     launch_spec: &ServerLaunchSpec,
 ) -> Result<PreparedLaunchCommand, String> {
-    #[cfg(windows)]
-    if launch_spec.kind == ServerLaunchKind::Maven && is_windows_batch_program(&launch_spec.program)
-    {
-        let invocation = build_powershell_maven_invocation(&launch_spec.program, &launch_spec.args);
-        let mut command = Command::new("powershell.exe");
-        command
-            .args(["-NoProfile", "-NonInteractive", "-Command", &invocation])
-            .current_dir(&launch_spec.working_dir)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        return Ok(PreparedLaunchCommand {
-            command,
-            cleanup_dir: None,
-        });
-    }
-
-    #[cfg(not(windows))]
-    let (program, cleanup_dir) = if launch_spec.kind == ServerLaunchKind::Maven
-        && launch_spec
-            .program
-            .file_name()
-            .and_then(|name| name.to_str())
-            == Some("mvnw")
-        && launch_spec.program.is_file()
-    {
-        prepare_unix_maven_wrapper_launcher(launch_spec)?
-    } else {
-        (launch_spec.program.clone(), None)
-    };
-
-    #[cfg(windows)]
-    let (program, cleanup_dir) = (launch_spec.program.clone(), None);
-
-    let mut command = Command::new(&program);
+    let mut command = Command::new(&launch_spec.program);
     command
         .args(&launch_spec.args)
         .current_dir(&launch_spec.working_dir)
@@ -290,165 +1319,12 @@ fn command_for_launch_spec(
         .stderr(Stdio::null());
     Ok(PreparedLaunchCommand {
         command,
-        cleanup_dir,
+        cleanup_dir: None,
     })
 }
 
-fn launch_ready_timeout(launch_spec: &ServerLaunchSpec) -> Duration {
-    if launch_spec.kind == ServerLaunchKind::Maven {
-        MAVEN_SERVER_READY_TIMEOUT
-    } else {
-        JAR_SERVER_READY_TIMEOUT
-    }
-}
-
-#[cfg(windows)]
-fn is_windows_batch_program(program: &Path) -> bool {
-    matches!(
-        program.extension().and_then(|extension| extension.to_str()),
-        Some("cmd" | "bat")
-    )
-}
-
-#[cfg(windows)]
-fn escape_powershell_single_quoted(value: &str) -> String {
-    value.replace('\'', "''")
-}
-
-#[cfg(windows)]
-fn build_powershell_batch_invocation(program: &Path, args: &[String]) -> String {
-    std::iter::once(program.to_string_lossy().to_string())
-        .chain(args.iter().cloned())
-        .map(|value| format!("'{}'", escape_powershell_single_quoted(&value)))
-        .collect::<Vec<_>>()
-        .join(" ")
-        .pipe(|command| format!("& {command}"))
-}
-
-#[cfg(windows)]
-fn build_powershell_maven_invocation(program: &Path, runtime_args: &[String]) -> String {
-    let install_args = vec![
-        "-pl".to_string(),
-        "browser4-app/browser4-agents".to_string(),
-        "-am".to_string(),
-        "-DskipTests".to_string(),
-        "install".to_string(),
-        "-q".to_string(),
-    ];
-    let mut run_args = vec![
-        "-pl".to_string(),
-        "browser4-app/browser4-agents".to_string(),
-        "spring-boot:run".to_string(),
-    ];
-    run_args.extend_from_slice(runtime_args);
-
-    let install_command = build_powershell_batch_invocation(program, &install_args);
-    let run_command = build_powershell_batch_invocation(program, &run_args);
-
-    format!("{install_command}; if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}; {run_command}")
-}
-
-#[cfg(not(windows))]
-fn prepare_unix_maven_wrapper_launcher(
-    launch_spec: &ServerLaunchSpec,
-) -> Result<(PathBuf, Option<PathBuf>), String> {
-    use std::os::unix::fs::{symlink, PermissionsExt};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let Some(repo_root) = launch_spec.program.parent() else {
-        return Ok((launch_spec.program.clone(), None));
-    };
-    let wrapper_support_dir = repo_root.join(".mvn");
-    if !wrapper_support_dir.is_dir() {
-        return Ok((launch_spec.program.clone(), None));
-    }
-
-    let launcher_base_dir = browser4_cli_temp_root_dir().join("launchers");
-    fs::create_dir_all(&launcher_base_dir).map_err(|e| {
-        format!(
-            "Failed to create Browser4 launcher directory {}: {e}",
-            launcher_base_dir.display()
-        )
-    })?;
-
-    let unique_suffix = format!(
-        "{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|e| format!("Failed to compute Browser4 launcher timestamp: {e}"))?
-            .as_nanos()
-    );
-    let launcher_dir = launcher_base_dir.join(format!("maven-wrapper-{unique_suffix}"));
-    fs::create_dir(&launcher_dir).map_err(|e| {
-        format!(
-            "Failed to create Browser4 Maven wrapper directory {}: {e}",
-            launcher_dir.display()
-        )
-    })?;
-
-    let launcher_wrapper_path = launcher_dir.join("mvnw");
-    let launcher_support_dir = launcher_dir.join(".mvn");
-    let wrapper_contents = fs::read(&launch_spec.program).map_err(|e| {
-        format!(
-            "Failed to read Maven wrapper {}: {e}",
-            launch_spec.program.display()
-        )
-    })?;
-    let normalized_wrapper_contents = wrapper_contents
-        .into_iter()
-        .filter(|byte| *byte != b'\r')
-        .collect::<Vec<_>>();
-    fs::write(&launcher_wrapper_path, normalized_wrapper_contents).map_err(|e| {
-        format!(
-            "Failed to write normalized Maven wrapper {}: {e}",
-            launcher_wrapper_path.display()
-        )
-    })?;
-    fs::set_permissions(&launcher_wrapper_path, fs::Permissions::from_mode(0o755)).map_err(
-        |e| {
-            format!(
-                "Failed to set executable permissions on normalized Maven wrapper {}: {e}",
-                launcher_wrapper_path.display()
-            )
-        },
-    )?;
-    symlink(&wrapper_support_dir, &launcher_support_dir).map_err(|e| {
-        format!(
-            "Failed to link Maven wrapper support directory {} -> {}: {e}",
-            launcher_support_dir.display(),
-            wrapper_support_dir.display()
-        )
-    })?;
-
-    // Use a single reactor spring-boot:run so Maven resolves sibling modules
-    // from the current checkout instead of falling back to stale installed jars.
-    let mvnw_abs = launcher_wrapper_path
-        .to_string_lossy()
-        .replace('\'', "'\\''");
-    let launcher_script_content = [
-        "#!/bin/sh",
-        "set -e",
-        &format!("'{mvnw_abs}' -pl browser4-app/browser4-agents -am -DskipTests install -q"),
-        &format!("'{mvnw_abs}' -pl browser4-app/browser4-agents spring-boot:run \"$@\""),
-        "",
-    ]
-    .join("\n");
-    let launcher_script_path = launcher_dir.join("browser4-start.sh");
-    fs::write(&launcher_script_path, launcher_script_content.as_bytes()).map_err(|e| {
-        format!(
-            "Failed to write Browser4 launcher script {}: {e}",
-            launcher_script_path.display()
-        )
-    })?;
-    fs::set_permissions(&launcher_script_path, fs::Permissions::from_mode(0o755)).map_err(|e| {
-        format!(
-            "Failed to set executable permissions on Browser4 launcher script {}: {e}",
-            launcher_script_path.display()
-        )
-    })?;
-
-    Ok((launcher_script_path, Some(launcher_dir)))
+fn launch_ready_timeout(_launch_spec: &ServerLaunchSpec) -> Duration {
+    JAR_SERVER_READY_TIMEOUT
 }
 
 fn find_browser4_root() -> Option<PathBuf> {
@@ -460,19 +1336,6 @@ fn find_browser4_root() -> Option<PathBuf> {
 
     let current_dir = env::current_dir().ok()?;
     find_browser4_root_from(&current_dir, false)
-}
-
-fn find_browser4_root_for_maven_launch() -> Option<PathBuf> {
-    let current_dir = env::current_dir().ok()?;
-    find_browser4_root_from(&current_dir, false)
-}
-
-fn find_browser4_root_for_enabled_maven_launch(use_maven_startup: bool) -> Option<PathBuf> {
-    if !use_maven_startup {
-        return None;
-    }
-
-    find_browser4_root_for_maven_launch()
 }
 
 fn browser4_root_search_start_dir_from_env() -> Option<PathBuf> {
@@ -549,94 +1412,293 @@ fn should_skip_browser4_root_search(path: &Path) -> bool {
     )
 }
 
-async fn find_or_download_jar() -> Result<PathBuf, String> {
-    if let Some(configured_path) = browser4_jar_override_path() {
-        return Ok(configured_path);
+/// Check whether a valid runtime bundle already exists at the given paths.
+///
+/// A valid bundle must have a populated `lib/` directory (at least one jar) and
+/// a `runtime/bin/java` launcher produced by jlink.
+fn existing_runtime_bundle(
+    lib_dir: &Path,
+    java_path: &Path,
+    work_dir: &Path,
+) -> Option<InstalledBrowser4Runtime> {
+    let has_jars = lib_dir.is_dir()
+        && std::fs::read_dir(lib_dir)
+            .map(|mut entries| {
+                entries.any(|entry| {
+                    entry
+                        .ok()
+                        .map(|e| {
+                            e.path()
+                                .extension()
+                                .map(|ext| ext == "jar")
+                                .unwrap_or(false)
+                        })
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false);
+
+    if has_jars && java_path.is_file() {
+        Some(InstalledBrowser4Runtime {
+            tag: "local".to_string(),
+            asset_name: String::new(),
+            download_url: String::new(),
+            install_dir: work_dir.to_path_buf(),
+            lib_dir: lib_dir.to_path_buf(),
+            jar_path: PathBuf::new(),
+            java_path: java_path.to_path_buf(),
+            reused_existing: true,
+        })
+    } else {
+        None
+    }
+}
+
+/// Check whether the Maven-built fat JAR is present and has valid content.
+fn maven_jar_exists(bundle_module_dir: &Path) -> bool {
+    let jar = bundle_module_dir.join("target").join("Browser4Bundle.jar");
+    // The bundle JAR is a Spring Boot thin launcher (~8 KB); anything
+    // above 4 KB is a credible build artifact.  Stale / corrupt files
+    // are typically zero-length or a few hundred bytes.
+    jar.is_file() && jar.metadata().map(|m| m.len() > 4_096).unwrap_or(false)
+}
+
+/// Attempt to auto-build the local runtime bundle from source when running in a
+/// Browser4 repository checkout.  Returns `Ok(None)` when auto-build is not
+/// applicable (no bundle module, build script missing, or build failed) so the
+/// caller can fall back to the download path.
+///
+/// Each build step is independently skippable when its output already exists:
+/// 1. Maven `package` is skipped when `target/Browser4Bundle.jar` is valid.
+/// 2. The platform build script is skipped when the runtime bundle already
+///    contains `lib/*.jar` and `runtime/bin/java`.
+async fn try_build_local_runtime_bundle(
+    root: &Path,
+) -> Result<Option<InstalledBrowser4Runtime>, String> {
+    let bundle_module_dir = root.join("browser4-apps").join("browser4-bundle");
+    if !bundle_module_dir.is_dir() {
+        return Ok(None);
     }
 
-    let project_root = find_browser4_root();
-    let candidates = browser4_jar_candidates(project_root.as_deref());
+    let platform = detect_current_runtime_bundle_platform()?;
+    let bundle_dir_name = platform.bundle_dir_name();
+    let bundle_runtime_dir = bundle_module_dir.join("target").join("runtime-bundle");
+    let work_dir = bundle_runtime_dir
+        .join("_work")
+        .join(&bundle_dir_name)
+        .join(&bundle_dir_name);
+    let lib_dir = work_dir.join("lib");
+    let java_path = work_dir
+        .join("runtime")
+        .join("bin")
+        .join(browser4_java_executable_name());
 
-    eprintln!("Project root: {:?}", project_root);
+    // Fast path: runtime bundle already assembled — nothing to do.
+    if let Some(runtime) = existing_runtime_bundle(&lib_dir, &java_path, &work_dir) {
+        eprintln!(
+            "Using existing local Browser4 runtime bundle at {}.",
+            work_dir.display()
+        );
+        return Ok(Some(runtime));
+    }
 
-    for candidate in candidates {
-        eprintln!("Checking for Browser4.jar at {}...", candidate.display());
+    let build_script = bundle_module_dir.join(platform.build_script_name());
+    if !build_script.is_file() {
+        eprintln!(
+            "Build script not found at {}; skipping local bundle build.",
+            build_script.display()
+        );
+        return Ok(None);
+    }
 
-        if candidate.exists() {
-            return Ok(candidate);
+    // Step 1 – ensure the fat JAR exists.  Skip Maven when the JAR from a
+    // previous build is still present; this saves 10–30 s on every invocation
+    // when only the runtime assembly step needs to be re-run.
+    if maven_jar_exists(&bundle_module_dir) {
+        eprintln!(
+            "Using existing Browser4 bundle JAR at {}; skipping Maven package.",
+            bundle_module_dir.join("target").join("Browser4Bundle.jar").display()
+        );
+    } else {
+        eprintln!(
+            "Building local Browser4 runtime bundle from {} ...",
+            bundle_module_dir.display()
+        );
+        let mvn_program = resolve_maven_program(root);
+        let mvn_status = tokio::task::spawn_blocking({
+            let mvn_program = mvn_program.clone();
+            let root = root.to_path_buf();
+            move || {
+                std::process::Command::new(&mvn_program)
+                    .args([
+                        "package",
+                        "-Passet-bundle",
+                        "-pl",
+                        "browser4-apps/browser4-bundle",
+                        "-am",
+                        "-DskipTests",
+                        "-q",
+                    ])
+                    .current_dir(&root)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::piped())
+                    .status()
+            }
+        })
+        .await
+        .map_err(|e| format!("Maven package task panicked: {e}"))?;
+
+        match mvn_status {
+            Ok(status) if status.success() => {}
+            Ok(status) => {
+                eprintln!(
+                    "Maven package for browser4-bundle exited with {}; falling back to download.",
+                    status.code().map_or_else(|| "signal".to_string(), |c| c.to_string())
+                );
+                return Ok(None);
+            }
+            Err(error) => {
+                eprintln!(
+                    "Failed to run Maven for browser4-bundle ({error}); falling back to download."
+                );
+                return Ok(None);
+            }
         }
     }
 
-    let download_path = default_browser4_jar_path();
-    download_jar(&download_path).await?;
-    Ok(download_path)
-}
+    // Step 2 – run the platform build script (jlink + assembly).
+    eprintln!(
+        "Assembling Browser4 runtime bundle from {} ...",
+        bundle_module_dir.display()
+    );
+    let build_result = if cfg!(windows) {
+        run_bundle_build_script("powershell.exe", &build_script, &bundle_module_dir).await
+    } else {
+        // PowerShell Core may be installed as `pwsh` on Linux / macOS.
+        run_bundle_build_script("pwsh", &build_script, &bundle_module_dir).await
+    };
 
-fn browser4_jar_override_path() -> Option<PathBuf> {
-    let override_path = env::var("BROWSER4_JAR_PATH").ok()?;
-    let trimmed = override_path.trim();
-    if trimmed.is_empty() {
-        return None;
+    match build_result {
+        Ok(()) => {}
+        Err(error) => {
+            eprintln!(
+                "Runtime bundle build script failed: {error}; falling back to download."
+            );
+            return Ok(None);
+        }
     }
 
-    let path = PathBuf::from(trimmed);
-    path.exists().then_some(path)
-}
-
-fn browser4_jar_candidates(project_root: Option<&Path>) -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-
-    if let Some(root) = project_root {
-        candidates.push(
-            root.join("browser4-app")
-                .join("browser4-agents")
-                .join("target")
-                .join(BROWSER4_JAR_FILE_NAME),
+    // Verify the expected output was produced.
+    if let Some(runtime) = existing_runtime_bundle(&lib_dir, &java_path, &work_dir) {
+        eprintln!(
+            "Local Browser4 runtime bundle built successfully at {}.",
+            bundle_runtime_dir.display()
         );
-        candidates.push(root.join("target").join(BROWSER4_JAR_FILE_NAME));
+        return Ok(Some(runtime));
     }
 
-    candidates.push(default_browser4_jar_path());
-    candidates
+    eprintln!(
+        "Runtime bundle build completed but expected layout under {} was not found; falling back to download.",
+        work_dir.display()
+    );
+    Ok(None)
 }
 
-fn default_browser4_jar_path() -> PathBuf {
-    resolve_default_state_dir()
-        .join(CLI_LIB_DIR_COMPONENT)
-        .join(BROWSER4_JAR_FILE_NAME)
+/// Resolve the Maven launcher (`mvnw` / `mvnw.cmd` / `mvn`) relative to the
+/// Browser4 repository root.  Prefers the checked-in wrapper when available.
+fn resolve_maven_program(root: &Path) -> PathBuf {
+    let wrapper_name = if cfg!(windows) { "mvnw.cmd" } else { "mvnw" };
+    let wrapper = root.join(wrapper_name);
+    if wrapper.exists() {
+        return wrapper;
+    }
+    if cfg!(windows) {
+        PathBuf::from("mvn.cmd")
+    } else {
+        PathBuf::from("mvn")
+    }
 }
 
-async fn download_jar(target_path: &Path) -> Result<(), String> {
-    if let Some(dir) = target_path.parent() {
-        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+/// Run the bundle build script and wait for it to finish.
+async fn run_bundle_build_script(
+    shell: &str,
+    script: &Path,
+    working_dir: &Path,
+) -> Result<(), String> {
+    let script_path = script.to_path_buf();
+    let working_dir = working_dir.to_path_buf();
+    let shell_owned = shell.to_string();
+    let shell_for_error = shell_owned.clone();
+
+    let output = tokio::task::spawn_blocking(move || {
+        std::process::Command::new(&shell_owned)
+            .args([
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                &script_path.to_string_lossy(),
+            ])
+            .current_dir(&working_dir)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .output()
+    })
+    .await
+    .map_err(|e| format!("build script task panicked: {e}"))?;
+
+    match output {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(format!(
+                "build script exited with {}: {}",
+                output
+                    .status
+                    .code()
+                    .map_or_else(|| "signal".to_string(), |c| c.to_string()),
+                stderr.trim()
+            ))
+        }
+        Err(error) => Err(format!("failed to spawn build script ({shell_for_error}): {error}")),
+    }
+}
+
+async fn find_or_install_runtime() -> Result<InstalledBrowser4Runtime, String> {
+    // Check for an already-installed runtime (from prior `install` command)
+    if install_dir_contains_runtime(&browser4_install_dir()) {
+        if let Some(metadata) = read_installed_browser4_runtime_metadata() {
+            eprintln!(
+                "Using installed Browser4 runtime {} from {}.",
+                metadata.tag,
+                browser4_install_dir().display()
+            );
+            return Ok(materialize_installed_runtime(metadata, true));
+        }
     }
 
-    let url = "https://github.com/platonai/Browser4/releases/latest/download/Browser4.jar";
-    eprintln!("Downloading Browser4.jar from {}...", url);
-
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(300))
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| format!("Download failed: {e}"))?;
-
-    if !response.status().is_success() {
-        return Err(format!(
-            "Download failed with status: {}",
-            response.status()
-        ));
+    // Check for a local project build (or auto-build it).
+    let project_root = find_browser4_root();
+    if let Some(root) = &project_root {
+        match try_build_local_runtime_bundle(root).await {
+            Ok(Some(runtime)) => return Ok(runtime),
+            Ok(None) => {
+                eprintln!(
+                    "Local Browser4 bundle is not available; falling back to download."
+                );
+            }
+            Err(error) => {
+                eprintln!(
+                    "Local Browser4 bundle check failed: {error}; falling back to download."
+                );
+            }
+        }
     }
 
-    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
-    fs::write(target_path, &bytes).map_err(|e| e.to_string())?;
-
-    eprintln!("Download complete.");
-    Ok(())
+    // Download and install the runtime bundle
+    install_browser4_runtime(None, false).await
 }
 
 async fn start_server(
@@ -677,7 +1739,13 @@ async fn start_server(
         .stderr(startup_log.stderr);
 
     let mut child = command.spawn().map_err(|e| {
-        let error = format!("Failed to start server: {e}");
+        let error = format_server_startup_failure_message(
+            base_url,
+            Some("Browser4 could not be launched."),
+            &format!("Failed to start server: {e}"),
+            None,
+            Some(startup_log.path.as_path()),
+        );
         append_startup_log_message(&startup_log.path, &error);
         error
     })?;
@@ -938,7 +2006,6 @@ fn server_startup_log_path(
     port: u16,
 ) -> PathBuf {
     let kind = match launch_spec.kind {
-        ServerLaunchKind::Maven => "maven",
         ServerLaunchKind::Jar => "jar",
     };
     let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
@@ -1095,11 +2162,12 @@ async fn wait_for_server_ready(
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
 
-    Err(format!(
-        "Server failed to become MCP-ready within {}s: {}{}",
-        timeout.as_secs(),
-        last_error,
-        format_startup_log_timeout_details(startup_log_path)
+    Err(format_server_startup_failure_message(
+        base_url,
+        Some("Browser4 did not become MCP-ready before the startup timeout elapsed."),
+        &format!("Last readiness probe result: {last_error}"),
+        Some(timeout),
+        startup_log_path,
     ))
 }
 
@@ -1134,13 +2202,55 @@ fn truncate_status_for_log(message: &str) -> String {
     truncated
 }
 
+fn format_server_startup_failure_message(
+    base_url: &str,
+    summary: Option<&str>,
+    details: &str,
+    timeout: Option<Duration>,
+    startup_log_path: Option<&Path>,
+) -> String {
+    let mut message = vec!["🛑 Browser4 server startup failed".to_string()];
+    message.push(format!("  Server: {base_url}"));
+
+    if let Some(timeout) = timeout {
+        message.push(format!("  Timeout: {}s", timeout.as_secs()));
+    }
+
+    if let Some(summary) = summary {
+        message.push(format!("  Summary: {summary}"));
+    }
+
+    let mut suggestions = vec!["inspect the Browser4 startup log for the underlying server error."];
+    if timeout.is_some() {
+        suggestions.push("retry the command after Browser4 finishes starting.");
+    } else {
+        suggestions.push("confirm Java/Browser4 dependencies are available, then retry.");
+    }
+
+    message.push(String::new());
+    message.push("💡 What to try".to_string());
+    message.extend(suggestions.into_iter().map(|line| format!("  - {line}")));
+
+    message.push(String::new());
+    message.push("🧾 Details".to_string());
+    message.push(format!("  {details}"));
+
+    let startup_log_details = format_startup_log_timeout_details(startup_log_path);
+    if !startup_log_details.is_empty() {
+        message.push(String::new());
+        message.push(startup_log_details);
+    }
+
+    message.join("\n")
+}
+
 fn format_startup_log_timeout_details(startup_log_path: Option<&Path>) -> String {
     let Some(startup_log_path) = startup_log_path else {
         return String::new();
     };
 
     format!(
-        "\nBrowser4 startup log: {}\nStartup log tail:\n{}",
+        "📄 Browser4 startup log\n  Path: {}\n  Tail:\n{}",
         startup_log_path.display(),
         read_startup_log_tail(startup_log_path)
     )
@@ -1178,7 +2288,13 @@ fn read_startup_log_tail(path: &Path) -> String {
 mod tests {
     use super::*;
     use std::fs::{create_dir_all, write};
+    use std::sync::Mutex;
     use tempfile::TempDir;
+
+    /// Global lock to serialize tests that manipulate `BROWSER4_RUNTIME_DIR`
+    /// and `BROWSER4_CLI_STATE_DIR` environment variables.  Without this,
+    /// parallel test execution causes cross-test contamination.
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     fn test_temp_dir() -> TempDir {
         let root = std::env::temp_dir()
@@ -1192,9 +2308,9 @@ mod tests {
             .unwrap()
     }
 
-    fn sample_launch_spec(kind: ServerLaunchKind) -> ServerLaunchSpec {
+    fn sample_launch_spec() -> ServerLaunchSpec {
         ServerLaunchSpec {
-            kind,
+            kind: ServerLaunchKind::Jar,
             program: PathBuf::from("program"),
             args: vec!["arg1".to_string(), "arg2".to_string()],
             working_dir: PathBuf::from("."),
@@ -1205,18 +2321,10 @@ mod tests {
 
     fn create_browser4_root(tmp: &TempDir) -> PathBuf {
         let root = tmp.path().join("Browser4");
-        create_dir_all(root.join("browser4-app").join("browser4-agents")).unwrap();
         create_dir_all(root.join("sdks").join("browser4-cli")).unwrap();
         write(root.join("ROOT.md"), "# Browser4\n").unwrap();
         write(root.join("VERSION"), "0.1.0\n").unwrap();
         write(root.join("pom.xml"), "<project />").unwrap();
-        write(
-            root.join("browser4-app")
-                .join("browser4-agents")
-                .join("pom.xml"),
-            "<project />",
-        )
-        .unwrap();
         write(
             root.join("sdks").join("browser4-cli").join("Cargo.toml"),
             "[package]\nname = \"browser4-cli\"\n",
@@ -1292,15 +2400,6 @@ mod tests {
     }
 
     #[test]
-    fn test_find_browser4_root_for_enabled_maven_launch_requires_opt_in() {
-        assert_eq!(find_browser4_root_for_enabled_maven_launch(false), None);
-        assert_eq!(
-            find_browser4_root_for_enabled_maven_launch(true),
-            find_browser4_root_for_maven_launch()
-        );
-    }
-
-    #[test]
     fn test_is_local_port_open_detects_listener() {
         let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -1319,17 +2418,9 @@ mod tests {
     }
 
     #[test]
-    fn test_launch_ready_timeout_prefers_maven_processes() {
-        let mut maven_spec = sample_launch_spec(ServerLaunchKind::Maven);
-        maven_spec.program = PathBuf::from(if cfg!(windows) { "mvnw.cmd" } else { "mvnw" });
-        let mut jar_spec = sample_launch_spec(ServerLaunchKind::Jar);
-        jar_spec.program = PathBuf::from("java");
-
-        assert_eq!(
-            launch_ready_timeout(&maven_spec),
-            MAVEN_SERVER_READY_TIMEOUT
-        );
-        assert_eq!(launch_ready_timeout(&jar_spec), JAR_SERVER_READY_TIMEOUT);
+    fn test_launch_ready_timeout_uses_jar_timeout() {
+        let spec = sample_launch_spec();
+        assert_eq!(launch_ready_timeout(&spec), JAR_SERVER_READY_TIMEOUT);
     }
 
     #[test]
@@ -1383,37 +2474,107 @@ mod tests {
     }
 
     #[test]
-    fn test_default_browser4_jar_path_uses_state_dir_override() {
-        let tmp = test_temp_dir();
-        let expected = tmp
-            .path()
-            .canonicalize()
-            .unwrap()
-            .join("lib")
-            .join("Browser4.jar");
-
+    fn test_browser4_release_download_url_defaults_to_latest() {
+        let previous = env::var(BROWSER4_RELEASES_BASE_URL_ENV).ok();
         unsafe {
-            env::set_var("BROWSER4_CLI_STATE_DIR", tmp.path().as_os_str());
+            env::remove_var(BROWSER4_RELEASES_BASE_URL_ENV);
         }
-        let actual = default_browser4_jar_path();
-        unsafe {
-            env::remove_var("BROWSER4_CLI_STATE_DIR");
+        let url = browser4_release_download_url(None, "browser4-runtime-windows-x64.zip");
+        match previous {
+            Some(value) => unsafe { env::set_var(BROWSER4_RELEASES_BASE_URL_ENV, value) },
+            None => unsafe { env::remove_var(BROWSER4_RELEASES_BASE_URL_ENV) },
         }
-
-        assert_eq!(actual, expected);
+        assert_eq!(
+            url,
+            "https://github.com/platonai/Browser4/releases/latest/download/browser4-runtime-windows-x64.zip"
+        );
     }
 
     #[test]
-    fn test_browser4_jar_override_path_ignores_blank_values() {
+    fn test_browser4_release_download_url_normalizes_explicit_tags() {
+        let previous = env::var(BROWSER4_RELEASES_BASE_URL_ENV).ok();
         unsafe {
-            env::set_var("BROWSER4_JAR_PATH", "   ");
+            env::remove_var(BROWSER4_RELEASES_BASE_URL_ENV);
         }
-        let actual = browser4_jar_override_path();
+        let url_without_v =
+            browser4_release_download_url(Some("4.9.3"), "browser4-runtime-linux-x64.tar.gz");
+        let url_with_v =
+            browser4_release_download_url(Some("v4.9.3"), "browser4-runtime-linux-x64.tar.gz");
+        match previous {
+            Some(value) => unsafe { env::set_var(BROWSER4_RELEASES_BASE_URL_ENV, value) },
+            None => unsafe { env::remove_var(BROWSER4_RELEASES_BASE_URL_ENV) },
+        }
+        assert_eq!(
+            url_without_v,
+            "https://github.com/platonai/Browser4/releases/download/v4.9.3/browser4-runtime-linux-x64.tar.gz"
+        );
+        assert_eq!(
+            url_with_v,
+            "https://github.com/platonai/Browser4/releases/download/v4.9.3/browser4-runtime-linux-x64.tar.gz"
+        );
+    }
+
+    #[test]
+    fn test_parse_release_tag_from_url_extracts_download_tag() {
+        let tag = parse_release_tag_from_url(
+            "https://github.com/platonai/Browser4/releases/download/v4.9.3/browser4-runtime-windows-x64.zip",
+        );
+        assert_eq!(tag.as_deref(), Some("v4.9.3"));
+    }
+
+    #[test]
+    fn test_runtime_bundle_root_detection_accepts_nested_folder() {
+        let tmp = test_temp_dir();
+        let extracted = tmp.path().join("extract");
+        let bundle_root = extracted.join("browser4-bundle-runtime-windows-x64");
+        fs::create_dir_all(bundle_root.join("runtime").join("bin")).unwrap();
+        fs::create_dir_all(bundle_root.join("lib")).unwrap();
+        // Create a jar file in lib/ to satisfy install_dir_contains_runtime
+        write(bundle_root.join("lib").join("test.jar"), "jar").unwrap();
+        write(
+            bundle_root
+                .join("runtime")
+                .join("bin")
+                .join(browser4_java_executable_name()),
+            "java",
+        )
+        .unwrap();
+
+        let actual = resolve_runtime_bundle_root(&extracted).unwrap();
+        assert_eq!(actual, bundle_root);
+    }
+
+    #[test]
+    fn test_materialize_installed_runtime_uses_versioned_layout() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let tmp = test_temp_dir();
         unsafe {
-            env::remove_var("BROWSER4_JAR_PATH");
+            env::set_var("BROWSER4_RUNTIME_DIR", tmp.path().as_os_str());
         }
 
-        assert_eq!(actual, None);
+        let runtime = materialize_installed_runtime(
+            InstalledBrowser4RuntimeMetadata {
+                tag: "v4.9.3".to_string(),
+                asset_name: "browser4-runtime-windows-x64.zip".to_string(),
+                download_url: "https://example.invalid/runtime.zip".to_string(),
+                installed_at: "2026-05-26T00:00:00Z".to_string(),
+            },
+            true,
+        );
+
+        unsafe {
+            env::remove_var("BROWSER4_RUNTIME_DIR");
+        }
+
+        // install_dir should be {runtime_data}/runtime/v4.9.3/
+        assert!(runtime.install_dir.ends_with(Path::new("runtime").join("v4.9.3")));
+        // lib_dir should be {install_dir}/lib/
+        assert!(runtime.lib_dir.ends_with(Path::new("v4.9.3").join("lib")));
+        // java_path should be {install_dir}/runtime/bin/java
+        assert!(runtime
+            .java_path
+            .ends_with(Path::new("v4.9.3").join("runtime").join("bin").join(browser4_java_executable_name())));
+        assert!(runtime.reused_existing);
     }
 
     #[test]
@@ -1438,24 +2599,15 @@ mod tests {
     #[test]
     fn test_server_startup_log_path_includes_launch_kind_and_port() {
         let tmp = test_temp_dir();
-        let maven_path = server_startup_log_path(
-            Some(tmp.path()),
-            &sample_launch_spec(ServerLaunchKind::Maven),
-            8182,
-        );
         let jar_path = server_startup_log_path(
             Some(tmp.path()),
-            &sample_launch_spec(ServerLaunchKind::Jar),
+            &sample_launch_spec(),
             9292,
         );
 
-        let maven_name = maven_path.file_name().unwrap().to_string_lossy();
         let jar_name = jar_path.file_name().unwrap().to_string_lossy();
 
-        assert!(maven_path.starts_with(tmp.path()));
         assert!(jar_path.starts_with(tmp.path()));
-        assert!(maven_name.starts_with("browser4-server-maven-port8182-"));
-        assert!(maven_name.ends_with(".log"));
         assert!(jar_name.starts_with("browser4-server-jar-port9292-"));
         assert!(jar_name.ends_with(".log"));
     }
@@ -1505,9 +2657,35 @@ mod tests {
 
         let details = format_startup_log_timeout_details(Some(&log_path));
 
-        assert!(details.contains(&format!("Browser4 startup log: {}", log_path.display())));
-        assert!(details.contains("Startup log tail:"));
+        assert!(details.contains("📄 Browser4 startup log"));
+        assert!(details.contains(&format!("Path: {}", log_path.display())));
+        assert!(details.contains("Tail:"));
         assert!(details.contains("line10"));
+    }
+
+    #[test]
+    fn test_format_server_startup_failure_message_includes_sections() {
+        let tmp = test_temp_dir();
+        let log_path = tmp.path().join("startup.log");
+        write(&log_path, "tail line 1\ntail line 2\n").unwrap();
+
+        let message = format_server_startup_failure_message(
+            "http://127.0.0.1:8182",
+            Some("Browser4 did not become MCP-ready before the startup timeout elapsed."),
+            "Last readiness probe result: connection refused",
+            Some(Duration::from_secs(60)),
+            Some(&log_path),
+        );
+
+        assert!(message.contains("🛑 Browser4 server startup failed"));
+        assert!(message.contains("Server: http://127.0.0.1:8182"));
+        assert!(message.contains("Timeout: 60s"));
+        assert!(message.contains("💡 What to try"));
+        assert!(message.contains("inspect the Browser4 startup log"));
+        assert!(message.contains("🧾 Details"));
+        assert!(message.contains("Last readiness probe result: connection refused"));
+        assert!(message.contains("📄 Browser4 startup log"));
+        assert!(message.contains("tail line 2"));
     }
 
     #[test]
@@ -1515,7 +2693,7 @@ mod tests {
         let tmp = test_temp_dir();
         let log = create_server_startup_log_in(
             Some(tmp.path()),
-            &sample_launch_spec(ServerLaunchKind::Maven),
+            &sample_launch_spec(),
             8123,
         )
         .expect("startup log creation should succeed");
@@ -1524,7 +2702,7 @@ mod tests {
         drop(log.stderr);
 
         let contents = fs::read_to_string(&log.path).expect("startup log should be readable");
-        assert!(contents.contains("Launching Browser4 Maven on port 8123"));
+        assert!(contents.contains("Launching Browser4 Jar on port 8123"));
         assert!(contents.contains("program: program"));
         assert!(contents.contains("args: arg1 arg2"));
     }
@@ -1534,7 +2712,7 @@ mod tests {
         let tmp = test_temp_dir();
         let log = create_server_startup_log_in(
             Some(tmp.path()),
-            &sample_launch_spec(ServerLaunchKind::Jar),
+            &sample_launch_spec(),
             8182,
         )
         .expect("startup log creation should succeed");
@@ -1552,12 +2730,12 @@ mod tests {
     fn test_is_browser4_root_rejects_missing_root_marker() {
         let tmp = test_temp_dir();
         let root = tmp.path().join("Browser4");
-        create_dir_all(root.join("browser4-app").join("browser4-agents")).unwrap();
+        create_dir_all(root.join("browser4-apps").join("browser4-standalone")).unwrap();
         create_dir_all(root.join("sdks").join("browser4-cli")).unwrap();
         write(root.join("pom.xml"), "<project />").unwrap();
         write(
-            root.join("browser4-app")
-                .join("browser4-agents")
+            root.join("browser4-apps")
+                .join("browser4-standalone")
                 .join("pom.xml"),
             "<project />",
         )
@@ -1574,14 +2752,14 @@ mod tests {
     fn create_browser4_root_in(parent: &Path) -> PathBuf {
         let root = parent.join("Browser4");
         create_dir_all(&root).unwrap();
-        create_dir_all(root.join("browser4-app").join("browser4-agents")).unwrap();
+        create_dir_all(root.join("browser4-apps").join("browser4-standalone")).unwrap();
         create_dir_all(root.join("sdks").join("browser4-cli")).unwrap();
         write(root.join("ROOT.md"), "# Browser4\n").unwrap();
         write(root.join("VERSION"), "0.1.0\n").unwrap();
         write(root.join("pom.xml"), "<project />").unwrap();
         write(
-            root.join("browser4-app")
-                .join("browser4-agents")
+            root.join("browser4-apps")
+                .join("browser4-standalone")
                 .join("pom.xml"),
             "<project />",
         )
@@ -1594,174 +2772,332 @@ mod tests {
         root
     }
 
-    #[cfg(windows)]
+    // -------------------------------------------------------------------
+    // normalize_release_tag
+    // -------------------------------------------------------------------
+
     #[test]
-    fn test_build_maven_launch_spec_prefers_windows_wrapper() {
-        let tmp = test_temp_dir();
-        let root = create_browser4_root(&tmp);
-        let wrapper = root.join("mvnw.cmd");
-        write(&wrapper, "@echo off\r\n").unwrap();
-        let port_arg = "-Dspring-boot.run.arguments=--server.port=8199".to_string();
-
-        let spec = build_maven_launch_spec(&root, 8199).unwrap();
-
-        assert_eq!(spec.kind, ServerLaunchKind::Maven);
-        assert_eq!(spec.program, wrapper);
-        assert_eq!(spec.working_dir, root);
-        assert_eq!(spec.args, vec![port_arg.clone()]);
-
-        let invocation = build_powershell_maven_invocation(&spec.program, &spec.args);
-        let escaped_program = escape_powershell_single_quoted(&spec.program.to_string_lossy());
-        let escaped_port_arg = escape_powershell_single_quoted(&port_arg);
-
-        assert!(
-            invocation.contains(&format!(
-                "& '{escaped_program}' '-pl' 'browser4-app/browser4-agents' '-am' '-DskipTests' 'install' '-q'"
-            )),
-            "expected Maven preinstall phase in invocation: {invocation}"
-        );
-        assert!(
-            invocation.contains("if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }"),
-            "expected explicit Maven failure guard in invocation: {invocation}"
-        );
-        assert!(
-            invocation.contains(&format!(
-                "& '{escaped_program}' '-pl' 'browser4-app/browser4-agents' 'spring-boot:run' '{escaped_port_arg}'"
-            )),
-            "expected module-scoped spring-boot:run phase in invocation: {invocation}"
-        );
+    fn test_normalize_release_tag_empty_or_latest_returns_none() {
+        assert_eq!(normalize_release_tag(None), None);
+        assert_eq!(normalize_release_tag(Some("")), None);
+        assert_eq!(normalize_release_tag(Some("  ")), None);
+        assert_eq!(normalize_release_tag(Some("latest")), None);
+        assert_eq!(normalize_release_tag(Some("LATEST")), None);
     }
 
-    #[cfg(windows)]
     #[test]
-    fn test_build_powershell_batch_invocation_escapes_dynamic_windows_paths() {
-        let tmp = test_temp_dir();
-        let wrapper_dir = tmp.path().join("team's tools");
-        create_dir_all(&wrapper_dir).unwrap();
-        let wrapper = wrapper_dir.join("mvnw.cmd");
-        write(&wrapper, "@echo off\r\n").unwrap();
-        let args = ["-Dflag=team's-value".to_string()];
+    fn test_normalize_release_tag_adds_v_prefix() {
+        assert_eq!(normalize_release_tag(Some("4.9.3")).as_deref(), Some("v4.9.3"));
+        assert_eq!(normalize_release_tag(Some("4.10.0")).as_deref(), Some("v4.10.0"));
+    }
 
-        let invocation = build_powershell_batch_invocation(&wrapper, &args);
+    #[test]
+    fn test_normalize_release_tag_keeps_existing_v_prefix() {
+        assert_eq!(normalize_release_tag(Some("v4.9.3")).as_deref(), Some("v4.9.3"));
+        assert_eq!(normalize_release_tag(Some("v4.10.0")).as_deref(), Some("v4.10.0"));
+    }
 
+    #[test]
+    fn test_normalize_release_tag_trims_whitespace() {
+        assert_eq!(normalize_release_tag(Some("  v4.9.3  ")).as_deref(), Some("v4.9.3"));
+        assert_eq!(normalize_release_tag(Some("  4.10.0\t")).as_deref(), Some("v4.10.0"));
+    }
+
+    // -------------------------------------------------------------------
+    // parse_release_tag_from_url (additional edge cases)
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_release_tag_from_url_latest_pattern() {
+        // When called on a "latest" URL (before redirect), the segment after
+        // "download" is the asset filename, not a tag.  In practice this
+        // function is only called on the redirect-final URL which always has
+        // a real tag, so this edge case is harmless.
+        let tag = parse_release_tag_from_url(
+            "https://github.com/platonai/Browser4/releases/latest/download/browser4-runtime.zip",
+        );
+        assert_eq!(tag.as_deref(), Some("browser4-runtime.zip"));
+    }
+
+    #[test]
+    fn test_parse_release_tag_from_url_non_release_url_returns_none() {
+        assert_eq!(parse_release_tag_from_url("https://example.com/other/path"), None);
         assert_eq!(
-            invocation,
-            format!(
-                "& '{}' '{}'",
-                wrapper.to_string_lossy().replace('\'', "''"),
-                args[0].replace('\'', "''")
-            )
+            parse_release_tag_from_url("https://github.com/platonai/Browser4/releases/tag/v4.9.3"),
+            None
         );
     }
 
-    #[cfg(windows)]
     #[test]
-    fn test_normalize_windows_verbatim_path_for_java_drive_path() {
-        let path = PathBuf::from(r"\\?\C:\temp\Browser4.jar");
-        assert_eq!(
-            normalize_windows_verbatim_path_for_java(&path),
-            r"C:\temp\Browser4.jar"
-        );
+    fn test_parse_release_tag_from_url_malformed_url_returns_none() {
+        assert_eq!(parse_release_tag_from_url("not-a-url"), None);
+        assert_eq!(parse_release_tag_from_url(""), None);
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn test_normalize_windows_verbatim_path_for_java_unc_path() {
-        let path = PathBuf::from(r"\\?\UNC\server\share\Browser4.jar");
-        assert_eq!(
-            normalize_windows_verbatim_path_for_java(&path),
-            r"\\server\share\Browser4.jar"
-        );
-    }
+    // -------------------------------------------------------------------
+    // install_dir_contains_runtime
+    // -------------------------------------------------------------------
 
-    #[cfg(not(windows))]
     #[test]
-    fn test_build_maven_launch_spec_prefers_unix_wrapper() {
+    fn test_install_dir_contains_runtime_valid() {
         let tmp = test_temp_dir();
-        let root = create_browser4_root(&tmp);
-        let wrapper = root.join("mvnw");
-        write(&wrapper, "#!/usr/bin/env sh\n").unwrap();
-
-        let spec = build_maven_launch_spec(&root, 8199).unwrap();
-
-        assert_eq!(spec.kind, ServerLaunchKind::Maven);
-        assert_eq!(spec.program, wrapper);
-        assert_eq!(spec.working_dir, root);
-        assert_eq!(
-            spec.args,
-            vec!["-Dspring-boot.run.arguments=--server.port=8199"]
-        );
+        let lib_dir = tmp.path().join("lib");
+        fs::create_dir_all(&lib_dir).unwrap();
+        write(lib_dir.join("browser4.jar"), "jar-content").unwrap();
+        let runtime_bin = tmp.path().join("runtime").join("bin");
+        fs::create_dir_all(&runtime_bin).unwrap();
+        write(runtime_bin.join(browser4_java_executable_name()), "java").unwrap();
+        assert!(install_dir_contains_runtime(tmp.path()));
     }
 
-    #[cfg(not(windows))]
     #[test]
-    fn test_command_for_launch_spec_normalizes_unix_maven_wrapper() {
+    fn test_install_dir_contains_runtime_missing_lib_dir() {
         let tmp = test_temp_dir();
-        let root = create_browser4_root(&tmp);
-        create_dir_all(root.join(".mvn").join("wrapper")).unwrap();
-        let wrapper = root.join("mvnw");
-        write(&wrapper, "#!/bin/sh\r\nset -eu\r\n").unwrap();
-        write(
-            root.join(".mvn").join("wrapper").join("maven-wrapper.properties"),
-            "distributionUrl=https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/3.9.7/apache-maven-3.9.7-bin.zip\n",
+        assert!(!install_dir_contains_runtime(tmp.path()));
+    }
+
+    #[test]
+    fn test_install_dir_contains_runtime_missing_java() {
+        let tmp = test_temp_dir();
+        fs::create_dir_all(tmp.path().join("lib")).unwrap();
+        write(tmp.path().join("lib").join("browser4.jar"), "jar").unwrap();
+        assert!(!install_dir_contains_runtime(tmp.path()));
+    }
+
+    #[test]
+    fn test_install_dir_contains_runtime_empty_lib_dir() {
+        let tmp = test_temp_dir();
+        fs::create_dir_all(tmp.path().join("lib")).unwrap();
+        let runtime_bin = tmp.path().join("runtime").join("bin");
+        fs::create_dir_all(&runtime_bin).unwrap();
+        write(runtime_bin.join(browser4_java_executable_name()), "java").unwrap();
+        // No jar files in lib/
+        assert!(!install_dir_contains_runtime(tmp.path()));
+    }
+
+    // -------------------------------------------------------------------
+    // read_installed_browser4_runtime_metadata
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_metadata_round_trip() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let tmp = test_temp_dir();
+        let tag = "v4.9.3";
+        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+        setup_valid_versioned_runtime(&tmp.path().join("runtime-data"), tag);
+
+        // Write metadata into the versioned install dir.
+        let metadata_path = tmp.path().join("runtime-data").join("runtime").join(tag).join("browser4-installation.json");
+        let metadata = InstalledBrowser4RuntimeMetadata {
+            tag: tag.to_string(),
+            asset_name: "browser4-runtime-linux-x64.tar.gz".to_string(),
+            download_url: "https://example.com/releases/download/v4.9.3/bundle.tar.gz"
+                .to_string(),
+            installed_at: "2026-06-01T00:00:00Z".to_string(),
+        };
+        let json = serde_json::to_string_pretty(&metadata).unwrap();
+        fs::write(&metadata_path, json).unwrap();
+
+        let read = read_installed_browser4_runtime_metadata();
+        assert!(read.is_some(), "Expected metadata to be readable");
+        let read = read.unwrap();
+        assert_eq!(read.tag, "v4.9.3");
+        assert_eq!(read.asset_name, "browser4-runtime-linux-x64.tar.gz");
+        assert_eq!(read.installed_at, "2026-06-01T00:00:00Z");
+
+        restore_test_env(prev_runtime, prev_state);
+    }
+
+    #[test]
+    fn test_metadata_missing_file_returns_none() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let tmp = test_temp_dir();
+        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+        // No runtime installed at all → metadata is None.
+        let read = read_installed_browser4_runtime_metadata();
+        assert!(read.is_none());
+        restore_test_env(prev_runtime, prev_state);
+    }
+
+    #[test]
+    fn test_metadata_corrupted_json_returns_none() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let tmp = test_temp_dir();
+        let tag = "v4.9.3";
+        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+        setup_valid_versioned_runtime(&tmp.path().join("runtime-data"), tag);
+
+        // Corrupt the metadata file.
+        let metadata_path = tmp.path().join("runtime-data").join("runtime").join(tag).join("browser4-installation.json");
+        fs::write(&metadata_path, "not valid json {{{").unwrap();
+
+        let read = read_installed_browser4_runtime_metadata();
+        assert!(read.is_none());
+
+        restore_test_env(prev_runtime, prev_state);
+    }
+
+    // -------------------------------------------------------------------
+    // Helpers for new-layout tests
+    // -------------------------------------------------------------------
+
+    /// Set up a fully valid versioned runtime directory so that
+    /// `install_dir_contains_runtime` and `browser4_install_dir` both succeed.
+    /// Also writes `current.tag`.
+    fn setup_valid_versioned_runtime(_tmp: &Path, tag: &str) -> PathBuf {
+        let dir = versioned_install_dir(tag);
+        let lib = dir.join("lib");
+        let rt_bin = dir.join("runtime").join("bin");
+        fs::create_dir_all(&lib).unwrap();
+        fs::create_dir_all(&rt_bin).unwrap();
+        fs::write(lib.join("browser4.jar"), "fake-jar").unwrap();
+        fs::write(rt_bin.join(browser4_java_executable_name()), "fake-java").unwrap();
+        write_current_tag(tag).unwrap();
+        dir
+    }
+
+    /// Set both env vars so tests are fully isolated from any real
+    /// `~/.browser4/` or `~/.local/share/browser4/` directories.
+    fn isolate_test_env(tmp: &Path) -> (Option<String>, Option<String>) {
+        let prev_runtime = env::var("BROWSER4_RUNTIME_DIR").ok();
+        let prev_state = env::var("BROWSER4_CLI_STATE_DIR").ok();
+        unsafe {
+            env::set_var("BROWSER4_RUNTIME_DIR", tmp.join("runtime-data").as_os_str());
+            env::set_var("BROWSER4_CLI_STATE_DIR", tmp.join("state").as_os_str());
+        }
+        (prev_runtime, prev_state)
+    }
+
+    fn restore_test_env(prev_runtime: Option<String>, prev_state: Option<String>) {
+        match prev_runtime {
+            Some(v) => unsafe { env::set_var("BROWSER4_RUNTIME_DIR", v) },
+            None => unsafe { env::remove_var("BROWSER4_RUNTIME_DIR") },
+        }
+        match prev_state {
+            Some(v) => unsafe { env::set_var("BROWSER4_CLI_STATE_DIR", v) },
+            None => unsafe { env::remove_var("BROWSER4_CLI_STATE_DIR") },
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // New layout: versioned install dirs, current.tag, migration
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_current_tag_read_write_round_trip() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let tmp = test_temp_dir();
+        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+
+        // No tag yet → None (and no legacy install to migrate).
+        assert!(read_current_tag().is_none());
+
+        // Write a tag → should read back.
+        write_current_tag("v4.11.0").unwrap();
+        assert_eq!(read_current_tag().as_deref(), Some("v4.11.0"));
+
+        // Overwrite with a different tag.
+        write_current_tag("v4.12.0").unwrap();
+        assert_eq!(read_current_tag().as_deref(), Some("v4.12.0"));
+
+        restore_test_env(prev_runtime, prev_state);
+    }
+
+    #[test]
+    fn test_versioned_install_dir_path() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let tmp = test_temp_dir();
+        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+
+        let dir = versioned_install_dir("v4.10.0");
+        assert!(dir.ends_with(Path::new("runtime").join("v4.10.0")));
+
+        // Write a valid runtime and verify browser4_install_dir resolves.
+        setup_valid_versioned_runtime(&tmp.path().join("runtime-data"), "v4.10.0");
+        let resolved = resolve_current_install_dir().unwrap();
+        // Both paths should point to the same versioned install (canonicalization
+        // may add \\?\ prefix on Windows — compare file names instead).
+        assert!(resolved.ends_with(Path::new("runtime").join("v4.10.0")));
+        assert!(resolved.join("lib").join("browser4.jar").exists());
+
+        restore_test_env(prev_runtime, prev_state);
+    }
+
+    #[test]
+    fn test_legacy_migration_detects_old_layout() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let tmp = test_temp_dir();
+        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+
+        // Set up legacy layout under state_dir/lib/ (but BROWSER4_CLI_STATE_DIR
+        // points to our isolated temp dir, so we must write there).
+        let state_dir = tmp.path().join("state");
+        let legacy_install = state_dir.join("lib");
+        let legacy_lib = legacy_install.join("lib");
+        let legacy_runtime_bin = legacy_install.join("runtime").join("bin");
+        fs::create_dir_all(&legacy_lib).unwrap();
+        fs::create_dir_all(&legacy_runtime_bin).unwrap();
+        fs::write(legacy_lib.join("browser4.jar"), "fake-jar").unwrap();
+        fs::write(
+            legacy_runtime_bin.join(browser4_java_executable_name()),
+            "fake-java",
+        )
+        .unwrap();
+        let metadata = InstalledBrowser4RuntimeMetadata {
+            tag: "v4.8.0".to_string(),
+            asset_name: "browser4-runtime.zip".to_string(),
+            download_url: "https://example.com/bundle.zip".to_string(),
+            installed_at: "2025-01-01T00:00:00Z".to_string(),
+        };
+        fs::write(
+            legacy_install.join("browser4-installation.json"),
+            serde_json::to_string_pretty(&metadata).unwrap(),
         )
         .unwrap();
 
-        let spec = build_maven_launch_spec(&root, 8199).unwrap();
-        let prepared = command_for_launch_spec(&spec).unwrap();
-        let cleanup_dir = prepared
-            .cleanup_dir
-            .clone()
-            .expect("Unix wrapper launch should stage a normalized temp wrapper");
-        let prepared_program = PathBuf::from(Path::new(prepared.command.get_program()));
+        // Migration should move the legacy install to the new layout.
+        let tag = read_current_tag();
+        assert_eq!(tag.as_deref(), Some("v4.8.0"));
 
-        // The launcher script (not mvnw) is returned as the program
-        assert_ne!(prepared_program, wrapper);
-        assert_eq!(
-            prepared_program.file_name().and_then(|name| name.to_str()),
-            Some("browser4-start.sh")
-        );
-        assert_eq!(
-            prepared.command.get_current_dir(),
-            Some(spec.working_dir.as_path())
-        );
-        assert_eq!(
-            prepared
-                .command
-                .get_args()
-                .map(|arg| arg.to_string_lossy().into_owned())
-                .collect::<Vec<_>>(),
-            spec.args
-        );
+        // The legacy dir should be gone.
+        assert!(!legacy_install.exists());
 
-        // The normalized mvnw and .mvn symlink are staged in the same cleanup dir
-        let staged_mvnw = cleanup_dir.join("mvnw");
-        assert!(staged_mvnw.exists(), "normalized mvnw should be staged");
-        assert_eq!(
-            fs::read_to_string(&staged_mvnw).unwrap(),
-            "#!/bin/sh\nset -eu\n"
-        );
-        assert!(cleanup_dir.join(".mvn").exists());
+        // The versioned dir should exist in the new location.
+        let new_dir = versioned_install_dir("v4.8.0");
+        assert!(new_dir.join("lib").join("browser4.jar").exists());
 
-        // The launcher script should reference mvnw and both Maven phases
-        let script_content = fs::read_to_string(&prepared_program).unwrap();
-        assert!(
-            script_content.contains("-am -DskipTests install"),
-            "launcher script should contain install phase"
-        );
-        assert!(
-            script_content.contains("spring-boot:run"),
-            "launcher script should contain spring-boot:run"
+        restore_test_env(prev_runtime, prev_state);
+    }
+
+    #[test]
+    fn test_find_newest_versioned_install() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let tmp = test_temp_dir();
+        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+
+        // Set up multiple versioned installs without current.tag.
+        for tag in &["v4.8.0", "v4.9.0", "v4.10.0"] {
+            let dir = versioned_install_dir(tag);
+            let lib = dir.join("lib");
+            let rt_bin = dir.join("runtime").join("bin");
+            fs::create_dir_all(&lib).unwrap();
+            fs::create_dir_all(&rt_bin).unwrap();
+            fs::write(lib.join("x.jar"), "jar").unwrap();
+            fs::write(rt_bin.join(browser4_java_executable_name()), "java").unwrap();
+        }
+        // Remove current.tag if it exists so find_newest is forced to scan.
+        let tag_path = current_tag_file_path();
+        let _ = fs::remove_file(&tag_path);
+
+        // Without current.tag, should find newest.
+        assert_eq!(read_current_tag().as_deref(), Some("v4.10.0"));
+        // Now current.tag should have been written.
+        assert_eq!(
+            fs::read_to_string(current_tag_file_path()).unwrap().trim(),
+            "v4.10.0"
         );
 
-        cleanup_prepared_launch_dir(Some(cleanup_dir));
+        restore_test_env(prev_runtime, prev_state);
     }
 }
-
-trait Pipe: Sized {
-    fn pipe<T, F: FnOnce(Self) -> T>(self, function: F) -> T {
-        function(self)
-    }
-}
-
-impl<T> Pipe for T {}

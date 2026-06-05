@@ -4,7 +4,7 @@
     <parent>
         <groupId>ai.platon.pulsar</groupId>
         <artifactId>browser4</artifactId>
-        <version>4.9.2-SNAPSHOT</version>
+        <version>4.10.0-rc.3</version>
         <relativePath>../../pom.xml</relativePath>
     </parent>
 
@@ -14,7 +14,16 @@
     <dependencies>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
+            <artifactId>browser4-common</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>pulsar-jsoup</artifactId>
         </dependency>
         <dependency>
             <groupId>ai.platon.cdt</groupId>
@@ -92,10 +101,6 @@
             <groupId>org.mockito</groupId>
             <artifactId>mockito-junit-jupiter</artifactId>
             <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>ai.platon.pulsar</groupId>
-            <artifactId>browser4-common</artifactId>
         </dependency>
 
         <!-- Kotlin-friendly mocking -->

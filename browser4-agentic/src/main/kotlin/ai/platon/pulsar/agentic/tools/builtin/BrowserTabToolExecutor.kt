@@ -2,8 +2,8 @@ package ai.platon.pulsar.agentic.tools.builtin
 
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecGenerator
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.NavigateEntry
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
+import ai.platon.pulsar.browser.common.NavigateEntry
+import ai.platon.pulsar.core.api.WebDriver
 import kotlinx.coroutines.delay
 import java.time.Duration
 import java.util.concurrent.atomic.AtomicBoolean
@@ -30,7 +30,7 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             "selectFirstAttributeOrNull", "selectAttributes", "selectAttributeAll",
             "selectFirstPropertyValueOrNull", "selectPropertyValueAll",
             "clickablePoint", "boundingBox",
-            "getCookies",
+            "getCookies", "saveStorageState",
             "currentUrl", "url", "documentURI", "baseURI", "referrer", "pageSource"
         )
 
@@ -45,7 +45,8 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
             "mousedown", "mouseDown", "mouseup", "mouseUp",
             "dragAndDrop", "drag", "clickTextMatches", "clickMatches",
             "check", "uncheck", "setAttribute", "setAttributeAll", "setProperty", "setPropertyAll",
-            "evaluate", "evaluateDetail", "eval", "evaluateValue", "evaluateValueDetail"
+            "evaluate", "evaluateDetail", "eval", "evaluateValue", "evaluateValueDetail",
+            "loadStorageState"
         )
 
         // Actions that may trigger page navigation (form submission, link clicks, history traversal, etc.).
@@ -158,6 +159,30 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
 
                 Presses the key on the currently focused element when selector is omitted.
                 When selector is provided, the executor focuses the matched element first and then presses the key.
+            """.trimIndent()
+        )
+        toolSpec["saveStorageState"] = ToolSpec(
+            domain = domain,
+            method = "saveStorageState",
+            arguments = emptyList(),
+            returnType = "String",
+            description = "Save cookies and the active origin's localStorage as a JSON storage-state payload.",
+            help = """
+                tab.saveStorageState()
+
+                Returns a JSON string containing the current browser cookies and the active origin's localStorage entries.
+            """.trimIndent()
+        )
+        toolSpec["loadStorageState"] = ToolSpec(
+            domain = domain,
+            method = "loadStorageState",
+            arguments = listOf(ToolSpec.Arg("state", "String")),
+            returnType = "String",
+            description = "Load a JSON storage-state payload, restoring cookies and localStorage.",
+            help = """
+                tab.loadStorageState(state: String)
+
+                Restores cookies plus localStorage from a JSON string previously returned by tab.saveStorageState().
             """.trimIndent()
         )
     }
@@ -758,18 +783,6 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 validateArgs(args, emptySet(), emptySet(), functionName); driver.bringToFront()
             }
 
-            "chat" -> {
-                validateArgs(
-                    args,
-                    allowed("prompt", "selector"),
-                    setOf("prompt", "selector"),
-                    functionName
-                ); driver.chat(
-                    prompt = paramString(args, "prompt", functionName)!!,
-                    selector = paramString(args, "selector", functionName)!!
-                )
-            }
-
             // Scrolling
             "scrollDown" -> {
                 validateArgs(
@@ -1202,6 +1215,20 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
 
             "clearBrowserCookies" -> {
                 validateArgs(args, emptySet(), emptySet(), functionName); driver.clearBrowserCookies()
+            }
+
+            "saveStorageState" -> {
+                validateArgs(args, emptySet(), emptySet(), functionName); driver.saveStorageState()
+            }
+
+            "loadStorageState" -> {
+                validateArgs(args, allowed("state"), setOf("state"), functionName); driver.loadStorageState(
+                    paramString(
+                        args,
+                        "state",
+                        functionName
+                    )!!
+                )
             }
 
             // Delay / pause / stop

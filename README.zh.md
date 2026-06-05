@@ -11,19 +11,18 @@
 - [🤖 Browser4](#-browser4)
     - [🌟 项目简介](#-项目简介)
         - [✨ 核心能力](#-核心能力)
-    - [🎥 演示视频](#-演示视频)
-    - [🚀 快速开始](#-快速开始)
     - [💡 使用示例](#-使用示例)
-        - [浏览器智能体 (Browser Agents)](#浏览器智能体-browser-agents)
-        - [工作流自动化](#工作流自动化)
-        - [LLM + X-SQL](#llm--x-sql)
-        - [高速并行处理](#高速并行处理)
+        - [快速入门](#快速入门)
+        - [CLI 与技能 (SKILLS)](#cli-与技能-skills)
+    - [高级命令](#高级命令)
+        - [Agent 和 Swarm CLI](#agent-和-swarm-cli)
+    - [🚀 Native API 快速开始](#-native-api-快速开始)
         - [自动提取](#自动提取)
     - [📦 模块概览](#-模块概览)
+    - [🤝 支持与社区](#-支持与社区)
     - [📜 文档](#-文档)
     - [🔧 代理配置 - 解锁网站访问](#-代理配置---解锁网站访问)
-    - [✨ 特性](#-特性)
-    - [🤝 支持与社区](#-支持与社区)
+    - [许可证](#许可证)
 <!-- /TOC -->
 
 ## 🌟 项目简介
@@ -33,16 +32,16 @@
 ### ✨ 核心能力
 
 * 👽 **浏览器智能体** — 完全自主的浏览器智能体，能够推理、规划并端到端执行任务。
-* 🤖 **浏览器自动化** — 高性能的自动化工作流、页面导航和数据提取。
+* 🤖 **浏览器自动化** — 高性能自动化，涵盖工作流、导航和数据提取。
 * ⚙️ **机器学习智能体** — 在不消耗 token 的情况下学习复杂页面的字段结构。
-* ⚡  **极致性能** — 完全协程安全；支持每台机器每天 10 万 ~ 20 万次复杂页面访问。
+* ⚡  **极致性能** — 完全协程安全；单机每天支持 10 万 ~ 20 万次复杂页面访问。
 * 🧬 **数据提取** — 结合 LLM、ML 和选择器，在混乱的页面中提取干净的数据。
 
 ## 💡 使用示例
 
 ### 快速入门
 
-只需让任何大语言模型（LLM）智能体调用 browser4-cli来处理浏览器交互，它就能胜任像这样的复杂任务。
+只需让任何大语言模型（LLM）智能体使用 browser4-cli 来处理浏览器交互，它就能胜任像这样的复杂任务：
 
 ```shell
 $prompt = @"
@@ -54,8 +53,8 @@ Install https://raw.githubusercontent.com/platonai/Browser4/refs/heads/main/cli/
 4. write the result to a markdown file
 "@
 
-copilot --allow-all -p "$prompt"
-# claude --dangerously-skip-permissions "$prompt"
+copilot -p "$prompt"
+# claude "$prompt"
 ```
 
 ### CLI 与技能 (SKILLS)
@@ -71,13 +70,17 @@ npm install -g browser4-cli
 ```
 
 ```shell
-# 打开一个新的浏览器窗口
+# 打开 browser4（不导航到任何页面）
 browser4-cli open
 
-# 导航到页面
+# 以 headed 或 headless 模式打开
+browser4-cli open --headed https://browser4.io
+browser4-cli open --headless https://browser4.io
+
+# 导航到页面——如果没有活动会话则自动打开一个
 browser4-cli goto https://playwright.dev
 
-# 检查页面 — 注意可交互节点上的 eN 标签
+# 检查页面——注意可交互节点上的 eN 标签
 browser4-cli snapshot
 
 # 使用快照中的 ref 进行交互
@@ -117,17 +120,114 @@ echo '[
 browser4-cli close
 ```
 
-从源码构建 CLI：
+## 高级命令
 
-[README.md](cli/browser4-cli/README.md)
+以下命令有意从全局 `browser4-cli help` 概览中省略。
+需要时显式查询它们：
+
+```bash
+browser4-cli help batch
+browser4-cli help extract
+browser4-cli help summarize
+browser4-cli help agent run
+browser4-cli help swarm create
+```
 
 Browser4 CLI 专为 AI 智能体通过技能 (SKILLS) + CLI 使用而设计。
 
 [SKILL.md](cli/skill/SKILL.md)
 
+### Agent 和 Swarm CLI
+
+Browser4 CLI 提供两种高级接口，用于超越标准单步操作的复杂多步骤浏览器任务：
+
+**Agent CLI**（`agent <subcommand>`）—— 提交自然语言任务，让 Browser4 的后端 AI 智能体自主规划和执行。智能体会对页面进行推理，决定采取哪些操作，并异步完成任务。适用于：有明确目标但不了解页面结构、需要多步骤探索而无须为每个动作编写脚本的场景。
+
+**Swarm CLI**（`swarm <subcommand>`）—— 跨多个浏览器上下文编排并行抓取和结构化数据提取。专为高吞吐量任务打造：刷新精选 URL 列表、有监督的扇出式浏览、以及可重复执行的基于选择器的抓取。支持 X-SQL，可对已加载的网页进行结构化查询。
+
+| 接口 | 模式 | 适用场景 |
+|---|---|---|
+| 标准命令 | 每次调用执行单个操作 | 你已知道确切的 ref/选择器，需要精确控制 |
+| Agent CLI | 自然语言任务 → 自主执行 | 有目标但不了解页面结构；多步骤探索 |
+| Swarm CLI | 并行上下文 + X-SQL 查询 | 高吞吐量抓取、跨多个页面进行结构化提取 |
+
+#### Agent CLI 示例
+
+提交自然语言任务，让后端智能体自主推理、规划和执行：
+
+```shell
+# 提交自主任务 — 立即返回任务 ID
+browser4-cli agent run "打开 example.com，找到注册表单，用测试数据填写，然后截图"
+
+# 使用返回的任务 ID 轮询进度
+browser4-cli agent status agent-task-1
+
+# 任务完成后读取最终结果
+browser4-cli agent result agent-task-1
+```
+
+底层工作流程：
+1. `agent run` 将任务发送到 Browser4 后端，后端会启动一个 AI 智能体，该智能体拥有工具访问权限（导航、点击、输入、快照、截图、提取、总结等）。
+2. 智能体迭代探索页面，获取快照，决策操作，并逐步执行直到任务完成。
+3. `agent status` 返回后端状态负载（通常是 JSON 格式，包含 `id`、`status`、`statusCode`、`processState`、`agentState`、`agentHistory`、`commandResult` 等字段）。
+4. `agent result` 返回最终任务输出 — 根据任务类型可能是纯文本或结构化 JSON。
+
+关键说明：
+- `agent run` 是异步的：后端接受任务后立即返回。
+- `agent run` 会在提交后快速探测，以便 LLM/API 密钥配置错误能及早发现。
+- Agent 命令基于任务 ID，不需要活动的 CLI 浏览器会话槽。
+- Agent 子命令不支持在 `batch` 模式中使用。
+
+#### Swarm CLI 示例
+
+创建 swarm 会话，提交 URL 进行抓取，然后批量收集结果：
+
+```shell
+# 1) 创建具有并行浏览器上下文的 swarm 抓取会话
+browser4-cli swarm create \
+  --profile-mode=TEMPORARY \
+  --max-open-tabs=12 \
+  --max-browser-contexts=3 \
+  --display-mode=HEADLESS
+
+# 2) 将 URL 提交为抓取任务（直接 URL + 种子文件）
+browser4-cli swarm submit https://example.com/direct \
+  --seed-file=./urls.txt \
+  --refresh --parse --store-content
+
+# 3) 轮询并获取结果
+browser4-cli swarm status scrape-task-4
+browser4-cli swarm result scrape-task-4
+```
+
+运行 X-SQL 查询从已加载的网页中提取结构化数据：
+
+```shell
+# 内联 X-SQL 查询
+browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql "
+  SELECT
+    dom_base_uri(dom) AS url,
+    dom_first_text(dom, '#productTitle') AS title,
+    dom_first_slim_html(dom, 'img:expr(width > 400)') AS img
+  FROM load_and_select(@url, 'body');
+"
+
+# 从文件读取查询
+browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql @query.sql
+
+# 带种子文件和加载选项
+browser4-cli swarm query --sql @query.sql --seed-file=./urls.txt --refresh --parse
+```
+
+关键说明：
+- 种子文件为纯文本格式，每行一个 URL；`#` 注释和空行将被忽略。
+- `swarm submit` 和 `swarm query` 都支持 `--seed-file`、`--deadline`、`--expires`、`--refresh`、`--parse`、`--store-content`。
+- 所有 swarm 命令都会返回任务 ID；使用 `swarm status` / `swarm result` 跟踪进度。
+- 在 X-SQL 模板中使用 `@url` — 它会在服务器端替换为目标 URL。
+
 ---
 
-### 🚀 Native API 快速开始
+## 🚀 从源码构建
 
 **前置条件**：Java 17+
 
@@ -146,133 +246,7 @@ Browser4 CLI 专为 AI 智能体通过技能 (SKILLS) + CLI 使用而设计。
    ./mvnw -DskipTests
    ```
 
-4. **运行示例**
-   ```shell
-   ./mvnw -pl examples/browser4-examples exec:java -D"exec.mainClass=ai.platon.pulsar.examples.agent.Browser4AgentKt"
-   ```
-   如果在 Windows 上遇到编码问题：
-   ```shell
-   ./bin/run-agent-examples.ps1
-   ```
-
-   在 `browser4-examples` 模块中探索并运行示例，亲身体验 Browser4 的强大功能。
-   Java 兼容示例已被移除；请使用 Kotlin API、SDK 或 CLI 工具。
-
-关于 Docker 部署，请查看我们的 [Docker Hub 仓库](https://hub.docker.com/r/galaxyeye88/browser4)。
-
-**Windows 用户**：你也可以将 Browser4 构建为独立的 Windows 安装程序。详情请参阅 [Windows 安装程序指南](browser4-app/browser4-agents/README.md)。
-
 ---
-
-### 浏览器智能体 (Browser Agents)
-
-理解自然语言指令并执行复杂浏览器工作流的自主智能体。
-
-```kotlin
-val agent = AgenticContexts.getOrCreateAgent()
-
-val task = """
-    1. 访问 amazon.com
-    2. 搜索用于白板绘图的笔
-    3. 对比前 4 个商品
-    4. 将结果写入 markdown 文件
-    """
-
-agent.run(task)
-```
-
-### 工作流自动化
-
-提供精细控制的底层浏览器自动化与数据提取。
-
-**特性：**
-- 支持实时 DOM 访问和离线快照解析
-- 直接且完整的 Chrome DevTools Protocol (CDP) 控制，协程安全
-- 精确的元素交互（点击、滚动、输入）
-- 使用 CSS 选择器/XPath 进行快速数据提取
-
-```kotlin
-val session = AgenticContexts.getOrCreateSession()
-val agent = session.companionAgent
-val driver = session.getOrCreateBoundDriver()
-
-// 加载输入 URL 引用的初始页面
-var page = session.open(url)
-
-// 使用自然语言指令驱动浏览器
-agent.act("滚动到评论区")
-// 从实时 DOM 中读取第一个匹配的评论节点
-val content = driver.selectFirstTextOrNull("#comments")
-
-// 将页面快照保存为内存文档以进行离线解析
-var document = session.parse(page)
-// 一次性将 CSS 选择器映射到结构化字段
-var fields = session.extract(document, mapOf("title" to "#title"))
-
-// 让伴随智能体执行多步导航/搜索流程
-val history = agent.run(
-    "前往 amazon.com，搜索 '智能手机'，打开评分最高的商品页面"
-)
-
-// 将更新后的浏览器状态捕获回 PageSnapshot
-page = session.capture(driver)
-document = session.parse(page)
-// 从捕获的快照中提取其他属性
-fields = session.extract(document, mapOf("ratings" to "#ratings"))
-```
-
-### LLM + X-SQL
-
-非常适合高复杂度的数据提取流水线，涉及数十个实体和每个实体数百个字段。
-
-**优势：**
-- 与传统方法相比，可多提取 10 倍的实体和 100 倍的字段
-- 将 LLM 智能与精确的 CSS 选择器/XPath 相结合
-- 类似 SQL 的语法，实现熟悉的数据查询方式
-
-```kotlin
-val context = AgenticContexts.create()
-val sql = """
-select
-  llm_extract(dom, 'product name, price, ratings') as llm_extracted_data,
-  dom_first_text(dom, '#productTitle') as title,
-  dom_first_text(dom, '#bylineInfo') as brand,
-  dom_first_text(dom, '#price tr td:matches(^Price) ~ td, #corePrice_desktop tr td:matches(^Price) ~ td') as price,
-  dom_first_text(dom, '#acrCustomerReviewText') as ratings,
-  str_first_float(dom_first_text(dom, '#reviewsMedley .AverageCustomerReviews span:contains(out of)'), 0.0) as score
-from load_and_select('https://www.amazon.com/dp/B08PP5MSVB -i 1s -njr 3', 'body');
-"""
-val rs = context.executeQuery(sql)
-println(ResultSetFormatter(rs, withHeader = true))
-```
-
-示例代码：
-
-* [使用 X-SQL 从亚马逊商品页面抓取 100+ 个字段](https://github.com/platonai/exotic-amazon/tree/main/src/main/resources/sites/amazon/crawl/parse/sql/crawl)
-* [使用 X-SQL 抓取所有类型的亚马逊网页](https://github.com/platonai/exotic-amazon/tree/main/src/main/resources/sites/amazon/crawl/parse/sql/crawl)
-
-### 高速并行处理
-
-通过并行浏览器控制和智能资源优化实现极致吞吐量。
-
-**性能：**
-- 每台机器每天 1 万 ~ 2 万次复杂页面访问
-- 并发会话管理
-- 资源拦截以加快页面加载速度
-
-```kotlin
-val args = "-refresh -dropContent -interactLevel fastest"
-val blockingUrls = listOf("*.png", "*.jpg")
-val links = LinkExtractors.fromResource("urls.txt")
-    .map { ListenableHyperlink(it, "", args = args) }
-    .onEach {
-        it.eventHandlers.browseEventHandlers.onWillNavigate.addLast { page, driver ->
-            driver.addBlockedURLs(blockingUrls)
-        }
-    }
-
-session.submitAll(links)
-```
 
 🎬 YouTube：
 [![观看视频](https://img.youtube.com/vi/_BcryqWzVMI/0.jpg)](https://www.youtube.com/watch?v=_BcryqWzVMI)
@@ -321,55 +295,15 @@ curl -L -o PulsarRPAPro.jar https://github.com/platonai/PulsarRPAPro/releases/do
 
 ## 📦 模块概览
 
-| 模块                 | 描述                                         |
-|----------------------|----------------------------------------------|
-| `cli`                | 基于 Rust 的 CLI，支持技能 (SKILLS)            |
-| `browser4-core`      | 核心引擎：会话、调度、DOM、浏览器控制            |
-| `browser4-agentic`   | 智能体实现、MCP 和技能注册                      |
-| `browser4-rest`      | Spring Boot REST 层和命令端点                  |
-| `browser4-agents`    | 智能体和爬虫编排，包含产品打包                    |
-| `examples`           | 可运行的示例和演示                              |
-| `browser4-tests`     | 端到端测试、重量级集成测试和场景测试              |
-
----
-
-## ✨ 特性
-
-状态说明：[Available] 已在仓库中可用，[Experimental] 正在积极迭代中，[Planned] 尚未在仓库中，[Indicative] 性能目标。
-
-### AI 与智能体
-- [Available] 具备问题解决能力的自主浏览器智能体
-- [Available] 并行智能体会话
-- [Experimental] LLM 辅助的页面理解和提取
-
-### 浏览器自动化与 RPA
-- [Available] 基于工作流的浏览器操作
-- [Available] 精确的协程安全控制（滚动、点击、提取）
-- [Available] 灵活的事件处理器和生命周期管理
-
-### 数据提取与查询
-- [Available] 一行命令完成数据提取
-- [Available] 用于 DOM/内容查询的 X-SQL 扩展查询语言
-- [Experimental] 结构化与非结构化混合提取（LLM & ML & 选择器）
-
-### 性能与可扩展性
-- [Available] 高效并行页面渲染
-- [Available] 抗拦截设计和智能重试
-- [Indicative] 在普通硬件上每天处理 10 万+ 复杂页面
-
-### 隐匿性与可靠性
-- [Experimental] 高级反反爬技术
-- [Available] 通过 `PROXY_ROTATION_URL` 进行代理轮换
-- [Available] 弹性调度和质量保证
-
-### 开发者体验
-- [Available] 简洁的 API 集成（REST、原生、文本命令）
-- [Available] 丰富的配置分层
-- [Available] 清晰的结构化日志和指标
-
-### 存储与监控
-- [Available] 本地文件系统和 MongoDB 支持（可扩展）
-- [Available] 全面的日志和透明度
+| 模块                   | 描述                                         |
+|------------------------|----------------------------------------------|
+| `cli`                  | 基于 Rust 的 CLI，支持技能 (SKILLS)            |
+| `browser4-core`        | 核心引擎：会话、调度、DOM、浏览器控制            |
+| `browser4-agentic`     | 智能体实现、MCP 和技能注册                      |
+| `browser4-rest`        | Spring Boot REST 层和命令端点                  |
+| `browser4-standalone`  | 智能体和爬虫编排，包含产品打包                    |
+| `examples`             | 可运行的示例和演示                              |
+| `browser4-tests`       | 端到端测试、重量级集成测试和场景测试              |
 
 ---
 
@@ -411,4 +345,3 @@ export PROXY_ROTATION_URL=https://your-proxy-provider.com/rotation-endpoint
 ## 许可证
 
 Apache 2.0 许可证。详情请参见 [LICENSE](LICENSE) 文件。
-

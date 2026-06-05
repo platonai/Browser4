@@ -16,15 +16,26 @@ COPY . .
 
 RUN ls -la && ls -la bin && find . -name "*.sh" -exec chmod +x {} \;
 
-# Build the application with Maven cache mount
-RUN --mount=type=cache,target=/root/.m2 mvn clean package -DskipTests -Dmaven.javadoc.skip=true -B -V && \
+# Build the standalone application with Maven cache mount.
+# The asset-standalone profile adds only browser4-apps/browser4-standalone to
+# the default reactor (which already includes core/rest/agentic).  This avoids
+# building browser4-bundle, whose Browser4Bundle.jar would collide with
+# Browser4.jar if selected by accident.
+ARG STANDALONE_MODULE=browser4-apps/browser4-standalone
+RUN --mount=type=cache,target=/root/.m2 \
+    mvn clean package -Passet-standalone -DskipTests -D"maven.javadoc.skip=true" -B -V && \
     echo "Build completed successfully"
 
-# Copy JAR for use in the next stage with better error handling
-RUN JAR_FILE=$(find . -name "Browser4*.jar" -type f | head -n 1) && \
-    test -n "$JAR_FILE" || (echo "ERROR: Browser4 JAR file not found" && exit 1) && \
-    cp "$JAR_FILE" /build/app.jar && \
-    echo "Successfully copied JAR: $JAR_FILE"
+# Copy the JAR that Maven just built inside the container.
+# Use RUN cp (not COPY) — COPY would pull from the Docker build context
+# (host filesystem), which does not have the freshly-built JAR.
+RUN cp ${STANDALONE_MODULE}/target/Browser4.jar /build/app.jar
+
+# Validate the JAR before proceeding to the runtime stage.
+RUN jar xf /build/app.jar META-INF/MANIFEST.MF && \
+    grep -q 'Start-Class: ai.platon.pulsar.apps.Browser4StandaloneApplicationKt' META-INF/MANIFEST.MF || \
+    (echo "ERROR: /build/app.jar has wrong Start-Class — not built from browser4-standalone" && exit 1) && \
+    echo "JAR validated: Start-Class is Browser4StandaloneApplicationKt"
 
 # Stage 2: Run stage
 FROM eclipse-temurin:21-jre-alpine AS runner

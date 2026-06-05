@@ -1,19 +1,22 @@
 package ai.platon.pulsar.agentic.model
 
+import com.fasterxml.jackson.annotation.JsonAlias
 import com.fasterxml.jackson.annotation.JsonIgnore
+import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.node.ArrayNode
 import com.fasterxml.jackson.databind.node.JsonNodeFactory
 import com.fasterxml.jackson.databind.node.ObjectNode
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
-import com.fasterxml.jackson.module.kotlin.readValue
 
 data class ExtractionField(
     val name: String,
     val type: String = "string",                 // JSON schema primitive or 'object' / 'array'
     val description: String? = null,
     val required: Boolean = true,
+    @param:JsonAlias("properties")
     val objectMemberProperties: List<ExtractionField> = emptyList(), // define the schema of member properties if type == object
+    @param:JsonAlias("items")
     val arrayElements: ExtractionField? = null                   // define the schema of elements if type == array
 ) {
     fun toJsonSchemaNode(mapper: ObjectMapper): ObjectNode {
@@ -173,7 +176,14 @@ class ExtractionSchema(val fields: List<ExtractionField>) {
             )
 
         fun parse(json: String): ExtractionSchema {
-            return mapper.readValue(json)
+            val root = mapper.readTree(json)
+            require(root.isObject) { "Extraction schema must be a JSON object" }
+
+            return if (root.has("fields")) {
+                fromFieldSchema(root)
+            } else {
+                fromJsonSchema(root)
+            }
         }
 
         /** Utility adapter: build a schema from a legacy Map<String,String> where value = description */
@@ -186,6 +196,162 @@ class ExtractionSchema(val fields: List<ExtractionField>) {
                 )
             }
             return ExtractionSchema(fields)
+        }
+
+        private fun fromFieldSchema(root: JsonNode): ExtractionSchema {
+            val fieldsNode = root.get("fields")
+            require(fieldsNode != null && fieldsNode.isArray) { "Extraction schema 'fields' must be an array" }
+
+            val fields = fieldsNode.mapIndexed { index, fieldNode ->
+                parseFieldDefinition(fieldNode, fallbackName = "field${index + 1}")
+            }
+            return ExtractionSchema(fields)
+        }
+
+        private fun fromJsonSchema(root: JsonNode): ExtractionSchema {
+            val rootType = inferType(root)
+            if (rootType != "object") {
+                return ExtractionSchema(listOf(jsonSchemaNodeToField("result", root, required = true)))
+            }
+
+            val properties = root.get("properties")
+            if (properties == null || !properties.isObject) {
+                return ExtractionSchema(emptyList())
+            }
+
+            val required = root.get("required")
+                ?.takeIf { it.isArray }
+                ?.mapTo(linkedSetOf()) { it.asText() }
+                ?: emptySet()
+
+            val fields = properties.properties().asSequence().map { (name, node) ->
+                jsonSchemaNodeToField(name, node, name in required)
+            }.toList()
+
+            return ExtractionSchema(fields)
+        }
+
+        private fun parseFieldDefinition(node: JsonNode, fallbackName: String, requiredFallback: Boolean = true): ExtractionField {
+            require(node.isObject) { "Extraction field definition must be an object" }
+
+            val name = node.get("name")
+                ?.takeIf { !it.isNull && it.asText().isNotBlank() }
+                ?.asText()
+                ?: fallbackName
+            val type = node.get("type")
+                ?.takeIf { !it.isNull && it.asText().isNotBlank() }
+                ?.asText()
+                ?: inferType(node)
+            val description = node.get("description")?.takeIf { !it.isNull }?.asText()
+            val required = node.get("required")?.takeIf { !it.isNull }?.asBoolean() ?: requiredFallback
+            val objectMemberProperties = if (type == "object") parseFieldChildren(node, name) else emptyList()
+            val arrayElements = if (type == "array") parseFieldArrayElements(name, node) else null
+
+            return ExtractionField(
+                name = name,
+                type = type,
+                description = description,
+                required = required,
+                objectMemberProperties = objectMemberProperties,
+                arrayElements = arrayElements,
+            )
+        }
+
+        private fun jsonSchemaNodeToField(name: String, node: JsonNode, required: Boolean): ExtractionField {
+            val type = inferType(node)
+            val description = node.get("description")?.takeIf { !it.isNull }?.asText()
+            val objectMemberProperties = if (type == "object") parseObjectProperties(node) else emptyList()
+            val arrayElements = if (type == "array") parseArrayElements(name, node.get("items")) else null
+
+            return ExtractionField(
+                name = name,
+                type = type,
+                description = description,
+                required = required,
+                objectMemberProperties = objectMemberProperties,
+                arrayElements = arrayElements,
+            )
+        }
+
+        private fun parseFieldChildren(node: JsonNode, ownerName: String): List<ExtractionField> {
+            val childNode = node.get("objectMemberProperties")
+                ?: node.get("properties")
+                ?: node.get("fields")
+                ?: return emptyList()
+
+            return when {
+                childNode.isArray -> childNode.mapIndexed { index, child ->
+                    parseFieldDefinition(child, fallbackName = "${ownerName}Field${index + 1}")
+                }
+
+                childNode.isObject -> {
+                    val required = node.get("required")
+                        ?.takeIf { it.isArray }
+                        ?.mapTo(linkedSetOf()) { it.asText() }
+                        ?: emptySet()
+                    childNode.properties().asSequence().map { (name, child) ->
+                        jsonSchemaNodeToField(name, child, name in required)
+                    }.toList()
+                }
+
+                else -> emptyList()
+            }
+        }
+
+        private fun parseFieldArrayElements(parentName: String, node: JsonNode): ExtractionField? {
+            val itemsNode = node.get("arrayElements") ?: node.get("items") ?: return null
+            if (!itemsNode.isObject) {
+                return null
+            }
+
+            return parseFieldDefinition(itemsNode, fallbackName = "${parentName}Item", requiredFallback = false)
+        }
+
+        private fun parseObjectProperties(node: JsonNode): List<ExtractionField> {
+            val properties = node.get("properties")
+            if (properties == null || !properties.isObject) {
+                return emptyList()
+            }
+
+            val required = node.get("required")
+                ?.takeIf { it.isArray }
+                ?.mapTo(linkedSetOf()) { it.asText() }
+                ?: emptySet()
+
+            return properties.properties().asSequence().map { (name, child) ->
+                jsonSchemaNodeToField(name, child, name in required)
+            }.toList()
+        }
+
+        private fun parseArrayElements(parentName: String, itemsNode: JsonNode?): ExtractionField? {
+            if (itemsNode == null || itemsNode.isNull) {
+                return null
+            }
+
+            val itemName = itemsNode.get("name")
+                ?.takeIf { !it.isNull && it.asText().isNotBlank() }
+                ?.asText()
+                ?: "${parentName}Item"
+
+            return jsonSchemaNodeToField(itemName, itemsNode, required = false)
+        }
+
+        private fun inferType(node: JsonNode): String {
+            val explicitType = node.get("type")
+                ?.takeIf { !it.isNull && !it.asText().isNullOrBlank() }
+                ?.asText()
+            if (explicitType != null) {
+                return explicitType
+            }
+
+            return when {
+                node.has("objectMemberProperties") -> "object"
+                node.has("properties") && node.get("properties")?.let { it.isObject || it.isArray } == true -> "object"
+                node.has("fields") -> "object"
+                node.has("arrayElements") -> "array"
+                node.has("items") -> "array"
+                else -> "string"
+            }
         }
     }
 }

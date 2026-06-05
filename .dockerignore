@@ -38,5 +38,5 @@ application-private.yml
 强调包含所有源文件
 !**/src/*
 
-!browser4-app/**/target/Browser4.jar
-!browser4-app/browser4-agents/target/Browser4.jar
+!browser4-apps/**/target/Browser4.jar
+!browser4-apps/browser4-standalone/target/Browser4.jar

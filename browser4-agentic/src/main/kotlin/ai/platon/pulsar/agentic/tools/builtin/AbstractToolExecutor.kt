@@ -88,9 +88,9 @@ abstract class AbstractToolExecutor : ToolExecutor {
         default: String? = null
     ): String? {
         val v = args[name]
-        return when {
-            v == null && required && default == null -> throw IllegalArgumentException("Missing parameter '$name' for $functionName")
-            v == null -> default
+        return when (v) {
+            null if required && default == null -> throw IllegalArgumentException("Missing parameter '$name' for $functionName")
+            null -> default
             else -> v.toString()
         }
     }

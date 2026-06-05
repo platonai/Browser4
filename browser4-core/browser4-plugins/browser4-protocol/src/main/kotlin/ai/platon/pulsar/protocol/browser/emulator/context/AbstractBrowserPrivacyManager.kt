@@ -1,11 +1,11 @@
 package ai.platon.pulsar.protocol.browser.emulator.context
 
+import ai.platon.pulsar.browser.BrowserManager
+import ai.platon.pulsar.browser.privacy.AbstractPrivacyManager
+import ai.platon.pulsar.browser.privacy.PrivacyManager
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.proxy.ProxyPoolManager
 import ai.platon.pulsar.protocol.browser.driver.WebDriverPoolManager
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserManager
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.AbstractPrivacyManager
-import ai.platon.pulsar.skeleton.workflow.fetch.privacy.PrivacyManager
 
 interface BrowserPrivacyManager : PrivacyManager {
     val browserManager: BrowserManager

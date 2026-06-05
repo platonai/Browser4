@@ -15,7 +15,7 @@
 
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>browser4-examples</artifactId>
-    <version>4.9.2-SNAPSHOT</version>
+    <version>4.10.0-rc.3</version>
 
     <name>Browser4 Kotlin Examples</name>
     <description>
@@ -129,7 +129,7 @@
 
         <kotlin.version>2.2.21</kotlin.version>
         <spring-boot.version>4.0.5</spring-boot.version>
-        <browser4-base.version>4.7.1</browser4-base.version>
+        <browser4-base.version>4.8.2</browser4-base.version>
         <exec.mainClass>ai.platon.pulsar.examples.agent.Browser4AgentKt</exec.mainClass>
     </properties>
 </project>

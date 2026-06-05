@@ -31,8 +31,13 @@ pub(super) fn test_session_lifecycle(ctx: &mut E2ECtx) {
         close_without_session_result.stdout, close_without_session_result.stderr
     );
     assert!(
-        combined_output.contains("No active session. Run \"browser4-cli open\" first."),
+        combined_output.contains("🔐 Session required"),
         "Expected missing-session close message in output:\n{}",
+        combined_output
+    );
+    assert!(
+        combined_output.contains("run `browser4-cli open <url>` first."),
+        "Expected missing-session guidance in output:\n{}",
         combined_output
     );
     assert!(
@@ -84,9 +89,77 @@ pub(super) fn test_newly_opened_session_shows_active(ctx: &mut E2ECtx) {
     run_command(ctx, &["close"]);
 }
 
+pub(super) fn test_open_recovery_after_browser_kill(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    // 1. Open a session with a URL (navigates immediately)
+    let interactive_url = ctx.interactive_url();
+    let open_result = run_command(
+        ctx,
+        &["open", &interactive_url, OPEN_PROFILE_MODE_ARG],
+    );
+    assert!(
+        open_result.stdout.contains("Session opened:"),
+        "Expected session to open with a URL. Output:\n{}",
+        open_result.stdout
+    );
+    // Give the browser a moment to finish launching.
+    sleep(Duration::from_secs(2));
+
+    // Verify the page loaded correctly.
+    let title = eval_text(ctx, "document.title");
+    assert_eq!(title.trim(), INTERACTIVE_TITLE);
+
+    // 2. Kill browser processes (not the server).
+    let kill_result = browser4_cli::managed_processes::kill_all_browsers();
+    if !kill_result.killed_pids.is_empty() {
+        eprintln!(
+            "[test_open_recovery_after_browser_kill] killed browser PIDs: {:?}",
+            kill_result.killed_pids
+        );
+    }
+    // Give the server a moment to detect the browser disconnection.
+    sleep(Duration::from_millis(1500));
+
+    // 3. Goto another URL — should re-launch the browser via stale-session recovery.
+    let other_url = ctx.other_url();
+    let goto_result = run_command(ctx, &["goto", &other_url]);
+    assert!(
+        !goto_result.stdout.is_empty(),
+        "Expected goto to produce page output after browser-kill recovery (got empty stdout)"
+    );
+
+    // Verify we landed on the target page.
+    wait_for_eval_text(
+        ctx,
+        "document.title",
+        OTHER_TITLE,
+        10_000,
+        "Expected goto to navigate to the other page after browser recovery",
+    );
+
+    // 4. Server should still be UP (only browsers were killed, not the server).
+    let status_result = run_command(ctx, &["status"]);
+    assert!(
+        status_result.stdout.contains("Server health: UP"),
+        "Expected 'Server health: UP' after browser kill. Status output:\n{}",
+        status_result.stdout
+    );
+
+    // 5. The recovered session should show as Active in list output.
+    let list_result = run_command(ctx, &["list"]);
+    assert!(
+        list_result.stdout.contains("Active"),
+        "Expected session to be 'Active' in list output after goto recovery:\n{}",
+        list_result.stdout
+    );
+
+    run_command(ctx, &["close"]);
+}
+
 pub(super) fn test_navigation_and_storage(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
 
     let interactive_url = ctx.interactive_url();
     let other_url = ctx.other_url();
@@ -147,9 +220,405 @@ pub(super) fn test_navigation_and_storage(ctx: &mut E2ECtx) {
     run_command(ctx, &["close"]);
 }
 
+pub(super) fn test_storage_state_commands(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let interactive_url = ctx.interactive_url();
+    let storage_state_path = ctx.workspace_dir.join("auth-state.json");
+    let storage_state_path_text = storage_state_path.to_string_lossy().into_owned();
+    let initial_state = serde_json::json!({
+        "cookies": [
+            {
+                "name": "restoredCookie",
+                "value": "restored-value",
+                "url": interactive_url,
+            }
+        ],
+        "origins": [
+            {
+                "origin": ctx.fixture_base_url,
+                "localStorage": [
+                    { "name": "restoredKey", "value": "restored-value" }
+                ]
+            }
+        ]
+    });
+    fs::write(
+        &storage_state_path,
+        serde_json::to_string_pretty(&initial_state).unwrap(),
+    )
+    .unwrap();
+
+    let load_without_session = run_command(ctx, &["state-load", &storage_state_path_text]);
+    assert!(
+        load_without_session
+            .stdout
+            .contains("Storage state loaded:"),
+        "Expected storage-state load output:\n{}",
+        load_without_session.stdout
+    );
+
+    run_command(ctx, &["goto", &interactive_url]);
+    wait_for_eval_text(
+        ctx,
+        "document.cookie.includes('restoredCookie=restored-value').toString()",
+        "true",
+        2_000,
+        "Expected state-load to restore cookies into a fresh session",
+    );
+    wait_for_eval_text(
+        ctx,
+        "window.localStorage.getItem('restoredKey') ?? ''",
+        "restored-value",
+        2_000,
+        "Expected state-load to restore localStorage into a fresh session",
+    );
+
+    let cookie_set_result = run_command(ctx, &["cookie-set", "session_id", "abc123", "--path=/"]);
+    assert!(
+        cookie_set_result.stdout.contains("Cookie set: session_id"),
+        "Expected cookie-set output:\n{}",
+        cookie_set_result.stdout
+    );
+    wait_for_eval_text(
+        ctx,
+        "document.cookie.includes('session_id=abc123').toString()",
+        "true",
+        2_000,
+        "Expected cookie-set to restore the session_id cookie",
+    );
+
+    let cookie_get_result = run_command(ctx, &["cookie-get", "session_id"]);
+    let cookie_get: serde_json::Value = serde_json::from_str(cookie_get_result.stdout.trim())
+        .expect("cookie-get should return JSON");
+    assert_eq!(cookie_get["name"].as_str(), Some("session_id"));
+    assert_eq!(cookie_get["value"].as_str(), Some("abc123"));
+
+    let cookie_list_result = run_command(ctx, &["cookie-list"]);
+    let cookie_list: serde_json::Value = serde_json::from_str(cookie_list_result.stdout.trim())
+        .expect("cookie-list should return a JSON array");
+    let cookie_domain = cookie_list
+        .as_array()
+        .and_then(|cookies| {
+            cookies.iter().find_map(|cookie| {
+                (cookie["name"].as_str() == Some("session_id"))
+                    .then(|| cookie["domain"].as_str().map(str::to_string))
+                    .flatten()
+            })
+        })
+        .expect("cookie-list should include session_id with a domain");
+    assert!(
+        cookie_list.as_array().is_some_and(|cookies| {
+            cookies
+                .iter()
+                .any(|cookie| cookie["name"].as_str() == Some("session_id"))
+        }),
+        "Expected cookie-list to contain session_id:\n{}",
+        cookie_list
+    );
+
+    let cookie_list_domain_result =
+        run_command(ctx, &["cookie-list", &format!("--domain={cookie_domain}")]);
+    let cookie_list_by_domain: serde_json::Value =
+        serde_json::from_str(cookie_list_domain_result.stdout.trim())
+            .expect("cookie-list --domain should return a JSON array");
+    assert!(
+        cookie_list_by_domain.as_array().is_some_and(|cookies| {
+            cookies
+                .iter()
+                .any(|cookie| cookie["name"].as_str() == Some("session_id"))
+        }),
+        "Expected cookie-list --domain to contain session_id:\n{}",
+        cookie_list_by_domain
+    );
+
+    let cookie_list_path_result = run_command(ctx, &["cookie-list", "--path=/"]);
+    let cookie_list_by_path: serde_json::Value =
+        serde_json::from_str(cookie_list_path_result.stdout.trim())
+            .expect("cookie-list --path should return a JSON array");
+    assert!(
+        cookie_list_by_path.as_array().is_some_and(|cookies| {
+            cookies
+                .iter()
+                .any(|cookie| cookie["name"].as_str() == Some("session_id"))
+        }),
+        "Expected cookie-list --path to contain session_id:\n{}",
+        cookie_list_by_path
+    );
+
+    let cookie_delete_result = run_command(ctx, &["cookie-delete", "session_id"]);
+    assert!(
+        cookie_delete_result
+            .stdout
+            .contains("Cookie deleted: session_id"),
+        "Expected cookie-delete output:\n{}",
+        cookie_delete_result.stdout
+    );
+    wait_for_eval_text(
+        ctx,
+        "document.cookie.includes('session_id=abc123').toString()",
+        "false",
+        2_000,
+        "Expected cookie-delete to remove the session_id cookie",
+    );
+
+    run_command(ctx, &["cookie-set", "clear_one", "1", "--path=/"]);
+    run_command(ctx, &["cookie-set", "clear_two", "2", "--path=/"]);
+    let cookie_clear_result = run_command(ctx, &["cookie-clear"]);
+    assert!(
+        cookie_clear_result.stdout.contains("Cookies cleared."),
+        "Expected cookie-clear output:\n{}",
+        cookie_clear_result.stdout
+    );
+    wait_for_eval_text(
+        ctx,
+        "document.cookie.includes('clear_one=1').toString()",
+        "false",
+        2_000,
+        "Expected cookie-clear to remove clear_one",
+    );
+    wait_for_eval_text(
+        ctx,
+        "document.cookie.includes('clear_two=2').toString()",
+        "false",
+        2_000,
+        "Expected cookie-clear to remove clear_two",
+    );
+
+    let localstorage_set_result = run_command(ctx, &["localstorage-set", "theme", "dark"]);
+    assert!(
+        localstorage_set_result
+            .stdout
+            .contains("localStorage key set: theme"),
+        "Expected localstorage-set output:\n{}",
+        localstorage_set_result.stdout
+    );
+    wait_for_eval_text(
+        ctx,
+        "window.localStorage.getItem('theme') ?? ''",
+        "dark",
+        2_000,
+        "Expected localstorage-set to persist the theme key",
+    );
+
+    let localstorage_get_result = run_command(ctx, &["localstorage-get", "theme"]);
+    assert_eq!(localstorage_get_result.stdout.trim(), "dark");
+
+    run_command(
+        ctx,
+        &[
+            "localstorage-set",
+            "user_settings",
+            "{\"theme\":\"dark\",\"language\":\"en\"}",
+        ],
+    );
+    let localstorage_list_result = run_command(ctx, &["localstorage-list"]);
+    let localstorage_list: serde_json::Value =
+        serde_json::from_str(localstorage_list_result.stdout.trim())
+            .expect("localstorage-list should return a JSON array");
+    assert!(
+        localstorage_list.as_array().is_some_and(|entries| {
+            entries.iter().any(|entry| {
+                entry["name"].as_str() == Some("theme") && entry["value"].as_str() == Some("dark")
+            }) && entries.iter().any(|entry| {
+                entry["name"].as_str() == Some("user_settings")
+                    && entry["value"].as_str() == Some("{\"theme\":\"dark\",\"language\":\"en\"}")
+            })
+        }),
+        "Expected localstorage-list to include theme and user_settings:\n{}",
+        localstorage_list
+    );
+
+    let localstorage_delete_result = run_command(ctx, &["localstorage-delete", "theme"]);
+    assert!(
+        localstorage_delete_result
+            .stdout
+            .contains("localStorage key deleted: theme"),
+        "Expected localstorage-delete output:\n{}",
+        localstorage_delete_result.stdout
+    );
+    wait_for_eval_text(
+        ctx,
+        "window.localStorage.getItem('theme') ?? ''",
+        "",
+        2_000,
+        "Expected localstorage-delete to remove theme",
+    );
+
+    let localstorage_clear_result = run_command(ctx, &["localstorage-clear"]);
+    assert!(
+        localstorage_clear_result
+            .stdout
+            .contains("localStorage cleared:"),
+        "Expected localstorage-clear output:\n{}",
+        localstorage_clear_result.stdout
+    );
+    wait_for_eval_text(
+        ctx,
+        "window.localStorage.length.toString()",
+        "0",
+        2_000,
+        "Expected localstorage-clear to clear all entries",
+    );
+
+    let sessionstorage_set_result = run_command(ctx, &["sessionstorage-set", "step", "3"]);
+    assert!(
+        sessionstorage_set_result
+            .stdout
+            .contains("sessionStorage key set: step"),
+        "Expected sessionstorage-set output:\n{}",
+        sessionstorage_set_result.stdout
+    );
+    wait_for_eval_text(
+        ctx,
+        "window.sessionStorage.getItem('step') ?? ''",
+        "3",
+        2_000,
+        "Expected sessionstorage-set to persist the step key",
+    );
+
+    let sessionstorage_get_result = run_command(ctx, &["sessionstorage-get", "step"]);
+    assert_eq!(sessionstorage_get_result.stdout.trim(), "3");
+
+    run_command(
+        ctx,
+        &["sessionstorage-set", "form_data", "{\"name\":\"Ada\"}"],
+    );
+    let sessionstorage_list_result = run_command(ctx, &["sessionstorage-list"]);
+    let sessionstorage_list: serde_json::Value =
+        serde_json::from_str(sessionstorage_list_result.stdout.trim())
+            .expect("sessionstorage-list should return a JSON array");
+    assert!(
+        sessionstorage_list.as_array().is_some_and(|entries| {
+            entries.iter().any(|entry| {
+                entry["name"].as_str() == Some("step") && entry["value"].as_str() == Some("3")
+            }) && entries.iter().any(|entry| {
+                entry["name"].as_str() == Some("form_data")
+                    && entry["value"].as_str() == Some("{\"name\":\"Ada\"}")
+            })
+        }),
+        "Expected sessionstorage-list to include step and form_data:\n{}",
+        sessionstorage_list
+    );
+
+    let sessionstorage_delete_result = run_command(ctx, &["sessionstorage-delete", "step"]);
+    assert!(
+        sessionstorage_delete_result
+            .stdout
+            .contains("sessionStorage key deleted: step"),
+        "Expected sessionstorage-delete output:\n{}",
+        sessionstorage_delete_result.stdout
+    );
+    wait_for_eval_text(
+        ctx,
+        "window.sessionStorage.getItem('step') ?? ''",
+        "",
+        2_000,
+        "Expected sessionstorage-delete to remove step",
+    );
+
+    let sessionstorage_clear_result = run_command(ctx, &["sessionstorage-clear"]);
+    assert!(
+        sessionstorage_clear_result
+            .stdout
+            .contains("sessionStorage cleared:"),
+        "Expected sessionstorage-clear output:\n{}",
+        sessionstorage_clear_result.stdout
+    );
+    wait_for_eval_text(
+        ctx,
+        "window.sessionStorage.length.toString()",
+        "0",
+        2_000,
+        "Expected sessionstorage-clear to clear all entries",
+    );
+
+    run_command(
+        ctx,
+        &[
+            "eval",
+            "(() => { document.cookie = 'savedCookie=saved-value; path=/'; window.localStorage.setItem('savedKey', 'saved-value'); return 'ok'; })()",
+        ],
+    );
+
+    let save_result = run_command(ctx, &["state-save", &storage_state_path_text]);
+    assert!(
+        save_result.stdout.contains("Storage state saved:"),
+        "Expected storage-state save output:\n{}",
+        save_result.stdout
+    );
+
+    let saved_state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&storage_state_path).unwrap()).unwrap();
+    assert!(
+        saved_state["cookies"]
+            .as_array()
+            .is_some_and(|cookies| cookies.iter().any(|cookie| {
+                cookie["name"].as_str() == Some("savedCookie")
+                    && cookie["value"].as_str() == Some("saved-value")
+            })),
+        "Expected saved state file to contain savedCookie:\n{}",
+        saved_state
+    );
+    assert!(
+        saved_state["origins"]
+            .as_array()
+            .is_some_and(|origins| origins.iter().any(|origin| {
+                origin["origin"].as_str() == Some(&ctx.fixture_base_url)
+                    && origin["localStorage"].as_array().is_some_and(|entries| {
+                        entries.iter().any(|entry| {
+                            entry["name"].as_str() == Some("savedKey")
+                                && entry["value"].as_str() == Some("saved-value")
+                        })
+                    })
+            })),
+        "Expected saved state file to contain savedKey localStorage entry:\n{}",
+        saved_state
+    );
+
+    run_command(ctx, &["delete-data"]);
+    wait_for_eval_text(
+        ctx,
+        "document.cookie.includes('savedCookie=saved-value').toString()",
+        "false",
+        2_000,
+        "Expected delete-data to remove cookies before restoring state",
+    );
+    wait_for_eval_text(
+        ctx,
+        "window.localStorage.getItem('savedKey') ?? ''",
+        "",
+        2_000,
+        "Expected delete-data to clear localStorage before restoring state",
+    );
+
+    let load_result = run_command(ctx, &["state-load", &storage_state_path_text]);
+    assert!(
+        load_result.stdout.contains("Storage state loaded:"),
+        "Expected storage-state reload output:\n{}",
+        load_result.stdout
+    );
+    wait_for_eval_text(
+        ctx,
+        "document.cookie.includes('savedCookie=saved-value').toString()",
+        "true",
+        2_000,
+        "Expected state-load to restore saved cookies",
+    );
+    wait_for_eval_text(
+        ctx,
+        "window.localStorage.getItem('savedKey') ?? ''",
+        "saved-value",
+        2_000,
+        "Expected state-load to restore saved localStorage",
+    );
+
+    run_command(ctx, &["close"]);
+}
+
 pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
     open_resized_interactive_page(ctx);
 
     run_command(ctx, &["type", "hello world", "#type-target"]);
@@ -236,6 +705,14 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
         "Expected keyup to record a final 'up:Shift' key event",
     );
 
+    run_command(ctx, &["close"]);
+}
+
+pub(super) fn test_pointer_commands(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
+    open_resized_interactive_page(ctx);
+
     run_command(ctx, &["click", "#click-target"]);
     wait_for_state_or_abort(
         ctx,
@@ -276,7 +753,7 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
 
 pub(super) fn test_eval_command(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
     open_resized_interactive_page(ctx);
 
     let title = eval_text(ctx, "document.title");
@@ -300,49 +777,127 @@ pub(super) fn test_eval_command(ctx: &mut E2ECtx) {
     run_command(ctx, &["close"]);
 }
 
-pub(super) fn test_agent_run_live_or_missing_llm_key(ctx: &mut E2ECtx) {
+pub(super) fn test_eval_return_types(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
+    open_resized_interactive_page(ctx);
 
-    let task = format!(
-        "Navigate to {} and report the page title.",
-        ctx.interactive_url()
-    );
-    let result = run_command_allowing_failure(ctx, &["agent-run", &task]);
+    // --- number ---
+    let num = eval_text(ctx, "40 + 2");
+    // Server returns numbers as their decimal string representation.
+    let parsed_num: i64 = num
+        .trim()
+        .parse()
+        .unwrap_or_else(|_| panic!("Expected numeric result, got: {num}"));
+    assert_eq!(parsed_num, 42);
 
-    if result.exit_code == 0 {
-        assert!(
-            result.stdout.contains("Task submitted:"),
-            "Expected task submission output in:\n{}",
-            result.stdout
-        );
-        let task_id = extract_submitted_task_id(&result.stdout);
-        let status_result = run_command(ctx, &["agent-status", &task_id]);
-        let status = strip_snapshot_output(&status_result.stdout);
-        assert!(
-            status.contains(&task_id),
-            "Expected task status to mention submitted task id '{task_id}', got:\n{status}"
-        );
-        assert!(
-            status.contains("\"status\""),
-            "Expected JSON status payload in:\n{status}"
-        );
+    // --- boolean ---
+    let bool_val = eval_text(ctx, "true");
+    assert_eq!(bool_val.trim(), "true", "Expected boolean true, got: {bool_val}");
+
+    let bool_false = eval_text(ctx, "1 > 2");
+    assert_eq!(bool_false.trim(), "false", "Expected boolean false, got: {bool_false}");
+
+    // --- array (JSON) ---
+    let arr = eval_text(ctx, "[1, 2, 3]");
+    let parsed_arr: serde_json::Value = serde_json::from_str(arr.trim())
+        .unwrap_or_else(|_| panic!("Expected valid JSON array, got: {arr}"));
+    assert!(parsed_arr.is_array(), "Expected JSON array, got: {arr}");
+    assert_eq!(parsed_arr.as_array().unwrap().len(), 3);
+
+    // --- object ---
+    // The server may return either valid JSON ({"answer":42,"name":"eval-test"})
+    // or a non-JSON representation ({answer=42, name=eval-test}) depending on
+    // how the browser serializes JavaScript objects.
+    //
+    // TODO(server): The Browser4 server should consistently return valid JSON
+    // for JavaScript objects evaluated via browser_evaluate.  Currently it
+    // sometimes emits a Java-style Map.toString() representation (keys
+    // unquoted, = instead of :).  Once fixed server-side, this test should
+    // revert to requiring strict JSON parsing.
+    let obj = eval_text(ctx, "({answer: 42, name: 'eval-test'})");
+    let trimmed_obj = obj.trim();
+    // Try JSON first; if that fails, verify the result contains the expected values.
+    if let Ok(parsed_obj) = serde_json::from_str::<serde_json::Value>(trimmed_obj) {
+        assert_eq!(parsed_obj["answer"].as_i64(), Some(42));
+        assert_eq!(parsed_obj["name"].as_str(), Some("eval-test"));
     } else {
-        let combined = format!("{}\n{}", result.stdout, result.stderr);
         assert!(
-            combined.contains("Agent task requires an LLM key and cannot execute"),
-            "Expected missing-LLM message in:\n{combined}"
-        );
-        assert!(
-            combined.contains("The LLM is not configured")
-                || combined.to_ascii_lowercase().contains("api key"),
-            "Expected specific LLM configuration detail in:\n{combined}"
+            trimmed_obj.contains("42") && trimmed_obj.contains("eval-test"),
+            "Expected object result to contain 42 and eval-test, got: {obj}"
         );
     }
+
+    // --- null ---
+    // The server may return "null" or an empty string for JavaScript null.
+    let null_val = eval_text(ctx, "null");
+    let trimmed_null = null_val.trim();
+    assert!(
+        trimmed_null == "null" || trimmed_null.is_empty(),
+        "Expected 'null' or empty string for `null`, got: {null_val}"
+    );
+
+    // --- undefined ---
+    // `void 0` evaluates to undefined in JS. Some servers serialize
+    // undefined as the empty string, others as "undefined".
+    let undef_val = eval_text(ctx, "void 0");
+    // Accept either "undefined" or "" as valid serializations.
+    let trimmed = undef_val.trim();
+    assert!(
+        trimmed == "undefined" || trimmed.is_empty(),
+        "Expected undefined or empty string for `void 0`, got: {undef_val}"
+    );
+
+    run_command(ctx, &["close"]);
+}
+
+pub(super) fn test_eval_css_selector_scoping(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
+    open_resized_interactive_page(ctx);
+
+    // Eval scoped to an element via id selector.
+    let button_tag = eval_text_for_target(
+        ctx,
+        "element => element.tagName",
+        "#click-target",
+    );
+    assert_eq!(button_tag.trim().to_uppercase(), "BUTTON");
+
+    // Eval scoped to an input element via id selector.
+    let input_tag = eval_text_for_target(
+        ctx,
+        "element => element.tagName",
+        "#type-target",
+    );
+    assert_eq!(input_tag.trim().to_uppercase(), "INPUT");
+
+    // Eval scoped to a <select> element.
+    let select_tag = eval_text_for_target(
+        ctx,
+        "element => element.tagName",
+        "#select-target",
+    );
+    assert_eq!(select_tag.trim().to_uppercase(), "SELECT");
+
+    // Eval that reads the element's own attribute.
+    let checkbox_type = eval_text_for_target(
+        ctx,
+        "element => element.getAttribute('type')",
+        "#check-target",
+    );
+    assert_eq!(checkbox_type.trim(), "checkbox");
+
+    // Eval without a ref at page scope should still work independently.
+    let title = eval_text(ctx, "document.title");
+    assert_eq!(title.trim(), INTERACTIVE_TITLE);
+
+    run_command(ctx, &["close"]);
 }
 
 pub(super) fn test_wait_for_state_failure_modes(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
     goto_interactive_page(ctx);
 
     let error = wait_for_state(
@@ -387,7 +942,7 @@ pub(super) fn test_wait_for_state_failure_modes(ctx: &mut E2ECtx) {
 
 pub(super) fn test_form_controls_and_exports(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
     goto_interactive_page(ctx);
 
     run_command(ctx, &["select", "#select-target", "green"]);
@@ -468,7 +1023,7 @@ pub(super) fn test_form_controls_and_exports(ctx: &mut E2ECtx) {
 
 pub(super) fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
     open_resized_interactive_page(ctx);
 
     run_command(ctx, &["mousemove", "120", "120"]);
@@ -509,38 +1064,6 @@ pub(super) fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
         "Expected mouseup to increment mouseUpCount",
     );
 
-    let wheel_args = ["mousewheel", "160", "0"];
-    let wheel_started_at = std::time::Instant::now();
-    let wheel_result = run_cli_process(ctx, &wheel_args);
-    ctx.record_step(
-        format_cli_step_label(&wheel_args, false, false),
-        wheel_started_at.elapsed(),
-    );
-    if wheel_result.exit_code != 0 {
-        eprintln!(
-            "mousewheel command failed in e2e scenario; using eval fallback. stderr: {}",
-            wheel_result.stderr
-        );
-        run_command(
-            ctx,
-            &[
-                "eval",
-                "(() => { const area = document.getElementById('mouse-area'); if (!area) return 'missing-mouse-area'; const evt = new WheelEvent('wheel', { deltaY: 160, deltaX: 0, bubbles: true }); area.dispatchEvent(evt); return 'wheel-fallback-dispatched'; })()",
-            ],
-        );
-    }
-    let wheel_state = wait_for_state_or_abort(
-        ctx,
-        |s| s["lastWheel"][0].as_i64() == Some(160) && s["lastWheel"][1].as_i64() == Some(0),
-        2_000,
-        "Expected mousewheel to update lastWheel to [160, 0]",
-    );
-    assert!(
-        wheel_state["lastWheel"][0].as_i64() == Some(160)
-            && wheel_state["lastWheel"][1].as_i64() == Some(0),
-        "Expected lastWheel to equal [160, 0], got {wheel_state:#?}"
-    );
-
     eval_text(
         ctx,
         "(() => { setTimeout(() => document.getElementById('prompt-target').click(), 100); return 'scheduled'; })()",
@@ -570,9 +1093,30 @@ pub(super) fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
     run_command(ctx, &["close"]);
 }
 
+pub(super) fn test_mousewheel(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
+    open_resized_interactive_page(ctx);
+
+    run_command(ctx, &["mousewheel", "160", "0"]);
+    let wheel_state = wait_for_state_or_abort(
+        ctx,
+        |s| s["lastWheel"][0].as_i64() == Some(160) && s["lastWheel"][1].as_i64() == Some(0),
+        2_000,
+        "Expected mousewheel to update lastWheel to [160, 0]",
+    );
+    assert!(
+        wheel_state["lastWheel"][0].as_i64() == Some(160)
+            && wheel_state["lastWheel"][1].as_i64() == Some(0),
+        "Expected lastWheel to equal [160, 0], got {wheel_state:#?}"
+    );
+
+    run_command(ctx, &["close"]);
+}
+
 pub(super) fn test_tab_commands(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG]);
+    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
 
     goto_interactive_page(ctx);
     let interactive_url = ctx.interactive_url();

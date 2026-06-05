@@ -1,19 +1,11 @@
 package ai.platon.pulsar.skeleton.event.impl
 
-import ai.platon.browser4.common.B4ResourceLoader
+import ai.platon.pulsar.browser.rpa.BrowseRPA
+import ai.platon.pulsar.browser.rpa.DefaultBrowseRPA
+import ai.platon.pulsar.common.ResourceLoader
 import ai.platon.pulsar.common.config.CapabilityTypes
 import ai.platon.pulsar.common.config.ImmutableConfig
-import ai.platon.pulsar.skeleton.event.BrowseEventHandlers
-import ai.platon.pulsar.skeleton.event.CrawlEventHandlers
-import ai.platon.pulsar.skeleton.event.LoadEventHandlers
-import ai.platon.pulsar.skeleton.event.PageEventHandlers
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.rpa.BrowseRPA
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.rpa.DefaultBrowseRPA
-import ai.platon.pulsar.skeleton.event.AbstractBrowseEventHandlers
-import ai.platon.pulsar.skeleton.event.AbstractCrawlEventHandlers
-import ai.platon.pulsar.skeleton.event.AbstractLoadEventHandlers
-import ai.platon.pulsar.skeleton.event.AbstractPageEventHandlers
-import ai.platon.pulsar.skeleton.event.WebPageWebDriverEventHandler
+import ai.platon.pulsar.skeleton.event.*
 import org.slf4j.LoggerFactory
 
 /**
@@ -24,7 +16,7 @@ open class DefaultLoadEventHandlers(
 ) : AbstractLoadEventHandlers()
 
 /**
- * The default crawl event handler.
+ * The default browser event handler.
  */
 open class DefaultCrawlEventHandlers : AbstractCrawlEventHandlers()
 
@@ -146,7 +138,7 @@ class PageEventHandlersFactory(val conf: ImmutableConfig = ImmutableConfig()) {
         val clazz = try {
             // Get the value of the `name` property as a `Class`.
             // If the property is not set, or the class is not found, use the default class.
-            runCatching { B4ResourceLoader.loadUserClass<PageEventHandlers>(className) }.getOrNull()
+            runCatching { ResourceLoader.loadUserClass<PageEventHandlers>(className) }.getOrNull()
                 ?: defaultClazz
 //             conf.getClass(className, defaultClazz)
         } catch (e: Exception) {

@@ -124,9 +124,11 @@ application-private.properties
 /**/node_modules/**
 */**/py/dom/
 */**/human-private/
+.browser4-cli/
 */**/.browser4-cli/
 /**/dist/**
 
 browser4-cli-linux-arm64
 browser4-cli-linux-x64
 browser4-cli-win32-x64.exe
+/cli/browser4-cli/coverage-html/

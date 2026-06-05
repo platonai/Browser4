@@ -2,17 +2,14 @@ package ai.platon.pulsar.skeleton.workflow.component
 
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.config.ImmutableConfig
+import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.persist.PageDatum
 import ai.platon.pulsar.persist.ProtocolStatus
-import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.persist.WebPageExt
 import ai.platon.pulsar.persist.model.GoraWebPage
-import ai.platon.pulsar.skeleton.common.options.LoadOptions
-import ai.platon.pulsar.skeleton.common.persist.ext.loadEventHandlers
-import ai.platon.pulsar.skeleton.common.persist.ext.options
 import ai.platon.pulsar.skeleton.CoreMetrics
+import ai.platon.pulsar.skeleton.common.persist.ext.loadEventHandlers
 import ai.platon.pulsar.skeleton.event.PulsarEventBus
-import ai.platon.pulsar.skeleton.workflow.common.FetchEntry
 import ai.platon.pulsar.skeleton.workflow.protocol.ProtocolFactory
 import ai.platon.pulsar.skeleton.workflow.protocol.ProtocolNotFound
 import ai.platon.pulsar.skeleton.workflow.protocol.ProtocolOutput
@@ -34,44 +31,6 @@ open class FetchComponent(
     private val abnormalPage get() = GoraWebPage.NIL.takeIf { !isActive }
 
     /**
-     * Fetch a url
-     *
-     * @param url The url of web page to fetch
-     * @return The fetch result
-     */
-    @Throws(Exception::class)
-    fun fetch(url: String) =
-        abnormalPage ?: fetchContent(GoraWebPage.newWebPage(url, immutableConfig.toVolatileConfig()))
-
-    /**
-     * Fetch a url
-     *
-     * @param url The url of web page to fetch
-     * @param options The options
-     * @return The fetch result
-     */
-    @Throws(Exception::class)
-    fun fetch(url: String, options: LoadOptions) = abnormalPage ?: fetchContent0(FetchEntry(url, options))
-
-    /**
-     * Fetch a page
-     *
-     * @param page The page to fetch
-     * @return The fetch result
-     */
-    @Throws(Exception::class)
-    fun fetchContent(page: WebPage) = abnormalPage ?: fetchContent0(FetchEntry(page, page.options))
-
-    /**
-     * Fetch a page
-     *
-     * @param fetchEntry The fetch entry
-     * @return The fetch result
-     */
-    @Throws(Exception::class)
-    fun fetchContent(fetchEntry: FetchEntry) = abnormalPage ?: fetchContent0(fetchEntry)
-
-    /**
      * Fetch a page
      *
      * @param page The page to fetch
@@ -79,32 +38,6 @@ open class FetchComponent(
      */
     @Throws(Exception::class)
     suspend fun fetchContentDeferred(page: WebPage) = abnormalPage ?: fetchContentDeferred0(page)
-
-    /**
-     * Fetch a page
-     *
-     * @param fetchEntry The fetch entry
-     * @return The fetched webpage
-     */
-    @Throws(Exception::class)
-    protected fun fetchContent0(fetchEntry: FetchEntry): WebPage {
-        val page = fetchEntry.page
-        require(page.isNotInternal) { "Internal page ${page.url}" }
-
-        coreMetrics?.markFetchTaskStart()
-        onWillFetch(page)
-
-        return try {
-            val protocol = protocolFactory.getProtocol(page)
-            val output = protocol.getProtocolOutput(page)
-            processProtocolOutput(page, output)
-        } catch (e: ProtocolNotFound) {
-            logger.warn(e.message)
-            page.also { updateStatus(it, ProtocolStatus.STATUS_PROTO_NOT_FOUND) }
-        } finally {
-            onFetched(page)
-        }
-    }
 
     /**
      * Fetch a page

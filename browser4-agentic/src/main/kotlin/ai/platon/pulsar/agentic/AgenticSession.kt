@@ -1,10 +1,13 @@
 package ai.platon.pulsar.agentic
 
 import ai.platon.pulsar.agentic.agents.RobustBrowserAgent
-import ai.platon.pulsar.agentic.context.AbstractAgenticContext
+import ai.platon.pulsar.agentic.context.GenericAgenticContext
+import ai.platon.pulsar.agentic.context.StaticAgenticContext
+import ai.platon.pulsar.agentic.context.sql.AbstractBrowser4SQLContext
 import ai.platon.pulsar.agentic.inference.SessionActExecutor
 import ai.platon.pulsar.agentic.model.ToolCallResult
 import ai.platon.pulsar.common.config.VolatileConfig
+import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.ql.SessionConfig
 import ai.platon.pulsar.ql.h2.AbstractH2SQLSession
 import ai.platon.pulsar.ql.h2.H2SessionDelegate
@@ -33,30 +36,12 @@ abstract class AbstractAgenticSession(
 ) : AbstractPulsarSession(context, sessionConfig, id = id), AgenticSession {
 }
 
-open class BasicAgenticSession(
-    context: AbstractAgenticContext,
-    sessionConfig: VolatileConfig,
-    id: Long = nextId()
-) : AbstractAgenticSession(context, sessionConfig, id) {
-
-    override val companionAgent: PerceptiveAgent by lazy { createCompanionAgent() }
-
-    private val executor by lazy { SessionActExecutor(this) }
-
-    override suspend fun act(action: String) = executor.performActs(action)
-
-    @Synchronized
-    private fun createCompanionAgent(): RobustBrowserAgent {
-        getOrCreateBoundDriver()
-        return RobustBrowserAgent(this).also { registerClosable(it) }
-    }
-}
-
 open class AbstractAgenticQLSession(
     context: AbstractPulsarContext,
     sessionDelegate: H2SessionDelegate,
     config: SessionConfig
 ) : AbstractH2SQLSession(context, sessionDelegate, config), AgenticSession {
+    private val logger = getLogger(AbstractAgenticQLSession::class)
 
     override val companionAgent: PerceptiveAgent by lazy { createCompanionAgent() }
 
@@ -66,13 +51,73 @@ open class AbstractAgenticQLSession(
 
     @Synchronized
     private fun createCompanionAgent(): RobustBrowserAgent {
-        getOrCreateBoundDriver()
+        if (isActive) {
+            runCatching { getOrCreateBoundDriver() }.onFailure { logger.warn("Failed to get or create bound driver for session $id", it) }
+        }
         return RobustBrowserAgent(this).also { registerClosable(it) }
     }
 }
 
+/**
+ * An [AgenticQLSession] is a [ai.platon.pulsar.ql.SQLSession] that also implements [AgenticSession], allowing it to
+ * perform agentic actions in addition to SQL operations.
+ *
+ * > **NOTE:** This session is designed to work with H2 databases and is created by SQL engine, it is not intended to
+ * > be instantiated directly by users.
+ * */
 open class AgenticQLSession(
-    context: AbstractPulsarContext,
+    context: AbstractBrowser4SQLContext,
     sessionDelegate: H2SessionDelegate,
     config: SessionConfig
 ) : AbstractAgenticQLSession(context, sessionDelegate, config)
+
+open class BasicAgenticSession(
+    context: AbstractPulsarContext,
+    sessionConfig: VolatileConfig,
+    id: Long = nextId()
+) : AbstractAgenticSession(context, sessionConfig, id) {
+    private val logger = getLogger(GenericAgenticSession::class)
+
+    override val companionAgent: PerceptiveAgent by lazy { createCompanionAgent() }
+
+    private val executor by lazy { SessionActExecutor(this) }
+
+    override suspend fun act(action: String) = executor.performActs(action)
+
+    @Synchronized
+    private fun createCompanionAgent(): RobustBrowserAgent {
+        if (isActive) {
+            runCatching { getOrCreateBoundDriver() }.onFailure { logger.warn("Failed to get or create bound driver for session $id", it) }
+        }
+        return RobustBrowserAgent(this).also { registerClosable(it) }
+    }
+}
+
+open class GenericAgenticSession(
+    context: GenericAgenticContext,
+    sessionConfig: VolatileConfig,
+    id: Long = nextId()
+) : AbstractAgenticSession(context, sessionConfig, id) {
+    private val logger = getLogger(GenericAgenticSession::class)
+
+    override val companionAgent: PerceptiveAgent by lazy { createCompanionAgent() }
+
+    private val executor by lazy { SessionActExecutor(this) }
+
+    override suspend fun act(action: String) = executor.performActs(action)
+
+    @Synchronized
+    private fun createCompanionAgent(): RobustBrowserAgent {
+        if (isActive) {
+            runCatching { getOrCreateBoundDriver() }.onFailure { logger.warn("Failed to get or create bound driver for session $id", it) }
+        }
+        return RobustBrowserAgent(this).also { registerClosable(it) }
+    }
+}
+
+class StaticAgenticSession(
+    context: StaticAgenticContext,
+    sessionConfig: VolatileConfig,
+) : GenericAgenticSession(context, sessionConfig) {
+
+}

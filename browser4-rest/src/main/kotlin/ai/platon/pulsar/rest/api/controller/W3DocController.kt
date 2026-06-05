@@ -17,7 +17,7 @@ class W3DocController(
     val loadService: LoadService
 ) {
     @GetMapping
-    fun get(request: W3DocumentRequest): String {
+    suspend fun get(request: W3DocumentRequest): String {
         val (page, document) = loadService.loadDocument(request.url, request.args)
         return document.prettyHtml
     }

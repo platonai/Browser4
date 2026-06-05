@@ -1,22 +1,22 @@
 package ai.platon.pulsar.skeleton.context
 
+import ai.platon.pulsar.browser.Browser
+import ai.platon.pulsar.browser.BrowserManager
+import ai.platon.pulsar.browser.common.BrowserLaunchException
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.urls.UrlAware
+import ai.platon.pulsar.core.api.WebDriver
+import ai.platon.pulsar.core.api.WebPage
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.external.ModelResponse
-import ai.platon.pulsar.persist.WebPage
+import ai.platon.pulsar.loop.TaskLoops
 import ai.platon.pulsar.persist.gora.generated.GWebPage
 import ai.platon.pulsar.skeleton.PulsarSettings
-import ai.platon.pulsar.skeleton.TaskLoops
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.common.urls.NormURL
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.Browser
 import ai.platon.pulsar.skeleton.session.PulsarSession
 import ai.platon.pulsar.skeleton.workflow.common.GlobalCache
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserLaunchException
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.BrowserManager
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.WebDriver
 import ai.platon.pulsar.skeleton.workflow.filter.ChainedUrlNormalizer
 import com.google.common.annotations.Beta
 import org.springframework.beans.BeansException
@@ -173,12 +173,12 @@ interface PulsarContext : java.lang.AutoCloseable {
     fun normalizeOrNull(url: String?, options: LoadOptions, toItemOption: Boolean = false): NormURL?
 
     /**
-     * Normalize urls, remove invalid ones
+     * Normalize URLs, remove invalid ones
      *
-     * @param urls The urls to normalize
+     * @param urls The URLs to normalize
      * @param options The LoadOptions applied to each url
      * @param toItemOption If the LoadOptions is converted to item load options
-     * @return All normalized urls, all invalid input urls are removed
+     * @return All normalized URLs, all invalid input URLs are removed
      * */
     fun normalize(urls: Iterable<String>, options: LoadOptions, toItemOption: Boolean = false): List<NormURL>
 
@@ -332,7 +332,7 @@ interface PulsarContext : java.lang.AutoCloseable {
      * @param options The options
      * @return The WebPage. If there is no web page at local storage nor remote location, [WebPageImpl.NIL] is returned
      */
-    fun load(url: String, options: LoadOptions): WebPage
+    suspend fun load(url: String, options: LoadOptions): WebPage
 
     /**
      * Load a url with specified options, see [LoadOptions] for all options
@@ -341,7 +341,7 @@ interface PulsarContext : java.lang.AutoCloseable {
      * @param options The options
      * @return The WebPage. If there is no web page at local storage nor remote location, [WebPageImpl.NIL] is returned
      */
-    fun load(url: URL, options: LoadOptions): WebPage
+    suspend fun load(url: URL, options: LoadOptions): WebPage
 
     /**
      * Load a url, options can be specified following the url, see [LoadOptions] for all options
@@ -349,7 +349,7 @@ interface PulsarContext : java.lang.AutoCloseable {
      * @param url The url followed by options
      * @return The WebPage. If there is no web page at local storage nor remote location, [WebPageImpl.NIL] is returned
      */
-    fun load(url: NormURL): WebPage
+    suspend fun load(url: NormURL): WebPage
 
     /**
      * Load a url, options can be specified following the url, see [LoadOptions] for all options

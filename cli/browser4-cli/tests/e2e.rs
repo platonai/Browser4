@@ -15,8 +15,11 @@
 //! cargo test --test e2e -- --nocapture
 //! cargo test --test e2e -- --nocapture --enable-batch-scenario
 //! cargo test --test e2e -- --nocapture --batch-only
-//! cargo test --test e2e -- --nocapture --scenario=test_e2e_agent_task_commands
+//! cargo test --test e2e -- --nocapture --scenario=*open*
 //! cargo test --test e2e -- --nocapture --scenario=test_e2e_batch_*
+//! cargo test --test e2e -- --nocapture --scenario=test_e2e_swarm_*
+//! cargo test --test e2e -- --nocapture --scenario=test_e2e_agent_*
+//! cargo test --test e2e -- --nocapture --scenario=test_e2e_agent_task_commands
 //! cargo test --test e2e -- --nocapture --scenario-from=test_e2e_mouse_and_dialog
 //! cargo test --test e2e -- --nocapture --scenario-from=test_e2e_navigation_and_storage --scenario-limit=5
 //! cargo test --test e2e -- --nocapture --failed
@@ -25,7 +28,7 @@
 //!
 //! The `--failed` selector reruns scenario names stored by the previous run in
 //! `%TEMP%/browser4/browser4-cli/e2e/last-failed-scenarios.json`.
-//! By default the full e2e run skips batch-command scenarios; pass
+//! By default, the full e2e run skips batch-command scenarios; pass
 //! `--enable-batch-scenario` to include them, or `--batch-only` to run only
 //! batch-command scenarios.
 //!
@@ -34,9 +37,7 @@
 //!    service (Docker-friendly; no JAR is needed).
 //! 2. `BROWSER4_E2E_SERVER_URL` environment variable – alias for the above.
 //! 3. Otherwise, each local run lets `browser4-cli` auto-start the backend.
-//!    By default, e2e forces the jar startup path (faster than Maven
-//!    `spring-boot:run`). Set `BROWSER4_E2E_USE_MAVEN_STARTUP=true` to opt in to
-//!    Maven startup checks.
+//!    The browser4-bundle runtime bundle is used for local backend startup.
 //!
 //! When running against an external Docker service, also set:
 //! - `BROWSER4_E2E_FIXTURE_HOST` – hostname/IP the Browser4 container uses to
@@ -196,7 +197,9 @@ impl FixtureServer {
         });
 
         thread::spawn(move || {
-            listener.set_nonblocking(true).ok();
+            listener
+                .set_nonblocking(true)
+                .expect("fixture server set_nonblocking failed");
             loop {
                 if flag.load(Ordering::Relaxed) {
                     break;
@@ -209,7 +212,10 @@ impl FixtureServer {
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(5));
                     }
-                    Err(_) => break,
+                    Err(e) => {
+                        eprintln!("[fixture server] accept error (listener continues): {e}");
+                        thread::sleep(Duration::from_millis(5));
+                    }
                 }
             }
         });
@@ -283,6 +289,240 @@ fn serve_fixture_request(mut stream: std::net::TcpStream, pages: Arc<FixturePage
 }
 
 // ---------------------------------------------------------------------------
+// Fake runtime bundle builder (for install / upgrade e2e tests)
+// ---------------------------------------------------------------------------
+
+/// Build a minimal fake runtime bundle archive that satisfies
+/// `install_dir_contains_runtime` checks: a `lib/` dir with a jar file and
+/// a `runtime/bin/` dir with a platform-appropriate java executable.
+///
+/// On Windows the archive is a ZIP file; on all other platforms it is a
+/// tar.gz file — matching the real runtime bundle formats.
+///
+/// Returns the archive bytes and the bundle root directory name inside the
+/// archive (e.g. `browser4-bundle-runtime-windows-x64`).
+fn build_fake_runtime_bundle(tag: &str) -> (Vec<u8>, String) {
+    let platform = if cfg!(windows) {
+        "windows-x64"
+    } else if cfg!(target_os = "macos") {
+        if cfg!(target_arch = "aarch64") { "darwin-arm64" } else { "darwin-x64" }
+    } else {
+        "linux-x64"
+    };
+    let dir_name = format!("browser4-bundle-runtime-{platform}");
+    let java_name = if cfg!(windows) { "java.exe" } else { "java" };
+
+    if cfg!(windows) {
+        build_fake_zip_bundle(tag, &dir_name, &java_name)
+    } else {
+        build_fake_tar_gz_bundle(tag, &dir_name, &java_name)
+    }
+}
+
+fn build_fake_zip_bundle(tag: &str, dir_name: &str, java_name: &str) -> (Vec<u8>, String) {
+    let mut buffer = Vec::new();
+    {
+        let mut zip_writer = zip::ZipWriter::new(std::io::Cursor::new(&mut buffer));
+        let options = zip::write::SimpleFileOptions::default();
+
+        // lib/sample.jar (a minimal non-empty file)
+        zip_writer
+            .start_file(format!("{dir_name}/lib/browser4-core.jar"), options)
+            .unwrap();
+        zip_writer.write_all(b"fake-jar-content").unwrap();
+
+        // runtime/bin/java
+        zip_writer
+            .start_file(format!("{dir_name}/runtime/bin/{java_name}"), options)
+            .unwrap();
+        zip_writer.write_all(b"fake-java-binary").unwrap();
+
+        // bin/ launcher script (needed for bundle validation)
+        zip_writer
+            .start_file(format!("{dir_name}/bin/launcher"), options)
+            .unwrap();
+        zip_writer.write_all(b"#!/bin/sh\necho fake").unwrap();
+
+        // Write the tag into a VERSION file so we can verify correct extraction.
+        zip_writer
+            .start_file(format!("{dir_name}/VERSION"), options)
+            .unwrap();
+        zip_writer.write_all(tag.as_bytes()).unwrap();
+
+        zip_writer.finish().unwrap();
+    }
+    (buffer, dir_name.to_string())
+}
+
+fn build_fake_tar_gz_bundle(tag: &str, dir_name: &str, java_name: &str) -> (Vec<u8>, String) {
+    let mut buffer = Vec::new();
+    {
+        let gz_encoder =
+            flate2::write::GzEncoder::new(&mut buffer, flate2::Compression::default());
+        let mut tar_builder = tar::Builder::new(gz_encoder);
+
+        fn add_tar_entry(
+            builder: &mut tar::Builder<impl std::io::Write>,
+            path: &str,
+            data: &[u8],
+        ) {
+            let mut header = tar::Header::new_gnu();
+            header.set_path(path).unwrap();
+            header.set_size(data.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder.append_data(&mut header, path, data).unwrap();
+        }
+
+        add_tar_entry(
+            &mut tar_builder,
+            &format!("{dir_name}/lib/browser4-core.jar"),
+            b"fake-jar-content",
+        );
+        add_tar_entry(
+            &mut tar_builder,
+            &format!("{dir_name}/runtime/bin/{java_name}"),
+            b"fake-java-binary",
+        );
+        add_tar_entry(
+            &mut tar_builder,
+            &format!("{dir_name}/bin/launcher"),
+            b"#!/bin/sh\necho fake",
+        );
+        add_tar_entry(
+            &mut tar_builder,
+            &format!("{dir_name}/VERSION"),
+            tag.as_bytes(),
+        );
+
+        let gz_encoder = tar_builder.into_inner().unwrap();
+        gz_encoder.finish().unwrap();
+    }
+    (buffer, dir_name.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Minimal HTTP server that serves fake runtime bundles for install/upgrade e2e
+// ---------------------------------------------------------------------------
+
+struct FixtureDownloadServer {
+    port: u16,
+    shutdown: Arc<AtomicBool>,
+    /// Recorded request paths.
+    requests: Arc<Mutex<Vec<String>>>,
+}
+
+impl FixtureDownloadServer {
+    fn start(bundle_bytes: Vec<u8>) -> Self {
+        let listener =
+            TcpListener::bind("127.0.0.1:0").expect("fixture download server bind failed");
+        let port = listener.local_addr().unwrap().port();
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let flag = shutdown.clone();
+        let reqs = requests.clone();
+        let bytes = Arc::new(bundle_bytes);
+
+        thread::spawn(move || {
+            listener
+                .set_nonblocking(true)
+                .expect("fixture download server set_nonblocking failed");
+            loop {
+                if flag.load(Ordering::Relaxed) {
+                    break;
+                }
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        let b = bytes.clone();
+                        let r = reqs.clone();
+                        thread::spawn(move || serve_download_request(stream, b, r));
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[fixture download server] accept error (continuing): {e}"
+                        );
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                }
+            }
+        });
+
+        Self {
+            port,
+            shutdown,
+            requests,
+        }
+    }
+
+    fn base_url(&self) -> String {
+        format!("http://127.0.0.1:{}/releases", self.port)
+    }
+
+    fn snapshot_requests(&self) -> Vec<String> {
+        self.requests
+            .lock()
+            .expect("download requests mutex poisoned")
+            .clone()
+    }
+}
+
+impl Drop for FixtureDownloadServer {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+    }
+}
+
+fn serve_download_request(
+    mut stream: TcpStream,
+    bundle_bytes: Arc<Vec<u8>>,
+    requests: Arc<Mutex<Vec<String>>>,
+) {
+    let mut buf = vec![0u8; 8192];
+    let n = match stream.read(&mut buf) {
+        Ok(n) => n,
+        Err(_) => return,
+    };
+
+    let request = std::str::from_utf8(&buf[..n]).unwrap_or("");
+    let first_line = request.lines().next().unwrap_or("");
+    let path = first_line
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or("/");
+
+    requests
+        .lock()
+        .expect("download requests mutex poisoned")
+        .push(path.to_string());
+
+    // Serve 404 for HEAD requests or non-GET methods (simulating GitHub).
+    let method = first_line.split_whitespace().next().unwrap_or("");
+    if method != "GET" {
+        write_http_response(&mut stream, "405 Method Not Allowed", "text/plain", "");
+        return;
+    }
+
+    // GitHub-style paths:
+    //   /releases/latest/download/{asset}
+    //   /releases/download/{tag}/{asset}
+    // Serve the same fake bundle for all paths that match the pattern.
+    if path.contains("/download/") {
+        let body_len = bundle_bytes.len();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body_len
+        );
+        let _ = stream.write_all(response.as_bytes());
+        let _ = stream.write_all(&bundle_bytes);
+    } else {
+        write_http_response(&mut stream, "404 Not Found", "text/plain", "not found");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Mock Browser4 server for Agent/Collective E2E coverage
 // ---------------------------------------------------------------------------
 
@@ -296,12 +536,25 @@ struct RecordedToolCall {
 struct MockBrowser4State {
     tool_calls: Vec<RecordedToolCall>,
     plain_commands: Vec<String>,
+    swarm_queries: Vec<serde_json::Value>,
     status_queries: Vec<String>,
     result_queries: Vec<String>,
     next_agent_task_id: usize,
-    next_collective_task_id: usize,
+    next_swarm_task_id: usize,
     listed_sessions: Vec<MockListedSession>,
     queued_open_session_ids: Vec<String>,
+    queued_tool_failures: Vec<MockToolFailure>,
+    health_status: Option<(u16, String, String)>, // (status_code, content_type, body)
+    close_session_calls: Vec<String>,
+    close_all_sessions_calls: Vec<serde_json::Value>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct MockToolFailure {
+    tool: String,
+    session_id: Option<String>,
+    url: Option<String>,
+    message: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -345,7 +598,9 @@ impl MockBrowser4Server {
         let shared_state = state.clone();
 
         thread::spawn(move || {
-            listener.set_nonblocking(true).ok();
+            listener
+                .set_nonblocking(true)
+                .expect("mock Browser4 server set_nonblocking failed");
             loop {
                 if flag.load(Ordering::Relaxed) {
                     break;
@@ -358,7 +613,12 @@ impl MockBrowser4Server {
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(5));
                     }
-                    Err(_) => break,
+                    Err(e) => {
+                        eprintln!(
+                            "[mock Browser4 server] accept error (listener continues): {e}"
+                        );
+                        thread::sleep(Duration::from_millis(5));
+                    }
                 }
             }
         });
@@ -394,6 +654,49 @@ impl MockBrowser4Server {
             .expect("mock Browser4 state mutex poisoned")
             .queued_open_session_ids = session_ids.into_iter().map(str::to_string).collect();
     }
+
+    fn queue_tool_failure(
+        &self,
+        tool: &str,
+        session_id: Option<&str>,
+        url: Option<&str>,
+        message: &str,
+    ) {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .queued_tool_failures
+            .push(MockToolFailure {
+                tool: tool.to_string(),
+                session_id: session_id.map(str::to_string),
+                url: url.map(str::to_string),
+                message: message.to_string(),
+            });
+    }
+
+    /// Configure a custom response for `GET /actuator/health`.
+    fn set_health_response(&self, status_code: u16, content_type: &str, body: &str) {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .health_status = Some((status_code, content_type.to_string(), body.to_string()));
+    }
+
+    /// Remove the health response override so the mock falls back to the
+    /// default `{"status":"UP"}` behaviour.
+    fn clear_health_response(&self) {
+        self.state
+            .lock()
+            .expect("mock Browser4 state mutex poisoned")
+            .health_status = None;
+    }
+
+    /// Shut down the mock server's listener thread without dropping the recorded
+    /// state. After calling this, further requests will fail with a connection
+    /// error (simulating an unreachable backend).
+    fn shutdown(&self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+    }
 }
 
 impl Drop for MockBrowser4Server {
@@ -410,12 +713,29 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
     let route = path.split('?').next().unwrap_or(path.as_str());
 
     match (method.as_str(), route) {
-        ("GET", "/actuator/health") => write_http_response(
-            &mut stream,
-            "200 OK",
-            "application/json",
-            r#"{"status":"UP"}"#,
-        ),
+        ("GET", "/actuator/health") => {
+            let guard = state.lock().expect("mock Browser4 state mutex poisoned");
+            if let Some((status_code, ref content_type, ref body)) = guard.health_status {
+                let status_text = match status_code {
+                    200 => "200 OK",
+                    503 => "503 Service Unavailable",
+                    other => {
+                        eprintln!(
+                            "[mock Browser4 server] unsupported health status {other}, using 200 OK"
+                        );
+                        "200 OK"
+                    }
+                };
+                write_http_response(&mut stream, status_text, content_type, body);
+            } else {
+                write_http_response(
+                    &mut stream,
+                    "200 OK",
+                    "application/json",
+                    r#"{"status":"UP"}"#,
+                );
+            }
+        }
         ("GET", "/mcp/tools") => write_http_response(
             &mut stream,
             "200 OK",
@@ -444,12 +764,76 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                     arguments: arguments.clone(),
                 });
 
+            // Record session-close operations before the failure check so
+            // tests can verify they were attempted even when the mock returns
+            // an error response.
+            let mut guard = state.lock().expect("mock Browser4 state mutex poisoned");
+            match tool.as_str() {
+                "close_session" => {
+                    if let Some(sid) = arguments.get("sessionId").and_then(|v| v.as_str()) {
+                        guard.close_session_calls.push(sid.to_string());
+                    }
+                }
+                "close_all_sessions" => {
+                    guard.close_all_sessions_calls.push(arguments.clone());
+                }
+                _ => {}
+            }
+            drop(guard);
+
+            if let Some(message) = {
+                let mut guard = state.lock().expect("mock Browser4 state mutex poisoned");
+                let failure_index = guard.queued_tool_failures.iter().position(|failure| {
+                    failure.tool == tool
+                        && failure
+                            .session_id
+                            .as_deref()
+                            .map(|expected| {
+                                arguments.get("sessionId").and_then(|value| value.as_str())
+                                    == Some(expected)
+                            })
+                            .unwrap_or(true)
+                        && failure
+                            .url
+                            .as_deref()
+                            .map(|expected| {
+                                arguments.get("url").and_then(|value| value.as_str())
+                                    == Some(expected)
+                            })
+                            .unwrap_or(true)
+                });
+                failure_index.map(|index| guard.queued_tool_failures.remove(index).message)
+            } {
+                let response = serde_json::json!({
+                    "isError": true,
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": message,
+                        }
+                    ]
+                })
+                .to_string();
+                write_http_response(&mut stream, "200 OK", "application/json", &response);
+                return;
+            }
+
             let text = match tool.as_str() {
                 "open_session" => {
                     let session_id = {
                         let mut guard = state.lock().expect("mock Browser4 state mutex poisoned");
                         let session_id = if guard.queued_open_session_ids.is_empty() {
-                            "collective-session-1".to_string()
+                            // SWARM sessions must return the fixed session ID "SWARM".
+                            let requested_session_id = arguments
+                                .get("capabilities")
+                                .and_then(|caps| caps.get("sessionId"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or_default();
+                            if requested_session_id.eq_ignore_ascii_case("SWARM") {
+                                "SWARM".to_string()
+                            } else {
+                                "swarm-session-1".to_string()
+                            }
                         } else {
                             guard.queued_open_session_ids.remove(0)
                         };
@@ -496,8 +880,8 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                         let mut guard = state.lock().expect("mock Browser4 state mutex poisoned");
                         guard.plain_commands.push(command.clone());
                         if command.starts_with("http://") || command.starts_with("https://") {
-                            guard.next_collective_task_id += 1;
-                            format!("co-task-{}", guard.next_collective_task_id)
+                            guard.next_swarm_task_id += 1;
+                            format!("swarm-task-{}", guard.next_swarm_task_id)
                         } else {
                             guard.next_agent_task_id += 1;
                             format!("agent-task-{}", guard.next_agent_task_id)
@@ -546,6 +930,12 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                     format!("result for {task_id}")
                 }
                 "command_batch" => mock_command_batch_response(&arguments),
+                "close_session" => {
+                    "Session closed.".to_string()
+                }
+                "close_all_sessions" => {
+                    "All sessions closed.".to_string()
+                }
                 "agent_extract" => {
                     r#"{"items":[{"title":"Mock Product","price":"$19.99"}]}"#.to_string()
                 }
@@ -570,8 +960,8 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                 let mut guard = state.lock().expect("mock Browser4 state mutex poisoned");
                 guard.plain_commands.push(command.clone());
                 if command.starts_with("http://") || command.starts_with("https://") {
-                    guard.next_collective_task_id += 1;
-                    format!("co-task-{}", guard.next_collective_task_id)
+                    guard.next_swarm_task_id += 1;
+                    format!("swarm-task-{}", guard.next_swarm_task_id)
                 } else {
                     guard.next_agent_task_id += 1;
                     format!("agent-task-{}", guard.next_agent_task_id)
@@ -583,6 +973,39 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                 "200 OK",
                 "application/json",
                 &format!(r#""{}""#, task_id),
+            );
+        }
+        _ if method == "POST"
+            && (route == "/api/x/submit" || route == "/api/x/s" || route == "/api/swarm/submit") => {
+            let payload = String::from_utf8_lossy(&body).trim().to_string();
+            let task_id = {
+                let mut guard = state.lock().expect("mock Browser4 state mutex poisoned");
+                guard.plain_commands.push(payload);
+                guard.next_swarm_task_id += 1;
+                format!("swarm-task-{}", guard.next_swarm_task_id)
+            };
+
+            write_http_response(
+                &mut stream,
+                "200 OK",
+                "application/json",
+                &serde_json::json!(task_id).to_string(),
+            );
+        }
+        _ if method == "POST" && route == "/api/swarm/query" => {
+            let query: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+            let task_id = {
+                let mut guard = state.lock().expect("mock Browser4 state mutex poisoned");
+                guard.swarm_queries.push(query);
+                guard.next_swarm_task_id += 1;
+                format!("swarm-task-{}", guard.next_swarm_task_id)
+            };
+
+            write_http_response(
+                &mut stream,
+                "200 OK",
+                "application/json",
+                &serde_json::json!(task_id).to_string(),
             );
         }
         _ if method == "GET"
@@ -606,6 +1029,33 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
             let response = serde_json::json!({
                 "id": task_id,
                 "status": "RUNNING",
+            })
+            .to_string();
+            write_http_response(&mut stream, "200 OK", "application/json", &response);
+        }
+        _ if method == "GET"
+            && (route.starts_with("/api/x/") || route.starts_with("/api/swarm/"))
+            && route.ends_with("/status") =>
+        {
+            let Some(task_id) = extract_swarm_task_id(route, "/status")
+            else {
+                write_http_response(&mut stream, "404 Not Found", "text/plain", "not found");
+                return;
+            };
+
+            state
+                .lock()
+                .expect("mock Browser4 state mutex poisoned")
+                .status_queries
+                .push(task_id.to_string());
+
+            let response = serde_json::json!({
+                "id": task_id,
+                "statusCode": 102,
+                "pageStatusCode": 102,
+                "isDone": false,
+                "resultSet": null,
+                "status": "Processing",
             })
             .to_string();
             write_http_response(&mut stream, "200 OK", "application/json", &response);
@@ -636,6 +1086,37 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                 &response,
             );
         }
+        _ if method == "GET"
+            && (route.starts_with("/api/x/") || route.starts_with("/api/swarm/"))
+            && route.ends_with("/result") =>
+        {
+            let Some(task_id) = extract_swarm_task_id(route, "/result")
+            else {
+                write_http_response(&mut stream, "404 Not Found", "text/plain", "not found");
+                return;
+            };
+
+            state
+                .lock()
+                .expect("mock Browser4 state mutex poisoned")
+                .result_queries
+                .push(task_id.to_string());
+
+            let response = serde_json::json!({
+                "id": task_id,
+                "statusCode": 200,
+                "pageStatusCode": 200,
+                "isDone": true,
+                "resultSet": [
+                    {
+                        "url": format!("https://mock.browser4.local/result/{task_id}"),
+                    }
+                ],
+                "status": "OK",
+            })
+            .to_string();
+            write_http_response(&mut stream, "200 OK", "application/json", &response);
+        }
         _ => write_http_response(
             &mut stream,
             "404 Not Found",
@@ -643,6 +1124,18 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
             "not found",
         ),
     }
+}
+
+fn extract_swarm_task_id(route: &str, suffix: &str) -> Option<String> {
+    for prefix in ["/api/x/", "/api/swarm/"] {
+        if let Some(rest) = route.strip_prefix(prefix) {
+            return rest
+                .strip_suffix(suffix)
+                .map(|value| value.trim_end_matches('/').to_string())
+                .filter(|value| !value.is_empty());
+        }
+    }
+    None
 }
 
 fn mock_browser_tool_text(tool: &str, arguments: &serde_json::Value) -> String {
@@ -690,7 +1183,7 @@ fn mock_command_batch_response(arguments: &serde_json::Value) -> String {
             "open" => {
                 let session_id = current_session_id
                     .clone()
-                    .unwrap_or_else(|| "collective-session-1".to_string());
+                    .unwrap_or_else(|| "swarm-session-1".to_string());
                 let text = if current_session_id.is_some() {
                     format!("Session already open: {session_id}")
                 } else {
@@ -763,18 +1256,31 @@ fn read_http_request(stream: &mut TcpStream) -> Option<(String, String, Vec<u8>)
     let mut buffer = Vec::new();
     let mut content_length = 0usize;
     let mut header_end = None;
+    let mut empty_read_attempts = 0u32;
+    const MAX_EMPTY_READ_ATTEMPTS: u32 = 200; // 2 s with 10 ms sleep per attempt
 
     loop {
         let mut chunk = [0u8; 4096];
         match stream.read(&mut chunk) {
             Ok(0) => break,
-            Ok(n) => buffer.extend_from_slice(&chunk[..n]),
+            Ok(n) => {
+                empty_read_attempts = 0;
+                buffer.extend_from_slice(&chunk[..n]);
+            }
             Err(ref e)
                 if e.kind() == std::io::ErrorKind::WouldBlock
                     || e.kind() == std::io::ErrorKind::TimedOut =>
             {
                 if buffer.is_empty() {
-                    return None;
+                    empty_read_attempts += 1;
+                    if empty_read_attempts >= MAX_EMPTY_READ_ATTEMPTS {
+                        eprintln!(
+                            "[read_http_request] giving up after {MAX_EMPTY_READ_ATTEMPTS} empty reads"
+                        );
+                        return None;
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                    continue;
                 }
                 continue;
             }
@@ -829,7 +1335,84 @@ fn write_http_response(stream: &mut TcpStream, status: &str, content_type: &str,
         body.len(),
         body
     );
-    let _ = stream.write_all(response.as_bytes());
+    if let Err(e) = stream.write_all(response.as_bytes()) {
+        eprintln!(
+            "[write_http_response] failed to write response (status={status}): {e}"
+        );
+    }
+    // Best-effort flush: ignore errors since the connection is about to close.
+    let _ = stream.flush();
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests for internal HTTP helpers
+// ---------------------------------------------------------------------------
+
+/// Validate `read_http_request` and `write_http_response` core behaviours.
+///
+/// These tests use real TCP sockets to exercise the read/write helpers under
+/// conditions that the mock-server scenarios depend on.  They run once at
+/// startup (after coverage checks) and panic on failure so regressions are
+/// caught before any scenario runs.
+fn verify_internal_http_helpers() {
+    // ── round-trip: write a request, read it back ──────────────────────
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind for http helper test");
+    let port = listener.local_addr().unwrap().port();
+
+    let client_thread = thread::spawn(move || {
+        let mut stream = TcpStream::connect(format!("127.0.0.1:{port}"))
+            .expect("connect for http helper test");
+        // Write a minimal POST request with a JSON body.
+        let body = r#"{"tool":"open_session","arguments":{"url":"https://example.com"}}"#;
+        let request = format!(
+            "POST /mcp/call-tool HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(request.as_bytes()).expect("write request");
+        // Read back the response to drain it.
+        let mut buf = vec![0u8; 4096];
+        let _ = stream.read(&mut buf);
+    });
+
+    let (mut server_stream, _) = listener.accept().expect("accept for http helper test");
+    let parsed = read_http_request(&mut server_stream)
+        .expect("read_http_request should parse a well-formed request");
+    assert_eq!(parsed.0, "POST", "method mismatch");
+    assert_eq!(parsed.1, "/mcp/call-tool", "path mismatch");
+    let parsed_body = String::from_utf8(parsed.2).expect("body is valid UTF-8");
+    assert!(
+        parsed_body.contains("open_session"),
+        "body should contain open_session, got: {parsed_body}"
+    );
+
+    // Send a response back so the client thread can finish.
+    write_http_response(&mut server_stream, "200 OK", "application/json", r#"{"ok":true}"#);
+    drop(server_stream);
+    client_thread.join().expect("client thread should finish");
+
+    // ── empty stream returns None ─────────────────────────────────────
+    let listener2 = TcpListener::bind("127.0.0.1:0").expect("bind for empty-stream test");
+    let port2 = listener2.local_addr().unwrap().port();
+
+    let client_thread2 = thread::spawn(move || {
+        let _stream = TcpStream::connect(format!("127.0.0.1:{port2}"))
+            .expect("connect for empty-stream test");
+        // Immediately drop the stream — server sees EOF / WouldBlock then EOF.
+    });
+
+    let (mut server_stream2, _) = listener2.accept().expect("accept for empty-stream test");
+    // Wait a bit for the client to close.
+    thread::sleep(Duration::from_millis(50));
+    let result = read_http_request(&mut server_stream2);
+    assert!(
+        result.is_none(),
+        "read_http_request should return None for an empty/closed stream, got: {result:?}"
+    );
+    // Should not hang — we hit the max-empty-read-attempts path.
+
+    drop(server_stream2);
+    client_thread2.join().expect("client thread 2 should finish");
 }
 
 // ---------------------------------------------------------------------------
@@ -973,8 +1556,18 @@ struct E2ECtx {
     use_maven_startup: bool,
     workspace_dir: PathBuf,
     state_dir: PathBuf,
+    runtime_dir: PathBuf,
     upload_file_path: PathBuf,
     step_timings: Vec<TimedStep>,
+    /// Extra environment variables to set for every CLI child process.
+    extra_env: Vec<(String, String)>,
+}
+
+impl E2ECtx {
+    fn set_env(&mut self, key: &str, value: &str) {
+        self.extra_env.retain(|(k, _)| k != key);
+        self.extra_env.push((key.to_string(), value.to_string()));
+    }
 }
 
 impl E2ECtx {
@@ -1038,7 +1631,7 @@ impl E2ETestResources {
         let started_at = Instant::now();
         let startup_result = run_cli_process_with_live_output(
             &self.ctx,
-            &["open", OPEN_PROFILE_MODE_ARG, OPEN_INTERACT_LEVEL_ARG],
+            &["open", &self.ctx.interactive_url(), OPEN_PROFILE_MODE_ARG, OPEN_INTERACT_LEVEL_ARG],
         );
         let startup_log_hint = format_browser4_startup_log_hint(&startup_result.stderr);
         let started_via_maven = startup_result
@@ -1133,7 +1726,7 @@ impl E2ETestResources {
         let mut steps = Vec::new();
         // Kill any lingering Chrome processes from the previous server before
         // starting a fresh one.  Without this, the new Java server may see
-        // stale CDP browser contexts, leading to intermittent
+        // stale BrowserProtocol browser contexts, leading to intermittent
         // "Cannot find context with specified id" errors.
         let cleanup_started_at = Instant::now();
         stop_browser4_server_forcibly();
@@ -1250,12 +1843,18 @@ fn run_cli_process_internal(
         .args(&full_args)
         .current_dir(&ctx.workspace_dir)
         .env("BROWSER4_CLI_STATE_DIR", &ctx.state_dir)
+        .env("BROWSER4_RUNTIME_DIR", &ctx.runtime_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
     // Always anchor Browser4.jar root search to the CLI launch directory,
     // not the isolated temporary workspace used for test artifacts.
     command.env(ROOT_SEARCH_START_DIR_ENV, &ctx.invocation_dir);
+
+    // Apply scenario-specific extra env vars (e.g. BROWSER4_RELEASES_BASE_URL).
+    for (key, value) in &ctx.extra_env {
+        command.env(key, value);
+    }
 
     let output = if let Some(payload) = stdin_payload {
         let mut child = command
@@ -1711,6 +2310,98 @@ fn extract_tab_index(output: &str, url: &str) -> usize {
 }
 
 // ---------------------------------------------------------------------------
+// Swarm / agent helpers
+// ---------------------------------------------------------------------------
+
+fn extract_swarm_submissions(output: &str) -> Vec<(String, String)> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let rest = line.strip_prefix("Task Submitted: ")?;
+            let (url, task_id) = rest.split_once(" -> Task ID: ")?;
+            let url = url.trim();
+            let task_id = task_id.trim();
+            if url.is_empty() || task_id.is_empty() {
+                return None;
+            }
+            Some((url.to_string(), task_id.to_string()))
+        })
+        .collect()
+}
+
+fn parse_json_output(stdout: &str, command_name: &str) -> serde_json::Value {
+    let payload = strip_snapshot_output(stdout);
+    serde_json::from_str(&payload).unwrap_or_else(|error| {
+        panic!("Expected JSON payload from {command_name}, got:\n{payload}\nparse error: {error}")
+    })
+}
+
+fn swarm_done_flag(payload: &serde_json::Value) -> Option<bool> {
+    payload
+        .get("isDone")
+        .and_then(|value| value.as_bool())
+        .or_else(|| payload.get("done").and_then(|value| value.as_bool()))
+}
+
+fn wait_for_swarm_result(ctx: &mut E2ECtx, task_id: &str, timeout_ms: u64) -> serde_json::Value {
+    wait_for_swarm_result_with_error(ctx, task_id, timeout_ms)
+        .unwrap_or_else(|last_payload| {
+            panic!(
+                "Timed out after {timeout_ms}ms waiting for swarm result '{task_id}' to complete. Last payload:\n{last_payload}"
+            )
+        })
+}
+
+/// Like [`wait_for_swarm_result`] but returns `Err(last_payload)` instead of
+/// panicking on timeout. Also considers a task done when it reports an error
+/// status (e.g. 404 Not Found) even if `done` is `false`, so tests can handle
+/// server-side unavailability gracefully.
+fn wait_for_swarm_result_with_error(
+    ctx: &mut E2ECtx,
+    task_id: &str,
+    timeout_ms: u64,
+) -> Result<serde_json::Value, String> {
+    let started_at = Instant::now();
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    let mut last_payload = String::new();
+
+    while Instant::now() < deadline {
+        let result = run_checked_cli_process(ctx, &["swarm", "result", task_id]);
+        let payload = strip_snapshot_output(&result.stdout);
+        last_payload = payload.clone();
+        let parsed = parse_json_output(&result.stdout, "swarm result");
+        if parsed["id"].as_str() == Some(task_id) && swarm_done_flag(&parsed) == Some(true) {
+            ctx.record_step(
+                format!(
+                    "wait for swarm result {task_id} done (timeout={}ms)",
+                    timeout_ms
+                ),
+                started_at.elapsed(),
+            );
+            return Ok(parsed);
+        }
+        // Also consider the task finished when the server reports a terminal
+        // error status (e.g. 4xx / 5xx), even if `done` is still false.
+        if let Some(status) = parsed["statusCode"].as_i64() {
+            if !(200..400).contains(&status) {
+                ctx.record_step(
+                    format!(
+                        "wait for swarm result {task_id} terminal error (timeout={}ms)",
+                        timeout_ms
+                    ),
+                    started_at.elapsed(),
+                );
+                return Ok(parsed);
+            }
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+
+    Err(last_payload)
+}
+
+// ---------------------------------------------------------------------------
 // State helpers
 // ---------------------------------------------------------------------------
 
@@ -2037,8 +2728,10 @@ fn create_e2e_test_resources() -> E2ETestResources {
         });
     let workspace_dir = temp_dir.path().join("workspace");
     let state_dir = temp_dir.path().join("state");
+    let runtime_dir = temp_dir.path().join("runtime-data");
     fs::create_dir_all(&workspace_dir).unwrap();
     fs::create_dir_all(&state_dir).unwrap();
+    fs::create_dir_all(&runtime_dir).unwrap();
 
     let invocation_dir = std::env::current_dir().expect("failed to read e2e invocation directory");
 
@@ -2059,8 +2752,10 @@ fn create_e2e_test_resources() -> E2ETestResources {
             use_maven_startup,
             workspace_dir,
             state_dir,
+            runtime_dir,
             upload_file_path,
             step_timings: Vec::new(),
+            extra_env: Vec::new(),
         },
     }
 }
@@ -2076,7 +2771,10 @@ fn goto_interactive_page(ctx: &mut E2ECtx) {
 }
 
 fn run_open_command(ctx: &mut E2ECtx) -> CliRunResult {
-    let result = run_command(ctx, &["open", OPEN_PROFILE_MODE_ARG, OPEN_INTERACT_LEVEL_ARG]);
+    let result = run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG, OPEN_INTERACT_LEVEL_ARG],
+    );
     sleep(Duration::from_secs(2));
     return result;
 }
@@ -2108,39 +2806,36 @@ fn open_resized_interactive_page(ctx: &mut E2ECtx) {
     assert!(vw >= 1000, "Expected viewport width >= 1000, got {vw}");
 }
 
-fn start_mock_collective_session(ctx: &mut E2ECtx) -> MockBrowser4Server {
+fn start_mock_swarm_session(ctx: &mut E2ECtx) -> MockBrowser4Server {
     let started_at = Instant::now();
     let mock_server = MockBrowser4Server::start();
     ctx.record_step("mock Browser4 server start", started_at.elapsed());
     ctx.browser4_base_url = mock_server.base_url();
 
-    let co_create_result = run_command(
+    let swarm_create_result = run_command(
         ctx,
         &[
-            "co",
+            "swarm",
             "create",
-            "--profile-mode=prototype",
+            "--profile-mode=TEMPORARY",
             "--max-open-tabs=12",
             "--max-browser-contexts=3",
-            "--display-mode=SUPERVISED",
+            "--display-mode=HEADLESS",
         ],
     );
     assert!(
-        co_create_result
+        swarm_create_result
             .stdout
-            .contains("Collective session created: collective-session-1"),
-        "Expected collective session creation output in:\n{}",
-        co_create_result.stdout
+            .contains("Swarm session created: SWARM"),
+        "Expected swarm session creation output in:\n{}",
+        swarm_create_result.stdout
     );
-    assert_eq!(
-        read_persisted_session_id(&ctx.state_dir),
-        "collective-session-1"
-    );
+    assert_eq!(read_persisted_session_id(&ctx.state_dir), "SWARM");
 
     mock_server
 }
 
-fn assert_collective_session_call(mock_server: &MockBrowser4Server) {
+fn assert_swarm_session_call(mock_server: &MockBrowser4Server) {
     let tool_calls = mock_server.snapshot().tool_calls;
     let open_session_call = tool_calls
         .iter()
@@ -2148,7 +2843,7 @@ fn assert_collective_session_call(mock_server: &MockBrowser4Server) {
         .expect("expected open_session call");
     assert_eq!(
         open_session_call.arguments["capabilities"]["profileMode"],
-        "prototype"
+        "TEMPORARY"
     );
     assert_eq!(
         open_session_call.arguments["capabilities"]["maxOpenTabs"],
@@ -2160,7 +2855,7 @@ fn assert_collective_session_call(mock_server: &MockBrowser4Server) {
     );
     assert_eq!(
         open_session_call.arguments["capabilities"]["displayMode"],
-        "SUPERVISED"
+        "HEADLESS"
     );
 }
 
@@ -2279,9 +2974,8 @@ fn run_final_cleanup() -> Result<Vec<TimedStep>, String> {
 /// build will fail.
 fn excluded_commands(include_batch_command: bool) -> HashSet<&'static str> {
     let mut commands: HashSet<&'static str> = [
-        // Destructive across concurrent sessions — would make the suite flaky
-        "close-all",
-        "kill-all",
+        // Not yet exercised by e2e scenarios; mock handler exists.
+        "swarm-query",
     ]
     .into();
 
@@ -2301,12 +2995,41 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "open",
         "list",
         "close",
+        // test_close_*, test_close_all_*
+        "close-all",
+        // test_kill_all_*
+        "kill-all",
+        // test_stop_*
+        "stop",
+        // test_status_*
+        "status",
+        // test_install_*, test_upgrade_*
+        "install",
+        "upgrade",
         // test_navigation_and_storage
         "goto",
         "go-back",
         "go-forward",
         "reload",
         "delete-data",
+        // test_storage_state_commands
+        "state-save",
+        "state-load",
+        "cookie-list",
+        "cookie-get",
+        "cookie-set",
+        "cookie-delete",
+        "cookie-clear",
+        "localstorage-list",
+        "localstorage-get",
+        "localstorage-set",
+        "localstorage-delete",
+        "localstorage-clear",
+        "sessionstorage-list",
+        "sessionstorage-get",
+        "sessionstorage-set",
+        "sessionstorage-delete",
+        "sessionstorage-clear",
         // test_interaction_commands
         "resize",
         "type",
@@ -2314,6 +3037,7 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "press",
         "keydown",
         "keyup",
+        // test_pointer_commands
         "click",
         "dblclick",
         "hover",
@@ -2327,26 +3051,26 @@ fn tested_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "snapshot",
         "screenshot",
         "pdf",
-        // test_collective_session_and_agent_tools
+        // test_swarm_session_and_agent_tools
         "extract",
         "summarize",
         // test_agent_task_commands
         "agent-run",
         "agent-status",
         "agent-result",
-        // test_collective_submission_commands
-        "co-create",
-        "co-submit",
-        "co-scrape",
-        "co-status",
-        "co-result",
+        // test_swarm_submission_commands
+        "swarm-create",
+        "swarm-submit",
+        "swarm-status",
+        "swarm-result",
         // test_mouse_and_dialog
         "mousemove",
         "mousedown",
         "mouseup",
-        "mousewheel",
         "dialog-accept",
         "dialog-dismiss",
+        // test_mousewheel
+        "mousewheel",
         // test_tab_commands
         "tab-list",
         "tab-new",
@@ -2685,9 +3409,50 @@ struct RunOptions {
     has_positional_filter: bool,
     fail_fast: bool,
     list_only: bool,
+    list_groups: bool,
     batch_only: bool,
     enable_batch_scenario: bool,
+    enable_install_scenario: bool,
+    /// When non-empty, only scenarios matching at least one of these group
+    /// names are selected.  An empty Vec means no group filter is applied.
+    groups: Vec<String>,
+    /// Maximum scenario level to run.  Defaults to `Basic` so the suite
+    /// finishes faster.  Pass `--level=EXTENDED` (or `--level=all`) to
+    /// include longer-running / edge-case tests.
+    max_level: scenarios::ScenarioLevel,
 }
+
+const HELP_TEXT: &str = r#"browser4-cli e2e test runner
+
+Usage: cargo test --test e2e -- [OPTIONS]
+
+Options:
+  --help                       Print this help message
+  --list                       List all scenario names (dry run)
+  --list-groups                List available groups with scenario counts
+  --group=<name>               Run only scenarios in the specified group
+                               (repeatable; e.g. --group=open --group=eval)
+  --scenario=<name|pattern>    Run only scenarios matching this name or
+                               glob pattern (* and ? wildcards)
+  --scenario-from=<name>       Run scenarios starting from the named one
+  --scenario-limit=<count>     Run at most <count> selected scenarios
+  --failed                     Rerun scenarios that failed in the previous run
+  --fail-fast                  Stop after the first failure
+  --batch-only                 Run only batch-command scenarios
+  --enable-batch-scenario      Include batch-command scenarios in the run
+  --enable-install-scenario    Include install/upgrade scenarios
+  --level=<BASIC|EXTENDED|all> Max scenario level to run (default: BASIC).
+                               Use EXTENDED or all to include edge-case and
+                               longer-running tests.
+
+Environment variables:
+  BROWSER4_E2E_SERVICE_URL     Connect to an already-running Browser4 service
+  BROWSER4_E2E_SERVER_URL      Alias for BROWSER4_E2E_SERVICE_URL
+  BROWSER4_E2E_FIXTURE_HOST    Host the Browser4 container uses to reach the
+                               fixture HTTP server (default: 127.0.0.1)
+  BROWSER4_E2E_CLI_TIMEOUT_SECS Override per-command timeout in seconds
+  BROWSER4_E2E_USE_MAVEN_STARTUP Set to 1/true/yes/on for Maven startup
+"#;
 
 fn parse_scenario_limit(raw: &str) -> usize {
     let normalized = raw.trim();
@@ -2737,10 +3502,33 @@ fn parse_run_options() -> RunOptions {
     let mut fail_fast = false;
     let mut has_positional_filter = false;
     let mut list_only = false;
+    let mut list_groups = false;
     let mut batch_only = false;
     let mut enable_batch_scenario = false;
+    let mut enable_install_scenario = false;
+    let mut groups: Vec<String> = Vec::new();
+    let mut max_level = scenarios::ScenarioLevel::Basic;
 
     while let Some(arg) = args.next() {
+        if arg == "--help" || arg == "-h" {
+            print!("{HELP_TEXT}");
+            std::process::exit(0);
+        }
+
+        if let Some(value) = arg.strip_prefix("--level=") {
+            max_level = scenarios::ScenarioLevel::from_arg(value).unwrap_or_else(|error| {
+                panic!("{error}");
+            });
+            continue;
+        }
+        if arg == "--level" {
+            let value = parse_named_flag_value(&mut args, "--level");
+            max_level = scenarios::ScenarioLevel::from_arg(&value).unwrap_or_else(|error| {
+                panic!("{error}");
+            });
+            continue;
+        }
+
         if let Some(value) = arg.strip_prefix("--scenario=") {
             scenario = Some(value.to_string());
             continue;
@@ -2802,6 +3590,25 @@ fn parse_run_options() -> RunOptions {
             continue;
         }
 
+        if arg == "--enable-install-scenario" {
+            enable_install_scenario = true;
+            continue;
+        }
+
+        if arg == "--list-groups" {
+            list_groups = true;
+            continue;
+        }
+
+        if let Some(value) = arg.strip_prefix("--group=") {
+            groups.push(value.to_string());
+            continue;
+        }
+        if arg == "--group" {
+            groups.push(parse_named_flag_value(&mut args, "--group"));
+            continue;
+        }
+
         if !arg.starts_with('-') {
             has_positional_filter = true;
         }
@@ -2822,14 +3629,23 @@ fn parse_run_options() -> RunOptions {
         _ => unreachable!("unexpected scenario filter argument combination"),
     };
 
+    println!(
+        "[e2e] max scenario level: {}",
+        max_level
+    );
+
     RunOptions {
         scenario_filter,
         scenario_limit,
         has_positional_filter,
         fail_fast,
         list_only,
+        list_groups,
         batch_only,
         enable_batch_scenario,
+        enable_install_scenario,
+        groups,
+        max_level,
     }
 }
 
@@ -2848,6 +3664,15 @@ fn exclude_batch_scenarios(
     selected_scenarios
         .into_iter()
         .filter(|scenario| !scenario.is_batch_command_scenario())
+        .collect()
+}
+
+fn exclude_install_scenarios(
+    selected_scenarios: Vec<scenarios::ScenarioDef>,
+) -> Vec<scenarios::ScenarioDef> {
+    selected_scenarios
+        .into_iter()
+        .filter(|scenario| !scenario.is_install_scenario())
         .collect()
 }
 
@@ -2919,7 +3744,6 @@ impl PlannedScenarioRun {
             )
         }
     }
-
 }
 
 const COVERAGE_TEST_NAME: &str = "test_e2e_command_coverage";
@@ -2942,6 +3766,23 @@ fn main() {
         .map(|s| format!("{} ({})", s.name, s.short_name))
         .collect::<Vec<_>>()
         .join(", ");
+
+    if run_options.list_groups {
+        let mut group_set: std::collections::BTreeMap<&str, usize> =
+            std::collections::BTreeMap::new();
+        for scenario in all_scenarios {
+            let key = scenario.group.unwrap_or("<none>");
+            *group_set.entry(key).or_insert(0) += 1;
+        }
+        println!("Available groups (scenario count):");
+        for (group, count) in &group_set {
+            println!("  {}: {}", group, count);
+        }
+        println!(
+            "Use --group=<name> to filter by group (repeatable)."
+        );
+        return;
+    }
 
     let mut selected_scenarios: Vec<scenarios::ScenarioDef> = match run_options.scenario_filter {
         Some(ScenarioFilter::Scenario(filter)) => {
@@ -3029,7 +3870,7 @@ fn main() {
                 .collect::<Vec<_>>()
                 .join(", ")
         );
-    } else if !has_explicit_scenario_filter && !run_options.enable_batch_scenario {
+    } else if !has_explicit_scenario_filter && run_options.groups.is_empty() && !run_options.enable_batch_scenario {
         let batch_scenarios = selected_scenarios
             .iter()
             .copied()
@@ -3045,9 +3886,73 @@ fn main() {
         }
     }
 
-    let run_coverage = !has_explicit_scenario_filter && !run_options.batch_only;
+    // Install / upgrade scenarios are disabled by default (they download and
+    // extract archives).  Use --enable-install-scenario to include them.
+    if !has_explicit_scenario_filter && run_options.groups.is_empty() && !run_options.enable_install_scenario {
+        let install_scenarios = selected_scenarios
+            .iter()
+            .copied()
+            .filter(|scenario| scenario.is_install_scenario())
+            .collect::<Vec<_>>();
+        selected_scenarios = exclude_install_scenarios(selected_scenarios);
 
-    let selected_scenarios = apply_scenario_limit_filter(selected_scenarios, run_options.scenario_limit);
+        if !install_scenarios.is_empty() {
+            println!(
+                "default e2e run skips {} install/upgrade scenario(s); pass --enable-install-scenario to include them",
+                install_scenarios.len()
+            );
+        }
+    }
+
+    // --group filtering: when one or more groups are specified, keep only
+    // scenarios that belong to at least one of the requested groups.
+    if !run_options.groups.is_empty() {
+        let group_set: std::collections::HashSet<&str> =
+            run_options.groups.iter().map(String::as_str).collect();
+        let before = selected_scenarios.len();
+        selected_scenarios.retain(|scenario| {
+            scenario
+                .group
+                .map_or(false, |g| group_set.contains(g))
+        });
+        println!(
+            "selected {} scenario(s) via --group={}: {} (filtered out {})",
+            selected_scenarios.len(),
+            run_options.groups.join(","),
+            selected_scenarios
+                .iter()
+                .map(|s| s.name)
+                .collect::<Vec<_>>()
+                .join(", "),
+            before.saturating_sub(selected_scenarios.len()),
+        );
+        assert!(
+            !selected_scenarios.is_empty(),
+            "No scenarios match the requested group(s) '{}'. Use --list-groups to see available groups.",
+            run_options.groups.join(",")
+        );
+    }
+
+    // --level filtering: by default only scenarios at or below Basic level
+    // are run.  Pass --level=EXTENDED to include edge-case / longer-running
+    // tests.
+    {
+        let before = selected_scenarios.len();
+        let max_level = run_options.max_level;
+        selected_scenarios.retain(|scenario| scenario.at_or_below_level(max_level));
+        let filtered_out = before.saturating_sub(selected_scenarios.len());
+        if filtered_out > 0 {
+            println!(
+                "level filter (--level={}): excluded {} scenario(s) above {} level",
+                max_level, filtered_out, max_level
+            );
+        }
+    }
+
+    let run_coverage = !has_explicit_scenario_filter && run_options.groups.is_empty() && !run_options.batch_only;
+
+    let selected_scenarios =
+        apply_scenario_limit_filter(selected_scenarios, run_options.scenario_limit);
 
     if let Some(limit) = run_options.scenario_limit {
         println!(
@@ -3082,7 +3987,10 @@ fn main() {
         for planned_run in &planned_runs {
             println!("{}: test", planned_run.display_name());
         }
-        println!("\n{} tests, 0 benchmarks", planned_runs.len() + usize::from(run_coverage));
+        println!(
+            "\n{} tests, 0 benchmarks",
+            planned_runs.len() + usize::from(run_coverage)
+        );
         return;
     }
 
@@ -3099,7 +4007,30 @@ fn main() {
 
     println!("running {total_tests} tests");
 
+    // Validate internal HTTP helpers before any scenario touches the mock
+    // server.  Panics early so regressions are obvious.
+    verify_internal_http_helpers();
+
     let mut resources = create_e2e_test_resources();
+
+    // Sweep orphaned Browser4 processes from previous runs before starting.
+    // This is a safety net: even if the final cleanup of a prior run was
+    // skipped (e.g. Ctrl+C), the next run starts from a clean slate.
+    let pre_sweep_started_at = Instant::now();
+    let pre_sweep_result = stop_browser4_server_forcibly();
+    if pre_sweep_result.shutdown.stopped_pids.is_empty()
+        && pre_sweep_result.browser_kill.killed_pids.is_empty()
+    {
+        // nothing to clean up — don't add a timing entry
+    } else {
+        eprintln!(
+            "[pre-sweep] cleaned up {} server(s) and {} browser(s) from previous runs ({:.2}s)",
+            pre_sweep_result.shutdown.stopped_pids.len(),
+            pre_sweep_result.browser_kill.killed_pids.len(),
+            pre_sweep_started_at.elapsed().as_secs_f64()
+        );
+    }
+
     let run_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut timings: Vec<TimingReport> = Vec::with_capacity(total_tests);
         let mut scenario_failures: Vec<(String, FailureDetail)> = Vec::new();
@@ -3194,8 +4125,7 @@ fn main() {
             if failed_scenario_count == 0 {
                 println!(
                     "test result: ok. {} passed; 0 failed; 0 ignored; 0 measured; {} filtered out",
-                    total_tests,
-                    filtered_out
+                    total_tests, filtered_out
                 );
             } else if failed_scenario_count <= MAX_ALLOWED_FAILED_SCENARIOS {
                 println!(

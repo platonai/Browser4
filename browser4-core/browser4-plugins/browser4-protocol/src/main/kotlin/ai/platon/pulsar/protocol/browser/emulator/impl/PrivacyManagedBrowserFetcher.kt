@@ -15,22 +15,26 @@
  */
 package ai.platon.pulsar.protocol.browser.emulator.impl
 
+import ai.platon.pulsar.browser.Browser
+import ai.platon.pulsar.browser.BrowserManager
+import ai.platon.pulsar.browser.common.IllegalWebDriverStateException
+import ai.platon.pulsar.browser.common.WebDriverCancellationException
+import ai.platon.pulsar.browser.common.WebDriverException
+import ai.platon.pulsar.browser.privacy.PrivacyManager
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.stringify
+import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.persist.AbstractWebPage
 import ai.platon.pulsar.persist.WebPage
 import ai.platon.pulsar.protocol.browser.emulator.AbstractBrowserFetcher
 import ai.platon.pulsar.protocol.browser.emulator.BrowserEmulator
 import ai.platon.pulsar.protocol.browser.emulator.IncognitoBrowserFetcher
-import ai.platon.pulsar.protocol.browser.emulator.context.BrowserPrivacyManager
 import ai.platon.pulsar.skeleton.common.persist.ext.browseEventHandlers
-import ai.platon.pulsar.skeleton.crawl.fetch.driver.Browser
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchResult
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
 import ai.platon.pulsar.skeleton.workflow.fetch.WebDriverFetcher
-import ai.platon.pulsar.skeleton.workflow.fetch.driver.*
 import ai.platon.pulsar.skeleton.workflow.protocol.ForwardingResponse
 import ai.platon.pulsar.skeleton.workflow.protocol.Response
 import org.slf4j.LoggerFactory
@@ -104,7 +108,7 @@ open class BrowserWebDriverFetcher(
  */
 open class PrivacyManagedBrowserFetcher constructor(
     val browserManager: BrowserManager,
-    override val privacyManager: BrowserPrivacyManager,
+    override val privacyManager: PrivacyManager,
     override val browserEmulator: BrowserEmulator,
     override val conf: ImmutableConfig,
     private val closeCascaded: Boolean = false

@@ -3,7 +3,7 @@ package ai.platon.pulsar.agentic.mcp.server
 import ai.platon.pulsar.agentic.model.TcEvaluate
 import ai.platon.pulsar.agentic.model.ToolCallResult
 import ai.platon.pulsar.agentic.model.ToolSpec
-import ai.platon.pulsar.agentic.tools.AgentToolExecutor
+import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.agentic.tools.builtin.ToolExecutor
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -18,19 +18,19 @@ import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 
 /**
- * Tests for [Browser4MCPServer] when constructed from [AgentToolExecutor].
+ * Tests for [Browser4MCPServer] when constructed from [AgentToolManager].
  *
  * Validates that:
- * - Tools are discovered dynamically from [AgentToolExecutor.concreteExecutors] and their
+ * - Tools are discovered dynamically from [AgentToolManager.registeredExecutors] and their
  *   [ToolSpec] metadata, rather than being registered with hard-coded schemas.
- * - Every MCP tool handler routes its call through [AgentToolExecutor.execute].
+ * - Every MCP tool handler routes its call through [AgentToolManager.execute].
  * - The snake_case MCP tool names are derived correctly from domain + method.
  * - Tools with and without optional arguments are registered correctly.
  */
 @DisplayName("Browser4MCPServer - AgentToolManager-based tool registration")
 class Browser4MCPServerToolManagerTest {
 
-    private lateinit var toolManager: AgentToolExecutor
+    private lateinit var toolManager: AgentToolManager
     private lateinit var driverExecutor: ToolExecutor
     private lateinit var fsExecutor: ToolExecutor
     private lateinit var mcpServer: Browser4MCPServer
@@ -83,7 +83,7 @@ class Browser4MCPServerToolManagerTest {
         )
 
         toolManager = mockk(relaxed = true)
-        every { toolManager.concreteExecutors } returns listOf(driverExecutor, fsExecutor)
+        every { toolManager.registeredExecutors } returns mutableListOf(driverExecutor, fsExecutor).associateBy { it.domain }
 
         mcpServer = Browser4MCPServer(
             toolManager = toolManager,
@@ -122,7 +122,7 @@ class Browser4MCPServerToolManagerTest {
     @Test
     @DisplayName("each registered tool's spec has a non-blank description")
     fun registeredToolsHaveDescriptions() {
-        val allSpecs = toolManager.concreteExecutors
+        val allSpecs = toolManager.registeredExecutors.values
             .flatMap { executor -> executor.getToolSpecs().values }
         allSpecs.forEach { spec ->
             assertFalse(spec.description.isNullOrBlank(),

@@ -1,7 +1,7 @@
 package ai.platon.pulsar.agentic.tools.util
 
-import ai.platon.browser4.driver.chrome.dom.FBNLocator
 import ai.platon.pulsar.agentic.model.ToolCall
+import ai.platon.pulsar.browser.common.FBNLocator
 import ai.platon.pulsar.common.getLogger
 import java.net.URI
 import java.util.concurrent.ConcurrentHashMap

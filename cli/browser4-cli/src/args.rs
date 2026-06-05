@@ -15,8 +15,10 @@ pub struct GlobalFlags {
     pub session_name: Option<String>,
     /// `--server=<url>` or `--server <url>` server override
     pub server_url: Option<String>,
-    /// `--use-maven-startup` enables local Maven-based server startup.
-    pub use_maven_startup: bool,
+    /// `--json` — emit machine-parseable JSON to stdout
+    pub json: bool,
+    /// `-q` / `--quiet` — suppress normal output, only show errors
+    pub quiet: bool,
     /// Remaining arguments (command + its args/options)
     pub args: Vec<String>,
 }
@@ -33,7 +35,7 @@ pub struct BatchArgs {
 /// Recognises:
 /// - `-s=<name>`, `-s <name>`, `--session=<name>`, `--session <name>` → session name
 /// - `--server=<url>` or `--server <url>` → server URL override
-/// - `--use-maven-startup` → opt in to local Maven `spring-boot:run` startup
+/// - `--json` → emit machine-parseable JSON to stdout
 /// - `--version` / `-v` → version flag (returned in `args`)
 /// - Everything else is forwarded unchanged in `args`
 pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
@@ -45,6 +47,11 @@ pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
             flags.session_name = Some(env_session);
         }
     }
+
+    // `--json` is only a global flag when it appears *before* the command
+    // name.  After the command it is passed through so sub-commands like
+    // `batch --json` (stdin JSON input) are not shadowed by the global flag.
+    let mut seen_command = false;
 
     let mut i = 0;
     while i < argv.len() {
@@ -58,6 +65,10 @@ pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
                 i += 1;
                 flags.session_name = Some(argv[i].clone());
             }
+        } else if !seen_command && arg == "--json" {
+            flags.json = true;
+        } else if !seen_command && (arg == "-q" || arg == "--quiet") {
+            flags.quiet = true;
         } else if arg.starts_with("--server=") {
             flags.server_url = Some(arg["--server=".len()..].to_string());
         } else if arg == "--server" {
@@ -65,9 +76,11 @@ pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
                 i += 1;
                 flags.server_url = Some(argv[i].clone());
             }
-        } else if arg == "--use-maven-startup" {
-            flags.use_maven_startup = true;
         } else {
+            // First non-flag argument is the command name.
+            if !arg.starts_with('-') {
+                seen_command = true;
+            }
             flags.args.push(arg.clone());
         }
         i += 1;
@@ -79,15 +92,19 @@ pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
 ///
 /// - Positional arguments go into `_` as a JSON array.
 /// - `--key=value` → key: string value
-/// - `--flag` (no value) → key: true (boolean)
+/// - `--key value` (next arg does not start with `--`) → key: string value
+/// - `--flag` (followed by another `--` arg or end-of-args) → key: true (boolean)
 /// - Values `"true"` / `"false"` are coerced to booleans.
 pub fn parse_raw_args(raw_args: &[String]) -> HashMap<String, Value> {
     let mut result: HashMap<String, Value> = HashMap::new();
     let mut positional: Vec<Value> = Vec::new();
 
-    for arg in raw_args {
+    let mut i = 0;
+    while i < raw_args.len() {
+        let arg = &raw_args[i];
         if let Some(rest) = arg.strip_prefix("--") {
             if let Some(eq) = rest.find('=') {
+                // --key=value
                 let key = rest[..eq].to_string();
                 let val = &rest[eq + 1..];
                 let value = match val {
@@ -97,11 +114,26 @@ pub fn parse_raw_args(raw_args: &[String]) -> HashMap<String, Value> {
                 };
                 result.insert(key, value);
             } else {
-                result.insert(rest.to_string(), Value::Bool(true));
+                // Look ahead: if the next argument does NOT start with `--`,
+                // treat it as this option's value rather than a positional.
+                if i + 1 < raw_args.len() && !raw_args[i + 1].starts_with("--") {
+                    let key = rest.to_string();
+                    let val = &raw_args[i + 1];
+                    let value = match val.as_str() {
+                        "true" => Value::Bool(true),
+                        "false" => Value::Bool(false),
+                        other => Value::String(other.to_string()),
+                    };
+                    result.insert(key, value);
+                    i += 1; // consume the value
+                } else {
+                    result.insert(rest.to_string(), Value::Bool(true));
+                }
             }
         } else {
             positional.push(json!(arg));
         }
+        i += 1;
     }
     result.insert("_".to_string(), Value::Array(positional));
     result
@@ -336,10 +368,7 @@ mod tests {
 
     #[test]
     fn test_parse_global_flags_long_session_name_equals() {
-        let argv = vec![
-            "--session=mysession".to_string(),
-            "goto".to_string(),
-        ];
+        let argv = vec!["--session=mysession".to_string(), "goto".to_string()];
 
         let flags = parse_global_flags(&argv);
 
@@ -385,29 +414,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_global_flags_use_maven_startup() {
-        let argv = vec![
-            "--use-maven-startup".to_string(),
-            "open".to_string(),
-            "https://example.com".to_string(),
-        ];
-
-        let flags = parse_global_flags(&argv);
-
-        assert!(flags.use_maven_startup);
-        assert_eq!(flags.args, vec!["open", "https://example.com"]);
-    }
-
-    #[test]
-    fn test_parse_global_flags_use_maven_startup_defaults_false() {
-        let argv = vec!["open".to_string()];
-
-        let flags = parse_global_flags(&argv);
-
-        assert!(!flags.use_maven_startup);
-    }
-
-    #[test]
     fn test_parse_raw_args_positional() {
         let raw = vec!["goto".to_string(), "https://example.com".to_string()];
         let map = parse_raw_args(&raw);
@@ -432,6 +438,50 @@ mod tests {
         let raw = vec!["snapshot".to_string(), "--headed".to_string()];
         let map = parse_raw_args(&raw);
         assert_eq!(map.get("headed"), Some(&json!(true)));
+    }
+
+    #[test]
+    fn test_parse_raw_args_key_value_space() {
+        let raw = vec![
+            "install".to_string(),
+            "--tag".to_string(),
+            "4.10.0-rc.2".to_string(),
+        ];
+        let map = parse_raw_args(&raw);
+        // --tag value should be parsed as a key-value pair, not a boolean flag
+        // plus a positional argument.
+        assert_eq!(map.get("tag"), Some(&json!("4.10.0-rc.2")));
+        // The positional list should only contain the command name, not the
+        // tag value.
+        let pos = map["_"].as_array().unwrap();
+        assert_eq!(pos.len(), 1);
+        assert_eq!(pos[0].as_str(), Some("install"));
+    }
+
+    #[test]
+    fn test_parse_raw_args_key_value_equals() {
+        // --key=value should still work alongside --key value.
+        let raw = vec![
+            "install".to_string(),
+            "--tag=4.10.0-rc.2".to_string(),
+        ];
+        let map = parse_raw_args(&raw);
+        assert_eq!(map.get("tag"), Some(&json!("4.10.0-rc.2")));
+    }
+
+    #[test]
+    fn test_parse_raw_args_bool_flag_before_positional() {
+        // --force (boolean) followed by a positional arg should NOT consume
+        // the positional as the flag's value.
+        let raw = vec![
+            "install".to_string(),
+            "--force".to_string(),
+            "--tag".to_string(),
+            "4.10.0-rc.2".to_string(),
+        ];
+        let map = parse_raw_args(&raw);
+        assert_eq!(map.get("force"), Some(&json!(true)));
+        assert_eq!(map.get("tag"), Some(&json!("4.10.0-rc.2")));
     }
 
     #[test]

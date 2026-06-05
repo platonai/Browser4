@@ -12,7 +12,7 @@ import ai.platon.pulsar.agentic.inference.action.ContextToAction
 import ai.platon.pulsar.agentic.inference.detail.ActResultHelper
 import ai.platon.pulsar.agentic.inference.detail.PageStateTracker
 import ai.platon.pulsar.agentic.model.*
-import ai.platon.pulsar.agentic.tools.AgentToolExecutor
+import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.agentic.tools.specs.ToolSpecification
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.alwaysTrue
@@ -45,13 +45,13 @@ open class BasicBrowserAgent(
     protected val snapshotService get() = inference.snapshotService
     protected val promptBuilder = PromptBuilder()
 
-    private val lazyToolExecutor by lazy {
-        AgentToolExecutor(_baseDir, this)
+    private val lazyAgentToolManager by lazy {
+        AgentToolManager(_baseDir, this)
     }
 
-    /** The [AgentToolExecutor] used by this agent for tool discovery and execution. */
-    val toolExtractor: AgentToolExecutor get() = lazyToolExecutor
-    protected val fs get() = toolExtractor.fs
+    /** The [AgentToolManager] used by this agent for tool discovery and execution. */
+    val agentToolManager: AgentToolManager get() = lazyAgentToolManager
+    protected val fs get() = agentToolManager.fs
 
     val activeDriver get() = session.getOrCreateBoundDriver()
     val startTime get() = _startTime
@@ -189,13 +189,13 @@ open class BasicBrowserAgent(
                 ?: return ActResultHelper.failed(IllegalStateException("No action description to act"), instruction)
         val originalToolCall =
             element.toolCall ?: return ActResultHelper.failed(IllegalStateException("No tool call to act"), instruction)
-        val toolCall = toolExtractor.normalizeToolCall(originalToolCall)
+        val toolCall = agentToolManager.normalizeToolCall(originalToolCall)
         val method = toolCall.method
 
         logger.info("🛠️ tool.exec sid={} step={} tool={}", context.sid, context.step, toolCall.pseudoExpression)
 
         return try {
-            val result = toolExtractor.execute(toolCall)
+            val result = agentToolManager.execute(toolCall)
             // Discuss: should we sync browser state after tool call immediately? probably not.
             // stateManager.syncBrowserUseState(context)
 

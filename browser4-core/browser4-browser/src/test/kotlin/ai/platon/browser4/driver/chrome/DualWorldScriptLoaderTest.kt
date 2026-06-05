@@ -1,11 +1,11 @@
 package ai.platon.browser4.driver.chrome
 
-import ai.platon.browser4.driver.common.BrowserSettings
-import ai.platon.browser4.driver.common.DualWorldScriptLoader
-import org.junit.jupiter.api.Assertions.*
-import org.junit.jupiter.api.Test
+import ai.platon.pulsar.browser.common.BrowserSettings
+import ai.platon.pulsar.browser.detail.DualWorldScriptLoader
 import ai.platon.pulsar.common.config.ImmutableConfig
+import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.DisplayName
+import org.junit.jupiter.api.Test
 
 /**
  * Tests for the dual-world script injection mechanism.

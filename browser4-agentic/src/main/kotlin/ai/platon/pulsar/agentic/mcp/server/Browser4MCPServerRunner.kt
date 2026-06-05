@@ -37,7 +37,7 @@ import kotlinx.io.buffered
  *
  * ## Behaviour
  * 1. Creates an [ai.platon.pulsar.agentic.AgenticSession] and acquires a companion [BasicBrowserAgent].
- * 2. Wraps the agent's [ai.platon.pulsar.agentic.tools.AgentToolExecutor] in a [Browser4MCPServer],
+ * 2. Wraps the agent's [ai.platon.pulsar.agentic.tools.AgentToolManager] in a [Browser4MCPServer],
  *    which discovers and registers all tools from the manager.
  * 3. Creates a [StdioServerTransport] that reads JSON-RPC messages from stdin
  *    and writes responses to stdout.
@@ -56,7 +56,7 @@ fun runBrowser4MCPServer(args: Array<String> = emptyArray()) {
     val agent = session.companionAgent as BasicBrowserAgent
 
     try {
-        val mcpServer = Browser4MCPServer(toolManager = agent.toolExtractor)
+        val mcpServer = Browser4MCPServer(toolManager = agent.agentToolManager)
 
         val transport = StdioServerTransport(
             inputStream = System.`in`.asSource().buffered(),

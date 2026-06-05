@@ -14,7 +14,7 @@
     <parent>
         <groupId>ai.platon.pulsar</groupId>
         <artifactId>browser4</artifactId>
-        <version>4.9.2-SNAPSHOT</version>
+        <version>4.10.0-rc.3</version>
         <relativePath>../../pom.xml</relativePath>
     </parent>
 
@@ -25,13 +25,11 @@
         <!-- Internal Dependencies -->
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>browser4-browser</artifactId>
-            <version>${project.version}</version>
+            <artifactId>browser4-common</artifactId>
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
-            <artifactId>pulsar-llm</artifactId>
-            <version>${project.version}</version>
+            <artifactId>browser4-browser</artifactId>
         </dependency>
 
         <dependency>
@@ -54,6 +52,10 @@
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-h2</artifactId>
         </dependency>
+        <dependency>
+            <groupId>ai.platon.pulsar</groupId>
+            <artifactId>pulsar-llm</artifactId>
+        </dependency>
 
         <dependency>
             <groupId>dev.langchain4j</groupId>
@@ -70,6 +72,11 @@
         <dependency>
             <groupId>org.apache.commons</groupId>
             <artifactId>commons-collections4</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
         </dependency>
 
         <dependency>
@@ -159,5 +166,4 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
-
 </project>

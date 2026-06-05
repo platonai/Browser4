@@ -1,10 +1,12 @@
 package ai.platon.pulsar.agentic.skills
 
-import ai.platon.pulsar.agentic.context.DefaultClassPathXmlAgenticContext
+import ai.platon.pulsar.agentic.context.AgenticContext
+import ai.platon.pulsar.agentic.context.GenericAgenticContext
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.springframework.context.annotation.AnnotationConfigApplicationContext
 
 /**
  * Integration test for SkillBootstrap auto-loading in Spring context.
@@ -14,12 +16,12 @@ import org.junit.jupiter.api.Test
  */
 class SkillBootstrapIntegrationTest {
 
-    private lateinit var context: DefaultClassPathXmlAgenticContext
+    private lateinit var context: AgenticContext
 
     @BeforeEach
     fun setup() {
-        // Create the Spring context which should trigger SkillBootstrap initialization
-        context = DefaultClassPathXmlAgenticContext()
+        val cx = AnnotationConfigApplicationContext(SkillBootstrap::class.java)
+        context = GenericAgenticContext(cx, false)
     }
 
     @AfterEach

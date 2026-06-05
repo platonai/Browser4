@@ -42,7 +42,7 @@ class LoadComponentTests: TestBase() {
     lateinit var loadComponent: LoadComponent
 
     @BeforeEach
-    fun clearResources() {
+    suspend fun clearResources() {
         session.globalCache.resetCaches()
         session.context.taskLoops.restart()
 

@@ -1,7 +1,8 @@
 package ai.platon.pulsar.rest.api.service
 
-import ai.platon.pulsar.agentic.tools.high.crawl.ScrapeRequest
-import ai.platon.pulsar.boot.autoconfigure.test.PulsarTestContextInitializer
+import ai.platon.browser4.boot.autoconfigure.Browser4AutoConfiguration
+import ai.platon.browser4.boot.autoconfigure.test.PulsarTestContextInitializer
+import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.common.DateTimes
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.printlnPro
@@ -28,7 +29,7 @@ import kotlin.test.assertTrue
 
 @SpringBootTest
 @ContextConfiguration(initializers = [PulsarTestContextInitializer::class])
-@Import(MockEcServerConfiguration::class)
+@Import(MockEcServerConfiguration::class, Browser4AutoConfiguration::class)
 class ScrapeServiceTests : MockEcServerTestBase() {
 
     private val productListURL = "http://localhost:18080/ec/b?node=1292115012"
@@ -43,7 +44,7 @@ class ScrapeServiceTests : MockEcServerTestBase() {
 
     @BeforeEach
     @DisplayName("Ensure resources are prepared")
-    fun ensureResourcesArePrepared() {
+    suspend fun ensureResourcesArePrepared() {
         super.setup() // Call parent setup to verify mock server is running
         TestHelper.ensurePage(productListURL)
         TestHelper.ensurePage(productDetailURL)
