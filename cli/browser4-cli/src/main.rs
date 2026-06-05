@@ -693,7 +693,7 @@ async fn handle_open(
         .and_then(|u| u.as_str())
         .unwrap_or("about:blank");
     if should_navigate_after_open(url) {
-        let mut params = tool_params.clone();
+        let mut params = json!({ "url": url });
         params["sessionId"] = json!(session_id.clone());
         let navigate_result = call_tool(client, base_url, tool_name, params.clone()).await;
         match navigate_result {
