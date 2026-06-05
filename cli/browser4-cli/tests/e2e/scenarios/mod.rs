@@ -8,6 +8,38 @@ use super::*;
 
 pub(super) type ScenarioFn = fn(&mut E2ECtx);
 
+/// Test granularity level.  The default `cargo test --test e2e` run only
+/// executes `Basic` scenarios so the suite finishes faster.  Pass
+/// `--level=EXTENDED` (or `--level=all`) to include longer-running /
+/// edge-case tests.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub(super) enum ScenarioLevel {
+    Basic = 1,
+    Extended = 2,
+}
+
+impl ScenarioLevel {
+    pub(super) fn from_arg(value: &str) -> Result<ScenarioLevel, String> {
+        match value.trim().to_uppercase().as_str() {
+            "BASIC" | "1" => Ok(ScenarioLevel::Basic),
+            "EXTENDED" | "2" | "ALL" => Ok(ScenarioLevel::Extended),
+            _ => Err(format!(
+                "Unknown level '{}'. Valid values: BASIC, EXTENDED (or 1, 2, all)",
+                value
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for ScenarioLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ScenarioLevel::Basic => write!(f, "BASIC"),
+            ScenarioLevel::Extended => write!(f, "EXTENDED"),
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(super) struct ScenarioDef {
     pub(super) name: &'static str,
@@ -20,6 +52,9 @@ pub(super) struct ScenarioDef {
     /// group.  `None` means the scenario is not assigned to any group and is
     /// only run when no `--group` filter is active.
     pub(super) group: Option<&'static str>,
+    /// Test granularity level.  Default `Basic` runs are meant to be fast;
+    /// `Extended` scenarios cover edge cases and longer-running tests.
+    pub(super) level: ScenarioLevel,
 }
 
 impl ScenarioDef {
@@ -41,6 +76,11 @@ impl ScenarioDef {
     pub(super) fn in_group(self, group_name: &str) -> bool {
         self.group == Some(group_name)
     }
+
+    /// Returns true when this scenario's level is at or below `max_level`.
+    pub(super) fn at_or_below_level(self, max_level: ScenarioLevel) -> bool {
+        self.level <= max_level
+    }
 }
 
 pub(crate) const SCENARIOS: &[ScenarioDef] = &[
@@ -52,6 +92,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: browser::test_session_lifecycle,
         group: Some("open"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_newly_opened_session_shows_active",
@@ -61,6 +102,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: browser::test_newly_opened_session_shows_active,
         group: Some("open"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_open_recovery_after_browser_kill",
@@ -70,6 +112,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: browser::test_open_recovery_after_browser_kill,
         group: Some("open"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_navigation_and_storage",
@@ -79,6 +122,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: browser::test_navigation_and_storage,
         group: Some("navigation"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_storage_state_commands",
@@ -88,6 +132,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: browser::test_storage_state_commands,
         group: Some("storage"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_interaction_commands",
@@ -97,6 +142,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: browser::test_interaction_commands,
         group: Some("interaction"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_pointer_commands",
@@ -106,6 +152,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: browser::test_pointer_commands,
         group: Some("pointer"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_eval_command",
@@ -115,6 +162,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: browser::test_eval_command,
         group: Some("eval"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_eval_return_types",
@@ -124,6 +172,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: browser::test_eval_return_types,
         group: Some("eval"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_eval_css_selector_scoping",
@@ -133,6 +182,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: browser::test_eval_css_selector_scoping,
         group: Some("eval"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_agent_run_live_or_missing_llm_key",
@@ -142,6 +192,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: agent::test_agent_run_live_or_missing_llm_key,
         group: Some("agent"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_swarm_submission_commands_live",
@@ -151,6 +202,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: swarm::test_swarm_submission_commands_live,
         group: Some("swarm"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_wait_for_state_failure_modes",
@@ -160,6 +212,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: browser::test_wait_for_state_failure_modes,
         group: Some("interaction"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_form_controls_and_exports",
@@ -169,6 +222,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: browser::test_form_controls_and_exports,
         group: Some("form"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_mouse_and_dialog",
@@ -178,6 +232,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: browser::test_mouse_and_dialog,
         group: Some("mouse"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_mousewheel",
@@ -187,6 +242,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: browser::test_mousewheel,
         group: Some("mouse"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_tab_commands",
@@ -196,6 +252,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: browser::test_tab_commands,
         group: Some("tab"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_batch_commands",
@@ -205,6 +262,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: batch::test_batch_commands,
         group: Some("batch"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_batch_form_submission",
@@ -214,6 +272,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: batch::test_batch_form_submission,
         group: Some("batch"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_batch_form_submission_from_json_file",
@@ -223,6 +282,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: batch::test_batch_form_submission_from_json_file,
         group: Some("batch"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_batch_multi_interaction",
@@ -232,6 +292,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: batch::test_batch_multi_interaction,
         group: Some("batch"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_batch_error_handling",
@@ -241,6 +302,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: batch::test_batch_error_handling,
         group: Some("batch"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_batch_json_edge_cases",
@@ -250,6 +312,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: batch::test_batch_json_edge_cases,
         group: Some("batch"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_swarm_session_and_agent_tools",
@@ -259,6 +322,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_swarm_session_and_agent_tools,
         group: Some("swarm"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_open_uses_temporary_profile_mode",
@@ -268,6 +332,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_open_uses_temporary_profile_mode,
         group: Some("open"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_open_with_url_prints_page_state",
@@ -277,6 +342,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_open_with_url_prints_page_state,
         group: Some("open"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_open_reuses_existing_active_session",
@@ -286,6 +352,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_open_reuses_existing_active_session,
         group: Some("open"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_named_session_reuses_opened_session",
@@ -295,6 +362,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_named_session_reuses_opened_session,
         group: Some("open"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_open_refreshes_inactive_saved_session",
@@ -304,6 +372,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_open_refreshes_inactive_saved_session,
         group: Some("open"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_open_reopens_saved_session_after_human_closed_tab",
@@ -313,6 +382,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_open_reopens_saved_session_after_human_closed_tab,
         group: Some("open"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_open_navigation_failure_uses_structured_message",
@@ -322,6 +392,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_open_navigation_failure_uses_structured_message,
         group: Some("open"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_goto_opens_session_when_missing_or_inactive",
@@ -331,6 +402,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_goto_opens_session_when_missing_or_inactive,
         group: Some("open"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_batch_reduces_transport_round_trips",
@@ -340,6 +412,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_batch_reduces_transport_round_trips,
         group: Some("batch"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_mock_eval_command",
@@ -349,6 +422,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_eval_command,
         group: Some("eval"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_mock_eval_css_selector_passthrough",
@@ -358,6 +432,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_eval_css_selector_passthrough,
         group: Some("eval"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_mock_eval_complex_expression",
@@ -367,6 +442,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_eval_complex_expression_falls_to_default,
         group: Some("eval"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_mock_eval_standalone_batch",
@@ -376,6 +452,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_eval_in_standalone_batch,
         group: Some("eval"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_mock_press_command_uses_direct_tool_dispatch",
@@ -385,6 +462,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_press_command_uses_direct_tool_dispatch,
         group: Some("interaction"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_agent_task_commands",
@@ -394,6 +472,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_agent_task_commands,
         group: Some("agent"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_agent_run_missing_llm_key",
@@ -403,6 +482,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_agent_run_missing_llm_key,
         group: Some("agent"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_prefixed_flat_forms_are_rejected",
@@ -412,6 +492,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_prefixed_flat_forms_are_rejected,
         group: Some("form"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_swarm_submission_commands",
@@ -421,6 +502,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_swarm_submission_commands,
         group: Some("swarm"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_swarm_command_help_and_validation",
@@ -430,6 +512,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_swarm_command_help_and_validation,
         group: Some("swarm"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_close_active_session",
@@ -439,6 +522,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_close_active_session,
         group: Some("close"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_close_no_active_session",
@@ -448,6 +532,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_close_no_active_session,
         group: Some("close"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_close_ignores_backend_close_failure",
@@ -457,6 +542,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_close_ignores_backend_close_failure,
         group: Some("close"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_close_named_session",
@@ -466,6 +552,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_close_named_session,
         group: Some("open"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_close_all_single_server",
@@ -475,6 +562,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_close_all_single_server,
         group: Some("close"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_close_all_no_active_sessions",
@@ -484,6 +572,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_close_all_no_active_sessions,
         group: Some("close"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_close_all_server_unreachable",
@@ -493,6 +582,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_close_all_server_unreachable,
         group: Some("close"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_close_all_preserves_managed_process_registry",
@@ -502,6 +592,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_close_all_preserves_managed_process_registry,
         group: Some("close"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_list_active_session",
@@ -511,6 +602,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_list_active_session,
         group: Some("list"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_list_stale_session",
@@ -520,6 +612,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_list_stale_session,
         group: Some("list"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_list_backend_unreachable",
@@ -529,6 +622,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_list_backend_unreachable,
         group: Some("list"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_list_no_sessions",
@@ -538,6 +632,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_list_no_sessions,
         group: Some("list"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_list_multiple_named_sessions",
@@ -547,6 +642,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_list_multiple_named_sessions,
         group: Some("open"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_status_server_up",
@@ -556,6 +652,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_status_server_up,
         group: Some("status"),
+        level: ScenarioLevel::Basic,
     },
     ScenarioDef {
         name: "test_e2e_status_server_down",
@@ -565,6 +662,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_status_server_down,
         group: Some("status"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_status_server_unreachable",
@@ -574,6 +672,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_status_server_unreachable,
         group: Some("status"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_status_installed_runtime",
@@ -583,6 +682,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_status_installed_runtime,
         group: Some("install"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_status_no_installed_runtime",
@@ -592,6 +692,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_status_no_installed_runtime,
         group: Some("install"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_stop_no_running_server",
@@ -601,6 +702,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_stop_no_running_server,
         group: Some("stop"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_stop_clears_state",
@@ -610,6 +712,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_stop_clears_state,
         group: Some("stop"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_kill_all_no_running_processes",
@@ -619,6 +722,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_kill_all_no_running_processes,
         group: Some("stop"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_kill_all_clears_state_and_registry",
@@ -628,6 +732,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_kill_all_clears_state_and_registry,
         group: Some("stop"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_close_twice_idempotent",
@@ -637,6 +742,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_close_twice_idempotent,
         group: Some("close"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_state_isolation_named_vs_default",
@@ -646,6 +752,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_state_isolation_named_vs_default,
         group: Some("open"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_corrupted_state_file_treated_as_missing",
@@ -655,6 +762,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_corrupted_state_file_treated_as_missing,
         group: Some("open"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_install_downloads_and_installs",
@@ -664,6 +772,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_install_downloads_and_installs,
         group: Some("install"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_install_skips_when_already_installed",
@@ -673,6 +782,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_install_skips_when_already_installed,
         group: Some("install"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_install_force_re_downloads",
@@ -682,6 +792,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_install_force_re_downloads,
         group: Some("install"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_install_specific_tag",
@@ -691,6 +802,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_install_specific_tag,
         group: Some("install"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_upgrade_already_latest",
@@ -700,6 +812,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_upgrade_already_latest,
         group: Some("install"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_upgrade_to_new_version",
@@ -709,6 +822,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_upgrade_to_new_version,
         group: Some("install"),
+        level: ScenarioLevel::Extended,
     },
     ScenarioDef {
         name: "test_e2e_install_download_failure",
@@ -718,6 +832,7 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         test_count: 1,
         test_fn: mock_server::test_install_download_failure,
         group: Some("install"),
+        level: ScenarioLevel::Extended,
     },
 ];
 

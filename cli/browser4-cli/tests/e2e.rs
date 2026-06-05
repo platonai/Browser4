@@ -3382,7 +3382,43 @@ struct RunOptions {
     /// When non-empty, only scenarios matching at least one of these group
     /// names are selected.  An empty Vec means no group filter is applied.
     groups: Vec<String>,
+    /// Maximum scenario level to run.  Defaults to `Basic` so the suite
+    /// finishes faster.  Pass `--level=EXTENDED` (or `--level=all`) to
+    /// include longer-running / edge-case tests.
+    max_level: scenarios::ScenarioLevel,
 }
+
+const HELP_TEXT: &str = r#"browser4-cli e2e test runner
+
+Usage: cargo test --test e2e -- [OPTIONS]
+
+Options:
+  --help                       Print this help message
+  --list                       List all scenario names (dry run)
+  --list-groups                List available groups with scenario counts
+  --group=<name>               Run only scenarios in the specified group
+                               (repeatable; e.g. --group=open --group=eval)
+  --scenario=<name|pattern>    Run only scenarios matching this name or
+                               glob pattern (* and ? wildcards)
+  --scenario-from=<name>       Run scenarios starting from the named one
+  --scenario-limit=<count>     Run at most <count> selected scenarios
+  --failed                     Rerun scenarios that failed in the previous run
+  --fail-fast                  Stop after the first failure
+  --batch-only                 Run only batch-command scenarios
+  --enable-batch-scenario      Include batch-command scenarios in the run
+  --enable-install-scenario    Include install/upgrade scenarios
+  --level=<BASIC|EXTENDED|all> Max scenario level to run (default: BASIC).
+                               Use EXTENDED or all to include edge-case and
+                               longer-running tests.
+
+Environment variables:
+  BROWSER4_E2E_SERVICE_URL     Connect to an already-running Browser4 service
+  BROWSER4_E2E_SERVER_URL      Alias for BROWSER4_E2E_SERVICE_URL
+  BROWSER4_E2E_FIXTURE_HOST    Host the Browser4 container uses to reach the
+                               fixture HTTP server (default: 127.0.0.1)
+  BROWSER4_E2E_CLI_TIMEOUT_SECS Override per-command timeout in seconds
+  BROWSER4_E2E_USE_MAVEN_STARTUP Set to 1/true/yes/on for Maven startup
+"#;
 
 fn parse_scenario_limit(raw: &str) -> usize {
     let normalized = raw.trim();
@@ -3437,8 +3473,28 @@ fn parse_run_options() -> RunOptions {
     let mut enable_batch_scenario = false;
     let mut enable_install_scenario = false;
     let mut groups: Vec<String> = Vec::new();
+    let mut max_level = scenarios::ScenarioLevel::Basic;
 
     while let Some(arg) = args.next() {
+        if arg == "--help" || arg == "-h" {
+            print!("{HELP_TEXT}");
+            std::process::exit(0);
+        }
+
+        if let Some(value) = arg.strip_prefix("--level=") {
+            max_level = scenarios::ScenarioLevel::from_arg(value).unwrap_or_else(|error| {
+                panic!("{error}");
+            });
+            continue;
+        }
+        if arg == "--level" {
+            let value = parse_named_flag_value(&mut args, "--level");
+            max_level = scenarios::ScenarioLevel::from_arg(&value).unwrap_or_else(|error| {
+                panic!("{error}");
+            });
+            continue;
+        }
+
         if let Some(value) = arg.strip_prefix("--scenario=") {
             scenario = Some(value.to_string());
             continue;
@@ -3539,6 +3595,11 @@ fn parse_run_options() -> RunOptions {
         _ => unreachable!("unexpected scenario filter argument combination"),
     };
 
+    println!(
+        "[e2e] max scenario level: {}",
+        max_level
+    );
+
     RunOptions {
         scenario_filter,
         scenario_limit,
@@ -3550,6 +3611,7 @@ fn parse_run_options() -> RunOptions {
         enable_batch_scenario,
         enable_install_scenario,
         groups,
+        max_level,
     }
 }
 
@@ -3835,6 +3897,22 @@ fn main() {
             "No scenarios match the requested group(s) '{}'. Use --list-groups to see available groups.",
             run_options.groups.join(",")
         );
+    }
+
+    // --level filtering: by default only scenarios at or below Basic level
+    // are run.  Pass --level=EXTENDED to include edge-case / longer-running
+    // tests.
+    {
+        let before = selected_scenarios.len();
+        let max_level = run_options.max_level;
+        selected_scenarios.retain(|scenario| scenario.at_or_below_level(max_level));
+        let filtered_out = before.saturating_sub(selected_scenarios.len());
+        if filtered_out > 0 {
+            println!(
+                "level filter (--level={}): excluded {} scenario(s) above {} level",
+                max_level, filtered_out, max_level
+            );
+        }
     }
 
     let run_coverage = !has_explicit_scenario_filter && run_options.groups.is_empty() && !run_options.batch_only;
