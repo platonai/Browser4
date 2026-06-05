@@ -58,8 +58,8 @@ function Print-Usage {
     Write-Host "  test.ps1 -DryRun it -pl browser4-core  # Show the Maven command with extra args"
     Write-Host "  test.ps1 it                         # Run integration tests"
     Write-Host "  test.ps1 e2e                        # Run end-to-end tests"
-    Write-Host "  test.ps1 cli                        # Run Browser4 CLI tests"
-    Write-Host "  test.ps1 cli -- --nocapture         # Pass extra cargo test args"
+    Write-Host "  test.ps1 cli                        # Show CLI test help (cargo test --test e2e -- --help)"
+    Write-Host "  test.ps1 cli -- --nocapture         # Run CLI tests with extra cargo test args"
     Write-Host "  test.ps1 mock-site -Dmock.site.port=18080"
     Write-Host "  test.ps1 skills                     # Run skills-focused agentic tests"
     Write-Host "  test.ps1 mcp                        # Run MCP-focused agentic tests"
@@ -210,7 +210,7 @@ function Invoke-Browser4CliTests([string[]]$additionalArgs) {
         }
 
         if ($script:Show) {
-            $cargoArgs = @('test') + $additionalArgs
+            $cargoArgs = @('test', '--test', 'e2e') + $additionalArgs
             Write-Host ""
             Write-Host "=========================================="
             Write-Host "[SHOW] Would execute in ${browser4CliDir}:"
@@ -220,9 +220,11 @@ function Invoke-Browser4CliTests([string[]]$additionalArgs) {
         }
 
         if ($script:DryRun) {
-            $cargoArgs = @('test', '--no-run') + $additionalArgs
+            $cargoArgs = @('test', '--test', 'e2e', '--no-run') + $additionalArgs
+        } elseif ($additionalArgs.Count -eq 0) {
+            $cargoArgs = @('test', '--test', 'e2e', '--', '--help')
         } else {
-            $cargoArgs = @('test') + $additionalArgs
+            $cargoArgs = @('test', '--test', 'e2e') + $additionalArgs
         }
 
         if ($script:DryRun) {
