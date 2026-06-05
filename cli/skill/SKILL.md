@@ -8,8 +8,8 @@ allowed-tools: Bash(browser4-cli:*)
 
 Browser automation CLI for AI agents.
 
-- Chrome/Chromium via CDP with accessibility-tree snapshots, playwright CLI compatible commands
-- Build-in agent loop for autonomous agents with tool use and reasoning capabilities
+- Chrome/Chromium via CDP with accessibility-tree snapshots, Playwright CLI compatible commands
+- Built-in agent loop for autonomous agents with tool use and reasoning capabilities
 - Data extraction and summarization tools for processing web content
 
 Install: `npm i -g browser4-cli`
@@ -37,12 +37,12 @@ browser4-cli screenshot
 browser4-cli close
 ```
 
+`browser4-cli open` reuses the saved session for the current slot only when the backend still reports it
+as active. If the saved session is stale or missing, `open` refreshes it by creating a new session.
+
 `browser4-cli goto` first tries to reuse the current active session. If no active session is available,
 or the saved session is no longer active, it automatically starts or refreshes the session before
 navigating.
-
-`browser4-cli open` reuses the saved session for the current slot only when the backend still reports it
-as active. If the saved session is stale or missing, `open` refreshes it by creating a new session.
 
 When `browser4-cli install` has been run, `browser4-cli open` uses the bundled `jlink` JRE and
 installed `Browser4.jar` from the CLI state directory instead of requiring a separately installed Java runtime.
@@ -84,7 +84,7 @@ browser4-cli go-forward
 browser4-cli reload
 ```
 
-Before calling `goto`, make sure you have already created or refreshed the session with `browser4-cli open`.
+`goto` automatically reuses the current active session when possible, and auto-opens a fresh session when the saved session is missing or stale. If the backend had been stopped, `goto` starts or reconnects through the current slot before navigating.
 
 ### Keyboard
 
@@ -106,7 +106,7 @@ browser4-cli mouseup right
 browser4-cli mousewheel 0 100
 ```
 
-### Save as
+### Screenshots
 
 ```bash
 browser4-cli screenshot
@@ -151,6 +151,8 @@ browser4-cli sessionstorage-delete step
 browser4-cli sessionstorage-clear
 ```
 
+### Notes
+
 `state-save` writes a JSON file containing cookies plus the active origin's `localStorage`.
 `state-load` restores that JSON into the current session and auto-opens a session first when needed.
 `cookie-list` and `cookie-get` read from the current session's cookie jar.
@@ -158,14 +160,27 @@ browser4-cli sessionstorage-clear
 The `localstorage-*` and `sessionstorage-*` commands operate on the active page origin in the current session.
 
 ## Open parameters
+
 ```bash
-# Start with profile mode
-browser4-cli open
+# Open with a URL (defaults to headed mode)
 browser4-cli open https://browser4.io
+
+# Force headed mode (visible browser window)
+browser4-cli open --headed https://browser4.io
+
+# Force headless mode (no visible window)
+browser4-cli open --headless https://browser4.io
+
+# Open a named session
+browser4-cli -s=mysession open https://browser4.io
 
 # Close the browser
 browser4-cli close
 ```
+
+- `--headed` forces a visible browser window (useful for debugging or when screenshots need rendering).
+- `--headless` forces headless mode (no visible window). If both are passed, `--headless` takes priority.
+- Use `-s=<name>` to target a named session instead of the default slot.
 
 ## Snapshots
 
@@ -214,6 +229,22 @@ browser4-cli help summarize
 browser4-cli help agent run
 browser4-cli help swarm create
 ```
+
+## Agent and Swarm CLI
+
+Browser4 CLI offers two high-level interfaces for complex, multi-step browser tasks beyond the standard single-action commands:
+
+**Agent CLI** (`agent <subcommand>`) — Submit a natural-language task and let Browser4's backend AI agent plan and execute it autonomously. The agent reasons about the page, decides which actions to take, and completes the task asynchronously. Best for exploratory tasks, multi-step workflows where you don't know the exact page structure ahead of time, or delegating an entire goal to the backend.
+
+**Swarm CLI** (`swarm <subcommand>`) — Orchestrate parallel scraping and structured data extraction across multiple browser contexts. Designed for high-throughput jobs like refreshing a curated URL list, supervised fan-out browsing, or repeatable selector-based scraping with explicit output artifacts. Supports X-SQL for structured queries against loaded webpages.
+
+| Interface | Model | Use when |
+|---|---|---|
+| Standard commands | Single action per invocation | You know the exact refs/selectors and want precise control |
+| Agent CLI | Natural-language task → autonomous execution | You have a goal but don't know the page structure; multi-step exploration |
+| Swarm CLI | Parallel contexts + X-SQL queries | High-throughput scraping, structured extraction across many pages |
+
+See the sections below for detailed usage of each.
 
 ## Agent task commands
 
@@ -384,9 +415,23 @@ npm install -g browser4-cli
 
 # optional but recommended for standalone backend startup
 browser4-cli install
+
+# install a specific version
+browser4-cli install --tag=v4.9.3
+
+# force reinstall even if already installed
+browser4-cli install --tag=4.9.3 --force
 ```
 
 After installation, use `browser4-cli`.
+
+## Error handling
+
+- Commands that require a connection to the Browser4 backend (such as `open`, `goto`, `snapshot`, `click`) will fail with a non-zero exit code if the backend is unreachable. Check that the backend is running with `browser4-cli list`.
+- `eval` returns a non-zero exit code when the JavaScript expression throws or cannot be evaluated.
+- `snapshot` returns a non-zero exit code when the page is not ready or the accessibility tree cannot be captured.
+- `agent run` performs a short status probe after submission — missing LLM/API key configuration errors fail fast with a clear message rather than silently queuing a doomed task.
+- When a session goes stale (browser closed externally or backend restarted), `open` and `goto` automatically refresh it. Running commands against a stale session before refreshing will fail — prefer letting `goto` auto-open rather than manually managing session state.
 
 ## Example: Form submission
 
