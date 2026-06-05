@@ -23,7 +23,7 @@
     <name>Pulsar All-in-one</name>
 
     <build>
-        <defaultGoal>deploy</defaultGoal>
+        <defaultGoal>verify</defaultGoal>
         <plugins>
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
