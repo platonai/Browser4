@@ -17,7 +17,8 @@
       "Bash(xargs grep -l \"upgrade\")",
       "Bash(grep -v \"fn \\\\|let \\\\|\\\\.state_dir\\\\|//\\\\|use \")",
       "Bash(grep -v \"^.*//\")",
-      "Bash(git commit -m 'refactor\\(cli\\): separate runtime install from CLI state, add versioned layout *)"
+      "Bash(git commit -m 'refactor\\(cli\\): separate runtime install from CLI state, add versioned layout *)",
+      "Bash(git commit *)"
     ]
   }
 }
