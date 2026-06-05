@@ -780,16 +780,12 @@ async fn handle_goto(
         Err(err) => {
             if !should_retry_open_after_navigation_error(&err, reused_existing_session) {
                 let should_suggest_refresh = should_retry_open_after_navigation_error(&err, true);
-                cli_println!(
-                    "{}",
-                    format_navigation_failure_message(
-                        target_url,
-                        &session_id,
-                        &err,
-                        should_suggest_refresh,
-                    )
-                );
-                return Ok(());
+                return Err(format_navigation_failure_message(
+                    target_url,
+                    &session_id,
+                    &err,
+                    should_suggest_refresh,
+                ));
             }
 
             let _ = call_tool(
@@ -816,15 +812,12 @@ async fn handle_goto(
                 Err(retry_err) => {
                     let should_suggest_refresh =
                         should_retry_open_after_navigation_error(&retry_err, true);
-                    cli_println!(
-                        "{}",
-                        format_navigation_failure_message(
-                            target_url,
-                            &retry_id,
-                            &retry_err,
-                            should_suggest_refresh,
-                        )
-                    );
+                    return Err(format_navigation_failure_message(
+                        target_url,
+                        &retry_id,
+                        &retry_err,
+                        should_suggest_refresh,
+                    ));
                 }
             }
         }
@@ -3738,36 +3731,14 @@ async fn run(
     // Dispatch the command
     match command {
         "open" => {
-            // When called without a URL, do not launch a browser.
-            if parsed.get("url").is_none() {
-                let state = read_state(None, global.session_name.as_deref());
-                match find_reusable_persisted_session_id(
-                    &client,
-                    &base_url,
-                    &state,
-                    global.session_name.as_deref(),
-                )
-                .await
-                {
-                    Ok(Some(existing_id)) => {
-                        json_field("session_id", json!(&existing_id));
-                        json_field("reused", json!(true));
-                        cli_println!("Session already open: {}", existing_id);
-                    }
-                    _ => {
-                        cli_println!("No URL provided. Try: browser4-cli open <url>");
-                    }
-                }
-            } else {
-                handle_open(
-                    &client,
-                    &base_url,
-                    &tool_name,
-                    &tool_params,
-                    global.session_name.as_deref(),
-                )
-                .await?;
-            }
+            handle_open(
+                &client,
+                &base_url,
+                &tool_name,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
         }
         "goto" => {
             handle_goto(
