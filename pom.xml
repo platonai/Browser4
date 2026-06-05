@@ -97,18 +97,11 @@
 
     <profiles>
 
+        <!-- Add additional main modules to the default reactor -->
         <profile>
-            <id>all-modules</id>
+            <id>all-main-modules</id>
             <modules>
-                <module>browser4-dependencies</module>
-                <module>browser4-core</module>
-                <module>browser4-agentic</module>
-                <module>browser4-agent-tools</module>
-                <module>browser4-rest</module>
-
                 <module>browser4-apps</module>
-
-                <module>examples</module>
             </modules>
         </profile>
 
@@ -123,7 +116,7 @@
         </profile>
 
         <!-- Targeted profiles that add only one browser4-apps submodule to the
-             default reactor.  Use these instead of -Pall-modules when you need
+             default reactor.  Use these instead of -Pall-main-modules when you need
              exactly one app JAR without building the sibling module. -->
 
         <profile>

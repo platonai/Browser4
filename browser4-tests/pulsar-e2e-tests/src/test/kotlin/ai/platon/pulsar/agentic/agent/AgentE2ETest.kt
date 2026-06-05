@@ -52,12 +52,12 @@ import java.util.jar.JarFile
  *
  * By default, E2ETest tagged tests are excluded from normal test runs. To run them:
  * ```bash
- * ./mvnw test -P all-modules -pl :pulsar-e2e-tests -am -Dtest=AgentE2ETest
+ * ./mvnw test -P all-main-modules -pl :pulsar-e2e-tests -am -Dtest=AgentE2ETest
  * ```
  *
  * Or run all E2E tests:
  * ```bash
- * ./mvnw test -P all-modules -Dgroups=E2ETest -Dsurefire.excludedGroups="" -DfailIfNoTests=false
+ * ./mvnw test -P all-main-modules -Dgroups=E2ETest -Dsurefire.excludedGroups="" -DfailIfNoTests=false
  * ```
  */
 @Tag("E2ETest")

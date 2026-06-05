@@ -67,7 +67,7 @@ jobs:
         with:
           skip_tests: ${{ inputs.skip_tests || 'true' }}
           timeout_minutes: '15'
-          maven_profiles: 'all-modules'
+          maven_profiles: 'all-main-modules'
 
       - name: Setup Rust Toolchain
         id: rust-setup
@@ -140,7 +140,7 @@ jobs:
         if: inputs.skip_tests != true
         uses: ./.github/actions/run-tests
         with:
-          maven_profiles: 'all-modules'
+          maven_profiles: 'all-main-modules'
           # CI Pipeline: Run only Fast unit tests (same as PR tests)
           # Comprehensive tests (Slow + Integration) run in nightly.yml
           # Exclude: Slow, Heavy, Integration, E2E, SDK, and all environment-dependent tests

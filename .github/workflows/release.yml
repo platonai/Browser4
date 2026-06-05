@@ -307,7 +307,7 @@ jobs:
         id: maven-build
         uses: ./.github/actions/maven-build
         with:
-          maven_profiles: 'all-modules,asset-standalone'
+          maven_profiles: 'all-main-modules,asset-standalone'
           skip_tests: 'true'
           parallel_builds: 'true'
           timeout_minutes: '20'

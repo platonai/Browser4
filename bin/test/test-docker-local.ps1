@@ -5,7 +5,7 @@
     release.yml "build-core-and-docker" job behaviour as closely as possible.
 
 .DESCRIPTION
-    1. Maven build (all-modules + asset-standalone)
+    1. Maven build (all-main-modules + asset-standalone)
     2. docker build (Dockerfile) with the same args as CI
     3. docker run with health check
     4. Inspect the JAR inside the container to verify the main class is present
@@ -43,11 +43,11 @@ $ContainerName = "browser4-test-local"
 # -------------------------------------------------------------------
 if (-not $SkipMavenBuild) {
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
-    Write-Host "  [1/5] Maven Build (all-modules,asset-standalone)" -ForegroundColor Cyan
+    Write-Host "  [1/5] Maven Build (all-main-modules,asset-standalone)" -ForegroundColor Cyan
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
 
     $mvnCmd = if ($IsWindows) { '.\mvnw.cmd' } else { './mvnw' }
-    $mvnArgs = @('package', '-Pall-modules,asset-standalone', '-DskipTests', '-Dmaven.javadoc.skip=true', '-B', '-V')
+    $mvnArgs = @('package', '-Pall-main-modules,asset-standalone', '-DskipTests', '-Dmaven.javadoc.skip=true', '-B', '-V')
     & $mvnCmd @mvnArgs
     if ($LASTEXITCODE -ne 0) { throw "Maven build failed" }
     Write-Host "`n✅ Maven build complete`n" -ForegroundColor Green
