@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-EXE_PATH="$SCRIPT_DIR/target/release/browser4-cli"
+EXE_PATH="$SCRIPT_DIR/cli/browser4-cli/target/release/browser4-cli"
 
 if [[ ! -x "$EXE_PATH" ]]; then
     echo "[browser4-cli.sh] ERROR: executable not found: \"$EXE_PATH\""

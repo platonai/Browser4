@@ -2,7 +2,7 @@
 setlocal EnableExtensions
 
 set "SCRIPT_DIR=%~dp0"
-set "EXE_PATH=%SCRIPT_DIR%target\release\browser4-cli.exe"
+set "EXE_PATH=%SCRIPT_DIR%\cli\browser4-cli\target\release\browser4-cli.exe"
 
 if not exist "%EXE_PATH%" (
 	echo [browser4-cli.cmd] ERROR: executable not found: "%EXE_PATH%"
