@@ -392,15 +392,20 @@ set "MAIN_CLASS=$mainClass"
 # Resolve Maven command and repo root early — both the JAR auto-build and
 # dependency:copy-dependencies need them.
 $repoRoot = git rev-parse --show-toplevel
+Set-Location $repoRoot
+
 $mvnCmd = if (Get-IsWindows) { Join-Path $repoRoot 'mvnw.cmd' } else { Join-Path $repoRoot 'mvnw' }
 $bundleModule = 'browser4-apps/browser4-bundle'
 
-# Install core modules to ~/.m2 so dependency:copy-dependencies can resolve
-# internal reactor artifacts (browser4-resources, browser4-skeleton, etc.)
-# that are not published to Maven Central.  This is idempotent — on the
-# second run Maven only touches unchanged files.
+# Install browser4-bundle and its transitive reactor dependencies to ~/.m2
+# so dependency:copy-dependencies can resolve internal reactor artifacts
+# (browser4-resources, browser4-skeleton, browser4-protocol, etc.) that are
+# not published to Maven Central.  Using -pl ... -am targets only the subset
+# of modules the bundle actually needs, avoiding failures in unrelated modules.
+# This is idempotent — on the second run Maven only touches unchanged files.
 Write-Host "Ensuring core modules are installed to ~/.m2 ..."
-$coreArgs = @('install', '-DskipTests', '-Dmaven.javadoc.skip=true', '-q')
+$coreArgs = @('install', '-Passet-bundle', '-pl', 'browser4-apps/browser4-bundle', '-am', '-DskipTests', '-Dmaven.javadoc.skip=true', '-q')
+# mvnw has to been invoked from the repo root for the -pl argument to work correctly, so we Set-Location above.
 & $mvnCmd @coreArgs
 if ($LASTEXITCODE -ne 0) { throw "Core modules install failed with exit code $LASTEXITCODE" }
 
