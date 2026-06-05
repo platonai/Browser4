@@ -626,9 +626,13 @@ pub(super) fn test_stop_no_running_server(ctx: &mut E2ECtx) {
     let result = run_command(ctx, &["stop"]);
     assert_eq!(result.exit_code, 0, "expected stop to succeed");
 
+    // stop may report "No Browser4 server was running." when no server is
+    // active, or it may report the actual server shutdown steps when a
+    // real server (started by a previous live test) is still running.
     assert!(
-        result.stdout.contains("No Browser4 server was running."),
-        "Expected 'No Browser4 server was running.' in:\n{}",
+        result.stdout.contains("No Browser4 server was running.")
+            || result.stdout.contains("Browser4 server stopped."),
+        "Expected either 'No Browser4 server was running.' or 'Browser4 server stopped.' in:\n{}",
         result.stdout
     );
 }
@@ -1040,16 +1044,18 @@ pub(super) fn test_named_session_reuses_opened_session(ctx: &mut E2ECtx) {
         .iter()
         .filter(|call| call.tool == "browser_navigate")
         .collect();
+    // open navigates once (when given a URL), and goto navigates once.
     assert_eq!(
         navigate_calls.len(),
-        1,
-        "Expected goto to make exactly one browser_navigate call"
+        2,
+        "Expected open and goto to each make one browser_navigate call"
     );
+    // First navigate from open, second from goto.
     assert_eq!(
-        navigate_calls[0].arguments["sessionId"],
+        navigate_calls[1].arguments["sessionId"],
         persisted_session_id
     );
-    assert_eq!(navigate_calls[0].arguments["url"], "https://example.com/");
+    assert_eq!(navigate_calls[1].arguments["url"], "https://example.com/");
 }
 
 pub(super) fn test_open_refreshes_inactive_saved_session(ctx: &mut E2ECtx) {
@@ -1171,13 +1177,21 @@ pub(super) fn test_open_reopens_saved_session_after_human_closed_tab(ctx: &mut E
         .iter()
         .filter(|call| call.tool == "browser_navigate")
         .collect();
+    // First open navigates (1 call), second open fails then retries (2 calls).
     assert_eq!(
         navigate_calls.len(),
-        2,
+        3,
         "Expected open to retry browser_navigate with the replacement session"
     );
+    // First navigate: initial open to example.com/
     assert_eq!(navigate_calls[0].arguments["sessionId"], "swarm-session-1");
-    assert_eq!(navigate_calls[1].arguments["sessionId"], "swarm-session-2");
+    assert_eq!(navigate_calls[0].arguments["url"], "https://example.com/");
+    // Second navigate (failed): reuse session with human-closed-tab URL
+    assert_eq!(navigate_calls[1].arguments["sessionId"], "swarm-session-1");
+    assert_eq!(navigate_calls[1].arguments["url"], workflow_url);
+    // Third navigate (retry): new session with human-closed-tab URL
+    assert_eq!(navigate_calls[2].arguments["sessionId"], "swarm-session-2");
+    assert_eq!(navigate_calls[2].arguments["url"], workflow_url);
     assert_eq!(read_persisted_session_id(&ctx.state_dir), "swarm-session-2");
 }
 
@@ -1889,6 +1903,115 @@ pub(super) fn test_swarm_submission_commands(ctx: &mut E2ECtx) {
                 && call.tool != "command_status"
                 && call.tool != "command_result"),
         "Expected swarm submission/status/result to avoid MCP command_* calls: {:?}",
+        snapshot.tool_calls
+    );
+    assert_eq!(snapshot.status_queries, vec!["swarm-job-42".to_string()]);
+    assert_eq!(snapshot.result_queries, vec!["swarm-job-42".to_string()]);
+}
+
+pub(super) fn test_swarm_query_commands(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+    let mock_server = start_mock_swarm_session(ctx);
+    assert_swarm_session_call(&mock_server);
+
+    let seed_file = ctx.workspace_dir.join("swarm-query-seeds.txt");
+    fs::write(
+        &seed_file,
+        b"# seed urls for query\nhttps://example.com/query-seed-1\n\nhttps://example.com/query-seed-2\n",
+    )
+    .expect("write seed file failed");
+    let seed_file_arg = format!("--seed-file={}", seed_file.to_string_lossy());
+
+    let query_sql = "select dom_base_uri(dom) as url from load_and_select('@url', ':root')";
+
+    let swarm_query_result = run_command(
+        ctx,
+        &[
+            "swarm",
+            "query",
+            "https://example.com/direct-query",
+            "--sql",
+            query_sql,
+            &seed_file_arg,
+            "--deadline=2026-03-30T00:00:00Z",
+            "--expires=1d",
+            "--refresh",
+        ],
+    );
+    assert!(
+        swarm_query_result
+            .stdout
+            .contains("Query Submitted: https://example.com/direct-query"),
+        "Expected direct URL query output in:\n{}",
+        swarm_query_result.stdout
+    );
+    assert!(
+        swarm_query_result.stdout.contains("3 URL(s) queried."),
+        "Expected aggregate query count in:\n{}",
+        swarm_query_result.stdout
+    );
+
+    let swarm_status_result = run_command(ctx, &["swarm", "status", "swarm-job-42"]);
+    let swarm_status_payload = strip_snapshot_output(&swarm_status_result.stdout);
+    assert!(
+        swarm_status_payload.contains(r#""id":"swarm-job-42""#),
+        "Expected query status payload to contain the task id in:\n{}",
+        swarm_status_result.stdout
+    );
+    assert!(
+        swarm_status_payload.contains(r#""isDone":false"#),
+        "Expected query status payload to remain in-progress in:\n{}",
+        swarm_status_result.stdout
+    );
+
+    let swarm_result_result = run_command(ctx, &["swarm", "result", "swarm-job-42"]);
+    let swarm_result_payload = strip_snapshot_output(&swarm_result_result.stdout);
+    assert!(
+        swarm_result_payload.contains(r#""id":"swarm-job-42""#),
+        "Expected query result payload to contain the task id in:\n{}",
+        swarm_result_result.stdout
+    );
+    assert!(
+        swarm_result_payload.contains(r#""isDone":true"#),
+        "Expected query result payload to be done in:\n{}",
+        swarm_result_result.stdout
+    );
+    assert!(
+        swarm_result_payload.contains(
+            r#""resultSet":[{"url":"https://mock.browser4.local/result/swarm-job-42"}]"#
+        ),
+        "Expected query result payload to contain a resultSet in:\n{}",
+        swarm_result_result.stdout
+    );
+
+    let snapshot = mock_server.snapshot();
+    // Verify that the X-SQL queries were submitted via /api/swarm/query (REST),
+    // not through MCP command_* calls.
+    assert_eq!(
+        snapshot.swarm_queries.len(),
+        3,
+        "Expected three swarm query submissions (1 direct + 2 seed), got {:?}",
+        snapshot.swarm_queries
+    );
+    // Each query payload should contain url, args, and query fields.
+    for (i, query) in snapshot.swarm_queries.iter().enumerate() {
+        assert!(
+            query.get("url").and_then(|v| v.as_str()).is_some(),
+            "Query {i} missing url field: {query}"
+        );
+        assert!(
+            query.get("query").and_then(|v| v.as_str()) == Some(query_sql),
+            "Query {i} missing or mismatched query field: {query}"
+        );
+    }
+    assert!(
+        snapshot
+            .tool_calls
+            .iter()
+            .all(|call| call.tool != "command_run"
+                && call.tool != "command_status"
+                && call.tool != "command_result"),
+        "Expected swarm query/status/result to avoid MCP command_* calls: {:?}",
         snapshot.tool_calls
     );
     assert_eq!(snapshot.status_queries, vec!["swarm-job-42".to_string()]);
