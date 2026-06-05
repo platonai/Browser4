@@ -6,9 +6,13 @@
 //! endpoints under `/api/x`.
 //!
 //! # State persistence
-//! CLI state is persisted between invocations under `~/.browser4` by default.
-//! The default session uses `~/.browser4/cli-state.json`; named sessions use
-//! `~/.browser4/sessions/<name>.json`.
+//! CLI session state is persisted between invocations under `~/.browser4` by
+//! default.  The default session uses `~/.browser4/cli-state.json`; named
+//! sessions use `~/.browser4/sessions/<name>.json`.
+//!
+//! The Browser4 runtime bundle (JRE, JARs, launchers) lives separately in a
+//! platform-conventional data directory so that clearing CLI state does not
+//! require re-downloading the ~200 MB runtime.  See `state::resolve_runtime_data_dir`.
 //!
 //! # Element selectors
 //! Use the short `e<N>` form from `snapshot` output; the CLI automatically

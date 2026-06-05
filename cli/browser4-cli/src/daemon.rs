@@ -21,15 +21,24 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 use crate::managed_processes::{register_managed_server_process, ManagedServerProcess};
-use crate::state::{read_state, resolve_default_state_dir};
+use crate::state::{
+    read_state, resolve_default_state_dir, resolve_runtime_cache_dir, resolve_runtime_data_dir,
+};
 
 const EXISTING_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(120);
 const JAR_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(120);
 const SERVER_READY_INITIAL_QUIET_WAIT: Duration = Duration::from_secs(5);
 const CLI_TEMP_DIR_COMPONENTS: [&str; 2] = ["tmp", "cli"];
-const CLI_LIB_DIR_COMPONENT: &str = "lib";
+/// Subdirectory of the runtime data dir that holds versioned installs.
+const RUNTIME_VERSIONS_DIR_NAME: &str = "runtime";
+/// Symlink (or tag file on Windows) that points to the currently active version.
+const CURRENT_TAG_FILE_NAME: &str = "current.tag";
+/// Name of the directory inside each versioned install that holds dependency JARs.
 const BROWSER4_LIB_DIR_NAME: &str = "lib";
+/// Name of the directory inside each versioned install that holds the bundled JRE.
 const BROWSER4_RUNTIME_DIR_NAME: &str = "runtime";
+/// Subdirectory of the runtime data dir for cached downloads.
+const DOWNLOADS_DIR_NAME: &str = "downloads";
 const BROWSER4_MAIN_CLASS: &str = "ai.platon.pulsar.apps.Browser4BundleApplicationKt";
 const BROWSER4_INSTALL_METADATA_FILE_NAME: &str = "browser4-installation.json";
 const BROWSER4_RELEASES_BASE_URL: &str = "https://github.com/platonai/Browser4/releases";
@@ -258,8 +267,210 @@ fn detect_current_runtime_bundle_platform() -> Result<RuntimeBundlePlatform, Str
     }
 }
 
+// ---------------------------------------------------------------------------
+// Runtime data directory layout
+// ---------------------------------------------------------------------------
+//
+//   {runtime_data_dir}/                  e.g. ~/.local/share/browser4/
+//   ├── runtime/                         versioned installs
+//   │   ├── current.tag                  plain-text file: "v4.11.0"
+//   │   │                               (or symlink on Unix when possible)
+//   │   ├── v4.10.0/
+//   │   │   ├── lib/                     dependency JARs
+//   │   │   ├── runtime/                 bundled JRE
+//   │   │   ├── bin/                     launcher scripts
+//   │   │   └── browser4-installation.json
+//   │   └── v4.11.0/
+//   │       └── ...
+//   └── downloads/                       cached downloaded archives
+//       └── v4.10.0/
+//           └── browser4-bundle-runtime-….zip
+//
+// The `current.tag` file (or `current` symlink on Unix) is the single source
+// of truth for which version is active.  `browser4_install_dir()` resolves it
+// to the versioned directory.
+// ---------------------------------------------------------------------------
+
+/// The directory that holds versioned runtime installs.
+fn runtime_versions_dir() -> PathBuf {
+    resolve_runtime_data_dir().join(RUNTIME_VERSIONS_DIR_NAME)
+}
+
+/// Path to a specific versioned install directory.
+fn versioned_install_dir(tag: &str) -> PathBuf {
+    runtime_versions_dir().join(tag)
+}
+
+/// Path to the `current.tag` marker file that records the active version tag.
+fn current_tag_file_path() -> PathBuf {
+    runtime_versions_dir().join(CURRENT_TAG_FILE_NAME)
+}
+
+/// Read the currently active tag from the marker file.  Returns `None` when
+/// no runtime has been installed yet or the file is corrupt.
+fn read_current_tag() -> Option<String> {
+    let path = current_tag_file_path();
+    if !path.exists() {
+        return try_migrate_legacy_runtime().or_else(|| {
+            // No legacy install either — try to find any versioned directory.
+            find_newest_versioned_install()
+        });
+    }
+    let raw = fs::read_to_string(&path).ok()?;
+    let tag = raw.trim().to_string();
+    if tag.is_empty() { None } else { Some(tag) }
+}
+
+/// Record `tag` as the currently active version.
+///
+/// On Unix this also attempts to create a `current` symlink for convenience,
+/// but the `current.tag` file is always the authoritative source.
+fn write_current_tag(tag: &str) -> Result<(), String> {
+    let parent = runtime_versions_dir();
+    fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
+
+    let tag_path = current_tag_file_path();
+    fs::write(&tag_path, format!("{tag}\n")).map_err(|e| e.to_string())?;
+
+    // Best-effort symlink on Unix for shell-friendliness.
+    #[cfg(unix)]
+    {
+        let symlink_path = parent.join("current");
+        let target = versioned_install_dir(tag);
+        let _ = std::os::unix::fs::symlink(&target, &symlink_path);
+    }
+
+    Ok(())
+}
+
+/// Resolve the currently active runtime install directory.
+///
+/// Reads `current.tag`, validates the versioned directory exists, and returns
+/// its path.  Returns `None` when no runtime is installed.
+fn resolve_current_install_dir() -> Option<PathBuf> {
+    let tag = read_current_tag()?;
+    let dir = versioned_install_dir(&tag);
+    if install_dir_contains_runtime(&dir) {
+        Some(dir)
+    } else {
+        None
+    }
+}
+
+/// The active runtime install directory.  Panics when no runtime is installed
+/// — only call this after confirming a runtime exists.
 fn browser4_install_dir() -> PathBuf {
-    resolve_default_state_dir().join(CLI_LIB_DIR_COMPONENT)
+    resolve_current_install_dir().unwrap_or_else(|| {
+        // Fallback: return the versions dir itself (caller will find nothing
+        // and trigger a download).
+        runtime_versions_dir()
+    })
+}
+
+/// Compare two version tags like "v4.10.0" and "v4.9.0" using natural
+/// numeric ordering so "v4.10.0" > "v4.9.0".
+fn compare_semver_tags(a: &str, b: &str) -> std::cmp::Ordering {
+    let a_parts: Vec<u64> = a
+        .trim_start_matches('v')
+        .split('.')
+        .filter_map(|s| s.parse::<u64>().ok())
+        .collect();
+    let b_parts: Vec<u64> = b
+        .trim_start_matches('v')
+        .split('.')
+        .filter_map(|s| s.parse::<u64>().ok())
+        .collect();
+    for (ap, bp) in a_parts.iter().zip(b_parts.iter()) {
+        match ap.cmp(bp) {
+            std::cmp::Ordering::Equal => continue,
+            other => return other,
+        }
+    }
+    a_parts.len().cmp(&b_parts.len())
+}
+
+/// Look for the newest versioned install directory when `current.tag` is
+/// missing (e.g. after manual cleanup or migration).
+fn find_newest_versioned_install() -> Option<String> {
+    let parent = runtime_versions_dir();
+    let entries = fs::read_dir(&parent).ok()?;
+    let mut tags: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            // Only consider directories that look like version tags (v*).
+            if name.starts_with('v') && install_dir_contains_runtime(&parent.join(&name)) {
+                Some(name)
+            } else {
+                None
+            }
+        })
+        .collect();
+    if tags.is_empty() {
+        return None;
+    }
+    // Sort by version using natural numeric ordering so v4.10.0 > v4.9.0.
+    tags.sort_by(|a, b| compare_semver_tags(a, b));
+    let newest = tags.last()?.clone();
+    // Re-write the marker file so the next lookup is fast.
+    let _ = write_current_tag(&newest);
+    Some(newest)
+}
+
+/// One-shot migration from the legacy `~/.browser4/lib/` layout to the new
+/// versioned layout under the platform data directory.  Reads the old
+/// metadata to determine the tag, moves the files, and writes `current.tag`.
+fn try_migrate_legacy_runtime() -> Option<String> {
+    let legacy_install_dir = resolve_default_state_dir().join("lib");
+    if !install_dir_contains_runtime(&legacy_install_dir) {
+        return None;
+    }
+
+    let legacy_metadata_path = legacy_install_dir.join(BROWSER4_INSTALL_METADATA_FILE_NAME);
+    let metadata: InstalledBrowser4RuntimeMetadata =
+        serde_json::from_str(&fs::read_to_string(&legacy_metadata_path).ok()?).ok()?;
+
+    let tag = metadata.tag;
+    let target_dir = versioned_install_dir(&tag);
+
+    // Don't overwrite if the target already exists.
+    if target_dir.exists() {
+        // Both exist — just set the current tag and clean up the legacy dir.
+        let _ = write_current_tag(&tag);
+        let _ = fs::remove_dir_all(&legacy_install_dir);
+        return Some(tag);
+    }
+
+    eprintln!(
+        "Migrating Browser4 runtime from legacy location {} to {}",
+        legacy_install_dir.display(),
+        target_dir.display()
+    );
+
+    // Move the legacy install into the versioned directory.
+    if let Some(parent) = target_dir.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    match fs::rename(&legacy_install_dir, &target_dir) {
+        Ok(()) => {
+            let _ = write_current_tag(&tag);
+            eprintln!("  Migration complete.");
+            Some(tag)
+        }
+        Err(e) => {
+            eprintln!(
+                "  Migration by rename failed ({}); copying instead...",
+                e
+            );
+            // Fallback: copy recursively.
+            copy_dir_recursive(&legacy_install_dir, &target_dir)
+                .ok()?;
+            let _ = fs::remove_dir_all(&legacy_install_dir);
+            let _ = write_current_tag(&tag);
+            Some(tag)
+        }
+    }
 }
 
 fn browser4_java_executable_name() -> &'static str {
@@ -279,6 +490,15 @@ fn java_path_in_install_dir(install_dir: &Path) -> PathBuf {
 
 pub fn read_installed_browser4_runtime_metadata() -> Option<InstalledBrowser4RuntimeMetadata> {
     let path = browser4_install_metadata_path();
+    let contents = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&contents).ok()
+}
+
+/// Read metadata from a specific install directory (does not go through `current.tag`).
+fn read_installed_browser4_runtime_metadata_for(
+    install_dir: &Path,
+) -> Option<InstalledBrowser4RuntimeMetadata> {
+    let path = install_dir.join(BROWSER4_INSTALL_METADATA_FILE_NAME);
     let contents = fs::read_to_string(path).ok()?;
     serde_json::from_str(&contents).ok()
 }
@@ -306,7 +526,7 @@ fn materialize_installed_runtime(
     metadata: InstalledBrowser4RuntimeMetadata,
     reused_existing: bool,
 ) -> InstalledBrowser4Runtime {
-    let install_dir = browser4_install_dir();
+    let install_dir = versioned_install_dir(&metadata.tag);
     let lib_dir = install_dir.join(BROWSER4_LIB_DIR_NAME);
     InstalledBrowser4Runtime {
         tag: metadata.tag,
@@ -582,7 +802,7 @@ fn commit_installed_browser4_runtime(
     extracted_root: &Path,
     metadata: InstalledBrowser4RuntimeMetadata,
 ) -> Result<InstalledBrowser4Runtime, String> {
-    let install_dir = browser4_install_dir();
+    let install_dir = versioned_install_dir(&metadata.tag);
     let target_runtime = install_dir.join(BROWSER4_RUNTIME_DIR_NAME);
     let target_lib = install_dir.join(BROWSER4_LIB_DIR_NAME);
     let target_bin = install_dir.join("bin");
@@ -612,6 +832,9 @@ fn commit_installed_browser4_runtime(
     if source_bin.is_dir() {
         copy_dir_recursive(&source_bin, &target_bin)?;
     }
+    // Write the current-tag marker *before* write_installed_browser4_runtime_metadata
+    // because browser4_install_metadata_path() resolves through the current tag.
+    write_current_tag(&metadata.tag)?;
     write_installed_browser4_runtime_metadata(&metadata)?;
 
     Ok(materialize_installed_runtime(metadata, false))
@@ -622,13 +845,8 @@ fn commit_installed_browser4_runtime(
 // `install --force` (stress tests exercise this path heavily).
 // ---------------------------------------------------------------------------
 
-const CLI_CACHE_DIR_COMPONENT: &str = "cache";
-const CLI_CACHE_DOWNLOADS_COMPONENT: &str = "downloads";
-
 fn browser4_download_cache_dir() -> PathBuf {
-    resolve_default_state_dir()
-        .join(CLI_CACHE_DIR_COMPONENT)
-        .join(CLI_CACHE_DOWNLOADS_COMPONENT)
+    resolve_runtime_cache_dir().join(DOWNLOADS_DIR_NAME)
 }
 
 /// Path where a downloaded archive for the given *normalized* tag and
@@ -701,10 +919,13 @@ pub async fn install_browser4_runtime(
     let requested_tag = normalize_release_tag(tag);
     if !force {
         if let Some(requested_tag) = requested_tag.as_deref() {
-            if let Some(existing_metadata) = read_installed_browser4_runtime_metadata() {
-                if existing_metadata.tag == requested_tag
-                    && install_dir_contains_runtime(&browser4_install_dir())
-                {
+            let versioned_dir = versioned_install_dir(requested_tag);
+            if install_dir_contains_runtime(&versioned_dir) {
+                if let Some(existing_metadata) = read_installed_browser4_runtime_metadata_for(&versioned_dir) {
+                    // Ensure this version is also marked as current.
+                    if read_current_tag().as_deref() != Some(requested_tag) {
+                        let _ = write_current_tag(requested_tag);
+                    }
                     return Ok(materialize_installed_runtime(existing_metadata, true));
                 }
             }
@@ -2067,7 +2288,13 @@ fn read_startup_log_tail(path: &Path) -> String {
 mod tests {
     use super::*;
     use std::fs::{create_dir_all, write};
+    use std::sync::Mutex;
     use tempfile::TempDir;
+
+    /// Global lock to serialize tests that manipulate `BROWSER4_RUNTIME_DIR`
+    /// and `BROWSER4_CLI_STATE_DIR` environment variables.  Without this,
+    /// parallel test execution causes cross-test contamination.
+    static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     fn test_temp_dir() -> TempDir {
         let root = std::env::temp_dir()
@@ -2318,10 +2545,11 @@ mod tests {
     }
 
     #[test]
-    fn test_materialize_installed_runtime_uses_default_install_layout() {
+    fn test_materialize_installed_runtime_uses_versioned_layout() {
+        let _guard = ENV_MUTEX.lock().unwrap();
         let tmp = test_temp_dir();
         unsafe {
-            env::set_var("BROWSER4_CLI_STATE_DIR", tmp.path().as_os_str());
+            env::set_var("BROWSER4_RUNTIME_DIR", tmp.path().as_os_str());
         }
 
         let runtime = materialize_installed_runtime(
@@ -2335,14 +2563,17 @@ mod tests {
         );
 
         unsafe {
-            env::remove_var("BROWSER4_CLI_STATE_DIR");
+            env::remove_var("BROWSER4_RUNTIME_DIR");
         }
 
-        // In the new model, jar_path = lib_dir (the lib/ directory)
-        assert!(runtime.lib_dir.ends_with("lib"));
+        // install_dir should be {runtime_data}/runtime/v4.9.3/
+        assert!(runtime.install_dir.ends_with(Path::new("runtime").join("v4.9.3")));
+        // lib_dir should be {install_dir}/lib/
+        assert!(runtime.lib_dir.ends_with(Path::new("v4.9.3").join("lib")));
+        // java_path should be {install_dir}/runtime/bin/java
         assert!(runtime
             .java_path
-            .ends_with(Path::new("lib").join("runtime").join("bin").join(browser4_java_executable_name())));
+            .ends_with(Path::new("v4.9.3").join("runtime").join("bin").join(browser4_java_executable_name())));
         assert!(runtime.reused_existing);
     }
 
@@ -2650,11 +2881,16 @@ mod tests {
 
     #[test]
     fn test_metadata_round_trip() {
+        let _guard = ENV_MUTEX.lock().unwrap();
         let tmp = test_temp_dir();
-        let metadata_path = tmp.path().join("lib").join("browser4-installation.json");
-        fs::create_dir_all(metadata_path.parent().unwrap()).unwrap();
+        let tag = "v4.9.3";
+        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+        setup_valid_versioned_runtime(&tmp.path().join("runtime-data"), tag);
+
+        // Write metadata into the versioned install dir.
+        let metadata_path = tmp.path().join("runtime-data").join("runtime").join(tag).join("browser4-installation.json");
         let metadata = InstalledBrowser4RuntimeMetadata {
-            tag: "v4.9.3".to_string(),
+            tag: tag.to_string(),
             asset_name: "browser4-runtime-linux-x64.tar.gz".to_string(),
             download_url: "https://example.com/releases/download/v4.9.3/bundle.tar.gz"
                 .to_string(),
@@ -2663,49 +2899,205 @@ mod tests {
         let json = serde_json::to_string_pretty(&metadata).unwrap();
         fs::write(&metadata_path, json).unwrap();
 
-        let previous = env::var("BROWSER4_CLI_STATE_DIR").ok();
-        unsafe { env::set_var("BROWSER4_CLI_STATE_DIR", tmp.path().as_os_str()); }
         let read = read_installed_browser4_runtime_metadata();
-        // restore
-        match previous {
-            Some(v) => unsafe { env::set_var("BROWSER4_CLI_STATE_DIR", v) },
-            None => unsafe { env::remove_var("BROWSER4_CLI_STATE_DIR") },
-        }
-        assert!(read.is_some());
+        assert!(read.is_some(), "Expected metadata to be readable");
         let read = read.unwrap();
         assert_eq!(read.tag, "v4.9.3");
         assert_eq!(read.asset_name, "browser4-runtime-linux-x64.tar.gz");
         assert_eq!(read.installed_at, "2026-06-01T00:00:00Z");
+
+        restore_test_env(prev_runtime, prev_state);
     }
 
     #[test]
     fn test_metadata_missing_file_returns_none() {
+        let _guard = ENV_MUTEX.lock().unwrap();
         let tmp = test_temp_dir();
-        let previous = env::var("BROWSER4_CLI_STATE_DIR").ok();
-        unsafe { env::set_var("BROWSER4_CLI_STATE_DIR", tmp.path().as_os_str()); }
+        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+        // No runtime installed at all → metadata is None.
         let read = read_installed_browser4_runtime_metadata();
-        match previous {
-            Some(v) => unsafe { env::set_var("BROWSER4_CLI_STATE_DIR", v) },
-            None => unsafe { env::remove_var("BROWSER4_CLI_STATE_DIR") },
-        }
         assert!(read.is_none());
+        restore_test_env(prev_runtime, prev_state);
     }
 
     #[test]
     fn test_metadata_corrupted_json_returns_none() {
+        let _guard = ENV_MUTEX.lock().unwrap();
         let tmp = test_temp_dir();
-        let metadata_path = tmp.path().join("lib").join("browser4-installation.json");
-        fs::create_dir_all(metadata_path.parent().unwrap()).unwrap();
+        let tag = "v4.9.3";
+        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+        setup_valid_versioned_runtime(&tmp.path().join("runtime-data"), tag);
+
+        // Corrupt the metadata file.
+        let metadata_path = tmp.path().join("runtime-data").join("runtime").join(tag).join("browser4-installation.json");
         fs::write(&metadata_path, "not valid json {{{").unwrap();
 
-        let previous = env::var("BROWSER4_CLI_STATE_DIR").ok();
-        unsafe { env::set_var("BROWSER4_CLI_STATE_DIR", tmp.path().as_os_str()); }
         let read = read_installed_browser4_runtime_metadata();
-        match previous {
+        assert!(read.is_none());
+
+        restore_test_env(prev_runtime, prev_state);
+    }
+
+    // -------------------------------------------------------------------
+    // Helpers for new-layout tests
+    // -------------------------------------------------------------------
+
+    /// Set up a fully valid versioned runtime directory so that
+    /// `install_dir_contains_runtime` and `browser4_install_dir` both succeed.
+    /// Also writes `current.tag`.
+    fn setup_valid_versioned_runtime(_tmp: &Path, tag: &str) -> PathBuf {
+        let dir = versioned_install_dir(tag);
+        let lib = dir.join("lib");
+        let rt_bin = dir.join("runtime").join("bin");
+        fs::create_dir_all(&lib).unwrap();
+        fs::create_dir_all(&rt_bin).unwrap();
+        fs::write(lib.join("browser4.jar"), "fake-jar").unwrap();
+        fs::write(rt_bin.join(browser4_java_executable_name()), "fake-java").unwrap();
+        write_current_tag(tag).unwrap();
+        dir
+    }
+
+    /// Set both env vars so tests are fully isolated from any real
+    /// `~/.browser4/` or `~/.local/share/browser4/` directories.
+    fn isolate_test_env(tmp: &Path) -> (Option<String>, Option<String>) {
+        let prev_runtime = env::var("BROWSER4_RUNTIME_DIR").ok();
+        let prev_state = env::var("BROWSER4_CLI_STATE_DIR").ok();
+        unsafe {
+            env::set_var("BROWSER4_RUNTIME_DIR", tmp.join("runtime-data").as_os_str());
+            env::set_var("BROWSER4_CLI_STATE_DIR", tmp.join("state").as_os_str());
+        }
+        (prev_runtime, prev_state)
+    }
+
+    fn restore_test_env(prev_runtime: Option<String>, prev_state: Option<String>) {
+        match prev_runtime {
+            Some(v) => unsafe { env::set_var("BROWSER4_RUNTIME_DIR", v) },
+            None => unsafe { env::remove_var("BROWSER4_RUNTIME_DIR") },
+        }
+        match prev_state {
             Some(v) => unsafe { env::set_var("BROWSER4_CLI_STATE_DIR", v) },
             None => unsafe { env::remove_var("BROWSER4_CLI_STATE_DIR") },
         }
-        assert!(read.is_none());
     }
 
+    // -------------------------------------------------------------------
+    // New layout: versioned install dirs, current.tag, migration
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_current_tag_read_write_round_trip() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let tmp = test_temp_dir();
+        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+
+        // No tag yet → None (and no legacy install to migrate).
+        assert!(read_current_tag().is_none());
+
+        // Write a tag → should read back.
+        write_current_tag("v4.11.0").unwrap();
+        assert_eq!(read_current_tag().as_deref(), Some("v4.11.0"));
+
+        // Overwrite with a different tag.
+        write_current_tag("v4.12.0").unwrap();
+        assert_eq!(read_current_tag().as_deref(), Some("v4.12.0"));
+
+        restore_test_env(prev_runtime, prev_state);
+    }
+
+    #[test]
+    fn test_versioned_install_dir_path() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let tmp = test_temp_dir();
+        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+
+        let dir = versioned_install_dir("v4.10.0");
+        assert!(dir.ends_with(Path::new("runtime").join("v4.10.0")));
+
+        // Write a valid runtime and verify browser4_install_dir resolves.
+        setup_valid_versioned_runtime(&tmp.path().join("runtime-data"), "v4.10.0");
+        let resolved = resolve_current_install_dir().unwrap();
+        // Both paths should point to the same versioned install (canonicalization
+        // may add \\?\ prefix on Windows — compare file names instead).
+        assert!(resolved.ends_with(Path::new("runtime").join("v4.10.0")));
+        assert!(resolved.join("lib").join("browser4.jar").exists());
+
+        restore_test_env(prev_runtime, prev_state);
+    }
+
+    #[test]
+    fn test_legacy_migration_detects_old_layout() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let tmp = test_temp_dir();
+        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+
+        // Set up legacy layout under state_dir/lib/ (but BROWSER4_CLI_STATE_DIR
+        // points to our isolated temp dir, so we must write there).
+        let state_dir = tmp.path().join("state");
+        let legacy_install = state_dir.join("lib");
+        let legacy_lib = legacy_install.join("lib");
+        let legacy_runtime_bin = legacy_install.join("runtime").join("bin");
+        fs::create_dir_all(&legacy_lib).unwrap();
+        fs::create_dir_all(&legacy_runtime_bin).unwrap();
+        fs::write(legacy_lib.join("browser4.jar"), "fake-jar").unwrap();
+        fs::write(
+            legacy_runtime_bin.join(browser4_java_executable_name()),
+            "fake-java",
+        )
+        .unwrap();
+        let metadata = InstalledBrowser4RuntimeMetadata {
+            tag: "v4.8.0".to_string(),
+            asset_name: "browser4-runtime.zip".to_string(),
+            download_url: "https://example.com/bundle.zip".to_string(),
+            installed_at: "2025-01-01T00:00:00Z".to_string(),
+        };
+        fs::write(
+            legacy_install.join("browser4-installation.json"),
+            serde_json::to_string_pretty(&metadata).unwrap(),
+        )
+        .unwrap();
+
+        // Migration should move the legacy install to the new layout.
+        let tag = read_current_tag();
+        assert_eq!(tag.as_deref(), Some("v4.8.0"));
+
+        // The legacy dir should be gone.
+        assert!(!legacy_install.exists());
+
+        // The versioned dir should exist in the new location.
+        let new_dir = versioned_install_dir("v4.8.0");
+        assert!(new_dir.join("lib").join("browser4.jar").exists());
+
+        restore_test_env(prev_runtime, prev_state);
+    }
+
+    #[test]
+    fn test_find_newest_versioned_install() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let tmp = test_temp_dir();
+        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+
+        // Set up multiple versioned installs without current.tag.
+        for tag in &["v4.8.0", "v4.9.0", "v4.10.0"] {
+            let dir = versioned_install_dir(tag);
+            let lib = dir.join("lib");
+            let rt_bin = dir.join("runtime").join("bin");
+            fs::create_dir_all(&lib).unwrap();
+            fs::create_dir_all(&rt_bin).unwrap();
+            fs::write(lib.join("x.jar"), "jar").unwrap();
+            fs::write(rt_bin.join(browser4_java_executable_name()), "java").unwrap();
+        }
+        // Remove current.tag if it exists so find_newest is forced to scan.
+        let tag_path = current_tag_file_path();
+        let _ = fs::remove_file(&tag_path);
+
+        // Without current.tag, should find newest.
+        assert_eq!(read_current_tag().as_deref(), Some("v4.10.0"));
+        // Now current.tag should have been written.
+        assert_eq!(
+            fs::read_to_string(current_tag_file_path()).unwrap().trim(),
+            "v4.10.0"
+        );
+
+        restore_test_env(prev_runtime, prev_state);
+    }
 }

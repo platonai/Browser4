@@ -563,11 +563,15 @@ pub(super) fn test_status_installed_runtime(ctx: &mut E2ECtx) {
     let mock_server = MockBrowser4Server::start();
     ctx.browser4_base_url = mock_server.base_url();
 
-    // Write a runtime install metadata file.
-    let metadata_path = ctx.state_dir.join("lib").join("browser4-installation.json");
-    fs::create_dir_all(metadata_path.parent().unwrap()).expect("create lib dir");
+    // Write a runtime install metadata file using the new versioned layout.
+    let tag = "v4.10.0";
+    let versions_dir = ctx.runtime_dir.join("runtime");
+    let metadata_path = versions_dir.join(tag).join("browser4-installation.json");
+    fs::create_dir_all(metadata_path.parent().unwrap()).expect("create versioned runtime dir");
+    // Also write the current.tag marker file so the CLI can find this install.
+    fs::write(versions_dir.join("current.tag"), format!("{tag}\n")).expect("write current.tag");
     let metadata = serde_json::json!({
-        "tag": "v4.10.0",
+        "tag": tag,
         "asset_name": "browser4-runtime-v4.10.0.zip",
         "download_url": "https://example.com/releases/v4.10.0/browser4-runtime.zip",
         "installed_at": "2026-05-15T10:00:00Z"
@@ -2006,17 +2010,17 @@ pub(super) fn test_install_downloads_and_installs(ctx: &mut E2ECtx) {
         requests
     );
 
-    // Verify the metadata file was written.
-    let metadata_path = ctx.state_dir.join("lib").join("browser4-installation.json");
+    // Verify the metadata file was written (versioned layout).
+    let metadata_path = ctx.runtime_dir.join("runtime").join("v4.10.0").join("browser4-installation.json");
     assert!(
         metadata_path.exists(),
         "Expected install metadata at {}",
         metadata_path.display()
     );
 
-    // Verify the runtime was extracted (lib/ dir with jar).
-    let lib_dir = ctx.state_dir.join("lib").join("lib");
-    assert!(lib_dir.is_dir(), "Expected lib/lib dir after install");
+    // Verify the runtime was extracted (lib/ subdirectory inside the versioned install).
+    let lib_dir = ctx.runtime_dir.join("runtime").join("v4.10.0").join("lib");
+    assert!(lib_dir.is_dir(), "Expected runtime lib dir after install");
 }
 
 pub(super) fn test_install_skips_when_already_installed(ctx: &mut E2ECtx) {

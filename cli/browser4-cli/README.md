@@ -19,7 +19,7 @@ cargo install --path .
 | `src/commands.rs` | Command definitions (name, args, options, MCP tool mapping) |
 | `src/args.rs` | CLI argument parsing |
 | `src/http.rs` | HTTP client for `/mcp/call-tool` |
-| `src/state.rs` | Persistent CLI state (`~/.browser4/cli-state.json`) |
+| `src/state.rs` | Persistent CLI state (`~/.browser4/cli-state.json`) and runtime data directory resolution |
 | `src/daemon.rs` | Local Browser4 server auto-start (Maven / jar / download) |
 | `src/managed_processes.rs` | Server process registry and force-cleanup |
 | `src/snapshot.rs` | Snapshot & screenshot file helpers |

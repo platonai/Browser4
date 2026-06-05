@@ -426,8 +426,8 @@ The `list` command shows each session's status: **Active** (backend confirms),
 
 `browser4-cli` keeps ephemeral runtime artifacts under the system temp directory:
 
-- Windows: `%TEMP%\.browser4\browser4-cli`
-- Linux/macOS: `${TMPDIR:-/tmp}/.browser4/browser4-cli`
+- Windows: `%TEMP%\browser4\browser4-cli`
+- Linux/macOS: `${TMPDIR:-/tmp}/browser4/browser4-cli`
 
 This temp subtree contains items such as:
 
@@ -435,7 +435,20 @@ This temp subtree contains items such as:
 - staged Maven wrapper launchers
 - Rust test scratch directories used by `browser4-cli` tests
 
-Persistent CLI state and the fallback `Browser4.jar` remain under `~/.browser4` by default.
+Persistent CLI state remains under `~/.browser4` by default.  The Browser4 runtime
+bundle (JRE, JARs, launchers) is stored separately in a platform-conventional
+data directory so that clearing CLI session state does not require re-downloading
+the ~200 MB runtime:
+
+- Linux:   `~/.local/share/browser4/runtime/<version>/`
+- macOS:   `~/Library/Application Support/browser4/runtime/<version>/`
+- Windows: `%APPDATA%/browser4/runtime/<version>/`
+
+The `current.tag` file in the `runtime/` directory records the active version.
+Override the runtime data root with the `BROWSER4_RUNTIME_DIR` environment variable.
+Downloaded archives are cached under the platform cache directory
+(`~/.cache/browser4/downloads/` on Linux, `~/Library/Caches/browser4/downloads/`
+on macOS, `%LOCALAPPDATA%/browser4/downloads/` on Windows).
 
 ## Snapshots
 

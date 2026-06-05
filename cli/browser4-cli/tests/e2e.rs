@@ -1556,6 +1556,7 @@ struct E2ECtx {
     use_maven_startup: bool,
     workspace_dir: PathBuf,
     state_dir: PathBuf,
+    runtime_dir: PathBuf,
     upload_file_path: PathBuf,
     step_timings: Vec<TimedStep>,
     /// Extra environment variables to set for every CLI child process.
@@ -1842,6 +1843,7 @@ fn run_cli_process_internal(
         .args(&full_args)
         .current_dir(&ctx.workspace_dir)
         .env("BROWSER4_CLI_STATE_DIR", &ctx.state_dir)
+        .env("BROWSER4_RUNTIME_DIR", &ctx.runtime_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -2697,8 +2699,10 @@ fn create_e2e_test_resources() -> E2ETestResources {
         });
     let workspace_dir = temp_dir.path().join("workspace");
     let state_dir = temp_dir.path().join("state");
+    let runtime_dir = temp_dir.path().join("runtime-data");
     fs::create_dir_all(&workspace_dir).unwrap();
     fs::create_dir_all(&state_dir).unwrap();
+    fs::create_dir_all(&runtime_dir).unwrap();
 
     let invocation_dir = std::env::current_dir().expect("failed to read e2e invocation directory");
 
@@ -2719,6 +2723,7 @@ fn create_e2e_test_resources() -> E2ETestResources {
             use_maven_startup,
             workspace_dir,
             state_dir,
+            runtime_dir,
             upload_file_path,
             step_timings: Vec::new(),
             extra_env: Vec::new(),
