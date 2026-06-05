@@ -53,8 +53,8 @@ Install https://raw.githubusercontent.com/platonai/Browser4/refs/heads/main/cli/
 4. write the result to a markdown file
 "@
 
-copilot --allow-all -p "$prompt"
-# claude --dangerously-skip-permissions "$prompt"
+copilot -p "$prompt"
+# claude "$prompt"
 ```
 
 ### CLI 与技能 (SKILLS)
