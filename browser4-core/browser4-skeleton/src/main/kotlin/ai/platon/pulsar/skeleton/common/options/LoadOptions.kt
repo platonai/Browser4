@@ -1005,10 +1005,10 @@ open class LoadOptions(
     private fun doRefresh(value: Boolean): Boolean {
         if (value) {
             expires = Duration.ZERO
-            expireAt = Instant.now()
+            expireAt = Instant.ofEpochSecond(0)
 
             itemExpires = Duration.ZERO
-            itemExpireAt = Instant.now()
+            itemExpireAt = expireAt
 
             ignoreFailure = true
         }

@@ -219,13 +219,24 @@ class TestLoadOptions {
 
     @Test
     fun testClone() {
-        val options = LoadOptions.parse("$args -incognito -expires 1s -ignoreFailure -storeContent false", conf)
-        val clone = options.clone()
-        assertEquals(options, clone)
-        val clone2 = clone.clone()
-        assertEquals(options, clone)
-        assertEquals(options, clone2)
-        assertEquals(clone, clone2)
+        val argsList = listOf(
+            "",
+            "-refresh",
+            "-incognito -expires 1s -ignoreFailure",
+            "$args -incognito -expires 1s -ignoreFailure -storeContent false"
+        )
+
+        argsList.forEach {
+            val options = LoadOptions.parse(it, conf)
+            val clone = options.clone()
+            assertEquals(options, clone)
+            val clone2 = clone.clone()
+            assertEquals(options, clone)
+            assertEquals(options, clone2)
+            assertEquals(clone, clone2)
+            assertEquals(options.toString(), clone2.toString())
+            assertEquals(clone.toString(), clone2.toString())
+        }
     }
 
     @Test

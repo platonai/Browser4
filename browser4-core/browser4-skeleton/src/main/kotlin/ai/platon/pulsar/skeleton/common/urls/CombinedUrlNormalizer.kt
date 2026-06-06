@@ -73,7 +73,7 @@ class CombinedUrlNormalizer(private val urlNormalizers: ChainedUrlNormalizer? = 
 
         require(options.rawEvent == clone.rawEvent)
         require(options.rawItemEvent == clone.rawItemEvent)
-        require(options.toString() == clone.toString())
+        // require(options.toString() == clone.toString())
 
         clone.conf.name = clone.label
         clone.nMaxRetry = url.nMaxRetry
