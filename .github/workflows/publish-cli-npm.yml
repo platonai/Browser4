@@ -1,0 +1,388 @@
+name: Publish browser4-cli to npm
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_binary_build:
+        description: 'Skip building CLI binaries (use if already built)'
+        required: false
+        default: false
+        type: boolean
+      dry_run:
+        description: 'Validate without publishing to npm'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: publish-cli-npm-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '24'
+  CLI_PACKAGE_DIR: cli
+  CLI_PACKAGE_NAME: browser4-cli
+  CLI_MANIFEST_PATH: cli/browser4-cli/Cargo.toml
+
+jobs:
+  prepare:
+    name: Prepare metadata
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      cli_version: ${{ steps.prepare.outputs.cli_version }}
+      remote_version: ${{ steps.prepare.outputs.remote_version }}
+      lookup_status: ${{ steps.prepare.outputs.lookup_status }}
+      should_publish: ${{ steps.prepare.outputs.should_publish }}
+      skip_binary_build: ${{ steps.prepare.outputs.skip_binary_build }}
+      dry_run: ${{ steps.prepare.outputs.dry_run }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: https://registry.npmjs.org
+
+      - name: Prepare outputs
+        id: prepare
+        shell: bash
+        env:
+          INPUT_SKIP_BINARY_BUILD: ${{ github.event.inputs.skip_binary_build || 'false' }}
+          INPUT_DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+
+          CLI_VERSION=$(node -p "require('./${{ env.CLI_PACKAGE_DIR }}/package.json').version")
+          PACKAGE_NAME=$(node -p "require('./${{ env.CLI_PACKAGE_DIR }}/package.json').name")
+
+          REMOTE_VERSION="unknown"
+          LOOKUP_STATUS="failed"
+          SHOULD_PUBLISH="false"
+
+          if REMOTE_VERSION=$(npm view "$PACKAGE_NAME" version 2>/dev/null); then
+            LOOKUP_STATUS="success"
+            if [ "$CLI_VERSION" != "$REMOTE_VERSION" ]; then
+              SHOULD_PUBLISH="true"
+            fi
+          else
+            echo "::warning::Unable to query npm version for $PACKAGE_NAME"
+          fi
+
+          echo "cli_version=$CLI_VERSION" >> "$GITHUB_OUTPUT"
+          echo "remote_version=$REMOTE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "lookup_status=$LOOKUP_STATUS" >> "$GITHUB_OUTPUT"
+          echo "should_publish=$SHOULD_PUBLISH" >> "$GITHUB_OUTPUT"
+          echo "skip_binary_build=$INPUT_SKIP_BINARY_BUILD" >> "$GITHUB_OUTPUT"
+          echo "dry_run=$INPUT_DRY_RUN" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## 📦 browser4-cli npm Publish"
+            echo ""
+            echo "- **Package**: $PACKAGE_NAME"
+            echo "- **Local Version**: $CLI_VERSION"
+            echo "- **Remote Version**: $REMOTE_VERSION"
+            echo "- **Should Publish**: $SHOULD_PUBLISH"
+            echo "- **Skip Binary Build**: $INPUT_SKIP_BINARY_BUILD"
+            echo "- **Dry Run**: $INPUT_DRY_RUN"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build-binaries:
+    name: Build ${{ matrix.name }}
+    needs: prepare
+    if: needs.prepare.outputs.skip_binary_build != 'true'
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: browser4-cli-linux-x64
+            use_zigbuild: true
+          - name: Linux ARM64
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            binary: browser4-cli-linux-arm64
+            use_zigbuild: true
+          - name: Linux musl x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            binary: browser4-cli-linux-musl-x64
+            use_zigbuild: true
+          - name: Linux musl ARM64
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            binary: browser4-cli-linux-musl-arm64
+            use_zigbuild: true
+          - name: Windows x64
+            os: ubuntu-latest
+            target: x86_64-pc-windows-gnu
+            binary: browser4-cli-win32-x64.exe
+            use_zigbuild: false
+          - name: macOS x64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            binary: browser4-cli-darwin-x64
+            use_zigbuild: false
+          - name: macOS ARM64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            binary: browser4-cli-darwin-arm64
+            use_zigbuild: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Sync CLI version metadata
+        shell: bash
+        run: node cli/scripts/sync-version.js
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9  # v1
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu gcc-x86-64-linux-gnu mingw-w64
+
+      - name: Install Zig
+        if: matrix.use_zigbuild
+        uses: goto-bus-stop/setup-zig@abea47f85e598557f500fa1fd2ab7464fcb39406  # v2.2.1
+        with:
+          version: '0.13.0'
+
+      - name: Install cargo-zigbuild
+        if: matrix.use_zigbuild
+        shell: bash
+        run: cargo install cargo-zigbuild
+
+      - name: Configure Rust linkers
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p ~/.cargo
+          cat >> ~/.cargo/config.toml << 'EOF'
+          [target.aarch64-unknown-linux-gnu]
+          linker = "aarch64-linux-gnu-gcc"
+
+          [target.x86_64-pc-windows-gnu]
+          linker = "x86_64-w64-mingw32-gcc"
+          EOF
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+        with:
+          workspaces: cli/browser4-cli
+
+      - name: Build with zigbuild
+        if: matrix.use_zigbuild
+        shell: bash
+        run: cargo zigbuild --release --manifest-path ${{ env.CLI_MANIFEST_PATH }} --target ${{ matrix.target }}
+
+      - name: Build with cargo
+        if: ${{ !matrix.use_zigbuild }}
+        shell: bash
+        run: cargo build --release --manifest-path ${{ env.CLI_MANIFEST_PATH }} --target ${{ matrix.target }}
+
+      - name: Copy binary artifact
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          if [[ "${{ matrix.target }}" == *"windows"* ]]; then
+            cp cli/browser4-cli/target/${{ matrix.target }}/release/browser4-cli.exe artifacts/${{ matrix.binary }}
+          else
+            cp cli/browser4-cli/target/${{ matrix.target }}/release/browser4-cli artifacts/${{ matrix.binary }}
+            chmod +x artifacts/${{ matrix.binary }}
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.binary }}
+          path: artifacts/${{ matrix.binary }}
+          retention-days: 1
+
+  publish:
+    name: Publish to npm
+    needs: [prepare, build-binaries]
+    if: |
+      always() &&
+      needs.prepare.result == 'success' &&
+      (needs.build-binaries.result == 'success' || needs.build-binaries.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: https://registry.npmjs.org
+
+      - name: Sync CLI version metadata
+        shell: bash
+        run: node cli/scripts/sync-version.js
+
+      - name: Re-check npm version before publish
+        id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          eval "$(node cli/scripts/check-npm-publish-needed.js --shell)"
+
+          echo "package_name=$PACKAGE_NAME" >> "$GITHUB_OUTPUT"
+          echo "cli_version=$CLI_VERSION" >> "$GITHUB_OUTPUT"
+          echo "remote_version=$REMOTE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "lookup_status=$LOOKUP_STATUS" >> "$GITHUB_OUTPUT"
+          echo "should_publish=$SHOULD_PUBLISH" >> "$GITHUB_OUTPUT"
+
+          if [ "$SHOULD_PUBLISH" != "true" ]; then
+            echo "::notice::Skipping npm publish — $PACKAGE_NAME@$CLI_VERSION already exists on npm."
+          fi
+
+          {
+            echo "## 🔎 Publish Re-check"
+            echo ""
+            echo "- **Package**: $PACKAGE_NAME"
+            echo "- **Local Version**: $CLI_VERSION"
+            echo "- **Remote Version**: $REMOTE_VERSION"
+            echo "- **Will Publish**: $SHOULD_PUBLISH"
+            echo "- **Dry Run**: ${{ needs.prepare.outputs.dry_run }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Download all CLI binary artifacts
+        if: steps.check.outputs.should_publish == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: browser4-cli-*
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Move binaries into CLI package bin directory
+        if: steps.check.outputs.should_publish == 'true'
+        shell: bash
+        run: |
+          mkdir -p cli/bin
+          find artifacts -maxdepth 1 -type f -name 'browser4-cli-*' -exec mv {} cli/bin/ \;
+          rm -rf artifacts
+          chmod +x cli/bin/browser4-cli-* 2>/dev/null || true
+          echo "Binaries in cli/bin/:"
+          ls -la cli/bin/
+
+      - name: Verify all packaged binaries exist
+        if: steps.check.outputs.should_publish == 'true'
+        shell: bash
+        run: |
+          EXPECTED_BINARIES=(
+            "browser4-cli-linux-x64"
+            "browser4-cli-linux-arm64"
+            "browser4-cli-linux-musl-x64"
+            "browser4-cli-linux-musl-arm64"
+            "browser4-cli-win32-x64.exe"
+            "browser4-cli-darwin-x64"
+            "browser4-cli-darwin-arm64"
+          )
+          MIN_SIZE=100000
+          ERRORS=0
+
+          for binary in "${EXPECTED_BINARIES[@]}"; do
+            if [ ! -f "cli/bin/$binary" ]; then
+              echo "ERROR: Missing cli/bin/$binary"
+              ERRORS=$((ERRORS + 1))
+            else
+              SIZE=$(stat -c%s "cli/bin/$binary" 2>/dev/null || stat -f%z "cli/bin/$binary")
+              if [ "$SIZE" -lt "$MIN_SIZE" ]; then
+                echo "ERROR: cli/bin/$binary is too small ($SIZE bytes, expected >= $MIN_SIZE)"
+                ERRORS=$((ERRORS + 1))
+              else
+                echo "OK: cli/bin/$binary ($SIZE bytes)"
+              fi
+            fi
+          done
+
+          if [ "$ERRORS" -gt 0 ]; then
+            echo "Error: $ERRORS binary issues found"
+            exit 1
+          fi
+
+          echo "All 7 platform binaries are present and valid"
+
+      - name: Publish to npm (dry-run)
+        if: steps.check.outputs.should_publish == 'true' && needs.prepare.outputs.dry_run == 'true'
+        working-directory: ${{ env.CLI_PACKAGE_DIR }}
+        run: npm publish --dry-run
+
+      - name: Publish to npm
+        if: steps.check.outputs.should_publish == 'true' && needs.prepare.outputs.dry_run != 'true'
+        working-directory: ${{ env.CLI_PACKAGE_DIR }}
+        run: npm publish --provenance
+
+      - name: Verify npm package was published
+        if: steps.check.outputs.should_publish == 'true' && needs.prepare.outputs.dry_run != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PACKAGE_NAME='${{ steps.check.outputs.package_name }}'
+          CLI_VERSION='${{ steps.check.outputs.cli_version }}'
+
+          for attempt in 1 2 3 4 5; do
+            PUBLISHED_VERSION=$(npm view "$PACKAGE_NAME@$CLI_VERSION" version 2>/dev/null || true)
+            if [ "$PUBLISHED_VERSION" = "$CLI_VERSION" ]; then
+              echo "✅ Verified $PACKAGE_NAME@$CLI_VERSION on npm"
+              exit 0
+            fi
+
+            if [ "$attempt" -lt 5 ]; then
+              echo "npm registry has not reported $PACKAGE_NAME@$CLI_VERSION yet (attempt $attempt/5); retrying in 10s..."
+              sleep 10
+            fi
+          done
+
+          echo "❌ Unable to verify $PACKAGE_NAME@$CLI_VERSION on npm after publish"
+          exit 1
+
+      - name: Publish summary
+        if: always()
+        shell: bash
+        run: |
+          if [ "${{ needs.prepare.outputs.dry_run }}" = "true" ]; then
+            echo "## 📦 npm Publish (dry-run — nothing published)"
+            exit 0
+          fi
+          {
+            echo "## 📦 npm Publish Summary"
+            echo ""
+            echo "- **Package**: ${{ steps.check.outputs.package_name }}"
+            echo "- **Version**: ${{ steps.check.outputs.cli_version }}"
+            echo "- **Remote Version**: ${{ steps.check.outputs.remote_version }}"
+            echo "- **Published**: ${{ steps.check.outputs.should_publish }}"
+            echo "- **Status**: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"
