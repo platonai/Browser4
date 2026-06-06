@@ -3,7 +3,8 @@ name: Publish browser4-cli to npm
 on:
   push:
     tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+-npm_publish'
+      - 'v[0-9]+.[0-9]+.[0-9]+*npm_publish',
+      - 'v[0-9]+.[0-9]+.[0-9]+-rc.*npm_publish'
   workflow_dispatch:
     inputs:
       skip_binary_build:
