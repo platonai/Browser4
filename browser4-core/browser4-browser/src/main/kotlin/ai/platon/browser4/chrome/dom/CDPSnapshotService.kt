@@ -15,6 +15,8 @@ import ai.platon.pulsar.chrome.dom.SnapshotService
 import ai.platon.pulsar.chrome.dom.model.*
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.math.geometric.DimI
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import java.util.*
 
 /**
@@ -86,20 +88,44 @@ class CDPSnapshotService(
     private val logger = getLogger(this)
     private val tracer get() = logger.takeIf { it.isTraceEnabled }
 
+    companion object {
+        /**
+         * Vertical padding (in CSS pixels) beyond the viewport edge within which an element is
+         * still considered "visible". This generous margin accounts for lazy-loaded content,
+         * off-screen rendered elements, and scroll-triggered animations.
+         */
+        private const val VIEWPORT_VISIBILITY_MARGIN_PX = 1000
+
+        /**
+         * Multiplier for stacking context depth when computing [interactiveIndex].
+         * Assumes no page exceeds 1000 paint-order entries per stacking context;
+         * elements in a deeper stacking context get an offset of contextDepth * this value
+         * so that higher‑z‑index elements always receive higher indices.
+         */
+        private const val STACKING_CONTEXT_INDEX_MULTIPLIER = 1000
+
+        /** Tolerance (in CSS pixels) for detecting when an element's scrollable area exceeds its client area. */
+        private const val SCROLL_OVERFLOW_TOLERANCE_PX = 1
+    }
+
     private val accessibility = AccessibilityHandler(bp)
     private val domTree = DomTreeHandler(bp)
     private val snapshot = DomSnapshotHandler(bp)
     private val highlightManager = HighlightManager(bp)
     private val clickableDetector = ClickableElementDetector()
 
-    @Volatile
-    private var lastEnhancedRoot: MergedDOMTreeNode? = null
+    /**
+     * Snapshot of the last merged tree and its index maps, kept as a single atomic reference
+     * so that [findElement] always reads a consistent view regardless of concurrent tree rebuilds.
+     */
+    private data class MergedSnapshot(
+        val root: MergedDOMTreeNode,
+        val ancestorMap: Map<Int, List<MergedDOMTreeNode>>,
+        val domByBackend: Map<Int, MergedDOMTreeNode>
+    )
 
     @Volatile
-    private var lastAncestorMap: Map<Int, List<MergedDOMTreeNode>> = emptyMap()
-
-    @Volatile
-    private var lastDomByBackend: Map<Int, MergedDOMTreeNode> = emptyMap()
+    private var lastMergedSnapshot: MergedSnapshot? = null
 
     override suspend fun getBrowserUseState(
         target: PageTarget,
@@ -113,7 +139,7 @@ class CDPSnapshotService(
         target: PageTarget,
         snapshotOptions: SnapshotOptions
     ): DOMState {
-        val allTrees = buildTargetTrees(options = snapshotOptions)
+        val allTrees = buildTargetTrees(target = target, options = snapshotOptions)
         if (logger.isDebugEnabled) {
             logger.debug("allTrees summary: \n{}", DomDebug.summarize(allTrees))
         }
@@ -220,8 +246,6 @@ class CDPSnapshotService(
         val options = trees.options
         // Build ancestor map for XPath and hash generation
         val ancestorMap = buildAncestorMap(trees.domTree)
-        lastAncestorMap = ancestorMap
-        lastDomByBackend = trees.domByBackendId
 
         // Build sibling map for XPath index calculation
         val siblingMap = buildSiblingMap(trees.domTree)
@@ -247,10 +271,9 @@ class CDPSnapshotService(
         }
 
         fun isElementVisibleAccordingToAllParents(
-            node: MergedDOMTreeNode,
+            snap: SnapshotNodeEx,
             htmlFrames: List<MergedDOMTreeNode>
         ): Boolean {
-            val snap = node.snapshotNode ?: return false
             var current = snap.bounds?.roundTo(1)
                 ?.let { DOMRect(it.x, it.y, it.width, it.height) } ?: return false
 
@@ -275,8 +298,8 @@ class CDPSnapshotService(
 
                     val intersects = adjustedX < viewportRight &&
                             adjustedX + current.width > viewportLeft &&
-                            adjustedY < viewportBottom + 1000 &&
-                            adjustedY + current.height > viewportTop - 1000
+                            adjustedY < viewportBottom + VIEWPORT_VISIBILITY_MARGIN_PX &&
+                            adjustedY + current.height > viewportTop - VIEWPORT_VISIBILITY_MARGIN_PX
                     if (!intersects) return false
 
                     // Keep adjustment like Python for proper propagation
@@ -306,12 +329,15 @@ class CDPSnapshotService(
             val absolutePosition = snapshot?.bounds?.roundTo(1)
                 ?.let { DOMRect(it.x + offsetX, it.y + offsetY, it.width, it.height) }
 
-            // Visibility: style check first, then frame viewport check
+            // Visibility: style check first (returns null when snapshot/styles unavailable),
+            // then fall through to spatial viewport check for both true (style-visible) and null (indeterminate).
             val isVisible = if (options.includeVisibility) {
-                val styleVisible = visibilityStyleCheck(snapshot)
-                if (styleVisible == false) false else isElementVisibleAccordingToAllParents(
-                    node.copy(snapshotNode = snapshot), htmlFrames
-                )
+                val snap = snapshot
+                when {
+                    snap == null -> null  // can't determine without snapshot data
+                    visibilityStyleCheck(snap) == false -> false
+                    else -> isElementVisibleAccordingToAllParents(snap, htmlFrames)
+                }
             } else null
 
             // Interactivity and indices
@@ -411,7 +437,7 @@ class CDPSnapshotService(
         }
 
         val merged = merge(trees.domTree, emptyList(), emptyList(), 0.0, 0.0)
-        lastEnhancedRoot = merged
+        lastMergedSnapshot = MergedSnapshot(merged, ancestorMap, trees.domByBackendId)
         return merged
     }
 
@@ -424,7 +450,6 @@ class CDPSnapshotService(
 
         if (!hasElements || optimizedTree == null) {
             logger.info("Empty DOM tree collected | trees: {}", DomDebug.summarize(trees))
-            // throw IllegalStateException("Empty DOM tree collected (AX=${trees.axTree.size}, SNAP=${trees.snapshotByBackendId.size})")
         }
 
         return optimizedTree ?: OptimizedDOMTree(MergedDOMTreeNode())
@@ -501,84 +526,101 @@ class CDPSnapshotService(
     }
 
     private suspend fun buildBrowserState(domState: DOMState): BrowserUseState {
-        // URL from DOM domain (resilient)
-        val url: String = runCatching { bp.getDocument().documentURL }.getOrNull() ?: ""
+        // Fire all independent CDP / JS evaluations concurrently to reduce wall-clock latency.
+        // CDP supports command pipelining, so parallel sends can overlap server-side handling.
+        return coroutineScope {
+            // --- CDP domain calls (independent of JS evals) ---
+            val urlDef = async {
+                runCatching { bp.getDocument().documentURL }.getOrNull() ?: ""
+            }
+            val navDef = async {
+                runCatching {
+                    val history = bp.getNavigationHistory()
+                    val idx = history.currentIndex
+                    val entries = history.entries
+                    entries.getOrNull(idx - 1)?.url to entries.getOrNull(idx + 1)?.url
+                }.getOrElse { "" to "" }
+            }
 
-        // Navigation history for back/forward URLs (resilient)
+            // --- JS evaluations (all independent) ---
+            val scrollXDef = async { evalDouble("window.scrollX || window.pageXOffset || 0") }
+            val scrollYDef = async { evalDouble("window.scrollY || window.pageYOffset || 0") }
+            val vpWidthDef = async {
+                evalDouble("window.innerWidth || document.documentElement.clientWidth || document.body.clientWidth || 0")
+            }
+            val vpHeightDef = async {
+                evalDouble("window.innerHeight || document.documentElement.clientHeight || document.body.clientHeight || 0")
+            }
+            val screenWDef = async { evalInt("(window.screen && window.screen.width) || 0") }
+            val screenHDef = async { evalInt("(window.screen && window.screen.height) || 0") }
+            val totalHDef = async {
+                evalDouble("(document.scrollingElement || document.documentElement || document.body).scrollHeight")
+            }
+            val clientHDef = async {
+                evalDouble("(document.scrollingElement || document.documentElement || document.body).clientHeight")
+            }
+            val tzDef = async {
+                runCatching {
+                    bp.evaluate("Intl.DateTimeFormat().resolvedOptions().timeZone").result.value?.toString()
+                }.getOrNull()?.takeIf { it.isNotBlank() }
+            }
+            val langDef = async {
+                runCatching {
+                    bp.evaluate("navigator.language || (navigator.languages && navigator.languages[0]) || ''").result.value?.toString()
+                }.getOrNull()?.takeIf { it.isNotBlank() }
+            }
 
-        val (goBackUrl, goForwardUrl) = runCatching {
-            val history = bp.getNavigationHistory()
-            val currentIndex = history.currentIndex
-            val entries = history.entries
+            // --- Await and assemble ---
+            val url = urlDef.await()
+            val (goBackUrl, goForwardUrl) = navDef.await()
 
-            val back = entries.getOrNull(currentIndex - 1)?.url
-            val forward = entries.getOrNull(currentIndex + 1)?.url
-            back to forward
-        }.getOrElse { "" to "" }
+            val scrollX = scrollXDef.await() ?: 0.0
+            val scrollY = scrollYDef.await() ?: 0.0
+            val viewportWidth = (vpWidthDef.await() ?: 0.0).toInt()
+            val viewportHeight = (vpHeightDef.await() ?: 0.0).toInt()
+            val screenWidth = screenWDef.await() ?: 0
+            val screenHeight = screenHDef.await() ?: 0
 
-        // Scroll positions and viewport size (resilient)
-        val scrollX = evalDouble("window.scrollX || window.pageXOffset || 0") ?: 0.0
-        val scrollY = evalDouble("window.scrollY || window.pageYOffset || 0") ?: 0.0
-        val viewportWidth =
-            (evalDouble("window.innerWidth || document.documentElement.clientWidth || document.body.clientWidth || 0")
-                ?: 0.0).toInt()
-        val viewportHeight =
-            (evalDouble("window.innerHeight || document.documentElement.clientHeight || document.body.clientHeight || 0")
-                ?: 0.0).toInt()
+            val totalHeight = totalHDef.await() ?: viewportHeight.toDouble()
+            val clientHeight = clientHDef.await() ?: viewportHeight.toDouble()
+            val maxScrollY = (totalHeight - clientHeight).let { if (it.isFinite() && it > 0) it else 0.0 }
+            val scrollYRatio = if (maxScrollY > 0) (scrollY / maxScrollY).coerceIn(0.0, 1.0) else 0.0
 
-        // Screen DimIs
-        val screenWidth = evalInt("(window.screen && window.screen.width) || 0") ?: 0
-        val screenHeight = evalInt("(window.screen && window.screen.height) || 0") ?: 0
+            val scrollState = ScrollState(
+                x = scrollX,
+                y = scrollY,
+                viewport = DimI(viewportWidth, viewportHeight),
+                totalHeight = totalHeight,
+                scrollYRatio = scrollYRatio
+            )
 
-        // Compute max vertical scroll and ratio
-        val totalHeight =
-            evalDouble("(document.scrollingElement || document.documentElement || document.body).scrollHeight")
-                ?: viewportHeight.toDouble()
-        val clientHeight =
-            evalDouble("(document.scrollingElement || document.documentElement || document.body).clientHeight")
-                ?: viewportHeight.toDouble()
-        val maxScrollY = (totalHeight - clientHeight).let { if (it.isFinite() && it > 0) it else 0.0 }
-        val scrollYRatio = if (maxScrollY > 0) (scrollY / maxScrollY).coerceIn(0.0, 1.0) else 0.0
+            val tzId = tzDef.await()
+            val timeZone = runCatching { if (tzId != null) TimeZone.getTimeZone(tzId) else TimeZone.getDefault() }
+                .getOrDefault(TimeZone.getDefault())
 
-        val scrollState = ScrollState(
-            x = scrollX,
-            y = scrollY,
-            viewport = DimI(viewportWidth, viewportHeight),
-            totalHeight = totalHeight,
-            scrollYRatio = scrollYRatio
-        )
+            val langTag = langDef.await()
+            val locale = runCatching { if (langTag != null) Locale.forLanguageTag(langTag) else Locale.getDefault() }
+                .getOrDefault(Locale.getDefault())
 
-        // Client info from browser (fallback to system defaults)
-        val tzId = runCatching {
-            bp.evaluate("Intl.DateTimeFormat().resolvedOptions().timeZone").result.value?.toString()
-        }.getOrNull()?.takeIf { it.isNotBlank() }
-        val timeZone = runCatching { if (tzId != null) TimeZone.getTimeZone(tzId) else TimeZone.getDefault() }
-            .getOrDefault(TimeZone.getDefault())
+            val clientInfo = ClientInfo(
+                timeZone = timeZone.id,
+                locale = locale,
+                viewportWidth = viewportWidth,
+                viewportHeight = viewportHeight,
+                screenWidth = screenWidth,
+                screenHeight = screenHeight
+            )
 
-        val langTag = runCatching {
-            bp.evaluate("navigator.language || (navigator.languages && navigator.languages[0]) || ''").result.value?.toString()
-        }.getOrNull()?.takeIf { it.isNotBlank() }
-        val locale = runCatching { if (langTag != null) Locale.forLanguageTag(langTag) else Locale.getDefault() }
-            .getOrDefault(Locale.getDefault())
+            val browserState = BrowserState(
+                url = url,
+                goBackUrl = goBackUrl,
+                goForwardUrl = goForwardUrl,
+                clientInfo = clientInfo,
+                scrollState = scrollState
+            )
 
-        val clientInfo = ClientInfo(
-            timeZone = timeZone.id,
-            locale = locale,
-            viewportWidth = viewportWidth,
-            viewportHeight = viewportHeight,
-            screenWidth = screenWidth,
-            screenHeight = screenHeight
-        )
-
-        val browserState = BrowserState(
-            url = url,
-            goBackUrl = goBackUrl,
-            goForwardUrl = goForwardUrl,
-            clientInfo = clientInfo,
-            scrollState = scrollState
-        )
-
-        return BrowserUseState(browserState, domState)
+            BrowserUseState(browserState, domState)
+        }
     }
 
     /**
@@ -646,7 +688,8 @@ class CDPSnapshotService(
     }
 
     override fun findElement(ref: ElementRefCriteria): MergedDOMTreeNode? {
-        val root = requireNotNull(lastEnhancedRoot) { "Enhanced DOM tree not built yet" }
+        val snapshot = requireNotNull(lastMergedSnapshot) { "Enhanced DOM tree not built yet" }
+        val root = snapshot.root
 
         // Try element hash first (fastest)
         ref.elementHash?.let { hash ->
@@ -658,9 +701,9 @@ class CDPSnapshotService(
             findByDfs(root) { it.xpath == xpath }?.let { return it }
         }
 
-        // Try backend node ID
+        // Try backend node ID — use the consistent snapshot index first, then fall back to DFS
         ref.backendNodeId?.let { backendId ->
-            lastDomByBackend[backendId]?.let { return it }
+            snapshot.domByBackend[backendId]?.let { return it }
             findByDfs(root) { it.backendNodeId == backendId }?.let { return it }
         }
 
@@ -774,7 +817,8 @@ class CDPSnapshotService(
     ): Boolean? {
         if (snap == null) return null
 
-        // Use the provided snapshot for basic detection (prevents null snapshotNode on pre-merge node)
+        // Copy needed: the pre-merge node has no snapshot yet; attach it so isActuallyScrollable
+        // can inspect scroll rects and computed styles in addition to nodeName/isScrollable.
         val basicScrollable = ScrollUtils.isActuallyScrollable(
             node.copy(snapshotNode = snap)
         )
@@ -788,7 +832,7 @@ class CDPSnapshotService(
             // For special elements, check if they have meaningful scrollable content
             val scrollHeight = snap.scrollRects?.height ?: 0.0
             val clientHeight = snap.clientRects?.height ?: 0.0
-            return scrollHeight > clientHeight + 1 // Allow 1px tolerance
+            return scrollHeight > clientHeight + SCROLL_OVERFLOW_TOLERANCE_PX
         }
 
         // For nested containers, check for duplicate scrollability in ancestors
@@ -855,9 +899,10 @@ class CDPSnapshotService(
             return null
         }
 
-        // Higher paint order means element is painted later (on top)
-        // Lower stacking context values mean higher z-index
-        val stackingFactor = (stackingContext ?: 0) * 1000
+        // Higher paint order means element is painted later (on top).
+        // Lower stacking context values mean higher z-index; each context depth
+        // receives an index offset large enough to keep ordering across contexts.
+        val stackingFactor = (stackingContext ?: 0) * STACKING_CONTEXT_INDEX_MULTIPLIER
         return paintOrder + stackingFactor
     }
 
