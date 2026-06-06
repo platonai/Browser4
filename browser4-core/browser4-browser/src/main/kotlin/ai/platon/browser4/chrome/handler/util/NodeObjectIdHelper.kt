@@ -41,7 +41,7 @@ suspend fun resolveNodeObjectId(devTools: RemoteDevTools, node: NodeRef): Resolv
 }
 
 suspend fun resolveNodeObjectId(bp: BrowserProtocol, node: NodeRef): ResolvedNodeObjectId? {
-    val devTools = (bp as RemoteChromeProtocol).devTools
+    val devTools = (bp as RemoteChromeProtocol).remoteDevToolsOrNull ?: return null
     return resolveNodeObjectId(devTools, node)
 }
 
@@ -58,7 +58,7 @@ suspend fun releaseNodeObjectIfNeeded(devTools: RemoteDevTools, resolved: Resolv
 }
 
 suspend fun releaseNodeObjectIfNeeded(bp: BrowserProtocol, resolved: ResolvedNodeObjectId?) {
-    val devTools = (bp as RemoteChromeProtocol).devTools
+    val devTools = (bp as RemoteChromeProtocol).remoteDevToolsOrNull ?: return
     releaseNodeObjectIfNeeded(devTools, resolved)
 }
 
@@ -84,6 +84,8 @@ suspend inline fun <T> withNodeObjectId(
     node: NodeRef,
     block: suspend (String) -> T,
 ): T? {
-    val devTools = (bp as RemoteChromeProtocol).devTools
+    val devTools = (bp as RemoteChromeProtocol).remoteDevToolsOrNull ?: return null
     return withNodeObjectId(devTools, node, block)
 }
+
+

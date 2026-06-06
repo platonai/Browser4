@@ -2,11 +2,13 @@ package ai.platon.browser4.chrome
 
 import ai.platon.browser4.chrome.util.ChromeIOException
 import ai.platon.browser4.chrome.util.ChromeServiceException
+import ai.platon.cdt.kt.protocol.ChromeDevTools
 import ai.platon.cdt.kt.protocol.support.types.EventHandler
 import ai.platon.cdt.kt.protocol.support.types.EventListener
 import ai.platon.pulsar.browser.impl.BrowserTab
 import ai.platon.pulsar.browser.impl.ChromeVersion
 import ai.platon.pulsar.browser.impl.DevToolsConfig
+import ai.platon.pulsar.browser.impl.MethodInvocation
 import java.net.URI
 import java.util.function.Consumer
 import kotlin.reflect.KClass
@@ -63,38 +65,22 @@ interface ChromeService : AutoCloseable {
         createDevTools(tab, config)
 }
 
-/**
- * A minimal, native-image-friendly DevTools service interface.
- *
- * All CDP commands flow through [execute], which takes a method name string
- * (e.g. "Page.navigate") and a parameter map. Event subscriptions use
- * [addEventListener] / [removeEventListener].
- *
- * There is no dependency on the generated [ai.platon.cdt.kt.protocol.ChromeDevTools]
- * interface — this class does not extend it, and no dynamic proxies are involved.
- */
-interface ChromeDevToolsService : AutoCloseable {
+interface ChromeDevToolsService : ChromeDevTools, AutoCloseable {
 
     val isOpen: Boolean
 
-    /**
-     * Executes a CDP command by method name.
-     *
-     * @param method  The CDP method name, e.g. "Page.navigate".
-     * @param params  The command parameters, or null for parameter-less commands.
-     * @param returnClass  The expected return type's [KClass].
-     * @param returnProperty  Optional property name to extract from the result object
-     *                        (corresponds to the `@Returns` annotation in the generated API).
-     * @param returnTypeClasses  Optional array of type parameters for generic return
-     *                           types (e.g. `arrayOf(Int::class.java)` for `List<Int>`).
-     * @return The deserialized response, or null for void commands / empty results.
-     */
-    suspend fun <T : Any> execute(
+    suspend fun <T> invoke(
+        clazz: Class<T>,
+        returnProperty: String?,
+        returnTypeClasses: Array<Class<out Any>>?,
+        method: MethodInvocation
+    ): T?
+
+    suspend operator fun <T : Any> invoke(
         method: String,
         params: Map<String, Any?>?,
         returnClass: KClass<T>,
-        returnProperty: String? = null,
-        returnTypeClasses: Array<Class<out Any>>? = null
+        returnProperty: String? = null
     ): T?
 
     fun awaitTermination()
@@ -112,15 +98,9 @@ interface ChromeDevToolsService : AutoCloseable {
     fun waitUntilClosed() = awaitTermination()
 }
 
-/**
- * Reified convenience for [ChromeDevToolsService.execute] so callers can write
- * `devTools.execute<Navigate>("Page.navigate", mapOf("url" to url))`
- * without passing a [KClass] explicitly.
- */
-suspend inline fun <reified T : Any> RemoteDevTools.execute(
-    method: String, params: Map<String, Any?>? = null, returnProperty: String? = null,
-    returnTypeClasses: Array<Class<out Any>>? = null
-): T? = execute(method, params, T::class, returnProperty, returnTypeClasses)
+suspend inline operator fun <reified T : Any> RemoteDevTools.invoke(
+    method: String, params: Map<String, Any?>?, returnProperty: String? = null
+): T? = invoke(method, params, T::class, returnProperty)
 
 // Compatibility
 typealias RemoteChrome = ChromeService

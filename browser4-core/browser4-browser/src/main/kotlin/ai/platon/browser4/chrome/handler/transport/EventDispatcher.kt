@@ -4,7 +4,6 @@ import ai.platon.browser4.chrome.util.ChromeRPCException
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.getTracerOrNull
 import ai.platon.pulsar.common.stringify
-import com.codahale.metrics.Counter
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.core.JsonProcessingException
 import com.fasterxml.jackson.databind.DeserializationFeature
@@ -69,9 +68,6 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
 
     private val eventDispatcherScope =
         CoroutineScope(SupervisorJob() + Dispatchers.Default + CoroutineName("EventDispatcher"))
-
-    /** Optional metrics counter incremented on each received message. Set by [ChromeDevToolsImpl] on construction. */
-    var acceptCounter: Counter? = null
 
     val isActive get() = !closed.get()
 
@@ -219,7 +215,7 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
 
         val message = patchMessageForProtocolChange(message)
 
-        acceptCounter?.inc()
+        ChromeDevToolsImpl.numAccepts.inc()
         try {
             val jsonNode = OBJECT_MAPPER.readTree(message)
             val idNode = jsonNode.get(ID_PROPERTY)
@@ -241,8 +237,7 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
                         future.deferred.complete(RpcResult(true, resultNode, message))
                     }
                 } else {
-                    // Late response that arrived after the caller already timed out and unsubscribed
-                    logger.debug("Received response with unknown invocation #{} - {}", id, jsonNode.asText())
+                    logger.warn("Received response with unknown invocation #{} - {}", id, jsonNode.asText())
                 }
             } else {
                 val methodNode = jsonNode.get(METHOD_PROPERTY)
