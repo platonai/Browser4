@@ -43,8 +43,8 @@ print_usage() {
   echo "  test.sh --dry-run it -pl browser4-core  # Show the Maven command with extra args"
   echo "  test.sh it                         # Run integration tests"
   echo "  test.sh e2e                        # Run end-to-end tests"
-  echo "  test.sh cli                        # Show CLI test help (cargo test --test e2e -- --help)"
-  echo "  test.sh cli -- --nocapture         # Run CLI tests with extra cargo test args"
+  echo "  test.sh cli                        # Run CLI tests (cargo test --test e2e -- --nocapture)"
+  echo "  test.sh cli --help                 # Run CLI tests with extra cargo test args"
   echo "  test.sh mock-site -Dmock.site.port=18080"
   echo "  test.sh skills                     # Run skills-focused agentic tests"
   echo "  test.sh mcp                        # Run MCP-focused agentic tests"
@@ -182,7 +182,7 @@ run_browser4_cli_tests() {
     echo ""
     echo "=========================================="
     echo "[SHOW] Would execute in $browser4_cli_dir:"
-    echo "  cargo test --test e2e ${AdditionalMvnArgs[*]}"
+    echo "  cargo test --test e2e -- --nocapture ${AdditionalMvnArgs[*]}"
     echo "=========================================="
     popd > /dev/null || true
     return
@@ -200,9 +200,8 @@ run_browser4_cli_tests() {
   if [[ "$DRY_RUN" == "true" ]]; then
     cargo_args+=("--no-run")
     cargo_args+=("${AdditionalMvnArgs[@]}")
-  elif [[ ${#AdditionalMvnArgs[@]} -eq 0 ]]; then
-    cargo_args+=("--" "--help")
   else
+    cargo_args+=("--" "--nocapture")
     cargo_args+=("${AdditionalMvnArgs[@]}")
   fi
   cargo "${cargo_args[@]}"
