@@ -142,7 +142,7 @@ open class PulsarWebDriverE2ETest : WebDriverTestBase() {
         val data = detail?.value?.toString()
         assertNotNull(data)
 
-        val message = ActiveDOMMessage.fromJson(data)
+        val message = pulsarObjectMapper().readValue<ActiveDOMMessage>(data)
         val urls = message.urls
         assertNotNull(urls)
         assertEquals(e2eOriginUrl, urls.URL)

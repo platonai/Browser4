@@ -21,6 +21,7 @@ import ai.platon.pulsar.common.browser.BrowserErrorCode
 import ai.platon.pulsar.common.config.CapabilityTypes.PARSE_SUPPORT_ALL_CHARSETS
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.event.AbstractEventEmitter
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.persist.ProtocolStatus
 import ai.platon.pulsar.persist.RetryScope
@@ -35,6 +36,7 @@ import ai.platon.pulsar.protocol.browser.emulator.util.*
 import ai.platon.pulsar.skeleton.common.metrics.MetricsSystem
 import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
 import ai.platon.pulsar.skeleton.workflow.protocol.Response
+import com.fasterxml.jackson.module.kotlin.readValue
 import org.slf4j.LoggerFactory
 import java.time.Duration
 import java.time.Instant
@@ -125,7 +127,7 @@ open class BrowserResponseHandlerImpl(
      * This page should be text analyzed to determine the actual error.
      * */
     override fun createBrowserErrorResponse(message: String): BrowserErrorResponse {
-        val activeDomMessage = ActiveDOMMessage.fromJson(message)
+        val activeDomMessage = pulsarObjectMapper().readValue<ActiveDOMMessage>(message)
         val ec = activeDomMessage.trace?.status?.ec
         if (ec == null) {
             val status = ProtocolStatus.retry(RetryScope.PRIVACY, "Unknown error, no message")

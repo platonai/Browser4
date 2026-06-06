@@ -24,6 +24,7 @@ import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.config.AppConstants.VAR_CAPTURE
 import ai.platon.pulsar.common.config.ImmutableConfig
 import ai.platon.pulsar.common.event.AbstractEventEmitter
+import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.persist.AbstractWebPage
 import ai.platon.pulsar.persist.ProtocolStatus
@@ -42,6 +43,7 @@ import ai.platon.pulsar.skeleton.workflow.fetch.FetchTask
 import ai.platon.pulsar.skeleton.workflow.protocol.ForwardingResponse
 import ai.platon.pulsar.skeleton.workflow.protocol.Response
 import ai.platon.pulsar.skeleton.workflow.protocol.http.ProtocolStatusTranslator
+import com.fasterxml.jackson.module.kotlin.readValue
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import java.nio.charset.StandardCharsets
@@ -572,12 +574,12 @@ open class InteractiveBrowserEmulator(
             emit1(EmulateEvents.didScroll, page, driver)
         }
 
-        if (result.state.isContinue && hasScript) {
-            val selectors = task.page.options.waitNonBlank.split(",")
-            if (selectors.isNotEmpty()) {
-                waitForElementUntilNonBlank(task, selectors)
-            }
-        }
+//        if (result.state.isContinue && hasScript) {
+//            val selectors = task.page.options.waitNonBlank.split(",")
+//            if (selectors.isNotEmpty()) {
+//                waitForElementUntilNonBlank(task, selectors)
+//            }
+//        }
 
         if (result.state.isContinue) {
             updateMetaInfos(page, driver)
@@ -797,7 +799,7 @@ open class InteractiveBrowserEmulator(
         val message = evaluate(interactTask, expression)
 
         if (message is String) {
-            result.activeDOMMessage = ActiveDOMMessage.fromJson(message)
+            result.activeDOMMessage = pulsarObjectMapper().readValue<ActiveDOMMessage>(message)
             if (taskLogger.isDebugEnabled) {
                 val page = interactTask.navigateTask.fetchTask.page
                 taskLogger.debug("{}. {} | {}", page.id, result.activeDOMMessage?.trace, interactTask.url)
