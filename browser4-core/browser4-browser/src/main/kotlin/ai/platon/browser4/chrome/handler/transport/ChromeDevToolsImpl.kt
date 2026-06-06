@@ -18,37 +18,22 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
 import java.io.IOException
-import java.lang.reflect.Method
 import java.time.Duration
 import java.time.Instant
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.reflect.KClass
 import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 
-internal class CachedDevToolsInvocationHandlerProxies(impl: Any) : SuspendAwareHandler(impl) {
-    val commandHandler: DevToolsInvocationHandler = DevToolsInvocationHandler(impl)
-    val commands: MutableMap<Method, Any> = ConcurrentHashMap()
-
-    init {
-        // println("CommandHandler hashCode: " + commandHandler.hashCode())
-    }
-
-    // Typical proxy:
-    //   - jdk.proxy1.$Proxy24
-    // Typical methods:
-    //   - public abstract void com.github.kklisura.cdt.protocol.commands.Page.enable()
-    //   - public abstract com...page.Navigate com...Page.navigate(java.lang.String)
-    override fun invoke(proxy: Any, method: Method, args: Array<out Any>?): Any? {
-        return commands.computeIfAbsent(method) {
-            ProxyClasses.createProxy(method.returnType, commandHandler)
-        }
-    }
-}
-
-internal abstract class ChromeDevToolsImpl(
+/**
+ * A concrete, native-image-friendly implementation of [RemoteDevTools].
+ *
+ * All CDP commands flow through [execute] — there is no dynamic proxy, no javassist
+ * bytecode generation, and no reflection-based method dispatch. The class is
+ * instantiated directly via its constructor.
+ */
+internal class ChromeDevToolsImpl(
     private val browserTransport: Transport,
     private val pageTransport: Transport,
     private val config: DevToolsConfig
@@ -62,7 +47,6 @@ internal abstract class ChromeDevToolsImpl(
         private val metrics = SharedMetricRegistries.getOrCreate(AppConstants.DEFAULT_METRICS_NAME)
         private val metricsPrefix = "c.i.BasicDevTools.global"
         private val numInvokes = metrics.counter("$metricsPrefix.invokes")
-        val numAccepts = metrics.counter("$metricsPrefix.accepts")
         private val gauges = mapOf(
             "idleTime" to Gauge { idleTime.readable() }
         )
@@ -74,109 +58,86 @@ internal abstract class ChromeDevToolsImpl(
 
     private val logger = LoggerFactory.getLogger(ChromeDevToolsImpl::class.java)
 
+    private val idSupplier = AtomicLong(1L)
     private val closeLatch = CountDownLatch(1)
     private val closed = AtomicBoolean()
     override val isOpen get() = !closed.get() && pageTransport.isOpen
 
-    private val dispatcher = EventDispatcher()
+    private val dispatcher = EventDispatcher().apply {
+        acceptCounter = metrics.counter("$metricsPrefix.accepts")
+    }
 
     init {
         browserTransport.addMessageHandler(dispatcher)
         pageTransport.addMessageHandler(dispatcher)
     }
 
-    @Throws(ChromeIOException::class, ChromeRPCException::class)
-    override suspend operator fun <T : Any> invoke(
-        method: String, params: Map<String, Any?>?, returnClass: KClass<T>, returnProperty: String?
-    ): T? {
-        val invocation = DevToolsInvocationHandler.createMethodInvocation(method, params)
-
-        // Non-blocking
-        val message = dispatcher.serialize(invocation.id, invocation.method, invocation.params, null)
-
-        val rpcResult = sendAndReceive(invocation.id, method, returnProperty, message) ?: return null
-        val jsonNode = rpcResult.result ?: return null
-
-        return dispatcher.deserialize(returnClass.java, jsonNode)
-    }
-
     /**
-     * Invokes a remote method and returns the result.
+     * Executes a CDP command by method name and returns the deserialized result.
      *
-     * This method is designed to be non-blocking, but it is often called in blocking methods
-     * from Java proxy objects. For example, when calling `devTools.page.navigate(url)`, the
-     * framework translates the function call to this `invoke` method. Since `devTools.page.navigate(url)`
-     * is not a suspend function, this method is wrapped in `runBlocking` to ensure compatibility.
+     * This is the single entry point for all CDP command dispatch. It replaces the
+     * reflection-based proxy system with a straightforward string-keyed dispatch.
      *
-     * @param clazz The class of the return type. This is used to deserialize the result into the expected type.
-     * @param returnProperty The property to return from the response. This is optional and can be null.
-     * @param returnTypeClasses An array of classes representing the return type. This is used for deserialization
-     *                          when the return type involves generics or complex types.
-     * @param method The `MethodInvocation` object containing details about the method to invoke, such as its ID,
-     *               name, and parameters.
-     * @param <T> The generic return type of the method.
-     * @return The result of the invocation, deserialized into the specified type `T`, or null if the result is not available.
-     * @throws ChromeRPCException If the remote procedure call fails or the result indicates an error.
-     * @throws ChromeRPCTimeoutException If the response times out based on the configured read timeout.
+     * @param method The CDP method name, e.g. "Page.navigate".
+     * @param params The command parameters, or null.
+     * @param returnClass The expected return type's class.
+     * @param returnProperty An optional property name to extract from the result object.
+     * @return The deserialized response, or null for void commands or empty results.
+     * @throws ChromeRPCException If the remote procedure call returns an error.
+     * @throws ChromeRPCTimeoutException If the response is not received within the configured timeout.
      */
     @Throws(ChromeRPCException::class)
-    override suspend fun <T> invoke(
-        clazz: Class<T>,
-        returnProperty: String?,
-        returnTypeClasses: Array<Class<out Any>>?,
-        method: MethodInvocation
-    ): T? = invokeInternal(clazz, returnProperty, returnTypeClasses, method, null)
-
-    @Throws(ChromeRPCException::class)
-    internal suspend fun <T> invokeInternal(
-        clazz: Class<T>,
-        returnProperty: String?,
-        returnTypeClasses: Array<Class<out Any>>?,
-        method: MethodInvocation,
-        // for test purpose
-        mockRpcResult: RpcResult? = null
+    override suspend fun <T : Any> execute(
+        method: String, params: Map<String, Any?>?, returnClass: KClass<T>, returnProperty: String?,
+        returnTypeClasses: Array<Class<out Any>>?
     ): T? {
         numInvokes.inc()
         lastActiveTime = Instant.now()
 
-        // Serialize the method invocation into a message to be sent to the remote server.
-        val message = dispatcher.serialize(method)
+        val invocation = createMethodInvocation(method, params)
+        val message = dispatcher.serialize(invocation)
 
-        // Send the request and await the result in a coroutine-friendly way.
-        val rpcResult = mockRpcResult ?: sendAndReceive(method.id, method.method, returnProperty, message)
+        val rpcResult = sendAndReceive(invocation.id, method, returnProperty, message)
 
-        // If no result is received within the timeout, throw a timeout exception.
         if (rpcResult == null) {
-            val methodName = method.method
             val readTimeout = config.readTimeout
-            throw ChromeRPCTimeoutException("No response | $methodName | #${numInvokes.count}, ($readTimeout)")
+            throw ChromeRPCTimeoutException("No response | $method | #${numInvokes.count}, ($readTimeout)")
         }
 
-        // Handle the result based on its success status and the expected return type.
         return when {
-            // If the result indicates failure, handle the error and throw an exception.
             !rpcResult.isSuccess -> {
                 handleFailedFurther(rpcResult.result).let { e ->
-                    //
                     // Known errors:
                     // * -32000L Could not find node with given id
+                    // -32000L is expected and handled in higher layer, so no log needed
                     if (e.errorCode != -32000L) {
-                        // -32000L is expected and handled in higher layer, so no log needed
-                        logger.info("Protocol return error. errorCode={}, errorMessage={} | request={}", e.errorCode, e.errorMessage, message)
+                        logger.info(
+                            "Protocol return error. errorCode={}, errorMessage={} | request={}",
+                            e.errorCode, e.errorMessage, message
+                        )
                     }
                     throw e
                 }
             }
-            // If the expected return type is `Void`, return null.
-            Void.TYPE == clazz -> null
+
+            Void.TYPE == returnClass.java -> null
             rpcResult.result == null -> null
-
-            // If returnTypeClasses is provided, use it for deserialization.
-            returnTypeClasses != null -> dispatcher.deserialize(returnTypeClasses, clazz, rpcResult.result)
-
-            // Otherwise, deserialize the result using the provided class type.
-            else -> dispatcher.deserialize(clazz, rpcResult.result)
+            returnTypeClasses != null -> dispatcher.deserialize(returnTypeClasses, returnClass.java, rpcResult.result)
+            else -> dispatcher.deserialize(returnClass.java, rpcResult.result)
         }
+    }
+
+    private fun createMethodInvocation(method: String, params: Map<String, Any?>?): MethodInvocation {
+        val params0 = (params ?: emptyMap()).toMutableMap()
+        // The 'id' field is transport-level metadata for request/response correlation,
+        // not a CDP command parameter — extract it from params and use it as the methodId,
+        // but don't leak it into the serialized message's params object.
+        val methodId = params0.remove(EventDispatcher.ID_PROPERTY)?.toString()?.toLongOrNull()
+            ?: idSupplier.getAndIncrement()
+        val params1: Map<String, Any> = params0.entries
+            .filter { it.value != null }
+            .associate { it.key to it.value as Any }
+        return MethodInvocation(methodId, method, params1)
     }
 
     @Throws(ChromeIOException::class)
@@ -246,10 +207,9 @@ internal abstract class ChromeDevToolsImpl(
 
     /**
      * Waits for the DevTool to terminate.
-     * */
+     */
     override fun awaitTermination() {
         try {
-            // block the calling thread
             closeLatch.await()
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
@@ -258,21 +218,17 @@ internal abstract class ChromeDevToolsImpl(
 
     override fun close() {
         if (closed.compareAndSet(false, true)) {
-            // discard all furthers in dispatcher?
             runCatching { runBlocking { doClose() } }.onFailure { warnForClose(this, it) }
 
             // Decrements the count of the latch, releasing all waiting threads if the count reaches zero.
-            // If the current count is greater than zero then it is decremented. If the new count is zero then all
-            // waiting threads are re-enabled for thread scheduling purposes.
-            // If the current count equals zero then nothing happens.
             closeLatch.countDown()
         }
     }
 
     @Throws(Exception::class)
     private suspend fun doClose() {
-        // Use shorter timeout if both transports are already closed/inactive
-        // If either transport is still open, use full timeout for graceful shutdown
+        // Use shorter timeout if both transports are already closed/inactive.
+        // If either transport is still open, use full timeout for graceful shutdown.
         val shutdownWaitTimeout = if (pageTransport.isOpen || browserTransport.isOpen) {
             Duration.ofSeconds(10)
         } else {

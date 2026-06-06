@@ -7,6 +7,7 @@ import ai.platon.cdt.kt.protocol.events.page.FrameNavigated
 import ai.platon.cdt.kt.protocol.events.page.FrameStartedLoading
 import ai.platon.cdt.kt.protocol.events.page.FrameStoppedLoading
 import ai.platon.cdt.kt.protocol.events.page.LoadEventFired
+import ai.platon.cdt.kt.protocol.support.types.EventHandler
 import ai.platon.pulsar.common.AppFiles
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.serialize.json.Pson
@@ -16,75 +17,88 @@ class BlockUrlsExample: BrowserExampleBase() {
 
     override val testUrl = "https://www.stbchina.cn/"
 
+    private data class EmptyResult(val ignored: String? = null)
+
     override suspend fun run() {
-        page.enable()
-        network.enable()
-        runtime.enable()
+        devTools.pageEnable()
+        devTools.networkEnable()
+        devTools.runtimeEnable()
 
-        page.addScriptToEvaluateOnNewDocument(preloadJs)
+        devTools.addScriptToEvaluateOnNewDocument(preloadJs)
 
-        page.onDomContentEventFired { event: DomContentEventFired ->
-            // The page's main html content is ready, but css/js are not ready, document.readyState === 'interactive'
-            runtime.evaluate("__pulsar_utils__.checkStatus()")
-        }
+        remoteDevTools.addEventListener("Page", "domContentEventFired",
+            EventHandler { event ->
+                val e = event as DomContentEventFired
+                devTools.evaluate("__pulsar_utils__.checkStatus()")
+            },
+            DomContentEventFired::class.java)
 
-        page.onLoadEventFired { event: LoadEventFired ->
-            // The page is completely loaded, document.readyState === 'complete'
+        remoteDevTools.addEventListener("Page", "loadEventFired",
+            EventHandler { event ->
+                val e = event as LoadEventFired
+                devTools.evaluate("__pulsar_utils__.scrollDownN();")
 
-            runtime.evaluate("__pulsar_utils__.scrollDownN();")
-//            runtime.evaluate("__pulsar_utils__.emulate();")
+                val source = pageSource
+                val path = AppPaths.WEB_CACHE_DIR.resolve(AppPaths.fromUri(testUrl, "", ".htm"))
+                AppFiles.saveTo(source, path, true)
+                logger.debug("Page is saved to {}", path.toUri())
 
-            val source = pageSource
-            val path = AppPaths.WEB_CACHE_DIR.resolve(AppPaths.fromUri(testUrl, "", ".htm"))
-            AppFiles.saveTo(source, path, true)
-            logger.debug("Page is saved to {}", path.toUri())
+                TimeUnit.SECONDS.sleep(5)
+                remoteDevTools.close()
+            },
+            LoadEventFired::class.java)
 
-            TimeUnit.SECONDS.sleep(5)
-            devTools.close()
-        }
+        remoteDevTools.addEventListener("Page", "frameAttached",
+            EventHandler { event ->
+                val e = event as FrameAttached
+                if (isMainFrame(e.frameId)) {
+                    debugDocumentState(e)
+                }
+                println("onFrameAttached - ${e.frameId}")
+            },
+            FrameAttached::class.java)
 
-        page.onFrameAttached { event: FrameAttached ->
-            if (isMainFrame(event.frameId)) {
-                debugDocumentState(event)
-            }
-            println("onFrameAttached - ${event.frameId}")
-        }
+        remoteDevTools.addEventListener("Page", "frameDetached",
+            EventHandler { event ->
+                val e = event as FrameDetached
+                if (isMainFrame(e.frameId)) {
+                    debugDocumentState(e)
+                }
+                println("onFrameDetached - " + e.frameId)
+            },
+            FrameDetached::class.java)
 
-        page.onFrameDetached { event: FrameDetached ->
-            if (isMainFrame(event.frameId)) {
-                debugDocumentState(event)
-            }
-            println("onFrameDetached - " + event.frameId)
-        }
-
-        page.onFrameNavigated { event: FrameNavigated ->
+        devTools.onFrameNavigated { event ->
             if (isMainFrame(event.frame.id)) {
                 debugDocumentState(event)
                 println(event.javaClass.simpleName + " - " + event.frame.id)
             }
         }
 
-        page.onFrameStartedLoading { event: FrameStartedLoading ->
-            if (isMainFrame(event.frameId)) {
-                debugDocumentState(event)
-                // emulation.canEmulate() //true
-            }
-        }
+        remoteDevTools.addEventListener("Page", "frameStartedLoading",
+            EventHandler { event ->
+                val e = event as FrameStartedLoading
+                if (isMainFrame(e.frameId)) {
+                    debugDocumentState(e)
+                }
+            },
+            FrameStartedLoading::class.java)
 
-        page.onFrameStoppedLoading { event: FrameStoppedLoading ->
-            if (isMainFrame(event.frameId)) {
-                println("[main] onFrameStoppedLoading - ${event.frameId} - ${pageSource.length}")
-            } else {
-                println("onFrameStoppedLoading - ${event.frameId}")
-            }
-            println()
-        }
+        remoteDevTools.addEventListener("Page", "frameStoppedLoading",
+            EventHandler { event ->
+                val e = event as FrameStoppedLoading
+                if (isMainFrame(e.frameId)) {
+                    println("[main] onFrameStoppedLoading - ${e.frameId} - ${pageSource.length}")
+                } else {
+                    println("onFrameStoppedLoading - ${e.frameId}")
+                }
+                println()
+            },
+            FrameStoppedLoading::class.java)
 
-        page.navigate(testUrl)
+        devTools.navigate(testUrl)
 
         println(Pson.toJson(chrome.version))
-
-//        readLine()
     }
 
     private fun isMainFrame(frameId: String): Boolean {
@@ -92,7 +106,7 @@ class BlockUrlsExample: BrowserExampleBase() {
     }
 
     private suspend fun debugDocumentState(event: Any, message: String = "") {
-        val evaluate = runtime.evaluate("document.readyState")
+        val evaluate = devTools.evaluate("document.readyState")
         println("${event.javaClass.simpleName} ${evaluate.result.value} | message")
     }
 }

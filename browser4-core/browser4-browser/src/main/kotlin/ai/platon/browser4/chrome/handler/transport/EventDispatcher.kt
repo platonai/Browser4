@@ -4,6 +4,7 @@ import ai.platon.browser4.chrome.util.ChromeRPCException
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.getTracerOrNull
 import ai.platon.pulsar.common.stringify
+import com.codahale.metrics.Counter
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.core.JsonProcessingException
 import com.fasterxml.jackson.databind.DeserializationFeature
@@ -68,6 +69,9 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
 
     private val eventDispatcherScope =
         CoroutineScope(SupervisorJob() + Dispatchers.Default + CoroutineName("EventDispatcher"))
+
+    /** Optional metrics counter incremented on each received message. Set by [ChromeDevToolsImpl] on construction. */
+    var acceptCounter: Counter? = null
 
     val isActive get() = !closed.get()
 
@@ -215,7 +219,7 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
 
         val message = patchMessageForProtocolChange(message)
 
-        ChromeDevToolsImpl.numAccepts.inc()
+        acceptCounter?.inc()
         try {
             val jsonNode = OBJECT_MAPPER.readTree(message)
             val idNode = jsonNode.get(ID_PROPERTY)

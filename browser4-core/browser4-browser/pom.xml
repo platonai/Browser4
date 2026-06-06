@@ -64,13 +64,6 @@
             <artifactId>ktor-client-websockets</artifactId>
         </dependency>
 
-        <!-- https://mvnrepository.com/artifact/org.javassist/javassist -->
-        <dependency>
-            <groupId>org.javassist</groupId>
-            <artifactId>javassist</artifactId>
-            <version>${javassist.version}</version>
-        </dependency>
-
         <!-- Test dependencies: JUnit 5 and Mockito (including Kotlin bindings) -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
@@ -111,8 +104,6 @@
     </dependencies>
 
     <properties>
-        <!-- Reflect, org.javassist:javassist, required by ProxyClasses -->
-        <javassist.version>3.30.2-GA</javassist.version>
         <cdt-kotlin-client.version>4.0.5</cdt-kotlin-client.version>
     </properties>
 </project>
