@@ -108,7 +108,4 @@
         </dependency>
     </dependencies>
 
-    <properties>
-        <spring-boot.version>4.0.5</spring-boot.version>
-    </properties>
 </project>
