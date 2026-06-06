@@ -1676,10 +1676,16 @@ impl E2ETestResources {
                         startup_result.stdout,
                         startup_result.stderr,
                     );
-                    assert_root_search_log_contains_invocation_dir(
-                        &startup_result.stderr,
-                        &self.ctx.invocation_dir,
-                    );
+                    // When --force-remote-bundle is active the CLI skips the
+                    // local Browser4 root search and downloads a pre-built
+                    // runtime bundle instead — root-search diagnostics are
+                    // never emitted.
+                    if !force_remote_bundle_for_local_server() {
+                        assert_root_search_log_contains_invocation_dir(
+                            &startup_result.stderr,
+                            &self.ctx.invocation_dir,
+                        );
+                    }
                 }
                 assert!(
                     startup_result.stderr.contains("Browser4 startup log:"),
