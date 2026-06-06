@@ -32,7 +32,9 @@
       "Bash(cargo build *)",
       "Bash(wait)",
       "Bash(cp target/aarch64-apple-darwin/release/browser4 bin/browser4-darwin-arm64)",
-      "Bash(cp target/x86_64-apple-darwin/release/browser4 bin/browser4-darwin-x64)"
+      "Bash(cp target/x86_64-apple-darwin/release/browser4 bin/browser4-darwin-x64)",
+      "Bash(node -e ' *)",
+      "Bash(git commit -m 'fix: don'\\\\''t publish to npm when remote version lookup fails *)"
     ]
   }
 }
