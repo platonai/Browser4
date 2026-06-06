@@ -5,7 +5,9 @@
       "mcp__ide__getDiagnostics",
       "Bash(git ls-remote *)",
       "Bash(git tag *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(powershell *)",
+      "Bash(xxd)"
     ]
   }
 }

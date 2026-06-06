@@ -8,12 +8,22 @@
     increments the specified part (major, minor, or patch), and then updates the version number in all relevant files,
     including pom.xml, READMEs, and the VERSION file itself. Finally, it commits the changes to Git.
 
+    Before bumping, by default the script runs a publish-status precheck via check-publish-status.ps1 which verifies:
+      1. The current version (vX.Y.Z) is the latest release on GitHub.
+      2. The pulsar-bom artifact for the current version is available on Maven Central.
+    These checks ensure that you are bumping from a version that has actually been published.
+    Use -SkipPrecheck to bypass this verification.
+
 .PARAMETER Part
     Specifies which part of the version to bump. Must be one of 'major', 'minor', or 'patch'.
 
+.PARAMETER SkipPrecheck
+    Skips the publish-status precheck. By default the script verifies that the current version
+    is the latest GitHub release and is available on Maven Central before bumping.
+
 .EXAMPLE
     .\bump-version.ps1 -Part patch
-    Bumps the patch version (e.g., 1.2.3 -> 1.2.4).
+    Bumps the patch version (e.g., 1.2.3 -> 1.2.4). Runs the publish-status precheck first.
 
 .EXAMPLE
     .\bump-version.ps1 -Part minor
@@ -22,12 +32,19 @@
 .EXAMPLE
     .\bump-version.ps1 -Part major
     Bumps the major version and resets minor and patch versions to 0 (e.g., 1.2.3 -> 2.0.0).
+
+.EXAMPLE
+    .\bump-version.ps1 -Part patch -SkipPrecheck
+    Bumps the patch version without running the publish-status precheck.
 #>
 [CmdletBinding()]
 param (
     [Parameter(Mandatory = $true, HelpMessage = "The part of the version to bump: 'major', 'minor', or 'patch'")]
     [ValidateSet('major', 'minor', 'patch')]
-    [string]$Part
+    [string]$Part,
+
+    [Parameter(HelpMessage = "Skip the publish-status precheck (GitHub release + Maven Central)")]
+    [switch]$SkipPrecheck
 )
 
 # Find the project root directory containing the VERSION file
@@ -66,6 +83,36 @@ if ($VERSION -match "^(\d+)\.(\d+)\.(\d+)") {
     Write-Error "Version string '$VERSION' does not match the expected format X.Y.Z"
     exit 1
 }
+
+# ---------------------------------------------------------------
+# Precheck: verify the current version has been fully published
+# ---------------------------------------------------------------
+if (-not $SkipPrecheck) {
+    Write-Host ""
+    Write-Host "Running publish-status precheck for version v$VERSION..."
+    Write-Host "---------------------------------------------------------"
+
+    $checkScript = Join-Path $repoRoot "bin\release\check-publish-status.ps1"
+    if (Test-Path $checkScript) {
+        & $checkScript -Version $VERSION
+        # Check both $LASTEXITCODE (set by exit N) and $? (set on error)
+        $precheckFailed = ($LASTEXITCODE -ne 0) -or (-not $?)
+        if ($precheckFailed) {
+            Write-Host ""
+            Write-Error ("Precheck failed: version v$VERSION has not been fully published." `
+                + " Ensure the version is the latest GitHub release and pulsar-bom is on Maven Central." `
+                + " Use -SkipPrecheck to bypass this check if you know what you're doing.")
+            exit 1
+        }
+    } else {
+        Write-Warning "check-publish-status.ps1 not found at '$checkScript'. Skipping precheck."
+    }
+} else {
+    Write-Host ""
+    Write-Host "Precheck skipped (-SkipPrecheck specified). Proceeding without publish-status verification."
+}
+Write-Host "---------------------------------------------------------"
+Write-Host ""
 
 # Calculate the next version based on the specified part
 switch ($Part) {
