@@ -501,7 +501,7 @@ if ($normalizedScriptArgs.Count -eq 0) {
 }
 
 foreach ($arg in $normalizedScriptArgs) {
-    if ($arg -in '-h', '-help', '--help') {
+    if ($arg -in '-h', '-help', '--help' -and $testTypes.Count -eq 0) {
         Print-Usage -ExitCode 0
     }
 

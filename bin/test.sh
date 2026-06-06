@@ -463,7 +463,12 @@ fi
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|-help|--help)
-      print_usage 0
+      if [[ ${#TestTypes[@]} -eq 0 ]]; then
+        print_usage 0
+      else
+        AdditionalMvnArgs+=("$1")
+      fi
+      shift
       ;;
     --dry-run)
       DRY_RUN=true
