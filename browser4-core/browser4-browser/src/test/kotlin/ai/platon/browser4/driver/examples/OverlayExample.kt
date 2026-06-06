@@ -15,7 +15,7 @@ class OverlayExample : BrowserExampleBase() {
     override suspend fun run() {
         devTools.pageEnable()
         devTools.domEnable()
-        remoteDevTools.execute("Overlay.enable", null, EmptyResult::class)
+        remoteDevTools.invoke("Overlay.enable", null, EmptyResult::class)
 
         remoteDevTools.addEventListener("Overlay", "screenshotRequested",
             EventHandler { event ->
