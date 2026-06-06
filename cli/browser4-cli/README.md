@@ -103,6 +103,12 @@ e2e uses a custom harness (`harness = false`). Arguments after `--` are forwarde
 # Basics
 cargo test --test e2e -- --nocapture
 
+# Run only "Extended" level scenarios (default is "Basic")
+cargo test --test e2e -- --nocapture --level=EXTENDED
+
+# Limit to 1 scenario
+cargo test --test e2e -- --nocapture --scenario-limit=1
+
 # Run a specific scenario (exact match)
 cargo test --test e2e -- --nocapture --scenario=test_e2e_batch_form_submission
 
