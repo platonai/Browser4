@@ -76,7 +76,7 @@ export function getPublishDecision() {
     cliVersion: metadata.version,
     remoteVersion: remoteInfo.version,
     lookupStatus: remoteInfo.status,
-    shouldPublish: remoteInfo.version === 'unknown' || metadata.version !== remoteInfo.version,
+    shouldPublish: remoteInfo.version !== 'unknown' && metadata.version !== remoteInfo.version,
   };
 }
 
