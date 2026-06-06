@@ -125,6 +125,17 @@ if (Test-Path $pomXmlPath) {
     ((Get-Content $pomXmlPath -Raw) -replace "<tag>v$VERSION</tag>", "<tag>v$NEXT_VERSION</tag>") | Set-Content $pomXmlPath
 }
 
+# Sync the CLI version from the VERSION file to package.json and Cargo.toml
+$syncScript = Join-Path $repoRoot "cli/scripts/sync-version.js"
+if (Test-Path $syncScript) {
+    Write-Host "Syncing CLI version metadata..."
+    & node $syncScript
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "CLI version sync failed."
+        exit 1
+    }
+}
+
 # Commit changes
 $COMMENT = "Bump version to v$($NEXT_VERSION)"
 Write-Host "Ready to commit with comment: <$COMMENT>"
