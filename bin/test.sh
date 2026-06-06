@@ -18,6 +18,7 @@ fi
 cd "$repo_root" || exit 1
 
 print_usage() {
+  local exit_code="${1:-1}"
   echo "Usage: test.sh [--dry-run] [--show] [test-types...] [additional-args...]"
   echo ""
   echo "Options:"
@@ -29,13 +30,12 @@ print_usage() {
   echo "  it          Run integration tests"
   echo "  e2e         Run end-to-end tests"
   echo "  cli         Run Rust Browser4 CLI tests from cli/browser4-cli"
-  echo "  mock-site   Launch mock site from browser4-tests\browser4-rest-tests"
+  echo "  mock-site   Launch mock site from browser4-tests/browser4-rest-tests"
   echo "  rest        Run REST module tests"
   echo "  skills      Run skills-focused agentic tests"
   echo "  mcp         Run MCP-focused agentic tests"
   echo "  resume      Resume from the last failed module (-rf)"
   echo "  browser4    Run all Browser4 main tests (fast, rest, it, e2e)"
-  echo "  b4          Alias for browser4"
   echo ""
   echo "Examples:"
   echo "  test.sh fast                       # Run fast unit tests"
@@ -50,14 +50,13 @@ print_usage() {
   echo "  test.sh mcp                        # Run MCP-focused agentic tests"
   echo "  test.sh resume                     # Resume from the last failed module"
   echo "  test.sh browser4                   # Run all Browser4 main tests"
-  echo "  test.sh b4                         # Alias for browser4"
   echo "  test.sh it -pl browser4-core       # Pass additional Maven args through"
-  exit 1
+  exit "$exit_code"
 }
 
 exit_unknown_test_type() {
   local test_type=$1
-  echo "Error: Unknown test type '$test_type'. Valid test types: fast, it, e2e, cli, mock-site, rest, skills, mcp, resume, browser4, b4 (aliases: mocksite, mocksiteboot)." >&2
+  echo "Error: Unknown test type '$test_type'. Valid test types: fast, it, e2e, cli, mock-site, rest, skills, mcp, resume, browser4 (aliases: mocksite, mocksiteboot)." >&2
   exit 1
 }
 
@@ -448,7 +447,7 @@ run_resume_tests() {
   echo "=========================================="
 }
 
-KnownTestTypes=(fast it e2e cli browser4-cli mock-site mocksite mocksiteboot rest skills mcp resume browser4 b4)
+KnownTestTypes=(fast it e2e cli browser4-cli mock-site mocksite mocksiteboot rest skills mcp resume browser4)
 TestTypes=()
 MavenTests=()
 CLITests=()
@@ -465,7 +464,7 @@ fi
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -h|-help|--help)
-      print_usage
+      print_usage 0
       ;;
     --dry-run)
       DRY_RUN=true
@@ -475,7 +474,7 @@ while [[ $# -gt 0 ]]; do
       SHOW=true
       shift
       ;;
-    fast|it|e2e|cli|browser4-cli|mock-site|mocksite|mocksiteboot|rest|skills|mcp|browser4|b4|resume)
+    fast|it|e2e|cli|browser4-cli|mock-site|mocksite|mocksiteboot|rest|skills|mcp|browser4|resume)
       if [[ "$ParsingTestTypes" == "true" ]]; then
         TestTypes+=("$1")
       else
@@ -509,7 +508,7 @@ if [[ " ${TestTypes[*]} " == *" resume "* ]]; then
 fi
 
 for type in "${TestTypes[@]}"; do
-  if [[ "$type" == "browser4" || "$type" == "b4" ]]; then
+  if [[ "$type" == "browser4" ]]; then
     MavenTests+=(fast it e2e rest)
   elif [[ "$type" == "cli" || "$type" == "browser4-cli" ]]; then
     CLITests+=("$type")
