@@ -2922,6 +2922,7 @@ fn normalize_command_invocation(global: &args::GlobalFlags) -> (String, args::Gl
             server_url: global.server_url.clone(),
             json: global.json,
             quiet: global.quiet,
+            proxy_url: global.proxy_url.clone(),
             args: rewritten,
         };
         (cmd, new_global, true)
@@ -3703,6 +3704,16 @@ async fn run(
             updated.base_url = server_url.clone();
             write_state(&updated, None, global.session_name.as_deref())
                 .map_err(|e| e.to_string())?;
+        }
+    }
+
+    // Forward --proxy to the download layer via env var so it can be
+    // picked up by resolve_download_proxy() without threading through
+    // every function signature.  Has highest priority over auto-detection.
+    if let Some(ref proxy_url) = global.proxy_url {
+        // Rust 2024 marks process-wide env mutation as unsafe.
+        unsafe {
+            std::env::set_var("BROWSER4_CLI_PROXY", proxy_url);
         }
     }
 

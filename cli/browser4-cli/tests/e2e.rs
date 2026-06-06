@@ -24,6 +24,7 @@
 //! cargo test --test e2e -- --nocapture --scenario-from=test_e2e_navigation_and_storage --scenario-limit=5
 //! cargo test --test e2e -- --nocapture --failed
 //! cargo test --test e2e -- --nocapture --scenario=test_e2e_eval_command --fail-fast
+//! cargo test --test e2e -- --nocapture --force-remote-bundle
 //! ```
 //!
 //! The `--failed` selector reruns scenario names stored by the previous run in
@@ -80,6 +81,8 @@ const OTHER_TITLE: &str = "Browser4 CLI Other Fixture";
 const FORM_TITLE: &str = "Browser4 CLI Form Fixture";
 const ROOT_SEARCH_START_DIR_ENV: &str = "BROWSER4_CLI_INVOKE_DIR";
 const USE_MAVEN_STARTUP_ENV: &str = "BROWSER4_E2E_USE_MAVEN_STARTUP";
+const FORCE_REMOTE_BUNDLE_ENV: &str = "BROWSER4_E2E_FORCE_REMOTE_BUNDLE";
+const FORCE_REMOTE_BUNDLE_CLI_ENV: &str = "BROWSER4_CLI_FORCE_REMOTE_BUNDLE";
 const LAST_FAILED_SCENARIOS_FILE: &str = "last-failed-scenarios.json";
 
 // ---------------------------------------------------------------------------
@@ -110,6 +113,18 @@ fn fixture_host() -> String {
 
 fn use_maven_startup_for_local_server() -> bool {
     std::env::var(USE_MAVEN_STARTUP_ENV)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn force_remote_bundle_for_local_server() -> bool {
+    std::env::var(FORCE_REMOTE_BUNDLE_ENV)
         .ok()
         .map(|value| {
             matches!(
@@ -2739,6 +2754,13 @@ fn create_e2e_test_resources() -> E2ETestResources {
     fs::write(&upload_file_path, b"browser4-cli e2e upload payload")
         .expect("write upload file failed");
 
+    // When --force-remote-bundle is active, forward the corresponding env
+    // var to every CLI child process so it skips the local Maven/jlink build.
+    let mut extra_env = Vec::new();
+    if force_remote_bundle_for_local_server() {
+        extra_env.push((FORCE_REMOTE_BUNDLE_CLI_ENV.to_string(), "1".to_string()));
+    }
+
     E2ETestResources {
         _temp_dir: temp_dir,
         _fixture: fixture,
@@ -2755,7 +2777,7 @@ fn create_e2e_test_resources() -> E2ETestResources {
             runtime_dir,
             upload_file_path,
             step_timings: Vec::new(),
-            extra_env: Vec::new(),
+            extra_env,
         },
     }
 }
@@ -3413,6 +3435,7 @@ struct RunOptions {
     batch_only: bool,
     enable_batch_scenario: bool,
     enable_install_scenario: bool,
+    force_remote_bundle: bool,
     /// When non-empty, only scenarios matching at least one of these group
     /// names are selected.  An empty Vec means no group filter is applied.
     groups: Vec<String>,
@@ -3441,6 +3464,9 @@ Options:
   --batch-only                 Run only batch-command scenarios
   --enable-batch-scenario      Include batch-command scenarios in the run
   --enable-install-scenario    Include install/upgrade scenarios
+  --force-remote-bundle        Download the Browser4 runtime bundle from a
+                               remote release instead of building locally
+                               (sets BROWSER4_CLI_FORCE_REMOTE_BUNDLE=1).
   --level=<BASIC|EXTENDED|all> Max scenario level to run (default: BASIC).
                                Use EXTENDED or all to include edge-case and
                                longer-running tests.
@@ -3452,6 +3478,10 @@ Environment variables:
                                fixture HTTP server (default: 127.0.0.1)
   BROWSER4_E2E_CLI_TIMEOUT_SECS Override per-command timeout in seconds
   BROWSER4_E2E_USE_MAVEN_STARTUP Set to 1/true/yes/on for Maven startup
+  BROWSER4_E2E_FORCE_REMOTE_BUNDLE Set to 1/true/yes/on to download runtime
+                               bundle from GitHub (equiv. --force-remote-bundle)
+  BROWSER4_CLI_FORCE_REMOTE_BUNDLE Set to 1/true/yes/on in the CLI process
+                               to skip local Maven/jlink build
 "#;
 
 fn parse_scenario_limit(raw: &str) -> usize {
@@ -3506,6 +3536,7 @@ fn parse_run_options() -> RunOptions {
     let mut batch_only = false;
     let mut enable_batch_scenario = false;
     let mut enable_install_scenario = false;
+    let mut force_remote_bundle = false;
     let mut groups: Vec<String> = Vec::new();
     let mut max_level = scenarios::ScenarioLevel::Basic;
 
@@ -3513,6 +3544,11 @@ fn parse_run_options() -> RunOptions {
         if arg == "--help" || arg == "-h" {
             print!("{HELP_TEXT}");
             std::process::exit(0);
+        }
+
+        if arg == "--force-remote-bundle" {
+            force_remote_bundle = true;
+            continue;
         }
 
         if let Some(value) = arg.strip_prefix("--level=") {
@@ -3644,6 +3680,7 @@ fn parse_run_options() -> RunOptions {
         batch_only,
         enable_batch_scenario,
         enable_install_scenario,
+        force_remote_bundle,
         groups,
         max_level,
     }
@@ -4010,6 +4047,12 @@ fn main() {
     // Validate internal HTTP helpers before any scenario touches the mock
     // server.  Panics early so regressions are obvious.
     verify_internal_http_helpers();
+
+    // When --force-remote-bundle is passed, set the env var before
+    // create_e2e_test_resources() reads it.
+    if run_options.force_remote_bundle {
+        std::env::set_var(FORCE_REMOTE_BUNDLE_ENV, "1");
+    }
 
     let mut resources = create_e2e_test_resources();
 

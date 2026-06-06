@@ -19,6 +19,8 @@ pub struct GlobalFlags {
     pub json: bool,
     /// `-q` / `--quiet` — suppress normal output, only show errors
     pub quiet: bool,
+    /// `--proxy=<url>` or `--proxy <url>` — manual HTTP proxy for downloads
+    pub proxy_url: Option<String>,
     /// Remaining arguments (command + its args/options)
     pub args: Vec<String>,
 }
@@ -35,6 +37,7 @@ pub struct BatchArgs {
 /// Recognises:
 /// - `-s=<name>`, `-s <name>`, `--session=<name>`, `--session <name>` → session name
 /// - `--server=<url>` or `--server <url>` → server URL override
+/// - `--proxy=<url>` or `--proxy <url>` → manual HTTP proxy override for downloads
 /// - `--json` → emit machine-parseable JSON to stdout
 /// - `--version` / `-v` → version flag (returned in `args`)
 /// - Everything else is forwarded unchanged in `args`
@@ -75,6 +78,13 @@ pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
             if i + 1 < argv.len() && !argv[i + 1].starts_with('-') {
                 i += 1;
                 flags.server_url = Some(argv[i].clone());
+            }
+        } else if !seen_command && arg.starts_with("--proxy=") {
+            flags.proxy_url = Some(arg["--proxy=".len()..].to_string());
+        } else if !seen_command && arg == "--proxy" {
+            if i + 1 < argv.len() && !argv[i + 1].starts_with('-') {
+                i += 1;
+                flags.proxy_url = Some(argv[i].clone());
             }
         } else {
             // First non-flag argument is the command name.

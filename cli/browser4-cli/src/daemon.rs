@@ -44,6 +44,11 @@ const BROWSER4_INSTALL_METADATA_FILE_NAME: &str = "browser4-installation.json";
 const BROWSER4_RELEASES_BASE_URL: &str = "https://github.com/platonai/Browser4/releases";
 const BROWSER4_RELEASES_BASE_URL_ENV: &str = "BROWSER4_RELEASES_BASE_URL";
 const ROOT_SEARCH_START_DIR_ENV: &str = "BROWSER4_CLI_INVOKE_DIR";
+/// When set to `1`, `true`, `yes`, or `on`, forces the CLI to download the
+/// Browser4 runtime bundle from a remote release instead of building it from
+/// a local Browser4 repository checkout.  Useful in environments where
+/// Maven / jlink are unavailable or unreliable (e.g. CI behind a proxy).
+const FORCE_REMOTE_BUNDLE_ENV: &str = "BROWSER4_CLI_FORCE_REMOTE_BUNDLE";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeBundleArchiveKind {
@@ -552,6 +557,19 @@ fn normalize_release_tag(tag: Option<&str>) -> Option<String> {
     }
 }
 
+/// Check whether `BROWSER4_CLI_FORCE_REMOTE_BUNDLE` is set.
+///
+/// When this flag is active the CLI skips the local Maven/jlink build
+/// and downloads a pre-built runtime bundle directly from the release
+/// server.  This is primarily useful in CI / corporate environments
+/// where Maven or jlink dependencies are unavailable.
+fn should_force_remote_bundle() -> bool {
+    match env::var(FORCE_REMOTE_BUNDLE_ENV).ok().as_deref() {
+        Some("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON") => true,
+        _ => false,
+    }
+}
+
 fn browser4_releases_base_url() -> String {
     env::var(BROWSER4_RELEASES_BASE_URL_ENV)
         .ok()
@@ -573,6 +591,189 @@ fn parse_release_tag_from_url(url: &str) -> Option<String> {
     let segments = parsed.path_segments()?.collect::<Vec<_>>();
     let download_index = segments.iter().position(|segment| *segment == "download")?;
     segments.get(download_index + 1).map(|segment| (*segment).to_string())
+}
+
+/// Build a `reqwest::Proxy` from the given URL string.
+/// The URL must include a scheme (http://, https://, or socks5://).
+fn proxy_from_url(raw: &str) -> Option<reqwest::Proxy> {
+    let trimmed = raw.trim().to_string();
+    if trimmed.is_empty() {
+        return None;
+    }
+    match reqwest::Proxy::all(&trimmed) {
+        Ok(proxy) => Some(proxy),
+        Err(error) => {
+            eprintln!(
+                "Warning: failed to configure download proxy from ({trimmed}): {error}"
+            );
+            None
+        }
+    }
+}
+
+/// Resolve a download proxy for the reqwest HTTP client.
+///
+/// # Search order (first match wins)
+/// 1. `BROWSER4_CLI_PROXY` env var — set by `--proxy=<url>` on the CLI,
+///    giving the user explicit control over the download proxy.
+/// 2. Standard env vars (`https_proxy`, `HTTPS_PROXY`, `http_proxy`, …) —
+///    the portable path, used on Unix, in CI, and in Docker.
+/// 3. On Windows: the system-wide proxy configured via Internet Options,
+///    which is stored in the registry and surfaced by `netsh winhttp`.
+///
+/// Returns `None` when no proxy is configured, so the download uses a
+/// direct connection.
+fn resolve_download_proxy() -> Option<reqwest::Proxy> {
+    // 1 — Explicit CLI override (--proxy flag).
+    let cli_proxy = std::env::var("BROWSER4_CLI_PROXY")
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    if let Some(ref url) = cli_proxy {
+        return proxy_from_url(url);
+    }
+
+    // 2 — Environment variables (portable; primary on Unix).
+    // On Windows, `std::env::var` is backed by `GetEnvironmentVariableW`,
+    // which does case-insensitive matching, so the first variant already
+    // catches both `HTTPS_PROXY` and `https_proxy`.  The explicit
+    // fallbacks are here for Unix (case-sensitive).
+    let env_proxy = std::env::var("https_proxy")
+        .or_else(|_| std::env::var("HTTPS_PROXY"))
+        .or_else(|_| std::env::var("http_proxy"))
+        .or_else(|_| std::env::var("HTTP_PROXY"))
+        .or_else(|_| std::env::var("all_proxy"))
+        .or_else(|_| std::env::var("ALL_PROXY"))
+        .ok()
+        .filter(|v| !v.trim().is_empty());
+    if let Some(ref url) = env_proxy {
+        return proxy_from_url(url);
+    }
+
+    // 3 — Windows system proxy (WinHTTP / Internet Options).
+    #[cfg(windows)]
+    {
+        if let Some(proxy) = resolve_windows_system_proxy() {
+            return Some(proxy);
+        }
+    }
+
+    None
+}
+
+/// Read the system-wide proxy configured under Internet Options on Windows.
+///
+/// Checks two sources (in order):
+/// 1. `netsh winhttp show proxy` — the WinHTTP proxy used by system services.
+/// 2. The registry key `HKCU\…\Internet Settings` — the IE / Edge proxy
+///    (surfaced in the GUI as "LAN Settings").
+///
+/// Returns the proxy URL with a scheme added when necessary
+/// (the registry stores `host:port` without a scheme by default).
+#[cfg(windows)]
+fn resolve_windows_system_proxy() -> Option<reqwest::Proxy> {
+    // 2a — WinHTTP proxy (netsh).
+    if let Some(url) = read_winhttp_proxy() {
+        return proxy_from_url(&url);
+    }
+
+    // 2b — IE proxy via registry.
+    if let Some(url) = read_ie_proxy_from_registry() {
+        return proxy_from_url(&url);
+    }
+
+    None
+}
+
+#[cfg(windows)]
+fn read_winhttp_proxy() -> Option<String> {
+    let output = std::process::Command::new("netsh")
+        .args(["winhttp", "show", "proxy"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        let line = line.trim();
+        if let Some(server) = line.strip_prefix("Proxy Server(s):") {
+            let server = server.trim();
+            if !server.is_empty()
+                && !server.eq_ignore_ascii_case("direct")
+            {
+                return Some(ensure_proxy_scheme(server));
+            }
+        }
+    }
+
+    None
+}
+
+/// Add a default `http://` scheme to a `host:port` proxy URL if one is
+/// not already present.
+fn ensure_proxy_scheme(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.starts_with("http://")
+        || trimmed.starts_with("https://")
+        || trimmed.starts_with("socks5://")
+    {
+        return trimmed.to_string();
+    }
+    format!("http://{trimmed}")
+}
+
+/// Read the Internet Explorer proxy from
+/// `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings`.
+///
+/// The registry value `ProxyServer` may be a plain `host:port` or a
+/// semicolon-delimited list like `http=proxy1:8080;https=proxy2:8080`.
+/// This function prefers the `https=` entry when present (our download
+/// target is GitHub, served over HTTPS), falling back to the plain form.
+#[cfg(windows)]
+fn read_ie_proxy_from_registry() -> Option<String> {
+    // PowerShell one-liner: read ProxyEnable + ProxyServer from the
+    // IE registry key.  We use PowerShell rather than linking against
+    // winreg to avoid adding a new crate dependency.
+    let ps_command = r#"
+$key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+$enabled = (Get-ItemProperty -Path $key -Name ProxyEnable -ErrorAction SilentlyContinue).ProxyEnable
+if ($enabled -ne 1) { exit 1 }
+$server = (Get-ItemProperty -Path $key -Name ProxyServer -ErrorAction SilentlyContinue).ProxyServer
+if (-not $server) { exit 1 }
+$server
+"#;
+
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", ps_command])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if raw.is_empty() {
+        return None;
+    }
+
+    // The server may be protocol-specific: "http=host:port;https=host:port".
+    // For HTTPS downloads we prefer the https= entry.
+    if let Some(https_proxy) = raw
+        .split(';')
+        .find_map(|entry| entry.trim().strip_prefix("https="))
+    {
+        return Some(ensure_proxy_scheme(https_proxy.trim()));
+    }
+
+    // Single server — use as-is.
+    Some(ensure_proxy_scheme(&raw))
 }
 
 fn create_runtime_install_temp_dir() -> Result<PathBuf, String> {
@@ -605,66 +806,156 @@ fn download_file_blocking(url: &str, target_path: &Path) -> Result<DownloadedFil
         fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
 
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(1800))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let mut client_builder = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(1800));
 
-    let mut response = client
-        .get(url)
-        .send()
-        .map_err(|e| format!("Download failed: {e}"))?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let mut msg = format!("Download failed with status: {status}\n  URL: {url}");
-        if status == reqwest::StatusCode::NOT_FOUND {
-            msg.push_str("\n\n  The runtime bundle asset was not found on the release.");
-            msg.push_str("\n  This may happen when the release does not include pre-built runtime bundles.");
-            msg.push_str("\n  Try one of the following:");
-            msg.push_str("\n    - Use a specific tag that includes runtime bundles: browser4-cli install --tag v4.8.0");
-            msg.push_str("\n    - Build the runtime from source inside the Browser4 repo and use --skip-install");
-            msg.push_str("\n    - Set BROWSER4_RELEASES_BASE_URL to a custom server hosting the runtime bundle");
-        }
-        return Err(msg);
+    // Honour proxy environment variables and system proxy settings.
+    // Reqwest processes NO_PROXY / no_proxy automatically when a proxy
+    // is configured via the env-var form.
+    if let Some(proxy) = resolve_download_proxy() {
+        client_builder = client_builder.proxy(proxy);
     }
 
-    let final_url = response.url().to_string();
-    let mut file = fs::File::create(target_path).map_err(|e| e.to_string())?;
+    let client = client_builder.build().map_err(|e| e.to_string())?;
 
-    // Copy with progress reporting every 30 s so long-running downloads
-    // don't appear hung (stress tests rely on this).
-    let total_size = response.content_length();
-    let mut downloaded: u64 = 0;
-    let mut last_report = std::time::Instant::now();
-    let report_interval = std::time::Duration::from_secs(30);
-    let mut buf = [0u8; 8192];
-    loop {
-        let n = response.read(&mut buf).map_err(|e| e.to_string())?;
-        if n == 0 {
-            break;
-        }
-        file.write_all(&buf[..n]).map_err(|e| e.to_string())?;
-        downloaded += n as u64;
-        if last_report.elapsed() >= report_interval {
-            if let Some(total) = total_size {
-                let pct = if total > 0 {
-                    (downloaded as f64 / total as f64) * 100.0
-                } else {
-                    0.0
-                };
-                eprintln!(
-                    "  Download progress: {} / {} bytes ({:.0}%)",
-                    downloaded, total, pct
-                );
-            } else {
-                eprintln!("  Download progress: {} bytes", downloaded);
+    let response = client.get(url).send();
+    match response {
+        Ok(mut response) => {
+            if !response.status().is_success() {
+                let status = response.status();
+                let mut msg = format!("Download failed with status: {status}\n  URL: {url}");
+                if status == reqwest::StatusCode::NOT_FOUND {
+                    msg.push_str("\n\n  The runtime bundle asset was not found on the release.");
+                    msg.push_str("\n  This may happen when the release does not include pre-built runtime bundles.");
+                    msg.push_str("\n  Try one of the following:");
+                    msg.push_str("\n    - Use a specific tag that includes runtime bundles: browser4-cli install --tag v4.8.0");
+                    msg.push_str("\n    - Build the runtime from source inside the Browser4 repo and use --skip-install");
+                    msg.push_str("\n    - Set BROWSER4_RELEASES_BASE_URL to a custom server hosting the runtime bundle");
+                }
+                return Err(msg);
             }
-            last_report = std::time::Instant::now();
+
+            let final_url = response.url().to_string();
+            let mut file = fs::File::create(target_path).map_err(|e| e.to_string())?;
+
+            // Copy with progress reporting every 30 s so long-running downloads
+            // don't appear hung.
+            let total_size = response.content_length();
+            let mut downloaded: u64 = 0;
+            let mut last_report = std::time::Instant::now();
+            let report_interval = std::time::Duration::from_secs(30);
+            let mut buf = [0u8; 8192];
+            loop {
+                let n = response.read(&mut buf).map_err(|e| e.to_string())?;
+                if n == 0 {
+                    break;
+                }
+                file.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+                downloaded += n as u64;
+                if last_report.elapsed() >= report_interval {
+                    if let Some(total) = total_size {
+                        let pct = if total > 0 {
+                            (downloaded as f64 / total as f64) * 100.0
+                        } else {
+                            0.0
+                        };
+                        eprintln!(
+                            "  Download progress: {} / {} bytes ({:.0}%)",
+                            downloaded, total, pct
+                        );
+                    } else {
+                        eprintln!("  Download progress: {} bytes", downloaded);
+                    }
+                    last_report = std::time::Instant::now();
+                }
+            }
+            let bytes_written = downloaded;
+            file.flush().map_err(|e| e.to_string())?;
+
+            Ok(DownloadedFile {
+                final_url,
+                bytes_written,
+            })
+        }
+        Err(reqwest_error) => {
+            // On Windows, fall back to PowerShell's Invoke-WebRequest which
+            // uses the system WinINET proxy stack natively — no manual
+            // proxy configuration needed.
+            #[cfg(windows)]
+            {
+                eprintln!(
+                    "Download via reqwest failed ({}); falling back to PowerShell.",
+                    reqwest_error
+                );
+                return download_file_via_powershell(url, target_path);
+            }
+
+            #[cfg(not(windows))]
+            {
+                Err(format!("Download failed: {reqwest_error}"))
+            }
         }
     }
-    let bytes_written = downloaded;
-    file.flush().map_err(|e| e.to_string())?;
+}
+
+/// Download a file using PowerShell's `Invoke-WebRequest`, which uses the
+/// Windows WinINET proxy stack natively and handles system proxy (Internet
+/// Options) automatically — no manual proxy configuration needed.
+#[cfg(windows)]
+fn download_file_via_powershell(url: &str, target_path: &Path) -> Result<DownloadedFile, String> {
+    let url = url.to_string();
+    let target_path = target_path.to_path_buf();
+
+    // Escape single quotes in the URL and path for the PowerShell script.
+    let ps_url = url.replace('\'', "''");
+    let ps_outfile = target_path.to_string_lossy().replace('\'', "''");
+
+    let ps_script = format!(
+        "$ProgressPreference = 'SilentlyContinue'; \
+         Invoke-WebRequest -Uri '{ps_url}' -OutFile '{ps_outfile}' -UseBasicParsing; \
+         if (-not (Test-Path '{ps_outfile}')) {{ throw 'Download produced no output file.' }}; \
+         $length = (Get-Item '{ps_outfile}').Length; \
+         Write-Output \"DOWNLOADED:$length\"; \
+         Write-Output \"FINAL_URL:{ps_url}\""
+    );
+
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &ps_script])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .map_err(|e| format!("Failed to spawn PowerShell downloader: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "PowerShell download failed: {}",
+            stderr.trim()
+        ));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut bytes_written: u64 = 0;
+    let mut final_url = url.clone();
+
+    for line in stdout.lines() {
+        if let Some(size) = line.trim().strip_prefix("DOWNLOADED:") {
+            bytes_written = size.trim().parse::<u64>().unwrap_or(0);
+        }
+        if let Some(redirect_url) = line.trim().strip_prefix("FINAL_URL:") {
+            final_url = redirect_url.trim().to_string();
+        }
+    }
+
+    if bytes_written == 0 {
+        // Fallback: read the file size directly.
+        bytes_written = target_path
+            .metadata()
+            .map(|m| m.len())
+            .map_err(|e| format!("PowerShell download appeared to succeed but the output file is unreadable: {e}"))?;
+    }
+
+    eprintln!("  PowerShell download complete: {} bytes", bytes_written);
 
     Ok(DownloadedFile {
         final_url,
@@ -1621,6 +1912,11 @@ fn resolve_maven_program(root: &Path) -> PathBuf {
 }
 
 /// Run the bundle build script and wait for it to finish.
+///
+/// Uses `-Command` instead of `-File` so we can force UTF-8 output encoding
+/// before the script runs.  Without this, PowerShell writes stderr in the
+/// system's OEM code page (e.g. GBK on Chinese Windows) and Rust's
+/// `String::from_utf8_lossy` produces garbled diagnostics.
 async fn run_bundle_build_script(
     shell: &str,
     script: &Path,
@@ -1630,6 +1926,16 @@ async fn run_bundle_build_script(
     let working_dir = working_dir.to_path_buf();
     let shell_owned = shell.to_string();
     let shell_for_error = shell_owned.clone();
+    // Build a -Command line that forces UTF-8 encoding on the console output
+    // stream, then dot-sources the build script.  We shell-escape the script
+    // path so that paths with spaces or special characters work correctly.
+    let script_path_escaped = script_path.to_string_lossy().replace('\'', "''");
+    let command = format!(
+        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; \
+         [Console]::ErrorEncoding = [System.Text.Encoding]::UTF8; \
+         & '{}'",
+        script_path_escaped
+    );
 
     let output = tokio::task::spawn_blocking(move || {
         std::process::Command::new(&shell_owned)
@@ -1637,8 +1943,8 @@ async fn run_bundle_build_script(
                 "-NoProfile",
                 "-ExecutionPolicy",
                 "Bypass",
-                "-File",
-                &script_path.to_string_lossy(),
+                "-Command",
+                &command,
             ])
             .current_dir(&working_dir)
             .stdin(std::process::Stdio::null())
@@ -1679,20 +1985,27 @@ async fn find_or_install_runtime() -> Result<InstalledBrowser4Runtime, String> {
         }
     }
 
-    // Check for a local project build (or auto-build it).
-    let project_root = find_browser4_root();
-    if let Some(root) = &project_root {
-        match try_build_local_runtime_bundle(root).await {
-            Ok(Some(runtime)) => return Ok(runtime),
-            Ok(None) => {
-                eprintln!(
-                    "Local Browser4 bundle is not available; falling back to download."
-                );
-            }
-            Err(error) => {
-                eprintln!(
-                    "Local Browser4 bundle check failed: {error}; falling back to download."
-                );
+    let force_remote = should_force_remote_bundle();
+
+    // When BROWSER4_CLI_FORCE_REMOTE_BUNDLE is set, skip the local build
+    // entirely — useful in CI / corporate environments where Maven or jlink
+    // are unreliable (e.g. behind a proxy that only allows HTTPS to GitHub).
+    if !force_remote {
+        // Check for a local project build (or auto-build it).
+        let project_root = find_browser4_root();
+        if let Some(root) = &project_root {
+            match try_build_local_runtime_bundle(root).await {
+                Ok(Some(runtime)) => return Ok(runtime),
+                Ok(None) => {
+                    eprintln!(
+                        "Local Browser4 bundle is not available; falling back to download."
+                    );
+                }
+                Err(error) => {
+                    eprintln!(
+                        "Local Browser4 bundle check failed: {error}; falling back to download."
+                    );
+                }
             }
         }
     }
