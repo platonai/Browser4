@@ -103,6 +103,12 @@ e2e uses a custom harness (`harness = false`). Arguments after `--` are forwarde
 # Basics
 cargo test --test e2e -- --nocapture
 
+# Run only "Extended" level scenarios (default is "Basic")
+cargo test --test e2e -- --nocapture --level=EXTENDED
+
+# Limit to 1 scenario
+cargo test --test e2e -- --nocapture --scenario-limit=1
+
 # Run a specific scenario (exact match)
 cargo test --test e2e -- --nocapture --scenario=test_e2e_batch_form_submission
 
@@ -122,6 +128,23 @@ cargo test --test e2e -- --nocapture --failed --enable-batch-scenario
 
 # List all available scenarios without running them
 cargo test --test e2e -- --list
+
+# More examples:
+cargo test --test e2e -- --nocapture
+cargo test --test e2e -- --nocapture --level=Basic
+cargo test --test e2e -- --nocapture --scenario-limit=5
+cargo test --test e2e -- --nocapture --enable-batch-scenario
+cargo test --test e2e -- --nocapture --batch-only
+cargo test --test e2e -- --nocapture --scenario=*open*
+cargo test --test e2e -- --nocapture --scenario=test_e2e_batch_*
+cargo test --test e2e -- --nocapture --scenario=test_e2e_swarm_*
+cargo test --test e2e -- --nocapture --scenario=test_e2e_agent_*
+cargo test --test e2e -- --nocapture --scenario=test_e2e_agent_task_commands
+cargo test --test e2e -- --nocapture --scenario-from=test_e2e_mouse_and_dialog
+cargo test --test e2e -- --nocapture --scenario-from=test_e2e_navigation_and_storage --scenario-limit=5
+cargo test --test e2e -- --nocapture --failed
+cargo test --test e2e -- --nocapture --scenario=test_e2e_eval_command --fail-fast
+cargo test --test e2e -- --nocapture --force-remote-bundle
 ```
 
 ## License

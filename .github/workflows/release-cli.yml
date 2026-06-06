@@ -61,11 +61,19 @@ jobs:
         env:
           INPUT_SKIP_BINARY_BUILD: ${{ github.event.inputs.skip_binary_build || 'false' }}
           INPUT_DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          TAG_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
 
           CLI_VERSION=$(node -p "require('./${{ env.CLI_PACKAGE_DIR }}/package.json').version")
           PACKAGE_NAME=$(node -p "require('./${{ env.CLI_PACKAGE_DIR }}/package.json').name")
+
+          # Detect dry_run from tag name (e.g., v0.0.0-cli_dry_run.1)
+          DRY_RUN="$INPUT_DRY_RUN"
+          if [[ "$TAG_REF" == *"dry_run"* ]]; then
+            DRY_RUN="true"
+            echo "::notice::Tag contains 'dry_run' — forcing dry-run mode, will not publish to npm."
+          fi
 
           REMOTE_VERSION="unknown"
           LOOKUP_STATUS="failed"
@@ -85,7 +93,7 @@ jobs:
           echo "lookup_status=$LOOKUP_STATUS" >> "$GITHUB_OUTPUT"
           echo "should_publish=$SHOULD_PUBLISH" >> "$GITHUB_OUTPUT"
           echo "skip_binary_build=$INPUT_SKIP_BINARY_BUILD" >> "$GITHUB_OUTPUT"
-          echo "dry_run=$INPUT_DRY_RUN" >> "$GITHUB_OUTPUT"
+          echo "dry_run=$DRY_RUN" >> "$GITHUB_OUTPUT"
 
           {
             echo "## 📦 browser4-cli npm Publish"
@@ -95,7 +103,10 @@ jobs:
             echo "- **Remote Version**: $REMOTE_VERSION"
             echo "- **Should Publish**: $SHOULD_PUBLISH"
             echo "- **Skip Binary Build**: $INPUT_SKIP_BINARY_BUILD"
-            echo "- **Dry Run**: $INPUT_DRY_RUN"
+            echo "- **Dry Run**: $DRY_RUN"
+            if [ "$DRY_RUN" = "true" ] && [[ "$TAG_REF" == *"dry_run"* ]]; then
+              echo "- **Dry Run Source**: tag"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
   test:
