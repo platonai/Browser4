@@ -1,14 +1,11 @@
 package ai.platon.pulsar.skeleton.common.options
 
-import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.browser.InteractLevel
 import ai.platon.pulsar.common.config.VolatileConfig
-import ai.platon.pulsar.persist.metadata.FetchMode
 import com.fasterxml.jackson.core.JsonGenerator
 import com.fasterxml.jackson.core.JsonParser
 import com.fasterxml.jackson.databind.*
 import com.fasterxml.jackson.databind.module.SimpleModule
-import com.fasterxml.jackson.databind.node.ObjectNode
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import java.time.Duration
@@ -61,10 +58,6 @@ object LoadOptionsJson {
             addDeserializer(Duration::class.java, DurationJsonDeserializer())
 
             // Enum serializers/deserializers
-            addSerializer(BrowserType::class.java, EnumNameSerializer(BrowserType::class.java))
-            addDeserializer(BrowserType::class.java, BrowserTypeDeserializer())
-            addSerializer(FetchMode::class.java, EnumNameSerializer(FetchMode::class.java))
-            addDeserializer(FetchMode::class.java, FetchModeDeserializer())
             addSerializer(InteractLevel::class.java, EnumNameSerializer(InteractLevel::class.java))
             addDeserializer(InteractLevel::class.java, InteractLevelDeserializer())
             addSerializer(Condition::class.java, EnumNameSerializer(Condition::class.java))
@@ -285,24 +278,6 @@ private class EnumNameSerializer<E : Enum<E>>(private val enumClass: Class<E>) :
         } else {
             gen.writeString(value.name)
         }
-    }
-}
-
-/**
- * JSON deserializer for BrowserType.
- */
-private class BrowserTypeDeserializer : JsonDeserializer<BrowserType>() {
-    override fun deserialize(p: JsonParser, ctxt: DeserializationContext): BrowserType {
-        return BrowserType.fromString(p.text)
-    }
-}
-
-/**
- * JSON deserializer for FetchMode.
- */
-private class FetchModeDeserializer : JsonDeserializer<FetchMode>() {
-    override fun deserialize(p: JsonParser, ctxt: DeserializationContext): FetchMode {
-        return FetchMode.fromString(p.text)
     }
 }
 

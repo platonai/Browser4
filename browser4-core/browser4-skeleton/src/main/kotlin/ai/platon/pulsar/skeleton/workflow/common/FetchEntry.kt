@@ -43,7 +43,6 @@ class FetchEntry(val page: WebPage, val options: LoadOptions) {
             }
             if (options != null) {
                 page.args = options.toString()
-                page.fetchMode = options.fetchMode
                 page.conf = options.conf
                 page.maxRetries = options.nMaxRetry
                 page.isResource = options.isResource
