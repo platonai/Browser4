@@ -4,12 +4,14 @@ import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.common.urls.URLUtils
+import ai.platon.pulsar.skeleton.common.ApiPublic
 import ai.platon.pulsar.skeleton.common.options.LoadOptionDefaults
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.context.PulsarContexts
 import ai.platon.pulsar.skeleton.context.support.AbstractPulsarContext
 import ai.platon.pulsar.skeleton.workflow.common.url.StatefulListenableHyperlink
 import java.time.Duration
+import kotlin.reflect.jvm.kotlinProperty
 import kotlin.test.*
 
 class TestLoadOptions {
@@ -315,6 +317,27 @@ class TestLoadOptions {
 
     private fun assertOptionNotEquals(expected: String, actual: String, msg: String? = null) {
         assertNotEquals(LoadOptions.parse(expected, conf), LoadOptions.parse(actual, conf), msg)
+    }
+
+    @Test
+    fun testDescriptorApiPublicMatches() {
+        // Verify that all descriptors with isApiPublic=true match @ApiPublic-annotated Kotlin properties.
+        // This test uses kotlin.reflect only as a guard rail in the test suite — the runtime code is 100% reflection-free.
+        val apiPublicFieldNames = LoadOptions::class.java.declaredFields
+            .filter { field ->
+                field.kotlinProperty?.annotations?.any { it is ApiPublic } == true
+            }
+            .map { it.name }
+            .toSet()
+
+        val descriptorApiPublic = LoadOptions.optionDescriptors
+            .filter { it.isApiPublic }
+            .map { it.fieldName }
+            .toSet()
+
+        assertEquals(apiPublicFieldNames, descriptorApiPublic,
+            "OptionDescriptor isApiPublic must match @ApiPublic annotations. " +
+                    "If you added/removed @ApiPublic on a field, update the corresponding descriptor's isApiPublic flag.")
     }
 }
 

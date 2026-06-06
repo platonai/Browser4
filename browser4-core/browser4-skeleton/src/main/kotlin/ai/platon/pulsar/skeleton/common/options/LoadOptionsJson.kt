@@ -4,7 +4,6 @@ import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.browser.InteractLevel
 import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.persist.metadata.FetchMode
-import com.beust.jcommander.Parameter
 import com.fasterxml.jackson.core.JsonGenerator
 import com.fasterxml.jackson.core.JsonParser
 import com.fasterxml.jackson.databind.*
@@ -143,11 +142,12 @@ object LoadOptionsJson {
      */
     @JvmStatic
     fun toMap(options: LoadOptions): Map<String, Any?> {
-        return LoadOptions.optionFields
-            .filter { it.annotations.any { it is Parameter } }
-            .onEach { it.isAccessible = true }
-            .filter { it.get(options) != null }
-            .associate { it.name to convertValue(it.get(options)) }
+        return LoadOptions.optionDescriptors
+            .mapNotNull { desc ->
+                val value = desc.get(options)
+                if (value != null) desc.fieldName to convertValue(value) else null
+            }
+            .toMap()
     }
 
     /**
@@ -158,11 +158,13 @@ object LoadOptionsJson {
      */
     @JvmStatic
     fun toModifiedMap(options: LoadOptions): Map<String, Any?> {
-        return LoadOptions.optionFields
-            .filter { it.annotations.any { it is Parameter } && !options.isDefault(it.name) }
-            .onEach { it.isAccessible = true }
-            .filter { it.get(options) != null }
-            .associate { it.name to convertValue(it.get(options)) }
+        return LoadOptions.optionDescriptors
+            .filter { !options.isDefault(it.fieldName) }
+            .mapNotNull { desc ->
+                val value = desc.get(options)
+                if (value != null) desc.fieldName to convertValue(value) else null
+            }
+            .toMap()
     }
 
     /**
@@ -186,18 +188,12 @@ object LoadOptionsJson {
     fun generateJsonTemplateWithDescriptions(): String {
         val node = objectMapper.createObjectNode()
 
-        LoadOptions.optionFields
-            .mapNotNull { field ->
-                val param = field.annotations.filterIsInstance<Parameter>().firstOrNull()
-                if (param != null) {
-                    field.isAccessible = true
-                    Triple(field.name, field.get(LoadOptions.DEFAULT), param.description)
-                } else null
-            }
-            .forEach { (name, value, description) ->
-                val valueNode = objectMapper.valueToTree<JsonNode>(convertValue(value))
-                node.set<JsonNode>(name, valueNode)
-            }
+        LoadOptions.optionDescriptors.forEach { desc ->
+            val value = desc.get(LoadOptions.DEFAULT)
+            val converted = convertValue(value)
+            val valueNode = objectMapper.valueToTree<JsonNode>(converted)
+            node.set<JsonNode>(desc.fieldName, valueNode)
+        }
 
         return objectMapper.writeValueAsString(node)
     }
