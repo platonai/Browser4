@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 
 /**
- * Syncs the version from the project root VERSION file to all CLI config files.
+ * Syncs the CLI version from cli/package.json to the Cargo manifest.
  *
- * The VERSION file at the repository root is the single source of truth for
- * the entire project.  This script:
- *   - Reads the version from <repo-root>/VERSION
+ * cli/package.json is the single source of truth for the CLI version.  This
+ * allows the backend Maven project and the CLI to be published separately with
+ * different versions.  This script:
+ *   - Reads the version from cli/package.json
  *   - Strips the Maven-style "-SNAPSHOT" suffix
- *   - Writes the clean semver to cli/package.json and cli/browser4-cli/Cargo.toml
+ *   - Writes the clean semver to cli/browser4-cli/Cargo.toml
  *   - Updates Cargo.lock to match
  *
  * Usage:
@@ -16,7 +17,7 @@
  */
 
 import {execSync} from "child_process";
-import {existsSync, readFileSync, writeFileSync} from "fs";
+import {readFileSync, writeFileSync} from "fs";
 import {dirname, join, resolve} from "path";
 import {fileURLToPath} from "url";
 
@@ -28,29 +29,6 @@ const cargoDir = join(cliDir, "browser4-cli");               // cli/browser4-cli
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/** Walk upward from `startDir` until a file named `filename` is found. */
-function findFileUpwards(startDir, filename) {
-  let dir = resolve(startDir);
-  while (true) {
-    const candidate = join(dir, filename);
-    if (existsSync(candidate)) return candidate;
-    const parent = dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
-  }
-}
-
-/** Read the first non-empty line of a file, trimmed. */
-function readFirstLine(path) {
-  const raw = readFileSync(path, "utf-8");
-  const lines = raw.split(/\r?\n/);
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (trimmed.length > 0) return trimmed;
-  }
-  return null;
-}
 
 /** Strip the "-SNAPSHOT" suffix if present. */
 function stripSnapshot(version) {
@@ -66,43 +44,21 @@ function stripSnapshot(version) {
 
 const checkOnly = process.argv.includes("--check");
 
-// 1. Locate the project root VERSION file
-const versionPath = findFileUpwards(cliDir, "VERSION");
-if (!versionPath) {
-  console.error("ERROR: Could not find VERSION file in any parent directory.");
-  process.exit(1);
-}
-
-const repoRoot = dirname(versionPath);
-const rawVersion = readFirstLine(versionPath);
-if (!rawVersion) {
-  console.error("ERROR: VERSION file is empty.");
-  process.exit(1);
-}
-
-const version = stripSnapshot(rawVersion);
-if (checkOnly) console.log(`VERSION file (${versionPath}): ${version}`);
-
-// 2. Update cli/package.json
+// 1. Read the CLI version from cli/package.json (the source of truth)
 const packageJsonPath = join(cliDir, "package.json");
 const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf-8"));
 const pkgName = packageJson.name;
 const pkgVersion = packageJson.version;
 
-if (pkgVersion !== version) {
-  if (checkOnly) {
-    console.error(`MISMATCH: ${packageJsonPath} version is "${pkgVersion}", expected "${version}"`);
-    process.exitCode = 1;
-  } else {
-    packageJson.version = version;
-    writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2) + "\n");
-    console.log(`  Updated ${packageJsonPath}: ${pkgVersion} -> ${version}`);
-  }
-} else {
-  if (!checkOnly) console.log(`  ${packageJsonPath} already up to date`);
+if (!pkgVersion) {
+  console.error("ERROR: cli/package.json does not contain a version field.");
+  process.exit(1);
 }
 
-// 3. Update cli/browser4-cli/Cargo.toml
+const version = stripSnapshot(pkgVersion);
+if (checkOnly) console.log(`cli/package.json: ${version}`);
+
+// 2. Update cli/browser4-cli/Cargo.toml
 const cargoTomlPath = join(cargoDir, "Cargo.toml");
 let cargoToml = readFileSync(cargoTomlPath, "utf-8");
 const cargoVersionRegex = /^version\s*=\s*"[^"]*"/m;
@@ -127,7 +83,7 @@ if (cargoVersion !== version) {
   if (!checkOnly) console.log(`  ${cargoTomlPath} already up to date`);
 }
 
-// 4. Update Cargo.lock (only in sync mode)
+// 3. Update Cargo.lock (only in sync mode)
 if (!checkOnly && cargoVersion !== version) {
   try {
     execSync("cargo update -p browser4-cli --offline", {
@@ -148,7 +104,7 @@ if (!checkOnly && cargoVersion !== version) {
   }
 }
 
-// 5. Report
+// 4. Report
 if (checkOnly) {
   if (process.exitCode === 1) {
     console.error("\nVersion mismatch detected! Run 'node cli/scripts/sync-version.js' to fix.");
