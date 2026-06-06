@@ -13,7 +13,26 @@
       "Bash(git checkout *)",
       "Bash(git restore *)",
       "Bash(git add *)",
-      "Bash(git commit -m 'chore: add git permissions and e2e test runner improvements *)"
+      "Bash(git commit -m 'chore: add git permissions and e2e test runner improvements *)",
+      "Bash(rustc --version)",
+      "Bash(cargo --version)",
+      "Bash(rustup update *)",
+      "Bash(cargo metadata *)",
+      "Bash(npm run *)",
+      "Read(//mnt/d/workspace/Browser4/Browser4-4.10/**)",
+      "Read(//mnt/d/workspace/Browser4/Browser4-4.10/cli/**)",
+      "Read(//mnt/d/workspace/Browser4/Browser4-4.10/cli/browser4-cli/**)",
+      "Bash(\"/mnt/d/Program Files/nodejs/npm.cmd\" run build:macos)",
+      "Bash(\"/d/Program Files/nodejs/npm.cmd\" run build:macos)",
+      "Bash(rustup target *)",
+      "Bash(export RUSTUP_DIST_SERVER=\"https://mirrors.tuna.tsinghua.edu.cn/rustup\")",
+      "Bash(export RUSTUP_UPDATE_ROOT=\"https://mirrors.tuna.tsinghua.edu.cn/rustup/rustup\")",
+      "Bash(export RUSTUP_DIST_SERVER=\"https://mirrors.ustc.edu.cn/rust-static\")",
+      "Bash(export RUSTUP_UPDATE_ROOT=\"https://mirrors.ustc.edu.cn/rust-static/rustup\")",
+      "Bash(cargo build *)",
+      "Bash(wait)",
+      "Bash(cp target/aarch64-apple-darwin/release/browser4 bin/browser4-darwin-arm64)",
+      "Bash(cp target/x86_64-apple-darwin/release/browser4 bin/browser4-darwin-x64)"
     ]
   }
 }
