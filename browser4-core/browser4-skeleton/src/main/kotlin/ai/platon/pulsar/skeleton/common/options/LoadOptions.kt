@@ -4,11 +4,9 @@ import ai.platon.pulsar.browser.InteractSettings
 import ai.platon.pulsar.common.DateTimes
 import ai.platon.pulsar.common.Priority13
 import ai.platon.pulsar.common.browser.InteractLevel
-import ai.platon.pulsar.common.config.CapabilityTypes
 import ai.platon.pulsar.common.config.Params
 import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.dom.select.appendSelectorIfMissing
-import ai.platon.pulsar.persist.metadata.FetchMode
 import ai.platon.pulsar.skeleton.common.ApiPublic
 import ai.platon.pulsar.skeleton.event.PageEventHandlers
 import ai.platon.pulsar.skeleton.event.impl.PageEventHandlersFactory
@@ -53,7 +51,6 @@ open class LoadOptions(
     var rawItemEvent: PageEventHandlers? = null,
     var referrer: String? = null,
 ) : PulsarOptions(argv) {
-
 
     /**
      * Represents the type of content being crawled, such as an article, product, or hotel.
@@ -661,6 +658,12 @@ open class LoadOptions(
     @Parameter(names = ["-v", "-version", "--version"], description = "The load option version")
     var version = "20260606"
 
+    @Parameter(
+        names = ["-incognito", "--incognito"],
+        description = "Incognito mode. Deprecated."
+    )
+    var incognito = false
+
     /**
      * Returns the outLinkSelector if it's non-blank, or null otherwise.
      *
@@ -1252,6 +1255,10 @@ open class LoadOptions(
                 isArity0Boolean = true,
                 description = "If false, pages are flushed into database as soon as possible",
                 get = { it.lazyFlush }, set = { o, v -> o.lazyFlush = v }),
+            option("incognito", arrayOf("-ic", "-incognito", "--incognito"),
+                isArity0Boolean = true,
+                description = "Run browser in incognito mode",
+                get = { it.incognito }, set = { o, v -> o.incognito = v }),
             option("parse", arrayOf("-ps", "-parse", "--parse"),
                 isArity0Boolean = true,
                 description = "If true, parse the page when it's just be fetched.",
