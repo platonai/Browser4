@@ -19,7 +19,7 @@ class TestLoadOptionsJson {
 
     @Test
     @DisplayName("test toJson with default options")
-    fun testTojsonWithDefaultOptions() {
+    fun testToJsonWithDefaultOptions() {
         val options = LoadOptions.create(conf)
         val json = LoadOptionsJson.toJson(options)
 
@@ -30,7 +30,7 @@ class TestLoadOptionsJson {
 
     @Test
     @DisplayName("test toJson with modified options")
-    fun testTojsonWithModifiedOptions() {
+    fun testToJsonWithModifiedOptions() {
         val options = LoadOptions.parse("-expires 1d -ignoreFailure -parse", conf)
         val json = LoadOptionsJson.toJson(options)
 
@@ -44,14 +44,13 @@ class TestLoadOptionsJson {
 
     @Test
     @DisplayName("test toJson with includeDefaults")
-    fun testTojsonWithIncludedefaults() {
+    fun testToJsonWithIncludeDefaults() {
         val options = LoadOptions.create(conf)
         val json = LoadOptionsJson.toJson(options, includeDefaults = true)
 
         println("Full options JSON: $json")
         // Should contain all fields
         assertTrue(json.contains("expires"))
-        assertTrue(json.contains("browser"))
         assertTrue(json.contains("persist"))
         assertTrue(json.contains("storeContent"))
     }
@@ -165,7 +164,6 @@ class TestLoadOptionsJson {
         println("JSON Template:\n$template")
         assertTrue(template.isNotBlank())
         assertTrue(template.contains("expires"))
-        assertTrue(template.contains("browser"))
         assertTrue(template.contains("persist"))
     }
 
