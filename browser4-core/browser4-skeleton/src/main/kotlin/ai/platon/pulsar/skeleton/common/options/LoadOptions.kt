@@ -242,17 +242,6 @@ open class LoadOptions(
     var outLinkPattern = ".+"
 
     /**
-     * The index of the iframe to focus on during page interaction.
-     *
-     * Used to target specific iframes within complex pages for content extraction.
-     * TODO: This feature is planned but not fully implemented yet.
-     */
-    @ApiPublic
-    @Parameter(names = ["-ifr", "-iframe", "--iframe"], description = "The iframe id to switch to")
-    @Beta
-    var iframe = 0
-
-    /**
      * Maximum number of outlinks to extract and follow from a single page.
      *
      * Limits the number of child URLs to be processed from portal/index pages
@@ -264,20 +253,6 @@ open class LoadOptions(
         description = "Specify how many links to extract for out pages."
     )
     var topLinks = 20
-
-    /**
-     * CSS selector for an element that must contain non-blank text before proceeding.
-     *
-     * The crawler will wait until the specified element contains text or until a timeout occurs.
-     * Useful for ensuring that dynamic content has properly loaded before processing the page.
-     */
-    @ApiPublic
-    @Parameter(
-        names = ["-wnb", "-waitNonBlank", "--wait-non-blank"],
-        description = "The selector specified element should have a non-blank text"
-    )
-    @Beta
-    var waitNonBlank: String = ""
 
     /**
      * CSS selector for an element that must contain non-blank text for valid retrieval.
@@ -333,30 +308,6 @@ open class LoadOptions(
     var requireAnchors = 0
 
     /**
-     * Specifies the mechanism used to fetch web content.
-     *
-     * Currently, only BROWSER mode is fully supported, which uses a headless browser
-     * for rendering and JavaScript execution during content retrieval.
-     */
-    @Parameter(
-        names = ["-fm", "-fetchMode", "--fetch-mode"], converter = FetchModeConverter::class,
-        description = "The fetch mode"
-    )
-    var fetchMode = FetchMode.BROWSER
-
-    /**
-     * Specifies which browser engine to use for rendering pages.
-     *
-     * Google Chrome is the default and recommended browser engine.
-     * NOTE: Session-scope browser selection is not yet fully supported.
-     */
-    @Parameter(
-        names = ["-b", "-browser", "--browser"], converter = BrowserTypeConverter::class,
-        description = "Specify which browser to use, google chrome is the default"
-    )
-    var browser = LoadOptionDefaults.browser
-
-    /**
      * Number of times to scroll down the page after initial load.
      *
      * Controls how aggressively the crawler attempts to load additional content
@@ -404,18 +355,6 @@ open class LoadOptions(
         description = "The maximum time to wait for a page to finish"
     )
     var pageLoadTimeout = InteractSettings.DEFAULT.pageLoadTimeout
-
-    /**
-     * Browser to use specifically for item detail pages (as opposed to index pages).
-     *
-     * Allows using different browser configurations for detail pages vs. index pages.
-     * NOTE: Session-scope browser selection is not yet fully supported.
-     */
-    @Parameter(
-        names = ["-ib", "-itemBrowser", "--item-browser"], converter = BrowserTypeConverter::class,
-        description = "The browser used to visit the item pages"
-    )
-    var itemBrowser = LoadOptionDefaults.browser
 
     /**
      * Cache expiration duration specifically for item detail pages.
@@ -490,33 +429,6 @@ open class LoadOptions(
         description = "The same as pageLoadTimeout, but only works for item pages"
     )
     var itemPageLoadTimeout = pageLoadTimeout
-
-    /**
-     * CSS selector for non-blank text validation on item detail pages.
-     *
-     * Works identically to [waitNonBlank] but applies only to item pages.
-     * Makes the crawler wait until the specified element contains text.
-     */
-    @ApiPublic
-    @Parameter(
-        names = ["-iwnb", "-itemWaitNonBlank", "--item-wait-non-blank"],
-        description = "The selector specified element should have a non-blank text"
-    )
-    var itemWaitNonBlank: String = ""
-
-    /**
-     * CSS selector for content validation on item detail pages.
-     *
-     * Works identically to [requireNotBlank] but applies only to item pages.
-     * Pages without text in this selector will be considered invalid and refetched.
-     */
-    @ApiPublic
-    @Parameter(
-        names = ["-irnb", "-itemRequireNotBlank", "--item-require-not-blank"],
-        description = "Re-fetch the item pages if the required text is blank"
-    )
-    @Beta
-    var itemRequireNotBlank = ""
 
     /**
      * Minimum page size required for item detail pages.
@@ -676,16 +588,6 @@ open class LoadOptions(
     var lazyFlush = LoadOptionDefaults.lazyFlush
 
     /**
-     * Enables browser incognito/private mode for page fetching.
-     *
-     * NOTE: This setting has limited effect since browsers always run in
-     * temporary contexts in the current implementation.
-     */
-    @Beta
-    @Parameter(names = ["-ic", "-incognito", "--incognito"], description = "Run browser in incognito mode")
-    var incognito = false
-
-    /**
      * Enables immediate parsing of fetched pages.
      *
      * When enabled, pages are parsed into a [ai.platon.pulsar.dom.FeaturedDocument] as soon as they're fetched,
@@ -757,7 +659,7 @@ open class LoadOptions(
      * Used to track compatibility between different versions of the load options parser.
      */
     @Parameter(names = ["-v", "-version", "--version"], description = "The load option version")
-    var version = "20220918"
+    var version = "20260606"
 
     /**
      * Returns the outLinkSelector if it's non-blank, or null otherwise.
@@ -920,12 +822,9 @@ open class LoadOptions(
         scriptTimeout = itemScriptTimeout
         scrollInterval = itemScrollInterval
         pageLoadTimeout = itemPageLoadTimeout
-        waitNonBlank = itemWaitNonBlank
-        requireNotBlank = itemRequireNotBlank
         requireSize = itemRequireSize
         requireImages = itemRequireImages
         requireAnchors = itemRequireAnchors
-        browser = itemBrowser
 
         // Only for portal pages
         outLinkSelector = DEFAULT.outLinkSelector
@@ -936,12 +835,9 @@ open class LoadOptions(
         itemScriptTimeout = DEFAULT.itemScriptTimeout
         itemScrollInterval = DEFAULT.itemScrollInterval
         itemPageLoadTimeout = DEFAULT.itemPageLoadTimeout
-        itemWaitNonBlank = DEFAULT.itemWaitNonBlank
-        itemRequireNotBlank = DEFAULT.itemRequireNotBlank
         itemRequireSize = DEFAULT.itemRequireSize
         itemRequireImages = DEFAULT.itemRequireImages
         itemRequireAnchors = DEFAULT.itemRequireAnchors
-        itemBrowser = DEFAULT.itemBrowser
 
         rawEvent = rawItemEvent
         rawItemEvent = null
@@ -968,9 +864,6 @@ open class LoadOptions(
 
         if (conf != null) {
             rawEvent?.let { conf.putBean(it) }
-            conf.setEnum(CapabilityTypes.BROWSER_TYPE, browser)
-            // incognito mode is never used because the browsers are always running in temporary contexts
-            conf.setBoolean(CapabilityTypes.BROWSER_INCOGNITO, incognito)
         }
 
         return conf
@@ -1225,22 +1118,10 @@ open class LoadOptions(
                 isApiPublic = true,
                 description = "The pattern to select out links in the portal page",
                 get = { it.outLinkPattern }, set = { o, v -> o.outLinkPattern = v }),
-            option("waitNonBlank", arrayOf("-wnb", "-waitNonBlank", "--wait-non-blank"),
-                isApiPublic = true,
-                description = "The selector specified element should have a non-blank text",
-                get = { it.waitNonBlank }, set = { o, v -> o.waitNonBlank = v }),
             option("requireNotBlank", arrayOf("-rnb", "-requireNotBlank"),
                 isApiPublic = true,
                 description = "The selector specified element should have a non-blank text",
                 get = { it.requireNotBlank }, set = { o, v -> o.requireNotBlank = v }),
-            option("itemWaitNonBlank", arrayOf("-iwnb", "-itemWaitNonBlank", "--item-wait-non-blank"),
-                isApiPublic = true,
-                description = "The selector specified element should have a non-blank text",
-                get = { it.itemWaitNonBlank }, set = { o, v -> o.itemWaitNonBlank = v }),
-            option("itemRequireNotBlank", arrayOf("-irnb", "-itemRequireNotBlank", "--item-require-not-blank"),
-                isApiPublic = true,
-                description = "Re-fetch the item pages if the required text is blank",
-                get = { it.itemRequireNotBlank }, set = { o, v -> o.itemRequireNotBlank = v }),
             option("version", arrayOf("-v", "-version", "--version"),
                 description = "The load option version",
                 get = { it.version }, set = { o, v -> o.version = v }),
@@ -1296,10 +1177,6 @@ open class LoadOptions(
                 isApiPublic = true,
                 description = "Represents the priority of a task, determining the order of execution",
                 get = { it.priority }, set = { o, v -> o.priority = v }),
-            option("iframe", arrayOf("-ifr", "-iframe", "--iframe"),
-                isApiPublic = true,
-                description = "The iframe id to switch to",
-                get = { it.iframe }, set = { o, v -> o.iframe = v }),
             option("topLinks", arrayOf("-tl", "-topLinks", "--top-links"),
                 isApiPublic = true,
                 description = "Specify how many links to extract for out pages.",
@@ -1375,10 +1252,6 @@ open class LoadOptions(
                 isArity0Boolean = true,
                 description = "If false, pages are flushed into database as soon as possible",
                 get = { it.lazyFlush }, set = { o, v -> o.lazyFlush = v }),
-            option("incognito", arrayOf("-ic", "-incognito", "--incognito"),
-                isArity0Boolean = true,
-                description = "Run browser in incognito mode",
-                get = { it.incognito }, set = { o, v -> o.incognito = v }),
             option("parse", arrayOf("-ps", "-parse", "--parse"),
                 isArity0Boolean = true,
                 description = "If true, parse the page when it's just be fetched.",
@@ -1393,15 +1266,6 @@ open class LoadOptions(
                 get = { it.noNorm }, set = { o, v -> o.noNorm = v }),
 
             // --- Enum options ---
-            option("fetchMode", arrayOf("-fm", "-fetchMode", "--fetch-mode"),
-                description = "The fetch mode",
-                get = { it.fetchMode }, set = { o, v -> o.fetchMode = v }),
-            option("browser", arrayOf("-b", "-browser", "--browser"),
-                description = "Specify which browser to use, google chrome is the default",
-                get = { it.browser }, set = { o, v -> o.browser = v }),
-            option("itemBrowser", arrayOf("-ib", "-itemBrowser", "--item-browser"),
-                description = "The browser used to visit the item pages",
-                get = { it.itemBrowser }, set = { o, v -> o.itemBrowser = v }),
             option("interactLevel", arrayOf("-ilv", "-interactLevel", "--interact-level"),
                 description = "Specifies the interaction level with the page (higher = better data, lower = faster).",
                 get = { it.interactLevel }, set = { o, v -> o.interactLevel = v }),
