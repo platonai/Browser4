@@ -4631,6 +4631,7 @@ mod tests {
             server_url: None,
             json: false,
             quiet: false,
+            proxy_url: None,
             args: vec![
                 "agent".to_string(),
                 "status".to_string(),
@@ -4653,6 +4654,7 @@ mod tests {
             server_url: None,
             json: false,
             quiet: false,
+            proxy_url: None,
             args: vec!["agent-run".to_string(), "task".to_string()],
         };
 
