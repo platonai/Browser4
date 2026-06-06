@@ -4,11 +4,9 @@ import ai.platon.pulsar.browser.InteractSettings
 import ai.platon.pulsar.common.DateTimes
 import ai.platon.pulsar.common.Priority13
 import ai.platon.pulsar.common.browser.InteractLevel
-import ai.platon.pulsar.common.config.CapabilityTypes
 import ai.platon.pulsar.common.config.Params
 import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.dom.select.appendSelectorIfMissing
-import ai.platon.pulsar.persist.metadata.FetchMode
 import ai.platon.pulsar.skeleton.common.ApiPublic
 import ai.platon.pulsar.skeleton.event.PageEventHandlers
 import ai.platon.pulsar.skeleton.event.impl.PageEventHandlersFactory
@@ -660,6 +658,12 @@ open class LoadOptions(
      */
     @Parameter(names = ["-v", "-version", "--version"], description = "The load option version")
     var version = "20260606"
+
+    @Parameter(
+        names = ["-incognito", "--incognito"],
+        description = "Incognito mode. Deprecated."
+    )
+    var incognito = false
 
     /**
      * Returns the outLinkSelector if it's non-blank, or null otherwise.
