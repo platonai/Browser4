@@ -137,6 +137,7 @@ internal abstract class ChromeDevToolsImpl(
         mockRpcResult: RpcResult? = null
     ): T? {
         numInvokes.inc()
+        lastActiveTime = Instant.now()
 
         // Serialize the method invocation into a message to be sent to the remote server.
         val message = dispatcher.serialize(method)
@@ -198,11 +199,15 @@ internal abstract class ChromeDevToolsImpl(
     }
 
     /**
-     * Send the message to the server and return immediately
-     * */
+     * Send the message to the server and return immediately.
+     *
+     * Target-related commands (Target.createTarget, Target.closeTarget, etc.) are sent via
+     * the browser-level transport because they operate on the browser session, not a specific
+     * page. All other commands go through the page-level transport.
+     *
+     * @see https://github.com/hardkoded/puppeteer-sharp/issues/796
+     */
     private suspend fun sendToBrowser(method: String, message: String) {
-        // See https://github.com/hardkoded/puppeteer-sharp/issues/796 to understand why we need handle Target methods
-        // differently.
         if (method.startsWith("Target.")) {
             browserTransport.send(message)
         } else {
@@ -211,14 +216,10 @@ internal abstract class ChromeDevToolsImpl(
     }
 
     @Throws(ChromeRPCException::class, IOException::class)
-    private fun handleFailedFurther(result: RpcResult): CDPReturnError {
-        return handleFailedFurther(result.result)
-    }
-
-    @Throws(ChromeRPCException::class, IOException::class)
-    private fun handleFailedFurther(error: JsonNode?): CDPReturnError {
-        // Received an error
-        val error = dispatcher.deserialize(ErrorObject::class.java, error)
+    private fun handleFailedFurther(errorNode: JsonNode?): CDPReturnError {
+        // When isSuccess=false, EventDispatcher stores the error node in RpcResult.result,
+        // so the error JSON is in rpcResult.result, not in a dedicated error field.
+        val error = dispatcher.deserialize(ErrorObject::class.java, errorNode)
         val sb = StringBuilder(error.message)
         if (error.data != null) {
             sb.append(": ")
@@ -282,14 +283,17 @@ internal abstract class ChromeDevToolsImpl(
 
         logger.debug("Closing devtools client ...")
 
-        pageTransport.close()
-        browserTransport.close()
+        // Close transports first to stop new messages from arriving,
+        // then clean up the dispatcher (pending futures, listeners, coroutine scope).
+        runCatching { pageTransport.close() }
+        runCatching { browserTransport.close() }
+        dispatcher.close()
     }
 
     private suspend fun waitUntilIdle(timeout: Duration) {
         val endTime = Instant.now().plus(timeout)
         while (dispatcher.hasFutures() && Instant.now().isBefore(endTime)) {
-            delay(1.seconds)
+            delay(100.milliseconds)
         }
     }
 }

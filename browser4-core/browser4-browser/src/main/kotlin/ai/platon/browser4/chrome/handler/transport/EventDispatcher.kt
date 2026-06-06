@@ -237,7 +237,8 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
                         future.deferred.complete(RpcResult(true, resultNode, message))
                     }
                 } else {
-                    logger.warn("Received response with unknown invocation #{} - {}", id, jsonNode.asText())
+                    // Late response that arrived after the caller already timed out and unsubscribed
+                    logger.debug("Received response with unknown invocation #{} - {}", id, jsonNode.asText())
                 }
             } else {
                 val methodNode = jsonNode.get(METHOD_PROPERTY)

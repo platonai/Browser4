@@ -35,8 +35,10 @@ class DevToolsInvocationHandler(impl: Any) : SuspendAwareHandler(impl) {
          * */
         fun createMethodInvocation(method: String, params: Map<String, Any?>?): MethodInvocation {
             val params0 = (params ?: emptyMap()).toMutableMap()
-            val methodId = params0[EventDispatcher.ID_PROPERTY]?.toString()?.toLongOrNull() ?: nextId()
-            params0[EventDispatcher.ID_PROPERTY] = methodId.toString()
+            // The 'id' field is transport-level metadata for request/response correlation,
+            // not a CDP command parameter — extract it from params and use it as the methodId,
+            // but don't leak it into the serialized message's params object.
+            val methodId = params0.remove(EventDispatcher.ID_PROPERTY)?.toString()?.toLongOrNull() ?: nextId()
 
             val params1: Map<String, Any> = params0.entries
                 .filter { it.value != null }
