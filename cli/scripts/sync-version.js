@@ -8,6 +8,9 @@
  * different versions.  This script:
  *   - Reads the version from cli/package.json
  *   - Strips the Maven-style "-SNAPSHOT" suffix
+ *   - Fetches the latest published version from npm and compares it
+ *     against the local version, warning when the bump is neither a
+ *     patch nor a minor increment.
  *   - Writes the clean semver to cli/browser4-cli/Cargo.toml
  *   - Updates Cargo.lock to match
  *
@@ -38,6 +41,85 @@ function stripSnapshot(version) {
   return version;
 }
 
+/**
+ * Parse a semver string into { major, minor, patch } integers.
+ * Returns null for non-semver strings (e.g. snapshots, prereleases).
+ */
+function parseSemver(version) {
+  const m = version.match(/^(\d+)\.(\d+)\.(\d+)$/);
+  if (!m) return null;
+  return { major: Number(m[1]), minor: Number(m[2]), patch: Number(m[3]) };
+}
+
+/**
+ * Fetch the latest published version of a package from the npm registry.
+ * Returns the version string, or null if the package hasn't been published
+ * yet or the registry is unreachable.
+ */
+function getLatestPublishedVersion(packageName) {
+  try {
+    const raw = execSync(`npm view "${packageName}" version --json`, {
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 10_000,
+    });
+    return JSON.parse(raw.toString().trim());
+  } catch {
+    // Package may not be published yet, or network is unavailable.
+    return null;
+  }
+}
+
+/**
+ * Check whether `local` is an expected bump from `published`:
+ *   - same version (already published)
+ *   - next patch
+ *   - next minor
+ *
+ * Returns { ok: true } or { ok: false, reason: "..." }.
+ */
+function checkVersionBump(published, local) {
+  const pub = parseSemver(published);
+  const loc = parseSemver(local);
+
+  if (!pub || !loc) {
+    // Can't compare — pre-release / snapshot versions are fine.
+    return { ok: true };
+  }
+
+  // Same version — already published.
+  if (loc.major === pub.major && loc.minor === pub.minor && loc.patch === pub.patch) {
+    return { ok: true, note: `version ${local} is already published` };
+  }
+
+  // Next patch: X.Y.Z → X.Y.(Z+1)
+  if (loc.major === pub.major && loc.minor === pub.minor && loc.patch === pub.patch + 1) {
+    return { ok: true };
+  }
+
+  // Next minor: X.Y.Z → X.(Y+1).0
+  if (loc.major === pub.major && loc.minor === pub.minor + 1 && loc.patch === 0) {
+    return { ok: true };
+  }
+
+  // Local is behind published.
+  if (
+    loc.major < pub.major ||
+    (loc.major === pub.major && loc.minor < pub.minor) ||
+    (loc.major === pub.major && loc.minor === pub.minor && loc.patch < pub.patch)
+  ) {
+    return {
+      ok: false,
+      reason: `local version ${local} is behind the published version ${published}`,
+    };
+  }
+
+  // Anything else — skipping versions, major bump, etc.
+  return {
+    ok: false,
+    reason: `version bump from ${published} to ${local} is neither a patch nor a minor increment`,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -58,7 +140,21 @@ if (!pkgVersion) {
 const version = stripSnapshot(pkgVersion);
 if (checkOnly) console.log(`cli/package.json: ${version}`);
 
-// 2. Update cli/browser4-cli/Cargo.toml
+// 2. Compare against the latest published version on npm
+const publishedVersion = getLatestPublishedVersion(pkgName);
+if (publishedVersion) {
+  console.log(`Latest published: ${pkgName}@${publishedVersion}`);
+  const bump = checkVersionBump(publishedVersion, version);
+  if (!bump.ok) {
+    console.warn(`\x1b[33mWARNING: ${bump.reason}\x1b[0m`);
+  } else if (bump.note) {
+    console.log(`  (${bump.note})`);
+  }
+} else {
+  console.log(`Latest published: (not found — package may not be published yet)`);
+}
+
+// 3. Sync cli/browser4-cli/Cargo.toml
 const cargoTomlPath = join(cargoDir, "Cargo.toml");
 let cargoToml = readFileSync(cargoTomlPath, "utf-8");
 const cargoVersionRegex = /^version\s*=\s*"[^"]*"/m;
@@ -83,7 +179,7 @@ if (cargoVersion !== version) {
   if (!checkOnly) console.log(`  ${cargoTomlPath} already up to date`);
 }
 
-// 3. Update Cargo.lock (only in sync mode)
+// 4. Update Cargo.lock (only in sync mode)
 if (!checkOnly && cargoVersion !== version) {
   try {
     execSync("cargo update -p browser4-cli --offline", {
@@ -104,7 +200,7 @@ if (!checkOnly && cargoVersion !== version) {
   }
 }
 
-// 4. Report
+// 5. Report
 if (checkOnly) {
   if (process.exitCode === 1) {
     console.error("\nVersion mismatch detected! Run 'node cli/scripts/sync-version.js' to fix.");
