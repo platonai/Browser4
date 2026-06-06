@@ -52,7 +52,6 @@ open class LoadOptions(
     var referrer: String? = null,
 ) : PulsarOptions(argv) {
 
-
     /**
      * Represents the type of content being crawled, such as an article, product, or hotel.
      * This is used for classifying and applying specialized processing to different content types.
@@ -1256,6 +1255,10 @@ open class LoadOptions(
                 isArity0Boolean = true,
                 description = "If false, pages are flushed into database as soon as possible",
                 get = { it.lazyFlush }, set = { o, v -> o.lazyFlush = v }),
+            option("incognito", arrayOf("-ic", "-incognito", "--incognito"),
+                isArity0Boolean = true,
+                description = "Run browser in incognito mode",
+                get = { it.incognito }, set = { o, v -> o.incognito = v }),
             option("parse", arrayOf("-ps", "-parse", "--parse"),
                 isArity0Boolean = true,
                 description = "If true, parse the page when it's just be fetched.",
