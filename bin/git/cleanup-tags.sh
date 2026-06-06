@@ -76,7 +76,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ ${#PATTERNS[@]} -eq 0 ]]; then
-  PATTERNS=("dry_run" "ci")
+  PATTERNS=("dry_run" "ci" "npm_publish")
 fi
 
 # --------------- safety checks ---------------
