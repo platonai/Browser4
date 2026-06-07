@@ -4,7 +4,7 @@
 if command -v pwsh &> /dev/null
 then
     # echo "PowerShell (pwsh) has been already installed."
-    exit
+    return
 fi
 
 echo "PowerShell (pwsh) is not installed. Installing PowerShell..."
