@@ -121,6 +121,15 @@ if ($Help) {
     exit 0
 }
 
+function Assert-PowerShellVersion {
+    $currentVersion = $PSVersionTable.PSVersion
+    if (-not $currentVersion -or $currentVersion.Major -lt 7) {
+        throw "build-runtime-bundle.ps1 requires PowerShell 7+ (current: $currentVersion). Use pwsh to run this script."
+    }
+}
+
+Assert-PowerShellVersion
+
 function Get-IsWindows {
     return [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
         [System.Runtime.InteropServices.OSPlatform]::Windows
@@ -172,6 +181,31 @@ function Remove-ArchiveSuffix([string]$name) {
         }
     }
     return [System.IO.Path]::GetFileNameWithoutExtension($name)
+}
+
+function Convert-ToExtendedLengthPath([string]$path) {
+    if (-not (Get-IsWindows) -or [string]::IsNullOrWhiteSpace($path)) {
+        return $path
+    }
+
+    $fullPath = [System.IO.Path]::GetFullPath($path)
+    if ($fullPath.StartsWith('\\?\')) {
+        return $fullPath
+    }
+    if ($fullPath.StartsWith('\\')) {
+        return ('\\?\UNC\' + $fullPath.TrimStart('\'))
+    }
+    return "\\?\$fullPath"
+}
+
+function Resolve-InputPath([string]$path, [string]$baseDirectory) {
+    if ([string]::IsNullOrWhiteSpace($path)) {
+        return $path
+    }
+    if ([System.IO.Path]::IsPathRooted($path)) {
+        return [System.IO.Path]::GetFullPath($path)
+    }
+    return [System.IO.Path]::GetFullPath((Join-Path $baseDirectory $path))
 }
 
 # --------------------------------------------------------------------------
@@ -336,6 +370,57 @@ function Resolve-JavaHome {
     return $env:JAVA_HOME
 }
 
+function Resolve-RepositoryRoot {
+    $currentDirectory = [System.IO.Path]::GetFullPath($PSScriptRoot)
+    $wrapperName = if (Get-IsWindows) { 'mvnw.cmd' } else { 'mvnw' }
+    while (-not [string]::IsNullOrWhiteSpace($currentDirectory)) {
+        $pomPath = Join-Path $currentDirectory 'pom.xml'
+        $mavenWrapperPath = Join-Path $currentDirectory $wrapperName
+        if ((Test-Path -LiteralPath $pomPath) -and (Test-Path -LiteralPath $mavenWrapperPath)) {
+            return $currentDirectory
+        }
+
+        $parentDirectory = Split-Path -Path $currentDirectory -Parent
+        if ([string]::IsNullOrWhiteSpace($parentDirectory) -or $parentDirectory -eq $currentDirectory) {
+            break
+        }
+        $currentDirectory = $parentDirectory
+    }
+
+    $gitCommand = Get-Command git -ErrorAction SilentlyContinue
+    if ($gitCommand) {
+        $gitRoot = & $gitCommand.Source -C $PSScriptRoot rev-parse --show-toplevel 2>$null
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($gitRoot)) {
+            return $gitRoot.Trim()
+        }
+        $global:LASTEXITCODE = 0
+    }
+
+    throw "Unable to locate the Browser4 repository root from $PSScriptRoot. Run the script from inside a Browser4 checkout with pom.xml and the Maven wrapper available."
+}
+
+function Resolve-MavenCommand([string]$repositoryRoot) {
+    $wrapperName = if (Get-IsWindows) { 'mvnw.cmd' } else { 'mvnw' }
+    $wrapperPath = Join-Path $repositoryRoot $wrapperName
+    if (Test-Path -LiteralPath $wrapperPath) {
+        return (Resolve-Path -LiteralPath $wrapperPath).Path
+    }
+
+    $mavenCommand = Get-Command mvn -ErrorAction SilentlyContinue
+    if ($mavenCommand) {
+        return $mavenCommand.Source
+    }
+
+    if ($env:MAVEN_HOME) {
+        $mavenHomeExecutable = if (Get-IsWindows) { Join-Path $env:MAVEN_HOME 'bin/mvn.cmd' } else { Join-Path $env:MAVEN_HOME 'bin/mvn' }
+        if (Test-Path -LiteralPath $mavenHomeExecutable) {
+            return (Resolve-Path -LiteralPath $mavenHomeExecutable).Path
+        }
+    }
+
+    throw 'Maven is required to build the Browser4 runtime bundle. Install Maven or use a checkout that contains the Maven wrapper.'
+}
+
 function Resolve-ToolPath([string]$toolName) {
     $toolFileName = if (Get-IsWindows) { "$toolName.exe" } else { $toolName }
     if ($env:JAVA_HOME) {
@@ -378,10 +463,27 @@ function Get-JavaVersionText {
     }
 }
 
+function Get-JavaMajorVersionFromText([string]$javaVersionText) {
+    if ($javaVersionText -match 'version\s+"(\d+)') {
+        return [int]$Matches[1]
+    }
+    if ($javaVersionText -match 'version\s+"[\d._]+-(\d+)') {
+        return [int]$Matches[1]
+    }
+    return $null
+}
+
+function Get-JlinkCompressValue([Nullable[int]]$javaMajorVersion) {
+    if ($javaMajorVersion -ge 21) {
+        return 'zip-9'
+    }
+    return '2'
+}
+
 function Ensure-CleanDirectory([string]$path) {
     if (Test-Path $path) {
-        # Use \\?\ prefix to bypass Windows MAX_PATH (260 char) limit.
-        $longPath = if (Get-IsWindows -and -not $path.StartsWith('\\?\' -as [String])) { "\\?\$path" } else { $path }
+        # Use extended-length paths on Windows to bypass MAX_PATH (260 char) limits.
+        $longPath = Convert-ToExtendedLengthPath $path
         Remove-Item -LiteralPath $longPath -Recurse -Force -ErrorAction SilentlyContinue
         # If the long-path removal left empty directories behind, clean up via normal path.
         if (Test-Path $path) {
@@ -453,41 +555,41 @@ function Get-BundleMetadataJson(
 
 function Remove-IfExists([string]$path) {
     if (Test-Path $path) {
-        $longPath = if (Get-IsWindows -and -not $path.StartsWith('\\?\' -as [String])) { "\\?\$path" } else { $path }
+        $longPath = Convert-ToExtendedLengthPath $path
         Remove-Item -LiteralPath $longPath -Force -Recurse -ErrorAction SilentlyContinue
     }
 }
 
 function Remove-SafeRuntimePayload([string]$runtimeRoot) {
     $safeToRemove = @(
-        'lib\ct.sym',
-        'lib\jvm.lib',
-        'bin\jvmcicompiler.dll',
-        'bin\libjvmcicompiler.dylib',
-        'bin\libjvmcicompiler.so',
-        'bin\jar.exe',
-        'bin\jarsigner.exe',
-        'bin\javac.exe',
-        'bin\javadoc.exe',
-        'bin\javap.exe',
-        'bin\jdb.exe',
-        'bin\jdeps.exe',
-        'bin\jfr.exe',
-        'bin\jimage.exe',
-        'bin\jlink.exe',
-        'bin\jmod.exe',
-        'bin\jpackage.exe',
-        'bin\jrunscript.exe',
-        'bin\jshell.exe',
-        'bin\jstatd.exe',
-        'bin\keytool.exe',
-        'bin\kinit.exe',
-        'bin\klist.exe',
-        'bin\ktab.exe',
-        'bin\rmiregistry.exe',
-        'bin\serialver.exe',
-        'bin\jaccessinspector.exe',
-        'bin\jaccesswalker.exe'
+        'lib/ct.sym',
+        'lib/jvm.lib',
+        'bin/jvmcicompiler.dll',
+        'bin/libjvmcicompiler.dylib',
+        'bin/libjvmcicompiler.so',
+        'bin/jar.exe',
+        'bin/jarsigner.exe',
+        'bin/javac.exe',
+        'bin/javadoc.exe',
+        'bin/javap.exe',
+        'bin/jdb.exe',
+        'bin/jdeps.exe',
+        'bin/jfr.exe',
+        'bin/jimage.exe',
+        'bin/jlink.exe',
+        'bin/jmod.exe',
+        'bin/jpackage.exe',
+        'bin/jrunscript.exe',
+        'bin/jshell.exe',
+        'bin/jstatd.exe',
+        'bin/keytool.exe',
+        'bin/kinit.exe',
+        'bin/klist.exe',
+        'bin/ktab.exe',
+        'bin/rmiregistry.exe',
+        'bin/serialver.exe',
+        'bin/jaccessinspector.exe',
+        'bin/jaccesswalker.exe'
     )
 
     foreach ($relativePath in $safeToRemove) {
@@ -506,8 +608,26 @@ function Read-ManifestAttribute([string]$jarPath, [string]$attributeName) {
         $reader = [System.IO.StreamReader]::new($entry.Open())
         try {
             $manifestText = $reader.ReadToEnd()
-            foreach ($line in $manifestText -split "`n") {
-                if ($line -match "^$attributeName\s*:\s*(.+)$") {
+            $manifestLines = [System.Collections.Generic.List[string]]::new()
+            $currentLine = $null
+            foreach ($rawLine in ($manifestText -split "`r?`n")) {
+                if ($rawLine.StartsWith(' ') -and $null -ne $currentLine) {
+                    $currentLine += $rawLine.Substring(1)
+                    continue
+                }
+
+                if ($null -ne $currentLine) {
+                    $manifestLines.Add($currentLine)
+                }
+                $currentLine = $rawLine
+            }
+            if ($null -ne $currentLine) {
+                $manifestLines.Add($currentLine)
+            }
+
+            $attributePattern = '^{0}\s*:\s*(.+)$' -f [regex]::Escape($attributeName)
+            foreach ($line in $manifestLines) {
+                if ($line -match $attributePattern) {
                     return $Matches[1].Trim()
                 }
             }
@@ -574,24 +694,24 @@ set "MAIN_CLASS=$mainClass"
 # Main script
 # ============================================================================
 
+$invocationDirectory = if ($PWD -and $PWD.ProviderPath) { $PWD.ProviderPath } else { (Get-Location).Path }
+$JarPath = Resolve-InputPath -path $JarPath -baseDirectory $invocationDirectory
+$OutputDirectory = Resolve-InputPath -path $OutputDirectory -baseDirectory $invocationDirectory
+if (-not [string]::IsNullOrWhiteSpace($JdkHome)) {
+    $JdkHome = Resolve-InputPath -path $JdkHome -baseDirectory $invocationDirectory
+}
+
 # Resolve Maven command and repo root early — both the JAR auto-build and
 # dependency:copy-dependencies need them.
-$repoRoot = git rev-parse --show-toplevel
+$repoRoot = Resolve-RepositoryRoot
 Set-Location $repoRoot
 
-$mvnCmd = if (Get-IsWindows) { Join-Path $repoRoot 'mvnw.cmd' } else { Join-Path $repoRoot 'mvnw' }
+$mvnCmd = Resolve-MavenCommand -repositoryRoot $repoRoot
 $bundleModule = 'browser4-apps/browser4-bundle'
 
-# Install browser4-bundle and its transitive reactor dependencies to ~/.m2
-# so dependency:copy-dependencies can resolve internal reactor artifacts
-# (browser4-resources, browser4-skeleton, browser4-protocol, etc.) that are
-# not published to Maven Central.  Using -pl ... -am targets only the subset
-# of modules the bundle actually needs, avoiding failures in unrelated modules.
-# This is idempotent — on the second run Maven only touches unchanged files.
-Write-Host "Ensuring core modules are installed to ~/.m2 ..."
-$coreArgs = @('install', '-Pall-main-modules', '-DskipTests', '-Dmaven.javadoc.skip=true')
-# mvnw has to been invoked from the repo root for the -pl argument to work correctly, so we Set-Location above.
-& $mvnCmd @coreArgs
+Write-Host "Ensuring main modules are installed to ~/.m2 ..."
+$mainArgs = @('install', '-Pall-main-modules', '-DskipTests', '-Dmaven.javadoc.skip=true')
+& $mvnCmd @mainArgs
 if ($LASTEXITCODE -ne 0) { throw "Core modules install failed with exit code $LASTEXITCODE" }
 
 # Auto-build the bundle JAR if it doesn't exist yet (package only — the
@@ -645,17 +765,14 @@ $jdeps = Resolve-ToolPath 'jdeps'
 $jlink = Resolve-ToolPath 'jlink'
 $javaVersionText = Get-JavaVersionText
 $isGraalVmRuntime = $javaVersionText -match 'GraalVM'
+$selectedJdkVersion = if ($env:JAVA_HOME) { Get-JDKVersion -jdkHome $env:JAVA_HOME } else { $null }
 
 # Parse the JDK major version from java -version output as a fallback for
 # --multi-release (primary source is the release file read by Get-JDKVersion).
 # On some platforms / JDK distributions the release file may be in an
 # unexpected location, so this secondary check is essential.
-$javaVersionMajor = $null
-if ($javaVersionText -match 'version\s+"(\d+)') {
-    $javaVersionMajor = [int]$Matches[1]
-} elseif ($javaVersionText -match 'version\s+"[\d._]+-(\d+)') {
-    $javaVersionMajor = [int]$Matches[1]
-}
+$javaVersionMajor = if ($selectedJdkVersion) { $selectedJdkVersion.Major } else { Get-JavaMajorVersionFromText -javaVersionText $javaVersionText }
+$jlinkCompressValue = Get-JlinkCompressValue -javaMajorVersion $javaVersionMajor
 
 # --------------------------------------------------------------------------
 # Progress tracking
@@ -748,12 +865,11 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 # Compute the multi-release version from the JDK being used.
 # This ensures jdeps processes multi-release JARs with the correct
 # version-specific class files for the target runtime.
-# Priority: 1) release file via Get-JDKVersion  2) java -version output
+# Priority: 1) selected JDK release file  2) java -version output
 #            3) hardcoded '17' as last resort
-$jdkReleaseVer = Get-JDKVersion -jdkHome $env:JAVA_HOME
-$detectedMajor = if ($jdkReleaseVer) { $jdkReleaseVer.Major } elseif ($javaVersionMajor) { $javaVersionMajor } else { $null }
+$detectedMajor = if ($selectedJdkVersion) { $selectedJdkVersion.Major } elseif ($javaVersionMajor) { $javaVersionMajor } else { $null }
 $multiReleaseVersion = if ($detectedMajor) { [string]$detectedMajor } else { '17' }
-Write-Host "Using multi-release version: $multiReleaseVersion (release-file: $($jdkReleaseVer), java-cmd: $javaVersionMajor)" -ForegroundColor Cyan
+Write-Host "Using multi-release version: $multiReleaseVersion (release-file: $($selectedJdkVersion), java-cmd: $javaVersionMajor)" -ForegroundColor Cyan
 
 # --------------------------------------------------------------------------
 # Primary jdeps strategy: full recursive analysis with class-path.
@@ -925,6 +1041,7 @@ $phaseIndex = 4
 Write-BuildProgress -Status $buildPhases[$phaseIndex - 1].Label
 
 Write-Host "Running jlink with modules: $($modules -join ',')" -ForegroundColor Cyan
+Write-Host "Using jlink compression mode: $jlinkCompressValue" -ForegroundColor Cyan
 $jlinkArgs = @(
     '--add-modules', ($modules -join ','),
     '--vm', 'server',
@@ -933,7 +1050,7 @@ $jlinkArgs = @(
     '--no-header-files',
     '--no-man-pages',
     '--dedup-legal-notices', 'error-if-not-same-content',
-    '--compress', 'zip-9',
+    '--compress', $jlinkCompressValue,
     '--output', $runtimeDirectory
 )
 if ($isGraalVmRuntime) {
