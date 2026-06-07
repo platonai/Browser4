@@ -558,7 +558,7 @@
 
         <!--  Language  -->
         <javaVersion>17</javaVersion>
-        <kotlinVersion>2.2.21</kotlinVersion>
+        <kotlinVersion>2.3.21</kotlinVersion>
         <kotlin.coroutine.version>1.10.2</kotlin.coroutine.version>
 
         <!--  Kotlin  -->

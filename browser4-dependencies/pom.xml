@@ -11,13 +11,16 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <!-- From apache: "Most projects will want to override some of these settings." -->
-    <!-- for more information, see the documentation of this POM: http://maven.apache.org/pom/asf/ -->
+    <parent>
+        <groupId>ai.platon.pulsar</groupId>
+        <artifactId>browser4</artifactId>
+        <version>4.11.0-SNAPSHOT</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
 
-    <groupId>ai.platon</groupId>
     <artifactId>browser4-dependencies</artifactId>
     <name>Browser4 Dependencies</name>
-    <version>4.11.0-SNAPSHOT</version>
+
     <packaging>pom</packaging>
 
     <description>Pulsar Dependencies</description>
@@ -504,16 +507,6 @@
         <springmockk.version>4.0.2</springmockk.version>
         <mockito-junit-jupiter.version>5.20.0</mockito-junit-jupiter.version>
 
-        <!--  Language  -->
-        <javaVersion>17</javaVersion>
-        <kotlinVersion>2.2.21</kotlinVersion>
-
-        <!--  Kotlin  -->
-        <kotlin.version>${kotlinVersion}</kotlin.version>
-        <maven.compiler.release>${javaVersion}</maven.compiler.release>
-        <kotlin.compiler.jvmTarget>${javaVersion}</kotlin.compiler.jvmTarget>
-
-        <kotlin.coroutine.version>1.10.2</kotlin.coroutine.version>
         <kotlin-statistics.version>1.2.1</kotlin-statistics.version>
         <mcp-sdk.version>0.8.1</mcp-sdk.version>
 
