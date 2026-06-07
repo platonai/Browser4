@@ -756,6 +756,7 @@ $workDirectory = Join-Path $resolvedOutputDirectory (Join-Path '_work' $bundleBa
 $bundleDirectory = Join-Path $workDirectory $bundleBaseName
 $runtimeDirectory = Join-Path $bundleDirectory 'runtime'
 $libDirectory = Join-Path $bundleDirectory 'lib'
+$jdepsLogDirectory = Join-Path $workDirectory 'jdeps-logs'
 $assetPath = Join-Path $resolvedOutputDirectory $AssetName
 
 if ((Test-Path $assetPath) -and (-not $Force)) {
@@ -766,6 +767,7 @@ New-Item -ItemType Directory -Force -Path $resolvedOutputDirectory | Out-Null
 Ensure-CleanDirectory $workDirectory
 Ensure-CleanDirectory $bundleDirectory
 Ensure-CleanDirectory $libDirectory
+Ensure-CleanDirectory $jdepsLogDirectory
 
 # Auto-detect best JDK before resolving jdeps/jlink.
 $null = Resolve-JavaHome
@@ -861,15 +863,12 @@ Write-BuildProgress -Status $buildPhases[$phaseIndex - 1].Label
 
 Write-Host "Running jdeps to compute Browser4 runtime modules..." -ForegroundColor Cyan
 
+
 # Create a temp directory for extracted app classes (jdeps works best with classes)
 $appClassesDir = Join-Path $workDirectory 'app-classes'
 Ensure-CleanDirectory $appClassesDir
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 [System.IO.Compression.ZipFile]::ExtractToDirectory($resolvedJarPath, $appClassesDir)
-
-
-
-
 
 # Compute the multi-release version from the JDK being used.
 # This ensures jdeps processes multi-release JARs with the correct
@@ -881,6 +880,23 @@ $multiReleaseVersion = if ($detectedMajor) { [string]$detectedMajor } else { '17
 Write-Host "Using multi-release version: $multiReleaseVersion (release-file: $($selectedJdkVersion), java-cmd: $javaVersionMajor)" -ForegroundColor Cyan
 
 # --------------------------------------------------------------------------
+# Diagnostic logging helper -- writes timestamped entries to the jdeps log
+# directory so we can diagnose slow or failing jdeps invocations in CI.
+# --------------------------------------------------------------------------
+function Write-JdepsDiagnostic {
+    param([string]$Message)
+    $timestamp = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff')
+    $line = "[$timestamp] $Message"
+    Add-Content -LiteralPath (Join-Path $jdepsLogDirectory 'jdeps-diagnostic.log') -Value $line -Encoding UTF8
+}
+
+Write-JdepsDiagnostic "jdeps binary: $jdeps"
+Write-JdepsDiagnostic "multi-release version: $multiReleaseVersion"
+Write-JdepsDiagnostic "app classes dir: $appClassesDir"
+Write-JdepsDiagnostic "lib jar count: $libJarCount"
+Write-JdepsDiagnostic "JDK version: $(Get-JDKVersion -jdkHome $env:JAVA_HOME)"
+
+# --------------------------------------------------------------------------
 # Primary jdeps strategy: full recursive analysis with class-path.
 # On some platforms, specific dependency JARs (e.g. native transports)
 # may contain class files that jdeps cannot parse.  When that happens we
@@ -888,6 +904,8 @@ Write-Host "Using multi-release version: $multiReleaseVersion (release-file: $($
 # --------------------------------------------------------------------------
 $jdepsOutput = $null
 $jdepsSuccess = $false
+$primaryStdoutPath = Join-Path $jdepsLogDirectory 'jdeps-primary-stdout.txt'
+$primaryStderrPath = Join-Path $jdepsLogDirectory 'jdeps-primary-stderr.txt'
 
 # Build primary jdeps argument list
 $primaryJdepsArgs = @(
@@ -905,25 +923,66 @@ if ($libJarCount -gt 0) {
 }
 $primaryJdepsArgs += $appClassesDir
 
-# Run primary jdeps — capture all output (stdout + stderr) so we can
-# inspect failures without the ErrorActionPreference=Stop killing us.
+Write-JdepsDiagnostic "Primary jdeps args: $($primaryJdepsArgs -join ' ')"
+
+# Run primary jdeps -- capture stdout and stderr separately so we can save
+# both to disk immediately, even on failure.
 $prevErrorAction = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
+$primaryStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+Write-JdepsDiagnostic "Primary jdeps START"
+
+$primaryExitCode = $null
+$primaryStdout = ''
+$primaryStderr = ''
+
+# Use a temp file approach so stdout and stderr are captured independently
+# even when the process writes > 64 KB (PowerShell's 2>&1 merging can
+# interleave or truncate large outputs).
+$tempStdout = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName())
+$tempStderr = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName())
 try {
-    $jdepsOutput = & $jdeps @primaryJdepsArgs 2>&1
-    $jdepsSuccess = ($LASTEXITCODE -eq 0)
+    $process = Start-Process -FilePath $jdeps `
+        -ArgumentList $primaryJdepsArgs `
+        -RedirectStandardOutput $tempStdout `
+        -RedirectStandardError $tempStderr `
+        -Wait `
+        -PassThru `
+        -NoNewWindow
+    $primaryExitCode = $process.ExitCode
+    $primaryStdout = if (Test-Path $tempStdout) { Get-Content -LiteralPath $tempStdout -Raw -ErrorAction SilentlyContinue } else { '' }
+    $primaryStderr = if (Test-Path $tempStderr) { Get-Content -LiteralPath $tempStderr -Raw -ErrorAction SilentlyContinue } else { '' }
+    $jdepsOutput = $primaryStdout
+    $jdepsSuccess = ($primaryExitCode -eq 0)
 } catch {
-    $jdepsOutput = $_.Exception.Message
+    $primaryExitCode = -1
+    $primaryStderr = $_.Exception.Message
     $jdepsSuccess = $false
 } finally {
-    $ErrorActionPreference = $prevErrorAction
-    # Reset LASTEXITCODE so later non-zero checks are not poisoned
-    if (-not $jdepsSuccess) { $global:LASTEXITCODE = 0 }
+    $primaryStopwatch.Stop()
+    Remove-IfExists $tempStdout
+    Remove-IfExists $tempStderr
 }
+
+# Save stdout and stderr to disk IMMEDIATELY, regardless of success/failure.
+if ($primaryStdout) {
+    Set-Content -LiteralPath $primaryStdoutPath -Value $primaryStdout -Encoding UTF8
+}
+if ($primaryStderr) {
+    Set-Content -LiteralPath $primaryStderrPath -Value $primaryStderr -Encoding UTF8
+}
+
+Write-JdepsDiagnostic "Primary jdeps END -- exit=$primaryExitCode, elapsed=$($primaryStopwatch.Elapsed.TotalSeconds.ToString('F1'))s, success=$jdepsSuccess"
+if (-not $jdepsSuccess) {
+    Write-JdepsDiagnostic "Primary jdeps STDERR (first 2KB): $($primaryStderr.Substring(0, [Math]::Min(2048, $primaryStderr.Length)))"
+}
+
+$ErrorActionPreference = $prevErrorAction
+if (-not $jdepsSuccess) { $global:LASTEXITCODE = 0 }
 
 if (-not $jdepsSuccess) {
     Write-Warning "Primary jdeps failed (full recursive analysis with $libJarCount dependency JARs)."
-    Write-Warning "jdeps stderr: $jdepsOutput"
+    Write-Warning "jdeps stderr saved to: $primaryStderrPath"
 
     # ----------------------------------------------------------------------
     # Fallback: per-JAR analysis.
@@ -935,55 +994,81 @@ if (-not $jdepsSuccess) {
     # netty-transport-native-kqueue on macOS) are skipped.
     #
     # The union of every JAR's direct module deps is a superset of the
-    # recursive transitive closure — it processes every class in every JAR,
+    # recursive transitive closure -- it processes every class in every JAR,
     # not just classes reachable from the app entry points.  This is
     # correct and safe: it can only over-approximate, never miss a module.
     # ----------------------------------------------------------------------
     Write-Host "Falling back to per-JAR analysis (individual JAR scanning)..." -ForegroundColor Yellow
+    Write-JdepsDiagnostic "Fallback per-JAR analysis START -- $libJarCount JARs to scan"
+
+    $perJarLogPath = Join-Path $jdepsLogDirectory 'jdeps-perjar.log'
+    # Truncate the per-JAR log before the fallback run
+    Set-Content -LiteralPath $perJarLogPath -Value "# Per-JAR jdeps analysis -- $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')`n" -Encoding UTF8
 
     $allJarModules = @()
     $goodJars = 0
     $badJars = 0
     $badJarNames = @()
+    $perJarStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+    $totalElapsed = 0.0
 
-    # Temporarily relax ErrorActionPreference so a single bad JAR cannot
-    # abort the whole loop.  Restore via try/finally to avoid leaking the
-    # relaxed setting into later phases (jlink, packaging, ...).
     $ErrorActionPreference = 'Continue'
     try {
-        # Analyse the application JAR first (it is also in lib/, but we
-        # process it explicitly so a failure here is visible).
+        # Analyse the application JAR first.
+        $jarStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
         $appModuleText = & $jdeps -q --ignore-missing-deps --multi-release $multiReleaseVersion --print-module-deps $resolvedJarPath 2>&1
+        $jarStopwatch.Stop()
+        Add-Content -LiteralPath $perJarLogPath -Value "[$($jarStopwatch.Elapsed.TotalSeconds.ToString('F1'))s] APP  $([System.IO.Path]::GetFileName($resolvedJarPath))  exit=$LASTEXITCODE  $appModuleText" -Encoding UTF8
         if ($LASTEXITCODE -eq 0) {
             $allJarModules += ($appModuleText -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            $goodJars++
         } else {
             Write-Warning "  Even the application JAR failed jdeps: $appModuleText"
+            $badJarNames += [System.IO.Path]::GetFileName($resolvedJarPath)
+            $badJars++
         }
+        $totalElapsed += $jarStopwatch.Elapsed.TotalSeconds
         $global:LASTEXITCODE = 0
 
-        # Analyse every dependency JAR in lib/ — skip the few that upset jdeps.
+        # Analyse every dependency JAR in lib/ -- skip the few that upset jdeps.
         $allJars = @(Get-ChildItem -Path $libDirectory -File -Filter '*.jar' -ErrorAction SilentlyContinue)
+        $processedCount = 1
         foreach ($jar in $allJars) {
+            $processedCount++
+            $jarStopwatch.Restart()
             $jarOutput = & $jdeps -q --ignore-missing-deps --multi-release $multiReleaseVersion --print-module-deps $jar.FullName 2>&1
+            $jarStopwatch.Stop()
+            $jarSeconds = $jarStopwatch.Elapsed.TotalSeconds
+
             if ($LASTEXITCODE -eq 0) {
                 $allJarModules += ($jarOutput -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+                Add-Content -LiteralPath $perJarLogPath -Value "[$($jarSeconds.ToString('F1'))s] OK   $($jar.Name)  -> $jarOutput" -Encoding UTF8
                 $goodJars++
             } else {
-                Write-Warning "  Skipping problematic JAR: $($jar.Name)"
+                $shortError = if ($jarOutput.Length -gt 200) { $jarOutput.Substring(0, 200) + '...' } else { $jarOutput }
+                Add-Content -LiteralPath $perJarLogPath -Value "[$($jarSeconds.ToString('F1'))s] SKIP $($jar.Name)  exit=$LASTEXITCODE  $shortError" -Encoding UTF8
+                Write-Warning "  Skipping problematic JAR: $($jar.Name) ($($jarSeconds.ToString('F1'))s)"
                 $badJarNames += $jar.Name
                 $badJars++
             }
+            $totalElapsed += $jarSeconds
             $global:LASTEXITCODE = 0
+
+            # Progress heartbeat every 50 JARs so CI logs don't look hung.
+            if ($processedCount % 50 -eq 0) {
+                Write-Host "  Per-JAR progress: $processedCount / $libJarCount ($goodJars ok, $badJars skipped, $([math]::Round($totalElapsed, 1))s elapsed)" -ForegroundColor Cyan
+            }
         }
 
-        Write-Host "Per-JAR analysis: $goodJars succeeded, $badJars skipped." -ForegroundColor Cyan
+        $perJarStopwatch.Stop()
+        Write-JdepsDiagnostic "Per-JAR analysis END -- $goodJars succeeded, $badJars skipped, total=$($perJarStopwatch.Elapsed.TotalSeconds.ToString('F1'))s"
+        Write-Host "Per-JAR analysis: $goodJars succeeded, $badJars skipped ($([math]::Round($perJarStopwatch.Elapsed.TotalSeconds, 1))s)." -ForegroundColor Cyan
         if ($badJars -gt 0) {
             Write-Host "  Skipped JARs: $($badJarNames -join ', ')" -ForegroundColor Yellow
+            Write-JdepsDiagnostic "Skipped JARs: $($badJarNames -join ', ')"
         }
 
         if ($allJarModules.Count -gt 0) {
-            # Reproduce the comma-separated output format that the
-            # module-processing block below expects.
             $jdepsOutput = ($allJarModules | Select-Object -Unique) -join ','
             $jdepsSuccess = $true
         } else {
@@ -991,6 +1076,7 @@ if (-not $jdepsSuccess) {
         }
     } catch {
         Write-Warning "Per-JAR analysis threw: $($_.Exception.Message)"
+        Write-JdepsDiagnostic "Per-JAR analysis EXCEPTION: $($_.Exception.Message)"
     } finally {
         $ErrorActionPreference = $prevErrorAction
         if (-not $jdepsSuccess) { $global:LASTEXITCODE = 0 }
@@ -998,13 +1084,99 @@ if (-not $jdepsSuccess) {
 }
 
 if (-not $jdepsSuccess) {
+    Write-JdepsDiagnostic "FATAL: jdeps failed with both primary and per-JAR strategies"
     throw "jdeps failed with both primary (full classpath) and per-JAR strategies."
 }
 
+# Save the resolved module list immediately.
+Set-Content -LiteralPath (Join-Path $jdepsLogDirectory 'jdeps-modules.txt') `
+    -Value $jdepsOutput `
+    -Encoding UTF8
+Write-Host "  jdeps-modules.txt  -> $($jdepsOutput)" -ForegroundColor Green
+Write-JdepsDiagnostic "Resolved modules: $jdepsOutput"
 
+# --------------------------------------------------------------------------
+# Supplementary jdeps analyses -- best-effort, failures are non-fatal.
+# These provide detailed dependency graphs for offline auditing.
+# --------------------------------------------------------------------------
 
+# 2) Full verbose class-level dependency graph.
+$verboseJdepsArgs = @(
+    '--ignore-missing-deps',
+    '--multi-release', $multiReleaseVersion,
+    '--recursive',
+    '-verbose'
+)
+if ($libJarCount -gt 0) {
+    $jdepsClassPath = Get-JdepsClassPath -libDirectory $libDirectory
+    if (-not [string]::IsNullOrWhiteSpace($jdepsClassPath)) {
+        $verboseJdepsArgs += @('--class-path', $jdepsClassPath)
+    }
+}
+$verboseJdepsArgs += $appClassesDir
 
+$verboseLogPath = Join-Path $jdepsLogDirectory 'jdeps-verbose.log'
+$prevErrorAction = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+$verboseStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+Write-JdepsDiagnostic "Verbose jdeps START"
+try {
+    $verboseOutput = & $jdeps @verboseJdepsArgs 2>&1
+    $verboseStopwatch.Stop()
+    if ($verboseOutput) {
+        Set-Content -LiteralPath $verboseLogPath -Value $verboseOutput -Encoding UTF8
+        Write-Host "  jdeps-verbose.log saved ($([math]::Round(((Get-Item $verboseLogPath).Length / 1KB), 1)) KB, $($verboseStopwatch.Elapsed.TotalSeconds.ToString('F1'))s)" -ForegroundColor Green
+        Write-JdepsDiagnostic "Verbose jdeps END -- ok, $($verboseStopwatch.Elapsed.TotalSeconds.ToString('F1'))s, $([math]::Round(((Get-Item $verboseLogPath).Length / 1KB), 1)) KB"
+    } else {
+        Write-JdepsDiagnostic "Verbose jdeps END -- empty output, $($verboseStopwatch.Elapsed.TotalSeconds.ToString('F1'))s"
+    }
+} catch {
+    $verboseStopwatch.Stop()
+    Write-Warning "Failed to generate verbose jdeps log: $($_.Exception.Message)"
+    Write-JdepsDiagnostic "Verbose jdeps EXCEPTION: $($_.Exception.Message)"
+} finally {
+    $ErrorActionPreference = $prevErrorAction
+    $global:LASTEXITCODE = 0
+}
 
+# 3) Package-level summary (medium detail -- useful for auditing).
+$packageJdepsArgs = @(
+    '--ignore-missing-deps',
+    '--multi-release', $multiReleaseVersion,
+    '--recursive',
+    '-verbose:package'
+)
+if ($libJarCount -gt 0) {
+    $jdepsClassPath = Get-JdepsClassPath -libDirectory $libDirectory
+    if (-not [string]::IsNullOrWhiteSpace($jdepsClassPath)) {
+        $packageJdepsArgs += @('--class-path', $jdepsClassPath)
+    }
+}
+$packageJdepsArgs += $appClassesDir
+
+$packageLogPath = Join-Path $jdepsLogDirectory 'jdeps-packages.log'
+$packageStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+Write-JdepsDiagnostic "Package jdeps START"
+try {
+    $packageOutput = & $jdeps @packageJdepsArgs 2>&1
+    $packageStopwatch.Stop()
+    if ($packageOutput) {
+        Set-Content -LiteralPath $packageLogPath -Value $packageOutput -Encoding UTF8
+        Write-Host "  jdeps-packages.log saved ($([math]::Round(((Get-Item $packageLogPath).Length / 1KB), 1)) KB, $($packageStopwatch.Elapsed.TotalSeconds.ToString('F1'))s)" -ForegroundColor Green
+        Write-JdepsDiagnostic "Package jdeps END -- ok, $($packageStopwatch.Elapsed.TotalSeconds.ToString('F1'))s, $([math]::Round(((Get-Item $packageLogPath).Length / 1KB), 1)) KB"
+    } else {
+        Write-JdepsDiagnostic "Package jdeps END -- empty output, $($packageStopwatch.Elapsed.TotalSeconds.ToString('F1'))s"
+    }
+} catch {
+    $packageStopwatch.Stop()
+    Write-Warning "Failed to generate package-level jdeps log: $($_.Exception.Message)"
+    Write-JdepsDiagnostic "Package jdeps EXCEPTION: $($_.Exception.Message)"
+} finally {
+    $ErrorActionPreference = $prevErrorAction
+    $global:LASTEXITCODE = 0
+}
+
+Write-JdepsDiagnostic "All jdeps phases complete"
 
 $recommendedModules = @(
     'java.management',
