@@ -89,7 +89,7 @@ checksum = "c4512299f36f043ab09a583e57bceb5a5aab7a73db1805848e8fef3c9e8c78b3"
 
 [[package]]
 name = "browser4-cli"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "base64",
  "chrono",

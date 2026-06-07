@@ -181,12 +181,14 @@ if (cargoVersion !== version) {
 
 // 4. Update Cargo.lock (only in sync mode)
 if (!checkOnly && cargoVersion !== version) {
+  let lockUpdated = false;
   try {
     execSync("cargo update -p browser4-cli --offline", {
       cwd: cargoDir,
       stdio: "pipe",
     });
     console.log("  Updated Cargo.lock");
+    lockUpdated = true;
   } catch {
     try {
       execSync("cargo update -p browser4-cli", {
@@ -194,8 +196,34 @@ if (!checkOnly && cargoVersion !== version) {
         stdio: "pipe",
       });
       console.log("  Updated Cargo.lock");
+      lockUpdated = true;
     } catch (e) {
-      console.error(`  Warning: Could not update Cargo.lock: ${e.message}`);
+      console.error(`  Warning: Could not update Cargo.lock via cargo: ${e.message}`);
+    }
+  }
+
+  // Fallback: edit Cargo.lock directly when cargo update fails (e.g. due to
+  // lock file version mismatch between the installed cargo and the lock file).
+  if (!lockUpdated) {
+    const cargoLockPath = join(cargoDir, "Cargo.lock");
+    try {
+      let lockContent = readFileSync(cargoLockPath, "utf-8");
+      // Match the [[package]] block for browser4-cli and replace its version.
+      // Works for both v3 and v4 lock file formats.
+      const lockPkgRegex = new RegExp(
+        `(\\[\\[package\\]\\][\\r\\n]+\\s*name\\s*=\\s*"browser4-cli"[\\r\\n]+\\s*version\\s*=\\s*)"[^"]*"`,
+        "m"
+      );
+      if (lockPkgRegex.test(lockContent)) {
+        lockContent = lockContent.replace(lockPkgRegex, `$1"${version}"`);
+        writeFileSync(cargoLockPath, lockContent);
+        console.log(`  Updated Cargo.lock directly: ${cargoVersion} -> ${version}`);
+        lockUpdated = true;
+      } else {
+        console.error("  Warning: Could not find browser4-cli entry in Cargo.lock");
+      }
+    } catch (e2) {
+      console.error(`  Warning: Could not update Cargo.lock directly: ${e2.message}`);
     }
   }
 }
