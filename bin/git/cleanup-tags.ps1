@@ -53,7 +53,7 @@ $ErrorActionPreference = "Stop"
 
 # --------------- defaults ---------------
 if ($Pattern.Count -eq 0) {
-    $Pattern = @("dry_run", "ci", "npm_publish")
+    $Pattern = @("dry_run", "ci", "npm_publish", "rb")
 }
 
 # --------------- safety checks ---------------
