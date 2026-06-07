@@ -188,7 +188,6 @@ function Invoke-ServerBuildIfNeeded {
         '-pl', $bundleModule,
         '-am',
         '-DskipTests',
-        '-Dmaven.javadoc.skip=true',
         '-q'
     )
 

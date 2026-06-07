@@ -710,7 +710,7 @@ $mvnCmd = Resolve-MavenCommand -repositoryRoot $repoRoot
 $bundleModule = 'browser4-apps/browser4-bundle'
 
 Write-Host "Ensuring main modules are installed to ~/.m2 ..."
-$mainArgs = @('install', '-Pall-main-modules', '-DskipTests', '-Dmaven.javadoc.skip=true')
+$mainArgs = @('install', '-Pall-main-modules', '-DskipTests')
 & $mvnCmd @mainArgs
 if ($LASTEXITCODE -ne 0) { throw "Core modules install failed with exit code $LASTEXITCODE" }
 
@@ -720,7 +720,7 @@ if (-not (Test-Path $JarPath)) {
     Write-Host "Bundle JAR not found, building from source ..." -ForegroundColor Yellow
     Write-Host "  Building $bundleModule ..."
     # Try again
-    $bundleArgs = @('install', '-pl', $bundleModule, '-am', '-Passet-bundle', '-DskipTests', '-Dmaven.javadoc.skip=true', '-q')
+    $bundleArgs = @('install', '-pl', $bundleModule, '-am', '-Passet-bundle', '-DskipTests', '-q')
     & $mvnCmd @bundleArgs
     if ($LASTEXITCODE -ne 0) { throw "Bundle JAR build failed with exit code $LASTEXITCODE" }
 

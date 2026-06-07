@@ -1822,7 +1822,7 @@ async fn try_build_local_runtime_bundle(
             move || {
                 std::process::Command::new(&mvn_program)
                     .args([
-                        "package",
+                        "install",
                         "-Passet-bundle",
                         "-pl",
                         "browser4-apps/browser4-bundle",

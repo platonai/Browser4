@@ -50,7 +50,6 @@ jobs:
           ./mvnw install -pl browser4-apps/browser4-bundle -am `
             -Passet-bundle `
             -DskipTests `
-            -Dmaven.javadoc.skip=true `
             -q
           if ($LASTEXITCODE -ne 0) {
             throw "Maven build failed with exit code $LASTEXITCODE"
@@ -72,14 +71,6 @@ jobs:
             throw "build-runtime-bundle.ps1 failed with exit code $LASTEXITCODE"
           }
           Write-Host "::endgroup::"
-
-      - name: Upload runtime bundle artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: browser4-bundle-runtime-linux-x64
-          path: browser4-apps/browser4-bundle/target/runtime-bundle/browser4-bundle-runtime-linux-x64.tar.gz
-          if-no-files-found: error
-          retention-days: 7
 
       - name: Display bundle info
         if: always()
