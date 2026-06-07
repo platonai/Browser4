@@ -2721,6 +2721,27 @@ async fn handle_install(tool_params: &Value) -> Result<(), String> {
     Ok(())
 }
 
+/// Returns true when npm's output indicates browser4-cli was not installed
+/// via npm, as opposed to a genuine uninstall failure.
+fn npm_not_installed_message(msg: &str) -> bool {
+    let lower = msg.to_ascii_lowercase();
+    lower.contains("enoent")
+        || lower.contains("not found")
+        || lower.contains("not installed")
+        || lower.contains("no such package")
+        || lower.is_empty()
+}
+
+/// Returns true when cargo's output indicates browser4-cli was not installed
+/// via cargo, as opposed to a genuine uninstall failure.
+fn cargo_not_installed_message(msg: &str) -> bool {
+    let lower = msg.to_ascii_lowercase();
+    lower.contains("did not match any packages")
+        || lower.contains("no packages found")
+        || lower.contains("not found")
+        || lower.is_empty()
+}
+
 /// Format the output lines for `handle_uninstall`.  Extracted as a pure function
 /// so the branching logic can be unit-tested without network I/O.
 fn format_uninstall_output(
@@ -2788,12 +2809,16 @@ async fn handle_uninstall() -> Result<(), String> {
                 let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
                 let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 let msg = if stderr.is_empty() { stdout } else { stderr };
-                (false, Some(msg))
+                if npm_not_installed_message(&msg) {
+                    (false, None)
+                } else {
+                    (false, Some(msg))
+                }
             }
         }
-        Err(e) => {
-            // npm not found or failed to start
-            (false, Some(e.to_string()))
+        Err(_e) => {
+            // npm binary not found on $PATH — treat as not installed
+            (false, None)
         }
     };
 
@@ -2809,12 +2834,16 @@ async fn handle_uninstall() -> Result<(), String> {
                 let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
                 let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 let msg = if stderr.is_empty() { stdout } else { stderr };
-                (false, Some(msg))
+                if cargo_not_installed_message(&msg) {
+                    (false, None)
+                } else {
+                    (false, Some(msg))
+                }
             }
         }
-        Err(e) => {
-            // cargo not found or failed to start
-            (false, Some(e.to_string()))
+        Err(_e) => {
+            // cargo binary not found on $PATH — treat as not installed
+            (false, None)
         }
     };
 
