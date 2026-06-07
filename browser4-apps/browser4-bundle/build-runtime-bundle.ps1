@@ -1,3 +1,103 @@
+<#
+.SYNOPSIS
+Build a self-contained Browser4 runtime bundle with an embedded JRE.
+
+.DESCRIPTION
+This script builds a platform-native runtime bundle for Browser4.  It:
+  1. Installs core Maven modules (browser4-bundle and its transitive dependencies)
+     to ~/.m2.
+  2. Auto-detects or accepts a JDK 16+ installation.
+  3. Collects all runtime JARs via Maven dependency:copy-dependencies.
+  4. Computes the minimal set of JRE modules required via jdeps.
+  5. Generates a bundled, stripped-down JRE with jlink.
+  6. Writes launch scripts (start.sh / start.bat) and packages everything into a
+     platform archive.
+
+The output is a .zip (Windows) or .tar.gz (Linux/macOS) archive containing:
+  runtime/           - bundled JRE (stripped, compressed)
+  lib/               - application and dependency JARs
+  bin/               - launch scripts (start.sh, start.bat)
+  runtime-bundle.json - metadata
+
+JDK auto-detection scans common install locations:
+  Windows: Program Files\Java, Eclipse Adoptium, Microsoft, Zulu, Corretto, OpenLogic
+  macOS:   /Library/Java/JavaVirtualMachines, ~/.sdkman/candidates/java
+  Linux:   /usr/lib/jvm, /usr/java, ~/.sdkman/candidates/java
+
+.PARAMETER JarPath
+Path to the Browser4Bundle.jar file.
+Default: [script-dir]/target/Browser4Bundle.jar
+
+.PARAMETER OutputDirectory
+Directory where the final runtime bundle archive will be placed.
+Default: [script-dir]/target/runtime-bundle
+
+.PARAMETER AssetName
+Name of the output archive file (e.g. "browser4-bundle-runtime-windows-x64.zip").
+If not specified, auto-detected based on the current OS and architecture.
+
+.PARAMETER MainClass
+Fully-qualified Java main class name for the launch scripts.
+If not specified, read from the JAR manifest (Start-Class or Main-Class attribute),
+falling back to the Browser4 default: ai.platon.pulsar.apps.Browser4BundleApplicationKt
+
+.PARAMETER Force
+Overwrite the output archive if it already exists.  Default: $true.
+
+.PARAMETER ListJDKs
+Scan the system for all JDK 16+ installations with jpackage and display a
+version/path table showing which JDK was selected and why.
+The build proceeds normally after the report is printed.
+
+.PARAMETER JdkHome
+Use the specified JDK directory directly, bypassing auto-detection entirely.
+The directory must contain bin/jpackage (or bin/jpackage.exe on Windows)
+and be JDK 16+.  Example: -JdkHome "C:\Program Files\Java\jdk-21"
+
+.PARAMETER JdkVersion
+Preferred JDK major version for auto-detection (e.g. 21, 17).
+When specified, Find-BestJDK selects the highest JDK matching this major version.
+If no JDK with that version is found, falls back to the highest available version.
+
+.PARAMETER Help
+Display this help message and exit without building.
+
+.EXAMPLE
+.\build-runtime-bundle.ps1
+Build the runtime bundle with all defaults: auto-detect JDK, auto-detect platform,
+auto-detect main class from the JAR manifest.
+
+.EXAMPLE
+.\build-runtime-bundle.ps1 -JdkVersion 21
+Build using the highest JDK 21 found on the system.  Falls back to the overall
+highest JDK if no JDK 21 is installed.
+
+.EXAMPLE
+.\build-runtime-bundle.ps1 -JdkHome "C:\Program Files\Eclipse Adoptium\jdk-21.0.5.11-hotspot"
+Build using a specific JDK installation.
+
+.EXAMPLE
+.\build-runtime-bundle.ps1 -ListJDKs
+Scan and display all detected JDKs (with the selected one highlighted), then
+proceed with the build.
+
+.EXAMPLE
+.\build-runtime-bundle.ps1 -ListJDKs -JdkVersion 17
+List all JDKs and prefer JDK 17 for the build.
+
+.EXAMPLE
+.\build-runtime-bundle.ps1 -AssetName "custom-bundle.zip" -MainClass "com.example.Main"
+Build with a custom output archive name and explicit main class.
+
+.EXAMPLE
+.\build-runtime-bundle.ps1 -Force:$false
+Never overwrite an existing bundle archive (throws if the target already exists).
+
+.NOTES
+Requires: PowerShell 7+, Maven (mvn / mvnw), JDK 16+ (for jlink/jdeps/jpackage).
+On Windows the script uses mvnw.cmd from the repository root; on Linux/macOS it
+uses the mvnw shell script.
+#>
 param(
     [string]$JarPath = (Join-Path $PSScriptRoot "target/Browser4Bundle.jar"),
     [string]$OutputDirectory = (Join-Path $PSScriptRoot "target/runtime-bundle"),
@@ -6,11 +106,20 @@ param(
     [switch]$Force = $true,
     [switch]$ListJDKs = $false,
     [string]$JdkHome = '',
-    [int]$JdkVersion = 0
+    [int]$JdkVersion = 0,
+    [switch]$Help = $false
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# Display comment-based help and exit when -Help is passed.  We do this early
+# (before any function definitions or side-effects) so the user gets a fast
+# response without Maven/JDK/network activity.
+if ($Help) {
+    Get-Help -Full $PSCommandPath
+    exit 0
+}
 
 function Get-IsWindows {
     return [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
@@ -641,10 +750,10 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 # version-specific class files for the target runtime.
 # Priority: 1) release file via Get-JDKVersion  2) java -version output
 #            3) hardcoded '17' as last resort
-$jdkVersion = Get-JDKVersion -jdkHome $env:JAVA_HOME
-$detectedMajor = if ($jdkVersion) { $jdkVersion.Major } elseif ($javaVersionMajor) { $javaVersionMajor } else { $null }
+$jdkReleaseVer = Get-JDKVersion -jdkHome $env:JAVA_HOME
+$detectedMajor = if ($jdkReleaseVer) { $jdkReleaseVer.Major } elseif ($javaVersionMajor) { $javaVersionMajor } else { $null }
 $multiReleaseVersion = if ($detectedMajor) { [string]$detectedMajor } else { '17' }
-Write-Host "Using multi-release version: $multiReleaseVersion (release-file: $($jdkVersion), java-cmd: $javaVersionMajor)" -ForegroundColor Cyan
+Write-Host "Using multi-release version: $multiReleaseVersion (release-file: $($jdkReleaseVer), java-cmd: $javaVersionMajor)" -ForegroundColor Cyan
 
 # --------------------------------------------------------------------------
 # Primary jdeps strategy: full recursive analysis with class-path.
