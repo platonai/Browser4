@@ -377,26 +377,11 @@
 
     <dependencyManagement>
         <dependencies>
-            <dependency>
-                <groupId>org.jetbrains.kotlin</groupId>
-                <artifactId>kotlin-bom</artifactId>
-                <version>${kotlin.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
+
             <dependency>
                 <groupId>ai.platon</groupId>
                 <artifactId>browser4-dependencies</artifactId>
                 <version>${project.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-
-            <!-- Temporary use, will remove and use the published version later -->
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-bom</artifactId>
-                <version>${browser4-base.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
