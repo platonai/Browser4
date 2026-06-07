@@ -522,6 +522,7 @@
         <!-- Pulsar dependency -->
         <pulsar-h2.version>1.4.197</pulsar-h2.version>
         <pulsar-jsoup.version>1.14.3</pulsar-jsoup.version>
+        <browser4-base.version>4.8.4</browser4-base.version>
     </properties>
 
     <profiles>
