@@ -1,15 +1,11 @@
 package ai.platon.pulsar.skeleton.common.options
 
-import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.browser.InteractLevel
 import ai.platon.pulsar.common.config.VolatileConfig
-import ai.platon.pulsar.persist.metadata.FetchMode
-import com.beust.jcommander.Parameter
 import com.fasterxml.jackson.core.JsonGenerator
 import com.fasterxml.jackson.core.JsonParser
 import com.fasterxml.jackson.databind.*
 import com.fasterxml.jackson.databind.module.SimpleModule
-import com.fasterxml.jackson.databind.node.ObjectNode
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import java.time.Duration
@@ -62,10 +58,6 @@ object LoadOptionsJson {
             addDeserializer(Duration::class.java, DurationJsonDeserializer())
 
             // Enum serializers/deserializers
-            addSerializer(BrowserType::class.java, EnumNameSerializer(BrowserType::class.java))
-            addDeserializer(BrowserType::class.java, BrowserTypeDeserializer())
-            addSerializer(FetchMode::class.java, EnumNameSerializer(FetchMode::class.java))
-            addDeserializer(FetchMode::class.java, FetchModeDeserializer())
             addSerializer(InteractLevel::class.java, EnumNameSerializer(InteractLevel::class.java))
             addDeserializer(InteractLevel::class.java, InteractLevelDeserializer())
             addSerializer(Condition::class.java, EnumNameSerializer(Condition::class.java))
@@ -143,11 +135,12 @@ object LoadOptionsJson {
      */
     @JvmStatic
     fun toMap(options: LoadOptions): Map<String, Any?> {
-        return LoadOptions.optionFields
-            .filter { it.annotations.any { it is Parameter } }
-            .onEach { it.isAccessible = true }
-            .filter { it.get(options) != null }
-            .associate { it.name to convertValue(it.get(options)) }
+        return LoadOptions.optionDescriptors
+            .mapNotNull { desc ->
+                val value = desc.get(options)
+                if (value != null) desc.fieldName to convertValue(value) else null
+            }
+            .toMap()
     }
 
     /**
@@ -158,11 +151,13 @@ object LoadOptionsJson {
      */
     @JvmStatic
     fun toModifiedMap(options: LoadOptions): Map<String, Any?> {
-        return LoadOptions.optionFields
-            .filter { it.annotations.any { it is Parameter } && !options.isDefault(it.name) }
-            .onEach { it.isAccessible = true }
-            .filter { it.get(options) != null }
-            .associate { it.name to convertValue(it.get(options)) }
+        return LoadOptions.optionDescriptors
+            .filter { !options.isDefault(it.fieldName) }
+            .mapNotNull { desc ->
+                val value = desc.get(options)
+                if (value != null) desc.fieldName to convertValue(value) else null
+            }
+            .toMap()
     }
 
     /**
@@ -186,18 +181,12 @@ object LoadOptionsJson {
     fun generateJsonTemplateWithDescriptions(): String {
         val node = objectMapper.createObjectNode()
 
-        LoadOptions.optionFields
-            .mapNotNull { field ->
-                val param = field.annotations.filterIsInstance<Parameter>().firstOrNull()
-                if (param != null) {
-                    field.isAccessible = true
-                    Triple(field.name, field.get(LoadOptions.DEFAULT), param.description)
-                } else null
-            }
-            .forEach { (name, value, description) ->
-                val valueNode = objectMapper.valueToTree<JsonNode>(convertValue(value))
-                node.set<JsonNode>(name, valueNode)
-            }
+        LoadOptions.optionDescriptors.forEach { desc ->
+            val value = desc.get(LoadOptions.DEFAULT)
+            val converted = convertValue(value)
+            val valueNode = objectMapper.valueToTree<JsonNode>(converted)
+            node.set<JsonNode>(desc.fieldName, valueNode)
+        }
 
         return objectMapper.writeValueAsString(node)
     }
@@ -289,24 +278,6 @@ private class EnumNameSerializer<E : Enum<E>>(private val enumClass: Class<E>) :
         } else {
             gen.writeString(value.name)
         }
-    }
-}
-
-/**
- * JSON deserializer for BrowserType.
- */
-private class BrowserTypeDeserializer : JsonDeserializer<BrowserType>() {
-    override fun deserialize(p: JsonParser, ctxt: DeserializationContext): BrowserType {
-        return BrowserType.fromString(p.text)
-    }
-}
-
-/**
- * JSON deserializer for FetchMode.
- */
-private class FetchModeDeserializer : JsonDeserializer<FetchMode>() {
-    override fun deserialize(p: JsonParser, ctxt: DeserializationContext): FetchMode {
-        return FetchMode.fromString(p.text)
     }
 }
 

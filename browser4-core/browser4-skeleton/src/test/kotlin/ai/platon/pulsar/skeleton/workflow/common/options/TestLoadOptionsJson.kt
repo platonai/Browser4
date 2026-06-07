@@ -1,15 +1,14 @@
 package ai.platon.pulsar.skeleton.workflow.common.options
 
-import ai.platon.pulsar.common.browser.BrowserType
-import ai.platon.pulsar.common.browser.InteractLevel
 import ai.platon.pulsar.common.config.VolatileConfig
-import ai.platon.pulsar.persist.metadata.FetchMode
-import ai.platon.pulsar.skeleton.common.options.Condition
 import ai.platon.pulsar.skeleton.common.options.LoadOptions
 import ai.platon.pulsar.skeleton.common.options.LoadOptionsJson
-import java.time.Duration
-import kotlin.test.*
 import org.junit.jupiter.api.DisplayName
+import java.time.Duration
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 /**
  * Tests for [LoadOptionsJson] - JSON serialization and deserialization of LoadOptions.
@@ -19,8 +18,8 @@ class TestLoadOptionsJson {
     private val conf = VolatileConfig.UNSAFE
 
     @Test
-        @DisplayName("test toJson with default options")
-    fun testTojsonWithDefaultOptions() {
+    @DisplayName("test toJson with default options")
+    fun testToJsonWithDefaultOptions() {
         val options = LoadOptions.create(conf)
         val json = LoadOptionsJson.toJson(options)
 
@@ -30,8 +29,8 @@ class TestLoadOptionsJson {
     }
 
     @Test
-        @DisplayName("test toJson with modified options")
-    fun testTojsonWithModifiedOptions() {
+    @DisplayName("test toJson with modified options")
+    fun testToJsonWithModifiedOptions() {
         val options = LoadOptions.parse("-expires 1d -ignoreFailure -parse", conf)
         val json = LoadOptionsJson.toJson(options)
 
@@ -44,22 +43,21 @@ class TestLoadOptionsJson {
     }
 
     @Test
-        @DisplayName("test toJson with includeDefaults")
-    fun testTojsonWithIncludedefaults() {
+    @DisplayName("test toJson with includeDefaults")
+    fun testToJsonWithIncludeDefaults() {
         val options = LoadOptions.create(conf)
         val json = LoadOptionsJson.toJson(options, includeDefaults = true)
 
         println("Full options JSON: $json")
         // Should contain all fields
         assertTrue(json.contains("expires"))
-        assertTrue(json.contains("browser"))
         assertTrue(json.contains("persist"))
         assertTrue(json.contains("storeContent"))
     }
 
     @Test
-        @DisplayName("test fromJson basic")
-    fun testFromjsonBasic() {
+    @DisplayName("test fromJson basic")
+    fun testFromJsonBasic() {
         val json = """
             {
                 "expires": "1d",
@@ -76,8 +74,8 @@ class TestLoadOptionsJson {
     }
 
     @Test
-        @DisplayName("test fromJson with various duration formats")
-    fun testFromjsonWithVariousDurationFormats() {
+    @DisplayName("test fromJson with various duration formats")
+    fun testFromJsonWithVariousDurationFormats() {
         val json = """
             {
                 "expires": "2h",
@@ -96,33 +94,15 @@ class TestLoadOptionsJson {
     }
 
     @Test
-        @DisplayName("test fromJson with enum values")
-    fun testFromjsonWithEnumValues() {
-        val json = """
-            {
-                "browser": "PULSAR_CHROME",
-                "fetchMode": "BROWSER",
-                "interactLevel": "BEST_DATA"
-            }
-        """.trimIndent()
-
-        val options = LoadOptionsJson.fromJson(json, conf)
-
-        assertEquals(BrowserType.PULSAR_CHROME, options.browser)
-        assertEquals(FetchMode.BROWSER, options.fetchMode)
-        assertEquals(InteractLevel.BEST_DATA, options.interactLevel)
-    }
-
-    @Test
-        @DisplayName("test roundtrip conversion")
-    fun testRoundtripConversion() {
+    @DisplayName("test roundTrip conversion")
+    fun testRoundTripConversion() {
         val originalOptions = LoadOptions.parse(
             "-expires 1d -ignoreFailure -parse -topLinks 50 -autoScrollCount 10 -browser PULSAR_CHROME",
             conf
         )
 
         val json = LoadOptionsJson.toJson(originalOptions)
-        println("Roundtrip JSON: $json")
+        println("RoundTrip JSON: $json")
 
         val restoredOptions = LoadOptionsJson.fromJson(json, conf)
 
@@ -131,12 +111,11 @@ class TestLoadOptionsJson {
         assertEquals(originalOptions.parse, restoredOptions.parse)
         assertEquals(originalOptions.topLinks, restoredOptions.topLinks)
         assertEquals(originalOptions.autoScrollCount, restoredOptions.autoScrollCount)
-        assertEquals(originalOptions.browser, restoredOptions.browser)
     }
 
     @Test
-        @DisplayName("test toMap")
-    fun testTomap() {
+    @DisplayName("test toMap")
+    fun testToMap() {
         val options = LoadOptions.parse("-expires 1d -ignoreFailure -topLinks 50", conf)
         val map = LoadOptionsJson.toMap(options)
 
@@ -148,7 +127,7 @@ class TestLoadOptionsJson {
     }
 
     @Test
-        @DisplayName("test toModifiedMap")
+    @DisplayName("test toModifiedMap")
     fun testTomodifiedmap() {
         val options = LoadOptions.parse("-expires 1d -ignoreFailure", conf)
         val map = LoadOptionsJson.toModifiedMap(options)
@@ -162,7 +141,7 @@ class TestLoadOptionsJson {
     }
 
     @Test
-        @DisplayName("test fromMap")
+    @DisplayName("test fromMap")
     fun testFromMap() {
         val map = mapOf(
             "expires" to "1d",
@@ -178,20 +157,19 @@ class TestLoadOptionsJson {
     }
 
     @Test
-        @DisplayName("test generateJsonTemplate")
-    fun testGeneratejsontemplate() {
+    @DisplayName("test generateJsonTemplate")
+    fun testGenerateJsonTemplate() {
         val template = LoadOptionsJson.generateJsonTemplate()
 
         println("JSON Template:\n$template")
         assertTrue(template.isNotBlank())
         assertTrue(template.contains("expires"))
-        assertTrue(template.contains("browser"))
         assertTrue(template.contains("persist"))
     }
 
     @Test
-        @DisplayName("test fromJson ignores unknown properties")
-    fun testFromjsonIgnoresUnknownProperties() {
+    @DisplayName("test fromJson ignores unknown properties")
+    fun testFromJsonIgnoresUnknownProperties() {
         val json = """
             {
                 "expires": "1d",
@@ -206,8 +184,8 @@ class TestLoadOptionsJson {
     }
 
     @Test
-        @DisplayName("test fromJson with string values")
-    fun testFromjsonWithStringValues() {
+    @DisplayName("test fromJson with string values")
+    fun testFromJsonWithStringValues() {
         val json = """
             {
                 "label": "test-label",
@@ -224,8 +202,8 @@ class TestLoadOptionsJson {
     }
 
     @Test
-        @DisplayName("test fromJson with integer values")
-    fun testFromjsonWithIntegerValues() {
+    @DisplayName("test fromJson with integer values")
+    fun testFromJsonWithIntegerValues() {
         val json = """
             {
                 "topLinks": 100,
@@ -244,8 +222,8 @@ class TestLoadOptionsJson {
     }
 
     @Test
-        @DisplayName("test fromJson with boolean values")
-    fun testFromjsonWithBooleanValues() {
+    @DisplayName("test fromJson with boolean values")
+    fun testFromJsonWithBooleanValues() {
         val json = """
             {
                 "refresh": true,
@@ -264,7 +242,7 @@ class TestLoadOptionsJson {
     }
 
     @Test
-        @DisplayName("test item options in JSON")
+    @DisplayName("test item options in JSON")
     fun testItemOptionsInJson() {
         val json = """
             {
@@ -284,7 +262,7 @@ class TestLoadOptionsJson {
     }
 
     @Test
-        @DisplayName("test complex roundtrip")
+    @DisplayName("test complex roundtrip")
     fun testComplexRoundtrip() {
         val originalArgs = """
             -expires 2d
@@ -315,7 +293,6 @@ class TestLoadOptionsJson {
         assertEquals(originalOptions.outLinkSelector, restoredOptions.outLinkSelector)
         assertEquals(originalOptions.autoScrollCount, restoredOptions.autoScrollCount)
         assertEquals(originalOptions.scrollInterval, restoredOptions.scrollInterval)
-        assertEquals(originalOptions.browser, restoredOptions.browser)
         assertEquals(originalOptions.interactLevel, restoredOptions.interactLevel)
         assertEquals(originalOptions.label, restoredOptions.label)
         assertEquals(originalOptions.entity, restoredOptions.entity)

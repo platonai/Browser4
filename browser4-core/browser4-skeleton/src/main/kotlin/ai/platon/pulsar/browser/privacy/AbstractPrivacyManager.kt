@@ -84,11 +84,6 @@ abstract class AbstractPrivacyManager(
     protected val browserProfileGeneratorFactory = BrowserProfileGeneratorFactory(conf)
 
     /**
-     * The generator used to create browser profiles.
-     */
-    open val profileGenerator get() = browserProfileGeneratorFactory.generator
-
-    /**
      * Indicates whether the privacy manager is closed.
      */
     override val isClosed get() = closed.get()

@@ -222,6 +222,25 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli install --tag=4.9.3 --force".to_string());
     }
 
+    if cmd.name == "uninstall" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Attempts to remove browser4-cli from npm global packages and cargo installs."
+                .to_string(),
+        );
+        lines.push(
+            "  - Removes the Browser4 runtime data and runtime cache directories."
+                .to_string(),
+        );
+        lines.push(
+            "  - Does not require a running server."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli uninstall".to_string());
+    }
+
     if cmd.name == "list" {
         lines.push("Notes:".to_string());
         lines.push(
@@ -458,6 +477,7 @@ mod tests {
         assert!(help.contains("click"));
         assert!(help.contains("snapshot"));
         assert!(help.contains("install"));
+        assert!(help.contains("uninstall"));
         assert!(help.contains("ArrowLeft"));
         assert!(help.contains("Evaluate JavaScript expression on page or element"));
         assert!(help.contains("Core:"));

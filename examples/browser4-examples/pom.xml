@@ -127,9 +127,9 @@
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <version.maven-compiler-plugin>3.14.1</version.maven-compiler-plugin>
 
-        <kotlin.version>2.2.21</kotlin.version>
-        <spring-boot.version>4.0.5</spring-boot.version>
-        <browser4-base.version>4.8.2</browser4-base.version>
+        <kotlin.version>2.3.21</kotlin.version>
+        <spring-boot.version>4.0.6</spring-boot.version>
+        <browser4-base.version>4.8.4</browser4-base.version>
         <exec.mainClass>ai.platon.pulsar.examples.agent.Browser4AgentKt</exec.mainClass>
     </properties>
 </project>

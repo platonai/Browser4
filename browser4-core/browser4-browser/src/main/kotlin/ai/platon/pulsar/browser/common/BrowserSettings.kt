@@ -45,15 +45,15 @@ open class BrowserSettings constructor(
          * */
         var SCRIPT_CONFUSER: ScriptConfuser = SimpleScriptConfuser()
 
-        var RANDOM_BROWSER_PROFILE_GENERATOR_CLASS_REFERENCE =
+        var RANDOM_BROWSER_PROFILE_GENERATOR_CLASS_NAME =
             "ai.platon.pulsar.browser.privacy.RandomBrowserProfileGenerator"
-        var SEQUENTIAL_BROWSER_PROFILE_GENERATOR_CLASS_REFERENCE =
+        var SEQUENTIAL_BROWSER_PROFILE_GENERATOR_CLASS_NAME =
             "ai.platon.pulsar.browser.privacy.SequentialBrowserProfileGenerator"
-        var PROTOTYPE_BROWSER_PROFILE_GENERATOR_CLASS_REFERENCE =
+        var PROTOTYPE_BROWSER_PROFILE_GENERATOR_CLASS_NAME =
             "ai.platon.pulsar.browser.privacy.PrototypeBrowserProfileGenerator"
-        var DEFAULT_BROWSER_PROFILE_GENERATOR_CLASS_REFERENCE =
+        var DEFAULT_BROWSER_PROFILE_GENERATOR_CLASS_NAME =
             "ai.platon.pulsar.browser.privacy.DefaultBrowserProfileGenerator"
-        var SYSTEM_DEFAULT_BROWSER_PROFILE_GENERATOR_CLASS_REFERENCE =
+        var SYSTEM_DEFAULT_BROWSER_PROFILE_GENERATOR_CLASS_NAME =
             "ai.platon.pulsar.browser.privacy.SystemDefaultBrowserProfileGenerator"
 
         /**
@@ -123,7 +123,7 @@ open class BrowserSettings constructor(
         }
 
         private fun withSystemDefaultBrowserInternal(browserType: BrowserType, conf: MutableConfig? = null): Companion {
-            val classReference = SYSTEM_DEFAULT_BROWSER_PROFILE_GENERATOR_CLASS_REFERENCE
+            val classReference = SYSTEM_DEFAULT_BROWSER_PROFILE_GENERATOR_CLASS_NAME
             if (conf == null) {
                 System.setProperty(PRIVACY_AGENT_GENERATOR_CLASS, classReference)
             } else {
@@ -134,7 +134,7 @@ open class BrowserSettings constructor(
         }
 
         private fun withDefaultBrowserInternal(browserType: BrowserType, conf: MutableConfig? = null): Companion {
-            val classReference = "ai.platon.pulsar.browser.privacy.DefaultBrowserProfileGenerator"
+            val classReference = DEFAULT_BROWSER_PROFILE_GENERATOR_CLASS_NAME
             if (conf == null) {
                 System.setProperty(PRIVACY_AGENT_GENERATOR_CLASS, classReference)
             } else {
@@ -145,7 +145,7 @@ open class BrowserSettings constructor(
         }
 
         private fun withPrototypeBrowserInternal(browserType: BrowserType, conf: MutableConfig? = null): Companion {
-            val classReference = PROTOTYPE_BROWSER_PROFILE_GENERATOR_CLASS_REFERENCE
+            val classReference = PROTOTYPE_BROWSER_PROFILE_GENERATOR_CLASS_NAME
             if (conf == null) {
                 System.setProperty(PRIVACY_AGENT_GENERATOR_CLASS, classReference)
             } else {
@@ -176,7 +176,7 @@ open class BrowserSettings constructor(
                 conf[BROWSER_PROFILE_MODE] = "SEQUENTIAL"
                 conf[MAX_SEQUENTIAL_PRIVACY_AGENT_NUMBER] = "$maxAgents"
             }
-            val classReference = SEQUENTIAL_BROWSER_PROFILE_GENERATOR_CLASS_REFERENCE
+            val classReference = SEQUENTIAL_BROWSER_PROFILE_GENERATOR_CLASS_NAME
             if (conf == null) {
                 System.setProperty(PRIVACY_AGENT_GENERATOR_CLASS, classReference)
             } else {
@@ -186,7 +186,7 @@ open class BrowserSettings constructor(
         }
 
         private fun withTemporaryBrowserInternal(browserType: BrowserType, conf: MutableConfig? = null): Companion {
-            val classReference = RANDOM_BROWSER_PROFILE_GENERATOR_CLASS_REFERENCE
+            val classReference = RANDOM_BROWSER_PROFILE_GENERATOR_CLASS_NAME
             if (conf == null) {
                 System.setProperty(PRIVACY_AGENT_GENERATOR_CLASS, classReference)
             } else {

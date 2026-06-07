@@ -100,6 +100,12 @@
         <!-- Add additional main modules to the default reactor -->
         <profile>
             <id>all-main-modules</id>
+            <activation>
+                <property>
+                    <name>allMainModules</name>
+                    <value>true</value>
+                </property>
+            </activation>
             <modules>
                 <module>browser4-apps</module>
             </modules>
@@ -107,11 +113,30 @@
 
         <profile>
             <id>all-test-modules</id>
+            <activation>
+                <property>
+                    <name>allTestModules</name>
+                    <value>true</value>
+                </property>
+            </activation>
             <modules>
                 <module>browser4-tests</module>
                 <module>browser4-tests/browser4-rest-tests</module>
                 <module>browser4-tests/pulsar-it-tests</module>
                 <module>browser4-tests/pulsar-e2e-tests</module>
+            </modules>
+        </profile>
+
+        <profile>
+            <id>all-modules</id>
+            <properties>
+                <allMainModules>true</allMainModules>
+                <allTestModules>true</allTestModules>
+            </properties>
+            <modules>
+                <module>examples</module>
+                <module>browser4-apps/browser4-standalone</module>
+                <module>browser4-apps/browser4-bundle</module>
             </modules>
         </profile>
 
@@ -130,16 +155,6 @@
             <id>asset-bundle</id>
             <modules>
                 <module>browser4-apps/browser4-bundle</module>
-            </modules>
-        </profile>
-
-        <profile>
-            <id>examples</id>
-            <activation>
-                <activeByDefault>true</activeByDefault>
-            </activation>
-            <modules>
-                <module>examples/browser4-examples</module>
             </modules>
         </profile>
 
@@ -584,8 +599,8 @@
             IntegrationTest,E2ETest,HeavyTest
         </surefire.excludedGroups>
 
-        <spring-boot.version>4.0.5</spring-boot.version>
-        <browser4-base.version>4.8.2</browser4-base.version>
+        <spring-boot.version>4.0.6</spring-boot.version>
+        <browser4-base.version>4.8.4</browser4-base.version>
     </properties>
 
 </project>

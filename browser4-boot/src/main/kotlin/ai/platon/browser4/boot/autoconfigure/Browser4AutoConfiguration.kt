@@ -197,7 +197,7 @@ class Browser4AutoConfiguration {
     fun browserResponseHandler(
         browserResponseHandlerFactory: BrowserResponseHandlerFactory,
     ): BrowserResponseHandler {
-        return browserResponseHandlerFactory.eventHandler
+        return browserResponseHandlerFactory.browserResponseHandler
     }
 
     @Bean(name = ["browserEmulator"], destroyMethod = "close")

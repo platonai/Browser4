@@ -1,13 +1,134 @@
+<#
+.SYNOPSIS
+Build a self-contained Browser4 runtime bundle with an embedded JRE.
+
+.DESCRIPTION
+This script builds a platform-native runtime bundle for Browser4.  It:
+  1. Installs core Maven modules (browser4-bundle and its transitive dependencies)
+     to ~/.m2.
+  2. Auto-detects or accepts a JDK 16+ installation.
+  3. Collects all runtime JARs via Maven dependency:copy-dependencies.
+  4. Computes the minimal set of JRE modules required via jdeps.
+  5. Generates a bundled, stripped-down JRE with jlink.
+  6. Writes launch scripts (start.sh / start.bat) and packages everything into a
+     platform archive.
+
+The output is a .zip (Windows) or .tar.gz (Linux/macOS) archive containing:
+  runtime/           - bundled JRE (stripped, compressed)
+  lib/               - application and dependency JARs
+  bin/               - launch scripts (start.sh, start.bat)
+  runtime-bundle.json - metadata
+
+JDK auto-detection scans common install locations:
+  Windows: Program Files\Java, Eclipse Adoptium, Microsoft, Zulu, Corretto, OpenLogic
+  macOS:   /Library/Java/JavaVirtualMachines, ~/.sdkman/candidates/java
+  Linux:   /usr/lib/jvm, /usr/java, ~/.sdkman/candidates/java
+
+.PARAMETER JarPath
+Path to the Browser4Bundle.jar file.
+Default: [script-dir]/target/Browser4Bundle.jar
+
+.PARAMETER OutputDirectory
+Directory where the final runtime bundle archive will be placed.
+Default: [script-dir]/target/runtime-bundle
+
+.PARAMETER AssetName
+Name of the output archive file (e.g. "browser4-bundle-runtime-windows-x64.zip").
+If not specified, auto-detected based on the current OS and architecture.
+
+.PARAMETER MainClass
+Fully-qualified Java main class name for the launch scripts.
+If not specified, read from the JAR manifest (Start-Class or Main-Class attribute),
+falling back to the Browser4 default: ai.platon.pulsar.apps.Browser4BundleApplicationKt
+
+.PARAMETER Force
+Overwrite the output archive if it already exists.  Default: $true.
+
+.PARAMETER ListJDKs
+Scan the system for all JDK 16+ installations with jpackage and display a
+version/path table showing which JDK was selected and why.
+The build proceeds normally after the report is printed.
+
+.PARAMETER JdkHome
+Use the specified JDK directory directly, bypassing auto-detection entirely.
+The directory must contain bin/jpackage (or bin/jpackage.exe on Windows)
+and be JDK 16+.  Example: -JdkHome "C:\Program Files\Java\jdk-21"
+
+.PARAMETER JdkVersion
+Preferred JDK major version for auto-detection (e.g. 21, 17).
+When specified, Find-BestJDK selects the highest JDK matching this major version.
+If no JDK with that version is found, falls back to the highest available version.
+
+.PARAMETER Help
+Display this help message and exit without building.
+
+.EXAMPLE
+.\build-runtime-bundle.ps1
+Build the runtime bundle with all defaults: auto-detect JDK, auto-detect platform,
+auto-detect main class from the JAR manifest.
+
+.EXAMPLE
+.\build-runtime-bundle.ps1 -JdkVersion 21
+Build using the highest JDK 21 found on the system.  Falls back to the overall
+highest JDK if no JDK 21 is installed.
+
+.EXAMPLE
+.\build-runtime-bundle.ps1 -JdkHome "C:\Program Files\Eclipse Adoptium\jdk-21.0.5.11-hotspot"
+Build using a specific JDK installation.
+
+.EXAMPLE
+.\build-runtime-bundle.ps1 -ListJDKs
+Scan and display all detected JDKs (with the selected one highlighted), then
+proceed with the build.
+
+.EXAMPLE
+.\build-runtime-bundle.ps1 -ListJDKs -JdkVersion 17
+List all JDKs and prefer JDK 17 for the build.
+
+.EXAMPLE
+.\build-runtime-bundle.ps1 -AssetName "custom-bundle.zip" -MainClass "com.example.Main"
+Build with a custom output archive name and explicit main class.
+
+.EXAMPLE
+.\build-runtime-bundle.ps1 -Force:$false
+Never overwrite an existing bundle archive (throws if the target already exists).
+
+.NOTES
+Requires: PowerShell 7+, Maven (mvn / mvnw), JDK 16+ (for jlink/jdeps/jpackage).
+On Windows the script uses mvnw.cmd from the repository root; on Linux/macOS it
+uses the mvnw shell script.
+#>
 param(
     [string]$JarPath = (Join-Path $PSScriptRoot "target/Browser4Bundle.jar"),
     [string]$OutputDirectory = (Join-Path $PSScriptRoot "target/runtime-bundle"),
     [string]$AssetName,
     [string]$MainClass = '',
-    [switch]$Force = $true
+    [switch]$Force = $true,
+    [switch]$ListJDKs = $false,
+    [string]$JdkHome = '',
+    [int]$JdkVersion = 0,
+    [switch]$Help = $false
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# Display comment-based help and exit when -Help is passed.  We do this early
+# (before any function definitions or side-effects) so the user gets a fast
+# response without Maven/JDK/network activity.
+if ($Help) {
+    Get-Help -Full $PSCommandPath
+    exit 0
+}
+
+function Assert-PowerShellVersion {
+    $currentVersion = $PSVersionTable.PSVersion
+    if (-not $currentVersion -or $currentVersion.Major -lt 7) {
+        throw "build-runtime-bundle.ps1 requires PowerShell 7+ (current: $currentVersion). Use pwsh to run this script."
+    }
+}
+
+Assert-PowerShellVersion
 
 function Get-IsWindows {
     return [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
@@ -62,6 +183,31 @@ function Remove-ArchiveSuffix([string]$name) {
     return [System.IO.Path]::GetFileNameWithoutExtension($name)
 }
 
+function Convert-ToExtendedLengthPath([string]$path) {
+    if (-not (Get-IsWindows) -or [string]::IsNullOrWhiteSpace($path)) {
+        return $path
+    }
+
+    $fullPath = [System.IO.Path]::GetFullPath($path)
+    if ($fullPath.StartsWith('\\?\')) {
+        return $fullPath
+    }
+    if ($fullPath.StartsWith('\\')) {
+        return ('\\?\UNC\' + $fullPath.TrimStart('\'))
+    }
+    return "\\?\$fullPath"
+}
+
+function Resolve-InputPath([string]$path, [string]$baseDirectory) {
+    if ([string]::IsNullOrWhiteSpace($path)) {
+        return $path
+    }
+    if ([System.IO.Path]::IsPathRooted($path)) {
+        return [System.IO.Path]::GetFullPath($path)
+    }
+    return [System.IO.Path]::GetFullPath((Join-Path $baseDirectory $path))
+}
+
 # --------------------------------------------------------------------------
 # JDK auto-detection — scan known install directories for jpackage (JDK 16+),
 # pick the highest version, and set JAVA_HOME accordingly before any tool use.
@@ -87,11 +233,19 @@ function Get-JDKVersion([string]$jdkHome) {
 }
 
 function Find-BestJDK {
+    param([int]$PreferredMajor = 0)
+
     # Scans common JDK install roots for jpackage (JDK 16+ marker),
-    # returns the path of the highest-version JDK >= 16, or $null.
+    # returns the path of the best JDK >= 16, or $null.
+    # When PreferredMajor is specified, prefers JDKs matching that major version;
+    # falls back to the highest version if no match is found.
+    # Populates $script:AllFoundJDKs with every valid JDK found (for -ListJDKs).
     $minMajor = 16
     $bestHome = $null
     $bestVersion = [version]'0.0'
+    $preferredHome = $null
+    $preferredVersion = [version]'0.0'
+    $script:AllFoundJDKs = @()
 
     # Collect search roots — one filesystem scan per root, shallow.
     $searchRoots = [System.Collections.Generic.List[string]]::new()
@@ -125,18 +279,83 @@ function Find-BestJDK {
             if (-not (Test-Path $jpkg)) { continue }
 
             $ver = Get-JDKVersion -jdkHome $jdkDir.FullName
-            if ($ver -and $ver.Major -ge $minMajor -and $ver -gt $bestVersion) {
-                $bestVersion = $ver
-                $bestHome = $jdkDir.FullName
+            if ($ver -and $ver.Major -ge $minMajor) {
+                # Track all valid JDKs for the listing feature
+                $script:AllFoundJDKs += @{ Home = $jdkDir.FullName; Version = $ver }
+
+                if ($ver -gt $bestVersion) {
+                    $bestVersion = $ver
+                    $bestHome = $jdkDir.FullName
+                }
+                if ($PreferredMajor -gt 0 -and $ver.Major -eq $PreferredMajor -and $ver -gt $preferredVersion) {
+                    $preferredVersion = $ver
+                    $preferredHome = $jdkDir.FullName
+                }
             }
         }
     }
 
+    # Prefer the requested major version if found; otherwise use the highest.
+    if ($preferredHome) { return $preferredHome }
     return $bestHome
 }
 
+function Show-AllJDKs {
+    param([string]$selectedHome, [int]$preferredMajor = 0)
+
+    if ($script:AllFoundJDKs.Count -eq 0) {
+        Write-Host "No JDKs (>= 16) found in the system." -ForegroundColor Yellow
+        return
+    }
+
+    Write-Host ""
+    Write-Host "=== JDK Discovery Report ===" -ForegroundColor Cyan
+    Write-Host "Found $($script:AllFoundJDKs.Count) JDK(s) with jpackage (JDK 16+ marker):"
+    Write-Host ""
+    Write-Host ("{0,-12} {1}" -f 'Version', 'Path')
+    Write-Host ("{0,-12} {1}" -f '-------', '----')
+
+    foreach ($jdk in ($script:AllFoundJDKs | Sort-Object -Property Version -Descending)) {
+        $marker = if ($jdk.Home -eq $selectedHome) { ' [SELECTED]' } else { '' }
+        Write-Host ("{0,-12} {1}{2}" -f $jdk.Version, $jdk.Home, $marker)
+    }
+
+    Write-Host ""
+    if ($selectedHome) {
+        $reason = if ($preferredMajor -gt 0) { "preferred version $preferredMajor" } else { "highest version >= 16" }
+        Write-Host "Selected: $selectedHome" -ForegroundColor Green
+        Write-Host "Reason: $reason" -ForegroundColor Green
+    }
+    Write-Host ""
+}
+
 function Resolve-JavaHome {
-    $best = Find-BestJDK
+    # --jdk-home: use the exact path provided, bypass auto-detection entirely.
+    if ($JdkHome) {
+        if (-not (Test-Path $JdkHome)) {
+            throw "Specified JDK home does not exist: $JdkHome"
+        }
+        $jpkgExe = if (Get-IsWindows) { Join-Path $JdkHome 'bin\jpackage.exe' }
+                    else { Join-Path $JdkHome 'bin/jpackage' }
+        if (-not (Test-Path $jpkgExe)) {
+            throw "Specified JDK home does not contain jpackage (JDK 16+ required): $JdkHome"
+        }
+        $jdkVer = Get-JDKVersion -jdkHome $JdkHome
+        if (-not $jdkVer -or $jdkVer.Major -lt 16) {
+            throw "Specified JDK is version $jdkVer (JDK 16+ required): $JdkHome"
+        }
+        Write-Host "Using specified JDK: $JdkHome ($jdkVer)" -ForegroundColor Cyan
+        $env:JAVA_HOME = $JdkHome
+        return $JdkHome
+    }
+
+    $best = Find-BestJDK -PreferredMajor $JdkVersion
+
+    # Show all found JDKs if requested (only meaningful when not using --jdk-home).
+    if ($ListJDKs) {
+        Show-AllJDKs -selectedHome $best -preferredMajor $JdkVersion
+    }
+
     if ($best) {
         Write-Host "Auto-selected JDK for bundle build: $best ($(Get-JDKVersion -jdkHome $best))" -ForegroundColor Cyan
         $env:JAVA_HOME = $best
@@ -149,6 +368,57 @@ function Resolve-JavaHome {
         Write-Host "No JDK >= 16 found; relying on PATH resolution (jlink --compress zip-9 requires JDK 21+)." -ForegroundColor Yellow
     }
     return $env:JAVA_HOME
+}
+
+function Resolve-RepositoryRoot {
+    $currentDirectory = [System.IO.Path]::GetFullPath($PSScriptRoot)
+    $wrapperName = if (Get-IsWindows) { 'mvnw.cmd' } else { 'mvnw' }
+    while (-not [string]::IsNullOrWhiteSpace($currentDirectory)) {
+        $pomPath = Join-Path $currentDirectory 'pom.xml'
+        $mavenWrapperPath = Join-Path $currentDirectory $wrapperName
+        if ((Test-Path -LiteralPath $pomPath) -and (Test-Path -LiteralPath $mavenWrapperPath)) {
+            return $currentDirectory
+        }
+
+        $parentDirectory = Split-Path -Path $currentDirectory -Parent
+        if ([string]::IsNullOrWhiteSpace($parentDirectory) -or $parentDirectory -eq $currentDirectory) {
+            break
+        }
+        $currentDirectory = $parentDirectory
+    }
+
+    $gitCommand = Get-Command git -ErrorAction SilentlyContinue
+    if ($gitCommand) {
+        $gitRoot = & $gitCommand.Source -C $PSScriptRoot rev-parse --show-toplevel 2>$null
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($gitRoot)) {
+            return $gitRoot.Trim()
+        }
+        $global:LASTEXITCODE = 0
+    }
+
+    throw "Unable to locate the Browser4 repository root from $PSScriptRoot. Run the script from inside a Browser4 checkout with pom.xml and the Maven wrapper available."
+}
+
+function Resolve-MavenCommand([string]$repositoryRoot) {
+    $wrapperName = if (Get-IsWindows) { 'mvnw.cmd' } else { 'mvnw' }
+    $wrapperPath = Join-Path $repositoryRoot $wrapperName
+    if (Test-Path -LiteralPath $wrapperPath) {
+        return (Resolve-Path -LiteralPath $wrapperPath).Path
+    }
+
+    $mavenCommand = Get-Command mvn -ErrorAction SilentlyContinue
+    if ($mavenCommand) {
+        return $mavenCommand.Source
+    }
+
+    if ($env:MAVEN_HOME) {
+        $mavenHomeExecutable = if (Get-IsWindows) { Join-Path $env:MAVEN_HOME 'bin/mvn.cmd' } else { Join-Path $env:MAVEN_HOME 'bin/mvn' }
+        if (Test-Path -LiteralPath $mavenHomeExecutable) {
+            return (Resolve-Path -LiteralPath $mavenHomeExecutable).Path
+        }
+    }
+
+    throw 'Maven is required to build the Browser4 runtime bundle. Install Maven or use a checkout that contains the Maven wrapper.'
 }
 
 function Resolve-ToolPath([string]$toolName) {
@@ -193,10 +463,27 @@ function Get-JavaVersionText {
     }
 }
 
+function Get-JavaMajorVersionFromText([string]$javaVersionText) {
+    if ($javaVersionText -match 'version\s+"(\d+)') {
+        return [int]$Matches[1]
+    }
+    if ($javaVersionText -match 'version\s+"[\d._]+-(\d+)') {
+        return [int]$Matches[1]
+    }
+    return $null
+}
+
+function Get-JlinkCompressValue([Nullable[int]]$javaMajorVersion) {
+    if ($javaMajorVersion -ge 21) {
+        return 'zip-9'
+    }
+    return '2'
+}
+
 function Ensure-CleanDirectory([string]$path) {
     if (Test-Path $path) {
-        # Use \\?\ prefix to bypass Windows MAX_PATH (260 char) limit.
-        $longPath = if (Get-IsWindows -and -not $path.StartsWith('\\?\' -as [String])) { "\\?\$path" } else { $path }
+        # Use extended-length paths on Windows to bypass MAX_PATH (260 char) limits.
+        $longPath = Convert-ToExtendedLengthPath $path
         Remove-Item -LiteralPath $longPath -Recurse -Force -ErrorAction SilentlyContinue
         # If the long-path removal left empty directories behind, clean up via normal path.
         if (Test-Path $path) {
@@ -268,41 +555,41 @@ function Get-BundleMetadataJson(
 
 function Remove-IfExists([string]$path) {
     if (Test-Path $path) {
-        $longPath = if (Get-IsWindows -and -not $path.StartsWith('\\?\' -as [String])) { "\\?\$path" } else { $path }
+        $longPath = Convert-ToExtendedLengthPath $path
         Remove-Item -LiteralPath $longPath -Force -Recurse -ErrorAction SilentlyContinue
     }
 }
 
 function Remove-SafeRuntimePayload([string]$runtimeRoot) {
     $safeToRemove = @(
-        'lib\ct.sym',
-        'lib\jvm.lib',
-        'bin\jvmcicompiler.dll',
-        'bin\libjvmcicompiler.dylib',
-        'bin\libjvmcicompiler.so',
-        'bin\jar.exe',
-        'bin\jarsigner.exe',
-        'bin\javac.exe',
-        'bin\javadoc.exe',
-        'bin\javap.exe',
-        'bin\jdb.exe',
-        'bin\jdeps.exe',
-        'bin\jfr.exe',
-        'bin\jimage.exe',
-        'bin\jlink.exe',
-        'bin\jmod.exe',
-        'bin\jpackage.exe',
-        'bin\jrunscript.exe',
-        'bin\jshell.exe',
-        'bin\jstatd.exe',
-        'bin\keytool.exe',
-        'bin\kinit.exe',
-        'bin\klist.exe',
-        'bin\ktab.exe',
-        'bin\rmiregistry.exe',
-        'bin\serialver.exe',
-        'bin\jaccessinspector.exe',
-        'bin\jaccesswalker.exe'
+        'lib/ct.sym',
+        'lib/jvm.lib',
+        'bin/jvmcicompiler.dll',
+        'bin/libjvmcicompiler.dylib',
+        'bin/libjvmcicompiler.so',
+        'bin/jar.exe',
+        'bin/jarsigner.exe',
+        'bin/javac.exe',
+        'bin/javadoc.exe',
+        'bin/javap.exe',
+        'bin/jdb.exe',
+        'bin/jdeps.exe',
+        'bin/jfr.exe',
+        'bin/jimage.exe',
+        'bin/jlink.exe',
+        'bin/jmod.exe',
+        'bin/jpackage.exe',
+        'bin/jrunscript.exe',
+        'bin/jshell.exe',
+        'bin/jstatd.exe',
+        'bin/keytool.exe',
+        'bin/kinit.exe',
+        'bin/klist.exe',
+        'bin/ktab.exe',
+        'bin/rmiregistry.exe',
+        'bin/serialver.exe',
+        'bin/jaccessinspector.exe',
+        'bin/jaccesswalker.exe'
     )
 
     foreach ($relativePath in $safeToRemove) {
@@ -321,8 +608,26 @@ function Read-ManifestAttribute([string]$jarPath, [string]$attributeName) {
         $reader = [System.IO.StreamReader]::new($entry.Open())
         try {
             $manifestText = $reader.ReadToEnd()
-            foreach ($line in $manifestText -split "`n") {
-                if ($line -match "^$attributeName\s*:\s*(.+)$") {
+            $manifestLines = [System.Collections.Generic.List[string]]::new()
+            $currentLine = $null
+            foreach ($rawLine in ($manifestText -split "`r?`n")) {
+                if ($rawLine.StartsWith(' ') -and $null -ne $currentLine) {
+                    $currentLine += $rawLine.Substring(1)
+                    continue
+                }
+
+                if ($null -ne $currentLine) {
+                    $manifestLines.Add($currentLine)
+                }
+                $currentLine = $rawLine
+            }
+            if ($null -ne $currentLine) {
+                $manifestLines.Add($currentLine)
+            }
+
+            $attributePattern = '^{0}\s*:\s*(.+)$' -f [regex]::Escape($attributeName)
+            foreach ($line in $manifestLines) {
+                if ($line -match $attributePattern) {
                     return $Matches[1].Trim()
                 }
             }
@@ -389,19 +694,24 @@ set "MAIN_CLASS=$mainClass"
 # Main script
 # ============================================================================
 
+$invocationDirectory = if ($PWD -and $PWD.ProviderPath) { $PWD.ProviderPath } else { (Get-Location).Path }
+$JarPath = Resolve-InputPath -path $JarPath -baseDirectory $invocationDirectory
+$OutputDirectory = Resolve-InputPath -path $OutputDirectory -baseDirectory $invocationDirectory
+if (-not [string]::IsNullOrWhiteSpace($JdkHome)) {
+    $JdkHome = Resolve-InputPath -path $JdkHome -baseDirectory $invocationDirectory
+}
+
 # Resolve Maven command and repo root early — both the JAR auto-build and
 # dependency:copy-dependencies need them.
-$repoRoot = git rev-parse --show-toplevel
-$mvnCmd = if (Get-IsWindows) { Join-Path $repoRoot 'mvnw.cmd' } else { Join-Path $repoRoot 'mvnw' }
+$repoRoot = Resolve-RepositoryRoot
+Set-Location $repoRoot
+
+$mvnCmd = Resolve-MavenCommand -repositoryRoot $repoRoot
 $bundleModule = 'browser4-apps/browser4-bundle'
 
-# Install core modules to ~/.m2 so dependency:copy-dependencies can resolve
-# internal reactor artifacts (browser4-resources, browser4-skeleton, etc.)
-# that are not published to Maven Central.  This is idempotent — on the
-# second run Maven only touches unchanged files.
-Write-Host "Ensuring core modules are installed to ~/.m2 ..."
-$coreArgs = @('install', '-DskipTests', '-Dmaven.javadoc.skip=true', '-q')
-& $mvnCmd @coreArgs
+Write-Host "Ensuring main modules are installed to ~/.m2 ..."
+$mainArgs = @('install', '-Pall-main-modules', '-DskipTests', '-Dmaven.javadoc.skip=true')
+& $mvnCmd @mainArgs
 if ($LASTEXITCODE -ne 0) { throw "Core modules install failed with exit code $LASTEXITCODE" }
 
 # Auto-build the bundle JAR if it doesn't exist yet (package only — the
@@ -409,7 +719,8 @@ if ($LASTEXITCODE -ne 0) { throw "Core modules install failed with exit code $LA
 if (-not (Test-Path $JarPath)) {
     Write-Host "Bundle JAR not found, building from source ..." -ForegroundColor Yellow
     Write-Host "  Building $bundleModule ..."
-    $bundleArgs = @('package', '-pl', $bundleModule, '-am', '-Passet-bundle', '-DskipTests', '-Dmaven.javadoc.skip=true', '-q')
+    # Try again
+    $bundleArgs = @('install', '-pl', $bundleModule, '-am', '-Passet-bundle', '-DskipTests', '-Dmaven.javadoc.skip=true', '-q')
     & $mvnCmd @bundleArgs
     if ($LASTEXITCODE -ne 0) { throw "Bundle JAR build failed with exit code $LASTEXITCODE" }
 
@@ -454,17 +765,14 @@ $jdeps = Resolve-ToolPath 'jdeps'
 $jlink = Resolve-ToolPath 'jlink'
 $javaVersionText = Get-JavaVersionText
 $isGraalVmRuntime = $javaVersionText -match 'GraalVM'
+$selectedJdkVersion = if ($env:JAVA_HOME) { Get-JDKVersion -jdkHome $env:JAVA_HOME } else { $null }
 
 # Parse the JDK major version from java -version output as a fallback for
 # --multi-release (primary source is the release file read by Get-JDKVersion).
 # On some platforms / JDK distributions the release file may be in an
 # unexpected location, so this secondary check is essential.
-$javaVersionMajor = $null
-if ($javaVersionText -match 'version\s+"(\d+)') {
-    $javaVersionMajor = [int]$Matches[1]
-} elseif ($javaVersionText -match 'version\s+"[\d._]+-(\d+)') {
-    $javaVersionMajor = [int]$Matches[1]
-}
+$javaVersionMajor = if ($selectedJdkVersion) { $selectedJdkVersion.Major } else { Get-JavaMajorVersionFromText -javaVersionText $javaVersionText }
+$jlinkCompressValue = Get-JlinkCompressValue -javaMajorVersion $javaVersionMajor
 
 # --------------------------------------------------------------------------
 # Progress tracking
@@ -557,12 +865,11 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 # Compute the multi-release version from the JDK being used.
 # This ensures jdeps processes multi-release JARs with the correct
 # version-specific class files for the target runtime.
-# Priority: 1) release file via Get-JDKVersion  2) java -version output
+# Priority: 1) selected JDK release file  2) java -version output
 #            3) hardcoded '17' as last resort
-$jdkVersion = Get-JDKVersion -jdkHome $env:JAVA_HOME
-$detectedMajor = if ($jdkVersion) { $jdkVersion.Major } elseif ($javaVersionMajor) { $javaVersionMajor } else { $null }
+$detectedMajor = if ($selectedJdkVersion) { $selectedJdkVersion.Major } elseif ($javaVersionMajor) { $javaVersionMajor } else { $null }
 $multiReleaseVersion = if ($detectedMajor) { [string]$detectedMajor } else { '17' }
-Write-Host "Using multi-release version: $multiReleaseVersion (release-file: $($jdkVersion), java-cmd: $javaVersionMajor)" -ForegroundColor Cyan
+Write-Host "Using multi-release version: $multiReleaseVersion (release-file: $($selectedJdkVersion), java-cmd: $javaVersionMajor)" -ForegroundColor Cyan
 
 # --------------------------------------------------------------------------
 # Primary jdeps strategy: full recursive analysis with class-path.
@@ -734,6 +1041,7 @@ $phaseIndex = 4
 Write-BuildProgress -Status $buildPhases[$phaseIndex - 1].Label
 
 Write-Host "Running jlink with modules: $($modules -join ',')" -ForegroundColor Cyan
+Write-Host "Using jlink compression mode: $jlinkCompressValue" -ForegroundColor Cyan
 $jlinkArgs = @(
     '--add-modules', ($modules -join ','),
     '--vm', 'server',
@@ -742,7 +1050,7 @@ $jlinkArgs = @(
     '--no-header-files',
     '--no-man-pages',
     '--dedup-legal-notices', 'error-if-not-same-content',
-    '--compress', 'zip-9',
+    '--compress', $jlinkCompressValue,
     '--output', $runtimeDirectory
 )
 if ($isGraalVmRuntime) {

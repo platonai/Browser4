@@ -62,7 +62,6 @@ data class InteractSettings constructor(
     var bringToFront: Boolean = false,
     /**
      * DOM settle policy.
-     * TODO: the default value will be set to NETWORK_IDLE
      * */
     var domSettlePolicy: DomSettlePolicy = DomSettlePolicy.FIELDS_SETTLE
 ) {

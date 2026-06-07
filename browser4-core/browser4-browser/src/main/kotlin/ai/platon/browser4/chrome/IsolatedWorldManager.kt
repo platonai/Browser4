@@ -57,7 +57,9 @@ class IsolatedWorldManager constructor(
      * @return The execution context ID of the created isolated world
      */
     suspend fun createIsolatedWorld(frameId: String? = null): Int {
-        val resolvedFrameId: String? = frameId ?: runCatching { browserProtocol.mainFrame().id }.getOrNull()
+        val resolvedFrameId: String? = frameId ?: runCatching { browserProtocol.mainFrame().id }
+            .onFailure { logger.warn("Failed to resolve main frame ID, defaulting to 'main' world", it) }
+            .getOrNull()
 
         logger.debug(
             "Creating isolated world '{}' for frame: {}",

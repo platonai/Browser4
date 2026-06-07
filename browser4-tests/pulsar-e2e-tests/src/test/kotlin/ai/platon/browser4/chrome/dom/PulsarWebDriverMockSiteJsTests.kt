@@ -106,7 +106,7 @@ class PulsarWebDriverMockSiteJsTests : WebDriverTestBase() {
         val data = detail?.value?.toString()
         assertNotNull(data)
 
-        val message = ActiveDOMMessage.fromJson(data)
+        val message = pulsarObjectMapper().readValue<ActiveDOMMessage>(data)
         val urls = message.urls
         assertNotNull(urls)
         assertEquals(interactiveUrl, urls.URL)

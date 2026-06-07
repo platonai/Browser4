@@ -20,3 +20,9 @@ for FILE_PATTERN in 'pom.xml' 'llm-config.md' 'README.md' 'README.zh.md'; do
     sed -i "s/$SNAPSHOT_VERSION/$VERSION/g" "$FILE"
   done
 done
+
+# Sync the CLI version from the VERSION file to package.json and Cargo.toml
+if [ -f "$repoRoot/cli/scripts/sync-version.js" ]; then
+  echo "Syncing CLI version metadata..."
+  node "$repoRoot/cli/scripts/sync-version.js"
+fi

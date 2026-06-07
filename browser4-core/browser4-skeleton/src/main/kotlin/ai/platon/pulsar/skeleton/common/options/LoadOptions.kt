@@ -4,11 +4,9 @@ import ai.platon.pulsar.browser.InteractSettings
 import ai.platon.pulsar.common.DateTimes
 import ai.platon.pulsar.common.Priority13
 import ai.platon.pulsar.common.browser.InteractLevel
-import ai.platon.pulsar.common.config.CapabilityTypes
 import ai.platon.pulsar.common.config.Params
 import ai.platon.pulsar.common.config.VolatileConfig
 import ai.platon.pulsar.dom.select.appendSelectorIfMissing
-import ai.platon.pulsar.persist.metadata.FetchMode
 import ai.platon.pulsar.skeleton.common.ApiPublic
 import ai.platon.pulsar.skeleton.event.PageEventHandlers
 import ai.platon.pulsar.skeleton.event.impl.PageEventHandlersFactory
@@ -17,8 +15,6 @@ import com.google.common.annotations.Beta
 import java.time.Duration
 import java.time.Instant
 import java.time.temporal.ChronoUnit
-import kotlin.reflect.full.hasAnnotation
-import kotlin.reflect.jvm.kotlinProperty
 
 /**
  * Load options define the parameters controlling how web pages are fetched, processed, and stored.
@@ -244,17 +240,6 @@ open class LoadOptions(
     var outLinkPattern = ".+"
 
     /**
-     * The index of the iframe to focus on during page interaction.
-     *
-     * Used to target specific iframes within complex pages for content extraction.
-     * TODO: This feature is planned but not fully implemented yet.
-     */
-    @ApiPublic
-    @Parameter(names = ["-ifr", "-iframe", "--iframe"], description = "The iframe id to switch to")
-    @Beta
-    var iframe = 0
-
-    /**
      * Maximum number of outlinks to extract and follow from a single page.
      *
      * Limits the number of child URLs to be processed from portal/index pages
@@ -266,20 +251,6 @@ open class LoadOptions(
         description = "Specify how many links to extract for out pages."
     )
     var topLinks = 20
-
-    /**
-     * CSS selector for an element that must contain non-blank text before proceeding.
-     *
-     * The crawler will wait until the specified element contains text or until a timeout occurs.
-     * Useful for ensuring that dynamic content has properly loaded before processing the page.
-     */
-    @ApiPublic
-    @Parameter(
-        names = ["-wnb", "-waitNonBlank", "--wait-non-blank"],
-        description = "The selector specified element should have a non-blank text"
-    )
-    @Beta
-    var waitNonBlank: String = ""
 
     /**
      * CSS selector for an element that must contain non-blank text for valid retrieval.
@@ -335,30 +306,6 @@ open class LoadOptions(
     var requireAnchors = 0
 
     /**
-     * Specifies the mechanism used to fetch web content.
-     *
-     * Currently, only BROWSER mode is fully supported, which uses a headless browser
-     * for rendering and JavaScript execution during content retrieval.
-     */
-    @Parameter(
-        names = ["-fm", "-fetchMode", "--fetch-mode"], converter = FetchModeConverter::class,
-        description = "The fetch mode"
-    )
-    var fetchMode = FetchMode.BROWSER
-
-    /**
-     * Specifies which browser engine to use for rendering pages.
-     *
-     * Google Chrome is the default and recommended browser engine.
-     * NOTE: Session-scope browser selection is not yet fully supported.
-     */
-    @Parameter(
-        names = ["-b", "-browser", "--browser"], converter = BrowserTypeConverter::class,
-        description = "Specify which browser to use, google chrome is the default"
-    )
-    var browser = LoadOptionDefaults.browser
-
-    /**
      * Number of times to scroll down the page after initial load.
      *
      * Controls how aggressively the crawler attempts to load additional content
@@ -406,18 +353,6 @@ open class LoadOptions(
         description = "The maximum time to wait for a page to finish"
     )
     var pageLoadTimeout = InteractSettings.DEFAULT.pageLoadTimeout
-
-    /**
-     * Browser to use specifically for item detail pages (as opposed to index pages).
-     *
-     * Allows using different browser configurations for detail pages vs. index pages.
-     * NOTE: Session-scope browser selection is not yet fully supported.
-     */
-    @Parameter(
-        names = ["-ib", "-itemBrowser", "--item-browser"], converter = BrowserTypeConverter::class,
-        description = "The browser used to visit the item pages"
-    )
-    var itemBrowser = LoadOptionDefaults.browser
 
     /**
      * Cache expiration duration specifically for item detail pages.
@@ -492,33 +427,6 @@ open class LoadOptions(
         description = "The same as pageLoadTimeout, but only works for item pages"
     )
     var itemPageLoadTimeout = pageLoadTimeout
-
-    /**
-     * CSS selector for non-blank text validation on item detail pages.
-     *
-     * Works identically to [waitNonBlank] but applies only to item pages.
-     * Makes the crawler wait until the specified element contains text.
-     */
-    @ApiPublic
-    @Parameter(
-        names = ["-iwnb", "-itemWaitNonBlank", "--item-wait-non-blank"],
-        description = "The selector specified element should have a non-blank text"
-    )
-    var itemWaitNonBlank: String = ""
-
-    /**
-     * CSS selector for content validation on item detail pages.
-     *
-     * Works identically to [requireNotBlank] but applies only to item pages.
-     * Pages without text in this selector will be considered invalid and refetched.
-     */
-    @ApiPublic
-    @Parameter(
-        names = ["-irnb", "-itemRequireNotBlank", "--item-require-not-blank"],
-        description = "Re-fetch the item pages if the required text is blank"
-    )
-    @Beta
-    var itemRequireNotBlank = ""
 
     /**
      * Minimum page size required for item detail pages.
@@ -678,16 +586,6 @@ open class LoadOptions(
     var lazyFlush = LoadOptionDefaults.lazyFlush
 
     /**
-     * Enables browser incognito/private mode for page fetching.
-     *
-     * NOTE: This setting has limited effect since browsers always run in
-     * temporary contexts in the current implementation.
-     */
-    @Beta
-    @Parameter(names = ["-ic", "-incognito", "--incognito"], description = "Run browser in incognito mode")
-    var incognito = false
-
-    /**
      * Enables immediate parsing of fetched pages.
      *
      * When enabled, pages are parsed into a [ai.platon.pulsar.dom.FeaturedDocument] as soon as they're fetched,
@@ -759,7 +657,13 @@ open class LoadOptions(
      * Used to track compatibility between different versions of the load options parser.
      */
     @Parameter(names = ["-v", "-version", "--version"], description = "The load option version")
-    var version = "20220918"
+    var version = "20260606"
+
+    @Parameter(
+        names = ["-incognito", "--incognito"],
+        description = "Incognito mode. Deprecated."
+    )
+    var incognito = false
 
     /**
      * Returns the outLinkSelector if it's non-blank, or null otherwise.
@@ -791,11 +695,13 @@ open class LoadOptions(
     open val modifiedParams: Params
         get() {
             val rowFormat = "%40s: %s"
-            val fields = LoadOptions::class.java.declaredFields
-            return fields.filter { it.annotations.any { it is Parameter } && !isDefault(it.name) }
-                .onEach { it.isAccessible = true }
-                .filter { it.get(this) != null }
-                .associate { "-${it.name}" to it.get(this) }
+            return optionDescriptors
+                .filter { !isDefault(it.fieldName) }
+                .mapNotNull { desc ->
+                    val value = desc.get(this)
+                    if (value != null) "-${desc.fieldName}" to value else null
+                }
+                .toMap()
                 .let { Params.of(it).withRowFormat(rowFormat) }
         }
 
@@ -806,11 +712,13 @@ open class LoadOptions(
      */
     open val modifiedOptions: Map<String, Any>
         get() {
-            val fields = LoadOptions::class.java.declaredFields
-            return fields.filter { it.annotations.any { it is Parameter } && !isDefault(it.name) }
-                .onEach { it.isAccessible = true }
-                .filter { it.get(this) != null }
-                .associate { it.name to it.get(this) }
+            return optionDescriptors
+                .filter { !isDefault(it.fieldName) }
+                .mapNotNull { desc ->
+                    val value = desc.get(this)
+                    if (value != null) desc.fieldName to value else null
+                }
+                .toMap()
         }
 
     /**
@@ -845,12 +753,12 @@ open class LoadOptions(
         val b = super.parse()
         if (b) {
             // fix zero-arity boolean parameter overwriting
-            optionFields
-                .filter { arity0BooleanParams.contains("-${it.name}") }
-                .filter { argv.contains("-${it.name}") }
-                .forEach {
-                    it.isAccessible = true
-                    it.set(this, true)
+            optionDescriptors
+                .filter { it.isArity0Boolean }
+                .filter { desc -> desc.names.any { n -> n in argv } }
+                .forEach { desc ->
+                    @Suppress("UNCHECKED_CAST")
+                    (desc as OptionDescriptor<Any>).set(this, true)
                 }
             // fix out link parsing (remove surrounding symbols)
             outLinkSelector = correctOutLinkSelector() ?: ""
@@ -918,12 +826,9 @@ open class LoadOptions(
         scriptTimeout = itemScriptTimeout
         scrollInterval = itemScrollInterval
         pageLoadTimeout = itemPageLoadTimeout
-        waitNonBlank = itemWaitNonBlank
-        requireNotBlank = itemRequireNotBlank
         requireSize = itemRequireSize
         requireImages = itemRequireImages
         requireAnchors = itemRequireAnchors
-        browser = itemBrowser
 
         // Only for portal pages
         outLinkSelector = DEFAULT.outLinkSelector
@@ -934,12 +839,9 @@ open class LoadOptions(
         itemScriptTimeout = DEFAULT.itemScriptTimeout
         itemScrollInterval = DEFAULT.itemScrollInterval
         itemPageLoadTimeout = DEFAULT.itemPageLoadTimeout
-        itemWaitNonBlank = DEFAULT.itemWaitNonBlank
-        itemRequireNotBlank = DEFAULT.itemRequireNotBlank
         itemRequireSize = DEFAULT.itemRequireSize
         itemRequireImages = DEFAULT.itemRequireImages
         itemRequireAnchors = DEFAULT.itemRequireAnchors
-        itemBrowser = DEFAULT.itemBrowser
 
         rawEvent = rawItemEvent
         rawItemEvent = null
@@ -966,9 +868,6 @@ open class LoadOptions(
 
         if (conf != null) {
             rawEvent?.let { conf.putBean(it) }
-            conf.setEnum(CapabilityTypes.BROWSER_TYPE, browser)
-            // incognito mode is never used because the browsers are always running in temporary contexts
-            conf.setBoolean(CapabilityTypes.BROWSER_INCOGNITO, incognito)
         }
 
         return conf
@@ -1010,7 +909,8 @@ open class LoadOptions(
      * @return true if the option has its default value
      */
     open fun isDefault(optionName: String): Boolean {
-        val value = optionFieldsMap[optionName]?.also { it.isAccessible = true }?.get(this) ?: return false
+        val descriptor = optionFieldsMap[optionName] ?: return false
+        val value = descriptor.get(this)
         return value == defaultParams[optionName]
     }
 
@@ -1021,10 +921,12 @@ open class LoadOptions(
      */
     override fun getParams(): Params {
         val rowFormat = "%40s: %s"
-        return optionFields.filter { it.annotations.any { it is Parameter } }
-            .onEach { it.isAccessible = true }
-            .associate { "-${it.name}" to it.get(this) }
-            .filter { it.value != null }
+        return optionDescriptors
+            .mapNotNull { desc ->
+                val value = desc.get(this)
+                if (value != null) "-${desc.fieldName}" to value else null
+            }
+            .toMap()
             .let { Params.of(it).withRowFormat(rowFormat) }
     }
 
@@ -1103,10 +1005,10 @@ open class LoadOptions(
     private fun doRefresh(value: Boolean): Boolean {
         if (value) {
             expires = Duration.ZERO
-            expireAt = Instant.now()
+            expireAt = Instant.ofEpochSecond(0)
 
             itemExpires = Duration.ZERO
-            itemExpireAt = Instant.now()
+            itemExpireAt = expireAt
 
             ignoreFailure = true
         }
@@ -1139,6 +1041,33 @@ open class LoadOptions(
         return eh
     }
 
+    /**
+     * Descriptor for a single option field in [LoadOptions].
+     *
+     * Captures all metadata (field name, CLI names, type, arity, API visibility, description)
+     * plus typed [get] and [set] lambdas that use direct Kotlin property access — no reflection.
+     *
+     * @param T the type of the option value
+     * @property fieldName the Kotlin property name
+     * @property names all CLI long/short names (e.g. ["-e", "-entity", "--entity"])
+     * @property type the JVM type class
+     * @property isApiPublic whether the option is exposed via REST APIs
+     * @property isArity0Boolean true for boolean flags that take no value
+     * @property description the help text (from @Parameter.description)
+     * @property get typed getter lambda
+     * @property set typed setter lambda
+     */
+    class OptionDescriptor<T : Any>(
+        val fieldName: String,
+        val names: List<String>,
+        val type: Class<T>,
+        val isApiPublic: Boolean = false,
+        val isArity0Boolean: Boolean = false,
+        val description: String = "",
+        val get: (LoadOptions) -> T,
+        val set: (LoadOptions, T) -> Unit,
+    )
+
     companion object {
         /**
          * Default LoadOptions instance with standard settings.
@@ -1146,32 +1075,234 @@ open class LoadOptions(
          */
         val DEFAULT = LoadOptions("", VolatileConfig.UNSAFE)
 
-        /**
-         * List of all option fields in the LoadOptions class.
-         * Contains fields with Parameter annotations for option parsing.
-         */
-        val optionFields = LoadOptions::class.java.declaredFields
-            .asSequence()
-            .onEach { it.isAccessible = true }
-            .filter { it.annotations.filterIsInstance<Parameter>().isNotEmpty() }
-            .onEach {
-                val name = it.name
-                val count = it.annotations.filterIsInstance<Parameter>().count { it.names.contains("-$name") }
-                require(count > 0) {
-                    "Missing -$name option for field <$name>. " +
-                            "Every option with name `optionName` has to take a [Parameter] name [-optionName]."
+        // ---------------------------------------------------------------------------
+        // Descriptor registry — one entry per @Parameter-annotated field.
+        // Each descriptor replaces the previous reflection-based field introspection.
+        // arity0Boolean = boolean flag that takes no value (persist/storeContent are
+        // arity-1 booleans and thus isArity0Boolean=false).
+        // ---------------------------------------------------------------------------
+
+        private inline fun <reified T : Any> option(
+            fieldName: String,
+            names: Array<String>,
+            isApiPublic: Boolean = false,
+            isArity0Boolean: Boolean = false,
+            description: String = "",
+            noinline get: (LoadOptions) -> T,
+            noinline set: (LoadOptions, T) -> Unit,
+        ): OptionDescriptor<T> = OptionDescriptor(
+            fieldName = fieldName, names = names.toList(), type = T::class.java,
+            isApiPublic = isApiPublic, isArity0Boolean = isArity0Boolean,
+            description = description, get = get, set = set,
+        )
+
+        val optionDescriptors: List<OptionDescriptor<*>> = listOf(
+            // --- string options ---
+            option("entity", arrayOf("-e", "-entity", "--entity"),
+                isApiPublic = true,
+                description = "Specifies the entity type of the page. This is optional.",
+                get = { it.entity }, set = { o, v -> o.entity = v }),
+            option("label", arrayOf("-l", "-label", "--label"),
+                isApiPublic = true,
+                description = "An optional label to group tasks logically.",
+                get = { it.label }, set = { o, v -> o.label = v }),
+            option("taskId", arrayOf("-taskId", "--task-id"),
+                isApiPublic = true,
+                description = "An optional task ID to differentiate tasks.",
+                get = { it.taskId }, set = { o, v -> o.taskId = v }),
+            option("authToken", arrayOf("-authToken", "--auth-token"),
+                isApiPublic = true,
+                description = "The auth token, can be used for authorization purpose.",
+                get = { it.authToken }, set = { o, v -> o.authToken = v }),
+            option("outLinkSelector", arrayOf("-ol", "-outLink", "-outLinkSelector", "--out-link-selector", "-outlink", "-outlinkSelector", "--outlink-selector"),
+                isApiPublic = true,
+                description = "The selector to extract links in portal pages.",
+                get = { it.outLinkSelector }, set = { o, v -> o.outLinkSelector = v }),
+            option("outLinkPattern", arrayOf("-olp", "-outLinkPattern", "--out-link-pattern"),
+                isApiPublic = true,
+                description = "The pattern to select out links in the portal page",
+                get = { it.outLinkPattern }, set = { o, v -> o.outLinkPattern = v }),
+            option("requireNotBlank", arrayOf("-rnb", "-requireNotBlank"),
+                isApiPublic = true,
+                description = "The selector specified element should have a non-blank text",
+                get = { it.requireNotBlank }, set = { o, v -> o.requireNotBlank = v }),
+            option("version", arrayOf("-v", "-version", "--version"),
+                description = "The load option version",
+                get = { it.version }, set = { o, v -> o.version = v }),
+
+            // --- Instant options ---
+            option("taskTime", arrayOf("-taskTime", "--task-time"),
+                isApiPublic = true,
+                description = "An optional timestamp to denote a batch of tasks.",
+                get = { it.taskTime }, set = { o, v -> o.taskTime = v }),
+            option("deadline", arrayOf("-deadline", "--deadline"),
+                isApiPublic = true,
+                description = "The task's deadline indicates the time by which it should be completed. If this deadline is surpassed, the task must be promptly discarded.",
+                get = { it.deadline }, set = { o, v -> o.deadline = v }),
+            option("expireAt", arrayOf("-expireAt", "--expire-at"),
+                isApiPublic = true,
+                description = "The expiry time point. If the expiry time is exceeded, the page should be fetched from the Internet.",
+                get = { it.expireAt }, set = { o, v -> o.expireAt = v }),
+            option("itemExpireAt", arrayOf("-itemExpireAt", "--item-expire-at"),
+                isApiPublic = true,
+                description = "If an item page is expired, it should be fetched from the web again",
+                get = { it.itemExpireAt }, set = { o, v -> o.itemExpireAt = v }),
+
+            // --- Duration options ---
+            option("expires", arrayOf("-i", "-expire", "-expires", "--expire"),
+                isApiPublic = true,
+                description = "The expiry duration. If the expiry time is exceeded, the page should be fetched from the Internet.",
+                get = { it.expires }, set = { o, v -> o.expires = v }),
+            option("scrollInterval", arrayOf("-si", "-scrollInterval", "--scroll-interval"),
+                description = "The interval to scroll down after a page being opened in a browser",
+                get = { it.scrollInterval }, set = { o, v -> o.scrollInterval = v }),
+            option("scriptTimeout", arrayOf("-stt", "-scriptTimeout", "--script-timeout"),
+                description = "The maximum time to perform javascript injected into the browser",
+                get = { it.scriptTimeout }, set = { o, v -> o.scriptTimeout = v }),
+            option("pageLoadTimeout", arrayOf("-plt", "-pageLoadTimeout", "--page-load-timeout"),
+                description = "The maximum time to wait for a page to finish",
+                get = { it.pageLoadTimeout }, set = { o, v -> o.pageLoadTimeout = v }),
+            option("itemExpires", arrayOf("-ii", "-itemExpire", "-itemExpires", "--item-expires"),
+                isApiPublic = true,
+                description = "The same as expires, but only works for item pages",
+                get = { it.itemExpires }, set = { o, v -> o.itemExpires = v }),
+            option("itemScrollInterval", arrayOf("-isi", "-itemScrollInterval", "--item-scroll-interval"),
+                description = "The same as scrollInterval, but only works for item pages",
+                get = { it.itemScrollInterval }, set = { o, v -> o.itemScrollInterval = v }),
+            option("itemScriptTimeout", arrayOf("-ist", "-itemScriptTimeout", "--item-script-timeout"),
+                description = "The same as scriptTimeout, but only works for item pages",
+                get = { it.itemScriptTimeout }, set = { o, v -> o.itemScriptTimeout = v }),
+            option("itemPageLoadTimeout", arrayOf("-iplt", "-itemPageLoadTimeout", "--item-page-load-timeout"),
+                description = "The same as pageLoadTimeout, but only works for item pages",
+                get = { it.itemPageLoadTimeout }, set = { o, v -> o.itemPageLoadTimeout = v }),
+
+            // --- Int options ---
+            option("priority", arrayOf("-p", "-priority"),
+                isApiPublic = true,
+                description = "Represents the priority of a task, determining the order of execution",
+                get = { it.priority }, set = { o, v -> o.priority = v }),
+            option("topLinks", arrayOf("-tl", "-topLinks", "--top-links"),
+                isApiPublic = true,
+                description = "Specify how many links to extract for out pages.",
+                get = { it.topLinks }, set = { o, v -> o.topLinks = v }),
+            option("requireSize", arrayOf("-rs", "-requireSize", "--require-size"),
+                isApiPublic = true,
+                description = "The minimum page size expected",
+                get = { it.requireSize }, set = { o, v -> o.requireSize = v }),
+            option("requireImages", arrayOf("-ri", "-requireImages", "--require-images"),
+                isApiPublic = true,
+                description = "The minimum number of images expected in the page",
+                get = { it.requireImages }, set = { o, v -> o.requireImages = v }),
+            option("requireAnchors", arrayOf("-ra", "-requireAnchors", "--require-anchors"),
+                isApiPublic = true,
+                description = "The minimum number of anchors expected in the page",
+                get = { it.requireAnchors }, set = { o, v -> o.requireAnchors = v }),
+            option("autoScrollCount", arrayOf("-sc", "-autoScrollCount", "--auto-scroll-count", "-scrollCount", "--scroll-count"),
+                description = "The count to scroll down after a page being opened in a browser",
+                get = { it.autoScrollCount }, set = { o, v -> o.autoScrollCount = v }),
+            option("nMaxRetry", arrayOf("-nmr", "-nMaxRetry", "--n-max-retry"),
+                description = "Retry to fetch at most n times, if page.fetchRetries > nMaxRetry, the page is marked as gone and do not fetch it again until -refresh is set to clear page.fetchRetries",
+                get = { it.nMaxRetry }, set = { o, v -> o.nMaxRetry = v }),
+            option("nJitRetry", arrayOf("-njr", "-nJitRetry", "--n-jit-retry"),
+                description = "Retry at most n times at fetch phase immediately if RETRY(1601) code return",
+                get = { it.nJitRetry }, set = { o, v -> o.nJitRetry = v }),
+            option("test", arrayOf("-test", "--test"),
+                description = "The test level, 0 to disable, we will talk more in test mode",
+                get = { it.test }, set = { o, v -> o.test = v }),
+            option("itemScrollCount", arrayOf("-isc", "-itemScrollCount", "--item-scroll-count"),
+                description = "The same as scrollCount, but only works for item pages",
+                get = { it.itemScrollCount }, set = { o, v -> o.itemScrollCount = v }),
+            option("itemRequireSize", arrayOf("-irs", "-itemRequireSize", "--item-require-size"),
+                isApiPublic = true,
+                description = "Re-fetch item pages smaller than requireSize",
+                get = { it.itemRequireSize }, set = { o, v -> o.itemRequireSize = v }),
+            option("itemRequireImages", arrayOf("-iri", "-itemRequireImages", "--item-require-images"),
+                isApiPublic = true,
+                description = "Re-fetch item pages who's images is less than requireImages",
+                get = { it.itemRequireImages }, set = { o, v -> o.itemRequireImages = v }),
+            option("itemRequireAnchors", arrayOf("-ira", "-itemRequireAnchors", "--item-require-anchors"),
+                isApiPublic = true,
+                description = "Re-fetch item pages who's anchors is less than requireAnchors",
+                get = { it.itemRequireAnchors }, set = { o, v -> o.itemRequireAnchors = v }),
+
+            // --- Boolean options ---
+            option("readonly", arrayOf("-readonly"),
+                isApiPublic = true, isArity0Boolean = true,
+                description = "Specify whether the load execution is read-only or not. When a load execution is read-only, it ensures that the webpage loaded remains unchanged by the execution.",
+                get = { it.readonly }, set = { o, v -> o.readonly = v }),
+            option("isResource", arrayOf("-resource", "-isResource"),
+                isApiPublic = true, isArity0Boolean = true,
+                description = "If true, fetch the url as a resource without browser rendering.",
+                get = { it.isResource }, set = { o, v -> o.isResource = v }),
+            option("refresh", arrayOf("-refresh", "--refresh"),
+                isApiPublic = true, isArity0Boolean = true,
+                description = "Refresh the fetch state of a page, clear the retry counters. If true, the page should be fetched immediately. The option can be explained as follows: -refresh = -ignoreFailure -i 0s and set page.fetchRetries = 0",
+                get = { it.refresh }, set = { o, v -> o.refresh = v }),
+            option("ignoreFailure", arrayOf("-ignF", "-ignoreFailure", "--ignore-failure"),
+                isApiPublic = true, isArity0Boolean = true,
+                description = "Retry fetching the page even if it's failed last time",
+                get = { it.ignoreFailure }, set = { o, v -> o.ignoreFailure = v }),
+            option("persist", arrayOf("-persist", "--persist"),
+                description = "Persist fetched pages as soon as possible",
+                get = { it.persist }, set = { o, v -> o.persist = v }),
+            option("storeContent", arrayOf("-sct", "-storeContent", "--store-content"),
+                description = "If false, do not persist the page content which is usually very large.",
+                get = { it.storeContent }, set = { o, v -> o.storeContent = v }),
+            option("dropContent", arrayOf("-dropContent", "--drop-content"),
+                isArity0Boolean = true,
+                description = "If the option exists, do not persist the page content which is usually very large.",
+                get = { it.dropContent }, set = { o, v -> o.dropContent = v }),
+            option("lazyFlush", arrayOf("-lazyFlush", "--lazy-flush"),
+                isArity0Boolean = true,
+                description = "If false, pages are flushed into database as soon as possible",
+                get = { it.lazyFlush }, set = { o, v -> o.lazyFlush = v }),
+            option("incognito", arrayOf("-ic", "-incognito", "--incognito"),
+                isArity0Boolean = true,
+                description = "Run browser in incognito mode",
+                get = { it.incognito }, set = { o, v -> o.incognito = v }),
+            option("parse", arrayOf("-ps", "-parse", "--parse"),
+                isArity0Boolean = true,
+                description = "If true, parse the page when it's just be fetched.",
+                get = { it.parse }, set = { o, v -> o.parse = v }),
+            option("ignoreUrlQuery", arrayOf("-ignoreUrlQuery", "--ignore-url-query"),
+                isArity0Boolean = true,
+                description = "Remove the query parameters in the url",
+                get = { it.ignoreUrlQuery }, set = { o, v -> o.ignoreUrlQuery = v }),
+            option("noNorm", arrayOf("-noNorm", "--no-link-normalizer"),
+                isArity0Boolean = true,
+                description = "If true, no normalizer will be applied when normalize urls.",
+                get = { it.noNorm }, set = { o, v -> o.noNorm = v }),
+
+            // --- Enum options ---
+            option("interactLevel", arrayOf("-ilv", "-interactLevel", "--interact-level"),
+                description = "Specifies the interaction level with the page (higher = better data, lower = faster).",
+                get = { it.interactLevel }, set = { o, v -> o.interactLevel = v }),
+        )
+
+        init {
+            // Validate that every descriptor has a -fieldName among its CLI names
+            optionDescriptors.forEach { desc ->
+                val hasSelfName = desc.names.any { it == "-${desc.fieldName}" }
+                require(hasSelfName) {
+                    "Missing -${desc.fieldName} option for field <${desc.fieldName}>. " +
+                            "Every option with name `optionName` has to take a name [-optionName]."
                 }
             }
+        }
+
+        // ---- Derived collections (all built from optionDescriptors, zero reflection) ----
 
         /**
-         * Map of field names to their corresponding Field objects.
+         * Map of field names to their corresponding [OptionDescriptor].
          */
-        val optionFieldsMap = optionFields.associateBy { it.name }
+        val optionFieldsMap: Map<String, OptionDescriptor<*>> =
+            optionDescriptors.associateBy { it.fieldName }
 
         /**
          * Map of field names to their default values from DEFAULT instance.
          */
-        val defaultParams = optionFields.associate { it.name to it.get(DEFAULT) }
+        val defaultParams: Map<String, Any?> =
+            optionDescriptors.associate { it.fieldName to it.get(DEFAULT) }
 
         /**
          * Map of default option names and values.
@@ -1179,67 +1310,44 @@ open class LoadOptions(
         val defaultArgsMap = DEFAULT.toArgsMap()
 
         /**
-         * List of zero-arity boolean parameter names.
-         * These are parameters that don't require a value (flag parameters).
+         * List of zero-arity boolean parameter names (flag parameters).
          */
-        val arity0BooleanParams = optionFields
-            .onEach { it.isAccessible = true }
-            .filter { it.get(DEFAULT) is Boolean }
-            .flatMap { it.annotations.toList() }
-            .filterIsInstance<Parameter>()
-            .filter { it.arity < 1 }
-            .flatMap { it.names.toList() }
-            .toList()
+        val arity0BooleanParams: List<String> =
+            optionDescriptors.filter { it.isArity0Boolean }.flatMap { it.names }
 
         /**
          * List of single-arity boolean parameter names.
-         * These are boolean parameters that require a value.
          */
-        val arity1BooleanParams = optionFields
-            .onEach { it.isAccessible = true }
-            .filter { it.get(DEFAULT) is Boolean }
-            .flatMap { it.annotations.toList() }
-            .filterIsInstance<Parameter>()
-            .filter { it.arity == 1 }
-            .flatMap { it.names.toList() }
-            .toList()
+        val arity1BooleanParams: List<String> =
+            optionDescriptors.filter { it.type == java.lang.Boolean::class.java && !it.isArity0Boolean }
+                .flatMap { it.names }
 
         /**
-         * List of all option names from parameter annotations.
+         * List of all option names.
          */
-        val optionNames = optionFields
-            .flatMap { it.annotations.toList() }
-            .filterIsInstance<Parameter>()
-            .flatMap { it.names.toList() }
-            .toList()
+        val optionNames: List<String> =
+            optionDescriptors.flatMap { it.names }
 
         /**
          * List of option names that are marked as API public.
          * These options are exposed through REST APIs.
          */
-        val apiPublicOptionNames = optionFields
-            .filter { it.kotlinProperty?.hasAnnotation<ApiPublic>() == true }
-            .flatMap { it.annotations.toList() }
-            .filterIsInstance<Parameter>()
-            .flatMap { it.names.toList() }
-            .toList()
+        val apiPublicOptionNames: List<String> =
+            optionDescriptors.filter { it.isApiPublic }.flatMap { it.names }
 
         /**
-         * Generates help documentation from field annotations.
+         * Generates help documentation from descriptors.
          * Returns a list of option descriptions for documentation.
          */
         val helpList: List<List<String>>
-            get() =
-                optionFields
-                    .mapNotNull { (it.annotations.firstOrNull { it is Parameter } as? Parameter)?.to(it) }
-                    .map {
-                        listOf(
-                            it.first.names.joinToString { it },
-                            it.second.type.typeName.substringAfterLast("."),
-                            defaultParams[it.second.name].toString(),
-                            it.first.description
-                        )
-                    }.toList()
+            get() = optionDescriptors.map { desc ->
+                listOf(
+                    desc.names.joinToString { it },
+                    desc.type.simpleName,
+                    defaultParams[desc.fieldName]?.toString().orEmpty(),
+                    desc.description,
+                )
+            }
 
         /**
          * Sets the value of a field based on its annotation name.
@@ -1249,11 +1357,10 @@ open class LoadOptions(
          * @param value the value to set
          */
         fun setFieldByAnnotation(options: LoadOptions, annotationName: String, value: Any) {
-            optionFields.forEach {
-                val found = it.annotations.filterIsInstance<Parameter>().any { annotationName in it.names }
-                if (found) {
-                    it.isAccessible = true
-                    it.set(options, value)
+            optionDescriptors.forEach { desc ->
+                if (annotationName in desc.names && desc.type.isInstance(value)) {
+                    @Suppress("UNCHECKED_CAST")
+                    (desc as OptionDescriptor<Any>).set(options, value)
                 }
             }
         }
@@ -1265,12 +1372,7 @@ open class LoadOptions(
          * @return list of all option names for that field
          */
         fun getOptionNames(fieldName: String): List<String> {
-            return optionFields
-                .filter { it.name == fieldName }
-                .flatMap { it.annotations.toList() }
-                .filterIsInstance<Parameter>()
-                .flatMap { it.names.toList() }
-                .toList()
+            return optionFieldsMap[fieldName]?.names.orEmpty()
         }
 
         /**

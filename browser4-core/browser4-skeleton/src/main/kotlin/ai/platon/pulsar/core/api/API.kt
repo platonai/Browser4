@@ -1,12 +1,10 @@
 package ai.platon.pulsar.core.api
 
-import ai.platon.pulsar.browser.InteractSettings
-
 typealias ImmutableConfig = ai.platon.pulsar.common.config.ImmutableConfig
 typealias MutableConfig = ai.platon.pulsar.common.config.MutableConfig
 typealias VolatileConfig = ai.platon.pulsar.common.config.VolatileConfig
 
-typealias InteractSettings = InteractSettings
+typealias InteractSettings = ai.platon.pulsar.browser.InteractSettings
 typealias PulsarSettings = ai.platon.pulsar.skeleton.PulsarSettings
 typealias LoadOptions = ai.platon.pulsar.skeleton.common.options.LoadOptions
 

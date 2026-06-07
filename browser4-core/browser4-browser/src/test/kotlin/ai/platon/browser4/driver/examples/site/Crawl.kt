@@ -7,13 +7,13 @@ class Crawler: BrowserExampleBase() {
     override val testUrl = "https://ly.simuwang.com/"
 
     override suspend fun run() {
-        network.setBlockedURLs(listOf("*fireyejs*"))
-        network.enable()
+        devTools.setBlockedURLs(listOf("*fireyejs*"))
+        devTools.networkEnable()
 
-        page.addScriptToEvaluateOnNewDocument(preloadJs)
-        page.enable()
+        devTools.addScriptToEvaluateOnNewDocument(preloadJs)
+        devTools.pageEnable()
 
-        page.navigate(testUrl)
+        devTools.navigate(testUrl)
     }
 }
 

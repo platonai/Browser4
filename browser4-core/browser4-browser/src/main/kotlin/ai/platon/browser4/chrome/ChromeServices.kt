@@ -83,6 +83,13 @@ interface ChromeDevToolsService : ChromeDevTools, AutoCloseable {
         returnProperty: String? = null
     ): T?
 
+    suspend fun <T : Any> execute(
+        method: String,
+        params: Map<String, Any?>?,
+        returnClass: KClass<T>,
+        returnProperty: String? = null
+    ): T? = invoke(method, params, returnClass, returnProperty)
+
     fun awaitTermination()
 
     fun addEventListener(

@@ -41,6 +41,17 @@ install_chrome() {
     google-chrome -version
 }
 
+install_powsershell() {
+    if command -v pwsh &> /dev/null
+    then
+        return
+    fi
+
+    echo "PowerShell (pwsh) is not installed. Installing PowerShell..."
+
+    curl -fsSL https://aka.ms/install-powershell.sh | bash
+}
+
 cd /tmp/ || exit
 
 install_utils

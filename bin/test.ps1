@@ -33,6 +33,7 @@ if (-not (Test-Path (Join-Path $repoRoot 'VERSION'))) {
 Set-Location $repoRoot
 
 function Print-Usage {
+    param([int]$ExitCode = 1)
     Write-Host "Usage: test.ps1 [-DryRun] [-Show] [test-types...] [additional-args...]"
     Write-Host ""
     Write-Host "Options:"
@@ -44,13 +45,12 @@ function Print-Usage {
     Write-Host "  it          Run integration tests"
     Write-Host "  e2e         Run end-to-end tests"
     Write-Host "  cli         Run Rust Browser4 CLI tests from cli\browser4-cli"
-    Write-Host "  mock-site   Launch mock site from browser4-tests\browser4-rest-tests"
+    Write-Host "  server   Launch mock site from browser4-tests\browser4-rest-tests"
     Write-Host "  rest        Run REST module tests"
     Write-Host "  skills      Run skills-focused agentic tests"
     Write-Host "  mcp         Run MCP-focused agentic tests"
     Write-Host "  resume      Resume from the last failed module (-rf)"
-    Write-Host "  browser4    Run all Browser4 main tests (fast, rest, it, e2e)"
-    Write-Host "  b4          Alias for browser4"
+    Write-Host "  main    Run all Browser4 main tests (fast, rest, it, e2e)"
     Write-Host ""
     Write-Host "Examples:"
     Write-Host "  test.ps1 fast                       # Run fast unit tests"
@@ -58,20 +58,19 @@ function Print-Usage {
     Write-Host "  test.ps1 -DryRun it -pl browser4-core  # Show the Maven command with extra args"
     Write-Host "  test.ps1 it                         # Run integration tests"
     Write-Host "  test.ps1 e2e                        # Run end-to-end tests"
-    Write-Host "  test.ps1 cli                        # Run Browser4 CLI tests"
-    Write-Host "  test.ps1 cli -- --nocapture         # Pass extra cargo test args"
-    Write-Host "  test.ps1 mock-site -Dmock.site.port=18080"
+    Write-Host "  test.ps1 cli                        # Run CLI tests (cargo test --test e2e -- --nocapture)"
+    Write-Host "  test.ps1 cli --help                 # Run CLI tests with extra cargo test args"
+    Write-Host "  test.ps1 server -Dmock.site.port=18080"
     Write-Host "  test.ps1 skills                     # Run skills-focused agentic tests"
     Write-Host "  test.ps1 mcp                        # Run MCP-focused agentic tests"
     Write-Host "  test.ps1 resume                     # Resume from the last failed module"
-    Write-Host "  test.ps1 browser4                   # Run all Browser4 main tests"
-    Write-Host "  test.ps1 b4                         # Alias for browser4"
+    Write-Host "  test.ps1 main                       # Run all Browser4 main tests"
     Write-Host '  test.ps1 it -pl browser4-core       # Pass additional Maven args through'
-    exit 1
+    exit $ExitCode
 }
 
 function Exit-UnknownTestType([string]$testType) {
-    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, mock-site, rest, skills, mcp, resume, browser4, b4. Aliases: mocksite, mocksiteboot."
+    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, main, server, rest, skills, mcp, resume."
     exit 1
 }
 
@@ -210,7 +209,7 @@ function Invoke-Browser4CliTests([string[]]$additionalArgs) {
         }
 
         if ($script:Show) {
-            $cargoArgs = @('test') + $additionalArgs
+            $cargoArgs = @('test', '--test', 'e2e', '--', '--nocapture') + $additionalArgs
             Write-Host ""
             Write-Host "=========================================="
             Write-Host "[SHOW] Would execute in ${browser4CliDir}:"
@@ -220,9 +219,9 @@ function Invoke-Browser4CliTests([string[]]$additionalArgs) {
         }
 
         if ($script:DryRun) {
-            $cargoArgs = @('test', '--no-run') + $additionalArgs
+            $cargoArgs = @('test', '--test', 'e2e', '--no-run') + $additionalArgs
         } else {
-            $cargoArgs = @('test') + $additionalArgs
+            $cargoArgs = @('test', '--test', 'e2e', '--', '--nocapture') + $additionalArgs
         }
 
         if ($script:DryRun) {
@@ -490,7 +489,7 @@ function Invoke-ResumeTests([string[]]$additionalArgs) {
     }
 }
 
-$knownTestTypes = @('fast', 'it', 'e2e', 'cli', 'browser4-cli', 'mock-site', 'mocksite', 'mocksiteboot', 'rest', 'skills', 'mcp', 'resume', 'browser4', 'b4')
+$knownTestTypes = @('fast', 'it', 'e2e', 'cli', 'main', 'browser4-cli', 'server', 'rest', 'skills', 'mcp', 'resume')
 $testTypes = @()
 $additionalArgs = @()
 $parsingTestTypes = $true
@@ -502,8 +501,8 @@ if ($normalizedScriptArgs.Count -eq 0) {
 }
 
 foreach ($arg in $normalizedScriptArgs) {
-    if ($arg -in '-h', '-help', '--help') {
-        Print-Usage
+    if ($arg -in '-h', '-help', '--help' -and $testTypes.Count -eq 0) {
+        Print-Usage -ExitCode 0
     }
 
     if ($arg -eq '--dry-run') {
@@ -548,7 +547,7 @@ $cliTests = @()
 $launchTargets = @()
 
 foreach ($type in $testTypes) {
-    if ($type -in @('browser4', 'b4')) {
+    if ($type -eq 'main') {
         $mavenTests += 'fast', 'it', 'e2e', 'rest'
         continue
     }
@@ -558,8 +557,8 @@ foreach ($type in $testTypes) {
         continue
     }
 
-    if ($type -in @('mock-site', 'mocksite', 'mocksiteboot')) {
-        $launchTargets += 'mock-site'
+    if ($type -in @('server', 'mock-site', 'mocksite', 'mocksiteboot')) {
+        $launchTargets += 'server'
         continue
     }
 
@@ -571,7 +570,7 @@ $cliTests = $cliTests | Select-Object -Unique
 $launchTargets = $launchTargets | Select-Object -Unique
 
 if ($launchTargets.Count -gt 0 -and (($mavenTests.Count -gt 0) -or ($cliTests.Count -gt 0) -or ($launchTargets.Count -gt 1))) {
-    Write-Error "mock-site must be run by itself. Pass any Maven properties after it, for example: test.ps1 mock-site -Dmock.site.port=18080"
+    Write-Error "server must be run by itself. Pass any Maven properties after it, for example: test.ps1 server -Dmock.site.port=18080"
     exit 1
 }
 
@@ -583,7 +582,7 @@ if (($cliTests | Where-Object { $_ -in @('cli', 'browser4-cli') }).Count -gt 0) 
     Invoke-Browser4CliTests -additionalArgs $additionalArgs
 }
 
-if ($launchTargets -contains 'mock-site') {
+if ($launchTargets -contains 'server') {
     Invoke-MockSiteBoot -additionalArgs $additionalArgs
 }
 

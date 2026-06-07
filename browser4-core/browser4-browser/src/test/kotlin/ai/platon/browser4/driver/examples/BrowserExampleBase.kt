@@ -20,8 +20,11 @@
 package ai.platon.browser4.driver.examples
 
 import ai.platon.browser4.chrome.ChromeLauncher
+import ai.platon.browser4.chrome.RemoteDevTools
+import ai.platon.browser4.chrome.handler.RemoteChromeProtocol
 import ai.platon.browser4.chrome.util.ChromeOptions
 import ai.platon.pulsar.browser.common.BrowserSettings
+import ai.platon.pulsar.browser.impl.BrowserProtocol
 import ai.platon.pulsar.browser.impl.DevToolsConfig
 import ai.platon.pulsar.common.browser.BrowserFiles
 import kotlinx.coroutines.runBlocking
@@ -42,22 +45,18 @@ abstract class BrowserExampleBase(val headless: Boolean = false): AutoCloseable 
 
     val chrome = launcher.launch(launchOptions)
     val tab = chrome.createTab()
-    val devTools = chrome.createDevTools(tab, DevToolsConfig())
+    val remoteDevTools: RemoteDevTools = chrome.createDevTools(tab, DevToolsConfig())
+    val devTools: BrowserProtocol = RemoteChromeProtocol(remoteDevTools)
 
-    val browser get() = devTools.browser
-    val network get() = devTools.network
-    val page get() = devTools.page
-    val mainFrame get() = runBlocking { page.getFrameTree().frame }
-    val runtime get() = devTools.runtime
-    val emulation get() = devTools.emulation
-    val dom get() = devTools.dom
-    val overlay get() = devTools.overlay
+    val mainFrame get() = runBlocking { devTools.mainFrame() }
 
     abstract suspend fun run()
 
     val pageSource: String
         get() {
-            val evaluation = runBlocking { runtime.evaluate("document.documentElement.outerHTML") }
+            val evaluation = runBlocking {
+                devTools.evaluate("document.documentElement.outerHTML")
+            }
             return evaluation.result.value.toString()
         }
 
@@ -67,6 +66,6 @@ abstract class BrowserExampleBase(val headless: Boolean = false): AutoCloseable 
     }
 
     override fun close() {
-        devTools.awaitTermination()
+        remoteDevTools.awaitTermination()
     }
 }
