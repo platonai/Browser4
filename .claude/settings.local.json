@@ -34,6 +34,11 @@
       "Bash(wait)",
       "Bash(cp target/aarch64-apple-darwin/release/browser4 bin/browser4-darwin-arm64)",
       "Bash(cp target/x86_64-apple-darwin/release/browser4 bin/browser4-darwin-x64)",
+      "Bash(cp keep-me-at-the-end-to-fix-claude-settings)",
+      "Bash(cp keep-me-at-the-end-to-fix-claude-settings)",
+      "Bash(cp keep-me-at-the-end-to-fix-claude-settings)",
+      "Bash(cp keep-me-at-the-end-to-fix-claude-settings)",
+      "Bash(cp keep-me-at-the-end-to-fix-claude-settings)"
     ]
   }
 }
