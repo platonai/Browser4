@@ -2,9 +2,9 @@ name: Runtime Bundle Build
 
 on:
   push:
-    paths:
-      - 'browser4-apps/browser4-bundle/**'
-      - '.github/workflows/runtime-bundle.yml'
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+-rb'
+      - 'v[0-9]+.[0-9]+.[0-9]+-rb.[0-9]+'
   pull_request:
     paths:
       - 'browser4-apps/browser4-bundle/**'
