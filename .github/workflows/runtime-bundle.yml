@@ -1,0 +1,108 @@
+name: Runtime Bundle Build
+
+on:
+  push:
+    paths:
+      - 'browser4-apps/browser4-bundle/**'
+      - '.github/workflows/runtime-bundle.yml'
+  pull_request:
+    paths:
+      - 'browser4-apps/browser4-bundle/**'
+      - '.github/workflows/runtime-bundle.yml'
+  workflow_dispatch:
+    inputs:
+      jdk_version:
+        description: 'JDK major version for the bundle runtime'
+        required: false
+        default: '21'
+        type: choice
+        options:
+          - '21'
+          - '17'
+
+jobs:
+  build-runtime-bundle:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ inputs.jdk_version || '21' }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.jdk_version || '21' }}
+
+      - name: Cache Maven dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.m2/wrapper
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml', '**/.mvn/wrapper/maven-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+
+      - name: Make Maven wrapper executable
+        run: chmod +x ./mvnw
+
+      - name: Build bundle JAR
+        shell: pwsh
+        run: |
+          Write-Host "::group::Building browser4-bundle JAR"
+          ./mvnw install -pl browser4-apps/browser4-bundle -am `
+            -Passet-bundle `
+            -DskipTests `
+            -Dmaven.javadoc.skip=true `
+            -q
+          if ($LASTEXITCODE -ne 0) {
+            throw "Maven build failed with exit code $LASTEXITCODE"
+          }
+          Write-Host "::endgroup::"
+
+      - name: Run build-runtime-bundle.ps1
+        shell: pwsh
+        run: |
+          $scriptPath = 'browser4-apps/browser4-bundle/build-runtime-bundle.ps1'
+          $jdkVersion = '${{ inputs.jdk_version }}'
+          $args = @()
+          if ($jdkVersion -and $jdkVersion -match '^\d+$') {
+            $args += '-JdkVersion', $jdkVersion
+          }
+          Write-Host "::group::Running build-runtime-bundle.ps1 $($args -join ' ')"
+          & pwsh -File $scriptPath @args
+          if ($LASTEXITCODE -ne 0) {
+            throw "build-runtime-bundle.ps1 failed with exit code $LASTEXITCODE"
+          }
+          Write-Host "::endgroup::"
+
+      - name: Upload runtime bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser4-bundle-runtime-linux-x64
+          path: browser4-apps/browser4-bundle/target/runtime-bundle/browser4-bundle-runtime-linux-x64.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Display bundle info
+        if: always()
+        shell: pwsh
+        run: |
+          $bundleDir = 'browser4-apps/browser4-bundle/target/runtime-bundle'
+          if (-not (Test-Path $bundleDir)) {
+            Write-Host "Bundle output directory not found: $bundleDir"
+            return
+          }
+          $archive = Get-ChildItem -Path $bundleDir -Filter '*.tar.gz' -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if ($archive) {
+            $sizeMB = [math]::Round($archive.Length / 1MB, 2)
+            Write-Host "Bundle archive: $($archive.Name) ($sizeMB MB)"
+          }
+          $metadataPath = Get-ChildItem -Path $bundleDir -Recurse -Filter 'runtime-bundle.json' -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if ($metadataPath) {
+            Write-Host "Metadata:"
+            Get-Content $metadataPath.FullName | Write-Host
+          }
