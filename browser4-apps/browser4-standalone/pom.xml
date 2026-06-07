@@ -21,7 +21,7 @@
 
     <artifactId>browser4-standalone</artifactId>
 
-    <name>Browser4 Agents</name>
+    <name>Browser4 Standalone</name>
     <description>Browser4 Agents - browser agent for your AI</description>
 
     <build>
@@ -213,7 +213,6 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
-
 
     <properties>
         <!-- Suppress warning: [WARNING] Using platform encoding (GBK actually) to copy filtered resources -->

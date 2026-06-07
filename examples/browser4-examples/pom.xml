@@ -89,7 +89,7 @@
     <dependencyManagement>
         <dependencies>
             <dependency>
-                <groupId>ai.platon</groupId>
+                <groupId>ai.platon.pulsar</groupId>
                 <artifactId>browser4-dependencies</artifactId>
                 <version>${project.version}</version>
             </dependency>

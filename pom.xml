@@ -379,7 +379,7 @@
         <dependencies>
 
             <dependency>
-                <groupId>ai.platon</groupId>
+                <groupId>ai.platon.pulsar</groupId>
                 <artifactId>browser4-dependencies</artifactId>
                 <version>${project.version}</version>
                 <type>pom</type>
@@ -556,16 +556,6 @@
         <version.maven-surefire>${surefire.version}</version.maven-surefire>
         <version.maven-war-plugin>3.5.1</version.maven-war-plugin>
 
-        <!--  Language  -->
-        <javaVersion>17</javaVersion>
-        <kotlinVersion>2.3.21</kotlinVersion>
-        <kotlin.coroutine.version>1.10.2</kotlin.coroutine.version>
-
-        <!--  Kotlin  -->
-        <kotlin.version>${kotlinVersion}</kotlin.version>
-        <maven.compiler.release>${javaVersion}</maven.compiler.release>
-        <kotlin.compiler.jvmTarget>${javaVersion}</kotlin.compiler.jvmTarget>
-
         <!-- Test execution control properties -->
         <runITs>false</runITs>
         <runE2ETests>false</runE2ETests>
@@ -584,8 +574,16 @@
             IntegrationTest,E2ETest,HeavyTest
         </surefire.excludedGroups>
 
-        <spring-boot.version>4.0.6</spring-boot.version>
-        <browser4-base.version>4.8.4</browser4-base.version>
+        <!--  Language  -->
+        <javaVersion>17</javaVersion>
+        <kotlinVersion>2.3.21</kotlinVersion>
+        <kotlin.coroutine.version>1.10.2</kotlin.coroutine.version>
+
+        <!--  Kotlin  -->
+        <kotlin.version>${kotlinVersion}</kotlin.version>
+        <maven.compiler.release>${javaVersion}</maven.compiler.release>
+        <kotlin.compiler.jvmTarget>${javaVersion}</kotlin.compiler.jvmTarget>
+
     </properties>
 
 </project>
