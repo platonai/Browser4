@@ -135,6 +135,8 @@
             </properties>
             <modules>
                 <module>examples</module>
+                <module>browser4-apps/browser4-standalone</module>
+                <module>browser4-apps/browser4-bundle</module>
             </modules>
         </profile>
 
