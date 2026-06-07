@@ -16,13 +16,13 @@
     <parent>
         <groupId>ai.platon.pulsar</groupId>
         <artifactId>browser4</artifactId>
-        <version>4.11.0-SNAPSHOT</version>
+        <version>4.11.1-SNAPSHOT</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>browser4-examples</artifactId>
-    <version>4.11.0-SNAPSHOT</version>
+    <version>4.11.1-SNAPSHOT</version>
 
     <name>Browser4 Kotlin Examples</name>
     <description>
