@@ -1948,7 +1948,7 @@ async fn run_bundle_build_script(
             ])
             .current_dir(&working_dir)
             .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .output()
     })
@@ -1958,15 +1958,27 @@ async fn run_bundle_build_script(
     match output {
         Ok(output) if output.status.success() => Ok(()),
         Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
-            Err(format!(
-                "build script exited with {}: {}",
+            let mut message = format!(
+                "build script exited with {}",
                 output
                     .status
                     .code()
                     .map_or_else(|| "signal".to_string(), |c| c.to_string()),
-                stderr.trim()
-            ))
+            );
+            if !stdout.trim().is_empty() {
+                message.push_str("\n--- stdout ---\n");
+                message.push_str(stdout.trim());
+            }
+            if !stderr.trim().is_empty() {
+                message.push_str("\n--- stderr ---\n");
+                message.push_str(stderr.trim());
+            }
+            if stdout.trim().is_empty() && stderr.trim().is_empty() {
+                message.push_str(" (no output)");
+            }
+            Err(message)
         }
         Err(error) => Err(format!("failed to spawn build script ({shell_for_error}): {error}")),
     }

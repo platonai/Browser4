@@ -1656,7 +1656,7 @@ impl E2ETestResources {
         let expect_maven_startup = self.ctx.use_maven_startup;
         assert_eq!(
             startup_result.exit_code, 0,
-            "Expected CLI-managed Browser4 startup to succeed.{}\nstdout:\n{}\nstderr:\n{}",
+            "Expected CLI-managed Browser4 startup to succeed.{}\nstdout:--->\n{}\n<---\nstderr:--->\n{}\n<---",
             startup_log_hint, startup_result.stdout, startup_result.stderr,
         );
         if !self.local_browser4_started {
@@ -1664,7 +1664,7 @@ impl E2ETestResources {
                 if expect_maven_startup {
                     assert!(
                         started_via_maven,
-                        "Expected local e2e startup to use Maven spring-boot:run when {USE_MAVEN_STARTUP_ENV}=true.{}\nstdout:\n{}\nstderr:\n{}",
+                        "Expected local e2e startup to use Maven spring-boot:run when {USE_MAVEN_STARTUP_ENV}=true.{}\nstdout:--->\n{}\n<---\nstderr:--->\n{}\n<---",
                         startup_log_hint,
                         startup_result.stdout,
                         startup_result.stderr,
@@ -1672,7 +1672,7 @@ impl E2ETestResources {
                 } else {
                     assert!(
                         !started_via_maven,
-                        "Expected local e2e startup to default to jar fallback (set {USE_MAVEN_STARTUP_ENV}=true to opt in to Maven).{}\nstdout:\n{}\nstderr:\n{}",
+                        "Expected local e2e startup to default to jar fallback (set {USE_MAVEN_STARTUP_ENV}=true to opt in to Maven).{}\nstdout:--->\n{}\n<---\nstderr:--->\n{}\n<---",
                         startup_log_hint,
                         startup_result.stdout,
                         startup_result.stderr,
@@ -1690,7 +1690,7 @@ impl E2ETestResources {
                 }
                 assert!(
                     startup_result.stderr.contains("Browser4 startup log:"),
-                    "Expected startup diagnostics to include the Browser4 startup log path.{}\nstdout:\n{}\nstderr:\n{}",
+                    "Expected startup diagnostics to include the Browser4 startup log path.{}\nstdout:--->\n{}\n<---\nstderr:--->\n{}\n<---",
                     startup_log_hint,
                     startup_result.stdout,
                     startup_result.stderr,
@@ -1707,7 +1707,7 @@ impl E2ETestResources {
             if started_via_maven {
                 assert!(
                     startup_result.stderr.contains("Browser4 startup log:"),
-                    "Expected startup diagnostics to include the Browser4 startup log path when Browser4 restarts.{}\nstdout:\n{}\nstderr:\n{}",
+                    "Expected startup diagnostics to include the Browser4 startup log path when Browser4 restarts.{}\nstdout:--->\n{}\n<---\nstderr:--->\n{}\n<---",
                     startup_log_hint,
                     startup_result.stdout,
                     startup_result.stderr,
@@ -2156,7 +2156,7 @@ fn run_checked_cli_process(ctx: &E2ECtx, args: &[&str]) -> CliRunResult {
     let result = run_cli_process_with_retry(ctx, args);
     assert_eq!(
         result.exit_code, 0,
-        "Command {:?} failed (exit={}):\nstdout:\n{}\nstderr:\n{}",
+        "Command {:?} failed (exit={}):\nstdout:--->\n{}\n<---\nstderr:--->\n{}\n<---",
         args, result.exit_code, result.stdout, result.stderr
     );
     result
@@ -2170,7 +2170,7 @@ fn run_checked_cli_process_with_stdin(
     let result = run_cli_process_with_retry_and_stdin(ctx, args, stdin_payload);
     assert_eq!(
         result.exit_code, 0,
-        "Command {:?} failed (exit={}):\nstdout:\n{}\nstderr:\n{}",
+        "Command {:?} failed (exit={}):\nstdout:--->\n{}\n<---\nstderr:--->\n{}\n<---",
         args, result.exit_code, result.stdout, result.stderr
     );
     result
@@ -2184,7 +2184,7 @@ fn run_checked_cli_process_expecting_failure(
     let result = run_cli_process_with_retry(ctx, args);
     assert_ne!(
         result.exit_code, 0,
-        "Expected command {:?} to fail, but it exited with 0.\nstdout:\n{}\nstderr:\n{}",
+        "Expected command {:?} to fail, but it exited with 0.\nstdout:--->\n{}\n<---\nstderr:--->\n{}\n<---",
         args, result.stdout, result.stderr
     );
     let combined = format!("{}\n{}", result.stdout, result.stderr);
@@ -2900,14 +2900,14 @@ fn cleanup_browser4_sessions_with_ctx(ctx: &E2ECtx) -> Result<Vec<TimedStep>, St
     if result.exit_code == 0 {
         assert!(
             !result.stderr.contains("Unknown diagnostic command"),
-            "browser4-cli close-all should not emit JVM diagnostic errors.\nstdout:\n{}\nstderr:\n{}",
+            "browser4-cli close-all should not emit JVM diagnostic errors.\nstdout:--->\n{}\n<---\nstderr:--->\n{}\n<---",
             result.stdout,
             result.stderr
         );
         let health_started_at = Instant::now();
         wait_for_health(&ctx.browser4_base_url, 15_000).map_err(|error| {
             format!(
-                "browser4-cli close-all should keep the Browser4 backend alive for subsequent commands:\n{}\nstdout:\n{}\nstderr:\n{}",
+                "browser4-cli close-all should keep the Browser4 backend alive for subsequent commands:\n{}\nstdout:--->\n{}\n<---\nstderr:--->\n{}\n<---",
                 error, result.stdout, result.stderr
             )
         })?;
@@ -2925,7 +2925,7 @@ fn cleanup_browser4_sessions_with_ctx(ctx: &E2ECtx) -> Result<Vec<TimedStep>, St
         fallback_started_at.elapsed(),
     ));
     let errors = vec![format!(
-        "browser4-cli close-all failed (exit={}):\nstdout:\n{}\nstderr:\n{}",
+        "browser4-cli close-all failed (exit={}):\nstdout:--->\n{}\n<---\nstderr:--->\n{}\n<---",
         result.exit_code, result.stdout, result.stderr
     )];
     Err(errors.join("\n\n"))
