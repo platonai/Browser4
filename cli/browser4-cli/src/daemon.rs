@@ -1823,10 +1823,7 @@ async fn try_build_local_runtime_bundle(
                 std::process::Command::new(&mvn_program)
                     .args([
                         "install",
-                        "-Passet-bundle",
-                        "-pl",
-                        "browser4-apps/browser4-bundle",
-                        "-am",
+                        "-Pall-main-modules,asset-bundle",
                         "-DskipTests",
                         "-q",
                     ])
@@ -1933,7 +1930,7 @@ async fn run_bundle_build_script(
     let command = format!(
         "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; \
          [Console]::ErrorEncoding = [System.Text.Encoding]::UTF8; \
-         & '{}'",
+         & '{}' -SkipMavenInstall",
         script_path_escaped
     );
 

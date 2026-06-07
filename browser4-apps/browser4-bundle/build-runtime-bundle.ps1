@@ -4,8 +4,10 @@ Build a self-contained Browser4 runtime bundle with an embedded JRE.
 
 .DESCRIPTION
 This script builds a platform-native runtime bundle for Browser4.  It:
-  1. Installs core Maven modules (browser4-bundle and its transitive dependencies)
-     to ~/.m2.
+  1. Expects the Browser4 bundle JAR and ~/.m2 dependencies to already be
+     prepared (the CLI daemon runs `mvn install -P"all-main-modules,asset-bundle"`
+     before invoking this script).  When running standalone, run that Maven
+     command first.
   2. Auto-detects or accepts a JDK 16+ installation.
   3. Collects all runtime JARs via Maven dependency:copy-dependencies.
   4. Computes the minimal set of JRE modules required via jdeps.
@@ -59,6 +61,12 @@ Preferred JDK major version for auto-detection (e.g. 21, 17).
 When specified, Find-BestJDK selects the highest JDK matching this major version.
 If no JDK with that version is found, falls back to the highest available version.
 
+.PARAMETER SkipMavenInstall
+Skip the `mvn install` step that installs Browser4 modules to ~/.m2.
+Use this when the caller has already run the install (e.g. the Browser4
+CLI daemon runs `mvn install -P"all-main-modules,asset-bundle"` before
+invoking this script).  Default: $false (run mvn install).
+
 .PARAMETER Help
 Display this help message and exit without building.
 
@@ -107,6 +115,7 @@ param(
     [switch]$ListJDKs = $false,
     [string]$JdkHome = '',
     [int]$JdkVersion = 0,
+    [switch]$SkipMavenInstall = $false,
     [switch]$Help = $false
 )
 
@@ -701,33 +710,24 @@ if (-not [string]::IsNullOrWhiteSpace($JdkHome)) {
     $JdkHome = Resolve-InputPath -path $JdkHome -baseDirectory $invocationDirectory
 }
 
-# Resolve Maven command and repo root early — both the JAR auto-build and
-# dependency:copy-dependencies need them.
+# Resolve Maven command and repo root early — dependency:copy-dependencies needs them.
 $repoRoot = Resolve-RepositoryRoot
 Set-Location $repoRoot
 
 $mvnCmd = Resolve-MavenCommand -repositoryRoot $repoRoot
-$bundleModule = 'browser4-apps/browser4-bundle'
 
-Write-Host "Ensuring main modules are installed to ~/.m2 ..."
-$mainArgs = @('install', '-Pall-main-modules', '-DskipTests')
-& $mvnCmd @mainArgs
-if ($LASTEXITCODE -ne 0) { throw "Core modules install failed with exit code $LASTEXITCODE" }
+# Install Maven modules to ~/.m2 and build the bundle JAR.
+# Skip when the caller has already done this (e.g. the Browser4 CLI daemon
+# runs `mvn install` before invoking this script and passes -SkipMavenInstall).
+if (-not $SkipMavenInstall) {
+    Write-Host "Ensuring main modules are installed to ~/.m2 ..."
+    $installArgs = @('install', '-Pall-main-modules,asset-bundle', '-DskipTests', '-q')
+    & $mvnCmd @installArgs
+    if ($LASTEXITCODE -ne 0) { throw "Core modules install failed with exit code $LASTEXITCODE" }
+}
 
-# Auto-build the bundle JAR if it doesn't exist yet (package only — the
-# CLI handles installation via its own flow).
 if (-not (Test-Path $JarPath)) {
-    Write-Host "Bundle JAR not found, building from source ..." -ForegroundColor Yellow
-    Write-Host "  Building $bundleModule ..."
-    # Try again
-    $bundleArgs = @('install', '-pl', $bundleModule, '-am', '-Passet-bundle', '-DskipTests', '-q')
-    & $mvnCmd @bundleArgs
-    if ($LASTEXITCODE -ne 0) { throw "Bundle JAR build failed with exit code $LASTEXITCODE" }
-
-    if (-not (Test-Path $JarPath)) {
-        throw "Bundle JAR still not found after build: $JarPath"
-    }
-    Write-Host "  Bundle JAR built successfully." -ForegroundColor Green
+    throw "Bundle JAR not found: $JarPath. Build it first: mvn install -P`"all-main-modules,asset-bundle`" -DskipTests -q"
 }
 
 $resolvedJarPath = (Resolve-Path $JarPath).Path
