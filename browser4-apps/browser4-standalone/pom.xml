@@ -72,6 +72,7 @@
                 <configuration>
                     <compilerPlugins>
                         <plugin>spring</plugin>
+                        <plugin>all-open</plugin>
                     </compilerPlugins>
                     <jvmTarget>${kotlin.compiler.jvmTarget}</jvmTarget>
                 </configuration>
@@ -100,10 +101,6 @@
                     <source>9</source>
                     <target>9</target>
                 </configuration>
-            </plugin>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-dependency-plugin</artifactId>
             </plugin>
         </plugins>
     </build>

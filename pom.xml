@@ -584,6 +584,8 @@
         <maven.compiler.release>${javaVersion}</maven.compiler.release>
         <kotlin.compiler.jvmTarget>${javaVersion}</kotlin.compiler.jvmTarget>
 
+        <spring-boot.version>4.0.6</spring-boot.version>
+        <browser4-base.version>4.8.4</browser4-base.version>
     </properties>
 
 </project>
