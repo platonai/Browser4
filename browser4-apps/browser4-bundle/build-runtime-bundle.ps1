@@ -3,7 +3,10 @@ param(
     [string]$OutputDirectory = (Join-Path $PSScriptRoot "target/runtime-bundle"),
     [string]$AssetName,
     [string]$MainClass = '',
-    [switch]$Force = $true
+    [switch]$Force = $true,
+    [switch]$ListJDKs = $false,
+    [string]$JdkHome = '',
+    [int]$JdkVersion = 0
 )
 
 Set-StrictMode -Version Latest
@@ -87,11 +90,19 @@ function Get-JDKVersion([string]$jdkHome) {
 }
 
 function Find-BestJDK {
+    param([int]$PreferredMajor = 0)
+
     # Scans common JDK install roots for jpackage (JDK 16+ marker),
-    # returns the path of the highest-version JDK >= 16, or $null.
+    # returns the path of the best JDK >= 16, or $null.
+    # When PreferredMajor is specified, prefers JDKs matching that major version;
+    # falls back to the highest version if no match is found.
+    # Populates $script:AllFoundJDKs with every valid JDK found (for -ListJDKs).
     $minMajor = 16
     $bestHome = $null
     $bestVersion = [version]'0.0'
+    $preferredHome = $null
+    $preferredVersion = [version]'0.0'
+    $script:AllFoundJDKs = @()
 
     # Collect search roots — one filesystem scan per root, shallow.
     $searchRoots = [System.Collections.Generic.List[string]]::new()
@@ -125,18 +136,83 @@ function Find-BestJDK {
             if (-not (Test-Path $jpkg)) { continue }
 
             $ver = Get-JDKVersion -jdkHome $jdkDir.FullName
-            if ($ver -and $ver.Major -ge $minMajor -and $ver -gt $bestVersion) {
-                $bestVersion = $ver
-                $bestHome = $jdkDir.FullName
+            if ($ver -and $ver.Major -ge $minMajor) {
+                # Track all valid JDKs for the listing feature
+                $script:AllFoundJDKs += @{ Home = $jdkDir.FullName; Version = $ver }
+
+                if ($ver -gt $bestVersion) {
+                    $bestVersion = $ver
+                    $bestHome = $jdkDir.FullName
+                }
+                if ($PreferredMajor -gt 0 -and $ver.Major -eq $PreferredMajor -and $ver -gt $preferredVersion) {
+                    $preferredVersion = $ver
+                    $preferredHome = $jdkDir.FullName
+                }
             }
         }
     }
 
+    # Prefer the requested major version if found; otherwise use the highest.
+    if ($preferredHome) { return $preferredHome }
     return $bestHome
 }
 
+function Show-AllJDKs {
+    param([string]$selectedHome, [int]$preferredMajor = 0)
+
+    if ($script:AllFoundJDKs.Count -eq 0) {
+        Write-Host "No JDKs (>= 16) found in the system." -ForegroundColor Yellow
+        return
+    }
+
+    Write-Host ""
+    Write-Host "=== JDK Discovery Report ===" -ForegroundColor Cyan
+    Write-Host "Found $($script:AllFoundJDKs.Count) JDK(s) with jpackage (JDK 16+ marker):"
+    Write-Host ""
+    Write-Host ("{0,-12} {1}" -f 'Version', 'Path')
+    Write-Host ("{0,-12} {1}" -f '-------', '----')
+
+    foreach ($jdk in ($script:AllFoundJDKs | Sort-Object -Property Version -Descending)) {
+        $marker = if ($jdk.Home -eq $selectedHome) { ' [SELECTED]' } else { '' }
+        Write-Host ("{0,-12} {1}{2}" -f $jdk.Version, $jdk.Home, $marker)
+    }
+
+    Write-Host ""
+    if ($selectedHome) {
+        $reason = if ($preferredMajor -gt 0) { "preferred version $preferredMajor" } else { "highest version >= 16" }
+        Write-Host "Selected: $selectedHome" -ForegroundColor Green
+        Write-Host "Reason: $reason" -ForegroundColor Green
+    }
+    Write-Host ""
+}
+
 function Resolve-JavaHome {
-    $best = Find-BestJDK
+    # --jdk-home: use the exact path provided, bypass auto-detection entirely.
+    if ($JdkHome) {
+        if (-not (Test-Path $JdkHome)) {
+            throw "Specified JDK home does not exist: $JdkHome"
+        }
+        $jpkgExe = if (Get-IsWindows) { Join-Path $JdkHome 'bin\jpackage.exe' }
+                    else { Join-Path $JdkHome 'bin/jpackage' }
+        if (-not (Test-Path $jpkgExe)) {
+            throw "Specified JDK home does not contain jpackage (JDK 16+ required): $JdkHome"
+        }
+        $jdkVer = Get-JDKVersion -jdkHome $JdkHome
+        if (-not $jdkVer -or $jdkVer.Major -lt 16) {
+            throw "Specified JDK is version $jdkVer (JDK 16+ required): $JdkHome"
+        }
+        Write-Host "Using specified JDK: $JdkHome ($jdkVer)" -ForegroundColor Cyan
+        $env:JAVA_HOME = $JdkHome
+        return $JdkHome
+    }
+
+    $best = Find-BestJDK -PreferredMajor $JdkVersion
+
+    # Show all found JDKs if requested (only meaningful when not using --jdk-home).
+    if ($ListJDKs) {
+        Show-AllJDKs -selectedHome $best -preferredMajor $JdkVersion
+    }
+
     if ($best) {
         Write-Host "Auto-selected JDK for bundle build: $best ($(Get-JDKVersion -jdkHome $best))" -ForegroundColor Cyan
         $env:JAVA_HOME = $best
@@ -404,7 +480,7 @@ $bundleModule = 'browser4-apps/browser4-bundle'
 # of modules the bundle actually needs, avoiding failures in unrelated modules.
 # This is idempotent — on the second run Maven only touches unchanged files.
 Write-Host "Ensuring core modules are installed to ~/.m2 ..."
-$coreArgs = @('install', '-Passet-bundle', '-pl', 'browser4-apps/browser4-bundle', '-am', '-DskipTests', '-Dmaven.javadoc.skip=true', '-q')
+$coreArgs = @('install', '-Pall-main-modules', '-DskipTests', '-Dmaven.javadoc.skip=true')
 # mvnw has to been invoked from the repo root for the -pl argument to work correctly, so we Set-Location above.
 & $mvnCmd @coreArgs
 if ($LASTEXITCODE -ne 0) { throw "Core modules install failed with exit code $LASTEXITCODE" }
