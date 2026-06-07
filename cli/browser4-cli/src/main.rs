@@ -203,6 +203,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "kill-all",
         "list",
         "install",
+        "uninstall",
         "help",
         "eval",
         "summarize",
@@ -2720,6 +2721,188 @@ async fn handle_install(tool_params: &Value) -> Result<(), String> {
     Ok(())
 }
 
+/// Format the output lines for `handle_uninstall`.  Extracted as a pure function
+/// so the branching logic can be unit-tested without network I/O.
+fn format_uninstall_output(
+    npm_removed: bool,
+    npm_error: Option<&str>,
+    cargo_removed: bool,
+    cargo_error: Option<&str>,
+    runtime_dir_removed: bool,
+    runtime_dir: &str,
+    cache_dir_removed: bool,
+    cache_dir: &str,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+
+    // npm
+    if npm_removed {
+        lines.push("✅ Removed browser4-cli from npm global packages.".to_string());
+    } else if let Some(err) = npm_error {
+        lines.push(format!("⚠  npm uninstall failed: {err}"));
+    } else {
+        lines.push("ℹ  npm not found or browser4-cli not installed via npm.".to_string());
+    }
+
+    // cargo
+    if cargo_removed {
+        lines.push("✅ Removed browser4-cli from cargo installs.".to_string());
+    } else if let Some(err) = cargo_error {
+        lines.push(format!("⚠  cargo uninstall failed: {err}"));
+    } else {
+        lines.push("ℹ  cargo not found or browser4-cli not installed via cargo.".to_string());
+    }
+
+    // runtime data dir
+    if runtime_dir_removed {
+        lines.push(format!("✅ Removed runtime data directory: {runtime_dir}"));
+    } else {
+        lines.push(format!("ℹ  Runtime data directory not present: {runtime_dir}"));
+    }
+
+    // cache dir
+    if cache_dir_removed {
+        lines.push(format!("✅ Removed runtime cache directory: {cache_dir}"));
+    } else {
+        lines.push(format!("ℹ  Runtime cache directory not present: {cache_dir}"));
+    }
+
+    lines
+}
+
+async fn handle_uninstall() -> Result<(), String> {
+    use std::process::Command;
+
+    eprintln!("🧹 Uninstalling browser4-cli ...");
+    eprintln!();
+
+    // ── 1. npm global uninstall ──
+    let (npm_removed, npm_error) = match Command::new("npm")
+        .args(["uninstall", "-g", "browser4-cli"])
+        .output()
+    {
+        Ok(output) => {
+            if output.status.success() {
+                (true, None)
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                let msg = if stderr.is_empty() { stdout } else { stderr };
+                (false, Some(msg))
+            }
+        }
+        Err(e) => {
+            // npm not found or failed to start
+            (false, Some(e.to_string()))
+        }
+    };
+
+    // ── 2. cargo uninstall ──
+    let (cargo_removed, cargo_error) = match Command::new("cargo")
+        .args(["uninstall", "browser4-cli"])
+        .output()
+    {
+        Ok(output) => {
+            if output.status.success() {
+                (true, None)
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                let msg = if stderr.is_empty() { stdout } else { stderr };
+                (false, Some(msg))
+            }
+        }
+        Err(e) => {
+            // cargo not found or failed to start
+            (false, Some(e.to_string()))
+        }
+    };
+
+    // ── 3. Remove runtime data directory (with confirmation if it exists) ──
+    let runtime_dir = state::resolve_runtime_data_dir();
+    let runtime_dir_str = runtime_dir.display().to_string();
+    let cache_dir = state::resolve_runtime_cache_dir();
+    let cache_dir_str = cache_dir.display().to_string();
+
+    let has_data = runtime_dir.exists();
+    let has_cache = cache_dir.exists();
+
+    let (runtime_dir_removed, cache_dir_removed) = if has_data || has_cache {
+        eprintln!();
+        eprintln!("The following directories will be removed:");
+        if has_data {
+            eprintln!("  Runtime data:  {runtime_dir_str}");
+        }
+        if has_cache {
+            eprintln!("  Runtime cache: {cache_dir_str}");
+        }
+        eprintln!();
+        eprintln!("Type 'yes' to confirm, anything else to skip:");
+
+        let mut input = String::new();
+        match std::io::stdin().read_line(&mut input) {
+            Ok(_) if input.trim().eq_ignore_ascii_case("yes") => {
+                let removed_data = if has_data {
+                    std::fs::remove_dir_all(&runtime_dir).is_ok()
+                } else {
+                    false
+                };
+                let removed_cache = if has_cache {
+                    std::fs::remove_dir_all(&cache_dir).is_ok()
+                } else {
+                    false
+                };
+                (removed_data, removed_cache)
+            }
+            _ => {
+                eprintln!("Skipped directory removal.");
+                (false, false)
+            }
+        }
+    } else {
+        (false, false)
+    };
+
+    // ── Print output ──
+    let lines = format_uninstall_output(
+        npm_removed,
+        npm_error.as_deref(),
+        cargo_removed,
+        cargo_error.as_deref(),
+        runtime_dir_removed,
+        &runtime_dir_str,
+        cache_dir_removed,
+        &cache_dir_str,
+    );
+    for line in &lines {
+        cli_println!("{}", line);
+    }
+
+    // ── JSON fields ──
+    json_field("npm_removed", json!(npm_removed));
+    if let Some(ref err) = npm_error {
+        json_field("npm_error", json!(err));
+    }
+    json_field("cargo_removed", json!(cargo_removed));
+    if let Some(ref err) = cargo_error {
+        json_field("cargo_error", json!(err));
+    }
+    json_field("runtime_dir_removed", json!(runtime_dir_removed));
+    json_field("runtime_dir", json!(&runtime_dir_str));
+    json_field("cache_dir_removed", json!(cache_dir_removed));
+    json_field("cache_dir", json!(&cache_dir_str));
+
+    if !npm_removed && !cargo_removed && npm_error.is_none() && cargo_error.is_none() {
+        cli_println!();
+        cli_println!("ℹ  browser4-cli was not found in npm or cargo global installs.");
+        cli_println!("   If installed by other means, remove the binary manually.");
+    }
+
+    cli_println!();
+    cli_println!("✅ uninstall complete.");
+    Ok(())
+}
+
 /// Format the output lines for `handle_upgrade`.  Extracted as a pure function
 /// so the branching logic can be unit-tested without network I/O.
 fn format_upgrade_output(runtime: &InstalledBrowser4Runtime, force: bool) -> Vec<String> {
@@ -2862,6 +3045,7 @@ fn should_ensure_server_running(command: &str) -> bool {
         && command != "kill-all"
         && command != "list"
         && command != "install"
+        && command != "uninstall"
         && command != "upgrade"
         && command != "stop"
         && command != "status"
@@ -3258,7 +3442,8 @@ fn compile_batch_request(
                     final_state.active_selector = active_selector.clone();
                 }
             }
-            "list" | "close-all" | "kill-all" | "delete-data" | "agent-run" | "agent-status"
+            "list" | "close-all" | "kill-all" | "delete-data" | "install" | "uninstall"
+            | "upgrade" | "agent-run" | "agent-status"
             | "agent-result" | "swarm-create" | "swarm-submit" | "swarm-query"
             | "swarm-status" | "swarm-result" => {
                 if push_batch_local_failure(
@@ -3779,6 +3964,9 @@ async fn run(
         }
         "install" => {
             handle_install(&tool_params).await?;
+        }
+        "uninstall" => {
+            handle_uninstall().await?;
         }
         "upgrade" => {
             handle_upgrade(&tool_params).await?;
