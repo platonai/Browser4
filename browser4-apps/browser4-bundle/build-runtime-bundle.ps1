@@ -70,6 +70,11 @@ invoking this script).  Default: $false (run mvn install).
 .PARAMETER Help
 Display this help message and exit without building.
 
+.PARAMETER ShowMavenOutput
+Do not pass -q (quiet) to Maven commands.  Use this when running the script
+standalone so you can inspect Maven progress and status output.
+Default: $false (Maven runs with -q).
+
 .EXAMPLE
 .\build-runtime-bundle.ps1
 Build the runtime bundle with all defaults: auto-detect JDK, auto-detect platform,
@@ -116,6 +121,7 @@ param(
     [string]$JdkHome = '',
     [int]$JdkVersion = 0,
     [switch]$SkipMavenInstall = $false,
+    [switch]$ShowMavenOutput = $false,
     [switch]$Help = $false
 )
 
@@ -721,7 +727,10 @@ $mvnCmd = Resolve-MavenCommand -repositoryRoot $repoRoot
 # runs `mvn install` before invoking this script and passes -SkipMavenInstall).
 if (-not $SkipMavenInstall) {
     Write-Host "Ensuring main modules are installed to ~/.m2 ..."
-    $installArgs = @('install', '-Pall-main-modules,asset-bundle', '-DskipTests', '-q')
+    $installArgs = @('install', '-Pall-main-modules,asset-bundle', '-DskipTests')
+    if (-not $ShowMavenOutput) {
+        $installArgs += '-q'
+    }
     & $mvnCmd @installArgs
     if ($LASTEXITCODE -ne 0) { throw "Core modules install failed with exit code $LASTEXITCODE" }
 }

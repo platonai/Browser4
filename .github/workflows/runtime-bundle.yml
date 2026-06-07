@@ -43,22 +43,21 @@ jobs:
       - name: Make Maven wrapper executable
         run: chmod +x ./mvnw
 
-      - name: Build bundle JAR
-        shell: pwsh
-        run: |
-          Write-Host "::group::Building browser4-bundle JAR"
-          ./mvnw install -pl browser4-apps/browser4-bundle -am `
-            -Passet-bundle `
-            -DskipTests `
-            -q
-          if ($LASTEXITCODE -ne 0) {
-            throw "Maven build failed with exit code $LASTEXITCODE"
-          }
-          Write-Host "::endgroup::"
-
       - name: Run build-runtime-bundle.ps1
         shell: pwsh
         run: |
+          # Clean the project to ensure a fresh build
+          & ./mvnw -Pall-modules clean
+
+          # Clean installed dependencies to ensure a fresh build
+          $m2Repo = "$HOME/.m2/repository/ai"
+          if (Test-Path $m2Repo) {
+            Write-Host "Cleaning Maven repository: $m2Repo"
+            Remove-Item -Path $m2Repo -Recurse -Force
+          } else {
+            Write-Host "Maven repository not found: $m2Repo"
+          }
+
           $scriptPath = 'browser4-apps/browser4-bundle/build-runtime-bundle.ps1'
           $jdkVersion = '${{ inputs.jdk_version }}'
           $args = @()
