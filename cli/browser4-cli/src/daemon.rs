@@ -724,6 +724,7 @@ fn read_winhttp_proxy() -> Option<String> {
 
 /// Add a default `http://` scheme to a `host:port` proxy URL if one is
 /// not already present.
+#[cfg(windows)]
 fn ensure_proxy_scheme(raw: &str) -> String {
     let trimmed = raw.trim();
     if trimmed.starts_with("http://")

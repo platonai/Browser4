@@ -58,8 +58,25 @@ $null = & chcp 65001
 $RepoRoot = git rev-parse --show-toplevel
 $CliManifest = Join-Path $RepoRoot 'cli' | Join-Path -ChildPath 'browser4-cli' | Join-Path -ChildPath 'Cargo.toml'
 
-$cli = if ($env:BROWSER4_CLI_BIN) {
-    { & $env:BROWSER4_CLI_BIN $args 2>&1 }
+# Prefer a pre-compiled debug binary so we avoid cargo build output (warnings,
+# progress messages) leaking into CLI output captured by assertions.  Fall back
+# to `cargo run` when the binary hasn't been built yet.
+$script:__CliBin = $env:BROWSER4_CLI_BIN
+if (-not $script:__CliBin) {
+    $DebugBinary = Join-Path (Split-Path $CliManifest -Parent) 'target' |
+        Join-Path -ChildPath 'debug' |
+        Join-Path -ChildPath 'browser4-cli'
+    if ($IsWin) { $DebugBinary = "$DebugBinary.exe" }
+    if (Test-Path $DebugBinary) {
+        $script:__CliBin = $DebugBinary
+        Write-Host "  (using pre-built binary: $DebugBinary)" -ForegroundColor DarkGray
+    } else {
+        Write-Host "  (binary not found; falling back to cargo run)" -ForegroundColor DarkGray
+    }
+}
+
+$cli = if ($script:__CliBin) {
+    { & $script:__CliBin $args 2>&1 }
 } else {
     { cargo run --manifest-path $CliManifest --quiet -- $args 2>&1 }
 }
@@ -164,7 +181,14 @@ filter session-data-rows {
         $_ -match '\S' -and
         $_ -notmatch '^\s*-+\s*' -and
         $_ -notmatch '^Name\b' -and
-        $_ -notmatch '^Note:'
+        $_ -notmatch '^Note:' -and
+        # Exclude rustc / cargo build output that may leak through when
+        # using `cargo run` (warnings, errors, source locations, and
+        # diagnostic annotations).
+        $_ -notmatch '^\s*(warning|error)\b' -and
+        $_ -notmatch '^\s*-->' -and
+        $_ -notmatch '^\s*[|]' -and
+        $_ -notmatch '^\s*=\s*(note|help):'
     }
 }
 
@@ -669,7 +693,7 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
     Write-Host "`n  F2. close clears sessionId  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
     Set-Status -Phase 'F (state)' -Step 'F2 close clears' -Passes $global:TestPassed
     Invoke-Cli close
-    try { $cliState2 = Get-Content -Raw $CliStateFile | ConvertFrom-Json } catch { $cliState2 = $null }
+    try { $cliState2 = Get-Content -Raw $CliStateFile -ErrorAction SilentlyContinue | ConvertFrom-Json } catch { $cliState2 = $null }
     # clear_state (called by `close`) removes the file entirely via
     # fs::remove_file.  Either outcome — file gone, or sessionId blank
     # — means the session is deactivated.
@@ -705,7 +729,7 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
     Set-Status -Phase 'F (state)' -Step 'F5 kill-all clear' -Passes $global:TestPassed
     $null = Invoke-Cli kill-all
     Wait-WithStatus -Seconds 5
-    try { $procData = Get-Content -Raw $ManagedProcsFile | ConvertFrom-Json } catch { $procData = $null }
+    try { $procData = Get-Content -Raw $ManagedProcsFile -ErrorAction SilentlyContinue | ConvertFrom-Json } catch { $procData = $null }
     # write_managed_server_processes removes the registry file when the
     # list is empty, so `kill-all` may delete managed-processes.json
     # entirely.  Either outcome — file gone, or empty PID list — is a
