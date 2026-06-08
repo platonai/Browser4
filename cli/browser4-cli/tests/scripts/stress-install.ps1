@@ -219,8 +219,11 @@ if (-not $env:BROWSER4_RUNTIME_DIR) {
 }
 
 # Versioned install directory for the tag under test.
+# Mirror Rust's normalize_release_tag(): if the tag doesn't start with 'v',
+# prepend one — the CLI normalises "4.10.0" to "v4.10.0".
+$NormalizedTag = if ($Tag.StartsWith('v')) { $Tag } else { "v$Tag" }
 $RuntimeVersionsDir = Join-Path $RuntimeDataDir 'runtime'
-$VersionedInstallDir = Join-Path $RuntimeVersionsDir $Tag
+$VersionedInstallDir = Join-Path $RuntimeVersionsDir $NormalizedTag
 $InstallMetaFile = Join-Path $VersionedInstallDir 'browser4-installation.json'
 
 $CliStateFile = Join-Path $StateDir 'cli-state.json'
