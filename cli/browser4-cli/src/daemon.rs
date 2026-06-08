@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::managed_processes::{register_managed_server_process, ManagedServerProcess};
 use crate::state::{
@@ -509,6 +510,14 @@ fn read_installed_browser4_runtime_metadata_for(
 }
 
 fn install_dir_contains_runtime(install_dir: &Path) -> bool {
+    // Verify the metadata file exists — a missing file signals a truncated
+    // or partially-committed install that should be re-downloaded.
+    if !install_dir
+        .join(BROWSER4_INSTALL_METADATA_FILE_NAME)
+        .is_file()
+    {
+        return false;
+    }
     let lib_dir = install_dir.join(BROWSER4_LIB_DIR_NAME);
     let has_lib = lib_dir.is_dir()
         && std::fs::read_dir(&lib_dir)
@@ -1132,6 +1141,45 @@ fn commit_installed_browser4_runtime(
 }
 
 // ---------------------------------------------------------------------------
+// Checksum utilities — used by the download cache to verify archive
+// integrity on restore (self-consistency check, not external verification).
+// ---------------------------------------------------------------------------
+
+/// Compute the SHA-256 digest of a file, returning the hex-encoded string.
+fn compute_file_sha256(path: &Path) -> Result<String, String> {
+    let mut file = fs::File::open(path).map_err(|e| format!("Cannot open file for checksum: {e}"))?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 65536];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .map_err(|e| format!("Cannot read file for checksum: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// Verify that `path` has the expected SHA-256 digest.
+fn verify_file_sha256(path: &Path, expected_sha256: &str) -> Result<(), String> {
+    let actual = compute_file_sha256(path)?;
+    // Constant-time-ish comparison: compare lengths first, then hex strings.
+    if actual.len() != expected_sha256.len() || actual != expected_sha256 {
+        return Err(format!(
+            "Checksum mismatch for {}:\n  expected sha256: {}\n  actual   sha256: {}",
+            path.file_name()
+                .map(|n| n.to_string_lossy())
+                .unwrap_or_else(|| path.to_string_lossy()),
+            expected_sha256,
+            actual
+        ));
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Download cache — avoids re-downloading the same runtime bundle on every
 // `install --force` (stress tests exercise this path heavily).
 // ---------------------------------------------------------------------------
@@ -1149,9 +1197,21 @@ fn cached_download_path(normalized_tag: &str, asset_name: &str) -> PathBuf {
         .join(asset_name)
 }
 
+/// Path to the checksum sidecar file for a cached archive.
+fn cached_checksum_path(normalized_tag: &str, asset_name: &str) -> PathBuf {
+    let mut base = cached_download_path(normalized_tag, asset_name)
+        .into_os_string();
+    base.push(".sha256");
+    PathBuf::from(base)
+}
+
 /// Copy `src` into the download cache so the next install of the same
-/// tag can skip the network fetch.  Errors are swallowed — a full cache
-/// is never fatal.
+/// tag can skip the network fetch.  A `.sha256` sidecar is written
+/// alongside the archive for integrity verification on later restores.
+///
+/// Both files are written atomically (temp file → rename) to prevent
+/// concurrent readers from observing partial writes.  Errors are swallowed
+/// — a full or broken cache is never fatal.
 fn try_cache_downloaded_archive(src: &Path, normalized_tag: &str, asset_name: &str) {
     let dest = cached_download_path(normalized_tag, asset_name);
     if dest.exists() {
@@ -1163,34 +1223,147 @@ fn try_cache_downloaded_archive(src: &Path, normalized_tag: &str, asset_name: &s
             return;
         }
     }
-    if let Err(e) = fs::copy(src, &dest) {
+
+    // Compute the SHA-256 checksum of the source file first.
+    let sha256 = match compute_file_sha256(src) {
+        Ok(digest) => digest,
+        Err(e) => {
+            eprintln!("  (skipping download cache: cannot compute checksum: {e})");
+            return;
+        }
+    };
+
+    // Write archive to a temporary path and rename atomically.
+    let dest_tmp = match dest.with_extension("tmp") {
+        Ok(p) => p,
+        Err(_) => {
+            eprintln!("  (skipping download cache: invalid path)");
+            return;
+        }
+    };
+    if let Err(e) = fs::copy(src, &dest_tmp) {
         eprintln!("  (skipping download cache: copy failed: {e})");
+        let _ = fs::remove_file(&dest_tmp);
         return;
     }
-    eprintln!("  Cached downloaded archive to {}", dest.display());
+    if let Err(e) = fs::rename(&dest_tmp, &dest) {
+        eprintln!("  (skipping download cache: atomic rename failed: {e})");
+        let _ = fs::remove_file(&dest_tmp);
+        return;
+    }
+
+    // Write checksum sidecar atomically.
+    let checksum_path = cached_checksum_path(normalized_tag, asset_name);
+    let checksum_tmp = match checksum_path.with_extension("sha256.tmp") {
+        Ok(p) => p,
+        Err(_) => return, // archive is already cached; sidecar is best-effort
+    };
+    if let Err(e) = fs::write(&checksum_tmp, &sha256) {
+        eprintln!("  (skipping download cache: cannot write checksum: {e})");
+        let _ = fs::remove_file(&checksum_tmp);
+        return;
+    }
+    if let Err(e) = fs::rename(&checksum_tmp, &checksum_path) {
+        eprintln!("  (skipping download cache: checksum rename failed: {e})");
+        let _ = fs::remove_file(&checksum_tmp);
+        return;
+    }
+
+    eprintln!(
+        "  Cached downloaded archive to {} (sha256: {})",
+        dest.display(),
+        sha256
+    );
 }
 
 /// If a previously-downloaded archive for this tag+asset is cached,
-/// copy it into `dest_path` and return `true`.
+/// copy it into `dest_path`, verify its integrity against the stored
+/// checksum, and return `true`.
+///
+/// A corrupt cache entry (missing sidecar or checksum mismatch) is
+/// cleaned up and `false` is returned so the caller falls back to a
+/// fresh download.
 fn try_restore_from_download_cache(
     normalized_tag: &str,
     asset_name: &str,
     dest_path: &Path,
 ) -> bool {
     let cached = cached_download_path(normalized_tag, asset_name);
-    if !cached.exists() {
+    let checksum_path = cached_checksum_path(normalized_tag, asset_name);
+
+    if !cached.exists() || !checksum_path.exists() {
+        // If only one of the pair exists, clean up the orphan.
+        if cached.exists() {
+            eprintln!(
+                "  Cached archive {} is missing its checksum file; discarding.",
+                cached.display()
+            );
+            let _ = fs::remove_file(&cached);
+        }
+        if checksum_path.exists() {
+            let _ = fs::remove_file(&checksum_path);
+        }
         return false;
     }
+
+    // Read the expected checksum from the sidecar file.
+    let expected_sha256 = match fs::read_to_string(&checksum_path) {
+        Ok(s) => s.trim().to_string(),
+        Err(e) => {
+            eprintln!(
+                "  Cannot read cached checksum {}: {}; will re-download.",
+                checksum_path.display(),
+                e
+            );
+            let _ = fs::remove_file(&cached);
+            let _ = fs::remove_file(&checksum_path);
+            return false;
+        }
+    };
+
+    if expected_sha256.is_empty() {
+        eprintln!(
+            "  Cached checksum {} is empty; will re-download.",
+            checksum_path.display()
+        );
+        let _ = fs::remove_file(&cached);
+        let _ = fs::remove_file(&checksum_path);
+        return false;
+    }
+
+    // Copy the cached archive to the destination, then verify.
     if let Some(parent) = dest_path.parent() {
         let _ = fs::create_dir_all(parent);
     }
+
+    eprintln!(
+        "  Restoring {} from download cache...",
+        asset_name
+    );
+
     match fs::copy(&cached, dest_path) {
         Ok(bytes) => {
             eprintln!(
-                "  Restored {} from download cache ({} bytes).",
+                "  Copied {} from cache ({} bytes); verifying integrity...",
                 asset_name, bytes
             );
-            true
+
+            match verify_file_sha256(dest_path, &expected_sha256) {
+                Ok(()) => {
+                    eprintln!("  Checksum verified successfully.");
+                    true
+                }
+                Err(e) => {
+                    eprintln!(
+                        "  Cached archive is corrupt: {}. Cleaning up and re-downloading.",
+                        e
+                    );
+                    let _ = fs::remove_file(&cached);
+                    let _ = fs::remove_file(&checksum_path);
+                    let _ = fs::remove_file(dest_path);
+                    false
+                }
+            }
         }
         Err(e) => {
             eprintln!(
@@ -1199,6 +1372,67 @@ fn try_restore_from_download_cache(
             );
             false
         }
+    }
+}
+
+/// Evict old entries from the download cache, keeping only the newest `MAX`
+/// versioned directories.  Non-version directories (e.g. `latest`) are left
+/// untouched.  Errors are swallowed — cache eviction is best-effort and
+/// never causes an install to fail.
+fn evict_old_download_cache_entries() {
+    const MAX_CACHED_VERSIONS: usize = 3;
+
+    let cache_dir = browser4_download_cache_dir();
+    if !cache_dir.is_dir() {
+        return;
+    }
+
+    let entries = match fs::read_dir(&cache_dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    let mut versioned: Vec<(Vec<u64>, PathBuf)> = Vec::new();
+
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let dir_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(name) => name,
+            None => continue,
+        };
+        // Only consider version-tag directories (e.g. "v4.10.0").
+        let parts: Vec<u64> = dir_name
+            .trim_start_matches('v')
+            .split('.')
+            .filter_map(|s| s.parse::<u64>().ok())
+            .collect();
+        if parts.is_empty() || parts.len() < 2 {
+            continue; // skip non-version dirs like "latest"
+        }
+        versioned.push((parts, path));
+    }
+
+    if versioned.len() <= MAX_CACHED_VERSIONS {
+        return;
+    }
+
+    // Sort descending (newest first), then delete everything after MAX.
+    versioned.sort_by(|(a, _), (b, _)| {
+        for (ap, bp) in a.iter().zip(b.iter()) {
+            match bp.cmp(ap) {
+                std::cmp::Ordering::Equal => continue,
+                other => return other,
+            }
+        }
+        b.len().cmp(&a.len())
+    });
+
+    for (_, path) in versioned.iter().skip(MAX_CACHED_VERSIONS) {
+        eprintln!("  Evicting old cached runtime: {}", path.display());
+        let _ = fs::remove_dir_all(path);
     }
 }
 
@@ -1272,6 +1506,7 @@ pub async fn install_browser4_runtime(
                 "Downloaded {} bytes for Browser4 runtime bundle.",
                 downloaded.bytes_written
             );
+
             // Cache the downloaded archive for future runs (only when we have
             // a concrete tag — "latest" is too ephemeral).
             if let Some(normalized) = requested_tag.as_deref() {
@@ -1292,6 +1527,10 @@ pub async fn install_browser4_runtime(
         }
     }
     .await;
+
+    // Best-effort eviction of old cached versions to prevent unbounded
+    // disk growth on CI machines and long-lived developer workstations.
+    evict_old_download_cache_entries();
 
     cleanup_prepared_launch_dir(Some(temp_dir));
     install_result
