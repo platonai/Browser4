@@ -32,11 +32,19 @@
 .PARAMETER ForceServerBuild
     Always run Maven, even when the fingerprint says the server is up to date.
 
+.PARAMETER UseGlobalCli
+    Skip the local cargo build and use the globally-installed browser4-cli
+    (resolved from PATH) instead.  The server-side (Maven) build is
+    unaffected by this flag — use -SkipServerBuild to suppress that as well.
+
 .EXAMPLE
     .\multi-scenarios.ps1 -Iterations 10
 
 .EXAMPLE
     .\multi-scenarios.ps1 -Release -ForceServerBuild
+
+.EXAMPLE
+    .\multi-scenarios.ps1 -UseGlobalCli -SkipServerBuild
 #>
 
 [CmdletBinding()]
@@ -52,8 +60,15 @@ param(
     [switch] $SkipBuild,
     [switch] $SkipServerBuild,
     [switch] $ForceServerBuild,
+    [switch] $UseGlobalCli,
+    [switch] $Help,
     [string] $RuntimeBundleHome = ''
 )
+
+if ($Help) {
+    Get-Help -Full $MyInvocation.MyCommand.Path
+    exit 0
+}
 
 $ErrorActionPreference = 'Stop'
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -69,6 +84,24 @@ if (-not $RepoRoot) { throw 'Cannot find repo root (no pom.xml found up the tree
 $BinaryName = if ($IsWindows) { 'browser4-cli.exe' } else { 'browser4-cli' }
 $Profile = if ($Release) { 'release' } else { 'debug' }
 $BinaryPath = "$ProjectDir\target\$Profile\$BinaryName"
+
+# ---- resolve global browser4-cli when -UseGlobalCli is set ----
+if ($UseGlobalCli) {
+    $globalCmd = Get-Command 'browser4-cli' -CommandType Application -ErrorAction SilentlyContinue
+    if (-not $globalCmd) {
+        # Fall back to where.exe on Windows, `which` on Unix.
+        $whichCmd = if ($IsWindows) { 'where.exe' } else { 'which' }
+        $raw = & $whichCmd 'browser4-cli' 2>$null | Select-Object -First 1
+        if ($raw) { $globalCmd = $raw.Trim() }
+    }
+    if (-not $globalCmd -or -not (Test-Path ($globalCmd.Source ?? $globalCmd))) {
+        throw 'browser4-cli not found on PATH. Install it globally or remove -UseGlobalCli.'
+    }
+    $resolved = if ($globalCmd -is [string]) { $globalCmd } else { $globalCmd.Source }
+    Write-Host "Using global browser4-cli: $resolved" -ForegroundColor DarkGray
+    $BinaryPath = $resolved
+}
+
 $ScenarioTimeoutSeconds = 300   # per-scenario timeout (5 min)
 $ServerLogTailLines = 1000      # lines to tail from pulsar.log on failure
 
@@ -224,17 +257,22 @@ if (-not $SkipBuild) {
     }
 
     # --- CLI (Rust) ---
-    Push-Location $ProjectDir
-    Write-Host "`n[CLI] cargo clean …" -ForegroundColor Yellow
-    cargo clean
-    if ($LASTEXITCODE -ne 0) { throw 'cargo clean failed' }
+    if ($UseGlobalCli) {
+        Write-Host "`n[CLI] Skipping cargo build — using global browser4-cli" -ForegroundColor DarkGray
+    }
+    else {
+        Push-Location $ProjectDir
+        Write-Host "`n[CLI] cargo clean …" -ForegroundColor Yellow
+        cargo clean
+        if ($LASTEXITCODE -ne 0) { throw 'cargo clean failed' }
 
-    $buildArgs = @('build')
-    if ($Release) { $buildArgs += '--release' }
-    Write-Host "[CLI] cargo $($buildArgs -join ' ') …" -ForegroundColor Yellow
-    & cargo $buildArgs
-    if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
-    Pop-Location
+        $buildArgs = @('build')
+        if ($Release) { $buildArgs += '--release' }
+        Write-Host "[CLI] cargo $($buildArgs -join ' ') …" -ForegroundColor Yellow
+        & cargo $buildArgs
+        if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
+        Pop-Location
+    }
 
     Write-Host "`n✅ Build complete`n" -ForegroundColor Green
 }
