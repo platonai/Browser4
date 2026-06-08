@@ -1025,8 +1025,29 @@ fn extract_tar_gz_archive(archive_path: &Path, destination_dir: &Path) -> Result
     archive.unpack(destination_dir).map_err(|e| e.to_string())
 }
 
+/// Check whether `path` contains the runtime bundle directory structure
+/// (lib/ with at least one .jar and a java executable).  Unlike
+/// `install_dir_contains_runtime` this does *not* require an installation
+/// metadata file, because freshly-extracted bundles don't have one yet.
 fn is_runtime_bundle_root(path: &Path) -> bool {
-    install_dir_contains_runtime(path)
+    let lib_dir = path.join(BROWSER4_LIB_DIR_NAME);
+    let has_lib = lib_dir.is_dir()
+        && std::fs::read_dir(&lib_dir)
+            .map(|mut entries| {
+                entries.any(|entry| {
+                    entry
+                        .ok()
+                        .map(|e| {
+                            e.path()
+                                .extension()
+                                .map(|ext| ext == "jar")
+                                .unwrap_or(false)
+                        })
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false);
+    has_lib && java_path_in_install_dir(path).is_file()
 }
 
 fn resolve_runtime_bundle_root(extracted_dir: &Path) -> Result<PathBuf, String> {
@@ -1234,13 +1255,8 @@ fn try_cache_downloaded_archive(src: &Path, normalized_tag: &str, asset_name: &s
     };
 
     // Write archive to a temporary path and rename atomically.
-    let dest_tmp = match dest.with_extension("tmp") {
-        Ok(p) => p,
-        Err(_) => {
-            eprintln!("  (skipping download cache: invalid path)");
-            return;
-        }
-    };
+    let mut dest_tmp = dest.clone();
+    dest_tmp.set_extension("tmp");
     if let Err(e) = fs::copy(src, &dest_tmp) {
         eprintln!("  (skipping download cache: copy failed: {e})");
         let _ = fs::remove_file(&dest_tmp);
@@ -1254,10 +1270,8 @@ fn try_cache_downloaded_archive(src: &Path, normalized_tag: &str, asset_name: &s
 
     // Write checksum sidecar atomically.
     let checksum_path = cached_checksum_path(normalized_tag, asset_name);
-    let checksum_tmp = match checksum_path.with_extension("sha256.tmp") {
-        Ok(p) => p,
-        Err(_) => return, // archive is already cached; sidecar is best-effort
-    };
+    let mut checksum_tmp = checksum_path.clone();
+    checksum_tmp.set_extension("sha256.tmp");
     if let Err(e) = fs::write(&checksum_tmp, &sha256) {
         eprintln!("  (skipping download cache: cannot write checksum: {e})");
         let _ = fs::remove_file(&checksum_tmp);
@@ -3402,6 +3416,13 @@ mod tests {
     #[test]
     fn test_install_dir_contains_runtime_valid() {
         let tmp = test_temp_dir();
+        // The metadata file is required — a missing file signals a truncated
+        // or partially-committed install that should be re-downloaded.
+        write(
+            tmp.path().join("browser4-installation.json"),
+            r#"{"tag":"v4.10.0","asset_name":"bundle.tar.gz","download_url":"https://example.com/bundle.tar.gz","installed_at":"2026-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
         let lib_dir = tmp.path().join("lib");
         fs::create_dir_all(&lib_dir).unwrap();
         write(lib_dir.join("browser4.jar"), "jar-content").unwrap();
@@ -3514,6 +3535,15 @@ mod tests {
         fs::create_dir_all(&rt_bin).unwrap();
         fs::write(lib.join("browser4.jar"), "fake-jar").unwrap();
         fs::write(rt_bin.join(browser4_java_executable_name()), "fake-java").unwrap();
+        // Write the installation metadata file required by install_dir_contains_runtime.
+        fs::write(
+            dir.join(BROWSER4_INSTALL_METADATA_FILE_NAME),
+            format!(
+                r#"{{"tag":"{}","asset_name":"bundle.tar.gz","download_url":"https://example.com/bundle.tar.gz","installed_at":"2026-01-01T00:00:00Z"}}"#,
+                tag
+            ),
+        )
+        .unwrap();
         write_current_tag(tag).unwrap();
         dir
     }
@@ -3646,6 +3676,15 @@ mod tests {
             fs::create_dir_all(&rt_bin).unwrap();
             fs::write(lib.join("x.jar"), "jar").unwrap();
             fs::write(rt_bin.join(browser4_java_executable_name()), "java").unwrap();
+            // Write the required installation metadata file.
+            fs::write(
+                dir.join(BROWSER4_INSTALL_METADATA_FILE_NAME),
+                format!(
+                    r#"{{"tag":"{}","asset_name":"bundle.tar.gz","download_url":"https://example.com/bundle.tar.gz","installed_at":"2026-01-01T00:00:00Z"}}"#,
+                    tag
+                ),
+            )
+            .unwrap();
         }
         // Remove current.tag if it exists so find_newest is forced to scan.
         let tag_path = current_tag_file_path();
