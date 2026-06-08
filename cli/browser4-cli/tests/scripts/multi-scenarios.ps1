@@ -85,7 +85,7 @@ $BinaryName = if ($IsWindows) { 'browser4-cli.exe' } else { 'browser4-cli' }
 $Profile = if ($Release) { 'release' } else { 'debug' }
 $BinaryPath = "$ProjectDir\target\$Profile\$BinaryName"
 
-# ---- resolve global browser4-cli when -UseGlobalCli is set ----
+# ---- resolve / install global browser4-cli when -UseGlobalCli is set ----
 if ($UseGlobalCli) {
     $globalCmd = Get-Command 'browser4-cli' -CommandType Application -ErrorAction SilentlyContinue
     if (-not $globalCmd) {
@@ -95,7 +95,13 @@ if ($UseGlobalCli) {
         if ($raw) { $globalCmd = $raw.Trim() }
     }
     if (-not $globalCmd -or -not (Test-Path ($globalCmd.Source ?? $globalCmd))) {
-        throw 'browser4-cli not found on PATH. Install it globally or remove -UseGlobalCli.'
+        Write-Host 'browser4-cli not found on PATH — installing globally …' -ForegroundColor Yellow
+        npm i -g browser4-cli
+        if ($LASTEXITCODE -ne 0) { throw 'npm i -g browser4-cli failed' }
+        browser4-cli install
+        if ($LASTEXITCODE -ne 0) { throw 'browser4-cli install failed' }
+        # Re-resolve after install.
+        $globalCmd = Get-Command 'browser4-cli' -CommandType Application -ErrorAction Stop
     }
     $resolved = if ($globalCmd -is [string]) { $globalCmd } else { $globalCmd.Source }
     Write-Host "Using global browser4-cli: $resolved" -ForegroundColor DarkGray
