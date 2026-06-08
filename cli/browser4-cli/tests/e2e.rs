@@ -2634,6 +2634,11 @@ fn reset_cli_artifacts(ctx: &mut E2ECtx) {
     let _ = fs::remove_dir_all(&ctx.state_dir);
     fs::create_dir_all(&ctx.state_dir).ok();
     let _ = fs::remove_dir_all(ctx.workspace_dir.join(".browser4-cli"));
+    // Clean the runtime dir too so that tests that set up an installed
+    // runtime (e.g. test_status_installed_runtime) don't leak state into
+    // subsequent scenarios that expect a clean slate.
+    let _ = fs::remove_dir_all(&ctx.runtime_dir);
+    fs::create_dir_all(&ctx.runtime_dir).ok();
     ctx.record_step("reset CLI artifacts", started_at.elapsed());
 }
 

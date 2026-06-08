@@ -1111,7 +1111,12 @@ fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<(), String> {
 fn write_installed_browser4_runtime_metadata(
     metadata: &InstalledBrowser4RuntimeMetadata,
 ) -> Result<(), String> {
-    let path = browser4_install_metadata_path();
+    // Write directly to the versioned install directory instead of going
+    // through browser4_install_metadata_path() → browser4_install_dir() →
+    // resolve_current_install_dir() → install_dir_contains_runtime().  The
+    // latter requires the metadata file to already exist (it signals a
+    // complete install), so using it here would be a chicken-and-egg problem.
+    let path = versioned_install_dir(&metadata.tag).join(BROWSER4_INSTALL_METADATA_FILE_NAME);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -1478,11 +1483,18 @@ pub async fn install_browser4_runtime(
     let extraction_dir = temp_dir.join("extract");
 
     // If we have a concrete tag, try the download cache first so repeated
-    // `install --force` runs (like stress tests) don't re-fetch the same
-    // ~200 MB bundle from the network every time.
-    let cache_hit = match requested_tag.as_deref() {
-        Some(normalized) => try_restore_from_download_cache(normalized, &asset_name, &archive_path),
-        None => false,
+    // install runs don't re-fetch the same ~200 MB bundle from the network
+    // every time.  When --force is given the user explicitly wants a fresh
+    // download, so skip the cache in that case.
+    let cache_hit = if force {
+        false
+    } else {
+        match requested_tag.as_deref() {
+            Some(normalized) => {
+                try_restore_from_download_cache(normalized, &asset_name, &archive_path)
+            }
+            None => false,
+        }
     };
 
     let install_result = async {
@@ -3117,6 +3129,96 @@ mod tests {
 
         let actual = resolve_runtime_bundle_root(&extracted).unwrap();
         assert_eq!(actual, bundle_root);
+    }
+
+    #[test]
+    fn test_is_runtime_bundle_root_accepts_top_level_bundle() {
+        // The extracted directory itself is the bundle root (no nested folder).
+        let tmp = test_temp_dir();
+        fs::create_dir_all(tmp.path().join("runtime").join("bin")).unwrap();
+        fs::create_dir_all(tmp.path().join("lib")).unwrap();
+        write(tmp.path().join("lib").join("browser4.jar"), "jar").unwrap();
+        write(
+            tmp.path()
+                .join("runtime")
+                .join("bin")
+                .join(browser4_java_executable_name()),
+            "java",
+        )
+        .unwrap();
+
+        // No metadata file — is_runtime_bundle_root should still detect the bundle.
+        assert!(is_runtime_bundle_root(tmp.path()));
+        assert_eq!(resolve_runtime_bundle_root(tmp.path()).unwrap(), tmp.path());
+    }
+
+    #[test]
+    fn test_is_runtime_bundle_root_returns_false_when_lib_dir_missing() {
+        let tmp = test_temp_dir();
+        fs::create_dir_all(tmp.path().join("runtime").join("bin")).unwrap();
+        write(
+            tmp.path()
+                .join("runtime")
+                .join("bin")
+                .join(browser4_java_executable_name()),
+            "java",
+        )
+        .unwrap();
+        // lib/ directory absent → should not be detected as a bundle root.
+        assert!(!is_runtime_bundle_root(tmp.path()));
+    }
+
+    #[test]
+    fn test_is_runtime_bundle_root_returns_false_when_no_jar_files() {
+        let tmp = test_temp_dir();
+        fs::create_dir_all(tmp.path().join("lib")).unwrap();
+        fs::create_dir_all(tmp.path().join("runtime").join("bin")).unwrap();
+        write(
+            tmp.path()
+                .join("runtime")
+                .join("bin")
+                .join(browser4_java_executable_name()),
+            "java",
+        )
+        .unwrap();
+        // lib/ exists but contains no .jar files.
+        assert!(!is_runtime_bundle_root(tmp.path()));
+    }
+
+    #[test]
+    fn test_is_runtime_bundle_root_returns_false_when_java_binary_missing() {
+        let tmp = test_temp_dir();
+        fs::create_dir_all(tmp.path().join("lib")).unwrap();
+        write(tmp.path().join("lib").join("browser4.jar"), "jar").unwrap();
+        fs::create_dir_all(tmp.path().join("runtime").join("bin")).unwrap();
+        // runtime/bin/ exists but the java executable is absent.
+        assert!(!is_runtime_bundle_root(tmp.path()));
+    }
+
+    #[test]
+    fn test_is_runtime_bundle_root_still_works_without_metadata_file() {
+        // The key distinction from install_dir_contains_runtime: a freshly
+        // extracted bundle has no browser4-installation.json yet, but it
+        // should still be recognised.
+        let tmp = test_temp_dir();
+        fs::create_dir_all(tmp.path().join("lib")).unwrap();
+        write(tmp.path().join("lib").join("browser4.jar"), "jar").unwrap();
+        fs::create_dir_all(tmp.path().join("runtime").join("bin")).unwrap();
+        write(
+            tmp.path()
+                .join("runtime")
+                .join("bin")
+                .join(browser4_java_executable_name()),
+            "java",
+        )
+        .unwrap();
+
+        // No metadata file present.
+        assert!(!tmp.path().join("browser4-installation.json").exists());
+        // install_dir_contains_runtime requires the metadata file → false.
+        assert!(!install_dir_contains_runtime(tmp.path()));
+        // is_runtime_bundle_root deliberately does NOT require it → true.
+        assert!(is_runtime_bundle_root(tmp.path()));
     }
 
     #[test]

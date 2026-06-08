@@ -566,8 +566,20 @@ pub(super) fn test_status_installed_runtime(ctx: &mut E2ECtx) {
     // Write a runtime install metadata file using the new versioned layout.
     let tag = "v4.10.0";
     let versions_dir = ctx.runtime_dir.join("runtime");
-    let metadata_path = versions_dir.join(tag).join("browser4-installation.json");
+    let install_dir = versions_dir.join(tag);
+    let metadata_path = install_dir.join("browser4-installation.json");
     fs::create_dir_all(metadata_path.parent().unwrap()).expect("create versioned runtime dir");
+
+    // Create the lib/ directory with a jar and the runtime/ directory
+    // with a java binary — both required by install_dir_contains_runtime.
+    let lib_dir = install_dir.join("lib");
+    fs::create_dir_all(&lib_dir).expect("create lib dir");
+    fs::write(lib_dir.join("browser4-core.jar"), "fake-jar-content").expect("write jar");
+    let runtime_bin = install_dir.join("runtime").join("bin");
+    fs::create_dir_all(&runtime_bin).expect("create runtime bin dir");
+    let java_name = if cfg!(windows) { "java.exe" } else { "java" };
+    fs::write(runtime_bin.join(java_name), "fake-java-binary").expect("write java");
+
     // Also write the current.tag marker file so the CLI can find this install.
     fs::write(versions_dir.join("current.tag"), format!("{tag}\n")).expect("write current.tag");
     let metadata = serde_json::json!({
