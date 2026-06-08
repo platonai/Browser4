@@ -2,9 +2,6 @@
   "permissions": {
     "allow": [
       "Bash(cargo test *)",
-      "Bash(pwsh *)",
-      "Bash([ -d \"$HOME/.m2/repository/ai/platon/pulsar/pulsar-boot\" ])",
-      "Bash(./gradlew :browser4-agent-tools:compileKotlin)",
       "Bash(./mvnw compile *)",
       "Skill(code-review)",
       "Bash(git pull *)",
@@ -20,26 +17,18 @@
       "Bash(rustup update *)",
       "Bash(cargo metadata *)",
       "Bash(npm run *)",
-      "Read(//mnt/d/workspace/Browser4/Browser4-4.10/**)",
-      "Read(//mnt/d/workspace/Browser4/Browser4-4.10/cli/**)",
-      "Read(//mnt/d/workspace/Browser4/Browser4-4.10/cli/browser4-cli/**)",
-      "Bash(\"/mnt/d/Program Files/nodejs/npm.cmd\" run build:macos)",
-      "Bash(\"/d/Program Files/nodejs/npm.cmd\" run build:macos)",
       "Bash(rustup target *)",
-      "Bash(export RUSTUP_DIST_SERVER=\"https://mirrors.tuna.tsinghua.edu.cn/rustup\")",
-      "Bash(export RUSTUP_UPDATE_ROOT=\"https://mirrors.tuna.tsinghua.edu.cn/rustup/rustup\")",
-      "Bash(export RUSTUP_DIST_SERVER=\"https://mirrors.ustc.edu.cn/rust-static\")",
-      "Bash(export RUSTUP_UPDATE_ROOT=\"https://mirrors.ustc.edu.cn/rust-static/rustup\")",
       "Bash(cargo build *)",
       "Bash(wait)",
-      "Bash(cp target/aarch64-apple-darwin/release/browser4 bin/browser4-darwin-arm64)",
-      "Bash(cp target/x86_64-apple-darwin/release/browser4 bin/browser4-darwin-x64)",
+      "WebFetch(domain:api.github.com)",
+      "Bash(rustup show *)",
+      "Bash(cargo check *)",
+      "Bash(rustup component *)",
       "Bash(cp keep-me-at-the-end-to-fix-claude-settings)",
       "Bash(cp keep-me-at-the-end-to-fix-claude-settings)",
       "Bash(cp keep-me-at-the-end-to-fix-claude-settings)",
       "Bash(cp keep-me-at-the-end-to-fix-claude-settings)",
-      "Bash(cp keep-me-at-the-end-to-fix-claude-settings)",
-      "Bash(powershell *)"
+      "Bash(cp keep-me-at-the-end-to-fix-claude-settings)"
     ]
   }
 }
