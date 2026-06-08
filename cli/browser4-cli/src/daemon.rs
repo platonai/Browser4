@@ -1580,7 +1580,17 @@ pub fn find_chrome_executable() -> Option<std::path::PathBuf> {
             "/Applications/Chromium.app/Contents/MacOS/Chromium",
         ]
     } else {
-        &[]
+        // Linux: check common install locations before falling back to PATH.
+        &[
+            "/opt/google/chrome/chrome",
+            "/opt/google/chrome-stable/chrome",
+            "/opt/google/chromium/chromium",
+            "/usr/bin/google-chrome",
+            "/usr/bin/google-chrome-stable",
+            "/usr/bin/chromium-browser",
+            "/usr/bin/chromium",
+            "/usr/lib64/chromium-browser/chromium-browser",
+        ]
     };
 
     for path in candidates {
@@ -1645,14 +1655,22 @@ pub fn ensure_chrome_available() -> Result<(), String> {
 
         eprintln!("   Unsupported Linux distribution.");
         eprintln!("   Install Chrome manually: https://www.google.com/chrome/");
-        return Ok(());
+        return Err(
+            "Cannot auto-install Chrome on this Linux distribution. \
+             Install it manually from https://www.google.com/chrome/"
+                .to_string(),
+        );
     }
 
     if cfg!(target_os = "macos") {
         eprintln!("   Install Chrome manually:");
         eprintln!("     brew install --cask google-chrome");
         eprintln!("   Or download from: https://www.google.com/chrome/");
-        return Ok(());
+        return Err(
+            "Chrome is not installed. Install it with: brew install --cask google-chrome, \
+             or download from https://www.google.com/chrome/"
+                .to_string(),
+        );
     }
 
     if cfg!(target_os = "windows") {
@@ -1689,6 +1707,7 @@ fn install_chrome_windows() -> Result<(), String> {
                 }
             }
             eprintln!("   winget install failed or Chrome not found after install.");
+            eprintln!("   Hint: winget requires Administrator privileges. Run as Administrator and try again.");
         }
     }
 
@@ -1704,7 +1723,7 @@ fn install_chrome_windows() -> Result<(), String> {
          Invoke-WebRequest -Uri '{url}' -OutFile '{}'; \
          Start-Process -FilePath '{}' -ArgumentList '/silent /install' -Wait; \
          Remove-Item '{}' -Force; \
-         exit (Test-Path '{}')",
+         if (Test-Path '{}') {{ exit 0 }} else {{ exit 1 }}",
         temp_installer.display(),
         temp_installer.display(),
         temp_installer.display(),
@@ -1723,7 +1742,12 @@ fn install_chrome_windows() -> Result<(), String> {
 
     if !status.success() {
         let _ = fs::remove_file(&temp_installer);
-        return Err("Google Chrome installation via PowerShell failed.".to_string());
+        return Err(
+            "Google Chrome installation via PowerShell failed. \
+             This may be due to insufficient privileges — try running as Administrator, \
+             or install Chrome manually from https://www.google.com/chrome/"
+                .to_string(),
+        );
     }
 
     if find_chrome_executable().is_some() {
@@ -1766,7 +1790,10 @@ fn install_chrome_debian() -> Result<(), String> {
         .args(["dpkg", "-i"])
         .arg(&tmp_deb)
         .status()
-        .map_err(|e| format!("Failed to run dpkg: {e}"))?;
+        .map_err(|e| format!(
+            "Failed to run 'sudo dpkg': {e}. \
+             Ensure you have sudo privileges (passwordless sudo required for unattended install)."
+        ))?;
 
     if !status.success() {
         // Fix broken dependencies
@@ -1808,7 +1835,10 @@ fn install_chrome_rhel() -> Result<(), String> {
         .args(["dnf", "install", "-y"])
         .arg(&tmp_rpm)
         .status()
-        .map_err(|e| format!("Failed to run dnf: {e}"))?;
+        .map_err(|e| format!(
+            "Failed to run 'sudo dnf': {e}. \
+             Ensure you have sudo privileges (passwordless sudo required for unattended install)."
+        ))?;
 
     if !status.success() {
         // Try yum as fallback
