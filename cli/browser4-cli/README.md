@@ -145,6 +145,9 @@ cargo test --test e2e -- --nocapture --scenario-from=test_e2e_navigation_and_sto
 cargo test --test e2e -- --nocapture --failed
 cargo test --test e2e -- --nocapture --scenario=test_e2e_eval_command --fail-fast
 cargo test --test e2e -- --nocapture --force-remote-bundle
+
+# Nightly regression testing (runs all scenarios)
+cargo test --test e2e -- --nocapture --level=All --force-remote-bundle --enable-batch-scenario --enable-install-scenario
 ```
 
 ## License

@@ -28,7 +28,8 @@
       "Bash(cp keep-me-at-the-end-to-fix-claude-settings)",
       "Bash(cp keep-me-at-the-end-to-fix-claude-settings)",
       "Bash(cp keep-me-at-the-end-to-fix-claude-settings)",
-      "Bash(cp keep-me-at-the-end-to-fix-claude-settings)"
+      "Bash(cp keep-me-at-the-end-to-fix-claude-settings)",
+      "Bash(rustup toolchain *)"
     ]
   }
 }

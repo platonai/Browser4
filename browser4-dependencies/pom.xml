@@ -460,12 +460,10 @@
         <central-publishing-maven-plugin.version>0.9.0</central-publishing-maven-plugin.version>
         <!-- Apache common libraries -->
         <!-- managed by spring-boot-dependencies -->
-        <!--        <commons-lang.version>2.6</commons-lang.version>-->
         <commons-io.version>2.16.1</commons-io.version>
         <commons-codec.version>1.17.0</commons-codec.version>
         <commons-text.version>1.11.0</commons-text.version>
         <!-- managed by spring-boot-dependencies -->
-        <!--        <commons-lang3.version>3.12.0</commons-lang3.version>-->
         <commons-math3.version>3.6.1</commons-math3.version>
         <commons-numbers-bom.version>1.1</commons-numbers-bom.version>
         <commons-collections4.version>4.4</commons-collections4.version>
