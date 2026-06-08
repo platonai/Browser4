@@ -27,9 +27,10 @@
     that already has a local runtime bundle built.
 
 .NOTES
-    This script WILL delete ~/.browser4/lib/ to test fresh-install paths.
-    It will also kill and restart the Browser4 server multiple times.
-    Run it in an environment where this is acceptable.
+    This script WILL delete the versioned runtime install directory under the
+    platform data directory to test fresh-install paths.  It will also kill and
+    restart the Browser4 server multiple times.  Run it in an environment where
+    this is acceptable.
 #>
 param(
     [int] $Iterations = 2,
@@ -200,15 +201,35 @@ $rng = [Random]::new($Seed)
 $StateDir = if ($env:BROWSER4_CLI_STATE_DIR) { $env:BROWSER4_CLI_STATE_DIR }
             else { Join-Path $HOME '.browser4' }
 
-$LibDir = Join-Path $StateDir 'lib'
-$InstallMetaFile = Join-Path $LibDir 'browser4-installation.json'
+# Resolve the Browser4 runtime data directory (mirrors Rust's resolve_runtime_data_dir()).
+# On Linux:   $XDG_DATA_HOME/browser4 (typically ~/.local/share/browser4/)
+# On macOS:   ~/Library/Application Support/browser4/
+# On Windows: %APPDATA%/browser4/
+# Honours BROWSER4_RUNTIME_DIR as an override.
+if (-not (Get-Variable -Name 'IsLinux' -ErrorAction SilentlyContinue)) { $IsLinux = $false }
+if (-not (Get-Variable -Name 'IsMacOS' -ErrorAction SilentlyContinue)) { $IsMacOS = $false }
+$RuntimeDataDir = if ($env:BROWSER4_RUNTIME_DIR) { $env:BROWSER4_RUNTIME_DIR }
+                  elseif ($IsLinux) { Join-Path $HOME '.local/share/browser4' }
+                  elseif ($IsMacOS) { Join-Path $HOME 'Library/Application Support/browser4' }
+                  else { Join-Path $env:APPDATA 'browser4' }
+
+# Ensure the CLI binary uses the same runtime directory we are checking.
+if (-not $env:BROWSER4_RUNTIME_DIR) {
+    $env:BROWSER4_RUNTIME_DIR = $RuntimeDataDir
+}
+
+# Versioned install directory for the tag under test.
+$RuntimeVersionsDir = Join-Path $RuntimeDataDir 'runtime'
+$VersionedInstallDir = Join-Path $RuntimeVersionsDir $Tag
+$InstallMetaFile = Join-Path $VersionedInstallDir 'browser4-installation.json'
+
 $CliStateFile = Join-Path $StateDir 'cli-state.json'
 $ManagedProcsFile = Join-Path $StateDir 'cli-managed-processes.json'
 
 # -------------------------------------------------------------------
 # Resolution for platform-dependent paths inside the runtime bundle.
 # -------------------------------------------------------------------
-$RuntimeBinDir = Join-Path $LibDir 'runtime' | Join-Path -ChildPath 'bin'
+$RuntimeBinDir = Join-Path $VersionedInstallDir 'runtime' | Join-Path -ChildPath 'bin'
 $IsWin = $env:OS -eq 'Windows_NT'  # works on PS 5.1 and 6+
 $JavaExe = if ($IsWin) { 'java.exe' } else { 'java' }
 $JavaBin = Join-Path $RuntimeBinDir $JavaExe
@@ -360,13 +381,20 @@ try { $null = Invoke-Cli close } catch { Write-Host "       (no session to close
 Wait-WithStatus -Seconds 2
 
 if (-not $SkipInstall) {
-    Write-Host "-- Removing ~/.browser4/lib/ for fresh-install test --" -ForegroundColor DarkYellow
-    if (Test-Path $LibDir) {
-        Remove-Item -Recurse -Force $LibDir -ErrorAction Stop
-        Write-Host "       Removed $LibDir"
+    Write-Host "-- Removing versioned install for fresh-install test --" -ForegroundColor DarkYellow
+    # Remove the versioned install directory so the next install starts fresh.
+    if (Test-Path $VersionedInstallDir) {
+        Remove-Item -Recurse -Force $VersionedInstallDir -ErrorAction Stop
+        Write-Host "       Removed $VersionedInstallDir"
+    }
+    # Also remove current.tag so the runtime is treated as not installed.
+    $currentTagFile = Join-Path $RuntimeVersionsDir 'current.tag'
+    if (Test-Path $currentTagFile) {
+        Remove-Item -Force $currentTagFile -ErrorAction Stop
+        Write-Host "       Removed $currentTagFile"
     }
 } else {
-    Write-Host "-- SkipInstall: keeping existing ~/.browser4/lib/ --" -ForegroundColor DarkGray
+    Write-Host "-- SkipInstall: keeping existing runtime install --" -ForegroundColor DarkGray
 }
 
 # -------------------------------------------------------------------
@@ -713,7 +741,7 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
             $instMeta.tag -and $instMeta.asset_name -and $instMeta.installed_at
         }
         Assert-FileExists $JavaBin "bundled java exists"
-        $libJars = Get-ChildItem -Path (Join-Path $LibDir 'lib') -Filter '*.jar' -ErrorAction SilentlyContinue
+        $libJars = Get-ChildItem -Path (Join-Path $VersionedInstallDir 'lib') -Filter '*.jar' -ErrorAction SilentlyContinue
         Assert-True "lib/*.jar files exist" { $libJars.Count -gt 0 }
 
     }
