@@ -35,7 +35,7 @@ param(
     [int] $Iterations = 2,
     [int] $Seed = (Get-Random),
     [switch] $SkipInstall,
-    [string] $Tag = '4.10.0-rc.2'
+    [string] $Tag = '4.10.0'
 )
 
 $ErrorActionPreference = 'Continue'
@@ -46,7 +46,9 @@ $ErrorActionPreference = 'Continue'
 # into CJK gibberish.  `chcp` changes the *console's interpretation* of
 # output bytes; OutputEncoding / InputEncoding alone only affect .NET
 # stream encoding, not how the host renders them.
-$null = & chcp 65001
+if ($IsWin) {
+    $null = & chcp 65001
+}
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 [Console]::InputEncoding  = [Text.Encoding]::UTF8
 
