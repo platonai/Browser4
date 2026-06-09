@@ -122,7 +122,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("test setPropertyAll")
-    fun testSetPropertyall() = runEnhancedWebDriverTest(simpleDomURL, browser) { driver ->
+    fun testSetPropertyAll() = runEnhancedWebDriverTest(simpleDomURL, browser) { driver ->
         val selector = "input"
         val propName = "value"
 
@@ -156,7 +156,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("test clearBrowserCookies")
-    fun testClearbrowsercookies() = runEnhancedWebDriverTest("$assetsPBaseURL/cookie.html", browser) { driver ->
+    fun testClearBrowserCookies() = runEnhancedWebDriverTest("$assetsPBaseURL/cookie.html", browser) { driver ->
         var cookies = driver.getCookies()
 
         printlnPro(cookies.toString())
@@ -176,7 +176,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("test scrollToBottom")
-    fun testScrolltobottom() = runEnhancedWebDriverTest(multiScreensInteractiveUrl, browser) { driver ->
+    fun testScrolltoBottom() = runEnhancedWebDriverTest(multiScreensInteractiveUrl, browser) { driver ->
         val bottomY = driver.scrollToBottom()
         val viewportHeight = (driver.evaluate("window.innerHeight", 0.0) as? Number)?.toDouble() ?: 0.0
         val totalHeight = (driver.evaluate(
