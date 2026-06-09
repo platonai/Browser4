@@ -2,6 +2,46 @@
 
 Submit natural-language tasks to Browser4's backend AI agent and let it plan and execute browser actions autonomously. The agent reasons about the page, decides which actions to take, and completes the task asynchronously — no need to know page structure or element refs ahead of time.
 
+Browser4-cli agent command requires LLM API key.
+
+```bash
+export OPENROUTER_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# Uncomment to use OpenRouter provider
+
+# export OPENROUTER_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+# export OPENROUTER_MODEL_NAME=openai/gpt-5.4
+# export OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+
+# export OPENROUTER_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+# export OPENROUTER_MODEL_NAME=bytedance-seed/seed-2.0-lite
+# export OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+
+
+# Uncomment to use Volcengine provider (ByteDance)
+
+# export VOLCENGINE_API_KEY=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+# export VOLCENGINE_MODEL_NAME=doubao-seed-2-0-pro-260215
+# export VOLCENGINE_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+
+
+# Uncomment to use the official DeepSeek provider
+
+# export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
+
+# Uncomment to use an OpenAI-compatible provider
+
+# export OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
+# export OPENAI_MODEL_NAME=gpt-4o
+# export OPENAI_BASE_URL=https://api.openai.com/v1
+
+# Aliyun Qwen via DashScope (OpenAI-compatible API)
+
+# export OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
+# export OPENAI_MODEL_NAME=qwen-plus
+# export OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+```
+
 ## Architecture
 
 The agent lifecycle follows a submit → poll → fetch pattern, all driven through the MCP `command_run` / `command_status` / `command_result` tools on the Browser4 backend:
