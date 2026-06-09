@@ -1,0 +1,104 @@
+# .github/workflows/sync-to-oss.yml
+name: Sync Release to Aliyun OSS
+
+on:
+  release:
+    types: [ published ]
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Release Assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+
+          # Parse all assets from the release payload:
+          # github.event.release.assets is an array of { name, url, size, ... }.
+          readarray -t assets < <(echo '${{ toJson(github.event.release.assets) }}' | jq -r '.[] | "\(.name)\t\(.url)"')
+
+          if [[ ${#assets[@]} -eq 0 ]]; then
+            echo "::warning::No assets found in release ${{ github.event.release.tag_name }}"
+            exit 0
+          fi
+
+          echo "Found ${#assets[@]} asset(s) in release ${{ github.event.release.tag_name }}"
+
+          for asset_line in "${assets[@]}"; do
+            IFS=$'\t' read -r name url <<< "$asset_line"
+            echo "  Downloading: $name"
+            curl -fsSL \
+              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/octet-stream" \
+              "$url" \
+              -o "release-assets/$name"
+          done
+
+          echo ""
+          echo "All assets downloaded:"
+          ls -lh release-assets/
+
+      - name: Install ossutil
+        run: |
+          set -euo pipefail
+          wget -q https://gosspublic.alicdn.com/ossutil/2.0.3/ossutil-linux-amd64 -O ossutil
+          chmod +x ossutil
+          ./ossutil --version
+
+      - name: Upload to OSS
+        env:
+          OSS_ENDPOINT: oss-cn-beijing.aliyuncs.com
+          OSS_BUCKET: web-insight
+          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+        run: |
+          set -euo pipefail
+          TAG_NAME="${{ github.event.release.tag_name }}"
+
+          uploaded=0
+          failed=0
+
+          for asset in release-assets/*; do
+            [[ -f "$asset" ]] || continue
+            asset_name=$(basename "$asset")
+            oss_path="oss://${OSS_BUCKET}/releases/download/${TAG_NAME}/${asset_name}"
+
+            echo "Uploading: $asset_name → $oss_path"
+            if ./ossutil cp "$asset" "$oss_path" \
+              -e "$OSS_ENDPOINT" \
+              --retry-times 3; then
+              ((uploaded++)) || true
+            else
+              echo "::error::Failed to upload $asset_name"
+              ((failed++)) || true
+            fi
+          done
+
+          echo ""
+          echo "Upload complete: ${uploaded} succeeded, ${failed} failed"
+
+          if [[ $failed -gt 0 ]]; then
+            echo "::error::${failed} asset(s) failed to upload"
+            exit 1
+          fi
+
+          echo "✅ All ${uploaded} release assets synced to OSS"
+
+      - name: Sync Summary
+        if: always()
+        run: |
+          {
+            echo "## ☁️ Aliyun OSS Sync"
+            echo ""
+            echo "- **Release**: ${{ github.event.release.tag_name }}"
+            echo "- **Release URL**: ${{ github.event.release.html_url }}"
+            echo "- **Assets**: ${{ github.event.release.assets_count || 0 }}"
+            echo "- **OSS Bucket**: \`oss://web-insight/releases/download/${{ github.event.release.tag_name }}/\`"
+            echo "- **Status**: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"
