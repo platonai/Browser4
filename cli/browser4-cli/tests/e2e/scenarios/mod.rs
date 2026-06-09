@@ -844,6 +844,36 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         group: Some("install"),
         level: ScenarioLevel::Extended,
     },
+    ScenarioDef {
+        name: "test_e2e_install_mirror_failover",
+        short_name: "test_install_mirror_failover",
+        requires_browser4: false,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: mock_server::test_install_mirror_failover,
+        group: Some("install"),
+        level: ScenarioLevel::Extended,
+    },
+    ScenarioDef {
+        name: "test_e2e_install_all_mirrors_unreachable",
+        short_name: "test_install_all_mirrors_unreachable",
+        requires_browser4: false,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: mock_server::test_install_all_mirrors_unreachable,
+        group: Some("install"),
+        level: ScenarioLevel::Extended,
+    },
+    ScenarioDef {
+        name: "test_e2e_install_loads_mirrors_json_from_runtime_dir",
+        short_name: "test_install_loads_mirrors_json_from_runtime_dir",
+        requires_browser4: false,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: mock_server::test_install_loads_mirrors_json_from_runtime_dir,
+        group: Some("install"),
+        level: ScenarioLevel::Extended,
+    },
 ];
 
 pub(super) fn all_scenarios() -> &'static [ScenarioDef] {

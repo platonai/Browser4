@@ -3387,6 +3387,118 @@ mod tests {
         assert_eq!(mirrors[0].base_url, "https://custom.example.com/releases");
     }
 
+    // -------------------------------------------------------------------
+    // mirror_is_reachable / select_reachable_mirror
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_mirror_is_reachable_detects_listening_port() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("bind test listener");
+        let port = listener.local_addr().unwrap().port();
+        let mirror = DownloadMirror {
+            name: "test".to_string(),
+            base_url: format!("https://127.0.0.1:{port}"),
+        };
+        assert!(
+            mirror_is_reachable(&mirror),
+            "mirror should be reachable when a TCP listener is bound to its port"
+        );
+        drop(listener);
+    }
+
+    #[test]
+    fn test_mirror_is_reachable_returns_false_for_unbound_port() {
+        // Bind and immediately drop to find a free port, then verify
+        // nothing is listening on it.
+        let free_port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0")
+                .expect("bind for free port");
+            listener.local_addr().unwrap().port()
+        };
+        let mirror = DownloadMirror {
+            name: "test".to_string(),
+            base_url: format!("https://127.0.0.1:{free_port}"),
+        };
+        assert!(
+            !mirror_is_reachable(&mirror),
+            "mirror should not be reachable when nothing listens on its port"
+        );
+    }
+
+    #[test]
+    fn test_mirror_is_reachable_returns_false_for_invalid_url() {
+        let mirror = DownloadMirror {
+            name: "test".to_string(),
+            base_url: "not-a-valid-url".to_string(),
+        };
+        assert!(
+            !mirror_is_reachable(&mirror),
+            "mirror should not be reachable when the base_url is not a valid URL"
+        );
+    }
+
+    #[test]
+    fn test_select_reachable_mirror_returns_first_reachable() {
+        // First mirror points to a free port (nothing listening) — unreachable.
+        // Second mirror has a live TcpListener — reachable.
+        let dead_port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0")
+                .expect("bind for dead port");
+            listener.local_addr().unwrap().port()
+        };
+        let live_listener = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("bind live listener");
+        let live_port = live_listener.local_addr().unwrap().port();
+
+        let mirrors = vec![
+            DownloadMirror {
+                name: "dead".to_string(),
+                base_url: format!("https://127.0.0.1:{dead_port}"),
+            },
+            DownloadMirror {
+                name: "live".to_string(),
+                base_url: format!("https://127.0.0.1:{live_port}"),
+            },
+        ];
+
+        let (selected, reachable) = select_reachable_mirror(&mirrors);
+        assert!(reachable, "should have found a reachable mirror");
+        assert_eq!(selected.name, "live");
+        drop(live_listener);
+    }
+
+    #[test]
+    fn test_select_reachable_mirror_falls_back_to_first_when_none_reachable() {
+        // Both mirrors point to free ports — neither is reachable.
+        let dead1 = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0")
+                .expect("bind for dead port 1");
+            listener.local_addr().unwrap().port()
+        };
+        let dead2 = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0")
+                .expect("bind for dead port 2");
+            listener.local_addr().unwrap().port()
+        };
+
+        let mirrors = vec![
+            DownloadMirror {
+                name: "first".to_string(),
+                base_url: format!("https://127.0.0.1:{dead1}"),
+            },
+            DownloadMirror {
+                name: "second".to_string(),
+                base_url: format!("https://127.0.0.1:{dead2}"),
+            },
+        ];
+
+        let (selected, reachable) = select_reachable_mirror(&mirrors);
+        assert!(!reachable, "should not have found a reachable mirror");
+        assert_eq!(selected.name, "first",
+            "should fall back to the first mirror when none are reachable");
+    }
+
     #[test]
     fn test_parse_release_tag_from_url_extracts_download_tag() {
         let tag = parse_release_tag_from_url(

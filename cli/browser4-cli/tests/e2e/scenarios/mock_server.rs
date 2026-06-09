@@ -2305,3 +2305,135 @@ pub(super) fn test_install_download_failure(ctx: &mut E2ECtx) {
         "Expected error message in:\n{combined}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// install / upgrade — mirror failover
+// ---------------------------------------------------------------------------
+
+pub(super) fn test_install_mirror_failover(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let (bundle_bytes, _dir_name) = build_fake_runtime_bundle("v4.10.0");
+    // Start the reachable mirror (serves the fake runtime bundle).
+    let download_server = FixtureDownloadServer::start(bundle_bytes);
+    // Find a free port that will be unreachable (nothing listening).
+    let dead_port = find_free_port();
+
+    // Write mirrors.json with two mirrors: first unreachable, second reachable.
+    let mirrors_path = ctx.runtime_dir.join("mirrors.json");
+    let mirrors_json = serde_json::json!({
+        "mirrors": [
+            {
+                "name": "dead-mirror",
+                "base_url": format!("http://127.0.0.1:{}/releases", dead_port)
+            },
+            {
+                "name": "live-mirror",
+                "base_url": download_server.base_url()
+            }
+        ]
+    });
+    fs::write(&mirrors_path, mirrors_json.to_string()).expect("write mirrors.json");
+    ctx.set_env("BROWSER4_MIRRORS_CONFIG", &mirrors_path.to_string_lossy());
+    // IMPORTANT: do NOT set BROWSER4_RELEASES_BASE_URL — let the mirror system work.
+
+    let result = run_command(ctx, &["install", INSTALL_TAG]);
+    assert_eq!(
+        result.exit_code, 0,
+        "install should succeed via mirror failover:\n{}",
+        result.stderr
+    );
+    assert!(
+        result.stdout.contains("installed successfully"),
+        "Expected 'installed successfully' in:\n{}",
+        result.stdout
+    );
+
+    // Verify the download hit the live mirror.
+    let requests = download_server.snapshot_requests();
+    assert!(
+        requests.iter().any(|p| p.contains("/download/")),
+        "Expected at least one download request from the live mirror, got: {:?}",
+        requests
+    );
+}
+
+pub(super) fn test_install_all_mirrors_unreachable(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    // Both mirrors point to free ports — neither is reachable.
+    let dead1 = find_free_port();
+    let dead2 = find_free_port();
+
+    let mirrors_path = ctx.runtime_dir.join("mirrors.json");
+    let mirrors_json = serde_json::json!({
+        "mirrors": [
+            {
+                "name": "dead-one",
+                "base_url": format!("http://127.0.0.1:{}/releases", dead1)
+            },
+            {
+                "name": "dead-two",
+                "base_url": format!("http://127.0.0.1:{}/releases", dead2)
+            }
+        ]
+    });
+    fs::write(&mirrors_path, mirrors_json.to_string()).expect("write mirrors.json");
+    ctx.set_env("BROWSER4_MIRRORS_CONFIG", &mirrors_path.to_string_lossy());
+
+    let result = run_command_allowing_failure(ctx, &["install"]);
+    // install should fail because all mirrors are unreachable.
+    assert_ne!(
+        result.exit_code, 0,
+        "Expected install to fail when all mirrors are unreachable"
+    );
+    let combined = format!("{}\n{}", result.stdout, result.stderr);
+    assert!(
+        combined.contains("No mirror is reachable")
+            || combined.contains("error")
+            || combined.contains("Error")
+            || combined.contains("failed"),
+        "Expected fallback or error message in:\n{combined}"
+    );
+}
+
+pub(super) fn test_install_loads_mirrors_json_from_runtime_dir(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let (bundle_bytes, _dir_name) = build_fake_runtime_bundle("v4.10.0");
+    let download_server = FixtureDownloadServer::start(bundle_bytes);
+
+    // Write mirrors.json at the default location: {runtime_data_dir}/mirrors.json.
+    // ctx.runtime_dir IS the runtime data dir (set via BROWSER4_RUNTIME_DIR).
+    let mirrors_path = ctx.runtime_dir.join("mirrors.json");
+    let mirrors_json = serde_json::json!({
+        "mirrors": [
+            {
+                "name": "test-mirror",
+                "base_url": download_server.base_url()
+            }
+        ]
+    });
+    fs::write(&mirrors_path, mirrors_json.to_string()).expect("write mirrors.json");
+    // Do NOT set BROWSER4_MIRRORS_CONFIG — the CLI should find it at its
+    // default location under ctx.runtime_dir (which is the runtime data dir).
+    // Do NOT set BROWSER4_RELEASES_BASE_URL — let the mirror system work.
+
+    let result = run_command(ctx, &["install", INSTALL_TAG]);
+    assert_eq!(result.exit_code, 0,
+        "install should succeed with mirrors.json at default location:\n{}",
+        result.stderr);
+    assert!(
+        result.stdout.contains("installed successfully"),
+        "Expected 'installed successfully' in:\n{}",
+        result.stdout
+    );
+
+    // Verify the download hit our custom mirror.
+    let requests = download_server.snapshot_requests();
+    assert!(
+        requests.iter().any(|p| p.contains("/download/")),
+        "Expected at least one download request from the custom mirror, got: {:?}",
+        requests
+    );
+}
