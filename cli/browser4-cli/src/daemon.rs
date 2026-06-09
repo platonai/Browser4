@@ -169,7 +169,7 @@ fn builtin_mirrors() -> Vec<DownloadMirror> {
         },
         DownloadMirror {
             name: "aliyun-oss".to_string(),
-            base_url: "https://web-insight.oss-cn-beijing.aliyuncs.com/releases".to_string(),
+            base_url: "https://browser4.oss-cn-beijing.aliyuncs.com/releases".to_string(),
         },
     ]
 }

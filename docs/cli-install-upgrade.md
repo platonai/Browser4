@@ -154,7 +154,7 @@ The CLI probes download mirrors in order and uses the **first reachable** one.
 | Priority | Name | Base URL |
 |---|---|---|
 | 1 | `github` | `https://github.com/platonai/Browser4/releases` |
-| 2 | `aliyun-oss` | `https://web-insight.oss-cn-beijing.aliyuncs.com/releases` |
+| 2 | `aliyun-oss` | `https://browser4.oss-cn-beijing.aliyuncs.com/releases` |
 
 ### Custom mirror configuration
 
@@ -170,7 +170,7 @@ Create a JSON file at `{runtime-data-dir}/mirrors.json` (or set
     },
     {
       "name": "aliyun-oss",
-      "base_url": "https://web-insight.oss-cn-beijing.aliyuncs.com/releases"
+      "base_url": "https://browser4.oss-cn-beijing.aliyuncs.com/releases"
     },
     {
       "name": "github",
