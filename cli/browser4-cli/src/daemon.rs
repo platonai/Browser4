@@ -44,6 +44,17 @@ const BROWSER4_MAIN_CLASS: &str = "ai.platon.pulsar.apps.Browser4BundleApplicati
 const BROWSER4_INSTALL_METADATA_FILE_NAME: &str = "browser4-installation.json";
 const BROWSER4_RELEASES_BASE_URL: &str = "https://github.com/platonai/Browser4/releases";
 const BROWSER4_RELEASES_BASE_URL_ENV: &str = "BROWSER4_RELEASES_BASE_URL";
+/// Base URL for the Aliyun OSS mirror of Browser4 releases.
+/// The OSS bucket hosts the same release assets as GitHub Releases under
+/// `releases/download/<tag>/<asset>` so the path structure is identical.
+const BROWSER4_OSS_BASE_URL: &str =
+    "https://web-insight.oss-cn-beijing.aliyuncs.com/releases";
+const BROWSER4_OSS_BASE_URL_ENV: &str = "BROWSER4_OSS_BASE_URL";
+/// Timeout for the GitHub reachability check performed before every download.
+/// Must be short so the CLI doesn't appear to hang on slow/flaky networks.
+const GITHUB_REACHABILITY_TIMEOUT_SECS: u64 = 5;
+/// Hostname used for the GitHub reachability probe.
+const GITHUB_HOST: &str = "github.com:443";
 const ROOT_SEARCH_START_DIR_ENV: &str = "BROWSER4_CLI_INVOKE_DIR";
 /// When set to `1`, `true`, `yes`, or `on`, forces the CLI to download the
 /// Browser4 runtime bundle from a remote release instead of building it from
@@ -600,6 +611,49 @@ fn parse_release_tag_from_url(url: &str) -> Option<String> {
     let segments = parsed.path_segments()?.collect::<Vec<_>>();
     let download_index = segments.iter().position(|segment| *segment == "download")?;
     segments.get(download_index + 1).map(|segment| (*segment).to_string())
+}
+
+fn browser4_oss_base_url() -> String {
+    env::var(BROWSER4_OSS_BASE_URL_ENV)
+        .ok()
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| BROWSER4_OSS_BASE_URL.to_string())
+}
+
+/// Build the Aliyun OSS download URL for a given release tag and asset name.
+///
+/// The OSS bucket mirrors the GitHub Releases layout, so the path structure is
+/// identical: `<base>/download/<tag>/<asset>` or `<base>/latest/download/<asset>`.
+fn browser4_oss_download_url(tag: Option<&str>, asset_name: &str) -> String {
+    let base = browser4_oss_base_url();
+    match normalize_release_tag(tag) {
+        Some(tag) => format!("{base}/download/{tag}/{asset_name}"),
+        None => format!("{base}/latest/download/{asset_name}"),
+    }
+}
+
+/// Check whether GitHub is reachable from the current network.
+///
+/// Performs a single TCP connect to `github.com:443` with a short timeout
+/// (default 5 s, overridable via `BROWSER4_CLI_GITHUB_CHECK_TIMEOUT_SECS`).
+/// This is intentionally a fast connectivity probe rather than an HTTP
+/// round-trip — it's resilient to GitHub API rate limits and redirects.
+fn is_github_reachable() -> bool {
+    use std::net::TcpStream;
+
+    let timeout_secs = std::env::var("BROWSER4_CLI_GITHUB_CHECK_TIMEOUT_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&s| s > 0)
+        .unwrap_or(GITHUB_REACHABILITY_TIMEOUT_SECS);
+
+    let timeout = Duration::from_secs(timeout_secs);
+    TcpStream::connect_timeout(
+        &GITHUB_HOST.parse().unwrap(),
+        timeout,
+    )
+    .is_ok()
 }
 
 /// Build a `reqwest::Proxy` from the given URL string.
@@ -1478,7 +1532,7 @@ pub async fn install_browser4_runtime(
     }
 
     let asset_name = platform.asset_name();
-    let download_url = browser4_release_download_url(tag, &asset_name);
+    let preferred_download_url = browser4_release_download_url(tag, &asset_name);
     let temp_dir = create_runtime_install_temp_dir()?;
     let archive_path = temp_dir.join(&asset_name);
     let extraction_dir = temp_dir.join("extract");
@@ -1508,7 +1562,7 @@ pub async fn install_browser4_runtime(
             // We need a DownloadedFile for the metadata below.
             // Reconstruct it from what we know.
             let downloaded = DownloadedFile {
-                final_url: download_url.clone(),
+                final_url: preferred_download_url.clone(),
                 bytes_written: fs::metadata(&archive_path)
                     .map(|m| m.len())
                     .unwrap_or(0),
@@ -1527,8 +1581,45 @@ pub async fn install_browser4_runtime(
             };
             commit_installed_browser4_runtime(&extracted_root, metadata)
         } else {
+            // Check GitHub reachability; fall back to Aliyun OSS if it's
+            // unreachable (e.g. in mainland China, restricted networks, or
+            // when GitHub is down).  The OSS bucket mirrors the same release
+            // assets with an identical path structure.
+            let github_reachable = is_github_reachable();
+            let using_oss = !github_reachable;
+            let download_url = if github_reachable {
+                preferred_download_url.clone()
+            } else {
+                let oss_url = browser4_oss_download_url(tag, &asset_name);
+                eprintln!("GitHub is unreachable. Falling back to Aliyun OSS mirror.");
+                if requested_tag.is_none() {
+                    eprintln!(
+                        "Note: the OSS mirror does not resolve \"latest\" automatically. \
+                         If the download fails with a 404, specify an exact --tag."
+                    );
+                }
+                oss_url
+            };
+
             eprintln!("Downloading Browser4 runtime bundle from {}...", download_url);
-            let downloaded = download_file(&download_url, &archive_path).await?;
+            let downloaded = download_file(&download_url, &archive_path).await.map_err(|e| {
+                if using_oss && requested_tag.is_none() {
+                    format!(
+                        "Failed to download from Aliyun OSS mirror: {e}\n\
+                         Help: the OSS mirror may not have a \"latest\" release. \
+                         Specify an exact version with --tag, e.g. 'browser4-cli install --tag v4.11.0', \
+                         or set BROWSER4_OSS_BASE_URL to point to a server that supports /latest/."
+                    )
+                } else if using_oss {
+                    format!("Failed to download from Aliyun OSS mirror: {e}")
+                } else {
+                    format!(
+                        "Failed to download from GitHub Releases: {e}\n\
+                         Help: set BROWSER4_OSS_BASE_URL to use an OSS mirror, \
+                         or try a specific --tag."
+                    )
+                }
+            })?;
             eprintln!(
                 "Downloaded {} bytes for Browser4 runtime bundle.",
                 downloaded.bytes_written
