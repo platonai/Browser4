@@ -208,11 +208,19 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     if cmd.name == "install" {
         lines.push("Notes:".to_string());
         lines.push(
-            "  - Downloads the self-contained Browser4 runtime bundle for the current OS/architecture from GitHub Releases."
+            "  - Downloads the self-contained Browser4 runtime bundle for the current OS/architecture."
                 .to_string(),
         );
         lines.push(
             "  - The bundle contains all dependency jars, a minimal `jlink`-built JRE, and platform launcher scripts."
+                .to_string(),
+        );
+        lines.push(
+            "  - Probes configured download mirrors in order and uses the first reachable one."
+                .to_string(),
+        );
+        lines.push(
+            "  - When no --tag is given the latest release is resolved automatically."
                 .to_string(),
         );
         lines.push(String::new());
@@ -220,6 +228,31 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  browser4-cli install".to_string());
         lines.push("  browser4-cli install --tag=v4.9.3".to_string());
         lines.push("  browser4-cli install --tag=4.9.3 --force".to_string());
+    }
+
+    if cmd.name == "upgrade" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Convenience wrapper around `install` that upgrades the runtime to a newer version."
+                .to_string(),
+        );
+        lines.push(
+            "  - When the requested version is already installed, the download is skipped."
+                .to_string(),
+        );
+        lines.push(
+            "  - After upgrading, restart the server: browser4-cli stop && browser4-cli open <url>"
+                .to_string(),
+        );
+        lines.push(
+            "  - Supports the same mirror selection and proxy configuration as `install`."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli upgrade".to_string());
+        lines.push("  browser4-cli upgrade v4.11.0".to_string());
+        lines.push("  browser4-cli upgrade --force".to_string());
     }
 
     if cmd.name == "uninstall" {
@@ -478,6 +511,7 @@ mod tests {
         assert!(help.contains("snapshot"));
         assert!(help.contains("install"));
         assert!(help.contains("uninstall"));
+        assert!(help.contains("upgrade"));
         assert!(help.contains("ArrowLeft"));
         assert!(help.contains("Evaluate JavaScript expression on page or element"));
         assert!(help.contains("Core:"));
@@ -527,6 +561,19 @@ mod tests {
         assert!(help.contains("dependency jars, a minimal `jlink`-built JRE"));
         assert!(help.contains("browser4-cli install --tag=v4.9.3"));
         assert!(help.contains("--force"));
+        assert!(help.contains("configured download mirrors"));
+    }
+
+    #[test]
+    fn test_generate_command_help_upgrade() {
+        let cmds = all_commands();
+        let upgrade = cmds.iter().find(|c| c.name == "upgrade").unwrap();
+        let help = generate_command_help(upgrade);
+        assert!(help.contains("browser4-cli upgrade"));
+        assert!(help.contains("Convenience wrapper around `install`"));
+        assert!(help.contains("restart the server"));
+        assert!(help.contains("--force"));
+        assert!(help.contains("mirror selection"));
     }
 
     #[test]
