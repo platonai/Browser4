@@ -37,6 +37,28 @@ brew install browser4-cli
 cargo install browser4-cli
 ```
 
+### Standalone Installer Scripts (no npm / Rust / Homebrew needed)
+
+Bootstrap the native binary directly with a single command:
+
+**Windows (PowerShell):**
+```powershell
+Invoke-WebRequest -Uri "https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1" -OutFile "$env:TEMP\install-browser4-cli.ps1"
+powershell -ExecutionPolicy Bypass -File "$env:TEMP\install-browser4-cli.ps1"
+```
+
+**Linux / macOS (bash):**
+```bash
+curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash
+```
+
+Or run the scripts locally from a cloned repo:
+- `cli/scripts/install-browser4-cli.ps1` (Windows)
+- `cli/scripts/install-browser4-cli.sh` (Linux / macOS / Git Bash)
+
+See [Standalone CLI Installer Scripts](../docs/cli-standalone-install.md) for
+the full option reference, supported platforms, and examples.
+
 ### From Source
 
 ```bash
