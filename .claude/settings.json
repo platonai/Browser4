@@ -29,7 +29,9 @@
       "Bash(cp keep-me-at-the-end-to-fix-claude-settings)",
       "Bash(cp keep-me-at-the-end-to-fix-claude-settings)",
       "Bash(cp keep-me-at-the-end-to-fix-claude-settings)",
-      "Bash(rustup toolchain *)"
+      "Bash(rustup toolchain *)",
+      "Bash(chmod +x bin/release/download-release-assets.sh)",
+      "Bash(bash -n bin/release/download-release-assets.sh)"
     ]
   }
 }
