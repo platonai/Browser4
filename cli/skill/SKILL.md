@@ -12,7 +12,25 @@ Browser automation CLI for AI agents.
 - Built-in agent loop for autonomous agents with tool use and reasoning capabilities
 - Data extraction and summarization tools for processing web content
 
-Install: `npm i -g browser4-cli`
+## Installation
+
+Installs browser4-cli globally using npm (Requires Node.js):
+
+```shell
+npm install -g browser4-cli
+```
+
+Bootstrap the native binary directly with a single command:
+
+**Windows (PowerShell):**
+```powershell
+irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex
+```
+
+**Linux / macOS (bash):**
+```bash
+curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash
+```
 
 Optional backend runtime install: `browser4-cli install`
 
@@ -459,4 +477,6 @@ browser4-cli close
 
 ## Specific tasks
 
+* **Agent command** [references/agent.md](references/agent.md)
+* **Smarm command** [references/swarm.md](references/swarm.md)
 * **Storage state (cookies, localStorage)** [references/storage-state.md](references/storage-state.md)
