@@ -45,7 +45,8 @@ Just ask any LLM agent to use browser4-cli for browser interactions, and it will
 
 ```shell
 $prompt = @"
-Install https://raw.githubusercontent.com/platonai/Browser4/refs/heads/main/cli/skill/SKILL.md and use browser4-cli and perform the following task:
+Read https://raw.githubusercontent.com/platonai/Browser4/refs/heads/main/cli/skill/SKILL.md
+and install browser4-cli for browser automation to perform the following task:
 
 1. go to amazon.com
 2. search for pens to draw on whiteboards
@@ -57,6 +58,26 @@ copilot -p "$prompt"
 # claude "$prompt"
 ```
 
+### Installation
+
+Installs browser4-cli globally using npm (Requires Node.js):
+
+```shell
+npm install -g browser4-cli
+```
+
+Bootstrap the native binary directly with a single command:
+
+**Windows (PowerShell):**
+```powershell
+irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex
+```
+
+**Linux / macOS (bash):**
+```bash
+curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash
+```
+
 ### CLI & SKILLS
 
 Browser4 CLI is a powerful command-line interface for direct browser control and automation, designed for both human
@@ -65,11 +86,7 @@ users and AI agents. It provides a simple syntax to perform complex browser inte
 Browser4 CLI is compatible with Playwright and supports a wide range of commands for navigation, interaction, and data extraction.
 It can be used in scripts, terminal sessions, or integrated into AI agents through SKILLS.
 
-Installs browser4-cli globally using npm:
-
-```shell
-npm install -g browser4-cli
-```
+Commands are designed to be intuitive and composable, allowing you to chain multiple actions together for complex workflows.
 
 ```shell
 # Open browser4 without navigation
@@ -123,9 +140,6 @@ browser4-cli close
 ```
 
 ## Advanced commands
-
-Some advanced commands are intentionally omitted from the global `browser4-cli help` summary.
-Query them explicitly when needed:
 
 ```bash
 browser4-cli help batch
@@ -195,7 +209,7 @@ browser4-cli swarm create \
 # 2) Submit URLs as scrape jobs (direct URL + seed file)
 browser4-cli swarm submit https://example.com/direct \
   --seed-file=./urls.txt \
-  --refresh --parse --store-content
+  --refresh --store-content
 
 # 3) Poll and fetch the result
 browser4-cli swarm status scrape-task-4
@@ -223,7 +237,7 @@ browser4-cli swarm query --sql @query.sql --seed-file=./urls.txt --refresh --par
 
 Key notes:
 - Seed files are plain text, one URL per line; `#` comments and blank lines are ignored.
-- Both `swarm submit` and `swarm query` accept `--seed-file`, `--deadline`, `--expires`, `--refresh`, `--parse`, `--store-content`.
+- Both `swarm submit` and `swarm query` accept `--seed-file`, `--deadline`, `--expires`, `--refresh`, `--store-content`.
 - All swarm commands return a task ID; track progress with `swarm status` / `swarm result`.
 - Use `@url` in X-SQL templates — it is replaced with the target URL server-side.
 
