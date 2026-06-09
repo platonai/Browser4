@@ -105,6 +105,7 @@ derby.log
 !*/**/src/**/target
 /cron.log
 /.vscode/settings.json
+settings.local.json
 /user-data-dir-0/
 /user-data-dir-1/
 /user-data-dir-2/
