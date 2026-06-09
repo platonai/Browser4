@@ -4,6 +4,12 @@ name: Sync Release to Aliyun OSS
 on:
   release:
     types: [ published ]
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag to sync (e.g. v1.2.3)'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -12,36 +18,46 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
+      - name: Resolve Tag
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Determine tag: release payload or manual dispatch input
+          if [[ -n "${{ github.event.release && github.event.release.tag_name || '' }}" ]]; then
+            TAG_NAME="${{ github.event.release.tag_name }}"
+            RELEASE_URL="${{ github.event.release.html_url }}"
+            ASSETS_COUNT="${{ github.event.release.assets_count || 0 }}"
+          elif [[ -n "${{ inputs.tag_name || '' }}" ]]; then
+            TAG_NAME="${{ inputs.tag_name }}"
+            # Validate the tag exists and fetch release info
+            RELEASE_JSON=$(gh release view "$TAG_NAME" --json name,url,assets --jq '.')
+            RELEASE_URL=$(echo "$RELEASE_JSON" | jq -r '.url')
+            ASSETS_COUNT=$(echo "$RELEASE_JSON" | jq '.assets | length')
+          else
+            echo "::error::No release tag available"
+            exit 1
+          fi
+
+          echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+          echo "release_url=${RELEASE_URL}" >> "$GITHUB_OUTPUT"
+          echo "assets_count=${ASSETS_COUNT}" >> "$GITHUB_OUTPUT"
+          echo "Resolved release: ${TAG_NAME} (${ASSETS_COUNT} assets)"
+
       - name: Download Release Assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          TAG_NAME="${{ steps.resolve.outputs.tag_name }}"
           mkdir -p release-assets
 
-          # Parse all assets from the release payload:
-          # github.event.release.assets is an array of { name, url, size, ... }.
-          readarray -t assets < <(echo '${{ toJson(github.event.release.assets) }}' | jq -r '.[] | "\(.name)\t\(.url)"')
-
-          if [[ ${#assets[@]} -eq 0 ]]; then
-            echo "::warning::No assets found in release ${{ github.event.release.tag_name }}"
-            exit 0
-          fi
-
-          echo "Found ${#assets[@]} asset(s) in release ${{ github.event.release.tag_name }}"
-
-          for asset_line in "${assets[@]}"; do
-            IFS=$'\t' read -r name url <<< "$asset_line"
-            echo "  Downloading: $name"
-            curl -fsSL \
-              -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              -H "Accept: application/octet-stream" \
-              "$url" \
-              -o "release-assets/$name"
-          done
+          gh release download "$TAG_NAME" --dir release-assets
 
           echo ""
-          echo "All assets downloaded:"
+          echo "Assets downloaded:"
           ls -lh release-assets/
 
       - name: Install ossutil
@@ -59,7 +75,7 @@ jobs:
           OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
         run: |
           set -euo pipefail
-          TAG_NAME="${{ github.event.release.tag_name }}"
+          TAG_NAME="${{ steps.resolve.outputs.tag_name }}"
 
           uploaded=0
           failed=0
@@ -90,15 +106,59 @@ jobs:
 
           echo "✅ All ${uploaded} release assets synced to OSS"
 
+      - name: Create latest symlinks
+        env:
+          OSS_ENDPOINT: oss-cn-beijing.aliyuncs.com
+          OSS_BUCKET: web-insight
+          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+        run: |
+          set -euo pipefail
+          TAG_NAME="${{ steps.resolve.outputs.tag_name }}"
+
+          created=0
+          failed=0
+
+          for asset in release-assets/*; do
+            [[ -f "$asset" ]] || continue
+            asset_name=$(basename "$asset")
+
+            # The versioned object already uploaded
+            target="oss://${OSS_BUCKET}/releases/download/${TAG_NAME}/${asset_name}"
+            # The symlink pointing to it
+            symlink="oss://${OSS_BUCKET}/releases/download/latest/${asset_name}"
+
+            echo "Creating symlink: ${symlink} → ${target}"
+            if ./ossutil symlink put "$symlink" "$target" \
+              -e "$OSS_ENDPOINT" \
+              --retry-times 3; then
+              ((created++)) || true
+            else
+              echo "::error::Failed to create symlink for $asset_name"
+              ((failed++)) || true
+            fi
+          done
+
+          echo ""
+          echo "Symlinks: ${created} created, ${failed} failed"
+
+          if [[ $failed -gt 0 ]]; then
+            echo "::error::${failed} symlink(s) failed to create"
+            exit 1
+          fi
+
+          echo "🔗 All ${created} latest symlinks created"
+
       - name: Sync Summary
         if: always()
         run: |
           {
             echo "## ☁️ Aliyun OSS Sync"
             echo ""
-            echo "- **Release**: ${{ github.event.release.tag_name }}"
-            echo "- **Release URL**: ${{ github.event.release.html_url }}"
-            echo "- **Assets**: ${{ github.event.release.assets_count || 0 }}"
-            echo "- **OSS Bucket**: \`oss://web-insight/releases/download/${{ github.event.release.tag_name }}/\`"
+            echo "- **Release**: ${{ steps.resolve.outputs.tag_name }}"
+            echo "- **Release URL**: ${{ steps.resolve.outputs.release_url }}"
+            echo "- **Assets**: ${{ steps.resolve.outputs.assets_count }}"
+            echo "- **OSS Bucket**: \`oss://web-insight/releases/download/${{ steps.resolve.outputs.tag_name }}/\`"
+            echo "- **Latest symlink**: \`oss://web-insight/releases/download/latest/\`"
             echo "- **Status**: ${{ job.status }}"
           } >> "$GITHUB_STEP_SUMMARY"
