@@ -9,20 +9,20 @@ English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platon
 <!-- TOC -->
 **Table of Contents**
 - [🤖 Browser4](#-browser4)
-    - [🌟 Introduction](#-introduction)
-        - [✨ Key Capabilities](#-key-capabilities)
-    - [💡 Usage Examples](#-usage-examples)
-        - [Quick Start](#quick-start)
-        - [CLI \& SKILLS](#cli--skills)
-    - [Advanced commands](#advanced-commands)
-        - [Agent and Swarm CLI](#agent-and-swarm-cli)
-    - [🚀 Native API Quick Start](#-native-api-quick-start)
-        - [Auto Extraction](#auto-extraction)
-    - [📦 Modules Overview](#-modules-overview)
-    - [🤝 Support \& Community](#-support--community)
-    - [📜 Documentation](#-documentation)
-    - [🔧 Proxy Configuration - Unblock Website Access](#-proxy-configuration---unblock-website-access)
-    - [License](#license)
+  - [🌟 Introduction](#-introduction)
+    - [✨ Key Capabilities](#-key-capabilities)
+  - [📦 Installation](#-installation)
+  - [💡 Usage Examples](#-usage-examples)
+    - [Quick Start](#quick-start)
+    - [CLI & SKILLS](#cli--skills)
+    - [Agent and Swarm CLI](#agent-and-swarm-cli)
+  - [🚀 Build from Source](#-build-from-source)
+  - [🧬 Auto Extraction](#-auto-extraction)
+  - [📦 Modules Overview](#-modules-overview)
+  - [🤝 Support & Community](#-support--community)
+  - [📜 Documentation](#-documentation)
+  - [🔧 Proxy Configuration](#-proxy-configuration---unblock-website-access)
+  - [License](#license)
 <!-- /TOC -->
 
 ## 🌟 Introduction
@@ -33,9 +33,29 @@ English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platon
 
 * 👽 **Browser Agents** — Fully autonomous browser agents that reason, plan, and execute end-to-end tasks.
 * 🤖 **Browser Automation** — High-performance automation for workflows, navigation, and data extraction.
-* ⚙️ **Machine Learning Agent** - Learns field structures across complex pages without consuming tokens.
-* ⚡  **Extreme Performance** — Fully coroutine-safe; supports 100k ~ 200k complex page visits per machine per day.
+* ⚙️ **Machine Learning Agent** — Learns field structures across complex pages without consuming tokens.
+* ⚡ **Extreme Performance** — Fully coroutine-safe; supports 100k ~ 200k complex page visits per machine per day.
 * 🧬 **Data Extraction** — Hybrid of LLM, ML, and selectors for clean data across chaotic pages.
+
+## 📦 Installation
+
+Install browser4-cli globally using npm (requires Node.js):
+
+```shell
+npm install -g browser4-cli
+```
+
+Or bootstrap the native binary directly with a single command:
+
+**Windows (PowerShell):**
+```powershell
+irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex
+```
+
+**Linux / macOS (bash):**
+```bash
+curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash
+```
 
 ## 💡 Usage Examples
 
@@ -56,26 +76,6 @@ and install browser4-cli for browser automation to perform the following task:
 
 copilot -p "$prompt"
 # claude "$prompt"
-```
-
-### Installation
-
-Installs browser4-cli globally using npm (Requires Node.js):
-
-```shell
-npm install -g browser4-cli
-```
-
-Bootstrap the native binary directly with a single command:
-
-**Windows (PowerShell):**
-```powershell
-irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex
-```
-
-**Linux / macOS (bash):**
-```bash
-curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash
 ```
 
 ### CLI & SKILLS
@@ -139,7 +139,7 @@ echo '[
 browser4-cli close
 ```
 
-## Advanced commands
+For detailed help on advanced subcommands:
 
 ```bash
 browser4-cli help batch
@@ -243,7 +243,7 @@ Key notes:
 
 ---
 
-## 🚀 Build from source
+## 🚀 Build from Source
 
 **Prerequisites**: Java 17+
 
@@ -272,13 +272,13 @@ Key notes:
 
 ---
 
-### Auto Extraction
+## 🧬 Auto Extraction
 
 Automatic, large-scale, high-precision field discovery and extraction powered by self-/unsupervised machine learning — no LLM API calls, no tokens, deterministic and fast.
 
 **What it does:**
 - Learns every extractable field on item/detail pages (often dozens to hundreds) with high precision.
-- Open source when browser4 has 10K stars on GitHub.
+- Open source when Browser4 has 10K stars on GitHub.
 
 **Why not just LLMs?**
 - LLM extraction adds latency, cost, and token limits.
