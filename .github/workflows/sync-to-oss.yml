@@ -71,7 +71,11 @@ jobs:
       - name: Install ossutil
         run: |
           set -euo pipefail
-          wget -q https://gosspublic.alicdn.com/ossutil/2.0.3/ossutil-linux-amd64 -O ossutil
+          OSSUTIL_VERSION="2.2.1"
+          curl -sL "https://gosspublic.alicdn.com/ossutil/v2/${OSSUTIL_VERSION}/ossutil-${OSSUTIL_VERSION}-linux-amd64.zip" \
+            -o ossutil.zip
+          unzip -q ossutil.zip
+          mv "ossutil-${OSSUTIL_VERSION}-linux-amd64/ossutil" ./ossutil
           chmod +x ossutil
           ./ossutil --version
 
