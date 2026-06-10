@@ -266,7 +266,7 @@ fn mirror_download_url(mirror: &DownloadMirror, tag: Option<&str>, asset_name: &
 /// rather than an HTTP round-trip — it's resilient to rate limits and
 /// redirects.
 fn mirror_is_reachable(mirror: &DownloadMirror) -> bool {
-    use std::net::TcpStream;
+    use std::net::{TcpStream, ToSocketAddrs};
 
     let timeout_secs = env::var(MIRROR_REACHABILITY_TIMEOUT_ENV)
         .ok()
@@ -286,10 +286,18 @@ fn mirror_is_reachable(mirror: &DownloadMirror) -> bool {
     };
 
     let timeout = Duration::from_secs(timeout_secs);
-    match TcpStream::connect_timeout(&host_port.parse().unwrap(), timeout) {
-        Ok(_) => true,
-        Err(_) => false,
+    let addrs = match host_port.to_socket_addrs() {
+        Ok(addrs) => addrs,
+        Err(_) => return false,
+    };
+
+    for addr in addrs {
+        if TcpStream::connect_timeout(&addr, timeout).is_ok() {
+            return true;
+        }
     }
+
+    false
 }
 
 /// Select the first reachable mirror from the list.
@@ -3423,6 +3431,23 @@ mod tests {
         assert!(
             !mirror_is_reachable(&mirror),
             "mirror should not be reachable when nothing listens on its port"
+        );
+    }
+
+    #[test]
+    fn test_mirror_is_reachable_handles_localhost_without_panicking() {
+        let free_port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0")
+                .expect("bind for free localhost port");
+            listener.local_addr().unwrap().port()
+        };
+        let mirror = DownloadMirror {
+            name: "test".to_string(),
+            base_url: format!("https://localhost:{free_port}"),
+        };
+        assert!(
+            !mirror_is_reachable(&mirror),
+            "mirror should not panic when the host is localhost and no listener is bound"
         );
     }
 
