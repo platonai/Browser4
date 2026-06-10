@@ -120,7 +120,7 @@ jobs:
 
           echo "✅ All ${uploaded} release assets synced to OSS"
 
-      - name: Create latest symlinks
+      - name: Copy to latest/
         env:
           OSS_ENDPOINT: oss-cn-beijing.aliyuncs.com
           OSS_REGION: cn-beijing
@@ -131,39 +131,38 @@ jobs:
           set -euo pipefail
           TAG_NAME="${{ steps.resolve.outputs.tag_name }}"
 
-          created=0
+          copied=0
           failed=0
 
           for asset in release-assets/*; do
             [[ -f "$asset" ]] || continue
             asset_name=$(basename "$asset")
 
-            # The versioned object already uploaded
-            target="oss://${OSS_BUCKET}/releases/download/${TAG_NAME}/${asset_name}"
-            # The symlink pointing to it
-            symlink="oss://${OSS_BUCKET}/releases/download/latest/${asset_name}"
+            # Server-side copy from versioned path to latest/ prefix
+            source="oss://${OSS_BUCKET}/releases/download/${TAG_NAME}/${asset_name}"
+            dest="oss://${OSS_BUCKET}/releases/download/latest/${asset_name}"
 
-            echo "Creating symlink: ${symlink} → ${target}"
-            if ./ossutil symlink put "$symlink" "$target" \
+            echo "Copying: ${source} → ${dest}"
+            if ./ossutil cp "$source" "$dest" \
               -e "$OSS_ENDPOINT" \
               --region "$OSS_REGION" \
               --retry-times 3; then
-              ((created++)) || true
+              ((copied++)) || true
             else
-              echo "::error::Failed to create symlink for $asset_name"
+              echo "::error::Failed to copy $asset_name to latest/"
               ((failed++)) || true
             fi
           done
 
           echo ""
-          echo "Symlinks: ${created} created, ${failed} failed"
+          echo "Latest copies: ${copied} created, ${failed} failed"
 
           if [[ $failed -gt 0 ]]; then
-            echo "::error::${failed} symlink(s) failed to create"
+            echo "::error::${failed} latest copy(s) failed"
             exit 1
           fi
 
-          echo "🔗 All ${created} latest symlinks created"
+          echo "🔗 All ${copied} assets copied to latest/"
 
       - name: Upload CLI installer scripts to OSS
         env:
@@ -224,7 +223,7 @@ jobs:
             echo "- **Release URL**: ${{ steps.resolve.outputs.release_url }}"
             echo "- **Assets**: ${{ steps.resolve.outputs.assets_count }}"
             echo "- **OSS Bucket**: \`oss://browser4/releases/download/${{ steps.resolve.outputs.tag_name }}/\`"
-            echo "- **Latest symlink**: \`oss://browser4/releases/download/latest/\`"
+            echo "- **Latest copy**: \`oss://browser4/releases/download/latest/\`"
             echo "- **CLI installer scripts**:"
             echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1\`"
             echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh\`"
