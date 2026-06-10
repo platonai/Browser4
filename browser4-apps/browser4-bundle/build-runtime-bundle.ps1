@@ -107,7 +107,7 @@ Build with a custom output archive name and explicit main class.
 Never overwrite an existing bundle archive (throws if the target already exists).
 
 .NOTES
-Requires: PowerShell 7+, Maven (mvn / mvnw), JDK 16+ (for jlink/jdeps/jpackage).
+Requires: PowerShell 5.1+ (pwsh or powershell.exe), Maven (mvn / mvnw), JDK 16+ (for jlink/jdeps/jpackage).
 On Windows the script uses mvnw.cmd from the repository root; on Linux/macOS it
 uses the mvnw shell script.
 #>
@@ -136,34 +136,70 @@ if ($Help) {
     exit 0
 }
 
-function Assert-PowerShellVersion {
-    $currentVersion = $PSVersionTable.PSVersion
-    if (-not $currentVersion -or $currentVersion.Major -lt 7) {
-        throw "build-runtime-bundle.ps1 requires PowerShell 7+ (current: $currentVersion). Use pwsh to run this script."
-    }
-}
-
-Assert-PowerShellVersion
+# --------------------------------------------------------------------------
+# Runtime compatibility shim — allows the script to run under both
+# powershell.exe (Windows PowerShell 5.1, .NET Framework) and
+# pwsh (PowerShell 7+, .NET).  On .NET Framework the
+# System.Runtime.InteropServices.RuntimeInformation type may not be
+# auto-loaded; we try to load it explicitly and fall back to
+# Windows-only assumptions if it is unavailable (powershell.exe is
+# Windows-only, so the fallback is safe).
+# --------------------------------------------------------------------------
+$script:_runtimeInfoAvailable = $false
+try {
+    Add-Type -AssemblyName System.Runtime.InteropServices.RuntimeInformation -ErrorAction Stop
+} catch {}
+try {
+    $null = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+        [System.Runtime.InteropServices.OSPlatform]::Windows)
+    $script:_runtimeInfoAvailable = $true
+} catch {}
 
 function Get-IsWindows {
-    return [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
-        [System.Runtime.InteropServices.OSPlatform]::Windows
-    )
+    if ($script:_runtimeInfoAvailable) {
+        return [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+            [System.Runtime.InteropServices.OSPlatform]::Windows)
+    }
+    # powershell.exe runs only on Windows — this fallback is correct.
+    return $true
 }
 
 function Get-IsLinux {
-    return [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
-        [System.Runtime.InteropServices.OSPlatform]::Linux
-    )
+    if ($script:_runtimeInfoAvailable) {
+        return [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+            [System.Runtime.InteropServices.OSPlatform]::Linux)
+    }
+    return $false
 }
 
 function Get-IsMacOS {
-    return [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
-        [System.Runtime.InteropServices.OSPlatform]::OSX
-    )
+    if ($script:_runtimeInfoAvailable) {
+        return [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+            [System.Runtime.InteropServices.OSPlatform]::OSX)
+    }
+    return $false
+}
+
+function Get-OSArchitecture {
+    if ($script:_runtimeInfoAvailable) {
+        return [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+    }
+    # Fallback for .NET Framework 2.0+ — powershell.exe is Windows-only
+    if ([Environment]::Is64BitOperatingSystem) { return 'X64' }
+    return 'X86'
 }
 
 function Get-AssetNameForCurrentPlatform {
+    # Fast path when RuntimeInformation is unavailable (powershell.exe on
+    # older .NET Framework) — the script is Windows-only, so skip the
+    # platform/architecture type lookups entirely.
+    if (-not $script:_runtimeInfoAvailable) {
+        if (-not [Environment]::Is64BitOperatingSystem) {
+            throw "Windows runtime bundles currently support only X64."
+        }
+        return 'browser4-bundle-runtime-windows-x64.zip'
+    }
+
     $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
     if (Get-IsWindows) {
         if ($arch -ne [System.Runtime.InteropServices.Architecture]::X64) {
