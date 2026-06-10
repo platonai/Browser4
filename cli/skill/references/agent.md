@@ -1,58 +1,47 @@
 # Agent — Autonomous Browser Task Execution
 
-Submit natural-language tasks to Browser4's backend AI agent and let it plan and execute browser actions autonomously. The agent reasons about the page, decides which actions to take, and completes the task asynchronously — no need to know page structure or element refs ahead of time.
+Submit natural-language tasks and let Browser4's AI agent plan and execute browser actions autonomously. The agent reasons about the page, decides which actions to take, and completes the task asynchronously — no need to know page structure or element refs ahead of time.
 
-Browser4-cli agent command requires LLM API key.
+## Prerequisites
+
+Agent commands require an LLM API key. Configure one of the following providers via environment variables:
+
+| Provider | Required Variables |
+|---|---|
+| DeepSeek | `DEEPSEEK_API_KEY` |
+| OpenRouter | `OPENROUTER_API_KEY` |
+| Volcengine (ByteDance) | `VOLCENGINE_API_KEY`, `VOLCENGINE_MODEL_NAME`, `VOLCENGINE_BASE_URL` |
+| OpenAI-compatible | `OPENAI_API_KEY`, `OPENAI_MODEL_NAME`, `OPENAI_BASE_URL` |
+| Aliyun Qwen (DashScope) | `OPENAI_API_KEY`, `OPENAI_MODEL_NAME`, `OPENAI_BASE_URL` |
+
+Examples:
 
 ```bash
-export OPENROUTER_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+# DeepSeek
+export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
 
-# Uncomment to use OpenRouter provider
+# OpenRouter
+export OPENROUTER_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+export OPENROUTER_MODEL_NAME=openai/gpt-5.4
+export OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 
-# export OPENROUTER_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-# export OPENROUTER_MODEL_NAME=openai/gpt-5.4
-# export OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+# Volcengine (ByteDance)
+export VOLCENGINE_API_KEY=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+export VOLCENGINE_MODEL_NAME=doubao-seed-2-0-pro-260215
+export VOLCENGINE_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
 
-# export OPENROUTER_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-# export OPENROUTER_MODEL_NAME=bytedance-seed/seed-2.0-lite
-# export OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+# OpenAI-compatible
+export OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
+export OPENAI_MODEL_NAME=gpt-4o
+export OPENAI_BASE_URL=https://api.openai.com/v1
 
-
-# Uncomment to use Volcengine provider (ByteDance)
-
-# export VOLCENGINE_API_KEY=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-# export VOLCENGINE_MODEL_NAME=doubao-seed-2-0-pro-260215
-# export VOLCENGINE_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
-
-
-# Uncomment to use the official DeepSeek provider
-
-# export DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
-
-# Uncomment to use an OpenAI-compatible provider
-
-# export OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
-# export OPENAI_MODEL_NAME=gpt-4o
-# export OPENAI_BASE_URL=https://api.openai.com/v1
-
-# Aliyun Qwen via DashScope (OpenAI-compatible API)
-
-# export OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
-# export OPENAI_MODEL_NAME=qwen-plus
-# export OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+# Aliyun Qwen via DashScope
+export OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
+export OPENAI_MODEL_NAME=qwen-plus
+export OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 ```
 
-## Architecture
-
-The agent lifecycle follows a submit → poll → fetch pattern, all driven through the MCP `command_run` / `command_status` / `command_result` tools on the Browser4 backend:
-
-```
-agent run <task>      →  submits a natural-language task, returns immediately with a task ID
-agent status <id>     →  polls the task's progress (JSON payload with status, state, messages)
-agent result <id>     →  fetches the completed task's output (plain text or structured JSON)
-```
-
-All agent subcommands use the spaced form (`agent <subcommand>`, not `agent-<subcommand>`). They are task-ID based and do not depend on the current saved CLI browser session slot. Agent subcommands are advanced commands and are not supported in `batch` mode.
+If no valid LLM key is configured, `agent run` fails fast with a clear error message rather than silently queuing a doomed task.
 
 ## Comparison: Standard Commands vs Agent vs Swarm
 
@@ -64,50 +53,38 @@ All agent subcommands use the spaced form (`agent <subcommand>`, not `agent-<sub
 
 ## agent run
 
-Submit a natural-language task for autonomous execution. The backend agent will open a browser, navigate, interact with pages, and complete the task asynchronously. Returns a task ID immediately.
+Submit a natural-language task for autonomous execution. The agent opens a browser, navigates, interacts with pages, and completes the task asynchronously. Returns a task ID immediately.
 
 ```bash
-browser4-cli agent run "Open example.com and summarize the hero section"
+browser4-cli agent run "Open browser4.io and summarize the hero section"
 ```
 
-### Positional Arguments
+### Arguments
 
 | Argument | Required | Description |
 |---|---|---|
 | `task` | **Yes** | Natural-language description of what the agent should accomplish. Can be as simple as "navigate to example.com and take a screenshot" or as complex as a multi-step research workflow. |
 
-### Behavior
+### Output
 
-- Submits the task to the backend via `command_run` and prints a task ID immediately.
-- The task runs asynchronously on the backend — the CLI does not block waiting for completion.
-- On success, prints `Task submitted: <task-id>` plus a ready-to-copy follow-up command:
-  ```
-  Task submitted: agent-task-1
-  Next: browser4-cli agent status agent-task-1
-  ```
-- Performs a short status probe after submission. If the backend indicates a missing LLM/API key configuration, the command fails fast with a clear error message rather than silently queuing a doomed task.
+On success, prints the task ID and a ready-to-copy follow-up command:
 
-### Error Handling
-
-If the backend is not configured with a valid LLM key, `agent run` exits with a non-zero code and prints:
 ```
-Agent task requires an LLM key and cannot execute.
-The LLM is not configured, see docs/config/llm/llm-config.md
+Task submitted: agent-task-1
+Next: browser4-cli agent status agent-task-1
 ```
 
-This fast-fail check happens during the post-submission probe, so the task ID is still generated but the CLI surfaces the configuration error immediately.
+The task runs asynchronously — the CLI returns immediately. Use `agent status` to track progress and `agent result` to retrieve the output once complete.
 
-### Task Descriptions — Best Practices
+### Writing Effective Task Descriptions
 
-Write tasks that give the agent clear goals without prescribing exact steps:
+Describe **what** you want, not **how** to do it. The agent discovers elements, waits for pages to load, and adapts to dynamic content on its own.
 
 | Good | Avoid |
 |---|---|
 | "Go to amazon.com, search for 'wireless headphones', and extract the top 5 product titles and prices" | "Click e15, then type 'wireless headphones' into e22, then click e30" |
 | "Log into example.com with user@example.com / password123, then navigate to the dashboard and summarize the stats" | "Fill e1 with user@example.com, fill e2 with password123" |
 | "Open the GitHub trending page and list the top 3 repositories with their star counts" | (let the agent discover the page structure) |
-
-The agent works best when you describe **what** you want, not **how** to do it. It discovers elements, waits for pages to load, and adapts to dynamic content on its own.
 
 ## agent status
 
@@ -117,19 +94,15 @@ Poll the progress of a running agent task.
 browser4-cli agent status agent-task-1
 ```
 
-### Positional Arguments
+### Arguments
 
 | Argument | Required | Description |
 |---|---|---|
 | `id` | **Yes** | Task ID returned by `agent run`. |
 
-### Behavior
+### Output
 
-- Reads task status from `command_status` on the backend and prints the returned JSON payload as-is.
-- The payload typically includes fields like `id`, `status`, `statusCode`, `processState`, `message`, `agentState`, `agentHistory`, and `commandResult`.
-- Status is poll-based — there is no streaming or push notification. You must call `agent status` repeatedly until the task completes.
-
-### Interpreting Status
+Returns the current task status as a JSON payload. Typical fields include `id`, `status`, `statusCode`, `processState`, `message`, `agentState`, `agentHistory`, and `commandResult`.
 
 ```json
 {
@@ -141,7 +114,7 @@ browser4-cli agent status agent-task-1
 }
 ```
 
-Common `status` values:
+### Status Values
 
 | Status | Meaning |
 |---|---|
@@ -150,7 +123,7 @@ Common `status` values:
 | `FAILED` | The task encountered an error. Inspect `message` and `statusCode` for details. |
 | `EXPECTATION_FAILED` | The task failed a precondition check (e.g., missing LLM configuration, status code 417). |
 
-Wait for `status: "COMPLETED"` (or a terminal error status) before calling `agent result`.
+Wait for `status: "COMPLETED"` (or another terminal status) before calling `agent result`. Polling is manual — call `agent status` repeatedly until the task reaches a terminal state.
 
 ## agent result
 
@@ -160,19 +133,15 @@ Fetch the completed output of an agent task.
 browser4-cli agent result agent-task-1
 ```
 
-### Positional Arguments
+### Arguments
 
 | Argument | Required | Description |
 |---|---|---|
 | `id` | **Yes** | Task ID returned by `agent run`. |
 
-### Behavior
+### Output
 
-- Reads the completed task result from `command_result` on the backend and prints the returned payload as-is.
-- Depending on the task, the result may be plain text (a summary, extracted data) or structured JSON (extracted records, structured output).
-- There is no fixed schema — the agent determines the output format based on the task description.
-
-### Example Results
+Returns the completed task output. The format depends on the task description — results may be plain text or structured JSON:
 
 **Plain text result (summarization task):**
 ```
@@ -191,11 +160,13 @@ information at iana.org.
 }
 ```
 
+Always confirm the task is complete via `agent status` before fetching the result. If the task is still running, the result may be incomplete or empty.
+
 ## Complete Workflow
 
 ```bash
 # 1) Submit an autonomous task
-browser4-cli agent run "Open example.com and summarize the hero section"
+browser4-cli agent run "Open browser4.io and summarize the hero section"
 
 # Output:
 #   Task submitted: agent-task-1
@@ -216,7 +187,7 @@ browser4-cli agent result agent-task-1
 
 ## Combining Agent with Standard Commands
 
-The agent operates independently of standard browser commands, but you can use them together:
+Agent tasks operate independently of standard browser sessions, but you can use them together:
 
 ```bash
 # Use standard commands to set up state, then delegate to the agent
@@ -232,7 +203,7 @@ browser4-cli agent result agent-task-2
 
 ## Related Commands
 
-The Agent category also includes two synchronous extraction/summarization commands that operate on the **current** browser session (unlike `agent run` which is autonomous and task-ID-based):
+The following synchronous commands also use AI but operate on the **current** browser session (unlike `agent run` which is autonomous and task-ID-based):
 
 ### extract
 
@@ -260,21 +231,19 @@ browser4-cli summarize --selector="#content"
 | Argument/Option | Required | Description |
 |---|---|---|
 | `instruction` | No | Summarization instruction. Defaults to a general summary if omitted. |
-| `--selector` | No | CSS selector to limit the scope of summarization to a specific page region. |
+| `--selector` | No | CSS selector to limit summarization to a specific page region. |
 
 ## Error Handling
 
-- `agent run` returns a non-zero exit code when the backend is unreachable or when the post-submission probe detects a missing LLM/API key configuration.
-- `agent status` prints the backend status payload as-is. If the task failed server-side, inspect the `status`, `statusCode`, and `message` fields in the returned JSON.
-- `agent result` prints the backend result payload as-is. If the task has not yet completed, the result may be incomplete or empty — always confirm the task is done via `agent status` first.
+- `agent run` returns a non-zero exit code when the backend is unreachable or when the LLM/API key is not configured.
+- `agent status` prints the status payload as-is. If the task failed, inspect the `status`, `statusCode`, and `message` fields in the returned JSON.
+- `agent result` prints the result payload as-is. Always confirm the task is done via `agent status` first — incomplete tasks may return empty or partial results.
 - If the backend is stopped or restarted while a task is running, the task may be lost. Poll `agent status` to confirm the task is still alive.
-- Task IDs are ephemeral — they are managed by the backend and may not persist across backend restarts.
+- Task IDs may not persist across backend restarts.
 
 ## Notes
 
-- Agent subcommands (`agent run`, `agent status`, `agent result`) are advanced commands and are not supported in `batch` mode.
-- The flat forms `agent-run`, `agent-status`, `agent-result` are rejected with a message directing users to the spaced form.
-- Agent tasks do not depend on the current CLI browser session slot — they manage their own browser sessions internally.
-- The backend agent reasons about pages using accessibility-tree snapshots, not screenshots. It discovers elements dynamically rather than requiring pre-known refs.
-- `extract` and `summarize` are synchronous commands that operate on the current session — they block until complete. Use `agent run` for asynchronous, autonomous multi-step tasks.
-- LLM/API key configuration is required for all agent commands. See the Browser4 backend documentation for LLM configuration.
+- Agent subcommands use the spaced form (`agent run`, not `agent-run`) and are not supported in `batch` mode.
+- Agent tasks manage their own browser sessions internally — they do not depend on the current CLI browser session slot.
+- `extract` and `summarize` are synchronous commands that block until complete. Use `agent run` for asynchronous, autonomous multi-step tasks.
+- LLM/API key configuration is required for all agent commands. See the Browser4 backend documentation for LLM configuration details.

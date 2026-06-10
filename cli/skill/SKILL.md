@@ -272,7 +272,7 @@ natural-language task asynchronously.
 Use the spaced `agent <subcommand>` form:
 
 ```bash
-browser4-cli agent run "Open example.com and summarize the hero section"
+browser4-cli agent run "Open browser4.io and summarize the hero section"
 browser4-cli agent status agent-task-1
 browser4-cli agent result agent-task-1
 ```
@@ -281,7 +281,7 @@ Recommended lifecycle:
 
 ```bash
 # 1) submit an autonomous task
-browser4-cli agent run "Open example.com and summarize the hero section"
+browser4-cli agent run "Open browser4.io and summarize the hero section"
 
 # 2) poll progress with the returned task id
 browser4-cli agent status agent-task-1

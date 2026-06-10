@@ -264,7 +264,7 @@ Like other advanced commands, they are intentionally omitted from the global
 Use the spaced `agent <subcommand>` form:
 
 ```shell
-browser4-cli agent run "Open example.com and summarize the hero section"
+browser4-cli agent run "Open browser4.io and summarize the hero section"
 browser4-cli agent status agent-task-1
 browser4-cli agent result agent-task-1
 ```

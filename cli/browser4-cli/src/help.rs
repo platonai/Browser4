@@ -167,7 +167,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push(
-            "  browser4-cli agent run \"Open example.com and summarize the hero section\""
+            "  browser4-cli agent run \"Open browser4.io and summarize the hero section\""
                 .to_string(),
         );
     }
