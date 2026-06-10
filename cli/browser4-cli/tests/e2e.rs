@@ -2713,6 +2713,255 @@ fn load_last_failed_scenarios() -> Vec<String> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Pre-build the Browser4 runtime bundle (Maven JAR + jlink assembly)
+// ---------------------------------------------------------------------------
+
+/// Walk up from the current directory looking for the Browser4 repository
+/// root (a directory that contains both `ROOT.md` and `pom.xml`).
+fn find_browser4_root_from_cwd() -> Option<PathBuf> {
+    let mut current = std::env::current_dir().ok()?;
+    loop {
+        if current.join("ROOT.md").is_file() && current.join("pom.xml").is_file() {
+            return Some(current);
+        }
+        if !current.pop() {
+            return None;
+        }
+    }
+}
+
+/// Resolve the Maven launcher (`mvnw` / `mvnw.cmd` / `mvn`) relative to the
+/// Browser4 repository root. Prefers the checked-in wrapper when available.
+fn resolve_maven_program_for_root(root: &Path) -> PathBuf {
+    let wrapper_name = if cfg!(windows) { "mvnw.cmd" } else { "mvnw" };
+    let wrapper = root.join(wrapper_name);
+    if wrapper.exists() {
+        return wrapper;
+    }
+    if cfg!(windows) {
+        PathBuf::from("mvn.cmd")
+    } else {
+        PathBuf::from("mvn")
+    }
+}
+
+/// Ensure the Browser4 runtime bundle is pre-built before the first scenario
+/// runs.  Without this step the CLI daemon builds everything inside the first
+/// `browser4-cli` child process, which can take minutes and exceeds the
+/// per-command timeout (default 120 s).
+///
+/// The function checks two artifacts independently, skipping each when its
+/// output already exists:
+/// 1. `Browser4Bundle.jar` (Maven `package`).
+/// 2. The full runtime bundle (PowerShell `build-runtime-bundle.ps1`).
+fn ensure_browser4_runtime_bundle_prebuilt() {
+    // When the user opted into a remote bundle or an external service, no
+    // local build is needed — the CLI daemon will skip it as well.
+    if force_remote_bundle_for_local_server() {
+        eprintln!("[e2e pre-build] --force-remote-bundle is active; skipping local build.");
+        return;
+    }
+    if external_service_url().is_some() {
+        eprintln!("[e2e pre-build] External Browser4 service configured; skipping local build.");
+        return;
+    }
+
+    let root = match find_browser4_root_from_cwd() {
+        Some(r) => r,
+        None => {
+            eprintln!(
+                "[e2e pre-build] Browser4 repository root not found; \
+                 skipping pre-build (the CLI daemon will handle it)."
+            );
+            return;
+        }
+    };
+
+    let bundle_dir = root.join("browser4-apps").join("browser4-bundle");
+    if !bundle_dir.is_dir() {
+        eprintln!(
+            "[e2e pre-build] browser4-bundle module not found at {}; skipping pre-build.",
+            bundle_dir.display()
+        );
+        return;
+    }
+
+    // ---- Step 1: Maven package (Browser4Bundle.jar) -----------------------
+
+    let jar_path = bundle_dir.join("target").join("Browser4Bundle.jar");
+    let jar_valid = jar_path.is_file()
+        && jar_path.metadata().map(|m| m.len() > 4_096).unwrap_or(false);
+
+    if jar_valid {
+        eprintln!(
+            "[e2e pre-build] Browser4Bundle.jar found at {}; skipping Maven.",
+            jar_path.display()
+        );
+    } else {
+        eprintln!(
+            "[e2e pre-build] Browser4Bundle.jar not found. Running Maven package \
+             (this may take a while on the first run)..."
+        );
+        let mvn = resolve_maven_program_for_root(&root);
+        let started = Instant::now();
+        let status = Command::new(&mvn)
+            .args([
+                "install",
+                "-Pall-main-modules,asset-bundle",
+                "-DskipTests",
+                "-q",
+            ])
+            .current_dir(&root)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .status();
+
+        match status {
+            Ok(s) if s.success() => {
+                eprintln!(
+                    "[e2e pre-build] Maven package completed in {:.1}s.",
+                    started.elapsed().as_secs_f64()
+                );
+            }
+            Ok(s) => {
+                eprintln!(
+                    "[e2e pre-build] Maven package exited with {}; \
+                     falling back to daemon-side build.",
+                    s.code().map_or_else(|| "signal".to_string(), |c| c.to_string())
+                );
+                return;
+            }
+            Err(error) => {
+                eprintln!(
+                    "[e2e pre-build] Failed to run Maven: {error}; \
+                     falling back to daemon-side build."
+                );
+                return;
+            }
+        }
+    }
+
+    // ---- Step 2: Platform runtime bundle (jlink + assembly) ----------------
+
+    // Detect the platform directory name that the build script produces.
+    // This mirrors `detect_current_runtime_bundle_platform` in daemon.rs.
+    let platform_dir_name = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("windows", "x86_64") => "browser4-bundle-runtime-windows-x64",
+        ("linux", "x86_64") => "browser4-bundle-runtime-linux-x64",
+        ("macos", "x86_64") => "browser4-bundle-runtime-darwin-x64",
+        ("macos", "aarch64") => "browser4-bundle-runtime-darwin-arm64",
+        _ => {
+            eprintln!(
+                "[e2e pre-build] Unsupported platform; skipping runtime bundle assembly."
+            );
+            return;
+        }
+    };
+
+    let work_dir = bundle_dir
+        .join("target")
+        .join("runtime-bundle")
+        .join("_work")
+        .join(platform_dir_name)
+        .join(platform_dir_name);
+
+    let lib_dir = work_dir.join("lib");
+    let java_exe = if cfg!(windows) { "java.exe" } else { "java" };
+    let java_path = work_dir.join("runtime").join("bin").join(java_exe);
+
+    let has_bundle = lib_dir.is_dir()
+        && fs::read_dir(&lib_dir)
+            .map(|mut entries| {
+                entries.any(|e| {
+                    e.ok()
+                        .and_then(|entry| entry.path().extension().map(|ext| ext == "jar"))
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false)
+        && java_path.is_file();
+
+    if has_bundle {
+        eprintln!(
+            "[e2e pre-build] Runtime bundle already assembled at {}.",
+            work_dir.display()
+        );
+        return;
+    }
+
+    let build_script = bundle_dir.join("build-runtime-bundle.ps1");
+    if !build_script.is_file() {
+        eprintln!(
+            "[e2e pre-build] Build script not found at {}; skipping runtime bundle assembly.",
+            build_script.display()
+        );
+        return;
+    }
+
+    eprintln!(
+        "[e2e pre-build] Assembling runtime bundle (jdeps + jlink; \
+         may take ~30–60 s)..."
+    );
+    let started = Instant::now();
+
+    // Use the same PowerShell invocation as the CLI daemon:
+    // powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "..."
+    let shell = if cfg!(windows) {
+        "powershell.exe"
+    } else {
+        "pwsh"
+    };
+
+    let script_path_escaped = build_script
+        .to_string_lossy()
+        .replace('\'', "''");
+
+    let ps_command = format!(
+        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; \
+         [Console]::ErrorEncoding = [System.Text.Encoding]::UTF8; \
+         & '{}' -SkipMavenInstall",
+        script_path_escaped
+    );
+
+    let status = Command::new(shell)
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &ps_command,
+        ])
+        .current_dir(&bundle_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {
+            eprintln!(
+                "[e2e pre-build] Runtime bundle assembled in {:.1}s.",
+                started.elapsed().as_secs_f64()
+            );
+        }
+        Ok(s) => {
+            eprintln!(
+                "[e2e pre-build] Build script exited with {}; \
+                 falling back to daemon-side build.",
+                s.code().map_or_else(|| "signal".to_string(), |c| c.to_string())
+            );
+        }
+        Err(error) => {
+            eprintln!(
+                "[e2e pre-build] Failed to run build script: {error}; \
+                 falling back to daemon-side build."
+            );
+        }
+    }
+}
+
 fn create_e2e_test_resources() -> E2ETestResources {
     let service_url = external_service_url();
     let is_external = service_url.is_some();
@@ -4067,6 +4316,10 @@ fn main() {
     if run_options.force_remote_bundle {
         std::env::set_var(FORCE_REMOTE_BUNDLE_ENV, "1");
     }
+
+    // Pre-build the Browser4 runtime bundle if it is missing so the first
+    // CLI command doesn't time out while the daemon runs Maven + jlink.
+    ensure_browser4_runtime_bundle_prebuilt();
 
     let mut resources = create_e2e_test_resources();
 
