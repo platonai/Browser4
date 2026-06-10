@@ -65,7 +65,7 @@ curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4
 
 ```shell
 $prompt = @"
-Install https://raw.githubusercontent.com/platonai/Browser4/refs/heads/main/cli/skill/SKILL.md and use browser4-cli and perform the following task:
+Read https://browser4.io/skill/SKILL.md and install browser4-cli for browser automation to perform the following task:
 
 1. go to amazon.com
 2. search for pens to draw on whiteboards
