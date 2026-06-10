@@ -374,7 +374,7 @@ browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql "
 browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql @query.sql
 
 # With load options and a seed file:
-browser4-cli swarm query --sql @query.sql --seed-file=./urls.txt --refresh --parse
+browser4-cli swarm query --sql @query.sql --seed-file=./urls.txt --refresh
 ```
 
 Example `query.sql`:

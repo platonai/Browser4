@@ -366,7 +366,7 @@ browser4-cli swarm submit https://example.com/direct \
   --seed-file=./swarm-seeds.txt \
   --deadline=2026-03-30T00:00:00Z \
   --expires=1d \
-  --refresh --parse --store-content
+  --refresh --store-content
 
 # poll and fetch the result
 browser4-cli swarm status scrape-task-4
@@ -391,7 +391,7 @@ browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql "
 browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql @query.sql
 
 # With seed file and load options:
-browser4-cli swarm query --sql @query.sql --seed-file=./urls.txt --refresh --parse
+browser4-cli swarm query --sql @query.sql --seed-file=./urls.txt --refresh
 ```
 
 ### Notes

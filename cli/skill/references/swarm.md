@@ -68,7 +68,6 @@ browser4-cli swarm submit https://example.com/direct \
   --deadline=2026-03-30T00:00:00Z \
   --expires=1d \
   --refresh \
-  --parse \
   --store-content
 
 # Submit from a seed file (one URL per line)
@@ -269,7 +268,6 @@ browser4-cli swarm submit https://example.com/direct \
   --deadline=2026-03-30T00:00:00Z \
   --expires=1d \
   --refresh \
-  --parse \
   --store-content
 
 # 3) Poll until complete

@@ -204,7 +204,7 @@ browser4-cli swarm create \
 # 2) 将 URL 提交为抓取任务（直接 URL + 种子文件）
 browser4-cli swarm submit https://example.com/direct \
   --seed-file=./urls.txt \
-  --refresh --parse --store-content
+  --refresh --store-content
 
 # 3) 轮询并获取结果
 browser4-cli swarm status scrape-task-4
@@ -227,7 +227,7 @@ browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql "
 browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql @query.sql
 
 # 带种子文件和加载选项
-browser4-cli swarm query --sql @query.sql --seed-file=./urls.txt --refresh --parse
+browser4-cli swarm query --sql @query.sql --seed-file=./urls.txt --refresh
 ```
 
 关键说明：
