@@ -82,6 +82,7 @@ jobs:
       - name: Upload to OSS
         env:
           OSS_ENDPOINT: oss-cn-beijing.aliyuncs.com
+          OSS_REGION: cn-beijing
           OSS_BUCKET: browser4
           OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
           OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
@@ -100,6 +101,7 @@ jobs:
             echo "Uploading: $asset_name → $oss_path"
             if ./ossutil cp "$asset" "$oss_path" \
               -e "$OSS_ENDPOINT" \
+              --region "$OSS_REGION" \
               --retry-times 3; then
               ((uploaded++)) || true
             else
@@ -121,6 +123,7 @@ jobs:
       - name: Create latest symlinks
         env:
           OSS_ENDPOINT: oss-cn-beijing.aliyuncs.com
+          OSS_REGION: cn-beijing
           OSS_BUCKET: browser4
           OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
           OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
@@ -143,6 +146,7 @@ jobs:
             echo "Creating symlink: ${symlink} → ${target}"
             if ./ossutil symlink put "$symlink" "$target" \
               -e "$OSS_ENDPOINT" \
+              --region "$OSS_REGION" \
               --retry-times 3; then
               ((created++)) || true
             else
@@ -164,6 +168,7 @@ jobs:
       - name: Upload CLI installer scripts to OSS
         env:
           OSS_ENDPOINT: oss-cn-beijing.aliyuncs.com
+          OSS_REGION: cn-beijing
           OSS_BUCKET: browser4
           OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
           OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
@@ -189,6 +194,7 @@ jobs:
             echo "Uploading: ${script} → ${dest}"
             if ./ossutil cp "$src" "$dest" \
               -e "$OSS_ENDPOINT" \
+              --region "$OSS_REGION" \
               --retry-times 3; then
               ((uploaded++)) || true
               echo "  https://${OSS_BUCKET}.${OSS_ENDPOINT}/scripts/${script}"
