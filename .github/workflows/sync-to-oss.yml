@@ -77,7 +77,7 @@ jobs:
           unzip -q ossutil.zip
           mv "ossutil-${OSSUTIL_VERSION}-linux-amd64/ossutil" ./ossutil
           chmod +x ossutil
-          ./ossutil --version
+          ./ossutil version
 
       - name: Upload to OSS
         env:
