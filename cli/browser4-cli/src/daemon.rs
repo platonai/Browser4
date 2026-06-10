@@ -288,7 +288,13 @@ fn mirror_is_reachable(mirror: &DownloadMirror) -> bool {
     let timeout = Duration::from_secs(timeout_secs);
     let addrs = match host_port.to_socket_addrs() {
         Ok(addrs) => addrs,
-        Err(_) => return false,
+        Err(err) => {
+            eprintln!(
+                "Mirror '{}' host resolution failed for '{}': {}",
+                mirror.name, mirror.base_url, err
+            );
+            return false;
+        }
     };
 
     for addr in addrs {
@@ -3435,15 +3441,10 @@ mod tests {
     }
 
     #[test]
-    fn test_mirror_is_reachable_handles_localhost_without_panicking() {
-        let free_port = {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0")
-                .expect("bind for free localhost port");
-            listener.local_addr().unwrap().port()
-        };
+    fn test_mirror_is_reachable_localhost_no_listener() {
         let mirror = DownloadMirror {
             name: "test".to_string(),
-            base_url: format!("https://localhost:{free_port}"),
+            base_url: "https://localhost:0".to_string(),
         };
         assert!(
             !mirror_is_reachable(&mirror),
