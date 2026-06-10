@@ -121,7 +121,7 @@ jobs:
 
           echo "✅ All ${uploaded} release assets synced to OSS"
 
-      - name: Copy to latest/
+      - name: Create latest symlinks
         env:
           OSS_ENDPOINT: oss-cn-beijing.aliyuncs.com
           OSS_REGION: cn-beijing
@@ -132,39 +132,42 @@ jobs:
           set -euo pipefail
           TAG_NAME="${{ steps.resolve.outputs.tag_name }}"
 
-          copied=0
+          created=0
           failed=0
 
           for asset in release-assets/*; do
             [[ -f "$asset" ]] || continue
             asset_name=$(basename "$asset")
 
-            # Server-side copy from versioned path to latest/ prefix
-            source="oss://${OSS_BUCKET}/releases/download/${TAG_NAME}/${asset_name}"
-            dest="oss://${OSS_BUCKET}/releases/download/latest/${asset_name}"
+            # Symlink key and its target object key (relative to bucket root)
+            symlink_key="releases/download/latest/${asset_name}"
+            target_key="releases/download/${TAG_NAME}/${asset_name}"
 
-            echo "Copying: ${source} → ${dest}"
-            if ./ossutil cp "$source" "$dest" \
+            echo "Creating symlink: ${symlink_key} → ${target_key}"
+            if ./ossutil api put-symlink \
+              --bucket "$OSS_BUCKET" \
+              --key "$symlink_key" \
+              --symlink-target "$target_key" \
+              --object-acl public-read \
               -e "$OSS_ENDPOINT" \
               --region "$OSS_REGION" \
-              --acl public-read \
               --retry-times 3; then
-              ((copied++)) || true
+              ((created++)) || true
             else
-              echo "::error::Failed to copy $asset_name to latest/"
+              echo "::error::Failed to create symlink for $asset_name"
               ((failed++)) || true
             fi
           done
 
           echo ""
-          echo "Latest copies: ${copied} created, ${failed} failed"
+          echo "Symlinks: ${created} created, ${failed} failed"
 
           if [[ $failed -gt 0 ]]; then
-            echo "::error::${failed} latest copy(s) failed"
+            echo "::error::${failed} symlink(s) failed to create"
             exit 1
           fi
 
-          echo "🔗 All ${copied} assets copied to latest/"
+          echo "🔗 All ${created} latest symlinks created"
 
       - name: Upload CLI installer scripts to OSS
         env:
@@ -226,7 +229,7 @@ jobs:
             echo "- **Release URL**: ${{ steps.resolve.outputs.release_url }}"
             echo "- **Assets**: ${{ steps.resolve.outputs.assets_count }}"
             echo "- **OSS Bucket**: \`oss://browser4/releases/download/${{ steps.resolve.outputs.tag_name }}/\`"
-            echo "- **Latest copy**: \`oss://browser4/releases/download/latest/\`"
+            echo "- **Latest symlink**: \`oss://browser4/releases/download/latest/\`"
             echo "- **CLI installer scripts**:"
             echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1\`"
             echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh\`"
