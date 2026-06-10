@@ -266,7 +266,7 @@ fn mirror_download_url(mirror: &DownloadMirror, tag: Option<&str>, asset_name: &
 /// rather than an HTTP round-trip — it's resilient to rate limits and
 /// redirects.
 fn mirror_is_reachable(mirror: &DownloadMirror) -> bool {
-    use std::net::TcpStream;
+    use std::net::{TcpStream, ToSocketAddrs};
 
     let timeout_secs = env::var(MIRROR_REACHABILITY_TIMEOUT_ENV)
         .ok()
@@ -276,17 +276,30 @@ fn mirror_is_reachable(mirror: &DownloadMirror) -> bool {
 
     // Parse the host from the base URL.  reqwest::Url handles the scheme and
     // port extraction for us.
-    let host_port = match reqwest::Url::parse(&mirror.base_url) {
+    let (host, port) = match reqwest::Url::parse(&mirror.base_url) {
         Ok(parsed) => {
-            let host = parsed.host_str().unwrap_or("");
+            let host = parsed.host_str().unwrap_or("").to_string();
+            if host.is_empty() {
+                return false;
+            }
             let port = parsed.port().unwrap_or(443);
-            format!("{host}:{port}")
+            (host, port)
         }
         Err(_) => return false,
     };
 
+    // Use the (host, port) tuple form of ToSocketAddrs rather than a
+    // "host:port" string.  The tuple form avoids an IPv6 ambiguity: reqwest
+    // strips the brackets from IPv6 addresses (e.g. [::1] → ::1), so a
+    // formatted string like "::1:443" would be mis-parsed as a bare IPv6
+    // address with the port becoming the last hextet.
+    let addr = match (host.as_str(), port).to_socket_addrs().ok().and_then(|mut a| a.next()) {
+        Some(addr) => addr,
+        None => return false,
+    };
+
     let timeout = Duration::from_secs(timeout_secs);
-    match TcpStream::connect_timeout(&host_port.parse().unwrap(), timeout) {
+    match TcpStream::connect_timeout(&addr, timeout) {
         Ok(_) => true,
         Err(_) => false,
     }
@@ -3497,6 +3510,73 @@ mod tests {
         assert!(!reachable, "should not have found a reachable mirror");
         assert_eq!(selected.name, "first",
             "should fall back to the first mirror when none are reachable");
+    }
+
+    #[test]
+    fn test_mirror_is_reachable_returns_false_for_empty_host() {
+        // A URL with a scheme but no host should not panic — it should return false.
+        let mirror = DownloadMirror {
+            name: "empty-host".to_string(),
+            base_url: "https:///path".to_string(),
+        };
+        assert!(
+            !mirror_is_reachable(&mirror),
+            "mirror with empty host should not be reachable"
+        );
+    }
+
+    #[test]
+    fn test_mirror_is_reachable_handles_ipv6_localhost() {
+        // IPv6 loopback address — reqwest strips the brackets, so this
+        // exercises the (host, port) tuple form of ToSocketAddrs rather than
+        // the ambiguous "host:port" string form.
+        let listener = std::net::TcpListener::bind("[::1]:0")
+            .expect("bind IPv6 test listener");
+        let port = listener.local_addr().unwrap().port();
+        let mirror = DownloadMirror {
+            name: "ipv6".to_string(),
+            base_url: format!("https://[::1]:{port}"),
+        };
+        assert!(
+            mirror_is_reachable(&mirror),
+            "mirror should be reachable when a TCP listener is bound to its IPv6 port"
+        );
+        drop(listener);
+    }
+
+    #[test]
+    fn test_mirror_is_reachable_does_not_panic_on_hostname() {
+        // Hostname-based URLs were the original panic trigger:
+        // SocketAddr::FromStr rejects hostnames, only accepting IP literals.
+        // This test ensures hostnames are handled gracefully (return false
+        // when DNS fails, without panicking).  "invalid.invalid" is a
+        // reserved TLD that is guaranteed not to resolve.
+        let mirror = DownloadMirror {
+            name: "hostname".to_string(),
+            base_url: "https://invalid.invalid/releases".to_string(),
+        };
+        let result = mirror_is_reachable(&mirror);
+        // Must not panic — may be true or false depending on DNS hijacking,
+        // but the key invariant is that we got a bool back, not a crash.
+        assert!(!result || result,
+            "mirror_is_reachable must return a bool, not panic, for hostname URLs");
+    }
+
+    #[test]
+    fn test_mirror_is_reachable_respects_explicit_port() {
+        // URLs with an explicit non-default port should connect to that port.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("bind test listener");
+        let port = listener.local_addr().unwrap().port();
+        let mirror = DownloadMirror {
+            name: "explicit-port".to_string(),
+            base_url: format!("https://127.0.0.1:{port}/some/path"),
+        };
+        assert!(
+            mirror_is_reachable(&mirror),
+            "mirror should be reachable when the URL specifies the correct port explicitly"
+        );
+        drop(listener);
     }
 
     #[test]
