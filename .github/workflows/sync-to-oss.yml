@@ -102,6 +102,7 @@ jobs:
             if ./ossutil cp "$asset" "$oss_path" \
               -e "$OSS_ENDPOINT" \
               --region "$OSS_REGION" \
+              --acl public-read \
               --retry-times 3; then
               ((uploaded++)) || true
             else
@@ -146,6 +147,7 @@ jobs:
             if ./ossutil cp "$source" "$dest" \
               -e "$OSS_ENDPOINT" \
               --region "$OSS_REGION" \
+              --acl public-read \
               --retry-times 3; then
               ((copied++)) || true
             else
@@ -194,6 +196,7 @@ jobs:
             if ./ossutil cp "$src" "$dest" \
               -e "$OSS_ENDPOINT" \
               --region "$OSS_REGION" \
+              --acl public-read \
               --retry-times 3; then
               ((uploaded++)) || true
               echo "  https://${OSS_BUCKET}.${OSS_ENDPOINT}/scripts/${script}"
