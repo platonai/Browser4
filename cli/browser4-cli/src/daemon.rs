@@ -288,14 +288,28 @@ fn mirror_is_reachable(mirror: &DownloadMirror) -> bool {
         Err(_) => return false,
     };
 
-    // Use the (host, port) tuple form of ToSocketAddrs rather than a
-    // "host:port" string.  The tuple form avoids an IPv6 ambiguity: reqwest
-    // strips the brackets from IPv6 addresses (e.g. [::1] → ::1), so a
-    // formatted string like "::1:443" would be mis-parsed as a bare IPv6
-    // address with the port becoming the last hextet.
-    let addr = match (host.as_str(), port).to_socket_addrs().ok().and_then(|mut a| a.next()) {
-        Some(addr) => addr,
-        None => return false,
+    // Resolve the host to a SocketAddr.  Try parsing as a literal IP first
+    // to avoid getaddrinfo / AI_ADDRCONFIG issues: in containerised
+    // environments (Docker, GitHub Actions runners) IPv6 is often disabled
+    // at the sysctl level, so getaddrinfo filters out IPv6 loopback even
+    // though binding and connecting to [::1] works fine.  For hostnames
+    // that need real DNS resolution we fall back to ToSocketAddrs.
+    let addr: std::net::SocketAddr = {
+        use std::net::{IpAddr, SocketAddr};
+        if let Ok(ip) = host.parse::<IpAddr>() {
+            SocketAddr::new(ip, port)
+        } else {
+            // Use the (host, port) tuple form of ToSocketAddrs rather than a
+            // "host:port" string.  The tuple form avoids an IPv6 ambiguity:
+            // reqwest strips the brackets from IPv6 addresses
+            // (e.g. [::1] → ::1), so a formatted string like "::1:443" would
+            // be mis-parsed as a bare IPv6 address with the port becoming the
+            // last hextet.
+            match (host.as_str(), port).to_socket_addrs().ok().and_then(|mut a| a.next()) {
+                Some(addr) => addr,
+                None => return false,
+            }
+        }
     };
 
     let timeout = Duration::from_secs(timeout_secs);
