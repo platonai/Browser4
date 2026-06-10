@@ -40,7 +40,6 @@ jobs:
       cli_version: ${{ steps.prepare.outputs.cli_version }}
       remote_version: ${{ steps.prepare.outputs.remote_version }}
       lookup_status: ${{ steps.prepare.outputs.lookup_status }}
-      should_publish: ${{ steps.prepare.outputs.should_publish }}
       skip_binary_build: ${{ steps.prepare.outputs.skip_binary_build }}
       dry_run: ${{ steps.prepare.outputs.dry_run }}
 
@@ -92,7 +91,6 @@ jobs:
           echo "cli_version=$CLI_VERSION" >> "$GITHUB_OUTPUT"
           echo "remote_version=$REMOTE_VERSION" >> "$GITHUB_OUTPUT"
           echo "lookup_status=$LOOKUP_STATUS" >> "$GITHUB_OUTPUT"
-          echo "should_publish=$SHOULD_PUBLISH" >> "$GITHUB_OUTPUT"
           echo "skip_binary_build=$INPUT_SKIP_BINARY_BUILD" >> "$GITHUB_OUTPUT"
           echo "dry_run=$DRY_RUN" >> "$GITHUB_OUTPUT"
 
@@ -165,6 +163,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # NOTE: if you add/remove a target, update EXPECTED_COUNT in the
+        # "Verify all packaged binaries exist" step in the publish job.
         include:
           - name: Linux x64
             os: ubuntu-latest
@@ -234,10 +234,18 @@ jobs:
         with:
           version: '0.13.0'
 
-      - name: Install cargo-zigbuild
+      - name: Cache cargo-zigbuild binary
         if: matrix.use_zigbuild
+        id: cache-zigbuild
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-zigbuild
+          key: cargo-zigbuild-0.10.1
+
+      - name: Install cargo-zigbuild
+        if: matrix.use_zigbuild && steps.cache-zigbuild.outputs.cache-hit != 'true'
         shell: bash
-        run: cargo install cargo-zigbuild
+        run: cargo install cargo-zigbuild@0.10.1
 
       - name: Configure Rust linkers
         if: runner.os == 'Linux'
@@ -363,30 +371,26 @@ jobs:
         if: steps.check.outputs.should_publish == 'true'
         shell: bash
         run: |
-          EXPECTED_BINARIES=(
-            "browser4-cli-linux-x64"
-            "browser4-cli-linux-arm64"
-            "browser4-cli-linux-musl-x64"
-            "browser4-cli-linux-musl-arm64"
-            "browser4-cli-win32-x64.exe"
-            "browser4-cli-darwin-x64"
-            "browser4-cli-darwin-arm64"
-          )
           MIN_SIZE=100000
+          # build-binaries matrix defines 7 targets — this count must stay in sync
+          EXPECTED_COUNT=7
           ERRORS=0
 
-          for binary in "${EXPECTED_BINARIES[@]}"; do
-            if [ ! -f "cli/bin/$binary" ]; then
-              echo "ERROR: Missing cli/bin/$binary"
+          mapfile -t BINARIES < <(find cli/bin -maxdepth 1 -type f -name 'browser4-cli-*' | sort)
+          ACTUAL_COUNT="${#BINARIES[@]}"
+
+          if [ "$ACTUAL_COUNT" -ne "$EXPECTED_COUNT" ]; then
+            echo "ERROR: Expected $EXPECTED_COUNT binaries, found $ACTUAL_COUNT"
+            ERRORS=$((ERRORS + 1))
+          fi
+
+          for binary in "${BINARIES[@]}"; do
+            SIZE=$(stat -c%s "$binary" 2>/dev/null || stat -f%z "$binary")
+            if [ "$SIZE" -lt "$MIN_SIZE" ]; then
+              echo "ERROR: $(basename "$binary") is too small ($SIZE bytes, expected >= $MIN_SIZE)"
               ERRORS=$((ERRORS + 1))
             else
-              SIZE=$(stat -c%s "cli/bin/$binary" 2>/dev/null || stat -f%z "cli/bin/$binary")
-              if [ "$SIZE" -lt "$MIN_SIZE" ]; then
-                echo "ERROR: cli/bin/$binary is too small ($SIZE bytes, expected >= $MIN_SIZE)"
-                ERRORS=$((ERRORS + 1))
-              else
-                echo "OK: cli/bin/$binary ($SIZE bytes)"
-              fi
+              echo "OK: $(basename "$binary") ($SIZE bytes)"
             fi
           done
 
@@ -395,7 +399,7 @@ jobs:
             exit 1
           fi
 
-          echo "All 7 platform binaries are present and valid"
+          echo "All $ACTUAL_COUNT platform binaries are present and valid"
 
       - name: Publish to npm (dry-run)
         if: steps.check.outputs.should_publish == 'true' && needs.prepare.outputs.dry_run == 'true'
@@ -403,9 +407,25 @@ jobs:
         run: npm publish --dry-run
 
       - name: Publish to npm
+        id: publish
         if: steps.check.outputs.should_publish == 'true' && needs.prepare.outputs.dry_run != 'true'
         working-directory: ${{ env.CLI_PACKAGE_DIR }}
-        run: npm publish --provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if npm publish --provenance; then
+              echo "publish_outcome=success" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [ "$attempt" -lt 3 ]; then
+              echo "npm publish failed (attempt $attempt/3); retrying in 15s..."
+              sleep 15
+            fi
+          done
+          echo "publish_outcome=failure" >> "$GITHUB_OUTPUT"
+          echo "❌ npm publish failed after 3 attempts"
+          exit 1
 
       - name: Verify npm package was published
         if: steps.check.outputs.should_publish == 'true' && needs.prepare.outputs.dry_run != 'true'
@@ -440,12 +460,14 @@ jobs:
             echo "## 📦 npm Publish (dry-run — nothing published)"
             exit 0
           fi
+          PUBLISH_OUTCOME="${{ steps.publish.outputs.publish_outcome }}"
           {
             echo "## 📦 npm Publish Summary"
             echo ""
             echo "- **Package**: ${{ steps.check.outputs.package_name }}"
             echo "- **Version**: ${{ steps.check.outputs.cli_version }}"
             echo "- **Remote Version**: ${{ steps.check.outputs.remote_version }}"
-            echo "- **Published**: ${{ steps.check.outputs.should_publish }}"
+            echo "- **Publish Needed**: ${{ steps.check.outputs.should_publish }}"
+            echo "- **Publish Result**: ${PUBLISH_OUTCOME:-skipped}"
             echo "- **Status**: ${{ job.status }}"
           } >> "$GITHUB_STEP_SUMMARY"
