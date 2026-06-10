@@ -33,6 +33,7 @@ on:
         type: boolean
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   CLI_MANIFEST_PATH: cli/browser4-cli/Cargo.toml
 
 jobs:
