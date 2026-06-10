@@ -3526,12 +3526,42 @@ mod tests {
     }
 
     #[test]
+    fn test_mirror_is_reachable_resolves_ipv6_without_brackets() {
+        // When reqwest parses "https://[::1]:443", host_str() returns "::1"
+        // (without brackets).  The (host, port) tuple form of ToSocketAddrs
+        // must correctly pair the bare IPv6 address with the port rather than
+        // mis-parsing "::1:443" as a raw IPv6 address (where the port becomes
+        // the last hextet).  This test verifies the resolution directly —
+        // no TCP connection is needed, so it works even in Docker/CI
+        // environments where IPv6 may be unavailable.
+        use std::net::ToSocketAddrs;
+        let addr = ("::1", 443)
+            .to_socket_addrs()
+            .expect("must resolve ::1")
+            .next()
+            .expect("must produce at least one address");
+        assert_eq!(addr.port(), 443, "port must be the TCP port, not part of the IPv6 address");
+        assert!(addr.is_ipv6(), "must be an IPv6 address");
+        assert_eq!(addr.ip().to_string(), "::1");
+    }
+
+    #[test]
     fn test_mirror_is_reachable_handles_ipv6_localhost() {
-        // IPv6 loopback address — reqwest strips the brackets, so this
-        // exercises the (host, port) tuple form of ToSocketAddrs rather than
-        // the ambiguous "host:port" string form.
-        let listener = std::net::TcpListener::bind("[::1]:0")
-            .expect("bind IPv6 test listener");
+        // IPv6 loopback connectivity test — exercises the full
+        // mirror_is_reachable path with an IPv6 bracket-notation URL.
+        //
+        // Gracefully skip if IPv6 is unavailable (e.g. Docker containers
+        // disable IPv6 by default, and some CI runners restrict it).
+        let listener = match std::net::TcpListener::bind("[::1]:0") {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!(
+                    "SKIP test_mirror_is_reachable_handles_ipv6_localhost: \
+                     cannot bind [::1] — IPv6 disabled? ({e})"
+                );
+                return;
+            }
+        };
         let port = listener.local_addr().unwrap().port();
         let mirror = DownloadMirror {
             name: "ipv6".to_string(),
