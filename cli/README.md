@@ -61,19 +61,42 @@ the full option reference, supported platforms, and examples.
 
 ### From Source
 
+**Build prerequisites:** Rust (stable, edition 2021), Node.js 24+, pnpm 10+, git.
+
 ```bash
-git clone https://github.com/platonai/browser4-cli
-cd cli/browser4-cli
+git clone https://github.com/platonai/Browser4.git
+cd Browser4/cli/browser4-cli
 pnpm install
-pnpm build:native   # Requires Rust (https://rustup.rs)
+pnpm build:native   # Compiles the Rust binary (requires https://rustup.rs)
 pnpm link --global  # Makes browser4-cli available globally
 ```
 
+Cross-compilation from Linux (for release builds) additionally requires:
+`cargo-zigbuild`, Zig 0.13.0, `gcc-aarch64-linux-gnu`, and `mingw-w64`.
+See `cli/docker/Dockerfile.build` for a Dockerized build environment.
+
 ### Requirements
 
-- **Chrome** - Latest Chrome installed on your system.
-- **Java 17+** - Required to run the Browser4 backend (`Browser4.jar`).
-- **Rust** - Only needed when building from source (see From Source above).
+- **Chrome** — Latest Chrome installed on your system. The CLI can auto-install Chrome on most platforms when missing.
+- **Java 17+** — Required to run the Browser4 backend (`Browser4.jar`). Eclipse Temurin recommended. JDK 21+ enables best jlink compression when the CLI auto-builds a runtime bundle from source.
+- **Rust** — Only needed when building the CLI from source (see From Source above). The `stable` toolchain (edition 2021) is sufficient.
+
+#### Additional requirements for auto-building a runtime bundle from source
+
+When the CLI detects a Browser4 repository checkout, it attempts to build a
+self-contained runtime bundle (bundled JRE + dependency JARs) from source
+instead of downloading a pre-built release. This requires:
+
+| Tool | Version | Linux | macOS | Windows |
+|------|---------|-------|-------|---------|
+| **Maven** | 3.9+ | via `mvnw` wrapper | via `mvnw` wrapper | via `mvnw.cmd` wrapper |
+| **JDK tools** (`jdeps`, `jlink`) | bundled with JDK 16+ | included in JDK | included in JDK | included in JDK |
+| **PowerShell 7** (`pwsh`) | 7.0+ | **required** | **required** | built-in (`powershell.exe`) |
+| **tar** | any | **required** | **required** | built-in |
+
+Set `BROWSER4_CLI_FORCE_REMOTE_BUNDLE=1` to skip the local build and always
+download a pre-built bundle — useful in CI / corporate environments where
+Maven or jlink are unavailable.
 
 ## Usage
 

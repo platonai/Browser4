@@ -132,7 +132,7 @@ cargo test --test e2e -- --list
 # More examples:
 cargo test --test e2e -- --nocapture
 cargo test --test e2e -- --nocapture --level=Basic
-cargo test --test e2e -- --nocapture --scenario-limit=5
+cargo test --test e2e -- --nocapture --scenario-limit=1
 cargo test --test e2e -- --nocapture --enable-batch-scenario
 cargo test --test e2e -- --nocapture --batch-only
 cargo test --test e2e -- --nocapture --scenario=*open*
