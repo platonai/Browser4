@@ -1,6 +1,6 @@
 [package]
 name = "browser4-cli"
-version = "0.1.13"
+version = "0.1.14"
 edition = "2021"
 autotests = false
 description = "Browser4 CLI — control a Browser4 server from the command line"
@@ -30,6 +30,7 @@ base64 = "0.22"
 chrono = "0.4"
 regex = { version = "1.5.5" }
 sha2 = "0.10"
+which = "7"
 flate2 = "1"
 tar = "0.4"
 zip = { version = "2", default-features = false, features = ["deflate"] }
