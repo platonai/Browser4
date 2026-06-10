@@ -1,8 +1,8 @@
 package ai.platon.pulsar.ql.h2.udfs
 
+import ai.platon.pulsar.common.ExperimentalApi
 import ai.platon.pulsar.ql.common.annotation.UDFGroup
 import ai.platon.pulsar.ql.common.annotation.UDFunction
-import ai.platon.pulsar.ql.common.types.ValueDom
 import ai.platon.pulsar.ql.context.SQLContexts
 import kotlinx.coroutines.runBlocking
 
@@ -11,6 +11,7 @@ import kotlinx.coroutines.runBlocking
  * Copyright @ 2013-2020 Platon AI. All rights reserved
  */
 @Suppress("unused")
+@ExperimentalApi("Might be slow")
 @UDFGroup(namespace = "DOM")
 object ChatFunctions {
 

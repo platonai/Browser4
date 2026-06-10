@@ -13,14 +13,14 @@ object DateTimeFunctions {
     private val logger = getLogger(DateTimeFunctions::class)
     private val defaultDateTime = Instant.EPOCH.atZone(DateTimes.zoneId).toLocalDateTime()
 
-    @UDFunction
+    @UDFunction(description = "Parse a string as a MySQL-style date-time (yyyy-MM-dd HH:mm:ss) and reformat it with the given pattern, falling back to EPOCH on failure")
     @JvmOverloads
     @JvmStatic
     fun firstMysqlDateTime(text: String?, pattern: String = "yyyy-MM-dd HH:mm:ss"): String {
         return firstDateTime(text, pattern)
     }
 
-    @UDFunction
+    @UDFunction(description = "Parse a string using best-effort ISO instant parsing and reformat it with the given pattern, falling back to EPOCH on failure")
     @JvmOverloads
     @JvmStatic
     fun firstDateTime(text: String?, pattern: String = "yyyy-MM-dd HH:mm:ss"): String {

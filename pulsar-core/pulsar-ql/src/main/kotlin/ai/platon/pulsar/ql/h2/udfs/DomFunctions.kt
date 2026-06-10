@@ -10,10 +10,10 @@ import ai.platon.pulsar.dom.select.selectFirstOrNull
 import ai.platon.pulsar.ql.common.annotation.H2Context
 import ai.platon.pulsar.ql.common.annotation.UDFGroup
 import ai.platon.pulsar.ql.common.annotation.UDFunction
+import ai.platon.pulsar.ql.common.types.ValueDom
 import ai.platon.pulsar.ql.context.SQLContexts
 import ai.platon.pulsar.ql.h2.H2SessionFactory
 import ai.platon.pulsar.ql.h2.domValue
-import ai.platon.pulsar.ql.common.types.ValueDom
 import kotlinx.coroutines.runBlocking
 import org.h2.value.Value
 import org.h2.value.ValueArray
@@ -62,140 +62,137 @@ object DomFunctions {
     /**
      * Check if this is a nil DOM
      */
-    @UDFunction
+    @UDFunction(description = "Check if the DOM is nil (empty or invalid)")
     @JvmStatic
     fun isNil(dom: ValueDom) = dom.isNil
 
     /**
      * Check if this is a not nil DOM
      */
-    @UDFunction
+    @UDFunction(description = "Check if the DOM is not nil (valid and non-empty)")
     @JvmStatic
     fun isNotNil(dom: ValueDom) = dom.isNotNil
 
     /**
      * Get the value of the given attribute
      */
-    @UDFunction
+    @UDFunction(description = "Get the value of the given HTML attribute on the element")
     @JvmStatic
     fun attr(dom: ValueDom, attrName: String) = dom.element.attr(attrName)
 
     /**
-     * Get the value of the given attribute
+     * Get the value of the A_LABELS attribute
      */
-    @UDFunction
+    @UDFunction(description = "Get the value of the A_LABELS attribute (node classification labels)")
     @JvmStatic
     fun labels(dom: ValueDom) = dom.element.attr(A_LABELS)
 
     /**
-     * Get the value of the given indicator
+     * Get the value of the given computed feature
      */
-    @UDFunction
+    @UDFunction(description = "Get the computed feature value of the element by feature name")
     @JvmStatic
     fun feature(dom: ValueDom, featureName: String) = NodeFeature.getValue(featureName, dom.element)
 
-    @UDFunction
+    @UDFunction(description = "Check if the element has the given HTML attribute")
     @JvmStatic
     fun hasAttr(dom: ValueDom, attrName: String) = dom.element.hasAttr(attrName)
 
-    @UDFunction
+    @UDFunction(description = "Get the computed CSS style value of the element by style name")
     @JvmStatic
     fun style(dom: ValueDom, styleName: String) = dom.element.getStyle(styleName)
 
-    @UDFunction
+    @UDFunction(description = "Get the element's sequence number in the document")
     @JvmStatic
     fun sequence(dom: ValueDom) = dom.element.sequence
 
-    @UDFunction
+    @UDFunction(description = "Get the element's depth in the DOM tree")
     @JvmStatic
     fun depth(dom: ValueDom) = dom.element.depth
 
-    @UDFunction
+    @UDFunction(description = "Get the unique CSS selector path for the element")
     @JvmStatic
     fun cssSelector(dom: ValueDom) = dom.element.cssSelector()
 
-    @UDFunction
+    @UDFunction(description = "Alias for cssSelector — get the unique CSS selector path for the element")
     @JvmStatic
     fun cssPath(dom: ValueDom) = dom.element.cssSelector()
 
-    @UDFunction
+    @UDFunction(description = "Get the number of sibling nodes (including text nodes) of the element")
     @JvmStatic
     fun siblingSize(dom: ValueDom) = dom.element.siblingNodes().size
 
-    @UDFunction
+    @UDFunction(description = "Get the element's index among all sibling nodes")
     @JvmStatic
     fun siblingIndex(dom: ValueDom) = dom.element.siblingIndex()
 
-    @UDFunction
+    @UDFunction(description = "Get the number of sibling elements (Element nodes only) of the element")
     @JvmStatic
     fun elementSiblingSize(dom: ValueDom) = dom.element.siblingElements().size
 
-    @UDFunction
+    @UDFunction(description = "Get the element's index among all sibling elements")
     @JvmStatic
     fun elementSiblingIndex(dom: ValueDom) = dom.element.elementSiblingIndex()
 
     /**
-     * The normalized uri, should be the same as WebPage.url, which is also the key in the database
+     * The normalized URI — the same as WebPage.url, which is also the key in the database.
+     * This is the permanent internal address; it may no longer be accessible directly.
      * */
-    @UDFunction
+    @UDFunction(description = "Get the page's normalized URI (the permanent internal address / database key)")
     @JvmStatic
     fun uri(dom: ValueDom): String {
         return dom.element.ownerDocument.normalizedURI ?: ""
     }
 
     /**
-     * uri = WebPage.url which is the permanent internal address, it might not still available to access the target.
-     * And location = WebPage.location or baseUri = WebPage.baseUrl is the last working address, it might redirect to url,
-     * or it might have additional random parameters.
-     * WebPage.location may be different from url, it's generally normalized.
+     * baseUri = WebPage.baseUrl is the last working address. It might have redirected from url
+     * or it might have additional random parameters. Generally normalized.
      *
      * @return a {@link java.lang.String} object.
      */
-    @UDFunction
+    @UDFunction(description = "Get the element's base URI (the last working address of the page)")
     @JvmStatic
     fun baseUri(dom: ValueDom) = dom.element.baseUri()
 
-    @UDFunction
+    @UDFunction(description = "Resolve a relative URL attribute (e.g. 'href', 'src') to an absolute URL")
     @JvmStatic
     fun absUrl(dom: ValueDom, attributeKey: String) = dom.element.absUrl(attributeKey)
 
     /**
-     * WebPage.url is the permanent internal address, it might not still available to access the target,
-     * while WebPage.location or WebPage.baseUrl is the last working address, it might redirect to url,
-     * or it might have additional random parameters.
-     * WebPage.location may be different from url, it's generally normalized.
+     * WebPage.location is the last working address. It might have redirected from url,
+     * or it might have additional random parameters. Generally normalized.
      *
      * @return a {@link java.lang.String} object.
      */
-    @UDFunction
+    @UDFunction(description = "Get the page's location (the last working address, may differ from the URI)")
     @JvmStatic
     fun location(dom: ValueDom) = dom.element.location
 
-    @UDFunction
+    @UDFunction(description = "Get the number of child nodes (including text nodes) of the element")
     @JvmStatic
     fun childNodeSize(dom: ValueDom) = dom.element.childNodeSize()
 
-    @UDFunction
+    @UDFunction(description = "Get the number of child elements (Element nodes only) of the element")
     @JvmStatic
     fun childElementSize(dom: ValueDom) = dom.element.children().size
 
-    @UDFunction
+    @UDFunction(description = "Get the element's HTML tag name (e.g. 'DIV', 'A', 'SPAN')")
     @JvmStatic
     fun tagName(dom: ValueDom) = dom.element.tagName()
 
-    @UDFunction
+    @UDFunction(description = "Get the element's 'href' attribute value")
     @JvmStatic
     fun href(dom: ValueDom) = dom.element.attr("href")
 
-    @UDFunction
+    @UDFunction(description = "Get the absolute URL of the element's 'href' attribute")
     @JvmStatic
     fun absHref(dom: ValueDom) = dom.element.absUrl("href")
 
-    @UDFunction
+    @UDFunction(description = "Get the element's 'src' attribute value")
     @JvmStatic
     fun src(dom: ValueDom) = dom.element.attr("src")
 
-    @UDFunction
+    @UDFunction(description = "Get the absolute URL of the element's 'src' attribute")
     @JvmStatic
     fun absSrc(dom: ValueDom) = dom.element.absUrl("abs:src")
 
@@ -214,11 +211,11 @@ object DomFunctions {
         return dom.element.ownerDocument()!!.title()
     }
 
-    @UDFunction
+    @UDFunction(description = "Check if the element has any text content")
     @JvmStatic
     fun hasText(dom: ValueDom) = dom.element.hasText()
 
-    @UDFunction
+    @UDFunction(description = "Get the element's full text content, optionally truncated to the given length")
     @JvmStatic
     @JvmOverloads
     fun text(dom: ValueDom, truncate: Int = Int.MAX_VALUE): String {
@@ -230,31 +227,31 @@ object DomFunctions {
         }
     }
 
-    @UDFunction
+    @UDFunction(description = "Get the length of the element's text content")
     @JvmStatic
     fun textLen(dom: ValueDom) = dom.element.text().length
 
-    @UDFunction
+    @UDFunction(description = "Get the length of the element's text content (alias for textLen)")
     @JvmStatic
     fun textLength(dom: ValueDom) = dom.element.text().length
 
-    @UDFunction
+    @UDFunction(description = "Get the element's own text (excluding text from child elements)")
     @JvmStatic
     fun ownText(dom: ValueDom) = dom.element.ownText()
 
-    @UDFunction
+    @UDFunction(description = "Get the own texts of the element and its children as a ValueArray")
     @JvmStatic
     fun ownTexts(dom: ValueDom) = ValueArray.get(dom.element.ownTexts().map { ValueString.get(it) }.toTypedArray())
 
-    @UDFunction
+    @UDFunction(description = "Get the length of the element's own text")
     @JvmStatic
     fun ownTextLen(dom: ValueDom) = dom.element.ownText().length
 
-    @UDFunction
+    @UDFunction(description = "Get the element's whole text (including text from child text nodes)")
     @JvmStatic
     fun wholeText(dom: ValueDom) = dom.element.wholeText()
 
-    @UDFunction
+    @UDFunction(description = "Get the length of the element's whole text")
     @JvmStatic
     fun wholeTextLen(dom: ValueDom) = dom.element.wholeText().length
 
@@ -290,31 +287,31 @@ object DomFunctions {
         return ValueArray.get(array)
     }
 
-    @UDFunction
+    @UDFunction(description = "Get the element's combined data attributes")
     @JvmStatic
     fun data(dom: ValueDom) = dom.element.data()
 
-    @UDFunction
+    @UDFunction(description = "Get the element's 'id' attribute value")
     @JvmStatic
     fun id(dom: ValueDom) = dom.element.id()
 
-    @UDFunction
+    @UDFunction(description = "Get the element's 'class' attribute value")
     @JvmStatic
     fun className(dom: ValueDom) = dom.element.className()
 
-    @UDFunction
+    @UDFunction(description = "Get the element's class names as a set of strings")
     @JvmStatic
     fun classNames(dom: ValueDom) = dom.element.classNames()
 
-    @UDFunction
+    @UDFunction(description = "Check if the element has the given CSS class")
     @JvmStatic
     fun hasClass(dom: ValueDom, className: String) = dom.element.hasClass(className)
 
-    @UDFunction
+    @UDFunction(description = "Get the element's form value (e.g. the 'value' attribute of input elements)")
     @JvmStatic
     fun value(dom: ValueDom) = dom.element.`val`()
 
-    @UDFunction
+    @UDFunction(description = "Get the owner document of the element as a DOM")
     @JvmStatic
     fun ownerDocument(dom: ValueDom): ValueDom {
         if (dom.isNil) return ValueDom.NIL
@@ -322,7 +319,7 @@ object DomFunctions {
         return ValueDom.get(documentNode as Document)
     }
 
-    @UDFunction
+    @UDFunction(description = "Get the owner body element of the element as a DOM")
     @JvmStatic
     fun ownerBody(dom: ValueDom): ValueDom {
         if (dom.isNil) return ValueDom.NIL
@@ -330,7 +327,7 @@ object DomFunctions {
         return ValueDom.get(ownerBody as Element)
     }
 
-    @UDFunction
+    @UDFunction(description = "Get the Pulsar meta-information element from the document head")
     @JvmStatic
     fun documentVariables(dom: ValueDom): ValueDom {
         if (dom.isNil) return ValueDom.NIL
@@ -339,14 +336,14 @@ object DomFunctions {
         return ValueDom.get(meta)
     }
 
-    @UDFunction
+    @UDFunction(description = "Get the parent element of the element as a DOM")
     @JvmStatic
     fun parent(dom: ValueDom): ValueDom {
         if (dom.isNil) return ValueDom.NIL
         return ValueDom.get(dom.element.parent())
     }
 
-    @UDFunction
+    @UDFunction(description = "Get the nth ancestor element (0 = self, 1 = parent, 2 = grandparent, …) as a DOM")
     @JvmStatic
     fun ancestor(dom: ValueDom, n: Int): ValueDom {
         if (dom.isNil) return ValueDom.NIL
@@ -360,95 +357,95 @@ object DomFunctions {
         return p?.let { domValue(it) } ?: ValueDom.NIL
     }
 
-    @UDFunction
+    @UDFunction(description = "Get the unique name of the parent element, or 'nil' if the DOM is nil")
     @JvmStatic
     fun parentName(dom: ValueDom): String {
         if (dom.isNil) return "nil"
         return parent(dom).element.uniqueName
     }
 
-    @UDFunction
+    @UDFunction(description = "Identity function — return the DOM as-is")
     @JvmStatic
     fun dom(dom: ValueDom) = dom
 
-    @UDFunction
+    @UDFunction(description = "Get the element's inner HTML (slim copy)")
     @JvmStatic
     fun html(dom: ValueDom) = dom.element.slimCopy().html()
 
-    @UDFunction
+    @UDFunction(description = "Get the element's outer HTML including the element itself (slim copy)")
     @JvmStatic
     fun outerHtml(dom: ValueDom) = dom.element.slimCopy().outerHtml()
 
-    @UDFunction
+    @UDFunction(description = "Get a slimmed-down version of the element's HTML")
     @JvmStatic
     fun slimHtml(dom: ValueDom) = dom.element.slimHtml
 
-    @UDFunction
+    @UDFunction(description = "Get a minimal version of the element's HTML")
     @JvmStatic
     fun minimalHtml(dom: ValueDom) = dom.element.minimalHtml
 
-    @UDFunction
+    @UDFunction(description = "Get the element's unique name identifier")
     @JvmStatic
     fun uniqueName(dom: ValueDom) = dom.element.uniqueName
 
-    @UDFunction
+    @UDFunction(description = "Get all <a> elements within the element as a ValueArray of DOMs")
     @JvmStatic
     fun links(dom: ValueDom): ValueArray {
         val elements = dom.element.getElementsByTag("a")
         return toValueArray(elements)
     }
 
-    @UDFunction
+    @UDFunction(description = "Get the character count feature (CH) — text length of the element")
     @JvmStatic
     fun ch(dom: ValueDom) = getFeature(dom, CH)
 
-    @UDFunction
+    @UDFunction(description = "Get the text node count feature (TN) of the element")
     @JvmStatic
     fun tn(dom: ValueDom) = getFeature(dom, TN)
 
-    @UDFunction
+    @UDFunction(description = "Get the image count feature (IMG) of the element")
     @JvmStatic
     fun img(dom: ValueDom) = getFeature(dom, IMG)
 
-    @UDFunction
+    @UDFunction(description = "Get the anchor count feature (A) of the element")
     @JvmStatic
     fun a(dom: ValueDom) = getFeature(dom, A)
 
-    @UDFunction
+    @UDFunction(description = "Get the sibling count feature (SIB) of the element")
     @JvmStatic
     fun sib(dom: ValueDom) = getFeature(dom, SIB)
 
-    @UDFunction
+    @UDFunction(description = "Get the child count feature (C) of the element")
     @JvmStatic
     fun c(dom: ValueDom) = getFeature(dom, C)
 
-    @UDFunction
+    @UDFunction(description = "Get the depth feature (DEP) — depth of the element in the DOM tree")
     @JvmStatic
     fun dep(dom: ValueDom) = getFeature(dom, DEP)
 
-    @UDFunction
+    @UDFunction(description = "Get the sequence feature (SEQ) — sequence number of the element")
     @JvmStatic
     fun seq(dom: ValueDom) = getFeature(dom, SEQ)
 
-    @UDFunction
+    @UDFunction(description = "Get the Y-coordinate of the element's bounding box")
     @JvmStatic
     fun top(dom: ValueDom): Double {
         return getFeature(dom, TOP)
     }
 
-    @UDFunction
+    @UDFunction(description = "Get the X-coordinate of the element's bounding box")
     @JvmStatic
     fun left(dom: ValueDom): Double {
         return getFeature(dom, LEFT)
     }
 
-    @UDFunction
+    @UDFunction(description = "Get the width of the element's bounding box (minimum 1.0)")
     @JvmStatic
     fun width(dom: ValueDom): Double {
         return getFeature(dom, WIDTH).coerceAtLeast(1.0)
     }
 
-    @UDFunction
+    @UDFunction(description = "Get the height of the element's bounding box (minimum 1.0)")
     @JvmStatic
     fun height(dom: ValueDom): Double {
         return getFeature(dom, HEIGHT).coerceAtLeast(1.0)

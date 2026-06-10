@@ -219,7 +219,7 @@ fun alwaysTrue(): Boolean {
     AnnotationTarget.TYPEALIAS
 )
 @MustBeDocumented
-annotation class ExperimentalApi
+annotation class ExperimentalApi(val message: String = "")
 
 class PrioriClosable(
     val priority: Int,

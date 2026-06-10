@@ -1,5 +1,6 @@
 package ai.platon.pulsar.ql.h2.udfs
 
+import ai.platon.pulsar.common.ExperimentalApi
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.serialize.json.JSONExtractor
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
@@ -10,7 +11,6 @@ import ai.platon.pulsar.ql.common.types.ValueStringJSON
 import ai.platon.pulsar.skeleton.context.PulsarContexts
 import com.fasterxml.jackson.module.kotlin.readValue
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.CancellationException
 import java.util.concurrent.atomic.AtomicInteger
 
 const val DATA_EXTRACTION_RULES_PLACEHOLDER = "{DATA_EXTRACTION_RULES}"
@@ -36,6 +36,7 @@ Ensure all extracted values are clean and trimmed. If a field cannot be found, s
 """
 
 @Suppress("unused")
+@ExperimentalApi
 @UDFGroup(namespace = "LLM")
 object LLMFunctions {
     private val logger = getLogger(this)

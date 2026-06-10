@@ -6,12 +6,12 @@ import ai.platon.pulsar.dom.nodes.A_LABELS
 import ai.platon.pulsar.dom.nodes.node.ext.minimalHtml
 import ai.platon.pulsar.dom.nodes.node.ext.slimHtml
 import ai.platon.pulsar.dom.select.appendSelectorIfMissing
-import ai.platon.pulsar.dom.select.selectFirstOrNull
 import ai.platon.pulsar.dom.select.select2
+import ai.platon.pulsar.dom.select.selectFirstOrNull
 import ai.platon.pulsar.ql.common.annotation.UDFGroup
 import ai.platon.pulsar.ql.common.annotation.UDFunction
-import ai.platon.pulsar.ql.h2.DomToH2Queries
 import ai.platon.pulsar.ql.common.types.ValueDom
+import ai.platon.pulsar.ql.h2.DomToH2Queries
 import org.h2.value.ValueArray
 import org.h2.value.ValueFloat
 import org.h2.value.ValueInt
@@ -280,7 +280,7 @@ object DomSelectFunctions {
         return DomToH2Queries.selectNthOrNull(dom, q, n) { it.attr("abs:src") } ?: ""
     }
 
-    @UDFunction
+    @UDFunction(description = "Select all anchor elements matching the CSS query and return their absolute href URLs as an array. Automatically appends 'a' to the CSS query.")
     @JvmStatic
     @JvmOverloads
     fun allHrefs(dom: ValueDom, cssQuery: String = ":root"): ValueArray {
@@ -313,7 +313,7 @@ object DomSelectFunctions {
         return allAttrs(dom, cssQuery, A_LABELS)
     }
 
-    @UDFunction
+    @UDFunction(description = "Select the first element matching the CSS query and return its A_LABELS attribute value")
     @JvmStatic
     @JvmOverloads
     fun firstNodeLabels(dom: ValueDom, cssQuery: String = ":root"): String {
@@ -327,13 +327,13 @@ object DomSelectFunctions {
         return nthAttr(dom, cssQuery, n, A_LABELS)
     }
 
-    @UDFunction
+    @UDFunction(description = "Extract the first regex group from the text of all elements (scoped to :root) and return as an array")
     @JvmStatic
     fun allRe1(dom: ValueDom, regex: String): ValueArray {
         return allRe1(dom, ":root", regex)
     }
 
-    @UDFunction
+    @UDFunction(description = "Select all elements matching the CSS query and extract the first regex group from each element's text, returning the results as an array")
     @JvmStatic
     fun allRe1(dom: ValueDom, cssQuery: String, regex: String): ValueArray {
         val extractor = RegexExtractor()
@@ -363,20 +363,20 @@ object DomSelectFunctions {
         return RegexExtractor().re1(text, regex, group)
     }
 
-    @UDFunction
+    @UDFunction(description = "Extract key-value pairs via regex from the text of all elements (scoped to :root) and return as an array")
     @JvmStatic
     fun allRe2(dom: ValueDom, regex: String): ValueArray {
         return allRe2(dom, ":root", regex)
     }
 
-    @UDFunction
+    @UDFunction(description = "Select all elements matching the CSS query and extract key-value pairs via regex (groups 1 and 2) from each element's text, returning the results as an array")
     @JvmStatic
     fun allRe2(dom: ValueDom, cssQuery: String, regex: String): ValueArray {
         val extractor = RegexExtractor()
         return DomToH2Queries.select(dom, cssQuery) { extractor.re2(it.text(), regex).toString() }
     }
 
-    @UDFunction
+    @UDFunction(description = "Select the first element matching the CSS query and extract a key-value pair via regex (groups 1 and 2) from its text, returning [key, value] as a ValueArray")
     @JvmStatic
     fun firstRe2(dom: ValueDom, cssQuery: String, regex: String): ValueArray {
         val text = text(selectFirst(dom, cssQuery))
@@ -385,7 +385,7 @@ object DomSelectFunctions {
         return ValueArray.get(array)
     }
 
-    @UDFunction
+    @UDFunction(description = "Select the first element matching the CSS query and extract a key-value pair via regex with custom group indices from its text, returning [key, value] as a ValueArray")
     @JvmStatic
     fun firstRe2(dom: ValueDom, cssQuery: String, regex: String, keyGroup: Int, valueGroup: Int): ValueArray {
         val text = text(selectFirst(dom, cssQuery))
@@ -394,7 +394,7 @@ object DomSelectFunctions {
         return ValueArray.get(array)
     }
 
-    @UDFunction
+    @UDFunction(description = "Select all elements matching the CSS query and extract key-value pairs via regex with custom group indices from each element's text, returning the results as an array")
     @JvmStatic
     fun allRe2(dom: ValueDom, cssQuery: String, regex: String, keyGroup: Int, valueGroup: Int): ValueArray {
         val extractor = RegexExtractor()

@@ -17,29 +17,31 @@ object AdminFunctions {
     val log = LoggerFactory.getLogger(AdminFunctions::class.java)
     private val sqlContext get() = SQLContexts.create()
 
-    @UDFunction(deterministic = true) @JvmStatic
+    @UDFunction(deterministic = true, description = "Return the input message unchanged, useful for debugging")
+    @JvmStatic
     fun echo(@H2Context conn: Connection, message: String): String {
         return message
     }
 
-    @UDFunction(deterministic = true) @JvmStatic
+    @UDFunction(deterministic = true, description = "Return two input messages concatenated with a comma")
+    @JvmStatic
     fun echo(@H2Context conn: Connection, message: String, message2: String): String {
         return "$message, $message2"
     }
 
-    @UDFunction
+    @UDFunction(description = "Print a message to the server stdout")
     @JvmStatic
     fun print(message: String) {
         println(message)
     }
 
-    @UDFunction
+    @UDFunction(description = "Get the current number of active SQL sessions")
     @JvmStatic
     fun sessionCount(@H2Context conn: Connection): Int {
         return sqlContext.sessionCount()
     }
 
-    @UDFunction
+    @UDFunction(description = "Close the current H2 session and return its string representation")
     @JvmStatic
     fun closeSession(@H2Context conn: Connection): String {
         val h2session = H2SessionFactory.getH2Session(conn)
@@ -47,7 +49,7 @@ object AdminFunctions {
         return h2session.toString()
     }
 
-    @UDFunction
+    @UDFunction(description = "Load a page by URL, save it to the web cache directory, and return the file path")
     @JvmStatic
     @JvmOverloads
     fun save(@H2Context conn: Connection, url: String, postfix: String = ".htm"): String {
