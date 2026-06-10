@@ -9,6 +9,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 export const cliRootDir = join(__dirname, '..');
 const packageJsonPath = join(cliRootDir, 'package.json');
 
+/** The only valid npm package name for the CLI. */
+const EXPECTED_PACKAGE_NAME = 'browser4-cli';
+
 /**
  * Reads browser4-cli package metadata.
  *
@@ -16,6 +19,15 @@ const packageJsonPath = join(cliRootDir, 'package.json');
  */
 export function readPackageMetadata() {
   const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf-8'));
+
+  if (packageJson.name !== EXPECTED_PACKAGE_NAME) {
+    console.error(
+      `ERROR: cli/package.json name is "${packageJson.name}", expected "${EXPECTED_PACKAGE_NAME}". ` +
+      `Refusing to proceed with an unexpected package name.`
+    );
+    process.exit(1);
+  }
+
   return {
     name: packageJson.name,
     version: packageJson.version,
