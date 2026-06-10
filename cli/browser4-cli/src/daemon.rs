@@ -3562,10 +3562,29 @@ mod tests {
                 return;
             }
         };
-        let port = listener.local_addr().unwrap().port();
+        let addr = listener.local_addr().unwrap();
+
+        // Some environments (notably Docker with default settings) allow
+        // binding to IPv6 loopback but block outbound IPv6 connections.
+        // Probe with a raw connect before asserting mirror_is_reachable.
+        match std::net::TcpStream::connect_timeout(
+            &addr,
+            std::time::Duration::from_secs(2),
+        ) {
+            Err(e) => {
+                eprintln!(
+                    "SKIP test_mirror_is_reachable_handles_ipv6_localhost: \
+                     cannot connect to bound IPv6 address {addr} — environment \
+                     may block IPv6 loopback connections ({e})"
+                );
+                return;
+            }
+            Ok(_) => { /* raw connect succeeded — mirror_is_reachable should too */ }
+        }
+
         let mirror = DownloadMirror {
             name: "ipv6".to_string(),
-            base_url: format!("https://[::1]:{port}"),
+            base_url: format!("https://[::1]:{}", addr.port()),
         };
         assert!(
             mirror_is_reachable(&mirror),
