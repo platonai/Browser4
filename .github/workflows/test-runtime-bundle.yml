@@ -1,4 +1,4 @@
-name: Runtime Bundle Build
+name: Test Runtime Bundle Build
 
 on:
   push:
