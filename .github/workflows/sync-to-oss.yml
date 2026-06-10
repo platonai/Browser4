@@ -33,7 +33,7 @@ jobs:
           elif [[ -n "${{ inputs.tag_name || '' }}" ]]; then
             TAG_NAME="${{ inputs.tag_name }}"
             # Validate the tag exists and fetch release info
-            RELEASE_JSON=$(gh release view "$TAG_NAME" --json name,url,assets --jq '.')
+            RELEASE_JSON=$(gh release view "$TAG_NAME" --repo "${{ github.repository }}" --json name,url,assets --jq '.')
             RELEASE_URL=$(echo "$RELEASE_JSON" | jq -r '.url')
             ASSETS_COUNT=$(echo "$RELEASE_JSON" | jq '.assets | length')
           else
