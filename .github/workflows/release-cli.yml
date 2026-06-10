@@ -24,6 +24,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   NODE_VERSION: '24'
   CLI_PACKAGE_DIR: cli
   CLI_PACKAGE_NAME: browser4-cli

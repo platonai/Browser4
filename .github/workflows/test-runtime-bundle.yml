@@ -16,6 +16,9 @@ on:
           - '21'
           - '17'
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build-runtime-bundle:
     runs-on: ubuntu-latest

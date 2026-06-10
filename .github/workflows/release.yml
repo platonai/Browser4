@@ -55,6 +55,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   IMAGE_NAME: browser4
   CONTAINER_NAME: browser4
   NETWORK_NAME: 'browser4_backend'
