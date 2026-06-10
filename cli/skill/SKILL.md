@@ -479,3 +479,4 @@ browser4-cli close
 * **Agent command** [references/agent.md](references/agent.md)
 * **Smarm command** [references/swarm.md](references/swarm.md)
 * **Storage state (cookies, localStorage)** [references/storage-state.md](references/storage-state.md)
+* **X-SQL** [references/x-sql.md](references/x-sql.md)
