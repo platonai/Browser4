@@ -1,4 +1,4 @@
-name: Publish browser4-cli to npm
+name: Publish browser4-cli (npm + GitHub Release + OSS)
 
 on:
   push:
@@ -20,7 +20,7 @@ on:
         type: boolean
 
 concurrency:
-  group: publish-cli-npm-${{ github.ref }}
+  group: publish-cli-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -42,6 +42,7 @@ jobs:
       lookup_status: ${{ steps.prepare.outputs.lookup_status }}
       skip_binary_build: ${{ steps.prepare.outputs.skip_binary_build }}
       dry_run: ${{ steps.prepare.outputs.dry_run }}
+      tag: ${{ steps.prepare.outputs.tag }}
 
     steps:
       - name: Checkout repository
@@ -75,6 +76,13 @@ jobs:
             echo "::notice::Tag contains 'dry_run' — forcing dry-run mode, will not publish to npm."
           fi
 
+          # Extract tag name from ref (e.g., v1.2.3-cli). For workflow_dispatch,
+          # construct the tag from the CLI version.
+          TAG_NAME="${TAG_REF#refs/tags/}"
+          if [[ "$TAG_NAME" == "$TAG_REF" ]]; then
+            TAG_NAME="v${CLI_VERSION}-cli"
+          fi
+
           REMOTE_VERSION="unknown"
           LOOKUP_STATUS="failed"
           SHOULD_PUBLISH="false"
@@ -93,10 +101,12 @@ jobs:
           echo "lookup_status=$LOOKUP_STATUS" >> "$GITHUB_OUTPUT"
           echo "skip_binary_build=$INPUT_SKIP_BINARY_BUILD" >> "$GITHUB_OUTPUT"
           echo "dry_run=$DRY_RUN" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG_NAME" >> "$GITHUB_OUTPUT"
 
           {
             echo "## 📦 browser4-cli npm Publish"
             echo ""
+            echo "- **Tag**: $TAG_NAME"
             echo "- **Package**: $PACKAGE_NAME"
             echo "- **Local Version**: $CLI_VERSION"
             echo "- **Remote Version**: $REMOTE_VERSION"
@@ -164,7 +174,7 @@ jobs:
       fail-fast: false
       matrix:
         # NOTE: if you add/remove a target, update EXPECTED_COUNT in the
-        # "Verify all packaged binaries exist" step in the publish job.
+        # "Verify all packaged binaries exist" steps in the publish and github-release jobs.
         include:
           - name: Linux x64
             os: ubuntu-latest
@@ -469,5 +479,144 @@ jobs:
             echo "- **Remote Version**: ${{ steps.check.outputs.remote_version }}"
             echo "- **Publish Needed**: ${{ steps.check.outputs.should_publish }}"
             echo "- **Publish Result**: ${PUBLISH_OUTCOME:-skipped}"
+            echo "- **Status**: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  github-release:
+    name: Publish GitHub Release
+    needs: [prepare, test, build-binaries]
+    if: |
+      always() &&
+      needs.prepare.result == 'success' &&
+      needs.test.result == 'success' &&
+      (needs.build-binaries.result == 'success' || needs.build-binaries.result == 'skipped') &&
+      needs.prepare.outputs.dry_run != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Download CLI binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: browser4-cli-*
+          path: release-assets/
+          merge-multiple: true
+
+      - name: List and verify release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Release assets:"
+          ls -la release-assets/
+
+          EXPECTED_COUNT=7
+          MIN_SIZE=100000
+          ERRORS=0
+
+          mapfile -t BINARIES < <(find release-assets -maxdepth 1 -type f -name 'browser4-cli-*' | sort)
+          ACTUAL_COUNT="${#BINARIES[@]}"
+
+          if [ "$ACTUAL_COUNT" -ne "$EXPECTED_COUNT" ]; then
+            echo "ERROR: Expected $EXPECTED_COUNT CLI binaries, found $ACTUAL_COUNT"
+            ERRORS=$((ERRORS + 1))
+          fi
+
+          for binary in "${BINARIES[@]}"; do
+            SIZE=$(stat -c%s "$binary" 2>/dev/null || stat -f%z "$binary")
+            if [ "$SIZE" -lt "$MIN_SIZE" ]; then
+              echo "ERROR: $(basename "$binary") is too small ($SIZE bytes, expected >= $MIN_SIZE)"
+              ERRORS=$((ERRORS + 1))
+            else
+              echo "OK: $(basename "$binary") ($SIZE bytes)"
+            fi
+          done
+
+          if [ "$ERRORS" -gt 0 ]; then
+            echo "Error: $ERRORS binary validation failures"
+            exit 1
+          fi
+
+          echo "All $ACTUAL_COUNT platform binaries are present and valid"
+
+      - name: Build release asset manifest
+        id: asset_manifest
+        shell: bash
+        run: |
+          {
+            echo 'files<<EOF'
+            find release-assets -maxdepth 1 -type f -name 'browser4-cli-*' | sort
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Generate CLI release notes
+        shell: bash
+        env:
+          CLI_VERSION: ${{ needs.prepare.outputs.cli_version }}
+        run: |
+          cat > release_notes.md << NOTES_EOF
+          ## 🚀 browser4-cli v$CLI_VERSION
+
+          This release includes prebuilt native **browser4-cli** binaries for:
+
+          | Platform | Binary |
+          |----------|--------|
+          | Linux x64 | \`browser4-cli-linux-x64\` |
+          | Linux ARM64 | \`browser4-cli-linux-arm64\` |
+          | Linux musl x64 | \`browser4-cli-linux-musl-x64\` |
+          | Linux musl ARM64 | \`browser4-cli-linux-musl-arm64\` |
+          | Windows x64 | \`browser4-cli-win32-x64.exe\` |
+          | macOS x64 | \`browser4-cli-darwin-x64\` |
+          | macOS ARM64 | \`browser4-cli-darwin-arm64\` |
+
+          ### Installation
+
+          \`\`\`bash
+          npm install -g browser4-cli
+          \`\`\`
+
+          Or download the appropriate binary for your platform from the assets below.
+          NOTES_EOF
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
+        with:
+          files: ${{ steps.asset_manifest.outputs.files }}
+          name: browser4-cli v${{ needs.prepare.outputs.cli_version }}
+          body_path: release_notes.md
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          make_latest: true
+          overwrite_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Trigger OSS Sync
+        id: trigger_oss
+        if: success()
+        shell: bash
+        run: |
+          gh workflow run sync-to-oss.yml \
+            --repo "${{ github.repository }}" \
+            -f tag_name="${{ needs.prepare.outputs.tag }}"
+
+      - name: GitHub Release Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## 🚀 browser4-cli GitHub Release"
+            echo ""
+            echo "- **Tag**: ${{ needs.prepare.outputs.tag }}"
+            echo "- **Version**: ${{ needs.prepare.outputs.cli_version }}"
+            echo "- **Platform Binaries**: 7 (Linux x64, ARM64, musl x64, musl ARM64, Windows x64, macOS x64, ARM64)"
+            echo "- **OSS Sync**: ${{ steps.trigger_oss.outcome || 'triggered' }}"
             echo "- **Status**: ${{ job.status }}"
           } >> "$GITHUB_STEP_SUMMARY"
