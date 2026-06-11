@@ -11,7 +11,7 @@ Two modes:
     directly without creating a tag.
 
 .PARAMETER Version
-CLI version to release (default: from cli/package.json).
+CLI version to release (default: from cli/VERSION-CLI).
 
 .PARAMETER DryRun
 Tag as v{version}-cli_dry_run.N. Auto-increments the dry_run counter.
@@ -33,7 +33,7 @@ Skip confirmation prompts.
 
 .EXAMPLE
 .\bin\release\trigger-cli-release.ps1
-Tag mode with the current version from cli/package.json.
+Tag mode with the current version from cli/VERSION-CLI.
 
 .EXAMPLE
 .\bin\release\trigger-cli-release.ps1 -DryRun
@@ -70,20 +70,19 @@ if (-not $repoRoot) {
 }
 Set-Location $repoRoot
 
-$cliPackageJson = Join-Path $repoRoot "cli/package.json"
-if (-not (Test-Path $cliPackageJson)) {
-    Write-Error "Could not find cli/package.json at $cliPackageJson"
+$versionCliFile = Join-Path $repoRoot "cli/VERSION-CLI"
+if (-not (Test-Path $versionCliFile)) {
+    Write-Error "Could not find cli/VERSION-CLI at $versionCliFile"
     exit 1
 }
 
 # ──────────────────────────────────────────────
-# Resolve version
+# Resolve version (cli/VERSION-CLI is the single source of truth)
 # ──────────────────────────────────────────────
 if ([string]::IsNullOrWhiteSpace($Version)) {
-    $package = Get-Content $cliPackageJson -Raw | ConvertFrom-Json
-    $Version = $package.version
+    $Version = (Get-Content $versionCliFile -Raw).Trim()
     if ([string]::IsNullOrWhiteSpace($Version)) {
-        Write-Error "Could not read version from $cliPackageJson"
+        Write-Error "cli/VERSION-CLI is empty"
         exit 1
     }
 }
@@ -92,6 +91,60 @@ if ([string]::IsNullOrWhiteSpace($Version)) {
 if ($Version -notmatch '^\d+\.\d+\.\d+(-[a-zA-Z0-9.]+)?$') {
     Write-Error "Invalid version format: $Version (expected X.Y.Z or X.Y.Z-suffix.N)"
     exit 1
+}
+
+# ──────────────────────────────────────────────
+# Check npm registry — local version must be higher than what's published
+# ──────────────────────────────────────────────
+$PACKAGE_NAME = "browser4-cli"
+Write-Host "Checking npm registry for $PACKAGE_NAME ..."
+
+$npmVersion = $null
+try {
+    $raw = npm view "$PACKAGE_NAME" version 2>$null
+    if ($raw) {
+        $npmVersion = ($raw -split '\s+')[0].Trim()
+    }
+} catch {
+    # npm view failed — package may not be published yet, which is fine
+}
+
+if ($npmVersion -and $npmVersion -match '^\d+\.\d+\.\d+') {
+    Write-Host "  Local:  $Version"
+    Write-Host "  npm:    $npmVersion"
+
+    # Extract base X.Y.Z for comparison (strip suffixes like -alpha.1, -SNAPSHOT)
+    if ($Version -match '^(\d+\.\d+\.\d+)') { $localBase = $matches[1] } else { $localBase = $Version }
+    if ($npmVersion -match '^(\d+\.\d+\.\d+)') { $npmBase = $matches[1] } else { $npmBase = $npmVersion }
+
+    try {
+        $localVer = [version]$localBase
+        $npmVer = [version]$npmBase
+
+        if ($localVer -lt $npmVer) {
+            Write-Error @"
+Local version ($Version) is LOWER than the published npm version ($npmVersion).
+Bump cli/VERSION-CLI to a version higher than $npmVersion before releasing.
+"@
+            exit 1
+        } elseif ($localVer -eq $npmVer) {
+            Write-Warning "Local version ($Version) matches the published npm version ($npmVersion)."
+            Write-Warning "The npm publish step will be skipped unless the version has changed."
+            if (-not $Yes) {
+                $confirm = Read-Host "Continue anyway? (y/N)"
+                if ($confirm -ne 'y' -and $confirm -ne 'Y') {
+                    Write-Host "Cancelled."
+                    exit 0
+                }
+            }
+        } else {
+            Write-Host "  ✓ Local version is newer than npm" -ForegroundColor Green
+        }
+    } catch {
+        Write-Warning "Could not compare versions numerically ($localBase vs $npmBase). Proceeding."
+    }
+} else {
+    Write-Host "  No published version found on npm (first release?)" -ForegroundColor Yellow
 }
 
 # ──────────────────────────────────────────────

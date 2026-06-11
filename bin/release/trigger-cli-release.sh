@@ -15,7 +15,7 @@
 #   ./bin/release/trigger-cli-release.sh -v 0.2.0         # override version
 #
 # Options:
-#   -v, --version VERSION    CLI version to release (default: from cli/package.json)
+#   -v, --version VERSION    CLI version to release (default: from cli/VERSION-CLI)
 #   --dry-run                Tag as v{version}-cli_dry_run.N
 #   --dispatch               Use `gh workflow run` instead of creating a tag
 #   --skip-binary-build      Skip building CLI binaries (dispatch only)
@@ -30,11 +30,11 @@ set -euo pipefail
 # Resolve repository root
 # ──────────────────────────────────────────────
 REPO_ROOT=$(cd "$(dirname "$0")/../.." 2>/dev/null && pwd)
-if [[ ! -f "$REPO_ROOT/cli/package.json" ]]; then
+if [[ ! -f "$REPO_ROOT/cli/VERSION-CLI" ]]; then
   REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)
 fi
-if [[ -z "${REPO_ROOT:-}" || ! -f "$REPO_ROOT/cli/package.json" ]]; then
-  echo "ERROR: could not locate repository root (looked for cli/package.json)" >&2
+if [[ -z "${REPO_ROOT:-}" || ! -f "$REPO_ROOT/cli/VERSION-CLI" ]]; then
+  echo "ERROR: could not locate repository root (looked for cli/VERSION-CLI)" >&2
   exit 1
 fi
 cd "$REPO_ROOT"
@@ -86,13 +86,14 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ──────────────────────────────────────────────
-# Resolve version
+# Resolve version (cli/VERSION-CLI is the single source of truth)
 # ──────────────────────────────────────────────
 if [[ -z "$VERSION" ]]; then
-  VERSION=$(node -p "require('./cli/package.json').version" 2>/dev/null) || {
-    echo "ERROR: could not read version from cli/package.json" >&2
+  VERSION=$(head -n 1 "$REPO_ROOT/cli/VERSION-CLI" | tr -d '[:space:]')
+  if [[ -z "$VERSION" ]]; then
+    echo "ERROR: cli/VERSION-CLI is empty" >&2
     exit 1
-  }
+  fi
 fi
 
 # Validate version format
@@ -100,6 +101,46 @@ if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
   echo "ERROR: invalid version format: $VERSION" >&2
   echo "Expected: X.Y.Z or X.Y.Z-suffix.N" >&2
   exit 1
+fi
+
+# ──────────────────────────────────────────────
+# Check npm registry — local version must be higher than what's published
+# ──────────────────────────────────────────────
+PACKAGE_NAME="browser4-cli"
+echo "Checking npm registry for $PACKAGE_NAME ..."
+
+NPM_VERSION=""
+if NPM_VERSION=$(npm view "$PACKAGE_NAME" version 2>/dev/null | head -1 | tr -d '[:space:]'); then
+  if [[ -n "$NPM_VERSION" && "$NPM_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+    echo "  Local:  $VERSION"
+    echo "  npm:    $NPM_VERSION"
+
+    # Extract base X.Y.Z for comparison
+    LOCAL_BASE="${VERSION%%-*}"
+    NPM_BASE="${NPM_VERSION%%-*}"
+
+    # Sortable comparison using sort -V
+    HIGHEST=$(printf '%s\n%s\n' "$LOCAL_BASE" "$NPM_BASE" | sort -V | tail -1)
+
+    if [[ "$LOCAL_BASE" == "$NPM_BASE" ]]; then
+      echo "WARNING: Local version ($VERSION) matches the published npm version ($NPM_VERSION)."
+      echo "The npm publish step will be skipped unless the version has changed."
+      if [[ "$YES" != "true" ]]; then
+        read -r -p "Continue anyway? (y/N): " CONFIRM
+        [[ "$CONFIRM" =~ ^[Yy]$ ]] || { echo "Cancelled."; exit 0; }
+      fi
+    elif [[ "$HIGHEST" != "$LOCAL_BASE" ]]; then
+      echo "ERROR: Local version ($VERSION) is LOWER than the published npm version ($NPM_VERSION)." >&2
+      echo "Bump cli/VERSION-CLI to a version higher than $NPM_VERSION before releasing." >&2
+      exit 1
+    else
+      echo "  ✓ Local version is newer than npm"
+    fi
+  else
+    echo "  No published version found on npm (first release?)"
+  fi
+else
+  echo "  No published version found on npm (first release?)"
 fi
 
 # ──────────────────────────────────────────────
