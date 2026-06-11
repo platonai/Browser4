@@ -248,31 +248,29 @@ fn load_mirrors() -> Vec<DownloadMirror> {
 
     let config_path = mirrors_config_path();
     match fs::read_to_string(&config_path) {
-        Ok(contents) => {
-            match serde_json::from_str::<MirrorsConfig>(&contents) {
-                Ok(config) if !config.mirrors.is_empty() => {
-                    eprintln!(
-                        "Loaded {} mirror(s) from {}",
-                        config.mirrors.len(),
-                        config_path.display()
-                    );
-                    return config.mirrors;
-                }
-                Ok(_) => {
-                    eprintln!(
-                        "Mirror config file {} has an empty mirror list; using built-in defaults.",
-                        config_path.display()
-                    );
-                }
-                Err(e) => {
-                    eprintln!(
-                        "Failed to parse mirror config {}: {}; using built-in defaults.",
-                        config_path.display(),
-                        e
-                    );
-                }
+        Ok(contents) => match serde_json::from_str::<MirrorsConfig>(&contents) {
+            Ok(config) if !config.mirrors.is_empty() => {
+                eprintln!(
+                    "Loaded {} mirror(s) from {}",
+                    config.mirrors.len(),
+                    config_path.display()
+                );
+                return config.mirrors;
             }
-        }
+            Ok(_) => {
+                eprintln!(
+                    "Mirror config file {} has an empty mirror list; using built-in defaults.",
+                    config_path.display()
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "Failed to parse mirror config {}: {}; using built-in defaults.",
+                    config_path.display(),
+                    e
+                );
+            }
+        },
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             // No config file — silently use built-in defaults.
         }
@@ -343,7 +341,11 @@ fn mirror_is_reachable(mirror: &DownloadMirror) -> bool {
             // (e.g. [::1] → ::1), so a formatted string like "::1:443" would
             // be mis-parsed as a bare IPv6 address with the port becoming the
             // last hextet.
-            match (host.as_str(), port).to_socket_addrs().ok().and_then(|mut a| a.next()) {
+            match (host.as_str(), port)
+                .to_socket_addrs()
+                .ok()
+                .and_then(|mut a| a.next())
+            {
                 Some(addr) => addr,
                 None => return false,
             }
@@ -366,7 +368,10 @@ fn select_reachable_mirror(mirrors: &[DownloadMirror]) -> (&DownloadMirror, bool
         if mirror_is_reachable(mirror) {
             return (mirror, true);
         }
-        eprintln!("Mirror '{}' is unreachable; trying next mirror...", mirror.name);
+        eprintln!(
+            "Mirror '{}' is unreachable; trying next mirror...",
+            mirror.name
+        );
     }
     // All mirrors failed the reachability check — fall back to the first
     // mirror so the download attempt produces a clear HTTP error.
@@ -396,7 +401,10 @@ fn load_mirror_preference(mirrors: &[DownloadMirror]) -> Option<MirrorPreference
     let contents = fs::read_to_string(&path).ok()?;
     let pref: MirrorPreference = serde_json::from_str(&contents).ok()?;
     // Validate: the cached mirror must be in the current mirror list.
-    if !mirrors.iter().any(|m| m.base_url == pref.selected_mirror.base_url) {
+    if !mirrors
+        .iter()
+        .any(|m| m.base_url == pref.selected_mirror.base_url)
+    {
         eprintln!(
             "Cached mirror '{}' is not in the current mirror list; ignoring.",
             pref.selected_mirror.name
@@ -520,12 +528,7 @@ async fn run_speed_tests(mirrors: &[DownloadMirror]) -> Vec<SpeedTestResult> {
             let start = Instant::now();
 
             let range_header = format!("bytes=0-{}", SPEED_TEST_PROBE_BYTES - 1);
-            match client
-                .get(&url)
-                .header("Range", &range_header)
-                .send()
-                .await
-            {
+            match client.get(&url).header("Range", &range_header).send().await {
                 Ok(response) => {
                     let status = response.status();
                     // Accept 206 (Partial Content — Range honoured) and 200
@@ -853,7 +856,11 @@ fn read_current_tag() -> Option<String> {
     }
     let raw = fs::read_to_string(&path).ok()?;
     let tag = raw.trim().to_string();
-    if tag.is_empty() { None } else { Some(tag) }
+    if tag.is_empty() {
+        None
+    } else {
+        Some(tag)
+    }
 }
 
 /// Record `tag` as the currently active version.
@@ -994,13 +1001,9 @@ fn try_migrate_legacy_runtime() -> Option<String> {
             Some(tag)
         }
         Err(e) => {
-            eprintln!(
-                "  Migration by rename failed ({}); copying instead...",
-                e
-            );
+            eprintln!("  Migration by rename failed ({}); copying instead...", e);
             // Fallback: copy recursively.
-            copy_dir_recursive(&legacy_install_dir, &target_dir)
-                .ok()?;
+            copy_dir_recursive(&legacy_install_dir, &target_dir).ok()?;
             let _ = fs::remove_dir_all(&legacy_install_dir);
             let _ = write_current_tag(&tag);
             Some(tag)
@@ -1009,7 +1012,11 @@ fn try_migrate_legacy_runtime() -> Option<String> {
 }
 
 fn browser4_java_executable_name() -> &'static str {
-    if cfg!(windows) { "java.exe" } else { "java" }
+    if cfg!(windows) {
+        "java.exe"
+    } else {
+        "java"
+    }
 }
 
 fn browser4_install_metadata_path() -> PathBuf {
@@ -1050,17 +1057,19 @@ fn install_dir_contains_runtime(install_dir: &Path) -> bool {
     let lib_dir = install_dir.join(BROWSER4_LIB_DIR_NAME);
     let has_lib = lib_dir.is_dir()
         && std::fs::read_dir(&lib_dir)
-            .map(|mut entries| entries.any(|entry| {
-                entry
-                    .ok()
-                    .map(|e| {
-                        e.path()
-                            .extension()
-                            .map(|ext| ext == "jar")
-                            .unwrap_or(false)
-                    })
-                    .unwrap_or(false)
-            }))
+            .map(|mut entries| {
+                entries.any(|entry| {
+                    entry
+                        .ok()
+                        .map(|e| {
+                            e.path()
+                                .extension()
+                                .map(|ext| ext == "jar")
+                                .unwrap_or(false)
+                        })
+                        .unwrap_or(false)
+                })
+            })
             .unwrap_or(false);
     has_lib && java_path_in_install_dir(install_dir).is_file()
 }
@@ -1112,7 +1121,9 @@ fn parse_release_tag_from_url(url: &str) -> Option<String> {
     let parsed = reqwest::Url::parse(url).ok()?;
     let segments = parsed.path_segments()?.collect::<Vec<_>>();
     let download_index = segments.iter().position(|segment| *segment == "download")?;
-    segments.get(download_index + 1).map(|segment| (*segment).to_string())
+    segments
+        .get(download_index + 1)
+        .map(|segment| (*segment).to_string())
 }
 
 /// Build a `reqwest::Proxy` from the given URL string.
@@ -1125,9 +1136,7 @@ fn proxy_from_url(raw: &str) -> Option<reqwest::Proxy> {
     match reqwest::Proxy::all(&trimmed) {
         Ok(proxy) => Some(proxy),
         Err(error) => {
-            eprintln!(
-                "Warning: failed to configure download proxy from ({trimmed}): {error}"
-            );
+            eprintln!("Warning: failed to configure download proxy from ({trimmed}): {error}");
             None
         }
     }
@@ -1224,9 +1233,7 @@ fn read_winhttp_proxy() -> Option<String> {
         let line = line.trim();
         if let Some(server) = line.strip_prefix("Proxy Server(s):") {
             let server = server.trim();
-            if !server.is_empty()
-                && !server.eq_ignore_ascii_case("direct")
-            {
+            if !server.is_empty() && !server.eq_ignore_ascii_case("direct") {
                 return Some(ensure_proxy_scheme(server));
             }
         }
@@ -1300,13 +1307,11 @@ $server
 }
 
 fn create_runtime_install_temp_dir() -> Result<PathBuf, String> {
-    let path = browser4_cli_temp_root_dir()
-        .join("install")
-        .join(format!(
-            "runtime-{}-{}",
-            std::process::id(),
-            chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ")
-        ));
+    let path = browser4_cli_temp_root_dir().join("install").join(format!(
+        "runtime-{}-{}",
+        std::process::id(),
+        chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ")
+    ));
     fs::create_dir_all(&path).map_err(|e| {
         format!(
             "Failed to create Browser4 runtime install temp directory {}: {e}",
@@ -1329,8 +1334,8 @@ fn download_file_blocking(url: &str, target_path: &Path) -> Result<DownloadedFil
         fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
 
-    let mut client_builder = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(1800));
+    let mut client_builder =
+        reqwest::blocking::Client::builder().timeout(Duration::from_secs(1800));
 
     // Honour proxy environment variables and system proxy settings.
     // Reqwest processes NO_PROXY / no_proxy automatically when a proxy
@@ -1451,10 +1456,7 @@ fn download_file_via_powershell(url: &str, target_path: &Path) -> Result<Downloa
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!(
-            "PowerShell download failed: {}",
-            stderr.trim()
-        ));
+        return Err(format!("PowerShell download failed: {}", stderr.trim()));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1472,10 +1474,11 @@ fn download_file_via_powershell(url: &str, target_path: &Path) -> Result<Downloa
 
     if bytes_written == 0 {
         // Fallback: read the file size directly.
-        bytes_written = target_path
-            .metadata()
-            .map(|m| m.len())
-            .map_err(|e| format!("PowerShell download appeared to succeed but the output file is unreadable: {e}"))?;
+        bytes_written = target_path.metadata().map(|m| m.len()).map_err(|e| {
+            format!(
+                "PowerShell download appeared to succeed but the output file is unreadable: {e}"
+            )
+        })?;
     }
 
     eprintln!("  PowerShell download complete: {} bytes", bytes_written);
@@ -1687,7 +1690,8 @@ fn commit_installed_browser4_runtime(
 
 /// Compute the SHA-256 digest of a file, returning the hex-encoded string.
 fn compute_file_sha256(path: &Path) -> Result<String, String> {
-    let mut file = fs::File::open(path).map_err(|e| format!("Cannot open file for checksum: {e}"))?;
+    let mut file =
+        fs::File::open(path).map_err(|e| format!("Cannot open file for checksum: {e}"))?;
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 65536];
     loop {
@@ -1739,8 +1743,7 @@ fn cached_download_path(normalized_tag: &str, asset_name: &str) -> PathBuf {
 
 /// Path to the checksum sidecar file for a cached archive.
 fn cached_checksum_path(normalized_tag: &str, asset_name: &str) -> PathBuf {
-    let mut base = cached_download_path(normalized_tag, asset_name)
-        .into_os_string();
+    let mut base = cached_download_path(normalized_tag, asset_name).into_os_string();
     base.push(".sha256");
     PathBuf::from(base)
 }
@@ -1869,10 +1872,7 @@ fn try_restore_from_download_cache(
         let _ = fs::create_dir_all(parent);
     }
 
-    eprintln!(
-        "  Restoring {} from download cache...",
-        asset_name
-    );
+    eprintln!("  Restoring {} from download cache...", asset_name);
 
     match fs::copy(&cached, dest_path) {
         Ok(bytes) => {
@@ -1979,7 +1979,9 @@ pub async fn install_browser4_runtime(
         if let Some(requested_tag) = requested_tag.as_deref() {
             let versioned_dir = versioned_install_dir(requested_tag);
             if install_dir_contains_runtime(&versioned_dir) {
-                if let Some(existing_metadata) = read_installed_browser4_runtime_metadata_for(&versioned_dir) {
+                if let Some(existing_metadata) =
+                    read_installed_browser4_runtime_metadata_for(&versioned_dir)
+                {
                     // Ensure this version is also marked as current.
                     if read_current_tag().as_deref() != Some(requested_tag) {
                         let _ = write_current_tag(requested_tag);
@@ -1994,8 +1996,9 @@ pub async fn install_browser4_runtime(
     let mirrors = load_mirrors();
     // Determine whether BROWSER4_RELEASES_BASE_URL is in effect — when it is
     // there is only a single custom mirror and speed testing is pointless.
-    let is_single_mirror_override =
-        env::var(BROWSER4_RELEASES_BASE_URL_ENV).ok().map_or(false, |v| !v.trim().is_empty());
+    let is_single_mirror_override = env::var(BROWSER4_RELEASES_BASE_URL_ENV)
+        .ok()
+        .map_or(false, |v| !v.trim().is_empty());
     let preferred_download_url = mirror_download_url(&mirrors[0], tag, &asset_name);
     let temp_dir = create_runtime_install_temp_dir()?;
     let archive_path = temp_dir.join(&asset_name);
@@ -2188,7 +2191,12 @@ pub fn find_chrome_executable() -> Option<std::path::PathBuf> {
     }
 
     // Linux / fallback: check PATH
-    for name in &["google-chrome", "google-chrome-stable", "chromium-browser", "chromium"] {
+    for name in &[
+        "google-chrome",
+        "google-chrome-stable",
+        "chromium-browser",
+        "chromium",
+    ] {
         if let Some(path) = find_in_path(name) {
             return Some(path);
         }
@@ -2243,11 +2251,9 @@ pub fn ensure_chrome_available() -> Result<(), String> {
 
         eprintln!("   Unsupported Linux distribution.");
         eprintln!("   Install Chrome manually: https://www.google.com/chrome/");
-        return Err(
-            "Cannot auto-install Chrome on this Linux distribution. \
+        return Err("Cannot auto-install Chrome on this Linux distribution. \
              Install it manually from https://www.google.com/chrome/"
-                .to_string(),
-        );
+            .to_string());
     }
 
     if cfg!(target_os = "macos") {
@@ -2319,23 +2325,16 @@ fn install_chrome_windows() -> Result<(), String> {
     );
 
     let status = std::process::Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            &ps_script,
-        ])
+        .args(["-NoProfile", "-NonInteractive", "-Command", &ps_script])
         .status()
         .map_err(|e| format!("Failed to run PowerShell installer: {e}"))?;
 
     if !status.success() {
         let _ = fs::remove_file(&temp_installer);
-        return Err(
-            "Google Chrome installation via PowerShell failed. \
+        return Err("Google Chrome installation via PowerShell failed. \
              This may be due to insufficient privileges — try running as Administrator, \
              or install Chrome manually from https://www.google.com/chrome/"
-                .to_string(),
-        );
+            .to_string());
     }
 
     if find_chrome_executable().is_some() {
@@ -2378,10 +2377,12 @@ fn install_chrome_debian() -> Result<(), String> {
         .args(["dpkg", "-i"])
         .arg(&tmp_deb)
         .status()
-        .map_err(|e| format!(
-            "Failed to run 'sudo dpkg': {e}. \
+        .map_err(|e| {
+            format!(
+                "Failed to run 'sudo dpkg': {e}. \
              Ensure you have sudo privileges (passwordless sudo required for unattended install)."
-        ))?;
+            )
+        })?;
 
     if !status.success() {
         // Fix broken dependencies
@@ -2423,10 +2424,12 @@ fn install_chrome_rhel() -> Result<(), String> {
         .args(["dnf", "install", "-y"])
         .arg(&tmp_rpm)
         .status()
-        .map_err(|e| format!(
-            "Failed to run 'sudo dnf': {e}. \
+        .map_err(|e| {
+            format!(
+                "Failed to run 'sudo dnf': {e}. \
              Ensure you have sudo privileges (passwordless sudo required for unattended install)."
-        ))?;
+            )
+        })?;
 
     if !status.success() {
         // Try yum as fallback
@@ -2455,10 +2458,7 @@ fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> Serve
     let program = runtime.java_path.clone();
     let program_display = program.display().to_string();
     let classpath_arg = if cfg!(windows) {
-        format!(
-            "{}\\*",
-            runtime.lib_dir.display()
-        )
+        format!("{}\\*", runtime.lib_dir.display())
     } else {
         format!("{}/*", runtime.lib_dir.display())
     };
@@ -2692,7 +2692,10 @@ async fn try_build_local_runtime_bundle(
     if maven_jar_exists(&bundle_module_dir) {
         eprintln!(
             "Using existing Browser4 bundle JAR at {}; skipping Maven package.",
-            bundle_module_dir.join("target").join("Browser4Bundle.jar").display()
+            bundle_module_dir
+                .join("target")
+                .join("Browser4Bundle.jar")
+                .display()
         );
     } else {
         eprintln!(
@@ -2726,7 +2729,9 @@ async fn try_build_local_runtime_bundle(
             Ok(status) => {
                 eprintln!(
                     "Maven package for browser4-bundle exited with {}; falling back to download.",
-                    status.code().map_or_else(|| "signal".to_string(), |c| c.to_string())
+                    status
+                        .code()
+                        .map_or_else(|| "signal".to_string(), |c| c.to_string())
                 );
                 return Ok(None);
             }
@@ -2754,9 +2759,7 @@ async fn try_build_local_runtime_bundle(
     match build_result {
         Ok(()) => {}
         Err(error) => {
-            eprintln!(
-                "Runtime bundle build script failed: {error}; falling back to download."
-            );
+            eprintln!("Runtime bundle build script failed: {error}; falling back to download.");
             return Ok(None);
         }
     }
@@ -2861,7 +2864,9 @@ async fn run_bundle_build_script(
             }
             Err(message)
         }
-        Err(error) => Err(format!("failed to spawn build script ({shell_for_error}): {error}")),
+        Err(error) => Err(format!(
+            "failed to spawn build script ({shell_for_error}): {error}"
+        )),
     }
 }
 
@@ -2890,9 +2895,7 @@ async fn find_or_install_runtime() -> Result<InstalledBrowser4Runtime, String> {
             match try_build_local_runtime_bundle(root).await {
                 Ok(Some(runtime)) => return Ok(runtime),
                 Ok(None) => {
-                    eprintln!(
-                        "Local Browser4 bundle is not available; falling back to download."
-                    );
+                    eprintln!("Local Browser4 bundle is not available; falling back to download.");
                 }
                 Err(error) => {
                     eprintln!(
@@ -3759,7 +3762,10 @@ mod tests {
     fn test_load_mirrors_uses_single_source_override() {
         let previous = env::var(BROWSER4_RELEASES_BASE_URL_ENV).ok();
         unsafe {
-            env::set_var(BROWSER4_RELEASES_BASE_URL_ENV, "https://custom.example.com/releases");
+            env::set_var(
+                BROWSER4_RELEASES_BASE_URL_ENV,
+                "https://custom.example.com/releases",
+            );
         }
         let mirrors = load_mirrors();
         match previous {
@@ -3777,8 +3783,7 @@ mod tests {
 
     #[test]
     fn test_mirror_is_reachable_detects_listening_port() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0")
-            .expect("bind test listener");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind test listener");
         let port = listener.local_addr().unwrap().port();
         let mirror = DownloadMirror {
             name: "test".to_string(),
@@ -3796,8 +3801,7 @@ mod tests {
         // Bind and immediately drop to find a free port, then verify
         // nothing is listening on it.
         let free_port = {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0")
-                .expect("bind for free port");
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind for free port");
             listener.local_addr().unwrap().port()
         };
         let mirror = DownloadMirror {
@@ -3827,12 +3831,10 @@ mod tests {
         // First mirror points to a free port (nothing listening) — unreachable.
         // Second mirror has a live TcpListener — reachable.
         let dead_port = {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0")
-                .expect("bind for dead port");
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind for dead port");
             listener.local_addr().unwrap().port()
         };
-        let live_listener = std::net::TcpListener::bind("127.0.0.1:0")
-            .expect("bind live listener");
+        let live_listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind live listener");
         let live_port = live_listener.local_addr().unwrap().port();
 
         let mirrors = vec![
@@ -3856,13 +3858,13 @@ mod tests {
     fn test_select_reachable_mirror_falls_back_to_first_when_none_reachable() {
         // Both mirrors point to free ports — neither is reachable.
         let dead1 = {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0")
-                .expect("bind for dead port 1");
+            let listener =
+                std::net::TcpListener::bind("127.0.0.1:0").expect("bind for dead port 1");
             listener.local_addr().unwrap().port()
         };
         let dead2 = {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0")
-                .expect("bind for dead port 2");
+            let listener =
+                std::net::TcpListener::bind("127.0.0.1:0").expect("bind for dead port 2");
             listener.local_addr().unwrap().port()
         };
 
@@ -3879,8 +3881,10 @@ mod tests {
 
         let (selected, reachable) = select_reachable_mirror(&mirrors);
         assert!(!reachable, "should not have found a reachable mirror");
-        assert_eq!(selected.name, "first",
-            "should fall back to the first mirror when none are reachable");
+        assert_eq!(
+            selected.name, "first",
+            "should fall back to the first mirror when none are reachable"
+        );
     }
 
     #[test]
@@ -3911,7 +3915,11 @@ mod tests {
             .expect("must resolve ::1")
             .next()
             .expect("must produce at least one address");
-        assert_eq!(addr.port(), 443, "port must be the TCP port, not part of the IPv6 address");
+        assert_eq!(
+            addr.port(),
+            443,
+            "port must be the TCP port, not part of the IPv6 address"
+        );
         assert!(addr.is_ipv6(), "must be an IPv6 address");
         assert_eq!(addr.ip().to_string(), "::1");
     }
@@ -3939,10 +3947,7 @@ mod tests {
         // Some environments (notably Docker with default settings) allow
         // binding to IPv6 loopback but block outbound IPv6 connections.
         // Probe with a raw connect before asserting mirror_is_reachable.
-        match std::net::TcpStream::connect_timeout(
-            &addr,
-            std::time::Duration::from_secs(2),
-        ) {
+        match std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(2)) {
             Err(e) => {
                 eprintln!(
                     "SKIP test_mirror_is_reachable_handles_ipv6_localhost: \
@@ -3979,15 +3984,16 @@ mod tests {
         let result = mirror_is_reachable(&mirror);
         // Must not panic — may be true or false depending on DNS hijacking,
         // but the key invariant is that we got a bool back, not a crash.
-        assert!(!result || result,
-            "mirror_is_reachable must return a bool, not panic, for hostname URLs");
+        assert!(
+            !result || result,
+            "mirror_is_reachable must return a bool, not panic, for hostname URLs"
+        );
     }
 
     #[test]
     fn test_mirror_is_reachable_respects_explicit_port() {
         // URLs with an explicit non-default port should connect to that port.
-        let listener = std::net::TcpListener::bind("127.0.0.1:0")
-            .expect("bind test listener");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind test listener");
         let port = listener.local_addr().unwrap().port();
         let mirror = DownloadMirror {
             name: "explicit-port".to_string(),
@@ -4143,13 +4149,18 @@ mod tests {
         }
 
         // install_dir should be {runtime_data}/runtime/v4.9.3/
-        assert!(runtime.install_dir.ends_with(Path::new("runtime").join("v4.9.3")));
+        assert!(runtime
+            .install_dir
+            .ends_with(Path::new("runtime").join("v4.9.3")));
         // lib_dir should be {install_dir}/lib/
         assert!(runtime.lib_dir.ends_with(Path::new("v4.9.3").join("lib")));
         // java_path should be {install_dir}/runtime/bin/java
-        assert!(runtime
-            .java_path
-            .ends_with(Path::new("v4.9.3").join("runtime").join("bin").join(browser4_java_executable_name())));
+        assert!(runtime.java_path.ends_with(
+            Path::new("v4.9.3")
+                .join("runtime")
+                .join("bin")
+                .join(browser4_java_executable_name())
+        ));
         assert!(runtime.reused_existing);
     }
 
@@ -4175,11 +4186,7 @@ mod tests {
     #[test]
     fn test_server_startup_log_path_includes_launch_kind_and_port() {
         let tmp = test_temp_dir();
-        let jar_path = server_startup_log_path(
-            Some(tmp.path()),
-            &sample_launch_spec(),
-            9292,
-        );
+        let jar_path = server_startup_log_path(Some(tmp.path()), &sample_launch_spec(), 9292);
 
         let jar_name = jar_path.file_name().unwrap().to_string_lossy();
 
@@ -4267,12 +4274,8 @@ mod tests {
     #[test]
     fn test_create_server_startup_log_writes_header() {
         let tmp = test_temp_dir();
-        let log = create_server_startup_log_in(
-            Some(tmp.path()),
-            &sample_launch_spec(),
-            8123,
-        )
-        .expect("startup log creation should succeed");
+        let log = create_server_startup_log_in(Some(tmp.path()), &sample_launch_spec(), 8123)
+            .expect("startup log creation should succeed");
 
         drop(log.stdout);
         drop(log.stderr);
@@ -4286,12 +4289,8 @@ mod tests {
     #[test]
     fn test_append_startup_log_message_writes_status_line() {
         let tmp = test_temp_dir();
-        let log = create_server_startup_log_in(
-            Some(tmp.path()),
-            &sample_launch_spec(),
-            8182,
-        )
-        .expect("startup log creation should succeed");
+        let log = create_server_startup_log_in(Some(tmp.path()), &sample_launch_spec(), 8182)
+            .expect("startup log creation should succeed");
 
         append_startup_log_message_impl(&log.path, "test status line")
             .expect("startup log append should succeed");
@@ -4363,20 +4362,38 @@ mod tests {
 
     #[test]
     fn test_normalize_release_tag_adds_v_prefix() {
-        assert_eq!(normalize_release_tag(Some("4.9.3")).as_deref(), Some("v4.9.3"));
-        assert_eq!(normalize_release_tag(Some("4.10.0")).as_deref(), Some("v4.10.0"));
+        assert_eq!(
+            normalize_release_tag(Some("4.9.3")).as_deref(),
+            Some("v4.9.3")
+        );
+        assert_eq!(
+            normalize_release_tag(Some("4.10.0")).as_deref(),
+            Some("v4.10.0")
+        );
     }
 
     #[test]
     fn test_normalize_release_tag_keeps_existing_v_prefix() {
-        assert_eq!(normalize_release_tag(Some("v4.9.3")).as_deref(), Some("v4.9.3"));
-        assert_eq!(normalize_release_tag(Some("v4.10.0")).as_deref(), Some("v4.10.0"));
+        assert_eq!(
+            normalize_release_tag(Some("v4.9.3")).as_deref(),
+            Some("v4.9.3")
+        );
+        assert_eq!(
+            normalize_release_tag(Some("v4.10.0")).as_deref(),
+            Some("v4.10.0")
+        );
     }
 
     #[test]
     fn test_normalize_release_tag_trims_whitespace() {
-        assert_eq!(normalize_release_tag(Some("  v4.9.3  ")).as_deref(), Some("v4.9.3"));
-        assert_eq!(normalize_release_tag(Some("  4.10.0\t")).as_deref(), Some("v4.10.0"));
+        assert_eq!(
+            normalize_release_tag(Some("  v4.9.3  ")).as_deref(),
+            Some("v4.9.3")
+        );
+        assert_eq!(
+            normalize_release_tag(Some("  4.10.0\t")).as_deref(),
+            Some("v4.10.0")
+        );
     }
 
     // -------------------------------------------------------------------
@@ -4397,7 +4414,10 @@ mod tests {
 
     #[test]
     fn test_parse_release_tag_from_url_non_release_url_returns_none() {
-        assert_eq!(parse_release_tag_from_url("https://example.com/other/path"), None);
+        assert_eq!(
+            parse_release_tag_from_url("https://example.com/other/path"),
+            None
+        );
         assert_eq!(
             parse_release_tag_from_url("https://github.com/platonai/Browser4/releases/tag/v4.9.3"),
             None
@@ -4471,12 +4491,16 @@ mod tests {
         setup_valid_versioned_runtime(&tmp.path().join("runtime-data"), tag);
 
         // Write metadata into the versioned install dir.
-        let metadata_path = tmp.path().join("runtime-data").join("runtime").join(tag).join("browser4-installation.json");
+        let metadata_path = tmp
+            .path()
+            .join("runtime-data")
+            .join("runtime")
+            .join(tag)
+            .join("browser4-installation.json");
         let metadata = InstalledBrowser4RuntimeMetadata {
             tag: tag.to_string(),
             asset_name: "browser4-runtime-linux-x64.tar.gz".to_string(),
-            download_url: "https://example.com/releases/download/v4.9.3/bundle.tar.gz"
-                .to_string(),
+            download_url: "https://example.com/releases/download/v4.9.3/bundle.tar.gz".to_string(),
             installed_at: "2026-06-01T00:00:00Z".to_string(),
         };
         let json = serde_json::to_string_pretty(&metadata).unwrap();
@@ -4512,7 +4536,12 @@ mod tests {
         setup_valid_versioned_runtime(&tmp.path().join("runtime-data"), tag);
 
         // Corrupt the metadata file.
-        let metadata_path = tmp.path().join("runtime-data").join("runtime").join(tag).join("browser4-installation.json");
+        let metadata_path = tmp
+            .path()
+            .join("runtime-data")
+            .join("runtime")
+            .join(tag)
+            .join("browser4-installation.json");
         fs::write(&metadata_path, "not valid json {{{").unwrap();
 
         let read = read_installed_browser4_runtime_metadata();

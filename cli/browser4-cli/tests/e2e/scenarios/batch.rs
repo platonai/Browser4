@@ -2,7 +2,10 @@ use crate::*;
 
 pub(super) fn test_batch_commands(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
 
     let interactive_url = ctx.interactive_url();
     let navigate_command = batch_navigate_command(&interactive_url);
@@ -99,7 +102,10 @@ pub(super) fn test_batch_commands(ctx: &mut E2ECtx) {
     );
 
     run_command(ctx, &["close"]);
-    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
     run_command_with_stdin(
         ctx,
         &["batch", "--json"],
@@ -186,7 +192,10 @@ pub(super) fn test_batch_commands(ctx: &mut E2ECtx) {
 
 pub(super) fn test_batch_form_submission(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
 
     let form_url = ctx.form_url();
     let navigate_command = batch_navigate_command(&form_url);
@@ -271,7 +280,10 @@ pub(super) fn test_batch_form_submission(ctx: &mut E2ECtx) {
 
 pub(super) fn test_batch_form_submission_from_json_file(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
 
     let form_input_path = write_json_fixture(
         ctx,
@@ -360,7 +372,10 @@ pub(super) fn test_batch_form_submission_from_json_file(ctx: &mut E2ECtx) {
 
 pub(super) fn test_batch_multi_interaction(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
 
     let interactive_url = ctx.interactive_url();
     let navigate_command = batch_navigate_command(&interactive_url);
@@ -444,7 +459,10 @@ pub(super) fn test_batch_multi_interaction(ctx: &mut E2ECtx) {
 
 pub(super) fn test_batch_error_handling(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
 
     let interactive_url = ctx.interactive_url();
     let navigate_command = batch_navigate_command(&interactive_url);
@@ -526,7 +544,10 @@ pub(super) fn test_batch_error_handling(ctx: &mut E2ECtx) {
 
 pub(super) fn test_batch_json_edge_cases(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
 
     let interactive_url = ctx.interactive_url();
     let navigate_command = batch_navigate_command(&interactive_url);

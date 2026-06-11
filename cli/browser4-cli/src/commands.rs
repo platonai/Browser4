@@ -278,9 +278,21 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: false,
             args: &[],
-            options: &[],
+            options: &[
+                OptionDef {
+                    name: "yes",
+                    description: "Skip confirmation prompts (non-interactive mode)",
+                    is_bool: true,
+                },
+            ],
             tool_name_fn: |_| String::new(),
-            tool_params_fn: |_| json!({}),
+            tool_params_fn: |args| {
+                let mut params = json!({});
+                if let Some(yes) = get_bool(args, "yes") {
+                    params["yes"] = json!(yes);
+                }
+                params
+            },
         },
         CommandDef {
             name: "batch",
@@ -2015,10 +2027,7 @@ mod tests {
         let map = commands_map();
         let cmd = map.get("eval").unwrap();
         let mut args = HashMap::new();
-        args.insert(
-            "expression".to_string(),
-            json!("element => element.value"),
-        );
+        args.insert("expression".to_string(), json!("element => element.value"));
         args.insert("ref".to_string(), json!("#my-button"));
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["expression"], json!("element => element.value"));
@@ -2121,9 +2130,7 @@ mod tests {
     #[test]
     fn test_advanced_commands_are_hidden_from_global_help() {
         let map = commands_map();
-        for name in [
-            "console",
-        ] {
+        for name in ["console"] {
             assert!(map.get(name).unwrap().hidden, "{name} should stay hidden");
         }
     }

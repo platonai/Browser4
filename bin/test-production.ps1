@@ -344,7 +344,7 @@ if ($existingCli) {
     Write-Info "Found existing global browser4-cli: $existingPath"
     Write-Info 'Running browser4-cli uninstall …'
 
-    $result = Invoke-CliCommand -Arguments @('uninstall') -IgnoreExitCode
+    $result = Invoke-CliCommand -Arguments @('uninstall', '-y') -IgnoreExitCode
     Write-Info "uninstall output: $($result.Output)"
 
     # Also use the comprehensive remove script
@@ -809,7 +809,7 @@ function Invoke-InstallationCycle {
     # ─────────────────────────────────────────────────
     Write-StepHeader "CYCLE $CycleNumber — STEP H: browser4-cli uninstall"
 
-    $uninstallResult = Invoke-CliCommand -Arguments @('uninstall') -TimeoutSeconds 60 -IgnoreExitCode
+    $uninstallResult = Invoke-CliCommand -Arguments @('uninstall', '-y') -TimeoutSeconds 60 -IgnoreExitCode
     Write-Info "uninstall output: $($uninstallResult.Output)"
 
     # Also run the comprehensive removal script

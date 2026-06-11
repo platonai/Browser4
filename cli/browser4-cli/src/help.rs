@@ -70,7 +70,11 @@ pub fn generate_help() -> String {
         30,
     ));
     lines.push(format_with_gap("  -s=<name>", "named session label", 30));
-    lines.push(format_with_gap("  --server=<url>", "override Browser4 server URL", 30));
+    lines.push(format_with_gap(
+        "  --server=<url>",
+        "override Browser4 server URL",
+        30,
+    ));
 
     // for developer only
     // lines.push(format_with_gap(
@@ -220,8 +224,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - When no --tag is given the latest release is resolved automatically."
-                .to_string(),
+            "  - When no --tag is given the latest release is resolved automatically.".to_string(),
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
@@ -262,16 +265,17 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - Removes the Browser4 runtime data and runtime cache directories."
-                .to_string(),
+            "  - Removes the Browser4 runtime data and runtime cache directories.".to_string(),
         );
         lines.push(
-            "  - Does not require a running server."
+            "  - Prompts for confirmation before removing data directories unless --yes is passed."
                 .to_string(),
         );
+        lines.push("  - Does not require a running server.".to_string());
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli uninstall".to_string());
+        lines.push("  browser4-cli uninstall -y".to_string());
     }
 
     if cmd.name == "list" {
@@ -342,17 +346,13 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - When `--sql` is provided, the CLI sends a structured JSON body to `SwarmController.query(query)`"
                 .to_string(),
         );
-        lines.push(
-            "    instead of a raw string to `SwarmController.submit(payload)`."
-                .to_string(),
-        );
+        lines.push("    instead of a raw string to `SwarmController.submit(payload)`.".to_string());
         lines.push(
             "  - `--sql` accepts inline X-SQL or a file path prefixed with `@` (e.g. `--sql @query.sql`)."
                 .to_string(),
         );
         lines.push(
-            "  - Use `@url` in the X-SQL as a placeholder for the target page URL."
-                .to_string(),
+            "  - Use `@url` in the X-SQL as a placeholder for the target page URL.".to_string(),
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
@@ -361,10 +361,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(String::new());
-        lines.push(
-            "  # Submit with an inline X-SQL query:"
-                .to_string(),
-        );
+        lines.push("  # Submit with an inline X-SQL query:".to_string());
         lines.push(
             r##"  browser4-cli swarm submit "https://www.amazon.com/dp/B08PP5MSVB" --sql ""##
                 .to_string()
@@ -373,10 +370,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 + r#"""#
         );
         lines.push(String::new());
-        lines.push(
-            "  # Submit with a query file:"
-                .to_string(),
-        );
+        lines.push("  # Submit with a query file:".to_string());
         lines.push(
             r##"  browser4-cli swarm submit "https://www.amazon.com/dp/B08PP5MSVB" --sql @query.sql"##
                 .to_string(),
@@ -394,8 +388,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - Use `@url` in the X-SQL as a placeholder for the target page URL."
-                .to_string(),
+            "  - Use `@url` in the X-SQL as a placeholder for the target page URL.".to_string(),
         );
         lines.push(
             "  - The CLI sends a structured JSON body to `SwarmController.query(query)`."
@@ -415,10 +408,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push(
-            "  # Inline X-SQL:"
-                .to_string(),
-        );
+        lines.push("  # Inline X-SQL:".to_string());
         lines.push(
             r##"  browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql ""##
                 .to_string()
@@ -427,19 +417,13 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 + r#"""#
         );
         lines.push(String::new());
-        lines.push(
-            "  # From a query file:"
-                .to_string(),
-        );
+        lines.push("  # From a query file:".to_string());
         lines.push(
             r##"  browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql @query.sql"##
                 .to_string(),
         );
         lines.push(String::new());
-        lines.push(
-            "  # With seed file:"
-                .to_string(),
-        );
+        lines.push("  # With seed file:".to_string());
         lines.push(
             "  browser4-cli swarm query --sql @query.sql --seed-file=./swarm-seeds.txt --refresh"
                 .to_string(),

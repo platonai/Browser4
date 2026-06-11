@@ -89,7 +89,10 @@ pub(super) fn test_close_ignores_backend_close_failure(ctx: &mut E2ECtx) {
     );
 
     let result = run_command(ctx, &["close"]);
-    assert_eq!(result.exit_code, 0, "expected close to succeed despite backend error");
+    assert_eq!(
+        result.exit_code, 0,
+        "expected close to succeed despite backend error"
+    );
 
     assert!(
         result.stdout.contains("Session closed."),
@@ -168,21 +171,34 @@ pub(super) fn test_close_all_single_server(ctx: &mut E2ECtx) {
         "sessionId": "swarm-session-default",
         "baseUrl": mock_server.base_url(),
     });
-    fs::write(state_file_path(&ctx.state_dir, None), default_state.to_string())
-        .expect("write default state");
+    fs::write(
+        state_file_path(&ctx.state_dir, None),
+        default_state.to_string(),
+    )
+    .expect("write default state");
 
     let auth_path = state_file_path(&ctx.state_dir, Some("auth"));
     fs::create_dir_all(auth_path.parent().unwrap()).expect("create sessions dir");
-    fs::write(&auth_path, serde_json::json!({
-        "sessionId": "swarm-session-auth",
-        "baseUrl": mock_server.base_url(),
-    }).to_string()).expect("write auth state");
+    fs::write(
+        &auth_path,
+        serde_json::json!({
+            "sessionId": "swarm-session-auth",
+            "baseUrl": mock_server.base_url(),
+        })
+        .to_string(),
+    )
+    .expect("write auth state");
 
     let scraper_path = state_file_path(&ctx.state_dir, Some("scraper"));
-    fs::write(&scraper_path, serde_json::json!({
-        "sessionId": "swarm-session-scraper",
-        "baseUrl": mock_server.base_url(),
-    }).to_string()).expect("write scraper state");
+    fs::write(
+        &scraper_path,
+        serde_json::json!({
+            "sessionId": "swarm-session-scraper",
+            "baseUrl": mock_server.base_url(),
+        })
+        .to_string(),
+    )
+    .expect("write scraper state");
 
     let result = run_command(ctx, &["close-all"]);
     assert_eq!(result.exit_code, 0, "expected close-all to succeed");
@@ -204,10 +220,7 @@ pub(super) fn test_close_all_single_server(ctx: &mut E2ECtx) {
         !state_file_path(&ctx.state_dir, None).exists(),
         "Expected default state to be removed"
     );
-    assert!(
-        !auth_path.exists(),
-        "Expected auth state to be removed"
-    );
+    assert!(!auth_path.exists(), "Expected auth state to be removed");
     assert!(
         !scraper_path.exists(),
         "Expected scraper state to be removed"
@@ -222,7 +235,10 @@ pub(super) fn test_close_all_no_active_sessions(ctx: &mut E2ECtx) {
 
     // No state files at all.
     let result = run_command(ctx, &["close-all"]);
-    assert_eq!(result.exit_code, 0, "expected close-all to succeed with no sessions");
+    assert_eq!(
+        result.exit_code, 0,
+        "expected close-all to succeed with no sessions"
+    );
 
     // It should still call close_all_sessions on the backend.
     let snapshot = mock_server.snapshot();
@@ -243,19 +259,26 @@ pub(super) fn test_close_all_server_unreachable(ctx: &mut E2ECtx) {
         "sessionId": "swarm-session-1",
         "baseUrl": mock_server.base_url(),
     });
-    fs::write(state_file_path(&ctx.state_dir, None), default_state.to_string())
-        .expect("write state fixture");
+    fs::write(
+        state_file_path(&ctx.state_dir, None),
+        default_state.to_string(),
+    )
+    .expect("write state fixture");
 
     // Shut down the mock server before running the command.
     mock_server.shutdown();
 
     let result = run_command_allowing_failure(ctx, &["close-all"]);
     // close-all never fails fatally — it treats errors as warnings.
-    assert_eq!(result.exit_code, 0, "expected close-all to exit 0 even when server unreachable");
+    assert_eq!(
+        result.exit_code, 0,
+        "expected close-all to exit 0 even when server unreachable"
+    );
 
     let combined = format!("{}\n{}", result.stdout, result.stderr);
     assert!(
-        combined.contains("close-all warnings:") || combined.contains("No reachable Browser4 servers responded"),
+        combined.contains("close-all warnings:")
+            || combined.contains("No reachable Browser4 servers responded"),
         "Expected close-all to report unreachable server:\n{combined}"
     );
 
@@ -277,8 +300,11 @@ pub(super) fn test_close_all_preserves_managed_process_registry(ctx: &mut E2ECtx
         "sessionId": "swarm-session-1",
         "baseUrl": mock_server.base_url(),
     });
-    fs::write(state_file_path(&ctx.state_dir, None), default_state.to_string())
-        .expect("write state fixture");
+    fs::write(
+        state_file_path(&ctx.state_dir, None),
+        default_state.to_string(),
+    )
+    .expect("write state fixture");
 
     // Write a mock managed process registry (simulating a running server).
     let registry_path = ctx.state_dir.join("cli-managed-processes.json");
@@ -345,7 +371,10 @@ pub(super) fn test_list_active_session(ctx: &mut E2ECtx) {
     // Verify list_sessions was called.
     let snapshot = mock_server.snapshot();
     assert!(
-        snapshot.tool_calls.iter().any(|c| c.tool == "list_sessions"),
+        snapshot
+            .tool_calls
+            .iter()
+            .any(|c| c.tool == "list_sessions"),
         "Expected list_sessions tool call"
     );
 }
@@ -396,7 +425,10 @@ pub(super) fn test_list_backend_unreachable(ctx: &mut E2ECtx) {
 
     let result = run_command(ctx, &["list"]);
     // list should exit 0 even when backend is unreachable.
-    assert_eq!(result.exit_code, 0, "expected list to succeed when backend unreachable");
+    assert_eq!(
+        result.exit_code, 0,
+        "expected list to succeed when backend unreachable"
+    );
 
     assert!(
         result.stdout.contains("Unknown"),
@@ -422,7 +454,9 @@ pub(super) fn test_list_no_sessions(ctx: &mut E2ECtx) {
 
     // The table header should appear but no session rows.
     assert!(
-        result.stdout.contains("Name") && result.stdout.contains("Session ID") && result.stdout.contains("Status"),
+        result.stdout.contains("Name")
+            && result.stdout.contains("Session ID")
+            && result.stdout.contains("Status"),
         "Expected table header in list output:\n{}",
         result.stdout
     );
@@ -430,7 +464,10 @@ pub(super) fn test_list_no_sessions(ctx: &mut E2ECtx) {
     // Verify list_sessions was still called.
     let snapshot = mock_server.snapshot();
     assert!(
-        snapshot.tool_calls.iter().any(|c| c.tool == "list_sessions"),
+        snapshot
+            .tool_calls
+            .iter()
+            .any(|c| c.tool == "list_sessions"),
         "Expected list_sessions tool call even with no local sessions"
     );
 }
@@ -446,22 +483,35 @@ pub(super) fn test_list_multiple_named_sessions(ctx: &mut E2ECtx) {
         "sessionId": "swarm-session-default",
         "baseUrl": mock_server.base_url(),
     });
-    fs::write(state_file_path(&ctx.state_dir, None), default_state.to_string())
-        .expect("write default state");
+    fs::write(
+        state_file_path(&ctx.state_dir, None),
+        default_state.to_string(),
+    )
+    .expect("write default state");
 
     // Write two named sessions.
     let auth_path = state_file_path(&ctx.state_dir, Some("auth"));
     fs::create_dir_all(auth_path.parent().unwrap()).expect("create sessions dir");
-    fs::write(&auth_path, serde_json::json!({
-        "sessionId": "swarm-session-auth",
-        "baseUrl": mock_server.base_url(),
-    }).to_string()).expect("write auth state");
+    fs::write(
+        &auth_path,
+        serde_json::json!({
+            "sessionId": "swarm-session-auth",
+            "baseUrl": mock_server.base_url(),
+        })
+        .to_string(),
+    )
+    .expect("write auth state");
 
     let scraper_path = state_file_path(&ctx.state_dir, Some("scraper"));
-    fs::write(&scraper_path, serde_json::json!({
-        "sessionId": "swarm-session-scraper",
-        "baseUrl": mock_server.base_url(),
-    }).to_string()).expect("write scraper state");
+    fs::write(
+        &scraper_path,
+        serde_json::json!({
+            "sessionId": "swarm-session-scraper",
+            "baseUrl": mock_server.base_url(),
+        })
+        .to_string(),
+    )
+    .expect("write scraper state");
 
     // Backend: auth is active, scraper is stopped, default is active.
     mock_server.set_listed_sessions(vec![
@@ -475,8 +525,14 @@ pub(super) fn test_list_multiple_named_sessions(ctx: &mut E2ECtx) {
 
     let output = &result.stdout;
     assert!(output.contains("auth"), "Expected 'auth' row:\n{output}");
-    assert!(output.contains("scraper"), "Expected 'scraper' row:\n{output}");
-    assert!(output.contains("(default)"), "Expected '(default)' row:\n{output}");
+    assert!(
+        output.contains("scraper"),
+        "Expected 'scraper' row:\n{output}"
+    );
+    assert!(
+        output.contains("(default)"),
+        "Expected '(default)' row:\n{output}"
+    );
 
     // Verify statuses: default and auth are active, scraper is stale.
     assert!(
@@ -548,7 +604,10 @@ pub(super) fn test_status_server_unreachable(ctx: &mut E2ECtx) {
     mock_server.shutdown();
 
     let result = run_command(ctx, &["status"]);
-    assert_eq!(result.exit_code, 0, "expected status to succeed even when unreachable");
+    assert_eq!(
+        result.exit_code, 0,
+        "expected status to succeed even when unreachable"
+    );
 
     assert!(
         result.stdout.contains("Server health: UNREACHABLE"),
@@ -660,15 +719,23 @@ pub(super) fn test_stop_clears_state(ctx: &mut E2ECtx) {
         "sessionId": "swarm-session-1",
         "baseUrl": mock_server.base_url(),
     });
-    fs::write(state_file_path(&ctx.state_dir, None), default_state.to_string())
-        .expect("write default state");
+    fs::write(
+        state_file_path(&ctx.state_dir, None),
+        default_state.to_string(),
+    )
+    .expect("write default state");
 
     let auth_path = state_file_path(&ctx.state_dir, Some("auth"));
     fs::create_dir_all(auth_path.parent().unwrap()).expect("create sessions dir");
-    fs::write(&auth_path, serde_json::json!({
-        "sessionId": "swarm-session-auth",
-        "baseUrl": mock_server.base_url(),
-    }).to_string()).expect("write auth state");
+    fs::write(
+        &auth_path,
+        serde_json::json!({
+            "sessionId": "swarm-session-auth",
+            "baseUrl": mock_server.base_url(),
+        })
+        .to_string(),
+    )
+    .expect("write auth state");
 
     let result = run_command(ctx, &["stop"]);
     assert_eq!(result.exit_code, 0);
@@ -695,12 +762,17 @@ pub(super) fn test_kill_all_no_running_processes(ctx: &mut E2ECtx) {
     ctx.browser4_base_url = mock_server.base_url();
 
     let result = run_command(ctx, &["kill-all"]);
-    assert_eq!(result.exit_code, 0, "expected kill-all to succeed when no processes");
+    assert_eq!(
+        result.exit_code, 0,
+        "expected kill-all to succeed when no processes"
+    );
 
     // kill-all with no tracked processes should report that nothing was found
     // and succeed without error.
     assert!(
-        result.stdout.contains("No tracked Browser4 processes found")
+        result
+            .stdout
+            .contains("No tracked Browser4 processes found")
             || result.stdout.contains("Already stopped"),
         "Expected kill-all to report no tracked processes in:\n{}",
         result.stdout
@@ -718,15 +790,23 @@ pub(super) fn test_kill_all_clears_state_and_registry(ctx: &mut E2ECtx) {
         "sessionId": "swarm-session-1",
         "baseUrl": mock_server.base_url(),
     });
-    fs::write(state_file_path(&ctx.state_dir, None), default_state.to_string())
-        .expect("write default state");
+    fs::write(
+        state_file_path(&ctx.state_dir, None),
+        default_state.to_string(),
+    )
+    .expect("write default state");
 
     let auth_path = state_file_path(&ctx.state_dir, Some("auth"));
     fs::create_dir_all(auth_path.parent().unwrap()).expect("create sessions dir");
-    fs::write(&auth_path, serde_json::json!({
-        "sessionId": "swarm-session-auth",
-        "baseUrl": mock_server.base_url(),
-    }).to_string()).expect("write auth state");
+    fs::write(
+        &auth_path,
+        serde_json::json!({
+            "sessionId": "swarm-session-auth",
+            "baseUrl": mock_server.base_url(),
+        })
+        .to_string(),
+    )
+    .expect("write auth state");
 
     // Write a managed process registry (simulating registered server process).
     let registry_path = ctx.state_dir.join("cli-managed-processes.json");
@@ -803,15 +883,23 @@ pub(super) fn test_state_isolation_named_vs_default(ctx: &mut E2ECtx) {
         "sessionId": "swarm-session-default",
         "baseUrl": mock_server.base_url(),
     });
-    fs::write(state_file_path(&ctx.state_dir, None), default_state.to_string())
-        .expect("write default state");
+    fs::write(
+        state_file_path(&ctx.state_dir, None),
+        default_state.to_string(),
+    )
+    .expect("write default state");
 
     let auth_path = state_file_path(&ctx.state_dir, Some("auth"));
     fs::create_dir_all(auth_path.parent().unwrap()).expect("create sessions dir");
-    fs::write(&auth_path, serde_json::json!({
-        "sessionId": "swarm-session-auth",
-        "baseUrl": mock_server.base_url(),
-    }).to_string()).expect("write auth state");
+    fs::write(
+        &auth_path,
+        serde_json::json!({
+            "sessionId": "swarm-session-auth",
+            "baseUrl": mock_server.base_url(),
+        })
+        .to_string(),
+    )
+    .expect("write auth state");
 
     // Close only the named session.
     let result = run_command(ctx, &["-s=auth", "close"]);
@@ -846,7 +934,10 @@ pub(super) fn test_corrupted_state_file_treated_as_missing(ctx: &mut E2ECtx) {
 
     // close should treat corrupted state as missing and succeed.
     let result = run_command(ctx, &["close"]);
-    assert_eq!(result.exit_code, 0, "expected close to handle corrupted state gracefully");
+    assert_eq!(
+        result.exit_code, 0,
+        "expected close to handle corrupted state gracefully"
+    );
 
     let combined = format!("{}\n{}", result.stdout, result.stderr);
     assert!(
@@ -965,7 +1056,10 @@ pub(super) fn test_open_reuses_existing_active_session(ctx: &mut E2ECtx) {
     mock_server.queue_open_session_ids(vec!["swarm-session-1", "swarm-session-2"]);
     ctx.browser4_base_url = mock_server.base_url();
 
-    let first_open = run_command(ctx, &["open", "https://example.com/", OPEN_PROFILE_MODE_ARG]);
+    let first_open = run_command(
+        ctx,
+        &["open", "https://example.com/", OPEN_PROFILE_MODE_ARG],
+    );
     assert!(
         first_open
             .stdout
@@ -974,7 +1068,10 @@ pub(super) fn test_open_reuses_existing_active_session(ctx: &mut E2ECtx) {
         first_open.stdout
     );
 
-    let second_open = run_command(ctx, &["open", "https://example.com/", OPEN_PROFILE_MODE_ARG]);
+    let second_open = run_command(
+        ctx,
+        &["open", "https://example.com/", OPEN_PROFILE_MODE_ARG],
+    );
     assert!(
         second_open
             .stdout
@@ -1010,7 +1107,15 @@ pub(super) fn test_named_session_reuses_opened_session(ctx: &mut E2ECtx) {
     let mock_server = MockBrowser4Server::start();
     ctx.browser4_base_url = mock_server.base_url();
 
-    let open_result = run_command(ctx, &["-s=amazon", "open", "https://example.com/", OPEN_PROFILE_MODE_ARG]);
+    let open_result = run_command(
+        ctx,
+        &[
+            "-s=amazon",
+            "open",
+            "https://example.com/",
+            OPEN_PROFILE_MODE_ARG,
+        ],
+    );
     assert!(
         open_result
             .stdout
@@ -1077,7 +1182,10 @@ pub(super) fn test_open_refreshes_inactive_saved_session(ctx: &mut E2ECtx) {
     mock_server.queue_open_session_ids(vec!["swarm-session-1", "swarm-session-2"]);
     ctx.browser4_base_url = mock_server.base_url();
 
-    let first_open = run_command(ctx, &["open", "https://example.com/", OPEN_PROFILE_MODE_ARG]);
+    let first_open = run_command(
+        ctx,
+        &["open", "https://example.com/", OPEN_PROFILE_MODE_ARG],
+    );
     assert!(
         first_open
             .stdout
@@ -1088,7 +1196,10 @@ pub(super) fn test_open_refreshes_inactive_saved_session(ctx: &mut E2ECtx) {
 
     mock_server.set_listed_sessions(vec![MockListedSession::stopped("swarm-session-1")]);
 
-    let second_open = run_command(ctx, &["open", "https://example.com/", OPEN_PROFILE_MODE_ARG]);
+    let second_open = run_command(
+        ctx,
+        &["open", "https://example.com/", OPEN_PROFILE_MODE_ARG],
+    );
     assert!(
         second_open
             .stdout
@@ -1123,7 +1234,10 @@ pub(super) fn test_open_reopens_saved_session_after_human_closed_tab(ctx: &mut E
     mock_server.queue_open_session_ids(vec!["swarm-session-1", "swarm-session-2"]);
     ctx.browser4_base_url = mock_server.base_url();
 
-    let first_open = run_command(ctx, &["open", "https://example.com/", OPEN_PROFILE_MODE_ARG]);
+    let first_open = run_command(
+        ctx,
+        &["open", "https://example.com/", OPEN_PROFILE_MODE_ARG],
+    );
     assert!(
         first_open
             .stdout
@@ -1483,7 +1597,10 @@ pub(super) fn test_eval_css_selector_passthrough(ctx: &mut E2ECtx) {
 
     // CSS selectors should be passed through *without* the eN → backend:N
     // conversion that happens for snapshot refs.
-    let css_eval = run_command(ctx, &["eval", "element => element.textContent", "#click-target"]);
+    let css_eval = run_command(
+        ctx,
+        &["eval", "element => element.textContent", "#click-target"],
+    );
     assert_eq!(
         strip_snapshot_output(&css_eval.stdout),
         "Mock element text for #click-target"
@@ -1497,7 +1614,10 @@ pub(super) fn test_eval_css_selector_passthrough(ctx: &mut E2ECtx) {
     assert_eq!(eval_calls.len(), 1, "expected one browser_evaluate call");
     assert_eq!(eval_calls[0].arguments["ref"], "#click-target");
     assert!(
-        !eval_calls[0].arguments["ref"].as_str().unwrap().contains("backend:"),
+        !eval_calls[0].arguments["ref"]
+            .as_str()
+            .unwrap()
+            .contains("backend:"),
         "CSS selector ref should NOT be converted to backend:N, got {:?}",
         eval_calls[0].arguments["ref"]
     );
@@ -1989,9 +2109,8 @@ pub(super) fn test_swarm_query_commands(ctx: &mut E2ECtx) {
         swarm_result_result.stdout
     );
     assert!(
-        swarm_result_payload.contains(
-            r#""resultSet":[{"url":"https://mock.browser4.local/result/swarm-job-42"}]"#
-        ),
+        swarm_result_payload
+            .contains(r#""resultSet":[{"url":"https://mock.browser4.local/result/swarm-job-42"}]"#),
         "Expected query result payload to contain a resultSet in:\n{}",
         swarm_result_result.stdout
     );
@@ -2125,7 +2244,11 @@ pub(super) fn test_install_downloads_and_installs(ctx: &mut E2ECtx) {
     // Use --tag so the download URL contains the real tag (without a GitHub
     // redirect, parse_release_tag_from_url needs the tag in the path).
     let result = run_command(ctx, &["install", INSTALL_TAG]);
-    assert_eq!(result.exit_code, 0, "expected install to succeed:\n{}", result.stderr);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected install to succeed:\n{}",
+        result.stderr
+    );
     assert!(
         result.stdout.contains("installed successfully"),
         "Expected 'installed successfully' in:\n{}",
@@ -2146,7 +2269,11 @@ pub(super) fn test_install_downloads_and_installs(ctx: &mut E2ECtx) {
     );
 
     // Verify the metadata file was written (versioned layout).
-    let metadata_path = ctx.runtime_dir.join("runtime").join("v4.10.0").join("browser4-installation.json");
+    let metadata_path = ctx
+        .runtime_dir
+        .join("runtime")
+        .join("v4.10.0")
+        .join("browser4-installation.json");
     assert!(
         metadata_path.exists(),
         "Expected install metadata at {}",
@@ -2215,7 +2342,11 @@ pub(super) fn test_install_specific_tag(ctx: &mut E2ECtx) {
     ctx.set_env("BROWSER4_RELEASES_BASE_URL", &download_server.base_url());
 
     let result = run_command(ctx, &["install", "--tag=v4.9.3"]);
-    assert_eq!(result.exit_code, 0, "expected install --tag to succeed:\n{}", result.stderr);
+    assert_eq!(
+        result.exit_code, 0,
+        "expected install --tag to succeed:\n{}",
+        result.stderr
+    );
     assert!(
         result.stdout.contains("installed successfully"),
         "Expected 'installed successfully' in:\n{}",
@@ -2420,9 +2551,11 @@ pub(super) fn test_install_loads_mirrors_json_from_runtime_dir(ctx: &mut E2ECtx)
     // Do NOT set BROWSER4_RELEASES_BASE_URL — let the mirror system work.
 
     let result = run_command(ctx, &["install", INSTALL_TAG]);
-    assert_eq!(result.exit_code, 0,
+    assert_eq!(
+        result.exit_code, 0,
         "install should succeed with mirrors.json at default location:\n{}",
-        result.stderr);
+        result.stderr
+    );
     assert!(
         result.stdout.contains("installed successfully"),
         "Expected 'installed successfully' in:\n{}",
@@ -2523,7 +2656,11 @@ pub(super) fn test_install_mirror_preference_cache_hit(ctx: &mut E2ECtx) {
     // First install with --force: bypasses download cache, speed-tests mirrors,
     // caches the fastest mirror in mirror-preference.json.
     let first = run_command(ctx, &["install", INSTALL_TAG, "--force"]);
-    assert_eq!(first.exit_code, 0, "first install failed:\n{}", first.stderr);
+    assert_eq!(
+        first.exit_code, 0,
+        "first install failed:\n{}",
+        first.stderr
+    );
     assert!(
         first.stdout.contains("installed successfully"),
         "first install should succeed:\n{}",

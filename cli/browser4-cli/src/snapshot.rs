@@ -99,7 +99,10 @@ pub fn rotate_snapshots() {
     for (path, modified) in to_move {
         let date_dir = archive_date_dir(modified);
         if let Err(e) = ensure_dir(&date_dir) {
-            eprintln!("Warning: failed to create archive dir {}: {e}", date_dir.display());
+            eprintln!(
+                "Warning: failed to create archive dir {}: {e}",
+                date_dir.display()
+            );
             continue;
         }
         let dest = date_dir.join(path.file_name().unwrap_or_default());

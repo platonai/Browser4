@@ -321,7 +321,11 @@ fn build_fake_runtime_bundle(tag: &str) -> (Vec<u8>, String) {
     let platform = if cfg!(windows) {
         "windows-x64"
     } else if cfg!(target_os = "macos") {
-        if cfg!(target_arch = "aarch64") { "darwin-arm64" } else { "darwin-x64" }
+        if cfg!(target_arch = "aarch64") {
+            "darwin-arm64"
+        } else {
+            "darwin-x64"
+        }
     } else {
         "linux-x64"
     };
@@ -373,15 +377,10 @@ fn build_fake_zip_bundle(tag: &str, dir_name: &str, java_name: &str) -> (Vec<u8>
 fn build_fake_tar_gz_bundle(tag: &str, dir_name: &str, java_name: &str) -> (Vec<u8>, String) {
     let mut buffer = Vec::new();
     {
-        let gz_encoder =
-            flate2::write::GzEncoder::new(&mut buffer, flate2::Compression::default());
+        let gz_encoder = flate2::write::GzEncoder::new(&mut buffer, flate2::Compression::default());
         let mut tar_builder = tar::Builder::new(gz_encoder);
 
-        fn add_tar_entry(
-            builder: &mut tar::Builder<impl std::io::Write>,
-            path: &str,
-            data: &[u8],
-        ) {
+        fn add_tar_entry(builder: &mut tar::Builder<impl std::io::Write>, path: &str, data: &[u8]) {
             let mut header = tar::Header::new_gnu();
             header.set_path(path).unwrap();
             header.set_size(data.len() as u64);
@@ -464,9 +463,7 @@ impl FixtureDownloadServer {
                         thread::sleep(Duration::from_millis(5));
                     }
                     Err(e) => {
-                        eprintln!(
-                            "[fixture download server] accept error (continuing): {e}"
-                        );
+                        eprintln!("[fixture download server] accept error (continuing): {e}");
                         thread::sleep(Duration::from_millis(5));
                     }
                 }
@@ -516,10 +513,7 @@ fn serve_download_request(
 
     let request = std::str::from_utf8(&buf[..n]).unwrap_or("");
     let first_line = request.lines().next().unwrap_or("");
-    let path = first_line
-        .split_whitespace()
-        .nth(1)
-        .unwrap_or("/");
+    let path = first_line.split_whitespace().nth(1).unwrap_or("/");
 
     requests
         .lock()
@@ -642,9 +636,7 @@ impl MockBrowser4Server {
                         thread::sleep(Duration::from_millis(5));
                     }
                     Err(e) => {
-                        eprintln!(
-                            "[mock Browser4 server] accept error (listener continues): {e}"
-                        );
+                        eprintln!("[mock Browser4 server] accept error (listener continues): {e}");
                         thread::sleep(Duration::from_millis(5));
                     }
                 }
@@ -958,12 +950,8 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                     format!("result for {task_id}")
                 }
                 "command_batch" => mock_command_batch_response(&arguments),
-                "close_session" => {
-                    "Session closed.".to_string()
-                }
-                "close_all_sessions" => {
-                    "All sessions closed.".to_string()
-                }
+                "close_session" => "Session closed.".to_string(),
+                "close_all_sessions" => "All sessions closed.".to_string(),
                 "agent_extract" => {
                     r#"{"items":[{"title":"Mock Product","price":"$19.99"}]}"#.to_string()
                 }
@@ -1004,7 +992,10 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
             );
         }
         _ if method == "POST"
-            && (route == "/api/x/submit" || route == "/api/x/s" || route == "/api/swarm/submit") => {
+            && (route == "/api/x/submit"
+                || route == "/api/x/s"
+                || route == "/api/swarm/submit") =>
+        {
             let payload = String::from_utf8_lossy(&body).trim().to_string();
             let task_id = {
                 let mut guard = state.lock().expect("mock Browser4 state mutex poisoned");
@@ -1065,8 +1056,7 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
             && (route.starts_with("/api/x/") || route.starts_with("/api/swarm/"))
             && route.ends_with("/status") =>
         {
-            let Some(task_id) = extract_swarm_task_id(route, "/status")
-            else {
+            let Some(task_id) = extract_swarm_task_id(route, "/status") else {
                 write_http_response(&mut stream, "404 Not Found", "text/plain", "not found");
                 return;
             };
@@ -1118,8 +1108,7 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
             && (route.starts_with("/api/x/") || route.starts_with("/api/swarm/"))
             && route.ends_with("/result") =>
         {
-            let Some(task_id) = extract_swarm_task_id(route, "/result")
-            else {
+            let Some(task_id) = extract_swarm_task_id(route, "/result") else {
                 write_http_response(&mut stream, "404 Not Found", "text/plain", "not found");
                 return;
             };
@@ -1364,9 +1353,7 @@ fn write_http_response(stream: &mut TcpStream, status: &str, content_type: &str,
         body
     );
     if let Err(e) = stream.write_all(response.as_bytes()) {
-        eprintln!(
-            "[write_http_response] failed to write response (status={status}): {e}"
-        );
+        eprintln!("[write_http_response] failed to write response (status={status}): {e}");
     }
     // Best-effort flush: ignore errors since the connection is about to close.
     let _ = stream.flush();
@@ -1388,8 +1375,8 @@ fn verify_internal_http_helpers() {
     let port = listener.local_addr().unwrap().port();
 
     let client_thread = thread::spawn(move || {
-        let mut stream = TcpStream::connect(format!("127.0.0.1:{port}"))
-            .expect("connect for http helper test");
+        let mut stream =
+            TcpStream::connect(format!("127.0.0.1:{port}")).expect("connect for http helper test");
         // Write a minimal POST request with a JSON body.
         let body = r#"{"tool":"open_session","arguments":{"url":"https://example.com"}}"#;
         let request = format!(
@@ -1415,7 +1402,12 @@ fn verify_internal_http_helpers() {
     );
 
     // Send a response back so the client thread can finish.
-    write_http_response(&mut server_stream, "200 OK", "application/json", r#"{"ok":true}"#);
+    write_http_response(
+        &mut server_stream,
+        "200 OK",
+        "application/json",
+        r#"{"ok":true}"#,
+    );
     drop(server_stream);
     client_thread.join().expect("client thread should finish");
 
@@ -1440,7 +1432,9 @@ fn verify_internal_http_helpers() {
     // Should not hang — we hit the max-empty-read-attempts path.
 
     drop(server_stream2);
-    client_thread2.join().expect("client thread 2 should finish");
+    client_thread2
+        .join()
+        .expect("client thread 2 should finish");
 }
 
 // ---------------------------------------------------------------------------
@@ -1659,7 +1653,12 @@ impl E2ETestResources {
         let started_at = Instant::now();
         let startup_result = run_cli_process_with_live_output(
             &self.ctx,
-            &["open", &self.ctx.interactive_url(), OPEN_PROFILE_MODE_ARG, OPEN_INTERACT_LEVEL_ARG],
+            &[
+                "open",
+                &self.ctx.interactive_url(),
+                OPEN_PROFILE_MODE_ARG,
+                OPEN_INTERACT_LEVEL_ARG,
+            ],
         );
         let startup_log_hint = format_browser4_startup_log_hint(&startup_result.stderr);
         let started_via_maven = startup_result
@@ -2803,7 +2802,10 @@ fn ensure_browser4_runtime_bundle_prebuilt() {
 
     let jar_path = bundle_dir.join("target").join("Browser4Bundle.jar");
     let jar_valid = jar_path.is_file()
-        && jar_path.metadata().map(|m| m.len() > 4_096).unwrap_or(false);
+        && jar_path
+            .metadata()
+            .map(|m| m.len() > 4_096)
+            .unwrap_or(false);
 
     if jar_valid {
         eprintln!(
@@ -2841,7 +2843,8 @@ fn ensure_browser4_runtime_bundle_prebuilt() {
                 eprintln!(
                     "[e2e pre-build] Maven package exited with {}; \
                      falling back to daemon-side build.",
-                    s.code().map_or_else(|| "signal".to_string(), |c| c.to_string())
+                    s.code()
+                        .map_or_else(|| "signal".to_string(), |c| c.to_string())
                 );
                 return;
             }
@@ -2865,9 +2868,7 @@ fn ensure_browser4_runtime_bundle_prebuilt() {
         ("macos", "x86_64") => "browser4-bundle-runtime-darwin-x64",
         ("macos", "aarch64") => "browser4-bundle-runtime-darwin-arm64",
         _ => {
-            eprintln!(
-                "[e2e pre-build] Unsupported platform; skipping runtime bundle assembly."
-            );
+            eprintln!("[e2e pre-build] Unsupported platform; skipping runtime bundle assembly.");
             return;
         }
     };
@@ -2926,9 +2927,7 @@ fn ensure_browser4_runtime_bundle_prebuilt() {
         "pwsh"
     };
 
-    let script_path_escaped = build_script
-        .to_string_lossy()
-        .replace('\'', "''");
+    let script_path_escaped = build_script.to_string_lossy().replace('\'', "''");
 
     let ps_command = format!(
         "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; \
@@ -2962,7 +2961,8 @@ fn ensure_browser4_runtime_bundle_prebuilt() {
             eprintln!(
                 "[e2e pre-build] Build script exited with {}; \
                  falling back to daemon-side build.",
-                s.code().map_or_else(|| "signal".to_string(), |c| c.to_string())
+                s.code()
+                    .map_or_else(|| "signal".to_string(), |c| c.to_string())
             );
         }
         Err(error) => {
@@ -3068,7 +3068,12 @@ fn goto_interactive_page(ctx: &mut E2ECtx) {
 fn run_open_command(ctx: &mut E2ECtx) -> CliRunResult {
     let result = run_command(
         ctx,
-        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG, OPEN_INTERACT_LEVEL_ARG],
+        &[
+            "open",
+            &ctx.interactive_url(),
+            OPEN_PROFILE_MODE_ARG,
+            OPEN_INTERACT_LEVEL_ARG,
+        ],
     );
     sleep(Duration::from_secs(2));
     return result;
@@ -3940,10 +3945,7 @@ fn parse_run_options() -> RunOptions {
         _ => unreachable!("unexpected scenario filter argument combination"),
     };
 
-    println!(
-        "[e2e] max scenario level: {}",
-        max_level
-    );
+    println!("[e2e] max scenario level: {}", max_level);
 
     RunOptions {
         scenario_filter,
@@ -4090,9 +4092,7 @@ fn main() {
         for (group, count) in &group_set {
             println!("  {}: {}", group, count);
         }
-        println!(
-            "Use --group=<name> to filter by group (repeatable)."
-        );
+        println!("Use --group=<name> to filter by group (repeatable).");
         return;
     }
 
@@ -4182,7 +4182,10 @@ fn main() {
                 .collect::<Vec<_>>()
                 .join(", ")
         );
-    } else if !has_explicit_scenario_filter && run_options.groups.is_empty() && !run_options.enable_batch_scenario {
+    } else if !has_explicit_scenario_filter
+        && run_options.groups.is_empty()
+        && !run_options.enable_batch_scenario
+    {
         let batch_scenarios = selected_scenarios
             .iter()
             .copied()
@@ -4200,7 +4203,10 @@ fn main() {
 
     // Install / upgrade scenarios are disabled by default (they download and
     // extract archives).  Use --enable-install-scenario to include them.
-    if !has_explicit_scenario_filter && run_options.groups.is_empty() && !run_options.enable_install_scenario {
+    if !has_explicit_scenario_filter
+        && run_options.groups.is_empty()
+        && !run_options.enable_install_scenario
+    {
         let install_scenarios = selected_scenarios
             .iter()
             .copied()
@@ -4222,11 +4228,8 @@ fn main() {
         let group_set: std::collections::HashSet<&str> =
             run_options.groups.iter().map(String::as_str).collect();
         let before = selected_scenarios.len();
-        selected_scenarios.retain(|scenario| {
-            scenario
-                .group
-                .map_or(false, |g| group_set.contains(g))
-        });
+        selected_scenarios
+            .retain(|scenario| scenario.group.map_or(false, |g| group_set.contains(g)));
         println!(
             "selected {} scenario(s) via --group={}: {} (filtered out {})",
             selected_scenarios.len(),
@@ -4261,7 +4264,8 @@ fn main() {
         }
     }
 
-    let run_coverage = !has_explicit_scenario_filter && run_options.groups.is_empty() && !run_options.batch_only;
+    let run_coverage =
+        !has_explicit_scenario_filter && run_options.groups.is_empty() && !run_options.batch_only;
 
     let selected_scenarios =
         apply_scenario_limit_filter(selected_scenarios, run_options.scenario_limit);

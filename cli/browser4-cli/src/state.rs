@@ -108,7 +108,10 @@ pub fn resolve_runtime_cache_dir() -> PathBuf {
         }
     }
     dirs::cache_dir()
-        .unwrap_or_else(|| dirs::data_dir().unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))))
+        .unwrap_or_else(|| {
+            dirs::data_dir()
+                .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
+        })
         .join("browser4")
 }
 
