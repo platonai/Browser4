@@ -34,7 +34,7 @@ $year = $parsedDate.ToString("yyyy")
 $month = $parsedDate.ToString("MM")
 $day = $parsedDate.ToString("dd")
 
-$logsBaseDir = Resolve-TasksPath '300logs'
+$logsBaseDir = Join-Path "$HOME\.browser4\development" "logs"
 
 # Function to invoke the agent
 function Invoke-CoworkerMemoryAgent {

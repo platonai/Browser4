@@ -5,7 +5,7 @@
         # only if you explicitly need Windows PowerShell 5.1 behavior.
         PowerShellExecutable = 'pwsh'
         WorkingDirectory     = '..\..'
-        LogDirectory         = 'coworker\tasks\300logs\scheduler'
+        LogDirectory         = '~\.browser4\development\logs\scheduler'
         StatusFile           = 'logs\scheduled-tasks.status.json'
     }
 

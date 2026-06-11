@@ -31,7 +31,7 @@ $day = $parsedDate.ToString("dd")
 $dateStr = $parsedDate.ToString("yyyy-MM-dd")
 $compactDate = $parsedDate.ToString("yyyyMMdd")
 
-$logDir = Join-Path (Resolve-TasksPath '300logs') "$year\$month\$day"
+$logDir = Join-Path "$HOME\.browser4\development\logs" "$year\$month\$day"
 $memoryFile = Join-Path $logDir "MEMORY.$compactDate.md"
 
 if (-not (Test-Path $logDir)) {

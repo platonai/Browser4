@@ -92,7 +92,8 @@ buildNumber.properties
 
 #.idea/markdown-navigator/
 logs/
-coworker/tasks/300logs/scheduler/scheduled-tasks.status.json
+# coworker scheduler status (kept in home directory)
+.browser4/
 lib/
 repo/
 derby.log

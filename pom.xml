@@ -21,7 +21,7 @@
 
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>browser4</artifactId>
-    <version>4.11.2-SNAPSHOT</version>
+    <version>4.11.3-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <name>Browser4</name>
@@ -589,4 +589,5 @@
     </properties>
 
 </project>
+
 
