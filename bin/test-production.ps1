@@ -885,9 +885,37 @@ if ($SkipMultiScenarios) {
     if (-not $cliCheck) {
         Write-WarningMsg 'browser4-cli not on PATH — re-installing for multi-scenarios test …'
         if ($OSWin) {
-            irm $InstallPs1Url | iex
+            Write-Info "Downloading and running install script (Windows) …"
+            Write-Info "URL: $InstallPs1Url"
+
+            $installScript = Join-Path $env:TEMP 'install-browser4-cli.ps1'
+            Invoke-WebRequest -Uri $InstallPs1Url -OutFile $installScript -UseBasicParsing -ErrorAction Stop
+            Write-Info "Downloaded install script to $installScript"
+
+            # Patch for PS7 compatibility (same as step 6 above)
+            $rawScript = Get-Content $installScript -Raw
+            $rawScript = $rawScript -replace '\$script:IsWin\b',   '$script:OSWin'
+            $rawScript = $rawScript -replace '\$script:IsMac\b',   '$script:OSMac'
+            $rawScript = $rawScript -replace '\$script:IsLinux\b', '$script:OSLinux'
+            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+            [System.IO.File]::WriteAllText($installScript, $rawScript, $utf8NoBom)
+
+            & $installScript
+            if ($LASTEXITCODE -ne 0) {
+                Write-WarningMsg "Install script exited with code $LASTEXITCODE"
+            }
         } else {
-            bash -c "curl -fsSL $InstallShUrl | bash"
+            Write-Info "Downloading and running install script (Linux/macOS) …"
+            Write-Info "URL: $InstallShUrl"
+
+            $installScript = Join-Path $env:TEMP 'install-browser4-cli.sh'
+            Invoke-WebRequest -Uri $InstallShUrl -OutFile $installScript -UseBasicParsing -ErrorAction Stop
+            Write-Info "Downloaded install script to $installScript"
+
+            bash $installScript
+            if ($LASTEXITCODE -ne 0) {
+                Write-WarningMsg "Shell install script exited with code $LASTEXITCODE"
+            }
         }
         $env:Path = [System.Environment]::GetEnvironmentVariable('Path', 'User') + ';' +
                     [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
