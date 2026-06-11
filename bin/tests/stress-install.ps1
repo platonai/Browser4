@@ -54,35 +54,28 @@ if ($IsWin) {
 [Console]::InputEncoding  = [Text.Encoding]::UTF8
 
 # -------------------------------------------------------------------
-# CLI helper (same pattern as session-stress.ps1)
+# CLI helper — uses global browser4-cli by default.
+# Set BROWSER4_CLI_BIN to override (e.g. to a local dev binary).
 # -------------------------------------------------------------------
-# Resolve the CLI Cargo.toml path (the script may be invoked from the repo root
-# which does not contain a Cargo.toml).
-$RepoRoot = git rev-parse --show-toplevel
-$CliManifest = Join-Path $RepoRoot 'cli' | Join-Path -ChildPath 'browser4-cli' | Join-Path -ChildPath 'Cargo.toml'
-
-# Prefer a pre-compiled debug binary so we avoid cargo build output (warnings,
-# progress messages) leaking into CLI output captured by assertions.  Fall back
-# to `cargo run` when the binary hasn't been built yet.
 $script:__CliBin = $env:BROWSER4_CLI_BIN
 if (-not $script:__CliBin) {
-    $DebugBinary = Join-Path (Split-Path $CliManifest -Parent) 'target' |
-        Join-Path -ChildPath 'debug' |
-        Join-Path -ChildPath 'browser4-cli'
-    if ($IsWin) { $DebugBinary = "$DebugBinary.exe" }
-    if (Test-Path $DebugBinary) {
-        $script:__CliBin = $DebugBinary
-        Write-Host "  (using pre-built binary: $DebugBinary)" -ForegroundColor DarkGray
-    } else {
-        Write-Host "  (binary not found; falling back to cargo run)" -ForegroundColor DarkGray
+    $script:__CliBin = (Get-Command 'browser4-cli' -CommandType Application -ErrorAction SilentlyContinue)
+    if (-not $script:__CliBin) {
+        # Fall back to where.exe on Windows, `which` on Unix.
+        $whichCmd = if ($IsWindows) { 'where.exe' } else { 'which' }
+        $raw = & $whichCmd 'browser4-cli' 2>$null | Select-Object -First 1
+        if ($raw) { $script:__CliBin = $raw.Trim() }
     }
+    if ($script:__CliBin -and ($script:__CliBin -is [System.Management.Automation.CommandInfo])) {
+        $script:__CliBin = $script:__CliBin.Source
+    }
+    if (-not $script:__CliBin) {
+        throw 'browser4-cli not found on PATH. Install it with: npm i -g browser4-cli && browser4-cli install'
+    }
+    Write-Host "  (using global browser4-cli: $script:__CliBin)" -ForegroundColor DarkGray
 }
 
-$cli = if ($script:__CliBin) {
-    { & $script:__CliBin $args 2>&1 }
-} else {
-    { cargo run --manifest-path $CliManifest --quiet -- $args 2>&1 }
-}
+$cli = { & $script:__CliBin $args 2>&1 }
 
 # Wrapper that captures $LASTEXITCODE *before* the pipeline ends.
 # Windows PowerShell 5.1 clears $LASTEXITCODE after piping to a

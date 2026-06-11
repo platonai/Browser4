@@ -815,7 +815,7 @@ if ($SkipMultiScenarios) {
                     [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
     }
 
-    $multiScenariosScript = Join-Path $RepoRoot 'cli\browser4-cli\tests\scripts\multi-scenarios.ps1'
+    $multiScenariosScript = Join-Path $RepoRoot 'bin\tests\multi-scenarios.ps1'
     if (-not (Test-Path $multiScenariosScript)) {
         Write-WarningMsg "multi-scenarios.ps1 not found at: $multiScenariosScript"
         Write-StepResult -Step 'multi-scenarios' -Passed $false -Detail 'script not found'

@@ -45,7 +45,7 @@ $null = & chcp 65001
 $cli = if ($env:BROWSER4_CLI_BIN) {
     { & $env:BROWSER4_CLI_BIN $args 2>$null }
 } else {
-    { cargo run --quiet -- $args 2>$null }
+    { browser4-cli $args 2>$null }
 }
 
 # Invoke a CLI command, print its output for progress, and fail on

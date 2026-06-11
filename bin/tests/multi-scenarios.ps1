@@ -4,14 +4,14 @@
     Multi-scenario stress-test orchestrator for browser4-cli.
 
 .DESCRIPTION
-    Cleans and rebuilds the CLI binary (and optionally the Browser4 server),
-    then runs the scenario suite in a loop.  Each iteration launches every
-    scenario as an isolated sub-process so a single crash cannot poison the
-    runner.  Results are tracked per-iteration and a summary is printed at
-    the end.
+    Runs the scenario suite in a loop.  Each iteration launches every scenario
+    as an isolated sub-process so a single crash cannot poison the runner.
+    Results are tracked per-iteration and a summary is printed at the end.
 
-    The server-side rebuild uses a fast source-tree fingerprint so Maven is
-    only invoked when Java/Kotlin sources actually changed.
+    By default this script uses the globally-installed browser4-cli and does
+    NOT build the Browser4 server — it expects a server to already be running
+    (or auto-started by browser4-cli).  Use -BuildCli to build from the local
+    Rust source tree, and -BuildServer to rebuild the server JAR via Maven.
 
 .PARAMETER Iterations
     Number of full suite iterations (default: 60).
@@ -21,27 +21,31 @@
     four core scenarios.
 
 .PARAMETER Release
-    Build with `--release`.  The default is a debug build (faster iteration).
+    Build with `--release` (only meaningful with -BuildCli).
 
 .PARAMETER SkipBuild
-    Skip CLI build.  Use when the binary is already fresh.
+    Skip CLI build.  This is the default behaviour; accepted for bw-compat.
 
 .PARAMETER SkipServerBuild
-    Skip the Browser4 server (Maven) rebuild entirely.
+    Skip the Browser4 server (Maven) rebuild.  This is the default behaviour;
+    accepted for bw-compat.
 
-.PARAMETER ForceServerBuild
-    Always run Maven, even when the fingerprint says the server is up to date.
+.PARAMETER BuildServer
+    Rebuild the Browser4 server JAR via Maven before running scenarios.
+
+.PARAMETER BuildCli
+    Build the CLI binary from the local Rust source tree instead of using the
+    globally-installed browser4-cli.
 
 .PARAMETER UseGlobalCli
-    Skip the local cargo build and use the globally-installed browser4-cli
-    (resolved from PATH) instead.  The server-side (Maven) build is
-    unaffected by this flag — use -SkipServerBuild to suppress that as well.
+    Use the globally-installed browser4-cli.  This is the default behaviour;
+    accepted for bw-compat.  Override with -BuildCli.
 
 .EXAMPLE
     .\multi-scenarios.ps1 -Iterations 10
 
 .EXAMPLE
-    .\multi-scenarios.ps1 -Release -ForceServerBuild
+    .\multi-scenarios.ps1 -BuildCli -BuildServer -Iterations 5
 
 .EXAMPLE
     .\multi-scenarios.ps1 -UseGlobalCli -SkipServerBuild
@@ -59,7 +63,8 @@ param(
     [switch] $Release,
     [switch] $SkipBuild,
     [switch] $SkipServerBuild,
-    [switch] $ForceServerBuild,
+    [switch] $BuildServer,
+    [switch] $BuildCli,
     [switch] $UseGlobalCli,
     [switch] $Help,
     [string] $RuntimeBundleHome = ''
@@ -72,40 +77,45 @@ if ($Help) {
 
 $ErrorActionPreference = 'Stop'
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$ProjectDir = Resolve-Path "$ScriptDir\..\.."
-
-# Resolve the repo root (where pom.xml lives) by walking up from the CLI crate.
-$RepoRoot = $ProjectDir
-while ($RepoRoot -and -not (Test-Path (Join-Path $RepoRoot 'pom.xml'))) {
-    $RepoRoot = Split-Path -Parent $RepoRoot
-}
-if (-not $RepoRoot) { throw 'Cannot find repo root (no pom.xml found up the tree)' }
+# $ScriptDir is bin/tests/ — repo root is two levels up
+$RepoRoot = Resolve-Path "$ScriptDir\..\.."
 
 $BinaryName = if ($IsWindows) { 'browser4-cli.exe' } else { 'browser4-cli' }
 $Profile = if ($Release) { 'release' } else { 'debug' }
-$BinaryPath = "$ProjectDir\target\$Profile\$BinaryName"
 
-# ---- resolve / install global browser4-cli when -UseGlobalCli is set ----
-if ($UseGlobalCli) {
-    $globalCmd = Get-Command 'browser4-cli' -CommandType Application -ErrorAction SilentlyContinue
-    if (-not $globalCmd) {
-        # Fall back to where.exe on Windows, `which` on Unix.
-        $whichCmd = if ($IsWindows) { 'where.exe' } else { 'which' }
-        $raw = & $whichCmd 'browser4-cli' 2>$null | Select-Object -First 1
-        if ($raw) { $globalCmd = $raw.Trim() }
+# ---- Resolve the CLI binary ----
+# Default: use globally-installed browser4-cli (overridable via $env:BROWSER4_CLI_BIN).
+# When -BuildCli is given, build from the local Rust source and use the resulting binary.
+
+if ($BuildCli) {
+    # Build from local source tree
+    $CliProjectDir = Join-Path $RepoRoot 'cli\browser4-cli'
+    if (-not (Test-Path (Join-Path $CliProjectDir 'Cargo.toml'))) {
+        throw "CLI project not found at: $CliProjectDir"
     }
-    if (-not $globalCmd -or -not (Test-Path ($globalCmd.Source ?? $globalCmd))) {
-        Write-Host 'browser4-cli not found on PATH — installing globally …' -ForegroundColor Yellow
-        npm i -g browser4-cli
-        if ($LASTEXITCODE -ne 0) { throw 'npm i -g browser4-cli failed' }
-        browser4-cli install
-        if ($LASTEXITCODE -ne 0) { throw 'browser4-cli install failed' }
-        # Re-resolve after install.
-        $globalCmd = Get-Command 'browser4-cli' -CommandType Application -ErrorAction Stop
+    $BinaryPath = Join-Path $CliProjectDir "target\$Profile\$BinaryName"
+} else {
+    # Use global CLI — resolve from PATH (or $env:BROWSER4_CLI_BIN override)
+    if ($env:BROWSER4_CLI_BIN) {
+        $BinaryPath = $env:BROWSER4_CLI_BIN
+    } else {
+        $globalCmd = Get-Command 'browser4-cli' -CommandType Application -ErrorAction SilentlyContinue
+        if (-not $globalCmd) {
+            $whichCmd = if ($IsWindows) { 'where.exe' } else { 'which' }
+            $raw = & $whichCmd 'browser4-cli' 2>$null | Select-Object -First 1
+            if ($raw) { $globalCmd = $raw.Trim() }
+        }
+        if (-not $globalCmd -or -not (Test-Path ($globalCmd.Source ?? $globalCmd))) {
+            Write-Host 'browser4-cli not found on PATH — installing globally …' -ForegroundColor Yellow
+            npm i -g browser4-cli
+            if ($LASTEXITCODE -ne 0) { throw 'npm i -g browser4-cli failed' }
+            browser4-cli install
+            if ($LASTEXITCODE -ne 0) { throw 'browser4-cli install failed' }
+            $globalCmd = Get-Command 'browser4-cli' -CommandType Application -ErrorAction Stop
+        }
+        $BinaryPath = if ($globalCmd -is [string]) { $globalCmd } else { $globalCmd.Source }
     }
-    $resolved = if ($globalCmd -is [string]) { $globalCmd } else { $globalCmd.Source }
-    Write-Host "Using global browser4-cli: $resolved" -ForegroundColor DarkGray
-    $BinaryPath = $resolved
+    Write-Host "Using browser4-cli: $BinaryPath" -ForegroundColor DarkGray
 }
 
 $ScenarioTimeoutSeconds = 300   # per-scenario timeout (5 min)
@@ -251,23 +261,22 @@ function Invoke-ServerBuildIfNeeded {
 # -------------------------------------------------------------------
 # Build
 # -------------------------------------------------------------------
-if (-not $SkipBuild) {
+$needBuild = $BuildCli -or $BuildServer
+
+if ($needBuild) {
     Write-Host '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' -ForegroundColor Cyan
     Write-Host '  Build' -ForegroundColor Cyan
     Write-Host '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' -ForegroundColor Cyan
 
     # --- Server-side (Java) ---
-    if (-not $SkipServerBuild) {
+    if ($BuildServer) {
         Write-Host "`n[Server] Checking Browser4 bundle …" -ForegroundColor Yellow
         Invoke-ServerBuildIfNeeded
     }
 
     # --- CLI (Rust) ---
-    if ($UseGlobalCli) {
-        Write-Host "`n[CLI] Skipping cargo build — using global browser4-cli" -ForegroundColor DarkGray
-    }
-    else {
-        Push-Location $ProjectDir
+    if ($BuildCli) {
+        Push-Location $CliProjectDir
         Write-Host "`n[CLI] cargo clean …" -ForegroundColor Yellow
         cargo clean
         if ($LASTEXITCODE -ne 0) { throw 'cargo clean failed' }
@@ -291,7 +300,7 @@ Write-Host "Binary: $BinaryPath" -ForegroundColor DarkGray
 Write-Host "Version: $(& $BinaryPath --version)" -ForegroundColor DarkGray
 
 # Export so child scripts can use `$env:BROWSER4_CLI_BIN` as a faster
-# alternative to `cargo run`.
+# alternative to the global CLI.
 $env:BROWSER4_CLI_BIN = $BinaryPath
 
 # -------------------------------------------------------------------
