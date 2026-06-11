@@ -1,17 +1,18 @@
 #!/usr/bin/env node
 
 /**
- * Syncs the CLI version from cli/package.json to the Cargo manifest.
+ * Syncs the CLI version from cli/VERSION-CLI to all dependent files.
  *
- * cli/package.json is the single source of truth for the CLI version.  This
+ * cli/VERSION-CLI is the single source of truth for the CLI version.  This
  * allows the backend Maven project and the CLI to be published separately with
  * different versions.  This script:
- *   - Reads the version from cli/package.json
- *   - Strips the Maven-style "-SNAPSHOT" suffix
+ *   - Reads the version from cli/VERSION-CLI
+ *   - Strips any "-SNAPSHOT" suffix (if present)
  *   - Fetches the latest published version from npm and compares it
  *     against the local version, warning when the bump is neither a
  *     patch nor a minor increment.
- *   - Writes the clean semver to cli/browser4-cli/Cargo.toml
+ *   - Writes the version to cli/package.json
+ *   - Writes the version to cli/browser4-cli/Cargo.toml
  *   - Updates Cargo.lock to match
  *
  * Usage:
@@ -126,19 +127,26 @@ function checkVersionBump(published, local) {
 
 const checkOnly = process.argv.includes("--check");
 
-// 1. Read the CLI version from cli/package.json (the source of truth)
-const packageJsonPath = join(cliDir, "package.json");
-const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf-8"));
-const pkgName = packageJson.name;
-const pkgVersion = packageJson.version;
+// The npm package name (hard-coded — stable across versions)
+const pkgName = "browser4-cli";
 
-if (!pkgVersion) {
-  console.error("ERROR: cli/package.json does not contain a version field.");
+// 1. Read the CLI version from cli/VERSION-CLI (the single source of truth)
+const versionCliPath = join(cliDir, "VERSION-CLI");
+let versionRaw;
+try {
+  versionRaw = readFileSync(versionCliPath, "utf-8").trim();
+} catch {
+  console.error(`ERROR: Cannot read ${versionCliPath}`);
   process.exit(1);
 }
 
-const version = stripSnapshot(pkgVersion);
-if (checkOnly) console.log(`cli/package.json: ${version}`);
+if (!versionRaw) {
+  console.error("ERROR: cli/VERSION-CLI is empty.");
+  process.exit(1);
+}
+
+const version = stripSnapshot(versionRaw);
+if (checkOnly) console.log(`cli/VERSION-CLI: ${version}`);
 
 // 2. Compare against the latest published version on npm
 const publishedVersion = getLatestPublishedVersion(pkgName);
@@ -154,7 +162,34 @@ if (publishedVersion) {
   console.log(`Latest published: (not found — package may not be published yet)`);
 }
 
-// 3. Sync cli/browser4-cli/Cargo.toml
+// ---------------------------------------------------------------------------
+// 3. Sync cli/package.json
+// ---------------------------------------------------------------------------
+const packageJsonPath = join(cliDir, "package.json");
+const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf-8"));
+
+if (!packageJson.version) {
+  console.error("ERROR: cli/package.json does not contain a version field.");
+  process.exit(1);
+}
+
+if (packageJson.version !== version) {
+  if (checkOnly) {
+    console.error(`MISMATCH: ${packageJsonPath} version is "${packageJson.version}", expected "${version}"`);
+    process.exitCode = 1;
+  } else {
+    const oldVersion = packageJson.version;
+    packageJson.version = version;
+    writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2) + "\n");
+    console.log(`  Updated ${packageJsonPath}: ${oldVersion} -> ${version}`);
+  }
+} else {
+  if (!checkOnly) console.log(`  ${packageJsonPath} already up to date`);
+}
+
+// ---------------------------------------------------------------------------
+// 4. Sync cli/browser4-cli/Cargo.toml
+// ---------------------------------------------------------------------------
 const cargoTomlPath = join(cargoDir, "Cargo.toml");
 let cargoToml = readFileSync(cargoTomlPath, "utf-8");
 const cargoVersionRegex = /^version\s*=\s*"[^"]*"/m;
@@ -179,14 +214,18 @@ if (cargoVersion !== version) {
   if (!checkOnly) console.log(`  ${cargoTomlPath} already up to date`);
 }
 
-// 4. Update Cargo.lock (only in sync mode)
+// ---------------------------------------------------------------------------
+// 5. Update Cargo.lock (only in sync mode)
+// ---------------------------------------------------------------------------
 if (!checkOnly && cargoVersion !== version) {
+  let lockUpdated = false;
   try {
     execSync("cargo update -p browser4-cli --offline", {
       cwd: cargoDir,
       stdio: "pipe",
     });
     console.log("  Updated Cargo.lock");
+    lockUpdated = true;
   } catch {
     try {
       execSync("cargo update -p browser4-cli", {
@@ -194,18 +233,44 @@ if (!checkOnly && cargoVersion !== version) {
         stdio: "pipe",
       });
       console.log("  Updated Cargo.lock");
+      lockUpdated = true;
     } catch (e) {
-      console.error(`  Warning: Could not update Cargo.lock: ${e.message}`);
+      console.error(`  Warning: Could not update Cargo.lock via cargo: ${e.message}`);
+    }
+  }
+
+  // Fallback: edit Cargo.lock directly when cargo update fails (e.g. due to
+  // lock file version mismatch between the installed cargo and the lock file).
+  if (!lockUpdated) {
+    const cargoLockPath = join(cargoDir, "Cargo.lock");
+    try {
+      let lockContent = readFileSync(cargoLockPath, "utf-8");
+      // Match the [[package]] block for browser4-cli and replace its version.
+      // Works for both v3 and v4 lock file formats.
+      const lockPkgRegex = new RegExp(
+        `(\\[\\[package\\]\\][\\r\\n]+\\s*name\\s*=\\s*"browser4-cli"[\\r\\n]+\\s*version\\s*=\\s*)"[^"]*"`,
+        "m"
+      );
+      if (lockPkgRegex.test(lockContent)) {
+        lockContent = lockContent.replace(lockPkgRegex, `$1"${version}"`);
+        writeFileSync(cargoLockPath, lockContent);
+        console.log(`  Updated Cargo.lock directly: ${cargoVersion} -> ${version}`);
+        lockUpdated = true;
+      } else {
+        console.error("  Warning: Could not find browser4-cli entry in Cargo.lock");
+      }
+    } catch (e2) {
+      console.error(`  Warning: Could not update Cargo.lock directly: ${e2.message}`);
     }
   }
 }
 
-// 5. Report
+// 6. Report
 if (checkOnly) {
   if (process.exitCode === 1) {
     console.error("\nVersion mismatch detected! Run 'node cli/scripts/sync-version.js' to fix.");
   } else {
-    console.log(`\nAll versions in sync: ${version}`);
+    console.log(`\nAll versions in sync with cli/VERSION-CLI: ${version}`);
   }
 } else {
   console.log(`\nVersion sync complete: ${pkgName}@${version}`);

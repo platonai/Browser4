@@ -70,7 +70,11 @@ pub fn generate_help() -> String {
         30,
     ));
     lines.push(format_with_gap("  -s=<name>", "named session label", 30));
-    lines.push(format_with_gap("  --server=<url>", "override Browser4 server URL", 30));
+    lines.push(format_with_gap(
+        "  --server=<url>",
+        "override Browser4 server URL",
+        30,
+    ));
 
     // for developer only
     // lines.push(format_with_gap(
@@ -167,7 +171,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push(
-            "  browser4-cli agent run \"Open example.com and summarize the hero section\""
+            "  browser4-cli agent run \"Open browser4.io and summarize the hero section\""
                 .to_string(),
         );
     }
@@ -208,18 +212,50 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     if cmd.name == "install" {
         lines.push("Notes:".to_string());
         lines.push(
-            "  - Downloads the self-contained Browser4 runtime bundle for the current OS/architecture from GitHub Releases."
+            "  - Downloads the self-contained Browser4 runtime bundle for the current OS/architecture."
                 .to_string(),
         );
         lines.push(
             "  - The bundle contains all dependency jars, a minimal `jlink`-built JRE, and platform launcher scripts."
                 .to_string(),
         );
+        lines.push(
+            "  - Probes configured download mirrors in order and uses the first reachable one."
+                .to_string(),
+        );
+        lines.push(
+            "  - When no --tag is given the latest release is resolved automatically.".to_string(),
+        );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli install".to_string());
         lines.push("  browser4-cli install --tag=v4.9.3".to_string());
         lines.push("  browser4-cli install --tag=4.9.3 --force".to_string());
+    }
+
+    if cmd.name == "upgrade" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Convenience wrapper around `install` that upgrades the runtime to a newer version."
+                .to_string(),
+        );
+        lines.push(
+            "  - When the requested version is already installed, the download is skipped."
+                .to_string(),
+        );
+        lines.push(
+            "  - After upgrading, restart the server: browser4-cli stop && browser4-cli open <url>"
+                .to_string(),
+        );
+        lines.push(
+            "  - Supports the same mirror selection and proxy configuration as `install`."
+                .to_string(),
+        );
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        lines.push("  browser4-cli upgrade".to_string());
+        lines.push("  browser4-cli upgrade v4.11.0".to_string());
+        lines.push("  browser4-cli upgrade --force".to_string());
     }
 
     if cmd.name == "uninstall" {
@@ -229,16 +265,17 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - Removes the Browser4 runtime data and runtime cache directories."
-                .to_string(),
+            "  - Removes the Browser4 runtime data and runtime cache directories.".to_string(),
         );
         lines.push(
-            "  - Does not require a running server."
+            "  - Prompts for confirmation before removing data directories unless --yes is passed."
                 .to_string(),
         );
+        lines.push("  - Does not require a running server.".to_string());
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli uninstall".to_string());
+        lines.push("  browser4-cli uninstall -y".to_string());
     }
 
     if cmd.name == "list" {
@@ -309,29 +346,22 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - When `--sql` is provided, the CLI sends a structured JSON body to `SwarmController.query(query)`"
                 .to_string(),
         );
-        lines.push(
-            "    instead of a raw string to `SwarmController.submit(payload)`."
-                .to_string(),
-        );
+        lines.push("    instead of a raw string to `SwarmController.submit(payload)`.".to_string());
         lines.push(
             "  - `--sql` accepts inline X-SQL or a file path prefixed with `@` (e.g. `--sql @query.sql`)."
                 .to_string(),
         );
         lines.push(
-            "  - Use `@url` in the X-SQL as a placeholder for the target page URL."
-                .to_string(),
+            "  - Use `@url` in the X-SQL as a placeholder for the target page URL.".to_string(),
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push(
-            "  browser4-cli swarm submit https://example.com/direct --seed-file=./swarm-seeds.txt --deadline=2026-03-30T00:00:00Z --expires=1d --refresh --parse --store-content"
+            "  browser4-cli swarm submit https://example.com/direct --seed-file=./swarm-seeds.txt --deadline=2026-03-30T00:00:00Z --expires=1d --refresh --store-content"
                 .to_string(),
         );
         lines.push(String::new());
-        lines.push(
-            "  # Submit with an inline X-SQL query:"
-                .to_string(),
-        );
+        lines.push("  # Submit with an inline X-SQL query:".to_string());
         lines.push(
             r##"  browser4-cli swarm submit "https://www.amazon.com/dp/B08PP5MSVB" --sql ""##
                 .to_string()
@@ -340,10 +370,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 + r#"""#
         );
         lines.push(String::new());
-        lines.push(
-            "  # Submit with a query file:"
-                .to_string(),
-        );
+        lines.push("  # Submit with a query file:".to_string());
         lines.push(
             r##"  browser4-cli swarm submit "https://www.amazon.com/dp/B08PP5MSVB" --sql @query.sql"##
                 .to_string(),
@@ -361,8 +388,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 .to_string(),
         );
         lines.push(
-            "  - Use `@url` in the X-SQL as a placeholder for the target page URL."
-                .to_string(),
+            "  - Use `@url` in the X-SQL as a placeholder for the target page URL.".to_string(),
         );
         lines.push(
             "  - The CLI sends a structured JSON body to `SwarmController.query(query)`."
@@ -382,10 +408,7 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push(
-            "  # Inline X-SQL:"
-                .to_string(),
-        );
+        lines.push("  # Inline X-SQL:".to_string());
         lines.push(
             r##"  browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql ""##
                 .to_string()
@@ -394,19 +417,13 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
                 + r#"""#
         );
         lines.push(String::new());
-        lines.push(
-            "  # From a query file:"
-                .to_string(),
-        );
+        lines.push("  # From a query file:".to_string());
         lines.push(
             r##"  browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql @query.sql"##
                 .to_string(),
         );
         lines.push(String::new());
-        lines.push(
-            "  # With seed file:"
-                .to_string(),
-        );
+        lines.push("  # With seed file:".to_string());
         lines.push(
             "  browser4-cli swarm query --sql @query.sql --seed-file=./swarm-seeds.txt --refresh"
                 .to_string(),
@@ -478,6 +495,7 @@ mod tests {
         assert!(help.contains("snapshot"));
         assert!(help.contains("install"));
         assert!(help.contains("uninstall"));
+        assert!(help.contains("upgrade"));
         assert!(help.contains("ArrowLeft"));
         assert!(help.contains("Evaluate JavaScript expression on page or element"));
         assert!(help.contains("Core:"));
@@ -527,6 +545,19 @@ mod tests {
         assert!(help.contains("dependency jars, a minimal `jlink`-built JRE"));
         assert!(help.contains("browser4-cli install --tag=v4.9.3"));
         assert!(help.contains("--force"));
+        assert!(help.contains("configured download mirrors"));
+    }
+
+    #[test]
+    fn test_generate_command_help_upgrade() {
+        let cmds = all_commands();
+        let upgrade = cmds.iter().find(|c| c.name == "upgrade").unwrap();
+        let help = generate_command_help(upgrade);
+        assert!(help.contains("browser4-cli upgrade"));
+        assert!(help.contains("Convenience wrapper around `install`"));
+        assert!(help.contains("restart the server"));
+        assert!(help.contains("--force"));
+        assert!(help.contains("mirror selection"));
     }
 
     #[test]

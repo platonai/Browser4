@@ -21,7 +21,7 @@
 
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>browser4</artifactId>
-    <version>4.11.0-SNAPSHOT</version>
+    <version>4.11.3-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <name>Browser4</name>
@@ -377,26 +377,11 @@
 
     <dependencyManagement>
         <dependencies>
-            <dependency>
-                <groupId>org.jetbrains.kotlin</groupId>
-                <artifactId>kotlin-bom</artifactId>
-                <version>${kotlin.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-            <dependency>
-                <groupId>ai.platon</groupId>
-                <artifactId>browser4-dependencies</artifactId>
-                <version>${project.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
 
-            <!-- Temporary use, will remove and use the published version later -->
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-bom</artifactId>
-                <version>${browser4-base.version}</version>
+                <artifactId>browser4-dependencies</artifactId>
+                <version>${project.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -571,16 +556,6 @@
         <version.maven-surefire>${surefire.version}</version.maven-surefire>
         <version.maven-war-plugin>3.5.1</version.maven-war-plugin>
 
-        <!--  Language  -->
-        <javaVersion>17</javaVersion>
-        <kotlinVersion>2.2.21</kotlinVersion>
-        <kotlin.coroutine.version>1.10.2</kotlin.coroutine.version>
-
-        <!--  Kotlin  -->
-        <kotlin.version>${kotlinVersion}</kotlin.version>
-        <maven.compiler.release>${javaVersion}</maven.compiler.release>
-        <kotlin.compiler.jvmTarget>${javaVersion}</kotlin.compiler.jvmTarget>
-
         <!-- Test execution control properties -->
         <runITs>false</runITs>
         <runE2ETests>false</runE2ETests>
@@ -599,8 +574,20 @@
             IntegrationTest,E2ETest,HeavyTest
         </surefire.excludedGroups>
 
+        <!--  Language  -->
+        <javaVersion>17</javaVersion>
+        <kotlinVersion>2.3.21</kotlinVersion>
+        <kotlin.coroutine.version>1.10.2</kotlin.coroutine.version>
+
+        <!--  Kotlin  -->
+        <kotlin.version>${kotlinVersion}</kotlin.version>
+        <maven.compiler.release>${javaVersion}</maven.compiler.release>
+        <kotlin.compiler.jvmTarget>${javaVersion}</kotlin.compiler.jvmTarget>
+
         <spring-boot.version>4.0.6</spring-boot.version>
         <browser4-base.version>4.8.4</browser4-base.version>
     </properties>
 
 </project>
+
+

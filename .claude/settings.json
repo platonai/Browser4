@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo test *)",
+      "Bash(./mvnw compile *)",
+      "Skill(code-review)",
+      "Bash(git pull *)",
+      "Bash(git push *)",
+      "Bash(git stash *)",
+      "Bash(git checkout *)",
+      "Bash(git restore *)",
+      "Bash(git add *)",
+      "Bash(git reflog *)",
+      "Bash(git commit *)",
+      "Bash(rustc --version)",
+      "Bash(cargo --version)",
+      "Bash(rustup update *)",
+      "Bash(cargo metadata *)",
+      "Bash(npm run *)",
+      "Bash(rustup target *)",
+      "Bash(cargo build *)",
+      "Bash(wait)",
+      "WebFetch(domain:api.github.com)",
+      "Bash(rustup show *)",
+      "Bash(cargo check *)",
+      "Bash(rustup component *)",
+      "Bash(cp keep-me-at-the-end-to-fix-claude-settings)",
+      "Bash(cp keep-me-at-the-end-to-fix-claude-settings)",
+      "Bash(cp keep-me-at-the-end-to-fix-claude-settings)",
+      "Bash(cp keep-me-at-the-end-to-fix-claude-settings)",
+      "Bash(cp keep-me-at-the-end-to-fix-claude-settings)",
+      "Bash(rustup toolchain *)",
+      "Bash(chmod +x bin/release/download-release-assets.sh)",
+      "Bash(bash -n bin/release/download-release-assets.sh)"
+    ]
+  }
+}

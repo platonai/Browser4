@@ -132,7 +132,7 @@ cargo test --test e2e -- --list
 # More examples:
 cargo test --test e2e -- --nocapture
 cargo test --test e2e -- --nocapture --level=Basic
-cargo test --test e2e -- --nocapture --scenario-limit=5
+cargo test --test e2e -- --nocapture --scenario-limit=1
 cargo test --test e2e -- --nocapture --enable-batch-scenario
 cargo test --test e2e -- --nocapture --batch-only
 cargo test --test e2e -- --nocapture --scenario=*open*
@@ -145,6 +145,9 @@ cargo test --test e2e -- --nocapture --scenario-from=test_e2e_navigation_and_sto
 cargo test --test e2e -- --nocapture --failed
 cargo test --test e2e -- --nocapture --scenario=test_e2e_eval_command --fail-fast
 cargo test --test e2e -- --nocapture --force-remote-bundle
+
+# Nightly regression testing (runs all scenarios)
+cargo test --test e2e -- --nocapture --level=All --force-remote-bundle --enable-batch-scenario --enable-install-scenario
 ```
 
 ## License

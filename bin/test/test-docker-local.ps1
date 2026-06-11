@@ -47,7 +47,7 @@ if (-not $SkipMavenBuild) {
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
 
     $mvnCmd = if ($IsWindows) { '.\mvnw.cmd' } else { './mvnw' }
-    $mvnArgs = @('package', '-Pall-main-modules,asset-standalone', '-DskipTests', '-Dmaven.javadoc.skip=true', '-B', '-V')
+    $mvnArgs = @('package', '-Pall-main-modules,asset-standalone', '-DskipTests', '-B', '-V')
     & $mvnCmd @mvnArgs
     if ($LASTEXITCODE -ne 0) { throw "Maven build failed" }
     Write-Host "`n✅ Maven build complete`n" -ForegroundColor Green

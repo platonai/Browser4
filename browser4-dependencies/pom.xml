@@ -11,13 +11,11 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <!-- From apache: "Most projects will want to override some of these settings." -->
-    <!-- for more information, see the documentation of this POM: http://maven.apache.org/pom/asf/ -->
-
-    <groupId>ai.platon</groupId>
+    <groupId>ai.platon.pulsar</groupId>
     <artifactId>browser4-dependencies</artifactId>
+    <version>4.11.3-SNAPSHOT</version>
     <name>Browser4 Dependencies</name>
-    <version>4.11.0-SNAPSHOT</version>
+
     <packaging>pom</packaging>
 
     <description>Pulsar Dependencies</description>
@@ -62,10 +60,19 @@
     <dependencyManagement>
         <dependencies>
 
+            <!-- spring-boot-dependencies FIRST -->
             <dependency>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-dependencies</artifactId>
                 <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- pulsar-bom SECOND -->
+            <dependency>
+                <groupId>ai.platon.pulsar</groupId>
+                <artifactId>pulsar-bom</artifactId>
+                <version>${browser4-base.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -406,16 +413,57 @@
         </dependencies>
     </dependencyManagement>
 
+    <profiles>
+        <!-- Deploy profile for Central Portal -->
+        <profile>
+            <id>deploy</id>
+            <build>
+                <plugins>
+
+                    <!-- GPG signing -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <configuration>
+                            <gpgArguments>
+                                <arg>--pinentry-mode</arg>
+                                <arg>loopback</arg>
+                            </gpgArguments>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>${central-publishing-maven-plugin.version}</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>central</publishingServerId>
+                            <autoPublish>true</autoPublish>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
     <properties>
         <central-publishing-maven-plugin.version>0.9.0</central-publishing-maven-plugin.version>
         <!-- Apache common libraries -->
         <!-- managed by spring-boot-dependencies -->
-        <!--        <commons-lang.version>2.6</commons-lang.version>-->
         <commons-io.version>2.16.1</commons-io.version>
         <commons-codec.version>1.17.0</commons-codec.version>
         <commons-text.version>1.11.0</commons-text.version>
         <!-- managed by spring-boot-dependencies -->
-        <!--        <commons-lang3.version>3.12.0</commons-lang3.version>-->
         <commons-math3.version>3.6.1</commons-math3.version>
         <commons-numbers-bom.version>1.1</commons-numbers-bom.version>
         <commons-collections4.version>4.4</commons-collections4.version>
@@ -495,66 +543,25 @@
         <springmockk.version>4.0.2</springmockk.version>
         <mockito-junit-jupiter.version>5.20.0</mockito-junit-jupiter.version>
 
+        <kotlin-statistics.version>1.2.1</kotlin-statistics.version>
+        <mcp-sdk.version>0.8.1</mcp-sdk.version>
+
         <!--  Language  -->
         <javaVersion>17</javaVersion>
-        <kotlinVersion>2.2.21</kotlinVersion>
+        <kotlinVersion>2.3.21</kotlinVersion>
+        <kotlin.coroutine.version>1.10.2</kotlin.coroutine.version>
 
         <!--  Kotlin  -->
         <kotlin.version>${kotlinVersion}</kotlin.version>
         <maven.compiler.release>${javaVersion}</maven.compiler.release>
         <kotlin.compiler.jvmTarget>${javaVersion}</kotlin.compiler.jvmTarget>
 
-        <kotlin.coroutine.version>1.10.2</kotlin.coroutine.version>
-        <kotlin-statistics.version>1.2.1</kotlin-statistics.version>
-        <mcp-sdk.version>0.8.1</mcp-sdk.version>
-
         <spring-boot.version>4.0.6</spring-boot.version>
 
         <!-- Pulsar dependency -->
         <pulsar-h2.version>1.4.197</pulsar-h2.version>
         <pulsar-jsoup.version>1.14.3</pulsar-jsoup.version>
+        <browser4-base.version>4.8.4</browser4-base.version>
     </properties>
 
-    <profiles>
-        <!-- Deploy profile for Central Portal -->
-        <profile>
-            <id>deploy</id>
-            <build>
-                <plugins>
-
-                    <!-- GPG signing -->
-                    <plugin>
-                        <groupId>org.apache.maven.plugins</groupId>
-                        <artifactId>maven-gpg-plugin</artifactId>
-                        <configuration>
-                            <gpgArguments>
-                                <arg>--pinentry-mode</arg>
-                                <arg>loopback</arg>
-                            </gpgArguments>
-                        </configuration>
-                        <executions>
-                            <execution>
-                                <id>sign-artifacts</id>
-                                <phase>verify</phase>
-                                <goals>
-                                    <goal>sign</goal>
-                                </goals>
-                            </execution>
-                        </executions>
-                    </plugin>
-
-                    <plugin>
-                        <groupId>org.sonatype.central</groupId>
-                        <artifactId>central-publishing-maven-plugin</artifactId>
-                        <version>${central-publishing-maven-plugin.version}</version>
-                        <extensions>true</extensions>
-                        <configuration>
-                            <publishingServerId>central</publishingServerId>
-                            <autoPublish>true</autoPublish>
-                        </configuration>
-                    </plugin>
-                </plugins>
-            </build>
-        </profile>
-    </profiles>
 </project>

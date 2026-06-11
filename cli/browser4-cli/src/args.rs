@@ -471,10 +471,7 @@ mod tests {
     #[test]
     fn test_parse_raw_args_key_value_equals() {
         // --key=value should still work alongside --key value.
-        let raw = vec![
-            "install".to_string(),
-            "--tag=4.10.0-rc.2".to_string(),
-        ];
+        let raw = vec!["install".to_string(), "--tag=4.10.0-rc.2".to_string()];
         let map = parse_raw_args(&raw);
         assert_eq!(map.get("tag"), Some(&json!("4.10.0-rc.2")));
     }

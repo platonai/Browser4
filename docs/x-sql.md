@@ -1,7 +1,5 @@
 # X-SQL
 
-English | [简体中文](/docs/zh/x-sql.md)
-
 ## Introduction
 
 X-SQL is a SQL dialect for querying the web. It lets you load web pages, parse their DOM, extract structured data,

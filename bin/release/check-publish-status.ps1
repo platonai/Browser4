@@ -4,12 +4,9 @@
     Checks if the current project version has been fully published.
 
 .DESCRIPTION
-    Verifies two publish preconditions for the current version:
-      1. The version (tagged as vX.Y.Z) is the latest release on GitHub.
-      2. The pulsar-bom artifact for this version is available on Maven Central.
-
-    Only when both conditions are satisfied is the version considered "published"
-    and safe to bump. Exits with code 0 if published, non-zero otherwise.
+    Verifies that the current version (tagged as vX.Y.Z) is the latest release
+    on GitHub. When this condition is satisfied, the version is considered
+    "published" and safe to bump. Exits with code 0 if published, non-zero otherwise.
 
 .PARAMETER Version
     The version to check (without the -SNAPSHOT suffix).
@@ -70,17 +67,8 @@ if ($remoteUrl -notmatch 'github\.com[:/](.+?)(?:\.git)?$') {
 $githubRepo = $matches[1]
 Write-Host "GitHub repository : $githubRepo"
 
-# Maven Central coordinates for pulsar-bom
-$mavenGroupId = "ai.platon.pulsar"
-$mavenArtifactId = "pulsar-bom"
-$mavenPath = $mavenGroupId -replace '\.', '/'
-$mavenUrl = "https://repo1.maven.org/maven2/$mavenPath/$mavenArtifactId/$Version/$mavenArtifactId-$Version.pom"
-
-Write-Host "Maven Central URL : $mavenUrl"
-Write-Host ""
-
 # ---------------------------------------------------------------
-# Check 1: Is this version the latest GitHub release?
+# Check: Is this version the latest GitHub release?
 # ---------------------------------------------------------------
 Write-Host "-------------------------------------------------"
 Write-Host " Check 1: Latest GitHub release"
@@ -176,34 +164,6 @@ if ($null -eq $latestReleaseTag) {
 }
 
 # ---------------------------------------------------------------
-# Check 2: Is pulsar-bom available on Maven Central?
-# ---------------------------------------------------------------
-Write-Host ""
-Write-Host "-------------------------------------------------"
-Write-Host " Check 2: pulsar-bom on Maven Central"
-Write-Host "-------------------------------------------------"
-
-$mavenAvailable = $false
-
-try {
-    $response = Invoke-WebRequest -Uri $mavenUrl -Method Head -TimeoutSec 30 -ErrorAction SilentlyContinue
-    if ($response.StatusCode -eq 200) {
-        $mavenAvailable = $true
-        Write-Host "  [OK] pulsar-bom $Version is available on Maven Central."
-    } else {
-        Write-Host "  [XX] pulsar-bom $Version returned HTTP $($response.StatusCode)."
-    }
-} catch {
-    $statusCode = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { "N/A" }
-    if ($statusCode -eq 200) {
-        $mavenAvailable = $true
-        Write-Host "  [OK] pulsar-bom $Version is available on Maven Central."
-    } else {
-        Write-Host "  [XX] pulsar-bom $Version is NOT available on Maven Central (HTTP $statusCode)."
-    }
-}
-
-# ---------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------
 Write-Host ""
@@ -214,17 +174,13 @@ Write-Host "-------------------------------------------------"
 Write-Host ""
 Write-Host "  Version          : v$Version"
 Write-Host "  GitHub latest    : $($(if ($isLatestRelease) { '[OK] YES' } else { '[XX] NO' }))"
-Write-Host "  Maven Central    : $($(if ($mavenAvailable) { '[OK] YES' } else { '[XX] NO' }))"
-Write-Host "  Fully published  : $($(if ($isLatestRelease -and $mavenAvailable) { '[OK] YES' } else { '[XX] NO' }))"
+Write-Host "  Published        : $($(if ($isLatestRelease) { '[OK] YES' } else { '[XX] NO' }))"
 Write-Host ""
 
-if ($isLatestRelease -and $mavenAvailable) {
-    Write-Host "All preconditions satisfied -- safe to bump the version."
+if ($isLatestRelease) {
+    Write-Host "Version v$Version is the latest GitHub release -- safe to bump."
     exit 0
 } else {
-    $missing = @()
-    if (-not $isLatestRelease) { $missing += "latest GitHub release" }
-    if (-not $mavenAvailable) { $missing += "Maven Central availability" }
-    Write-Host "Preconditions NOT met -- missing: $($missing -join ', ')"
+    Write-Host "Version v$Version is NOT the latest GitHub release."
     exit 1
 }

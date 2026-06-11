@@ -5,7 +5,7 @@
 1. 运行 `coworker-scheduler.ps1` 以启动定时自动化
 2. 在 `0draft` 下起草任务（或者任何地方）
 3. 将已完成草稿的任务复制到 `1created` 目录以执行
-4. 执行后，您可以在 `3_1complete` 中找到结果，在 300logs 中找到详细日志
+4. 执行后，您可以在 `3_1complete` 中找到结果，在 `~/.browser4/development/logs` 中找到详细日志
 5. 如有需要，复核结果
 6. 将任务文件从 `3_1complete` 移动到 `5approved` 以便触发 git 推送
 

@@ -9,20 +9,20 @@
 <!-- TOC -->
 **目录**
 - [🤖 Browser4](#-browser4)
-    - [🌟 项目简介](#-项目简介)
-        - [✨ 核心能力](#-核心能力)
-    - [💡 使用示例](#-使用示例)
-        - [快速入门](#快速入门)
-        - [CLI 与技能 (SKILLS)](#cli-与技能-skills)
-    - [高级命令](#高级命令)
-        - [Agent 和 Swarm CLI](#agent-和-swarm-cli)
-    - [🚀 Native API 快速开始](#-native-api-快速开始)
-        - [自动提取](#自动提取)
-    - [📦 模块概览](#-模块概览)
-    - [🤝 支持与社区](#-支持与社区)
-    - [📜 文档](#-文档)
-    - [🔧 代理配置 - 解锁网站访问](#-代理配置---解锁网站访问)
-    - [许可证](#许可证)
+  - [🌟 项目简介](#-项目简介)
+    - [✨ 核心能力](#-核心能力)
+  - [📦 安装](#-安装)
+  - [💡 使用示例](#-使用示例)
+    - [快速入门](#快速入门)
+    - [CLI 与技能 (SKILLS)](#cli-与技能-skills)
+    - [Agent 和 Swarm CLI](#agent-和-swarm-cli)
+  - [🚀 从源码构建](#-从源码构建)
+  - [🧬 自动提取](#-自动提取)
+  - [📦 模块概览](#-模块概览)
+  - [🤝 支持与社区](#-支持与社区)
+  - [📜 文档](#-文档)
+  - [🔧 代理配置](#-代理配置---解锁网站访问)
+  - [许可证](#许可证)
 <!-- /TOC -->
 
 ## 🌟 项目简介
@@ -34,8 +34,28 @@
 * 👽 **浏览器智能体** — 完全自主的浏览器智能体，能够推理、规划并端到端执行任务。
 * 🤖 **浏览器自动化** — 高性能自动化，涵盖工作流、导航和数据提取。
 * ⚙️ **机器学习智能体** — 在不消耗 token 的情况下学习复杂页面的字段结构。
-* ⚡  **极致性能** — 完全协程安全；单机每天支持 10 万 ~ 20 万次复杂页面访问。
+* ⚡ **极致性能** — 完全协程安全；单机每天支持 10 万 ~ 20 万次复杂页面访问。
 * 🧬 **数据提取** — 结合 LLM、ML 和选择器，在混乱的页面中提取干净的数据。
+
+## 📦 安装
+
+通过 npm 全局安装 browser4-cli（需要 Node.js）：
+
+```shell
+npm install -g browser4-cli
+```
+
+或通过单条命令直接引导安装原生二进制文件：
+
+**Windows (PowerShell):**
+```powershell
+irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex
+```
+
+**Linux / macOS (bash):**
+```bash
+curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash
+```
 
 ## 💡 使用示例
 
@@ -45,7 +65,7 @@
 
 ```shell
 $prompt = @"
-Install https://raw.githubusercontent.com/platonai/Browser4/refs/heads/main/cli/skill/SKILL.md and use browser4-cli and perform the following task:
+Read https://browser4.io/SKILL.md and install browser4-cli for browser automation to perform the following task:
 
 1. go to amazon.com
 2. search for pens to draw on whiteboards
@@ -62,12 +82,6 @@ copilot -p "$prompt"
 Browser4 CLI 是一个强大的命令行界面，用于直接控制浏览器和实现自动化，专为人类用户和 AI 智能体设计。它提供简洁的语法来执行复杂的浏览器交互，而无需编写代码。
 
 Browser4 CLI 兼容 Playwright，支持导航、交互和数据提取等丰富的命令。它可以在脚本、终端会话中使用，也可以通过技能 (SKILLS) 集成到 AI 智能体中。
-
-通过 npm 全局安装 browser4-cli：
-
-```shell
-npm install -g browser4-cli
-```
 
 ```shell
 # 打开 browser4（不导航到任何页面）
@@ -120,10 +134,7 @@ echo '[
 browser4-cli close
 ```
 
-## 高级命令
-
-以下命令有意从全局 `browser4-cli help` 概览中省略。
-需要时显式查询它们：
+查询高级子命令的详细帮助：
 
 ```bash
 browser4-cli help batch
@@ -193,7 +204,7 @@ browser4-cli swarm create \
 # 2) 将 URL 提交为抓取任务（直接 URL + 种子文件）
 browser4-cli swarm submit https://example.com/direct \
   --seed-file=./urls.txt \
-  --refresh --parse --store-content
+  --refresh --store-content
 
 # 3) 轮询并获取结果
 browser4-cli swarm status scrape-task-4
@@ -216,7 +227,7 @@ browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql "
 browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql @query.sql
 
 # 带种子文件和加载选项
-browser4-cli swarm query --sql @query.sql --seed-file=./urls.txt --refresh --parse
+browser4-cli swarm query --sql @query.sql --seed-file=./urls.txt --refresh
 ```
 
 关键说明：
@@ -256,7 +267,7 @@ browser4-cli swarm query --sql @query.sql --seed-file=./urls.txt --refresh --par
 
 ---
 
-### 自动提取
+## 🧬 自动提取
 
 基于自监督/无监督机器学习的大规模、高精度字段发现与提取 — 无需 LLM API 调用，不消耗 token，确定性且快速。
 

@@ -94,10 +94,7 @@ pub(super) fn test_open_recovery_after_browser_kill(ctx: &mut E2ECtx) {
 
     // 1. Open a session with a URL (navigates immediately)
     let interactive_url = ctx.interactive_url();
-    let open_result = run_command(
-        ctx,
-        &["open", &interactive_url, OPEN_PROFILE_MODE_ARG],
-    );
+    let open_result = run_command(ctx, &["open", &interactive_url, OPEN_PROFILE_MODE_ARG]);
     assert!(
         open_result.stdout.contains("Session opened:"),
         "Expected session to open with a URL. Output:\n{}",
@@ -159,7 +156,10 @@ pub(super) fn test_open_recovery_after_browser_kill(ctx: &mut E2ECtx) {
 
 pub(super) fn test_navigation_and_storage(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
 
     let interactive_url = ctx.interactive_url();
     let other_url = ctx.other_url();
@@ -618,7 +618,10 @@ pub(super) fn test_storage_state_commands(ctx: &mut E2ECtx) {
 
 pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
     open_resized_interactive_page(ctx);
 
     run_command(ctx, &["type", "hello world", "#type-target"]);
@@ -710,7 +713,10 @@ pub(super) fn test_interaction_commands(ctx: &mut E2ECtx) {
 
 pub(super) fn test_pointer_commands(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
     open_resized_interactive_page(ctx);
 
     run_command(ctx, &["click", "#click-target"]);
@@ -753,7 +759,10 @@ pub(super) fn test_pointer_commands(ctx: &mut E2ECtx) {
 
 pub(super) fn test_eval_command(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
     open_resized_interactive_page(ctx);
 
     let title = eval_text(ctx, "document.title");
@@ -779,7 +788,10 @@ pub(super) fn test_eval_command(ctx: &mut E2ECtx) {
 
 pub(super) fn test_eval_return_types(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
     open_resized_interactive_page(ctx);
 
     // --- number ---
@@ -793,10 +805,18 @@ pub(super) fn test_eval_return_types(ctx: &mut E2ECtx) {
 
     // --- boolean ---
     let bool_val = eval_text(ctx, "true");
-    assert_eq!(bool_val.trim(), "true", "Expected boolean true, got: {bool_val}");
+    assert_eq!(
+        bool_val.trim(),
+        "true",
+        "Expected boolean true, got: {bool_val}"
+    );
 
     let bool_false = eval_text(ctx, "1 > 2");
-    assert_eq!(bool_false.trim(), "false", "Expected boolean false, got: {bool_false}");
+    assert_eq!(
+        bool_false.trim(),
+        "false",
+        "Expected boolean false, got: {bool_false}"
+    );
 
     // --- array (JSON) ---
     let arr = eval_text(ctx, "[1, 2, 3]");
@@ -853,31 +873,22 @@ pub(super) fn test_eval_return_types(ctx: &mut E2ECtx) {
 
 pub(super) fn test_eval_css_selector_scoping(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
     open_resized_interactive_page(ctx);
 
     // Eval scoped to an element via id selector.
-    let button_tag = eval_text_for_target(
-        ctx,
-        "element => element.tagName",
-        "#click-target",
-    );
+    let button_tag = eval_text_for_target(ctx, "element => element.tagName", "#click-target");
     assert_eq!(button_tag.trim().to_uppercase(), "BUTTON");
 
     // Eval scoped to an input element via id selector.
-    let input_tag = eval_text_for_target(
-        ctx,
-        "element => element.tagName",
-        "#type-target",
-    );
+    let input_tag = eval_text_for_target(ctx, "element => element.tagName", "#type-target");
     assert_eq!(input_tag.trim().to_uppercase(), "INPUT");
 
     // Eval scoped to a <select> element.
-    let select_tag = eval_text_for_target(
-        ctx,
-        "element => element.tagName",
-        "#select-target",
-    );
+    let select_tag = eval_text_for_target(ctx, "element => element.tagName", "#select-target");
     assert_eq!(select_tag.trim().to_uppercase(), "SELECT");
 
     // Eval that reads the element's own attribute.
@@ -897,7 +908,10 @@ pub(super) fn test_eval_css_selector_scoping(ctx: &mut E2ECtx) {
 
 pub(super) fn test_wait_for_state_failure_modes(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
     goto_interactive_page(ctx);
 
     let error = wait_for_state(
@@ -942,7 +956,10 @@ pub(super) fn test_wait_for_state_failure_modes(ctx: &mut E2ECtx) {
 
 pub(super) fn test_form_controls_and_exports(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
     goto_interactive_page(ctx);
 
     run_command(ctx, &["select", "#select-target", "green"]);
@@ -1023,7 +1040,10 @@ pub(super) fn test_form_controls_and_exports(ctx: &mut E2ECtx) {
 
 pub(super) fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
     open_resized_interactive_page(ctx);
 
     run_command(ctx, &["mousemove", "120", "120"]);
@@ -1095,7 +1115,10 @@ pub(super) fn test_mouse_and_dialog(ctx: &mut E2ECtx) {
 
 pub(super) fn test_mousewheel(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
     open_resized_interactive_page(ctx);
 
     run_command(ctx, &["mousewheel", "160", "0"]);
@@ -1116,7 +1139,10 @@ pub(super) fn test_mousewheel(ctx: &mut E2ECtx) {
 
 pub(super) fn test_tab_commands(ctx: &mut E2ECtx) {
     reset_cli_artifacts(ctx);
-    run_command(ctx, &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG]);
+    run_command(
+        ctx,
+        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG],
+    );
 
     goto_interactive_page(ctx);
     let interactive_url = ctx.interactive_url();

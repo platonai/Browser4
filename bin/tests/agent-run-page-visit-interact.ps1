@@ -6,9 +6,9 @@ $ErrorActionPreference = 'Stop'
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 
 $cli = if ($env:BROWSER4_CLI_BIN) {
-    { & $env:BROWSER4_CLI_BIN $args }
+    { & $env:BROWSER4_CLI_BIN @args }
 } else {
-    { cargo run --quiet -- $args }
+    { browser4-cli @args }
 }
 
 & $cli open

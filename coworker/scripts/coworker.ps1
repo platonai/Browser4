@@ -101,21 +101,21 @@ $taskRoots = @(
         Review = (Join-Path $tasksRoot "4review")
         Approved = (Join-Path $tasksRoot "5approved")
         Pushed = (Join-Path $tasksRoot "6git-pushed")
-        Logs = (Join-Path $tasksRoot "300logs")
         Label = "tasks"
     }
 )
 
-$logsDir = $taskRoots[0].Logs
+$logsDir = Join-Path "$HOME\.browser4\development" "logs"
 $memoryDir = $logsDir
 
-# Ensure all required directories exist
-# Create them if they don't already exist
+# Ensure all required task directories exist
 foreach ($root in $taskRoots) {
-    foreach ($dir in @($root.Prepare, $root.Created, $root.Working, $root.Finished, $root.Review, $root.Approved, $root.Pushed, $root.Logs)) {
+    foreach ($dir in @($root.Prepare, $root.Created, $root.Working, $root.Finished, $root.Review, $root.Approved, $root.Pushed)) {
         if (!(Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
     }
 }
+# Ensure logs directory exists
+if (!(Test-Path $logsDir)) { New-Item -ItemType Directory -Path $logsDir | Out-Null }
 
 # Handle specified TaskFile
 if (-not [string]::IsNullOrWhiteSpace($TaskFile)) {

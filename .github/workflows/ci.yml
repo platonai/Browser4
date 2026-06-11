@@ -21,6 +21,7 @@ on:
         type: boolean
 
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   IMAGE_NAME: browser4
   NETWORK_NAME: 'browser4_backend'
   CONTAINER_NAME: 'browser4-test'
@@ -41,7 +42,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Environment
         id: setup

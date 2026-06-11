@@ -9,20 +9,20 @@ English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platon
 <!-- TOC -->
 **Table of Contents**
 - [🤖 Browser4](#-browser4)
-    - [🌟 Introduction](#-introduction)
-        - [✨ Key Capabilities](#-key-capabilities)
-    - [💡 Usage Examples](#-usage-examples)
-        - [Quick Start](#quick-start)
-        - [CLI \& SKILLS](#cli--skills)
-    - [Advanced commands](#advanced-commands)
-        - [Agent and Swarm CLI](#agent-and-swarm-cli)
-    - [🚀 Native API Quick Start](#-native-api-quick-start)
-        - [Auto Extraction](#auto-extraction)
-    - [📦 Modules Overview](#-modules-overview)
-    - [🤝 Support \& Community](#-support--community)
-    - [📜 Documentation](#-documentation)
-    - [🔧 Proxy Configuration - Unblock Website Access](#-proxy-configuration---unblock-website-access)
-    - [License](#license)
+  - [🌟 Introduction](#-introduction)
+    - [✨ Key Capabilities](#-key-capabilities)
+  - [📦 Installation](#-installation)
+  - [💡 Usage Examples](#-usage-examples)
+    - [Quick Start](#quick-start)
+    - [CLI & SKILLS](#cli--skills)
+    - [Agent and Swarm CLI](#agent-and-swarm-cli)
+  - [🚀 Build from Source](#-build-from-source)
+  - [🧬 Auto Extraction](#-auto-extraction)
+  - [📦 Modules Overview](#-modules-overview)
+  - [🤝 Support & Community](#-support--community)
+  - [📜 Documentation](#-documentation)
+  - [🔧 Proxy Configuration](#-proxy-configuration---unblock-website-access)
+  - [License](#license)
 <!-- /TOC -->
 
 ## 🌟 Introduction
@@ -33,9 +33,29 @@ English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platon
 
 * 👽 **Browser Agents** — Fully autonomous browser agents that reason, plan, and execute end-to-end tasks.
 * 🤖 **Browser Automation** — High-performance automation for workflows, navigation, and data extraction.
-* ⚙️ **Machine Learning Agent** - Learns field structures across complex pages without consuming tokens.
-* ⚡  **Extreme Performance** — Fully coroutine-safe; supports 100k ~ 200k complex page visits per machine per day.
+* ⚙️ **Machine Learning Agent** — Learns field structures across complex pages without consuming tokens.
+* ⚡ **Extreme Performance** — Fully coroutine-safe; supports 100k ~ 200k complex page visits per machine per day.
 * 🧬 **Data Extraction** — Hybrid of LLM, ML, and selectors for clean data across chaotic pages.
+
+## 📦 Installation
+
+Install browser4-cli globally using npm (requires Node.js):
+
+```shell
+npm install -g browser4-cli
+```
+
+Or bootstrap the native binary directly with a single command:
+
+**Windows (PowerShell):**
+```powershell
+irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex
+```
+
+**Linux / macOS (bash):**
+```bash
+curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash
+```
 
 ## 💡 Usage Examples
 
@@ -45,7 +65,7 @@ Just ask any LLM agent to use browser4-cli for browser interactions, and it will
 
 ```shell
 $prompt = @"
-Install https://raw.githubusercontent.com/platonai/Browser4/refs/heads/main/cli/skill/SKILL.md and use browser4-cli and perform the following task:
+Read https://browser4.io/SKILL.md and install browser4-cli for browser automation to perform the following task:
 
 1. go to amazon.com
 2. search for pens to draw on whiteboards
@@ -65,11 +85,7 @@ users and AI agents. It provides a simple syntax to perform complex browser inte
 Browser4 CLI is compatible with Playwright and supports a wide range of commands for navigation, interaction, and data extraction.
 It can be used in scripts, terminal sessions, or integrated into AI agents through SKILLS.
 
-Installs browser4-cli globally using npm:
-
-```shell
-npm install -g browser4-cli
-```
+Commands are designed to be intuitive and composable, allowing you to chain multiple actions together for complex workflows.
 
 ```shell
 # Open browser4 without navigation
@@ -122,10 +138,7 @@ echo '[
 browser4-cli close
 ```
 
-## Advanced commands
-
-Some advanced commands are intentionally omitted from the global `browser4-cli help` summary.
-Query them explicitly when needed:
+For detailed help on advanced subcommands:
 
 ```bash
 browser4-cli help batch
@@ -195,7 +208,7 @@ browser4-cli swarm create \
 # 2) Submit URLs as scrape jobs (direct URL + seed file)
 browser4-cli swarm submit https://example.com/direct \
   --seed-file=./urls.txt \
-  --refresh --parse --store-content
+  --refresh --store-content
 
 # 3) Poll and fetch the result
 browser4-cli swarm status scrape-task-4
@@ -218,20 +231,55 @@ browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql "
 browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql @query.sql
 
 # With seed file and load options
-browser4-cli swarm query --sql @query.sql --seed-file=./urls.txt --refresh --parse
+browser4-cli swarm query --sql @query.sql --seed-file=./urls.txt --refresh
 ```
 
 Key notes:
 - Seed files are plain text, one URL per line; `#` comments and blank lines are ignored.
-- Both `swarm submit` and `swarm query` accept `--seed-file`, `--deadline`, `--expires`, `--refresh`, `--parse`, `--store-content`.
+- Both `swarm submit` and `swarm query` accept `--seed-file`, `--deadline`, `--expires`, `--refresh`, `--store-content`.
 - All swarm commands return a task ID; track progress with `swarm status` / `swarm result`.
 - Use `@url` in X-SQL templates — it is replaced with the target URL server-side.
 
 ---
 
-## 🚀 Build from source
+## 🚀 Build from Source
 
-**Prerequisites**: Java 17+
+### Prerequisites
+
+| Tool | Minimum Version | Required For | Notes |
+|------|----------------|-------------|-------|
+| **Git** | any | Clone, root discovery | |
+| **JDK** | 17+ (21+ recommended) | Build & runtime | Eclipse Temurin recommended. JDK 21+ enables best jlink compression (zip-9). |
+| **Maven** | 3.9+ | Java build | Included via `mvnw` wrapper — no separate install needed. |
+| **PowerShell 7** (`pwsh`) | 7.0+ | Runtime bundle assembly (jlink) | Required on **Linux** and **macOS**. Built-in on Windows (`powershell.exe`). Install: `curl -fsSL https://aka.ms/install-powershell.sh \| bash` |
+| **JDK tools** (`jdeps`, `jlink`, `jpackage`) | bundled with JDK 16+ | Runtime bundle assembly | Included in your JDK installation — no separate install needed. |
+| **Chrome / Chromium** | latest | Runtime | See auto-detection paths below. Docker images bundle Chromium via `apk add chromium`. |
+| **Rust** | stable (edition 2021) | CLI build only | Only needed when building `browser4-cli` from source (not needed for the Java backend). |
+| **Node.js + pnpm** | Node 24 / pnpm 10 | CLI distribution | Only needed when packaging the CLI for npm publish. |
+
+#### Platform-specific tools for runtime bundle assembly
+
+| Platform | Additional tools |
+|----------|-----------------|
+| **Linux** | `tar`, `wget` or `curl` |
+| **macOS** | `tar` |
+| **Windows** | `powershell.exe` (built-in) — Windows PowerShell 5.1+ is sufficient |
+
+#### Chrome auto-detection paths
+
+| Platform | Search paths |
+|----------|-------------|
+| **Windows** | `C:\Program Files\Google\Chrome\Application\chrome.exe`, `C:\Program Files (x86)\Google\Chrome\Application\chrome.exe` |
+| **macOS** | `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`, `/Applications/Chromium.app/Contents/MacOS/Chromium` |
+| **Linux** | `/opt/google/chrome/chrome`, `/usr/bin/google-chrome`, `/usr/bin/chromium-browser`, `PATH: google-chrome`, `chromium-browser`, `chromium` |
+
+If Chrome is not found, the CLI attempts automatic installation:
+- **Windows**: via `winget` or PowerShell download of the standalone installer
+- **Debian/Ubuntu**: via `wget`/`curl` + `sudo dpkg -i`
+- **RHEL/Fedora**: via `curl` + `sudo dnf install -y`
+- **macOS**: prints `brew install --cask google-chrome` instructions
+
+---
 
 1. **Clone the repository**
    ```shell
@@ -258,13 +306,13 @@ Key notes:
 
 ---
 
-### Auto Extraction
+## 🧬 Auto Extraction
 
 Automatic, large-scale, high-precision field discovery and extraction powered by self-/unsupervised machine learning — no LLM API calls, no tokens, deterministic and fast.
 
 **What it does:**
 - Learns every extractable field on item/detail pages (often dozens to hundreds) with high precision.
-- Open source when browser4 has 10K stars on GitHub.
+- Open source when Browser4 has 10K stars on GitHub.
 
 **Why not just LLMs?**
 - LLM extraction adds latency, cost, and token limits.

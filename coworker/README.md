@@ -8,7 +8,7 @@ It processes task files that you create, executes them, and can commit changes b
 1. run `coworker-scheduler.ps1` to start recurring automation
 2. draft tasks in `0draft` (or anywhere)
 3. copy ready tasks to `1created` for execution
-4. once executed, you can find results in `3_1complete` and detailed logs in `300logs`
+4. once executed, you can find results in `3_1complete` and detailed logs in `~/.browser4/development/logs`
 5. review results if needed
 6. move task file from `3_1complete` to `5approved` to trigger git pushing
 

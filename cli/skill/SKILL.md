@@ -12,7 +12,25 @@ Browser automation CLI for AI agents.
 - Built-in agent loop for autonomous agents with tool use and reasoning capabilities
 - Data extraction and summarization tools for processing web content
 
-Install: `npm i -g browser4-cli`
+## Installation
+
+Installs browser4-cli globally using npm (Requires Node.js):
+
+```shell
+npm install -g browser4-cli
+```
+
+Bootstrap the native binary directly with a single command:
+
+**Windows (PowerShell):**
+```powershell
+irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex
+```
+
+**Linux / macOS (bash):**
+```bash
+curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash
+```
 
 Optional backend runtime install: `browser4-cli install`
 
@@ -254,7 +272,7 @@ natural-language task asynchronously.
 Use the spaced `agent <subcommand>` form:
 
 ```bash
-browser4-cli agent run "Open example.com and summarize the hero section"
+browser4-cli agent run "Open browser4.io and summarize the hero section"
 browser4-cli agent status agent-task-1
 browser4-cli agent result agent-task-1
 ```
@@ -263,7 +281,7 @@ Recommended lifecycle:
 
 ```bash
 # 1) submit an autonomous task
-browser4-cli agent run "Open example.com and summarize the hero section"
+browser4-cli agent run "Open browser4.io and summarize the hero section"
 
 # 2) poll progress with the returned task id
 browser4-cli agent status agent-task-1
@@ -329,7 +347,6 @@ browser4-cli swarm submit https://example.com/direct \
   --deadline=2026-03-30T00:00:00Z \
   --expires=1d \
   --refresh \
-  --parse \
   --store-content
 
 # 3) poll and fetch the result
@@ -357,7 +374,7 @@ browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql "
 browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql @query.sql
 
 # With load options and a seed file:
-browser4-cli swarm query --sql @query.sql --seed-file=./urls.txt --refresh --parse
+browser4-cli swarm query --sql @query.sql --seed-file=./urls.txt --refresh
 ```
 
 Example `query.sql`:
@@ -459,4 +476,7 @@ browser4-cli close
 
 ## Specific tasks
 
+* **Agent command** [references/agent.md](references/agent.md)
+* **Smarm command** [references/swarm.md](references/swarm.md)
 * **Storage state (cookies, localStorage)** [references/storage-state.md](references/storage-state.md)
+* **X-SQL** [references/x-sql.md](references/x-sql.md)

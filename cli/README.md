@@ -37,21 +37,66 @@ brew install browser4-cli
 cargo install browser4-cli
 ```
 
+### Standalone Installer Scripts (no npm / Rust / Homebrew needed)
+
+Bootstrap the native binary directly with a single command:
+
+**Windows (PowerShell):**
+```powershell
+Invoke-WebRequest -Uri "https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1" -OutFile "$env:TEMP\install-browser4-cli.ps1"
+powershell -ExecutionPolicy Bypass -File "$env:TEMP\install-browser4-cli.ps1"
+```
+
+**Linux / macOS (bash):**
+```bash
+curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash
+```
+
+Or run the scripts locally from a cloned repo:
+- `cli/scripts/install-browser4-cli.ps1` (Windows)
+- `cli/scripts/install-browser4-cli.sh` (Linux / macOS / Git Bash)
+
+See [Standalone CLI Installer Scripts](../docs/cli-standalone-install.md) for
+the full option reference, supported platforms, and examples.
+
 ### From Source
 
+**Build prerequisites:** Rust (stable, edition 2021), Node.js 24+, pnpm 10+, git.
+
 ```bash
-git clone https://github.com/platonai/browser4-cli
-cd cli/browser4-cli
+git clone https://github.com/platonai/Browser4.git
+cd Browser4/cli/browser4-cli
 pnpm install
-pnpm build:native   # Requires Rust (https://rustup.rs)
+pnpm build:native   # Compiles the Rust binary (requires https://rustup.rs)
 pnpm link --global  # Makes browser4-cli available globally
 ```
 
+Cross-compilation from Linux (for release builds) additionally requires:
+`cargo-zigbuild`, Zig 0.13.0, `gcc-aarch64-linux-gnu`, and `mingw-w64`.
+See `cli/docker/Dockerfile.build` for a Dockerized build environment.
+
 ### Requirements
 
-- **Chrome** - Latest Chrome installed on your system.
-- **Java 17+** - Required to run the Browser4 backend (`Browser4.jar`).
-- **Rust** - Only needed when building from source (see From Source above).
+- **Chrome** — Latest Chrome installed on your system. The CLI can auto-install Chrome on most platforms when missing.
+- **Java 17+** — Required to run the Browser4 backend (`Browser4.jar`). Eclipse Temurin recommended. JDK 21+ enables best jlink compression when the CLI auto-builds a runtime bundle from source.
+- **Rust** — Only needed when building the CLI from source (see From Source above). The `stable` toolchain (edition 2021) is sufficient.
+
+#### Additional requirements for auto-building a runtime bundle from source
+
+When the CLI detects a Browser4 repository checkout, it attempts to build a
+self-contained runtime bundle (bundled JRE + dependency JARs) from source
+instead of downloading a pre-built release. This requires:
+
+| Tool | Version | Linux | macOS | Windows |
+|------|---------|-------|-------|---------|
+| **Maven** | 3.9+ | via `mvnw` wrapper | via `mvnw` wrapper | via `mvnw.cmd` wrapper |
+| **JDK tools** (`jdeps`, `jlink`) | bundled with JDK 16+ | included in JDK | included in JDK | included in JDK |
+| **PowerShell 7** (`pwsh`) | 7.0+ | **required** | **required** | built-in (`powershell.exe`) |
+| **tar** | any | **required** | **required** | built-in |
+
+Set `BROWSER4_CLI_FORCE_REMOTE_BUNDLE=1` to skip the local build and always
+download a pre-built bundle — useful in CI / corporate environments where
+Maven or jlink are unavailable.
 
 ## Usage
 
@@ -242,7 +287,7 @@ Like other advanced commands, they are intentionally omitted from the global
 Use the spaced `agent <subcommand>` form:
 
 ```shell
-browser4-cli agent run "Open example.com and summarize the hero section"
+browser4-cli agent run "Open browser4.io and summarize the hero section"
 browser4-cli agent status agent-task-1
 browser4-cli agent result agent-task-1
 ```
@@ -344,7 +389,7 @@ browser4-cli swarm submit https://example.com/direct \
   --seed-file=./swarm-seeds.txt \
   --deadline=2026-03-30T00:00:00Z \
   --expires=1d \
-  --refresh --parse --store-content
+  --refresh --store-content
 
 # poll and fetch the result
 browser4-cli swarm status scrape-task-4
@@ -369,7 +414,7 @@ browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql "
 browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql @query.sql
 
 # With seed file and load options:
-browser4-cli swarm query --sql @query.sql --seed-file=./urls.txt --refresh --parse
+browser4-cli swarm query --sql @query.sql --seed-file=./urls.txt --refresh
 ```
 
 ### Notes

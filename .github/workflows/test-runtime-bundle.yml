@@ -1,0 +1,97 @@
+name: Test Runtime Bundle Build
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+-rb'
+      - 'v[0-9]+.[0-9]+.[0-9]+-rb.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      jdk_version:
+        description: 'JDK major version for the bundle runtime'
+        required: false
+        default: '21'
+        type: choice
+        options:
+          - '21'
+          - '17'
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build-runtime-bundle:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up JDK ${{ inputs.jdk_version || '21' }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ inputs.jdk_version || '21' }}
+
+      - name: Cache Maven dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.m2/wrapper
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml', '**/.mvn/wrapper/maven-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+
+      - name: Make Maven wrapper executable
+        run: chmod +x ./mvnw
+
+      - name: Run build-runtime-bundle.ps1
+        shell: pwsh
+        run: |
+          # Clean the project to ensure a fresh build
+          & ./mvnw -Pall-modules clean
+
+          # Clean installed dependencies to ensure a fresh build
+          $m2Repo = "$HOME/.m2/repository/ai"
+          if (Test-Path $m2Repo) {
+            Write-Host "Cleaning Maven repository: $m2Repo"
+            Remove-Item -Path $m2Repo -Recurse -Force
+          } else {
+            Write-Host "Maven repository not found: $m2Repo"
+          }
+
+          $scriptPath = 'browser4-apps/browser4-bundle/build-runtime-bundle.ps1'
+          $jdkVersion = '${{ inputs.jdk_version }}'
+          $args = @()
+          if ($jdkVersion -and $jdkVersion -match '^\d+$') {
+            $args += '-JdkVersion', $jdkVersion
+          }
+          Write-Host "::group::Running build-runtime-bundle.ps1 $($args -join ' ')"
+          & pwsh -File $scriptPath @args
+          if ($LASTEXITCODE -ne 0) {
+            throw "build-runtime-bundle.ps1 failed with exit code $LASTEXITCODE"
+          }
+          Write-Host "::endgroup::"
+
+      - name: Display bundle info
+        if: always()
+        shell: pwsh
+        run: |
+          $bundleDir = 'browser4-apps/browser4-bundle/target/runtime-bundle'
+          if (-not (Test-Path $bundleDir)) {
+            Write-Host "Bundle output directory not found: $bundleDir"
+            return
+          }
+          $archive = Get-ChildItem -Path $bundleDir -Filter '*.tar.gz' -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if ($archive) {
+            $sizeMB = [math]::Round($archive.Length / 1MB, 2)
+            Write-Host "Bundle archive: $($archive.Name) ($sizeMB MB)"
+          }
+          $metadataPath = Get-ChildItem -Path $bundleDir -Recurse -Filter 'runtime-bundle.json' -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if ($metadataPath) {
+            Write-Host "Metadata:"
+            Get-Content $metadataPath.FullName | Write-Host
+          }

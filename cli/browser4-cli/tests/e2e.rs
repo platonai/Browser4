@@ -354,7 +354,11 @@ fn build_fake_runtime_bundle(tag: &str) -> (Vec<u8>, String) {
     let platform = if cfg!(windows) {
         "windows-x64"
     } else if cfg!(target_os = "macos") {
-        if cfg!(target_arch = "aarch64") { "darwin-arm64" } else { "darwin-x64" }
+        if cfg!(target_arch = "aarch64") {
+            "darwin-arm64"
+        } else {
+            "darwin-x64"
+        }
     } else {
         "linux-x64"
     };
@@ -406,15 +410,10 @@ fn build_fake_zip_bundle(tag: &str, dir_name: &str, java_name: &str) -> (Vec<u8>
 fn build_fake_tar_gz_bundle(tag: &str, dir_name: &str, java_name: &str) -> (Vec<u8>, String) {
     let mut buffer = Vec::new();
     {
-        let gz_encoder =
-            flate2::write::GzEncoder::new(&mut buffer, flate2::Compression::default());
+        let gz_encoder = flate2::write::GzEncoder::new(&mut buffer, flate2::Compression::default());
         let mut tar_builder = tar::Builder::new(gz_encoder);
 
-        fn add_tar_entry(
-            builder: &mut tar::Builder<impl std::io::Write>,
-            path: &str,
-            data: &[u8],
-        ) {
+        fn add_tar_entry(builder: &mut tar::Builder<impl std::io::Write>, path: &str, data: &[u8]) {
             let mut header = tar::Header::new_gnu();
             header.set_path(path).unwrap();
             header.set_size(data.len() as u64);
@@ -459,10 +458,17 @@ struct FixtureDownloadServer {
     shutdown: Arc<AtomicBool>,
     /// Recorded request paths.
     requests: Arc<Mutex<Vec<String>>>,
+    /// Artificial latency applied before serving each request (for speed-test
+    /// scenarios that need one mirror to appear slower than another).
+    latency: Duration,
 }
 
 impl FixtureDownloadServer {
     fn start(bundle_bytes: Vec<u8>) -> Self {
+        Self::start_with_latency(bundle_bytes, Duration::ZERO)
+    }
+
+    fn start_with_latency(bundle_bytes: Vec<u8>, latency: Duration) -> Self {
         let listener =
             TcpListener::bind("127.0.0.1:0").expect("fixture download server bind failed");
         let port = listener.local_addr().unwrap().port();
@@ -484,15 +490,13 @@ impl FixtureDownloadServer {
                     Ok((stream, _)) => {
                         let b = bytes.clone();
                         let r = reqs.clone();
-                        thread::spawn(move || serve_download_request(stream, b, r));
+                        thread::spawn(move || serve_download_request(stream, b, r, latency));
                     }
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(5));
                     }
                     Err(e) => {
-                        eprintln!(
-                            "[fixture download server] accept error (continuing): {e}"
-                        );
+                        eprintln!("[fixture download server] accept error (continuing): {e}");
                         thread::sleep(Duration::from_millis(5));
                     }
                 }
@@ -503,6 +507,7 @@ impl FixtureDownloadServer {
             port,
             shutdown,
             requests,
+            latency,
         }
     }
 
@@ -528,7 +533,11 @@ fn serve_download_request(
     mut stream: TcpStream,
     bundle_bytes: Arc<Vec<u8>>,
     requests: Arc<Mutex<Vec<String>>>,
+    latency: Duration,
 ) {
+    if !latency.is_zero() {
+        thread::sleep(latency);
+    }
     let mut buf = vec![0u8; 8192];
     let n = match stream.read(&mut buf) {
         Ok(n) => n,
@@ -537,10 +546,7 @@ fn serve_download_request(
 
     let request = std::str::from_utf8(&buf[..n]).unwrap_or("");
     let first_line = request.lines().next().unwrap_or("");
-    let path = first_line
-        .split_whitespace()
-        .nth(1)
-        .unwrap_or("/");
+    let path = first_line.split_whitespace().nth(1).unwrap_or("/");
 
     requests
         .lock()
@@ -663,9 +669,7 @@ impl MockBrowser4Server {
                         thread::sleep(Duration::from_millis(5));
                     }
                     Err(e) => {
-                        eprintln!(
-                            "[mock Browser4 server] accept error (listener continues): {e}"
-                        );
+                        eprintln!("[mock Browser4 server] accept error (listener continues): {e}");
                         thread::sleep(Duration::from_millis(5));
                     }
                 }
@@ -979,12 +983,8 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
                     format!("result for {task_id}")
                 }
                 "command_batch" => mock_command_batch_response(&arguments),
-                "close_session" => {
-                    "Session closed.".to_string()
-                }
-                "close_all_sessions" => {
-                    "All sessions closed.".to_string()
-                }
+                "close_session" => "Session closed.".to_string(),
+                "close_all_sessions" => "All sessions closed.".to_string(),
                 "agent_extract" => {
                     r#"{"items":[{"title":"Mock Product","price":"$19.99"}]}"#.to_string()
                 }
@@ -1025,7 +1025,10 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
             );
         }
         _ if method == "POST"
-            && (route == "/api/x/submit" || route == "/api/x/s" || route == "/api/swarm/submit") => {
+            && (route == "/api/x/submit"
+                || route == "/api/x/s"
+                || route == "/api/swarm/submit") =>
+        {
             let payload = String::from_utf8_lossy(&body).trim().to_string();
             let task_id = {
                 let mut guard = state.lock().expect("mock Browser4 state mutex poisoned");
@@ -1086,8 +1089,7 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
             && (route.starts_with("/api/x/") || route.starts_with("/api/swarm/"))
             && route.ends_with("/status") =>
         {
-            let Some(task_id) = extract_swarm_task_id(route, "/status")
-            else {
+            let Some(task_id) = extract_swarm_task_id(route, "/status") else {
                 write_http_response(&mut stream, "404 Not Found", "text/plain", "not found");
                 return;
             };
@@ -1139,8 +1141,7 @@ fn serve_mock_browser4_request(mut stream: TcpStream, state: Arc<Mutex<MockBrows
             && (route.starts_with("/api/x/") || route.starts_with("/api/swarm/"))
             && route.ends_with("/result") =>
         {
-            let Some(task_id) = extract_swarm_task_id(route, "/result")
-            else {
+            let Some(task_id) = extract_swarm_task_id(route, "/result") else {
                 write_http_response(&mut stream, "404 Not Found", "text/plain", "not found");
                 return;
             };
@@ -1385,9 +1386,7 @@ fn write_http_response(stream: &mut TcpStream, status: &str, content_type: &str,
         body
     );
     if let Err(e) = stream.write_all(response.as_bytes()) {
-        eprintln!(
-            "[write_http_response] failed to write response (status={status}): {e}"
-        );
+        eprintln!("[write_http_response] failed to write response (status={status}): {e}");
     }
     // Best-effort flush: ignore errors since the connection is about to close.
     let _ = stream.flush();
@@ -1409,8 +1408,8 @@ fn verify_internal_http_helpers() {
     let port = listener.local_addr().unwrap().port();
 
     let client_thread = thread::spawn(move || {
-        let mut stream = TcpStream::connect(format!("127.0.0.1:{port}"))
-            .expect("connect for http helper test");
+        let mut stream =
+            TcpStream::connect(format!("127.0.0.1:{port}")).expect("connect for http helper test");
         // Write a minimal POST request with a JSON body.
         let body = r#"{"tool":"open_session","arguments":{"url":"https://example.com"}}"#;
         let request = format!(
@@ -1436,7 +1435,12 @@ fn verify_internal_http_helpers() {
     );
 
     // Send a response back so the client thread can finish.
-    write_http_response(&mut server_stream, "200 OK", "application/json", r#"{"ok":true}"#);
+    write_http_response(
+        &mut server_stream,
+        "200 OK",
+        "application/json",
+        r#"{"ok":true}"#,
+    );
     drop(server_stream);
     client_thread.join().expect("client thread should finish");
 
@@ -1461,7 +1465,9 @@ fn verify_internal_http_helpers() {
     // Should not hang — we hit the max-empty-read-attempts path.
 
     drop(server_stream2);
-    client_thread2.join().expect("client thread 2 should finish");
+    client_thread2
+        .join()
+        .expect("client thread 2 should finish");
 }
 
 // ---------------------------------------------------------------------------
@@ -1680,7 +1686,12 @@ impl E2ETestResources {
         let started_at = Instant::now();
         let startup_result = run_cli_process_with_live_output(
             &self.ctx,
-            &["open", &self.ctx.interactive_url(), OPEN_PROFILE_MODE_ARG, OPEN_INTERACT_LEVEL_ARG],
+            &[
+                "open",
+                &self.ctx.interactive_url(),
+                OPEN_PROFILE_MODE_ARG,
+                OPEN_INTERACT_LEVEL_ARG,
+            ],
         );
         let startup_log_hint = format_browser4_startup_log_hint(&startup_result.stderr);
         let started_via_maven = startup_result
@@ -2667,6 +2678,11 @@ fn reset_cli_artifacts(ctx: &mut E2ECtx) {
     let _ = fs::remove_dir_all(&ctx.state_dir);
     fs::create_dir_all(&ctx.state_dir).ok();
     let _ = fs::remove_dir_all(ctx.workspace_dir.join(".browser4-cli"));
+    // Clean the runtime dir too so that tests that set up an installed
+    // runtime (e.g. test_status_installed_runtime) don't leak state into
+    // subsequent scenarios that expect a clean slate.
+    let _ = fs::remove_dir_all(&ctx.runtime_dir);
+    fs::create_dir_all(&ctx.runtime_dir).ok();
     ctx.record_step("reset CLI artifacts", started_at.elapsed());
 }
 
@@ -2737,6 +2753,256 @@ fn load_last_failed_scenarios() -> Vec<String> {
                 path.display()
             );
             Vec::new()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pre-build the Browser4 runtime bundle (Maven JAR + jlink assembly)
+// ---------------------------------------------------------------------------
+
+/// Walk up from the current directory looking for the Browser4 repository
+/// root (a directory that contains both `ROOT.md` and `pom.xml`).
+fn find_browser4_root_from_cwd() -> Option<PathBuf> {
+    let mut current = std::env::current_dir().ok()?;
+    loop {
+        if current.join("ROOT.md").is_file() && current.join("pom.xml").is_file() {
+            return Some(current);
+        }
+        if !current.pop() {
+            return None;
+        }
+    }
+}
+
+/// Resolve the Maven launcher (`mvnw` / `mvnw.cmd` / `mvn`) relative to the
+/// Browser4 repository root. Prefers the checked-in wrapper when available.
+fn resolve_maven_program_for_root(root: &Path) -> PathBuf {
+    let wrapper_name = if cfg!(windows) { "mvnw.cmd" } else { "mvnw" };
+    let wrapper = root.join(wrapper_name);
+    if wrapper.exists() {
+        return wrapper;
+    }
+    if cfg!(windows) {
+        PathBuf::from("mvn.cmd")
+    } else {
+        PathBuf::from("mvn")
+    }
+}
+
+/// Ensure the Browser4 runtime bundle is pre-built before the first scenario
+/// runs.  Without this step the CLI daemon builds everything inside the first
+/// `browser4-cli` child process, which can take minutes and exceeds the
+/// per-command timeout (default 120 s).
+///
+/// The function checks two artifacts independently, skipping each when its
+/// output already exists:
+/// 1. `Browser4Bundle.jar` (Maven `package`).
+/// 2. The full runtime bundle (PowerShell `build-runtime-bundle.ps1`).
+fn ensure_browser4_runtime_bundle_prebuilt() {
+    // When the user opted into a remote bundle or an external service, no
+    // local build is needed — the CLI daemon will skip it as well.
+    if force_remote_bundle_for_local_server() {
+        eprintln!("[e2e pre-build] --force-remote-bundle is active; skipping local build.");
+        return;
+    }
+    if external_service_url().is_some() {
+        eprintln!("[e2e pre-build] External Browser4 service configured; skipping local build.");
+        return;
+    }
+
+    let root = match find_browser4_root_from_cwd() {
+        Some(r) => r,
+        None => {
+            eprintln!(
+                "[e2e pre-build] Browser4 repository root not found; \
+                 skipping pre-build (the CLI daemon will handle it)."
+            );
+            return;
+        }
+    };
+
+    let bundle_dir = root.join("browser4-apps").join("browser4-bundle");
+    if !bundle_dir.is_dir() {
+        eprintln!(
+            "[e2e pre-build] browser4-bundle module not found at {}; skipping pre-build.",
+            bundle_dir.display()
+        );
+        return;
+    }
+
+    // ---- Step 1: Maven package (Browser4Bundle.jar) -----------------------
+
+    let jar_path = bundle_dir.join("target").join("Browser4Bundle.jar");
+    let jar_valid = jar_path.is_file()
+        && jar_path
+            .metadata()
+            .map(|m| m.len() > 4_096)
+            .unwrap_or(false);
+
+    if jar_valid {
+        eprintln!(
+            "[e2e pre-build] Browser4Bundle.jar found at {}; skipping Maven.",
+            jar_path.display()
+        );
+    } else {
+        eprintln!(
+            "[e2e pre-build] Browser4Bundle.jar not found. Running Maven package \
+             (this may take a while on the first run)..."
+        );
+        let mvn = resolve_maven_program_for_root(&root);
+        let started = Instant::now();
+        let status = Command::new(&mvn)
+            .args([
+                "install",
+                "-Pall-main-modules,asset-bundle",
+                "-DskipTests",
+                "-q",
+            ])
+            .current_dir(&root)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .status();
+
+        match status {
+            Ok(s) if s.success() => {
+                eprintln!(
+                    "[e2e pre-build] Maven package completed in {:.1}s.",
+                    started.elapsed().as_secs_f64()
+                );
+            }
+            Ok(s) => {
+                eprintln!(
+                    "[e2e pre-build] Maven package exited with {}; \
+                     falling back to daemon-side build.",
+                    s.code()
+                        .map_or_else(|| "signal".to_string(), |c| c.to_string())
+                );
+                return;
+            }
+            Err(error) => {
+                eprintln!(
+                    "[e2e pre-build] Failed to run Maven: {error}; \
+                     falling back to daemon-side build."
+                );
+                return;
+            }
+        }
+    }
+
+    // ---- Step 2: Platform runtime bundle (jlink + assembly) ----------------
+
+    // Detect the platform directory name that the build script produces.
+    // This mirrors `detect_current_runtime_bundle_platform` in daemon.rs.
+    let platform_dir_name = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("windows", "x86_64") => "browser4-bundle-runtime-windows-x64",
+        ("linux", "x86_64") => "browser4-bundle-runtime-linux-x64",
+        ("macos", "x86_64") => "browser4-bundle-runtime-darwin-x64",
+        ("macos", "aarch64") => "browser4-bundle-runtime-darwin-arm64",
+        _ => {
+            eprintln!("[e2e pre-build] Unsupported platform; skipping runtime bundle assembly.");
+            return;
+        }
+    };
+
+    let work_dir = bundle_dir
+        .join("target")
+        .join("runtime-bundle")
+        .join("_work")
+        .join(platform_dir_name)
+        .join(platform_dir_name);
+
+    let lib_dir = work_dir.join("lib");
+    let java_exe = if cfg!(windows) { "java.exe" } else { "java" };
+    let java_path = work_dir.join("runtime").join("bin").join(java_exe);
+
+    let has_bundle = lib_dir.is_dir()
+        && fs::read_dir(&lib_dir)
+            .map(|mut entries| {
+                entries.any(|e| {
+                    e.ok()
+                        .and_then(|entry| entry.path().extension().map(|ext| ext == "jar"))
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false)
+        && java_path.is_file();
+
+    if has_bundle {
+        eprintln!(
+            "[e2e pre-build] Runtime bundle already assembled at {}.",
+            work_dir.display()
+        );
+        return;
+    }
+
+    let build_script = bundle_dir.join("build-runtime-bundle.ps1");
+    if !build_script.is_file() {
+        eprintln!(
+            "[e2e pre-build] Build script not found at {}; skipping runtime bundle assembly.",
+            build_script.display()
+        );
+        return;
+    }
+
+    eprintln!(
+        "[e2e pre-build] Assembling runtime bundle (jdeps + jlink; \
+         may take ~30–60 s)..."
+    );
+    let started = Instant::now();
+
+    // Use the same PowerShell invocation as the CLI daemon:
+    // powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "..."
+    let shell = if cfg!(windows) {
+        "powershell.exe"
+    } else {
+        "pwsh"
+    };
+
+    let script_path_escaped = build_script.to_string_lossy().replace('\'', "''");
+
+    let ps_command = format!(
+        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; \
+         [Console]::ErrorEncoding = [System.Text.Encoding]::UTF8; \
+         & '{}' -SkipMavenInstall",
+        script_path_escaped
+    );
+
+    let status = Command::new(shell)
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &ps_command,
+        ])
+        .current_dir(&bundle_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {
+            eprintln!(
+                "[e2e pre-build] Runtime bundle assembled in {:.1}s.",
+                started.elapsed().as_secs_f64()
+            );
+        }
+        Ok(s) => {
+            eprintln!(
+                "[e2e pre-build] Build script exited with {}; \
+                 falling back to daemon-side build.",
+                s.code()
+                    .map_or_else(|| "signal".to_string(), |c| c.to_string())
+            );
+        }
+        Err(error) => {
+            eprintln!(
+                "[e2e pre-build] Failed to run build script: {error}; \
+                 falling back to daemon-side build."
+            );
         }
     }
 }
@@ -2835,7 +3101,12 @@ fn goto_interactive_page(ctx: &mut E2ECtx) {
 fn run_open_command(ctx: &mut E2ECtx) -> CliRunResult {
     let result = run_command(
         ctx,
-        &["open", &ctx.interactive_url(), OPEN_PROFILE_MODE_ARG, OPEN_INTERACT_LEVEL_ARG],
+        &[
+            "open",
+            &ctx.interactive_url(),
+            OPEN_PROFILE_MODE_ARG,
+            OPEN_INTERACT_LEVEL_ARG,
+        ],
     );
     sleep(Duration::from_secs(2));
     return result;
@@ -3707,10 +3978,7 @@ fn parse_run_options() -> RunOptions {
         _ => unreachable!("unexpected scenario filter argument combination"),
     };
 
-    println!(
-        "[e2e] max scenario level: {}",
-        max_level
-    );
+    println!("[e2e] max scenario level: {}", max_level);
 
     RunOptions {
         scenario_filter,
@@ -3857,9 +4125,7 @@ fn main() {
         for (group, count) in &group_set {
             println!("  {}: {}", group, count);
         }
-        println!(
-            "Use --group=<name> to filter by group (repeatable)."
-        );
+        println!("Use --group=<name> to filter by group (repeatable).");
         return;
     }
 
@@ -3949,7 +4215,10 @@ fn main() {
                 .collect::<Vec<_>>()
                 .join(", ")
         );
-    } else if !has_explicit_scenario_filter && run_options.groups.is_empty() && !run_options.enable_batch_scenario {
+    } else if !has_explicit_scenario_filter
+        && run_options.groups.is_empty()
+        && !run_options.enable_batch_scenario
+    {
         let batch_scenarios = selected_scenarios
             .iter()
             .copied()
@@ -3967,7 +4236,10 @@ fn main() {
 
     // Install / upgrade scenarios are disabled by default (they download and
     // extract archives).  Use --enable-install-scenario to include them.
-    if !has_explicit_scenario_filter && run_options.groups.is_empty() && !run_options.enable_install_scenario {
+    if !has_explicit_scenario_filter
+        && run_options.groups.is_empty()
+        && !run_options.enable_install_scenario
+    {
         let install_scenarios = selected_scenarios
             .iter()
             .copied()
@@ -3989,11 +4261,8 @@ fn main() {
         let group_set: std::collections::HashSet<&str> =
             run_options.groups.iter().map(String::as_str).collect();
         let before = selected_scenarios.len();
-        selected_scenarios.retain(|scenario| {
-            scenario
-                .group
-                .map_or(false, |g| group_set.contains(g))
-        });
+        selected_scenarios
+            .retain(|scenario| scenario.group.map_or(false, |g| group_set.contains(g)));
         println!(
             "selected {} scenario(s) via --group={}: {} (filtered out {})",
             selected_scenarios.len(),
@@ -4028,7 +4297,8 @@ fn main() {
         }
     }
 
-    let run_coverage = !has_explicit_scenario_filter && run_options.groups.is_empty() && !run_options.batch_only;
+    let run_coverage =
+        !has_explicit_scenario_filter && run_options.groups.is_empty() && !run_options.batch_only;
 
     let selected_scenarios =
         apply_scenario_limit_filter(selected_scenarios, run_options.scenario_limit);
@@ -4095,6 +4365,10 @@ fn main() {
     if run_options.force_remote_bundle {
         std::env::set_var(FORCE_REMOTE_BUNDLE_ENV, "1");
     }
+
+    // Pre-build the Browser4 runtime bundle if it is missing so the first
+    // CLI command doesn't time out while the daemon runs Maven + jlink.
+    ensure_browser4_runtime_bundle_prebuilt();
 
     let mut resources = create_e2e_test_resources();
 

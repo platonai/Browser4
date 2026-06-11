@@ -171,8 +171,12 @@ enum ExitCode {
 struct CliError(ExitCode, String);
 
 impl CliError {
-    fn code(&self) -> ExitCode { self.0 }
-    fn message(&self) -> &str { &self.1 }
+    fn code(&self) -> ExitCode {
+        self.0
+    }
+    fn message(&self) -> &str {
+        &self.1
+    }
 }
 
 impl std::fmt::Display for CliError {
@@ -851,7 +855,8 @@ fn format_navigation_failure_message(
     let mut suggestions = Vec::new();
 
     if suggest_refresh {
-        suggestions.push("run `browser4-cli open <url>` to refresh the session, then retry.".to_string());
+        suggestions
+            .push("run `browser4-cli open <url>` to refresh the session, then retry.".to_string());
     }
 
     if is_timeout_error_message(error) {
@@ -932,7 +937,10 @@ async fn handle_kill_all() -> Result<(), String> {
         json_field("server_pids", json!(server_pids));
         let browser_result = &result.browser_kill;
         json_field("browser_pids_killed", json!(browser_result.killed_pids));
-        json_field("browser_pids_remaining", json!(browser_result.remaining_pids));
+        json_field(
+            "browser_pids_remaining",
+            json!(browser_result.remaining_pids),
+        );
         json_field(
             "fallback_killed_pids",
             json!(shutdown_result.fallback_killed_server_pids),
@@ -962,10 +970,7 @@ async fn handle_kill_all() -> Result<(), String> {
             .iter()
             .map(|p| p.to_string())
             .collect();
-        cli_println!(
-            "⚠  Fallback-killed server process(es): {}",
-            pids.join(", ")
-        );
+        cli_println!("⚠  Fallback-killed server process(es): {}", pids.join(", "));
     }
 
     let browser_result = result.browser_kill;
@@ -1286,7 +1291,10 @@ async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
 
     cli_println!(
         "{:<20} | {:<40} | {:<8} | {}",
-        "Name", "Session ID", "Status", "Next open"
+        "Name",
+        "Session ID",
+        "Status",
+        "Next open"
     );
     cli_println!("{:-<20}-+-{:-<40}-+-{:-<8}-+-{:-<9}", "", "", "", "");
 
@@ -1311,7 +1319,10 @@ async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
                                 );
                                 cli_println!(
                                     "{:<20} | {:<40} | {:<8} | {}",
-                                    name, sid, status, next_open
+                                    name,
+                                    sid,
+                                    status,
+                                    next_open
                                 );
                                 json_sessions.push(json!({
                                     "name": name.to_string(),
@@ -1334,7 +1345,10 @@ async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
         let next_open = list_session_next_open_action(backend_sessions.as_deref(), &sid);
         cli_println!(
             "{:<20} | {:<40} | {:<8} | {}",
-            "(default)", sid, status, next_open
+            "(default)",
+            sid,
+            status,
+            next_open
         );
         json_sessions.push(json!({
             "name": "(default)",
@@ -2346,7 +2360,10 @@ async fn handle_agent_status(
     let result = get_command_status(client, base_url, id).await?;
     cli_println!("{}", result);
     json_field("task_id", json!(id));
-    json_field("raw", json!(serde_json::from_str::<Value>(&result).unwrap_or(Value::String(result.clone()))));
+    json_field(
+        "raw",
+        json!(serde_json::from_str::<Value>(&result).unwrap_or(Value::String(result.clone()))),
+    );
     Ok(())
 }
 
@@ -2527,7 +2544,12 @@ async fn handle_swarm_submit(
         };
 
         let task_id = result.trim().trim_matches('"').to_string();
-        cli_println!("Task Submitted: {} -> Task ID: {} (via {})", u, task_id, method);
+        cli_println!(
+            "Task Submitted: {} -> Task ID: {} (via {})",
+            u,
+            task_id,
+            method
+        );
         json_submissions.push(json!({
             "url": u,
             "task_id": task_id,
@@ -2652,7 +2674,10 @@ async fn handle_swarm_status(
     let result = get_swarm_status(client, base_url, id).await?;
     cli_println!("{}", result);
     json_field("task_id", json!(id));
-    json_field("raw", json!(serde_json::from_str::<Value>(&result).unwrap_or(Value::String(result.clone()))));
+    json_field(
+        "raw",
+        json!(serde_json::from_str::<Value>(&result).unwrap_or(Value::String(result.clone()))),
+    );
     Ok(())
 }
 
@@ -2673,7 +2698,10 @@ async fn handle_swarm_result(
     let result = get_swarm_result(client, base_url, id).await?;
     cli_println!("{}", result);
     json_field("task_id", json!(id));
-    json_field("raw", json!(serde_json::from_str::<Value>(&result).unwrap_or(Value::String(result.clone()))));
+    json_field(
+        "raw",
+        json!(serde_json::from_str::<Value>(&result).unwrap_or(Value::String(result.clone()))),
+    );
     Ok(())
 }
 
@@ -2715,7 +2743,10 @@ async fn handle_install(tool_params: &Value) -> Result<(), String> {
 
     json_field("tag", json!(&runtime.tag));
     json_field("asset_name", json!(&runtime.asset_name));
-    json_field("install_dir", json!(runtime.install_dir.display().to_string()));
+    json_field(
+        "install_dir",
+        json!(runtime.install_dir.display().to_string()),
+    );
     json_field("reused_existing", json!(runtime.reused_existing));
     json_field("source_url", json!(&runtime.download_url));
     Ok(())
@@ -2778,20 +2809,24 @@ fn format_uninstall_output(
     if runtime_dir_removed {
         lines.push(format!("✅ Removed runtime data directory: {runtime_dir}"));
     } else {
-        lines.push(format!("ℹ  Runtime data directory not present: {runtime_dir}"));
+        lines.push(format!(
+            "ℹ  Runtime data directory not present: {runtime_dir}"
+        ));
     }
 
     // cache dir
     if cache_dir_removed {
         lines.push(format!("✅ Removed runtime cache directory: {cache_dir}"));
     } else {
-        lines.push(format!("ℹ  Runtime cache directory not present: {cache_dir}"));
+        lines.push(format!(
+            "ℹ  Runtime cache directory not present: {cache_dir}"
+        ));
     }
 
     lines
 }
 
-async fn handle_uninstall() -> Result<(), String> {
+async fn handle_uninstall(tool_params: &Value) -> Result<(), String> {
     use std::process::Command;
 
     eprintln!("🧹 Uninstalling browser4-cli ...");
@@ -2856,37 +2891,48 @@ async fn handle_uninstall() -> Result<(), String> {
     let has_data = runtime_dir.exists();
     let has_cache = cache_dir.exists();
 
-    let (runtime_dir_removed, cache_dir_removed) = if has_data || has_cache {
-        eprintln!();
-        eprintln!("The following directories will be removed:");
-        if has_data {
-            eprintln!("  Runtime data:  {runtime_dir_str}");
-        }
-        if has_cache {
-            eprintln!("  Runtime cache: {cache_dir_str}");
-        }
-        eprintln!();
-        eprintln!("Type 'yes' to confirm, anything else to skip:");
+    let skip_confirm = tool_params
+        .get("yes")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
-        let mut input = String::new();
-        match std::io::stdin().read_line(&mut input) {
-            Ok(_) if input.trim().eq_ignore_ascii_case("yes") => {
-                let removed_data = if has_data {
-                    std::fs::remove_dir_all(&runtime_dir).is_ok()
-                } else {
-                    false
-                };
-                let removed_cache = if has_cache {
-                    std::fs::remove_dir_all(&cache_dir).is_ok()
-                } else {
-                    false
-                };
-                (removed_data, removed_cache)
+    let (runtime_dir_removed, cache_dir_removed) = if has_data || has_cache {
+        let confirmed = if skip_confirm {
+            true
+        } else {
+            eprintln!();
+            eprintln!("The following directories will be removed:");
+            if has_data {
+                eprintln!("  Runtime data:  {runtime_dir_str}");
             }
-            _ => {
-                eprintln!("Skipped directory removal.");
-                (false, false)
+            if has_cache {
+                eprintln!("  Runtime cache: {cache_dir_str}");
             }
+            eprintln!();
+            eprintln!("Type 'yes' to confirm, anything else to skip:");
+
+            let mut input = String::new();
+            match std::io::stdin().read_line(&mut input) {
+                Ok(_) if input.trim().eq_ignore_ascii_case("yes") => true,
+                _ => false,
+            }
+        };
+
+        if confirmed {
+            let removed_data = if has_data {
+                std::fs::remove_dir_all(&runtime_dir).is_ok()
+            } else {
+                false
+            };
+            let removed_cache = if has_cache {
+                std::fs::remove_dir_all(&cache_dir).is_ok()
+            } else {
+                false
+            };
+            (removed_data, removed_cache)
+        } else {
+            eprintln!("Skipped directory removal.");
+            (false, false)
         }
     } else {
         (false, false)
@@ -2965,7 +3011,10 @@ async fn handle_upgrade(tool_params: &Value) -> Result<(), String> {
     }
     json_field("tag", json!(&runtime.tag));
     json_field("asset_name", json!(&runtime.asset_name));
-    json_field("install_dir", json!(runtime.install_dir.display().to_string()));
+    json_field(
+        "install_dir",
+        json!(runtime.install_dir.display().to_string()),
+    );
     json_field("reused_existing", json!(runtime.reused_existing));
     json_field("source_url", json!(&runtime.download_url));
     Ok(())
@@ -3472,9 +3521,8 @@ fn compile_batch_request(
                 }
             }
             "list" | "close-all" | "kill-all" | "delete-data" | "install" | "uninstall"
-            | "upgrade" | "agent-run" | "agent-status"
-            | "agent-result" | "swarm-create" | "swarm-submit" | "swarm-query"
-            | "swarm-status" | "swarm-result" => {
+            | "upgrade" | "agent-run" | "agent-status" | "agent-result" | "swarm-create"
+            | "swarm-submit" | "swarm-query" | "swarm-status" | "swarm-result" => {
                 if push_batch_local_failure(
                     &mut entries,
                     spec,
@@ -3737,11 +3785,14 @@ async fn handle_batch(global: &args::GlobalFlags) -> Result<(), CliError> {
                             stop_processing = true;
                             break;
                         }
-                        return Err(CliError(ExitCode::Server, format!(
-                            "Batch backend response was missing command {} ({}).",
-                            index + 1,
-                            display
-                        )));
+                        return Err(CliError(
+                            ExitCode::Server,
+                            format!(
+                                "Batch backend response was missing command {} ({}).",
+                                index + 1,
+                                display
+                            ),
+                        ));
                     };
 
                     if result.ok {
@@ -3788,7 +3839,10 @@ async fn handle_batch(global: &args::GlobalFlags) -> Result<(), CliError> {
     if failures.is_empty() {
         Ok(())
     } else {
-        Err(CliError(ExitCode::BatchPartial, format!("{} batch command(s) failed.", failures.len())))
+        Err(CliError(
+            ExitCode::BatchPartial,
+            format!("{} batch command(s) failed.", failures.len()),
+        ))
     }
 }
 
@@ -3869,10 +3923,13 @@ async fn run(
         } else {
             if let Some(target) = global.args.get(1) {
                 if let Some(preferred) = preferred_spaced_command_form(target) {
-                    return Err(CliError(ExitCode::Usage, format!(
-                        "Unsupported command form: {}. Use 'browser4-cli help {}' instead.",
-                        target, preferred
-                    )));
+                    return Err(CliError(
+                        ExitCode::Usage,
+                        format!(
+                            "Unsupported command form: {}. Use 'browser4-cli help {}' instead.",
+                            target, preferred
+                        ),
+                    ));
                 }
             }
             global.args.get(1).cloned()
@@ -3893,18 +3950,24 @@ async fn run(
 
     if !from_spaced_prefix {
         if let Some(preferred) = preferred_spaced_command_form(command) {
-            return Err(CliError(ExitCode::Usage, format!(
-                "Unsupported command form: {}. Use 'browser4-cli {}' instead.",
-                command, preferred
-            )));
+            return Err(CliError(
+                ExitCode::Usage,
+                format!(
+                    "Unsupported command form: {}. Use 'browser4-cli {}' instead.",
+                    command, preferred
+                ),
+            ));
         }
     }
 
     if let Some(preferred) = preferred_prefixed_group_form(command) {
-        return Err(CliError(ExitCode::Usage, format!(
-            "Unsupported command form: {}. Use 'browser4-cli {}' instead.",
-            command, preferred
-        )));
+        return Err(CliError(
+            ExitCode::Usage,
+            format!(
+                "Unsupported command form: {}. Use 'browser4-cli {}' instead.",
+                command, preferred
+            ),
+        ));
     }
 
     // Resolve base URL: --server flag > persisted state > default
@@ -3995,7 +4058,7 @@ async fn run(
             handle_install(&tool_params).await?;
         }
         "uninstall" => {
-            handle_uninstall().await?;
+            handle_uninstall(&tool_params).await?;
         }
         "upgrade" => {
             handle_upgrade(&tool_params).await?;
@@ -4773,7 +4836,8 @@ mod tests {
 
         assert!(message.contains("🔐 Session refresh needed"));
         assert!(message.contains("saved session expired or is no longer usable"));
-        assert!(message.contains("run `browser4-cli open <url>` to create a fresh session, then retry."));
+        assert!(message
+            .contains("run `browser4-cli open <url>` to create a fresh session, then retry."));
     }
 
     #[test]
@@ -5116,7 +5180,9 @@ mod tests {
 
     #[test]
     fn is_backend_unreachable_detects_connection_refused() {
-        assert!(is_backend_unreachable_error("Connection refused (os error 61)"));
+        assert!(is_backend_unreachable_error(
+            "Connection refused (os error 61)"
+        ));
         assert!(is_backend_unreachable_error("connection refused"));
     }
 
@@ -5124,7 +5190,9 @@ mod tests {
     fn is_backend_unreachable_detects_tcp_errors() {
         assert!(is_backend_unreachable_error("tcp connect error"));
         assert!(is_backend_unreachable_error("error sending request"));
-        assert!(is_backend_unreachable_error("failed to connect to the server"));
+        assert!(is_backend_unreachable_error(
+            "failed to connect to the server"
+        ));
     }
 
     #[test]
@@ -5219,7 +5287,9 @@ mod tests {
         InstalledBrowser4Runtime {
             tag: "v4.10.0".to_string(),
             asset_name: "browser4-bundle-runtime-linux-x64.tar.gz".to_string(),
-            download_url: "https://github.com/platonai/Browser4/releases/download/v4.10.0/bundle.tar.gz".to_string(),
+            download_url:
+                "https://github.com/platonai/Browser4/releases/download/v4.10.0/bundle.tar.gz"
+                    .to_string(),
             install_dir: PathBuf::from("/tmp/browser4/lib"),
             lib_dir: PathBuf::from("/tmp/browser4/lib"),
             jar_path: PathBuf::from("/tmp/browser4/lib/browser4.jar"),
@@ -5232,16 +5302,30 @@ mod tests {
     fn test_format_install_output_reused() {
         let runtime = make_test_runtime(true);
         let lines = format_install_output(&runtime);
-        assert!(lines[0].contains("already installed"), "expected 'already installed', got: {:?}", lines);
-        assert!(lines.iter().any(|l| l.contains("v4.10.0")), "expected tag in output");
-        assert!(lines.iter().any(|l| l.contains("- Install dir:")), "expected install dir");
+        assert!(
+            lines[0].contains("already installed"),
+            "expected 'already installed', got: {:?}",
+            lines
+        );
+        assert!(
+            lines.iter().any(|l| l.contains("v4.10.0")),
+            "expected tag in output"
+        );
+        assert!(
+            lines.iter().any(|l| l.contains("- Install dir:")),
+            "expected install dir"
+        );
     }
 
     #[test]
     fn test_format_install_output_fresh() {
         let runtime = make_test_runtime(false);
         let lines = format_install_output(&runtime);
-        assert!(lines[0].contains("installed successfully"), "expected 'installed successfully', got: {:?}", lines);
+        assert!(
+            lines[0].contains("installed successfully"),
+            "expected 'installed successfully', got: {:?}",
+            lines
+        );
     }
 
     #[test]
@@ -5249,15 +5333,27 @@ mod tests {
         let runtime = make_test_runtime(true);
         let lines = format_upgrade_output(&runtime, false);
         assert_eq!(lines.len(), 1);
-        assert!(lines[0].contains("already at the latest version"), "got: {}", lines[0]);
-        assert!(lines[0].contains("v4.10.0"), "expected tag in message: {}", lines[0]);
+        assert!(
+            lines[0].contains("already at the latest version"),
+            "got: {}",
+            lines[0]
+        );
+        assert!(
+            lines[0].contains("v4.10.0"),
+            "expected tag in message: {}",
+            lines[0]
+        );
     }
 
     #[test]
     fn test_format_upgrade_output_fresh_install() {
         let runtime = make_test_runtime(false);
         let lines = format_upgrade_output(&runtime, false);
-        assert!(lines[0].contains("upgraded successfully"), "got: {}", lines[0]);
+        assert!(
+            lines[0].contains("upgraded successfully"),
+            "got: {}",
+            lines[0]
+        );
         assert!(lines.iter().any(|l| l.contains("Restart the server")));
     }
 
@@ -5265,7 +5361,11 @@ mod tests {
     fn test_format_upgrade_output_force_reinstall() {
         let runtime = make_test_runtime(true); // reused_existing = true
         let lines = format_upgrade_output(&runtime, true); // force = true → not "already latest"
-        assert!(lines[0].contains("upgraded successfully"), "force=true should not print 'already latest': {:?}", lines);
+        assert!(
+            lines[0].contains("upgraded successfully"),
+            "force=true should not print 'already latest': {:?}",
+            lines
+        );
         assert!(lines.iter().any(|l| l.contains("Restart the server")));
     }
 }

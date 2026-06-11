@@ -57,10 +57,12 @@ pub(super) fn test_swarm_submission_commands_live(ctx: &mut E2ECtx) {
         swarm_submit_result.stdout
     );
     assert!(
-        submitted_tasks.iter().any(
-            |(submitted_payload, task_id)| *submitted_payload == expected_url
-                && !task_id.is_empty()
-        ),
+        submitted_tasks
+            .iter()
+            .any(
+                |(submitted_payload, task_id)| *submitted_payload == expected_url
+                    && !task_id.is_empty()
+            ),
         "Expected submitted swarm output to include the URL with a task id in:\n{}",
         swarm_submit_result.stdout
     );

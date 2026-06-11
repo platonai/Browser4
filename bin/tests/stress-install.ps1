@@ -27,15 +27,16 @@
     that already has a local runtime bundle built.
 
 .NOTES
-    This script WILL delete ~/.browser4/lib/ to test fresh-install paths.
-    It will also kill and restart the Browser4 server multiple times.
-    Run it in an environment where this is acceptable.
+    This script WILL delete the versioned runtime install directory under the
+    platform data directory to test fresh-install paths.  It will also kill and
+    restart the Browser4 server multiple times.  Run it in an environment where
+    this is acceptable.
 #>
 param(
     [int] $Iterations = 2,
     [int] $Seed = (Get-Random),
     [switch] $SkipInstall,
-    [string] $Tag = '4.10.0-rc.2'
+    [string] $Tag = '4.10.0'
 )
 
 $ErrorActionPreference = 'Continue'
@@ -46,23 +47,35 @@ $ErrorActionPreference = 'Continue'
 # into CJK gibberish.  `chcp` changes the *console's interpretation* of
 # output bytes; OutputEncoding / InputEncoding alone only affect .NET
 # stream encoding, not how the host renders them.
-$null = & chcp 65001
+if ($IsWin) {
+    $null = & chcp 65001
+}
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 [Console]::InputEncoding  = [Text.Encoding]::UTF8
 
 # -------------------------------------------------------------------
-# CLI helper (same pattern as session-stress.ps1)
+# CLI helper — uses global browser4-cli by default.
+# Set BROWSER4_CLI_BIN to override (e.g. to a local dev binary).
 # -------------------------------------------------------------------
-# Resolve the CLI Cargo.toml path (the script may be invoked from the repo root
-# which does not contain a Cargo.toml).
-$RepoRoot = git rev-parse --show-toplevel
-$CliManifest = Join-Path $RepoRoot 'cli' | Join-Path -ChildPath 'browser4-cli' | Join-Path -ChildPath 'Cargo.toml'
-
-$cli = if ($env:BROWSER4_CLI_BIN) {
-    { & $env:BROWSER4_CLI_BIN $args 2>&1 }
-} else {
-    { cargo run --manifest-path $CliManifest --quiet -- $args 2>&1 }
+$script:__CliBin = $env:BROWSER4_CLI_BIN
+if (-not $script:__CliBin) {
+    $script:__CliBin = (Get-Command 'browser4-cli' -CommandType Application -ErrorAction SilentlyContinue)
+    if (-not $script:__CliBin) {
+        # Fall back to where.exe on Windows, `which` on Unix.
+        $whichCmd = if ($IsWindows) { 'where.exe' } else { 'which' }
+        $raw = & $whichCmd 'browser4-cli' 2>$null | Select-Object -First 1
+        if ($raw) { $script:__CliBin = $raw.Trim() }
+    }
+    if ($script:__CliBin -and ($script:__CliBin -is [System.Management.Automation.CommandInfo])) {
+        $script:__CliBin = $script:__CliBin.Source
+    }
+    if (-not $script:__CliBin) {
+        throw 'browser4-cli not found on PATH. Install it with: npm i -g browser4-cli && browser4-cli install'
+    }
+    Write-Host "  (using global browser4-cli: $script:__CliBin)" -ForegroundColor DarkGray
 }
+
+$cli = { & $script:__CliBin @args 2>&1 }
 
 # Wrapper that captures $LASTEXITCODE *before* the pipeline ends.
 # Windows PowerShell 5.1 clears $LASTEXITCODE after piping to a
@@ -164,7 +177,14 @@ filter session-data-rows {
         $_ -match '\S' -and
         $_ -notmatch '^\s*-+\s*' -and
         $_ -notmatch '^Name\b' -and
-        $_ -notmatch '^Note:'
+        $_ -notmatch '^Note:' -and
+        # Exclude rustc / cargo build output that may leak through when
+        # using `cargo run` (warnings, errors, source locations, and
+        # diagnostic annotations).
+        $_ -notmatch '^\s*(warning|error)\b' -and
+        $_ -notmatch '^\s*-->' -and
+        $_ -notmatch '^\s*[|]' -and
+        $_ -notmatch '^\s*=\s*(note|help):'
     }
 }
 
@@ -174,15 +194,38 @@ $rng = [Random]::new($Seed)
 $StateDir = if ($env:BROWSER4_CLI_STATE_DIR) { $env:BROWSER4_CLI_STATE_DIR }
             else { Join-Path $HOME '.browser4' }
 
-$LibDir = Join-Path $StateDir 'lib'
-$InstallMetaFile = Join-Path $LibDir 'browser4-installation.json'
+# Resolve the Browser4 runtime data directory (mirrors Rust's resolve_runtime_data_dir()).
+# On Linux:   $XDG_DATA_HOME/browser4 (typically ~/.local/share/browser4/)
+# On macOS:   ~/Library/Application Support/browser4/
+# On Windows: %APPDATA%/browser4/
+# Honours BROWSER4_RUNTIME_DIR as an override.
+if (-not (Get-Variable -Name 'IsLinux' -ErrorAction SilentlyContinue)) { $IsLinux = $false }
+if (-not (Get-Variable -Name 'IsMacOS' -ErrorAction SilentlyContinue)) { $IsMacOS = $false }
+$RuntimeDataDir = if ($env:BROWSER4_RUNTIME_DIR) { $env:BROWSER4_RUNTIME_DIR }
+                  elseif ($IsLinux) { Join-Path $HOME '.local/share/browser4' }
+                  elseif ($IsMacOS) { Join-Path $HOME 'Library/Application Support/browser4' }
+                  else { Join-Path $env:APPDATA 'browser4' }
+
+# Ensure the CLI binary uses the same runtime directory we are checking.
+if (-not $env:BROWSER4_RUNTIME_DIR) {
+    $env:BROWSER4_RUNTIME_DIR = $RuntimeDataDir
+}
+
+# Versioned install directory for the tag under test.
+# Mirror Rust's normalize_release_tag(): if the tag doesn't start with 'v',
+# prepend one — the CLI normalises "4.10.0" to "v4.10.0".
+$NormalizedTag = if ($Tag.StartsWith('v')) { $Tag } else { "v$Tag" }
+$RuntimeVersionsDir = Join-Path $RuntimeDataDir 'runtime'
+$VersionedInstallDir = Join-Path $RuntimeVersionsDir $NormalizedTag
+$InstallMetaFile = Join-Path $VersionedInstallDir 'browser4-installation.json'
+
 $CliStateFile = Join-Path $StateDir 'cli-state.json'
 $ManagedProcsFile = Join-Path $StateDir 'cli-managed-processes.json'
 
 # -------------------------------------------------------------------
 # Resolution for platform-dependent paths inside the runtime bundle.
 # -------------------------------------------------------------------
-$RuntimeBinDir = Join-Path $LibDir 'runtime' | Join-Path -ChildPath 'bin'
+$RuntimeBinDir = Join-Path $VersionedInstallDir 'runtime' | Join-Path -ChildPath 'bin'
 $IsWin = $env:OS -eq 'Windows_NT'  # works on PS 5.1 and 6+
 $JavaExe = if ($IsWin) { 'java.exe' } else { 'java' }
 $JavaBin = Join-Path $RuntimeBinDir $JavaExe
@@ -334,13 +377,20 @@ try { $null = Invoke-Cli close } catch { Write-Host "       (no session to close
 Wait-WithStatus -Seconds 2
 
 if (-not $SkipInstall) {
-    Write-Host "-- Removing ~/.browser4/lib/ for fresh-install test --" -ForegroundColor DarkYellow
-    if (Test-Path $LibDir) {
-        Remove-Item -Recurse -Force $LibDir -ErrorAction Stop
-        Write-Host "       Removed $LibDir"
+    Write-Host "-- Removing versioned install for fresh-install test --" -ForegroundColor DarkYellow
+    # Remove the versioned install directory so the next install starts fresh.
+    if (Test-Path $VersionedInstallDir) {
+        Remove-Item -Recurse -Force $VersionedInstallDir -ErrorAction Stop
+        Write-Host "       Removed $VersionedInstallDir"
+    }
+    # Also remove current.tag so the runtime is treated as not installed.
+    $currentTagFile = Join-Path $RuntimeVersionsDir 'current.tag'
+    if (Test-Path $currentTagFile) {
+        Remove-Item -Force $currentTagFile -ErrorAction Stop
+        Write-Host "       Removed $currentTagFile"
     }
 } else {
-    Write-Host "-- SkipInstall: keeping existing ~/.browser4/lib/ --" -ForegroundColor DarkGray
+    Write-Host "-- SkipInstall: keeping existing runtime install --" -ForegroundColor DarkGray
 }
 
 # -------------------------------------------------------------------
@@ -669,7 +719,7 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
     Write-Host "`n  F2. close clears sessionId  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
     Set-Status -Phase 'F (state)' -Step 'F2 close clears' -Passes $global:TestPassed
     Invoke-Cli close
-    try { $cliState2 = Get-Content -Raw $CliStateFile | ConvertFrom-Json } catch { $cliState2 = $null }
+    try { $cliState2 = Get-Content -Raw $CliStateFile -ErrorAction SilentlyContinue | ConvertFrom-Json } catch { $cliState2 = $null }
     # clear_state (called by `close`) removes the file entirely via
     # fs::remove_file.  Either outcome — file gone, or sessionId blank
     # — means the session is deactivated.
@@ -687,7 +737,7 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
             $instMeta.tag -and $instMeta.asset_name -and $instMeta.installed_at
         }
         Assert-FileExists $JavaBin "bundled java exists"
-        $libJars = Get-ChildItem -Path (Join-Path $LibDir 'lib') -Filter '*.jar' -ErrorAction SilentlyContinue
+        $libJars = Get-ChildItem -Path (Join-Path $VersionedInstallDir 'lib') -Filter '*.jar' -ErrorAction SilentlyContinue
         Assert-True "lib/*.jar files exist" { $libJars.Count -gt 0 }
 
     }
@@ -705,7 +755,7 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
     Set-Status -Phase 'F (state)' -Step 'F5 kill-all clear' -Passes $global:TestPassed
     $null = Invoke-Cli kill-all
     Wait-WithStatus -Seconds 5
-    try { $procData = Get-Content -Raw $ManagedProcsFile | ConvertFrom-Json } catch { $procData = $null }
+    try { $procData = Get-Content -Raw $ManagedProcsFile -ErrorAction SilentlyContinue | ConvertFrom-Json } catch { $procData = $null }
     # write_managed_server_processes removes the registry file when the
     # list is empty, so `kill-all` may delete managed-processes.json
     # entirely.  Either outcome — file gone, or empty PID list — is a

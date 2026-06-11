@@ -1,15 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CLI_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+browser4-cli open
+browser4-cli swarm create
 
-cd "$CLI_DIR"
-
-cargo run -- open
-cargo run -- swarm create
-
-output="$(cargo run --quiet -- swarm submit "https://example.com" 2>&1)"
+output="$(browser4-cli swarm submit "https://example.com" 2>&1)"
 output="${output%$'\n'}"
 submitted_line="$(printf '%s\n' "$output" | grep -E 'Task ID:[[:space:]]*[^[:space:]]+' | head -n 1 || true)"
 if [[ -z "$submitted_line" ]]; then
@@ -26,7 +21,7 @@ fi
 printf 'Waiting for agent task %s to finish...\n' "$task_id"
 
 for attempt in 1 2 3; do
-    status="$(cargo run --quiet -- swarm status "$task_id" 2>&1)"
+    status="$(browser4-cli swarm status "$task_id" 2>&1)"
     status="${status%$'\n'}"
     printf '%s\n' "$status"
 

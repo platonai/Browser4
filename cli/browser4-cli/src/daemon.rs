@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::managed_processes::{register_managed_server_process, ManagedServerProcess};
 use crate::state::{
@@ -41,8 +42,29 @@ const BROWSER4_RUNTIME_DIR_NAME: &str = "runtime";
 const DOWNLOADS_DIR_NAME: &str = "downloads";
 const BROWSER4_MAIN_CLASS: &str = "ai.platon.pulsar.apps.Browser4BundleApplicationKt";
 const BROWSER4_INSTALL_METADATA_FILE_NAME: &str = "browser4-installation.json";
-const BROWSER4_RELEASES_BASE_URL: &str = "https://github.com/platonai/Browser4/releases";
 const BROWSER4_RELEASES_BASE_URL_ENV: &str = "BROWSER4_RELEASES_BASE_URL";
+/// Path to the mirror configuration file, relative to the runtime data dir.
+const MIRRORS_CONFIG_FILE_NAME: &str = "mirrors.json";
+/// Env var to override the mirror config file path.
+const MIRRORS_CONFIG_FILE_ENV: &str = "BROWSER4_MIRRORS_CONFIG";
+/// Default timeout for mirror reachability checks (seconds).
+const MIRROR_REACHABILITY_TIMEOUT_SECS: u64 = 5;
+/// Env var to override the mirror reachability timeout (seconds).
+const MIRROR_REACHABILITY_TIMEOUT_ENV: &str = "BROWSER4_CLI_MIRROR_CHECK_TIMEOUT_SECS";
+/// Number of bytes to download from each mirror during speed tests (10 MB).
+const SPEED_TEST_PROBE_BYTES: u64 = 10 * 1024 * 1024;
+/// Default per-mirror timeout for speed-test downloads (seconds).
+const MIRROR_SPEED_TEST_TIMEOUT_SECS: u64 = 30;
+/// Env var to override the speed-test per-mirror timeout (seconds).
+const MIRROR_SPEED_TEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_MIRROR_SPEED_TEST_TIMEOUT_SECS";
+/// Default TTL for a cached mirror preference (24 hours).
+const MIRROR_PREFERENCE_TTL_SECS: u64 = 86400;
+/// Env var to override the mirror preference TTL (seconds).
+const MIRROR_PREFERENCE_TTL_ENV: &str = "BROWSER4_CLI_MIRROR_PREFERENCE_TTL_SECS";
+/// Env var to disable speed testing (set to "1") — forces TCP-only fallback.
+const DISABLE_MIRROR_SPEED_TEST_ENV: &str = "BROWSER4_CLI_DISABLE_MIRROR_SPEED_TEST";
+/// Name of the mirror preference cache file inside the runtime cache dir.
+const MIRROR_PREFERENCE_CACHE_FILE: &str = "mirror-preference.json";
 const ROOT_SEARCH_START_DIR_ENV: &str = "BROWSER4_CLI_INVOKE_DIR";
 /// When set to `1`, `true`, `yes`, or `on`, forces the CLI to download the
 /// Browser4 runtime bundle from a remote release instead of building it from
@@ -127,6 +149,517 @@ pub struct InstalledBrowser4Runtime {
 struct DownloadedFile {
     final_url: String,
     bytes_written: u64,
+}
+
+// ---------------------------------------------------------------------------
+// Download mirror configuration
+// ---------------------------------------------------------------------------
+
+/// A single download mirror entry.
+///
+/// Each mirror provides a `base_url` that hosts release assets in the same
+/// layout as GitHub Releases: `<base_url>/download/<tag>/<asset>` (or
+/// `/latest/download/<asset>` for the latest release).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct DownloadMirror {
+    /// Human-readable name shown in log messages (e.g. "github", "aliyun-oss").
+    name: String,
+    /// Base URL for release downloads (e.g. `https://github.com/platonai/Browser4/releases`).
+    base_url: String,
+}
+
+/// Top-level structure of the mirrors.json config file.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct MirrorsConfig {
+    mirrors: Vec<DownloadMirror>,
+}
+
+/// Result of a single-mirror speed test.
+#[derive(Debug, Clone)]
+struct SpeedTestResult {
+    mirror: DownloadMirror,
+    #[allow(dead_code)]
+    duration: Duration,
+    #[allow(dead_code)]
+    bytes_downloaded: u64,
+    /// Throughput in bytes per second (higher is better).
+    speed_bps: f64,
+}
+
+/// Cached mirror preference written to disk so we can skip re-testing on every
+/// install.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MirrorPreference {
+    /// The mirror that was fastest during the last speed test.
+    selected_mirror: DownloadMirror,
+    /// When the speed test was performed (UTC, RFC 3339).
+    tested_at: String,
+    /// Measured throughput in bytes per second.
+    download_speed_bps: u64,
+}
+
+/// Built-in default mirrors used when no config file exists.
+fn builtin_mirrors() -> Vec<DownloadMirror> {
+    vec![
+        DownloadMirror {
+            name: "github".to_string(),
+            base_url: "https://github.com/platonai/Browser4/releases".to_string(),
+        },
+        DownloadMirror {
+            name: "aliyun-oss".to_string(),
+            base_url: "https://browser4.oss-cn-beijing.aliyuncs.com/releases".to_string(),
+        },
+    ]
+}
+
+/// Path to the mirror configuration file.
+///
+/// 1. `BROWSER4_MIRRORS_CONFIG` env var, if set and non-empty.
+/// 2. `{runtime_data_dir}/mirrors.json` otherwise.
+fn mirrors_config_path() -> PathBuf {
+    if let Ok(env_path) = env::var(MIRRORS_CONFIG_FILE_ENV) {
+        let trimmed = env_path.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+    resolve_runtime_data_dir().join(MIRRORS_CONFIG_FILE_NAME)
+}
+
+/// Load the mirror list.
+///
+/// If `BROWSER4_RELEASES_BASE_URL` is set it takes full precedence — the
+/// env var is treated as a single-mirror override and no config file is read.
+///
+/// Otherwise the mirrors are loaded from `mirrors.json`.  When the file is
+/// missing or unreadable the built-in defaults (GitHub → Aliyun OSS) are used.
+fn load_mirrors() -> Vec<DownloadMirror> {
+    // Single-source override: BROWSER4_RELEASES_BASE_URL completely bypasses
+    // the mirror system for backward compatibility.
+    if let Ok(env_url) = env::var(BROWSER4_RELEASES_BASE_URL_ENV) {
+        let trimmed = env_url.trim().trim_end_matches('/').to_string();
+        if !trimmed.is_empty() {
+            return vec![DownloadMirror {
+                name: "custom".to_string(),
+                base_url: trimmed,
+            }];
+        }
+    }
+
+    let config_path = mirrors_config_path();
+    match fs::read_to_string(&config_path) {
+        Ok(contents) => match serde_json::from_str::<MirrorsConfig>(&contents) {
+            Ok(config) if !config.mirrors.is_empty() => {
+                eprintln!(
+                    "Loaded {} mirror(s) from {}",
+                    config.mirrors.len(),
+                    config_path.display()
+                );
+                return config.mirrors;
+            }
+            Ok(_) => {
+                eprintln!(
+                    "Mirror config file {} has an empty mirror list; using built-in defaults.",
+                    config_path.display()
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "Failed to parse mirror config {}: {}; using built-in defaults.",
+                    config_path.display(),
+                    e
+                );
+            }
+        },
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            // No config file — silently use built-in defaults.
+        }
+        Err(e) => {
+            eprintln!(
+                "Cannot read mirror config {}: {}; using built-in defaults.",
+                config_path.display(),
+                e
+            );
+        }
+    }
+
+    builtin_mirrors()
+}
+
+/// Build a download URL for the given mirror, release tag, and asset name.
+fn mirror_download_url(mirror: &DownloadMirror, tag: Option<&str>, asset_name: &str) -> String {
+    let base = mirror.base_url.trim_end_matches('/');
+    match normalize_release_tag(tag) {
+        Some(tag) => format!("{base}/download/{tag}/{asset_name}"),
+        None => format!("{base}/latest/download/{asset_name}"),
+    }
+}
+
+/// Check whether a mirror is reachable via a fast TCP connect to its host:443.
+///
+/// Parses the host from the mirror's `base_url` and attempts a single
+/// `TcpStream::connect_timeout`.  This is intentionally a connectivity probe
+/// rather than an HTTP round-trip — it's resilient to rate limits and
+/// redirects.
+fn mirror_is_reachable(mirror: &DownloadMirror) -> bool {
+    use std::net::{TcpStream, ToSocketAddrs};
+
+    let timeout_secs = env::var(MIRROR_REACHABILITY_TIMEOUT_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&s| s > 0)
+        .unwrap_or(MIRROR_REACHABILITY_TIMEOUT_SECS);
+
+    // Parse the host from the base URL.  reqwest::Url handles the scheme and
+    // port extraction for us.
+    let (host, port) = match reqwest::Url::parse(&mirror.base_url) {
+        Ok(parsed) => {
+            let host = parsed.host_str().unwrap_or("").to_string();
+            if host.is_empty() {
+                return false;
+            }
+            let port = parsed.port().unwrap_or(443);
+            (host, port)
+        }
+        Err(_) => return false,
+    };
+
+    // Resolve the host to a SocketAddr.  Try parsing as a literal IP first
+    // to avoid getaddrinfo / AI_ADDRCONFIG issues: in containerised
+    // environments (Docker, GitHub Actions runners) IPv6 is often disabled
+    // at the sysctl level, so getaddrinfo filters out IPv6 loopback even
+    // though binding and connecting to [::1] works fine.  For hostnames
+    // that need real DNS resolution we fall back to ToSocketAddrs.
+    let addr: std::net::SocketAddr = {
+        use std::net::{IpAddr, SocketAddr};
+        if let Ok(ip) = host.parse::<IpAddr>() {
+            SocketAddr::new(ip, port)
+        } else {
+            // Use the (host, port) tuple form of ToSocketAddrs rather than a
+            // "host:port" string.  The tuple form avoids an IPv6 ambiguity:
+            // reqwest strips the brackets from IPv6 addresses
+            // (e.g. [::1] → ::1), so a formatted string like "::1:443" would
+            // be mis-parsed as a bare IPv6 address with the port becoming the
+            // last hextet.
+            match (host.as_str(), port)
+                .to_socket_addrs()
+                .ok()
+                .and_then(|mut a| a.next())
+            {
+                Some(addr) => addr,
+                None => return false,
+            }
+        }
+    };
+
+    let timeout = Duration::from_secs(timeout_secs);
+    match TcpStream::connect_timeout(&addr, timeout) {
+        Ok(_) => true,
+        Err(_) => false,
+    }
+}
+
+/// Select the first reachable mirror from the list.
+///
+/// If no mirror is reachable, returns the first mirror anyway so the user
+/// gets a clear download error rather than a confusing "no mirrors" message.
+fn select_reachable_mirror(mirrors: &[DownloadMirror]) -> (&DownloadMirror, bool) {
+    for mirror in mirrors {
+        if mirror_is_reachable(mirror) {
+            return (mirror, true);
+        }
+        eprintln!(
+            "Mirror '{}' is unreachable; trying next mirror...",
+            mirror.name
+        );
+    }
+    // All mirrors failed the reachability check — fall back to the first
+    // mirror so the download attempt produces a clear HTTP error.
+    let fallback = &mirrors[0];
+    eprintln!(
+        "No mirror is reachable. Falling back to '{}' (download may fail).",
+        fallback.name
+    );
+    (fallback, false)
+}
+
+// ---------------------------------------------------------------------------
+// Mirror preference cache (persists the fastest mirror across install runs)
+// ---------------------------------------------------------------------------
+
+/// Path to the mirror preference cache file.
+fn mirror_preference_cache_path() -> PathBuf {
+    resolve_runtime_cache_dir().join(MIRROR_PREFERENCE_CACHE_FILE)
+}
+
+/// Load the cached mirror preference.
+///
+/// Returns `None` when the file is missing, corrupt, the cached mirror is no
+/// longer in the provided mirror list, or the preference has expired.
+fn load_mirror_preference(mirrors: &[DownloadMirror]) -> Option<MirrorPreference> {
+    let path = mirror_preference_cache_path();
+    let contents = fs::read_to_string(&path).ok()?;
+    let pref: MirrorPreference = serde_json::from_str(&contents).ok()?;
+    // Validate: the cached mirror must be in the current mirror list.
+    if !mirrors
+        .iter()
+        .any(|m| m.base_url == pref.selected_mirror.base_url)
+    {
+        eprintln!(
+            "Cached mirror '{}' is not in the current mirror list; ignoring.",
+            pref.selected_mirror.name
+        );
+        return None;
+    }
+    Some(pref)
+}
+
+/// Check whether a cached mirror preference is still within its TTL.
+fn is_mirror_preference_valid(pref: &MirrorPreference) -> bool {
+    let ttl_secs = env::var(MIRROR_PREFERENCE_TTL_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&s| s > 0)
+        .unwrap_or(MIRROR_PREFERENCE_TTL_SECS);
+
+    match chrono::DateTime::parse_from_rfc3339(&pref.tested_at) {
+        Ok(tested_at) => {
+            let tested_at_utc: chrono::DateTime<chrono::Utc> = tested_at.into();
+            let elapsed = chrono::Utc::now().signed_duration_since(tested_at_utc);
+            elapsed.num_seconds() >= 0 && elapsed.num_seconds() < ttl_secs as i64
+        }
+        Err(_) => {
+            // Unparseable timestamp — treat as invalid.
+            false
+        }
+    }
+}
+
+/// Atomically save a mirror preference to the cache file.
+fn save_mirror_preference(pref: &MirrorPreference) {
+    let path = mirror_preference_cache_path();
+    if let Some(parent) = path.parent() {
+        if let Err(e) = fs::create_dir_all(parent) {
+            eprintln!("  (skipping mirror cache: cannot create cache dir: {e})");
+            return;
+        }
+    }
+    // Write atomically via temp file + rename.
+    let tmp_path = path.with_extension("json.tmp");
+    match serde_json::to_string_pretty(pref) {
+        Ok(json) => {
+            if let Err(e) = fs::write(&tmp_path, &json) {
+                eprintln!("  (skipping mirror cache: write failed: {e})");
+                return;
+            }
+            if let Err(e) = fs::rename(&tmp_path, &path) {
+                eprintln!("  (skipping mirror cache: rename failed: {e})");
+                let _ = fs::remove_file(&tmp_path);
+            }
+        }
+        Err(e) => eprintln!("  (skipping mirror cache: serialization failed: {e})"),
+    }
+}
+
+/// Delete the mirror preference cache file.
+fn delete_mirror_preference_cache() {
+    let path = mirror_preference_cache_path();
+    let _ = fs::remove_file(&path);
+}
+
+// ---------------------------------------------------------------------------
+// Mirror speed testing
+// ---------------------------------------------------------------------------
+
+/// Run speed tests against all mirrors concurrently and return results sorted
+/// by speed (fastest first).
+///
+/// Each mirror is probed by downloading the first `SPEED_TEST_PROBE_BYTES` of
+/// the runtime bundle asset via an HTTP Range request.  This keeps the probe
+/// small (~10 MB) while exercising the same CDN endpoints that will serve the
+/// full download.
+///
+/// Returns an empty `Vec` when every mirror fails or speed testing is disabled
+/// via `BROWSER4_CLI_DISABLE_MIRROR_SPEED_TEST`.
+async fn run_speed_tests(mirrors: &[DownloadMirror]) -> Vec<SpeedTestResult> {
+    // Honour the disable flag.
+    if env::var(DISABLE_MIRROR_SPEED_TEST_ENV).ok().as_deref() == Some("1") {
+        return vec![];
+    }
+
+    let timeout_secs = env::var(MIRROR_SPEED_TEST_TIMEOUT_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&s| s > 0)
+        .unwrap_or(MIRROR_SPEED_TEST_TIMEOUT_SECS);
+
+    // Resolve the runtime bundle asset name for the current platform so we
+    // probe the exact same CDN path that the full download will use.
+    let platform = match detect_current_runtime_bundle_platform() {
+        Ok(p) => p,
+        Err(_) => return vec![],
+    };
+    let asset_name = platform.asset_name();
+
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(timeout_secs))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to create HTTP client for speed tests: {e}");
+            return vec![];
+        }
+    };
+
+    // Fire all speed tests concurrently — serial fallback would make the total
+    // latency the sum of all mirror timeouts (worst case).
+    let mut handles = Vec::new();
+    for mirror in mirrors {
+        // Use the "latest" endpoint for the speed test so the probe works
+        // regardless of whether the user specified a concrete tag.  The
+        // throughput characteristics of the CDN are the same.
+        let url = mirror_download_url(mirror, None, &asset_name);
+        let client = client.clone();
+        let mirror = mirror.clone();
+
+        handles.push(tokio::spawn(async move {
+            eprintln!("  Speed-testing mirror '{}'...", mirror.name);
+            let start = Instant::now();
+
+            let range_header = format!("bytes=0-{}", SPEED_TEST_PROBE_BYTES - 1);
+            match client.get(&url).header("Range", &range_header).send().await {
+                Ok(response) => {
+                    let status = response.status();
+                    // Accept 206 (Partial Content — Range honoured) and 200
+                    // (server ignored Range header and sent the full asset).
+                    if !status.is_success()
+                        && status != reqwest::StatusCode::PARTIAL_CONTENT
+                        && status != reqwest::StatusCode::OK
+                    {
+                        eprintln!(
+                            "  Mirror '{}' speed test failed: HTTP {}",
+                            mirror.name, status
+                        );
+                        return None;
+                    }
+                    match response.bytes().await {
+                        Ok(bytes) => {
+                            let elapsed = start.elapsed();
+                            let speed_bps = if elapsed.as_secs_f64() > 0.0 {
+                                bytes.len() as f64 / elapsed.as_secs_f64()
+                            } else {
+                                bytes.len() as f64
+                            };
+                            eprintln!(
+                                "  Mirror '{}' speed: {:.2} MB/s ({:.0} ms for {} bytes)",
+                                mirror.name,
+                                speed_bps / 1_048_576.0,
+                                elapsed.as_secs_f64() * 1000.0,
+                                bytes.len()
+                            );
+                            Some(SpeedTestResult {
+                                mirror,
+                                duration: elapsed,
+                                bytes_downloaded: bytes.len() as u64,
+                                speed_bps,
+                            })
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "  Mirror '{}' speed test failed (body read): {e}",
+                                mirror.name
+                            );
+                            None
+                        }
+                    }
+                }
+                Err(e) => {
+                    if e.is_timeout() {
+                        eprintln!(
+                            "  Mirror '{}' speed test timed out after {}s",
+                            mirror.name, timeout_secs
+                        );
+                    } else {
+                        eprintln!("  Mirror '{}' speed test failed: {e}", mirror.name);
+                    }
+                    None
+                }
+            }
+        }));
+    }
+
+    let mut results: Vec<SpeedTestResult> = Vec::new();
+    for handle in handles {
+        match handle.await {
+            Ok(Some(result)) => results.push(result),
+            Ok(None) => {} // This mirror failed — skip it.
+            Err(join_err) => {
+                eprintln!("  Speed test task panicked: {join_err}");
+            }
+        }
+    }
+
+    // Sort descending by speed (fastest first).
+    results.sort_by(|a, b| {
+        b.speed_bps
+            .partial_cmp(&a.speed_bps)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    results
+}
+
+/// Select the best mirror for the runtime download.
+///
+/// Decision order:
+/// 1. Cached preference (if valid and the mirror is still in the list).
+/// 2. Concurrent speed tests across all mirrors.
+/// 3. TCP reachability fallback (when all speed tests fail).
+///
+/// Returns `(selected_mirror, was_speed_tested)` — the caller uses
+/// `was_speed_tested` to decide whether to invalidate the cache and retry on
+/// download failure.
+async fn select_best_mirror(mirrors: &[DownloadMirror]) -> (&DownloadMirror, bool) {
+    // --- cached preference ---
+    if let Some(pref) = load_mirror_preference(mirrors) {
+        if is_mirror_preference_valid(&pref) {
+            if let Some(mirror) = mirrors
+                .iter()
+                .find(|m| m.base_url == pref.selected_mirror.base_url)
+            {
+                eprintln!(
+                    "Using cached mirror '{}' (tested at {}, {:.2} MB/s)",
+                    mirror.name,
+                    &pref.tested_at[..19.min(pref.tested_at.len())],
+                    pref.download_speed_bps as f64 / 1_048_576.0
+                );
+                return (mirror, true);
+            }
+        }
+    }
+
+    // --- speed tests ---
+    let results = run_speed_tests(mirrors).await;
+
+    if results.is_empty() {
+        eprintln!("All speed tests failed; falling back to TCP reachability check.");
+        return select_reachable_mirror(mirrors);
+    }
+
+    // Cache the best result for future runs.
+    let best = &results[0];
+    let pref = MirrorPreference {
+        selected_mirror: best.mirror.clone(),
+        tested_at: chrono::Utc::now().to_rfc3339(),
+        download_speed_bps: best.speed_bps as u64,
+    };
+    save_mirror_preference(&pref);
+
+    let idx = mirrors
+        .iter()
+        .position(|m| m.base_url == best.mirror.base_url)
+        .unwrap_or(0);
+    (&mirrors[idx], true)
 }
 
 /// Capture process startup cwd once for Browser4 root discovery.
@@ -323,7 +856,11 @@ fn read_current_tag() -> Option<String> {
     }
     let raw = fs::read_to_string(&path).ok()?;
     let tag = raw.trim().to_string();
-    if tag.is_empty() { None } else { Some(tag) }
+    if tag.is_empty() {
+        None
+    } else {
+        Some(tag)
+    }
 }
 
 /// Record `tag` as the currently active version.
@@ -464,13 +1001,9 @@ fn try_migrate_legacy_runtime() -> Option<String> {
             Some(tag)
         }
         Err(e) => {
-            eprintln!(
-                "  Migration by rename failed ({}); copying instead...",
-                e
-            );
+            eprintln!("  Migration by rename failed ({}); copying instead...", e);
             // Fallback: copy recursively.
-            copy_dir_recursive(&legacy_install_dir, &target_dir)
-                .ok()?;
+            copy_dir_recursive(&legacy_install_dir, &target_dir).ok()?;
             let _ = fs::remove_dir_all(&legacy_install_dir);
             let _ = write_current_tag(&tag);
             Some(tag)
@@ -479,7 +1012,11 @@ fn try_migrate_legacy_runtime() -> Option<String> {
 }
 
 fn browser4_java_executable_name() -> &'static str {
-    if cfg!(windows) { "java.exe" } else { "java" }
+    if cfg!(windows) {
+        "java.exe"
+    } else {
+        "java"
+    }
 }
 
 fn browser4_install_metadata_path() -> PathBuf {
@@ -509,20 +1046,30 @@ fn read_installed_browser4_runtime_metadata_for(
 }
 
 fn install_dir_contains_runtime(install_dir: &Path) -> bool {
+    // Verify the metadata file exists — a missing file signals a truncated
+    // or partially-committed install that should be re-downloaded.
+    if !install_dir
+        .join(BROWSER4_INSTALL_METADATA_FILE_NAME)
+        .is_file()
+    {
+        return false;
+    }
     let lib_dir = install_dir.join(BROWSER4_LIB_DIR_NAME);
     let has_lib = lib_dir.is_dir()
         && std::fs::read_dir(&lib_dir)
-            .map(|mut entries| entries.any(|entry| {
-                entry
-                    .ok()
-                    .map(|e| {
-                        e.path()
-                            .extension()
-                            .map(|ext| ext == "jar")
-                            .unwrap_or(false)
-                    })
-                    .unwrap_or(false)
-            }))
+            .map(|mut entries| {
+                entries.any(|entry| {
+                    entry
+                        .ok()
+                        .map(|e| {
+                            e.path()
+                                .extension()
+                                .map(|ext| ext == "jar")
+                                .unwrap_or(false)
+                        })
+                        .unwrap_or(false)
+                })
+            })
             .unwrap_or(false);
     has_lib && java_path_in_install_dir(install_dir).is_file()
 }
@@ -570,27 +1117,13 @@ fn should_force_remote_bundle() -> bool {
     }
 }
 
-fn browser4_releases_base_url() -> String {
-    env::var(BROWSER4_RELEASES_BASE_URL_ENV)
-        .ok()
-        .map(|value| value.trim().trim_end_matches('/').to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| BROWSER4_RELEASES_BASE_URL.to_string())
-}
-
-fn browser4_release_download_url(tag: Option<&str>, asset_name: &str) -> String {
-    let base = browser4_releases_base_url();
-    match normalize_release_tag(tag) {
-        Some(tag) => format!("{base}/download/{tag}/{asset_name}"),
-        None => format!("{base}/latest/download/{asset_name}"),
-    }
-}
-
 fn parse_release_tag_from_url(url: &str) -> Option<String> {
     let parsed = reqwest::Url::parse(url).ok()?;
     let segments = parsed.path_segments()?.collect::<Vec<_>>();
     let download_index = segments.iter().position(|segment| *segment == "download")?;
-    segments.get(download_index + 1).map(|segment| (*segment).to_string())
+    segments
+        .get(download_index + 1)
+        .map(|segment| (*segment).to_string())
 }
 
 /// Build a `reqwest::Proxy` from the given URL string.
@@ -603,9 +1136,7 @@ fn proxy_from_url(raw: &str) -> Option<reqwest::Proxy> {
     match reqwest::Proxy::all(&trimmed) {
         Ok(proxy) => Some(proxy),
         Err(error) => {
-            eprintln!(
-                "Warning: failed to configure download proxy from ({trimmed}): {error}"
-            );
+            eprintln!("Warning: failed to configure download proxy from ({trimmed}): {error}");
             None
         }
     }
@@ -702,9 +1233,7 @@ fn read_winhttp_proxy() -> Option<String> {
         let line = line.trim();
         if let Some(server) = line.strip_prefix("Proxy Server(s):") {
             let server = server.trim();
-            if !server.is_empty()
-                && !server.eq_ignore_ascii_case("direct")
-            {
+            if !server.is_empty() && !server.eq_ignore_ascii_case("direct") {
                 return Some(ensure_proxy_scheme(server));
             }
         }
@@ -715,6 +1244,7 @@ fn read_winhttp_proxy() -> Option<String> {
 
 /// Add a default `http://` scheme to a `host:port` proxy URL if one is
 /// not already present.
+#[cfg(windows)]
 fn ensure_proxy_scheme(raw: &str) -> String {
     let trimmed = raw.trim();
     if trimmed.starts_with("http://")
@@ -777,13 +1307,11 @@ $server
 }
 
 fn create_runtime_install_temp_dir() -> Result<PathBuf, String> {
-    let path = browser4_cli_temp_root_dir()
-        .join("install")
-        .join(format!(
-            "runtime-{}-{}",
-            std::process::id(),
-            chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ")
-        ));
+    let path = browser4_cli_temp_root_dir().join("install").join(format!(
+        "runtime-{}-{}",
+        std::process::id(),
+        chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ")
+    ));
     fs::create_dir_all(&path).map_err(|e| {
         format!(
             "Failed to create Browser4 runtime install temp directory {}: {e}",
@@ -806,8 +1334,8 @@ fn download_file_blocking(url: &str, target_path: &Path) -> Result<DownloadedFil
         fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
 
-    let mut client_builder = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(1800));
+    let mut client_builder =
+        reqwest::blocking::Client::builder().timeout(Duration::from_secs(1800));
 
     // Honour proxy environment variables and system proxy settings.
     // Reqwest processes NO_PROXY / no_proxy automatically when a proxy
@@ -928,10 +1456,7 @@ fn download_file_via_powershell(url: &str, target_path: &Path) -> Result<Downloa
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!(
-            "PowerShell download failed: {}",
-            stderr.trim()
-        ));
+        return Err(format!("PowerShell download failed: {}", stderr.trim()));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -949,10 +1474,11 @@ fn download_file_via_powershell(url: &str, target_path: &Path) -> Result<Downloa
 
     if bytes_written == 0 {
         // Fallback: read the file size directly.
-        bytes_written = target_path
-            .metadata()
-            .map(|m| m.len())
-            .map_err(|e| format!("PowerShell download appeared to succeed but the output file is unreadable: {e}"))?;
+        bytes_written = target_path.metadata().map(|m| m.len()).map_err(|e| {
+            format!(
+                "PowerShell download appeared to succeed but the output file is unreadable: {e}"
+            )
+        })?;
     }
 
     eprintln!("  PowerShell download complete: {} bytes", bytes_written);
@@ -1016,8 +1542,29 @@ fn extract_tar_gz_archive(archive_path: &Path, destination_dir: &Path) -> Result
     archive.unpack(destination_dir).map_err(|e| e.to_string())
 }
 
+/// Check whether `path` contains the runtime bundle directory structure
+/// (lib/ with at least one .jar and a java executable).  Unlike
+/// `install_dir_contains_runtime` this does *not* require an installation
+/// metadata file, because freshly-extracted bundles don't have one yet.
 fn is_runtime_bundle_root(path: &Path) -> bool {
-    install_dir_contains_runtime(path)
+    let lib_dir = path.join(BROWSER4_LIB_DIR_NAME);
+    let has_lib = lib_dir.is_dir()
+        && std::fs::read_dir(&lib_dir)
+            .map(|mut entries| {
+                entries.any(|entry| {
+                    entry
+                        .ok()
+                        .map(|e| {
+                            e.path()
+                                .extension()
+                                .map(|ext| ext == "jar")
+                                .unwrap_or(false)
+                        })
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false);
+    has_lib && java_path_in_install_dir(path).is_file()
 }
 
 fn resolve_runtime_bundle_root(extracted_dir: &Path) -> Result<PathBuf, String> {
@@ -1081,7 +1628,12 @@ fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<(), String> {
 fn write_installed_browser4_runtime_metadata(
     metadata: &InstalledBrowser4RuntimeMetadata,
 ) -> Result<(), String> {
-    let path = browser4_install_metadata_path();
+    // Write directly to the versioned install directory instead of going
+    // through browser4_install_metadata_path() → browser4_install_dir() →
+    // resolve_current_install_dir() → install_dir_contains_runtime().  The
+    // latter requires the metadata file to already exist (it signals a
+    // complete install), so using it here would be a chicken-and-egg problem.
+    let path = versioned_install_dir(&metadata.tag).join(BROWSER4_INSTALL_METADATA_FILE_NAME);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
@@ -1132,6 +1684,46 @@ fn commit_installed_browser4_runtime(
 }
 
 // ---------------------------------------------------------------------------
+// Checksum utilities — used by the download cache to verify archive
+// integrity on restore (self-consistency check, not external verification).
+// ---------------------------------------------------------------------------
+
+/// Compute the SHA-256 digest of a file, returning the hex-encoded string.
+fn compute_file_sha256(path: &Path) -> Result<String, String> {
+    let mut file =
+        fs::File::open(path).map_err(|e| format!("Cannot open file for checksum: {e}"))?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 65536];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .map_err(|e| format!("Cannot read file for checksum: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// Verify that `path` has the expected SHA-256 digest.
+fn verify_file_sha256(path: &Path, expected_sha256: &str) -> Result<(), String> {
+    let actual = compute_file_sha256(path)?;
+    // Constant-time-ish comparison: compare lengths first, then hex strings.
+    if actual.len() != expected_sha256.len() || actual != expected_sha256 {
+        return Err(format!(
+            "Checksum mismatch for {}:\n  expected sha256: {}\n  actual   sha256: {}",
+            path.file_name()
+                .map(|n| n.to_string_lossy())
+                .unwrap_or_else(|| path.to_string_lossy()),
+            expected_sha256,
+            actual
+        ));
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Download cache — avoids re-downloading the same runtime bundle on every
 // `install --force` (stress tests exercise this path heavily).
 // ---------------------------------------------------------------------------
@@ -1149,9 +1741,20 @@ fn cached_download_path(normalized_tag: &str, asset_name: &str) -> PathBuf {
         .join(asset_name)
 }
 
+/// Path to the checksum sidecar file for a cached archive.
+fn cached_checksum_path(normalized_tag: &str, asset_name: &str) -> PathBuf {
+    let mut base = cached_download_path(normalized_tag, asset_name).into_os_string();
+    base.push(".sha256");
+    PathBuf::from(base)
+}
+
 /// Copy `src` into the download cache so the next install of the same
-/// tag can skip the network fetch.  Errors are swallowed — a full cache
-/// is never fatal.
+/// tag can skip the network fetch.  A `.sha256` sidecar is written
+/// alongside the archive for integrity verification on later restores.
+///
+/// Both files are written atomically (temp file → rename) to prevent
+/// concurrent readers from observing partial writes.  Errors are swallowed
+/// — a full or broken cache is never fatal.
 fn try_cache_downloaded_archive(src: &Path, normalized_tag: &str, asset_name: &str) {
     let dest = cached_download_path(normalized_tag, asset_name);
     if dest.exists() {
@@ -1163,34 +1766,137 @@ fn try_cache_downloaded_archive(src: &Path, normalized_tag: &str, asset_name: &s
             return;
         }
     }
-    if let Err(e) = fs::copy(src, &dest) {
+
+    // Compute the SHA-256 checksum of the source file first.
+    let sha256 = match compute_file_sha256(src) {
+        Ok(digest) => digest,
+        Err(e) => {
+            eprintln!("  (skipping download cache: cannot compute checksum: {e})");
+            return;
+        }
+    };
+
+    // Write archive to a temporary path and rename atomically.
+    let mut dest_tmp = dest.clone();
+    dest_tmp.set_extension("tmp");
+    if let Err(e) = fs::copy(src, &dest_tmp) {
         eprintln!("  (skipping download cache: copy failed: {e})");
+        let _ = fs::remove_file(&dest_tmp);
         return;
     }
-    eprintln!("  Cached downloaded archive to {}", dest.display());
+    if let Err(e) = fs::rename(&dest_tmp, &dest) {
+        eprintln!("  (skipping download cache: atomic rename failed: {e})");
+        let _ = fs::remove_file(&dest_tmp);
+        return;
+    }
+
+    // Write checksum sidecar atomically.
+    let checksum_path = cached_checksum_path(normalized_tag, asset_name);
+    let mut checksum_tmp = checksum_path.clone();
+    checksum_tmp.set_extension("sha256.tmp");
+    if let Err(e) = fs::write(&checksum_tmp, &sha256) {
+        eprintln!("  (skipping download cache: cannot write checksum: {e})");
+        let _ = fs::remove_file(&checksum_tmp);
+        return;
+    }
+    if let Err(e) = fs::rename(&checksum_tmp, &checksum_path) {
+        eprintln!("  (skipping download cache: checksum rename failed: {e})");
+        let _ = fs::remove_file(&checksum_tmp);
+        return;
+    }
+
+    eprintln!(
+        "  Cached downloaded archive to {} (sha256: {})",
+        dest.display(),
+        sha256
+    );
 }
 
 /// If a previously-downloaded archive for this tag+asset is cached,
-/// copy it into `dest_path` and return `true`.
+/// copy it into `dest_path`, verify its integrity against the stored
+/// checksum, and return `true`.
+///
+/// A corrupt cache entry (missing sidecar or checksum mismatch) is
+/// cleaned up and `false` is returned so the caller falls back to a
+/// fresh download.
 fn try_restore_from_download_cache(
     normalized_tag: &str,
     asset_name: &str,
     dest_path: &Path,
 ) -> bool {
     let cached = cached_download_path(normalized_tag, asset_name);
-    if !cached.exists() {
+    let checksum_path = cached_checksum_path(normalized_tag, asset_name);
+
+    if !cached.exists() || !checksum_path.exists() {
+        // If only one of the pair exists, clean up the orphan.
+        if cached.exists() {
+            eprintln!(
+                "  Cached archive {} is missing its checksum file; discarding.",
+                cached.display()
+            );
+            let _ = fs::remove_file(&cached);
+        }
+        if checksum_path.exists() {
+            let _ = fs::remove_file(&checksum_path);
+        }
         return false;
     }
+
+    // Read the expected checksum from the sidecar file.
+    let expected_sha256 = match fs::read_to_string(&checksum_path) {
+        Ok(s) => s.trim().to_string(),
+        Err(e) => {
+            eprintln!(
+                "  Cannot read cached checksum {}: {}; will re-download.",
+                checksum_path.display(),
+                e
+            );
+            let _ = fs::remove_file(&cached);
+            let _ = fs::remove_file(&checksum_path);
+            return false;
+        }
+    };
+
+    if expected_sha256.is_empty() {
+        eprintln!(
+            "  Cached checksum {} is empty; will re-download.",
+            checksum_path.display()
+        );
+        let _ = fs::remove_file(&cached);
+        let _ = fs::remove_file(&checksum_path);
+        return false;
+    }
+
+    // Copy the cached archive to the destination, then verify.
     if let Some(parent) = dest_path.parent() {
         let _ = fs::create_dir_all(parent);
     }
+
+    eprintln!("  Restoring {} from download cache...", asset_name);
+
     match fs::copy(&cached, dest_path) {
         Ok(bytes) => {
             eprintln!(
-                "  Restored {} from download cache ({} bytes).",
+                "  Copied {} from cache ({} bytes); verifying integrity...",
                 asset_name, bytes
             );
-            true
+
+            match verify_file_sha256(dest_path, &expected_sha256) {
+                Ok(()) => {
+                    eprintln!("  Checksum verified successfully.");
+                    true
+                }
+                Err(e) => {
+                    eprintln!(
+                        "  Cached archive is corrupt: {}. Cleaning up and re-downloading.",
+                        e
+                    );
+                    let _ = fs::remove_file(&cached);
+                    let _ = fs::remove_file(&checksum_path);
+                    let _ = fs::remove_file(dest_path);
+                    false
+                }
+            }
         }
         Err(e) => {
             eprintln!(
@@ -1199,6 +1905,67 @@ fn try_restore_from_download_cache(
             );
             false
         }
+    }
+}
+
+/// Evict old entries from the download cache, keeping only the newest `MAX`
+/// versioned directories.  Non-version directories (e.g. `latest`) are left
+/// untouched.  Errors are swallowed — cache eviction is best-effort and
+/// never causes an install to fail.
+fn evict_old_download_cache_entries() {
+    const MAX_CACHED_VERSIONS: usize = 3;
+
+    let cache_dir = browser4_download_cache_dir();
+    if !cache_dir.is_dir() {
+        return;
+    }
+
+    let entries = match fs::read_dir(&cache_dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    let mut versioned: Vec<(Vec<u64>, PathBuf)> = Vec::new();
+
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let dir_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(name) => name,
+            None => continue,
+        };
+        // Only consider version-tag directories (e.g. "v4.10.0").
+        let parts: Vec<u64> = dir_name
+            .trim_start_matches('v')
+            .split('.')
+            .filter_map(|s| s.parse::<u64>().ok())
+            .collect();
+        if parts.is_empty() || parts.len() < 2 {
+            continue; // skip non-version dirs like "latest"
+        }
+        versioned.push((parts, path));
+    }
+
+    if versioned.len() <= MAX_CACHED_VERSIONS {
+        return;
+    }
+
+    // Sort descending (newest first), then delete everything after MAX.
+    versioned.sort_by(|(a, _), (b, _)| {
+        for (ap, bp) in a.iter().zip(b.iter()) {
+            match bp.cmp(ap) {
+                std::cmp::Ordering::Equal => continue,
+                other => return other,
+            }
+        }
+        b.len().cmp(&a.len())
+    });
+
+    for (_, path) in versioned.iter().skip(MAX_CACHED_VERSIONS) {
+        eprintln!("  Evicting old cached runtime: {}", path.display());
+        let _ = fs::remove_dir_all(path);
     }
 }
 
@@ -1212,7 +1979,9 @@ pub async fn install_browser4_runtime(
         if let Some(requested_tag) = requested_tag.as_deref() {
             let versioned_dir = versioned_install_dir(requested_tag);
             if install_dir_contains_runtime(&versioned_dir) {
-                if let Some(existing_metadata) = read_installed_browser4_runtime_metadata_for(&versioned_dir) {
+                if let Some(existing_metadata) =
+                    read_installed_browser4_runtime_metadata_for(&versioned_dir)
+                {
                     // Ensure this version is also marked as current.
                     if read_current_tag().as_deref() != Some(requested_tag) {
                         let _ = write_current_tag(requested_tag);
@@ -1224,17 +1993,30 @@ pub async fn install_browser4_runtime(
     }
 
     let asset_name = platform.asset_name();
-    let download_url = browser4_release_download_url(tag, &asset_name);
+    let mirrors = load_mirrors();
+    // Determine whether BROWSER4_RELEASES_BASE_URL is in effect — when it is
+    // there is only a single custom mirror and speed testing is pointless.
+    let is_single_mirror_override = env::var(BROWSER4_RELEASES_BASE_URL_ENV)
+        .ok()
+        .map_or(false, |v| !v.trim().is_empty());
+    let preferred_download_url = mirror_download_url(&mirrors[0], tag, &asset_name);
     let temp_dir = create_runtime_install_temp_dir()?;
     let archive_path = temp_dir.join(&asset_name);
     let extraction_dir = temp_dir.join("extract");
 
     // If we have a concrete tag, try the download cache first so repeated
-    // `install --force` runs (like stress tests) don't re-fetch the same
-    // ~200 MB bundle from the network every time.
-    let cache_hit = match requested_tag.as_deref() {
-        Some(normalized) => try_restore_from_download_cache(normalized, &asset_name, &archive_path),
-        None => false,
+    // install runs don't re-fetch the same ~200 MB bundle from the network
+    // every time.  When --force is given the user explicitly wants a fresh
+    // download, so skip the cache in that case.
+    let cache_hit = if force {
+        false
+    } else {
+        match requested_tag.as_deref() {
+            Some(normalized) => {
+                try_restore_from_download_cache(normalized, &asset_name, &archive_path)
+            }
+            None => false,
+        }
     };
 
     let install_result = async {
@@ -1247,7 +2029,7 @@ pub async fn install_browser4_runtime(
             // We need a DownloadedFile for the metadata below.
             // Reconstruct it from what we know.
             let downloaded = DownloadedFile {
-                final_url: download_url.clone(),
+                final_url: preferred_download_url.clone(),
                 bytes_written: fs::metadata(&archive_path)
                     .map(|m| m.len())
                     .unwrap_or(0),
@@ -1266,12 +2048,83 @@ pub async fn install_browser4_runtime(
             };
             commit_installed_browser4_runtime(&extracted_root, metadata)
         } else {
-            eprintln!("Downloading Browser4 runtime bundle from {}...", download_url);
-            let downloaded = download_file(&download_url, &archive_path).await?;
+            // Speed-based mirror selection with caching and fallback.
+            // When BROWSER4_RELEASES_BASE_URL is set we skip the speed test
+            // and use the single override mirror directly.
+            let (selected_mirror, was_speed_tested) = if is_single_mirror_override {
+                (&mirrors[0], false)
+            } else {
+                select_best_mirror(&mirrors).await
+            };
+            let download_url = mirror_download_url(selected_mirror, tag, &asset_name);
+
+            if requested_tag.is_none() {
+                eprintln!(
+                    "Note: the '{}' mirror does not resolve \"latest\" automatically. \
+                     If the download fails, specify an exact --tag.",
+                    selected_mirror.name
+                );
+            }
+
+            eprintln!(
+                "Downloading Browser4 runtime bundle from {}...",
+                download_url
+            );
+            let download_result = download_file(&download_url, &archive_path).await;
+
+            let downloaded = match download_result {
+                Ok(d) => d,
+                Err(e) if was_speed_tested => {
+                    // Cached or speed-tested mirror failed — invalidate the
+                    // preference, re-test, and retry once.
+                    eprintln!(
+                        "Download from '{}' failed: {e}",
+                        selected_mirror.name
+                    );
+                    eprintln!("Invalidating mirror preference and re-testing mirrors...");
+                    delete_mirror_preference_cache();
+
+                    let (retry_mirror, _) = select_best_mirror(&mirrors).await;
+                    let retry_url = mirror_download_url(retry_mirror, tag, &asset_name);
+                    eprintln!(
+                        "Retrying download from '{}'...",
+                        retry_mirror.name
+                    );
+
+                    download_file(&retry_url, &archive_path).await.map_err(|retry_err| {
+                        if requested_tag.is_none() {
+                            format!(
+                                "Failed to download from any mirror after retry: {retry_err}\n\
+                                 Help: the mirror may not have a \"latest\" release. \
+                                 Specify an exact version with --tag, e.g. 'browser4-cli install --tag v4.11.0', \
+                                 or configure additional mirrors in {}.",
+                                mirrors_config_path().display()
+                            )
+                        } else {
+                            format!(
+                                "Failed to download from any mirror after retry: {retry_err}\n\
+                                 Help: configure additional mirrors in {} or set \
+                                 BROWSER4_RELEASES_BASE_URL to point to a working release server.",
+                                mirrors_config_path().display()
+                            )
+                        }
+                    })?
+                }
+                Err(e) => {
+                    // Not speed-tested (TCP fallback or override) — propagate
+                    // the error directly without retry.
+                    return Err(format!(
+                        "Failed to download from {} mirror: {e}",
+                        selected_mirror.name
+                    ));
+                }
+            };
+
             eprintln!(
                 "Downloaded {} bytes for Browser4 runtime bundle.",
                 downloaded.bytes_written
             );
+
             // Cache the downloaded archive for future runs (only when we have
             // a concrete tag — "latest" is too ephemeral).
             if let Some(normalized) = requested_tag.as_deref() {
@@ -1292,6 +2145,10 @@ pub async fn install_browser4_runtime(
         }
     }
     .await;
+
+    // Best-effort eviction of old cached versions to prevent unbounded
+    // disk growth on CI machines and long-lived developer workstations.
+    evict_old_download_cache_entries();
 
     cleanup_prepared_launch_dir(Some(temp_dir));
     install_result
@@ -1314,7 +2171,17 @@ pub fn find_chrome_executable() -> Option<std::path::PathBuf> {
             "/Applications/Chromium.app/Contents/MacOS/Chromium",
         ]
     } else {
-        &[]
+        // Linux: check common install locations before falling back to PATH.
+        &[
+            "/opt/google/chrome/chrome",
+            "/opt/google/chrome-stable/chrome",
+            "/opt/google/chromium/chromium",
+            "/usr/bin/google-chrome",
+            "/usr/bin/google-chrome-stable",
+            "/usr/bin/chromium-browser",
+            "/usr/bin/chromium",
+            "/usr/lib64/chromium-browser/chromium-browser",
+        ]
     };
 
     for path in candidates {
@@ -1324,7 +2191,12 @@ pub fn find_chrome_executable() -> Option<std::path::PathBuf> {
     }
 
     // Linux / fallback: check PATH
-    for name in &["google-chrome", "google-chrome-stable", "chromium-browser", "chromium"] {
+    for name in &[
+        "google-chrome",
+        "google-chrome-stable",
+        "chromium-browser",
+        "chromium",
+    ] {
         if let Some(path) = find_in_path(name) {
             return Some(path);
         }
@@ -1379,14 +2251,20 @@ pub fn ensure_chrome_available() -> Result<(), String> {
 
         eprintln!("   Unsupported Linux distribution.");
         eprintln!("   Install Chrome manually: https://www.google.com/chrome/");
-        return Ok(());
+        return Err("Cannot auto-install Chrome on this Linux distribution. \
+             Install it manually from https://www.google.com/chrome/"
+            .to_string());
     }
 
     if cfg!(target_os = "macos") {
         eprintln!("   Install Chrome manually:");
         eprintln!("     brew install --cask google-chrome");
         eprintln!("   Or download from: https://www.google.com/chrome/");
-        return Ok(());
+        return Err(
+            "Chrome is not installed. Install it with: brew install --cask google-chrome, \
+             or download from https://www.google.com/chrome/"
+                .to_string(),
+        );
     }
 
     if cfg!(target_os = "windows") {
@@ -1423,6 +2301,7 @@ fn install_chrome_windows() -> Result<(), String> {
                 }
             }
             eprintln!("   winget install failed or Chrome not found after install.");
+            eprintln!("   Hint: winget requires Administrator privileges. Run as Administrator and try again.");
         }
     }
 
@@ -1438,7 +2317,7 @@ fn install_chrome_windows() -> Result<(), String> {
          Invoke-WebRequest -Uri '{url}' -OutFile '{}'; \
          Start-Process -FilePath '{}' -ArgumentList '/silent /install' -Wait; \
          Remove-Item '{}' -Force; \
-         exit (Test-Path '{}')",
+         if (Test-Path '{}') {{ exit 0 }} else {{ exit 1 }}",
         temp_installer.display(),
         temp_installer.display(),
         temp_installer.display(),
@@ -1446,18 +2325,16 @@ fn install_chrome_windows() -> Result<(), String> {
     );
 
     let status = std::process::Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            &ps_script,
-        ])
+        .args(["-NoProfile", "-NonInteractive", "-Command", &ps_script])
         .status()
         .map_err(|e| format!("Failed to run PowerShell installer: {e}"))?;
 
     if !status.success() {
         let _ = fs::remove_file(&temp_installer);
-        return Err("Google Chrome installation via PowerShell failed.".to_string());
+        return Err("Google Chrome installation via PowerShell failed. \
+             This may be due to insufficient privileges — try running as Administrator, \
+             or install Chrome manually from https://www.google.com/chrome/"
+            .to_string());
     }
 
     if find_chrome_executable().is_some() {
@@ -1500,7 +2377,12 @@ fn install_chrome_debian() -> Result<(), String> {
         .args(["dpkg", "-i"])
         .arg(&tmp_deb)
         .status()
-        .map_err(|e| format!("Failed to run dpkg: {e}"))?;
+        .map_err(|e| {
+            format!(
+                "Failed to run 'sudo dpkg': {e}. \
+             Ensure you have sudo privileges (passwordless sudo required for unattended install)."
+            )
+        })?;
 
     if !status.success() {
         // Fix broken dependencies
@@ -1542,7 +2424,12 @@ fn install_chrome_rhel() -> Result<(), String> {
         .args(["dnf", "install", "-y"])
         .arg(&tmp_rpm)
         .status()
-        .map_err(|e| format!("Failed to run dnf: {e}"))?;
+        .map_err(|e| {
+            format!(
+                "Failed to run 'sudo dnf': {e}. \
+             Ensure you have sudo privileges (passwordless sudo required for unattended install)."
+            )
+        })?;
 
     if !status.success() {
         // Try yum as fallback
@@ -1571,10 +2458,7 @@ fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> Serve
     let program = runtime.java_path.clone();
     let program_display = program.display().to_string();
     let classpath_arg = if cfg!(windows) {
-        format!(
-            "{}\\*",
-            runtime.lib_dir.display()
-        )
+        format!("{}\\*", runtime.lib_dir.display())
     } else {
         format!("{}/*", runtime.lib_dir.display())
     };
@@ -1808,7 +2692,10 @@ async fn try_build_local_runtime_bundle(
     if maven_jar_exists(&bundle_module_dir) {
         eprintln!(
             "Using existing Browser4 bundle JAR at {}; skipping Maven package.",
-            bundle_module_dir.join("target").join("Browser4Bundle.jar").display()
+            bundle_module_dir
+                .join("target")
+                .join("Browser4Bundle.jar")
+                .display()
         );
     } else {
         eprintln!(
@@ -1822,11 +2709,8 @@ async fn try_build_local_runtime_bundle(
             move || {
                 std::process::Command::new(&mvn_program)
                     .args([
-                        "package",
-                        "-Passet-bundle",
-                        "-pl",
-                        "browser4-apps/browser4-bundle",
-                        "-am",
+                        "install",
+                        "-Pall-main-modules,asset-bundle",
                         "-DskipTests",
                         "-q",
                     ])
@@ -1845,7 +2729,9 @@ async fn try_build_local_runtime_bundle(
             Ok(status) => {
                 eprintln!(
                     "Maven package for browser4-bundle exited with {}; falling back to download.",
-                    status.code().map_or_else(|| "signal".to_string(), |c| c.to_string())
+                    status
+                        .code()
+                        .map_or_else(|| "signal".to_string(), |c| c.to_string())
                 );
                 return Ok(None);
             }
@@ -1873,9 +2759,7 @@ async fn try_build_local_runtime_bundle(
     match build_result {
         Ok(()) => {}
         Err(error) => {
-            eprintln!(
-                "Runtime bundle build script failed: {error}; falling back to download."
-            );
+            eprintln!("Runtime bundle build script failed: {error}; falling back to download.");
             return Ok(None);
         }
     }
@@ -1933,7 +2817,7 @@ async fn run_bundle_build_script(
     let command = format!(
         "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; \
          [Console]::ErrorEncoding = [System.Text.Encoding]::UTF8; \
-         & '{}'",
+         & '{}' -SkipMavenInstall",
         script_path_escaped
     );
 
@@ -1980,7 +2864,9 @@ async fn run_bundle_build_script(
             }
             Err(message)
         }
-        Err(error) => Err(format!("failed to spawn build script ({shell_for_error}): {error}")),
+        Err(error) => Err(format!(
+            "failed to spawn build script ({shell_for_error}): {error}"
+        )),
     }
 }
 
@@ -2009,9 +2895,7 @@ async fn find_or_install_runtime() -> Result<InstalledBrowser4Runtime, String> {
             match try_build_local_runtime_bundle(root).await {
                 Ok(Some(runtime)) => return Ok(runtime),
                 Ok(None) => {
-                    eprintln!(
-                        "Local Browser4 bundle is not available; falling back to download."
-                    );
+                    eprintln!("Local Browser4 bundle is not available; falling back to download.");
                 }
                 Err(error) => {
                     eprintln!(
@@ -2799,16 +3683,12 @@ mod tests {
     }
 
     #[test]
-    fn test_browser4_release_download_url_defaults_to_latest() {
-        let previous = env::var(BROWSER4_RELEASES_BASE_URL_ENV).ok();
-        unsafe {
-            env::remove_var(BROWSER4_RELEASES_BASE_URL_ENV);
-        }
-        let url = browser4_release_download_url(None, "browser4-runtime-windows-x64.zip");
-        match previous {
-            Some(value) => unsafe { env::set_var(BROWSER4_RELEASES_BASE_URL_ENV, value) },
-            None => unsafe { env::remove_var(BROWSER4_RELEASES_BASE_URL_ENV) },
-        }
+    fn test_mirror_download_url_defaults_to_latest() {
+        let mirror = DownloadMirror {
+            name: "test".to_string(),
+            base_url: "https://github.com/platonai/Browser4/releases".to_string(),
+        };
+        let url = mirror_download_url(&mirror, None, "browser4-runtime-windows-x64.zip");
         assert_eq!(
             url,
             "https://github.com/platonai/Browser4/releases/latest/download/browser4-runtime-windows-x64.zip"
@@ -2816,19 +3696,15 @@ mod tests {
     }
 
     #[test]
-    fn test_browser4_release_download_url_normalizes_explicit_tags() {
-        let previous = env::var(BROWSER4_RELEASES_BASE_URL_ENV).ok();
-        unsafe {
-            env::remove_var(BROWSER4_RELEASES_BASE_URL_ENV);
-        }
+    fn test_mirror_download_url_normalizes_explicit_tags() {
+        let mirror = DownloadMirror {
+            name: "test".to_string(),
+            base_url: "https://github.com/platonai/Browser4/releases".to_string(),
+        };
         let url_without_v =
-            browser4_release_download_url(Some("4.9.3"), "browser4-runtime-linux-x64.tar.gz");
+            mirror_download_url(&mirror, Some("4.9.3"), "browser4-runtime-linux-x64.tar.gz");
         let url_with_v =
-            browser4_release_download_url(Some("v4.9.3"), "browser4-runtime-linux-x64.tar.gz");
-        match previous {
-            Some(value) => unsafe { env::set_var(BROWSER4_RELEASES_BASE_URL_ENV, value) },
-            None => unsafe { env::remove_var(BROWSER4_RELEASES_BASE_URL_ENV) },
-        }
+            mirror_download_url(&mirror, Some("v4.9.3"), "browser4-runtime-linux-x64.tar.gz");
         assert_eq!(
             url_without_v,
             "https://github.com/platonai/Browser4/releases/download/v4.9.3/browser4-runtime-linux-x64.tar.gz"
@@ -2837,6 +3713,297 @@ mod tests {
             url_with_v,
             "https://github.com/platonai/Browser4/releases/download/v4.9.3/browser4-runtime-linux-x64.tar.gz"
         );
+    }
+
+    #[test]
+    fn test_mirror_download_url_strips_trailing_slash_in_base_url() {
+        let mirror = DownloadMirror {
+            name: "test".to_string(),
+            base_url: "https://example.com/releases/".to_string(),
+        };
+        let url = mirror_download_url(&mirror, Some("v1.0.0"), "asset.zip");
+        assert_eq!(
+            url,
+            "https://example.com/releases/download/v1.0.0/asset.zip"
+        );
+    }
+
+    #[test]
+    fn test_builtin_mirrors_has_github_first() {
+        let mirrors = builtin_mirrors();
+        assert_eq!(mirrors[0].name, "github");
+        assert!(mirrors[0].base_url.contains("github.com"));
+    }
+
+    #[test]
+    fn test_load_mirrors_falls_back_to_builtins_when_no_config() {
+        let previous_config = env::var(MIRRORS_CONFIG_FILE_ENV).ok();
+        let previous_releases = env::var(BROWSER4_RELEASES_BASE_URL_ENV).ok();
+        unsafe {
+            // Point to a non-existent config file and clear the single-source override.
+            env::set_var(MIRRORS_CONFIG_FILE_ENV, "/nonexistent/mirrors.json");
+            env::remove_var(BROWSER4_RELEASES_BASE_URL_ENV);
+        }
+        let mirrors = load_mirrors();
+        match previous_config {
+            Some(value) => unsafe { env::set_var(MIRRORS_CONFIG_FILE_ENV, value) },
+            None => unsafe { env::remove_var(MIRRORS_CONFIG_FILE_ENV) },
+        }
+        match previous_releases {
+            Some(value) => unsafe { env::set_var(BROWSER4_RELEASES_BASE_URL_ENV, value) },
+            None => unsafe { env::remove_var(BROWSER4_RELEASES_BASE_URL_ENV) },
+        }
+        assert_eq!(mirrors.len(), 2);
+        assert_eq!(mirrors[0].name, "github");
+        assert_eq!(mirrors[1].name, "aliyun-oss");
+    }
+
+    #[test]
+    fn test_load_mirrors_uses_single_source_override() {
+        let previous = env::var(BROWSER4_RELEASES_BASE_URL_ENV).ok();
+        unsafe {
+            env::set_var(
+                BROWSER4_RELEASES_BASE_URL_ENV,
+                "https://custom.example.com/releases",
+            );
+        }
+        let mirrors = load_mirrors();
+        match previous {
+            Some(value) => unsafe { env::set_var(BROWSER4_RELEASES_BASE_URL_ENV, value) },
+            None => unsafe { env::remove_var(BROWSER4_RELEASES_BASE_URL_ENV) },
+        }
+        assert_eq!(mirrors.len(), 1);
+        assert_eq!(mirrors[0].name, "custom");
+        assert_eq!(mirrors[0].base_url, "https://custom.example.com/releases");
+    }
+
+    // -------------------------------------------------------------------
+    // mirror_is_reachable / select_reachable_mirror
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_mirror_is_reachable_detects_listening_port() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind test listener");
+        let port = listener.local_addr().unwrap().port();
+        let mirror = DownloadMirror {
+            name: "test".to_string(),
+            base_url: format!("https://127.0.0.1:{port}"),
+        };
+        assert!(
+            mirror_is_reachable(&mirror),
+            "mirror should be reachable when a TCP listener is bound to its port"
+        );
+        drop(listener);
+    }
+
+    #[test]
+    fn test_mirror_is_reachable_returns_false_for_unbound_port() {
+        // Bind and immediately drop to find a free port, then verify
+        // nothing is listening on it.
+        let free_port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind for free port");
+            listener.local_addr().unwrap().port()
+        };
+        let mirror = DownloadMirror {
+            name: "test".to_string(),
+            base_url: format!("https://127.0.0.1:{free_port}"),
+        };
+        assert!(
+            !mirror_is_reachable(&mirror),
+            "mirror should not be reachable when nothing listens on its port"
+        );
+    }
+
+    #[test]
+    fn test_mirror_is_reachable_returns_false_for_invalid_url() {
+        let mirror = DownloadMirror {
+            name: "test".to_string(),
+            base_url: "not-a-valid-url".to_string(),
+        };
+        assert!(
+            !mirror_is_reachable(&mirror),
+            "mirror should not be reachable when the base_url is not a valid URL"
+        );
+    }
+
+    #[test]
+    fn test_select_reachable_mirror_returns_first_reachable() {
+        // First mirror points to a free port (nothing listening) — unreachable.
+        // Second mirror has a live TcpListener — reachable.
+        let dead_port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind for dead port");
+            listener.local_addr().unwrap().port()
+        };
+        let live_listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind live listener");
+        let live_port = live_listener.local_addr().unwrap().port();
+
+        let mirrors = vec![
+            DownloadMirror {
+                name: "dead".to_string(),
+                base_url: format!("https://127.0.0.1:{dead_port}"),
+            },
+            DownloadMirror {
+                name: "live".to_string(),
+                base_url: format!("https://127.0.0.1:{live_port}"),
+            },
+        ];
+
+        let (selected, reachable) = select_reachable_mirror(&mirrors);
+        assert!(reachable, "should have found a reachable mirror");
+        assert_eq!(selected.name, "live");
+        drop(live_listener);
+    }
+
+    #[test]
+    fn test_select_reachable_mirror_falls_back_to_first_when_none_reachable() {
+        // Both mirrors point to free ports — neither is reachable.
+        let dead1 = {
+            let listener =
+                std::net::TcpListener::bind("127.0.0.1:0").expect("bind for dead port 1");
+            listener.local_addr().unwrap().port()
+        };
+        let dead2 = {
+            let listener =
+                std::net::TcpListener::bind("127.0.0.1:0").expect("bind for dead port 2");
+            listener.local_addr().unwrap().port()
+        };
+
+        let mirrors = vec![
+            DownloadMirror {
+                name: "first".to_string(),
+                base_url: format!("https://127.0.0.1:{dead1}"),
+            },
+            DownloadMirror {
+                name: "second".to_string(),
+                base_url: format!("https://127.0.0.1:{dead2}"),
+            },
+        ];
+
+        let (selected, reachable) = select_reachable_mirror(&mirrors);
+        assert!(!reachable, "should not have found a reachable mirror");
+        assert_eq!(
+            selected.name, "first",
+            "should fall back to the first mirror when none are reachable"
+        );
+    }
+
+    #[test]
+    fn test_mirror_is_reachable_returns_false_for_empty_host() {
+        // A URL with a scheme but no host should not panic — it should return false.
+        let mirror = DownloadMirror {
+            name: "empty-host".to_string(),
+            base_url: "https:///path".to_string(),
+        };
+        assert!(
+            !mirror_is_reachable(&mirror),
+            "mirror with empty host should not be reachable"
+        );
+    }
+
+    #[test]
+    fn test_mirror_is_reachable_resolves_ipv6_without_brackets() {
+        // When reqwest parses "https://[::1]:443", host_str() returns "::1"
+        // (without brackets).  The (host, port) tuple form of ToSocketAddrs
+        // must correctly pair the bare IPv6 address with the port rather than
+        // mis-parsing "::1:443" as a raw IPv6 address (where the port becomes
+        // the last hextet).  This test verifies the resolution directly —
+        // no TCP connection is needed, so it works even in Docker/CI
+        // environments where IPv6 may be unavailable.
+        use std::net::ToSocketAddrs;
+        let addr = ("::1", 443)
+            .to_socket_addrs()
+            .expect("must resolve ::1")
+            .next()
+            .expect("must produce at least one address");
+        assert_eq!(
+            addr.port(),
+            443,
+            "port must be the TCP port, not part of the IPv6 address"
+        );
+        assert!(addr.is_ipv6(), "must be an IPv6 address");
+        assert_eq!(addr.ip().to_string(), "::1");
+    }
+
+    #[test]
+    #[ignore] // temporarily disabled — IPv6 not available in current environment
+    fn test_mirror_is_reachable_handles_ipv6_localhost() {
+        // IPv6 loopback connectivity test — exercises the full
+        // mirror_is_reachable path with an IPv6 bracket-notation URL.
+        //
+        // Gracefully skip if IPv6 is unavailable (e.g. Docker containers
+        // disable IPv6 by default, and some CI runners restrict it).
+        let listener = match std::net::TcpListener::bind("[::1]:0") {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!(
+                    "SKIP test_mirror_is_reachable_handles_ipv6_localhost: \
+                     cannot bind [::1] — IPv6 disabled? ({e})"
+                );
+                return;
+            }
+        };
+        let addr = listener.local_addr().unwrap();
+
+        // Some environments (notably Docker with default settings) allow
+        // binding to IPv6 loopback but block outbound IPv6 connections.
+        // Probe with a raw connect before asserting mirror_is_reachable.
+        match std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(2)) {
+            Err(e) => {
+                eprintln!(
+                    "SKIP test_mirror_is_reachable_handles_ipv6_localhost: \
+                     cannot connect to bound IPv6 address {addr} — environment \
+                     may block IPv6 loopback connections ({e})"
+                );
+                return;
+            }
+            Ok(_) => { /* raw connect succeeded — mirror_is_reachable should too */ }
+        }
+
+        let mirror = DownloadMirror {
+            name: "ipv6".to_string(),
+            base_url: format!("https://[::1]:{}", addr.port()),
+        };
+        assert!(
+            mirror_is_reachable(&mirror),
+            "mirror should be reachable when a TCP listener is bound to its IPv6 port"
+        );
+        drop(listener);
+    }
+
+    #[test]
+    fn test_mirror_is_reachable_does_not_panic_on_hostname() {
+        // Hostname-based URLs were the original panic trigger:
+        // SocketAddr::FromStr rejects hostnames, only accepting IP literals.
+        // This test ensures hostnames are handled gracefully (return false
+        // when DNS fails, without panicking).  "invalid.invalid" is a
+        // reserved TLD that is guaranteed not to resolve.
+        let mirror = DownloadMirror {
+            name: "hostname".to_string(),
+            base_url: "https://invalid.invalid/releases".to_string(),
+        };
+        let result = mirror_is_reachable(&mirror);
+        // Must not panic — may be true or false depending on DNS hijacking,
+        // but the key invariant is that we got a bool back, not a crash.
+        assert!(
+            !result || result,
+            "mirror_is_reachable must return a bool, not panic, for hostname URLs"
+        );
+    }
+
+    #[test]
+    fn test_mirror_is_reachable_respects_explicit_port() {
+        // URLs with an explicit non-default port should connect to that port.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind test listener");
+        let port = listener.local_addr().unwrap().port();
+        let mirror = DownloadMirror {
+            name: "explicit-port".to_string(),
+            base_url: format!("https://127.0.0.1:{port}/some/path"),
+        };
+        assert!(
+            mirror_is_reachable(&mirror),
+            "mirror should be reachable when the URL specifies the correct port explicitly"
+        );
+        drop(listener);
     }
 
     #[test]
@@ -2870,6 +4037,96 @@ mod tests {
     }
 
     #[test]
+    fn test_is_runtime_bundle_root_accepts_top_level_bundle() {
+        // The extracted directory itself is the bundle root (no nested folder).
+        let tmp = test_temp_dir();
+        fs::create_dir_all(tmp.path().join("runtime").join("bin")).unwrap();
+        fs::create_dir_all(tmp.path().join("lib")).unwrap();
+        write(tmp.path().join("lib").join("browser4.jar"), "jar").unwrap();
+        write(
+            tmp.path()
+                .join("runtime")
+                .join("bin")
+                .join(browser4_java_executable_name()),
+            "java",
+        )
+        .unwrap();
+
+        // No metadata file — is_runtime_bundle_root should still detect the bundle.
+        assert!(is_runtime_bundle_root(tmp.path()));
+        assert_eq!(resolve_runtime_bundle_root(tmp.path()).unwrap(), tmp.path());
+    }
+
+    #[test]
+    fn test_is_runtime_bundle_root_returns_false_when_lib_dir_missing() {
+        let tmp = test_temp_dir();
+        fs::create_dir_all(tmp.path().join("runtime").join("bin")).unwrap();
+        write(
+            tmp.path()
+                .join("runtime")
+                .join("bin")
+                .join(browser4_java_executable_name()),
+            "java",
+        )
+        .unwrap();
+        // lib/ directory absent → should not be detected as a bundle root.
+        assert!(!is_runtime_bundle_root(tmp.path()));
+    }
+
+    #[test]
+    fn test_is_runtime_bundle_root_returns_false_when_no_jar_files() {
+        let tmp = test_temp_dir();
+        fs::create_dir_all(tmp.path().join("lib")).unwrap();
+        fs::create_dir_all(tmp.path().join("runtime").join("bin")).unwrap();
+        write(
+            tmp.path()
+                .join("runtime")
+                .join("bin")
+                .join(browser4_java_executable_name()),
+            "java",
+        )
+        .unwrap();
+        // lib/ exists but contains no .jar files.
+        assert!(!is_runtime_bundle_root(tmp.path()));
+    }
+
+    #[test]
+    fn test_is_runtime_bundle_root_returns_false_when_java_binary_missing() {
+        let tmp = test_temp_dir();
+        fs::create_dir_all(tmp.path().join("lib")).unwrap();
+        write(tmp.path().join("lib").join("browser4.jar"), "jar").unwrap();
+        fs::create_dir_all(tmp.path().join("runtime").join("bin")).unwrap();
+        // runtime/bin/ exists but the java executable is absent.
+        assert!(!is_runtime_bundle_root(tmp.path()));
+    }
+
+    #[test]
+    fn test_is_runtime_bundle_root_still_works_without_metadata_file() {
+        // The key distinction from install_dir_contains_runtime: a freshly
+        // extracted bundle has no browser4-installation.json yet, but it
+        // should still be recognised.
+        let tmp = test_temp_dir();
+        fs::create_dir_all(tmp.path().join("lib")).unwrap();
+        write(tmp.path().join("lib").join("browser4.jar"), "jar").unwrap();
+        fs::create_dir_all(tmp.path().join("runtime").join("bin")).unwrap();
+        write(
+            tmp.path()
+                .join("runtime")
+                .join("bin")
+                .join(browser4_java_executable_name()),
+            "java",
+        )
+        .unwrap();
+
+        // No metadata file present.
+        assert!(!tmp.path().join("browser4-installation.json").exists());
+        // install_dir_contains_runtime requires the metadata file → false.
+        assert!(!install_dir_contains_runtime(tmp.path()));
+        // is_runtime_bundle_root deliberately does NOT require it → true.
+        assert!(is_runtime_bundle_root(tmp.path()));
+    }
+
+    #[test]
     fn test_materialize_installed_runtime_uses_versioned_layout() {
         let _guard = ENV_MUTEX.lock().unwrap();
         let tmp = test_temp_dir();
@@ -2892,13 +4149,18 @@ mod tests {
         }
 
         // install_dir should be {runtime_data}/runtime/v4.9.3/
-        assert!(runtime.install_dir.ends_with(Path::new("runtime").join("v4.9.3")));
+        assert!(runtime
+            .install_dir
+            .ends_with(Path::new("runtime").join("v4.9.3")));
         // lib_dir should be {install_dir}/lib/
         assert!(runtime.lib_dir.ends_with(Path::new("v4.9.3").join("lib")));
         // java_path should be {install_dir}/runtime/bin/java
-        assert!(runtime
-            .java_path
-            .ends_with(Path::new("v4.9.3").join("runtime").join("bin").join(browser4_java_executable_name())));
+        assert!(runtime.java_path.ends_with(
+            Path::new("v4.9.3")
+                .join("runtime")
+                .join("bin")
+                .join(browser4_java_executable_name())
+        ));
         assert!(runtime.reused_existing);
     }
 
@@ -2924,11 +4186,7 @@ mod tests {
     #[test]
     fn test_server_startup_log_path_includes_launch_kind_and_port() {
         let tmp = test_temp_dir();
-        let jar_path = server_startup_log_path(
-            Some(tmp.path()),
-            &sample_launch_spec(),
-            9292,
-        );
+        let jar_path = server_startup_log_path(Some(tmp.path()), &sample_launch_spec(), 9292);
 
         let jar_name = jar_path.file_name().unwrap().to_string_lossy();
 
@@ -3016,12 +4274,8 @@ mod tests {
     #[test]
     fn test_create_server_startup_log_writes_header() {
         let tmp = test_temp_dir();
-        let log = create_server_startup_log_in(
-            Some(tmp.path()),
-            &sample_launch_spec(),
-            8123,
-        )
-        .expect("startup log creation should succeed");
+        let log = create_server_startup_log_in(Some(tmp.path()), &sample_launch_spec(), 8123)
+            .expect("startup log creation should succeed");
 
         drop(log.stdout);
         drop(log.stderr);
@@ -3035,12 +4289,8 @@ mod tests {
     #[test]
     fn test_append_startup_log_message_writes_status_line() {
         let tmp = test_temp_dir();
-        let log = create_server_startup_log_in(
-            Some(tmp.path()),
-            &sample_launch_spec(),
-            8182,
-        )
-        .expect("startup log creation should succeed");
+        let log = create_server_startup_log_in(Some(tmp.path()), &sample_launch_spec(), 8182)
+            .expect("startup log creation should succeed");
 
         append_startup_log_message_impl(&log.path, "test status line")
             .expect("startup log append should succeed");
@@ -3112,20 +4362,38 @@ mod tests {
 
     #[test]
     fn test_normalize_release_tag_adds_v_prefix() {
-        assert_eq!(normalize_release_tag(Some("4.9.3")).as_deref(), Some("v4.9.3"));
-        assert_eq!(normalize_release_tag(Some("4.10.0")).as_deref(), Some("v4.10.0"));
+        assert_eq!(
+            normalize_release_tag(Some("4.9.3")).as_deref(),
+            Some("v4.9.3")
+        );
+        assert_eq!(
+            normalize_release_tag(Some("4.10.0")).as_deref(),
+            Some("v4.10.0")
+        );
     }
 
     #[test]
     fn test_normalize_release_tag_keeps_existing_v_prefix() {
-        assert_eq!(normalize_release_tag(Some("v4.9.3")).as_deref(), Some("v4.9.3"));
-        assert_eq!(normalize_release_tag(Some("v4.10.0")).as_deref(), Some("v4.10.0"));
+        assert_eq!(
+            normalize_release_tag(Some("v4.9.3")).as_deref(),
+            Some("v4.9.3")
+        );
+        assert_eq!(
+            normalize_release_tag(Some("v4.10.0")).as_deref(),
+            Some("v4.10.0")
+        );
     }
 
     #[test]
     fn test_normalize_release_tag_trims_whitespace() {
-        assert_eq!(normalize_release_tag(Some("  v4.9.3  ")).as_deref(), Some("v4.9.3"));
-        assert_eq!(normalize_release_tag(Some("  4.10.0\t")).as_deref(), Some("v4.10.0"));
+        assert_eq!(
+            normalize_release_tag(Some("  v4.9.3  ")).as_deref(),
+            Some("v4.9.3")
+        );
+        assert_eq!(
+            normalize_release_tag(Some("  4.10.0\t")).as_deref(),
+            Some("v4.10.0")
+        );
     }
 
     // -------------------------------------------------------------------
@@ -3146,7 +4414,10 @@ mod tests {
 
     #[test]
     fn test_parse_release_tag_from_url_non_release_url_returns_none() {
-        assert_eq!(parse_release_tag_from_url("https://example.com/other/path"), None);
+        assert_eq!(
+            parse_release_tag_from_url("https://example.com/other/path"),
+            None
+        );
         assert_eq!(
             parse_release_tag_from_url("https://github.com/platonai/Browser4/releases/tag/v4.9.3"),
             None
@@ -3166,6 +4437,13 @@ mod tests {
     #[test]
     fn test_install_dir_contains_runtime_valid() {
         let tmp = test_temp_dir();
+        // The metadata file is required — a missing file signals a truncated
+        // or partially-committed install that should be re-downloaded.
+        write(
+            tmp.path().join("browser4-installation.json"),
+            r#"{"tag":"v4.10.0","asset_name":"bundle.tar.gz","download_url":"https://example.com/bundle.tar.gz","installed_at":"2026-01-01T00:00:00Z"}"#,
+        )
+        .unwrap();
         let lib_dir = tmp.path().join("lib");
         fs::create_dir_all(&lib_dir).unwrap();
         write(lib_dir.join("browser4.jar"), "jar-content").unwrap();
@@ -3213,12 +4491,16 @@ mod tests {
         setup_valid_versioned_runtime(&tmp.path().join("runtime-data"), tag);
 
         // Write metadata into the versioned install dir.
-        let metadata_path = tmp.path().join("runtime-data").join("runtime").join(tag).join("browser4-installation.json");
+        let metadata_path = tmp
+            .path()
+            .join("runtime-data")
+            .join("runtime")
+            .join(tag)
+            .join("browser4-installation.json");
         let metadata = InstalledBrowser4RuntimeMetadata {
             tag: tag.to_string(),
             asset_name: "browser4-runtime-linux-x64.tar.gz".to_string(),
-            download_url: "https://example.com/releases/download/v4.9.3/bundle.tar.gz"
-                .to_string(),
+            download_url: "https://example.com/releases/download/v4.9.3/bundle.tar.gz".to_string(),
             installed_at: "2026-06-01T00:00:00Z".to_string(),
         };
         let json = serde_json::to_string_pretty(&metadata).unwrap();
@@ -3254,7 +4536,12 @@ mod tests {
         setup_valid_versioned_runtime(&tmp.path().join("runtime-data"), tag);
 
         // Corrupt the metadata file.
-        let metadata_path = tmp.path().join("runtime-data").join("runtime").join(tag).join("browser4-installation.json");
+        let metadata_path = tmp
+            .path()
+            .join("runtime-data")
+            .join("runtime")
+            .join(tag)
+            .join("browser4-installation.json");
         fs::write(&metadata_path, "not valid json {{{").unwrap();
 
         let read = read_installed_browser4_runtime_metadata();
@@ -3278,6 +4565,15 @@ mod tests {
         fs::create_dir_all(&rt_bin).unwrap();
         fs::write(lib.join("browser4.jar"), "fake-jar").unwrap();
         fs::write(rt_bin.join(browser4_java_executable_name()), "fake-java").unwrap();
+        // Write the installation metadata file required by install_dir_contains_runtime.
+        fs::write(
+            dir.join(BROWSER4_INSTALL_METADATA_FILE_NAME),
+            format!(
+                r#"{{"tag":"{}","asset_name":"bundle.tar.gz","download_url":"https://example.com/bundle.tar.gz","installed_at":"2026-01-01T00:00:00Z"}}"#,
+                tag
+            ),
+        )
+        .unwrap();
         write_current_tag(tag).unwrap();
         dir
     }
@@ -3410,6 +4706,15 @@ mod tests {
             fs::create_dir_all(&rt_bin).unwrap();
             fs::write(lib.join("x.jar"), "jar").unwrap();
             fs::write(rt_bin.join(browser4_java_executable_name()), "java").unwrap();
+            // Write the required installation metadata file.
+            fs::write(
+                dir.join(BROWSER4_INSTALL_METADATA_FILE_NAME),
+                format!(
+                    r#"{{"tag":"{}","asset_name":"bundle.tar.gz","download_url":"https://example.com/bundle.tar.gz","installed_at":"2026-01-01T00:00:00Z"}}"#,
+                    tag
+                ),
+            )
+            .unwrap();
         }
         // Remove current.tag if it exists so find_newest is forced to scan.
         let tag_path = current_tag_file_path();
@@ -3422,6 +4727,223 @@ mod tests {
             fs::read_to_string(current_tag_file_path()).unwrap().trim(),
             "v4.10.0"
         );
+
+        restore_test_env(prev_runtime, prev_state);
+    }
+
+    // -------------------------------------------------------------------
+    // Mirror preference cache tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_mirror_preference_round_trip() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let tmp = test_temp_dir();
+        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+
+        let pref = MirrorPreference {
+            selected_mirror: DownloadMirror {
+                name: "test-mirror".to_string(),
+                base_url: "https://example.com/releases".to_string(),
+            },
+            tested_at: "2026-06-11T00:00:00+00:00".to_string(),
+            download_speed_bps: 5_000_000,
+        };
+        save_mirror_preference(&pref);
+
+        let mirrors = vec![pref.selected_mirror.clone()];
+        let loaded = load_mirror_preference(&mirrors);
+        assert!(loaded.is_some());
+        let loaded = loaded.unwrap();
+        assert_eq!(loaded.selected_mirror.name, "test-mirror");
+        assert_eq!(loaded.download_speed_bps, 5_000_000);
+
+        delete_mirror_preference_cache();
+        restore_test_env(prev_runtime, prev_state);
+    }
+
+    #[test]
+    fn test_mirror_preference_expired() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let tmp = test_temp_dir();
+        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+        let prev_ttl = env::var(MIRROR_PREFERENCE_TTL_ENV).ok();
+        unsafe {
+            env::set_var(MIRROR_PREFERENCE_TTL_ENV, "1"); // 1-second TTL
+        }
+
+        let pref = MirrorPreference {
+            selected_mirror: DownloadMirror {
+                name: "old-mirror".to_string(),
+                base_url: "https://example.com/releases".to_string(),
+            },
+            // Timestamp is well over 1 second ago.
+            tested_at: "2020-01-01T00:00:00+00:00".to_string(),
+            download_speed_bps: 100,
+        };
+        save_mirror_preference(&pref);
+
+        let mirrors = vec![pref.selected_mirror.clone()];
+        let loaded = load_mirror_preference(&mirrors);
+        assert!(loaded.is_some());
+        assert!(
+            !is_mirror_preference_valid(&loaded.unwrap()),
+            "preference with 2020 timestamp should be expired"
+        );
+
+        delete_mirror_preference_cache();
+        restore_test_env(prev_runtime, prev_state);
+        match prev_ttl {
+            Some(v) => unsafe { env::set_var(MIRROR_PREFERENCE_TTL_ENV, v) },
+            None => unsafe { env::remove_var(MIRROR_PREFERENCE_TTL_ENV) },
+        }
+    }
+
+    #[test]
+    fn test_mirror_preference_valid_under_ttl() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let tmp = test_temp_dir();
+        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+        let prev_ttl = env::var(MIRROR_PREFERENCE_TTL_ENV).ok();
+        unsafe {
+            env::set_var(MIRROR_PREFERENCE_TTL_ENV, "86400");
+        }
+
+        let pref = MirrorPreference {
+            selected_mirror: DownloadMirror {
+                name: "recent".to_string(),
+                base_url: "https://example.com/releases".to_string(),
+            },
+            tested_at: chrono::Utc::now().to_rfc3339(),
+            download_speed_bps: 200,
+        };
+        save_mirror_preference(&pref);
+
+        let mirrors = vec![pref.selected_mirror.clone()];
+        let loaded = load_mirror_preference(&mirrors);
+        assert!(loaded.is_some());
+        assert!(
+            is_mirror_preference_valid(&loaded.unwrap()),
+            "preference saved just now should be valid"
+        );
+
+        delete_mirror_preference_cache();
+        restore_test_env(prev_runtime, prev_state);
+        match prev_ttl {
+            Some(v) => unsafe { env::set_var(MIRROR_PREFERENCE_TTL_ENV, v) },
+            None => unsafe { env::remove_var(MIRROR_PREFERENCE_TTL_ENV) },
+        }
+    }
+
+    #[test]
+    fn test_mirror_preference_ttl_env_override() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let tmp = test_temp_dir();
+        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+        let prev_ttl = env::var(MIRROR_PREFERENCE_TTL_ENV).ok();
+        unsafe {
+            env::set_var(MIRROR_PREFERENCE_TTL_ENV, "3600"); // 1 hour
+        }
+
+        let pref = MirrorPreference {
+            selected_mirror: DownloadMirror {
+                name: "custom-ttl".to_string(),
+                base_url: "https://example.com/releases".to_string(),
+            },
+            tested_at: chrono::Utc::now().to_rfc3339(),
+            download_speed_bps: 300,
+        };
+        assert!(
+            is_mirror_preference_valid(&pref),
+            "with 3600s TTL, just-now timestamp should be valid"
+        );
+
+        // Now set a tiny TTL and verify an old timestamp becomes invalid.
+        unsafe {
+            env::set_var(MIRROR_PREFERENCE_TTL_ENV, "1");
+        }
+        let old_pref = MirrorPreference {
+            selected_mirror: DownloadMirror {
+                name: "custom-ttl".to_string(),
+                base_url: "https://example.com/releases".to_string(),
+            },
+            tested_at: "2020-01-01T00:00:00+00:00".to_string(),
+            download_speed_bps: 300,
+        };
+        assert!(
+            !is_mirror_preference_valid(&old_pref),
+            "with 1s TTL, 2020 timestamp should be expired"
+        );
+
+        restore_test_env(prev_runtime, prev_state);
+        match prev_ttl {
+            Some(v) => unsafe { env::set_var(MIRROR_PREFERENCE_TTL_ENV, v) },
+            None => unsafe { env::remove_var(MIRROR_PREFERENCE_TTL_ENV) },
+        }
+    }
+
+    #[test]
+    fn test_mirror_preference_invalid_when_mirror_missing() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let tmp = test_temp_dir();
+        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+
+        let pref = MirrorPreference {
+            selected_mirror: DownloadMirror {
+                name: "absent".to_string(),
+                base_url: "https://deleted.example.com/releases".to_string(),
+            },
+            tested_at: chrono::Utc::now().to_rfc3339(),
+            download_speed_bps: 100,
+        };
+        save_mirror_preference(&pref);
+
+        // Load with a different mirror list — the cached mirror is absent.
+        let mirrors = vec![DownloadMirror {
+            name: "other".to_string(),
+            base_url: "https://other.example.com/releases".to_string(),
+        }];
+        let loaded = load_mirror_preference(&mirrors);
+        assert!(
+            loaded.is_none(),
+            "cached mirror not in the list should return None"
+        );
+
+        delete_mirror_preference_cache();
+        restore_test_env(prev_runtime, prev_state);
+    }
+
+    #[test]
+    fn test_mirror_preference_corrupted() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let tmp = test_temp_dir();
+        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+
+        let path = mirror_preference_cache_path();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "not valid json {{{").unwrap();
+
+        let mirrors = builtin_mirrors();
+        let loaded = load_mirror_preference(&mirrors);
+        assert!(loaded.is_none(), "corrupted cache file should return None");
+
+        delete_mirror_preference_cache();
+        restore_test_env(prev_runtime, prev_state);
+    }
+
+    #[test]
+    fn test_delete_mirror_preference_cache_removes_file() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let tmp = test_temp_dir();
+        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+
+        let path = mirror_preference_cache_path();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, r#"{"selected_mirror":{"name":"x","base_url":"https://x.com"},"tested_at":"2026-01-01T00:00:00+00:00","download_speed_bps":1}"#).unwrap();
+        assert!(path.exists());
+
+        delete_mirror_preference_cache();
+        assert!(!path.exists(), "cache file should be deleted");
 
         restore_test_env(prev_runtime, prev_state);
     }

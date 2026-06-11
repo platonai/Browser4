@@ -1,0 +1,237 @@
+# .github/workflows/sync-to-oss.yml
+name: Sync Release to Aliyun OSS
+
+on:
+  release:
+    types: [ published ]
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag to sync (e.g. v1.2.3)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve Tag
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Determine tag: release payload or manual dispatch input
+          if [[ -n "${{ github.event.release && github.event.release.tag_name || '' }}" ]]; then
+            TAG_NAME="${{ github.event.release.tag_name }}"
+            RELEASE_URL="${{ github.event.release.html_url }}"
+            ASSETS_COUNT="${{ github.event.release.assets_count || 0 }}"
+          elif [[ -n "${{ inputs.tag_name || '' }}" ]]; then
+            TAG_NAME="${{ inputs.tag_name }}"
+            # Validate the tag exists and fetch release info
+            RELEASE_JSON=$(gh release view "$TAG_NAME" --repo "${{ github.repository }}" --json name,url,assets --jq '.')
+            RELEASE_URL=$(echo "$RELEASE_JSON" | jq -r '.url')
+            ASSETS_COUNT=$(echo "$RELEASE_JSON" | jq '.assets | length')
+          else
+            echo "::error::No release tag available"
+            exit 1
+          fi
+
+          echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+          echo "release_url=${RELEASE_URL}" >> "$GITHUB_OUTPUT"
+          echo "assets_count=${ASSETS_COUNT}" >> "$GITHUB_OUTPUT"
+          echo "Resolved release: ${TAG_NAME} (${ASSETS_COUNT} assets)"
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.resolve.outputs.tag_name }}
+
+      - name: Download Release Assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG_NAME="${{ steps.resolve.outputs.tag_name }}"
+          mkdir -p release-assets
+
+          gh release download "$TAG_NAME" --repo "${{ github.repository }}" --dir release-assets
+
+          echo ""
+          echo "Assets downloaded:"
+          ls -lh release-assets/
+
+      - name: Install ossutil
+        run: |
+          set -euo pipefail
+          OSSUTIL_VERSION="2.2.1"
+          curl -sL "https://gosspublic.alicdn.com/ossutil/v2/${OSSUTIL_VERSION}/ossutil-${OSSUTIL_VERSION}-linux-amd64.zip" \
+            -o ossutil.zip
+          unzip -q ossutil.zip
+          mv "ossutil-${OSSUTIL_VERSION}-linux-amd64/ossutil" ./ossutil
+          chmod +x ossutil
+          ./ossutil version
+
+      - name: Upload to OSS
+        env:
+          OSS_ENDPOINT: oss-cn-beijing.aliyuncs.com
+          OSS_REGION: cn-beijing
+          OSS_BUCKET: browser4
+          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+        run: |
+          set -euo pipefail
+          TAG_NAME="${{ steps.resolve.outputs.tag_name }}"
+
+          uploaded=0
+          failed=0
+
+          for asset in release-assets/*; do
+            [[ -f "$asset" ]] || continue
+            asset_name=$(basename "$asset")
+            oss_path="oss://${OSS_BUCKET}/releases/download/${TAG_NAME}/${asset_name}"
+
+            echo "Uploading: $asset_name → $oss_path"
+            if ./ossutil cp "$asset" "$oss_path" \
+              -e "$OSS_ENDPOINT" \
+              --region "$OSS_REGION" \
+              --acl public-read \
+              --retry-times 3; then
+              ((uploaded++)) || true
+            else
+              echo "::error::Failed to upload $asset_name"
+              ((failed++)) || true
+            fi
+          done
+
+          echo ""
+          echo "Upload complete: ${uploaded} succeeded, ${failed} failed"
+
+          if [[ $failed -gt 0 ]]; then
+            echo "::error::${failed} asset(s) failed to upload"
+            exit 1
+          fi
+
+          echo "✅ All ${uploaded} release assets synced to OSS"
+
+      - name: Create latest symlinks
+        env:
+          OSS_ENDPOINT: oss-cn-beijing.aliyuncs.com
+          OSS_REGION: cn-beijing
+          OSS_BUCKET: browser4
+          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+        run: |
+          set -euo pipefail
+          TAG_NAME="${{ steps.resolve.outputs.tag_name }}"
+
+          created=0
+          failed=0
+
+          for asset in release-assets/*; do
+            [[ -f "$asset" ]] || continue
+            asset_name=$(basename "$asset")
+
+            # Symlink key and its target object key (relative to bucket root)
+            symlink_key="releases/download/latest/${asset_name}"
+            target_key="releases/download/${TAG_NAME}/${asset_name}"
+
+            echo "Creating symlink: ${symlink_key} → ${target_key}"
+            if ./ossutil api put-symlink \
+              --bucket "$OSS_BUCKET" \
+              --key "$symlink_key" \
+              --symlink-target "$target_key" \
+              --object-acl public-read \
+              -e "$OSS_ENDPOINT" \
+              --region "$OSS_REGION" \
+              --retry-times 3; then
+              ((created++)) || true
+            else
+              echo "::error::Failed to create symlink for $asset_name"
+              ((failed++)) || true
+            fi
+          done
+
+          echo ""
+          echo "Symlinks: ${created} created, ${failed} failed"
+
+          if [[ $failed -gt 0 ]]; then
+            echo "::error::${failed} symlink(s) failed to create"
+            exit 1
+          fi
+
+          echo "🔗 All ${created} latest symlinks created"
+
+      - name: Upload CLI installer scripts to OSS
+        env:
+          OSS_ENDPOINT: oss-cn-beijing.aliyuncs.com
+          OSS_REGION: cn-beijing
+          OSS_BUCKET: browser4
+          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+        run: |
+          set -euo pipefail
+
+          SCRIPTS_DIR="cli/scripts"
+          OSS_SCRIPTS_PREFIX="oss://${OSS_BUCKET}/scripts"
+
+          uploaded=0
+          failed=0
+
+          for script in install-browser4-cli.ps1 install-browser4-cli.sh; do
+            src="${SCRIPTS_DIR}/${script}"
+            dest="${OSS_SCRIPTS_PREFIX}/${script}"
+
+            if [[ ! -f "$src" ]]; then
+              echo "::error::Script not found: $src"
+              ((failed++)) || true
+              continue
+            fi
+
+            echo "Uploading: ${script} → ${dest}"
+            if ./ossutil cp "$src" "$dest" \
+              -e "$OSS_ENDPOINT" \
+              --region "$OSS_REGION" \
+              --acl public-read \
+              --retry-times 3; then
+              ((uploaded++)) || true
+              echo "  https://${OSS_BUCKET}.${OSS_ENDPOINT}/scripts/${script}"
+            else
+              echo "::error::Failed to upload ${script}"
+              ((failed++)) || true
+            fi
+          done
+
+          echo ""
+          echo "CLI scripts upload: ${uploaded} succeeded, ${failed} failed"
+
+          if [[ $failed -gt 0 ]]; then
+            echo "::error::${failed} CLI installer script(s) failed to upload"
+            exit 1
+          fi
+
+          echo "📜 CLI installer scripts synced to OSS"
+
+      - name: Sync Summary
+        if: always()
+        run: |
+          {
+            echo "## ☁️ Aliyun OSS Sync"
+            echo ""
+            echo "- **Release**: ${{ steps.resolve.outputs.tag_name }}"
+            echo "- **Release URL**: ${{ steps.resolve.outputs.release_url }}"
+            echo "- **Assets**: ${{ steps.resolve.outputs.assets_count }}"
+            echo "- **OSS Bucket**: \`oss://browser4/releases/download/${{ steps.resolve.outputs.tag_name }}/\`"
+            echo "- **Latest symlink**: \`oss://browser4/releases/download/latest/\`"
+            echo "- **CLI installer scripts**:"
+            echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1\`"
+            echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh\`"
+            echo "- **Status**: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"

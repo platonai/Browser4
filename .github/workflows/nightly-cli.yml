@@ -1,0 +1,124 @@
+name: Nightly CLI E2E
+
+on:
+  schedule:
+    # Runs at 03:00 UTC every day (offset from the main nightly build at 00:00)
+    # Tests browser4-cli against the latest Browser4 release using --force-remote-bundle,
+    # which downloads the pre-built runtime bundle instead of building from source.
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: 'Filter scenarios by glob pattern (e.g. *open*, *agent*)'
+        required: false
+        type: string
+      level:
+        description: 'Max scenario level'
+        required: false
+        default: 'All'
+        type: choice
+        options:
+          - Basic
+          - EXTENDED
+          - All
+      enable_batch_scenario:
+        description: 'Include batch-command scenarios'
+        required: false
+        default: true
+        type: boolean
+      enable_install_scenario:
+        description: 'Include install/upgrade scenarios'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  CLI_MANIFEST_PATH: cli/browser4-cli/Cargo.toml
+
+jobs:
+  e2e:
+    name: 'CLI E2E (${{ matrix.name }})'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - name: macOS ARM64
+            os: macos-latest
+            target: aarch64-apple-darwin
+          - name: Windows x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: cli/browser4-cli
+
+      - name: Build e2e test binary
+        shell: bash
+        run: cargo test --test e2e --manifest-path ${{ env.CLI_MANIFEST_PATH }} --no-run
+
+      - name: Resolve test flags
+        id: flags
+        shell: bash
+        run: |
+          FLAGS="--nocapture --force-remote-bundle"
+
+          LEVEL="${{ inputs.level || 'All' }}"
+          FLAGS="$FLAGS --level=$LEVEL"
+
+          if [ "${{ inputs.enable_batch_scenario || 'true' }}" = "true" ]; then
+            FLAGS="$FLAGS --enable-batch-scenario"
+          fi
+
+          if [ "${{ inputs.enable_install_scenario || 'true' }}" = "true" ]; then
+            FLAGS="$FLAGS --enable-install-scenario"
+          fi
+
+          if [ -n "${{ inputs.scenario }}" ]; then
+            FLAGS="$FLAGS --scenario=${{ inputs.scenario }}"
+          fi
+
+          echo "flags=$FLAGS" >> "$GITHUB_OUTPUT"
+          echo "Resolved flags: $FLAGS"
+
+      - name: Run browser4-cli E2E tests
+        shell: bash
+        timeout-minutes: 30
+        run: |
+          echo "::group::🧪 browser4-cli E2E Tests (${{ matrix.name }})"
+
+          echo "Running: cargo test --test e2e --manifest-path ${{ env.CLI_MANIFEST_PATH }} -- ${{ steps.flags.outputs.flags }}"
+          cargo test --test e2e --manifest-path ${{ env.CLI_MANIFEST_PATH }} -- ${{ steps.flags.outputs.flags }}
+
+          echo "::endgroup::"
+
+      - name: Pipeline Summary
+        if: always()
+        shell: bash
+        run: |
+          echo "::group::📊 Nightly CLI E2E Summary"
+
+          echo "🎯 Platform: ${{ matrix.name }} (${{ matrix.os }})"
+          echo "📦 Target: ${{ matrix.target }}"
+          echo "🧪 Test flags: ${{ steps.flags.outputs.flags }}"
+          echo "📊 Status: ${{ job.status }}"
+          echo "📅 Completed at: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          echo "👤 Triggered by: ${{ github.actor }}"
+          echo "🌟 Commit: ${{ github.sha }}"
+
+          echo "::endgroup::"

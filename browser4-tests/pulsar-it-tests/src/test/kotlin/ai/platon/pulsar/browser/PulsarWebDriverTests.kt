@@ -87,7 +87,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("test selectFirstPropertyValueOrNull")
-    fun testSelectfirstpropertyvalueornull() =
+    fun testSelectFirstPropertyValueOrNull() =
         runEnhancedWebDriverTest(simpleDomURL, browser) { driver ->
             val selector = "input[id=input]"
 
@@ -100,7 +100,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("test selectPropertyValueAll")
-    fun testSelectpropertyvalueall() = runEnhancedWebDriverTest(simpleDomURL, browser) { driver ->
+    fun testSelectPropertyValueAll() = runEnhancedWebDriverTest(simpleDomURL, browser) { driver ->
         val selector = "input"
 
         val propValues = driver.selectPropertyValueAll(selector, "tagName")
@@ -110,7 +110,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("test setProperty")
-    fun testSetproperty() = runEnhancedWebDriverTest(simpleDomURL, browser) { driver ->
+    fun testSetProperty() = runEnhancedWebDriverTest(simpleDomURL, browser) { driver ->
         val selector = "input"
         val propName = "value"
 
@@ -122,7 +122,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("test setPropertyAll")
-    fun testSetpropertyall() = runEnhancedWebDriverTest(simpleDomURL, browser) { driver ->
+    fun testSetPropertyAll() = runEnhancedWebDriverTest(simpleDomURL, browser) { driver ->
         val selector = "input"
         val propName = "value"
 
@@ -135,7 +135,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("test deleteCookies")
-    fun testDeletecookies() = runEnhancedWebDriverTest("$assetsPBaseURL/cookie.html", browser) { driver ->
+    fun testDeleteCookies() = runEnhancedWebDriverTest("$assetsPBaseURL/cookie.html", browser) { driver ->
         var cookies = driver.getCookies()
 
         printlnPro(cookies.toString())
@@ -156,7 +156,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("test clearBrowserCookies")
-    fun testClearbrowsercookies() = runEnhancedWebDriverTest("$assetsPBaseURL/cookie.html", browser) { driver ->
+    fun testClearBrowserCookies() = runEnhancedWebDriverTest("$assetsPBaseURL/cookie.html", browser) { driver ->
         var cookies = driver.getCookies()
 
         printlnPro(cookies.toString())
@@ -176,7 +176,7 @@ class PulsarWebDriverTests : WebDriverTestBase() {
 
     @Test
     @DisplayName("test scrollToBottom")
-    fun testScrolltobottom() = runEnhancedWebDriverTest(multiScreensInteractiveUrl, browser) { driver ->
+    fun testScrolltoBottom() = runEnhancedWebDriverTest(multiScreensInteractiveUrl, browser) { driver ->
         val bottomY = driver.scrollToBottom()
         val viewportHeight = (driver.evaluate("window.innerHeight", 0.0) as? Number)?.toDouble() ?: 0.0
         val totalHeight = (driver.evaluate(

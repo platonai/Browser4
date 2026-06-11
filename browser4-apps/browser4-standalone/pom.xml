@@ -12,11 +12,16 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>ai.platon.pulsar</groupId>
-    <artifactId>browser4-standalone</artifactId>
-    <version>4.11.0-SNAPSHOT</version>
+    <parent>
+        <groupId>ai.platon.pulsar</groupId>
+        <artifactId>browser4</artifactId>
+        <version>4.11.3-SNAPSHOT</version>
+        <relativePath>../../pom.xml</relativePath>
+    </parent>
 
-    <name>Browser4 Agents</name>
+    <artifactId>browser4-standalone</artifactId>
+
+    <name>Browser4 Standalone</name>
     <description>Browser4 Agents - browser agent for your AI</description>
 
     <build>
@@ -67,6 +72,7 @@
                 <configuration>
                     <compilerPlugins>
                         <plugin>spring</plugin>
+                        <plugin>all-open</plugin>
                     </compilerPlugins>
                     <jvmTarget>${kotlin.compiler.jvmTarget}</jvmTarget>
                 </configuration>
@@ -96,26 +102,24 @@
                     <target>9</target>
                 </configuration>
             </plugin>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-dependency-plugin</artifactId>
-            </plugin>
         </plugins>
     </build>
 
     <dependencyManagement>
         <dependencies>
-            <dependency>
-                <groupId>ai.platon.pulsar</groupId>
-                <artifactId>pulsar-bom</artifactId>
-                <version>${browser4-base.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
+            <!-- spring-boot-dependencies FIRST -->
             <dependency>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-dependencies</artifactId>
                 <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- pulsar-bom SECOND -->
+            <dependency>
+                <groupId>ai.platon.pulsar</groupId>
+                <artifactId>pulsar-bom</artifactId>
+                <version>${browser4-base.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -207,18 +211,9 @@
         </dependency>
     </dependencies>
 
-
     <properties>
         <!-- Suppress warning: [WARNING] Using platform encoding (GBK actually) to copy filtered resources -->
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
-
-        <version.maven-compiler-plugin>3.14.1</version.maven-compiler-plugin>
-
-        <kotlin.version>2.3.21</kotlin.version>
-        <spring-boot.version>4.0.6</spring-boot.version>
-        <kotlin.compiler.jvmTarget>17</kotlin.compiler.jvmTarget>
-        <browser4-base.version>4.8.4</browser4-base.version>
-
     </properties>
 </project>

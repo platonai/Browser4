@@ -53,11 +53,14 @@ $ErrorActionPreference = "Stop"
 
 # --------------- defaults ---------------
 if ($Pattern.Count -eq 0) {
-    $Pattern = @("dry_run", "ci", "npm_publish")
+    $Pattern = @("dry_run", "ci", "npm_publish", "rb")
 }
 
 # --------------- safety checks ---------------
+$prevEAP = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 $repoRoot = git rev-parse --show-toplevel 2>$null
+$ErrorActionPreference = $prevEAP
 if (-not $repoRoot) {
     Write-Error "Error: not inside a git repository."
     exit 1
@@ -112,7 +115,9 @@ try {
     $remoteTagSet = @()
     if ($DeleteRemote) {
         Write-Host "Fetching tags from remote '$Remote'..."
-        git fetch --tags $Remote 2>$null
+        # --quiet keeps git from writing progress to stderr, which PowerShell
+        # treats as an error when $ErrorActionPreference = "Stop"
+        git fetch --tags --quiet $Remote 2>$null
 
         $lsRemote = git ls-remote --tags $Remote 2>$null
         foreach ($line in $lsRemote) {
