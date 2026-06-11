@@ -50,7 +50,7 @@ jobs:
           echo "Resolved release: ${TAG_NAME} (${ASSETS_COUNT} assets)"
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ steps.resolve.outputs.tag_name }}
 
