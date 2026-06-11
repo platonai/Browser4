@@ -67,9 +67,17 @@ $ErrorActionPreference = "Stop"
 # OS detection (compatible with PS 5.1+)
 # ──────────────────────────────────────────────
 
-$script:IsWin = [System.Environment]::OSVersion.Platform -eq "Win32NT"
-$script:IsMac = [System.Environment]::OSVersion.Platform -eq "Unix" -and (uname -s 2>$null) -eq "Darwin"
-$script:IsLinux = [System.Environment]::OSVersion.Platform -eq "Unix" -and (uname -s 2>$null) -ne "Darwin"
+# Avoid assigning to $IsLinux / $IsWindows / $IsMacOS directly —
+# they are read-only automatic variables in PowerShell 7+.
+if ($PSVersionTable.PSVersion.Major -ge 6) {
+    $script:OSWin   = $IsWindows
+    $script:OSLinux = $IsLinux
+    $script:OSMac   = $IsMacOS
+} else {
+    $script:OSWin   = [System.Environment]::OSVersion.Platform -eq "Win32NT"
+    $script:OSMac   = $false
+    $script:OSLinux = $false
+}
 
 # ──────────────────────────────────────────────
 # Helpers
@@ -102,13 +110,13 @@ function Write-WarnMsg {
 function Get-PlatformKey {
   $arch = if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq [System.Runtime.InteropServices.Architecture]::Arm64) { "arm64" } else { "x64" }
 
-  if ($script:IsWin) {
+  if ($script:OSWin) {
     return "win32-$arch"
   }
-  elseif ($script:IsMac) {
+  elseif ($script:OSMac) {
     return "darwin-$arch"
   }
-  elseif ($script:IsLinux) {
+  elseif ($script:OSLinux) {
     # Detect musl
     $isMusl = $false
     try {
@@ -133,10 +141,10 @@ function Get-BinaryName {
 }
 
 function Get-DefaultInstallDir {
-  if ($script:IsWin) {
+  if ($script:OSWin) {
     return Join-Path $env:LOCALAPPDATA "Programs\browser4-cli"
   }
-  elseif ($script:IsLinux -or $script:IsMac) {
+  elseif ($script:OSLinux -or $script:OSMac) {
     # Prefer ~/.local/bin for user installs
     if (Test-Path "$env:HOME/.local/bin") {
       return "$env:HOME/.local/bin"
@@ -233,7 +241,7 @@ function New-PlatformLink {
   }
 
   # Try hard link (Windows, same volume)
-  if ($script:IsWin) {
+  if ($script:OSWin) {
     try {
       $targetPath = Join-Path (Split-Path $LinkPath -Parent) $TargetName
       New-Item -ItemType HardLink -Path $LinkPath -Target $targetPath -Force -ErrorAction Stop | Out-Null
@@ -292,7 +300,7 @@ function New-Symlinks {
   }
 
   # Also check b4.cmd if on Windows (wrapper fallback)
-  if ($script:IsWin) {
+  if ($script:OSWin) {
     $shortCmdPath = Join-Path $InstallDir "b4.cmd"
     if (Test-Path $shortCmdPath) {
       Write-WarnMsg "Skipping short link '$shortName': 'b4.cmd' already exists in $InstallDir"
@@ -415,7 +423,7 @@ Please check:
   }
 
   # On Unix, ensure executable bit
-  if (-not $script:IsWin) {
+  if (-not $script:OSWin) {
     if (-not $DryRun) {
       try { chmod +x $binaryPath 2>$null } catch { }
     }
@@ -426,10 +434,10 @@ Please check:
   New-Symlinks -BinaryName $binaryName -InstallDir $installDir -PlatformKey $platformKey
 
   # Add to PATH
-  if ($AddToPath -and $script:IsWin) {
+  if ($AddToPath -and $script:OSWin) {
     Write-Summary ""
     Add-DirectoryToUserPath -Dir $installDir
-  } elseif ($AddToPath -and -not $script:IsWin) {
+  } elseif ($AddToPath -and -not $script:OSWin) {
     Write-Summary ""
     $shellRc = if (Test-Path "$env:HOME/.zshrc") { "$env:HOME/.zshrc" } elseif (Test-Path "$env:HOME/.bashrc") { "$env:HOME/.bashrc" } elseif (Test-Path "$env:HOME/.bash_profile") { "$env:HOME/.bash_profile" } else { "$env:HOME/.profile" }
     $pathLine = "export PATH=""$installDir`:`$PATH"""
@@ -465,7 +473,7 @@ Please check:
   Write-Summary ""
   Write-Summary "Run 'browser4-cli --help' to get started." -Color Cyan
 
-  if ($script:IsWin) {
+  if ($script:OSWin) {
     Write-Summary "If the command isn't found, restart your terminal or run:"
     Write-Summary "  `$env:Path = [System.Environment]::GetEnvironmentVariable('Path','User') + ';' + [System.Environment]::GetEnvironmentVariable('Path','Machine')"
   }
