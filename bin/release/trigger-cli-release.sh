@@ -144,6 +144,18 @@ else
 fi
 
 # ──────────────────────────────────────────────
+# Sync version to dependent files (package.json, Cargo.toml, Cargo.lock)
+# ──────────────────────────────────────────────
+echo ""
+echo "Syncing version from cli/VERSION-CLI to all dependent files ..."
+SYNC_SCRIPT="$REPO_ROOT/cli/scripts/sync-version.js"
+if [[ -f "$SYNC_SCRIPT" ]]; then
+  node "$SYNC_SCRIPT" || echo "WARNING: sync-version.js exited with code $?"
+else
+  echo "WARNING: sync-version.js not found at $SYNC_SCRIPT — skipping sync"
+fi
+
+# ──────────────────────────────────────────────
 # Resolve repository
 # ──────────────────────────────────────────────
 if [[ -z "$REPO" ]]; then

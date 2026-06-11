@@ -148,6 +148,21 @@ Bump cli/VERSION-CLI to a version higher than $npmVersion before releasing.
 }
 
 # ──────────────────────────────────────────────
+# Sync version to dependent files (package.json, Cargo.toml, Cargo.lock)
+# ──────────────────────────────────────────────
+Write-Host ""
+Write-Host "Syncing version from cli/VERSION-CLI to all dependent files ..." -ForegroundColor Cyan
+$syncScript = Join-Path $repoRoot "cli/scripts/sync-version.js"
+if (Test-Path $syncScript) {
+    node $syncScript
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "sync-version.js exited with code $LASTEXITCODE"
+    }
+} else {
+    Write-Warning "sync-version.js not found at $syncScript — skipping sync"
+}
+
+# ──────────────────────────────────────────────
 # Resolve repository
 # ──────────────────────────────────────────────
 if ([string]::IsNullOrWhiteSpace($Repo)) {
