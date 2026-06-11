@@ -75,7 +75,7 @@ if (-not $script:__CliBin) {
     Write-Host "  (using global browser4-cli: $script:__CliBin)" -ForegroundColor DarkGray
 }
 
-$cli = { & $script:__CliBin $args 2>&1 }
+$cli = { & $script:__CliBin @args 2>&1 }
 
 # Wrapper that captures $LASTEXITCODE *before* the pipeline ends.
 # Windows PowerShell 5.1 clears $LASTEXITCODE after piping to a

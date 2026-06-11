@@ -15,9 +15,9 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $cli = if ($env:BROWSER4_CLI_BIN) {
-    { & $env:BROWSER4_CLI_BIN $args }
+    { & $env:BROWSER4_CLI_BIN @args }
 } else {
-    { browser4-cli $args }
+    { browser4-cli @args }
 }
 
 # -------------------------------------------------------------------
