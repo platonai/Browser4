@@ -483,7 +483,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   github-release:
-    name: Publish GitHub Release
+    name: Update latest GitHub Release
     needs: [prepare, test, build-binaries]
     if: |
       always() &&
@@ -507,12 +507,12 @@ jobs:
           path: release-assets/
           merge-multiple: true
 
-      - name: List and verify release assets
+      - name: Verify CLI binaries
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Release assets:"
+          echo "CLI binaries to upload:"
           ls -la release-assets/
 
           EXPECTED_COUNT=7
@@ -544,59 +544,115 @@ jobs:
 
           echo "All $ACTUAL_COUNT platform binaries are present and valid"
 
-      - name: Build release asset manifest
-        id: asset_manifest
+      - name: Resolve latest release
+        id: latest
         shell: bash
         run: |
-          {
-            echo 'files<<EOF'
-            find release-assets -maxdepth 1 -type f -name 'browser4-cli-*' | sort
-            echo 'EOF'
-          } >> "$GITHUB_OUTPUT"
+          set -euo pipefail
 
-      - name: Generate CLI release notes
+          if ! LATEST_JSON=$(gh release view --repo "${{ github.repository }}" --json tagName,body,url 2>/dev/null); then
+            echo "::error::No latest release found. The main release workflow (release.yml) must publish a release first."
+            exit 1
+          fi
+
+          LATEST_TAG=$(echo "$LATEST_JSON" | jq -r '.tagName')
+          LATEST_URL=$(echo "$LATEST_JSON" | jq -r '.url')
+          LATEST_BODY=$(echo "$LATEST_JSON" | jq -r '.body')
+
+          echo "tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
+          echo "url=$LATEST_URL" >> "$GITHUB_OUTPUT"
+
+          # Save existing body for later modification
+          echo "$LATEST_BODY" > existing_body.md
+
+          echo "Latest release: $LATEST_TAG"
+          echo "Release URL: $LATEST_URL"
+
+      - name: Upload CLI binaries to latest release
+        id: upload
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          LATEST_TAG="${{ steps.latest.outputs.tag }}"
+
+          echo "Uploading CLI binaries to release '$LATEST_TAG' ..."
+
+          for binary in release-assets/browser4-cli-*; do
+            [[ -f "$binary" ]] || continue
+            echo "  Uploading: $(basename "$binary")"
+            gh release upload "$LATEST_TAG" "$binary" \
+              --repo "${{ github.repository }}" \
+              --clobber
+          done
+
+          echo ""
+          echo "All CLI binaries uploaded to latest release"
+
+      - name: Update release notes
+        id: update_release_notes
         shell: bash
         env:
           CLI_VERSION: ${{ needs.prepare.outputs.cli_version }}
+          LATEST_TAG: ${{ steps.latest.outputs.tag }}
         run: |
-          cat > release_notes.md << NOTES_EOF
-          ## 🚀 browser4-cli v$CLI_VERSION
+          set -euo pipefail
 
-          This release includes prebuilt native **browser4-cli** binaries for:
+          REPO="${{ github.repository }}"
+          LATEST_TAG="$LATEST_TAG"
+
+          # Generate the CLI section to inject
+          cat > cli_section.md << 'SECTION_EOF'
+          ## 🚀 browser4-cli vCLI_VERSION_PLACEHOLDER
+
+          Prebuilt native **browser4-cli** binaries for all major platforms are
+          included in this release:
 
           | Platform | Binary |
           |----------|--------|
-          | Linux x64 | \`browser4-cli-linux-x64\` |
-          | Linux ARM64 | \`browser4-cli-linux-arm64\` |
-          | Linux musl x64 | \`browser4-cli-linux-musl-x64\` |
-          | Linux musl ARM64 | \`browser4-cli-linux-musl-arm64\` |
-          | Windows x64 | \`browser4-cli-win32-x64.exe\` |
-          | macOS x64 | \`browser4-cli-darwin-x64\` |
-          | macOS ARM64 | \`browser4-cli-darwin-arm64\` |
+          | Linux x64 | `browser4-cli-linux-x64` |
+          | Linux ARM64 | `browser4-cli-linux-arm64` |
+          | Linux musl x64 | `browser4-cli-linux-musl-x64` |
+          | Linux musl ARM64 | `browser4-cli-linux-musl-arm64` |
+          | Windows x64 | `browser4-cli-win32-x64.exe` |
+          | macOS x64 | `browser4-cli-darwin-x64` |
+          | macOS ARM64 | `browser4-cli-darwin-arm64` |
 
-          ### Installation
+          ### Quick Install
 
-          \`\`\`bash
+          ```bash
           npm install -g browser4-cli
-          \`\`\`
+          ```
 
-          Or download the appropriate binary for your platform from the assets below.
-          NOTES_EOF
+          Or download the matching binary for your platform from the assets above.
+          SECTION_EOF
 
-      - name: Create or update GitHub Release
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2.6.2
-        with:
-          files: ${{ steps.asset_manifest.outputs.files }}
-          name: browser4-cli v${{ needs.prepare.outputs.cli_version }}
-          body_path: release_notes.md
-          tag_name: ${{ needs.prepare.outputs.tag }}
-          draft: false
-          prerelease: false
-          generate_release_notes: true
-          make_latest: true
-          overwrite_files: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Replace placeholder with actual version
+          sed -i "s/CLI_VERSION_PLACEHOLDER/$CLI_VERSION/g" cli_section.md
+
+          # Merge: remove any existing CLI section, then append the new one.
+          # Awk state machine: skip lines from "## *browser4-cli" header until
+          # the next "## " header (exclusive — that next header is kept).
+          if grep -q '^## .*browser4-cli' existing_body.md; then
+            echo "Existing CLI section found — replacing it."
+            awk '/^## .*browser4-cli/{skip=1; next} /^## /{skip=0} !skip' existing_body.md > updated_body.md
+          else
+            echo "No existing CLI section — appending."
+            cat existing_body.md > updated_body.md
+          fi
+
+          # Append the new CLI section
+          {
+            echo ""
+            cat cli_section.md
+          } >> updated_body.md
+
+          echo "Updating release notes for $LATEST_TAG ..."
+          gh release edit "$LATEST_TAG" \
+            --repo "$REPO" \
+            --notes-file updated_body.md
+
+          echo "Release notes updated"
 
       - name: Trigger OSS Sync
         id: trigger_oss
@@ -605,18 +661,20 @@ jobs:
         run: |
           gh workflow run sync-to-oss.yml \
             --repo "${{ github.repository }}" \
-            -f tag_name="${{ needs.prepare.outputs.tag }}"
+            -f tag_name="${{ steps.latest.outputs.tag }}"
 
       - name: GitHub Release Summary
         if: always()
         shell: bash
         run: |
           {
-            echo "## 🚀 browser4-cli GitHub Release"
+            echo "## 🚀 browser4-cli GitHub Release Update"
             echo ""
-            echo "- **Tag**: ${{ needs.prepare.outputs.tag }}"
-            echo "- **Version**: ${{ needs.prepare.outputs.cli_version }}"
-            echo "- **Platform Binaries**: 7 (Linux x64, ARM64, musl x64, musl ARM64, Windows x64, macOS x64, ARM64)"
+            echo "- **CLI Version**: ${{ needs.prepare.outputs.cli_version }}"
+            echo "- **Latest Release**: ${{ steps.latest.outputs.tag }}"
+            echo "- **Release URL**: ${{ steps.latest.outputs.url }}"
+            echo "- **Platform Binaries**: 7 uploaded"
+            echo "- **Notes Updated**: ${{ steps.update_release_notes.outcome || 'skipped' }}"
             echo "- **OSS Sync**: ${{ steps.trigger_oss.outcome || 'triggered' }}"
             echo "- **Status**: ${{ job.status }}"
           } >> "$GITHUB_STEP_SUMMARY"
