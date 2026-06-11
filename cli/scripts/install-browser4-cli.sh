@@ -308,6 +308,52 @@ add_to_shell_rc() {
 }
 
 # ──────────────────────────────────────────────
+# Symlinks
+# ──────────────────────────────────────────────
+
+create_symlinks() {
+  local binary_name="$1"
+  local install_dir="$2"
+
+  local ext=""
+  if [[ "$binary_name" == *.exe ]]; then
+    ext=".exe"
+  fi
+
+  # 1) Always: browser4-cli -> browser4-cli-<platform>
+  local link_name="browser4-cli${ext}"
+  local link_path="${install_dir}/${link_name}"
+
+  if [[ "$DRY_RUN" == true ]]; then
+    step "[DRY-RUN] Would create symlink: ${link_name} -> ${binary_name}"
+  else
+    ln -sf "$binary_name" "$link_path"
+    ok "Created symlink: ${link_name} -> ${binary_name}"
+  fi
+
+  # 2) Only if no conflict: b4 -> browser4-cli-<platform>
+  local short_name="b4${ext}"
+  local short_path="${install_dir}/${short_name}"
+
+  if command -v b4 >/dev/null 2>&1; then
+    warn "Skipping short link '${short_name}': 'b4' already found on PATH"
+    return
+  fi
+
+  if [[ -e "$short_path" ]] || [[ -L "$short_path" ]]; then
+    warn "Skipping short link '${short_name}': already exists in ${install_dir}"
+    return
+  fi
+
+  if [[ "$DRY_RUN" == true ]]; then
+    step "[DRY-RUN] Would create symlink: ${short_name} -> ${binary_name}"
+  else
+    ln -sf "$binary_name" "$short_path"
+    ok "Created symlink: ${short_name} -> ${binary_name}"
+  fi
+}
+
+# ──────────────────────────────────────────────
 # Main
 # ──────────────────────────────────────────────
 
@@ -398,6 +444,10 @@ main() {
   if [[ "$DRY_RUN" != true ]] && [[ -f "$binary_path" ]]; then
     chmod +x "$binary_path" 2>/dev/null || true
   fi
+
+  # Create symlinks (browser4-cli -> platform binary, b4 if no conflict)
+  say ""
+  create_symlinks "$binary_name" "$INSTALL_DIR"
 
   # Add to PATH
   if [[ "$ADD_TO_PATH" == true ]]; then

@@ -217,6 +217,97 @@ function Invoke-Download {
 }
 
 # ──────────────────────────────────────────────
+# Symlinks
+# ──────────────────────────────────────────────
+
+function New-PlatformLink {
+  param([string]$LinkPath, [string]$TargetName, [string]$DisplayName)
+
+  # Try symbolic link first (works on Unix; on Windows needs Admin or Developer Mode)
+  try {
+    New-Item -ItemType SymbolicLink -Path $LinkPath -Target $TargetName -Force -ErrorAction Stop | Out-Null
+    Write-Check "Created symlink: $DisplayName -> $TargetName"
+    return $true
+  } catch {
+    # Symbolic link failed — try hard link on Windows
+  }
+
+  # Try hard link (Windows, same volume)
+  if ($script:IsWin) {
+    try {
+      $targetPath = Join-Path (Split-Path $LinkPath -Parent) $TargetName
+      New-Item -ItemType HardLink -Path $LinkPath -Target $targetPath -Force -ErrorAction Stop | Out-Null
+      Write-Check "Created hard link: $DisplayName -> $TargetName"
+      return $true
+    } catch {
+      # Hard link also failed — create a .cmd wrapper as last resort
+    }
+
+    # Last resort: .cmd wrapper that forwards all arguments
+    try {
+      $wrapperContent = '@"%~dp0' + $TargetName + '" %*'
+      Set-Content -Path ($LinkPath -replace '\.exe$', '.cmd') -Value $wrapperContent -Force -ErrorAction Stop
+      Write-Check "Created wrapper: " + (Split-Path ($LinkPath -replace '\.exe$', '.cmd') -Leaf) + " -> $TargetName"
+      return $true
+    } catch {
+      Write-WarnMsg "Could not create link for $DisplayName (may need admin privileges)"
+      return $false
+    }
+  }
+
+  Write-WarnMsg "Could not create link for $DisplayName"
+  return $false
+}
+
+function New-Symlinks {
+  param([string]$BinaryName, [string]$InstallDir, [string]$PlatformKey)
+
+  $ext = if ($PlatformKey.StartsWith("win32")) { ".exe" } else { "" }
+
+  # 1) Always: browser4-cli -> browser4-cli-<platform>
+  $linkName = "browser4-cli$ext"
+  $linkPath = Join-Path $InstallDir $linkName
+
+  if ($DryRun) {
+    Write-Step "[DRY-RUN] Would create link: $linkName -> $BinaryName"
+  } else {
+    New-PlatformLink -LinkPath $linkPath -TargetName $BinaryName -DisplayName $linkName
+  }
+
+  # 2) Only if no conflict: b4 -> browser4-cli-<platform>
+  $shortName = "b4$ext"
+  $shortPath = Join-Path $InstallDir $shortName
+
+  # Check if b4 is already on PATH (conflict with another tool)
+  $existingCmd = Get-Command b4 -ErrorAction SilentlyContinue
+  if ($existingCmd) {
+    Write-WarnMsg "Skipping short link '$shortName': 'b4' already found on PATH ($($existingCmd.Source))"
+    return
+  }
+
+  # Check if b4 already exists in the install directory
+  if (Test-Path $shortPath) {
+    Write-WarnMsg "Skipping short link '$shortName': already exists in $InstallDir"
+    return
+  }
+
+  # Also check b4.cmd if on Windows (wrapper fallback)
+  if ($script:IsWin) {
+    $shortCmdPath = Join-Path $InstallDir "b4.cmd"
+    if (Test-Path $shortCmdPath) {
+      Write-WarnMsg "Skipping short link '$shortName': 'b4.cmd' already exists in $InstallDir"
+      return
+    }
+  }
+
+  if ($DryRun) {
+    Write-Step "[DRY-RUN] Would create link: $shortName -> $BinaryName"
+  } else {
+    New-PlatformLink -LinkPath $shortPath -TargetName $BinaryName -DisplayName $shortName
+  }
+}
+
+# ──────────────────────────────────────────────
 # PATH management
 # ──────────────────────────────────────────────
 
@@ -329,6 +420,10 @@ Please check:
       try { chmod +x $binaryPath 2>$null } catch { }
     }
   }
+
+  # Create symlinks (browser4-cli -> platform binary, b4 if no conflict)
+  Write-Summary ""
+  New-Symlinks -BinaryName $binaryName -InstallDir $installDir -PlatformKey $platformKey
 
   # Add to PATH
   if ($AddToPath -and $script:IsWin) {
