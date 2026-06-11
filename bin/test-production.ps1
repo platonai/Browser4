@@ -103,6 +103,31 @@ if ($PSVersionTable.PSVersion.Major -ge 6) {
 }
 
 # ─────────────────────────────────────────────────────
+# Platform-specific paths
+# $env:TEMP / $env:LOCALAPPDATA / $env:APPDATA are
+# Windows concepts and may be $null on Linux/macOS.
+# Resolve them once at the top so Join-Path never
+# receives a null Path argument.
+# ─────────────────────────────────────────────────────
+$script:TempDir = if ($env:TEMP) {
+    $env:TEMP
+} elseif ($env:TMPDIR) {
+    $env:TMPDIR
+} else {
+    '/tmp'
+}
+$script:LocalAppData = if ($env:LOCALAPPDATA) {
+    $env:LOCALAPPDATA
+} else {
+    Join-Path $env:HOME '.local'
+}
+$script:AppData = if ($env:APPDATA) {
+    $env:APPDATA
+} else {
+    $env:HOME  # ~/.browser4 lives under HOME on Linux/macOS
+}
+
+# ─────────────────────────────────────────────────────
 # Constants
 # ─────────────────────────────────────────────────────
 $InstallPs1Url = 'https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1'
@@ -187,8 +212,8 @@ function Invoke-CliCommand {
     )
     $sw = [Diagnostics.Stopwatch]::StartNew()
     try {
-        $tmpOut = Join-Path $env:TEMP 'b4cli-stdout.txt'
-        $tmpErr = Join-Path $env:TEMP 'b4cli-stderr.txt'
+        $tmpOut = Join-Path $TempDir 'b4cli-stdout.txt'
+        $tmpErr = Join-Path $TempDir 'b4cli-stderr.txt'
         Remove-Item $tmpOut, $tmpErr -Force -ErrorAction SilentlyContinue
 
         # Use direct invocation rather than Start-Process so that
@@ -225,15 +250,17 @@ function Invoke-CliCommandAsync {
         [int]$TimeoutSeconds = 30
     )
     # Locate the actual executable to pass to Start-Process.
-    $exe = (Get-Command 'browser4-cli' -CommandType Application -ErrorAction SilentlyContinue).Source
+    # Use Select-Object -First 1 in case multiple browser4-cli
+    # commands exist on PATH (e.g. npm version + standalone binary).
+    $exe = (Get-Command 'browser4-cli' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
     if (-not $exe) { $exe = 'browser4-cli' }
     $proc = Start-Process `
         -FilePath $exe `
         -ArgumentList $Arguments `
         -NoNewWindow `
         -PassThru `
-        -RedirectStandardOutput $env:TEMP\b4cli-async-stdout.txt `
-        -RedirectStandardError $env:TEMP\b4cli-async-stderr.txt
+        -RedirectStandardOutput (Join-Path $TempDir 'b4cli-async-stdout.txt') `
+        -RedirectStandardError (Join-Path $TempDir 'b4cli-async-stderr.txt')
 
     return $proc
 }
@@ -247,9 +274,9 @@ function Wait-ProcessAndCollect {
         $Process.Kill($true) | Out-Null
         $Process.WaitForExit(5000) | Out-Null
     }
-    $stdout = Get-Content -Path $env:TEMP\b4cli-async-stdout.txt -Raw -ErrorAction SilentlyContinue
-    $stderr = Get-Content -Path $env:TEMP\b4cli-async-stderr.txt -Raw -ErrorAction SilentlyContinue
-    Remove-Item $env:TEMP\b4cli-async-stdout.txt, $env:TEMP\b4cli-async-stderr.txt -Force -ErrorAction SilentlyContinue
+    $stdout = Get-Content -Path (Join-Path $TempDir 'b4cli-async-stdout.txt') -Raw -ErrorAction SilentlyContinue
+    $stderr = Get-Content -Path (Join-Path $TempDir 'b4cli-async-stderr.txt') -Raw -ErrorAction SilentlyContinue
+    Remove-Item (Join-Path $TempDir 'b4cli-async-stdout.txt'), (Join-Path $TempDir 'b4cli-async-stderr.txt') -Force -ErrorAction SilentlyContinue
 
     $combined = (@($stdout, $stderr) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join "`n"
     return [PSCustomObject]@{
@@ -264,8 +291,8 @@ function Get-RuntimeBundleDir {
     # The runtime bundle may live under ~/.browser4 or %APPDATA%/browser4.
     $searchRoots = @($Browser4Home)
     if ($OSWin) {
-        $searchRoots += Join-Path $env:APPDATA 'browser4'
-        $searchRoots += Join-Path $env:LOCALAPPDATA 'browser4'
+        $searchRoots += Join-Path $AppData 'browser4'
+        $searchRoots += Join-Path $LocalAppData 'browser4'
     }
     foreach ($root in $searchRoots) {
         if (-not (Test-Path $root)) { continue }
@@ -293,22 +320,6 @@ if (-not (Test-Path $WorkingDir)) {
 }
 Push-Location $WorkingDir
 Write-Info "Pushed to $WorkingDir"
-
-# ─────────────────────────────────────────────────────
-# Rename ~/.browser4 out of the way (if it exists) so
-# testing starts from a clean slate.  Restore it after
-# the test run completes (see Restore-Browser4Home).
-# ─────────────────────────────────────────────────────
-$browser4HomeBackup = $null
-if (Test-Path $Browser4Home) {
-    $browser4HomeBackup = "$Browser4Home.backup.$(Get-Date -Format 'yyyyMMdd-HHmmss')"
-    Write-Info "Renaming ~/.browser4 → $browser4HomeBackup"
-    Move-Item -Path $Browser4Home -Destination $browser4HomeBackup -Force
-    Write-Info 'Clean slate: no ~/.browser4 present'
-} else {
-    Write-Info 'No existing ~/.browser4 — already clean'
-}
-
 # ─────────────────────────────────────────────────────
 # Helper: restore ~/.browser4 from backup
 # ─────────────────────────────────────────────────────
@@ -321,6 +332,39 @@ function Restore-Browser4Home {
         Move-Item $browser4HomeBackup $Browser4Home -Force
         Write-Info 'Original ~/.browser4 restored'
     }
+}
+
+try {
+
+# ─────────────────────────────────────────────────────
+# Rename ~/.browser4 out of the way (if it exists) so
+# testing starts from a clean slate.  Restore it after
+# the test run completes (see Restore-Browser4Home).
+# ─────────────────────────────────────────────────────
+$browser4HomeBackup = $null
+if (Test-Path $Browser4Home) {
+    $browser4HomeBackup = "$Browser4Home.backup.$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+    Write-Info "Renaming ~/.browser4 → $browser4HomeBackup"
+    # On Windows, Move-Item can fail with "being used by another process"
+    # when files inside the directory are locked (e.g. by a running server,
+    # antivirus, or search indexer).  Fall back to copy+remove, and if even
+    # that fails, warn but continue with a clean slate by removing what we can.
+    try {
+        Move-Item -Path $Browser4Home -Destination $browser4HomeBackup -Force -ErrorAction Stop
+    } catch {
+        Write-Info "Move-Item failed ($_), falling back to copy+remove"
+        Copy-Item -Path $Browser4Home -Destination $browser4HomeBackup -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path $Browser4Home -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path $Browser4Home) {
+            Write-WarningMsg "Could not fully remove original ~/.browser4 — some files may be locked. Proceeding anyway."
+            # Rename the remnant so the test still starts from a clean slate
+            $remnant = "$Browser4Home.remnant.$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+            Rename-Item -Path $Browser4Home -NewName (Split-Path $remnant -Leaf) -ErrorAction SilentlyContinue
+        }
+    }
+    Write-Info 'Clean slate: no ~/.browser4 present'
+} else {
+    Write-Info 'No existing ~/.browser4 — already clean'
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -341,14 +385,18 @@ if ($existingCli) {
     Write-Info 'Running browser4-cli uninstall …'
 
     $result = Invoke-CliCommand -Arguments @('uninstall', '-y') -IgnoreExitCode
+    if ($result.Output -match 'too many arguments') {
+        Write-Info "uninstall -y not supported by this binary; retrying without -y …"
+        $result = Invoke-CliCommand -Arguments @('uninstall') -IgnoreExitCode
+    }
     Write-Info "uninstall output: $($result.Output)"
 
-    # Also use the comprehensive remove script
+    # Also use the comprehensive remove script (non-interactive).
     $removeScript = Join-Path $RepoRoot 'bin\tools\remove-global-browser4-cli.ps1'
     if (Test-Path $removeScript) {
         Write-Info 'Running remove-global-browser4-cli.ps1 for thorough cleanup …'
         try {
-            & $removeScript -ErrorAction SilentlyContinue
+            & $removeScript -Confirm:$false -ErrorAction SilentlyContinue
         } catch {
             Write-Info "remove-global-browser4-cli.ps1: $_"
         }
@@ -554,7 +602,7 @@ function Invoke-InstallationCycle {
             Write-Info "Downloading and running install script (Windows) …"
             Write-Info "URL: $InstallPs1Url"
 
-            $installScript = Join-Path $env:TEMP 'install-browser4-cli.ps1'
+            $installScript = Join-Path $TempDir 'install-browser4-cli.ps1'
             Invoke-WebRequest -Uri $InstallPs1Url -OutFile $installScript -UseBasicParsing -ErrorAction Stop
             Write-Info "Downloaded install script to $installScript"
 
@@ -578,7 +626,7 @@ function Invoke-InstallationCycle {
             Write-Info "Downloading and running install script (Linux/macOS) …"
             Write-Info "URL: $InstallShUrl"
 
-            $installScript = Join-Path $env:TEMP 'install-browser4-cli.sh'
+            $installScript = Join-Path $TempDir 'install-browser4-cli.sh'
             Invoke-WebRequest -Uri $InstallShUrl -OutFile $installScript -UseBasicParsing -ErrorAction Stop
             Write-Info "Downloaded install script to $installScript"
 
@@ -590,7 +638,7 @@ function Invoke-InstallationCycle {
 
         # Sync session PATH with the registry (the install script may
         # have skipped this if the dir was already in the registry).
-        $installDir = Join-Path $env:LOCALAPPDATA 'Programs\browser4-cli'
+        $installDir = Join-Path $LocalAppData 'Programs\browser4-cli'
         if ((Test-Path $installDir) -and ($installDir -notin ($env:Path -split ';'))) {
             $env:Path = "$installDir;$env:Path"
         }
@@ -606,6 +654,29 @@ function Invoke-InstallationCycle {
             if ($nativeExe) {
                 Write-Info "Creating .cmd wrapper: browser4-cli.cmd -> $($nativeExe.Name)"
                 '@"%~dp0' + $nativeExe.Name + '" %*' | Set-Content -Path $cliCmd -Force
+            }
+        }
+
+        # On Linux/macOS, the shell install script puts the binary under
+        # ~/.local/bin with a platform-specific name (e.g.
+        # browser4-cli-linux-x64) but does NOT create a bare
+        # 'browser4-cli' symlink.  Ensure the directory is on PATH and
+        # the symlink exists.
+        if ($OSLinux -or $OSMac) {
+            $linuxInstallDir = Join-Path $env:HOME '.local/bin'
+            if ((Test-Path $linuxInstallDir) -and ($linuxInstallDir -notin ($env:Path -split [System.IO.Path]::PathSeparator))) {
+                $env:Path = "$linuxInstallDir$([System.IO.Path]::PathSeparator)$env:Path"
+                Write-Info "Added to session PATH: $linuxInstallDir"
+            }
+            $cliSymlink = Join-Path $linuxInstallDir 'browser4-cli'
+            if (-not (Test-Path $cliSymlink)) {
+                $nativeBinary = Get-ChildItem -Path $linuxInstallDir -Filter 'browser4-cli-*' -ErrorAction SilentlyContinue `
+                    | Where-Object { $_.Name -match '^browser4-cli-(linux|macos|darwin)' } `
+                    | Select-Object -First 1
+                if ($nativeBinary) {
+                    Write-Info "Creating symlink: browser4-cli -> $($nativeBinary.Name)"
+                    New-Item -ItemType SymbolicLink -Path $cliSymlink -Target $nativeBinary.FullName -Force | Out-Null
+                }
             }
         }
 
@@ -805,14 +876,20 @@ function Invoke-InstallationCycle {
     # ─────────────────────────────────────────────────
     Write-StepHeader "CYCLE $CycleNumber — STEP H: browser4-cli uninstall"
 
+    # Try uninstall with -y first (supported by npm version ≥0.1.14).
+    # The standalone binary may not accept -y; fall back to plain uninstall.
     $uninstallResult = Invoke-CliCommand -Arguments @('uninstall', '-y') -TimeoutSeconds 60 -IgnoreExitCode
+    if ($uninstallResult.Output -match 'too many arguments') {
+        Write-Info "uninstall -y not supported by this binary; retrying without -y …"
+        $uninstallResult = Invoke-CliCommand -Arguments @('uninstall') -TimeoutSeconds 60 -IgnoreExitCode
+    }
     Write-Info "uninstall output: $($uninstallResult.Output)"
 
-    # Also run the comprehensive removal script
+    # Also run the comprehensive removal script (non-interactive).
     $removeScript = Join-Path $RepoRoot 'bin\tools\remove-global-browser4-cli.ps1'
     if (Test-Path $removeScript) {
         try {
-            & $removeScript -ErrorAction SilentlyContinue
+            & $removeScript -Confirm:$false -ErrorAction SilentlyContinue
         } catch {
             Write-Info "remove-global-browser4-cli.ps1: $_"
         }
@@ -821,33 +898,54 @@ function Invoke-InstallationCycle {
     # The standalone binary install (what the install script does) is
     # not handled by "browser4-cli uninstall" (which only covers npm/
     # cargo).  Remove it ourselves.
-    $installDir = Join-Path $env:LOCALAPPDATA 'Programs\browser4-cli'
+    $installDir = Join-Path $LocalAppData 'Programs\browser4-cli'
     if (Test-Path $installDir) {
-        Write-Info "Removing standalone install: $installDir"
+        Write-Info "Removing standalone install (Windows): $installDir"
         Remove-Item $installDir -Recurse -Force -ErrorAction SilentlyContinue
     }
-    # Also remove from user PATH.
+    # Also remove from user PATH (Windows).
+    $pathSep = [System.IO.Path]::PathSeparator
     $userPath = [System.Environment]::GetEnvironmentVariable('Path', 'User')
-    if ($userPath -match [regex]::Escape($installDir)) {
-        $newUserPath = ($userPath -split ';' | Where-Object { $_ -ne $installDir }) -join ';'
+    if ($userPath -and $userPath -match [regex]::Escape($installDir)) {
+        $newUserPath = ($userPath -split $pathSep | Where-Object { $_ -ne $installDir }) -join $pathSep
         [System.Environment]::SetEnvironmentVariable('Path', $newUserPath, 'User')
         Write-Info "Removed from user PATH: $installDir"
     }
 
-    # Verify uninstall
-    Start-Sleep -Seconds 2
-    $env:Path = [System.Environment]::GetEnvironmentVariable('Path', 'User') + ';' +
-                [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
-    $remainingCli = Get-Command 'browser4-cli' -CommandType Application -ErrorAction SilentlyContinue
-    if (-not $remainingCli) {
-        $whichCmd = if ($OSWin) { 'where.exe' } else { 'which' }
-        $raw = & $whichCmd 'browser4-cli' 2>$null | Select-Object -First 1
-        if ($raw) { $remainingCli = $raw.Trim() }
+    # On Linux/macOS, remove the 'browser4-cli' symlink and the
+    # platform-specific binary from ~/.local/bin.
+    if ($OSLinux -or $OSMac) {
+        $linuxInstallDir = Join-Path $env:HOME '.local/bin'
+        $cliSymlink = Join-Path $linuxInstallDir 'browser4-cli'
+        if (Test-Path $cliSymlink) {
+            Write-Info "Removing symlink: $cliSymlink"
+            Remove-Item $cliSymlink -Force -ErrorAction SilentlyContinue
+        }
+        $nativeBinary = Get-ChildItem -Path $linuxInstallDir -Filter 'browser4-cli-*' -ErrorAction SilentlyContinue `
+            | Where-Object { $_.Name -match '^browser4-cli-(linux|macos|darwin)' } `
+            | Select-Object -First 1
+        if ($nativeBinary) {
+            Write-Info "Removing native binary: $($nativeBinary.FullName)"
+            Remove-Item $nativeBinary.FullName -Force -ErrorAction SilentlyContinue
+        }
     }
 
-    $uninstallOk = ($null -eq $remainingCli)
+    # Verify uninstall — check that the standalone install we just
+    # removed is actually gone.  Don't require that every browser4-cli
+    # on the system is gone (the npm version may coexist).
+    Start-Sleep -Seconds 2
+    if ($OSWin) {
+        $env:Path = [System.Environment]::GetEnvironmentVariable('Path', 'User') + ';' +
+                    [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
+        $standaloneGone = -not (Test-Path $installDir)
+    } else {
+        $standaloneGone = (-not (Test-Path (Join-Path $env:HOME '.local/bin/browser4-cli'))) -and
+                          (-not (Get-ChildItem (Join-Path $env:HOME '.local/bin') -Filter 'browser4-cli-*' -ErrorAction SilentlyContinue `
+                              | Where-Object { $_.Name -match '^browser4-cli-(linux|macos|darwin)' }))
+    }
+    $uninstallOk = $standaloneGone
     Write-StepResult -Step 'uninstall' -Passed $uninstallOk `
-        -Detail $(if ($uninstallOk) { 'browser4-cli removed from PATH' } else { 'browser4-cli still on PATH' })
+        -Detail $(if ($uninstallOk) { 'standalone binary removed' } else { 'standalone binary still present' })
 
     # Ensure ~/.browser4 survived the uninstall
     $homeSurvived = Test-Path $Browser4Home
@@ -884,7 +982,7 @@ if ($SkipMultiScenarios) {
             Write-Info "Downloading and running install script (Windows) …"
             Write-Info "URL: $InstallPs1Url"
 
-            $installScript = Join-Path $env:TEMP 'install-browser4-cli.ps1'
+            $installScript = Join-Path $TempDir 'install-browser4-cli.ps1'
             Invoke-WebRequest -Uri $InstallPs1Url -OutFile $installScript -UseBasicParsing -ErrorAction Stop
             Write-Info "Downloaded install script to $installScript"
 
@@ -904,7 +1002,7 @@ if ($SkipMultiScenarios) {
             Write-Info "Downloading and running install script (Linux/macOS) …"
             Write-Info "URL: $InstallShUrl"
 
-            $installScript = Join-Path $env:TEMP 'install-browser4-cli.sh'
+            $installScript = Join-Path $TempDir 'install-browser4-cli.sh'
             Invoke-WebRequest -Uri $InstallShUrl -OutFile $installScript -UseBasicParsing -ErrorAction Stop
             Write-Info "Downloaded install script to $installScript"
 
@@ -913,8 +1011,29 @@ if ($SkipMultiScenarios) {
                 Write-WarningMsg "Shell install script exited with code $LASTEXITCODE"
             }
         }
-        $env:Path = [System.Environment]::GetEnvironmentVariable('Path', 'User') + ';' +
-                    [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
+        # Refresh session PATH.  On Windows, re-read the registry.
+        # On Linux/macOS, ensure ~/.local/bin is included and the
+        # browser4-cli symlink exists.
+        if ($OSWin) {
+            $env:Path = [System.Environment]::GetEnvironmentVariable('Path', 'User') + ';' +
+                        [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
+        } else {
+            $linuxInstallDir = Join-Path $env:HOME '.local/bin'
+            if ((Test-Path $linuxInstallDir) -and ($linuxInstallDir -notin ($env:Path -split [System.IO.Path]::PathSeparator))) {
+                $env:Path = "$linuxInstallDir$([System.IO.Path]::PathSeparator)$env:Path"
+                Write-Info "Added to session PATH: $linuxInstallDir"
+            }
+            $cliSymlink = Join-Path $linuxInstallDir 'browser4-cli'
+            if (-not (Test-Path $cliSymlink)) {
+                $nativeBinary = Get-ChildItem -Path $linuxInstallDir -Filter 'browser4-cli-*' -ErrorAction SilentlyContinue `
+                    | Where-Object { $_.Name -match '^browser4-cli-(linux|macos|darwin)' } `
+                    | Select-Object -First 1
+                if ($nativeBinary) {
+                    Write-Info "Creating symlink: browser4-cli -> $($nativeBinary.Name)"
+                    New-Item -ItemType SymbolicLink -Path $cliSymlink -Target $nativeBinary.FullName -Force | Out-Null
+                }
+            }
+        }
     }
 
     $multiScenariosScript = Join-Path $RepoRoot 'bin\tests\multi-scenarios.ps1'
@@ -949,32 +1068,34 @@ if ($SkipMultiScenarios) {
     }
 }
 
-# ═══════════════════════════════════════════════════════════════
-# Cleanup
-# ═══════════════════════════════════════════════════════════════
-Write-StepHeader 'Cleanup'
+} finally {
+    # ═══════════════════════════════════════════════════════════════
+    # Cleanup (guaranteed to run even on error)
+    # ═══════════════════════════════════════════════════════════════
+    Write-StepHeader 'Cleanup'
 
-# Restore original ~/.browser4
-Restore-Browser4Home
+    # Restore original ~/.browser4
+    try { Restore-Browser4Home } catch { Write-WarningMsg "Restore-Browser4Home failed: $_" }
 
-# Return to original directory
-Pop-Location
+    # Return to original directory
+    Pop-Location
 
-# Clean up working directory
-if (-not $KeepWorkingDir) {
-    Write-Info "Removing working directory: $WorkingDir"
-    try {
-        Remove-Item $WorkingDir -Recurse -Force -ErrorAction SilentlyContinue
-    } catch {
-        Write-WarningMsg "Could not fully remove $WorkingDir : $_"
+    # Clean up working directory
+    if (-not $KeepWorkingDir) {
+        Write-Info "Removing working directory: $WorkingDir"
+        try {
+            Remove-Item $WorkingDir -Recurse -Force -ErrorAction SilentlyContinue
+        } catch {
+            Write-WarningMsg "Could not fully remove $WorkingDir : $_"
+        }
+    } else {
+        Write-Info "-KeepWorkingDir set — preserving $WorkingDir"
     }
-} else {
-    Write-Info "-KeepWorkingDir set — preserving $WorkingDir"
-}
 
-# Clean up temp install scripts
-Remove-Item (Join-Path $env:TEMP 'install-browser4-cli.ps1') -Force -ErrorAction SilentlyContinue
-Remove-Item (Join-Path $env:TEMP 'install-browser4-cli.sh') -Force -ErrorAction SilentlyContinue
+    # Clean up temp install scripts
+    Remove-Item (Join-Path $TempDir 'install-browser4-cli.ps1') -Force -ErrorAction SilentlyContinue
+    Remove-Item (Join-Path $TempDir 'install-browser4-cli.sh') -Force -ErrorAction SilentlyContinue
+}
 
 # ═══════════════════════════════════════════════════════════════
 # Summary

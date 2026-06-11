@@ -1088,6 +1088,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: write
       attestations: write
       id-token: write
 
@@ -1250,6 +1251,14 @@ jobs:
             echo ""
             echo "✅ Release pipeline completed successfully!"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Trigger OSS Sync
+        if: success()
+        shell: bash
+        run: |
+          gh workflow run sync-to-oss.yml \
+            --repo "${{ github.repository }}" \
+            -f tag_name="${{ needs.prepare.outputs.tag }}"
 
   cleanup-on-failure:
     name: Report failed release
