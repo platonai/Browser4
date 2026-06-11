@@ -11,7 +11,7 @@
     The script is designed to be run in CI or locally before tagging a release.
     It tests the full lifecycle:
 
-      1. Create a random working directory under ~/tmp/.browser4-acceptance.
+      1. Create a random working directory under ${system_temp_dir}/.browser4-acceptance.
       2. Clean any pre-existing global installation.
       3. Install the latest browser4-cli via the remote bootstrap script.
       4. Smoke-test the CLI (--help, open, open <url>).
@@ -21,8 +21,9 @@
 
 .PARAMETER WorkingDir
     Working directory for temporary artifacts.
-    Default: a random subdirectory under ~/tmp/.browser4-acceptance
-    (e.g. ~/tmp/.browser4-acceptance/20260611-143052-a3f2).
+    Default: a random subdirectory under the system temp directory
+    (e.g. /tmp/.browser4-acceptance/20260611-143052-a3f2 on Unix,
+    %TEMP%\.browser4-acceptance\20260611-143052-a3f2 on Windows).
 
 .PARAMETER SkipMultiScenarios
     Skip the final multi-scenarios.ps1 run.
@@ -74,17 +75,12 @@ if (-not $RepoRoot) { throw 'Cannot find repo root (no pom.xml found up the tree
 
 # ─────────────────────────────────────────────────────
 # Resolve working directory — default to a random
-# subdirectory under ~/tmp/.browser4-acceptance so each
+# subdirectory under the system temp dir so each
 # run is isolated without the caller needing to supply
 # a unique path.
 # ─────────────────────────────────────────────────────
 if (-not $WorkingDir) {
-    $homeTmp = if ($IsLinux -or $IsMacOS) {
-        Join-Path $env:HOME 'tmp'
-    } else {
-        Join-Path $env:USERPROFILE 'tmp'
-    }
-    $acceptanceRoot = Join-Path $homeTmp '.browser4-acceptance'
+    $acceptanceRoot = Join-Path ([System.IO.Path]::GetTempPath()) '.browser4-acceptance'
     $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $randomSuffix = -join ((48..57) + (97..102) | Get-Random -Count 4 | ForEach-Object { [char]$_ })
     $WorkingDir = Join-Path $acceptanceRoot "$timestamp-$randomSuffix"
