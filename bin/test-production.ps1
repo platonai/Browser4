@@ -320,6 +320,7 @@ if (-not (Test-Path $WorkingDir)) {
 }
 Push-Location $WorkingDir
 Write-Info "Pushed to $WorkingDir"
+try {
 
 # ─────────────────────────────────────────────────────
 # Rename ~/.browser4 out of the way (if it exists) so
@@ -330,7 +331,23 @@ $browser4HomeBackup = $null
 if (Test-Path $Browser4Home) {
     $browser4HomeBackup = "$Browser4Home.backup.$(Get-Date -Format 'yyyyMMdd-HHmmss')"
     Write-Info "Renaming ~/.browser4 → $browser4HomeBackup"
-    Move-Item -Path $Browser4Home -Destination $browser4HomeBackup -Force
+    # On Windows, Move-Item can fail with "being used by another process"
+    # when files inside the directory are locked (e.g. by a running server,
+    # antivirus, or search indexer).  Fall back to copy+remove, and if even
+    # that fails, warn but continue with a clean slate by removing what we can.
+    try {
+        Move-Item -Path $Browser4Home -Destination $browser4HomeBackup -Force -ErrorAction Stop
+    } catch {
+        Write-Info "Move-Item failed ($_), falling back to copy+remove"
+        Copy-Item -Path $Browser4Home -Destination $browser4HomeBackup -Recurse -Force
+        Remove-Item -Path $Browser4Home -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path $Browser4Home) {
+            Write-WarningMsg "Could not fully remove original ~/.browser4 — some files may be locked. Proceeding anyway."
+            # Rename the remnant so the test still starts from a clean slate
+            $remnant = "$Browser4Home.remnant.$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+            Rename-Item -Path $Browser4Home -NewName (Split-Path $remnant -Leaf) -ErrorAction SilentlyContinue
+        }
+    }
     Write-Info 'Clean slate: no ~/.browser4 present'
 } else {
     Write-Info 'No existing ~/.browser4 — already clean'
@@ -1051,32 +1068,34 @@ if ($SkipMultiScenarios) {
     }
 }
 
-# ═══════════════════════════════════════════════════════════════
-# Cleanup
-# ═══════════════════════════════════════════════════════════════
-Write-StepHeader 'Cleanup'
+} finally {
+    # ═══════════════════════════════════════════════════════════════
+    # Cleanup (guaranteed to run even on error)
+    # ═══════════════════════════════════════════════════════════════
+    Write-StepHeader 'Cleanup'
 
-# Restore original ~/.browser4
-Restore-Browser4Home
+    # Restore original ~/.browser4
+    Restore-Browser4Home
 
-# Return to original directory
-Pop-Location
+    # Return to original directory
+    Pop-Location
 
-# Clean up working directory
-if (-not $KeepWorkingDir) {
-    Write-Info "Removing working directory: $WorkingDir"
-    try {
-        Remove-Item $WorkingDir -Recurse -Force -ErrorAction SilentlyContinue
-    } catch {
-        Write-WarningMsg "Could not fully remove $WorkingDir : $_"
+    # Clean up working directory
+    if (-not $KeepWorkingDir) {
+        Write-Info "Removing working directory: $WorkingDir"
+        try {
+            Remove-Item $WorkingDir -Recurse -Force -ErrorAction SilentlyContinue
+        } catch {
+            Write-WarningMsg "Could not fully remove $WorkingDir : $_"
+        }
+    } else {
+        Write-Info "-KeepWorkingDir set — preserving $WorkingDir"
     }
-} else {
-    Write-Info "-KeepWorkingDir set — preserving $WorkingDir"
-}
 
-# Clean up temp install scripts
-Remove-Item (Join-Path $TempDir 'install-browser4-cli.ps1') -Force -ErrorAction SilentlyContinue
-Remove-Item (Join-Path $TempDir 'install-browser4-cli.sh') -Force -ErrorAction SilentlyContinue
+    # Clean up temp install scripts
+    Remove-Item (Join-Path $TempDir 'install-browser4-cli.ps1') -Force -ErrorAction SilentlyContinue
+    Remove-Item (Join-Path $TempDir 'install-browser4-cli.sh') -Force -ErrorAction SilentlyContinue
+}
 
 # ═══════════════════════════════════════════════════════════════
 # Summary
