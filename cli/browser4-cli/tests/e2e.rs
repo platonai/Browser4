@@ -426,10 +426,17 @@ struct FixtureDownloadServer {
     shutdown: Arc<AtomicBool>,
     /// Recorded request paths.
     requests: Arc<Mutex<Vec<String>>>,
+    /// Artificial latency applied before serving each request (for speed-test
+    /// scenarios that need one mirror to appear slower than another).
+    latency: Duration,
 }
 
 impl FixtureDownloadServer {
     fn start(bundle_bytes: Vec<u8>) -> Self {
+        Self::start_with_latency(bundle_bytes, Duration::ZERO)
+    }
+
+    fn start_with_latency(bundle_bytes: Vec<u8>, latency: Duration) -> Self {
         let listener =
             TcpListener::bind("127.0.0.1:0").expect("fixture download server bind failed");
         let port = listener.local_addr().unwrap().port();
@@ -451,7 +458,7 @@ impl FixtureDownloadServer {
                     Ok((stream, _)) => {
                         let b = bytes.clone();
                         let r = reqs.clone();
-                        thread::spawn(move || serve_download_request(stream, b, r));
+                        thread::spawn(move || serve_download_request(stream, b, r, latency));
                     }
                     Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(5));
@@ -470,6 +477,7 @@ impl FixtureDownloadServer {
             port,
             shutdown,
             requests,
+            latency,
         }
     }
 
@@ -495,7 +503,11 @@ fn serve_download_request(
     mut stream: TcpStream,
     bundle_bytes: Arc<Vec<u8>>,
     requests: Arc<Mutex<Vec<String>>>,
+    latency: Duration,
 ) {
+    if !latency.is_zero() {
+        thread::sleep(latency);
+    }
     let mut buf = vec![0u8; 8192];
     let n = match stream.read(&mut buf) {
         Ok(n) => n,

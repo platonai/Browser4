@@ -2437,3 +2437,169 @@ pub(super) fn test_install_loads_mirrors_json_from_runtime_dir(ctx: &mut E2ECtx)
         requests
     );
 }
+
+// ---------------------------------------------------------------------------
+// install / upgrade — speed-test-based mirror selection
+// ---------------------------------------------------------------------------
+
+/// Verify that speed-testing selects the faster of two mirrors, not just the
+/// first one in the list.
+pub(super) fn test_install_speed_test_selects_fastest_mirror(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let (bundle_bytes, _dir_name) = build_fake_runtime_bundle("v4.10.0");
+
+    // Two download servers: one fast, one slow.
+    let fast_server = FixtureDownloadServer::start(bundle_bytes.clone());
+    let slow_server =
+        FixtureDownloadServer::start_with_latency(bundle_bytes.clone(), Duration::from_secs(2));
+
+    // Put the SLOW mirror FIRST in the list so we can verify that the
+    // speed test overrides simple list-order selection.
+    let mirrors_path = ctx.runtime_dir.join("mirrors.json");
+    let mirrors_json = serde_json::json!({
+        "mirrors": [
+            {
+                "name": "slow-mirror",
+                "base_url": slow_server.base_url()
+            },
+            {
+                "name": "fast-mirror",
+                "base_url": fast_server.base_url()
+            }
+        ]
+    });
+    fs::write(&mirrors_path, mirrors_json.to_string()).expect("write mirrors.json");
+
+    let result = run_command(ctx, &["install", INSTALL_TAG, "--force"]);
+    assert_eq!(
+        result.exit_code, 0,
+        "install should succeed with speed-test mirror selection:\n{}",
+        result.stderr
+    );
+    assert!(
+        result.stdout.contains("installed successfully"),
+        "Expected 'installed successfully' in:\n{}",
+        result.stdout
+    );
+
+    // The fast mirror should have received at least one download request
+    // (either the speed-test probe or the full download).
+    let fast_requests = fast_server.snapshot_requests();
+    assert!(
+        fast_requests.iter().any(|p| p.contains("/download/")),
+        "Fast mirror should have received download requests, got: {:?}",
+        fast_requests
+    );
+
+    // Verify speed-test messages appeared in stderr.
+    assert!(
+        result.stderr.contains("Speed-testing mirror"),
+        "Expected speed-test progress messages in stderr:\n{}",
+        result.stderr
+    );
+}
+
+/// Verify that after a successful speed-test the mirror preference is cached and
+/// the next forced install skips speed testing (even though the download cache is
+/// also bypassed).
+pub(super) fn test_install_mirror_preference_cache_hit(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let (bundle_bytes, _dir_name) = build_fake_runtime_bundle("v4.10.0");
+    let server = FixtureDownloadServer::start(bundle_bytes);
+
+    let mirrors_path = ctx.runtime_dir.join("mirrors.json");
+    let mirrors_json = serde_json::json!({
+        "mirrors": [
+            {
+                "name": "test-mirror",
+                "base_url": server.base_url()
+            }
+        ]
+    });
+    fs::write(&mirrors_path, mirrors_json.to_string()).expect("write mirrors.json");
+
+    // First install with --force: bypasses download cache, speed-tests mirrors,
+    // caches the fastest mirror in mirror-preference.json.
+    let first = run_command(ctx, &["install", INSTALL_TAG, "--force"]);
+    assert_eq!(first.exit_code, 0, "first install failed:\n{}", first.stderr);
+    assert!(
+        first.stdout.contains("installed successfully"),
+        "first install should succeed:\n{}",
+        first.stdout
+    );
+    // First install should contain speed-test messages.
+    assert!(
+        first.stderr.contains("Speed-testing mirror"),
+        "First install should have speed-test messages:\n{}",
+        first.stderr
+    );
+
+    // Clear server request log for the second install.
+    server.requests.lock().unwrap().clear();
+
+    // Second install with --force: bypasses download cache but mirror
+    // preference from step 1 is still valid — should use cached mirror.
+    let second = run_command(ctx, &["install", INSTALL_TAG, "--force"]);
+    assert_eq!(
+        second.exit_code, 0,
+        "second install failed:\n{}",
+        second.stderr
+    );
+
+    // The cached preference message should appear for the second install.
+    assert!(
+        second.stderr.contains("Using cached mirror"),
+        "Expected 'Using cached mirror' in second-install stderr:\n{}",
+        second.stderr
+    );
+    // Second install should NOT contain speed-test messages.
+    assert!(
+        !second.stderr.contains("Speed-testing mirror"),
+        "Second install should skip speed testing:\n{}",
+        second.stderr
+    );
+}
+
+/// Verify that setting BROWSER4_CLI_DISABLE_MIRROR_SPEED_TEST=1 skips the
+/// speed-test phase and falls back to TCP reachability.
+pub(super) fn test_install_speed_test_disabled_env_var(ctx: &mut E2ECtx) {
+    reset_cli_artifacts(ctx);
+
+    let (bundle_bytes, _dir_name) = build_fake_runtime_bundle("v4.10.0");
+    let server = FixtureDownloadServer::start(bundle_bytes);
+
+    let mirrors_path = ctx.runtime_dir.join("mirrors.json");
+    let mirrors_json = serde_json::json!({
+        "mirrors": [
+            {
+                "name": "test-mirror",
+                "base_url": server.base_url()
+            }
+        ]
+    });
+    fs::write(&mirrors_path, mirrors_json.to_string()).expect("write mirrors.json");
+
+    // Disable speed testing.
+    ctx.set_env("BROWSER4_CLI_DISABLE_MIRROR_SPEED_TEST", "1");
+
+    let result = run_command(ctx, &["install", INSTALL_TAG, "--force"]);
+    assert_eq!(
+        result.exit_code, 0,
+        "install should succeed with speed tests disabled:\n{}",
+        result.stderr
+    );
+    assert!(
+        result.stdout.contains("installed successfully"),
+        "Expected 'installed successfully' in:\n{}",
+        result.stdout
+    );
+
+    // Speed-test log messages should NOT appear.
+    assert!(
+        !result.stderr.contains("Speed-testing mirror"),
+        "Speed-test messages should not appear when disabled:\n{}",
+        result.stderr
+    );
+}

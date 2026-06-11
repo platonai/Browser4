@@ -874,6 +874,36 @@ pub(crate) const SCENARIOS: &[ScenarioDef] = &[
         group: Some("install"),
         level: ScenarioLevel::Extended,
     },
+    ScenarioDef {
+        name: "test_e2e_install_speed_test_selects_fastest_mirror",
+        short_name: "test_install_speed_test_selects_fastest_mirror",
+        requires_browser4: false,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: mock_server::test_install_speed_test_selects_fastest_mirror,
+        group: Some("install"),
+        level: ScenarioLevel::Extended,
+    },
+    ScenarioDef {
+        name: "test_e2e_install_mirror_preference_cache_hit",
+        short_name: "test_install_mirror_preference_cache_hit",
+        requires_browser4: false,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: mock_server::test_install_mirror_preference_cache_hit,
+        group: Some("install"),
+        level: ScenarioLevel::Extended,
+    },
+    ScenarioDef {
+        name: "test_e2e_install_speed_test_disabled_env_var",
+        short_name: "test_install_speed_test_disabled_env_var",
+        requires_browser4: false,
+        restart_browser4: false,
+        test_count: 1,
+        test_fn: mock_server::test_install_speed_test_disabled_env_var,
+        group: Some("install"),
+        level: ScenarioLevel::Extended,
+    },
 ];
 
 pub(super) fn all_scenarios() -> &'static [ScenarioDef] {

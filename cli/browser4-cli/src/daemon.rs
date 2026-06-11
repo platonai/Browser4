@@ -51,6 +51,20 @@ const MIRRORS_CONFIG_FILE_ENV: &str = "BROWSER4_MIRRORS_CONFIG";
 const MIRROR_REACHABILITY_TIMEOUT_SECS: u64 = 5;
 /// Env var to override the mirror reachability timeout (seconds).
 const MIRROR_REACHABILITY_TIMEOUT_ENV: &str = "BROWSER4_CLI_MIRROR_CHECK_TIMEOUT_SECS";
+/// Number of bytes to download from each mirror during speed tests (10 MB).
+const SPEED_TEST_PROBE_BYTES: u64 = 10 * 1024 * 1024;
+/// Default per-mirror timeout for speed-test downloads (seconds).
+const MIRROR_SPEED_TEST_TIMEOUT_SECS: u64 = 30;
+/// Env var to override the speed-test per-mirror timeout (seconds).
+const MIRROR_SPEED_TEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_MIRROR_SPEED_TEST_TIMEOUT_SECS";
+/// Default TTL for a cached mirror preference (24 hours).
+const MIRROR_PREFERENCE_TTL_SECS: u64 = 86400;
+/// Env var to override the mirror preference TTL (seconds).
+const MIRROR_PREFERENCE_TTL_ENV: &str = "BROWSER4_CLI_MIRROR_PREFERENCE_TTL_SECS";
+/// Env var to disable speed testing (set to "1") — forces TCP-only fallback.
+const DISABLE_MIRROR_SPEED_TEST_ENV: &str = "BROWSER4_CLI_DISABLE_MIRROR_SPEED_TEST";
+/// Name of the mirror preference cache file inside the runtime cache dir.
+const MIRROR_PREFERENCE_CACHE_FILE: &str = "mirror-preference.json";
 const ROOT_SEARCH_START_DIR_ENV: &str = "BROWSER4_CLI_INVOKE_DIR";
 /// When set to `1`, `true`, `yes`, or `on`, forces the CLI to download the
 /// Browser4 runtime bundle from a remote release instead of building it from
@@ -158,6 +172,30 @@ struct DownloadMirror {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct MirrorsConfig {
     mirrors: Vec<DownloadMirror>,
+}
+
+/// Result of a single-mirror speed test.
+#[derive(Debug, Clone)]
+struct SpeedTestResult {
+    mirror: DownloadMirror,
+    #[allow(dead_code)]
+    duration: Duration,
+    #[allow(dead_code)]
+    bytes_downloaded: u64,
+    /// Throughput in bytes per second (higher is better).
+    speed_bps: f64,
+}
+
+/// Cached mirror preference written to disk so we can skip re-testing on every
+/// install.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MirrorPreference {
+    /// The mirror that was fastest during the last speed test.
+    selected_mirror: DownloadMirror,
+    /// When the speed test was performed (UTC, RFC 3339).
+    tested_at: String,
+    /// Measured throughput in bytes per second.
+    download_speed_bps: u64,
 }
 
 /// Built-in default mirrors used when no config file exists.
@@ -338,6 +376,287 @@ fn select_reachable_mirror(mirrors: &[DownloadMirror]) -> (&DownloadMirror, bool
         fallback.name
     );
     (fallback, false)
+}
+
+// ---------------------------------------------------------------------------
+// Mirror preference cache (persists the fastest mirror across install runs)
+// ---------------------------------------------------------------------------
+
+/// Path to the mirror preference cache file.
+fn mirror_preference_cache_path() -> PathBuf {
+    resolve_runtime_cache_dir().join(MIRROR_PREFERENCE_CACHE_FILE)
+}
+
+/// Load the cached mirror preference.
+///
+/// Returns `None` when the file is missing, corrupt, the cached mirror is no
+/// longer in the provided mirror list, or the preference has expired.
+fn load_mirror_preference(mirrors: &[DownloadMirror]) -> Option<MirrorPreference> {
+    let path = mirror_preference_cache_path();
+    let contents = fs::read_to_string(&path).ok()?;
+    let pref: MirrorPreference = serde_json::from_str(&contents).ok()?;
+    // Validate: the cached mirror must be in the current mirror list.
+    if !mirrors.iter().any(|m| m.base_url == pref.selected_mirror.base_url) {
+        eprintln!(
+            "Cached mirror '{}' is not in the current mirror list; ignoring.",
+            pref.selected_mirror.name
+        );
+        return None;
+    }
+    Some(pref)
+}
+
+/// Check whether a cached mirror preference is still within its TTL.
+fn is_mirror_preference_valid(pref: &MirrorPreference) -> bool {
+    let ttl_secs = env::var(MIRROR_PREFERENCE_TTL_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&s| s > 0)
+        .unwrap_or(MIRROR_PREFERENCE_TTL_SECS);
+
+    match chrono::DateTime::parse_from_rfc3339(&pref.tested_at) {
+        Ok(tested_at) => {
+            let tested_at_utc: chrono::DateTime<chrono::Utc> = tested_at.into();
+            let elapsed = chrono::Utc::now().signed_duration_since(tested_at_utc);
+            elapsed.num_seconds() >= 0 && elapsed.num_seconds() < ttl_secs as i64
+        }
+        Err(_) => {
+            // Unparseable timestamp — treat as invalid.
+            false
+        }
+    }
+}
+
+/// Atomically save a mirror preference to the cache file.
+fn save_mirror_preference(pref: &MirrorPreference) {
+    let path = mirror_preference_cache_path();
+    if let Some(parent) = path.parent() {
+        if let Err(e) = fs::create_dir_all(parent) {
+            eprintln!("  (skipping mirror cache: cannot create cache dir: {e})");
+            return;
+        }
+    }
+    // Write atomically via temp file + rename.
+    let tmp_path = path.with_extension("json.tmp");
+    match serde_json::to_string_pretty(pref) {
+        Ok(json) => {
+            if let Err(e) = fs::write(&tmp_path, &json) {
+                eprintln!("  (skipping mirror cache: write failed: {e})");
+                return;
+            }
+            if let Err(e) = fs::rename(&tmp_path, &path) {
+                eprintln!("  (skipping mirror cache: rename failed: {e})");
+                let _ = fs::remove_file(&tmp_path);
+            }
+        }
+        Err(e) => eprintln!("  (skipping mirror cache: serialization failed: {e})"),
+    }
+}
+
+/// Delete the mirror preference cache file.
+fn delete_mirror_preference_cache() {
+    let path = mirror_preference_cache_path();
+    let _ = fs::remove_file(&path);
+}
+
+// ---------------------------------------------------------------------------
+// Mirror speed testing
+// ---------------------------------------------------------------------------
+
+/// Run speed tests against all mirrors concurrently and return results sorted
+/// by speed (fastest first).
+///
+/// Each mirror is probed by downloading the first `SPEED_TEST_PROBE_BYTES` of
+/// the runtime bundle asset via an HTTP Range request.  This keeps the probe
+/// small (~10 MB) while exercising the same CDN endpoints that will serve the
+/// full download.
+///
+/// Returns an empty `Vec` when every mirror fails or speed testing is disabled
+/// via `BROWSER4_CLI_DISABLE_MIRROR_SPEED_TEST`.
+async fn run_speed_tests(mirrors: &[DownloadMirror]) -> Vec<SpeedTestResult> {
+    // Honour the disable flag.
+    if env::var(DISABLE_MIRROR_SPEED_TEST_ENV).ok().as_deref() == Some("1") {
+        return vec![];
+    }
+
+    let timeout_secs = env::var(MIRROR_SPEED_TEST_TIMEOUT_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&s| s > 0)
+        .unwrap_or(MIRROR_SPEED_TEST_TIMEOUT_SECS);
+
+    // Resolve the runtime bundle asset name for the current platform so we
+    // probe the exact same CDN path that the full download will use.
+    let platform = match detect_current_runtime_bundle_platform() {
+        Ok(p) => p,
+        Err(_) => return vec![],
+    };
+    let asset_name = platform.asset_name();
+
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(timeout_secs))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to create HTTP client for speed tests: {e}");
+            return vec![];
+        }
+    };
+
+    // Fire all speed tests concurrently — serial fallback would make the total
+    // latency the sum of all mirror timeouts (worst case).
+    let mut handles = Vec::new();
+    for mirror in mirrors {
+        // Use the "latest" endpoint for the speed test so the probe works
+        // regardless of whether the user specified a concrete tag.  The
+        // throughput characteristics of the CDN are the same.
+        let url = mirror_download_url(mirror, None, &asset_name);
+        let client = client.clone();
+        let mirror = mirror.clone();
+
+        handles.push(tokio::spawn(async move {
+            eprintln!("  Speed-testing mirror '{}'...", mirror.name);
+            let start = Instant::now();
+
+            let range_header = format!("bytes=0-{}", SPEED_TEST_PROBE_BYTES - 1);
+            match client
+                .get(&url)
+                .header("Range", &range_header)
+                .send()
+                .await
+            {
+                Ok(response) => {
+                    let status = response.status();
+                    // Accept 206 (Partial Content — Range honoured) and 200
+                    // (server ignored Range header and sent the full asset).
+                    if !status.is_success()
+                        && status != reqwest::StatusCode::PARTIAL_CONTENT
+                        && status != reqwest::StatusCode::OK
+                    {
+                        eprintln!(
+                            "  Mirror '{}' speed test failed: HTTP {}",
+                            mirror.name, status
+                        );
+                        return None;
+                    }
+                    match response.bytes().await {
+                        Ok(bytes) => {
+                            let elapsed = start.elapsed();
+                            let speed_bps = if elapsed.as_secs_f64() > 0.0 {
+                                bytes.len() as f64 / elapsed.as_secs_f64()
+                            } else {
+                                bytes.len() as f64
+                            };
+                            eprintln!(
+                                "  Mirror '{}' speed: {:.2} MB/s ({:.0} ms for {} bytes)",
+                                mirror.name,
+                                speed_bps / 1_048_576.0,
+                                elapsed.as_secs_f64() * 1000.0,
+                                bytes.len()
+                            );
+                            Some(SpeedTestResult {
+                                mirror,
+                                duration: elapsed,
+                                bytes_downloaded: bytes.len() as u64,
+                                speed_bps,
+                            })
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "  Mirror '{}' speed test failed (body read): {e}",
+                                mirror.name
+                            );
+                            None
+                        }
+                    }
+                }
+                Err(e) => {
+                    if e.is_timeout() {
+                        eprintln!(
+                            "  Mirror '{}' speed test timed out after {}s",
+                            mirror.name, timeout_secs
+                        );
+                    } else {
+                        eprintln!("  Mirror '{}' speed test failed: {e}", mirror.name);
+                    }
+                    None
+                }
+            }
+        }));
+    }
+
+    let mut results: Vec<SpeedTestResult> = Vec::new();
+    for handle in handles {
+        match handle.await {
+            Ok(Some(result)) => results.push(result),
+            Ok(None) => {} // This mirror failed — skip it.
+            Err(join_err) => {
+                eprintln!("  Speed test task panicked: {join_err}");
+            }
+        }
+    }
+
+    // Sort descending by speed (fastest first).
+    results.sort_by(|a, b| {
+        b.speed_bps
+            .partial_cmp(&a.speed_bps)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    results
+}
+
+/// Select the best mirror for the runtime download.
+///
+/// Decision order:
+/// 1. Cached preference (if valid and the mirror is still in the list).
+/// 2. Concurrent speed tests across all mirrors.
+/// 3. TCP reachability fallback (when all speed tests fail).
+///
+/// Returns `(selected_mirror, was_speed_tested)` — the caller uses
+/// `was_speed_tested` to decide whether to invalidate the cache and retry on
+/// download failure.
+async fn select_best_mirror(mirrors: &[DownloadMirror]) -> (&DownloadMirror, bool) {
+    // --- cached preference ---
+    if let Some(pref) = load_mirror_preference(mirrors) {
+        if is_mirror_preference_valid(&pref) {
+            if let Some(mirror) = mirrors
+                .iter()
+                .find(|m| m.base_url == pref.selected_mirror.base_url)
+            {
+                eprintln!(
+                    "Using cached mirror '{}' (tested at {}, {:.2} MB/s)",
+                    mirror.name,
+                    &pref.tested_at[..19.min(pref.tested_at.len())],
+                    pref.download_speed_bps as f64 / 1_048_576.0
+                );
+                return (mirror, true);
+            }
+        }
+    }
+
+    // --- speed tests ---
+    let results = run_speed_tests(mirrors).await;
+
+    if results.is_empty() {
+        eprintln!("All speed tests failed; falling back to TCP reachability check.");
+        return select_reachable_mirror(mirrors);
+    }
+
+    // Cache the best result for future runs.
+    let best = &results[0];
+    let pref = MirrorPreference {
+        selected_mirror: best.mirror.clone(),
+        tested_at: chrono::Utc::now().to_rfc3339(),
+        download_speed_bps: best.speed_bps as u64,
+    };
+    save_mirror_preference(&pref);
+
+    let idx = mirrors
+        .iter()
+        .position(|m| m.base_url == best.mirror.base_url)
+        .unwrap_or(0);
+    (&mirrors[idx], true)
 }
 
 /// Capture process startup cwd once for Browser4 root discovery.
@@ -1672,12 +1991,12 @@ pub async fn install_browser4_runtime(
     }
 
     let asset_name = platform.asset_name();
-    // Build a canonical download URL from the first mirror for metadata /
-    // cache-hit paths.  The actual download further below runs through the
-    // full mirror selection (reachability check → first reachable mirror).
     let mirrors = load_mirrors();
-    let primary_mirror = &mirrors[0];
-    let preferred_download_url = mirror_download_url(primary_mirror, tag, &asset_name);
+    // Determine whether BROWSER4_RELEASES_BASE_URL is in effect — when it is
+    // there is only a single custom mirror and speed testing is pointless.
+    let is_single_mirror_override =
+        env::var(BROWSER4_RELEASES_BASE_URL_ENV).ok().map_or(false, |v| !v.trim().is_empty());
+    let preferred_download_url = mirror_download_url(&mirrors[0], tag, &asset_name);
     let temp_dir = create_runtime_install_temp_dir()?;
     let archive_path = temp_dir.join(&asset_name);
     let extraction_dir = temp_dir.join("extract");
@@ -1726,9 +2045,14 @@ pub async fn install_browser4_runtime(
             };
             commit_installed_browser4_runtime(&extracted_root, metadata)
         } else {
-            // Select the first reachable mirror.  If none is reachable, fall
-            // back to the first mirror so the user gets a clear HTTP error.
-            let (selected_mirror, _mirror_reachable) = select_reachable_mirror(&mirrors);
+            // Speed-based mirror selection with caching and fallback.
+            // When BROWSER4_RELEASES_BASE_URL is set we skip the speed test
+            // and use the single override mirror directly.
+            let (selected_mirror, was_speed_tested) = if is_single_mirror_override {
+                (&mirrors[0], false)
+            } else {
+                select_best_mirror(&mirrors).await
+            };
             let download_url = mirror_download_url(selected_mirror, tag, &asset_name);
 
             if requested_tag.is_none() {
@@ -1739,27 +2063,60 @@ pub async fn install_browser4_runtime(
                 );
             }
 
-            eprintln!("Downloading Browser4 runtime bundle from {}...", download_url);
-            let downloaded = download_file(&download_url, &archive_path).await.map_err(|e| {
-                if requested_tag.is_none() {
-                    format!(
-                        "Failed to download from {} mirror: {e}\n\
-                         Help: the mirror may not have a \"latest\" release. \
-                         Specify an exact version with --tag, e.g. 'browser4-cli install --tag v4.11.0', \
-                         or configure additional mirrors in {}.",
-                        selected_mirror.name,
-                        mirrors_config_path().display()
-                    )
-                } else {
-                    format!(
-                        "Failed to download from {} mirror: {e}\n\
-                         Help: configure additional mirrors in {} or set \
-                         BROWSER4_RELEASES_BASE_URL to point to a working release server.",
-                        selected_mirror.name,
-                        mirrors_config_path().display()
-                    )
+            eprintln!(
+                "Downloading Browser4 runtime bundle from {}...",
+                download_url
+            );
+            let download_result = download_file(&download_url, &archive_path).await;
+
+            let downloaded = match download_result {
+                Ok(d) => d,
+                Err(e) if was_speed_tested => {
+                    // Cached or speed-tested mirror failed — invalidate the
+                    // preference, re-test, and retry once.
+                    eprintln!(
+                        "Download from '{}' failed: {e}",
+                        selected_mirror.name
+                    );
+                    eprintln!("Invalidating mirror preference and re-testing mirrors...");
+                    delete_mirror_preference_cache();
+
+                    let (retry_mirror, _) = select_best_mirror(&mirrors).await;
+                    let retry_url = mirror_download_url(retry_mirror, tag, &asset_name);
+                    eprintln!(
+                        "Retrying download from '{}'...",
+                        retry_mirror.name
+                    );
+
+                    download_file(&retry_url, &archive_path).await.map_err(|retry_err| {
+                        if requested_tag.is_none() {
+                            format!(
+                                "Failed to download from any mirror after retry: {retry_err}\n\
+                                 Help: the mirror may not have a \"latest\" release. \
+                                 Specify an exact version with --tag, e.g. 'browser4-cli install --tag v4.11.0', \
+                                 or configure additional mirrors in {}.",
+                                mirrors_config_path().display()
+                            )
+                        } else {
+                            format!(
+                                "Failed to download from any mirror after retry: {retry_err}\n\
+                                 Help: configure additional mirrors in {} or set \
+                                 BROWSER4_RELEASES_BASE_URL to point to a working release server.",
+                                mirrors_config_path().display()
+                            )
+                        }
+                    })?
                 }
-            })?;
+                Err(e) => {
+                    // Not speed-tested (TCP fallback or override) — propagate
+                    // the error directly without retry.
+                    return Err(format!(
+                        "Failed to download from {} mirror: {e}",
+                        selected_mirror.name
+                    ));
+                }
+            };
+
             eprintln!(
                 "Downloaded {} bytes for Browser4 runtime bundle.",
                 downloaded.bytes_written
@@ -4341,6 +4698,223 @@ mod tests {
             fs::read_to_string(current_tag_file_path()).unwrap().trim(),
             "v4.10.0"
         );
+
+        restore_test_env(prev_runtime, prev_state);
+    }
+
+    // -------------------------------------------------------------------
+    // Mirror preference cache tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn test_mirror_preference_round_trip() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let tmp = test_temp_dir();
+        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+
+        let pref = MirrorPreference {
+            selected_mirror: DownloadMirror {
+                name: "test-mirror".to_string(),
+                base_url: "https://example.com/releases".to_string(),
+            },
+            tested_at: "2026-06-11T00:00:00+00:00".to_string(),
+            download_speed_bps: 5_000_000,
+        };
+        save_mirror_preference(&pref);
+
+        let mirrors = vec![pref.selected_mirror.clone()];
+        let loaded = load_mirror_preference(&mirrors);
+        assert!(loaded.is_some());
+        let loaded = loaded.unwrap();
+        assert_eq!(loaded.selected_mirror.name, "test-mirror");
+        assert_eq!(loaded.download_speed_bps, 5_000_000);
+
+        delete_mirror_preference_cache();
+        restore_test_env(prev_runtime, prev_state);
+    }
+
+    #[test]
+    fn test_mirror_preference_expired() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let tmp = test_temp_dir();
+        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+        let prev_ttl = env::var(MIRROR_PREFERENCE_TTL_ENV).ok();
+        unsafe {
+            env::set_var(MIRROR_PREFERENCE_TTL_ENV, "1"); // 1-second TTL
+        }
+
+        let pref = MirrorPreference {
+            selected_mirror: DownloadMirror {
+                name: "old-mirror".to_string(),
+                base_url: "https://example.com/releases".to_string(),
+            },
+            // Timestamp is well over 1 second ago.
+            tested_at: "2020-01-01T00:00:00+00:00".to_string(),
+            download_speed_bps: 100,
+        };
+        save_mirror_preference(&pref);
+
+        let mirrors = vec![pref.selected_mirror.clone()];
+        let loaded = load_mirror_preference(&mirrors);
+        assert!(loaded.is_some());
+        assert!(
+            !is_mirror_preference_valid(&loaded.unwrap()),
+            "preference with 2020 timestamp should be expired"
+        );
+
+        delete_mirror_preference_cache();
+        restore_test_env(prev_runtime, prev_state);
+        match prev_ttl {
+            Some(v) => unsafe { env::set_var(MIRROR_PREFERENCE_TTL_ENV, v) },
+            None => unsafe { env::remove_var(MIRROR_PREFERENCE_TTL_ENV) },
+        }
+    }
+
+    #[test]
+    fn test_mirror_preference_valid_under_ttl() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let tmp = test_temp_dir();
+        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+        let prev_ttl = env::var(MIRROR_PREFERENCE_TTL_ENV).ok();
+        unsafe {
+            env::set_var(MIRROR_PREFERENCE_TTL_ENV, "86400");
+        }
+
+        let pref = MirrorPreference {
+            selected_mirror: DownloadMirror {
+                name: "recent".to_string(),
+                base_url: "https://example.com/releases".to_string(),
+            },
+            tested_at: chrono::Utc::now().to_rfc3339(),
+            download_speed_bps: 200,
+        };
+        save_mirror_preference(&pref);
+
+        let mirrors = vec![pref.selected_mirror.clone()];
+        let loaded = load_mirror_preference(&mirrors);
+        assert!(loaded.is_some());
+        assert!(
+            is_mirror_preference_valid(&loaded.unwrap()),
+            "preference saved just now should be valid"
+        );
+
+        delete_mirror_preference_cache();
+        restore_test_env(prev_runtime, prev_state);
+        match prev_ttl {
+            Some(v) => unsafe { env::set_var(MIRROR_PREFERENCE_TTL_ENV, v) },
+            None => unsafe { env::remove_var(MIRROR_PREFERENCE_TTL_ENV) },
+        }
+    }
+
+    #[test]
+    fn test_mirror_preference_ttl_env_override() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let tmp = test_temp_dir();
+        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+        let prev_ttl = env::var(MIRROR_PREFERENCE_TTL_ENV).ok();
+        unsafe {
+            env::set_var(MIRROR_PREFERENCE_TTL_ENV, "3600"); // 1 hour
+        }
+
+        let pref = MirrorPreference {
+            selected_mirror: DownloadMirror {
+                name: "custom-ttl".to_string(),
+                base_url: "https://example.com/releases".to_string(),
+            },
+            tested_at: chrono::Utc::now().to_rfc3339(),
+            download_speed_bps: 300,
+        };
+        assert!(
+            is_mirror_preference_valid(&pref),
+            "with 3600s TTL, just-now timestamp should be valid"
+        );
+
+        // Now set a tiny TTL and verify an old timestamp becomes invalid.
+        unsafe {
+            env::set_var(MIRROR_PREFERENCE_TTL_ENV, "1");
+        }
+        let old_pref = MirrorPreference {
+            selected_mirror: DownloadMirror {
+                name: "custom-ttl".to_string(),
+                base_url: "https://example.com/releases".to_string(),
+            },
+            tested_at: "2020-01-01T00:00:00+00:00".to_string(),
+            download_speed_bps: 300,
+        };
+        assert!(
+            !is_mirror_preference_valid(&old_pref),
+            "with 1s TTL, 2020 timestamp should be expired"
+        );
+
+        restore_test_env(prev_runtime, prev_state);
+        match prev_ttl {
+            Some(v) => unsafe { env::set_var(MIRROR_PREFERENCE_TTL_ENV, v) },
+            None => unsafe { env::remove_var(MIRROR_PREFERENCE_TTL_ENV) },
+        }
+    }
+
+    #[test]
+    fn test_mirror_preference_invalid_when_mirror_missing() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let tmp = test_temp_dir();
+        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+
+        let pref = MirrorPreference {
+            selected_mirror: DownloadMirror {
+                name: "absent".to_string(),
+                base_url: "https://deleted.example.com/releases".to_string(),
+            },
+            tested_at: chrono::Utc::now().to_rfc3339(),
+            download_speed_bps: 100,
+        };
+        save_mirror_preference(&pref);
+
+        // Load with a different mirror list — the cached mirror is absent.
+        let mirrors = vec![DownloadMirror {
+            name: "other".to_string(),
+            base_url: "https://other.example.com/releases".to_string(),
+        }];
+        let loaded = load_mirror_preference(&mirrors);
+        assert!(
+            loaded.is_none(),
+            "cached mirror not in the list should return None"
+        );
+
+        delete_mirror_preference_cache();
+        restore_test_env(prev_runtime, prev_state);
+    }
+
+    #[test]
+    fn test_mirror_preference_corrupted() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let tmp = test_temp_dir();
+        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+
+        let path = mirror_preference_cache_path();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "not valid json {{{").unwrap();
+
+        let mirrors = builtin_mirrors();
+        let loaded = load_mirror_preference(&mirrors);
+        assert!(loaded.is_none(), "corrupted cache file should return None");
+
+        delete_mirror_preference_cache();
+        restore_test_env(prev_runtime, prev_state);
+    }
+
+    #[test]
+    fn test_delete_mirror_preference_cache_removes_file() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let tmp = test_temp_dir();
+        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+
+        let path = mirror_preference_cache_path();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, r#"{"selected_mirror":{"name":"x","base_url":"https://x.com"},"tested_at":"2026-01-01T00:00:00+00:00","download_speed_bps":1}"#).unwrap();
+        assert!(path.exists());
+
+        delete_mirror_preference_cache();
+        assert!(!path.exists(), "cache file should be deleted");
 
         restore_test_env(prev_runtime, prev_state);
     }
