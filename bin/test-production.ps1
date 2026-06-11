@@ -320,6 +320,20 @@ if (-not (Test-Path $WorkingDir)) {
 }
 Push-Location $WorkingDir
 Write-Info "Pushed to $WorkingDir"
+# ─────────────────────────────────────────────────────
+# Helper: restore ~/.browser4 from backup
+# ─────────────────────────────────────────────────────
+function Restore-Browser4Home {
+    if ($browser4HomeBackup -and (Test-Path $browser4HomeBackup)) {
+        Write-Info "Restoring original ~/.browser4 from $browser4HomeBackup"
+        if (Test-Path $Browser4Home) {
+            Remove-Item $Browser4Home -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        Move-Item $browser4HomeBackup $Browser4Home -Force
+        Write-Info 'Original ~/.browser4 restored'
+    }
+}
+
 try {
 
 # ─────────────────────────────────────────────────────
@@ -339,7 +353,7 @@ if (Test-Path $Browser4Home) {
         Move-Item -Path $Browser4Home -Destination $browser4HomeBackup -Force -ErrorAction Stop
     } catch {
         Write-Info "Move-Item failed ($_), falling back to copy+remove"
-        Copy-Item -Path $Browser4Home -Destination $browser4HomeBackup -Recurse -Force
+        Copy-Item -Path $Browser4Home -Destination $browser4HomeBackup -Recurse -Force -ErrorAction SilentlyContinue
         Remove-Item -Path $Browser4Home -Recurse -Force -ErrorAction SilentlyContinue
         if (Test-Path $Browser4Home) {
             Write-WarningMsg "Could not fully remove original ~/.browser4 — some files may be locked. Proceeding anyway."
@@ -351,20 +365,6 @@ if (Test-Path $Browser4Home) {
     Write-Info 'Clean slate: no ~/.browser4 present'
 } else {
     Write-Info 'No existing ~/.browser4 — already clean'
-}
-
-# ─────────────────────────────────────────────────────
-# Helper: restore ~/.browser4 from backup
-# ─────────────────────────────────────────────────────
-function Restore-Browser4Home {
-    if ($browser4HomeBackup -and (Test-Path $browser4HomeBackup)) {
-        Write-Info "Restoring original ~/.browser4 from $browser4HomeBackup"
-        if (Test-Path $Browser4Home) {
-            Remove-Item $Browser4Home -Recurse -Force -ErrorAction SilentlyContinue
-        }
-        Move-Item $browser4HomeBackup $Browser4Home -Force
-        Write-Info 'Original ~/.browser4 restored'
-    }
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -1075,7 +1075,7 @@ if ($SkipMultiScenarios) {
     Write-StepHeader 'Cleanup'
 
     # Restore original ~/.browser4
-    Restore-Browser4Home
+    try { Restore-Browser4Home } catch { Write-WarningMsg "Restore-Browser4Home failed: $_" }
 
     # Return to original directory
     Pop-Location
