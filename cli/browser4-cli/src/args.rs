@@ -98,14 +98,31 @@ pub fn parse_global_flags(argv: &[String]) -> GlobalFlags {
     flags
 }
 
+/// Build a mapping from short option names (e.g. `"y"`) to their long
+/// equivalent (e.g. `"yes"`) for a given command's option definitions.
+pub fn build_short_option_map(options: &[crate::commands::OptionDef]) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for opt in options {
+        if let Some(short) = opt.short {
+            map.insert(short.to_string(), opt.name.to_string());
+        }
+    }
+    map
+}
+
 /// Parse raw CLI arguments into a map suitable for command dispatch.
 ///
 /// - Positional arguments go into `_` as a JSON array.
 /// - `--key=value` → key: string value
 /// - `--key value` (next arg does not start with `--`) → key: string value
 /// - `--flag` (followed by another `--` arg or end-of-args) → key: true (boolean)
+/// - Short options (`-x` / `-x=value` / `-x value`) are resolved through
+///   `short_to_long` when provided.
 /// - Values `"true"` / `"false"` are coerced to booleans.
-pub fn parse_raw_args(raw_args: &[String]) -> HashMap<String, Value> {
+pub fn parse_raw_args(
+    raw_args: &[String],
+    short_to_long: Option<&HashMap<String, String>>,
+) -> HashMap<String, Value> {
     let mut result: HashMap<String, Value> = HashMap::new();
     let mut positional: Vec<Value> = Vec::new();
 
@@ -139,6 +156,43 @@ pub fn parse_raw_args(raw_args: &[String]) -> HashMap<String, Value> {
                 } else {
                     result.insert(rest.to_string(), Value::Bool(true));
                 }
+            }
+        } else if let Some(rest) = arg.strip_prefix('-') {
+            // Short option: -x, -x=value, or -x value
+            if let Some(map) = short_to_long {
+                if let Some(eq) = rest.find('=') {
+                    let short = &rest[..eq];
+                    let val = &rest[eq + 1..];
+                    if let Some(long) = map.get(short) {
+                        let value = match val {
+                            "true" => Value::Bool(true),
+                            "false" => Value::Bool(false),
+                            other => Value::String(other.to_string()),
+                        };
+                        result.insert(long.clone(), value);
+                    } else {
+                        positional.push(json!(arg));
+                    }
+                } else if let Some(long) = map.get(rest) {
+                    // Look ahead: if the next argument does NOT start with `-`,
+                    // treat it as this option's value rather than a positional.
+                    if i + 1 < raw_args.len() && !raw_args[i + 1].starts_with('-') {
+                        let val = &raw_args[i + 1];
+                        let value = match val.as_str() {
+                            "true" => Value::Bool(true),
+                            "false" => Value::Bool(false),
+                            other => Value::String(other.to_string()),
+                        };
+                        result.insert(long.clone(), value);
+                        i += 1; // consume the value
+                    } else {
+                        result.insert(long.clone(), Value::Bool(true));
+                    }
+                } else {
+                    positional.push(json!(arg));
+                }
+            } else {
+                positional.push(json!(arg));
             }
         } else {
             positional.push(json!(arg));
@@ -426,7 +480,7 @@ mod tests {
     #[test]
     fn test_parse_raw_args_positional() {
         let raw = vec!["goto".to_string(), "https://example.com".to_string()];
-        let map = parse_raw_args(&raw);
+        let map = parse_raw_args(&raw, None);
         let pos = map["_"].as_array().unwrap();
         assert_eq!(pos[0].as_str(), Some("goto"));
         assert_eq!(pos[1].as_str(), Some("https://example.com"));
@@ -439,14 +493,14 @@ mod tests {
             "e15".to_string(),
             "--submit=true".to_string(),
         ];
-        let map = parse_raw_args(&raw);
+        let map = parse_raw_args(&raw, None);
         assert_eq!(map.get("submit"), Some(&json!(true)));
     }
 
     #[test]
     fn test_parse_raw_args_bool_flag() {
         let raw = vec!["snapshot".to_string(), "--headed".to_string()];
-        let map = parse_raw_args(&raw);
+        let map = parse_raw_args(&raw, None);
         assert_eq!(map.get("headed"), Some(&json!(true)));
     }
 
@@ -457,7 +511,7 @@ mod tests {
             "--tag".to_string(),
             "4.10.0-rc.2".to_string(),
         ];
-        let map = parse_raw_args(&raw);
+        let map = parse_raw_args(&raw, None);
         // --tag value should be parsed as a key-value pair, not a boolean flag
         // plus a positional argument.
         assert_eq!(map.get("tag"), Some(&json!("4.10.0-rc.2")));
@@ -472,7 +526,7 @@ mod tests {
     fn test_parse_raw_args_key_value_equals() {
         // --key=value should still work alongside --key value.
         let raw = vec!["install".to_string(), "--tag=4.10.0-rc.2".to_string()];
-        let map = parse_raw_args(&raw);
+        let map = parse_raw_args(&raw, None);
         assert_eq!(map.get("tag"), Some(&json!("4.10.0-rc.2")));
     }
 
@@ -486,7 +540,7 @@ mod tests {
             "--tag".to_string(),
             "4.10.0-rc.2".to_string(),
         ];
-        let map = parse_raw_args(&raw);
+        let map = parse_raw_args(&raw, None);
         assert_eq!(map.get("force"), Some(&json!(true)));
         assert_eq!(map.get("tag"), Some(&json!("4.10.0-rc.2")));
     }

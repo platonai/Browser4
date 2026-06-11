@@ -37,8 +37,8 @@ use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Value};
 
 use args::{
-    build_command_args, parse_batch_args, parse_batch_json_commands, parse_command_string,
-    parse_global_flags, parse_raw_args,
+    build_command_args, build_short_option_map, parse_batch_args, parse_batch_json_commands,
+    parse_command_string, parse_global_flags, parse_raw_args,
 };
 use commands::commands_map;
 use daemon::{
@@ -3402,7 +3402,8 @@ fn compile_batch_request(
             continue;
         }
 
-        let raw_parsed = parse_raw_args(&effective_nested_global.args);
+        let nested_short_to_long = build_short_option_map(cmd_def.options);
+        let raw_parsed = parse_raw_args(&effective_nested_global.args, Some(&nested_short_to_long));
         let arg_names: Vec<&str> = cmd_def.args.iter().map(|arg| arg.name).collect();
         let parsed = match build_command_args(&raw_parsed, &arg_names) {
             Ok(parsed) => parsed,
@@ -4011,8 +4012,9 @@ async fn run(
         }
     };
 
-    // Parse positional + named arguments
-    let raw_parsed = parse_raw_args(&global.args);
+    // Parse positional + named arguments (with short-option resolution)
+    let short_to_long = build_short_option_map(cmd_def.options);
+    let raw_parsed = parse_raw_args(&global.args, Some(&short_to_long));
     let arg_names: Vec<&str> = cmd_def.args.iter().map(|a| a.name).collect();
     let parsed = build_command_args(&raw_parsed, &arg_names).map_err(|e| e.to_string())?;
 

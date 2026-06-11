@@ -59,6 +59,8 @@ pub struct OptionDef {
     pub name: &'static str,
     pub description: &'static str,
     pub is_bool: bool,
+    /// Optional short-form alias (e.g. `"y"` for `-y`).
+    pub short: Option<&'static str>,
 }
 
 /// A single CLI command definition.
@@ -195,11 +197,11 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[ArgDef { name: "url", description: "The URL to navigate to", optional: true }],
             options: &[
-                OptionDef { name: "headed", description: "Run browser in headed mode", is_bool: true },
-                OptionDef { name: "headless", description: "Run browser in headless mode", is_bool: true },
-                OptionDef { name: "profile", description: "Path to browser profile directory", is_bool: false },
-                OptionDef { name: "profile-mode", description: "Browser profile mode (temporary, sequential, default)", is_bool: false },
-                OptionDef { name: "interact-level", description: "Interaction level for the new session (for example FASTEST, FAST, DEFAULT)", is_bool: false },
+                OptionDef { name: "headed", description: "Run browser in headed mode", is_bool: true, short: None },
+                OptionDef { name: "headless", description: "Run browser in headless mode", is_bool: true, short: None },
+                OptionDef { name: "profile", description: "Path to browser profile directory", is_bool: false, short: None },
+                OptionDef { name: "profile-mode", description: "Browser profile mode (temporary, sequential, default)", is_bool: false, short: None },
+                OptionDef { name: "interact-level", description: "Interaction level for the new session (for example FASTEST, FAST, DEFAULT)", is_bool: false, short: None },
             ],
             tool_name_fn: |args| {
                 if args.get("url").and_then(|v| v.as_str()).map(|u| !u.is_empty()).unwrap_or(false) {
@@ -252,11 +254,13 @@ pub fn all_commands() -> Vec<CommandDef> {
                     name: "tag",
                     description: "Release tag to install, for example v4.9.3 or 4.9.3 (defaults to latest release)",
                     is_bool: false,
+                    short: None,
                 },
                 OptionDef {
                     name: "force",
                     description: "Force re-download even when the requested tagged runtime is already installed",
                     is_bool: true,
+                    short: None,
                 },
             ],
             tool_name_fn: |_| String::new(),
@@ -283,6 +287,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     name: "yes",
                     description: "Skip confirmation prompts (non-interactive mode)",
                     is_bool: true,
+                    short: Some("y"),
                 },
             ],
             tool_name_fn: |_| String::new(),
@@ -310,11 +315,13 @@ pub fn all_commands() -> Vec<CommandDef> {
                     name: "bail",
                     description: "Stop on the first command failure",
                     is_bool: true,
+                    short: None,
                 },
                 OptionDef {
                     name: "json",
                     description: "Read commands as JSON from stdin",
                     is_bool: true,
+                    short: None,
                 },
             ],
             tool_name_fn: |_| String::new(),
@@ -400,7 +407,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "ref", description: "Optional CSS selector or element reference to type into", optional: true },
             ],
             options: &[
-                OptionDef { name: "submit", description: "Whether to submit entered text (press Enter after)", is_bool: true },
+                OptionDef { name: "submit", description: "Whether to submit entered text (press Enter after)", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "browser_press_sequentially".to_string(),
             tool_params_fn: |args| {
@@ -518,7 +525,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "button", description: "Button to click, defaults to left", optional: true },
             ],
             options: &[
-                OptionDef { name: "modifiers", description: "Modifier keys to press", is_bool: false },
+                OptionDef { name: "modifiers", description: "Modifier keys to press", is_bool: false, short: None },
             ],
             tool_name_fn: |_| "browser_click".to_string(),
             tool_params_fn: |args| {
@@ -539,7 +546,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "button", description: "Button to click, defaults to left", optional: true },
             ],
             options: &[
-                OptionDef { name: "modifiers", description: "Modifier keys to press", is_bool: false },
+                OptionDef { name: "modifiers", description: "Modifier keys to press", is_bool: false, short: None },
             ],
             tool_name_fn: |_| "browser_click".to_string(),
             tool_params_fn: |args| {
@@ -582,7 +589,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "text", description: "Text to fill into the element", optional: false },
             ],
             options: &[
-                OptionDef { name: "submit", description: "Whether to submit entered text (press Enter after)", is_bool: true },
+                OptionDef { name: "submit", description: "Whether to submit entered text (press Enter after)", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "browser_type".to_string(),
             tool_params_fn: |args| {
@@ -671,7 +678,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[],
             options: &[
-                OptionDef { name: "filename", description: "Save snapshot to file instead of returning it in the response", is_bool: false },
+                OptionDef { name: "filename", description: "Save snapshot to file instead of returning it in the response", is_bool: false, short: None },
             ],
             tool_name_fn: |_| "browser_snapshot".to_string(),
             tool_params_fn: |args| {
@@ -708,7 +715,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "min-level", description: "Level of the console messages to return. Defaults to \"info\"", optional: true },
             ],
             options: &[
-                OptionDef { name: "clear", description: "Whether to clear the console list", is_bool: true },
+                OptionDef { name: "clear", description: "Whether to clear the console list", is_bool: true, short: None },
             ],
             tool_name_fn: |args| {
                 if get_bool(args, "clear").unwrap_or(false) {
@@ -832,8 +839,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[
-                OptionDef { name: "domain", description: "Only include cookies with the exact domain", is_bool: false },
-                OptionDef { name: "path", description: "Only include cookies with the exact path", is_bool: false },
+                OptionDef { name: "domain", description: "Only include cookies with the exact domain", is_bool: false, short: None },
+                OptionDef { name: "path", description: "Only include cookies with the exact path", is_bool: false, short: None },
             ],
             tool_name_fn: |_| "browser_save_storage_state".to_string(),
             tool_params_fn: |args| {
@@ -877,12 +884,12 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "value", description: "Cookie value", optional: false },
             ],
             options: &[
-                OptionDef { name: "domain", description: "Cookie domain", is_bool: false },
-                OptionDef { name: "path", description: "Cookie path", is_bool: false },
-                OptionDef { name: "expires", description: "Cookie expiration Unix timestamp", is_bool: false },
-                OptionDef { name: "httpOnly", description: "Mark the cookie as HttpOnly", is_bool: true },
-                OptionDef { name: "secure", description: "Mark the cookie as Secure", is_bool: true },
-                OptionDef { name: "sameSite", description: "Cookie SameSite policy (Strict, Lax, None)", is_bool: false },
+                OptionDef { name: "domain", description: "Cookie domain", is_bool: false, short: None },
+                OptionDef { name: "path", description: "Cookie path", is_bool: false, short: None },
+                OptionDef { name: "expires", description: "Cookie expiration Unix timestamp", is_bool: false, short: None },
+                OptionDef { name: "httpOnly", description: "Mark the cookie as HttpOnly", is_bool: true, short: None },
+                OptionDef { name: "secure", description: "Mark the cookie as Secure", is_bool: true, short: None },
+                OptionDef { name: "sameSite", description: "Cookie SameSite policy (Strict, Lax, None)", is_bool: false, short: None },
             ],
             tool_name_fn: |_| "browser_load_storage_state".to_string(),
             tool_params_fn: |args| {
@@ -923,8 +930,8 @@ pub fn all_commands() -> Vec<CommandDef> {
                 optional: false,
             }],
             options: &[
-                OptionDef { name: "domain", description: "Cookie domain override", is_bool: false },
-                OptionDef { name: "path", description: "Cookie path override", is_bool: false },
+                OptionDef { name: "domain", description: "Cookie domain override", is_bool: false, short: None },
+                OptionDef { name: "path", description: "Cookie path override", is_bool: false, short: None },
             ],
             tool_name_fn: |_| "delete_cookies".to_string(),
             tool_params_fn: |args| {
@@ -1118,8 +1125,8 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[ArgDef { name: "ref", description: "Exact target element reference from the page snapshot", optional: true }],
             options: &[
-                OptionDef { name: "filename", description: "File name to save the screenshot to", is_bool: false },
-                OptionDef { name: "full-page", description: "When true, takes a screenshot of the full scrollable page", is_bool: true },
+                OptionDef { name: "filename", description: "File name to save the screenshot to", is_bool: false, short: None },
+                OptionDef { name: "full-page", description: "When true, takes a screenshot of the full scrollable page", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "browser_take_screenshot".to_string(),
             tool_params_fn: |args| {
@@ -1138,7 +1145,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: true,
             args: &[],
             options: &[
-                OptionDef { name: "filename", description: "File name to save the pdf to", is_bool: false },
+                OptionDef { name: "filename", description: "File name to save the pdf to", is_bool: false, short: None },
             ],
             tool_name_fn: |_| "browser_pdf_save".to_string(),
             tool_params_fn: |args| {
@@ -1214,7 +1221,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[
-                OptionDef { name: "all", description: "List all browser sessions across all workspaces", is_bool: true },
+                OptionDef { name: "all", description: "List all browser sessions across all workspaces", is_bool: true, short: None },
             ],
             tool_name_fn: |_| String::new(),
             tool_params_fn: |_| json!({}),
@@ -1258,6 +1265,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     name: "force",
                     description: "Force re-download even when the requested version is already installed",
                     is_bool: true,
+                    short: None,
                 },
             ],
             tool_name_fn: |_| String::new(),
@@ -1295,6 +1303,7 @@ pub fn all_commands() -> Vec<CommandDef> {
                     name: "server",
                     description: "Server URL to check (defaults to saved or http://127.0.0.1:8182)",
                     is_bool: false,
+                    short: None,
                 },
             ],
             tool_name_fn: |_| String::new(),
@@ -1315,7 +1324,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[ArgDef { name: "instruction", description: "What data to extract, e.g. 'product name, price, ratings'", optional: false }],
             options: &[
-                OptionDef { name: "schema", description: "JSON schema to constrain the extracted data structure", is_bool: false },
+                OptionDef { name: "schema", description: "JSON schema to constrain the extracted data structure", is_bool: false, short: None },
             ],
             tool_name_fn: |_| "agent_extract".to_string(),
             tool_params_fn: |args| {
@@ -1332,7 +1341,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[ArgDef { name: "instruction", description: "Summarization instruction, e.g. 'summarize the product reviews'", optional: true }],
             options: &[
-                OptionDef { name: "selector", description: "CSS selector to limit the scope of summarization", is_bool: false },
+                OptionDef { name: "selector", description: "CSS selector to limit the scope of summarization", is_bool: false, short: None },
             ],
             tool_name_fn: |_| "agent_summarize".to_string(),
             tool_params_fn: |args| {
@@ -1390,10 +1399,10 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[],
             options: &[
-                OptionDef { name: "profile-mode", description: "Browser profile mode (default: SEQUENTIAL; supported: SEQUENTIAL or TEMPORARY)", is_bool: false },
-                OptionDef { name: "max-open-tabs", description: "Maximum open tabs per browser context (default: 8)", is_bool: false },
-                OptionDef { name: "max-browser-contexts", description: "Number of isolated browser environments (default: 2)", is_bool: false },
-                OptionDef { name: "display-mode", description: "Display mode: GUI, HEADLESS, SUPERVISED", is_bool: false },
+                OptionDef { name: "profile-mode", description: "Browser profile mode (default: SEQUENTIAL; supported: SEQUENTIAL or TEMPORARY)", is_bool: false, short: None },
+                OptionDef { name: "max-open-tabs", description: "Maximum open tabs per browser context (default: 8)", is_bool: false, short: None },
+                OptionDef { name: "max-browser-contexts", description: "Number of isolated browser environments (default: 2)", is_bool: false, short: None },
+                OptionDef { name: "display-mode", description: "Display mode: GUI, HEADLESS, SUPERVISED", is_bool: false, short: None },
             ],
             tool_name_fn: |_| "open_session".to_string(),
             tool_params_fn: |args| {
@@ -1417,13 +1426,13 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[ArgDef { name: "url", description: "URL or X-SQL payload to submit", optional: true }],
             options: &[
-                OptionDef { name: "seed-file", description: "File containing URLs to submit, one per line", is_bool: false },
-                OptionDef { name: "sql", description: "X-SQL query to execute against the page. Use @url as placeholder for the target URL. Prefix with @ to read from file (e.g. --sql @query.sql)", is_bool: false },
-                OptionDef { name: "deadline", description: "Deadline for task completion (ISO 8601, e.g. 2026-02-24T23:59:59Z)", is_bool: false },
-                OptionDef { name: "expires", description: "Cache expiration duration (e.g. 1d, 1h)", is_bool: false },
-                OptionDef { name: "refresh", description: "Force a fresh fetch, ignoring cache", is_bool: true },
-                OptionDef { name: "parse", description: "Parse page immediately after fetching", is_bool: true },
-                OptionDef { name: "store-content", description: "Persist page content to storage", is_bool: true },
+                OptionDef { name: "seed-file", description: "File containing URLs to submit, one per line", is_bool: false, short: None },
+                OptionDef { name: "sql", description: "X-SQL query to execute against the page. Use @url as placeholder for the target URL. Prefix with @ to read from file (e.g. --sql @query.sql)", is_bool: false, short: None },
+                OptionDef { name: "deadline", description: "Deadline for task completion (ISO 8601, e.g. 2026-02-24T23:59:59Z)", is_bool: false, short: None },
+                OptionDef { name: "expires", description: "Cache expiration duration (e.g. 1d, 1h)", is_bool: false, short: None },
+                OptionDef { name: "refresh", description: "Force a fresh fetch, ignoring cache", is_bool: true, short: None },
+                OptionDef { name: "parse", description: "Parse page immediately after fetching", is_bool: true, short: None },
+                OptionDef { name: "store-content", description: "Persist page content to storage", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "command_run".to_string(),
             tool_params_fn: |args| {
@@ -1447,11 +1456,11 @@ pub fn all_commands() -> Vec<CommandDef> {
             batch_supported: false,
             args: &[ArgDef { name: "url", description: "Target page URL to load and run the query against", optional: false }],
             options: &[
-                OptionDef { name: "sql", description: "X-SQL query to execute. Use @url as placeholder for the target URL. Prefix with @ to read from file (e.g. --sql @query.sql)", is_bool: false },
-                OptionDef { name: "seed-file", description: "File containing URLs to submit, one per line (direct path, no @ prefix)", is_bool: false },
-                OptionDef { name: "deadline", description: "Deadline for task completion (ISO 8601, e.g. 2026-02-24T23:59:59Z)", is_bool: false },
-                OptionDef { name: "expires", description: "Cache expiration duration (e.g. 1d, 1h)", is_bool: false },
-                OptionDef { name: "refresh", description: "Force a fresh fetch, ignoring cache", is_bool: true },
+                OptionDef { name: "sql", description: "X-SQL query to execute. Use @url as placeholder for the target URL. Prefix with @ to read from file (e.g. --sql @query.sql)", is_bool: false, short: None },
+                OptionDef { name: "seed-file", description: "File containing URLs to submit, one per line (direct path, no @ prefix)", is_bool: false, short: None },
+                OptionDef { name: "deadline", description: "Deadline for task completion (ISO 8601, e.g. 2026-02-24T23:59:59Z)", is_bool: false, short: None },
+                OptionDef { name: "expires", description: "Cache expiration duration (e.g. 1d, 1h)", is_bool: false, short: None },
+                OptionDef { name: "refresh", description: "Force a fresh fetch, ignoring cache", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "swarm_query".to_string(),
             tool_params_fn: |args| {
