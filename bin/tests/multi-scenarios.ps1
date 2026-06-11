@@ -99,7 +99,7 @@ if ($BuildCli) {
     if ($env:BROWSER4_CLI_BIN) {
         $BinaryPath = $env:BROWSER4_CLI_BIN
     } else {
-        $globalCmd = Get-Command 'browser4-cli' -CommandType Application -ErrorAction SilentlyContinue
+        $globalCmd = Get-Command 'browser4-cli' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
         if (-not $globalCmd) {
             $whichCmd = if ($IsWindows) { 'where.exe' } else { 'which' }
             $raw = & $whichCmd 'browser4-cli' 2>$null | Select-Object -First 1
@@ -111,7 +111,7 @@ if ($BuildCli) {
             if ($LASTEXITCODE -ne 0) { throw 'npm i -g browser4-cli failed' }
             browser4-cli install
             if ($LASTEXITCODE -ne 0) { throw 'browser4-cli install failed' }
-            $globalCmd = Get-Command 'browser4-cli' -CommandType Application -ErrorAction Stop
+            $globalCmd = Get-Command 'browser4-cli' -CommandType Application -ErrorAction Stop | Select-Object -First 1
         }
         $BinaryPath = if ($globalCmd -is [string]) { $globalCmd } else { $globalCmd.Source }
     }
