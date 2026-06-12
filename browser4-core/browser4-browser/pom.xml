@@ -102,8 +102,4 @@
         <!-- Kotlin coroutines test utilities -->
         <!-- (intentionally not used in this module; kept minimal) -->
     </dependencies>
-
-    <properties>
-        <cdt-kotlin-client.version>4.0.5</cdt-kotlin-client.version>
-    </properties>
 </project>

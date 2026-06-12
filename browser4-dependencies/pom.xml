@@ -332,15 +332,6 @@
                 <version>${metrics.version}</version>
             </dependency>
 
-<!--            &lt;!&ndash; OpenTelemetry for distributed tracing &ndash;&gt;-->
-<!--            <dependency>-->
-<!--                <groupId>io.opentelemetry</groupId>-->
-<!--                <artifactId>opentelemetry-bom</artifactId>-->
-<!--                <version>${opentelemetry.version}</version>-->
-<!--                <type>pom</type>-->
-<!--                <scope>import</scope>-->
-<!--            </dependency>-->
-<!--            &lt;!&ndash; Java generated classes for semantic conventions &ndash;&gt;-->
             <!-- Java generated classes for semantic conventions -->
             <dependency>
                 <groupId>io.opentelemetry.semconv</groupId>
@@ -348,21 +339,11 @@
                 <version>${opentelemetry.semconv.version}</version>
             </dependency>
 
-<!--            &lt;!&ndash; Micrometer for metrics with Prometheus support &ndash;&gt;-->
-<!--            <dependency>-->
-<!--                <groupId>io.micrometer</groupId>-->
-<!--                <artifactId>micrometer-bom</artifactId>-->
-<!--                <version>${micrometer.version}</version>-->
-<!--                <type>pom</type>-->
-<!--                <scope>import</scope>-->
-<!--            </dependency>-->
-
             <dependency>
                 <groupId>org.nibor.autolink</groupId>
                 <artifactId>autolink</artifactId>
                 <version>${autolink.version}</version>
             </dependency>
-
 
             <dependency>
                 <groupId>org.perf4j</groupId>
@@ -409,6 +390,11 @@
                 <groupId>ai.platon.pulsar</groupId>
                 <artifactId>pulsar-jsoup</artifactId>
                 <version>${pulsar-jsoup.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>ai.platon.cdt</groupId>
+                <artifactId>cdt-kotlin-client</artifactId>
+                <version>${cdt-kotlin-client.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
@@ -562,6 +548,7 @@
         <pulsar-h2.version>1.4.197</pulsar-h2.version>
         <pulsar-jsoup.version>1.14.3</pulsar-jsoup.version>
         <browser4-base.version>4.8.5</browser4-base.version>
+        <cdt-kotlin-client.version>4.8.0</cdt-kotlin-client.version>
     </properties>
 
 </project>
