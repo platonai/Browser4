@@ -2885,10 +2885,6 @@ async fn handle_uninstall(tool_params: &Value) -> Result<(), String> {
                     }
                 }
             }
-            Err(e) if e.contains("No such file") || e.contains("not found") || e.contains("os error 2") => {
-                // npm binary not found on $PATH — treat as not installed
-                (false, None)
-            }
             Err(_) => {
                 // npm not on PATH or spawn failed — treat as not installed
                 (false, None)
