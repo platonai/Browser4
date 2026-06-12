@@ -1255,6 +1255,8 @@ jobs:
       - name: Trigger OSS Sync
         if: success()
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           gh workflow run sync-to-oss.yml \
             --repo "${{ github.repository }}" \
