@@ -142,9 +142,6 @@ jobs:
         uses: ./.github/actions/run-tests
         with:
           maven_profiles: 'all-main-modules,all-test-modules'
-          # CI Pipeline: Run only Fast unit tests (same as PR tests)
-          # Comprehensive tests (Slow + Integration) run in nightly.yml
-          # Exclude: Slow, Heavy, Integration, E2E, SDK, and all environment-dependent tests
           excluded_groups: 'RequiresAI,ManualOnly'
           timeout_minutes: '35'
 
