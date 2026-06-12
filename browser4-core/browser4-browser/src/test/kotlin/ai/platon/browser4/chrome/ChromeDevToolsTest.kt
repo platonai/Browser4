@@ -1,6 +1,6 @@
 package ai.platon.browser4.chrome
 
-import ai.platon.browser4.chrome.handler.RemoteChromeProtocol
+import ai.platon.browser4.chrome.handler.ReflectiveChromeProtocol
 import ai.platon.browser4.chrome.util.LauncherOptions
 import ai.platon.pulsar.browser.impl.BrowserProtocol
 import ai.platon.pulsar.common.browser.BrowserFiles
@@ -33,7 +33,7 @@ class ChromeDevToolsTest {
         assertTrue(versionString.contains("Mozilla"))
 
         devTools = chrome.createDevTools(tab)
-        browserProtocol = RemoteChromeProtocol(devTools)
+        browserProtocol = ReflectiveChromeProtocol(devTools)
 
         runBlocking { browserProtocol.pageEnable() }
     }

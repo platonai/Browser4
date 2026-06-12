@@ -30,7 +30,7 @@ import ai.platon.pulsar.browser.impl.BrowserProtocol
  * All direct usage of [ai.platon.cdt.kt.protocol.ChromeDevTools] should go through this class to improve
  * maintainability and provide a consistent, centralized interface.
  */
-class RemoteChromeProtocol(
+class ReflectiveChromeProtocol(
     val devTools: ChromeDevTools
 ) : BrowserProtocol {
     private data class EmptyResult(val ignored: String? = null)
