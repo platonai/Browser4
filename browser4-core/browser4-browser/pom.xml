@@ -134,7 +134,6 @@
             <scope>compile</scope>
         </dependency>
 
-
         <!-- Test dependencies: JUnit 5 and Mockito (including Kotlin bindings) -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>

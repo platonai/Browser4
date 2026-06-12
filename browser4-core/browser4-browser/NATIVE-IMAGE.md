@@ -7,8 +7,8 @@ This document describes how to compile the MCP Browser Server into a standalone 
 | Artifact | Size | Description |
 |----------|------|-------------|
 | `MCPBrowserServer.jar` | 36 MB | Shaded fat JAR (maven-shade-plugin) |
-| `mcp-browser-server.exe` | **9.6 MB** | Native PE32+ x86-64, compressed with UPX |
-| `mcp-browser-server.exe` (no UPX) | 33 MB | Native image with `-Os` + strip, before UPX |
+| `mcp-browser-server.exe` | **9.5 MB** | Native PE32+ x86-64, UPX `--ultra-brute --compress-icons=3` |
+| `mcp-browser-server.exe` (no UPX) | 31 MB | Native image with `-Os` + `-H:+StripDebugInfo`, before UPX |
 | `mcp-browser-server.exe` (default `-O2`) | 52 MB | Native image at default optimization level |
 
 ## Prerequisites
@@ -227,15 +227,33 @@ native-image.cmd \
 
 UPX post-compresses the PE executable, typically achieving 55–70% additional reduction.
 
+### Recommended: Ultra-brute (maximum compression)
+
+```bash
+upx --ultra-brute --compress-icons=3 -o mcp-browser-server.exe mcp-browser-server-uncompressed.exe
+```
+
+### Quick: Best + LZMA (near-maximum, faster)
+
 ```bash
 upx --best --lzma -o mcp-browser-server-upx.exe mcp-browser-server.exe
 ```
 
 | UPX flag | Meaning |
 |----------|---------|
-| `--best` | Maximum compression (slower compression, same decompression speed) |
-| `--lzma` | Use LZMA algorithm (best ratio for native images) |
+| `--ultra-brute` | Try ALL compression variants [very slow, 1–2 min for 32 MB] |
+| `--brute` | Try all available compression methods & filters [slow] |
+| `--best --lzma` | Best compression with LZMA algorithm (near-optimal) |
+| `--compress-icons=3` | Compress ALL icon resources (default is 2) |
 | `-o <output>` | Output filename |
+
+### Choosing a compression level
+
+| Method | Time | Result |
+|--------|------|--------|
+| `--ultra-brute --compress-icons=3` | ~2 min | 9.5 MB (30.4%) — best |
+| `--best --lzma` | ~15 sec | 9.6 MB (30.7%) |
+| `-9 --lzma` | ~10 sec | ~10 MB |
 
 ```bash
 # Quick check: what ratio to expect
@@ -243,13 +261,15 @@ upx -t mcp-browser-server.exe
 ```
 
 > **Runtime overhead:** UPX decompresses the binary into memory at launch (~50–100ms). Once decompressed, the native code runs identically. No ongoing CPU overhead for compression.
+>
+> **Note:** On some environments (e.g., Git Bash/msys2), UPX-compressed PE files may not launch correctly. If you encounter "exit code 193", either run the exe directly from `cmd.exe` or Windows Explorer, or use the uncompressed native image. `upx -t` can verify the compression is valid.
 
 ## Build Results Comparison
 
 | Build | Flags | Code Area | Image Heap | Total File | UPX'd |
 |-------|-------|-----------|------------|------------|-------|
 | Default | `-O2` (default) | 27.7 MB | 23.0 MB | **51.8 MB** | ~18 MB |
-| **Size** | `-Os +StripDebug` | 12.0 MB | 19.5 MB | **32.8 MB** | **9.6 MB** |
+| **Size** | `-Os +StripDebug` | 12.0 MB | 19.5 MB | **31.2 MB** | **9.5 MB** |
 | Quick | `-Ob` | — | — | ~60 MB | ~20 MB |
 
 ## Understanding the Build Output
@@ -366,6 +386,6 @@ cd browser4-core/browser4-browser/target
 native-image.cmd -jar MCPBrowserServer.jar -o mcp-browser-server.exe \
     --no-fallback -Os -H:+StripDebugInfo -march=compatibility -J-Xmx6g
 
-# 4. Compress
-upx --best --lzma mcp-browser-server.exe
+# 4. Compress (maximum)
+upx --ultra-brute --compress-icons=3 mcp-browser-server.exe
 ```

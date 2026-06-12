@@ -1,7 +1,7 @@
 package ai.platon.browser4.chrome.handler.util
 
 import ai.platon.browser4.chrome.RemoteDevTools
-import ai.platon.browser4.chrome.handler.ReflectiveChromeProtocol
+import ai.platon.browser4.chrome.handler.DirectChromeProtocol
 import ai.platon.pulsar.browser.impl.BrowserProtocol
 import ai.platon.pulsar.browser.impl.NodeRef
 import ai.platon.pulsar.common.AppContext
@@ -30,7 +30,7 @@ suspend fun resolveNodeObjectId(devTools: RemoteDevTools, node: NodeRef): Resolv
         return null
     }
 
-    val bp = ReflectiveChromeProtocol(devTools)
+    val bp = DirectChromeProtocol(devTools)
     val objectId = when {
         node.nodeId > 0 -> bp.resolveNodeByNodeId(node.nodeId).objectId
         node.backendNodeId > 0 -> bp.resolveNodeByBackendNodeId(node.backendNodeId).objectId
@@ -41,7 +41,7 @@ suspend fun resolveNodeObjectId(devTools: RemoteDevTools, node: NodeRef): Resolv
 }
 
 suspend fun resolveNodeObjectId(bp: BrowserProtocol, node: NodeRef): ResolvedNodeObjectId? {
-    val devTools = (bp as ReflectiveChromeProtocol).remoteDevToolsOrNull ?: return null
+    val devTools = (bp as DirectChromeProtocol).remoteDevToolsOrNull ?: return null
     return resolveNodeObjectId(devTools, node)
 }
 
@@ -53,12 +53,12 @@ suspend fun releaseNodeObjectIfNeeded(devTools: RemoteDevTools, resolved: Resolv
         return
     }
 
-    val bp = ReflectiveChromeProtocol(devTools)
+    val bp = DirectChromeProtocol(devTools)
     runCatching { bp.releaseObject(resolved.objectId) }
 }
 
 suspend fun releaseNodeObjectIfNeeded(bp: BrowserProtocol, resolved: ResolvedNodeObjectId?) {
-    val devTools = (bp as ReflectiveChromeProtocol).remoteDevToolsOrNull ?: return
+    val devTools = (bp as DirectChromeProtocol).remoteDevToolsOrNull ?: return
     releaseNodeObjectIfNeeded(devTools, resolved)
 }
 
@@ -84,7 +84,7 @@ suspend inline fun <T> withNodeObjectId(
     node: NodeRef,
     block: suspend (String) -> T,
 ): T? {
-    val devTools = (bp as ReflectiveChromeProtocol).remoteDevToolsOrNull ?: return null
+    val devTools = (bp as DirectChromeProtocol).remoteDevToolsOrNull ?: return null
     return withNodeObjectId(devTools, node, block)
 }
 

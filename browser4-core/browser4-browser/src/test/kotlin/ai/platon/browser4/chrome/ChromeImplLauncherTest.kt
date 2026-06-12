@@ -1,6 +1,6 @@
 package ai.platon.browser4.chrome
 
-import ai.platon.browser4.chrome.handler.ReflectiveChromeProtocol
+import ai.platon.browser4.chrome.handler.DirectChromeProtocol
 import ai.platon.browser4.chrome.util.ChromeOptions
 import ai.platon.browser4.chrome.util.LauncherOptions
 import ai.platon.pulsar.common.browser.BrowserFiles
@@ -64,7 +64,7 @@ class ChromeImplLauncherTest {
             println(versionString)
 
             val devTools = chrome.createDevTools(tab)
-            val browserProtocol = ReflectiveChromeProtocol(devTools)
+            val browserProtocol = DirectChromeProtocol(devTools)
             runBlocking {
                 browserProtocol.pageEnable()
                 browserProtocol.navigate("https://vercel.com/")

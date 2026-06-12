@@ -2,7 +2,7 @@ package ai.platon.browser4.driver.examples
 
 import ai.platon.browser4.chrome.ChromeLauncher
 import ai.platon.browser4.chrome.RemoteDevTools
-import ai.platon.browser4.chrome.handler.ReflectiveChromeProtocol
+import ai.platon.browser4.chrome.handler.DirectChromeProtocol
 import ai.platon.cdt.kt.protocol.events.tracing.DataCollected
 import ai.platon.cdt.kt.protocol.support.types.EventHandler
 import ai.platon.pulsar.browser.impl.BrowserProtocol
@@ -16,7 +16,7 @@ suspend fun main() {
     val chromeService = launcher.launch(false)
     val tab = chromeService.createTab()
     val devTools: RemoteDevTools = chromeService.createDevToolsService(tab)
-    val bp: BrowserProtocol = ReflectiveChromeProtocol(devTools)
+    val bp: BrowserProtocol = DirectChromeProtocol(devTools)
 
     val dataCollectedList = mutableListOf<Any>()
 

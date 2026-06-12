@@ -15,7 +15,7 @@ class ScreenshotHandler(
     private val bp: BrowserProtocol,
 ) {
     private val logger = getLogger(this)
-    private val isActive get() = AppContext.isActive && (bp as ReflectiveChromeProtocol).isOpen
+    private val isActive get() = AppContext.isActive && (bp as DirectChromeProtocol).isOpen
     private fun activeCdp() = bp.takeIf { isActive }
     private val debugLevel = System.getProperty("browser.additionalDebugLevel")?.toIntOrNull() ?: 0
 

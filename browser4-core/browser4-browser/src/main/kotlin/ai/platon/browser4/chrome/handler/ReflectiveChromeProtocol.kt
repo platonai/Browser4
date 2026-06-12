@@ -38,7 +38,7 @@ class ReflectiveChromeProtocol(
     val remoteDevTools: RemoteDevTools =
         (devTools as? RemoteDevTools) ?: error("CDP requires RemoteDevTools for this runtime")
 
-    val remoteDevToolsOrNull: RemoteDevTools? get() = devTools as? RemoteDevTools
+    override val remoteDevToolsOrNull: RemoteDevTools? get() = devTools as? RemoteDevTools
     override val isOpen: Boolean get() = remoteDevToolsOrNull?.isOpen ?: false
 
     override suspend fun isBrowserAlive(): Boolean {

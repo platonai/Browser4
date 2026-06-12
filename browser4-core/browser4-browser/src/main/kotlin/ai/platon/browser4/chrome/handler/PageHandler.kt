@@ -32,7 +32,7 @@ class PageHandler constructor(
 
     private val logger = getLogger(this)
 
-    private val chromeProtocol = browserProtocol as ReflectiveChromeProtocol
+    private val chromeProtocol = browserProtocol as DirectChromeProtocol
 
     private val isActive get() = AppContext.isActive && chromeProtocol.isOpen
 
