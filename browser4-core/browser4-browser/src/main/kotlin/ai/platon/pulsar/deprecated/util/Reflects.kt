@@ -1,8 +1,7 @@
-package ai.platon.browser4.chrome.util
+package ai.platon.pulsar.deprecated.util
 
 import ai.platon.pulsar.common.alwaysTrue
 import ai.platon.pulsar.common.getLogger
-import javassist.Modifier
 import javassist.util.proxy.MethodHandler
 import javassist.util.proxy.ProxyFactory
 import kotlinx.coroutines.*

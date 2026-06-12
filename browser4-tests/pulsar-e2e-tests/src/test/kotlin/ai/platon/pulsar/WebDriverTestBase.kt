@@ -5,7 +5,7 @@ import ai.platon.browser4.chrome.dom.CDPSnapshotService
 import ai.platon.browser4.chrome.dom.util.DomDebug
 import ai.platon.pulsar.browser.BrowserId
 import ai.platon.pulsar.browser.common.BrowserSettings
-import ai.platon.pulsar.browser.common.SimpleScriptConfuser
+import ai.platon.pulsar.browser.detail.SimpleScriptConfuser
 import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
 import ai.platon.pulsar.chrome.dom.model.PageTarget
 import ai.platon.pulsar.chrome.dom.model.SnapshotOptions

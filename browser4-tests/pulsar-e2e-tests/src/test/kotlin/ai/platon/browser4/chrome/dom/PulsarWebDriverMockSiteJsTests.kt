@@ -1,7 +1,7 @@
 package ai.platon.browser4.chrome.dom
 
 import ai.platon.pulsar.WebDriverTestBase
-import ai.platon.pulsar.browser.common.SimpleScriptConfuser
+import ai.platon.pulsar.browser.detail.SimpleScriptConfuser
 import ai.platon.pulsar.common.printlnPro
 import ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
@@ -124,20 +124,21 @@ class PulsarWebDriverMockSiteJsTests : WebDriverTestBase() {
     }
 
     @Test
-    fun openAHtmlPageAndComputeScreenNumber() = runEnhancedWebDriverTest(multiScreensInteractiveUrl, browser) { driver ->
-        driver.evaluate("__pulsar_utils__.scrollToTop()")
-        var metadata = computeActiveDOMMetadata(driver)
-        assertEquals(0f, metadata.screenNumber)
+    fun openAHtmlPageAndComputeScreenNumber() =
+        runEnhancedWebDriverTest(multiScreensInteractiveUrl, browser) { driver ->
+            driver.evaluate("__pulsar_utils__.scrollToTop()")
+            var metadata = computeActiveDOMMetadata(driver)
+            assertEquals(0f, metadata.screenNumber)
 
-        driver.evaluate("window.scrollTo(0, 300)")
-        metadata = computeActiveDOMMetadata(driver)
-        assertTrue { metadata.screenNumber > 0.0 }
-        assertTrue { metadata.screenNumber < 1.0 }
+            driver.evaluate("window.scrollTo(0, 300)")
+            metadata = computeActiveDOMMetadata(driver)
+            assertTrue { metadata.screenNumber > 0.0 }
+            assertTrue { metadata.screenNumber < 1.0 }
 
-        driver.evaluate("window.scrollTo(0, 1080)")
-        metadata = computeActiveDOMMetadata(driver)
-        assertTrue { metadata.screenNumber > 1 }
-    }
+            driver.evaluate("window.scrollTo(0, 1080)")
+            metadata = computeActiveDOMMetadata(driver)
+            assertTrue { metadata.screenNumber > 1 }
+        }
 
     @Test
     fun ensureNoInjectedDocumentVariablesAreSeen() = runEnhancedWebDriverTest(interactiveUrl, browser) { driver ->

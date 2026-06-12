@@ -6,7 +6,7 @@ import ai.platon.browser4.chrome.dom.util.DomDebug
 import ai.platon.pulsar.browser.BrowserId
 import ai.platon.pulsar.browser.FastWebDriverService
 import ai.platon.pulsar.browser.common.BrowserSettings
-import ai.platon.pulsar.browser.common.SimpleScriptConfuser
+import ai.platon.pulsar.browser.detail.SimpleScriptConfuser
 import ai.platon.pulsar.browser.manage.BrowserFactory
 import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
 import ai.platon.pulsar.chrome.dom.model.PageTarget

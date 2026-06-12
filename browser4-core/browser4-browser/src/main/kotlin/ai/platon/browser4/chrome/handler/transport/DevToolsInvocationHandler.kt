@@ -3,8 +3,8 @@ package ai.platon.browser4.chrome.handler.transport
 import ai.platon.browser4.chrome.RemoteDevTools
 import ai.platon.browser4.chrome.util.ChromeIOException
 import ai.platon.browser4.chrome.util.ChromeRPCException
-import ai.platon.browser4.chrome.util.ReflectUtils
-import ai.platon.browser4.chrome.util.SuspendAwareHandler
+import ai.platon.pulsar.deprecated.util.ReflectUtils
+import ai.platon.pulsar.deprecated.util.SuspendAwareHandler
 import ai.platon.cdt.kt.protocol.support.annotations.EventName
 import ai.platon.cdt.kt.protocol.support.annotations.ParamName
 import ai.platon.cdt.kt.protocol.support.annotations.ReturnTypeParameter
