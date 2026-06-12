@@ -32,19 +32,19 @@ GitHub owner/repo (default: from git remote origin).
 Skip confirmation prompts.
 
 .EXAMPLE
-.\bin\release\trigger-cli-release.ps1
+.\bin\release\trigger-cli-release-action.ps1
 Tag mode with the current version from cli/VERSION-CLI.
 
 .EXAMPLE
-.\bin\release\trigger-cli-release.ps1 -DryRun
+.\bin\release\trigger-cli-release-action.ps1 -DryRun
 Create a dry_run tag and push it.
 
 .EXAMPLE
-.\bin\release\trigger-cli-release.ps1 -Dispatch
+.\bin\release\trigger-cli-release-action.ps1 -Dispatch
 Trigger via workflow_dispatch without creating a tag.
 
 .EXAMPLE
-.\bin\release\trigger-cli-release.ps1 -Version 0.2.0 -Dispatch -SkipBinaryBuild
+.\bin\release\trigger-cli-release-action.ps1 -Version 0.2.0 -Dispatch -SkipBinaryBuild
 Dispatch with a specific version and skip the binary build step.
 #>
 
