@@ -1255,12 +1255,14 @@ pub fn all_commands() -> Vec<CommandDef> {
             category: Category::Install,
             hidden: false,
             batch_supported: false,
-            args: &[ArgDef {
-                name: "tag",
-                description: "Release tag to upgrade to, e.g. v4.11.0 (defaults to latest release)",
-                optional: true,
-            }],
+            args: &[],
             options: &[
+                OptionDef {
+                    name: "tag",
+                    description: "Release tag to upgrade to, e.g. v4.11.0 (defaults to latest release)",
+                    is_bool: false,
+                    short: None,
+                },
                 OptionDef {
                     name: "force",
                     description: "Force re-download even when the requested version is already installed",

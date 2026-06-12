@@ -43,7 +43,7 @@ use args::{
 use commands::commands_map;
 use daemon::{
     ensure_chrome_available, ensure_server_running, init_root_search_start_dir_from_startup,
-    install_browser4_runtime, resolve_base_url, InstalledBrowser4Runtime,
+    install_browser4_runtime, read_current_tag, resolve_base_url, InstalledBrowser4Runtime,
 };
 use help::{generate_command_help, generate_help, generate_help_entry, public_command_name};
 use http::{
@@ -2737,8 +2737,12 @@ async fn handle_install(tool_params: &Value) -> Result<(), String> {
     // Check that a supported browser is available.  Auto-install Chrome on
     // Debian/Ubuntu; print guidance on other platforms.  Failure is non-fatal
     // — the runtime bundle is already installed at this point.
-    if let Err(e) = ensure_chrome_available() {
-        eprintln!("⚠  Chrome check failed: {e}");
+    // Skip this check when the runtime was already present: Chrome hasn't
+    // changed and running the check every time produces spurious warnings.
+    if !runtime.reused_existing {
+        if let Err(e) = ensure_chrome_available() {
+            eprintln!("⚠  Chrome check failed: {e}");
+        }
     }
 
     json_field("tag", json!(&runtime.tag));
@@ -2832,53 +2836,87 @@ async fn handle_uninstall(tool_params: &Value) -> Result<(), String> {
     eprintln!("🧹 Uninstalling browser4-cli ...");
     eprintln!();
 
-    // ── 1. npm global uninstall ──
-    let (npm_removed, npm_error) = match Command::new("npm")
-        .args(["uninstall", "-g", "browser4-cli"])
-        .output()
-    {
-        Ok(output) => {
-            if output.status.success() {
-                (true, None)
-            } else {
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                let msg = if stderr.is_empty() { stdout } else { stderr };
-                if npm_not_installed_message(&msg) {
-                    (false, None)
-                } else {
-                    (false, Some(msg))
+    // Helper: run a subprocess with a wall-clock timeout.  Returns the
+    // process output or a timeout/spawn error.
+    fn run_with_timeout(
+        mut cmd: Command,
+        timeout_secs: u64,
+    ) -> Result<std::process::Output, String> {
+        let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+        let deadline = std::time::Instant::now()
+            + std::time::Duration::from_secs(timeout_secs);
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => {
+                    return child.wait_with_output().map_err(|e| e.to_string());
                 }
+                Ok(None) => {
+                    if std::time::Instant::now() >= deadline {
+                        let _ = child.kill();
+                        return Err(format!(
+                            "process did not complete within {timeout_secs}s"
+                        ));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
+                Err(e) => return Err(e.to_string()),
             }
         }
-        Err(_e) => {
-            // npm binary not found on $PATH — treat as not installed
-            (false, None)
+    }
+
+    // ── 1. npm global uninstall ──
+    let (npm_removed, npm_error) = {
+        let mut cmd = Command::new("npm");
+        cmd.args(["uninstall", "-g", "browser4-cli"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        match run_with_timeout(cmd, 60) {
+            Ok(output) => {
+                if output.status.success() {
+                    (true, None)
+                } else {
+                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    let msg = if stderr.is_empty() { stdout } else { stderr };
+                    if npm_not_installed_message(&msg) {
+                        (false, None)
+                    } else {
+                        (false, Some(msg))
+                    }
+                }
+            }
+            Err(_) => {
+                // npm not on PATH or spawn failed — treat as not installed
+                (false, None)
+            }
         }
     };
 
     // ── 2. cargo uninstall ──
-    let (cargo_removed, cargo_error) = match Command::new("cargo")
-        .args(["uninstall", "browser4-cli"])
-        .output()
-    {
-        Ok(output) => {
-            if output.status.success() {
-                (true, None)
-            } else {
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                let msg = if stderr.is_empty() { stdout } else { stderr };
-                if cargo_not_installed_message(&msg) {
-                    (false, None)
+    let (cargo_removed, cargo_error) = {
+        let mut cmd = Command::new("cargo");
+        cmd.args(["uninstall", "browser4-cli"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        match run_with_timeout(cmd, 120) {
+            Ok(output) => {
+                if output.status.success() {
+                    (true, None)
                 } else {
-                    (false, Some(msg))
+                    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    let msg = if stderr.is_empty() { stdout } else { stderr };
+                    if cargo_not_installed_message(&msg) {
+                        (false, None)
+                    } else {
+                        (false, Some(msg))
+                    }
                 }
             }
-        }
-        Err(_e) => {
-            // cargo binary not found on $PATH — treat as not installed
-            (false, None)
+            Err(_) => {
+                // cargo not on PATH or spawn failed — treat as not installed
+                (false, None)
+            }
         }
     };
 
@@ -3002,8 +3040,23 @@ async fn handle_upgrade(tool_params: &Value) -> Result<(), String> {
         .and_then(|value| value.as_bool())
         .unwrap_or(false);
 
+    // Snapshot the currently-installed tag *before* the upgrade so we can
+    // detect the "same version re-downloaded via latest" case.
+    let prev_tag = read_current_tag();
+
     eprintln!("Upgrading Browser4 runtime...");
-    let runtime = install_browser4_runtime(tag, force).await?;
+    let mut runtime = install_browser4_runtime(tag, force).await?;
+
+    // When no explicit tag was requested (`upgrade` → "latest"), the early-exit
+    // fast-path in `install_browser4_runtime` does not fire, so `reused_existing`
+    // is always `false` even if the resolved tag matches what is already installed.
+    // Detect this case here and flip the flag so the output message is correct.
+    if !force && !runtime.reused_existing && tag.is_none() {
+        if prev_tag.as_deref() == Some(&runtime.tag) {
+            runtime.reused_existing = true;
+        }
+    }
+
     let output = format_upgrade_output(&runtime, force);
     let was_upgraded = !runtime.reused_existing || force;
     for line in &output {
