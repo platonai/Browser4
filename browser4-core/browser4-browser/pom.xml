@@ -20,6 +20,18 @@
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-common</artifactId>
+            <exclusions>
+                <exclusion>
+                    <!-- kotlin-serialization (compiler plugin) depends on
+                         kotlin-gradle-plugin-api; neither belongs at runtime -->
+                    <groupId>org.jetbrains.kotlin</groupId>
+                    <artifactId>kotlin-serialization</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.jetbrains.kotlin</groupId>
+                    <artifactId>kotlin-gradle-plugin-api</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
@@ -28,6 +40,14 @@
         <dependency>
             <groupId>ai.platon.cdt</groupId>
             <artifactId>cdt-kotlin-client</artifactId>
+            <exclusions>
+                <exclusion>
+                    <!-- cdt-kotlin-client transitively pulls kotlin-gradle-plugin-api
+                         which is a build-tool artifact that does not belong at runtime -->
+                    <groupId>org.jetbrains.kotlin</groupId>
+                    <artifactId>kotlin-gradle-plugin-api</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <dependency>

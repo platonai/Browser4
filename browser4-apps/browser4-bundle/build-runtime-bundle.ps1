@@ -892,6 +892,88 @@ $libJarCount = (Get-ChildItem -Path $libDirectory -File -Filter '*.jar' | Measur
 Write-Host "Collected $libJarCount jars in lib/" -ForegroundColor Green
 
 # --------------------------------------------------------------------------
+# Clean up unnecessary JARs from the runtime bundle.
+# These removals are a safety net: the POM exclusions should prevent most of
+# these from appearing, but runtime-scoped native classifiers and compiler
+# JARs from third-party modules can still leak through.
+# --------------------------------------------------------------------------
+
+# -- Non-Windows Netty native JARs (keep only windows-x86_64) --
+$nonPlatformNativePatterns = @(
+    'netty-codec-native-quic-*-linux-*',
+    'netty-codec-native-quic-*-osx-*',
+    'netty-transport-native-epoll-*-linux-*',
+    'netty-resolver-dns-native-macos-*',
+    'netty-resolver-dns-classes-macos-*'
+)
+foreach ($pattern in $nonPlatformNativePatterns) {
+    $removed = Get-ChildItem -Path $libDirectory -File -Filter $pattern -ErrorAction SilentlyContinue
+    foreach ($jar in $removed) {
+        Remove-Item -LiteralPath $jar.FullName -Force
+        Write-Host "  Removed non-platform native: $($jar.Name)" -ForegroundColor DarkGray
+    }
+}
+
+# -- Compiler JARs (no runtime purpose) --
+$compilerJars = @(
+    'avro-compiler-*.jar',
+    'gora-compiler-*.jar'
+)
+foreach ($pattern in $compilerJars) {
+    $removed = Get-ChildItem -Path $libDirectory -File -Filter $pattern -ErrorAction SilentlyContinue
+    foreach ($jar in $removed) {
+        Remove-Item -LiteralPath $jar.FullName -Force
+        Write-Host "  Removed compiler JAR: $($jar.Name)" -ForegroundColor DarkGray
+    }
+}
+
+# -- Kotlin Gradle plugin JARs (build-tool artifacts, safety net) --
+$buildToolPatterns = @(
+    'kotlin-gradle-plugin-api-*.jar',
+    'kotlin-gradle-plugin-annotations-*.jar',
+    'kotlin-build-tools-api-*.jar',
+    'kotlin-native-utils-*.jar',
+    'kotlin-tooling-core-*.jar',
+    'kotlin-util-io-*.jar'
+)
+foreach ($pattern in $buildToolPatterns) {
+    $removed = Get-ChildItem -Path $libDirectory -File -Filter $pattern -ErrorAction SilentlyContinue
+    foreach ($jar in $removed) {
+        Remove-Item -LiteralPath $jar.FullName -Force
+        Write-Host "  Removed build-tool JAR: $($jar.Name)" -ForegroundColor DarkGray
+    }
+}
+
+# -- POM files (accidentally placed in lib/) --
+$pomFiles = Get-ChildItem -Path $libDirectory -File -Filter '*.pom' -ErrorAction SilentlyContinue
+foreach ($pom in $pomFiles) {
+    Remove-Item -LiteralPath $pom.FullName -Force
+    Write-Host "  Removed POM from lib/: $($pom.Name)" -ForegroundColor DarkGray
+}
+
+# -- Test framework JARs (safety net; should be excluded by includeScope=runtime) --
+$testJarPatterns = @(
+    'spring-test-*.jar',
+    'spring-boot-test-*.jar',
+    'junit-*.jar',
+    'mockito-*.jar',
+    'mockk-*.jar'
+)
+foreach ($pattern in $testJarPatterns) {
+    $removed = Get-ChildItem -Path $libDirectory -File -Filter $pattern -ErrorAction SilentlyContinue
+    foreach ($jar in $removed) {
+        Remove-Item -LiteralPath $jar.FullName -Force
+        Write-Host "  Removed test JAR: $($jar.Name)" -ForegroundColor DarkGray
+    }
+}
+
+$libJarCountAfter = (Get-ChildItem -Path $libDirectory -File -Filter '*.jar' | Measure-Object).Count
+$removedCount = $libJarCount - $libJarCountAfter
+if ($removedCount -gt 0) {
+    Write-Host "Cleaned up $removedCount unnecessary JARs ($libJarCountAfter remaining in lib/)" -ForegroundColor Green
+}
+
+# --------------------------------------------------------------------------
 # Compute required JRE modules with jdeps
 # --------------------------------------------------------------------------
 $phaseIndex = 3

@@ -35,6 +35,18 @@
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-common</artifactId>
+            <exclusions>
+                <exclusion>
+                    <!-- kotlin-serialization (compiler plugin) depends on
+                         kotlin-gradle-plugin-api; neither belongs at runtime -->
+                    <groupId>org.jetbrains.kotlin</groupId>
+                    <artifactId>kotlin-serialization</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.jetbrains.kotlin</groupId>
+                    <artifactId>kotlin-gradle-plugin-api</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
