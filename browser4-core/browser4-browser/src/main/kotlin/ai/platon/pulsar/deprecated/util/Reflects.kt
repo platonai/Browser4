@@ -35,6 +35,10 @@ open class SuspendAwareHandler(private val impl: Any) : InvocationHandler {
     }
 }
 
+/**
+ * TODO: will remove reflection approach in the future, as it is too fragile and hard to maintain. The main reason for
+ *  using reflection here is to simplify CDP programming, but in AI era, it is simper to send raw JSON commands to CDP.
+ * */
 object ReflectUtils {
 
     fun getJavaClass(method: Method): Class<*> {
