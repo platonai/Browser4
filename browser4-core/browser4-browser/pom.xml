@@ -28,7 +28,6 @@
         <dependency>
             <groupId>ai.platon.cdt</groupId>
             <artifactId>cdt-kotlin-client</artifactId>
-            <version>${cdt-kotlin-client.version}</version>
         </dependency>
 
         <dependency>
