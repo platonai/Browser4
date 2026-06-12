@@ -3006,8 +3006,15 @@ async fn handle_upgrade(tool_params: &Value) -> Result<(), String> {
 
     eprintln!("Upgrading Browser4 runtime...");
     let runtime = install_browser4_runtime(tag, force).await?;
-    for line in format_upgrade_output(&runtime, force) {
+    let output = format_upgrade_output(&runtime, force);
+    let was_upgraded = !runtime.reused_existing || force;
+    for line in &output {
         cli_println!("{}", line);
+    }
+    if was_upgraded {
+        eprintln!(
+            "NOTE: Restart the server to use the new version: browser4-cli stop && browser4-cli open <url>"
+        );
     }
     json_field("tag", json!(&runtime.tag));
     json_field("asset_name", json!(&runtime.asset_name));

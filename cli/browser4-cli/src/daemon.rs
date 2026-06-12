@@ -160,12 +160,18 @@ struct DownloadedFile {
 /// Each mirror provides a `base_url` that hosts release assets in the same
 /// layout as GitHub Releases: `<base_url>/download/<tag>/<asset>` (or
 /// `/latest/download/<asset>` for the latest release).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 struct DownloadMirror {
     /// Human-readable name shown in log messages (e.g. "github", "aliyun-oss").
     name: String,
     /// Base URL for release downloads (e.g. `https://github.com/platonai/Browser4/releases`).
     base_url: String,
+    /// Whether this mirror supports GitHub-style `/latest/download/` redirects.
+    /// When `false`, "latest" downloads must resolve the tag before constructing
+    /// the download URL (e.g. via a release-metadata endpoint or user-supplied
+    /// `--tag`).
+    #[serde(default)]
+    supports_latest_resolution: bool,
 }
 
 /// Top-level structure of the mirrors.json config file.
@@ -204,10 +210,12 @@ fn builtin_mirrors() -> Vec<DownloadMirror> {
         DownloadMirror {
             name: "github".to_string(),
             base_url: "https://github.com/platonai/Browser4/releases".to_string(),
+            supports_latest_resolution: true,
         },
         DownloadMirror {
             name: "aliyun-oss".to_string(),
             base_url: "https://browser4.oss-cn-beijing.aliyuncs.com/releases".to_string(),
+            supports_latest_resolution: true,
         },
     ]
 }
@@ -242,6 +250,7 @@ fn load_mirrors() -> Vec<DownloadMirror> {
             return vec![DownloadMirror {
                 name: "custom".to_string(),
                 base_url: trimmed,
+                supports_latest_resolution: true,
             }];
         }
     }
@@ -387,6 +396,13 @@ fn select_reachable_mirror(mirrors: &[DownloadMirror]) -> (&DownloadMirror, bool
 // Mirror preference cache (persists the fastest mirror across install runs)
 // ---------------------------------------------------------------------------
 
+/// Normalize a mirror base URL for comparison purposes, stripping the
+/// trailing slash so that `https://example.com/releases` and
+/// `https://example.com/releases/` are treated as the same mirror.
+fn normalize_base_url_for_comparison(url: &str) -> &str {
+    url.trim_end_matches('/')
+}
+
 /// Path to the mirror preference cache file.
 fn mirror_preference_cache_path() -> PathBuf {
     resolve_runtime_cache_dir().join(MIRROR_PREFERENCE_CACHE_FILE)
@@ -401,10 +417,13 @@ fn load_mirror_preference(mirrors: &[DownloadMirror]) -> Option<MirrorPreference
     let contents = fs::read_to_string(&path).ok()?;
     let pref: MirrorPreference = serde_json::from_str(&contents).ok()?;
     // Validate: the cached mirror must be in the current mirror list.
-    if !mirrors
-        .iter()
-        .any(|m| m.base_url == pref.selected_mirror.base_url)
-    {
+    // Normalize trailing slashes so that a trivial config change (e.g.
+    // adding or removing a trailing / in mirrors.json) doesn't silently
+    // invalidate a valid cached preference.
+    if !mirrors.iter().any(|m| {
+        normalize_base_url_for_comparison(&m.base_url)
+            == normalize_base_url_for_comparison(&pref.selected_mirror.base_url)
+    }) {
         eprintln!(
             "Cached mirror '{}' is not in the current mirror list; ignoring.",
             pref.selected_mirror.name
@@ -481,7 +500,10 @@ fn delete_mirror_preference_cache() {
 ///
 /// Returns an empty `Vec` when every mirror fails or speed testing is disabled
 /// via `BROWSER4_CLI_DISABLE_MIRROR_SPEED_TEST`.
-async fn run_speed_tests(mirrors: &[DownloadMirror]) -> Vec<SpeedTestResult> {
+async fn run_speed_tests(
+    mirrors: &[DownloadMirror],
+    tag: Option<&str>,
+) -> Vec<SpeedTestResult> {
     // Honour the disable flag.
     if env::var(DISABLE_MIRROR_SPEED_TEST_ENV).ok().as_deref() == Some("1") {
         return vec![];
@@ -516,10 +538,22 @@ async fn run_speed_tests(mirrors: &[DownloadMirror]) -> Vec<SpeedTestResult> {
     // latency the sum of all mirror timeouts (worst case).
     let mut handles = Vec::new();
     for mirror in mirrors {
-        // Use the "latest" endpoint for the speed test so the probe works
-        // regardless of whether the user specified a concrete tag.  The
-        // throughput characteristics of the CDN are the same.
-        let url = mirror_download_url(mirror, None, &asset_name);
+        // When the user wants "latest" but this mirror doesn't support
+        // /latest/download/ redirects, skip the speed test — it would
+        // always 404.  The mirror can still be used when the user passes
+        // an explicit --tag; TCP reachability covers the connectivity
+        // check in that case.
+        if tag.is_none() && !mirror.supports_latest_resolution {
+            eprintln!(
+                "  Skipping speed test for '{}' (does not support /latest/download/).",
+                mirror.name
+            );
+            continue;
+        }
+
+        // Use the user-requested tag for the speed test when available so
+        // the probe hits the exact CDN path that the full download will use.
+        let url = mirror_download_url(mirror, tag, &asset_name);
         let client = client.clone();
         let mirror = mirror.clone();
 
@@ -619,14 +653,17 @@ async fn run_speed_tests(mirrors: &[DownloadMirror]) -> Vec<SpeedTestResult> {
 /// Returns `(selected_mirror, was_speed_tested)` — the caller uses
 /// `was_speed_tested` to decide whether to invalidate the cache and retry on
 /// download failure.
-async fn select_best_mirror(mirrors: &[DownloadMirror]) -> (&DownloadMirror, bool) {
+async fn select_best_mirror<'a>(
+    mirrors: &'a [DownloadMirror],
+    tag: Option<&str>,
+) -> (&'a DownloadMirror, bool) {
     // --- cached preference ---
     if let Some(pref) = load_mirror_preference(mirrors) {
         if is_mirror_preference_valid(&pref) {
-            if let Some(mirror) = mirrors
-                .iter()
-                .find(|m| m.base_url == pref.selected_mirror.base_url)
-            {
+            if let Some(mirror) = mirrors.iter().find(|m| {
+                normalize_base_url_for_comparison(&m.base_url)
+                    == normalize_base_url_for_comparison(&pref.selected_mirror.base_url)
+            }) {
                 eprintln!(
                     "Using cached mirror '{}' (tested at {}, {:.2} MB/s)",
                     mirror.name,
@@ -639,7 +676,7 @@ async fn select_best_mirror(mirrors: &[DownloadMirror]) -> (&DownloadMirror, boo
     }
 
     // --- speed tests ---
-    let results = run_speed_tests(mirrors).await;
+    let results = run_speed_tests(mirrors, tag).await;
 
     if results.is_empty() {
         eprintln!("All speed tests failed; falling back to TCP reachability check.");
@@ -655,9 +692,10 @@ async fn select_best_mirror(mirrors: &[DownloadMirror]) -> (&DownloadMirror, boo
     };
     save_mirror_preference(&pref);
 
-    let idx = mirrors
-        .iter()
-        .position(|m| m.base_url == best.mirror.base_url)
+    let idx = mirrors.iter().position(|m| {
+        normalize_base_url_for_comparison(&m.base_url)
+            == normalize_base_url_for_comparison(&best.mirror.base_url)
+    })
         .unwrap_or(0);
     (&mirrors[idx], true)
 }
@@ -1306,7 +1344,50 @@ $server
     Some(ensure_proxy_scheme(&raw))
 }
 
+/// Remove stale install temp directories that are older than the given age.
+/// These are left behind by killed or crashed processes and would otherwise
+/// accumulate unboundedly in the system temp directory.
+fn cleanup_stale_install_temp_dirs(max_age: std::time::Duration) {
+    let install_tmp_root = browser4_cli_temp_root_dir().join("install");
+    let now = std::time::SystemTime::now();
+    let entries = match fs::read_dir(&install_tmp_root) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        // Only touch directories that match our naming pattern.
+        let dir_name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+        if !dir_name.starts_with("runtime-") {
+            continue;
+        }
+        match entry.metadata().and_then(|m| m.modified()) {
+            Ok(mtime) => {
+                if let Ok(age) = now.duration_since(mtime) {
+                    if age > max_age {
+                        let _ = fs::remove_dir_all(&path);
+                    }
+                }
+            }
+            Err(_) => {
+                // Can't stat — remove it to be safe.
+                let _ = fs::remove_dir_all(&path);
+            }
+        }
+    }
+}
+
 fn create_runtime_install_temp_dir() -> Result<PathBuf, String> {
+    // Best-effort cleanup of orphaned temp dirs from previous crashed/killed
+    // processes before creating a new one.
+    cleanup_stale_install_temp_dirs(std::time::Duration::from_secs(3600));
+
     let path = browser4_cli_temp_root_dir().join("install").join(format!(
         "runtime-{}-{}",
         std::process::id(),
@@ -1399,6 +1480,20 @@ fn download_file_blocking(url: &str, target_path: &Path) -> Result<DownloadedFil
             }
             let bytes_written = downloaded;
             file.flush().map_err(|e| e.to_string())?;
+
+            // Validate download completeness against Content-Length when
+            // available.  A truncated response (dropped connection, CDN
+            // glitch) produces a corrupt archive that would fail extraction
+            // with a confusing "corrupt archive" error; catch it early.
+            if let Some(expected) = total_size {
+                if bytes_written != expected {
+                    return Err(format!(
+                        "Download incomplete: received {bytes_written} of {expected} bytes \
+                         (connection may have been interrupted).  Retry the command or \
+                         try a different mirror."
+                    ));
+                }
+            }
 
             Ok(DownloadedFile {
                 final_url,
@@ -1675,10 +1770,13 @@ fn commit_installed_browser4_runtime(
     if source_bin.is_dir() {
         copy_dir_recursive(&source_bin, &target_bin)?;
     }
-    // Write the current-tag marker *before* write_installed_browser4_runtime_metadata
-    // because browser4_install_metadata_path() resolves through the current tag.
-    write_current_tag(&metadata.tag)?;
+    // Write the metadata file *before* the current-tag marker so a crash
+    // between the two writes leaves the versioned install directory complete
+    // rather than having current.tag point to a directory that is missing
+    // browser4-installation.json (which install_dir_contains_runtime would
+    // reject, effectively bricking that version).
     write_installed_browser4_runtime_metadata(&metadata)?;
+    write_current_tag(&metadata.tag)?;
 
     Ok(materialize_installed_runtime(metadata, false))
 }
@@ -1999,7 +2097,6 @@ pub async fn install_browser4_runtime(
     let is_single_mirror_override = env::var(BROWSER4_RELEASES_BASE_URL_ENV)
         .ok()
         .map_or(false, |v| !v.trim().is_empty());
-    let preferred_download_url = mirror_download_url(&mirrors[0], tag, &asset_name);
     let temp_dir = create_runtime_install_temp_dir()?;
     let archive_path = temp_dir.join(&asset_name);
     let extraction_dir = temp_dir.join("extract");
@@ -2027,9 +2124,12 @@ pub async fn install_browser4_runtime(
                 asset_name
             );
             // We need a DownloadedFile for the metadata below.
-            // Reconstruct it from what we know.
+            // Reconstruct it from what we know.  The final_url is set to a
+            // sentinel value rather than the first mirror's URL so that
+            // inspecting browser4-installation.json doesn't mislead the user
+            // into thinking this file was just downloaded from that URL.
             let downloaded = DownloadedFile {
-                final_url: preferred_download_url.clone(),
+                final_url: "(restored from download cache)".to_string(),
                 bytes_written: fs::metadata(&archive_path)
                     .map(|m| m.len())
                     .unwrap_or(0),
@@ -2054,11 +2154,11 @@ pub async fn install_browser4_runtime(
             let (selected_mirror, was_speed_tested) = if is_single_mirror_override {
                 (&mirrors[0], false)
             } else {
-                select_best_mirror(&mirrors).await
+                select_best_mirror(&mirrors, tag).await
             };
             let download_url = mirror_download_url(selected_mirror, tag, &asset_name);
 
-            if requested_tag.is_none() {
+            if requested_tag.is_none() && !selected_mirror.supports_latest_resolution {
                 eprintln!(
                     "Note: the '{}' mirror does not resolve \"latest\" automatically. \
                      If the download fails, specify an exact --tag.",
@@ -2084,7 +2184,7 @@ pub async fn install_browser4_runtime(
                     eprintln!("Invalidating mirror preference and re-testing mirrors...");
                     delete_mirror_preference_cache();
 
-                    let (retry_mirror, _) = select_best_mirror(&mirrors).await;
+                    let (retry_mirror, _) = select_best_mirror(&mirrors, tag).await;
                     let retry_url = mirror_download_url(retry_mirror, tag, &asset_name);
                     eprintln!(
                         "Retrying download from '{}'...",
@@ -2112,9 +2212,23 @@ pub async fn install_browser4_runtime(
                 }
                 Err(e) => {
                     // Not speed-tested (TCP fallback or override) — propagate
-                    // the error directly without retry.
+                    // the error directly without retry, but include guidance.
+                    let hint = if requested_tag.is_none() {
+                        format!(
+                            "\nHelp: the mirror may not have a \"latest\" release. \
+                             Specify an exact version with --tag, e.g. 'browser4-cli install --tag v4.11.0', \
+                             or configure additional mirrors in {}.",
+                            mirrors_config_path().display()
+                        )
+                    } else {
+                        format!(
+                            "\nHelp: configure additional mirrors in {} or set \
+                             BROWSER4_RELEASES_BASE_URL to point to a working release server.",
+                            mirrors_config_path().display()
+                        )
+                    };
                     return Err(format!(
-                        "Failed to download from {} mirror: {e}",
+                        "Failed to download from {} mirror: {e}{hint}",
                         selected_mirror.name
                     ));
                 }
@@ -3687,6 +3801,7 @@ mod tests {
         let mirror = DownloadMirror {
             name: "test".to_string(),
             base_url: "https://github.com/platonai/Browser4/releases".to_string(),
+        ..Default::default()
         };
         let url = mirror_download_url(&mirror, None, "browser4-runtime-windows-x64.zip");
         assert_eq!(
@@ -3700,6 +3815,7 @@ mod tests {
         let mirror = DownloadMirror {
             name: "test".to_string(),
             base_url: "https://github.com/platonai/Browser4/releases".to_string(),
+        ..Default::default()
         };
         let url_without_v =
             mirror_download_url(&mirror, Some("4.9.3"), "browser4-runtime-linux-x64.tar.gz");
@@ -3720,6 +3836,7 @@ mod tests {
         let mirror = DownloadMirror {
             name: "test".to_string(),
             base_url: "https://example.com/releases/".to_string(),
+        ..Default::default()
         };
         let url = mirror_download_url(&mirror, Some("v1.0.0"), "asset.zip");
         assert_eq!(
@@ -3788,6 +3905,7 @@ mod tests {
         let mirror = DownloadMirror {
             name: "test".to_string(),
             base_url: format!("https://127.0.0.1:{port}"),
+        ..Default::default()
         };
         assert!(
             mirror_is_reachable(&mirror),
@@ -3807,6 +3925,7 @@ mod tests {
         let mirror = DownloadMirror {
             name: "test".to_string(),
             base_url: format!("https://127.0.0.1:{free_port}"),
+        ..Default::default()
         };
         assert!(
             !mirror_is_reachable(&mirror),
@@ -3819,6 +3938,7 @@ mod tests {
         let mirror = DownloadMirror {
             name: "test".to_string(),
             base_url: "not-a-valid-url".to_string(),
+        ..Default::default()
         };
         assert!(
             !mirror_is_reachable(&mirror),
@@ -3841,10 +3961,12 @@ mod tests {
             DownloadMirror {
                 name: "dead".to_string(),
                 base_url: format!("https://127.0.0.1:{dead_port}"),
+            ..Default::default()
             },
             DownloadMirror {
                 name: "live".to_string(),
                 base_url: format!("https://127.0.0.1:{live_port}"),
+            ..Default::default()
             },
         ];
 
@@ -3872,10 +3994,12 @@ mod tests {
             DownloadMirror {
                 name: "first".to_string(),
                 base_url: format!("https://127.0.0.1:{dead1}"),
+            ..Default::default()
             },
             DownloadMirror {
                 name: "second".to_string(),
                 base_url: format!("https://127.0.0.1:{dead2}"),
+            ..Default::default()
             },
         ];
 
@@ -3893,6 +4017,7 @@ mod tests {
         let mirror = DownloadMirror {
             name: "empty-host".to_string(),
             base_url: "https:///path".to_string(),
+        ..Default::default()
         };
         assert!(
             !mirror_is_reachable(&mirror),
@@ -3962,6 +4087,7 @@ mod tests {
         let mirror = DownloadMirror {
             name: "ipv6".to_string(),
             base_url: format!("https://[::1]:{}", addr.port()),
+        ..Default::default()
         };
         assert!(
             mirror_is_reachable(&mirror),
@@ -3980,6 +4106,7 @@ mod tests {
         let mirror = DownloadMirror {
             name: "hostname".to_string(),
             base_url: "https://invalid.invalid/releases".to_string(),
+        ..Default::default()
         };
         let result = mirror_is_reachable(&mirror);
         // Must not panic — may be true or false depending on DNS hijacking,
@@ -3998,6 +4125,7 @@ mod tests {
         let mirror = DownloadMirror {
             name: "explicit-port".to_string(),
             base_url: format!("https://127.0.0.1:{port}/some/path"),
+        ..Default::default()
         };
         assert!(
             mirror_is_reachable(&mirror),
@@ -4745,6 +4873,7 @@ mod tests {
             selected_mirror: DownloadMirror {
                 name: "test-mirror".to_string(),
                 base_url: "https://example.com/releases".to_string(),
+            ..Default::default()
             },
             tested_at: "2026-06-11T00:00:00+00:00".to_string(),
             download_speed_bps: 5_000_000,
@@ -4776,6 +4905,7 @@ mod tests {
             selected_mirror: DownloadMirror {
                 name: "old-mirror".to_string(),
                 base_url: "https://example.com/releases".to_string(),
+            ..Default::default()
             },
             // Timestamp is well over 1 second ago.
             tested_at: "2020-01-01T00:00:00+00:00".to_string(),
@@ -4813,6 +4943,7 @@ mod tests {
             selected_mirror: DownloadMirror {
                 name: "recent".to_string(),
                 base_url: "https://example.com/releases".to_string(),
+            ..Default::default()
             },
             tested_at: chrono::Utc::now().to_rfc3339(),
             download_speed_bps: 200,
@@ -4849,6 +4980,7 @@ mod tests {
             selected_mirror: DownloadMirror {
                 name: "custom-ttl".to_string(),
                 base_url: "https://example.com/releases".to_string(),
+            ..Default::default()
             },
             tested_at: chrono::Utc::now().to_rfc3339(),
             download_speed_bps: 300,
@@ -4866,6 +4998,7 @@ mod tests {
             selected_mirror: DownloadMirror {
                 name: "custom-ttl".to_string(),
                 base_url: "https://example.com/releases".to_string(),
+            ..Default::default()
             },
             tested_at: "2020-01-01T00:00:00+00:00".to_string(),
             download_speed_bps: 300,
@@ -4892,6 +5025,7 @@ mod tests {
             selected_mirror: DownloadMirror {
                 name: "absent".to_string(),
                 base_url: "https://deleted.example.com/releases".to_string(),
+            ..Default::default()
             },
             tested_at: chrono::Utc::now().to_rfc3339(),
             download_speed_bps: 100,
@@ -4902,6 +5036,7 @@ mod tests {
         let mirrors = vec![DownloadMirror {
             name: "other".to_string(),
             base_url: "https://other.example.com/releases".to_string(),
+            ..Default::default()
         }];
         let loaded = load_mirror_preference(&mirrors);
         assert!(

@@ -140,7 +140,7 @@ jobs:
             asset_name=$(basename "$asset")
 
             # Symlink key and its target object key (relative to bucket root)
-            symlink_key="releases/download/latest/${asset_name}"
+            symlink_key="releases/latest/download/${asset_name}"
             target_key="releases/download/${TAG_NAME}/${asset_name}"
 
             echo "Creating symlink: ${symlink_key} → ${target_key}"
@@ -229,7 +229,7 @@ jobs:
             echo "- **Release URL**: ${{ steps.resolve.outputs.release_url }}"
             echo "- **Assets**: ${{ steps.resolve.outputs.assets_count }}"
             echo "- **OSS Bucket**: \`oss://browser4/releases/download/${{ steps.resolve.outputs.tag_name }}/\`"
-            echo "- **Latest symlink**: \`oss://browser4/releases/download/latest/\`"
+            echo "- **Latest symlink**: \`oss://browser4/releases/latest/download/\`"
             echo "- **CLI installer scripts**:"
             echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1\`"
             echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh\`"
