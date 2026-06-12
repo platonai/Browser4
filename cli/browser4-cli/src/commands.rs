@@ -1252,7 +1252,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         CommandDef {
             name: "upgrade",
             description: "Upgrade Browser4 to the latest version (or a specified release tag)",
-            category: Category::Browsers,
+            category: Category::Install,
             hidden: false,
             batch_supported: false,
             args: &[ArgDef {
@@ -2153,7 +2153,7 @@ mod tests {
         let map = commands_map();
         let cmd = map.get("upgrade").expect("upgrade command must exist");
         assert!(!cmd.hidden);
-        assert_eq!(cmd.category, Category::Browsers);
+        assert_eq!(cmd.category, Category::Install);
 
         // With no args → empty params.
         let args: HashMap<String, Value> = HashMap::new();

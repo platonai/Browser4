@@ -61,10 +61,16 @@ const MIRROR_SPEED_TEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_MIRROR_SPEED_TEST_TIME
 const MIRROR_PREFERENCE_TTL_SECS: u64 = 86400;
 /// Env var to override the mirror preference TTL (seconds).
 const MIRROR_PREFERENCE_TTL_ENV: &str = "BROWSER4_CLI_MIRROR_PREFERENCE_TTL_SECS";
+/// Env var to override the download timeout (seconds).  Default: 1800 (30 min).
+const DOWNLOAD_TIMEOUT_ENV: &str = "BROWSER4_CLI_DOWNLOAD_TIMEOUT_SECS";
 /// Env var to disable speed testing (set to "1") — forces TCP-only fallback.
 const DISABLE_MIRROR_SPEED_TEST_ENV: &str = "BROWSER4_CLI_DISABLE_MIRROR_SPEED_TEST";
 /// Name of the mirror preference cache file inside the runtime cache dir.
 const MIRROR_PREFERENCE_CACHE_FILE: &str = "mirror-preference.json";
+/// Name of the lock directory used to serialise concurrent install/upgrade runs.
+const INSTALL_LOCK_DIR_NAME: &str = ".install.lock";
+/// Maximum time to wait for a concurrent install/upgrade to finish (seconds).
+const INSTALL_LOCK_TIMEOUT_SECS: u64 = 300;
 const ROOT_SEARCH_START_DIR_ENV: &str = "BROWSER4_CLI_INVOKE_DIR";
 /// When set to `1`, `true`, `yes`, or `on`, forces the CLI to download the
 /// Browser4 runtime bundle from a remote release instead of building it from
@@ -1415,8 +1421,14 @@ fn download_file_blocking(url: &str, target_path: &Path) -> Result<DownloadedFil
         fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
 
+    let download_timeout_secs = env::var(DOWNLOAD_TIMEOUT_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&s| s > 0)
+        .unwrap_or(1800);
     let mut client_builder =
-        reqwest::blocking::Client::builder().timeout(Duration::from_secs(1800));
+        reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(download_timeout_secs));
 
     // Honour proxy environment variables and system proxy settings.
     // Reqwest processes NO_PROXY / no_proxy automatically when a proxy
@@ -1679,6 +1691,73 @@ fn resolve_runtime_bundle_root(extracted_dir: &Path) -> Result<PathBuf, String> 
         "Downloaded Browser4 runtime bundle did not contain lib/ and runtime/ directories under {}.",
         extracted_dir.display()
     ))
+}
+
+/// Query available disk space on the filesystem containing `path`.
+///
+/// Uses `df` on Unix to get the available space in bytes.  On non-Unix
+/// platforms returns `u64::MAX` (skip check — the install will fail
+/// naturally with a clear error if the disk is truly full).
+fn fs_disk_space_available(path: &Path) -> Result<u64, String> {
+    // Walk up to find an existing ancestor if `path` doesn't exist yet.
+    let probe_path = if path.exists() {
+        path.to_path_buf()
+    } else {
+        let mut probe = path.to_path_buf();
+        loop {
+            if probe.exists() {
+                break;
+            }
+            if !probe.pop() {
+                return Err("Cannot find an existing ancestor for disk space check".to_string());
+            }
+        }
+        probe
+    };
+
+    #[cfg(unix)]
+    {
+        // `df -B1 <path>` prints available space in bytes.
+        // Output format (POSIX):
+        //   Filesystem    1B-blocks        Used    Available Use% Mounted on
+        //   /dev/sda1   12345678901  2345678901  10000000000  20% /home
+        match std::process::Command::new("df")
+            .args(["-B1", &probe_path.to_string_lossy()])
+            .output()
+        {
+            Ok(output) if output.status.success() => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                // Parse the second line, fourth column (Available).
+                if let Some(data_line) = stdout.lines().nth(1) {
+                    let columns: Vec<&str> = data_line.split_whitespace().collect();
+                    if columns.len() >= 4 {
+                        if let Ok(bytes) = columns[3].parse::<u64>() {
+                            return Ok(bytes);
+                        }
+                    }
+                }
+                Err(format!(
+                    "Could not parse 'df' output for {}: {}",
+                    probe_path.display(),
+                    stdout,
+                ))
+            }
+            Ok(output) => Err(format!(
+                "'df' command failed for {}: {}",
+                probe_path.display(),
+                String::from_utf8_lossy(&output.stderr).trim(),
+            )),
+            Err(e) => Err(format!(
+                "Failed to run 'df' for disk space check: {e}"
+            )),
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = probe_path;
+        Ok(u64::MAX)
+    }
 }
 
 fn remove_path_if_exists(path: &Path) -> Result<(), String> {
@@ -2067,6 +2146,78 @@ fn evict_old_download_cache_entries() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Concurrent install protection
+// ---------------------------------------------------------------------------
+
+/// Advisory lock that serialises concurrent `install` / `upgrade` runs.
+///
+/// Uses a directory-creation approach (`mkdir`) which is atomic on all
+/// mainstream filesystems.  The lock is released when the guard is dropped.
+struct RuntimeInstallLock {
+    lock_dir: PathBuf,
+    acquired: bool,
+}
+
+impl RuntimeInstallLock {
+    /// Attempt to acquire the install lock, blocking up to `timeout` seconds.
+    fn acquire(timeout: Duration) -> Result<Self, String> {
+        let lock_dir = runtime_versions_dir().join(INSTALL_LOCK_DIR_NAME);
+        let deadline = Instant::now() + timeout;
+
+        loop {
+            match fs::create_dir(&lock_dir) {
+                Ok(()) => {
+                    // Write our PID into the lock directory for debugging.
+                    let pid_file = lock_dir.join("pid");
+                    let _ = fs::write(&pid_file, std::process::id().to_string());
+                    return Ok(RuntimeInstallLock {
+                        lock_dir,
+                        acquired: true,
+                    });
+                }
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                    if Instant::now() >= deadline {
+                        // Remove a stale lock that's older than our timeout —
+                        // the previous process may have crashed.
+                        let _ = fs::remove_dir_all(&lock_dir);
+                        return Err(format!(
+                            "Another browser4-cli install or upgrade is already in progress \
+                             and did not finish within {} seconds.  \
+                             If you are sure no other install is running, remove \
+                             {} manually and retry.",
+                            timeout.as_secs(),
+                            lock_dir.display()
+                        ));
+                    }
+                    eprintln!(
+                        "Another browser4-cli install/upgrade is in progress; waiting... \
+                         ({:.0}s remaining)",
+                        deadline.saturating_duration_since(Instant::now())
+                            .as_secs_f64()
+                            .max(0.0)
+                    );
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+                Err(e) => {
+                    return Err(format!(
+                        "Failed to acquire install lock at {}: {e}",
+                        lock_dir.display()
+                    ));
+                }
+            }
+        }
+    }
+}
+
+impl Drop for RuntimeInstallLock {
+    fn drop(&mut self) {
+        if self.acquired {
+            let _ = fs::remove_dir_all(&self.lock_dir);
+        }
+    }
+}
+
 pub async fn install_browser4_runtime(
     tag: Option<&str>,
     force: bool,
@@ -2091,6 +2242,33 @@ pub async fn install_browser4_runtime(
     }
 
     let asset_name = platform.asset_name();
+    // Acquire an advisory lock to prevent concurrent install/upgrade runs
+    // from corrupting the versioned install directory.
+    let _install_lock = RuntimeInstallLock::acquire(Duration::from_secs(
+        INSTALL_LOCK_TIMEOUT_SECS,
+    ))?;
+
+    // Check available disk space before downloading.  We need at least
+    // ~500 MB free (200 MB download + 200 MB extraction + headroom).
+    // This is a best-effort check — the actual free space may change
+    // between the check and the download.
+    {
+        let check_path = runtime_versions_dir();
+        if let Ok(available) = fs_disk_space_available(&check_path) {
+            const MIN_FREE_BYTES: u64 = 500 * 1024 * 1024; // 500 MB
+            if available < MIN_FREE_BYTES {
+                return Err(format!(
+                    "Insufficient disk space at {}: only {:.1} MB available, \
+                     need at least {:.0} MB.  Free up space or set \
+                     BROWSER4_RUNTIME_DIR to a filesystem with more room.",
+                    check_path.display(),
+                    available as f64 / 1_048_576.0,
+                    MIN_FREE_BYTES as f64 / 1_048_576.0,
+                ));
+            }
+        }
+    }
+
     let mirrors = load_mirrors();
     // Determine whether BROWSER4_RELEASES_BASE_URL is in effect — when it is
     // there is only a single custom mirror and speed testing is pointless.
@@ -2148,103 +2326,160 @@ pub async fn install_browser4_runtime(
             };
             commit_installed_browser4_runtime(&extracted_root, metadata)
         } else {
-            // Speed-based mirror selection with caching and fallback.
-            // When BROWSER4_RELEASES_BASE_URL is set we skip the speed test
-            // and use the single override mirror directly.
-            let (selected_mirror, was_speed_tested) = if is_single_mirror_override {
+            // Build a prioritised list of mirrors to try.
+            // The first mirror is either the single override or the result of
+            // speed-test / cached-preference selection.  Remaining mirrors
+            // follow in the order they appear in the config, deduplicated.
+            let (preferred_mirror, _was_speed_tested) = if is_single_mirror_override {
                 (&mirrors[0], false)
             } else {
                 select_best_mirror(&mirrors, tag).await
             };
-            let download_url = mirror_download_url(selected_mirror, tag, &asset_name);
 
-            if requested_tag.is_none() && !selected_mirror.supports_latest_resolution {
-                eprintln!(
-                    "Note: the '{}' mirror does not resolve \"latest\" automatically. \
-                     If the download fails, specify an exact --tag.",
-                    selected_mirror.name
-                );
+            let mut ordered_mirrors: Vec<&DownloadMirror> = Vec::with_capacity(mirrors.len());
+            ordered_mirrors.push(preferred_mirror);
+            for mirror in &mirrors {
+                if normalize_base_url_for_comparison(&mirror.base_url)
+                    != normalize_base_url_for_comparison(&preferred_mirror.base_url)
+                {
+                    ordered_mirrors.push(mirror);
+                }
             }
 
-            eprintln!(
-                "Downloading Browser4 runtime bundle from {}...",
-                download_url
-            );
-            let download_result = download_file(&download_url, &archive_path).await;
-
-            let downloaded = match download_result {
-                Ok(d) => d,
-                Err(e) if was_speed_tested => {
-                    // Cached or speed-tested mirror failed — invalidate the
-                    // preference, re-test, and retry once.
+            // Warn about mirrors that don't support /latest/ resolution when
+            // no explicit --tag was given (they will be skipped below).
+            if requested_tag.is_none() {
+                let unsupported: Vec<&str> = ordered_mirrors
+                    .iter()
+                    .filter(|m| !m.supports_latest_resolution)
+                    .map(|m| m.name.as_str())
+                    .collect();
+                if !unsupported.is_empty() {
                     eprintln!(
-                        "Download from '{}' failed: {e}",
-                        selected_mirror.name
+                        "Note: mirror(s) {} do not resolve \"latest\" automatically. \
+                         If all downloads fail, specify an exact --tag.",
+                        unsupported.join(", ")
                     );
-                    eprintln!("Invalidating mirror preference and re-testing mirrors...");
-                    delete_mirror_preference_cache();
-
-                    let (retry_mirror, _) = select_best_mirror(&mirrors, tag).await;
-                    let retry_url = mirror_download_url(retry_mirror, tag, &asset_name);
-                    eprintln!(
-                        "Retrying download from '{}'...",
-                        retry_mirror.name
-                    );
-
-                    download_file(&retry_url, &archive_path).await.map_err(|retry_err| {
-                        if requested_tag.is_none() {
-                            format!(
-                                "Failed to download from any mirror after retry: {retry_err}\n\
-                                 Help: the mirror may not have a \"latest\" release. \
-                                 Specify an exact version with --tag, e.g. 'browser4-cli install --tag v4.11.0', \
-                                 or configure additional mirrors in {}.",
-                                mirrors_config_path().display()
-                            )
-                        } else {
-                            format!(
-                                "Failed to download from any mirror after retry: {retry_err}\n\
-                                 Help: configure additional mirrors in {} or set \
-                                 BROWSER4_RELEASES_BASE_URL to point to a working release server.",
-                                mirrors_config_path().display()
-                            )
-                        }
-                    })?
                 }
-                Err(e) => {
-                    // Not speed-tested (TCP fallback or override) — propagate
-                    // the error directly without retry, but include guidance.
-                    let hint = if requested_tag.is_none() {
-                        format!(
-                            "\nHelp: the mirror may not have a \"latest\" release. \
-                             Specify an exact version with --tag, e.g. 'browser4-cli install --tag v4.11.0', \
-                             or configure additional mirrors in {}.",
-                            mirrors_config_path().display()
-                        )
-                    } else {
-                        format!(
-                            "\nHelp: configure additional mirrors in {} or set \
-                             BROWSER4_RELEASES_BASE_URL to point to a working release server.",
-                            mirrors_config_path().display()
-                        )
-                    };
-                    return Err(format!(
-                        "Failed to download from {} mirror: {e}{hint}",
-                        selected_mirror.name
-                    ));
-                }
+            }
+
+            let mut last_error = String::new();
+            let mut download_succeeded = false;
+            let mut downloaded = DownloadedFile {
+                final_url: String::new(),
+                bytes_written: 0,
             };
+
+            for (attempt, mirror) in ordered_mirrors.iter().enumerate() {
+                // Skip mirrors that don't support latest resolution when no
+                // explicit --tag was given — they would 404.
+                if requested_tag.is_none() && !mirror.supports_latest_resolution {
+                    eprintln!(
+                        "Skipping mirror '{}' (does not support /latest/ resolution).",
+                        mirror.name
+                    );
+                    continue;
+                }
+
+                if attempt > 0 {
+                    eprintln!("Retrying with mirror '{}'...", mirror.name);
+                }
+
+                let download_url = mirror_download_url(mirror, tag, &asset_name);
+                eprintln!(
+                    "Downloading Browser4 runtime bundle from {}...",
+                    download_url
+                );
+
+                match download_file(&download_url, &archive_path).await {
+                    Ok(d) => {
+                        downloaded = d;
+                        download_succeeded = true;
+                        break;
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "Download from '{}' failed: {e}",
+                            mirror.name
+                        );
+                        last_error = e;
+                        // Continue to the next mirror.
+                    }
+                }
+            }
+
+            if !download_succeeded {
+                // All mirrors exhausted — invalidate the preference cache so
+                // the next run doesn't pick the same failing mirror.
+                delete_mirror_preference_cache();
+                return Err(format!(
+                    "Failed to download from all {} mirror(s). Last error: {last_error}\n\
+                     Help: configure additional mirrors in {} or set \
+                     BROWSER4_RELEASES_BASE_URL to point to a working release server.",
+                    ordered_mirrors.len(),
+                    mirrors_config_path().display()
+                ));
+            }
 
             eprintln!(
                 "Downloaded {} bytes for Browser4 runtime bundle.",
                 downloaded.bytes_written
             );
 
+            // Compute SHA-256 of the downloaded archive for self-consistency.
+            // If a previously-cached archive exists for this tag+asset, compare
+            // checksums — a mismatch signals a corrupt or tampered download.
+            if let Some(normalized) = requested_tag.as_deref() {
+                match compute_file_sha256(&archive_path) {
+                    Ok(fresh_checksum) => {
+                        let cached_checksum_path =
+                            cached_checksum_path(normalized, &asset_name);
+                        if cached_checksum_path.exists() {
+                            if let Ok(expected) =
+                                fs::read_to_string(&cached_checksum_path)
+                            {
+                                let expected = expected.trim();
+                                if !expected.is_empty() && fresh_checksum != expected {
+                                    eprintln!(
+                                        "⚠  Checksum mismatch with previously cached archive! \
+                                         The new download may be corrupt. \
+                                         Evicting stale cache entry."
+                                    );
+                                    let _ = fs::remove_file(
+                                        &cached_download_path(normalized, &asset_name),
+                                    );
+                                    let _ = fs::remove_file(&cached_checksum_path);
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "⚠  Could not compute checksum of downloaded archive: {e}"
+                        );
+                    }
+                }
+            }
+
             // Cache the downloaded archive for future runs (only when we have
             // a concrete tag — "latest" is too ephemeral).
             if let Some(normalized) = requested_tag.as_deref() {
                 try_cache_downloaded_archive(&archive_path, normalized, &asset_name);
             }
-            extract_runtime_bundle_archive(&archive_path, &extraction_dir, platform.archive_kind())?;
+
+            eprintln!(
+                "Extracting Browser4 runtime bundle ({} bytes)...",
+                fs::metadata(&archive_path)
+                    .map(|m| m.len())
+                    .unwrap_or(0)
+            );
+            extract_runtime_bundle_archive(
+                &archive_path,
+                &extraction_dir,
+                platform.archive_kind(),
+            )?;
+            eprintln!("Extraction complete.");
+
             let extracted_root = resolve_runtime_bundle_root(&extraction_dir)?;
             let resolved_tag = parse_release_tag_from_url(&downloaded.final_url)
                 .or(requested_tag)
@@ -2336,6 +2571,37 @@ fn find_in_path(name: &str) -> Option<std::path::PathBuf> {
         }
     }
     None
+}
+
+/// Run a command via sudo, returning a user-friendly error when sudo is
+/// unavailable or passwordless sudo is not configured.
+fn run_sudo_command(
+    program: &str,
+    args: &[&str],
+    description: &str,
+) -> Result<(), String> {
+    let status = std::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .status()
+        .map_err(|e| {
+            format!(
+                "Failed to run '{program}': {e}. \
+                 Ensure 'sudo' is installed and passwordless sudo is configured \
+                 for unattended Chrome installation, or install Chrome manually: \
+                 https://www.google.com/chrome/"
+            )
+        })?;
+
+    if !status.success() {
+        return Err(format!(
+            "{description} failed (sudo exit code: {}). \
+             Configure passwordless sudo for unattended Chrome installation, \
+             or install Chrome manually: https://www.google.com/chrome/",
+            status.code().map_or_else(|| "signal".to_string(), |c| c.to_string())
+        ));
+    }
+    Ok(())
 }
 
 /// Check whether Chrome or Chromium is available.  If not, attempt to install
@@ -2487,23 +2753,27 @@ fn install_chrome_debian() -> Result<(), String> {
     }
 
     eprintln!("   Installing Google Chrome ...");
-    let status = std::process::Command::new("sudo")
-        .args(["dpkg", "-i"])
-        .arg(&tmp_deb)
-        .status()
-        .map_err(|e| {
-            format!(
-                "Failed to run 'sudo dpkg': {e}. \
-             Ensure you have sudo privileges (passwordless sudo required for unattended install)."
-            )
-        })?;
+    let tmp_deb_str = tmp_deb.to_string_lossy().to_string();
+    let dpkg_result = run_sudo_command(
+        "sudo",
+        &["-n", "dpkg", "-i", &tmp_deb_str],
+        "Chrome dpkg install",
+    );
 
-    if !status.success() {
-        // Fix broken dependencies
+    if dpkg_result.is_err() {
+        // Fix broken dependencies (best-effort).
         eprintln!("   Fixing dependencies ...");
-        let _ = std::process::Command::new("sudo")
-            .args(["apt-get", "install", "-f", "-y"])
-            .status();
+        let _ = run_sudo_command(
+            "sudo",
+            &["-n", "apt-get", "install", "-f", "-y"],
+            "apt-get fix dependencies",
+        );
+        // Retry the dpkg install after fixing deps.
+        run_sudo_command(
+            "sudo",
+            &["-n", "dpkg", "-i", &tmp_deb_str],
+            "Chrome dpkg install (retry after dependency fix)",
+        )?;
     }
 
     let _ = fs::remove_file(&tmp_deb);
@@ -2534,23 +2804,20 @@ fn install_chrome_rhel() -> Result<(), String> {
     }
 
     eprintln!("   Installing Google Chrome ...");
-    let status = std::process::Command::new("sudo")
-        .args(["dnf", "install", "-y"])
-        .arg(&tmp_rpm)
-        .status()
-        .map_err(|e| {
-            format!(
-                "Failed to run 'sudo dnf': {e}. \
-             Ensure you have sudo privileges (passwordless sudo required for unattended install)."
-            )
-        })?;
+    let tmp_rpm_str = tmp_rpm.to_string_lossy().to_string();
+    let dnf_result = run_sudo_command(
+        "sudo",
+        &["-n", "dnf", "install", "-y", &tmp_rpm_str],
+        "Chrome dnf install",
+    );
 
-    if !status.success() {
-        // Try yum as fallback
-        let _ = std::process::Command::new("sudo")
-            .args(["yum", "install", "-y"])
-            .arg(&tmp_rpm)
-            .status();
+    if dnf_result.is_err() {
+        // Try yum as fallback.
+        run_sudo_command(
+            "sudo",
+            &["-n", "yum", "install", "-y", &tmp_rpm_str],
+            "Chrome yum install",
+        )?;
     }
 
     let _ = fs::remove_file(&tmp_rpm);

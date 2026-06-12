@@ -140,14 +140,34 @@ detect_libc() {
     return
   fi
 
-  # Check for musl
-  if ldd --version 2>&1 | grep -qi musl; then
-    echo "musl"
-  elif [[ -f /lib/ld-musl-x86_64.so.1 ]] || [[ -f /lib/ld-musl-aarch64.so.1 ]]; then
-    echo "musl"
-  else
-    echo ""
+  # Check for musl via ldd --version (guarded against missing ldd)
+  if command -v ldd >/dev/null 2>&1; then
+    if ldd --version 2>&1 | grep -qi musl; then
+      echo "musl"
+      return
+    fi
   fi
+
+  # Check for musl loader — covers common architectures
+  # x86_64, aarch64, armhf (32-bit ARM), i386, riscv64, s390x, ppc64le, mips64
+  local musl_loader
+  for musl_loader in \
+    /lib/ld-musl-x86_64.so.1 \
+    /lib/ld-musl-aarch64.so.1 \
+    /lib/ld-musl-armhf.so.1 \
+    /lib/ld-musl-i386.so.1 \
+    /lib/ld-musl-riscv64.so.1 \
+    /lib/ld-musl-s390x.so.1 \
+    /lib/ld-musl-ppc64le.so.1 \
+    /lib/ld-musl-mips64.so.1 \
+    /lib/ld-musl-mipsel.so.1; do
+    if [[ -f "$musl_loader" ]]; then
+      echo "musl"
+      return
+    fi
+  done
+
+  echo ""
 }
 
 get_platform_key() {
@@ -196,8 +216,14 @@ get_default_install_dir() {
 # ──────────────────────────────────────────────
 
 check_commands() {
-  if ! command -v curl >/dev/null 2>&1; then
-    die "'curl' is required but not found. Install curl and retry."
+  local missing=()
+  for cmd in curl mktemp stat awk grep ln mkdir chmod; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+      missing+=("$cmd")
+    fi
+  done
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    die "Required command(s) not found: ${missing[*]}. Install them and retry."
   fi
 }
 
@@ -240,10 +266,27 @@ download_file() {
     return 0
   fi
 
-  local http_code
+  local curl_stderr
+  curl_stderr=$(mktemp)
+  local http_code curl_exit
+
   http_code=$(curl -sSfL -w "%{http_code}" -o "$dest" \
     ${GITHUB_TOKEN:+-H "Authorization: Bearer $GITHUB_TOKEN"} \
-    "$url" 2>/dev/null) || true
+    "$url" 2>"$curl_stderr")
+  curl_exit=$?
+
+  if [[ $curl_exit -ne 0 ]]; then
+    local stderr_msg
+    stderr_msg=$(<"$curl_stderr")
+    rm -f "$curl_stderr" "$dest"
+    if [[ -n "$stderr_msg" ]]; then
+      warn "curl error (exit ${curl_exit}): ${stderr_msg}"
+    else
+      warn "curl failed with exit code ${curl_exit} (no stderr output)"
+    fi
+    return 1
+  fi
+  rm -f "$curl_stderr"
 
   if [[ "$http_code" == "200" ]] || [[ "$http_code" == "302" ]]; then
     local size
@@ -297,11 +340,37 @@ add_to_shell_rc() {
     return
   fi
 
+  # Ensure the file ends with a newline before appending, so the new
+  # content isn't glued to the last existing line.
+  if [[ -s "$rc_file" ]]; then
+    local last_byte
+    last_byte=$(tail -c1 "$rc_file" 2>/dev/null || true)
+    if [[ -n "$last_byte" ]]; then
+      echo "" >> "$rc_file"
+    fi
+  fi
+
+  # Use a lock file to prevent concurrent append races (best-effort).
+  local lock_file="${rc_file}.browser4-install.lock"
+  local lock_fd=9
+  # Wait up to 10 seconds for another install process to release the lock.
+  local waited=0
+  while ! (umask 0002 && command -v flock >/dev/null 2>&1 && flock -n 9 2>/dev/null); do
+    if [[ $waited -ge 10 ]]; then
+      warn "Could not acquire lock on ${rc_file} after 10s; appending anyway"
+      break
+    fi
+    sleep 0.5
+    waited=$((waited + 1))
+  done 9>"$lock_file"
+
   {
-    echo ""
     echo "# browser4-cli"
     echo "export PATH=\"$dir:\$PATH\""
   } >> "$rc_file"
+
+  # Clean up (flock auto-releases when fd 9 is closed)
+  rm -f "$lock_file" 2>/dev/null || true
 
   ok "Added to PATH in $rc_file"
   say "    Reload with: source $rc_file"

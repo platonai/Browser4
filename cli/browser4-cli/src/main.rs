@@ -2992,8 +2992,6 @@ fn format_upgrade_output(runtime: &InstalledBrowser4Runtime, force: bool) -> Vec
         format!("- Install dir: {}", runtime.install_dir.display()),
         format!("- Lib dir: {}", runtime.lib_dir.display()),
         format!("- Java: {}", runtime.java_path.display()),
-        "Restart the server to use the new version: browser4-cli stop && browser4-cli open <url>"
-            .to_string(),
     ]
 }
 
@@ -5363,7 +5361,8 @@ mod tests {
             "got: {}",
             lines[0]
         );
-        assert!(lines.iter().any(|l| l.contains("Restart the server")));
+        // The restart message is now emitted by handle_upgrade, not format_upgrade_output.
+        assert!(!lines.iter().any(|l| l.contains("Restart the server")));
     }
 
     #[test]
@@ -5375,6 +5374,5 @@ mod tests {
             "force=true should not print 'already latest': {:?}",
             lines
         );
-        assert!(lines.iter().any(|l| l.contains("Restart the server")));
     }
 }
