@@ -56,6 +56,14 @@ $ErrorActionPreference = 'Stop'
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 # -------------------------------------------------------------------
+# Load shared test utilities (for copilot analysis on failure)
+# -------------------------------------------------------------------
+Import-Module "$ScriptDir\test-utils.psm1" -Force
+
+$RunnerLogDir = Join-Path $ScriptDir 'logs'
+$null = New-Item -Path $RunnerLogDir -ItemType Directory -Force -ErrorAction SilentlyContinue
+
+# -------------------------------------------------------------------
 # Test registry
 # -------------------------------------------------------------------
 # Each entry:  Name (script basename without .ps1), Category, Description
@@ -264,5 +272,55 @@ Write-Host "  Total   : $($results.Count)"
 Write-Host "  Passed  : $passes" -ForegroundColor $(if ($passes -gt 0) { 'Green' } else { 'DarkGray' })
 Write-Host "  Failed  : $failures" -ForegroundColor $(if ($failures -gt 0) { 'Red' } else { 'DarkGray' })
 Write-Host ("  Elapsed : {0:hh\:mm\:ss}" -f $elapsed)
+Write-Host "  Logs    : $RunnerLogDir" -ForegroundColor DarkGray
+
+# -------------------------------------------------------------------
+# Failure log collection & copilot analysis
+# -------------------------------------------------------------------
+if ($failures -gt 0) {
+    Write-Host "`n──────────────────────────────────────────────────────" -ForegroundColor Red
+    Write-Host "  FAILURE LOGS" -ForegroundColor Red
+    Write-Host "──────────────────────────────────────────────────────" -ForegroundColor Red
+
+    $allFailureLogs = [System.Collections.ArrayList]::new()
+
+    foreach ($r in $results | Where-Object { -not $_.Passed }) {
+        Write-Host "`n  ❌ $($r.Name) (exit=$($r.ExitCode))" -ForegroundColor Red
+
+        # Find the most recent log directory for this test
+        $testLogPattern = "$($r.Name)_*"
+        $testLogDirs = @(Get-ChildItem -Path $RunnerLogDir -Directory -Filter $testLogPattern `
+            -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)
+
+        if ($testLogDirs.Count -gt 0) {
+            $testLogDir = $testLogDirs[0]
+            Write-Host "     Log dir: $($testLogDir.FullName)" -ForegroundColor DarkGray
+
+            # Collect all .log files from this test's log dir
+            $logFiles = @(Get-ChildItem -Path $testLogDir.FullName -Filter '*.log' `
+                -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+
+            if ($logFiles.Count -gt 0) {
+                foreach ($logFile in $logFiles) {
+                    Write-Host "     📄 $logFile" -ForegroundColor DarkGray
+                    $null = $allFailureLogs.Add($logFile)
+                }
+            } else {
+                Write-Host "     (no log files found in directory)" -ForegroundColor DarkGray
+            }
+        } else {
+            Write-Host "     (no log directory found for this test)" -ForegroundColor DarkGray
+        }
+    }
+
+    # Invoke copilot analysis
+    if ($allFailureLogs.Count -gt 0) {
+        Write-Host "`n──────────────────────────────────────────────────────" -ForegroundColor Magenta
+        $analysisPrompt = "Browser4 CLI test suite run. $failures test(s) failed out of $($results.Count) total. See individual test logs for details."
+        $analysisResult = Invoke-CopilotAnalysis -LogPaths $allFailureLogs.ToArray() -ExtraPrompt $analysisPrompt
+    } else {
+        Write-Host "`n  ℹ No detailed log files found for failed tests" -ForegroundColor Yellow
+    }
+}
 
 exit $(if ($failures -eq 0) { 0 } else { 1 })

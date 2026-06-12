@@ -16,6 +16,10 @@
       - Rapid stop->open->close and kill-all->open->close cycles
       - State file integrity (installation.json, cli-state.json, managed-processes.json)
 
+    All CLI invocations are logged to a per-run directory under bin/tests/logs/.
+    Failures are reported with log paths.  If `copilot` is on PATH, it is
+    invoked automatically to analyse any failures.
+
 .PARAMETER Iterations
     Number of full test cycles (default: 2).
 
@@ -54,21 +58,30 @@ if ($IsWin) {
 [Console]::InputEncoding  = [Text.Encoding]::UTF8
 
 # -------------------------------------------------------------------
+# Load shared test utilities (logging, status tracking, copilot)
+# -------------------------------------------------------------------
+Import-Module "$PSScriptRoot\test-utils.psm1" -Force
+Start-TestSession -Name 'stress-install'
+
+Write-TestHeader -Name 'stress-install'
+
+# -------------------------------------------------------------------
 # CLI helper — uses global browser4-cli by default.
 # Set BROWSER4_CLI_BIN to override (e.g. to a local dev binary).
 # -------------------------------------------------------------------
 $script:__CliBin = $env:BROWSER4_CLI_BIN
 if (-not $script:__CliBin) {
-    $script:__CliBin = (Get-Command 'browser4-cli' -CommandType Application -ErrorAction SilentlyContinue)
-    if (-not $script:__CliBin) {
+    # Use @(...) to guard against npm returning both .cmd and extensionless shims on Windows
+    $cmds = @(Get-Command 'browser4-cli' -CommandType Application -ErrorAction SilentlyContinue)
+    if ($cmds.Count -gt 0) {
+        $script:__CliBin = $cmds[0].Source
+    } else {
         # Fall back to where.exe on Windows, `which` on Unix.
         $whichCmd = if ($IsWindows) { 'where.exe' } else { 'which' }
         $raw = & $whichCmd 'browser4-cli' 2>$null | Select-Object -First 1
         if ($raw) { $script:__CliBin = $raw.Trim() }
     }
-    if ($script:__CliBin -and ($script:__CliBin -is [System.Management.Automation.CommandInfo])) {
-        $script:__CliBin = $script:__CliBin.Source
-    }
+}
     if (-not $script:__CliBin) {
         throw 'browser4-cli not found on PATH. Install it with: npm i -g browser4-cli && browser4-cli install'
     }
@@ -106,6 +119,11 @@ function Invoke-Cli {
     }
     $exitCode = $global:__InvokeCliExitCode
     $sw.Stop()
+
+    # Register with test-utils for structured logging and copilot analysis
+    Register-CliResult -Label $desc -ExitCode $exitCode -OutputLines $out `
+        -Elapsed $sw.Elapsed -ExpectedExitCode 0
+
     if ($exitCode -ne 0) {
         $msg = "CLI command failed (exit=$exitCode): $desc"
         Write-Host "       FAIL: $msg" -ForegroundColor Red
@@ -799,6 +817,7 @@ if ($global:TestFailed -gt 0) {
 }
 Write-Host "  Finished    : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 Write-Host ("  Elapsed     : {0:mm\:ss}" -f $suiteTimer.Elapsed)
+Write-Host "  Log dir     : $(Get-LogDir)" -ForegroundColor DarkGray
 Write-Host "============================================================" -ForegroundColor Cyan
 
 if ($global:TestFailed -gt 0) {
@@ -808,8 +827,12 @@ if ($global:TestFailed -gt 0) {
     }
     Write-Host ""
     Write-Host "  $($global:TestPassed) PASSED, $($global:TestFailed) FAILED" -ForegroundColor Red
-} else {
-    Write-Host "`n ALL $totalChecks CHECKS PASSED" -ForegroundColor Green
 }
+
+# --- Copilot analysis via test-utils ---
+# Finish-TestSession prints the per-command log report and invokes copilot
+# if any CLI commands failed.
+$cliCode = Finish-TestSession -ExtraCopilotPrompt "Browser4 CLI install stress test. Iterations: $Iterations. Seed: $Seed. Tag: $Tag."
+if ($exitCode -eq 0 -and $cliCode -ne 0) { $exitCode = $cliCode }
 
 exit $exitCode

@@ -13,6 +13,10 @@
     This test is self-contained and requires no external services — the CLI
     manages its own server lifecycle.
 
+    All CLI invocations are logged to a per-run directory under bin/tests/logs/.
+    Failures are reported with log paths.  If `copilot` is on PATH, it is
+    invoked automatically to analyse any failures.
+
 .EXAMPLE
     .\cli-basics.ps1
 
@@ -26,80 +30,53 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
-$script:Failures = 0
-$script:Total = 0
 
 # -------------------------------------------------------------------
-# Resolve CLI binary
+# Load shared test utilities
 # -------------------------------------------------------------------
-$script:CliBin = if ($env:BROWSER4_CLI_BIN) {
-    $env:BROWSER4_CLI_BIN
-} else {
-    $cmd = Get-Command 'browser4-cli' -CommandType Application -ErrorAction SilentlyContinue
-    if (-not $cmd) {
-        $whichCmd = if ($IsWindows) { 'where.exe' } else { 'which' }
-        $raw = & $whichCmd 'browser4-cli' 2>$null | Select-Object -First 1
-        if ($raw) { $raw.Trim() } else { $null }
-    } else {
-        $cmd.Source
-    }
-}
+Import-Module "$PSScriptRoot\test-utils.psm1" -Force
+Start-TestSession -Name 'cli-basics'
 
-if (-not $script:CliBin) {
-    Write-Host 'ERROR: browser4-cli not found on PATH.' -ForegroundColor Red
-    Write-Host 'Install it with: npm i -g browser4-cli && browser4-cli install' -ForegroundColor Yellow
+# -------------------------------------------------------------------
+# Resolve CLI binary (also done by test-utils, but we print it early)
+# -------------------------------------------------------------------
+$CliBin = Get-CliBin
+if (-not $CliBin -or -not (Test-Path $CliBin)) {
+    Write-Host "ERROR: browser4-cli not found on PATH." -ForegroundColor Red
+    Write-Host "Install it with: npm i -g browser4-cli && browser4-cli install" -ForegroundColor Yellow
     exit 1
 }
 
-Write-Host "Using CLI: $script:CliBin" -ForegroundColor DarkGray
+Write-Host "Using CLI: $CliBin" -ForegroundColor DarkGray
+try {
+    $ver = & $CliBin --version 2>&1
+    Write-Host "Version : $($ver -join ' ')" -ForegroundColor DarkGray
+} catch {}
 
-# -------------------------------------------------------------------
-# Helpers
-# -------------------------------------------------------------------
-function Assert-ExitCode {
-    param(
-        [string] $Label,
-        [int] $ExpectedCode = 0
-    )
-    $script:Total++
-    if ($global:LastExitCode -eq $ExpectedCode) {
-        Write-Host "  ✅ $Label" -ForegroundColor Green
-    } else {
-        $script:Failures++
-        Write-Host "  ❌ $Label — expected exit $ExpectedCode, got $global:LastExitCode" -ForegroundColor Red
-    }
-}
+Write-TestHeader -Name 'cli-basics'
+
+# Track additional content-based assertions (beyond exit-code checks done by Invoke-TrackedCli).
+$script:ContentFailures = 0
 
 function Assert-Output {
     param(
         [string] $Label,
         [scriptblock] $Condition
     )
-    $script:Total++
     if (& $Condition) {
-        Write-Host "  ✅ $Label" -ForegroundColor Green
+        Write-Host "    ✅ $Label" -ForegroundColor Green
     } else {
-        $script:Failures++
-        Write-Host "  ❌ $Label" -ForegroundColor Red
+        $script:ContentFailures++
+        Write-Host "    ❌ $Label" -ForegroundColor Red
     }
-}
-
-function Invoke-Cli {
-    param([string[]] $Arguments)
-    $global:LastExitCode = 0
-    $out = & $script:CliBin @Arguments 2>&1
-    $global:LastExitCode = $LASTEXITCODE
-    $out
 }
 
 # -------------------------------------------------------------------
 # Test: --version
 # -------------------------------------------------------------------
-Write-Host '━━━ --version ━━━' -ForegroundColor Cyan
+Write-Host "━━━ --version ━━━" -ForegroundColor Cyan
 
-$output = Invoke-Cli '--version'
-Assert-ExitCode -Label '--version exits 0'
-
+$output = Invoke-TrackedCli -Arguments @('--version') -Label '--version'
 $outputText = ($output | Out-String).Trim()
 Assert-Output -Label '--version prints version' -Condition { $outputText -match '\d+\.\d+\.\d+' }
 Write-Host "    Output: $outputText" -ForegroundColor DarkGray
@@ -108,11 +85,9 @@ Write-Host ''
 # -------------------------------------------------------------------
 # Test: --help
 # -------------------------------------------------------------------
-Write-Host '━━━ --help ━━━' -ForegroundColor Cyan
+Write-Host "━━━ --help ━━━" -ForegroundColor Cyan
 
-$output = Invoke-Cli '--help'
-Assert-ExitCode -Label '--help exits 0'
-
+$output = Invoke-TrackedCli -Arguments @('--help') -Label '--help'
 $outputText = ($output | Out-String).Trim()
 Assert-Output -Label '--help mentions "Usage"' -Condition { $outputText -match 'Usage' }
 Assert-Output -Label '--help mentions "open"' -Condition { $outputText -match '\bopen\b' }
@@ -124,73 +99,64 @@ Write-Host ''
 # -------------------------------------------------------------------
 # Test: help for specific commands
 # -------------------------------------------------------------------
-Write-Host '━━━ help <command> ━━━' -ForegroundColor Cyan
+Write-Host "━━━ help <command> ━━━" -ForegroundColor Cyan
 
-$output = Invoke-Cli '--help', 'open'
-Assert-ExitCode -Label '--help open exits 0'
+$output = Invoke-TrackedCli -Arguments @('--help', 'open') -Label '--help open'
 $outputText = ($output | Out-String).Trim()
 Assert-Output -Label '--help open mentions URL' -Condition { $outputText -match 'url|URL' }
 
-$output = Invoke-Cli '--help', 'agent'
-Assert-ExitCode -Label '--help agent exits 0'
+$output = Invoke-TrackedCli -Arguments @('--help', 'agent') -Label '--help agent'
 Write-Host ''
 
 # -------------------------------------------------------------------
 # Test: Server-dependent operations
 # -------------------------------------------------------------------
 if ($SkipServerDependent) {
-    Write-Host '━━━ Server tests skipped (-SkipServerDependent) ━━━' -ForegroundColor Yellow
+    Write-Host "━━━ Server tests skipped (-SkipServerDependent) ━━━" -ForegroundColor Yellow
 } else {
-    Write-Host '━━━ Session lifecycle ━━━' -ForegroundColor Cyan
+    Write-Host "━━━ Session lifecycle ━━━" -ForegroundColor Cyan
 
     # open
     Write-Host '--- open ---' -ForegroundColor DarkGray
-    $output = Invoke-Cli 'open'
-    # open can exit 0 (success) or non-zero if server can't start
-    # Accept either; the CLI auto-starts the server if needed
+    $output = Invoke-TrackedCli -Arguments @('open') -Label 'open' -PassThruOnly
+    $openExitCode = $LASTEXITCODE
     $outputText = ($output | Out-String).Trim()
-    if ($global:LastExitCode -eq 0) {
-        Write-Host "  ✅ open exits 0  (server is running)" -ForegroundColor Green
-        $script:Total++
-    } else {
-        Write-Host "  ⚠ open exited $global:LastExitCode — server may not be running" -ForegroundColor Yellow
-        Write-Host "    Output: $outputText" -ForegroundColor DarkGray
-        Write-Host "  ⚠ Skipping remaining server-dependent tests" -ForegroundColor Yellow
 
-        # Still count as "tested" — we verified the command is callable
-        $script:Total++
-        Write-Host ''
-        # Skip remaining server tests
+    # open can exit 0 (success) or non-zero if server can't auto-start.
+    # Use PassThruOnly so it always shows PASS; we check manually below.
+    if ($openExitCode -eq 0) {
+        Write-Host "    ✅ server is running, continuing session tests" -ForegroundColor Green
+    } else {
+        Write-Host "    ⚠ open exited $openExitCode — server may not be running" -ForegroundColor Yellow
+        Write-Host "    Output: $outputText" -ForegroundColor DarkGray
+        Write-Host "    ⚠ Skipping remaining server-dependent tests" -ForegroundColor Yellow
         $SkipServerDependent = $true
     }
 
     if (-not $SkipServerDependent) {
         # list
         Write-Host '--- list ---' -ForegroundColor DarkGray
-        $output = Invoke-Cli 'list'
-        Assert-ExitCode -Label 'list exits 0'
+        $output = Invoke-TrackedCli -Arguments @('list') -Label 'list'
         $outputText = ($output | Out-String).Trim()
         Assert-Output -Label 'list produces output' -Condition { $outputText.Length -gt 0 }
-        Write-Host "    Output: $($outputText -split \"`n\" | Select-Object -First 3)" -ForegroundColor DarkGray
+        $nl = [Environment]::NewLine
+        Write-Host "    Output: $($outputText -split $nl | Select-Object -First 3)" -ForegroundColor DarkGray
 
         # close
         Write-Host '--- close ---' -ForegroundColor DarkGray
-        $output = Invoke-Cli 'close'
-        Assert-ExitCode -Label 'close exits 0'
+        $output = Invoke-TrackedCli -Arguments @('close') -Label 'close'
 
         # Verify close actually worked — re-open to confirm we can restart
         Write-Host '--- re-open after close ---' -ForegroundColor DarkGray
-        $output = Invoke-Cli 'open'
-        if ($global:LastExitCode -eq 0) {
-            Write-Host "  ✅ re-open after close exits 0" -ForegroundColor Green
-            $script:Total++
+        $output = Invoke-TrackedCli -Arguments @('open') -Label 're-open after close' -PassThruOnly
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "    ✅ re-open after close succeeds" -ForegroundColor Green
         } else {
-            Write-Host "  ⚠ re-open exited $global:LastExitCode" -ForegroundColor Yellow
-            $script:Total++
+            Write-Host "    ⚠ re-open exited $LASTEXITCODE" -ForegroundColor Yellow
         }
 
-        # Final close
-        Invoke-Cli 'close' 2>$null
+        # Final close (best-effort, ignore exit code)
+        Invoke-TrackedCli -Arguments @('close') -Label 'final close' -PassThruOnly 2>$null
     }
 
     Write-Host ''
@@ -199,26 +165,23 @@ if ($SkipServerDependent) {
 # -------------------------------------------------------------------
 # Test: --json flag
 # -------------------------------------------------------------------
-Write-Host '━━━ --json flag ━━━' -ForegroundColor Cyan
-
-$output = Invoke-Cli '--json', '--help'
-Assert-ExitCode -Label '--json --help exits 0'
+Write-Host "━━━ --json flag ━━━" -ForegroundColor Cyan
+$output = Invoke-TrackedCli -Arguments @('--json', '--help') -Label '--json --help'
 Write-Host ''
 
 # -------------------------------------------------------------------
 # Test: --quiet flag
 # -------------------------------------------------------------------
-Write-Host '━━━ --quiet flag ━━━' -ForegroundColor Cyan
-
-$output = Invoke-Cli '--quiet', '--version'
-Assert-ExitCode -Label '--quiet --version exits 0'
+Write-Host "━━━ --quiet flag ━━━" -ForegroundColor Cyan
+$output = Invoke-TrackedCli -Arguments @('--quiet', '--version') -Label '--quiet --version'
 Write-Host ''
 
 # -------------------------------------------------------------------
-# Summary
+# Final report
 # -------------------------------------------------------------------
-Write-Host '══════════════════════════════════════════════════════' -ForegroundColor Cyan
-Write-Host "  CLI Basics: $script:Failures / $script:Total failures" -ForegroundColor $(if ($script:Failures -eq 0) { 'Green' } else { 'Red' })
-Write-Host '══════════════════════════════════════════════════════' -ForegroundColor Cyan
-
-exit $(if ($script:Failures -eq 0) { 0 } else { 1 })
+$exitCode = Finish-TestSession -ExtraCopilotPrompt "These are browser4-cli smoke test failures."
+if ($script:ContentFailures -gt 0) {
+    Write-Host "  ⚠ $script:ContentFailures content-based assertion(s) also failed" -ForegroundColor Red
+    if ($exitCode -eq 0) { $exitCode = 1 }
+}
+exit $exitCode

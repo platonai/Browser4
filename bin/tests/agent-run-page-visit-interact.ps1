@@ -1,34 +1,67 @@
 #!/usr/bin/env pwsh
+<#
+.SYNOPSIS
+    Agent page-visit + interaction task lifecycle test.
+
+.DESCRIPTION
+    Submits a complex agent task (visit, summarize, extract fields, find links,
+    click, scroll), polls status until completion, displays structured results,
+    and retrieves the final agent result.
+
+    All CLI invocations are logged.  Failures are reported with log paths.
+    If `copilot` is on PATH, it is invoked to analyse failures.
+#>
+
 $ErrorActionPreference = 'Stop'
+
+# -------------------------------------------------------------------
+# Load shared test utilities
+# -------------------------------------------------------------------
+Import-Module "$PSScriptRoot\test-utils.psm1" -Force
+Start-TestSession -Name 'agent-run-page-visit-interact'
 
 # Force UTF-8 encoding for CLI output
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 
-$cli = if ($env:BROWSER4_CLI_BIN) {
-    { & $env:BROWSER4_CLI_BIN @args }
-} else {
-    { browser4-cli @args }
-}
+Write-TestHeader -Name 'agent-run-page-visit-interact'
 
-& $cli open
+# -------------------------------------------------------------------
+# 1. Open session
+# -------------------------------------------------------------------
+Write-Host "━━━ Opening session ━━━" -ForegroundColor Cyan
+$output = Invoke-TrackedCli -Arguments @('open') -Label 'open session' -PassThruOnly
+Write-Host ''
 
-$task = @"
+# -------------------------------------------------------------------
+# 2. Submit agent task
+# -------------------------------------------------------------------
+Write-Host "━━━ Submitting agent task ━━━" -ForegroundColor Cyan
+$taskDescription = @"
 Visit https://www.amazon.com/dp/B08PP5MSVB
 Summarize the product.
 Extract: product name, price, ratings.
 Find all links containing /dp/.
 After page load: click #title, then scroll to the middle.
 "@
-
-# Convert 2>&1 merged streams to plain strings so ErrorRecords don't break later parsing
-$agentRunOutput = & $cli agent run "$task" 2>&1 | ForEach-Object { "$_" }
-$agentRunText = ($agentRunOutput | Out-String).Trim()
-$agentRunText
+$output = Invoke-TrackedCli -Arguments @('agent', 'run', $taskDescription) -Label 'agent run (page-visit-interact)' -PassThruOnly
+$agentRunText = ($output | Out-String).Trim()
+Write-Host "Agent run output: $agentRunText" -ForegroundColor DarkGray
 
 $taskIdMatch = [regex]::Match($agentRunText, 'Task submitted:\s*(\S+)')
+if (-not $taskIdMatch.Success) {
+    Write-Host "❌ Could not parse Task ID from agent run output" -ForegroundColor Red
+    $exitCode = Finish-TestSession -ExtraCopilotPrompt "Could not parse Task ID from agent run output. Output was: $agentRunText"
+    exit $(if ($exitCode -eq 0) { 1 } else { $exitCode })
+}
 $taskId = $taskIdMatch.Groups[1].Value
-Write-Host "Waiting for agent task $taskId to finish..."
+Write-Host "Task ID: $taskId" -ForegroundColor Green
+Write-Host ''
+
+# -------------------------------------------------------------------
+# 3. Poll for completion
+# -------------------------------------------------------------------
+Write-Host "━━━ Polling agent status (task: $taskId) ━━━" -ForegroundColor Cyan
 
 $done = $false
 $success = $false
@@ -40,19 +73,14 @@ $MaxPollAttempts = 60
 # CLI returns a JSON envelope: {"status":"ok"|"error", "command":"...", "output":{...}}
 # The agent task state lives under output.raw:
 #   output.raw.isDone       : bool   — true when the task has finished
-#                                     Always serialized as "isDone" (never "done").
-#                                     Jackson Kotlin module uses the Kotlin property name
-#                                     directly, not the Java Bean convention of stripping "is".
 #   output.raw.processState : str    — "in_progress" | "done" | "failed"
 #   output.raw.status       : str    — "Processing" | "OK" | …
 #   output.raw.statusCode   : int    — 102 (Processing), 200 (OK), etc.
 #   output.raw.commandResult: object — present when done; contains pageSummary & fields
 #   output.raw.instructResults: array — per-instruction results with statusCode
 # ---------------------------------------------------------------------------
-
 function Get-JsonFromOutput {
     param([string]$Text)
-    # Extract the first complete JSON object (the CLI envelope)
     $jsonMatch = [regex]::Match($Text, '\{.*\}', [System.Text.RegularExpressions.RegexOptions]::Singleline)
     if (-not $jsonMatch.Success) { return $null }
     try {
@@ -63,34 +91,35 @@ function Get-JsonFromOutput {
 }
 
 for ($attempt = 1; $attempt -le $MaxPollAttempts; $attempt++) {
-    # Convert 2>&1 merged streams to plain strings
-    $statusOutput = & $cli --json agent status $taskId 2>&1 | ForEach-Object { "$_" }
+    $statusOutput = Invoke-TrackedCli -Arguments @('--json', 'agent', 'status', $taskId) `
+        -Label "agent status poll ${attempt}/${MaxPollAttempts}" -PassThruOnly
     $lastStatusText = ($statusOutput | Out-String).Trim()
-    $lastStatusText
+    Write-Host "  Status poll ${attempt}: $lastStatusText" -ForegroundColor DarkGray
 
     $status = Get-JsonFromOutput $lastStatusText
     if (-not $status) {
-        Write-Host "Status poll ${attempt}/${MaxPollAttempts}: no valid JSON in output, retrying..."
-        sleep 3
+        Write-Host "  Status poll ${attempt}/${MaxPollAttempts}: no valid JSON in output, retrying..." -ForegroundColor Yellow
+        Start-Sleep -Seconds 3
         continue
     }
 
-    # --- Handle top-level CLI error envelope ---
-    # {"status":"error","command":"agent-status","error":{"message":"...","code":"..."}}
+    # Handle top-level CLI error envelope
     if ($status.status -eq 'error') {
         $errMsg = if ($status.error.message) { $status.error.message } else { 'Unknown CLI error' }
         $errCode = if ($status.error.code) { $status.error.code } else { 'UNKNOWN' }
-        Write-Host "Status poll ${attempt}/${MaxPollAttempts}: CLI error [${errCode}] ${errMsg}"
+        Write-Host "  Status poll ${attempt}/${MaxPollAttempts}: CLI error [${errCode}] ${errMsg}" -ForegroundColor Red
         $done = $true
         $success = $false
+        Register-CliResult -Label "agent task $taskId (CLI error [$errCode]: $errMsg)" -ExitCode 1 -ExpectedExitCode 0 `
+            -OutputLines @($lastStatusText) -Elapsed ([TimeSpan]::Zero)
         break
     }
 
-    # --- Navigate to the agent task state: output.raw ---
+    # Navigate to the agent task state: output.raw
     $raw = $status.output.raw
     if (-not $raw) {
-        Write-Host "Status poll ${attempt}/${MaxPollAttempts}: no output.raw in response, retrying..."
-        sleep 3
+        Write-Host "  Status poll ${attempt}/${MaxPollAttempts}: no output.raw in response, retrying..." -ForegroundColor Yellow
+        Start-Sleep -Seconds 3
         continue
     }
 
@@ -99,43 +128,47 @@ for ($attempt = 1; $attempt -le $MaxPollAttempts; $attempt++) {
     $taskStatus = if ($raw.status) { [string]$raw.status } else { '' }
     $statusCode = if ($raw.statusCode) { [int]$raw.statusCode } else { 0 }
 
-    Write-Host "Status poll ${attempt}/${MaxPollAttempts}: processState=${processState}, isDone=${isDone}, status=${taskStatus}, statusCode=${statusCode}"
+    Write-Host "  Status poll ${attempt}: processState=${processState}, isDone=${isDone}, status=${taskStatus}, statusCode=${statusCode}" -ForegroundColor DarkGray
 
-    # --- Check terminal states ---
-    # Success: isDone=true and processState="done"
+    # Check terminal states
     if ($isDone -and $processState -eq 'done') {
         $done = $true
         $success = $true
         break
     }
 
-    # Failure: isDone=true but processState indicates an error
     if ($isDone -and $processState -in @('failed', 'error')) {
         $done = $true
         $success = $false
-        Write-Host "Task $taskId ended with processState=${processState}"
+        Write-Host "  Task $taskId ended with processState=${processState}" -ForegroundColor Red
+        Register-CliResult -Label "agent task $taskId (processState=$processState)" -ExitCode 1 -ExpectedExitCode 0 `
+            -OutputLines @($lastStatusText) -Elapsed ([TimeSpan]::Zero)
         break
     }
 
-    # Failure: statusCode indicates an error (4xx/5xx)
     if ($isDone -and $statusCode -ge 400) {
         $done = $true
         $success = $false
-        Write-Host "Task $taskId ended with statusCode=${statusCode}, status=${taskStatus}"
+        Write-Host "  Task $taskId ended with statusCode=${statusCode}, status=${taskStatus}" -ForegroundColor Red
+        Register-CliResult -Label "agent task $taskId (statusCode=$statusCode, status=$taskStatus)" -ExitCode $statusCode `
+            -ExpectedExitCode 0 -OutputLines @($lastStatusText) -Elapsed ([TimeSpan]::Zero)
         break
     }
 
-    sleep 5
+    Start-Sleep -Seconds 5
 }
 
-# --- Report outcome ---
+# Report outcome
 if (-not $done) {
-    Write-Host "WARNING: Timed out after ${MaxPollAttempts} polls. Last known state:"
-    $lastStatusText
-    exit 1
+    Write-Host "❌ Timed out after ${MaxPollAttempts} polls. Last known state:" -ForegroundColor Red
+    Write-Host $lastStatusText
+    Register-CliResult -Label "agent task $taskId (timeout after $MaxPollAttempts polls)" -ExitCode 1 -ExpectedExitCode 0 `
+        -OutputLines @($lastStatusText) -Elapsed ([TimeSpan]::Zero)
 }
 
-# --- Extract and display results from the final status poll ---
+# -------------------------------------------------------------------
+# 4. Extract and display results from the final status poll
+# -------------------------------------------------------------------
 $finalStatus = Get-JsonFromOutput $lastStatusText
 if ($finalStatus -and $finalStatus.output.raw) {
     $raw = $finalStatus.output.raw
@@ -163,7 +196,7 @@ if ($finalStatus -and $finalStatus.output.raw) {
         Write-Host "`n=== INSTRUCTION RESULTS ==="
         foreach ($ir in $raw.instructResults) {
             $icon = if ($ir.statusCode -eq 200) { '[OK]' } else { '[FAIL]' }
-            Write-Host "${icon} ${$ir.name} (statusCode=$($ir.statusCode), resultType=$($ir.resultType))"
+            Write-Host "${icon} $($ir.name) (statusCode=$($ir.statusCode), resultType=$($ir.resultType))"
         }
     }
 
@@ -174,15 +207,27 @@ if ($finalStatus -and $finalStatus.output.raw) {
     Write-Host "event          : $($raw.event)"
 }
 
-# Also fetch the full agent result for completeness
-$agentResultOutput = & $cli agent result $taskId 2>&1 | ForEach-Object { "$_" }
+# -------------------------------------------------------------------
+# 5. Retrieve full agent result
+# -------------------------------------------------------------------
+Write-Host "`n━━━ Retrieving agent result ━━━" -ForegroundColor Cyan
+$resultOutput = Invoke-TrackedCli -Arguments @('agent', 'result', $taskId) `
+    -Label 'agent result' -PassThruOnly
 Write-Host "`n=== RAW AGENT RESULT ==="
-$agentResultOutput
+$resultOutput | ForEach-Object { Write-Host $_ }
+Write-Host ''
 
+# -------------------------------------------------------------------
+# 6. Report
+# -------------------------------------------------------------------
 if ($success) {
-    Write-Host "`nAgent task $taskId completed successfully."
-    exit 0
+    Write-Host "✅ Agent task $taskId completed successfully." -ForegroundColor Green
+    Invoke-TrackedCli -Arguments @('close') -Label 'final close' -PassThruOnly
+    $code = Finish-TestSession
+    exit $code
 } else {
-    Write-Host "`nAgent task $taskId failed."
-    exit 1
+    Write-Host "❌ Agent task $taskId failed." -ForegroundColor Red
+    Invoke-TrackedCli -Arguments @('close') -Label 'final close' -PassThruOnly
+    $code = Finish-TestSession -ExtraCopilotPrompt "Browser4 CLI agent page-visit-interact task failed. Task ID: $taskId"
+    exit $(if ($code -eq 0) { 1 } else { $code })
 }

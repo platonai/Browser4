@@ -80,6 +80,12 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 # $ScriptDir is bin/tests/ — repo root is two levels up
 $RepoRoot = Resolve-Path "$ScriptDir\..\.."
 
+# -------------------------------------------------------------------
+# Load shared test utilities (for copilot analysis on failure)
+# -------------------------------------------------------------------
+Import-Module "$ScriptDir\test-utils.psm1" -Force
+Start-TestSession -Name 'multi-scenarios' -LogBaseDir (Join-Path $ScriptDir 'logs')
+
 $BinaryName = if ($IsWindows) { 'browser4-cli.exe' } else { 'browser4-cli' }
 $Profile = if ($Release) { 'release' } else { 'debug' }
 
@@ -483,5 +489,20 @@ if ($failedIters) {
         Write-Host ("    Iter $($f.Iteration): $($f.Failures) failures in {0:mm\:ss}" -f $f.Elapsed) -ForegroundColor Red
     }
 }
+
+# --- Collect failure log paths and run copilot analysis ---
+if ($TotalFailures -gt 0) {
+    Write-Host "`n  Logs directory: $LogDir" -ForegroundColor DarkGray
+    Write-Host "  -- FAILURE LOGS --" -ForegroundColor Red
+    $failureLogs = @(Get-ChildItem -Path $LogDir -Filter "*.log" -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+    foreach ($log in $failureLogs) {
+        Write-Host "    📄 $log" -ForegroundColor DarkGray
+    }
+    $analysisPrompt = "Browser4 CLI multi-scenario stress test failures. $TotalFailures failures across $Iterations iterations. Scenarios: $($Scenarios -join ', ')."
+    $analysisResult = Invoke-CopilotAnalysis -LogPaths $failureLogs -ExtraPrompt $analysisPrompt
+}
+
+# Clean up the test-utils session
+$null = Finish-TestSession -ExtraCopilotPrompt "Browser4 CLI multi-scenario stress test."
 
 exit $(if ($TotalFailures -eq 0) { 0 } else { 1 })

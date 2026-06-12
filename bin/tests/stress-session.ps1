@@ -16,6 +16,10 @@
       - Snapshot accuracy after each navigation
       - Random interactions (scroll, press, hover, eval) without side-effects
 
+    All CLI invocations are logged to a per-run directory under bin/tests/logs/.
+    Failures are reported with log paths.  If `copilot` is on PATH, it is
+    invoked automatically to analyse any failures.
+
 .PARAMETER Iterations
     Number of full test cycles (default: 3).
 
@@ -29,18 +33,21 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
-# Switch the console code page to UTF-8 (65001) so box-drawing glyphs,
-# emoji, and other Unicode characters render correctly.  On Chinese
-# Windows the default is 936 (GBK), which mangles UTF-8 byte sequences
-# into CJK gibberish.  `chcp` changes the *console's interpretation* of
-# output bytes; OutputEncoding / InputEncoding alone only affect .NET
-# stream encoding, not how the host renders them.
+# -------------------------------------------------------------------
+# Load shared test utilities
+# -------------------------------------------------------------------
+Import-Module "$PSScriptRoot\test-utils.psm1" -Force
+Start-TestSession -Name 'stress-session'
+
+# Switch the console code page to UTF-8 (65001)
 $null = & chcp 65001
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 [Console]::InputEncoding  = [Text.Encoding]::UTF8
 
+Write-TestHeader -Name 'stress-session'
+
 # -------------------------------------------------------------------
-# CLI helper
+# CLI helper (wraps Invoke-TrackedCli for backward-compatible interface)
 # -------------------------------------------------------------------
 $cli = if ($env:BROWSER4_CLI_BIN) {
     { & $env:BROWSER4_CLI_BIN @args 2>$null }
@@ -48,15 +55,23 @@ $cli = if ($env:BROWSER4_CLI_BIN) {
     { browser4-cli @args 2>$null }
 }
 
-# Invoke a CLI command, print its output for progress, and fail on
-# non-zero exit.  Write-Host goes to the host (not the output stream),
-# so the function's return value stays clean and callers don't capture
-# display noise.  When the script is launched with `*>&1` the host
-# stream lands in the redirected log.
+# The Invoke-Cli here uses the script's own $cli scriptblock (which suppresses
+# stderr) but ALSO registers the result via test-utils so it gets logged.
+# We maintain backward compatibility with the existing code while adding logging.
 function Invoke-Cli {
+    $sw = [Diagnostics.Stopwatch]::StartNew()
     $out = & $cli @args
-    if ($LASTEXITCODE -ne 0) {
-        throw "CLI command failed (exit=$LASTEXITCODE): $($args -join ' ')`nOutput:`n$($out -join "`n")"
+    $exitCode = $LASTEXITCODE
+    $sw.Stop()
+
+    $label = "cli $($args -join ' ')"
+    # Register with test-utils for logging, but don't fail on non-zero exit
+    # (the test assertions will handle that).
+    Register-CliResult -Label $label -ExitCode $exitCode -OutputLines $out `
+        -Elapsed $sw.Elapsed -ExpectedExitCode 0
+
+    if ($exitCode -ne 0) {
+        throw "CLI command failed (exit=$exitCode): $($args -join ' ')`nOutput:`n$($out -join "`n")"
     }
     if ($out) {
         $out | ForEach-Object { Write-Host $_ }
@@ -171,8 +186,7 @@ function Assert-SessionCount {
 function Assert-SnapshotContains {
     param([string]$Keyword, [string]$Context)
     $snap = Invoke-Cli snapshot
-    # Join lines into a single string so -like works as a boolean test
-    # (passing an array to -like would filter instead of returning bool).
+    # Join lines into a single string so -like works as a boolean test.
     $text = $snap -join ' '
     if ($text -notlike "*$Keyword*") {
         throw "FAIL: snapshot contains '$Keyword'  ($Context)`n      snapshot output:`n$($snap -join "`n")"
@@ -187,14 +201,13 @@ Write-Host "`n=== SESSION STRESS TEST ===" -ForegroundColor Cyan
 Write-Host "  Iterations : $Iterations" -ForegroundColor Cyan
 Write-Host "  Seed       : $Seed" -ForegroundColor Cyan
 Write-Host "  Pages      : $($pages.Count) across 3 sites" -ForegroundColor Cyan
+Write-Host "  Log dir    : $(Get-LogDir)" -ForegroundColor Cyan
 Write-Host ""
 
 Write-Host "── Ensuring clean slate (close any lingering sessions) ──" -ForegroundColor DarkYellow
 try { $null = Invoke-Cli close } catch { Write-Host "       (no session to close, ok)" -ForegroundColor DarkGray }
 try { $null = Invoke-Cli close-all } catch { Write-Host "       (close-all skipped)" -ForegroundColor DarkGray }
-# Let the server finish async session teardown before we create new
-# sessions; otherwise a late-arriving close-all can nuke our active
-# session mid-test.
+# Let the server finish async session teardown before we create new sessions.
 Start-Sleep -Seconds 3
 
 # -------------------------------------------------------------------
@@ -273,7 +286,6 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
 
     # ──────────────────────────────────────────────────────────────
     # Phase B: Rapid open/close cycles across all 10 pages.
-    #          Each iteration: open → interact → snapshot → close.
     # ──────────────────────────────────────────────────────────────
     Write-Host "`n  ── Phase B: rapid open/close across all 10 pages ──" -ForegroundColor DarkYellow
 
@@ -296,7 +308,6 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
 
     # ──────────────────────────────────────────────────────────────
     # Phase C: Mixed navigation — go-back, go-forward, reload
-    #          within a single session across 3 pages.
     # ──────────────────────────────────────────────────────────────
     Write-Host "`n  ── Phase C: go-back / go-forward / reload ──" -ForegroundColor DarkYellow
 
@@ -363,7 +374,6 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
     Assert-SessionCount -Expected 0 -Context "after kill-all"
 
     # D2: open fresh after kill-all.
-    # `open` will auto-start the server; give it extra time.
     $dPage = $shuffled | Select-Object -First 1
     Write-Host "  D2. open fresh after kill-all → $($dPage.name)  (server will auto-start)" -ForegroundColor White
     Invoke-Cli open $dPage.url
@@ -380,7 +390,6 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
 
     # ──────────────────────────────────────────────────────────────
     # Phase E: go-back on a single-page session (edge case).
-    #          Should handle gracefully.
     # ──────────────────────────────────────────────────────────────
     Write-Host "`n  ── Phase E: edge cases ──" -ForegroundColor DarkYellow
 
@@ -437,7 +446,17 @@ Write-Host "  Iterations  : $Iterations"
 Write-Host "  Total checks: $totalPasses"
 Write-Host "  Passed      : $totalPasses" -ForegroundColor Green
 Write-Host ("  Elapsed     : {0:mm\:ss}" -f $suiteTimer.Elapsed)
+Write-Host "  Log dir     : $(Get-LogDir)" -ForegroundColor DarkGray
 Write-Host "============================================================" -ForegroundColor Cyan
 
-Write-Host "`n✅ ALL $totalPasses CHECKS PASSED" -ForegroundColor Green
-exit 0
+# Check if any CLI commands failed (tracked by test-utils)
+$cliFailures = Get-FailureCount
+if ($cliFailures -gt 0) {
+    Write-Host "`n⚠ $cliFailures CLI command(s) failed — see logs above" -ForegroundColor Red
+    $code = Finish-TestSession -ExtraCopilotPrompt "Browser4 CLI stress-session test. Iterations: $Iterations. Seed: $Seed. Total checks passed: $totalPasses."
+    exit $(if ($code -eq 0) { 1 } else { $code })
+} else {
+    Write-Host "`n✅ ALL $totalPasses CHECKS PASSED" -ForegroundColor Green
+    $code = Finish-TestSession
+    exit $code
+}
