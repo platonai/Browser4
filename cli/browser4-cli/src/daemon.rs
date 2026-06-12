@@ -287,7 +287,21 @@ fn load_mirrors() -> Vec<DownloadMirror> {
             }
         },
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            // No config file — silently use built-in defaults.
+            // Warn when the user explicitly set BROWSER4_MIRRORS_CONFIG to a
+            // path that doesn't exist — silently falling back to built-ins
+            // would mean their custom mirrors are not active and they might
+            // not notice.  Only be silent when no env var was set (the
+            // default mirrors.json simply doesn't exist yet).
+            if env::var(MIRRORS_CONFIG_FILE_ENV)
+                .ok()
+                .map_or(false, |v| !v.trim().is_empty())
+            {
+                eprintln!(
+                    "Warning: {MIRRORS_CONFIG_FILE_ENV} points to {} which does not exist; \
+                     using built-in defaults.",
+                    config_path.display()
+                );
+            }
         }
         Err(e) => {
             eprintln!(
@@ -890,7 +904,7 @@ fn current_tag_file_path() -> PathBuf {
 
 /// Read the currently active tag from the marker file.  Returns `None` when
 /// no runtime has been installed yet or the file is corrupt.
-fn read_current_tag() -> Option<String> {
+pub fn read_current_tag() -> Option<String> {
     let path = current_tag_file_path();
     if !path.exists() {
         return try_migrate_legacy_runtime().or_else(|| {
@@ -919,10 +933,14 @@ fn write_current_tag(tag: &str) -> Result<(), String> {
     fs::write(&tag_path, format!("{tag}\n")).map_err(|e| e.to_string())?;
 
     // Best-effort symlink on Unix for shell-friendliness.
+    // Remove the existing symlink first — symlink(2) returns EEXIST when the
+    // path already exists, so without this removal every call after the first
+    // install would silently leave the `current` pointer stale.
     #[cfg(unix)]
     {
         let symlink_path = parent.join("current");
         let target = versioned_install_dir(tag);
+        let _ = std::fs::remove_file(&symlink_path);
         let _ = std::os::unix::fs::symlink(&target, &symlink_path);
     }
 
@@ -1115,7 +1133,26 @@ fn install_dir_contains_runtime(install_dir: &Path) -> bool {
                 })
             })
             .unwrap_or(false);
-    has_lib && java_path_in_install_dir(install_dir).is_file()
+    if !has_lib {
+        return false;
+    }
+    let java = java_path_in_install_dir(install_dir);
+    if !java.is_file() {
+        return false;
+    }
+    // On Unix also verify the binary has at least one execute bit set so
+    // that a non-executable file extracted from a broken archive (or from a
+    // `noexec`-mounted filesystem) doesn't silently pass the check.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = fs::metadata(&java) {
+            if meta.permissions().mode() & 0o111 == 0 {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 fn materialize_installed_runtime(
@@ -1646,7 +1683,24 @@ fn extract_tar_gz_archive(archive_path: &Path, destination_dir: &Path) -> Result
     let file = fs::File::open(archive_path).map_err(|e| e.to_string())?;
     let decoder = flate2::read::GzDecoder::new(file);
     let mut archive = tar::Archive::new(decoder);
-    archive.unpack(destination_dir).map_err(|e| e.to_string())
+    for entry in archive.entries().map_err(|e| e.to_string())? {
+        let mut entry = entry.map_err(|e| e.to_string())?;
+        let entry_path = entry.path().map_err(|e| e.to_string())?;
+        // Reject path-traversal attempts (entries with `..` components).
+        if entry_path
+            .components()
+            .any(|c| c == std::path::Component::ParentDir)
+        {
+            return Err(format!(
+                "Malicious archive: entry contains path traversal: {}",
+                entry_path.display()
+            ));
+        }
+        entry
+            .unpack_in(destination_dir)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// Check whether `path` contains the runtime bundle directory structure
@@ -1682,8 +1736,20 @@ fn resolve_runtime_bundle_root(extracted_dir: &Path) -> Result<PathBuf, String> 
     for entry in fs::read_dir(extracted_dir).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path();
-        if path.is_dir() && is_runtime_bundle_root(&path) {
-            return Ok(path);
+        if path.is_dir() {
+            if is_runtime_bundle_root(&path) {
+                return Ok(path);
+            }
+            // Search one additional level to handle archives that wrap the
+            // bundle in two nested directories (e.g. archive → outer/ → bundle/).
+            if let Ok(sub_entries) = fs::read_dir(&path) {
+                for sub_entry in sub_entries.flatten() {
+                    let sub_path = sub_entry.path();
+                    if sub_path.is_dir() && is_runtime_bundle_root(&sub_path) {
+                        return Ok(sub_path);
+                    }
+                }
+            }
         }
     }
 
@@ -1820,9 +1886,6 @@ fn commit_installed_browser4_runtime(
     metadata: InstalledBrowser4RuntimeMetadata,
 ) -> Result<InstalledBrowser4Runtime, String> {
     let install_dir = versioned_install_dir(&metadata.tag);
-    let target_runtime = install_dir.join(BROWSER4_RUNTIME_DIR_NAME);
-    let target_lib = install_dir.join(BROWSER4_LIB_DIR_NAME);
-    let target_bin = install_dir.join("bin");
     let source_runtime = extracted_root.join(BROWSER4_RUNTIME_DIR_NAME);
     let source_lib = extracted_root.join(BROWSER4_LIB_DIR_NAME);
     let source_bin = extracted_root.join("bin");
@@ -1840,21 +1903,57 @@ fn commit_installed_browser4_runtime(
         ));
     }
 
-    fs::create_dir_all(&install_dir).map_err(|e| e.to_string())?;
-    remove_path_if_exists(&target_runtime)?;
-    remove_path_if_exists(&target_lib)?;
-    remove_path_if_exists(&target_bin)?;
-    copy_dir_recursive(&source_runtime, &target_runtime)?;
-    copy_dir_recursive(&source_lib, &target_lib)?;
+    // Stage into a sibling directory first, then atomically rename into
+    // place.  This prevents a crash or kill signal mid-copy from leaving
+    // `install_dir` in a half-written state that passes
+    // `install_dir_contains_runtime` (which only checks for the .jar +
+    // java binary) but is functionally broken.
+    let staging_dir = install_dir
+        .parent()
+        .map(|p| p.join(format!(".staging-{}-{}", metadata.tag, std::process::id())))
+        .unwrap_or_else(|| install_dir.with_extension("staging"));
+    let _ = remove_path_if_exists(&staging_dir);
+    fs::create_dir_all(&staging_dir).map_err(|e| e.to_string())?;
+
+    let stage_runtime = staging_dir.join(BROWSER4_RUNTIME_DIR_NAME);
+    let stage_lib = staging_dir.join(BROWSER4_LIB_DIR_NAME);
+    let stage_bin = staging_dir.join("bin");
+    copy_dir_recursive(&source_runtime, &stage_runtime)?;
+    copy_dir_recursive(&source_lib, &stage_lib)?;
     if source_bin.is_dir() {
-        copy_dir_recursive(&source_bin, &target_bin)?;
+        copy_dir_recursive(&source_bin, &stage_bin)?;
     }
-    // Write the metadata file *before* the current-tag marker so a crash
-    // between the two writes leaves the versioned install directory complete
-    // rather than having current.tag point to a directory that is missing
-    // browser4-installation.json (which install_dir_contains_runtime would
-    // reject, effectively bricking that version).
-    write_installed_browser4_runtime_metadata(&metadata)?;
+    // Write the metadata file into staging so the directory is fully
+    // populated before it becomes visible.
+    let meta_path = staging_dir.join(BROWSER4_INSTALL_METADATA_FILE_NAME);
+    let contents = serde_json::to_string_pretty(&metadata).map_err(|e| e.to_string())?;
+    if let Some(parent) = meta_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::write(&meta_path, contents).map_err(|e| e.to_string())?;
+
+    // Atomically swap staging → install_dir.  On the same filesystem this is
+    // a single directory rename (instantaneous).  If rename fails (e.g.
+    // cross-filesystem — extremely rare for temp dirs) fall back to the
+    // copy-in-place approach so the install still succeeds.
+    let _ = remove_path_if_exists(&install_dir);
+    if let Err(_e) = fs::rename(&staging_dir, &install_dir) {
+        // Fallback: copy from staging into install_dir directly.
+        let _ = remove_path_if_exists(&staging_dir);
+        let target_runtime = install_dir.join(BROWSER4_RUNTIME_DIR_NAME);
+        let target_lib = install_dir.join(BROWSER4_LIB_DIR_NAME);
+        let target_bin = install_dir.join("bin");
+        fs::create_dir_all(&install_dir).map_err(|e| e.to_string())?;
+        copy_dir_recursive(&source_runtime, &target_runtime)?;
+        copy_dir_recursive(&source_lib, &target_lib)?;
+        if source_bin.is_dir() {
+            copy_dir_recursive(&source_bin, &target_bin)?;
+        }
+        write_installed_browser4_runtime_metadata(&metadata)?;
+    }
+    // Write the current-tag marker *after* install_dir is fully populated so
+    // a crash between the rename and this write leaves current.tag pointing
+    // to a complete (though not yet current) version rather than nothing.
     write_current_tag(&metadata.tag)?;
 
     Ok(materialize_installed_runtime(metadata, false))
@@ -2412,12 +2511,21 @@ pub async fn install_browser4_runtime(
                 // All mirrors exhausted — invalidate the preference cache so
                 // the next run doesn't pick the same failing mirror.
                 delete_mirror_preference_cache();
+                let help = if is_single_mirror_override {
+                    format!(
+                        "The configured {BROWSER4_RELEASES_BASE_URL_ENV} is unreachable; \
+                         update it to point to a working release server."
+                    )
+                } else {
+                    format!(
+                        "Help: configure additional mirrors in {} or set \
+                         {BROWSER4_RELEASES_BASE_URL_ENV} to point to a working release server.",
+                        mirrors_config_path().display()
+                    )
+                };
                 return Err(format!(
-                    "Failed to download from all {} mirror(s). Last error: {last_error}\n\
-                     Help: configure additional mirrors in {} or set \
-                     BROWSER4_RELEASES_BASE_URL to point to a working release server.",
+                    "Failed to download from all {} mirror(s). Last error: {last_error}\n{help}",
                     ordered_mirrors.len(),
-                    mirrors_config_path().display()
                 ));
             }
 
@@ -2697,11 +2805,12 @@ fn install_chrome_windows() -> Result<(), String> {
          Invoke-WebRequest -Uri '{url}' -OutFile '{}'; \
          Start-Process -FilePath '{}' -ArgumentList '/silent /install' -Wait; \
          Remove-Item '{}' -Force; \
-         if (Test-Path '{}') {{ exit 0 }} else {{ exit 1 }}",
+         if ((Test-Path '{}') -or (Test-Path '{}')) {{ exit 0 }} else {{ exit 1 }}",
         temp_installer.display(),
         temp_installer.display(),
         temp_installer.display(),
         "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+        "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
     );
 
     let status = std::process::Command::new("powershell")
