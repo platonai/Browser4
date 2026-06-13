@@ -47,11 +47,16 @@ curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4
 ## What the scripts do
 
 1. **Detect** your platform and map it to the correct binary asset name.
-2. **Download** from GitHub Releases (primary) or Alibaba Cloud OSS (fallback).
-3. **Install** the binary to a default directory (or a custom one you provide).
-4. **Add to PATH** — on Windows, updates the user `PATH` registry; on Unix,
+2. **Detect China mainland locale** — checks locale environment variables
+   (`LC_ALL`, `LANG`, etc.), the `TZ` timezone, and (on Linux)
+   `/etc/timezone`. When detected, Aliyun OSS is tried first instead of
+   GitHub Releases. See [Download sources](#download-sources) below.
+3. **Download** from GitHub Releases or Alibaba Cloud OSS, with ordering
+   determined by locale auto-detection (unless `--source` overrides it).
+4. **Install** the binary to a default directory (or a custom one you provide).
+5. **Add to PATH** — on Windows, updates the user `PATH` registry; on Unix,
    appends an `export PATH` line to your shell rc file.
-5. **Verify** the binary can run `--version`.
+6. **Verify** the binary can run `--version`.
 
 No admin/sudo is required for the default install locations. The scripts never
 modify system state outside the chosen install directory and your shell
@@ -77,18 +82,52 @@ The scripts select the correct pre-built binary for your platform:
 
 ## Download sources
 
-The scripts try sources in order and use the **first reachable** one:
+The scripts try sources in order and use the **first reachable** one.
 
-| Priority | Name | URL pattern |
+### Locale auto-detection
+
+When no `--source` (or `-Source`) override is given, the scripts check whether
+the system is likely in **China mainland** using only local system properties:
+
+| Probe | Bash | PowerShell |
 |---|---|---|
-| 1 | GitHub Releases | `https://github.com/platonai/Browser4/releases/latest/download/{binary}` |
-| 2 | Alibaba Cloud OSS | `https://browser4.oss-cn-beijing.aliyuncs.com/releases/download/latest/{binary}` |
+| Locale env vars | `LC_ALL`, `LANG`, `LC_CTYPE`, `LC_MESSAGES` | same |
+| Timezone env var | `TZ` | `TZ` |
+| Filesystem | `/etc/timezone` | `/etc/timezone` (Linux/macOS) |
+| .NET API | — | `[System.TimeZoneInfo]::Local.Id` |
 
-When `--version` (or `-v`) is passed, `latest` in the URLs above is replaced
-with the specific tag you provide.
+If detected (locale string like `zh_CN*`/`zh-CN*`, or timezone
+`Asia/Shanghai`/`Asia/Chongqing`/`Asia/Urumqi`/`Asia/Harbin`), the script
+prints `China mainland locale detected: preferring Aliyun OSS mirror.` and
+reorders sources:
 
-Use `--source github` or `--source oss` to force a single source and skip the
-fallback.
+| Priority | Source |
+|---|---|
+| 1 | Alibaba Cloud OSS |
+| 2 | GitHub Releases |
+
+Otherwise, the default ordering applies:
+
+| Priority | Source |
+|---|---|
+| 1 | GitHub Releases |
+| 2 | Alibaba Cloud OSS |
+
+The scripts print which source they try first, so you can see the effect in
+the output.
+
+### Forcing a specific source
+
+Use `--source github` or `--source oss` (bash) / `-Source github` or
+`-Source oss` (PowerShell) to force a single source and skip both locale
+detection and fallback.
+
+### URL patterns
+
+| Source | Latest | Specific version |
+|---|---|---|
+| GitHub Releases | `https://github.com/platonai/Browser4/releases/latest/download/{binary}` | `https://github.com/platonai/Browser4/releases/download/{tag}/{binary}` |
+| Alibaba Cloud OSS | `https://browser4.oss-cn-beijing.aliyuncs.com/releases/download/latest/{binary}` | `https://browser4.oss-cn-beijing.aliyuncs.com/releases/download/{tag}/{binary}` |
 
 ---
 

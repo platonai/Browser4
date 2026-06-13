@@ -1,12 +1,13 @@
-# browser4-cli: `install` and `upgrade` User Guide
+# browser4-cli: `install`, `upgrade`, and `uninstall` User Guide
 
 ## Overview
 
-The `install` and `upgrade` commands manage the **Browser4 runtime bundle** — a
-self-contained distribution that includes all dependency JARs, a minimal
-`jlink`-built JRE, and platform-specific launcher scripts.  The runtime bundle
-is required to start the Browser4 backend server; the CLI downloads and
-installs it automatically on first use, but you can also manage it explicitly.
+The `install`, `upgrade`, and `uninstall` commands manage the **Browser4
+runtime bundle** — a self-contained distribution that includes all dependency
+JARs, a minimal `jlink`-built JRE, and platform-specific launcher scripts. The
+runtime bundle is required to start the Browser4 backend server; the CLI
+downloads and installs it automatically on first use, but you can also manage
+it explicitly.
 
 ---
 
@@ -125,6 +126,80 @@ Browser4 is already at the latest version (v4.11.0).
 
 ---
 
+## `uninstall` — Remove runtime bundles and CLI state
+
+```bash
+browser4-cli uninstall [--yes|-y]
+```
+
+### What it does
+
+1. **Removes npm/cargo packages** — If `browser4-cli` was installed globally via
+   npm (`npm uninstall -g browser4-cli`) or Cargo (`cargo uninstall
+   browser4-cli`), the command runs those package-manager uninstalls first.
+2. **Removes all runtime data** — Deletes the entire runtime data directory
+   (`{runtime-data-dir}/`), including all versioned runtime bundles, the
+   `current.tag` marker, and the mirror configuration.
+3. **Removes the download cache** — Deletes `{runtime-cache-dir}/downloads/`,
+   freeing disk space used by cached runtime archives.
+4. **Removes CLI state** — Deletes `{cli-state-dir}/`, which holds the
+   mirror-preference cache and other persistent CLI state.
+
+### Options
+
+| Option | Description |
+|---|---|
+| `--yes`, `-y` | Skip the confirmation prompt. |
+
+### Before-you-delete prompt
+
+Without `--yes`, the command prints a summary of everything that will be
+removed and asks for confirmation:
+
+```
+The following will be removed:
+  - Runtime data: /home/user/.local/share/browser4/
+  - Download cache: /home/user/.local/cache/browser4/downloads/
+  - CLI state: /home/user/.local/state/browser4/
+Proceed? [y/N]
+```
+
+### Examples
+
+```bash
+# Interactive uninstall (asks for confirmation)
+browser4-cli uninstall
+
+# Non-interactive uninstall (skip confirmation)
+browser4-cli uninstall --yes
+```
+
+### What uninstall does NOT remove
+
+- **Standalone binaries** installed via `install-browser4-cli.sh` or
+  `install-browser4-cli.ps1` — delete those manually (see
+  [Standalone CLI Installer](cli-standalone-install.md#uninstall)).
+- **Chrome/Chromium** — the auto-installed Chrome browser is left intact.
+- **Shell PATH entries** — if you added the install directory to PATH via an
+  rc file or Windows registry, remove that entry manually.
+
+### Reinstalling after uninstall
+
+After uninstalling, you can start fresh:
+
+```bash
+# Reinstall the CLI (if removed via npm uninstall)
+npm install -g browser4-cli
+
+# Or use the standalone script
+curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash
+
+# Then reinstall the runtime
+browser4-cli install
+```
+
+---
+
 ## Auto-install on first use
 
 When you run any command that requires the Browser4 backend (e.g. `open`,
@@ -147,14 +222,64 @@ You can skip the local-repo auto-build detection by setting
 
 ## Download mirrors
 
-The CLI probes download mirrors in order and uses the **first reachable** one.
+The CLI selects the best download mirror using a combination of locale-aware
+default ordering and real-world speed tests.
 
-### Built-in defaults (used when no config file exists)
+### China mainland locale auto-detection
+
+When no custom mirror configuration is present and no `--source` override is
+given, the CLI checks whether the current system is likely in **China
+mainland** using only local system properties (no network calls):
+
+- **Locale environment variables** — `LC_ALL`, `LANG`, `LC_CTYPE`, or
+  `LC_MESSAGES` containing `zh_CN`, `zh-CN`, or `Chinese (Simplified)_China`.
+- **`TZ` timezone variable** — set to `Asia/Shanghai`, `Asia/Chongqing`,
+  `Asia/Urumqi`, or `Asia/Harbin`.
+- **`/etc/timezone`** — same timezone patterns (Debian/Ubuntu).
+
+If a China mainland locale is detected, the built-in mirror list is
+**reordered** with Aliyun OSS first:
+
+| Priority | Name | Base URL |
+|---|---|---|
+| 1 | `aliyun-oss` | `https://browser4.oss-cn-beijing.aliyuncs.com/releases` |
+| 2 | `github` | `https://github.com/platonai/Browser4/releases` |
+
+Otherwise the default GitHub-first ordering applies:
 
 | Priority | Name | Base URL |
 |---|---|---|
 | 1 | `github` | `https://github.com/platonai/Browser4/releases` |
 | 2 | `aliyun-oss` | `https://browser4.oss-cn-beijing.aliyuncs.com/releases` |
+
+Note: `Asia/Hong_Kong` and `Asia/Macau` are intentionally **excluded** from
+detection — these regions have different internet infrastructure and GitHub
+is not blocked there.
+
+### Mirror speed test
+
+After the initial ordering (either locale-based or default), the CLI runs a
+concurrent speed test against all mirrors:
+
+1. Downloads the first ~10 MB of the runtime asset from each mirror.
+2. Measures throughput (bytes/second) for each successful probe.
+3. Selects the **fastest** mirror and caches the preference for 24 hours in
+   `{runtime-cache-dir}/mirror-preference.json`.
+4. On subsequent runs within the TTL, the cached preference is reused,
+   skipping the speed test entirely.
+
+If speed tests are undesirable (e.g., in CI or metered connections), disable
+them with `BROWSER4_CLI_DISABLE_MIRROR_SPEED_TEST=1`. In that case the CLI
+falls back to a fast TCP reachability check (5-second connect to
+`<host>:443`) and picks the first reachable mirror.
+
+### TCP reachability fallback
+
+Before attempting a download, each mirror is probed with a fast TCP connect
+to its host on port 443 (5 s timeout, overridable via
+`BROWSER4_CLI_MIRROR_CHECK_TIMEOUT_SECS`). If no mirror is reachable, the CLI
+falls back to the first mirror and attempts the download anyway — so you get
+a clear HTTP error rather than a confusing "no mirrors" message.
 
 ### Custom mirror configuration
 
@@ -181,13 +306,13 @@ Create a JSON file at `{runtime-data-dir}/mirrors.json` (or set
 ```
 
 - Mirrors are tried **in array order**.
-- Each mirror is probed with a fast TCP connect to `<host>:443` (5 s timeout,
-  overridable via `BROWSER4_CLI_MIRROR_CHECK_TIMEOUT_SECS`).
-- If **no** mirror is reachable, the CLI falls back to the first mirror and
-  attempts the download anyway (so you get a clear HTTP error rather than a
-  confusing "no mirrors" message).
+- When a custom config is present, locale auto-detection is **not** applied —
+  the array order is used as-is.
 - Mirror names appear in log messages and error output to help you identify
   which source was used.
+- Each `DownloadMirror` entry accepts an optional `supports_latest_resolution`
+  field (defaults to `true`). Set to `false` if the mirror does not support
+  GitHub-style `/latest/download/` redirects.
 
 ### Legacy single-source override
 
@@ -279,9 +404,12 @@ to PowerShell's `Invoke-WebRequest` which uses the WinINET proxy stack.
 |---|---|
 | `BROWSER4_RUNTIME_DIR` | Override the runtime data directory |
 | `BROWSER4_CLI_STATE_DIR` | Override the CLI session state directory |
-| `BROWSER4_RELEASES_BASE_URL` | Single-source download URL (bypasses mirrors) |
+| `BROWSER4_RELEASES_BASE_URL` | Single-source download URL (bypasses mirrors and locale detection) |
 | `BROWSER4_MIRRORS_CONFIG` | Path to custom `mirrors.json` |
-| `BROWSER4_CLI_MIRROR_CHECK_TIMEOUT_SECS` | Mirror reachability timeout in seconds (default: `5`) |
+| `BROWSER4_CLI_MIRROR_CHECK_TIMEOUT_SECS` | Mirror TCP reachability timeout in seconds (default: `5`) |
+| `BROWSER4_CLI_MIRROR_SPEED_TEST_TIMEOUT_SECS` | Per-mirror speed-test download timeout in seconds (default: `30`) |
+| `BROWSER4_CLI_MIRROR_PREFERENCE_TTL_SECS` | Cached mirror preference TTL in seconds (default: `86400` = 24 h) |
+| `BROWSER4_CLI_DISABLE_MIRROR_SPEED_TEST` | Set to `1` to skip speed tests; use TCP reachability only |
 | `BROWSER4_CLI_PROXY` | Explicit download proxy URL |
 | `BROWSER4_CLI_FORCE_REMOTE_BUNDLE` | Skip local repo build; always download (`1`/`true`/`yes`/`on`) |
 | `BROWSER4_CLI_HTTP_TIMEOUT_SECS` | HTTP request timeout in seconds (default: `30`) |
@@ -293,7 +421,13 @@ to PowerShell's `Invoke-WebRequest` which uses the WinINET proxy stack.
 
 | Command | Purpose |
 |---|---|
-| `browser4-cli uninstall` | Remove all installed runtimes, download cache, and CLI state |
+| `browser4-cli uninstall` | Remove all installed runtimes, download cache, and CLI state (see [above](#uninstall--remove-runtime-bundles-and-cli-state)) |
 | `browser4-cli status` | Show the active runtime version and server health |
 | `browser4-cli stop` | Gracefully stop the Browser4 server |
 | `browser4-cli kill-all` | Forcefully stop the server and all spawned browsers |
+
+## See also
+
+- [Standalone CLI Installer Scripts](cli-standalone-install.md) — How to
+  bootstrap the `browser4-cli` binary itself (without npm/Cargo/Homebrew).
+- [CLI README](../cli/README.md) — Full command reference for the CLI.
