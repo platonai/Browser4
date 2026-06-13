@@ -88,24 +88,6 @@ if (-not $script:__CliBin) {
     Write-Host "  (using global browser4-cli: $script:__CliBin)" -ForegroundColor DarkGray
 }
 
-$cli = { & $script:__CliBin @args 2>&1 }
-
-# Invoke the CLI binary, merging stderr into stdout, and return the
-# raw output.  $LASTEXITCODE is captured *before* the pipeline ends
-# because Windows PowerShell 5.1 clears it after piping to a cmdlet
-# like ForEach-Object (PS 6+ preserves it).
-#
-# IMPORTANT: do NOT capture output into an intermediate variable
-# (e.g. $raw = & $cli @args) — that would buffer *all* lines in
-# memory before the pipeline sees them, so ForEach-Object receives
-# nothing until the CLI exits.  For commands like `open` (which can
-# take 60-180 s for server startup + navigation + snapshot) this
-# makes the script appear hung because no progress is displayed.
-$script:__InvokeCliProducer = {
-    & $cli @args
-    $global:__InvokeCliExitCode = $LASTEXITCODE
-}
-
 function Invoke-Cli {
     $desc = ($args -join ' ')
     Write-Host "       [$(Get-Date -Format 'HH:mm:ss')] cli $desc ..." -ForegroundColor DarkGray
@@ -118,49 +100,137 @@ function Invoke-Cli {
                    elseif ($cmdName -in @('install', 'upgrade')) { 900 }
                    else { 120 }
 
-    # Start a watchdog job that will kill the CLI process if it exceeds
-    # the timeout.  We track the started child process below.
-    $watchdogJob = Start-Job -ScriptBlock {
-        param($TimeoutSecs)
-        Start-Sleep -Seconds $TimeoutSecs
-        Get-Process -Name 'browser4-cli' -ErrorAction SilentlyContinue |
-            Where-Object { $_.StartTime -gt (Get-Date).AddSeconds(-$TimeoutSecs) } |
-            Stop-Process -Force -ErrorAction SilentlyContinue
-    } -ArgumentList $timeoutSecs
+    # Resolve the actual executable — on Windows the CLI may be a .cmd
+    # shim; we want the native .exe so we can launch it via .NET Process
+    # (which avoids PowerShell pipeline handle-inheritance hangs).
+    $cliExe = $script:__CliBin
+    if ($IsWin -and $cliExe -match '\.cmd$') {
+        # Read the .cmd shim to find the real .exe path.  npm-generated
+        # .cmd shims have the form: @"<path>\<binary>.exe" %*
+        $cmdContent = Get-Content -LiteralPath $cliExe -TotalCount 3 -ErrorAction SilentlyContinue
+        $found = $cmdContent | ForEach-Object {
+            if ($_ -match '"([^"]+\.exe)"') { $matches[1]; break }
+        }
+        if ($found -and (Test-Path $found)) {
+            $cliExe = $found
+        }
+    }
 
-    # Stream stdout+stderr line-by-line in real time.  Every line is
-    # added to $out (via Add() — O(1) amortized) and echoed to the
-    # console so the user sees progress for long-running commands.
+    # Use .NET System.Diagnostics.Process instead of PowerShell pipeline
+    # (`& ... | ForEach-Object`).  On Windows the pipeline-based approach
+    # can hang indefinitely because the Java server child inherits the
+    # stdout pipe handle via bInheritHandles=TRUE in CreateProcess.
+    # .NET Process with redirected streams isolates our read handles from
+    # the server's handle table — the server can keep its own stdout open
+    # without affecting our ability to detect process exit.
     $out = [System.Collections.Generic.List[string]]::new()
-    $global:__InvokeCliExitCode = 0
-    & $script:__InvokeCliProducer @args | ForEach-Object {
-        $out.Add($_)
-        Write-Host $_
-    }
-    $exitCode = $global:__InvokeCliExitCode
-    $sw.Stop()
+    $timeoutOccurred = $false
+    $procExitCode = 0
 
-    # If the watchdog job already completed, it killed the CLI process.
-    # If it is still running, the command finished on time — dismiss it.
-    $timedOut = ($watchdogJob.State -ne 'Running')
-    if (-not $timedOut) {
-        Stop-Job $watchdogJob -ErrorAction SilentlyContinue
-    }
-    Remove-Job $watchdogJob -Force -ErrorAction SilentlyContinue
+    try {
+        $psi = [System.Diagnostics.ProcessStartInfo]::new()
+        $psi.FileName = $cliExe
+        $psi.Arguments = ($args -join ' ')
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
+        $psi.StandardOutputEncoding = [Text.Encoding]::UTF8
+        $psi.StandardErrorEncoding  = [Text.Encoding]::UTF8
 
-    if ($timedOut) {
-        Write-Host "       TIMEOUT after ${timeoutSecs}s — killed" -ForegroundColor Red
-        $exitCode = -99
+        $proc = [System.Diagnostics.Process]::new()
+        $proc.StartInfo = $psi
+        $proc.Start() | Out-Null
+
+        # Poll stdout/stderr synchronously in a loop.  `Peek()` returns
+        # -1 when no data is available (non-blocking on Windows anonymous
+        # pipes), so we can interleave reads with the timeout check and a
+        # short sleep.
+        $pollIntervalMs = 100
+        $timeoutMs = $timeoutSecs * 1000
+
+        while (-not $proc.HasExited) {
+            # Drain stdout
+            try {
+                while ($proc.StandardOutput.Peek() -ge 0) {
+                    $line = $proc.StandardOutput.ReadLine()
+                    if ($line -ne $null) {
+                        $out.Add($line)
+                        Write-Host $line
+                    }
+                }
+            } catch {}
+            # Drain stderr
+            try {
+                while ($proc.StandardError.Peek() -ge 0) {
+                    $line = $proc.StandardError.ReadLine()
+                    if ($line -ne $null) {
+                        $tagged = "[stderr] $line"
+                        $out.Add($tagged)
+                        Write-Host $tagged -ForegroundColor DarkYellow
+                    }
+                }
+            } catch {}
+
+            # Check timeout
+            if ($sw.Elapsed.TotalMilliseconds -gt $timeoutMs) {
+                $timeoutOccurred = $true
+                Write-Host "       TIMEOUT after ${timeoutSecs}s — killing process tree" -ForegroundColor Red
+                try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
+                try {
+                    $children = Get-CimInstance Win32_Process |
+                        Where-Object { $_.ParentProcessId -eq $proc.Id } |
+                        ForEach-Object { $_.ProcessId }
+                    foreach ($cp in $children) {
+                        Stop-Process -Id $cp -Force -ErrorAction SilentlyContinue
+                    }
+                } catch {}
+                if (-not $proc.HasExited) { $proc.Kill() }
+                break
+            }
+
+            Start-Sleep -Milliseconds $pollIntervalMs
+        }
+
+        # Drain any final lines that arrived between the last poll and
+        # process exit.
+        try {
+            while ($proc.StandardOutput.Peek() -ge 0) {
+                $line = $proc.StandardOutput.ReadLine()
+                if ($line -ne $null) { $out.Add($line); Write-Host $line }
+            }
+        } catch {}
+        try {
+            while ($proc.StandardError.Peek() -ge 0) {
+                $line = $proc.StandardError.ReadLine()
+                if ($line -ne $null) {
+                    $tagged = "[stderr] $line"
+                    $out.Add($tagged)
+                    Write-Host $tagged -ForegroundColor DarkYellow
+                }
+            }
+        } catch {}
+
+        $procExitCode = $proc.ExitCode
+        if ($timeoutOccurred) { $procExitCode = -99 }
+    } catch {
+        $msg = "CLI invocation failed: $($_.Exception.Message)"
+        Write-Host "       $msg" -ForegroundColor Red
+        $out.Add($msg)
+        $procExitCode = -99
+    } finally {
+        $sw.Stop()
+    }
+
+    $exitCode = $procExitCode
+    if ($timeoutOccurred) {
         $null = $global:FailureMessages.Add("       TIMEOUT: $desc (${timeoutSecs}s)")
         $global:TestFailed++
     }
 
     # Register with test-utils for structured logging and copilot analysis.
-    # Capture the status object so it doesn't leak into the function's
-    # return value (which would pollute Get-SessionDataRows etc.).
     $statusObj = Register-CliResult -Label $desc -ExitCode $exitCode -OutputLines ($out.ToArray()) `
-        -Elapsed $sw.Elapsed -ExpectedExitCode $(if ($timedOut) { -1 } else { 0 })
-    # Still display the status to the console.
+        -Elapsed $sw.Elapsed -ExpectedExitCode $(if ($timeoutOccurred) { -1 } else { 0 })
     Write-Host ($statusObj | Format-List | Out-String)
 
     if ($exitCode -ne 0) {

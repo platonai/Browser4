@@ -194,50 +194,107 @@ function Invoke-TrackedCli {
         else { 120 }
     }
 
-    # --- Watchdog: kills the CLI process if it exceeds the timeout ---
-    $watchdogJob = Start-Job -ScriptBlock {
-        param($TimeoutSecs)
-        Start-Sleep -Seconds $TimeoutSecs
-        Get-Process -Name 'browser4-cli' -ErrorAction SilentlyContinue |
-            Where-Object { $_.StartTime -gt (Get-Date).AddSeconds(-$TimeoutSecs) } |
-            Stop-Process -Force -ErrorAction SilentlyContinue
-    } -ArgumentList $effectiveTimeout
-
-    # --- Execute ---
+    # --- Execute via .NET Process (not PowerShell pipeline) ---
+    #
+    # On Windows, `& ... | ForEach-Object` can hang indefinitely when the
+    # CLI spawns a Java server child: the server inherits the stdout pipe
+    # handle via CreateProcess(bInheritHandles=TRUE), keeping the pipeline
+    # open even after the CLI exits.  .NET Process with redirected streams
+    # isolates our read handles from the server's handle table.
     $output = [System.Collections.Generic.List[string]]::new()
     $exitCode = 0
+    $timedOut = $false
+
+    # Resolve the real .exe when the CLI is a .cmd shim.
+    $cliExe = $cliBin
+    $isWin = (Get-Variable -Name 'IsWindows' -ErrorAction SilentlyContinue) -and $IsWindows
+    if (-not $isWin) { $isWin = ($env:OS -eq 'Windows_NT') }
+    if ($isWin -and $cliExe -match '\.cmd$') {
+        $cmdContent = Get-Content -LiteralPath $cliExe -TotalCount 3 -ErrorAction SilentlyContinue
+        $found = $cmdContent | ForEach-Object {
+            if ($_ -match '"([^"]+\.exe)"') { $matches[1]; break }
+        }
+        if ($found -and (Test-Path $found)) {
+            $cliExe = $found
+        }
+    }
+
     try {
-        # Stream output line-by-line so long-running commands (install,
-        # open) show progress in real time.  Do NOT capture with
-        # $raw = & ... — that buffers all lines until the process exits
-        # and makes the script appear hung.
-        $captureExitCode = {
-            & $cliBin @Arguments 2>&1
-            $global:__InvokeTrackedCliExitCode = $LASTEXITCODE
+        $psi = [System.Diagnostics.ProcessStartInfo]::new()
+        $psi.FileName = $cliExe
+        $psi.Arguments = ($Arguments -join ' ')
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
+        $psi.StandardOutputEncoding = [Text.Encoding]::UTF8
+        $psi.StandardErrorEncoding  = [Text.Encoding]::UTF8
+
+        $proc = [System.Diagnostics.Process]::new()
+        $proc.StartInfo = $psi
+        $proc.Start() | Out-Null
+
+        # Poll stdout/stderr synchronously.  Peek() is non-blocking on
+        # Windows anonymous pipes (returns -1 when no data is ready).
+        $timeoutMs = $effectiveTimeout * 1000
+        while (-not $proc.HasExited) {
+            try {
+                while ($proc.StandardOutput.Peek() -ge 0) {
+                    $line = $proc.StandardOutput.ReadLine()
+                    if ($line -ne $null) { $output.Add($line) }
+                }
+            } catch {}
+            try {
+                while ($proc.StandardError.Peek() -ge 0) {
+                    $line = $proc.StandardError.ReadLine()
+                    if ($line -ne $null) { $output.Add("[stderr] $line") }
+                }
+            } catch {}
+
+            if ($sw.Elapsed.TotalMilliseconds -gt $timeoutMs) {
+                $timedOut = $true
+                break
+            }
+            Start-Sleep -Milliseconds 100
         }
-        & $captureExitCode | ForEach-Object {
-            $output.Add("$_")
+
+        if ($timedOut) {
+            try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
+            try {
+                Get-CimInstance Win32_Process |
+                    Where-Object { $_.ParentProcessId -eq $proc.Id } |
+                    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+            } catch {}
+            if (-not $proc.HasExited) { $proc.Kill() }
         }
-        $exitCode = $global:__InvokeTrackedCliExitCode
+
+        # Drain final lines.
+        try {
+            while ($proc.StandardOutput.Peek() -ge 0) {
+                $line = $proc.StandardOutput.ReadLine()
+                if ($line -ne $null) { $output.Add($line) }
+            }
+        } catch {}
+        try {
+            while ($proc.StandardError.Peek() -ge 0) {
+                $line = $proc.StandardError.ReadLine()
+                if ($line -ne $null) { $output.Add("[stderr] $line") }
+            }
+        } catch {}
+
+        $exitCode = if ($timedOut) { -99 } else { $proc.ExitCode }
     } catch {
         $output.Add("EXCEPTION: $($_.Exception.Message)")
         $exitCode = -99
+    } finally {
+        $sw.Stop()
     }
 
-    $sw.Stop()
     $endTime = Get-Date
     $elapsed = $sw.Elapsed
 
-    # --- Check watchdog ---
-    $timedOut = ($watchdogJob.State -ne 'Running')
-    if (-not $timedOut) {
-        Stop-Job $watchdogJob -ErrorAction SilentlyContinue
-    }
-    Remove-Job $watchdogJob -Force -ErrorAction SilentlyContinue
-
     if ($timedOut) {
-        $exitCode = -99
-        $output.Add("TIMEOUT after ${effectiveTimeout}s — killed by watchdog")
+        $output.Add("TIMEOUT after ${effectiveTimeout}s — killed")
     }
 
     # --- Determine status ---
