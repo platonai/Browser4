@@ -218,35 +218,23 @@ fn builtin_mirrors() -> Vec<DownloadMirror> {
 /// Return the built-in mirror list, optionally placing the Aliyun OSS mirror
 /// first when the caller knows the user is in China mainland.
 fn builtin_mirrors_for_locale(china_locale: bool) -> Vec<DownloadMirror> {
+    let mut mirrors = vec![
+        DownloadMirror {
+            name: "github".to_string(),
+            base_url: "https://github.com/platonai/Browser4/releases".to_string(),
+            supports_latest_resolution: true,
+        },
+        DownloadMirror {
+            name: "aliyun-oss".to_string(),
+            base_url: "https://browser4.oss-cn-beijing.aliyuncs.com/releases"
+                .to_string(),
+            supports_latest_resolution: true,
+        },
+    ];
     if china_locale {
-        vec![
-            DownloadMirror {
-                name: "aliyun-oss".to_string(),
-                base_url: "https://browser4.oss-cn-beijing.aliyuncs.com/releases"
-                    .to_string(),
-                supports_latest_resolution: true,
-            },
-            DownloadMirror {
-                name: "github".to_string(),
-                base_url: "https://github.com/platonai/Browser4/releases".to_string(),
-                supports_latest_resolution: true,
-            },
-        ]
-    } else {
-        vec![
-            DownloadMirror {
-                name: "github".to_string(),
-                base_url: "https://github.com/platonai/Browser4/releases".to_string(),
-                supports_latest_resolution: true,
-            },
-            DownloadMirror {
-                name: "aliyun-oss".to_string(),
-                base_url: "https://browser4.oss-cn-beijing.aliyuncs.com/releases"
-                    .to_string(),
-                supports_latest_resolution: true,
-            },
-        ]
+        mirrors.swap(0, 1);
     }
+    mirrors
 }
 
 /// Check whether the system locale suggests the user is in China mainland.
@@ -4325,98 +4313,110 @@ mod tests {
         assert!(names.contains(&"aliyun-oss"));
     }
 
+    // --- Helpers for locale-env tests ---
+
+    /// Snapshot of the five environment variables that `is_china_locale()` reads.
+    type LocaleEnv = (
+        Option<String>, // LC_ALL
+        Option<String>, // LANG
+        Option<String>, // LC_CTYPE
+        Option<String>, // LC_MESSAGES
+        Option<String>, // TZ
+    );
+
+    fn isolate_locale_env() -> LocaleEnv {
+        let saved = (
+            env::var("LC_ALL").ok(),
+            env::var("LANG").ok(),
+            env::var("LC_CTYPE").ok(),
+            env::var("LC_MESSAGES").ok(),
+            env::var("TZ").ok(),
+        );
+        unsafe {
+            env::remove_var("LC_ALL");
+            env::remove_var("LANG");
+            env::remove_var("LC_CTYPE");
+            env::remove_var("LC_MESSAGES");
+            env::remove_var("TZ");
+        }
+        saved
+    }
+
+    fn restore_locale_env(saved: LocaleEnv) {
+        let (lc_all, lang, lc_ctype, lc_messages, tz) = saved;
+        for (var, val) in &[
+            ("LC_ALL", lc_all),
+            ("LANG", lang),
+            ("LC_CTYPE", lc_ctype),
+            ("LC_MESSAGES", lc_messages),
+            ("TZ", tz),
+        ] {
+            match val {
+                Some(v) => unsafe { env::set_var(var, v) },
+                None => unsafe { env::remove_var(var) },
+            }
+        }
+    }
+
+    // --- Locale detection tests ---
+
     #[test]
     fn test_is_china_locale_zh_cn_lang() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        let prev_lang = env::var("LANG").ok();
-        let prev_tz = env::var("TZ").ok();
+        let saved = isolate_locale_env();
         unsafe { env::set_var("LANG", "zh_CN.UTF-8") };
-        unsafe { env::remove_var("TZ") };
         let result = is_china_locale();
-        match prev_lang {
-            Some(v) => unsafe { env::set_var("LANG", v) },
-            None => unsafe { env::remove_var("LANG") },
-        }
-        match prev_tz {
-            Some(v) => unsafe { env::set_var("TZ", v) },
-            None => unsafe { env::remove_var("TZ") },
-        }
+        restore_locale_env(saved);
         assert!(result);
     }
 
     #[test]
     fn test_is_china_locale_zh_cn_dash() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        let prev_lang = env::var("LANG").ok();
-        let prev_tz = env::var("TZ").ok();
+        let saved = isolate_locale_env();
         unsafe { env::set_var("LANG", "zh-CN.UTF-8") };
-        unsafe { env::remove_var("TZ") };
         let result = is_china_locale();
-        match prev_lang {
-            Some(v) => unsafe { env::set_var("LANG", v) },
-            None => unsafe { env::remove_var("LANG") },
-        }
-        match prev_tz {
-            Some(v) => unsafe { env::set_var("TZ", v) },
-            None => unsafe { env::remove_var("TZ") },
-        }
+        restore_locale_env(saved);
+        assert!(result);
+    }
+
+    #[test]
+    fn test_is_china_locale_lc_all_overrides_lang() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let saved = isolate_locale_env();
+        unsafe { env::set_var("LC_ALL", "zh_CN.UTF-8") };
+        unsafe { env::set_var("LANG", "en_US.UTF-8") };
+        let result = is_china_locale();
+        restore_locale_env(saved);
         assert!(result);
     }
 
     #[test]
     fn test_is_china_locale_asia_shanghai_tz() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        let prev_lang = env::var("LANG").ok();
-        let prev_tz = env::var("TZ").ok();
-        unsafe { env::remove_var("LANG") };
+        let saved = isolate_locale_env();
         unsafe { env::set_var("TZ", "Asia/Shanghai") };
         let result = is_china_locale();
-        match prev_lang {
-            Some(v) => unsafe { env::set_var("LANG", v) },
-            None => unsafe { env::remove_var("LANG") },
-        }
-        match prev_tz {
-            Some(v) => unsafe { env::set_var("TZ", v) },
-            None => unsafe { env::remove_var("TZ") },
-        }
+        restore_locale_env(saved);
         assert!(result);
     }
 
     #[test]
     fn test_is_china_locale_false_for_en_us() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        let prev_lang = env::var("LANG").ok();
-        let prev_tz = env::var("TZ").ok();
+        let saved = isolate_locale_env();
         unsafe { env::set_var("LANG", "en_US.UTF-8") };
-        unsafe { env::remove_var("TZ") };
         let result = is_china_locale();
-        match prev_lang {
-            Some(v) => unsafe { env::set_var("LANG", v) },
-            None => unsafe { env::remove_var("LANG") },
-        }
-        match prev_tz {
-            Some(v) => unsafe { env::set_var("TZ", v) },
-            None => unsafe { env::remove_var("TZ") },
-        }
+        restore_locale_env(saved);
         assert!(!result);
     }
 
     #[test]
     fn test_is_china_locale_false_for_empty() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        let prev_lang = env::var("LANG").ok();
-        let prev_tz = env::var("TZ").ok();
-        unsafe { env::remove_var("LANG") };
-        unsafe { env::remove_var("TZ") };
+        let saved = isolate_locale_env();
         let result = is_china_locale();
-        match prev_lang {
-            Some(v) => unsafe { env::set_var("LANG", v) },
-            None => unsafe { env::remove_var("LANG") },
-        }
-        match prev_tz {
-            Some(v) => unsafe { env::set_var("TZ", v) },
-            None => unsafe { env::remove_var("TZ") },
-        }
+        restore_locale_env(saved);
         assert!(!result);
     }
 

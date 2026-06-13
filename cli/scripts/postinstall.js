@@ -56,7 +56,7 @@ function isChinaLocale() {
     || process.env.LC_CTYPE
     || process.env.LC_MESSAGES
     || '';
-  if (/^zh_CN|^zh-CN|^Chinese \(Simplified\)_China/i.test(lang)) {
+  if (/^(?:zh_CN|zh-CN|Chinese \(Simplified\)_China)/i.test(lang)) {
     return true;
   }
 
