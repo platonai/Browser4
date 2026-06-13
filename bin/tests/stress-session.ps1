@@ -48,34 +48,86 @@ $null = & chcp 65001
 Write-TestHeader -Name 'stress-session'
 
 # -------------------------------------------------------------------
-# CLI helper (wraps Invoke-TrackedCli for backward-compatible interface)
+# CLI helper — invokes browser4-cli with real-time output streaming
+# and a watchdog timeout that prevents indefinite hangs.
 # -------------------------------------------------------------------
-$cli = if ($env:BROWSER4_CLI_BIN) {
-    { & $env:BROWSER4_CLI_BIN @args 2>$null }
+
+# Resolve the CLI binary once (honours $env:BROWSER4_CLI_BIN).
+$script:__SessionCliBin = if ($env:BROWSER4_CLI_BIN) {
+    $env:BROWSER4_CLI_BIN
 } else {
-    { browser4-cli @args 2>$null }
+    $cmds = @(Get-Command 'browser4-cli' -CommandType Application -ErrorAction SilentlyContinue)
+    if ($cmds.Count -gt 0) { $cmds[0].Source } else { 'browser4-cli' }
 }
 
-# The Invoke-Cli here uses the script's own $cli scriptblock (which suppresses
-# stderr) but ALSO registers the result via test-utils so it gets logged.
-# We maintain backward compatibility with the existing code while adding logging.
+# Producer scriptblock — streams stdout+stderr line-by-line and
+# captures $LASTEXITCODE before the pipeline ends (PS 5.1 clears it
+# after piping to ForEach-Object).
+#
+# IMPORTANT: do NOT capture output with $raw = & ... — that buffers
+# *all* lines until the CLI exits, making long-running commands like
+# `open` appear hung because no progress is displayed.
+$script:__SessionCliProducer = {
+    & $script:__SessionCliBin @args 2>&1
+    $global:__SessionCliExitCode = $LASTEXITCODE
+}
+
 function Invoke-Cli {
+    $desc = ($args -join ' ')
+    Write-Host "       [$(Get-Date -Format 'HH:mm:ss')] cli $desc ..." -ForegroundColor DarkGray
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    $out = & $cli @args
-    $exitCode = $LASTEXITCODE
+
+    # Per-command timeout.  open / goto involve server startup or page
+    # loads; other commands complete quickly.
+    $cmdName = $args[0]
+    $timeoutSecs = if ($cmdName -in @('open', 'goto')) { 300 }
+                   elseif ($cmdName -in @('install', 'upgrade')) { 900 }
+                   else { 120 }
+
+    # Watchdog job: kills the CLI process if it exceeds the timeout.
+    $watchdogJob = Start-Job -ScriptBlock {
+        param($TimeoutSecs)
+        Start-Sleep -Seconds $TimeoutSecs
+        Get-Process -Name 'browser4-cli' -ErrorAction SilentlyContinue |
+            Where-Object { $_.StartTime -gt (Get-Date).AddSeconds(-$TimeoutSecs) } |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+    } -ArgumentList $timeoutSecs
+
+    # Stream output line-by-line in real time.  Every line is added to
+    # $out (via Add() — O(1) amortized) and echoed to the console.
+    $out = [System.Collections.Generic.List[string]]::new()
+    $global:__SessionCliExitCode = 0
+    & $script:__SessionCliProducer @args | ForEach-Object {
+        $out.Add($_)
+        Write-Host $_
+    }
+    $exitCode = $global:__SessionCliExitCode
     $sw.Stop()
 
-    $label = "cli $($args -join ' ')"
-    # Register with test-utils for logging, but don't fail on non-zero exit
-    # (the test assertions will handle that).
-    Register-CliResult -Label $label -ExitCode $exitCode -OutputLines $out `
-        -Elapsed $sw.Elapsed -ExpectedExitCode 0
-
-    if ($exitCode -ne 0) {
-        throw "CLI command failed (exit=$exitCode): $($args -join ' ')`nOutput:`n$($out -join "`n")"
+    # Check watchdog — if it already completed, the process was killed.
+    $timedOut = ($watchdogJob.State -ne 'Running')
+    if (-not $timedOut) {
+        Stop-Job $watchdogJob -ErrorAction SilentlyContinue
     }
-    if ($out) {
-        $out | ForEach-Object { Write-Host $_ }
+    Remove-Job $watchdogJob -Force -ErrorAction SilentlyContinue
+
+    if ($timedOut) {
+        Write-Host "       TIMEOUT after ${timeoutSecs}s — killed" -ForegroundColor Red
+        $exitCode = -99
+    }
+
+    $label = "cli $desc"
+    Register-CliResult -Label $label -ExitCode $exitCode -OutputLines ($out.ToArray()) `
+        -Elapsed $sw.Elapsed -ExpectedExitCode $(if ($timedOut) { -1 } else { 0 })
+
+    if ($timedOut) {
+        throw "CLI command timed out after ${timeoutSecs}s: $desc"
+    }
+    if ($exitCode -ne 0) {
+        throw "CLI command failed (exit=$exitCode): $desc`nOutput:`n$($out -join "`n")"
+    }
+    if ($sw.Elapsed.TotalSeconds -ge 5) {
+        Write-Host "       took $([math]::Round($sw.Elapsed.TotalSeconds, 1))s" -ForegroundColor DarkGray
     }
     $out
 }

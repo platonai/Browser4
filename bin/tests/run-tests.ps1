@@ -215,18 +215,27 @@ foreach ($testName in $toRun) {
         $proc = Start-Process -FilePath 'pwsh' `
             -ArgumentList @('-NoProfile', '-NonInteractive', '-File', $scriptPath) `
             -NoNewWindow `
-            -Wait `
             -PassThru
 
+        # Wait with timeout — if the child script hangs, kill it and
+        # report a failure instead of hanging the orchestrator.  The
+        # $TimeoutSeconds parameter was previously declared but unused.
+        $completed = $proc.WaitForExit($TimeoutSeconds * 1000)
+        if (-not $completed) {
+            Write-Host "  ⚠ TIMEOUT after ${TimeoutSeconds}s — killing" -ForegroundColor Red
+            $proc.Kill()
+            $proc.WaitForExit(5000) | Out-Null
+        }
+
         $sw.Stop()
-        $exitCode = $proc.ExitCode
+        $exitCode = if ($completed) { $proc.ExitCode } else { -99 }
 
         $null = $results.Add([PSCustomObject]@{
             Name     = $testName
             Passed   = ($exitCode -eq 0)
             Elapsed  = $sw.Elapsed
             ExitCode = $exitCode
-            Error    = ''
+            Error    = $(if (-not $completed) { "Timeout after ${TimeoutSeconds}s" } else { '' })
         })
 
         if ($exitCode -eq 0) {
@@ -234,7 +243,11 @@ foreach ($testName in $toRun) {
             Write-Host "  ✅ PASS  (${exitCode})  $('{0:F1}' -f $sw.Elapsed.TotalSeconds)s" -ForegroundColor Green
         } else {
             $failures++
-            Write-Host "  ❌ FAIL  (exit=$exitCode)  $('{0:F1}' -f $sw.Elapsed.TotalSeconds)s" -ForegroundColor Red
+            if (-not $completed) {
+                Write-Host "  ❌ TIMEOUT  $('{0:F1}' -f $sw.Elapsed.TotalSeconds)s" -ForegroundColor Red
+            } else {
+                Write-Host "  ❌ FAIL  (exit=$exitCode)  $('{0:F1}' -f $sw.Elapsed.TotalSeconds)s" -ForegroundColor Red
+            }
         }
     }
     catch {

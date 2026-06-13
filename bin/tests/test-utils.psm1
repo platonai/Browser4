@@ -159,7 +159,12 @@ function Invoke-TrackedCli {
 
         [int]$ExpectedExitCode = 0,
 
-        [switch]$PassThruOnly
+        [switch]$PassThruOnly,
+
+        # Per-command timeout in seconds.  When 0 (default), the timeout
+        # is auto-detected from the command name: open/goto → 300 s,
+        # install/upgrade → 900 s, everything else → 120 s.
+        [int]$TimeoutSecs = 0
     )
 
     $script:CommandIndex++
@@ -174,17 +179,48 @@ function Invoke-TrackedCli {
     $sw = [Diagnostics.Stopwatch]::StartNew()
     $startTime = Get-Date
 
+    # --- Resolve timeout ---
+    $effectiveTimeout = if ($TimeoutSecs -gt 0) {
+        $TimeoutSecs
+    } else {
+        $cmdArg = if ($Arguments.Count -gt 0) { $Arguments[0] } else { '' }
+        if ($cmdArg -in @('open', 'goto')) { 300 }
+        elseif ($cmdArg -in @('install', 'upgrade')) { 900 }
+        elseif ($cmdArg -in @('agent', 'swarm')) {
+            # agent run / swarm submit can take a long time
+            $subCmd = if ($Arguments.Count -gt 1) { $Arguments[1] } else { '' }
+            if ($subCmd -in @('run', 'submit')) { 300 } else { 120 }
+        }
+        else { 120 }
+    }
+
+    # --- Watchdog: kills the CLI process if it exceeds the timeout ---
+    $watchdogJob = Start-Job -ScriptBlock {
+        param($TimeoutSecs)
+        Start-Sleep -Seconds $TimeoutSecs
+        Get-Process -Name 'browser4-cli' -ErrorAction SilentlyContinue |
+            Where-Object { $_.StartTime -gt (Get-Date).AddSeconds(-$TimeoutSecs) } |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+    } -ArgumentList $effectiveTimeout
+
     # --- Execute ---
-    $output = @()
+    $output = [System.Collections.Generic.List[string]]::new()
     $exitCode = 0
     try {
-        $raw = & $cliBin @Arguments 2>&1
-        $exitCode = $LASTEXITCODE
-        if ($raw) {
-            $output = @($raw | ForEach-Object { "$_" })
+        # Stream output line-by-line so long-running commands (install,
+        # open) show progress in real time.  Do NOT capture with
+        # $raw = & ... — that buffers all lines until the process exits
+        # and makes the script appear hung.
+        $captureExitCode = {
+            & $cliBin @Arguments 2>&1
+            $global:__InvokeTrackedCliExitCode = $LASTEXITCODE
         }
+        & $captureExitCode | ForEach-Object {
+            $output.Add("$_")
+        }
+        $exitCode = $global:__InvokeTrackedCliExitCode
     } catch {
-        $output = @("EXCEPTION: $($_.Exception.Message)")
+        $output.Add("EXCEPTION: $($_.Exception.Message)")
         $exitCode = -99
     }
 
@@ -192,11 +228,24 @@ function Invoke-TrackedCli {
     $endTime = Get-Date
     $elapsed = $sw.Elapsed
 
+    # --- Check watchdog ---
+    $timedOut = ($watchdogJob.State -ne 'Running')
+    if (-not $timedOut) {
+        Stop-Job $watchdogJob -ErrorAction SilentlyContinue
+    }
+    Remove-Job $watchdogJob -Force -ErrorAction SilentlyContinue
+
+    if ($timedOut) {
+        $exitCode = -99
+        $output.Add("TIMEOUT after ${effectiveTimeout}s — killed by watchdog")
+    }
+
     # --- Determine status ---
     if ($PassThruOnly) {
         $passed = $true
     } else {
-        $passed = ($exitCode -eq $ExpectedExitCode)
+        $effectiveExpected = if ($timedOut) { -1 } else { $ExpectedExitCode }
+        $passed = ($exitCode -eq $effectiveExpected)
     }
     $status = if ($passed) { 'PASS' } else { 'FAIL' }
 
@@ -211,6 +260,7 @@ FINISHED    : $($endTime.ToString('yyyy-MM-dd HH:mm:ss.fff'))
 ELAPSED     : $('{0:F1}' -f $elapsed.TotalSeconds)s
 EXIT CODE   : $exitCode
 EXPECTED    : $ExpectedExitCode
+TIMEOUT     : $timedOut ($($effectiveTimeout)s)
 STATUS      : $status
 ================================================================================
 STDOUT / STDERR:
@@ -234,6 +284,7 @@ $outputText
         Passed    = $passed
         LogFile   = $logFile
         StartTime = $startTime
+        TimedOut  = $timedOut
     }
     $null = $script:CommandLogs.Add($statusObj)
 
@@ -244,7 +295,11 @@ $outputText
     # --- Console feedback ---
     $icon = if ($passed) { '✅' } else { '❌' }
     $color = if ($passed) { 'Green' } else { 'Red' }
-    Write-Host "  $icon $status $('{0:F1}s' -f $elapsed.TotalSeconds)  $cmdLabel" -ForegroundColor $color
+    if ($timedOut) {
+        Write-Host "  $icon $status $('{0:F1}s' -f $elapsed.TotalSeconds)  TIMEOUT ${effectiveTimeout}s  $cmdLabel" -ForegroundColor Red
+    } else {
+        Write-Host "  $icon $status $('{0:F1}s' -f $elapsed.TotalSeconds)  $cmdLabel" -ForegroundColor $color
+    }
     if (-not $passed) {
         Write-Host "       exit=$exitCode expected=$ExpectedExitCode  📄 $logFile" -ForegroundColor Red
     }

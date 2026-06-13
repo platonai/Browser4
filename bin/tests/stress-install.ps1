@@ -90,41 +90,76 @@ if (-not $script:__CliBin) {
 
 $cli = { & $script:__CliBin @args 2>&1 }
 
-# Wrapper that captures $LASTEXITCODE *before* the pipeline ends.
-# Windows PowerShell 5.1 clears $LASTEXITCODE after piping to a
-# cmdlet like ForEach-Object; PS 6+ preserves it.  Saving it inside
-# the producer scriptblock works on both.
+# Invoke the CLI binary, merging stderr into stdout, and return the
+# raw output.  $LASTEXITCODE is captured *before* the pipeline ends
+# because Windows PowerShell 5.1 clears it after piping to a cmdlet
+# like ForEach-Object (PS 6+ preserves it).
+#
+# IMPORTANT: do NOT capture output into an intermediate variable
+# (e.g. $raw = & $cli @args) — that would buffer *all* lines in
+# memory before the pipeline sees them, so ForEach-Object receives
+# nothing until the CLI exits.  For commands like `open` (which can
+# take 60-180 s for server startup + navigation + snapshot) this
+# makes the script appear hung because no progress is displayed.
 $script:__InvokeCliProducer = {
-    $raw = & $cli @args
+    & $cli @args
     $global:__InvokeCliExitCode = $LASTEXITCODE
-    $raw
 }
 
 function Invoke-Cli {
     $desc = ($args -join ' ')
     Write-Host "       [$(Get-Date -Format 'HH:mm:ss')] cli $desc ..." -ForegroundColor DarkGray
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    # Stream output line-by-line so long-running commands (e.g. install
-    # --force downloads) show progress in real time instead of appearing
-    # hung.  Each line is both captured and written to the console.
-    #
-    # $LASTEXITCODE is captured inside the producer scriptblock so it
-    # survives the pipeline on Windows PowerShell 5.1 (which clears it
-    # after piping to a cmdlet).
-    $out = @()
+
+    # Determine per-command timeout.  open / install / upgrade involve
+    # server startup or large downloads; other commands complete quickly.
+    $cmdName = $args[0]
+    $timeoutSecs = if ($cmdName -eq 'open') { 300 }
+                   elseif ($cmdName -in @('install', 'upgrade')) { 900 }
+                   else { 120 }
+
+    # Start a watchdog job that will kill the CLI process if it exceeds
+    # the timeout.  We track the started child process below.
+    $watchdogJob = Start-Job -ScriptBlock {
+        param($TimeoutSecs)
+        Start-Sleep -Seconds $TimeoutSecs
+        Get-Process -Name 'browser4-cli' -ErrorAction SilentlyContinue |
+            Where-Object { $_.StartTime -gt (Get-Date).AddSeconds(-$TimeoutSecs) } |
+            Stop-Process -Force -ErrorAction SilentlyContinue
+    } -ArgumentList $timeoutSecs
+
+    # Stream stdout+stderr line-by-line in real time.  Every line is
+    # added to $out (via Add() — O(1) amortized) and echoed to the
+    # console so the user sees progress for long-running commands.
+    $out = [System.Collections.Generic.List[string]]::new()
     $global:__InvokeCliExitCode = 0
     & $script:__InvokeCliProducer @args | ForEach-Object {
-        $out += $_
+        $out.Add($_)
         Write-Host $_
     }
     $exitCode = $global:__InvokeCliExitCode
     $sw.Stop()
 
+    # If the watchdog job already completed, it killed the CLI process.
+    # If it is still running, the command finished on time — dismiss it.
+    $timedOut = ($watchdogJob.State -ne 'Running')
+    if (-not $timedOut) {
+        Stop-Job $watchdogJob -ErrorAction SilentlyContinue
+    }
+    Remove-Job $watchdogJob -Force -ErrorAction SilentlyContinue
+
+    if ($timedOut) {
+        Write-Host "       TIMEOUT after ${timeoutSecs}s — killed" -ForegroundColor Red
+        $exitCode = -99
+        $null = $global:FailureMessages.Add("       TIMEOUT: $desc (${timeoutSecs}s)")
+        $global:TestFailed++
+    }
+
     # Register with test-utils for structured logging and copilot analysis.
     # Capture the status object so it doesn't leak into the function's
     # return value (which would pollute Get-SessionDataRows etc.).
-    $statusObj = Register-CliResult -Label $desc -ExitCode $exitCode -OutputLines $out `
-        -Elapsed $sw.Elapsed -ExpectedExitCode 0
+    $statusObj = Register-CliResult -Label $desc -ExitCode $exitCode -OutputLines ($out.ToArray()) `
+        -Elapsed $sw.Elapsed -ExpectedExitCode $(if ($timedOut) { -1 } else { 0 })
     # Still display the status to the console.
     Write-Host ($statusObj | Format-List | Out-String)
 
