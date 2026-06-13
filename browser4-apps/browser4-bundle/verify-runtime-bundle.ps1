@@ -1,6 +1,6 @@
 param(
-    [Parameter(Mandatory = $true)]
-    [string]$BundlePath,
+    [Parameter(Mandatory = $false)]
+    [string]$BundlePath = '',
 
     [string]$ExpectedAssetName,
 
@@ -32,6 +32,76 @@ function Get-IsWindows {
 function Get-JavaExecutableName {
     if (Get-IsWindows) { return 'java.exe' }
     return 'java'
+}
+
+function Get-IsLinux {
+    return [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+        [System.Runtime.InteropServices.OSPlatform]::Linux
+    )
+}
+
+function Get-IsMacOS {
+    return [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+        [System.Runtime.InteropServices.OSPlatform]::OSX
+    )
+}
+
+function Get-OSArchitecture {
+    return [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+}
+
+function Get-DefaultAssetName {
+    if (Get-IsWindows) {
+        return 'browser4-bundle-runtime-windows-x64.zip'
+    }
+    if (Get-IsLinux) {
+        return 'browser4-bundle-runtime-linux-x64.tar.gz'
+    }
+    if (Get-IsMacOS) {
+        $arch = Get-OSArchitecture
+        if ($arch -eq [System.Runtime.InteropServices.Architecture]::Arm64) {
+            return 'browser4-bundle-runtime-darwin-arm64.tar.gz'
+        }
+        return 'browser4-bundle-runtime-darwin-x64.tar.gz'
+    }
+    throw "Unsupported OS for Browser4 runtime bundle verification."
+}
+
+function Resolve-DefaultBundlePath {
+    $bundleDir = Join-Path $PSScriptRoot 'target' 'runtime-bundle'
+    if (-not (Test-Path -LiteralPath $bundleDir -PathType Container)) {
+        throw @(
+            "Default bundle directory not found: $bundleDir",
+            "Build the runtime bundle first with build-runtime-bundle.ps1, or specify -BundlePath explicitly."
+        ) -join [Environment]::NewLine
+    }
+
+    $assetName = Get-DefaultAssetName
+    $candidatePath = Join-Path $bundleDir $assetName
+    if (Test-Path -LiteralPath $candidatePath -PathType Leaf) {
+        return $candidatePath, $assetName
+    }
+
+    # Fall back: search for any .tar.gz or .zip in the runtime-bundle directory
+    $archives = @(Get-ChildItem -LiteralPath $bundleDir -File |
+        Where-Object { $_.Name.EndsWith('.tar.gz', [System.StringComparison]::OrdinalIgnoreCase) -or $_.Name.EndsWith('.zip', [System.StringComparison]::OrdinalIgnoreCase) })
+    if ($archives.Count -eq 0) {
+        throw "No runtime bundle archive (.tar.gz or .zip) found in $bundleDir. Build the runtime bundle first, or specify -BundlePath explicitly."
+    }
+    if ($archives.Count -eq 1) {
+        Write-Host "  Auto-detected bundle: $($archives[0].Name)" -ForegroundColor DarkGray
+        return $archives[0].FullName, $archives[0].Name
+    }
+
+    # Multiple archives: prefer the platform-specific one
+    foreach ($archive in $archives) {
+        if ($archive.Name -eq $assetName) {
+            Write-Host "  Auto-detected bundle: $assetName" -ForegroundColor DarkGray
+            return $archive.FullName, $assetName
+        }
+    }
+
+    throw "Multiple runtime bundle archives found in $bundleDir but none match the expected name '$assetName'. Specify -BundlePath explicitly."
 }
 
 function Get-ArchiveKind([string]$Path) {
@@ -466,9 +536,15 @@ function Invoke-FunctionalTest(
 # Main
 # ============================================================================
 
-$resolvedBundlePath = (Resolve-Path -LiteralPath $BundlePath).Path
+if ([string]::IsNullOrWhiteSpace($BundlePath)) {
+    $resolvedBundlePath, $autoAssetName = Resolve-DefaultBundlePath
+} else {
+    $resolvedBundlePath = (Resolve-Path -LiteralPath $BundlePath).Path
+    $autoAssetName = $null
+}
+
 $expectedAsset = if ([string]::IsNullOrWhiteSpace($ExpectedAssetName)) {
-    [System.IO.Path]::GetFileName($resolvedBundlePath)
+    if ($autoAssetName) { $autoAssetName } else { [System.IO.Path]::GetFileName($resolvedBundlePath) }
 } else {
     $ExpectedAssetName
 }
