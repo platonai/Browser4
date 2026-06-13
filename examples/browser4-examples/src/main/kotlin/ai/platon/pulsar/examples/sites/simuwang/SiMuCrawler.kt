@@ -1,6 +1,6 @@
 package ai.platon.pulsar.examples.sites.simuwang
 
-import ai.platon.pulsar.ql.context.SQLContexts
+import ai.platon.pulsar.agentic.context.AgenticContexts
 import ai.platon.pulsar.skeleton.event.impl.CloseMaskLayerHandler
 import ai.platon.pulsar.skeleton.event.impl.LoginHandler
 
@@ -13,7 +13,8 @@ class SiMuLoginHandler(
     submitSelector: String = "button.comp-login-btn",
     warnUpUrl: String? = null,
     activateSelector: String = "button.comp-login-b2",
-): LoginHandler(loginUrl,
+) : LoginHandler(
+    loginUrl,
     usernameSelector, username, passwordSelector, password,
     submitSelector, warnUpUrl, activateSelector
 )
@@ -22,13 +23,15 @@ open class SiMuCrawler {
     // general parameters
     val portalUrl = "https://dc.simuwang.com/"
     val args = "-i 30s -ii 30s -ol a[href~=product] -tl 10"
+
     // login parameters
     val username = System.getenv("PULSAR_SIMUWANG_USERNAME") ?: "MustFallUsername"
     val password = System.getenv("PULSAR_SIMUWANG_PASSWORD") ?: "MustFallPassword"
+
     // mask layer handling
     val closeMaskLayerSelector = ".comp-alert-btn"
 
-    val context = SQLContexts.create()
+    val context = AgenticContexts.create()
     val session = context.createSession()
 
     val loginHandler = SiMuLoginHandler(portalUrl, username, password)

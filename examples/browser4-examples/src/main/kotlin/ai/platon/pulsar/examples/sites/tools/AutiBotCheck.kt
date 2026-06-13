@@ -1,8 +1,8 @@
 package ai.platon.pulsar.examples.sites.tools
 
+import ai.platon.pulsar.agentic.context.AgenticContexts
 import ai.platon.pulsar.common.proxy.ProxyPool
 import ai.platon.pulsar.examples.sites.tools.proxy.TemporaryProxyLoader
-import ai.platon.pulsar.ql.context.SQLContexts
 
 /**
  * Bot check blogs and tools:
@@ -24,7 +24,7 @@ https://arh.antoinevastel.com/bots/areyouheadless
         .filter { it.startsWith("http") }
         .take(1)
 
-    val session = SQLContexts.createSession()
+    val session = AgenticContexts.createSession()
 
     val proxyPool = session.context.getBean(ProxyPool::class)
     val proxyLoader = TemporaryProxyLoader(proxyPool)

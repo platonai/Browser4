@@ -1,6 +1,7 @@
 package ai.platon.pulsar.examples.sites.tools
 
 import ai.platon.browser4.common.B4ResourceLoader
+import ai.platon.pulsar.agentic.context.AgenticContexts
 import ai.platon.pulsar.common.NetUtil
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.proxy.ProxyEntry
@@ -8,7 +9,6 @@ import ai.platon.pulsar.common.proxy.ProxyPool
 import ai.platon.pulsar.common.urls.DegenerateHyperlink
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.persist.WebPage
-import ai.platon.pulsar.ql.context.SQLContexts
 import ai.platon.pulsar.skeleton.context.PulsarContexts
 import kotlinx.coroutines.runBlocking
 import org.apache.hc.core5.net.URIBuilder
@@ -24,7 +24,7 @@ class SearchAgent {
     private val submittedDegeneratedLinks = AtomicInteger()
     private val submittedSearchTasks = AtomicInteger()
 
-    private val context = SQLContexts.create()
+    private val context = AgenticContexts.create()
     private val session = context.createSession()
     private val proxyPool get() = context.getBean(ProxyPool::class)
 
@@ -40,7 +40,8 @@ class SearchAgent {
             contactNames.forEach { contactName ->
                 val keyword = "$businessName $contactName"
                 if (async) {
-                    val degeneratedHyperlink = DegenerateHyperlink(bingBaseUrl, "bing.com") { runBlocking { bing(keyword) } }
+                    val degeneratedHyperlink =
+                        DegenerateHyperlink(bingBaseUrl, "bing.com") { runBlocking { bing(keyword) } }
                     session.submit(degeneratedHyperlink)
                     submittedDegeneratedLinks.incrementAndGet()
                 } else {

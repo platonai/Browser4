@@ -1,5 +1,6 @@
 package ai.platon.pulsar.examples.sites.topEc.english.amazon.rpa
 
+import ai.platon.pulsar.agentic.context.AgenticContexts
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.sql.ResultSetFormatter
 import ai.platon.pulsar.common.sql.SQLTemplate
@@ -8,7 +9,6 @@ import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.dom.FeaturedDocument
 import ai.platon.pulsar.persist.AbstractWebPage
 import ai.platon.pulsar.persist.WebPage
-import ai.platon.pulsar.ql.context.SQLContexts
 import ai.platon.pulsar.skeleton.workflow.common.url.ListenableHyperlink
 
 class AsinRPAScraper {
@@ -18,7 +18,7 @@ class AsinRPAScraper {
 
     private val logger = getLogger(AsinSellerScraper::class)
 
-    private val context = SQLContexts.create()
+    private val context = AgenticContexts.create()
     private val session = context.createSession()
 
     private val asinSQLTemplate = SQLTemplate.load("amazon/x-asin.sql")
