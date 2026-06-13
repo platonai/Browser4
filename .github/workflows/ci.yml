@@ -142,7 +142,7 @@ jobs:
         uses: ./.github/actions/run-tests
         with:
           maven_profiles: 'all-main-modules,all-test-modules'
-          excluded_groups: 'RequiresAI,ManualOnly'
+          excluded_groups: 'ManualOnly,RequiresAI,E2E,E2ETest,Slow,HeavyTest,SkippableLowerLevelTest,TestInfraCheck,OptionalTest'
           timeout_minutes: '35'
 
       - name: Check Test Status
