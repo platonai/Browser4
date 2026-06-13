@@ -96,9 +96,22 @@ $ErrorActionPreference = 'Stop'
 # Resolve paths
 # ---------------------------------------------------------------------------
 $ScriptDir   = Split-Path -Parent $PSCommandPath
-$ProjectDir  = Resolve-Path "$ScriptDir\..\.."
-$RepoRoot    = Resolve-Path "$ProjectDir\..\.."
-$TargetDir   = Join-Path $ProjectDir 'browser4-browser\target'
+$ModuleDir   = Resolve-Path "$ScriptDir\.."
+$TargetDir   = Join-Path $ModuleDir 'target'
+
+# Use git to find the repository root, then resolve files relative to it
+$RepoRoot = (git rev-parse --show-toplevel 2>$null)
+if (-not $RepoRoot) {
+    Write-Err 'Cannot determine repository root — are you inside a git repository?'
+    exit 1
+}
+
+# Pick the right Maven wrapper executable for this OS
+$mvnwExe = if (Test-Path (Join-Path $RepoRoot 'mvnw.cmd')) {
+    Join-Path $RepoRoot 'mvnw.cmd'
+} else {
+    Join-Path $RepoRoot 'mvnw'
+}
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -132,6 +145,7 @@ Write-Host ''
 # ---------------------------------------------------------------------------
 if (-not $SkipJar) {
     Write-Step 'Building shaded JAR with Maven ...'
+    Write-Log "Repo root: $RepoRoot"
     Push-Location $RepoRoot
     try {
         $mvnArgs = @(
@@ -143,7 +157,7 @@ if (-not $SkipJar) {
         if ($MavenOpts) {
             $mvnArgs += $MavenOpts.Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
         }
-        .\mvnw @mvnArgs
+        & $mvnwExe @mvnArgs
         if ($LASTEXITCODE -ne 0) {
             throw "Maven build failed with exit code $LASTEXITCODE"
         }
@@ -260,7 +274,7 @@ function Build-NativeImage {
 
     Push-Location $TargetDir
     try {
-        $cmd = $nativeImageCmd.Source ?? 'native-image.cmd'
+        $cmd = if ($nativeImageCmd.Source) { $nativeImageCmd.Source } else { 'native-image.cmd' }
         & $cmd @Flags
         if ($LASTEXITCODE -ne 0) {
             throw "native-image failed with exit code $LASTEXITCODE"

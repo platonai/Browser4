@@ -262,9 +262,7 @@ browser.display.mode=GUI  # GUI | HEADLESS | SUPERVISED
 - [Browser4 CLI Skill Guide](cli/skill/SKILL.md)
 - [ARIA Snapshots](docs/aria-snapshots.md)
 
-## Claude-Specific Guidance
-
-### Understanding Browser4 Architecture
+## Understanding Browser4 Architecture
 
 Browser4 is built around three core concepts:
 
@@ -272,19 +270,19 @@ Browser4 is built around three core concepts:
 2. **Agents** - Autonomous browser agents with reasoning capabilities
 3. **WebDrivers** - Low-level browser control with human-like behaviors
 
-### Task Planning and Execution
+## Task Planning and Execution
 
-When given a task, Claude should:
+When given a task:
 
 1. **Analyze Requirements** - Break down the task into minimal changes
-2. **Explore First** - Use grep/glob or explore agent to understand relevant code
+2. **Explore First** - Search and read relevant code to understand the problem
 3. **Make Minimal Changes** - Preserve existing style and patterns
 4. **Test Incrementally** - Run targeted tests after each change
 5. **Document Changes** - Update relevant documentation
 
-### Common Task Patterns
+## Common Task Patterns
 
-#### Adding a New Feature
+### Adding a New Feature
 
 1. Identify the relevant module (browser4-core, browser4-agentic, browser4-rest)
 2. Check existing similar features for patterns
@@ -293,7 +291,7 @@ When given a task, Claude should:
 5. Add tests (unit + integration if needed)
 6. Update documentation
 
-#### Fixing a Bug
+### Fixing a Bug
 
 1. Reproduce the issue with a test
 2. Use grep to find related code
@@ -301,7 +299,7 @@ When given a task, Claude should:
 4. Verify test passes
 5. Check for similar patterns elsewhere
 
-#### Refactoring Code
+### Refactoring Code
 
 1. Ensure tests exist for current behavior
 2. Make incremental changes
@@ -309,7 +307,7 @@ When given a task, Claude should:
 4. Preserve public API contracts
 5. Update KDoc if API changes
 
-#### Adding a `browser4-cli` Command
+### Adding a `browser4-cli` Command
 
 1. Add a `CommandDef` in `cli/browser4-cli/src/commands.rs`; keep the CLI command name kebab-case, use a `browser_`-prefixed snake_case MCP tool name, and map args/options to JSON in `tool_params_fn`
 2. Add the frontend alias in `browser4-rest/.../MCPToolController.kt` so names like `browser_my_tool` resolve to the internal tool name such as `my_tool`
@@ -319,7 +317,7 @@ When given a task, Claude should:
 6. Cover the change with the smallest relevant tests: `cli/browser4-cli/src/commands.rs` unit tests, `browser4-rest` controller mapping tests, `cli/browser4-cli/tests/e2e.rs`, and `browser4-tests/browser4-rest-tests/.../MCPToolControllerE2ETest.kt` when the command changes the end-to-end flow
 7. Watch the common failure points: missing backend alias, omitted `sessionId` in custom handlers, forgetting `no_snapshot_commands()` for read-only commands, forgetting `batch_supported`/`compile_batch_request()` for batch-safe DOM commands, mismatched element-ref parameter names, broken `activeSelector` / `lastMousePosition` persistence in `cli/browser4-cli/src/state.rs`, and snake_case/camelCase argument normalization
 
-### Browser Automation Specifics
+## Browser Automation Specifics
 
 **Key Classes to Know:**
 - `WebDriver` - Main browser control interface
@@ -347,7 +345,7 @@ document = session.parse(page)
 fields = session.extract(document, mapOf("title" to "#title"))
 ```
 
-### MCP (Model Context Protocol) Integration
+## MCP (Model Context Protocol) Integration
 
 Browser4 integrates with MCP for tool calling:
 
@@ -366,21 +364,21 @@ class CustomTool : MCPTool {
 skillRegistry.register(CustomTool())
 ```
 
-### Performance Considerations
+## Performance Considerations
 
 - **Coroutine Safety** - All operations must be coroutine-safe
 - **Resource Cleanup** - Always close sessions/drivers in finally blocks
 - **Batch Operations** - Use parallel processing for multiple pages
 - **Caching** - Respect page expiration settings
 
-### Security Best Practices
+## Security Best Practices
 
 - **Input Validation** - Always validate URLs and user inputs
 - **API Keys** - Never hardcode, use configuration
 - **XSS Prevention** - Sanitize extracted content
 - **BrowserProtocol Security** - Handle Chrome DevTools Protocol errors gracefully
 
-### Debugging with Claude
+## Debugging
 
 **For Build Issues:**
 ```bash
@@ -405,7 +403,7 @@ skillRegistry.register(CustomTool())
 - Enable trace logging for specific packages
 - Use `-diagnose` LoadOption for page loading issues
 
-### Working with Agents
+## Working with Agents
 
 Browser4's agentic capabilities allow autonomous task execution:
 
@@ -431,7 +429,7 @@ val result = agent.run("""
 - Handle errors gracefully
 - Set appropriate timeouts
 
-### Code Review Checklist
+## Code Review Checklist
 
 Before submitting changes, verify:
 
@@ -444,7 +442,29 @@ Before submitting changes, verify:
 - [ ] Existing tests still pass
 - [ ] No new warnings or deprecations
 
-### Getting Help
+## Scripting Guidelines (PowerShell)
+
+**Repo-relative paths.** When a PowerShell script needs to locate files in the repository,
+use `git rev-parse --show-toplevel` to find the repo root, then resolve every repo file
+relative to it. Never walk parent directories manually — `git` already knows the boundary.
+
+```powershell
+# Find the repository root (works from any directory inside the repo)
+$RepoRoot = (git rev-parse --show-toplevel 2>$null)
+if (-not $RepoRoot) {
+    Write-Error "Cannot determine repository root — are you inside a git repository?"
+    exit 1
+}
+
+# Resolve repo files relative to the root
+$versionFile = Join-Path $RepoRoot 'VERSION'
+$mvnwExe     = Join-Path $RepoRoot 'mvnw.cmd'
+$releaseScript = Join-Path $RepoRoot 'bin\release\check-publish-status.ps1'
+```
+
+See `bin/release/bump-version.ps1` for the canonical example.
+
+## Getting Help
 
 - Check `docs/` for detailed guides
 - Review `examples/` for usage patterns
