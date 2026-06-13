@@ -7,6 +7,9 @@ import ai.platon.pulsar.browser.common.WebDriverException
 import ai.platon.pulsar.browser.impl.NetworkResourceResponse
 import ai.platon.pulsar.browser.impl.NodeRef
 import ai.platon.pulsar.chrome.dom.model.BrowserUseState
+import ai.platon.pulsar.chrome.dom.model.NanoDOMTree
+import ai.platon.pulsar.chrome.dom.model.PageTarget
+import ai.platon.pulsar.chrome.dom.model.SnapshotOptions
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.ai.llm.MCP
 import ai.platon.pulsar.common.browser.BrowserType
@@ -461,12 +464,12 @@ interface WebDriver : Closeable {
      * */
     @MCP
     @Throws(WebDriverException::class)
-    suspend fun nanoDOMTree(): ai.platon.pulsar.chrome.dom.model.NanoDOMTree?
+    suspend fun nanoDOMTree(): NanoDOMTree?
 
     @Throws(WebDriverException::class)
     suspend fun browserUseState(
-        target: ai.platon.pulsar.chrome.dom.model.PageTarget = _root_ide_package_.ai.platon.pulsar.chrome.dom.model.PageTarget(),
-        snapshotOptions: ai.platon.pulsar.chrome.dom.model.SnapshotOptions = _root_ide_package_.ai.platon.pulsar.chrome.dom.model.SnapshotOptions()
+        target: PageTarget = PageTarget(),
+        snapshotOptions: SnapshotOptions = SnapshotOptions()
     ): BrowserUseState
 
     /**
