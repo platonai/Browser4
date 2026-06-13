@@ -14,6 +14,16 @@
 
 $ErrorActionPreference = 'Stop'
 
+<#
+.PARAMETER Locale
+    Two-letter locale code for URL selection (e.g. 'en', 'zh').
+    Auto-detected from system culture when omitted.
+    Override via -Locale or $env:BROWSER4_TEST_LOCALE.
+#>
+param(
+    [string]$Locale = ''
+)
+
 # -------------------------------------------------------------------
 # Load shared test utilities
 # -------------------------------------------------------------------
@@ -25,6 +35,14 @@ Start-TestSession -Name 'agent-run-page-visit-interact'
 $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 
 Write-TestHeader -Name 'agent-run-page-visit-interact'
+
+# ===================================================================
+# Resolve locale-appropriate test URL
+# ===================================================================
+$TestUrl = Get-TestUrl -Purpose product -Locale $Locale
+Write-Host "  Locale : $(Get-TestLocale -Locale $Locale)" -ForegroundColor DarkGray
+Write-Host "  Test URL: $TestUrl" -ForegroundColor DarkGray
+Write-Host ''
 
 # -------------------------------------------------------------------
 # 1. Open session
@@ -38,7 +56,7 @@ Write-Host ''
 # -------------------------------------------------------------------
 Write-Host "━━━ Submitting agent task ━━━" -ForegroundColor Cyan
 $taskDescription = @"
-Visit https://www.amazon.com/dp/B08PP5MSVB
+Visit $TestUrl
 Summarize the product.
 Extract: product name, price, ratings.
 Find all links containing /dp/.

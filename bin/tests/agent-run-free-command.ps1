@@ -13,6 +13,16 @@
 
 $ErrorActionPreference = 'Stop'
 
+<#
+.PARAMETER Locale
+    Two-letter locale code for URL selection (e.g. 'en', 'zh').
+    Auto-detected from system culture when omitted.
+    Override via -Locale or $env:BROWSER4_TEST_LOCALE.
+#>
+param(
+    [string]$Locale = ''
+)
+
 # -------------------------------------------------------------------
 # Load shared test utilities
 # -------------------------------------------------------------------
@@ -25,6 +35,14 @@ Start-TestSession -Name 'agent-run-free-command'
 
 Write-TestHeader -Name 'agent-run-free-command'
 
+# ===================================================================
+# Resolve locale-appropriate test URL
+# ===================================================================
+$TestUrl = Get-TestUrl -Purpose ecommerce -Locale $Locale
+Write-Host "  Locale : $(Get-TestLocale -Locale $Locale)" -ForegroundColor DarkGray
+Write-Host "  Test URL: $TestUrl" -ForegroundColor DarkGray
+Write-Host ''
+
 # -------------------------------------------------------------------
 # 1. Open session
 # -------------------------------------------------------------------
@@ -36,7 +54,7 @@ Write-Host ''
 # 2. Submit agent task
 # -------------------------------------------------------------------
 Write-Host "━━━ Submitting agent task ━━━" -ForegroundColor Cyan
-$taskDescription = 'goto https://www.hua.com/flower/ ; give me the titles and prices of the first 10 products'
+$taskDescription = "goto $TestUrl ; give me the titles and prices of the first 10 products"
 $output = Invoke-TrackedCli -Arguments @('agent', 'run', $taskDescription) -Label 'agent run (free-command)' -PassThruOnly
 
 $agentRunText = ($output | Out-String).Trim()

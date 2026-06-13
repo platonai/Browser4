@@ -18,7 +18,8 @@
 #>
 param(
     [int]$TimeoutSeconds = 120,
-    [string]$SeedFile = 'seeds.txt'
+    [string]$SeedFile = 'seeds.txt',
+    [string]$Locale = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -32,23 +33,14 @@ Start-TestSession -Name 'stress-swarm-agents'
 Write-TestHeader -Name 'stress-swarm-agents'
 
 # -------------------------------------------------------------------
-# 1. Prepare seeds.txt with URLs to scrape
+# 1. Prepare seeds.txt with locale-appropriate URLs to scrape
 # -------------------------------------------------------------------
-$testUrls = @(
-    'https://news.ycombinator.com/',
-    'https://news.ycombinator.com/newest',
-    'https://news.ycombinator.com/show',
-    'https://www.wikipedia.org/',
-    'https://en.wikipedia.org/wiki/Web_scraping'
-)
-
-# Add a timestamp query param so each run produces fresh results.
-$stamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-$urls = $testUrls | ForEach-Object { "$_?b4_stress=$stamp" }
+$testUrls = Get-TestUrlSet -Locale $Locale -IncludeTimestamp | ForEach-Object { $_.url }
+$urls = $testUrls
 $urls | Set-Content -Path $SeedFile -Encoding UTF8
 
 Write-Host "━━━ Seed file prepared ━━━" -ForegroundColor Cyan
-Write-Host "Seeds file ($SeedFile): $($urls.Count) URLs" -ForegroundColor Cyan
+Write-Host "Seeds file ($SeedFile): $($urls.Count) URLs (locale: $(Get-TestLocale -Locale $Locale))" -ForegroundColor Cyan
 $urls | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
 Write-Host ''
 

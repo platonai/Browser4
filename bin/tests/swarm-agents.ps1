@@ -13,6 +13,16 @@
 
 $ErrorActionPreference = 'Stop'
 
+<#
+.PARAMETER Locale
+    Two-letter locale code for URL selection (e.g. 'en', 'zh').
+    Auto-detected from system culture when omitted.
+    Override via -Locale or $env:BROWSER4_TEST_LOCALE.
+#>
+param(
+    [string]$Locale = ''
+)
+
 # -------------------------------------------------------------------
 # Load shared test utilities
 # -------------------------------------------------------------------
@@ -20,6 +30,14 @@ Import-Module "$PSScriptRoot\test-utils.psm1" -Force
 Start-TestSession -Name 'swarm-agents'
 
 Write-TestHeader -Name 'swarm-agents'
+
+# ===================================================================
+# Resolve locale-appropriate test URL
+# ===================================================================
+$SwarmUrl = Get-TestUrl -Purpose simple -Locale $Locale
+Write-Host "  Locale : $(Get-TestLocale -Locale $Locale)" -ForegroundColor DarkGray
+Write-Host "  Swarm URL: $SwarmUrl" -ForegroundColor DarkGray
+Write-Host ''
 
 # -------------------------------------------------------------------
 # 1. Open session + swarm create
@@ -36,7 +54,7 @@ Write-Host ''
 # 2. Submit seed URL
 # -------------------------------------------------------------------
 Write-Host "━━━ Submitting swarm task ━━━" -ForegroundColor Cyan
-$output = Invoke-TrackedCli -Arguments @('swarm', 'submit', 'https://example.com') -Label 'swarm submit' -PassThruOnly
+$output = Invoke-TrackedCli -Arguments @('swarm', 'submit', $SwarmUrl) -Label 'swarm submit' -PassThruOnly
 $outputText = ($output | Out-String).Trim()
 $submittedLine = $outputText -split "`r?`n" | Where-Object { $_ -match 'Task ID:\s*\S+' } | Select-Object -First 1
 if (-not $submittedLine) {

@@ -542,6 +542,213 @@ function Write-TestHeader {
     Write-Host "══════════════════════════════════════════════════════════" -ForegroundColor Cyan
 }
 
+# ============================================================================
+# Locale-aware test URL support
+# ============================================================================
+<#
+.SYNOPSIS
+    Curated set of 20 test URLs (10 global + 10 Chinese websites) categorised
+    by purpose, site group, display name, and a snapshot keyword for assertions.
+
+    Each entry in the en / zh arrays is a PSCustomObject:
+      .url     — full URL (string)
+      .purpose — semantic category: portal, reference, tech-news, tech-community,
+                  product, ecommerce, simple, qa, social, video
+      .site    — domain group for multi-page navigation tests (string)
+      .name    — human-readable label (string)
+      .keyword — substring expected in a page snapshot after load (string,
+                 typically ASCII for en, Unicode for zh)
+#>
+
+$script:TestUrlStore = @{
+    'en' = @(
+        [PSCustomObject]@{ url = 'https://www.wikipedia.org/';                    purpose = 'portal';          site = 'wikipedia';     name = 'Wikipedia Main';      keyword = 'wikipedia' }
+        [PSCustomObject]@{ url = 'https://en.wikipedia.org/wiki/Web_browser';     purpose = 'reference';       site = 'wikipedia';     name = 'Web Browser';         keyword = 'browser' }
+        [PSCustomObject]@{ url = 'https://en.wikipedia.org/wiki/Internet';        purpose = 'reference';       site = 'wikipedia';     name = 'Internet';            keyword = 'Internet' }
+        [PSCustomObject]@{ url = 'https://news.ycombinator.com/';                 purpose = 'tech-news';       site = 'hackernews';    name = 'HN Front';            keyword = 'ycombinator' }
+        [PSCustomObject]@{ url = 'https://news.ycombinator.com/newest';           purpose = 'tech-news';       site = 'hackernews';    name = 'HN Newest';           keyword = 'ycombinator' }
+        [PSCustomObject]@{ url = 'https://github.com/';                           purpose = 'tech-community';  site = 'github';        name = 'GitHub Home';         keyword = 'github' }
+        [PSCustomObject]@{ url = 'https://github.com/explore';                    purpose = 'tech-community';  site = 'github';        name = 'GitHub Explore';      keyword = 'github' }
+        [PSCustomObject]@{ url = 'https://www.amazon.com/dp/B08PP5MSVB';          purpose = 'product';         site = 'amazon';        name = 'Amazon Product';      keyword = 'Amazon' }
+        [PSCustomObject]@{ url = 'https://example.com/';                          purpose = 'simple';          site = 'example';       name = 'Example';             keyword = 'example' }
+        [PSCustomObject]@{ url = 'https://stackoverflow.com/';                    purpose = 'qa';              site = 'stackoverflow'; name = 'Stack Overflow';      keyword = 'stackoverflow' }
+    )
+    'zh' = @(
+        [PSCustomObject]@{ url = 'https://www.baidu.com/';                        purpose = 'portal';          site = 'baidu';         name = 'Baidu';               keyword = '百度' }
+        [PSCustomObject]@{ url = 'https://www.oschina.net/';                     purpose = 'tech-community';  site = 'oschina';       name = 'OSChina';             keyword = '开源中国' }
+        [PSCustomObject]@{ url = 'https://www.bilibili.com/';                     purpose = 'video';           site = 'bilibili';      name = 'Bilibili';            keyword = '哔哩哔哩' }
+        [PSCustomObject]@{ url = 'https://www.163.com/';                          purpose = 'portal';          site = '163';           name = 'NetEase';             keyword = '网易' }
+        [PSCustomObject]@{ url = 'https://www.jd.com/';                           purpose = 'ecommerce';       site = 'jd';            name = 'JD.com';              keyword = '京东' }
+        [PSCustomObject]@{ url = 'https://www.csdn.net/';                         purpose = 'tech-community';  site = 'csdn';          name = 'CSDN';                keyword = 'CSDN' }
+        [PSCustomObject]@{ url = 'https://www.douban.com/';                       purpose = 'social';          site = 'douban';        name = 'Douban';              keyword = '豆瓣' }
+        [PSCustomObject]@{ url = 'https://www.sina.com.cn/';                      purpose = 'portal';          site = 'sina';          name = 'Sina';                keyword = '新浪' }
+        [PSCustomObject]@{ url = 'https://www.runoob.com/';                       purpose = 'reference';       site = 'runoob';        name = 'Runoob Tutorials';    keyword = '菜鸟' }
+        [PSCustomObject]@{ url = 'https://www.hua.com/flower/';                   purpose = 'ecommerce';       site = 'hua';           name = 'Hua Flower';          keyword = '花' }
+    )
+}
+
+<#
+.SYNOPSIS
+    Resolve the effective test locale.
+
+.DESCRIPTION
+    Priority chain (highest first):
+      1. Explicit -Locale parameter
+      2. $env:BROWSER4_TEST_LOCALE environment variable
+      3. [System.Globalization.CultureInfo]::CurrentCulture.TwoLetterISOLanguageName
+      4. Hard fallback: 'en'
+
+    The returned value is always a lowercase two-letter ISO-639-1 code
+    (e.g. 'en', 'zh', 'ja').
+
+.PARAMETER Locale
+    Explicit locale override (accepts full culture names like 'zh-CN' — the
+    first two characters are extracted).
+#>
+function Get-TestLocale {
+    [CmdletBinding()]
+    param(
+        [string]$Locale = ''
+    )
+
+    if ($Locale) {
+        $normalized = $Locale.ToLower()
+        if ($normalized.Length -ge 2) { $normalized = $normalized.Substring(0, 2) }
+        return $normalized
+    }
+
+    if ($env:BROWSER4_TEST_LOCALE) {
+        $normalized = $env:BROWSER4_TEST_LOCALE.ToLower()
+        if ($normalized.Length -ge 2) { $normalized = $normalized.Substring(0, 2) }
+        return $normalized
+    }
+
+    try {
+        $ci = [System.Globalization.CultureInfo]::CurrentCulture
+        return $ci.TwoLetterISOLanguageName.ToLower()
+    } catch {
+        return 'en'
+    }
+}
+
+<#
+.SYNOPSIS
+    Return the set of test URL entries for a given locale, optionally filtered.
+
+.DESCRIPTION
+    Returns zero or more PSCustomObject entries from the curated URL store.
+    Each entry has: .url, .purpose, .site, .name, .keyword.
+
+.PARAMETER Locale
+    Two-letter locale code (e.g. 'en', 'zh').  Auto-detected when omitted.
+
+.PARAMETER Site
+    When provided, return only entries whose .site matches this value.
+
+.PARAMETER Purpose
+    When provided, return only entries whose .purpose matches this value.
+
+.PARAMETER IncludeTimestamp
+    Append ?b4_stress=<unix-timestamp> to every URL so each run produces
+    fresh results (used by stress / swarm seed-file tests).
+
+.EXAMPLE
+    # All 10 English URLs
+    Get-TestUrlSet -Locale en
+
+.EXAMPLE
+    # Chinese tech-community URLs only
+    Get-TestUrlSet -Locale zh -Purpose tech-community
+
+.EXAMPLE
+    # All URLs for auto-detected locale with cache-busting timestamps
+    Get-TestUrlSet -IncludeTimestamp
+#>
+function Get-TestUrlSet {
+    [CmdletBinding()]
+    param(
+        [string]$Locale = '',
+        [string]$Site = '',
+        [string]$Purpose = '',
+        [switch]$IncludeTimestamp
+    )
+
+    $resolvedLocale = Get-TestLocale -Locale $Locale
+
+    if (-not $script:TestUrlStore.ContainsKey($resolvedLocale)) {
+        Write-Warning "Get-TestUrlSet: no URL store for locale '$resolvedLocale'; falling back to 'en'"
+        $resolvedLocale = 'en'
+    }
+
+    $entries = $script:TestUrlStore[$resolvedLocale]
+
+    if ($Site)    { $entries = @($entries | Where-Object { $_.site -eq $Site }) }
+    if ($Purpose) { $entries = @($entries | Where-Object { $_.purpose -eq $Purpose }) }
+
+    if ($IncludeTimestamp) {
+        $stamp = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+        $entries = @($entries | ForEach-Object {
+            $u = $_.url
+            $sep = if ($u -match '\?') { '&' } else { '?' }
+            [PSCustomObject]@{
+                url     = "$u${sep}b4_stress=$stamp"
+                purpose = $_.purpose
+                site    = $_.site
+                name    = $_.name
+                keyword = $_.keyword
+            }
+        })
+    }
+
+    return $entries
+}
+
+<#
+.SYNOPSIS
+    Convenience wrapper: return a single test URL string for a given purpose
+    and locale.
+
+.DESCRIPTION
+    Calls Get-TestUrlSet with the given -Purpose and -Locale, picks the first
+    match.  When no entry matches the purpose, falls back to the first URL in
+    the resolved locale and emits a warning.
+
+.PARAMETER Purpose
+    Semantic category to select (e.g. 'product', 'ecommerce', 'simple').
+    Defaults to 'product'.
+
+.PARAMETER Locale
+    Two-letter locale code.  Auto-detected when omitted.
+
+.EXAMPLE
+    # Product page for auto-detected locale
+    Get-TestUrl -Purpose product
+
+.EXAMPLE
+    # Chinese ecommerce site
+    Get-TestUrl -Purpose ecommerce -Locale zh
+#>
+function Get-TestUrl {
+    [CmdletBinding()]
+    param(
+        [Parameter(Position = 0)]
+        [string]$Purpose = 'product',
+
+        [string]$Locale = ''
+    )
+
+    $resolvedLocale = Get-TestLocale -Locale $Locale
+    $entry = Get-TestUrlSet -Locale $resolvedLocale -Purpose $Purpose | Select-Object -First 1
+
+    if (-not $entry) {
+        if (-not $script:TestUrlStore.ContainsKey($resolvedLocale)) { $resolvedLocale = 'en' }
+        $entry = $script:TestUrlStore[$resolvedLocale] | Select-Object -First 1
+        Write-Warning "Get-TestUrl: no URL for purpose='$Purpose' in locale '$resolvedLocale'; using '$($entry.name)'"
+    }
+
+    return $entry.url
+}
+
 # Export functions
 Export-ModuleMember -Function @(
     'Start-TestSession',
@@ -559,5 +766,8 @@ Export-ModuleMember -Function @(
     'Test-CopilotAvailable',
     'Get-AiAnalyzer',
     'Get-CliBin',
-    'Write-TestHeader'
+    'Write-TestHeader',
+    'Get-TestLocale',
+    'Get-TestUrlSet',
+    'Get-TestUrl'
 )

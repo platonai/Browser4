@@ -40,7 +40,8 @@ param(
     [int] $Iterations = 2,
     [int] $Seed = (Get-Random),
     [switch] $SkipInstall,
-    [string] $Tag = '4.10.0'
+    [string] $Tag = '4.10.0',
+    [string] $Locale = ''
 )
 
 $ErrorActionPreference = 'Continue'
@@ -247,9 +248,14 @@ $IsWin = $env:OS -eq 'Windows_NT'  # works on PS 5.1 and 6+
 $JavaExe = if ($IsWin) { 'java.exe' } else { 'java' }
 $JavaBin = Join-Path $RuntimeBinDir $JavaExe
 
-# Stress-test page (lightweight, stable).
-$TestUrl = 'https://news.ycombinator.com/'
-$TestKeyword = 'ycombinator'
+# Stress-test page — locale-appropriate, lightweight, stable.
+$TestPage = Get-TestUrlSet -Locale $Locale -Purpose tech-news | Select-Object -First 1
+if (-not $TestPage) {
+    # Fall back to first URL in the resolved locale when no tech-news entry exists.
+    $TestPage = Get-TestUrlSet -Locale $Locale | Select-Object -First 1
+}
+$TestUrl     = $TestPage.url
+$TestKeyword = $TestPage.keyword
 
 # -------------------------------------------------------------------
 # Assertion helpers
@@ -381,6 +387,8 @@ Write-Host "`n=== INSTALL STRESS TEST ===" -ForegroundColor Cyan
 Write-Host "  Iterations  : $Iterations" -ForegroundColor Cyan
 Write-Host "  Seed        : $Seed" -ForegroundColor Cyan
 Write-Host "  Tag         : $Tag" -ForegroundColor Cyan
+Write-Host "  Locale      : $(Get-TestLocale -Locale $Locale)" -ForegroundColor Cyan
+Write-Host "  Test URL    : $TestUrl" -ForegroundColor Cyan
 Write-Host "  State dir   : $StateDir" -ForegroundColor Cyan
 Write-Host "  SkipInstall : $SkipInstall" -ForegroundColor Cyan
 Write-Host "  Started     : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor Cyan

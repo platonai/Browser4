@@ -28,7 +28,8 @@
 #>
 param(
     [int] $Iterations = 3,
-    [int] $Seed = (Get-Random)
+    [int] $Seed = (Get-Random),
+    [string] $Locale = ''
 )
 
 $ErrorActionPreference = 'Continue'
@@ -110,23 +111,13 @@ function assert-ok {
 }
 
 # -------------------------------------------------------------------
-# 10 pages across 3 sites
+# Locale-appropriate page set (10 entries from the URL store).
+# Each entry has: url, site, name, keyword.
 # -------------------------------------------------------------------
-$pages = @(
-    # Wikipedia (4 pages)
-    @{ url = 'https://www.wikipedia.org/';                    site = 'wikipedia'; name = 'Wikipedia Main';    keyword = 'wikipedia' },
-    @{ url = 'https://en.wikipedia.org/wiki/Web_browser';     site = 'wikipedia'; name = 'Web Browser';       keyword = 'browser' },
-    @{ url = 'https://en.wikipedia.org/wiki/Internet';        site = 'wikipedia'; name = 'Internet';          keyword = 'Internet' },
-    @{ url = 'https://en.wikipedia.org/wiki/Computer_network';site = 'wikipedia'; name = 'Computer Network';  keyword = 'network' },
-    # GitHub (3 pages)
-    @{ url = 'https://github.com/';                           site = 'github';    name = 'GitHub Home';       keyword = 'github' },
-    @{ url = 'https://github.com/explore';                    site = 'github';    name = 'GitHub Explore';    keyword = 'github' },
-    @{ url = 'https://github.com/trending';                   site = 'github';    name = 'GitHub Trending';   keyword = 'github' },
-    # Hacker News (3 pages)
-    @{ url = 'https://news.ycombinator.com/';                 site = 'hackernews'; name = 'HN Front';         keyword = 'ycombinator' },
-    @{ url = 'https://news.ycombinator.com/newest';           site = 'hackernews'; name = 'HN Newest';        keyword = 'ycombinator' },
-    @{ url = 'https://news.ycombinator.com/show';             site = 'hackernews'; name = 'HN Show';          keyword = 'ycombinator' }
-)
+$resolvedTestLocale = Get-TestLocale -Locale $Locale
+$pages = @(Get-TestUrlSet -Locale $resolvedTestLocale | ForEach-Object {
+    @{ url = $_.url; site = $_.site; name = $_.name; keyword = $_.keyword }
+})
 
 # -------------------------------------------------------------------
 # Random interaction primitives (safe — never navigate away)
@@ -200,7 +191,8 @@ function Assert-SnapshotContains {
 Write-Host "`n=== SESSION STRESS TEST ===" -ForegroundColor Cyan
 Write-Host "  Iterations : $Iterations" -ForegroundColor Cyan
 Write-Host "  Seed       : $Seed" -ForegroundColor Cyan
-Write-Host "  Pages      : $($pages.Count) across 3 sites" -ForegroundColor Cyan
+Write-Host "  Locale     : $resolvedTestLocale" -ForegroundColor Cyan
+Write-Host "  Pages      : $($pages.Count) across $(@($pages | Group-Object site).Count) sites" -ForegroundColor Cyan
 Write-Host "  Log dir    : $(Get-LogDir)" -ForegroundColor Cyan
 Write-Host ""
 
@@ -232,12 +224,12 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
     # ──────────────────────────────────────────────────────────────
     Write-Host "`n  ── Phase A: open → interact → snapshot → goto → close ──" -ForegroundColor DarkYellow
 
-    # Pick one page per site for this phase.
-    $phaseAPages = @(
-        ($shuffled | Where-Object { $_.site -eq 'wikipedia' } | Select-Object -First 1),
-        ($shuffled | Where-Object { $_.site -eq 'github' } | Select-Object -First 1),
-        ($shuffled | Where-Object { $_.site -eq 'hackernews' } | Select-Object -First 1)
-    )
+    # Pick one page from each of the first 3 distinct sites (locale-independent).
+    $phaseASites = @($shuffled | Group-Object site | Select-Object -First 3 -ExpandProperty Name)
+    $phaseAPages = @($phaseASites | ForEach-Object {
+        $siteName = $_
+        $shuffled | Where-Object { $_.site -eq $siteName } | Select-Object -First 1
+    })
 
     # A1: open first page
     $p1 = $phaseAPages[0]
@@ -311,9 +303,11 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
     # ──────────────────────────────────────────────────────────────
     Write-Host "`n  ── Phase C: go-back / go-forward / reload ──" -ForegroundColor DarkYellow
 
-    $c1 = ($shuffled | Where-Object { $_.site -eq 'wikipedia' } | Select-Object -First 1)
-    $c2 = ($shuffled | Where-Object { $_.site -eq 'github' } | Select-Object -First 1)
-    $c3 = ($shuffled | Where-Object { $_.site -eq 'hackernews' } | Select-Object -First 1)
+    # Pick one page from each of the first 3 distinct sites (locale-independent).
+    $phaseCSites = @($shuffled | Group-Object site | Select-Object -First 3 -ExpandProperty Name)
+    $c1 = $shuffled | Where-Object { $_.site -eq $phaseCSites[0] } | Select-Object -First 1
+    $c2 = $shuffled | Where-Object { $_.site -eq $phaseCSites[1] } | Select-Object -First 1
+    $c3 = $shuffled | Where-Object { $_.site -eq $phaseCSites[2] } | Select-Object -First 1
 
     Write-Host "`n  C1. open $($c1.name)" -ForegroundColor White
     Invoke-Cli open $c1.url

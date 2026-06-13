@@ -9,8 +9,40 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOGS_DIR="$SCRIPT_DIR/logs"
 
+# -------------------------------------------------------------------
+# Locale detection (multi-platform: macOS, Linux, Windows Git Bash)
+#
+# Priority: $BROWSER4_TEST_LOCALE > $LANG > `locale` command > 'en'
+# -------------------------------------------------------------------
+detect_locale() {
+    if [ -n "${BROWSER4_TEST_LOCALE:-}" ]; then
+        echo "$BROWSER4_TEST_LOCALE" | cut -c1-2
+        return
+    fi
+    if [ -n "${LANG:-}" ]; then
+        echo "$LANG" | cut -d_ -f1 | cut -d. -f1
+        return
+    fi
+    if command -v locale >/dev/null 2>&1; then
+        locale 2>/dev/null | grep -E '^LANG=' | cut -d= -f2 | cut -d_ -f1 | cut -d. -f1
+        return
+    fi
+    echo "en"
+}
+
+export BROWSER4_TEST_LOCALE
+BROWSER4_TEST_LOCALE="$(detect_locale)"
+
+# Build argument list, appending -Locale if the caller didn't already supply it.
+# This ensures locale flows through to the PowerShell orchestrator without
+# requiring every invocation to spell out -Locale.
+ARGS=("$@")
+if ! echo "$*" | grep -qiE '(-|/)Locale'; then
+    ARGS+=("-Locale" "$BROWSER4_TEST_LOCALE")
+fi
+
 # Run the PowerShell test runner
-pwsh -NoProfile -File "$SCRIPT_DIR/run-tests.ps1" "$@"
+pwsh -NoProfile -File "$SCRIPT_DIR/run-tests.ps1" "${ARGS[@]}"
 EXIT_CODE=$?
 
 # If the test runner failed, try AI analysis (claude first, then copilot)

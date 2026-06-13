@@ -11,6 +11,39 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# -------------------------------------------------------------------
+# Locale detection (multi-platform: macOS, Linux, Windows Git Bash)
+#
+# Priority: $BROWSER4_TEST_LOCALE > $LANG > `locale` command > 'en'
+# -------------------------------------------------------------------
+detect_locale() {
+    if [ -n "${BROWSER4_TEST_LOCALE:-}" ]; then
+        echo "$BROWSER4_TEST_LOCALE" | cut -c1-2
+        return
+    fi
+    if [ -n "${LANG:-}" ]; then
+        echo "$LANG" | cut -d_ -f1 | cut -d. -f1
+        return
+    fi
+    if command -v locale >/dev/null 2>&1; then
+        locale 2>/dev/null | grep -E '^LANG=' | cut -d= -f2 | cut -d_ -f1 | cut -d. -f1
+        return
+    fi
+    echo "en"
+}
+
+TEST_LOCALE="$(detect_locale)"
+
+# Select a locale-appropriate test URL (simple / portal page).
+case "$TEST_LOCALE" in
+    zh)
+        SWARM_URL="https://www.baidu.com/"
+        ;;
+    *)
+        SWARM_URL="https://example.com/"
+        ;;
+esac
+
 # --- Logging setup ---
 TIMESTAMP=$(date +'%Y%m%d_%H%M%S')
 LOG_DIR="$SCRIPT_DIR/logs/swarm-agents-sh_${TIMESTAMP}"
@@ -74,6 +107,8 @@ set +e
 
 echo "════════════════════════════════════════════════════════"
 echo "  TEST: swarm-agents (bash)"
+echo "  Locale: $TEST_LOCALE"
+echo "  Swarm URL: $SWARM_URL"
 echo "  Logs: $LOG_DIR"
 echo "════════════════════════════════════════════════════════"
 echo ""
@@ -88,7 +123,7 @@ run_cli "swarm create" swarm create
 
 echo ""
 echo "━━━ Submitting swarm task ━━━"
-OUTPUT=$(browser4-cli swarm submit "https://example.com" 2>&1)
+OUTPUT=$(browser4-cli swarm submit "$SWARM_URL" 2>&1)
 SUBMIT_EXIT=$?
 echo "$OUTPUT"
 
@@ -96,7 +131,7 @@ echo "$OUTPUT"
 SUBMIT_LOG="$LOG_DIR/cmd_$(printf "%04d" $((CMD_INDEX + 1)))_swarm_submit.log"
 {
     echo "================================================================================"
-    echo "COMMAND     : swarm submit https://example.com"
+    echo "COMMAND     : swarm submit $SWARM_URL"
     echo "EXIT CODE   : $SUBMIT_EXIT"
     echo "================================================================================"
     echo "$OUTPUT"

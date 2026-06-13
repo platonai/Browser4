@@ -49,7 +49,8 @@ param(
     [string[]] $Test = @('all'),
     [switch] $List,
     [int] $TimeoutSeconds = 600,
-    [switch] $CI
+    [switch] $CI,
+    [string] $Locale = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -151,6 +152,10 @@ $cliBin = if ($env:BROWSER4_CLI_BIN) {
     if ($cmd) { $cmd.Source } else { $null }
 }
 
+# Resolve and export locale for child process inheritance.
+# Each child script picks this up via Get-TestLocale -> $env:BROWSER4_TEST_LOCALE.
+$env:BROWSER4_TEST_LOCALE = Get-TestLocale -Locale $Locale
+
 Write-Host '══════════════════════════════════════════════════════' -ForegroundColor Cyan
 Write-Host '  browser4-cli Test Runner' -ForegroundColor Cyan
 Write-Host '══════════════════════════════════════════════════════' -ForegroundColor Cyan
@@ -162,6 +167,7 @@ if ($cliBin -and (Test-Path $cliBin)) {
 }
 Write-Host "  Tests     : $($toRun.Count) selected"
 Write-Host "  Timeout   : ${TimeoutSeconds}s per test"
+Write-Host "  Locale    : $env:BROWSER4_TEST_LOCALE"
 Write-Host '══════════════════════════════════════════════════════'
 Write-Host ''
 
