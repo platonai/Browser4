@@ -331,6 +331,20 @@ When creating or modifying a `.ps1` file, ensure the script is compatible with m
 6. Cover the change with the smallest relevant tests: `cli/browser4-cli/src/commands.rs` unit tests, `browser4-rest` controller mapping tests, `cli/browser4-cli/tests/e2e.rs`, and `browser4-tests/browser4-rest-tests/.../MCPToolControllerE2ETest.kt` when the command changes the end-to-end flow
 7. Watch the common failure points: missing backend alias, omitted `sessionId` in custom handlers, forgetting `no_snapshot_commands()` for read-only commands, forgetting `batch_supported`/`compile_batch_request()` for batch-safe DOM commands, mismatched element-ref parameter names, broken `activeSelector` / `lastMousePosition` persistence in `cli/browser4-cli/src/state.rs`, and snake_case/camelCase argument normalization
 
+#### Modifying Install / Uninstall / Upgrade Rust Code
+
+**Rule:** Whenever you change Rust code related to `install`, `uninstall`, or `upgrade` (primarily in `cli/browser4-cli/src/daemon.rs`), you **must** run the install-scenario e2e tests before considering the change complete:
+
+```bash
+# Run all install-related scenarios:
+cargo test --test e2e -- --nocapture --level=ALL --enable-install-scenario --scenario='*install*'
+
+# Or run the full install-enabled suite (broader, catches regressions in other scenarios):
+cargo test --test e2e -- --nocapture --level=ALL --enable-install-scenario
+```
+
+These tests exercise the full download / extract / install / uninstall / upgrade lifecycle against a local mock release server and catch regressions that unit tests miss (lock acquisition failures, path handling, disk-space checks, mirror selection, download-cache behavior, and current-tag management).
+
 ### Browser Automation Specifics
 
 **Key Classes to Know:**
