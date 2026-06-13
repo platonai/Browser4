@@ -45,9 +45,65 @@ const packageJson = JSON.parse(
 const version = packageJson.version;
 const commandNames = Object.keys(packageJson.bin || { 'browser4-cli': './bin/browser4-cli.js' });
 
-// GitHub release URL
+// ---------------------------------------------------------------------------
+// China mainland locale detection (zero-network — uses only local env / Intl)
+// ---------------------------------------------------------------------------
+
+function isChinaLocale() {
+  // 1 — Locale env vars (Unix, Git Bash, WSL, Docker)
+  const lang = process.env.LC_ALL
+    || process.env.LANG
+    || process.env.LC_CTYPE
+    || process.env.LC_MESSAGES
+    || '';
+  if (/^zh_CN|^zh-CN|^Chinese \(Simplified\)_China/i.test(lang)) {
+    return true;
+  }
+
+  // 2 — TZ env var (Docker, CI)
+  const tz = process.env.TZ || '';
+  if (/^Asia\/(Shanghai|Chongqing|Urumqi|Harbin)$/.test(tz)) {
+    return true;
+  }
+
+  // 3 — Intl timezone API (V8/Node.js, no filesystem access needed)
+  try {
+    const resolvedTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (/^Asia\/(Shanghai|Chongqing|Urumqi|Harbin)$/.test(resolvedTz)) {
+      return true;
+    }
+  } catch {
+    // Intl not available (very old Node) — skip
+  }
+
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// Download URLs (locale-aware ordering)
+// ---------------------------------------------------------------------------
+
 const GITHUB_REPO = 'platonai/Browser4';
-const DOWNLOAD_URL = `https://github.com/${GITHUB_REPO}/releases/download/v${version}/${binaryName}`;
+const DOWNLOAD_URL_GITHUB = `https://github.com/${GITHUB_REPO}/releases/download/v${version}/${binaryName}`;
+const DOWNLOAD_URL_OSS = `https://browser4.oss-cn-beijing.aliyuncs.com/releases/download/v${version}/${binaryName}`;
+
+/**
+ * Return download URLs ordered by locale preference.  `BROWSER4_RELEASES_BASE_URL`
+ * takes precedence; otherwise China mainland users get OSS-first ordering.
+ */
+function getDownloadUrls() {
+  // Single-source override
+  const envOverride = (process.env.BROWSER4_RELEASES_BASE_URL || '').trim();
+  if (envOverride) {
+    const base = envOverride.replace(/\/+$/, '');
+    return [`${base}/download/v${version}/${binaryName}`];
+  }
+
+  if (isChinaLocale()) {
+    return [DOWNLOAD_URL_OSS, DOWNLOAD_URL_GITHUB];
+  }
+  return [DOWNLOAD_URL_GITHUB, DOWNLOAD_URL_OSS];
+}
 
 async function downloadFile(url, dest) {
   return new Promise((resolve, reject) => {
@@ -130,19 +186,31 @@ async function main() {
   }
 
   console.log(`Downloading native binary for ${platformKey}...`);
-  console.log(`URL: ${DOWNLOAD_URL}`);
 
-  try {
-    await downloadFile(DOWNLOAD_URL, binaryPath);
+  const urls = getDownloadUrls();
 
-    // Make executable on Unix
-    if (platform() !== 'win32') {
-      chmodSync(binaryPath, 0o755);
+  let lastError = null;
+  for (const url of urls) {
+    console.log(`URL: ${url}`);
+    try {
+      await downloadFile(url, binaryPath);
+
+      // Make executable on Unix
+      if (platform() !== 'win32') {
+        chmodSync(binaryPath, 0o755);
+      }
+
+      console.log(`✓ Downloaded native binary: ${binaryName}`);
+      lastError = null;
+      break;
+    } catch (err) {
+      console.log(`Download failed: ${err.message}`);
+      lastError = err;
     }
+  }
 
-    console.log(`✓ Downloaded native binary: ${binaryName}`);
-  } catch (err) {
-    console.log(`Could not download native binary: ${err.message}`);
+  if (lastError) {
+    console.log(`Could not download native binary from any mirror: ${lastError.message}`);
     console.log('');
     console.log('To build the native binary locally:');
     console.log('  1. Install Rust: https://rustup.rs');

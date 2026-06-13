@@ -36,6 +36,7 @@ SOURCE=""
 ADD_TO_PATH=true
 SILENT=false
 DRY_RUN=false
+CHINA_DETECTED=false
 
 # ──────────────────────────────────────────────
 # Helpers
@@ -109,6 +110,35 @@ while [[ $# -gt 0 ]]; do
     *) die "Unknown argument: $1 (use --help)";;
   esac
 done
+
+# ──────────────────────────────────────────────
+# China mainland locale detection (zero-network)
+# ──────────────────────────────────────────────
+
+detect_china_locale() {
+  # 1 — Locale env vars
+  local lang
+  lang="${LC_ALL:-${LANG:-${LC_CTYPE:-${LC_MESSAGES:-}}}}"
+  case "$lang" in
+    zh_CN*|zh-CN*|"Chinese (Simplified)_China"*) return 0 ;;
+  esac
+
+  # 2 — TZ env var
+  case "${TZ:-}" in
+    Asia/Shanghai|Asia/Chongqing|Asia/Urumqi|Asia/Harbin) return 0 ;;
+  esac
+
+  # 3 — /etc/timezone
+  if [[ -f /etc/timezone ]]; then
+    local tz
+    tz=$(cat /etc/timezone 2>/dev/null || true)
+    case "$tz" in
+      Asia/Shanghai|Asia/Chongqing|Asia/Urumqi|Asia/Harbin) return 0 ;;
+    esac
+  fi
+
+  return 1
+}
 
 # ──────────────────────────────────────────────
 # Platform detection
@@ -245,8 +275,13 @@ get_download_urls() {
     github) urls+=("GitHub Releases|${gh_url}") ;;
     oss)    urls+=("Aliyun OSS|${oss_url}") ;;
     *)
-      urls+=("GitHub Releases|${gh_url}")
-      urls+=("Aliyun OSS|${oss_url}")
+      if [[ "$CHINA_DETECTED" == true ]]; then
+        urls+=("Aliyun OSS|${oss_url}")
+        urls+=("GitHub Releases|${gh_url}")
+      else
+        urls+=("GitHub Releases|${gh_url}")
+        urls+=("Aliyun OSS|${oss_url}")
+      fi
       ;;
   esac
 
@@ -429,6 +464,14 @@ create_symlinks() {
 main() {
   check_commands
   header
+
+  # Auto-detect China mainland locale when no explicit source is given
+  if [[ -z "$SOURCE" ]]; then
+    if detect_china_locale; then
+      CHINA_DETECTED=true
+      step "China mainland locale detected: preferring Aliyun OSS mirror."
+    fi
+  fi
 
   # Detect platform
   local platform_key binary_name

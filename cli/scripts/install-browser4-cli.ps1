@@ -155,11 +155,59 @@ function Get-DefaultInstallDir {
 }
 
 # ──────────────────────────────────────────────
+# China mainland locale detection (zero-network)
+# ──────────────────────────────────────────────
+
+<#
+.SYNOPSIS
+  Detect whether the current system is likely in China mainland.
+  Uses only local env vars and .NET APIs — no network calls.
+#>
+function Test-ChinaLocale {
+  # 1 — Locale env vars
+  $lang = $env:LC_ALL, $env:LANG, $env:LC_CTYPE, $env:LC_MESSAGES | Where-Object { $_ } | Select-Object -First 1
+  if ($lang -and ($lang -match '^zh_CN' -or $lang -match '^zh-CN' -or $lang -match '^Chinese \(Simplified\)_China')) {
+    return $true
+  }
+
+  # 2 — TZ env var
+  $tzEnv = $env:TZ
+  if ($tzEnv -and ($tzEnv -match '^Asia/(Shanghai|Chongqing|Urumqi|Harbin)$')) {
+    return $true
+  }
+
+  # 3 — .NET TimeZoneInfo (works on Windows and Unix PowerShell 7+)
+  try {
+    $tzId = [System.TimeZoneInfo]::Local.Id
+    if ($tzId -match '^Asia/(Shanghai|Chongqing|Urumqi|Harbin)$') {
+      return $true
+    }
+  } catch {
+    # TimeZoneInfo not available (unlikely on PS 5.1+ but guard anyway)
+  }
+
+  # 4 — /etc/timezone (PowerShell on Linux/macOS)
+  if (-not $script:OSWin -and (Test-Path '/etc/timezone')) {
+    try {
+      $tz = Get-Content '/etc/timezone' -Raw -ErrorAction Stop
+      if ($tz -match '^Asia/(Shanghai|Chongqing|Urumqi|Harbin)$') {
+        return $true
+      }
+    } catch {
+      # Permission or read error — skip
+    }
+  }
+
+  return $false
+}
+
+# ──────────────────────────────────────────────
 # Download URLs
 # ──────────────────────────────────────────────
 
 $GITHUB_REPO = "platonai/Browser4"
 $OSS_BASE = "https://browser4.oss-cn-beijing.aliyuncs.com"
+$script:ChinaDetected = $false
 
 function Get-DownloadUrls {
   param([string]$BinaryName, [string]$VersionTag)
@@ -181,8 +229,13 @@ function Get-DownloadUrls {
   } elseif ($Source -eq "oss") {
     $urls += @{ Url = $ossUrl; Label = "Aliyun OSS" }
   } else {
-    $urls += @{ Url = $ghUrl; Label = "GitHub Releases" }
-    $urls += @{ Url = $ossUrl; Label = "Aliyun OSS" }
+    if ($script:ChinaDetected) {
+      $urls += @{ Url = $ossUrl; Label = "Aliyun OSS" }
+      $urls += @{ Url = $ghUrl; Label = "GitHub Releases" }
+    } else {
+      $urls += @{ Url = $ghUrl; Label = "GitHub Releases" }
+      $urls += @{ Url = $ossUrl; Label = "Aliyun OSS" }
+    }
   }
 
   return $urls
@@ -358,6 +411,14 @@ function Main {
   Write-Summary "║   browser4-cli Installer               ║" -Color Cyan
   Write-Summary "╚════════════════════════════════════════╝" -Color Cyan
   Write-Summary ""
+
+  # Auto-detect China mainland locale when no explicit source is given
+  if (-not $Source) {
+    $script:ChinaDetected = Test-ChinaLocale
+    if ($script:ChinaDetected) {
+      Write-Step "China mainland locale detected: preferring Aliyun OSS mirror."
+    }
+  }
 
   # Detect platform
   $platformKey = Get-PlatformKey

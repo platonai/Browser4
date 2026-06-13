@@ -212,18 +212,90 @@ struct MirrorPreference {
 
 /// Built-in default mirrors used when no config file exists.
 fn builtin_mirrors() -> Vec<DownloadMirror> {
-    vec![
-        DownloadMirror {
-            name: "github".to_string(),
-            base_url: "https://github.com/platonai/Browser4/releases".to_string(),
-            supports_latest_resolution: true,
-        },
-        DownloadMirror {
-            name: "aliyun-oss".to_string(),
-            base_url: "https://browser4.oss-cn-beijing.aliyuncs.com/releases".to_string(),
-            supports_latest_resolution: true,
-        },
-    ]
+    builtin_mirrors_for_locale(is_china_locale())
+}
+
+/// Return the built-in mirror list, optionally placing the Aliyun OSS mirror
+/// first when the caller knows the user is in China mainland.
+fn builtin_mirrors_for_locale(china_locale: bool) -> Vec<DownloadMirror> {
+    if china_locale {
+        vec![
+            DownloadMirror {
+                name: "aliyun-oss".to_string(),
+                base_url: "https://browser4.oss-cn-beijing.aliyuncs.com/releases"
+                    .to_string(),
+                supports_latest_resolution: true,
+            },
+            DownloadMirror {
+                name: "github".to_string(),
+                base_url: "https://github.com/platonai/Browser4/releases".to_string(),
+                supports_latest_resolution: true,
+            },
+        ]
+    } else {
+        vec![
+            DownloadMirror {
+                name: "github".to_string(),
+                base_url: "https://github.com/platonai/Browser4/releases".to_string(),
+                supports_latest_resolution: true,
+            },
+            DownloadMirror {
+                name: "aliyun-oss".to_string(),
+                base_url: "https://browser4.oss-cn-beijing.aliyuncs.com/releases"
+                    .to_string(),
+                supports_latest_resolution: true,
+            },
+        ]
+    }
+}
+
+/// Check whether the system locale suggests the user is in China mainland.
+///
+/// Uses only local environment variables and filesystem probes — no network
+/// calls.  Returns `false` when all probes are ambiguous or empty, which is
+/// the safe default.
+fn is_china_locale() -> bool {
+    // 1 — Locale environment variables (works on Linux, macOS, Git Bash/WSL
+    //     on Windows, and most Docker/CI environments).
+    for var in ["LC_ALL", "LANG", "LC_CTYPE", "LC_MESSAGES"] {
+        if let Ok(val) = std::env::var(var) {
+            let trimmed = val.trim();
+            if trimmed.starts_with("zh_CN")
+                || trimmed.starts_with("zh-CN")
+                || trimmed.eq_ignore_ascii_case("Chinese (Simplified)_China")
+            {
+                return true;
+            }
+        }
+    }
+
+    // 2 — TZ environment variable (covers Docker/CI where locale is C but
+    //     timezone is explicitly set to a China mainland zone).
+    if let Ok(tz) = std::env::var("TZ") {
+        if is_china_timezone(tz.trim()) {
+            return true;
+        }
+    }
+
+    // 3 — /etc/timezone on Debian/Ubuntu.
+    #[cfg(unix)]
+    {
+        if let Ok(content) = std::fs::read_to_string("/etc/timezone") {
+            if is_china_timezone(content.trim()) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+/// Check whether `tz` is a China mainland timezone identifier.
+fn is_china_timezone(tz: &str) -> bool {
+    matches!(
+        tz,
+        "Asia/Shanghai" | "Asia/Chongqing" | "Asia/Urumqi" | "Asia/Harbin"
+    )
 }
 
 /// Path to the mirror configuration file.
@@ -4223,9 +4295,144 @@ mod tests {
 
     #[test]
     fn test_builtin_mirrors_has_github_first() {
-        let mirrors = builtin_mirrors();
+        let mirrors = builtin_mirrors_for_locale(false);
         assert_eq!(mirrors[0].name, "github");
         assert!(mirrors[0].base_url.contains("github.com"));
+    }
+
+    #[test]
+    fn test_builtin_mirrors_china_oss_first() {
+        let mirrors = builtin_mirrors_for_locale(true);
+        assert_eq!(mirrors[0].name, "aliyun-oss");
+        assert!(mirrors[0].base_url.contains("aliyuncs.com"));
+    }
+
+    #[test]
+    fn test_builtin_mirrors_china_retains_all() {
+        let mirrors = builtin_mirrors_for_locale(true);
+        assert_eq!(mirrors.len(), 2);
+        let names: Vec<&str> = mirrors.iter().map(|m| m.name.as_str()).collect();
+        assert!(names.contains(&"github"));
+        assert!(names.contains(&"aliyun-oss"));
+    }
+
+    #[test]
+    fn test_builtin_mirrors_non_china_retains_all() {
+        let mirrors = builtin_mirrors_for_locale(false);
+        assert_eq!(mirrors.len(), 2);
+        let names: Vec<&str> = mirrors.iter().map(|m| m.name.as_str()).collect();
+        assert!(names.contains(&"github"));
+        assert!(names.contains(&"aliyun-oss"));
+    }
+
+    #[test]
+    fn test_is_china_locale_zh_cn_lang() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let prev_lang = env::var("LANG").ok();
+        let prev_tz = env::var("TZ").ok();
+        unsafe { env::set_var("LANG", "zh_CN.UTF-8") };
+        unsafe { env::remove_var("TZ") };
+        let result = is_china_locale();
+        match prev_lang {
+            Some(v) => unsafe { env::set_var("LANG", v) },
+            None => unsafe { env::remove_var("LANG") },
+        }
+        match prev_tz {
+            Some(v) => unsafe { env::set_var("TZ", v) },
+            None => unsafe { env::remove_var("TZ") },
+        }
+        assert!(result);
+    }
+
+    #[test]
+    fn test_is_china_locale_zh_cn_dash() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let prev_lang = env::var("LANG").ok();
+        let prev_tz = env::var("TZ").ok();
+        unsafe { env::set_var("LANG", "zh-CN.UTF-8") };
+        unsafe { env::remove_var("TZ") };
+        let result = is_china_locale();
+        match prev_lang {
+            Some(v) => unsafe { env::set_var("LANG", v) },
+            None => unsafe { env::remove_var("LANG") },
+        }
+        match prev_tz {
+            Some(v) => unsafe { env::set_var("TZ", v) },
+            None => unsafe { env::remove_var("TZ") },
+        }
+        assert!(result);
+    }
+
+    #[test]
+    fn test_is_china_locale_asia_shanghai_tz() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let prev_lang = env::var("LANG").ok();
+        let prev_tz = env::var("TZ").ok();
+        unsafe { env::remove_var("LANG") };
+        unsafe { env::set_var("TZ", "Asia/Shanghai") };
+        let result = is_china_locale();
+        match prev_lang {
+            Some(v) => unsafe { env::set_var("LANG", v) },
+            None => unsafe { env::remove_var("LANG") },
+        }
+        match prev_tz {
+            Some(v) => unsafe { env::set_var("TZ", v) },
+            None => unsafe { env::remove_var("TZ") },
+        }
+        assert!(result);
+    }
+
+    #[test]
+    fn test_is_china_locale_false_for_en_us() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let prev_lang = env::var("LANG").ok();
+        let prev_tz = env::var("TZ").ok();
+        unsafe { env::set_var("LANG", "en_US.UTF-8") };
+        unsafe { env::remove_var("TZ") };
+        let result = is_china_locale();
+        match prev_lang {
+            Some(v) => unsafe { env::set_var("LANG", v) },
+            None => unsafe { env::remove_var("LANG") },
+        }
+        match prev_tz {
+            Some(v) => unsafe { env::set_var("TZ", v) },
+            None => unsafe { env::remove_var("TZ") },
+        }
+        assert!(!result);
+    }
+
+    #[test]
+    fn test_is_china_locale_false_for_empty() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let prev_lang = env::var("LANG").ok();
+        let prev_tz = env::var("TZ").ok();
+        unsafe { env::remove_var("LANG") };
+        unsafe { env::remove_var("TZ") };
+        let result = is_china_locale();
+        match prev_lang {
+            Some(v) => unsafe { env::set_var("LANG", v) },
+            None => unsafe { env::remove_var("LANG") },
+        }
+        match prev_tz {
+            Some(v) => unsafe { env::set_var("TZ", v) },
+            None => unsafe { env::remove_var("TZ") },
+        }
+        assert!(!result);
+    }
+
+    #[test]
+    fn test_is_china_timezone_matches_mainland() {
+        assert!(is_china_timezone("Asia/Shanghai"));
+        assert!(is_china_timezone("Asia/Chongqing"));
+        assert!(is_china_timezone("Asia/Urumqi"));
+        assert!(is_china_timezone("Asia/Harbin"));
+    }
+
+    #[test]
+    fn test_is_china_timezone_excludes_hk_macau() {
+        assert!(!is_china_timezone("Asia/Hong_Kong"));
+        assert!(!is_china_timezone("Asia/Macau"));
+        assert!(!is_china_timezone("Asia/Tokyo"));
     }
 
     #[test]
