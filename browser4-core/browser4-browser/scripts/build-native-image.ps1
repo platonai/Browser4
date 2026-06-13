@@ -1,4 +1,5 @@
 #!/usr/bin/env pwsh
+
 <#
 .SYNOPSIS
     Compile MCPBrowserServer.jar to a native Windows executable via GraalVM
@@ -91,6 +92,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Force UTF-8 encoding for CLI output to fix garbled text
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$OutputEncoding = [System.Text.Encoding]::UTF8
 
 # ---------------------------------------------------------------------------
 # Resolve paths
