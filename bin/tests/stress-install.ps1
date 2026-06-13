@@ -40,7 +40,7 @@ param(
     [int] $Iterations = 2,
     [int] $Seed = (Get-Random),
     [switch] $SkipInstall,
-    [string] $Tag = '4.10.0',
+    [string] $Tag = '4.11.2',
     [string] $Locale = ''
 )
 
@@ -120,9 +120,13 @@ function Invoke-Cli {
     $exitCode = $global:__InvokeCliExitCode
     $sw.Stop()
 
-    # Register with test-utils for structured logging and copilot analysis
-    Register-CliResult -Label $desc -ExitCode $exitCode -OutputLines $out `
+    # Register with test-utils for structured logging and copilot analysis.
+    # Capture the status object so it doesn't leak into the function's
+    # return value (which would pollute Get-SessionDataRows etc.).
+    $statusObj = Register-CliResult -Label $desc -ExitCode $exitCode -OutputLines $out `
         -Elapsed $sw.Elapsed -ExpectedExitCode 0
+    # Still display the status to the console.
+    Write-Host ($statusObj | Format-List | Out-String)
 
     if ($exitCode -ne 0) {
         $msg = "CLI command failed (exit=$exitCode): $desc"
@@ -192,6 +196,7 @@ function Set-StatusIter {
 # -------------------------------------------------------------------
 filter session-data-rows {
     $_ | Where-Object {
+        $_ -is [string] -and
         $_ -match '\S' -and
         $_ -notmatch '^\s*-+\s*' -and
         $_ -notmatch '^Name\b' -and
@@ -231,7 +236,7 @@ if (-not $env:BROWSER4_RUNTIME_DIR) {
 
 # Versioned install directory for the tag under test.
 # Mirror Rust's normalize_release_tag(): if the tag doesn't start with 'v',
-# prepend one — the CLI normalises "4.10.0" to "v4.10.0".
+# prepend one — the CLI normalises "4.11.2" to "v4.11.2".
 $NormalizedTag = if ($Tag.StartsWith('v')) { $Tag } else { "v$Tag" }
 $RuntimeVersionsDir = Join-Path $RuntimeDataDir 'runtime'
 $VersionedInstallDir = Join-Path $RuntimeVersionsDir $NormalizedTag
@@ -361,6 +366,39 @@ function Assert-SnapshotContains {
 }
 
 # -------------------------------------------------------------------
+# Port cleanup helper -- ensures the Browser4 server port is free.
+#
+# The CLI's managed-processes tracking can get out of sync when a
+# server from a previous test run is still alive.  After `stop` or
+# `kill-all`, verify the port is actually free and forcibly kill
+# anything still holding it so the next `open` doesn't hang.
+# -------------------------------------------------------------------
+function Clear-Browser4Port {
+    param([int]$Port = 8182)
+    $netstat = netstat -ano 2>$null | Select-String ":$Port " | Select-String 'LISTENING'
+    if ($netstat) {
+        $lines = $netstat | ForEach-Object { $_.Line.Trim() }
+        foreach ($line in $lines) {
+            $parts = $line -split '\s+'
+            $stalePid = [int]$parts[-1]
+            if ($stalePid -gt 0) {
+                Write-Host "       Stale process PID $stalePid on port $Port — force killing" -ForegroundColor DarkYellow
+                Stop-Process -Id $stalePid -Force -ErrorAction SilentlyContinue
+                Start-Sleep -Seconds 2
+            }
+        }
+        # Double-check
+        Start-Sleep -Seconds 1
+        $still = netstat -ano 2>$null | Select-String ":$Port " | Select-String 'LISTENING'
+        if ($still) {
+            Write-Host "       ⚠ Port $Port still occupied after cleanup attempt" -ForegroundColor Red
+        } else {
+            Write-Host "       Port $Port is now free" -ForegroundColor DarkGray
+        }
+    }
+}
+
+# -------------------------------------------------------------------
 # Timed wait helper -- sleeps in 10 s chunks, printing status via
 # the background timer, plus an explicit heartbeat line every 30 s.
 # -------------------------------------------------------------------
@@ -400,6 +438,8 @@ Write-Host "-- Ensuring clean slate (close current session if any) --" -Foregrou
 # to navigate to about:blank.
 try { $null = Invoke-Cli close } catch { Write-Host "       (no session to close)" -ForegroundColor DarkGray }
 Wait-WithStatus -Seconds 2
+# Kill any stale server holding port 8182 (e.g. from a previous aborted run).
+Clear-Browser4Port
 
 if (-not $SkipInstall) {
     Write-Host "-- Removing versioned install for fresh-install test --" -ForegroundColor DarkYellow
@@ -572,6 +612,9 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
         Remove-Item $ManagedProcsFile -Force -ErrorAction SilentlyContinue
         Write-Host "       (cleared stale managed-processes.json)" -ForegroundColor DarkGray
     }
+    # Ensure port 8182 is actually free — a stale server from a
+    # previous run can hold the port even after `stop`.
+    Clear-Browser4Port
 
     # B7: open after stop (server auto-restarts)
     Write-Host "`n  B7. open after stop (server should auto-restart)  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
@@ -598,6 +641,7 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
     $null = Invoke-Cli kill-all
     Wait-WithStatus -Seconds 5
     Assert-SessionCount 0 "after kill-all"
+    Clear-Browser4Port
 
     # C2: open after kill-all (fresh server)
     Write-Host "`n  C2. open after kill-all (fresh server)  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
@@ -615,6 +659,7 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
     $null = Invoke-Cli kill-all
     Wait-WithStatus -Seconds 3
     Assert-SessionCount 0 "after double kill-all"
+    Clear-Browser4Port
 
     # C4: rapid kill-all, open, close x3
     Write-Host "`n  C4. rapid kill-all, open, close (x3)  [$(Get-Date -Format 'HH:mm:ss')]" -ForegroundColor White
