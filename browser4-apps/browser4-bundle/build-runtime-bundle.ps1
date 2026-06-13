@@ -1308,7 +1308,6 @@ $recommendedModules = @(
 if (-not (Get-IsWindows)) {
     $recommendedModules += @(
         'java.naming',
-        'java.desktop',
         'java.security.jgss'
     )
 }
