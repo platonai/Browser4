@@ -282,6 +282,18 @@ When given a task, Claude should:
 4. **Test Incrementally** - Run targeted tests after each change
 5. **Document Changes** - Update relevant documentation
 
+### PowerShell (.ps1) Cross-Platform Compatibility
+
+When creating or modifying a `.ps1` file, ensure the script is compatible with multiple platforms (Windows, Linux, macOS). Follow these guidelines:
+
+- Use `$IsWindows`, `$IsLinux`, `$IsMacOS` (PowerShell Core 6+) for platform-specific branching instead of relying on `[Environment]::OSVersion`
+- Avoid Windows-only cmdlets (e.g., `Set-Win*`, `Get-WmiObject`, `netstat`-specific flags). Use cross-platform alternatives where available
+- Use forward slashes in paths where possible, or construct paths with `Join-Path` / `[System.IO.Path]::Combine()`
+- Avoid case-sensitive file-system assumptions (e.g., don't rely on `$env:USERPROFILE` — use `$env:HOME` or `[Environment]::GetFolderPath()`)
+- Prefer `#!/usr/bin/env pwsh` shebang for scripts intended to run on Unix
+- Test scripts on at least one non-Windows platform before finalizing
+- **When fixing a `.ps1` file**, also check other scripts in the same directory for the same issues and fix them proactively
+
 ### Common Task Patterns
 
 #### Adding a New Feature
