@@ -147,7 +147,7 @@ if ($toRun.Count -eq 0) {
 $cliBin = if ($env:BROWSER4_CLI_BIN) {
     $env:BROWSER4_CLI_BIN
 } else {
-    $cmd = Get-Command 'browser4-cli' -CommandType Application -ErrorAction SilentlyContinue
+    $cmd = Get-Command 'browser4-cli' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($cmd) { $cmd.Source } else { $null }
 }
 

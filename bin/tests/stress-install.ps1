@@ -81,7 +81,6 @@ if (-not $script:__CliBin) {
         $raw = & $whichCmd 'browser4-cli' 2>$null | Select-Object -First 1
         if ($raw) { $script:__CliBin = $raw.Trim() }
     }
-}
     if (-not $script:__CliBin) {
         throw 'browser4-cli not found on PATH. Install it with: npm i -g browser4-cli && browser4-cli install'
     }
