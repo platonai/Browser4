@@ -2467,6 +2467,9 @@ pub(super) fn test_install_mirror_failover(ctx: &mut E2ECtx) {
     fs::write(&mirrors_path, mirrors_json.to_string()).expect("write mirrors.json");
     ctx.set_env("BROWSER4_MIRRORS_CONFIG", &mirrors_path.to_string_lossy());
     // IMPORTANT: do NOT set BROWSER4_RELEASES_BASE_URL — let the mirror system work.
+    // Clear any stale BROWSER4_RELEASES_BASE_URL left over from earlier tests
+    // (E2ECtx.extra_env persists across scenarios).
+    ctx.set_env("BROWSER4_RELEASES_BASE_URL", "");
 
     let result = run_command(ctx, &["install", INSTALL_TAG]);
     assert_eq!(
@@ -2549,6 +2552,8 @@ pub(super) fn test_install_loads_mirrors_json_from_runtime_dir(ctx: &mut E2ECtx)
     // Do NOT set BROWSER4_MIRRORS_CONFIG — the CLI should find it at its
     // default location under ctx.runtime_dir (which is the runtime data dir).
     // Do NOT set BROWSER4_RELEASES_BASE_URL — let the mirror system work.
+    // Clear any stale BROWSER4_RELEASES_BASE_URL left over from earlier tests.
+    ctx.set_env("BROWSER4_RELEASES_BASE_URL", "");
 
     let result = run_command(ctx, &["install", INSTALL_TAG]);
     assert_eq!(
@@ -2603,6 +2608,8 @@ pub(super) fn test_install_speed_test_selects_fastest_mirror(ctx: &mut E2ECtx) {
         ]
     });
     fs::write(&mirrors_path, mirrors_json.to_string()).expect("write mirrors.json");
+    // Clear any stale BROWSER4_RELEASES_BASE_URL left over from earlier tests.
+    ctx.set_env("BROWSER4_RELEASES_BASE_URL", "");
 
     let result = run_command(ctx, &["install", INSTALL_TAG, "--force"]);
     assert_eq!(
@@ -2652,6 +2659,8 @@ pub(super) fn test_install_mirror_preference_cache_hit(ctx: &mut E2ECtx) {
         ]
     });
     fs::write(&mirrors_path, mirrors_json.to_string()).expect("write mirrors.json");
+    // Clear any stale BROWSER4_RELEASES_BASE_URL left over from earlier tests.
+    ctx.set_env("BROWSER4_RELEASES_BASE_URL", "");
 
     // First install with --force: bypasses download cache, speed-tests mirrors,
     // caches the fastest mirror in mirror-preference.json.
@@ -2717,6 +2726,8 @@ pub(super) fn test_install_speed_test_disabled_env_var(ctx: &mut E2ECtx) {
         ]
     });
     fs::write(&mirrors_path, mirrors_json.to_string()).expect("write mirrors.json");
+    // Clear any stale BROWSER4_RELEASES_BASE_URL left over from earlier tests.
+    ctx.set_env("BROWSER4_RELEASES_BASE_URL", "");
 
     // Disable speed testing.
     ctx.set_env("BROWSER4_CLI_DISABLE_MIRROR_SPEED_TEST", "1");

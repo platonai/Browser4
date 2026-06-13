@@ -2683,6 +2683,12 @@ fn reset_cli_artifacts(ctx: &mut E2ECtx) {
     // subsequent scenarios that expect a clean slate.
     let _ = fs::remove_dir_all(&ctx.runtime_dir);
     fs::create_dir_all(&ctx.runtime_dir).ok();
+    // Clear scenario-specific env vars that persist across tests so each
+    // test starts with a predictable environment.  Tests that need these
+    // vars must set them explicitly after calling reset_cli_artifacts.
+    ctx.set_env("BROWSER4_RELEASES_BASE_URL", "");
+    ctx.set_env("BROWSER4_MIRRORS_CONFIG", "");
+    ctx.set_env("BROWSER4_CLI_DISABLE_MIRROR_SPEED_TEST", "");
     ctx.record_step("reset CLI artifacts", started_at.elapsed());
 }
 
