@@ -334,6 +334,38 @@ function Restore-Browser4Home {
     }
 }
 
+# ─────────────────────────────────────────────────────
+# Helper: copy config from backup into the current
+# ~/.browser4 so the backend server can read config
+# files (e.g. LLM keys).  This is needed because the
+# test cycle starts with a fresh ~/.browser4 that has
+# no config.
+# ─────────────────────────────────────────────────────
+function Copy-ConfigFromBackup {
+    if (-not $browser4HomeBackup -or -not (Test-Path $browser4HomeBackup)) {
+        return
+    }
+
+    $backupConfig = Join-Path $browser4HomeBackup 'config'
+    if (-not (Test-Path $backupConfig)) {
+        Write-Info 'No config directory in backup — nothing to copy'
+        return
+    }
+
+    if (-not (Test-Path $Browser4Home)) {
+        New-Item -ItemType Directory -Path $Browser4Home -Force | Out-Null
+    }
+
+    $targetConfig = Join-Path $Browser4Home 'config'
+    if (Test-Path $targetConfig) {
+        Write-Info "Config already exists at $targetConfig — replacing with backup config"
+        Remove-Item $targetConfig -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    Copy-Item -Path $backupConfig -Destination $targetConfig -Recurse -Force
+    Write-Info "Copied config from backup ($backupConfig) to $targetConfig"
+}
+
 try {
 
 # ─────────────────────────────────────────────────────
@@ -720,6 +752,10 @@ function Invoke-InstallationCycle {
     # ─────────────────────────────────────────────────
     Write-StepHeader "CYCLE $CycleNumber — STEP C: browser4-cli open (cold start — no runtime bundle)"
 
+    # Ensure the backend server can read the real config (e.g. LLM keys) by
+    # copying it from the backup before the fresh ~/.browser4 is populated.
+    Copy-ConfigFromBackup
+
     # Ensure no runtime bundle is cached so we test the download path
     $bundleBefore = Get-RuntimeBundleDir
     if ($bundleBefore) {
@@ -1035,6 +1071,9 @@ if ($SkipMultiScenarios) {
             }
         }
     }
+
+    # Ensure config is available before running multi-scenarios
+    Copy-ConfigFromBackup
 
     $multiScenariosScript = Join-Path $RepoRoot 'bin\tests\multi-scenarios.ps1'
     if (-not (Test-Path $multiScenariosScript)) {
