@@ -2,7 +2,6 @@ package ai.platon.pulsar.browser.impl
 
 import ai.platon.browser4.chrome.RemoteDevTools
 import ai.platon.browser4.chrome.handler.DirectChromeProtocol
-import ai.platon.cdt.kt.protocol.ChromeDevTools
 import ai.platon.cdt.kt.protocol.events.console.MessageAdded
 import ai.platon.cdt.kt.protocol.events.fetch.AuthRequired
 import ai.platon.cdt.kt.protocol.events.fetch.RequestPaused
@@ -290,12 +289,10 @@ interface BrowserProtocol {
         const val PROTOCOL_MODE_KEY = "chrome.protocol.mode"
 
         /**
-         * Create a [BrowserProtocol] for the given [ChromeDevTools].
-         * The implementation is selected via the system property [PROTOCOL_MODE_KEY]:
-         * - "direct" → [DirectChromeProtocol]
-         * - "reflective" or unset → [DirectChromeProtocol]
+         * Create a [BrowserProtocol] for the given [RemoteDevTools].
+         * Always returns a [DirectChromeProtocol] — reflection-free CDP dispatch.
          */
-        fun create(devTools: ChromeDevTools): BrowserProtocol {
+        fun create(devTools: RemoteDevTools): BrowserProtocol {
             return DirectChromeProtocol(devTools)
         }
     }

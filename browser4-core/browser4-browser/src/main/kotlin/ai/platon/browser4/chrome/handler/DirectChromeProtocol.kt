@@ -1,8 +1,7 @@
 package ai.platon.browser4.chrome.handler
 
 import ai.platon.browser4.chrome.RemoteDevTools
-import ai.platon.browser4.chrome.handler.transport.DevToolsInvocationHandler
-import ai.platon.cdt.kt.protocol.ChromeDevTools
+import ai.platon.browser4.chrome.handler.transport.ChromeDevToolsImpl
 import ai.platon.cdt.kt.protocol.events.console.MessageAdded
 import ai.platon.cdt.kt.protocol.events.fetch.AuthRequired
 import ai.platon.cdt.kt.protocol.events.fetch.RequestPaused
@@ -40,67 +39,18 @@ import ai.platon.pulsar.browser.impl.BrowserProtocol
  * CDP is the single access point for all Chrome DevTools Protocol (CDP) domain APIs.
  *
  * All CDP method invocations go through [RemoteDevTools.execute] or [RemoteDevTools.invoke]
- * directly instead of using the reflection-based proxy of [ai.platon.cdt.kt.protocol.ChromeDevTools].
- * This minimizes reflection dependency while providing the same functionality.
+ * directly with string method names and [Map]-based parameters.
+ * This provides a zero-reflection CDP dispatch layer suitable for native-image compilation.
  *
  * Event subscriptions use [RemoteDevTools.addEventListener] directly with string domain/event names.
  */
 class DirectChromeProtocol(
-    val devTools: ChromeDevTools
+    override val remoteDevToolsOrNull: RemoteDevTools
 ) : BrowserProtocol {
     private data class EmptyResult(val ignored: String? = null)
 
-    private val remoteDevTools: RemoteDevTools =
-        (devTools as? RemoteDevTools) ?: error("DirectChromeProtocol requires RemoteDevTools")
-
-    override val remoteDevToolsOrNull: RemoteDevTools? get() = devTools as? RemoteDevTools
-    override val isOpen: Boolean get() = remoteDevToolsOrNull?.isOpen ?: false
-
-    // ---------------------------------------------------------------------------
-    // Domain accessors (kept for backward compatibility — not used internally)
-    // ---------------------------------------------------------------------------
-
-    @Suppress("unused")
-    val browser get() = devTools.browser
-
-    @Suppress("unused")
-    val page get() = devTools.page
-
-    @Suppress("unused")
-    val target get() = devTools.target
-
-    @Suppress("unused")
-    val dom get() = devTools.dom
-
-    @Suppress("unused")
-    val css get() = devTools.css
-
-    @Suppress("unused")
-    val input get() = devTools.input
-
-    @Suppress("unused")
-    val network get() = devTools.network
-
-    @Suppress("unused")
-    val fetch get() = devTools.fetch
-
-    @Suppress("unused")
-    val runtime get() = devTools.runtime
-
-    @Suppress("unused")
-    val emulation get() = devTools.emulation
-
-    @Suppress("unused")
-    val accessibility get() = devTools.accessibility
-
-    @Suppress("unused")
-    val domSnapshot get() = devTools.domSnapshot
-
-    @Suppress("unused")
-    val security get() = devTools.security
-
-    @Suppress("unused")
-    val console get() = devTools.console
+    private val remoteDevTools: RemoteDevTools = remoteDevToolsOrNull
+    override val isOpen: Boolean get() = remoteDevToolsOrNull.isOpen
 
     // ---------------------------------------------------------------------------
     // Private helpers — non-reflective CDP command dispatch
@@ -129,7 +79,7 @@ class DirectChromeProtocol(
         elementClass: Class<T>,
         returnProperty: String,
     ): List<T> {
-        val invocation = DevToolsInvocationHandler.createMethodInvocation(method, params)
+        val invocation = ChromeDevToolsImpl.createMethodInvocation(method, params)
         val typeArgs = arrayOf<Class<*>>(elementClass)
         return remoteDevTools.invoke(
             List::class.java, returnProperty, typeArgs, invocation
@@ -146,7 +96,7 @@ class DirectChromeProtocol(
         elementClass: Class<T>,
         returnProperty: String,
     ): List<List<T>> {
-        val invocation = DevToolsInvocationHandler.createMethodInvocation(method, params)
+        val invocation = ChromeDevToolsImpl.createMethodInvocation(method, params)
         val typeArgs = arrayOf<Class<*>>(List::class.java, elementClass)
         return remoteDevTools.invoke(
             List::class.java, returnProperty, typeArgs, invocation

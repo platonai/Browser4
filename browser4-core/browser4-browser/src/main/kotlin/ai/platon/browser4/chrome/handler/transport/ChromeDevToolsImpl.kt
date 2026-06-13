@@ -10,8 +10,6 @@ import ai.platon.pulsar.browser.impl.MethodInvocation
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.readable
 import ai.platon.pulsar.common.warnForClose
-import ai.platon.pulsar.deprecated.util.ProxyClasses
-import ai.platon.pulsar.deprecated.util.SuspendAwareHandler
 import com.codahale.metrics.Gauge
 import com.codahale.metrics.SharedMetricRegistries
 import com.fasterxml.jackson.databind.JsonNode
@@ -20,37 +18,16 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
 import java.io.IOException
-import java.lang.reflect.Method
 import java.time.Duration
 import java.time.Instant
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.reflect.KClass
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
-internal class CachedDevToolsInvocationHandlerProxies(impl: Any) : SuspendAwareHandler(impl) {
-    val commandHandler: DevToolsInvocationHandler = DevToolsInvocationHandler(impl)
-    val commands: MutableMap<Method, Any> = ConcurrentHashMap()
-
-    init {
-        // println("CommandHandler hashCode: " + commandHandler.hashCode())
-    }
-
-    // Typical proxy:
-    //   - jdk.proxy1.$Proxy24
-    // Typical methods:
-    //   - public abstract void com.github.kklisura.cdt.protocol.commands.Page.enable()
-    //   - public abstract com...page.Navigate com...Page.navigate(java.lang.String)
-    override fun invoke(proxy: Any, method: Method, args: Array<out Any>?): Any? {
-        return commands.computeIfAbsent(method) {
-            ProxyClasses.createProxy(method.returnType, commandHandler)
-        }
-    }
-}
-
-internal abstract class ChromeDevToolsImpl(
+internal class ChromeDevToolsImpl(
     private val browserTransport: Transport,
     private val pageTransport: Transport,
     private val config: DevToolsConfig
@@ -72,6 +49,25 @@ internal abstract class ChromeDevToolsImpl(
         init {
             gauges.forEach { (name, gauge) -> metrics.gauge("$metricsPrefix.$name") { gauge } }
         }
+
+        private val ID_SUPPLIER = AtomicLong(1L)
+
+        fun nextId() = ID_SUPPLIER.incrementAndGet()
+
+        /**
+         * Create a [MethodInvocation] from a method name and parameter map.
+         * This is the non-reflective variant used by [DirectChromeProtocol].
+         */
+        fun createMethodInvocation(method: String, params: Map<String, Any?>?): MethodInvocation {
+            val params0 = (params ?: emptyMap()).toMutableMap()
+            val methodId = params0[EventDispatcher.ID_PROPERTY]?.toString()?.toLongOrNull() ?: nextId()
+            params0[EventDispatcher.ID_PROPERTY] = methodId.toString()
+
+            val params1: Map<String, Any> = params0.entries
+                .filter { it.value != null }
+                .associate { it.key to it.value as Any }
+            return MethodInvocation(methodId, method, params1)
+        }
     }
 
     private val logger = LoggerFactory.getLogger(ChromeDevToolsImpl::class.java)
@@ -91,7 +87,7 @@ internal abstract class ChromeDevToolsImpl(
     override suspend operator fun <T : Any> invoke(
         method: String, params: Map<String, Any?>?, returnClass: KClass<T>, returnProperty: String?
     ): T? {
-        val invocation = DevToolsInvocationHandler.createMethodInvocation(method, params)
+        val invocation = createMethodInvocation(method, params)
 
         // Non-blocking
         val message = dispatcher.serialize(invocation.id, invocation.method, invocation.params, null)

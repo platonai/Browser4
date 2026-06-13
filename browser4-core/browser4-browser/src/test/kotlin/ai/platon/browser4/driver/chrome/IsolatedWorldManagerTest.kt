@@ -1,10 +1,9 @@
 package ai.platon.browser4.driver.chrome
 
 import ai.platon.browser4.chrome.IsolatedWorldManager
-import ai.platon.browser4.chrome.RemoteDevTools
-import ai.platon.browser4.chrome.handler.DirectChromeProtocol
 import ai.platon.cdt.kt.protocol.types.page.*
 import ai.platon.pulsar.browser.common.BrowserSettings
+import ai.platon.pulsar.browser.impl.BrowserProtocol
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -32,18 +31,14 @@ class IsolatedWorldManagerTest {
 
     @Test
     fun testCreateIsolatedWorldUsesResolvedMainFrameId() {
-        val devTools = mock<RemoteDevTools>()
-        val bp = DirectChromeProtocol(devTools)
-        val page = mock<ai.platon.cdt.kt.protocol.commands.Page>()
-        whenever(devTools.page).thenReturn(page)
-
+        val bp = mock<BrowserProtocol>()
         val settings = mock<BrowserSettings>()
         val mgr = IsolatedWorldManager(bp, settings)
 
         val mainFrame = createFrame("main")
-        wheneverBlocking { page.getFrameTree() }.thenReturn(FrameTree(mainFrame, childFrames = null))
+        wheneverBlocking { bp.mainFrame() }.thenReturn(mainFrame)
         wheneverBlocking {
-            page.createIsolatedWorld(
+            bp.createIsolatedWorld(
                 frameId = eq("main"),
                 worldName = eq(IsolatedWorldManager.RUNTIME_WORLD_NAME),
                 grantUniveralAccess = eq(true),
@@ -55,22 +50,22 @@ class IsolatedWorldManagerTest {
         assertEquals(101, mgr.getContextId("main"))
 
         runBlocking {
-            verify(page).createIsolatedWorld(any(), any(), any())
+            verify(bp).createIsolatedWorld(
+                frameId = eq("main"),
+                worldName = eq(IsolatedWorldManager.RUNTIME_WORLD_NAME),
+                grantUniveralAccess = eq(true),
+            )
         }
     }
 
     @Test
     fun testCreateIsolatedWorldRejectsMissingFrameWhenTreeAvailable() {
-        val devTools = mock<RemoteDevTools>()
-        val bp = DirectChromeProtocol(devTools)
-        val page = mock<ai.platon.cdt.kt.protocol.commands.Page>()
-        whenever(devTools.page).thenReturn(page)
-
+        val bp = mock<BrowserProtocol>()
         val settings = mock<BrowserSettings>()
         val mgr = IsolatedWorldManager(bp, settings)
 
         val mainFrame = createFrame("main")
-        wheneverBlocking { page.getFrameTree() }.thenReturn(FrameTree(mainFrame, childFrames = null))
+        wheneverBlocking { bp.mainFrame() }.thenReturn(mainFrame)
 
         assertThrows(IllegalStateException::class.java) {
             runBlocking { mgr.createIsolatedWorld("missing") }
