@@ -11,8 +11,6 @@
     If `copilot` is on PATH, it is invoked to analyse failures.
 #>
 
-$ErrorActionPreference = 'Stop'
-
 <#
 .PARAMETER Locale
     Two-letter locale code for URL selection (e.g. 'en', 'zh').
@@ -22,6 +20,8 @@ $ErrorActionPreference = 'Stop'
 param(
     [string]$Locale = ''
 )
+
+$ErrorActionPreference = 'Stop'
 
 # -------------------------------------------------------------------
 # Load shared test utilities
