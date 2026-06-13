@@ -271,11 +271,16 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
             "  - Prompts for confirmation before removing data directories unless --yes is passed."
                 .to_string(),
         );
+        lines.push(
+            "  - Pass --dry-run to preview what would be removed without making changes."
+                .to_string(),
+        );
         lines.push("  - Does not require a running server.".to_string());
         lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli uninstall".to_string());
         lines.push("  browser4-cli uninstall -y".to_string());
+        lines.push("  browser4-cli uninstall --dry-run".to_string());
     }
 
     if cmd.name == "list" {

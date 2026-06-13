@@ -289,12 +289,21 @@ pub fn all_commands() -> Vec<CommandDef> {
                     is_bool: true,
                     short: Some("y"),
                 },
+                OptionDef {
+                    name: "dry-run",
+                    description: "Show what would be removed without actually removing anything",
+                    is_bool: true,
+                    short: None,
+                },
             ],
             tool_name_fn: |_| String::new(),
             tool_params_fn: |args| {
                 let mut params = json!({});
                 if let Some(yes) = get_bool(args, "yes") {
                     params["yes"] = json!(yes);
+                }
+                if let Some(dry) = get_bool(args, "dry-run") {
+                    params["dry_run"] = json!(dry);
                 }
                 params
             },

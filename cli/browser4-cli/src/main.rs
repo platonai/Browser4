@@ -2788,11 +2788,23 @@ fn format_uninstall_output(
     runtime_dir: &str,
     cache_dir_removed: bool,
     cache_dir: &str,
+    dry_run: bool,
 ) -> Vec<String> {
     let mut lines = Vec::new();
 
+    if dry_run {
+        lines.push("🔍 DRY RUN — no changes will be made.".to_string());
+        lines.push(String::new());
+    }
+
     // npm
-    if npm_removed {
+    if dry_run {
+        if npm_removed {
+            lines.push("🔍 Would remove browser4-cli from npm global packages.".to_string());
+        } else {
+            lines.push("ℹ  npm not found or browser4-cli not installed via npm.".to_string());
+        }
+    } else if npm_removed {
         lines.push("✅ Removed browser4-cli from npm global packages.".to_string());
     } else if let Some(err) = npm_error {
         lines.push(format!("⚠  npm uninstall failed: {err}"));
@@ -2801,7 +2813,13 @@ fn format_uninstall_output(
     }
 
     // cargo
-    if cargo_removed {
+    if dry_run {
+        if cargo_removed {
+            lines.push("🔍 Would remove browser4-cli from cargo installs.".to_string());
+        } else {
+            lines.push("ℹ  cargo not found or browser4-cli not installed via cargo.".to_string());
+        }
+    } else if cargo_removed {
         lines.push("✅ Removed browser4-cli from cargo installs.".to_string());
     } else if let Some(err) = cargo_error {
         lines.push(format!("⚠  cargo uninstall failed: {err}"));
@@ -2810,7 +2828,15 @@ fn format_uninstall_output(
     }
 
     // runtime data dir
-    if runtime_dir_removed {
+    if dry_run {
+        if runtime_dir_removed {
+            lines.push(format!("🔍 Would remove runtime data directory: {runtime_dir}"));
+        } else {
+            lines.push(format!(
+                "ℹ  Runtime data directory not present: {runtime_dir}"
+            ));
+        }
+    } else if runtime_dir_removed {
         lines.push(format!("✅ Removed runtime data directory: {runtime_dir}"));
     } else {
         lines.push(format!(
@@ -2819,7 +2845,15 @@ fn format_uninstall_output(
     }
 
     // cache dir
-    if cache_dir_removed {
+    if dry_run {
+        if cache_dir_removed {
+            lines.push(format!("🔍 Would remove runtime cache directory: {cache_dir}"));
+        } else {
+            lines.push(format!(
+                "ℹ  Runtime cache directory not present: {cache_dir}"
+            ));
+        }
+    } else if cache_dir_removed {
         lines.push(format!("✅ Removed runtime cache directory: {cache_dir}"));
     } else {
         lines.push(format!(
@@ -2908,6 +2942,16 @@ async fn handle_uninstall(tool_params: &Value) -> Result<(), String> {
     eprintln!("🧹 Uninstalling browser4-cli ...");
     eprintln!();
 
+    let dry_run = tool_params
+        .get("dry_run")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    if dry_run {
+        eprintln!("🔍 DRY RUN — no changes will be made.");
+        eprintln!();
+    }
+
     // Helper: run a subprocess with a wall-clock timeout.  Returns the
     // process output or a timeout/spawn error.
     fn run_with_timeout(
@@ -2937,7 +2981,17 @@ async fn handle_uninstall(tool_params: &Value) -> Result<(), String> {
     }
 
     // ── 1. npm global uninstall ──
-    let (npm_removed, npm_error) = {
+    let (npm_removed, npm_error) = if dry_run {
+        // Check whether npm would find the package, but don't remove anything.
+        let installed = Command::new("npm")
+            .args(["list", "-g", "browser4-cli", "--depth=0"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        (installed, None)
+    } else {
         let mut cmd = Command::new("npm");
         cmd.args(["uninstall", "-g", "browser4-cli"])
             .stdout(std::process::Stdio::piped())
@@ -2965,7 +3019,21 @@ async fn handle_uninstall(tool_params: &Value) -> Result<(), String> {
     };
 
     // ── 2. cargo uninstall ──
-    let (cargo_removed, cargo_error) = {
+    let (cargo_removed, cargo_error) = if dry_run {
+        // Check whether cargo would find the package, but don't remove anything.
+        let installed = Command::new("cargo")
+            .args(["install", "--list"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .map(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .any(|l| l.contains("browser4-cli"))
+            })
+            .unwrap_or(false);
+        (installed, None)
+    } else {
         let mut cmd = Command::new("cargo");
         cmd.args(["uninstall", "browser4-cli"])
             .stdout(std::process::Stdio::piped())
@@ -3007,7 +3075,9 @@ async fn handle_uninstall(tool_params: &Value) -> Result<(), String> {
         .unwrap_or(false);
 
     let (runtime_dir_removed, cache_dir_removed) = if has_data || has_cache {
-        let confirmed = if skip_confirm {
+        // In dry-run mode, skip the confirmation prompt — we're just
+        // previewing what would happen.
+        let confirmed = if dry_run || skip_confirm {
             true
         } else {
             eprintln!();
@@ -3029,17 +3099,21 @@ async fn handle_uninstall(tool_params: &Value) -> Result<(), String> {
         };
 
         if confirmed {
-            let removed_data = if has_data {
-                std::fs::remove_dir_all(&runtime_dir).is_ok()
+            if dry_run {
+                (has_data, has_cache)
             } else {
-                false
-            };
-            let removed_cache = if has_cache {
-                std::fs::remove_dir_all(&cache_dir).is_ok()
-            } else {
-                false
-            };
-            (removed_data, removed_cache)
+                let removed_data = if has_data {
+                    std::fs::remove_dir_all(&runtime_dir).is_ok()
+                } else {
+                    false
+                };
+                let removed_cache = if has_cache {
+                    std::fs::remove_dir_all(&cache_dir).is_ok()
+                } else {
+                    false
+                };
+                (removed_data, removed_cache)
+            }
         } else {
             eprintln!("Skipped directory removal.");
             (false, false)
@@ -3058,6 +3132,7 @@ async fn handle_uninstall(tool_params: &Value) -> Result<(), String> {
         &runtime_dir_str,
         cache_dir_removed,
         &cache_dir_str,
+        dry_run,
     );
     for line in &lines {
         cli_println!("{}", line);
@@ -3076,39 +3151,64 @@ async fn handle_uninstall(tool_params: &Value) -> Result<(), String> {
     json_field("runtime_dir", json!(&runtime_dir_str));
     json_field("cache_dir_removed", json!(cache_dir_removed));
     json_field("cache_dir", json!(&cache_dir_str));
+    json_field("dry_run", json!(dry_run));
 
     if !npm_removed && !cargo_removed && npm_error.is_none() && cargo_error.is_none() {
         cli_println!();
         cli_println!("ℹ  browser4-cli was not found in npm or cargo global installs.");
 
-        // Locate the running binary and attempt self-removal.
-        if let Ok(exe_path) = std::env::current_exe() {
-            cli_println!("   Running binary: {}", exe_path.display());
-
-            // Check whether the binary lives inside a Browser4 repository
-            // checkout (i.e. a local dev build that should not be auto-deleted).
-            let inside_repo = daemon::find_browser4_root()
-                .map(|root| exe_path.starts_with(&root))
-                .unwrap_or(false);
-
-            if inside_repo {
-                cli_println!(
-                    "   This is a development build inside a Browser4 repo — remove it from"
-                );
-                cli_println!("   your PATH or delete it manually after leaving the repo.");
+        if dry_run {
+            // Locate the running binary and report what would happen.
+            if let Ok(exe_path) = std::env::current_exe() {
+                cli_println!("   Running binary: {}", exe_path.display());
+                let inside_repo = daemon::find_browser4_root()
+                    .map(|root| exe_path.starts_with(&root))
+                    .unwrap_or(false);
+                if inside_repo {
+                    cli_println!(
+                        "   This is a development build inside a Browser4 repo — remove it from"
+                    );
+                    cli_println!("   your PATH or delete it manually after leaving the repo.");
+                } else {
+                    cli_println!("   🔍 Would attempt to remove the binary.");
+                }
             } else {
-                cli_println!("   Attempting to remove the binary...");
-                let removed = attempt_self_removal(&exe_path);
-                json_field("binary_removed", json!(removed));
-                json_field("binary_path", json!(exe_path.display().to_string()));
+                cli_println!("   Could not determine binary location. Remove it manually.");
             }
         } else {
-            cli_println!("   Could not determine binary location. Remove it manually.");
+            // Locate the running binary and attempt self-removal.
+            if let Ok(exe_path) = std::env::current_exe() {
+                cli_println!("   Running binary: {}", exe_path.display());
+
+                // Check whether the binary lives inside a Browser4 repository
+                // checkout (i.e. a local dev build that should not be auto-deleted).
+                let inside_repo = daemon::find_browser4_root()
+                    .map(|root| exe_path.starts_with(&root))
+                    .unwrap_or(false);
+
+                if inside_repo {
+                    cli_println!(
+                        "   This is a development build inside a Browser4 repo — remove it from"
+                    );
+                    cli_println!("   your PATH or delete it manually after leaving the repo.");
+                } else {
+                    cli_println!("   Attempting to remove the binary...");
+                    let removed = attempt_self_removal(&exe_path);
+                    json_field("binary_removed", json!(removed));
+                    json_field("binary_path", json!(exe_path.display().to_string()));
+                }
+            } else {
+                cli_println!("   Could not determine binary location. Remove it manually.");
+            }
         }
     }
 
     cli_println!();
-    cli_println!("✅ uninstall complete.");
+    if dry_run {
+        cli_println!("🔍 dry run complete (no changes made).");
+    } else {
+        cli_println!("✅ uninstall complete.");
+    }
     Ok(())
 }
 
