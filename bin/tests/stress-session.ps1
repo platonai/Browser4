@@ -117,7 +117,7 @@ function Invoke-Cli {
     }
 
     $label = "cli $desc"
-    Register-CliResult -Label $label -ExitCode $exitCode -OutputLines ($out.ToArray()) `
+    $null = Register-CliResult -Label $label -ExitCode $exitCode -OutputLines ($out.ToArray()) `
         -Elapsed $sw.Elapsed -ExpectedExitCode $(if ($timedOut) { -1 } else { 0 })
 
     if ($timedOut) {
