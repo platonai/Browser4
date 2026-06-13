@@ -3052,7 +3052,7 @@ fn launch_ready_timeout(_launch_spec: &ServerLaunchSpec) -> Duration {
     JAR_SERVER_READY_TIMEOUT
 }
 
-fn find_browser4_root() -> Option<PathBuf> {
+pub(crate) fn find_browser4_root() -> Option<PathBuf> {
     if let Some(invocation_dir) = browser4_root_search_start_dir_from_env() {
         if let Some(root) = find_browser4_root_from(&invocation_dir, false) {
             return Some(root);
@@ -3494,6 +3494,7 @@ async fn start_server(
     );
 
     command
+        .stdin(Stdio::null())
         .stdout(startup_log.stdout)
         .stderr(startup_log.stderr);
 

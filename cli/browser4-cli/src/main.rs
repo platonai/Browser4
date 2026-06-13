@@ -2830,6 +2830,78 @@ fn format_uninstall_output(
     lines
 }
 
+/// Attempt to remove the running browser4-cli binary from disk.
+///
+/// On Unix, the file can be unlinked while the process is running — the
+/// directory entry disappears immediately and the inode is freed when the
+/// process exits.  On Windows the running executable is locked, so we
+/// schedule a deferred deletion via a detached PowerShell script.
+fn attempt_self_removal(exe_path: &std::path::Path) -> bool {
+    let exe_str = exe_path.display().to_string();
+
+    #[cfg(windows)]
+    {
+        // Use a PowerShell one-liner spawned through cmd.exe with
+        // CREATE_NO_WINDOW so no console window flashes on screen.
+        // The script sleeps briefly to let this process exit, then
+        // deletes the binary and itself.
+        let ps_script = format!(
+            "Start-Sleep -Milliseconds 1500; \
+             Remove-Item -Force -LiteralPath '{}' -ErrorAction SilentlyContinue; \
+             Remove-Item -Force -LiteralPath $MyInvocation.MyCommand.Path -ErrorAction SilentlyContinue",
+            exe_str.replace('\'', "''")
+        );
+
+        let tmp_dir = std::env::temp_dir();
+        let script_path = tmp_dir.join(format!(
+            "browser4-cli-uninstall-{}.ps1",
+            std::process::id()
+        ));
+
+        if let Err(e) = std::fs::write(&script_path, &ps_script) {
+            cli_println!("  Warning: Could not write cleanup script: {e}");
+            return false;
+        }
+
+        match std::process::Command::new("powershell")
+            .args([
+                "-WindowStyle",
+                "Hidden",
+                "-NoProfile",
+                "-NonInteractive",
+                "-File",
+            ])
+            .arg(&script_path)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(_) => {
+                cli_println!("  Binary scheduled for removal after exit.");
+                true
+            }
+            Err(e) => {
+                cli_println!("  Warning: Could not schedule binary removal: {e}");
+                false
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        match std::fs::remove_file(exe_path) {
+            Ok(()) => {
+                cli_println!("  Binary removed.");
+                true
+            }
+            Err(e) => {
+                cli_println!("  Warning: Could not remove binary: {e}");
+                false
+            }
+        }
+    }
+}
+
 async fn handle_uninstall(tool_params: &Value) -> Result<(), String> {
     use std::process::Command;
 
@@ -3008,7 +3080,31 @@ async fn handle_uninstall(tool_params: &Value) -> Result<(), String> {
     if !npm_removed && !cargo_removed && npm_error.is_none() && cargo_error.is_none() {
         cli_println!();
         cli_println!("ℹ  browser4-cli was not found in npm or cargo global installs.");
-        cli_println!("   If installed by other means, remove the binary manually.");
+
+        // Locate the running binary and attempt self-removal.
+        if let Ok(exe_path) = std::env::current_exe() {
+            cli_println!("   Running binary: {}", exe_path.display());
+
+            // Check whether the binary lives inside a Browser4 repository
+            // checkout (i.e. a local dev build that should not be auto-deleted).
+            let inside_repo = daemon::find_browser4_root()
+                .map(|root| exe_path.starts_with(&root))
+                .unwrap_or(false);
+
+            if inside_repo {
+                cli_println!(
+                    "   This is a development build inside a Browser4 repo — remove it from"
+                );
+                cli_println!("   your PATH or delete it manually after leaving the repo.");
+            } else {
+                cli_println!("   Attempting to remove the binary...");
+                let removed = attempt_self_removal(&exe_path);
+                json_field("binary_removed", json!(removed));
+                json_field("binary_path", json!(exe_path.display().to_string()));
+            }
+        } else {
+            cli_println!("   Could not determine binary location. Remove it manually.");
+        }
     }
 
     cli_println!();
