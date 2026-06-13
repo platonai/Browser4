@@ -2322,6 +2322,12 @@ impl RuntimeInstallLock {
     /// Attempt to acquire the install lock, blocking up to `timeout` seconds.
     fn acquire(timeout: Duration) -> Result<Self, String> {
         let lock_dir = runtime_versions_dir().join(INSTALL_LOCK_DIR_NAME);
+        // Ensure the parent directory exists before we attempt the atomic
+        // mkdir — create_dir only creates the leaf and fails if intermediate
+        // directories are missing (e.g. on a fresh install where the runtime
+        // versions directory hasn't been created yet).
+        fs::create_dir_all(runtime_versions_dir())
+            .map_err(|e| format!("Failed to create runtime versions directory: {e}"))?;
         let deadline = Instant::now() + timeout;
 
         loop {
