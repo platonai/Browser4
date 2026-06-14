@@ -21,6 +21,15 @@
     Skips the publish-status precheck. By default the script verifies that the current version
     is the latest GitHub release and is available on Maven Central before bumping.
 
+.PARAMETER TryRun
+    Runs the script in try-run mode: calculates and displays what the new version would be,
+    shows which files would be modified, but does not actually change anything or commit.
+    Useful for verifying the bump result before executing it for real.
+
+.EXAMPLE
+    .\bump-version.ps1 -Part patch -TryRun
+    Shows what would happen when bumping the patch version without making any changes.
+
 .EXAMPLE
     .\bump-version.ps1 -Part patch
     Bumps the patch version (e.g., 1.2.3 -> 1.2.4). Runs the publish-status precheck first.
@@ -44,7 +53,10 @@ param (
     [string]$Part,
 
     [Parameter(HelpMessage = "Skip the publish-status precheck (GitHub release + Maven Central)")]
-    [switch]$SkipPrecheck
+    [switch]$SkipPrecheck,
+
+    [Parameter(HelpMessage = "Run in try-run mode: show what would happen without making changes")]
+    [switch]$TryRun
 )
 
 # Find the project root directory containing the VERSION file
@@ -140,6 +152,30 @@ if ($NEXT_SNAPSHOT_VERSION -notmatch "^\d+\.\d+\.\d+-SNAPSHOT$") {
 
 Write-Host "Current version: $SNAPSHOT_VERSION"
 Write-Host "New version: $NEXT_SNAPSHOT_VERSION"
+
+# ---------------------------------------------------------------
+# Try-Run mode: print what would happen and exit without changes
+# ---------------------------------------------------------------
+if ($TryRun) {
+    Write-Host ""
+    Write-Host "========== TRY-RUN MODE ==========" -ForegroundColor Cyan
+    Write-Host "No changes will be made." -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "The following actions would be performed:"
+    Write-Host "  1. Update VERSION file: '$SNAPSHOT_VERSION' -> '$NEXT_SNAPSHOT_VERSION'"
+    Write-Host "  2. Run Maven versions:set -DnewVersion=$NEXT_SNAPSHOT_VERSION on all modules"
+    Write-Host "  3. Update root pom.xml <tag>: 'v$VERSION' -> 'v$NEXT_VERSION'"
+    Write-Host "  4. git add ."
+    Write-Host "  5. git commit -m 'Bump version to v$NEXT_VERSION'"
+    Write-Host "  6. git push"
+    Write-Host ""
+    Write-Host "Files that would be modified:"
+    Write-Host "  - VERSION"
+    Write-Host "  - pom.xml (root: <tag> update)"
+    Write-Host "  - pom.xml (all modules: <version> update via Maven)"
+    Write-Host "==================================" -ForegroundColor Cyan
+    exit 0
+}
 
 $isWindowsHost = $PSVersionTable.PSEdition -eq 'Desktop' -or $IsWindows
 
