@@ -4,19 +4,23 @@
     Checks if the current project version and browser4-cli version have been fully published.
 
 .DESCRIPTION
-    Verifies that the current version (tagged as vX.Y.Z) is the latest release
-    on GitHub. When this condition is satisfied, the version is considered
-    "published" and safe to bump.
+    Compares the local version against the latest GitHub release and determines
+    whether it is ready to publish:
 
-    Also checks browser4-cli release status by:
-      - Reading the CLI version from cli/VERSION-CLI
-      - Checking for the latest vX.Y.Z-cli tag on GitHub
-      - Checking the published version on npm (browser4-cli package)
+      - [OK] Local version IS the latest release — already published.
+      - [GO] Local version is the next patch/minor/major — ready to publish.
+      - [XX] Local version is BEHIND the latest release — something is wrong.
+
+    Also shows browser4-cli versions for reference (no judgment):
+      - Reads the CLI version from cli/VERSION-CLI
+      - Shows the latest vX.Y.Z-cli tag on GitHub (if any)
+      - Shows the published version on npm (browser4-cli package)
 
     Provides detailed information about the latest release, including publish
     date, author, release URL, and asset list.
 
-    Exits with code 0 if the main project version is published, non-zero otherwise.
+    Exits with code 0 if the main project version is published or is the natural
+    next version in sequence, non-zero otherwise.
     The CLI status is informational only and does not affect the exit code.
 
 .PARAMETER Version
@@ -216,6 +220,47 @@ function Get-GitHubLatestRelease {
 }
 
 # ---------------------------------------------------------------
+# Helper: Determine version relationship (same / next-patch / next-minor / behind / ahead)
+# ---------------------------------------------------------------
+function Test-NextVersion {
+    param(
+        [string]$LatestVersion,
+        [string]$LocalVersion
+    )
+
+    # Returns: 'same', 'next-patch', 'next-minor', 'next-major', 'ahead', 'behind', 'unknown'
+
+    try {
+        $latest = [version](($LatestVersion -replace '^v', '') -replace '^(\d+\.\d+\.\d+).*', '$1')
+        $local  = [version](($LocalVersion  -replace '^v', '') -replace '^(\d+\.\d+\.\d+).*', '$1')
+
+        if ($local -eq $latest) { return 'same' }
+        if ($local -lt $latest) { return 'behind' }
+
+        # Local is ahead — is it the natural next step?
+        if ($local.Major -eq $latest.Major -and
+            $local.Minor -eq $latest.Minor -and
+            $local.Build -eq $latest.Build + 1) {
+            return 'next-patch'
+        }
+        if ($local.Major -eq $latest.Major -and
+            $local.Minor -eq $latest.Minor + 1 -and
+            $local.Build -eq 0) {
+            return 'next-minor'
+        }
+        if ($local.Major -eq $latest.Major + 1 -and
+            $local.Minor -eq 0 -and
+            $local.Build -eq 0) {
+            return 'next-major'
+        }
+
+        return 'ahead'
+    } catch {
+        return 'unknown'
+    }
+}
+
+# ---------------------------------------------------------------
 # Check 1: Main project release status
 # ---------------------------------------------------------------
 Write-Host "────────────────────────────────────────────────" -ForegroundColor Yellow
@@ -288,55 +333,79 @@ if ($null -ne $latestReleaseInfo.Tag) {
     }
 
     Write-Host ""
-    Write-Host "  Current tag  : v$Version"
-    Write-Host "  Latest tag   : $($latestReleaseInfo.Tag)"
+    Write-Host "  Local version : v$Version"
+    Write-Host "  Latest release: $($latestReleaseInfo.Tag)"
 
-    if ($latestReleaseInfo.Tag -eq "v$Version") {
-        $isLatestRelease = $true
-        Write-Host "  [OK] Current version IS the latest GitHub release." -ForegroundColor Green
-    } else {
-        Write-Host "  [XX] Current version is NOT the latest release." -ForegroundColor Red
+    $versionStatus = Test-NextVersion -LatestVersion $latestReleaseInfo.Tag -LocalVersion "v$Version"
 
-        # Show how far behind
-        try {
-            $currentTag = "v$Version"
-            $latestTag = $latestReleaseInfo.Tag
-            # Count releases between current and latest using gh
-            $allTags = git ls-remote --tags --sort=-version:refname origin 2>$null `
-                | ForEach-Object { if ($_ -match 'refs/tags/(v\d+\.\d+\.\d+)$') { $matches[1] } } `
-                | Where-Object { $_ }
+    switch ($versionStatus) {
+        'same' {
+            $isLatestRelease = $true
+            Write-Host "  [OK] Local version IS the latest GitHub release (already published)." -ForegroundColor Green
+        }
+        'next-patch' {
+            $isLatestRelease = $true
+            Write-Host "  [GO] Local version is the next PATCH release — ready to publish!" -ForegroundColor Green
+        }
+        'next-minor' {
+            $isLatestRelease = $true
+            Write-Host "  [GO] Local version is the next MINOR release — ready to publish!" -ForegroundColor Green
+        }
+        'next-major' {
+            $isLatestRelease = $true
+            Write-Host "  [GO] Local version is the next MAJOR release — ready to publish!" -ForegroundColor Green
+        }
+        'behind' {
+            $isLatestRelease = $false
+            Write-Host "  [XX] Local version is BEHIND the latest release!" -ForegroundColor Red
 
-            if ($allTags) {
-                $currentIndex = [array]::IndexOf($allTags, $currentTag)
-                $latestIndex  = [array]::IndexOf($allTags, $latestTag)
+            # Show how far behind
+            try {
+                $currentTag = "v$Version"
+                $latestTag = $latestReleaseInfo.Tag
+                $allTags = git ls-remote --tags --sort=-version:refname origin 2>$null `
+                    | ForEach-Object { if ($_ -match 'refs/tags/(v\d+\.\d+\.\d+)$') { $matches[1] } } `
+                    | Where-Object { $_ }
 
-                if ($currentIndex -ge 0 -and $latestIndex -ge 0) {
-                    $behind = $latestIndex - $currentIndex
-                    if ($behind -lt 0) { $behind = $currentIndex - $latestIndex }
-                    if ($behind -gt 0) {
-                        Write-Host "  Releases behind: $behind release(s)" -ForegroundColor Yellow
+                if ($allTags) {
+                    $currentIndex = [array]::IndexOf($allTags, $currentTag)
+                    $latestIndex  = [array]::IndexOf($allTags, $latestTag)
 
-                        # Show recent releases between them
-                        if ($behind -le 10) {
-                            Write-Host "  Recent releases:"
-                            $startIdx = [Math]::Min($currentIndex, $latestIndex)
-                            $endIdx   = [Math]::Max($currentIndex, $latestIndex)
-                            for ($i = $startIdx; $i -le $endIdx; $i++) {
-                                $marker = if ($allTags[$i] -eq $currentTag) { " <= current" } else { "" }
-                                Write-Host "    - $($allTags[$i])$marker"
-                            }
-                        } else {
-                            Write-Host "  Recent releases (last 5):"
-                            for ($i = 0; $i -lt [Math]::Min(5, $allTags.Count); $i++) {
-                                $marker = if ($allTags[$i] -eq $currentTag) { " <= current" } else { "" }
-                                Write-Host "    - $($allTags[$i])$marker"
+                    if ($currentIndex -ge 0 -and $latestIndex -ge 0) {
+                        $behind = $latestIndex - $currentIndex
+                        if ($behind -lt 0) { $behind = $currentIndex - $latestIndex }
+                        if ($behind -gt 0) {
+                            Write-Host "  Releases behind: $behind release(s)" -ForegroundColor Yellow
+
+                            if ($behind -le 10) {
+                                Write-Host "  Recent releases:"
+                                $startIdx = [Math]::Min($currentIndex, $latestIndex)
+                                $endIdx   = [Math]::Max($currentIndex, $latestIndex)
+                                for ($i = $startIdx; $i -le $endIdx; $i++) {
+                                    $marker = if ($allTags[$i] -eq $currentTag) { " <= current" } else { "" }
+                                    Write-Host "    - $($allTags[$i])$marker"
+                                }
+                            } else {
+                                Write-Host "  Recent releases (last 5):"
+                                for ($i = 0; $i -lt [Math]::Min(5, $allTags.Count); $i++) {
+                                    $marker = if ($allTags[$i] -eq $currentTag) { " <= current" } else { "" }
+                                    Write-Host "    - $($allTags[$i])$marker"
+                                }
                             }
                         }
                     }
                 }
+            } catch {
+                # Non-critical: just skip the behind count
             }
-        } catch {
-            # Non-critical: just skip the behind count
+        }
+        'ahead' {
+            $isLatestRelease = $true
+            Write-Host "  [!!] Local version is AHEAD of latest release by more than one step." -ForegroundColor Yellow
+        }
+        default {
+            $isLatestRelease = $false
+            Write-Host "  [!!] Could not determine version relationship." -ForegroundColor Yellow
         }
     }
 } else {
@@ -374,87 +443,84 @@ if (-not $SkipCli) {
     }
 
     if (-not $SkipCli) {
-        $cliIsPublished = $false
-        $cliNpmPublished = $false
+        $cliLatestRemoteTag = $null
         $npmPublishedVersion = $null
 
-        # ── 2a: Check GitHub release for CLI ──
-        Write-Host "  ── GitHub Release (v$CliVersion-cli) ──"
-
+        # ── 2a: Fetch latest remote *-cli tag (informational only) ──
         $cliReleaseInfo = Get-GitHubLatestRelease -GitHubRepo $githubRepo -ReleaseTagPattern "*-cli"
 
         if ($null -ne $cliReleaseInfo.Tag) {
-            Write-Host "  Latest CLI tag  : $($cliReleaseInfo.Tag)"
-
-            if ($cliReleaseInfo.PublishedAt) {
-                Write-Host "  Published        : $($cliReleaseInfo.PublishedAt)"
-            }
-
-            if ($cliReleaseInfo.Author) {
-                Write-Host "  Author           : @$($cliReleaseInfo.Author)"
-            }
-
-            if ($cliReleaseInfo.HtmlUrl) {
-                Write-Host "  URL              : $($cliReleaseInfo.HtmlUrl)"
-            }
-
-            if ($cliReleaseInfo.IsPrerelease -or $cliReleaseInfo.IsDraft) {
-                $cliFlags = @()
-                if ($cliReleaseInfo.IsPrerelease) { $cliFlags += "PRE-RELEASE" }
-                if ($cliReleaseInfo.IsDraft)     { $cliFlags += "DRAFT" }
-                Write-Host "  Flags            : $($cliFlags -join ', ')" -ForegroundColor Yellow
-            }
-
-            Write-Host "  Assets           : $($cliReleaseInfo.AssetCount)"
-            if ($cliReleaseInfo.AssetCount -gt 0) {
-                foreach ($asset in $cliReleaseInfo.AssetNames) {
-                    Write-Host "                     - $asset"
-                }
-            }
-
-            if ($cliReleaseInfo.Tag -eq "v${CliVersion}-cli") {
-                $cliIsPublished = $true
-                Write-Host "  [OK] CLI version is on GitHub." -ForegroundColor Green
-            } else {
-                Write-Host "  Local CLI        : v${CliVersion}-cli"
-                Write-Host "  [XX] CLI v$CliVersion is NOT on GitHub." -ForegroundColor Red
-            }
-        } else {
-            Write-Host "  [XX] No CLI releases found on GitHub." -ForegroundColor Red
+            $cliLatestRemoteTag = $cliReleaseInfo.Tag
         }
 
-        # ── 2b: Check npm registry ──
-        Write-Host ""
-        Write-Host "  ── npm Registry (browser4-cli) ──"
-
+        # ── 2b: Fetch npm registry version (informational only) ──
         try {
             $npmRaw = npm view "browser4-cli" version 2>$null
             if ($npmRaw) {
                 $npmPublishedVersion = ($npmRaw -split '\s+')[0].Trim()
             }
         } catch {
-            # npm view failed
+            # npm view failed — non-critical
         }
 
+        # ── 2c: GitHub *-cli tag (temporary — for reference only) ──
+        Write-Host "  ── GitHub *-cli tag (temporary / reference only) ──"
+        Write-Host ""
+        Write-Host "  Local            : v${CliVersion}-cli"
+
+        if ($cliLatestRemoteTag) {
+            Write-Host "  Latest GitHub    : $cliLatestRemoteTag"
+            if ($cliReleaseInfo.PublishedAt) {
+                Write-Host "  GitHub published : $($cliReleaseInfo.PublishedAt)"
+            }
+            if ($cliReleaseInfo.Author) {
+                Write-Host "  GitHub author    : @$($cliReleaseInfo.Author)"
+            }
+            if ($cliReleaseInfo.IsPrerelease -or $cliReleaseInfo.IsDraft) {
+                $cliFlags = @()
+                if ($cliReleaseInfo.IsPrerelease) { $cliFlags += "PRE-RELEASE" }
+                if ($cliReleaseInfo.IsDraft)     { $cliFlags += "DRAFT" }
+                Write-Host "  GitHub flags     : $($cliFlags -join ', ')" -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "  Latest GitHub    : (none found)"
+        }
+
+        Write-Host ""
+        Write-Host "  (GitHub *-cli tags are temporary — shown for reference only.)" -ForegroundColor DarkGray
+
+        # ── 2d: npm registry (real release — compare properly) ──
+        Write-Host ""
+        Write-Host "  ── npm Registry (browser4-cli) ──"
+
         if ($npmPublishedVersion) {
-            Write-Host "  npm version      : $npmPublishedVersion"
+            Write-Host ""
             Write-Host "  Local version    : $CliVersion"
+            Write-Host "  npm version      : $npmPublishedVersion"
 
-            if ($npmPublishedVersion -eq $CliVersion) {
-                $cliNpmPublished = $true
-                Write-Host "  [OK] CLI version is published on npm." -ForegroundColor Green
-            } else {
-                try {
-                    $npmVer = [version]($npmPublishedVersion -replace '^(\d+\.\d+\.\d+).*', '$1')
-                    $localVer = [version]($CliVersion -replace '^(\d+\.\d+\.\d+).*', '$1')
+            $cliNpmStatus = Test-NextVersion -LatestVersion $npmPublishedVersion -LocalVersion $CliVersion
 
-                    if ($localVer -lt $npmVer) {
-                        Write-Host "  [XX] Local CLI version is BEHIND npm ($npmPublishedVersion)." -ForegroundColor Red
-                    } elseif ($localVer -gt $npmVer) {
-                        Write-Host "  [!!] Local CLI version is AHEAD of npm — not yet published." -ForegroundColor Yellow
-                    }
-                } catch {
-                    Write-Host "  [!!] Versions differ: local=$CliVersion, npm=$npmPublishedVersion" -ForegroundColor Yellow
+            switch ($cliNpmStatus) {
+                'same' {
+                    Write-Host "  [OK] CLI version is published on npm." -ForegroundColor Green
+                }
+                'next-patch' {
+                    Write-Host "  [GO] CLI is the next PATCH — ready to publish to npm." -ForegroundColor Green
+                }
+                'next-minor' {
+                    Write-Host "  [GO] CLI is the next MINOR — ready to publish to npm." -ForegroundColor Green
+                }
+                'next-major' {
+                    Write-Host "  [GO] CLI is the next MAJOR — ready to publish to npm." -ForegroundColor Green
+                }
+                'behind' {
+                    Write-Host "  [XX] Local CLI is BEHIND npm ($npmPublishedVersion)." -ForegroundColor Red
+                }
+                'ahead' {
+                    Write-Host "  [!!] Local CLI is AHEAD of npm by more than one step." -ForegroundColor Yellow
+                }
+                default {
+                    Write-Host "  [!!] Could not determine version relationship." -ForegroundColor Yellow
                 }
             }
         } else {
@@ -473,27 +539,46 @@ Write-Host "══════════════════════�
 Write-Host ""
 
 Write-Host "  ── Browser4 (main) ──"
-Write-Host "  Version          : v$Version"
-Write-Host "  GitHub latest    : $($(if ($isLatestRelease) { '[OK] YES' } else { '[XX] NO' }))"
-Write-Host "  Published        : $($(if ($isLatestRelease) { '[OK] YES' } else { '[XX] NO' }))"
+Write-Host "  Local version    : v$Version"
+Write-Host "  Latest release   : $($latestReleaseInfo.Tag)"
+Write-Host "  Status           : $(
+    switch ($versionStatus) {
+        'same'        { '[OK] Already published' }
+        'next-patch'  { '[GO] Next patch — can publish' }
+        'next-minor'  { '[GO] Next minor — can publish' }
+        'next-major'  { '[GO] Next major — can publish' }
+        'behind'      { '[XX] BEHIND latest release' }
+        'ahead'       { '[!!] Ahead (not next in sequence)' }
+        default       { '[??] Unknown' }
+    }
+)"
 Write-Host ""
 
 if (-not $SkipCli -and $CliVersion) {
     Write-Host "  ── browser4-cli ──"
-    Write-Host "  Version          : $CliVersion"
-    Write-Host "  GitHub published : $($(if ($cliIsPublished) { '[OK] YES' } else { '[XX] NO' }))"
+    Write-Host "  Local             : v${CliVersion}-cli"
+    Write-Host "  GitHub *-cli tag  : $(if ($cliLatestRemoteTag) { "$cliLatestRemoteTag (temporary)" } else { '(none)' })"
+    Write-Host "  npm registry      : $(if ($npmPublishedVersion) { $npmPublishedVersion } else { '(not found)' })"
     if ($npmPublishedVersion) {
-        Write-Host "  npm published    : $($(if ($cliNpmPublished) { '[OK] YES' } else { '[XX] NO' }))"
-    } else {
-        Write-Host "  npm published    : [!!] NOT FOUND"
+        Write-Host "  npm status        : $(
+            switch ($cliNpmStatus) {
+                'same'        { '[OK] Published' }
+                'next-patch'  { '[GO] Next patch — can publish' }
+                'next-minor'  { '[GO] Next minor — can publish' }
+                'next-major'  { '[GO] Next major — can publish' }
+                'behind'      { '[XX] BEHIND npm' }
+                'ahead'       { '[!!] Ahead (not next in sequence)' }
+                default       { '[??] Unknown' }
+            }
+        )"
     }
     Write-Host ""
 }
 
 if ($isLatestRelease) {
-    Write-Host "Main version v$Version is the latest GitHub release -- safe to bump." -ForegroundColor Green
+    Write-Host "Version v$Version is ready (published or next in sequence)." -ForegroundColor Green
     exit 0
 } else {
-    Write-Host "Main version v$Version is NOT the latest GitHub release." -ForegroundColor Red
+    Write-Host "Version v$Version is BEHIND the latest release — not safe to bump." -ForegroundColor Red
     exit 1
 }
