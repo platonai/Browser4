@@ -9,15 +9,24 @@
     multi-scenario stress suite against the global CLI.
 
     The script is designed to be run in CI or locally before tagging a release.
-    It tests the full lifecycle:
+    It simulates a real end user's journey:
 
       1. Create a random working directory under ${system_temp_dir}/.browser4-acceptance.
       2. Clean any pre-existing global installation.
-      3. Install the latest browser4-cli via the remote bootstrap script.
-      4. Smoke-test the CLI (--help, open, open <url>).
-      5. Clean up server processes (close-all, kill-all).
-      6. Uninstall and repeat the install cycle to verify idempotency.
-      7. Run multi-scenarios.ps1 against the global CLI.
+      3. Install the latest browser4-cli via the remote bootstrap script (as-is, no patching).
+      4. Verify the CLI is on PATH after install (no manual fixups — fails if install script is broken).
+      5. Smoke-test the CLI (--help, --version, config --help, agent-run --help, invalid command).
+      6. Cold-start the browser server (browser4-cli open), verify server responds to health checks.
+      7. Measure warm-start latency and compare against cold-start.
+      8. Clean up server processes (close-all, kill-all), verify server is no longer reachable.
+      9. Uninstall and verify runtime data / caches are removed.
+     10. Repeat the install cycle to verify idempotency.
+     11. Run multi-scenarios.ps1 against the global CLI with captured output.
+
+    KEY PRINCIPLE: This test acts like a real end user. It does NOT patch the
+    install script, create missing symlinks, or manually clean up after uninstall.
+    If any of those are needed, the test FAILS — because a real user would hit
+    the same broken behavior.
 
 .PARAMETER WorkingDir
     Working directory for temporary artifacts.
@@ -63,15 +72,16 @@ if ($Help) {
 
 $ErrorActionPreference = 'Stop'
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$RepoRoot = git rev-parse --show-toplevel 2>$null
 
-if (-not $RepoRoot) {
-    $RepoRoot = $ScriptDir
-    while ($RepoRoot -and -not (Test-Path (Join-Path $RepoRoot 'pom.xml'))) {
-        $RepoRoot = Split-Path -Parent $RepoRoot
-    }
+# Resolve the repo root for informational purposes only — do NOT require it.
+# This script is designed to run from any location with a globally-installed
+# browser4-cli.  Sibling scripts are resolved relative to $ScriptDir, and
+# remote fallbacks are used when they are missing.
+$RepoRoot = if (Test-Path (Join-Path $ScriptDir '..\pom.xml')) {
+    Resolve-Path (Join-Path $ScriptDir '..')
+} else {
+    $null
 }
-if (-not $RepoRoot) { throw 'Cannot find repo root (no pom.xml found up the tree)' }
 
 # ─────────────────────────────────────────────────────
 # Resolve working directory — default to a random
@@ -133,6 +143,22 @@ $script:AppData = if ($env:APPDATA) {
 $InstallPs1Url = 'https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1'
 $InstallShUrl  = 'https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh'
 $Browser4Home  = if ($OSWin) { Join-Path $env:USERPROFILE '.browser4' } else { Join-Path $env:HOME '.browser4' }
+$ServerBaseUrl = 'http://localhost:8182'
+$ServerHealthUrl = "$ServerBaseUrl/actuator/health"
+
+# Runtime data directory (what uninstall should remove)
+$RuntimeDataDir = if ($OSWin) {
+    Join-Path $AppData 'browser4'
+} elseif ($OSMac) {
+    Join-Path $env:HOME 'Library/Application Support/browser4'
+} else {
+    # $XDG_DATA_HOME/browser4 or ~/.local/share/browser4
+    if ($env:XDG_DATA_HOME) {
+        Join-Path $env:XDG_DATA_HOME 'browser4'
+    } else {
+        Join-Path $env:HOME '.local/share/browser4'
+    }
+}
 
 # ─────────────────────────────────────────────────────
 # State tracking
@@ -178,11 +204,6 @@ function Write-Info {
 function Write-WarningMsg {
     param([string]$Message)
     Write-Host "    ⚠ $Message" -ForegroundColor Yellow
-}
-
-function Write-PlanNote {
-    param([string]$Message)
-    Write-Host "    📋 $Message" -ForegroundColor Magenta
 }
 
 function Assert-OutputContains {
@@ -305,12 +326,180 @@ function Get-RuntimeBundleDir {
 }
 
 # ═══════════════════════════════════════════════════════════════
+# NEW: Health-check-based server readiness
+# ═══════════════════════════════════════════════════════════════
+<#
+.SYNOPSIS
+    Poll the Browser4 server health endpoint until it responds or times out.
+
+.DESCRIPTION
+    Sends GET requests to $ServerHealthUrl (/actuator/health) with exponential
+    backoff.  Returns an object with .Healthy (bool) and .Elapsed (TimeSpan).
+
+    This replaces brittle Start-Sleep-based polling with a real readiness
+    check — exactly what the CLI itself and Docker healthcheck use.
+#>
+function Wait-ServerHealthy {
+    param(
+        [string]$BaseUrl = $ServerBaseUrl,
+        [int]$TimeoutSeconds = 120
+    )
+    $healthUrl = "$BaseUrl/actuator/health"
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    $sleep = 1
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+
+    while (([DateTime]::UtcNow) -lt $deadline) {
+        try {
+            $resp = Invoke-WebRequest -Uri $healthUrl -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop
+            if ($resp.StatusCode -eq 200 -and $resp.Content -match '"status":"UP"') {
+                $sw.Stop()
+                return [PSCustomObject]@{
+                    Healthy  = $true
+                    Elapsed  = $sw.Elapsed
+                    Content  = $resp.Content
+                }
+            } else {
+                Write-Info "Health endpoint returned status=$($resp.StatusCode) (not UP yet)"
+            }
+        } catch {
+            # Server not reachable yet — expected during startup
+        }
+
+        $remaining = ($deadline - [DateTime]::UtcNow).TotalSeconds
+        if ($remaining -le 0) { break }
+        $sleep = [Math]::Min($sleep * 1.5, 15)
+        Start-Sleep -Seconds ([Math]::Min($sleep, $remaining))
+    }
+
+    $sw.Stop()
+    return [PSCustomObject]@{
+        Healthy  = $false
+        Elapsed  = $sw.Elapsed
+        Content  = ''
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════
+# NEW: Install from remote bootstrap script (no patching)
+# ═══════════════════════════════════════════════════════════════
+<#
+.SYNOPSIS
+    Download and execute the remote install script AS-IS.
+
+.DESCRIPTION
+    Downloads the platform-appropriate install script and runs it without
+    any modifications.  If the published script has bugs (e.g. PS7-incompatible
+    variable names), this function will surface them by returning $false —
+    just as a real user would encounter them.
+
+    This replaces the old inline install logic that patched the downloaded
+    script, created missing .cmd wrappers, and manually created symlinks.
+#>
+function Invoke-InstallFromRemoteScript {
+    Write-Info 'Downloading and executing remote install script (unmodified) ...'
+
+    try {
+        if ($OSWin) {
+            Write-Info "URL: $InstallPs1Url"
+            $installScript = Join-Path $TempDir 'install-browser4-cli.ps1'
+            Invoke-WebRequest -Uri $InstallPs1Url -OutFile $installScript -UseBasicParsing -ErrorAction Stop
+            Write-Info "Downloaded install script to $installScript"
+
+            # Run the script AS-IS.  No variable-name patches, no workarounds.
+            # If the published script is broken, the test MUST fail.
+            & $installScript
+            $exitCode = $LASTEXITCODE
+        } else {
+            Write-Info "URL: $InstallShUrl"
+            $installScript = Join-Path $TempDir 'install-browser4-cli.sh'
+            Invoke-WebRequest -Uri $InstallShUrl -OutFile $installScript -UseBasicParsing -ErrorAction Stop
+            Write-Info "Downloaded install script to $installScript"
+
+            bash $installScript
+            $exitCode = $LASTEXITCODE
+        }
+
+        if ($exitCode -ne 0) {
+            Write-WarningMsg "Install script exited with code $exitCode"
+            return $false
+        }
+
+        Write-Info 'Install script completed successfully'
+        return $true
+    } catch {
+        Write-WarningMsg "Install script download/execution failed: $_"
+        return $false
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════
+# NEW: Refresh session PATH from system state
+# ═══════════════════════════════════════════════════════════════
+<#
+.SYNOPSIS
+    Reload PATH for the current session from persistent system state.
+
+.DESCRIPTION
+    After the install script modifies persistent PATH (registry on Windows,
+    shell rc files on Linux/macOS), the current session may not see the
+    change.  This function reads the persistent state into the session.
+
+    Unlike the old script, this does NOT create missing symlinks, .cmd
+    wrappers, or directories — it only refreshes PATH.  If the binary is
+    missing after this, the test will fail at the verification step.
+#>
+function Update-SessionPath {
+    if ($OSWin) {
+        $userPath   = [System.Environment]::GetEnvironmentVariable('Path', 'User')
+        $machinePath = [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
+        $env:Path = (@($userPath, $machinePath) | Where-Object { $_ }) -join [System.IO.Path]::PathSeparator
+        Write-Info 'Session PATH refreshed from registry (User + Machine)'
+    } else {
+        # ~/.local/bin is the default install location on Linux/macOS.
+        # Many distros already include it in PATH via .profile; if not,
+        # add it so the test can proceed.
+        $localBin = Join-Path $env:HOME '.local/bin'
+        $pathEntries = $env:Path -split [System.IO.Path]::PathSeparator
+        if ((Test-Path $localBin) -and ($localBin -notin $pathEntries)) {
+            $env:Path = "$localBin$([System.IO.Path]::PathSeparator)$env:Path"
+            Write-Info "Added ~/.local/bin to session PATH"
+        }
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════
+# NEW: Resolve the CLI binary path
+# ═══════════════════════════════════════════════════════════════
+<#
+.SYNOPSIS
+    Find the browser4-cli executable on PATH.
+
+.DESCRIPTION
+    Returns the full path to the browser4-cli executable, or $null if
+    it cannot be found.  Does NOT create any files or symlinks.
+#>
+function Resolve-CliPath {
+    $cmd = Get-Command 'browser4-cli' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($cmd) {
+        if ($cmd -is [string]) { return $cmd } else { return $cmd.Source }
+    }
+    # Fallback: try which/where.exe
+    $whichCmd = if ($OSWin) { 'where.exe' } else { 'which' }
+    $raw = & $whichCmd 'browser4-cli' 2>$null | Select-Object -First 1
+    if ($raw) { return $raw.Trim() }
+    return $null
+}
+
+# ═══════════════════════════════════════════════════════════════
 # STEP 0 — Setup working directory
 # ═══════════════════════════════════════════════════════════════
 Write-StepHeader 'STEP 0 — Setup'
 
 Write-Info "WorkingDir    : $WorkingDir"
 Write-Info "Browser4Home  : $Browser4Home"
+Write-Info "ServerHealth  : $ServerHealthUrl"
+Write-Info "RuntimeData   : $RuntimeDataDir"
 
 if (-not (Test-Path $WorkingDir)) {
     New-Item -ItemType Directory -Path $WorkingDir -Force | Out-Null
@@ -320,6 +509,7 @@ if (-not (Test-Path $WorkingDir)) {
 }
 Push-Location $WorkingDir
 Write-Info "Pushed to $WorkingDir"
+
 # ─────────────────────────────────────────────────────
 # Helper: restore ~/.browser4 from backup
 # ─────────────────────────────────────────────────────
@@ -337,9 +527,9 @@ function Restore-Browser4Home {
 # ─────────────────────────────────────────────────────
 # Helper: copy config from backup into the current
 # ~/.browser4 so the backend server can read config
-# files (e.g. LLM keys).  This is needed because the
-# test cycle starts with a fresh ~/.browser4 that has
-# no config.
+# files (e.g. LLM keys).  This is needed when testing
+# with a configured setup.  For clean-room (new user)
+# testing, this function is intentionally NOT called.
 # ─────────────────────────────────────────────────────
 function Copy-ConfigFromBackup {
     if (-not $browser4HomeBackup -or -not (Test-Path $browser4HomeBackup)) {
@@ -424,7 +614,10 @@ if ($existingCli) {
     Write-Info "uninstall output: $($result.Output)"
 
     # Also use the comprehensive remove script (non-interactive).
-    $removeScript = Join-Path $RepoRoot 'bin\tools\remove-global-browser4-cli.ps1'
+    $removeScript = Join-Path $ScriptDir 'tools\remove-global-browser4-cli.ps1'
+    if (-not (Test-Path $removeScript) -and $RepoRoot) {
+        $removeScript = Join-Path $RepoRoot 'bin\tools\remove-global-browser4-cli.ps1'
+    }
     if (Test-Path $removeScript) {
         Write-Info 'Running remove-global-browser4-cli.ps1 for thorough cleanup …'
         try {
@@ -609,13 +802,37 @@ Write-StepResult -Step 'Release status report' -Passed $allChannelsOk `
     -Detail $(if ($allChannelsOk) { 'all channels reachable' } else { 'one or more channels unreachable' })
 
 # ═══════════════════════════════════════════════════════════════
-# Core test cycle (runs twice: fresh install + re-install)
+# Core test cycle — simulates a real end user's journey
 # ═══════════════════════════════════════════════════════════════
+<#
+.SYNOPSIS
+    Run one full install→exercise→uninstall cycle.
 
+.DESCRIPTION
+    Each cycle simulates what a real user does:
+      1. Runs the remote install script (as-is, no patches).
+      2. Verifies browser4-cli is on PATH.
+      3. Runs --help, --version, and exercises key subcommands.
+      4. Tests error handling with an invalid command.
+      5. Cold-starts the server (browser4-cli open), verifies it responds
+         to health checks.
+      6. Optionally measures warm-start latency vs cold-start.
+      7. Shuts down the server and verifies it is no longer reachable.
+      8. Uninstalls and verifies runtime data is removed.
+
+    When -CopyConfig is passed, pre-existing config (LLM keys, etc.) is
+    copied into ~/.browser4 before starting the server.  When omitted,
+    the cycle tests the clean-room first-run experience.
+
+    When -MeasureStartupTime is passed, the cycle runs a second `open`
+    with the cached bundle and compares startup latencies.
+#>
 function Invoke-InstallationCycle {
     param(
         [int]$CycleNumber,
-        [string]$CycleLabel
+        [string]$CycleLabel,
+        [switch]$CopyConfig,
+        [switch]$MeasureStartupTime
     )
 
     Write-Host ''
@@ -624,116 +841,40 @@ function Invoke-InstallationCycle {
     Write-Host ('╚' + ('═' * 58) + '╝') -ForegroundColor Magenta
 
     # ─────────────────────────────────────────────────
-    # STEP A — Install browser4-cli
+    # STEP A — Install browser4-cli from the remote
+    #           bootstrap script (NO PATCHING)
     # ─────────────────────────────────────────────────
-    Write-StepHeader "CYCLE $CycleNumber — STEP A: Install browser4-cli"
+    Write-StepHeader "CYCLE $CycleNumber — STEP A: Install browser4-cli from remote script"
 
-    $installedOk = $false
-    try {
-        if ($OSWin) {
-            Write-Info "Downloading and running install script (Windows) …"
-            Write-Info "URL: $InstallPs1Url"
-
-            $installScript = Join-Path $TempDir 'install-browser4-cli.ps1'
-            Invoke-WebRequest -Uri $InstallPs1Url -OutFile $installScript -UseBasicParsing -ErrorAction Stop
-            Write-Info "Downloaded install script to $installScript"
-
-            # Patch the downloaded script in case it still uses PS7-incompatible
-            # variable names ($script:IsLinux is read-only in PS 7+).  This
-            # patch is a no-op once the published script is updated.
-            $rawScript = Get-Content $installScript -Raw
-            $rawScript = $rawScript -replace '\$script:IsWin\b',   '$script:OSWin'
-            $rawScript = $rawScript -replace '\$script:IsMac\b',   '$script:OSMac'
-            $rawScript = $rawScript -replace '\$script:IsLinux\b', '$script:OSLinux'
-            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-            [System.IO.File]::WriteAllText($installScript, $rawScript, $utf8NoBom)
-
-            # Run the patched script in-process.  (We tried a child
-            # process but PATH/environment changes don't propagate back.)
-            & $installScript
-            if ($LASTEXITCODE -ne 0) {
-                throw "Install script failed with exit code $LASTEXITCODE"
-            }
-        } else {
-            Write-Info "Downloading and running install script (Linux/macOS) …"
-            Write-Info "URL: $InstallShUrl"
-
-            $installScript = Join-Path $TempDir 'install-browser4-cli.sh'
-            Invoke-WebRequest -Uri $InstallShUrl -OutFile $installScript -UseBasicParsing -ErrorAction Stop
-            Write-Info "Downloaded install script to $installScript"
-
-            bash $installScript
-            if ($LASTEXITCODE -ne 0) {
-                throw "Shell install script failed with exit code $LASTEXITCODE"
-            }
-        }
-
-        # Sync session PATH with the registry (the install script may
-        # have skipped this if the dir was already in the registry).
-        $installDir = Join-Path $LocalAppData 'Programs\browser4-cli'
-        if ((Test-Path $installDir) -and ($installDir -notin ($env:Path -split ';'))) {
-            $env:Path = "$installDir;$env:Path"
-        }
-
-        # Check that browser4-cli.exe (or a symlink/wrapper) exists
-        # in the install directory.  If the symlink creation failed,
-        # create a .cmd wrapper so the CLI is invokable.
-        $cliExe = Join-Path $installDir 'browser4-cli.exe'
-        $cliCmd = Join-Path $installDir 'browser4-cli.cmd'
-        if (-not (Test-Path $cliExe) -and -not (Test-Path $cliCmd)) {
-            $nativeExe = Get-ChildItem -Path $installDir -Filter 'browser4-cli-*.exe' -ErrorAction SilentlyContinue `
-                | Select-Object -First 1
-            if ($nativeExe) {
-                Write-Info "Creating .cmd wrapper: browser4-cli.cmd -> $($nativeExe.Name)"
-                '@"%~dp0' + $nativeExe.Name + '" %*' | Set-Content -Path $cliCmd -Force
-            }
-        }
-
-        # On Linux/macOS, the shell install script puts the binary under
-        # ~/.local/bin with a platform-specific name (e.g.
-        # browser4-cli-linux-x64) but does NOT create a bare
-        # 'browser4-cli' symlink.  Ensure the directory is on PATH and
-        # the symlink exists.
-        if ($OSLinux -or $OSMac) {
-            $linuxInstallDir = Join-Path $env:HOME '.local/bin'
-            if ((Test-Path $linuxInstallDir) -and ($linuxInstallDir -notin ($env:Path -split [System.IO.Path]::PathSeparator))) {
-                $env:Path = "$linuxInstallDir$([System.IO.Path]::PathSeparator)$env:Path"
-                Write-Info "Added to session PATH: $linuxInstallDir"
-            }
-            $cliSymlink = Join-Path $linuxInstallDir 'browser4-cli'
-            if (-not (Test-Path $cliSymlink)) {
-                $nativeBinary = Get-ChildItem -Path $linuxInstallDir -Filter 'browser4-cli-*' -ErrorAction SilentlyContinue `
-                    | Where-Object { $_.Name -match '^browser4-cli-(linux|macos|darwin)' } `
-                    | Select-Object -First 1
-                if ($nativeBinary) {
-                    Write-Info "Creating symlink: browser4-cli -> $($nativeBinary.Name)"
-                    New-Item -ItemType SymbolicLink -Path $cliSymlink -Target $nativeBinary.FullName -Force | Out-Null
-                }
-            }
-        }
-
-        # Verify by actually invoking the CLI.
-        $versionResult = Invoke-CliCommand -Arguments @('--version') -TimeoutSeconds 15 -IgnoreExitCode
-        $installedOk = ($versionResult.ExitCode -eq 0)
-        if ($installedOk) {
-            Write-StepResult -Step 'Install' -Passed $true `
-                -Detail "browser4-cli --version: $($versionResult.Output.Trim())"
-        } else {
-            Write-StepResult -Step 'Install' -Passed $false -Detail 'browser4-cli not on PATH after install'
-        }
-    } catch {
-        Write-StepResult -Step 'Install' -Passed $false -Detail "Exception: $_"
-    }
+    $installedOk = Invoke-InstallFromRemoteScript
 
     if (-not $installedOk) {
-        Write-WarningMsg 'Installation failed — skipping remaining cycle steps'
+        Write-StepResult -Step 'Install' -Passed $false -Detail 'Remote install script failed — a real user would be stuck here'
+        return $false
+    }
+
+    # Refresh session PATH so we can find the newly installed binary.
+    Update-SessionPath
+
+    # ─────────────────────────────────────────────────
+    # STEP B — Verify browser4-cli is on PATH
+    # ─────────────────────────────────────────────────
+    Write-StepHeader "CYCLE $CycleNumber — STEP B: Verify browser4-cli on PATH"
+
+    $cliPath = Resolve-CliPath
+    if ($cliPath) {
+        Write-StepResult -Step 'CLI on PATH' -Passed $true `
+            -Detail $cliPath
+    } else {
+        Write-StepResult -Step 'CLI on PATH' -Passed $false `
+            -Detail 'browser4-cli not found on PATH after install — install script may be broken'
         return $false
     }
 
     # ─────────────────────────────────────────────────
-    # STEP B — browser4-cli --help
+    # STEP C — browser4-cli --help
     # ─────────────────────────────────────────────────
-    Write-StepHeader "CYCLE $CycleNumber — STEP B: browser4-cli --help"
+    Write-StepHeader "CYCLE $CycleNumber — STEP C: browser4-cli --help"
 
     $helpResult = Invoke-CliCommand -Arguments @('--help')
     $helpOk = (Assert-ExitOk $helpResult.ExitCode) -and
@@ -748,151 +889,407 @@ function Invoke-InstallationCycle {
     }
 
     # ─────────────────────────────────────────────────
-    # STEP C — browser4-cli open (cold start)
+    # STEP D — browser4-cli --version
     # ─────────────────────────────────────────────────
-    Write-StepHeader "CYCLE $CycleNumber — STEP C: browser4-cli open (cold start — no runtime bundle)"
+    Write-StepHeader "CYCLE $CycleNumber — STEP D: browser4-cli --version"
 
-    # Ensure the backend server can read the real config (e.g. LLM keys) by
-    # copying it from the backup before the fresh ~/.browser4 is populated.
-    Copy-ConfigFromBackup
+    $versionResult = Invoke-CliCommand -Arguments @('--version')
+    $versionOk = Assert-ExitOk $versionResult.ExitCode
+    Write-StepResult -Step '--version' -Passed $versionOk `
+        -Detail $versionResult.Output.Trim()
 
-    # Ensure no runtime bundle is cached so we test the download path
+    # ─────────────────────────────────────────────────
+    # STEP E — Invalid command (error handling)
+    #           A real user WILL make typos.
+    #           The output must be helpful — not a
+    #           stack trace or an empty response.
+    # ─────────────────────────────────────────────────
+    Write-StepHeader "CYCLE $CycleNumber — STEP E: Invalid command (error handling)"
+
+    $invalidResult = Invoke-CliCommand -Arguments @('--nonexistent-flag-xyz123') -IgnoreExitCode
+    $hasOutput = $invalidResult.Output.Length -gt 0
+    $hasHelpfulMessage = $invalidResult.Output -match 'error|unknown|usage|help|invalid|unrecognized|try|see|Usage'
+    $invalidOk = ($invalidResult.ExitCode -ne 0) -and $hasOutput -and $hasHelpfulMessage
+
+    $invalidDetail = "exit=$($invalidResult.ExitCode) output="
+    if ($hasOutput) {
+        $invalidDetail += "'$($invalidResult.Output.Substring(0, [Math]::Min(100, $invalidResult.Output.Length)))'"
+    } else {
+        $invalidDetail += '(empty — bad user experience!)'
+    }
+
+    Write-StepResult -Step 'Invalid command' -Passed $invalidOk -Detail $invalidDetail
+
+    # ─────────────────────────────────────────────────
+    # STEP F — browser4-cli config --help
+    #           Users need to configure API keys.
+    # ─────────────────────────────────────────────────
+    Write-StepHeader "CYCLE $CycleNumber — STEP F: browser4-cli config --help"
+
+    $configResult = Invoke-CliCommand -Arguments @('config', '--help') -IgnoreExitCode
+    $configOk = ($configResult.ExitCode -eq 0) -and ($configResult.Output.Length -gt 0)
+    Write-StepResult -Step 'config --help' -Passed $configOk `
+        -Detail "exit=$($configResult.ExitCode)"
+
+    # ─────────────────────────────────────────────────
+    # STEP G — browser4-cli agent-run --help
+    #           Agent is a headline feature.
+    # ─────────────────────────────────────────────────
+    Write-StepHeader "CYCLE $CycleNumber — STEP G: browser4-cli agent-run --help"
+
+    $agentResult = Invoke-CliCommand -Arguments @('agent-run', '--help') -IgnoreExitCode
+    $agentOk = ($agentResult.ExitCode -eq 0) -and ($agentResult.Output.Length -gt 0)
+    Write-StepResult -Step 'agent-run --help' -Passed $agentOk `
+        -Detail "exit=$($agentResult.ExitCode)"
+
+    # ─────────────────────────────────────────────────
+    # STEP H — browser4-cli open (cold start)
+    #           Verifies the server actually responds
+    #           to health checks — not just that a
+    #           bundle directory appeared on disk.
+    # ─────────────────────────────────────────────────
+    $startupLabel = if ($CopyConfig) { 'cold start (with config)' } else { 'cold start (clean-room — no config)' }
+    Write-StepHeader "CYCLE $CycleNumber — STEP H: browser4-cli open — $startupLabel"
+
+    if ($CopyConfig) {
+        Copy-ConfigFromBackup
+    } else {
+        Write-Info 'No config copied — testing what a brand-new user experiences on first run'
+    }
+
+    # Ensure no runtime bundle is cached so we test the cold-start path
     $bundleBefore = Get-RuntimeBundleDir
     if ($bundleBefore) {
         Write-Info "Runtime bundle exists before test: $bundleBefore"
-        Write-Info "Removing to test cold-start download path …"
+        Write-Info 'Removing to test cold-start download path …'
         Remove-Item $bundleBefore -Recurse -Force -ErrorAction SilentlyContinue
     } else {
         Write-Info 'No runtime bundle cached — will test download path'
     }
 
-    Write-Info 'Launching browser4-cli open (async, wait for startup) …'
+    Write-Info 'Launching browser4-cli open (async) …'
+    $coldStartSw = [Diagnostics.Stopwatch]::StartNew()
     $openProc = Invoke-CliCommandAsync -Arguments @('open')
 
-    # Poll for the runtime bundle to appear (download + extract takes time).
-    $coldStartOk = $false
-    $bundleAfter = $null
-    for ($i = 0; $i -lt 6; $i++) {
-        Start-Sleep -Seconds 10
+    # Poll the server health endpoint until it responds or we time out.
+    Write-Info "Polling $ServerHealthUrl for readiness …"
+    $coldHealth = Wait-ServerHealthy -TimeoutSeconds 120
+    $coldStartSw.Stop()
+    $coldStartTime = $coldStartSw.Elapsed
+
+    $coldStartOk = $coldHealth.Healthy
+    if ($coldStartOk) {
+        Write-Info "Server healthy after $($coldHealth.Elapsed.TotalSeconds.ToString('F1'))s"
+        Write-Info "Total cold-start time (wall clock): $($coldStartTime.TotalSeconds.ToString('F1'))s"
+
+        # Diagnostic: show what the health endpoint returned
+        try {
+            $healthData = $coldHealth.Content | ConvertFrom-Json
+            Write-Info "Health response: status=$($healthData.status)"
+        } catch {
+            Write-Info "Health response: $($coldHealth.Content)"
+        }
+
+        # Show bundle location for diagnostics
         $bundleAfter = Get-RuntimeBundleDir
         if ($bundleAfter) {
-            Write-Info "Runtime bundle found at: $bundleAfter"
+            Write-Info "Runtime bundle at: $bundleAfter"
+        }
+    } else {
+        Write-WarningMsg "Server did NOT become healthy within $($coldHealth.Elapsed.TotalSeconds.ToString('F1'))s"
+        # Check if a bundle at least appeared (download/extract may have worked)
+        $bundleAfter = Get-RuntimeBundleDir
+        if ($bundleAfter) {
+            Write-Info "Runtime bundle exists at $bundleAfter but server is not responding"
+            # Check for server log
             $logPath = Join-Path $bundleAfter 'logs\pulsar.log'
             if (Test-Path $logPath) {
-                $logTail = Get-Content -Path $logPath -Tail 5 -ErrorAction SilentlyContinue | Out-String
-                Write-Info "pulsar.log tail: $logTail"
+                $logTail = Get-Content -Path $logPath -Tail 20 -ErrorAction SilentlyContinue | Out-String
+                Write-WarningMsg "pulsar.log tail:`n$logTail"
             }
-            $coldStartOk = $true
-            break
+        } else {
+            Write-WarningMsg 'Runtime bundle also not found — download/extract may have failed'
         }
-        Write-Info "Waiting for runtime bundle download … ($($i+1)/6)"
-    }
-    if (-not $bundleAfter) {
-        Write-WarningMsg 'Runtime bundle NOT found after 60 s — download may still be in progress'
     }
 
-    # Try to stop/kill the server process that open started
-    try { & 'browser4-cli' 'close-all' *>$null } catch { }
-    Start-Sleep -Seconds 2
-
-    Write-StepResult -Step 'open (cold start)' -Passed $true `
-        -Detail $(if ($bundleAfter) { "bundle at: $bundleAfter" } else { 'server started, bundle downloading (async)' })
+    Write-StepResult -Step 'open (cold start)' -Passed $coldStartOk `
+        -Detail "healthy=$coldStartOk time=$($coldStartTime.TotalSeconds.ToString('F1'))s"
 
     # ─────────────────────────────────────────────────
-    # STEP D — browser4-cli open (warm start)
+    # STEP I — Warm start (only if cold start succeeded
+    #           and measurement is requested)
     # ─────────────────────────────────────────────────
-    Write-StepHeader "CYCLE $CycleNumber — STEP D: browser4-cli open (warm start — bundle cached)"
+    if ($MeasureStartupTime -and $coldStartOk) {
+        Write-StepHeader "CYCLE $CycleNumber — STEP I: browser4-cli open (warm start — bundle cached)"
 
-    $bundleBeforeWarm = Get-RuntimeBundleDir
-    if ($bundleBeforeWarm) {
-        Write-Info "Runtime bundle already cached — testing warm start …"
-        Write-Info "Bundle: $bundleBeforeWarm"
+        $bundleCached = Get-RuntimeBundleDir
+        if ($bundleCached) {
+            Write-Info "Bundle cached at: $bundleCached"
+            Write-Info 'Stopping server before warm-start measurement …'
 
-        $warmProc = Invoke-CliCommandAsync -Arguments @('open')
-        $warmBundle = $null
-        for ($i = 0; $i -lt 3; $i++) {
-            Start-Sleep -Seconds 5
-            $warmBundle = Get-RuntimeBundleDir
-            if ($warmBundle) { break }
+            # Stop the server that cold-start launched
+            try { & 'browser4-cli' 'close-all' *>$null } catch {}
+            Start-Sleep -Seconds 2
+            try { & 'browser4-cli' 'kill-all' *>$null } catch {}
+            Start-Sleep -Seconds 3
+
+            # Verify server is down before measuring warm start
+            try {
+                $checkResp = Invoke-WebRequest -Uri $ServerHealthUrl -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop
+                if ($checkResp.StatusCode -eq 200) {
+                    Write-WarningMsg 'Server still reachable after kill-all — waiting longer'
+                    Start-Sleep -Seconds 10
+                }
+            } catch {
+                Write-Info 'Server confirmed stopped'
+            }
+
+            # Measure warm start
+            Write-Info 'Launching warm start …'
+            $warmStartSw = [Diagnostics.Stopwatch]::StartNew()
+            $warmProc = Invoke-CliCommandAsync -Arguments @('open')
+            $warmHealth = Wait-ServerHealthy -TimeoutSeconds 60
+            $warmStartSw.Stop()
+            $warmStartTime = $warmStartSw.Elapsed
+
+            $warmOk = $warmHealth.Healthy
+            $coldSec = $coldStartTime.TotalSeconds
+            $warmSec = $warmStartTime.TotalSeconds
+            $speedup = if ($coldSec -gt 0) { [Math]::Round(($coldSec - $warmSec) / $coldSec * 100) } else { 0 }
+            $speedupLabel = if ($speedup -gt 0) { "${speedup}% faster" } else { 'no speedup' }
+
+            if ($warmOk) {
+                Write-Info "Warm start: $($warmSec.ToString('F1'))s (cold was $($coldSec.ToString('F1'))s, $speedupLabel)"
+            }
+
+            Write-StepResult -Step 'open (warm start)' -Passed $warmOk `
+                -Detail "cold=$($coldSec.ToString('F1'))s warm=$($warmSec.ToString('F1'))s $speedupLabel"
+        } else {
+            Write-WarningMsg 'No cached bundle — skipping warm start test'
+            Write-StepResult -Step 'open (warm start)' -Passed $true -Detail 'skipped (bundle not cached)'
         }
-        $warmStartOk = ($warmBundle -ne $null)
-        Write-StepResult -Step 'open (warm start)' -Passed $true `
-            -Detail $(if ($warmBundle) { "used cached bundle: $warmBundle" } else { 'server restarted (bundle download async)' })
-
-        # Clean up
-        try { & 'browser4-cli' 'close-all' *>$null } catch { }
-        Start-Sleep -Seconds 2
-    } else {
-        Write-WarningMsg 'No cached bundle — skipping warm start test'
-        Write-StepResult -Step 'open (warm start)' -Passed $true -Detail 'no cached bundle (cold start was skipped or bundle not yet downloaded)'
     }
 
     # ─────────────────────────────────────────────────
-    # STEP E — Development plan: version check / upgrade tip
+    # STEP J — close-all / kill-all + verify shutdown
     # ─────────────────────────────────────────────────
-    Write-StepHeader "CYCLE $CycleNumber — STEP E: Upgrade-tip development plan"
-
-    Write-PlanNote @'
-
-    Feature: "browser4-cli open" should detect when the cached runtime bundle
-             is not the latest version, use the cached bundle, and show an
-             upgrade tip.
-
-    Development plan:
-      1. Embed latest version info in Browser4Bundle.jar / META-INF.
-      2. On "open", compare cached bundle version against a remote version
-         endpoint (e.g., https://browser4.oss-cn-beijing.aliyuncs.com/versions/latest).
-      3. If cached version < latest, print a tip:
-           ⚠  browser4-bundle v4.11.2 is available (you have v4.11.1).
-              Run 'browser4-cli upgrade' to get the latest.
-      4. Always use the cached bundle regardless — never block startup.
-      5. The tip should be suppressible via --quiet / --no-upgrade-check.
-
-    Status: NOT YET IMPLEMENTED.
-'@
-    Write-StepResult -Step 'Upgrade-tip plan' -Passed $true -Detail 'development plan documented (feature not yet implemented)'
-
-    # ─────────────────────────────────────────────────
-    # STEP F — browser4-cli open browser4.io
-    # ─────────────────────────────────────────────────
-    Write-StepHeader "CYCLE $CycleNumber — STEP F: browser4-cli open browser4.io"
-
-    $openUrlProc = Invoke-CliCommandAsync -Arguments @('open', 'browser4.io')
-    $bundleAfterUrl = $null
-    for ($i = 0; $i -lt 3; $i++) {
-        Start-Sleep -Seconds 5
-        $bundleAfterUrl = Get-RuntimeBundleDir
-        if ($bundleAfterUrl) { break }
-    }
-    $openUrlOk = ($bundleAfterUrl -ne $null)
-    Write-StepResult -Step 'open browser4.io' -Passed $true `
-        -Detail $(if ($bundleAfterUrl) { "bundle: $bundleAfterUrl" } else { 'server running (bundle download async)' })
-
-    # ─────────────────────────────────────────────────
-    # STEP G — browser4-cli close-all, browser4-cli kill-all
-    # ─────────────────────────────────────────────────
-    Write-StepHeader "CYCLE $CycleNumber — STEP G: browser4-cli close-all / kill-all"
+    Write-StepHeader "CYCLE $CycleNumber — STEP J: browser4-cli close-all / kill-all"
 
     # close-all
     $closeResult = Invoke-CliCommand -Arguments @('close-all') -TimeoutSeconds 30 -IgnoreExitCode
-    $closeOk = $true  # close-all is best-effort
-    Write-StepResult -Step 'close-all' -Passed $closeOk `
+    Write-StepResult -Step 'close-all' -Passed $true `
         -Detail "exit=$($closeResult.ExitCode)"
 
     Start-Sleep -Seconds 2
 
     # kill-all
     $killResult = Invoke-CliCommand -Arguments @('kill-all') -TimeoutSeconds 30 -IgnoreExitCode
-    $killAllOk = $true  # kill-all is best-effort
-    Write-StepResult -Step 'kill-all' -Passed $killAllOk `
+    Write-StepResult -Step 'kill-all' -Passed $true `
         -Detail "exit=$($killResult.ExitCode)"
 
     Start-Sleep -Seconds 2
 
-    # Verify no more browser4/Java server processes remain.
-    Write-Info 'Checking for remaining browser4 processes …'
+    # Verify the server is no longer reachable.
+    # This confirms kill-all actually stopped the server process —
+    # a real user expects "kill-all" to mean the server is gone.
+    Write-Info "Verifying server is no longer reachable at $ServerHealthUrl ..."
+    $serverStillUp = $false
     try {
-        $remaining = Get-Process -Name 'java', 'browser4*' -ErrorAction SilentlyContinue |
+        $shutdownCheck = Invoke-WebRequest -Uri $ServerHealthUrl -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop
+        if ($shutdownCheck.StatusCode -eq 200) {
+            $serverStillUp = $true
+        }
+    } catch {
+        # Expected — server should be unreachable
+    }
+
+    if ($serverStillUp) {
+        Write-WarningMsg 'Server is still reachable after kill-all — force-killing remaining processes'
+        try {
+            Get-Process -Name 'java' -ErrorAction SilentlyContinue |
+                Where-Object { $_.CommandLine -match 'browser4|Browser4Bundle' } |
+                ForEach-Object {
+                    Write-Info "  Force-killing PID $($_.Id): $($_.ProcessName)"
+                    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+                }
+        } catch {
+            Write-Info 'Process cleanup skipped (non-fatal)'
+        }
+        Start-Sleep -Seconds 2
+    }
+
+    $shutdownOk = -not $serverStillUp
+    Write-StepResult -Step 'Server shutdown' -Passed $shutdownOk `
+        -Detail $(if ($shutdownOk) { 'server unreachable (clean shutdown)' } else { 'server still reachable!' })
+
+    # ═══════════════════════════════════════════════════════════════
+    # STEP K — browser4-cli uninstall + verify artifacts removed
+    # ═══════════════════════════════════════════════════════════════
+    Write-StepHeader "CYCLE $CycleNumber — STEP K: browser4-cli uninstall"
+
+    # Record pre-uninstall state so we can verify removal
+    $hadRuntimeData = Test-Path $RuntimeDataDir
+    Write-Info "Runtime data dir before uninstall: $RuntimeDataDir (exists=$hadRuntimeData)"
+
+    # Run uninstall with --yes for non-interactive mode.
+    # Older binaries may not support --yes; fall back to bare uninstall.
+    $uninstallResult = Invoke-CliCommand -Arguments @('uninstall', '--yes') -TimeoutSeconds 120 -IgnoreExitCode
+    if ($uninstallResult.Output -match 'too many arguments') {
+        Write-Info "uninstall --yes not supported by this binary; retrying without --yes …"
+        $uninstallResult = Invoke-CliCommand -Arguments @('uninstall') -TimeoutSeconds 120 -IgnoreExitCode
+    }
+    Write-Info "uninstall output: $($uninstallResult.Output)"
+
+    # Allow the filesystem to settle
+    Start-Sleep -Seconds 3
+
+    # Verify: if runtime data existed before uninstall, it should be gone now.
+    # We do NOT manually delete it — if uninstall left it behind, that's a bug
+    # a real user would encounter.
+    $runtimeDataGone = -not (Test-Path $RuntimeDataDir)
+
+    if ($hadRuntimeData -and -not $runtimeDataGone) {
+        Write-WarningMsg "Runtime data NOT removed by uninstall: $RuntimeDataDir"
+        Write-WarningMsg 'This is a bug — a real user would have leftover files'
+    } elseif (-not $hadRuntimeData) {
+        Write-Info 'No runtime data existed before uninstall — nothing to verify'
+    }
+
+    $uninstallOk = ($uninstallResult.ExitCode -eq 0) -and $runtimeDataGone
+    Write-StepResult -Step 'uninstall' -Passed $uninstallOk `
+        -Detail $(if ($uninstallOk) {
+            'runtime data removed by uninstall'
+        } elseif (-not $runtimeDataGone) {
+            'FAILED: runtime data not removed — user would have leftover files'
+        } else {
+            "uninstall exit=$($uninstallResult.ExitCode)"
+        })
+
+    # Verify ~/.browser4 (state dir) survived uninstall.
+    # The state directory is intentionally preserved so user settings
+    # survive an uninstall/reinstall cycle.
+    $homeSurvived = Test-Path $Browser4Home
+    Write-StepResult -Step '~/.browser4 preserved' -Passed $homeSurvived `
+        -Detail $(if ($homeSurvived) { 'state directory intact' } else { 'STATE DIRECTORY MISSING — user settings lost!' })
+
+    return $uninstallOk
+}
+
+# ═══════════════════════════════════════════════════════════════
+# Run Cycle 1 — Clean-room install (no pre-existing config)
+#               Simulates a brand-new user's first experience.
+# ═══════════════════════════════════════════════════════════════
+$cycle1Ok = Invoke-InstallationCycle -CycleNumber 1 -CycleLabel 'FRESH INSTALL (clean-room)'
+
+# ═══════════════════════════════════════════════════════════════
+# Run Cycle 2 — Re-install with config and timing
+#               Simulates a returning user who has config set up.
+# ═══════════════════════════════════════════════════════════════
+$cycle2Ok = Invoke-InstallationCycle -CycleNumber 2 -CycleLabel 'RE-INSTALL (with config + timing)' -CopyConfig -MeasureStartupTime
+
+# ═══════════════════════════════════════════════════════════════
+# FINAL STEP — Multi-scenarios test against global CLI
+# ═══════════════════════════════════════════════════════════════
+Write-StepHeader 'FINAL STEP — Multi-scenarios test against global CLI'
+
+if ($SkipMultiScenarios) {
+    Write-Info '-SkipMultiScenarios set — skipping multi-scenarios suite'
+    Write-StepResult -Step 'multi-scenarios' -Passed $true -Detail 'skipped by flag'
+} else {
+    # Ensure browser4-cli is available (cycle 2 may have uninstalled)
+    $cliCheck = Resolve-CliPath
+    if (-not $cliCheck) {
+        Write-WarningMsg 'browser4-cli not on PATH — re-installing for multi-scenarios test …'
+        $reinstallOk = Invoke-InstallFromRemoteScript
+        if (-not $reinstallOk) {
+            Write-StepResult -Step 'multi-scenarios' -Passed $false -Detail 'reinstall failed — cannot run scenarios'
+        } else {
+            Update-SessionPath
+            $cliCheck = Resolve-CliPath
+        }
+    }
+
+    if ($cliCheck) {
+        # Ensure config is available before running multi-scenarios
+        Copy-ConfigFromBackup
+
+        $multiScenariosScript = Join-Path $ScriptDir 'tests\multi-scenarios.ps1'
+        if (-not (Test-Path $multiScenariosScript) -and $RepoRoot) {
+            # Fall back to repo-relative path for bw-compat
+            $multiScenariosScript = Join-Path $RepoRoot 'bin\tests\multi-scenarios.ps1'
+        }
+        if (-not (Test-Path $multiScenariosScript)) {
+            Write-WarningMsg "multi-scenarios.ps1 not found at: $multiScenariosScript"
+            Write-StepResult -Step 'multi-scenarios' -Passed $false -Detail 'script not found'
+        } else {
+            Write-Info "Running: $multiScenariosScript -Iterations $MultiScenariosIterations -UseGlobalCli -SkipServerBuild"
+            Write-Info "Working directory: $WorkingDir"
+
+            # Capture stdout/stderr so we can show context on failure
+            $multiStdout = Join-Path $TempDir 'multi-scenarios-stdout.txt'
+            $multiStderr = Join-Path $TempDir 'multi-scenarios-stderr.txt'
+            Remove-Item $multiStdout, $multiStderr -Force -ErrorAction SilentlyContinue
+
+            try {
+                $multiArgs = @(
+                    '-File', $multiScenariosScript,
+                    '-Iterations', $MultiScenariosIterations,
+                    '-UseGlobalCli',
+                    '-SkipServerBuild'
+                )
+
+                $multiProc = Start-Process `
+                    -FilePath 'pwsh' `
+                    -ArgumentList $multiArgs `
+                    -NoNewWindow `
+                    -Wait `
+                    -PassThru `
+                    -RedirectStandardOutput $multiStdout `
+                    -RedirectStandardError $multiStderr
+
+                $multiOk = ($multiProc.ExitCode -eq 0)
+
+                if (-not $multiOk) {
+                    Write-WarningMsg 'Multi-scenarios failed — showing tail of captured output:'
+                    Write-WarningMsg '--- STDOUT (last 40 lines) ---'
+                    if (Test-Path $multiStdout) {
+                        Get-Content -Path $multiStdout -Tail 40 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+                    }
+                    Write-WarningMsg '--- STDERR (last 20 lines) ---'
+                    if (Test-Path $multiStderr) {
+                        Get-Content -Path $multiStderr -Tail 20 | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
+                    }
+                }
+
+                Write-StepResult -Step 'multi-scenarios' -Passed $multiOk `
+                    -Detail "exit=$($multiProc.ExitCode) iterations=$MultiScenariosIterations"
+            } catch {
+                Write-StepResult -Step 'multi-scenarios' -Passed $false -Detail "Exception: $_"
+            } finally {
+                Remove-Item $multiStdout, $multiStderr -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+}
+
+} finally {
+    # ═══════════════════════════════════════════════════════════════
+    # Cleanup (guaranteed to run even on error)
+    # ═══════════════════════════════════════════════════════════════
+    Write-StepHeader 'Cleanup'
+
+    # Stop any server processes that are still running
+    Write-Info 'Ensuring no server processes remain …'
+    try {
+        & 'browser4-cli' 'kill-all' *>$null
+    } catch {
+        # browser4-cli may not be available
+    }
+    Start-Sleep -Seconds 2
+
+    # Force-kill any remaining Java processes tied to Browser4
+    try {
+        $remaining = Get-Process -Name 'java' -ErrorAction SilentlyContinue |
             Where-Object { $_.CommandLine -match 'browser4|Browser4Bundle' }
         if ($remaining) {
             Write-WarningMsg "Force-killing $($remaining.Count) remaining browser4 processes"
@@ -906,212 +1303,6 @@ function Invoke-InstallationCycle {
     } catch {
         Write-Info 'Process check skipped (non-fatal)'
     }
-
-    # ─────────────────────────────────────────────────
-    # STEP H — browser4-cli uninstall
-    # ─────────────────────────────────────────────────
-    Write-StepHeader "CYCLE $CycleNumber — STEP H: browser4-cli uninstall"
-
-    # Try uninstall with -y first (supported by npm version ≥0.1.14).
-    # The standalone binary may not accept -y; fall back to plain uninstall.
-    $uninstallResult = Invoke-CliCommand -Arguments @('uninstall', '-y') -TimeoutSeconds 60 -IgnoreExitCode
-    if ($uninstallResult.Output -match 'too many arguments') {
-        Write-Info "uninstall -y not supported by this binary; retrying without -y …"
-        $uninstallResult = Invoke-CliCommand -Arguments @('uninstall') -TimeoutSeconds 60 -IgnoreExitCode
-    }
-    Write-Info "uninstall output: $($uninstallResult.Output)"
-
-    # Also run the comprehensive removal script (non-interactive).
-    $removeScript = Join-Path $RepoRoot 'bin\tools\remove-global-browser4-cli.ps1'
-    if (Test-Path $removeScript) {
-        try {
-            & $removeScript -Confirm:$false -ErrorAction SilentlyContinue
-        } catch {
-            Write-Info "remove-global-browser4-cli.ps1: $_"
-        }
-    }
-
-    # The standalone binary install (what the install script does) is
-    # not handled by "browser4-cli uninstall" (which only covers npm/
-    # cargo).  Remove it ourselves.
-    $installDir = Join-Path $LocalAppData 'Programs\browser4-cli'
-    if (Test-Path $installDir) {
-        Write-Info "Removing standalone install (Windows): $installDir"
-        Remove-Item $installDir -Recurse -Force -ErrorAction SilentlyContinue
-    }
-    # Also remove from user PATH (Windows).
-    $pathSep = [System.IO.Path]::PathSeparator
-    $userPath = [System.Environment]::GetEnvironmentVariable('Path', 'User')
-    if ($userPath -and $userPath -match [regex]::Escape($installDir)) {
-        $newUserPath = ($userPath -split $pathSep | Where-Object { $_ -ne $installDir }) -join $pathSep
-        [System.Environment]::SetEnvironmentVariable('Path', $newUserPath, 'User')
-        Write-Info "Removed from user PATH: $installDir"
-    }
-
-    # On Linux/macOS, remove the 'browser4-cli' symlink and the
-    # platform-specific binary from ~/.local/bin.
-    if ($OSLinux -or $OSMac) {
-        $linuxInstallDir = Join-Path $env:HOME '.local/bin'
-        $cliSymlink = Join-Path $linuxInstallDir 'browser4-cli'
-        if (Test-Path $cliSymlink) {
-            Write-Info "Removing symlink: $cliSymlink"
-            Remove-Item $cliSymlink -Force -ErrorAction SilentlyContinue
-        }
-        $nativeBinary = Get-ChildItem -Path $linuxInstallDir -Filter 'browser4-cli-*' -ErrorAction SilentlyContinue `
-            | Where-Object { $_.Name -match '^browser4-cli-(linux|macos|darwin)' } `
-            | Select-Object -First 1
-        if ($nativeBinary) {
-            Write-Info "Removing native binary: $($nativeBinary.FullName)"
-            Remove-Item $nativeBinary.FullName -Force -ErrorAction SilentlyContinue
-        }
-    }
-
-    # Verify uninstall — check that the standalone install we just
-    # removed is actually gone.  Don't require that every browser4-cli
-    # on the system is gone (the npm version may coexist).
-    Start-Sleep -Seconds 2
-    if ($OSWin) {
-        $env:Path = [System.Environment]::GetEnvironmentVariable('Path', 'User') + ';' +
-                    [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
-        $standaloneGone = -not (Test-Path $installDir)
-    } else {
-        $standaloneGone = (-not (Test-Path (Join-Path $env:HOME '.local/bin/browser4-cli'))) -and
-                          (-not (Get-ChildItem (Join-Path $env:HOME '.local/bin') -Filter 'browser4-cli-*' -ErrorAction SilentlyContinue `
-                              | Where-Object { $_.Name -match '^browser4-cli-(linux|macos|darwin)' }))
-    }
-    $uninstallOk = $standaloneGone
-    Write-StepResult -Step 'uninstall' -Passed $uninstallOk `
-        -Detail $(if ($uninstallOk) { 'standalone binary removed' } else { 'standalone binary still present' })
-
-    # Ensure ~/.browser4 survived the uninstall
-    $homeSurvived = Test-Path $Browser4Home
-    Write-StepResult -Step '~/.browser4 preserved' -Passed $homeSurvived `
-        -Detail $(if ($homeSurvived) { 'directory intact' } else { 'DIRECTORY MISSING!' })
-
-    return $uninstallOk
-}
-
-# ═══════════════════════════════════════════════════════════════
-# Run Cycle 1 — Fresh install
-# ═══════════════════════════════════════════════════════════════
-$cycle1Ok = Invoke-InstallationCycle -CycleNumber 1 -CycleLabel 'FRESH INSTALL'
-
-# ═══════════════════════════════════════════════════════════════
-# Run Cycle 2 — Re-install (after uninstall)
-# ═══════════════════════════════════════════════════════════════
-$cycle2Ok = Invoke-InstallationCycle -CycleNumber 2 -CycleLabel 'RE-INSTALL (after uninstall)'
-
-# ═══════════════════════════════════════════════════════════════
-# STEP 9 — Multi-scenarios test against global CLI
-# ═══════════════════════════════════════════════════════════════
-Write-StepHeader 'FINAL STEP — Multi-scenarios test against global CLI'
-
-if ($SkipMultiScenarios) {
-    Write-Info '-SkipMultiScenarios set — skipping multi-scenarios suite'
-    Write-StepResult -Step 'multi-scenarios' -Passed $true -Detail 'skipped by flag'
-} else {
-    # Ensure browser4-cli is available (cycle 2 may have uninstalled)
-    $cliCheck = Get-Command 'browser4-cli' -CommandType Application -ErrorAction SilentlyContinue
-    if (-not $cliCheck) {
-        Write-WarningMsg 'browser4-cli not on PATH — re-installing for multi-scenarios test …'
-        if ($OSWin) {
-            Write-Info "Downloading and running install script (Windows) …"
-            Write-Info "URL: $InstallPs1Url"
-
-            $installScript = Join-Path $TempDir 'install-browser4-cli.ps1'
-            Invoke-WebRequest -Uri $InstallPs1Url -OutFile $installScript -UseBasicParsing -ErrorAction Stop
-            Write-Info "Downloaded install script to $installScript"
-
-            # Patch for PS7 compatibility (same as step 6 above)
-            $rawScript = Get-Content $installScript -Raw
-            $rawScript = $rawScript -replace '\$script:IsWin\b',   '$script:OSWin'
-            $rawScript = $rawScript -replace '\$script:IsMac\b',   '$script:OSMac'
-            $rawScript = $rawScript -replace '\$script:IsLinux\b', '$script:OSLinux'
-            $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-            [System.IO.File]::WriteAllText($installScript, $rawScript, $utf8NoBom)
-
-            & $installScript
-            if ($LASTEXITCODE -ne 0) {
-                Write-WarningMsg "Install script exited with code $LASTEXITCODE"
-            }
-        } else {
-            Write-Info "Downloading and running install script (Linux/macOS) …"
-            Write-Info "URL: $InstallShUrl"
-
-            $installScript = Join-Path $TempDir 'install-browser4-cli.sh'
-            Invoke-WebRequest -Uri $InstallShUrl -OutFile $installScript -UseBasicParsing -ErrorAction Stop
-            Write-Info "Downloaded install script to $installScript"
-
-            bash $installScript
-            if ($LASTEXITCODE -ne 0) {
-                Write-WarningMsg "Shell install script exited with code $LASTEXITCODE"
-            }
-        }
-        # Refresh session PATH.  On Windows, re-read the registry.
-        # On Linux/macOS, ensure ~/.local/bin is included and the
-        # browser4-cli symlink exists.
-        if ($OSWin) {
-            $env:Path = [System.Environment]::GetEnvironmentVariable('Path', 'User') + ';' +
-                        [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
-        } else {
-            $linuxInstallDir = Join-Path $env:HOME '.local/bin'
-            if ((Test-Path $linuxInstallDir) -and ($linuxInstallDir -notin ($env:Path -split [System.IO.Path]::PathSeparator))) {
-                $env:Path = "$linuxInstallDir$([System.IO.Path]::PathSeparator)$env:Path"
-                Write-Info "Added to session PATH: $linuxInstallDir"
-            }
-            $cliSymlink = Join-Path $linuxInstallDir 'browser4-cli'
-            if (-not (Test-Path $cliSymlink)) {
-                $nativeBinary = Get-ChildItem -Path $linuxInstallDir -Filter 'browser4-cli-*' -ErrorAction SilentlyContinue `
-                    | Where-Object { $_.Name -match '^browser4-cli-(linux|macos|darwin)' } `
-                    | Select-Object -First 1
-                if ($nativeBinary) {
-                    Write-Info "Creating symlink: browser4-cli -> $($nativeBinary.Name)"
-                    New-Item -ItemType SymbolicLink -Path $cliSymlink -Target $nativeBinary.FullName -Force | Out-Null
-                }
-            }
-        }
-    }
-
-    # Ensure config is available before running multi-scenarios
-    Copy-ConfigFromBackup
-
-    $multiScenariosScript = Join-Path $RepoRoot 'bin\tests\multi-scenarios.ps1'
-    if (-not (Test-Path $multiScenariosScript)) {
-        Write-WarningMsg "multi-scenarios.ps1 not found at: $multiScenariosScript"
-        Write-StepResult -Step 'multi-scenarios' -Passed $false -Detail 'script not found'
-    } else {
-        Write-Info "Running: $multiScenariosScript -Iterations $MultiScenariosIterations -UseGlobalCli -SkipServerBuild"
-        Write-Info "Working directory: $WorkingDir"
-
-        try {
-            $multiArgs = @(
-                '-File', $multiScenariosScript,
-                '-Iterations', $MultiScenariosIterations,
-                '-UseGlobalCli',
-                '-SkipServerBuild'
-            )
-
-            $multiProc = Start-Process `
-                -FilePath 'pwsh' `
-                -ArgumentList $multiArgs `
-                -NoNewWindow `
-                -Wait `
-                -PassThru
-
-            $multiOk = ($multiProc.ExitCode -eq 0)
-            Write-StepResult -Step 'multi-scenarios' -Passed $multiOk `
-                -Detail "exit=$($multiProc.ExitCode) iterations=$MultiScenariosIterations"
-        } catch {
-            Write-StepResult -Step 'multi-scenarios' -Passed $false -Detail "Exception: $_"
-        }
-    }
-}
-
-} finally {
-    # ═══════════════════════════════════════════════════════════════
-    # Cleanup (guaranteed to run even on error)
-    # ═══════════════════════════════════════════════════════════════
-    Write-StepHeader 'Cleanup'
 
     # Restore original ~/.browser4
     try { Restore-Browser4Home } catch { Write-WarningMsg "Restore-Browser4Home failed: $_" }
@@ -1146,7 +1337,8 @@ Write-Host '╚═════════════════════�
 Write-Host "  Total steps : $TotalSteps"
 Write-Host "  Passed      : $PassedSteps" -ForegroundColor $(if ($PassedSteps -gt 0) { 'Green' } else { 'Red' })
 Write-Host "  Failed      : $FailedSteps" -ForegroundColor $(if ($FailedSteps -eq 0) { 'Green' } else { 'Red' })
-Write-Host "  Cycles      : $(if ($cycle1Ok) { '✅ 1' } else { '❌ 1' }) / $(if ($cycle2Ok) { '✅ 2' } else { '❌ 2' })"
+Write-Host "  Cycle 1     : $(if ($cycle1Ok) { '✅ Clean-room install' } else { '❌ Clean-room install' })"
+Write-Host "  Cycle 2     : $(if ($cycle2Ok) { '✅ Re-install + timing' } else { '❌ Re-install + timing' })"
 
 if ($FailedSteps -gt 0) {
     Write-Host ''
