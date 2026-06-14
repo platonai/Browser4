@@ -233,24 +233,42 @@ function Invoke-CliCommand {
     )
     $sw = [Diagnostics.Stopwatch]::StartNew()
     try {
+        # Resolve the executable path.  Start-Process handles .cmd wrappers
+        # and .exe files equally well when given the full path.
+        $exe = (Get-Command 'browser4-cli' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+        if (-not $exe) { $exe = 'browser4-cli' }
+
         $tmpOut = Join-Path $TempDir 'b4cli-stdout.txt'
         $tmpErr = Join-Path $TempDir 'b4cli-stderr.txt'
         Remove-Item $tmpOut, $tmpErr -Force -ErrorAction SilentlyContinue
 
-        # Use direct invocation rather than Start-Process so that
-        # .cmd wrappers and PATHEXT resolution work correctly.
-        $prevEAP = $ErrorActionPreference
-        $ErrorActionPreference = 'Continue'
-        $output = & browser4-cli @Arguments 2>&1 | Out-String
-        $exitCode = $LASTEXITCODE
-        $ErrorActionPreference = $prevEAP
+        $proc = Start-Process `
+            -FilePath $exe `
+            -ArgumentList $Arguments `
+            -NoNewWindow `
+            -PassThru `
+            -RedirectStandardOutput $tmpOut `
+            -RedirectStandardError $tmpErr
+
+        $completed = $proc.WaitForExit($TimeoutSeconds * 1000)
+        if (-not $completed) {
+            Write-WarningMsg "Command timed out after ${TimeoutSeconds}s — killing process (PID $($proc.Id))"
+            $proc.Kill($true) | Out-Null
+            $proc.WaitForExit(5000) | Out-Null
+        }
+
+        $stdout = Get-Content -Path $tmpOut -Raw -ErrorAction SilentlyContinue
+        $stderr = Get-Content -Path $tmpErr -Raw -ErrorAction SilentlyContinue
+        Remove-Item $tmpOut, $tmpErr -Force -ErrorAction SilentlyContinue
+
+        $combined = (@($stdout, $stderr) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join "`n"
 
         $sw.Stop()
         return [PSCustomObject]@{
-            ExitCode = [int]$exitCode
-            Output   = $output.Trim()
-            Stdout   = $output.Trim()
-            Stderr   = ''
+            ExitCode = if ($completed) { [int]$proc.ExitCode } else { -1 }
+            Output   = $combined.Trim()
+            Stdout   = if ($stdout) { $stdout.Trim() } else { '' }
+            Stderr   = if ($stderr) { $stderr.Trim() } else { '' }
             Elapsed  = $sw.Elapsed
         }
     } catch {
@@ -352,15 +370,34 @@ function Wait-ServerHealthy {
     while (([DateTime]::UtcNow) -lt $deadline) {
         try {
             $resp = Invoke-WebRequest -Uri $healthUrl -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop
-            if ($resp.StatusCode -eq 200 -and $resp.Content -match '"status":"UP"') {
-                $sw.Stop()
-                return [PSCustomObject]@{
-                    Healthy  = $true
-                    Elapsed  = $sw.Elapsed
-                    Content  = $resp.Content
+            if ($resp.StatusCode -eq 200) {
+                # Parse the JSON response to read the actual status field.
+                # Using ConvertFrom-Json is more robust than regex-matching
+                # because it handles formatting variations (whitespace,
+                # key ordering, additional fields like "groups").
+                try {
+                    $healthData = $resp.Content | ConvertFrom-Json
+                    if ($healthData.status -eq 'UP') {
+                        $sw.Stop()
+                        return [PSCustomObject]@{
+                            Healthy  = $true
+                            Elapsed  = $sw.Elapsed
+                            Content  = $resp.Content
+                        }
+                    }
+                    # Status field present but not UP (e.g. DOWN, OUT_OF_SERVICE)
+                    Write-Info "Health endpoint status=$($healthData.status) (waiting for UP)"
+                } catch {
+                    # Content is not valid JSON — log a snippet for diagnostics
+                    $snippet = if ($resp.Content.Length -gt 200) {
+                        $resp.Content.Substring(0, 200) + '…'
+                    } else {
+                        $resp.Content
+                    }
+                    Write-Info "Health endpoint returned non-JSON content: $snippet"
                 }
             } else {
-                Write-Info "Health endpoint returned status=$($resp.StatusCode) (not UP yet)"
+                Write-Info "Health endpoint returned HTTP $($resp.StatusCode) (waiting for 200)"
             }
         } catch {
             # Server not reachable yet — expected during startup
