@@ -4054,13 +4054,55 @@ fn read_startup_log_tail(path: &Path) -> String {
 mod tests {
     use super::*;
     use std::fs::{create_dir_all, write};
-    use std::sync::Mutex;
+    use std::sync::{Mutex, MutexGuard};
     use tempfile::TempDir;
 
     /// Global lock to serialize tests that manipulate `BROWSER4_RUNTIME_DIR`
     /// and `BROWSER4_CLI_STATE_DIR` environment variables.  Without this,
     /// parallel test execution causes cross-test contamination.
     static ENV_MUTEX: Mutex<()> = Mutex::new(());
+
+    /// Acquire the global env mutex, tolerating a poisoned lock from a
+    /// previous test panic.  This prevents a single assertion failure from
+    /// cascading into 18 `PoisonError` failures across other tests.
+    fn lock_env_mutex() -> MutexGuard<'static, ()> {
+        ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Drop-based guard that isolates `BROWSER4_RUNTIME_DIR` and
+    /// `BROWSER4_CLI_STATE_DIR` for a single test.  On drop (including
+    /// panic unwinding) the original env-var values are restored, so a
+    /// panicked test can never leak its temp-directory paths into
+    /// subsequent tests.
+    struct TestEnvGuard {
+        prev_runtime: Option<String>,
+        prev_state: Option<String>,
+    }
+
+    impl TestEnvGuard {
+        fn lock(tmp: &Path) -> Self {
+            let prev_runtime = env::var("BROWSER4_RUNTIME_DIR").ok();
+            let prev_state = env::var("BROWSER4_CLI_STATE_DIR").ok();
+            unsafe {
+                env::set_var("BROWSER4_RUNTIME_DIR", tmp.join("runtime-data").as_os_str());
+                env::set_var("BROWSER4_CLI_STATE_DIR", tmp.join("state").as_os_str());
+            }
+            Self { prev_runtime, prev_state }
+        }
+    }
+
+    impl Drop for TestEnvGuard {
+        fn drop(&mut self) {
+            match &self.prev_runtime {
+                Some(v) => unsafe { env::set_var("BROWSER4_RUNTIME_DIR", v) },
+                None => unsafe { env::remove_var("BROWSER4_RUNTIME_DIR") },
+            }
+            match &self.prev_state {
+                Some(v) => unsafe { env::set_var("BROWSER4_CLI_STATE_DIR", v) },
+                None => unsafe { env::remove_var("BROWSER4_CLI_STATE_DIR") },
+            }
+        }
+    }
 
     fn test_temp_dir() -> TempDir {
         let root = std::env::temp_dir()
@@ -4369,7 +4411,7 @@ mod tests {
 
     #[test]
     fn test_is_china_locale_zh_cn_lang() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = lock_env_mutex();
         let saved = isolate_locale_env();
         unsafe { env::set_var("LANG", "zh_CN.UTF-8") };
         let result = is_china_locale();
@@ -4379,7 +4421,7 @@ mod tests {
 
     #[test]
     fn test_is_china_locale_zh_cn_dash() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = lock_env_mutex();
         let saved = isolate_locale_env();
         unsafe { env::set_var("LANG", "zh-CN.UTF-8") };
         let result = is_china_locale();
@@ -4389,7 +4431,7 @@ mod tests {
 
     #[test]
     fn test_is_china_locale_lc_all_overrides_lang() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = lock_env_mutex();
         let saved = isolate_locale_env();
         unsafe { env::set_var("LC_ALL", "zh_CN.UTF-8") };
         unsafe { env::set_var("LANG", "en_US.UTF-8") };
@@ -4400,7 +4442,7 @@ mod tests {
 
     #[test]
     fn test_is_china_locale_asia_shanghai_tz() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = lock_env_mutex();
         let saved = isolate_locale_env();
         unsafe { env::set_var("TZ", "Asia/Shanghai") };
         let result = is_china_locale();
@@ -4410,7 +4452,7 @@ mod tests {
 
     #[test]
     fn test_is_china_locale_false_for_en_us() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = lock_env_mutex();
         let saved = isolate_locale_env();
         unsafe { env::set_var("LANG", "en_US.UTF-8") };
         let result = is_china_locale();
@@ -4420,7 +4462,7 @@ mod tests {
 
     #[test]
     fn test_is_china_locale_false_for_empty() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = lock_env_mutex();
         let saved = isolate_locale_env();
         let result = is_china_locale();
         restore_locale_env(saved);
@@ -4846,7 +4888,7 @@ mod tests {
 
     #[test]
     fn test_materialize_installed_runtime_uses_versioned_layout() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _guard = lock_env_mutex();
         let tmp = test_temp_dir();
         unsafe {
             env::set_var("BROWSER4_RUNTIME_DIR", tmp.path().as_os_str());
@@ -5202,10 +5244,10 @@ mod tests {
 
     #[test]
     fn test_metadata_round_trip() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _lock = lock_env_mutex();
         let tmp = test_temp_dir();
         let tag = "v4.9.3";
-        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+        let _env = TestEnvGuard::lock(&tmp.path());
         setup_valid_versioned_runtime(&tmp.path().join("runtime-data"), tag);
 
         // Write metadata into the versioned install dir.
@@ -5230,27 +5272,24 @@ mod tests {
         assert_eq!(read.tag, "v4.9.3");
         assert_eq!(read.asset_name, "browser4-runtime-linux-x64.tar.gz");
         assert_eq!(read.installed_at, "2026-06-01T00:00:00Z");
-
-        restore_test_env(prev_runtime, prev_state);
     }
 
     #[test]
     fn test_metadata_missing_file_returns_none() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _lock = lock_env_mutex();
         let tmp = test_temp_dir();
-        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+        let _env = TestEnvGuard::lock(&tmp.path());
         // No runtime installed at all → metadata is None.
         let read = read_installed_browser4_runtime_metadata();
         assert!(read.is_none());
-        restore_test_env(prev_runtime, prev_state);
     }
 
     #[test]
     fn test_metadata_corrupted_json_returns_none() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _lock = lock_env_mutex();
         let tmp = test_temp_dir();
         let tag = "v4.9.3";
-        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+        let _env = TestEnvGuard::lock(&tmp.path());
         setup_valid_versioned_runtime(&tmp.path().join("runtime-data"), tag);
 
         // Corrupt the metadata file.
@@ -5264,8 +5303,6 @@ mod tests {
 
         let read = read_installed_browser4_runtime_metadata();
         assert!(read.is_none());
-
-        restore_test_env(prev_runtime, prev_state);
     }
 
     // -------------------------------------------------------------------
@@ -5296,38 +5333,15 @@ mod tests {
         dir
     }
 
-    /// Set both env vars so tests are fully isolated from any real
-    /// `~/.browser4/` or `~/.local/share/browser4/` directories.
-    fn isolate_test_env(tmp: &Path) -> (Option<String>, Option<String>) {
-        let prev_runtime = env::var("BROWSER4_RUNTIME_DIR").ok();
-        let prev_state = env::var("BROWSER4_CLI_STATE_DIR").ok();
-        unsafe {
-            env::set_var("BROWSER4_RUNTIME_DIR", tmp.join("runtime-data").as_os_str());
-            env::set_var("BROWSER4_CLI_STATE_DIR", tmp.join("state").as_os_str());
-        }
-        (prev_runtime, prev_state)
-    }
-
-    fn restore_test_env(prev_runtime: Option<String>, prev_state: Option<String>) {
-        match prev_runtime {
-            Some(v) => unsafe { env::set_var("BROWSER4_RUNTIME_DIR", v) },
-            None => unsafe { env::remove_var("BROWSER4_RUNTIME_DIR") },
-        }
-        match prev_state {
-            Some(v) => unsafe { env::set_var("BROWSER4_CLI_STATE_DIR", v) },
-            None => unsafe { env::remove_var("BROWSER4_CLI_STATE_DIR") },
-        }
-    }
-
     // -------------------------------------------------------------------
     // New layout: versioned install dirs, current.tag, migration
     // -------------------------------------------------------------------
 
     #[test]
     fn test_current_tag_read_write_round_trip() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _lock = lock_env_mutex();
         let tmp = test_temp_dir();
-        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+        let _env = TestEnvGuard::lock(&tmp.path());
 
         // No tag yet → None (and no legacy install to migrate).
         assert!(read_current_tag().is_none());
@@ -5339,15 +5353,13 @@ mod tests {
         // Overwrite with a different tag.
         write_current_tag("v4.12.0").unwrap();
         assert_eq!(read_current_tag().as_deref(), Some("v4.12.0"));
-
-        restore_test_env(prev_runtime, prev_state);
     }
 
     #[test]
     fn test_versioned_install_dir_path() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _lock = lock_env_mutex();
         let tmp = test_temp_dir();
-        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+        let _env = TestEnvGuard::lock(&tmp.path());
 
         let dir = versioned_install_dir("v4.10.0");
         assert!(dir.ends_with(Path::new("runtime").join("v4.10.0")));
@@ -5359,15 +5371,13 @@ mod tests {
         // may add \\?\ prefix on Windows — compare file names instead).
         assert!(resolved.ends_with(Path::new("runtime").join("v4.10.0")));
         assert!(resolved.join("lib").join("browser4.jar").exists());
-
-        restore_test_env(prev_runtime, prev_state);
     }
 
     #[test]
     fn test_legacy_migration_detects_old_layout() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _lock = lock_env_mutex();
         let tmp = test_temp_dir();
-        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+        let _env = TestEnvGuard::lock(&tmp.path());
 
         // Set up legacy layout under state_dir/lib/ (but BROWSER4_CLI_STATE_DIR
         // points to our isolated temp dir, so we must write there).
@@ -5405,15 +5415,13 @@ mod tests {
         // The versioned dir should exist in the new location.
         let new_dir = versioned_install_dir("v4.8.0");
         assert!(new_dir.join("lib").join("browser4.jar").exists());
-
-        restore_test_env(prev_runtime, prev_state);
     }
 
     #[test]
     fn test_find_newest_versioned_install() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _lock = lock_env_mutex();
         let tmp = test_temp_dir();
-        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+        let _env = TestEnvGuard::lock(&tmp.path());
 
         // Set up multiple versioned installs without current.tag.
         for tag in &["v4.8.0", "v4.9.0", "v4.10.0"] {
@@ -5445,8 +5453,6 @@ mod tests {
             fs::read_to_string(current_tag_file_path()).unwrap().trim(),
             "v4.10.0"
         );
-
-        restore_test_env(prev_runtime, prev_state);
     }
 
     // -------------------------------------------------------------------
@@ -5455,9 +5461,9 @@ mod tests {
 
     #[test]
     fn test_mirror_preference_round_trip() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _lock = lock_env_mutex();
         let tmp = test_temp_dir();
-        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+        let _env = TestEnvGuard::lock(&tmp.path());
 
         let pref = MirrorPreference {
             selected_mirror: DownloadMirror {
@@ -5478,14 +5484,13 @@ mod tests {
         assert_eq!(loaded.download_speed_bps, 5_000_000);
 
         delete_mirror_preference_cache();
-        restore_test_env(prev_runtime, prev_state);
     }
 
     #[test]
     fn test_mirror_preference_expired() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _lock = lock_env_mutex();
         let tmp = test_temp_dir();
-        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+        let _env = TestEnvGuard::lock(&tmp.path());
         let prev_ttl = env::var(MIRROR_PREFERENCE_TTL_ENV).ok();
         unsafe {
             env::set_var(MIRROR_PREFERENCE_TTL_ENV, "1"); // 1-second TTL
@@ -5512,7 +5517,6 @@ mod tests {
         );
 
         delete_mirror_preference_cache();
-        restore_test_env(prev_runtime, prev_state);
         match prev_ttl {
             Some(v) => unsafe { env::set_var(MIRROR_PREFERENCE_TTL_ENV, v) },
             None => unsafe { env::remove_var(MIRROR_PREFERENCE_TTL_ENV) },
@@ -5521,9 +5525,9 @@ mod tests {
 
     #[test]
     fn test_mirror_preference_valid_under_ttl() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _lock = lock_env_mutex();
         let tmp = test_temp_dir();
-        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+        let _env = TestEnvGuard::lock(&tmp.path());
         let prev_ttl = env::var(MIRROR_PREFERENCE_TTL_ENV).ok();
         unsafe {
             env::set_var(MIRROR_PREFERENCE_TTL_ENV, "86400");
@@ -5549,7 +5553,6 @@ mod tests {
         );
 
         delete_mirror_preference_cache();
-        restore_test_env(prev_runtime, prev_state);
         match prev_ttl {
             Some(v) => unsafe { env::set_var(MIRROR_PREFERENCE_TTL_ENV, v) },
             None => unsafe { env::remove_var(MIRROR_PREFERENCE_TTL_ENV) },
@@ -5558,9 +5561,9 @@ mod tests {
 
     #[test]
     fn test_mirror_preference_ttl_env_override() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _lock = lock_env_mutex();
         let tmp = test_temp_dir();
-        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+        let _env = TestEnvGuard::lock(&tmp.path());
         let prev_ttl = env::var(MIRROR_PREFERENCE_TTL_ENV).ok();
         unsafe {
             env::set_var(MIRROR_PREFERENCE_TTL_ENV, "3600"); // 1 hour
@@ -5598,7 +5601,6 @@ mod tests {
             "with 1s TTL, 2020 timestamp should be expired"
         );
 
-        restore_test_env(prev_runtime, prev_state);
         match prev_ttl {
             Some(v) => unsafe { env::set_var(MIRROR_PREFERENCE_TTL_ENV, v) },
             None => unsafe { env::remove_var(MIRROR_PREFERENCE_TTL_ENV) },
@@ -5607,9 +5609,9 @@ mod tests {
 
     #[test]
     fn test_mirror_preference_invalid_when_mirror_missing() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _lock = lock_env_mutex();
         let tmp = test_temp_dir();
-        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+        let _env = TestEnvGuard::lock(&tmp.path());
 
         let pref = MirrorPreference {
             selected_mirror: DownloadMirror {
@@ -5635,14 +5637,13 @@ mod tests {
         );
 
         delete_mirror_preference_cache();
-        restore_test_env(prev_runtime, prev_state);
     }
 
     #[test]
     fn test_mirror_preference_corrupted() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _lock = lock_env_mutex();
         let tmp = test_temp_dir();
-        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+        let _env = TestEnvGuard::lock(&tmp.path());
 
         let path = mirror_preference_cache_path();
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -5653,14 +5654,13 @@ mod tests {
         assert!(loaded.is_none(), "corrupted cache file should return None");
 
         delete_mirror_preference_cache();
-        restore_test_env(prev_runtime, prev_state);
     }
 
     #[test]
     fn test_delete_mirror_preference_cache_removes_file() {
-        let _guard = ENV_MUTEX.lock().unwrap();
+        let _lock = lock_env_mutex();
         let tmp = test_temp_dir();
-        let (prev_runtime, prev_state) = isolate_test_env(&tmp.path());
+        let _env = TestEnvGuard::lock(&tmp.path());
 
         let path = mirror_preference_cache_path();
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -5669,7 +5669,5 @@ mod tests {
 
         delete_mirror_preference_cache();
         assert!(!path.exists(), "cache file should be deleted");
-
-        restore_test_env(prev_runtime, prev_state);
     }
 }
