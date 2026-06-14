@@ -44,6 +44,22 @@ Comprehensive test runner for the current Maven reactors plus the Browser4 CLI p
 ./bin/test.sh mock-site -Dmock.site.port=18080
 ```
 
+### `test-production.ps1`
+
+Acceptance test for the latest production release of `browser4-cli`.
+
+Downloads, installs, exercises, uninstalls, and re-installs the global `browser4-cli`
+from the public distribution channel, then runs the multi-scenario stress suite against it.
+
+Tests the full lifecycle: install → smoke-test → uninstall → re-install → multi-scenario stress.
+
+| Parameter | Description |
+|---|---|
+| `-SkipMultiScenarios` | Skip the final multi-scenarios.ps1 run |
+| `-MultiScenariosIterations N` | Number of iterations (default: 1) |
+| `-KeepWorkingDir` | Do not delete the working directory on exit |
+| `-WorkingDir <path>` | Override the working directory |
+
 ### `version.ps1`, `version.sh`
 
 Print the version of Browser4.
@@ -62,14 +78,14 @@ A text file containing seed URLs for testing or crawling.
 
 Build scripts with extended functionality.
 
-- **`build.ps1` / `build.sh`**: Full build pipeline — Maven + Spring Boot fat JAR + Cargo. Builds the entire project including the CLI, then copies `Browser4.jar` to `target/`.
+- **`build.ps1`**: Full build pipeline — Maven + Spring Boot fat JAR + Cargo. Builds the entire project including the CLI, then copies `Browser4.jar` to `target/`.
 - **`spring-boot.ps1`**: Build then launch Browser4 via `mvnw spring-boot:run`. Convenient for development hot-reload workflows.
 
 ### `ci/`
 
-CI/CD helper scripts.
+CI/CD helper scripts for triggering and managing CI workflows.
 
-- **`ci-tag-add.ps1`**: Add a CI release tag.
+- **`trigger-ci-action.ps1`**: Create and push a CI pre-release tag (`vX.Y.Z-ci.N`) to trigger the CI workflow. Auto-increments the pre-release number.
 - **`ci-tags-rm.ps1`**: Remove CI release tags.
 
 ### `common/`
@@ -82,7 +98,8 @@ Shared PowerShell utility modules imported by other scripts.
 
 Git maintenance and housekeeping scripts.
 
-- **`clean-orphan-tags.ps1`**: Clean up orphaned git tags that no longer exist on the remote.
+- **`cleanup-orphan-tags.ps1`**: Clean up orphaned git tags that no longer exist on the remote.
+- **`cleanup-tags.ps1`**, **`cleanup-tags.sh`**: Remove local tags that no longer exist on the remote.
 - **`delete-copilot-branches.ps1`**: Delete local and remote branches matching the GitHub Copilot naming pattern (`copilot/*`).
 - **`git-config.ps1`**: Quick-set git HTTP/HTTPS proxy configuration.
 - **`remove-tags-before.ps1`**: Remove stable-version git tags older than a specified threshold (default: before `v4.0.0`). Supports remote deletion.
@@ -97,10 +114,44 @@ Code quality check scripts.
 
 Release management scripts. See also [release/README.md](release/README.md) for the release workflow.
 
+- **`trigger-release-action.ps1`**: Interactive script to create and push a release tag (`vX.Y.Z`). Validates the version in `VERSION`, shows changelog since the previous tag, and pushes to the specified remote.
+- **`trigger-cli-release-action.ps1`**: Trigger the `browser4-cli` release workflow. Supports tag mode (creates `v{version}-cli` tag) and dispatch mode (`gh workflow run`), plus dry-run tagging.
+- **`check-publish-status.ps1`**: Check whether the current project version and CLI version have been fully published to GitHub and npm.
+- **`download-release-assets.ps1`**: Download all assets from a GitHub release (defaults to latest, supports specific tags via `-Tag`).
 - **`bump-version.ps1`**: Bump project version (minor/major).
 - **`bump-version-patch.ps1`**: Bump project version (patch).
-- **`release-tag-add.ps1`**: Interactive script to create and push a release tag. Validates the version in `VERSION`, shows changelog since the previous tag, and pushes to the specified remote.
 - **`update-versions.sh`**: Replace `-SNAPSHOT` version strings across `pom.xml`, `llm-config.md`, `README.md`, etc. Used by the CI release pipeline.
+
+### `test/`
+
+Test infrastructure and Docker verification scripts.
+
+- **`test-create-runtime-bundle.ps1`**: Build the `browser4-bundle` Maven module with `-Passet-bundle` to create a runtime distribution bundle.
+- **`test-docker-local.ps1`**: Build and smoke-test the Browser4 Docker image locally, mirroring the CI `build-core-and-docker` job. Runs Maven build, Docker build, health check, and JAR inspection.
+
+### `tests/`
+
+Integration test suite for `browser4-cli`. All tests use the globally-installed CLI by default (override with `$env:BROWSER4_CLI_BIN`).
+
+**Test Runner:**
+- **`run-tests.ps1`**, **`run-tests.sh`**: Discover and run test scripts. Supports categories (`smoke`, `agent`, `swarm`, `stress`, `all`) or individual tests. `run-tests.sh` is a bash wrapper that auto-detects locale and invokes `run-tests.ps1` via `pwsh`. On failure, attempts AI-powered log analysis via `claude` or `copilot` if available.
+
+**Test Scripts:**
+- **`cli-basics.ps1`**: Smoke test — verifies `--version`, `--help`, and basic session operations (open, list, close).
+- **`agent-run-page-visit.ps1`**: Agent page-visit task lifecycle test.
+- **`agent-run-page-visit-interact.ps1`**: Agent page-visit with interaction task test.
+- **`agent-run-free-command.ps1`**: Agent free-command task lifecycle test (goto → extract).
+- **`swarm-agents.ps1`**, **`swarm-agents.sh`**: Swarm create / submit / status lifecycle test.
+- **`multi-scenarios.ps1`**: Multi-scenario stress-test orchestrator. Runs the scenario suite in a loop with isolated sub-processes.
+- **`stress-install.ps1`**: Stress-test the install/uninstall lifecycle.
+- **`stress-session.ps1`**: Stress-test session open/close lifecycle.
+- **`stress-swarm-agents.ps1`**: Stress-test swarm agent operations at scale.
+
+**Support Files:**
+- **`test-utils.psm1`**: Shared PowerShell module providing CLI invocation tracking, logging, failure reporting, and AI analysis.
+- **`seeds.txt`**, **`seeds-stress.txt`**: Seed URL lists for test scenarios.
+- **`logs/`**: Per-run log directories with full command output.
+- **`.browser4-cli/snapshot/`**: CLI snapshot files for history verification.
 
 ### `tools/`
 
@@ -116,11 +167,12 @@ Utility scripts for development and system maintenance.
 
 **Dependencies & Setup:**
 - **`install-depends.ps1` / `install-depends.sh`**: Install system dependencies (Chrome, Maven Wrapper, etc.).
+- **`install-powershell.sh`**: Install PowerShell (`pwsh`) via the official install script if not already present.
 - **`check-dependencies.ps1` / `check-dependencies.sh`**: Check for dependency updates or issues.
 - **`fix-kotlin-daemon.ps1`**: Diagnose and fix stale Kotlin daemon processes. Kills orphaned daemon JVMs, cleans lock files in `%LOCALAPPDATA%\kotlin\daemon`, and optionally runs a Maven install check to verify the fix.
 
 **Housekeeping:**
-- **`clear-temp-dir.ps1`**: Targeted cleanup of temporary build artifacts (tomcat, chrome, test, `.jar`, `koltin`, playwright, VS installer residue). Supports `-MinAgeHours` (default 24h) and `-WhatIf` for preview.
+- **`clear-temp-dir.ps1`**: Targeted cleanup of temporary build artifacts (tomcat, chrome, test, `.jar`, koltin, playwright, VS installer residue). Supports `-MinAgeHours` (default 24h) and `-WhatIf` for preview.
 - **`remove-global-browser4-cli.ps1`**: Uninstall globally installed `browser4-cli` packages from npm, pnpm, Yarn, and cargo. Supports `-DryRun` and `-FailIfRemaining` for CI validation.
 - **`dos2unix.sh`**: Convert Windows line endings to Unix.
 
