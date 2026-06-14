@@ -27,6 +27,7 @@
                         </goals>
                         <configuration>
                             <createDependencyReducedPom>true</createDependencyReducedPom>
+                            <minimizeJar>true</minimizeJar>
                             <filters>
                                 <filter>
                                     <artifact>*:*</artifact>
@@ -34,7 +35,33 @@
                                         <exclude>META-INF/*.SF</exclude>
                                         <exclude>META-INF/*.DSA</exclude>
                                         <exclude>META-INF/*.RSA</exclude>
+                                        <!-- Strip native-image metadata for libraries
+                                             whose classes are removed by minimizeJar.
+                                             Stale metadata referencing stripped classes
+                                             causes native-image failures. -->
+                                        <exclude>META-INF/native-image/io.netty*/**</exclude>
+                                        <exclude>META-INF/native-image/org.springframework*/**</exclude>
                                     </excludes>
+                                </filter>
+                                <!-- Keep reflection-heavy libraries in full:
+                                     Jackson, Log4j, and Kotlin reflect use
+                                     extensive runtime reflection that bytecode
+                                     analysis cannot trace. -->
+                                <filter>
+                                    <artifact>com.fasterxml.jackson.*:*</artifact>
+                                    <includes><include>**</include></includes>
+                                </filter>
+                                <filter>
+                                    <artifact>org.apache.logging.log4j:*</artifact>
+                                    <includes><include>**</include></includes>
+                                </filter>
+                                <filter>
+                                    <artifact>ch.qos.logback:*</artifact>
+                                    <includes><include>**</include></includes>
+                                </filter>
+                                <filter>
+                                    <artifact>org.jetbrains.kotlinx:kotlinx-serialization-*</artifact>
+                                    <includes><include>**</include></includes>
                                 </filter>
                             </filters>
                             <transformers>
