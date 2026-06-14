@@ -224,18 +224,19 @@ function Invoke-TrackedCli {
         else { 120 }
     }
 
-    # --- Execute via .NET Process (not PowerShell pipeline) ---
+    # --- Execute via Start-Process with temp-file redirection ---
     #
-    # On Windows, `& ... | ForEach-Object` can hang indefinitely when the
-    # CLI spawns a Java server child: the server inherits the stdout pipe
-    # handle via CreateProcess(bInheritHandles=TRUE), keeping the pipeline
-    # open even after the CLI exits.  .NET Process with redirected streams
-    # isolates our read handles from the server's handle table.
+    # On Windows, .NET Process.StandardOutput.Peek() can block indefinitely
+    # when the CLI spawns a Java server child that keeps the pipe open (the
+    # server inherits the write end of the anonymous pipe).  Start-Process
+    # with file redirection avoids this: our read handles are never shared,
+    # and WaitForExit provides reliable timeout behaviour.
     $output = [System.Collections.Generic.List[string]]::new()
     $exitCode = 0
     $timedOut = $false
 
-    # Resolve the real .exe when the CLI is a .cmd shim.
+    # Resolve the real .exe when the CLI is a .cmd shim (Start-Process
+    # handles .cmd via cmd.exe /c, but direct .exe is more reliable).
     $cliExe = $cliBin
     $isWin = (Get-Variable -Name 'IsWindows' -ErrorAction SilentlyContinue) -and $IsWindows
     if (-not $isWin) { $isWin = ($env:OS -eq 'Windows_NT') }
@@ -250,69 +251,43 @@ function Invoke-TrackedCli {
     }
 
     try {
-        $psi = [System.Diagnostics.ProcessStartInfo]::new()
-        $psi.FileName = $cliExe
-        $psi.Arguments = ($Arguments -join ' ')
-        $psi.UseShellExecute = $false
-        $psi.RedirectStandardOutput = $true
-        $psi.RedirectStandardError = $true
-        $psi.CreateNoWindow = $true
-        $psi.StandardOutputEncoding = [Text.Encoding]::UTF8
-        $psi.StandardErrorEncoding  = [Text.Encoding]::UTF8
+        $tmpOut = Join-Path $script:LogDir "tmp_stdout_${idx}.txt"
+        $tmpErr = Join-Path $script:LogDir "tmp_stderr_${idx}.txt"
+        Remove-Item $tmpOut, $tmpErr -Force -ErrorAction SilentlyContinue
 
-        $proc = [System.Diagnostics.Process]::new()
-        $proc.StartInfo = $psi
-        $proc.Start() | Out-Null
+        # Start-Process with -PassThru gives us a Process object we can
+        # WaitForExit on.  Using file redirection avoids the inherited-pipe
+        # problem that plagues .NET Process + Peek() on Windows.
+        $proc = Start-Process `
+            -FilePath $cliExe `
+            -ArgumentList ($Arguments -join ' ') `
+            -NoNewWindow `
+            -PassThru `
+            -RedirectStandardOutput $tmpOut `
+            -RedirectStandardError $tmpErr
 
-        # Poll stdout/stderr synchronously.  Peek() is non-blocking on
-        # Windows anonymous pipes (returns -1 when no data is ready).
         $timeoutMs = $effectiveTimeout * 1000
-        while (-not $proc.HasExited) {
-            try {
-                while ($proc.StandardOutput.Peek() -ge 0) {
-                    $line = $proc.StandardOutput.ReadLine()
-                    if ($line -ne $null) { $output.Add($line) }
-                }
-            } catch {}
-            try {
-                while ($proc.StandardError.Peek() -ge 0) {
-                    $line = $proc.StandardError.ReadLine()
-                    if ($line -ne $null) { $output.Add("[stderr] $line") }
-                }
-            } catch {}
+        $completed = $proc.WaitForExit($timeoutMs)
 
-            if ($sw.Elapsed.TotalMilliseconds -gt $timeoutMs) {
-                $timedOut = $true
-                break
-            }
-            Start-Sleep -Milliseconds 100
+        if (-not $completed) {
+            $timedOut = $true
+            $proc.Kill($true) | Out-Null
+            $proc.WaitForExit(5000) | Out-Null
         }
 
-        if ($timedOut) {
-            try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
-            try {
-                Get-CimInstance Win32_Process |
-                    Where-Object { $_.ParentProcessId -eq $proc.Id } |
-                    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-            } catch {}
-            if (-not $proc.HasExited) { $proc.Kill() }
+        # Read captured output from temp files.
+        if (Test-Path $tmpOut) {
+            $stdoutLines = Get-Content -Path $tmpOut -ErrorAction SilentlyContinue
+            if ($stdoutLines) { $stdoutLines | ForEach-Object { $output.Add($_) } }
+        }
+        if (Test-Path $tmpErr) {
+            $stderrLines = Get-Content -Path $tmpErr -ErrorAction SilentlyContinue
+            if ($stderrLines) { $stderrLines | ForEach-Object { $output.Add("[stderr] $_") } }
         }
 
-        # Drain final lines.
-        try {
-            while ($proc.StandardOutput.Peek() -ge 0) {
-                $line = $proc.StandardOutput.ReadLine()
-                if ($line -ne $null) { $output.Add($line) }
-            }
-        } catch {}
-        try {
-            while ($proc.StandardError.Peek() -ge 0) {
-                $line = $proc.StandardError.ReadLine()
-                if ($line -ne $null) { $output.Add("[stderr] $line") }
-            }
-        } catch {}
+        Remove-Item $tmpOut, $tmpErr -Force -ErrorAction SilentlyContinue
 
-        $exitCode = if ($timedOut) { -99 } else { $proc.ExitCode }
+        $exitCode = if ($timedOut) { -99 } else { [int]$proc.ExitCode }
     } catch {
         $output.Add("EXCEPTION: $($_.Exception.Message)")
         $exitCode = -99
