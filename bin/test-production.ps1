@@ -366,56 +366,35 @@ function Wait-ServerHealthy {
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     $sleep = 1
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    $lastContent = ''
+    $lastStatus = ''
 
     while (([DateTime]::UtcNow) -lt $deadline) {
         try {
-            $resp = Invoke-WebRequest -Uri $healthUrl -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop
-            $lastContent = $resp.Content
+            # Invoke-RestMethod parses the JSON response directly into a
+            # PSCustomObject — avoids the byte[]-vs-string inconsistency
+            # that Invoke-WebRequest + ConvertFrom-Json can hit when the
+            # server returns a compressed or chunked response on Windows.
+            $healthData = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 5 -ErrorAction Stop
 
-            if ($resp.StatusCode -eq 200) {
-                # Check for status=UP in the JSON response.  Two strategies:
-                #   1. Proper JSON parse via ConvertFrom-Json (handles
-                #      formatting variations, key ordering, extra fields).
-                #   2. Regex fallback — catches responses where the JSON
-                #      text is valid but ConvertFrom-Json may trip on a
-                #      BOM, trailing whitespace, or PS-version quirks.
-                $isUp = $false
-                try {
-                    $healthData = $resp.Content | ConvertFrom-Json
-                    if ($healthData.status -eq 'UP') {
-                        $isUp = $true
-                    }
-                } catch {
-                    # Content may not be parseable; fall through to regex
+            if ($healthData.status -eq 'UP') {
+                $sw.Stop()
+                return [PSCustomObject]@{
+                    Healthy  = $true
+                    Elapsed  = $sw.Elapsed
+                    Content  = ($healthData | ConvertTo-Json -Compress)
                 }
-
-                if (-not $isUp -and $resp.Content -match 'status["\s]*:["\s]*UP') {
-                    $isUp = $true
-                }
-
-                if ($isUp) {
-                    $sw.Stop()
-                    return [PSCustomObject]@{
-                        Healthy  = $true
-                        Elapsed  = $sw.Elapsed
-                        Content  = $resp.Content
-                    }
-                }
-
-                # Not UP yet — log the raw content so we can diagnose
-                # what the server is actually returning during startup.
-                $raw = if ($resp.Content.Length -gt 150) {
-                    $resp.Content.Substring(0, 150) + '…'
-                } else {
-                    $resp.Content
-                }
-                Write-Info "Health not UP yet. raw=$raw"
-            } else {
-                Write-Info "Health HTTP $($resp.StatusCode) (waiting for 200)"
             }
+
+            # Status field present but not UP (e.g. DOWN, OUT_OF_SERVICE)
+            $lastStatus = $healthData.status
+            Write-Info "Health status=$lastStatus (waiting for UP)"
         } catch {
-            # Server not reachable yet — expected during startup
+            # Server not reachable, non-2xx, or invalid JSON —
+            # all expected during startup.  Log the first few times
+            # so the operator can see progress, then go quiet.
+            if ($sleep -le 4) {
+                Write-Info "Health endpoint not ready: $_"
+            }
         }
 
         $remaining = ($deadline - [DateTime]::UtcNow).TotalSeconds
@@ -425,14 +404,13 @@ function Wait-ServerHealthy {
     }
 
     $sw.Stop()
-    # On timeout, show the last response we saw for diagnosis
-    if ($lastContent) {
-        Write-WarningMsg "Health check timed out. Last response: $lastContent"
+    if ($lastStatus) {
+        Write-WarningMsg "Health check timed out. Last status: $lastStatus"
     }
     return [PSCustomObject]@{
         Healthy  = $false
         Elapsed  = $sw.Elapsed
-        Content  = $lastContent
+        Content  = ''
     }
 }
 
