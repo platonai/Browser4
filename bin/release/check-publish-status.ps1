@@ -1,29 +1,57 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-    Checks if the current project version has been fully published.
+    Checks if the current project version and browser4-cli version have been fully published.
 
 .DESCRIPTION
     Verifies that the current version (tagged as vX.Y.Z) is the latest release
     on GitHub. When this condition is satisfied, the version is considered
-    "published" and safe to bump. Exits with code 0 if published, non-zero otherwise.
+    "published" and safe to bump.
+
+    Also checks browser4-cli release status by:
+      - Reading the CLI version from cli/VERSION-CLI
+      - Checking for the latest vX.Y.Z-cli tag on GitHub
+      - Checking the published version on npm (browser4-cli package)
+
+    Provides detailed information about the latest release, including publish
+    date, author, release URL, and asset list.
+
+    Exits with code 0 if the main project version is published, non-zero otherwise.
+    The CLI status is informational only and does not affect the exit code.
 
 .PARAMETER Version
     The version to check (without the -SNAPSHOT suffix).
     If omitted, reads the version from the VERSION file in the repo root.
 
+.PARAMETER CliVersion
+    The CLI version to check.
+    If omitted, reads the version from cli/VERSION-CLI.
+
+.PARAMETER SkipCli
+    Skip the browser4-cli release status check.
+
 .EXAMPLE
     .\check-publish-status.ps1
-    Checks the version from the VERSION file.
+    Checks both main and CLI versions from their respective version files.
 
 .EXAMPLE
     .\check-publish-status.ps1 -Version 4.8.4
     Checks version 4.8.4 explicitly.
+
+.EXAMPLE
+    .\check-publish-status.ps1 -SkipCli
+    Only checks the main project version.
 #>
 [CmdletBinding()]
 param (
     [Parameter(HelpMessage = "The version to check (without -SNAPSHOT)")]
-    [string]$Version
+    [string]$Version,
+
+    [Parameter(HelpMessage = "The CLI version to check")]
+    [string]$CliVersion,
+
+    [Parameter(HelpMessage = "Skip the CLI release status check")]
+    [switch]$SkipCli
 )
 
 $ErrorActionPreference = "Stop"
@@ -55,8 +83,10 @@ if ($Version -notmatch "^\d+\.\d+\.\d+") {
     exit 2
 }
 
-Write-Host "Checking publish status for version: v$Version"
 Write-Host ""
+Write-Host "══════════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host "  Browser4 Release Status Check"              -ForegroundColor Cyan
+Write-Host "══════════════════════════════════════════════" -ForegroundColor Cyan
 
 # Derive GitHub repository from the git remote
 $remoteUrl = git config --get remote.origin.url
@@ -65,101 +95,371 @@ if ($remoteUrl -notmatch 'github\.com[:/](.+?)(?:\.git)?$') {
     exit 2
 }
 $githubRepo = $matches[1]
-Write-Host "GitHub repository : $githubRepo"
+Write-Host "  GitHub repository : $githubRepo"
+Write-Host "  Current version   : v$Version"
+Write-Host ""
 
 # ---------------------------------------------------------------
-# Check: Is this version the latest GitHub release?
+# Helper: Fetch latest release from GitHub using gh CLI
 # ---------------------------------------------------------------
-Write-Host "-------------------------------------------------"
-Write-Host " Check 1: Latest GitHub release"
-Write-Host "-------------------------------------------------"
+function Get-GitHubLatestRelease {
+    param(
+        [string]$GitHubRepo,
+        [string]$ReleaseTagPattern = "*"   # e.g. "*-cli" for CLI releases
+    )
+
+    $result = @{
+        Tag         = $null
+        Name        = $null
+        PublishedAt = $null
+        Author      = $null
+        HtmlUrl     = $null
+        IsPrerelease = $false
+        IsDraft     = $false
+        Body        = $null
+        AssetCount  = 0
+        AssetNames  = @()
+    }
+
+    $ghAvailable = $null -ne (Get-Command gh -ErrorAction SilentlyContinue)
+
+    if ($ghAvailable) {
+        try {
+            # Fetch the latest release matching the pattern
+            if ($ReleaseTagPattern -eq "*") {
+                $releases = & gh release list --repo $GitHubRepo --limit 1 --json tagName,name,publishedAt,author,url,isPrerelease,isDraft,body,assets 2>&1
+            } else {
+                # gh release list doesn't support tag filtering, so fetch more and filter
+                $releases = & gh release list --repo $GitHubRepo --limit 50 --json tagName,name,publishedAt,author,url,isPrerelease,isDraft,body,assets 2>&1
+            }
+
+            if ($LASTEXITCODE -eq 0 -and $releases) {
+                $allReleases = $releases | ConvertFrom-Json
+
+                if ($ReleaseTagPattern -ne "*") {
+                    # Filter releases matching the tag pattern (e.g. "*-cli")
+                    $wildcard = [System.Management.Automation.WildcardPattern]::new($ReleaseTagPattern, [System.Management.Automation.WildcardOptions]::IgnoreCase)
+                    $allReleases = @($allReleases | Where-Object { $wildcard.IsMatch($_.tagName) })
+                }
+
+                if ($allReleases -and $allReleases.Count -gt 0) {
+                    $latest = $allReleases[0]
+                    $result.Tag         = $latest.tagName
+                    $result.Name        = $latest.name
+                    $result.PublishedAt = $latest.publishedAt
+                    $result.Author      = $latest.author.login
+                    $result.HtmlUrl     = $latest.url
+                    $result.IsPrerelease = $latest.isPrerelease
+                    $result.IsDraft     = $latest.isDraft
+                    $result.Body        = $latest.body
+                    $result.AssetCount  = $latest.assets.Count
+                    $result.AssetNames  = @($latest.assets | ForEach-Object { $_.name })
+                }
+            }
+        } catch {
+            # Fall through to API method
+        }
+    }
+
+    # Fallback: GitHub API
+    if ($null -eq $result.Tag) {
+        try {
+            $apiUrl = "https://api.github.com/repos/$GitHubRepo/releases?per_page=50"
+            $releases = Invoke-RestMethod -Uri $apiUrl -Method Get -Headers @{
+                Accept = "application/vnd.github+json"
+            } -ErrorAction SilentlyContinue
+
+            if ($releases) {
+                if ($ReleaseTagPattern -ne "*") {
+                    $wildcard = [System.Management.Automation.WildcardPattern]::new($ReleaseTagPattern, [System.Management.Automation.WildcardOptions]::IgnoreCase)
+                    $releases = @($releases | Where-Object { $wildcard.IsMatch($_.tag_name) })
+                }
+
+                if ($releases.Count -gt 0) {
+                    $latest = $releases[0]
+                    $result.Tag         = $latest.tag_name
+                    $result.Name        = $latest.name
+                    $result.PublishedAt = $latest.published_at
+                    $result.Author      = $latest.author.login
+                    $result.HtmlUrl     = $latest.html_url
+                    $result.IsPrerelease = $latest.prerelease
+                    $result.IsDraft     = $latest.draft
+                    $result.Body        = $latest.body
+                    $result.AssetCount  = $latest.assets.Count
+                    $result.AssetNames  = @($latest.assets | ForEach-Object { $_.name })
+                }
+            }
+        } catch {
+            # Fall through to git fallback
+        }
+    }
+
+    # Second fallback: git tags
+    if ($null -eq $result.Tag) {
+        if ($ReleaseTagPattern -eq "*") {
+            $latestTag = git ls-remote --tags --sort=-version:refname origin 2>$null `
+                | Select-Object -First 1 `
+                | ForEach-Object { $_ -match 'refs/tags/(v\d+\.\d+\.\d+)$' | Out-Null; $matches[1] }
+        } else {
+            # Convert wildcard to grep pattern
+            $grepPattern = $ReleaseTagPattern -replace '\*', '.*'
+            $latestTag = git ls-remote --tags --sort=-version:refname origin 2>$null `
+                | ForEach-Object { if ($_ -match "refs/tags/($grepPattern)") { $matches[1] } } `
+                | Select-Object -First 1
+        }
+        if ($latestTag) {
+            $result.Tag = $latestTag
+        }
+    }
+
+    return $result
+}
+
+# ---------------------------------------------------------------
+# Check 1: Main project release status
+# ---------------------------------------------------------------
+Write-Host "────────────────────────────────────────────────" -ForegroundColor Yellow
+Write-Host "  Check 1: Browser4 (main project) release"    -ForegroundColor Yellow
+Write-Host "────────────────────────────────────────────────" -ForegroundColor Yellow
+Write-Host ""
 
 $isLatestRelease = $false
-$latestReleaseTag = $null
+$latestReleaseInfo = $null
 
-# Prefer gh CLI if available (handles auth and rate limiting)
-$ghAvailable = $null -ne (Get-Command gh -ErrorAction SilentlyContinue)
-if ($ghAvailable) {
-    Write-Host "Using gh CLI to fetch latest release..."
+Write-Host "Fetching latest GitHub release for $githubRepo ..."
+$latestReleaseInfo = Get-GitHubLatestRelease -GitHubRepo $githubRepo
 
-    try {
-        # gh release list returns releases ordered by creation date (newest first)
-        $latestRelease = & gh release list --repo $githubRepo --limit 1 --json tagName 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            $latestReleaseObj = $latestRelease | ConvertFrom-Json
-            if ($latestReleaseObj -and $latestReleaseObj.Count -gt 0) {
-                $latestReleaseTag = $latestReleaseObj[0].tagName
-                Write-Host "  Latest release : $latestReleaseTag"
-                Write-Host "  Current tag    : v$Version"
+if ($null -ne $latestReleaseInfo.Tag) {
+    Write-Host ""
+    Write-Host "  ── Latest GitHub Release ──"
+    Write-Host "  Tag          : $($latestReleaseInfo.Tag)"
 
-                if ($latestReleaseTag -eq "v$Version") {
-                    $isLatestRelease = $true
-                    Write-Host "  [OK] The current version IS the latest GitHub release."
-                } else {
-                    Write-Host "  [XX] The current version is NOT the latest release."
-                }
-            } else {
-                Write-Host "  No releases found via gh CLI. Falling back to GitHub API."
-            }
-        } else {
-            Write-Host "  gh command returned an error. Falling back to GitHub API."
-        }
-    } catch {
-        Write-Host "  gh error: $_"
-        Write-Host "  Falling back to GitHub API."
+    if ($latestReleaseInfo.Name) {
+        Write-Host "  Title        : $($latestReleaseInfo.Name)"
     }
-}
 
-# Fallback: use GitHub API
-if (-not $ghAvailable -or $null -eq $latestReleaseTag) {
-    Write-Host "Using GitHub API to fetch latest release..."
-
-    try {
-        $apiUrl = "https://api.github.com/repos/$githubRepo/releases/latest"
-        $response = Invoke-RestMethod -Uri $apiUrl -Method Get -Headers @{
-            Accept = "application/vnd.github+json"
-        } -ErrorAction SilentlyContinue
-
-        if ($response) {
-            $latestReleaseTag = $response.tag_name
-            Write-Host "  Latest release : $latestReleaseTag"
-            Write-Host "  Current tag    : v$Version"
-
-            if ($latestReleaseTag -eq "v$Version") {
-                $isLatestRelease = $true
-                Write-Host "  [OK] The current version IS the latest GitHub release."
-            } else {
-                Write-Host "  [XX] The current version is NOT the latest release."
-            }
-        } else {
-            Write-Host "  GitHub API returned no data (no releases yet?)."
-        }
-    } catch {
-        Write-Host "  GitHub API error: $_"
+    if ($latestReleaseInfo.PublishedAt) {
+        Write-Host "  Published    : $($latestReleaseInfo.PublishedAt)"
     }
-}
 
-# Second fallback: compare against latest git tag
-if ($null -eq $latestReleaseTag) {
-    Write-Host "Falling back to git tag comparison..."
+    if ($latestReleaseInfo.Author) {
+        Write-Host "  Author       : @$($latestReleaseInfo.Author)"
+    }
 
-    # Get the latest tag matching vX.Y.Z pattern
-    $latestTag = git ls-remote --tags --sort=-version:refname origin 2>$null `
-        | Select-Object -First 1 `
-        | ForEach-Object { $_ -match 'refs/tags/(v\d+\.\d+\.\d+)$' | Out-Null; $matches[1] }
+    if ($latestReleaseInfo.HtmlUrl) {
+        Write-Host "  URL          : $($latestReleaseInfo.HtmlUrl)"
+    }
 
-    if ($latestTag) {
-        Write-Host "  Latest remote tag: $latestTag"
-        Write-Host "  Current tag      : v$Version"
+    # Flags
+    $flags = @()
+    if ($latestReleaseInfo.IsPrerelease) { $flags += "PRE-RELEASE" }
+    if ($latestReleaseInfo.IsDraft)     { $flags += "DRAFT" }
+    if ($flags.Count -gt 0) {
+        Write-Host "  Flags        : $($flags -join ', ')" -ForegroundColor Yellow
+    }
 
-        if ($latestTag -eq "v$Version") {
-            $isLatestRelease = $true
-            Write-Host "  [OK] The current version matches the latest tag."
-        } else {
-            Write-Host "  [XX] The current version does NOT match the latest tag."
+    # Assets
+    Write-Host "  Assets       : $($latestReleaseInfo.AssetCount)"
+    if ($latestReleaseInfo.AssetCount -gt 0) {
+        $maxAssetsToShow = 8
+        $shown = 0
+        foreach ($asset in $latestReleaseInfo.AssetNames) {
+            if ($shown -ge $maxAssetsToShow) {
+                $remaining = $latestReleaseInfo.AssetCount - $maxAssetsToShow
+                Write-Host "                 ... and $remaining more"
+                break
+            }
+            Write-Host "                 - $asset"
+            $shown++
         }
+    }
+
+    # Release body summary (first few lines)
+    if ($latestReleaseInfo.Body) {
+        $bodyLines = $latestReleaseInfo.Body -split "`n" | Where-Object { $_.Trim() -ne "" } | Select-Object -First 5
+        if ($bodyLines.Count -gt 0) {
+            Write-Host "  Notes        :"
+            foreach ($line in $bodyLines) {
+                $trimmed = $line.Trim()
+                if ($trimmed.Length -gt 100) { $trimmed = $trimmed.Substring(0, 97) + "..." }
+                Write-Host "                 $trimmed"
+            }
+        }
+    }
+
+    Write-Host ""
+    Write-Host "  Current tag  : v$Version"
+    Write-Host "  Latest tag   : $($latestReleaseInfo.Tag)"
+
+    if ($latestReleaseInfo.Tag -eq "v$Version") {
+        $isLatestRelease = $true
+        Write-Host "  [OK] Current version IS the latest GitHub release." -ForegroundColor Green
     } else {
-        Write-Host "  [XX] No version tags found. Cannot verify release status."
+        Write-Host "  [XX] Current version is NOT the latest release." -ForegroundColor Red
+
+        # Show how far behind
+        try {
+            $currentTag = "v$Version"
+            $latestTag = $latestReleaseInfo.Tag
+            # Count releases between current and latest using gh
+            $allTags = git ls-remote --tags --sort=-version:refname origin 2>$null `
+                | ForEach-Object { if ($_ -match 'refs/tags/(v\d+\.\d+\.\d+)$') { $matches[1] } } `
+                | Where-Object { $_ }
+
+            if ($allTags) {
+                $currentIndex = [array]::IndexOf($allTags, $currentTag)
+                $latestIndex  = [array]::IndexOf($allTags, $latestTag)
+
+                if ($currentIndex -ge 0 -and $latestIndex -ge 0) {
+                    $behind = $latestIndex - $currentIndex
+                    if ($behind -lt 0) { $behind = $currentIndex - $latestIndex }
+                    if ($behind -gt 0) {
+                        Write-Host "  Releases behind: $behind release(s)" -ForegroundColor Yellow
+
+                        # Show recent releases between them
+                        if ($behind -le 10) {
+                            Write-Host "  Recent releases:"
+                            $startIdx = [Math]::Min($currentIndex, $latestIndex)
+                            $endIdx   = [Math]::Max($currentIndex, $latestIndex)
+                            for ($i = $startIdx; $i -le $endIdx; $i++) {
+                                $marker = if ($allTags[$i] -eq $currentTag) { " <= current" } else { "" }
+                                Write-Host "    - $($allTags[$i])$marker"
+                            }
+                        } else {
+                            Write-Host "  Recent releases (last 5):"
+                            for ($i = 0; $i -lt [Math]::Min(5, $allTags.Count); $i++) {
+                                $marker = if ($allTags[$i] -eq $currentTag) { " <= current" } else { "" }
+                                Write-Host "    - $($allTags[$i])$marker"
+                            }
+                        }
+                    }
+                }
+            }
+        } catch {
+            # Non-critical: just skip the behind count
+        }
+    }
+} else {
+    Write-Host "  [XX] No GitHub releases found for $githubRepo." -ForegroundColor Red
+    Write-Host "  This may indicate no releases have been created yet."
+}
+
+# ---------------------------------------------------------------
+# Check 2: browser4-cli release status
+# ---------------------------------------------------------------
+if (-not $SkipCli) {
+    Write-Host ""
+    Write-Host "────────────────────────────────────────────────" -ForegroundColor Yellow
+    Write-Host "  Check 2: browser4-cli release"                -ForegroundColor Yellow
+    Write-Host "────────────────────────────────────────────────" -ForegroundColor Yellow
+    Write-Host ""
+
+    # Resolve CLI version
+    if (-not $CliVersion) {
+        $cliVersionFile = Join-Path $repoRoot "cli/VERSION-CLI"
+        if (Test-Path $cliVersionFile) {
+            $CliVersion = (Get-Content $cliVersionFile -TotalCount 1).Trim()
+        } else {
+            Write-Host "  [!] cli/VERSION-CLI not found. Skipping CLI check." -ForegroundColor Yellow
+            $SkipCli = $true
+        }
+    }
+
+    if (-not $SkipCli) {
+        # Validate CLI version format
+        if ($CliVersion -notmatch "^\d+\.\d+\.\d+") {
+            Write-Host "  [!] CLI version '$CliVersion' does not match X.Y.Z format. Skipping." -ForegroundColor Yellow
+            $SkipCli = $true
+        }
+    }
+
+    if (-not $SkipCli) {
+        $cliIsPublished = $false
+        $cliNpmPublished = $false
+        $npmPublishedVersion = $null
+
+        # ── 2a: Check GitHub release for CLI ──
+        Write-Host "  ── GitHub Release (v$CliVersion-cli) ──"
+
+        $cliReleaseInfo = Get-GitHubLatestRelease -GitHubRepo $githubRepo -ReleaseTagPattern "*-cli"
+
+        if ($null -ne $cliReleaseInfo.Tag) {
+            Write-Host "  Latest CLI tag  : $($cliReleaseInfo.Tag)"
+
+            if ($cliReleaseInfo.PublishedAt) {
+                Write-Host "  Published        : $($cliReleaseInfo.PublishedAt)"
+            }
+
+            if ($cliReleaseInfo.Author) {
+                Write-Host "  Author           : @$($cliReleaseInfo.Author)"
+            }
+
+            if ($cliReleaseInfo.HtmlUrl) {
+                Write-Host "  URL              : $($cliReleaseInfo.HtmlUrl)"
+            }
+
+            if ($cliReleaseInfo.IsPrerelease -or $cliReleaseInfo.IsDraft) {
+                $cliFlags = @()
+                if ($cliReleaseInfo.IsPrerelease) { $cliFlags += "PRE-RELEASE" }
+                if ($cliReleaseInfo.IsDraft)     { $cliFlags += "DRAFT" }
+                Write-Host "  Flags            : $($cliFlags -join ', ')" -ForegroundColor Yellow
+            }
+
+            Write-Host "  Assets           : $($cliReleaseInfo.AssetCount)"
+            if ($cliReleaseInfo.AssetCount -gt 0) {
+                foreach ($asset in $cliReleaseInfo.AssetNames) {
+                    Write-Host "                     - $asset"
+                }
+            }
+
+            if ($cliReleaseInfo.Tag -eq "v${CliVersion}-cli") {
+                $cliIsPublished = $true
+                Write-Host "  [OK] CLI version is on GitHub." -ForegroundColor Green
+            } else {
+                Write-Host "  Local CLI        : v${CliVersion}-cli"
+                Write-Host "  [XX] CLI v$CliVersion is NOT on GitHub." -ForegroundColor Red
+            }
+        } else {
+            Write-Host "  [XX] No CLI releases found on GitHub." -ForegroundColor Red
+        }
+
+        # ── 2b: Check npm registry ──
+        Write-Host ""
+        Write-Host "  ── npm Registry (browser4-cli) ──"
+
+        try {
+            $npmRaw = npm view "browser4-cli" version 2>$null
+            if ($npmRaw) {
+                $npmPublishedVersion = ($npmRaw -split '\s+')[0].Trim()
+            }
+        } catch {
+            # npm view failed
+        }
+
+        if ($npmPublishedVersion) {
+            Write-Host "  npm version      : $npmPublishedVersion"
+            Write-Host "  Local version    : $CliVersion"
+
+            if ($npmPublishedVersion -eq $CliVersion) {
+                $cliNpmPublished = $true
+                Write-Host "  [OK] CLI version is published on npm." -ForegroundColor Green
+            } else {
+                try {
+                    $npmVer = [version]($npmPublishedVersion -replace '^(\d+\.\d+\.\d+).*', '$1')
+                    $localVer = [version]($CliVersion -replace '^(\d+\.\d+\.\d+).*', '$1')
+
+                    if ($localVer -lt $npmVer) {
+                        Write-Host "  [XX] Local CLI version is BEHIND npm ($npmPublishedVersion)." -ForegroundColor Red
+                    } elseif ($localVer -gt $npmVer) {
+                        Write-Host "  [!!] Local CLI version is AHEAD of npm — not yet published." -ForegroundColor Yellow
+                    }
+                } catch {
+                    Write-Host "  [!!] Versions differ: local=$CliVersion, npm=$npmPublishedVersion" -ForegroundColor Yellow
+                }
+            }
+        } else {
+            Write-Host "  [!!] Package 'browser4-cli' not found on npm (unpublished?)." -ForegroundColor Yellow
+        }
     }
 }
 
@@ -167,20 +467,33 @@ if ($null -eq $latestReleaseTag) {
 # Summary
 # ---------------------------------------------------------------
 Write-Host ""
-Write-Host "-------------------------------------------------"
-Write-Host " Summary"
-Write-Host "-------------------------------------------------"
-
+Write-Host "══════════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host "  Summary"                                    -ForegroundColor Cyan
+Write-Host "══════════════════════════════════════════════" -ForegroundColor Cyan
 Write-Host ""
+
+Write-Host "  ── Browser4 (main) ──"
 Write-Host "  Version          : v$Version"
 Write-Host "  GitHub latest    : $($(if ($isLatestRelease) { '[OK] YES' } else { '[XX] NO' }))"
 Write-Host "  Published        : $($(if ($isLatestRelease) { '[OK] YES' } else { '[XX] NO' }))"
 Write-Host ""
 
+if (-not $SkipCli -and $CliVersion) {
+    Write-Host "  ── browser4-cli ──"
+    Write-Host "  Version          : $CliVersion"
+    Write-Host "  GitHub published : $($(if ($cliIsPublished) { '[OK] YES' } else { '[XX] NO' }))"
+    if ($npmPublishedVersion) {
+        Write-Host "  npm published    : $($(if ($cliNpmPublished) { '[OK] YES' } else { '[XX] NO' }))"
+    } else {
+        Write-Host "  npm published    : [!!] NOT FOUND"
+    }
+    Write-Host ""
+}
+
 if ($isLatestRelease) {
-    Write-Host "Version v$Version is the latest GitHub release -- safe to bump."
+    Write-Host "Main version v$Version is the latest GitHub release -- safe to bump." -ForegroundColor Green
     exit 0
 } else {
-    Write-Host "Version v$Version is NOT the latest GitHub release."
+    Write-Host "Main version v$Version is NOT the latest GitHub release." -ForegroundColor Red
     exit 1
 }
