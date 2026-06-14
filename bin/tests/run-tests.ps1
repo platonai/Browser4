@@ -74,7 +74,7 @@ $Tests = @(
     [PSCustomObject]@{ Name = 'agent-run-page-visit';           Category = 'agent';  Description = 'Agent page-visit task lifecycle' },
     [PSCustomObject]@{ Name = 'agent-run-page-visit-interact';  Category = 'agent';  Description = 'Agent page-visit + interaction task lifecycle' },
     [PSCustomObject]@{ Name = 'swarm-agents';                   Category = 'swarm';  Description = 'Swarm create / submit / status lifecycle' },
-    [PSCustomObject]@{ Name = 'swarm-agents-stress';            Category = 'stress'; Description = 'Swarm stress test with seed URLs' },
+    [PSCustomObject]@{ Name = 'stress-swarm-agents';            Category = 'stress'; Description = 'Swarm stress test with seed URLs' },
     [PSCustomObject]@{ Name = 'stress-session';                 Category = 'stress'; Description = 'Session lifecycle stress test' },
     [PSCustomObject]@{ Name = 'stress-install';                 Category = 'stress'; Description = 'Install / server lifecycle stress test' }
 )
@@ -83,8 +83,8 @@ $Tests = @(
 $Categories = @{
     smoke  = @('cli-basics')
     agent  = @('agent-run-free-command', 'agent-run-page-visit', 'agent-run-page-visit-interact')
-    swarm  = @('swarm-agents', 'swarm-agents-stress')
-    stress = @('swarm-agents-stress', 'stress-session', 'stress-install')
+    swarm  = @('swarm-agents', 'stress-swarm-agents')
+    stress = @('stress-swarm-agents', 'stress-session', 'stress-install')
 }
 
 # -------------------------------------------------------------------

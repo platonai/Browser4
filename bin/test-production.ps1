@@ -63,15 +63,16 @@ if ($Help) {
 
 $ErrorActionPreference = 'Stop'
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$RepoRoot = git rev-parse --show-toplevel 2>$null
 
-if (-not $RepoRoot) {
-    $RepoRoot = $ScriptDir
-    while ($RepoRoot -and -not (Test-Path (Join-Path $RepoRoot 'pom.xml'))) {
-        $RepoRoot = Split-Path -Parent $RepoRoot
-    }
+# Resolve the repo root for informational purposes only — do NOT require it.
+# This script is designed to run from any location with a globally-installed
+# browser4-cli.  Sibling scripts are resolved relative to $ScriptDir, and
+# remote fallbacks are used when they are missing.
+$RepoRoot = if (Test-Path (Join-Path $ScriptDir '..\pom.xml')) {
+    Resolve-Path (Join-Path $ScriptDir '..')
+} else {
+    $null
 }
-if (-not $RepoRoot) { throw 'Cannot find repo root (no pom.xml found up the tree)' }
 
 # ─────────────────────────────────────────────────────
 # Resolve working directory — default to a random
@@ -424,7 +425,11 @@ if ($existingCli) {
     Write-Info "uninstall output: $($result.Output)"
 
     # Also use the comprehensive remove script (non-interactive).
-    $removeScript = Join-Path $RepoRoot 'bin\tools\remove-global-browser4-cli.ps1'
+    $removeScript = Join-Path $ScriptDir 'tools\remove-global-browser4-cli.ps1'
+    if (-not (Test-Path $removeScript)) {
+        # Try the repo-relative path as fallback (for bw-compat)
+        if ($RepoRoot) { $removeScript = Join-Path $RepoRoot 'bin\tools\remove-global-browser4-cli.ps1' }
+    }
     if (Test-Path $removeScript) {
         Write-Info 'Running remove-global-browser4-cli.ps1 for thorough cleanup …'
         try {
@@ -922,7 +927,10 @@ function Invoke-InstallationCycle {
     Write-Info "uninstall output: $($uninstallResult.Output)"
 
     # Also run the comprehensive removal script (non-interactive).
-    $removeScript = Join-Path $RepoRoot 'bin\tools\remove-global-browser4-cli.ps1'
+    $removeScript = Join-Path $ScriptDir 'tools\remove-global-browser4-cli.ps1'
+    if (-not (Test-Path $removeScript) -and $RepoRoot) {
+        $removeScript = Join-Path $RepoRoot 'bin\tools\remove-global-browser4-cli.ps1'
+    }
     if (Test-Path $removeScript) {
         try {
             & $removeScript -Confirm:$false -ErrorAction SilentlyContinue
@@ -1075,7 +1083,11 @@ if ($SkipMultiScenarios) {
     # Ensure config is available before running multi-scenarios
     Copy-ConfigFromBackup
 
-    $multiScenariosScript = Join-Path $RepoRoot 'bin\tests\multi-scenarios.ps1'
+    $multiScenariosScript = Join-Path $ScriptDir 'tests\multi-scenarios.ps1'
+    if (-not (Test-Path $multiScenariosScript) -and $RepoRoot) {
+        # Fall back to repo-relative path for bw-compat
+        $multiScenariosScript = Join-Path $RepoRoot 'bin\tests\multi-scenarios.ps1'
+    }
     if (-not (Test-Path $multiScenariosScript)) {
         Write-WarningMsg "multi-scenarios.ps1 not found at: $multiScenariosScript"
         Write-StepResult -Step 'multi-scenarios' -Passed $false -Detail 'script not found'

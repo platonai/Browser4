@@ -77,8 +77,14 @@ if ($Help) {
 
 $ErrorActionPreference = 'Stop'
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-# $ScriptDir is bin/tests/ — repo root is two levels up
-$RepoRoot = Resolve-Path "$ScriptDir\..\.."
+# Resolve repo root only when inside a repository checkout (two levels up from
+# bin/tests/).  When this script is run standalone (e.g. downloaded from OSS),
+# repo-dependent features like -BuildCli / -BuildServer are unavailable.
+$RepoRoot = if (Test-Path (Join-Path $ScriptDir '..\..\pom.xml')) {
+    Resolve-Path (Join-Path $ScriptDir '..\..')
+} else {
+    $null
+}
 
 # -------------------------------------------------------------------
 # Load shared test utilities (for copilot analysis on failure)
@@ -94,6 +100,9 @@ $Profile = if ($Release) { 'release' } else { 'debug' }
 # When -BuildCli is given, build from the local Rust source and use the resulting binary.
 
 if ($BuildCli) {
+    if (-not $RepoRoot) {
+        throw '-BuildCli requires the source repository (no pom.xml found). Run without -BuildCli to use the globally-installed browser4-cli, or run this script from within a repository checkout.'
+    }
     # Build from local source tree
     $CliProjectDir = Join-Path $RepoRoot 'cli\browser4-cli'
     if (-not (Test-Path (Join-Path $CliProjectDir 'Cargo.toml'))) {
@@ -128,7 +137,8 @@ $ScenarioTimeoutSeconds = 300   # per-scenario timeout (5 min)
 $ServerLogTailLines = 1000      # lines to tail from pulsar.log on failure
 
 # Auto-detect RuntimeBundleHome when not explicitly provided.
-if (-not $RuntimeBundleHome) {
+# Only scans the local repo build output; graceful when run outside a repo.
+if (-not $RuntimeBundleHome -and $RepoRoot) {
     $bundleTargetDir = Join-Path $RepoRoot 'browser4-apps\browser4-bundle\target\runtime-bundle'
     if (Test-Path $bundleTargetDir) {
         $candidate = Get-ChildItem -Path $bundleTargetDir -Recurse -Directory -Filter 'logs' -ErrorAction SilentlyContinue `
@@ -276,12 +286,18 @@ if ($needBuild) {
 
     # --- Server-side (Java) ---
     if ($BuildServer) {
+        if (-not $RepoRoot) {
+            throw '-BuildServer requires the source repository (no pom.xml found). Run without -BuildServer to use the globally-installed browser4-cli, or run this script from within a repository checkout.'
+        }
         Write-Host "`n[Server] Checking Browser4 bundle …" -ForegroundColor Yellow
         Invoke-ServerBuildIfNeeded
     }
 
     # --- CLI (Rust) ---
     if ($BuildCli) {
+        if (-not $RepoRoot) {
+            throw '-BuildCli requires the source repository (no pom.xml found). Run without -BuildCli to use the globally-installed browser4-cli, or run this script from within a repository checkout.'
+        }
         Push-Location $CliProjectDir
         Write-Host "`n[CLI] cargo clean …" -ForegroundColor Yellow
         cargo clean
