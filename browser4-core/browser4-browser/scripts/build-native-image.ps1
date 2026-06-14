@@ -3,16 +3,17 @@
 <#
 .SYNOPSIS
     Compile MCPBrowserServer.jar to a native Windows executable via GraalVM
-    native-image, optionally compressed with UPX.
+    native-image.
 
 .DESCRIPTION
     Builds a standalone native executable from the shaded JAR produced by
     maven-shade-plugin. Handles MSVC environment setup, native-image invocation,
-    and UPX post-compression.
+    and optional UPX post-compression (off by default — UPX is incompatible
+    with GraalVM 22+ on Windows).
 
 .PARAMETER Mode
     Build mode: size (default), default, quick, pgo.
-      size    -Os +StripDebugInfo (~31 MB before UPX, recommended)
+      size    -Os +StripDebugInfo (~32 MB, recommended)
       default -O2 standard optimizations (~52 MB)
       quick   -Ob fast iteration (~60 MB)
       pgo     Two-pass profile-guided optimization
@@ -23,8 +24,9 @@
 .PARAMETER SkipJar
     Skip Maven JAR build — use the existing JAR in target/.
 
-.PARAMETER SkipUpx
-    Skip UPX post-compression.
+.PARAMETER EnableUpx
+    Enable UPX post-compression (off by default — UPX is incompatible with
+    GraalVM 22+ on Windows; a smoke test will restore the backup if it fails).
 
 .PARAMETER UpxMode
     UPX compression level: ultra (default), best, quick.
@@ -49,19 +51,19 @@
 
 .EXAMPLE
     .\build-native-image.ps1
-    Full size-optimized build with UPX ultra compression.
+    Full size-optimized build (UPX disabled by default).
 
 .EXAMPLE
-    .\build-native-image.ps1 -Mode quick -SkipUpx
-    Fast dev iteration, skip UPX.
+    .\build-native-image.ps1 -Mode quick
+    Fast dev iteration.
 
 .EXAMPLE
     .\build-native-image.ps1 -Mode pgo
     Profile-guided optimization build.
 
 .EXAMPLE
-    .\build-native-image.ps1 -SkipJar -SkipUpx
-    Rebuild native image from an existing JAR without UPX.
+    .\build-native-image.ps1 -SkipJar
+    Rebuild native image from an existing JAR.
 #>
 
 [CmdletBinding()]
@@ -73,7 +75,7 @@ param(
 
     [switch]$SkipJar,
 
-    [switch]$SkipUpx,
+    [switch]$EnableUpx,
 
     [ValidateSet('ultra', 'best', 'quick')]
     [string]$UpxMode = 'ultra',
@@ -141,7 +143,7 @@ Write-Host '══════════════════════�
 Write-Host ''
 Write-Log "Build mode:   $Mode"
 Write-Log "Output name:  $OutputName.exe"
-Write-Log "UPX:          $(if ($SkipUpx) { 'skipped' } else { $UpxMode })"
+Write-Log "UPX:          $(if ($EnableUpx) { $UpxMode } else { 'skipped' })"
 Write-Log "Target dir:   $TargetDir"
 Write-Host ''
 
@@ -297,7 +299,7 @@ function Build-NativeImage {
 # Common flags
 $commonFlags = @(
     '-jar', $JarPath,
-    '-o', (Join-Path $TargetDir "$OutputName.exe"),
+    '-o', (Join-Path $TargetDir $OutputName),
     '--no-fallback',
     '-march=compatibility',
     "-J-Xmx$JavaHeap"
@@ -322,7 +324,7 @@ switch ($Mode) {
         $pgoDir = Join-Path $TargetDir 'pgo'
         New-Item -ItemType Directory -Force -Path $pgoDir | Out-Null
 
-        $instrumentedOut = Join-Path $TargetDir "$OutputName-instrumented.exe"
+        $instrumentedOut = Join-Path $TargetDir "$OutputName-instrumented"
         $profileFile = Join-Path $pgoDir 'default.iprof'
 
         # -------- Pass 1: Instrumented build --------
@@ -339,7 +341,7 @@ switch ($Mode) {
         Write-Step 'PGO Profiling — Running instrumented binary ...'
         Push-Location $TargetDir
         try {
-            $proc = Start-Process -FilePath $instrumentedOut -PassThru -WindowStyle Hidden
+            $proc = Start-Process -FilePath "$instrumentedOut.exe" -PassThru -WindowStyle Hidden
             Start-Sleep -Seconds 3
 
             try {
@@ -393,7 +395,7 @@ Write-Log ('Native image size: ' + (Format-MB $nativeItem.Length))
 # ---------------------------------------------------------------------------
 # Step 5 — UPX compression (optional)
 # ---------------------------------------------------------------------------
-if (-not $SkipUpx) {
+if ($EnableUpx) {
     $upxCmd = Get-Command upx -ErrorAction SilentlyContinue
     if (-not $upxCmd) {
         Write-Warn 'UPX not found. Skipping compression.'
@@ -432,14 +434,37 @@ if (-not $SkipUpx) {
             $finalItem = Get-Item $nativeExe
             Write-Log ('Compressed size: ' + (Format-MB $finalItem.Length) + ' (in ' + '{0:N0}s)' -f $upxTimer.Elapsed.TotalSeconds)
 
-            # Verify
-            Write-Log 'Verifying compressed binary ...'
+            # UPX internal decompression test
+            Write-Log 'Verifying compressed binary (UPX -t) ...'
             & upx -t $nativeExe 2>$null
-            if ($LASTEXITCODE -eq 0) {
-                Write-Log 'Verification OK.'
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warn "UPX -t verification failed — restoring uncompressed backup."
+                Copy-Item -Force $backupExe $nativeExe
             }
             else {
-                Write-Warn "Verification failed — uncompressed backup at $backupExe"
+                Write-Log 'UPX -t OK. Running smoke test ...'
+
+                # Smoke test: the binary must stay alive for at least 3 seconds.
+                # UPX can corrupt GraalVM native images (the binary exits
+                # silently without producing any output). Restore the backup
+                # if the smoke test fails.
+                $smokeProc = Start-Process -FilePath $nativeExe `
+                    -PassThru -WindowStyle Hidden `
+                    -RedirectStandardError (Join-Path $TargetDir 'smoke-test-stderr.txt') `
+                    -RedirectStandardOutput (Join-Path $TargetDir 'smoke-test-stdout.txt')
+
+                Start-Sleep -Seconds 4
+
+                if ($smokeProc.HasExited) {
+                    Write-Warn 'Smoke test FAILED — binary exited immediately.'
+                    Write-Warn 'UPX compression is incompatible with this GraalVM native image.'
+                    Write-Warn 'Restoring uncompressed backup ...'
+                    Copy-Item -Force $backupExe $nativeExe
+                }
+                else {
+                    Stop-Process -Id $smokeProc.Id -Force -ErrorAction SilentlyContinue
+                    Write-Log 'Smoke test PASSED — binary stays alive.'
+                }
             }
         }
         Write-Host ''
