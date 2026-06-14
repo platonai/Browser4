@@ -5,6 +5,8 @@ import ai.platon.pulsar.agentic.event.AgenticEvents
 import ai.platon.pulsar.agentic.model.ActionDescription
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.common.event.EventBus
+import ai.platon.pulsar.core.api.ImmutableConfig
+import ai.platon.pulsar.external.ChatModelFactory
 import kotlinx.coroutines.delay
 import org.junit.jupiter.api.*
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -34,6 +36,13 @@ class SkillRegistrationAndInvocationE2ETest {
 
     companion object {
         private val capturedEvents = ConcurrentHashMap<String, MutableList<Map<String, Any?>>>()
+        private val conf = ImmutableConfig()
+
+        @BeforeAll
+        @JvmStatic
+        fun checkLLM() {
+            Assumptions.assumeTrue(ChatModelFactory.isModelConfigured(conf))
+        }
 
         @BeforeAll
         @JvmStatic
@@ -63,6 +72,8 @@ class SkillRegistrationAndInvocationE2ETest {
 
     @BeforeEach
     fun setup() {
+        Assumptions.assumeTrue(ChatModelFactory.isModelConfigured(conf))
+
         // Clear captured events
         capturedEvents.clear()
     }
