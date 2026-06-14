@@ -386,7 +386,7 @@ for ($iteration = 1; $iteration -le $Iterations; $iteration++) {
         $stderrTask = $proc.StandardError.ReadToEndAsync()
 
         # Wait with timeout, printing progress periodically.
-        $pollIntervalMs = 30000   # log "still waiting" every 30 s
+        $pollIntervalMs = 10000   # log "still waiting" every 10 s
         $deadline = [DateTime]::UtcNow.AddSeconds($ScenarioTimeoutSeconds)
         $completed = $false
         while (-not $completed -and ([DateTime]::UtcNow -lt $deadline)) {

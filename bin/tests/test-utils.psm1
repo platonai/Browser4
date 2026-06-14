@@ -267,7 +267,23 @@ function Invoke-TrackedCli {
             -RedirectStandardError $tmpErr
 
         $timeoutMs = $effectiveTimeout * 1000
-        $completed = $proc.WaitForExit($timeoutMs)
+        # For commands that can exceed 30 s, poll with progress ticks
+        # every 10 s so the user knows the CLI hasn't hung.
+        if ($effectiveTimeout -gt 30) {
+            $deadline = [DateTime]::UtcNow.AddSeconds($effectiveTimeout)
+            $completed = $false
+            while (-not $completed -and ([DateTime]::UtcNow -lt $deadline)) {
+                $completed = $proc.WaitForExit(10000)
+                if (-not $completed -and ([DateTime]::UtcNow -lt $deadline)) {
+                    $elapsed = [Math]::Floor($sw.Elapsed.TotalSeconds)
+                    Write-Host ("`r  ⏳ {0} — {1}s / {2}s … " -f $cmdLabel, $elapsed, $effectiveTimeout) -NoNewline -ForegroundColor DarkGray
+                }
+            }
+            # Clear the progress tick line.
+            Write-Host ''
+        } else {
+            $completed = $proc.WaitForExit($timeoutMs)
+        }
 
         if (-not $completed) {
             $timedOut = $true
