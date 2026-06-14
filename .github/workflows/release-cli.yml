@@ -247,7 +247,7 @@ jobs:
       - name: Cache cargo-zigbuild binary
         if: matrix.use_zigbuild
         id: cache-zigbuild
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cargo/bin/cargo-zigbuild
           key: cargo-zigbuild-0.10.1
@@ -297,7 +297,7 @@ jobs:
           fi
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.binary }}
           path: artifacts/${{ matrix.binary }}
@@ -360,7 +360,7 @@ jobs:
 
       - name: Download all CLI binary artifacts
         if: steps.check.outputs.should_publish == 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: browser4-cli-*
           path: artifacts/
@@ -501,7 +501,7 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Download CLI binary artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: browser4-cli-*
           path: release-assets/

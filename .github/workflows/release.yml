@@ -583,7 +583,7 @@ jobs:
 
       - name: Upload JAR artifact
         if: success() && needs.prepare.outputs.should_publish_artifacts == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: release-jar
           path: ${{ env.PRODUCTION_JAR_PATH }}
@@ -591,7 +591,7 @@ jobs:
 
       - name: Upload release notes artifact
         if: success() && needs.prepare.outputs.should_publish_artifacts == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: release-notes
           path: release_notes.md
@@ -810,7 +810,7 @@ jobs:
 
       - name: Upload artifact
         if: needs.prepare.outputs.should_publish_artifacts == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.binary }}
           path: artifacts/${{ matrix.binary }}
@@ -855,7 +855,7 @@ jobs:
           ref: ${{ needs.prepare.outputs.tag }}
 
       - name: Setup JDK ${{ env.BUNDLE_JAVA_VERSION }} for jlink
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: ${{ env.BUNDLE_JAVA_VERSION }}
@@ -903,7 +903,7 @@ jobs:
 
       - name: Upload runtime bundle artifact
         if: needs.prepare.outputs.should_publish_artifacts == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact_name }}
           path: browser4-apps/browser4-bundle/target/runtime-release/${{ matrix.asset_name }}
@@ -966,7 +966,7 @@ jobs:
 
       - name: Download all CLI binary artifacts
         if: steps.cli_publish_check.outputs.should_publish == 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: browser4-cli-*
           path: artifacts/
@@ -1094,27 +1094,27 @@ jobs:
 
     steps:
       - name: Download JAR artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: release-jar
           path: release-assets/
 
       - name: Download release notes
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: release-notes
           path: release-notes/
 
       - name: Download CLI artifacts
         if: needs.prepare.outputs.cli_should_build == 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: browser4-cli-*
           path: release-assets/
           merge-multiple: true
 
       - name: Download runtime bundle artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: browser4-bundle-runtime-*
           path: release-assets/

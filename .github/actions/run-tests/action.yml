@@ -302,7 +302,7 @@ runs:
 
     - name: Upload Test Reports
       if: always() && inputs.test_reports == 'true'
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: ${{ inputs.report_name }}-${{ github.run_id }}
         path: |
