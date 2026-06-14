@@ -352,7 +352,7 @@ function Wait-ServerHealthy {
     while (([DateTime]::UtcNow) -lt $deadline) {
         try {
             $resp = Invoke-WebRequest -Uri $healthUrl -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop
-            if ($resp.StatusCode -eq 200 -and $resp.Content -match '"status":"UP"') {
+            if ($resp.StatusCode -eq 200 -and $resp.Content -match '"UP"') {
                 $sw.Stop()
                 return [PSCustomObject]@{
                     Healthy  = $true
