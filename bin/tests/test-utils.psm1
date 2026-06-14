@@ -13,6 +13,9 @@
 # Then wrap every browser4-cli call with Invoke-TrackedCli or use the
 # lower-level Register-CliResult to log results from custom invocations.
 
+# Import shared AI agent utilities (Get-AiAnalyzer, Invoke-CopilotAnalysis, etc.)
+Import-Module "$PSScriptRoot\..\common\agent-utils.psm1" -Force -Prefix 'Agent'
+
 # ============================================================================
 # Module-level state (script-scoped so it won't leak between tests)
 # ============================================================================
@@ -22,7 +25,6 @@ $script:CommandLogs     = [System.Collections.ArrayList]::new()
 $script:Failures        = [System.Collections.ArrayList]::new()
 $script:TestStartTime   = Get-Date
 $script:CommandIndex    = 0
-$script:AiAnalyzer      = $null  # resolved AI CLI: 'claude', 'copilot', or $null
 
 # ============================================================================
 # Internal helpers
@@ -43,34 +45,18 @@ function Get-CliBin {
     return 'browser4-cli'
 }
 
-# Resolve the best available AI analyzer on PATH (cached).
-# Priority: claude > copilot
+# Thin wrappers that delegate to agent-utils.psm1 (imported with -Prefix 'Agent').
+# These preserve the original function names so existing callers don't break.
 function Get-AiAnalyzer {
-    if ($null -ne $script:AiAnalyzer) {
-        if ($script:AiAnalyzer -eq 'none') { return $null }
-        return $script:AiAnalyzer
-    }
-    # Prefer claude
-    $claude = Get-Command 'claude' -CommandType Application -ErrorAction SilentlyContinue
-    if ($null -ne $claude) {
-        $script:AiAnalyzer = 'claude'
-        Write-Host "  ℹ claude detected on PATH — AI failure analysis will run" -ForegroundColor DarkGray
-        return 'claude'
-    }
-    # Fall back to copilot
-    $copilot = Get-Command 'copilot' -CommandType Application -ErrorAction SilentlyContinue
-    if ($null -ne $copilot) {
-        $script:AiAnalyzer = 'copilot'
-        Write-Host "  ℹ copilot detected on PATH — AI failure analysis will run" -ForegroundColor DarkGray
-        return 'copilot'
-    }
-    $script:AiAnalyzer = 'none'
-    return $null
+    [CmdletBinding()]
+    param([switch]$ForceRefresh)
+    return Get-AgentAiAnalyzer @PSBoundParameters
 }
 
-# Backward-compatible alias
 function Test-CopilotAvailable {
-    return $null -ne (Get-AiAnalyzer)
+    [CmdletBinding()]
+    param()
+    return Test-AgentCopilotAvailable
 }
 
 # Sanitise a string for use in a filename.
@@ -113,7 +99,6 @@ function Start-TestSession {
     $script:Failures      = [System.Collections.ArrayList]::new()
     $script:TestStartTime = Get-Date
     $script:CommandIndex  = 0
-    $script:AiAnalyzer    = $null
 
     $null = New-Item -Path $script:LogDir -ItemType Directory -Force -ErrorAction SilentlyContinue
 
@@ -493,16 +478,11 @@ function Get-AllLogPaths {
     or directly when you have custom log paths.
 #>
 function Invoke-CopilotAnalysis {
+    [CmdletBinding()]
     param(
         [string[]]$LogPaths,
         [string]$ExtraPrompt = ''
     )
-
-    $analyzer = Get-AiAnalyzer
-    if (-not $analyzer) {
-        Write-Host "  ⚠ Neither claude nor copilot found on PATH — skipping AI failure analysis" -ForegroundColor Yellow
-        return $null
-    }
 
     $paths = if ($LogPaths -and $LogPaths.Count -gt 0) {
         $LogPaths
@@ -511,38 +491,50 @@ function Invoke-CopilotAnalysis {
     }
 
     if ($paths.Count -eq 0) {
-        Write-Host "  ℹ No failure logs to analyse" -ForegroundColor DarkGray
+        Write-Host '  ℹ No failure logs to analyse' -ForegroundColor DarkGray
         return $null
     }
 
-    $logList = ($paths | ForEach-Object { "  - $_" }) -join "`n"
-    $prompt = "analyze the failures, here are the logs:`n$logList"
+    $prompt = 'Analyse the failures in the provided log files.  Suggest root causes and fixes.'
     if ($ExtraPrompt) {
-        $prompt = "$ExtraPrompt`n$prompt"
+        $prompt = "$ExtraPrompt`n`n$prompt"
     }
 
-    Write-Host "`n🤖 Running failure analysis with $analyzer ..." -ForegroundColor Magenta
-    Write-Host "   Prompt: $prompt" -ForegroundColor DarkGray
+    # Build log-file content block
+    $logContent = ''
+    foreach ($lp in $paths) {
+        if (Test-Path -LiteralPath $lp -PathType Leaf) {
+            try {
+                $content = Get-Content -LiteralPath $lp -Raw -ErrorAction Stop
+                $logContent += "─── LOG FILE: $lp ───`n$content`n`n"
+            } catch {
+                Write-Warning "Invoke-CopilotAnalysis: Could not read: $lp"
+            }
+        } else {
+            Write-Warning "Invoke-CopilotAnalysis: Log file not found: $lp"
+        }
+    }
 
-    try {
-        $analysis = & $analyzer -p $prompt 2>&1
-        $analysisText = ($analysis | Out-String).Trim()
+    $fullPrompt = "$logContent`n$prompt"
+    $analysisText = Invoke-AgentAiAnalysis -Prompt $fullPrompt -Quiet
 
+    if ($analysisText) {
         # Save analysis to file
-        $analysisFile = Join-Path $script:LogDir "${analyzer}-analysis.txt"
-        $analysisText | Set-Content -Path $analysisFile -Encoding UTF8
+        $analysisFile = Join-Path $script:LogDir 'ai-analysis.txt'
+        try {
+            $analysisText | Set-Content -LiteralPath $analysisFile -Encoding UTF8
+            Write-Host "  📄 Analysis saved to: $analysisFile" -ForegroundColor DarkGray
+        } catch {
+            Write-Warning "Invoke-CopilotAnalysis: Could not write analysis file: $analysisFile"
+        }
 
-        $header = "─── ${analyzer^^} ANALYSIS ─────────────────────────────────────"
+        $header = '─── AI ANALYSIS ─────────────────────────────────────────'
         Write-Host "`n$header" -ForegroundColor Magenta
         Write-Host $analysisText
-        Write-Host "──────────────────────────────────────────────────────────" -ForegroundColor Magenta
-        Write-Host "  📄 Analysis saved to: $analysisFile" -ForegroundColor DarkGray
-
-        return $analysisText
-    } catch {
-        Write-Host "  ⚠ $analyzer invocation failed: $($_.Exception.Message)" -ForegroundColor Yellow
-        return $null
+        Write-Host '──────────────────────────────────────────────────────────' -ForegroundColor Magenta
     }
+
+    return $analysisText
 }
 
 # ============================================================================
