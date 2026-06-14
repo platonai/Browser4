@@ -4661,7 +4661,12 @@ fn print_help(command_name: Option<&str>) {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::sync::Mutex;
     use tempfile::TempDir;
+
+    /// Serialize tests that change the process-wide current directory so they
+    /// don't race with each other or with other tests that read `current_dir`.
+    static CWD_MUTEX: Mutex<()> = Mutex::new(());
 
     fn test_temp_dir() -> TempDir {
         let root = std::env::temp_dir()
@@ -4717,6 +4722,9 @@ mod tests {
 
     #[test]
     fn resolve_storage_state_path_uses_current_directory() {
+        // Serialize with other tests that modify the process-wide cwd so
+        // they don't race and cause flaky failures.
+        let _cwd_guard = CWD_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = test_temp_dir();
         let previous_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();
@@ -4728,6 +4736,7 @@ mod tests {
 
     #[test]
     fn resolve_storage_state_path_defaults_to_timestamped_json_in_current_directory() {
+        let _cwd_guard = CWD_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = test_temp_dir();
         let previous_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(tmp.path()).unwrap();

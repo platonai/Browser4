@@ -4083,9 +4083,18 @@ mod tests {
         fn lock(tmp: &Path) -> Self {
             let prev_runtime = env::var("BROWSER4_RUNTIME_DIR").ok();
             let prev_state = env::var("BROWSER4_CLI_STATE_DIR").ok();
+            // Pre-create the directories so that `resolve_runtime_data_dir`
+            // and `resolve_default_state_dir` can canonicalize the paths
+            // consistently across calls (canonicalize fails on nonexistent
+            // paths and falls back to the raw string, which may differ in
+            // format from the canonicalised form on Windows).
+            let runtime_dir = tmp.join("runtime-data");
+            let state_dir = tmp.join("state");
+            let _ = fs::create_dir_all(&runtime_dir);
+            let _ = fs::create_dir_all(&state_dir);
             unsafe {
-                env::set_var("BROWSER4_RUNTIME_DIR", tmp.join("runtime-data").as_os_str());
-                env::set_var("BROWSER4_CLI_STATE_DIR", tmp.join("state").as_os_str());
+                env::set_var("BROWSER4_RUNTIME_DIR", runtime_dir.as_os_str());
+                env::set_var("BROWSER4_CLI_STATE_DIR", state_dir.as_os_str());
             }
             Self { prev_runtime, prev_state }
         }
@@ -5210,6 +5219,7 @@ mod tests {
         let runtime_bin = tmp.path().join("runtime").join("bin");
         fs::create_dir_all(&runtime_bin).unwrap();
         write(runtime_bin.join(browser4_java_executable_name()), "java").unwrap();
+        set_test_file_executable(&runtime_bin.join(browser4_java_executable_name()));
         assert!(install_dir_contains_runtime(tmp.path()));
     }
 
@@ -5309,6 +5319,25 @@ mod tests {
     // Helpers for new-layout tests
     // -------------------------------------------------------------------
 
+    /// On Unix, mark a file as executable so that `install_dir_contains_runtime`
+    /// doesn't reject it for missing the execute bit (it checks `mode & 0o111`).
+    /// On other platforms this is a no-op.
+    fn set_test_file_executable(path: &Path) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(meta) = fs::metadata(path) {
+                let mut perms = meta.permissions();
+                perms.set_mode(0o755);
+                let _ = fs::set_permissions(path, perms);
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = path;
+        }
+    }
+
     /// Set up a fully valid versioned runtime directory so that
     /// `install_dir_contains_runtime` and `browser4_install_dir` both succeed.
     /// Also writes `current.tag`.
@@ -5319,7 +5348,9 @@ mod tests {
         fs::create_dir_all(&lib).unwrap();
         fs::create_dir_all(&rt_bin).unwrap();
         fs::write(lib.join("browser4.jar"), "fake-jar").unwrap();
-        fs::write(rt_bin.join(browser4_java_executable_name()), "fake-java").unwrap();
+        let java = rt_bin.join(browser4_java_executable_name());
+        fs::write(&java, "fake-java").unwrap();
+        set_test_file_executable(&java);
         // Write the installation metadata file required by install_dir_contains_runtime.
         fs::write(
             dir.join(BROWSER4_INSTALL_METADATA_FILE_NAME),
@@ -5393,6 +5424,7 @@ mod tests {
             "fake-java",
         )
         .unwrap();
+        set_test_file_executable(&legacy_runtime_bin.join(browser4_java_executable_name()));
         let metadata = InstalledBrowser4RuntimeMetadata {
             tag: "v4.8.0".to_string(),
             asset_name: "browser4-runtime.zip".to_string(),
@@ -5432,6 +5464,7 @@ mod tests {
             fs::create_dir_all(&rt_bin).unwrap();
             fs::write(lib.join("x.jar"), "jar").unwrap();
             fs::write(rt_bin.join(browser4_java_executable_name()), "java").unwrap();
+            set_test_file_executable(&rt_bin.join(browser4_java_executable_name()));
             // Write the required installation metadata file.
             fs::write(
                 dir.join(BROWSER4_INSTALL_METADATA_FILE_NAME),
