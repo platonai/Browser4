@@ -294,6 +294,28 @@ When creating or modifying a `.ps1` file, ensure the script is compatible with m
 - Test scripts on at least one non-Windows platform before finalizing
 - **When fixing a `.ps1` file**, also check other scripts in the same directory for the same issues and fix them proactively
 
+### Test Script Portability (bin/tests/ and bin/test-production.ps1)
+
+All `.ps1` and `.sh` scripts under `bin/tests/` and `bin/test-production.ps1` are **production test scripts** — they test a globally-installed `browser4-cli` binary, not the source tree.  They are designed to be run from **any location** (CI, a user's machine, a downloaded bundle) and must **never** depend on:
+
+- `git` — no `git rev-parse`, `git show-toplevel`, or any git command
+- The repository root — no traversing up the tree looking for `pom.xml` or similar markers
+- Source code — no references to `cli/`, `browser4-core/`, `browser4-apps/`, or any source module path
+- Maven / Cargo build outputs — no dependency on `target/` directories
+
+**What IS allowed:**
+- Sibling references via `$PSScriptRoot` / `$MyInvocation.MyCommand.Path` / `$BASH_SOURCE` — these work when the `bin/` directory structure is preserved
+- `$env:BROWSER4_CLI_BIN` to override the CLI binary path
+- Globally-installed tools on PATH (`browser4-cli`, `pwsh`, `bash`, optional AI CLIs like `claude` / `copilot`)
+- Remote URLs (OSS install scripts, release downloads)
+- **Conditional** repo-awareness: scripts may optionally use repo paths *when available*, but must degrade gracefully when they are not (e.g., `-BuildCli` / `-BuildServer` flags in `multi-scenarios.ps1` throw a clear error when run outside a repo checkout)
+
+**When adding new test scripts or modifying existing ones:**
+- Resolve sibling scripts and modules relative to the script's own directory, not the repo root
+- Use `$ScriptDir` / `$PSScriptRoot` (PowerShell) or `SCRIPT_DIR` (bash) for all internal path resolution
+- If a feature genuinely requires the source repo (e.g., building from source), guard it behind an explicit parameter and fail with a helpful message when the repo is absent
+- After making changes, verify the script parses correctly with `pwsh -NoProfile -Command "[Parser]::ParseFile('<path>', [ref]$null, [ref]$null)"`
+
 ### Common Task Patterns
 
 #### Adding a New Feature

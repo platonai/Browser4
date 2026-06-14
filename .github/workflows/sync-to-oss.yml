@@ -121,6 +121,80 @@ jobs:
 
           echo "✅ All ${uploaded} release assets synced to OSS"
 
+      - name: Upload CLI installer scripts to OSS
+        env:
+          OSS_ENDPOINT: oss-cn-beijing.aliyuncs.com
+          OSS_REGION: cn-beijing
+          OSS_BUCKET: browser4
+          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+        run: |
+          set -euo pipefail
+          TAG_NAME="${{ steps.resolve.outputs.tag_name }}"
+
+          SCRIPTS_DIR="cli/scripts"
+          OSS_SCRIPTS_PREFIX="oss://${OSS_BUCKET}/scripts"
+          OSS_VERSIONED_PREFIX="oss://${OSS_BUCKET}/releases/download/${TAG_NAME}"
+
+          uploaded=0
+          failed=0
+
+          for script in install-browser4-cli.ps1 install-browser4-cli.sh; do
+            src="${SCRIPTS_DIR}/${script}"
+
+            if [[ ! -f "$src" ]]; then
+              echo "::error::Script not found: $src"
+              ((failed++)) || true
+              continue
+            fi
+
+            # 1) Upload to convenience URL (unversioned — always latest)
+            dest_latest="${OSS_SCRIPTS_PREFIX}/${script}"
+            echo "Uploading: ${script} → ${dest_latest}"
+            if ./ossutil cp "$src" "$dest_latest" \
+              -e "$OSS_ENDPOINT" \
+              --region "$OSS_REGION" \
+              --acl public-read \
+              --retry-times 3; then
+              echo "  https://${OSS_BUCKET}.${OSS_ENDPOINT}/scripts/${script}"
+            else
+              echo "::error::Failed to upload ${script} to scripts/"
+              ((failed++)) || true
+              continue
+            fi
+
+            # 2) Upload to versioned release path
+            dest_versioned="${OSS_VERSIONED_PREFIX}/${script}"
+            echo "Uploading: ${script} → ${dest_versioned}"
+            if ./ossutil cp "$src" "$dest_versioned" \
+              -e "$OSS_ENDPOINT" \
+              --region "$OSS_REGION" \
+              --acl public-read \
+              --retry-times 3; then
+              echo "  https://${OSS_BUCKET}.${OSS_ENDPOINT}/releases/download/${TAG_NAME}/${script}"
+            else
+              echo "::error::Failed to upload ${script} to versioned path"
+              ((failed++)) || true
+              continue
+            fi
+
+            # 3) Copy into release-assets/ so the symlink step picks it up
+            cp "$src" "release-assets/${script}"
+            echo "Staged ${script} in release-assets/ for latest symlink"
+
+            ((uploaded++)) || true
+          done
+
+          echo ""
+          echo "CLI scripts upload: ${uploaded} succeeded, ${failed} failed"
+
+          if [[ $failed -gt 0 ]]; then
+            echo "::error::${failed} CLI installer script(s) failed to upload"
+            exit 1
+          fi
+
+          echo "📜 CLI installer scripts synced to OSS"
+
       - name: Create latest symlinks
         env:
           OSS_ENDPOINT: oss-cn-beijing.aliyuncs.com
@@ -169,56 +243,6 @@ jobs:
 
           echo "🔗 All ${created} latest symlinks created"
 
-      - name: Upload CLI installer scripts to OSS
-        env:
-          OSS_ENDPOINT: oss-cn-beijing.aliyuncs.com
-          OSS_REGION: cn-beijing
-          OSS_BUCKET: browser4
-          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
-          OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
-        run: |
-          set -euo pipefail
-
-          SCRIPTS_DIR="cli/scripts"
-          OSS_SCRIPTS_PREFIX="oss://${OSS_BUCKET}/scripts"
-
-          uploaded=0
-          failed=0
-
-          for script in install-browser4-cli.ps1 install-browser4-cli.sh; do
-            src="${SCRIPTS_DIR}/${script}"
-            dest="${OSS_SCRIPTS_PREFIX}/${script}"
-
-            if [[ ! -f "$src" ]]; then
-              echo "::error::Script not found: $src"
-              ((failed++)) || true
-              continue
-            fi
-
-            echo "Uploading: ${script} → ${dest}"
-            if ./ossutil cp "$src" "$dest" \
-              -e "$OSS_ENDPOINT" \
-              --region "$OSS_REGION" \
-              --acl public-read \
-              --retry-times 3; then
-              ((uploaded++)) || true
-              echo "  https://${OSS_BUCKET}.${OSS_ENDPOINT}/scripts/${script}"
-            else
-              echo "::error::Failed to upload ${script}"
-              ((failed++)) || true
-            fi
-          done
-
-          echo ""
-          echo "CLI scripts upload: ${uploaded} succeeded, ${failed} failed"
-
-          if [[ $failed -gt 0 ]]; then
-            echo "::error::${failed} CLI installer script(s) failed to upload"
-            exit 1
-          fi
-
-          echo "📜 CLI installer scripts synced to OSS"
-
       - name: Sync Summary
         if: always()
         run: |
@@ -230,8 +254,14 @@ jobs:
             echo "- **Assets**: ${{ steps.resolve.outputs.assets_count }}"
             echo "- **OSS Bucket**: \`oss://browser4/releases/download/${{ steps.resolve.outputs.tag_name }}/\`"
             echo "- **Latest symlink**: \`oss://browser4/releases/latest/download/\`"
-            echo "- **CLI installer scripts**:"
+            echo "- **CLI installer scripts** (convenience — always latest):"
             echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1\`"
             echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh\`"
+            echo "- **CLI installer scripts** (versioned):"
+            echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/releases/download/${{ steps.resolve.outputs.tag_name }}/install-browser4-cli.ps1\`"
+            echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/releases/download/${{ steps.resolve.outputs.tag_name }}/install-browser4-cli.sh\`"
+            echo "- **CLI installer scripts** (latest alias):"
+            echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/releases/latest/download/install-browser4-cli.ps1\`"
+            echo "  - \`https://browser4.oss-cn-beijing.aliyuncs.com/releases/latest/download/install-browser4-cli.sh\`"
             echo "- **Status**: ${{ job.status }}"
           } >> "$GITHUB_STEP_SUMMARY"

@@ -11,9 +11,11 @@
     Windows:  $env:LOCALAPPDATA\Programs\browser4-cli
     (override with -InstallDir)
 
-  Download sources (tried in order unless -Source is specified):
-    1. GitHub Releases   — https://github.com/platonai/Browser4
-    2. Aliyun OSS        — https://browser4.oss-cn-beijing.aliyuncs.com
+  Download sources (auto-selected by locale; use -Source to override):
+    Outside China:  1. GitHub Releases  ->  2. Aliyun OSS
+    China mainland: 1. Aliyun OSS        ->  2. GitHub Releases
+    GitHub Releases — https://github.com/platonai/Browser4
+    Aliyun OSS       — https://browser4.oss-cn-beijing.aliyuncs.com
 
 .PARAMETER Version
   Release version tag to download (e.g. "v4.11.0" or "v0.1.12-cli").
@@ -25,7 +27,7 @@
 
 .PARAMETER Source
   Force a specific download source: "github" or "oss".
-  Default: try GitHub first, fall back to OSS.
+  Default (auto): locale-aware — OSS first in China mainland, GitHub first elsewhere.
 
 .PARAMETER AddToPath
   Add the install directory to the current user's PATH environment variable.
@@ -36,6 +38,15 @@
 
 .PARAMETER DryRun
   Print what would be done without actually doing it.
+
+.PARAMETER SkipLocal
+  Skip checking for a locally-bundled binary alongside the script.
+  By default the script looks for the platform binary in its own directory
+  before downloading — use this to force a fresh download.
+
+.PARAMETER Locate
+  Print detection results (OS, architecture, script location, China locale)
+  and exit without installing. Useful for diagnostics.
 
 .EXAMPLE
   # Quick install — default location, latest version, add to PATH
@@ -48,6 +59,24 @@
 .EXAMPLE
   # Install from OSS only, custom directory
   powershell -ExecutionPolicy Bypass -File install-browser4-cli.ps1 -Source oss -InstallDir "C:\tools\browser4"
+
+.EXAMPLE
+  # Run diagnostics — see what the script detects without installing
+  powershell -ExecutionPolicy Bypass -File install-browser4-cli.ps1 -Locate
+
+.EXAMPLE
+  # Use a locally-bundled binary (place binary next to the script)
+  # The script auto-detects binaries in its own directory
+  powershell -ExecutionPolicy Bypass -File install-browser4-cli.ps1
+
+.EXAMPLE
+  # Force download even when a local binary exists
+  powershell -ExecutionPolicy Bypass -File install-browser4-cli.ps1 -SkipLocal
+
+.EXAMPLE
+  # For China mainland: OSS is auto-preferred via locale detection,
+  # or force it explicitly
+  powershell -ExecutionPolicy Bypass -File install-browser4-cli.ps1 -Source oss
 #>
 
 [CmdletBinding()]
@@ -58,10 +87,64 @@ param(
   [string]$Source = "",
   [bool]$AddToPath = $true,
   [switch]$Silent,
-  [switch]$DryRun
+  [switch]$DryRun,
+  [switch]$SkipLocal,
+  [switch]$Locate
 )
 
 $ErrorActionPreference = "Stop"
+
+# ──────────────────────────────────────────────
+# Script location — find ourselves on disk
+# ──────────────────────────────────────────────
+
+# $PSScriptRoot is the directory containing this script (PS 3+).
+# Falls back to $MyInvocation for edge cases (dot-sourced, PS 2).
+$ScriptDir = if ($PSScriptRoot) {
+  $PSScriptRoot
+} elseif ($MyInvocation -and $MyInvocation.MyCommand.Path) {
+  Split-Path -Parent $MyInvocation.MyCommand.Path
+} else {
+  $null
+}
+
+<#
+.SYNOPSIS
+  Search for a pre-downloaded binary near the script (bundled/sideload install).
+  Returns the full path if found, $null otherwise.
+#>
+function Find-LocalBinary {
+  param([string]$BinaryName)
+
+  if (-not $ScriptDir) { return $null }
+
+  $localPath = Join-Path $ScriptDir $BinaryName
+  if (Test-Path $localPath -PathType Leaf) {
+    $size = (Get-Item $localPath).Length
+    if ($size -gt 102400) {  # > 100 KB minimum
+      return $localPath
+    }
+  }
+  return $null
+}
+
+<#
+.SYNOPSIS
+  Check whether a local binary is usable by querying its version.
+  Returns $true if --version executes successfully, $false otherwise.
+#>
+function Test-LocalBinary {
+  param([string]$Path)
+
+  if (-not $Path -or -not (Test-Path $Path)) { return $false }
+
+  try {
+    $null = & $Path --version 2>&1
+    return ($LASTEXITCODE -eq 0)
+  } catch {
+    return $false
+  }
+}
 
 # ──────────────────────────────────────────────
 # OS detection (compatible with PS 5.1+)
@@ -423,6 +506,49 @@ function Main {
   # Detect platform
   $platformKey = Get-PlatformKey
   $binaryName = Get-BinaryName -PlatformKey $platformKey
+
+  # ── Locate mode: print diagnostics and exit ──
+  if ($Locate) {
+    Write-Summary "─── Locate / diagnostics ───" -Color Cyan
+    Write-Summary ""
+    Write-Step "Script dir:       $ScriptDir"
+    Write-Step "Platform key:     $platformKey"
+    Write-Step "Binary name:      $binaryName"
+    Write-Step "Default install:  $(Get-DefaultInstallDir)"
+    Write-Step "China locale:     $script:ChinaDetected"
+    Write-Step "Source override:  $(if ($Source) { $Source } else { 'auto' })"
+    Write-Step "OS:               $(if ($script:OSWin) { 'Windows' } elseif ($script:OSMac) { 'macOS' } elseif ($script:OSLinux) { 'Linux' } else { 'Unknown' })"
+
+    # Check for local binary
+    $localPath = Find-LocalBinary -BinaryName $binaryName
+    if ($localPath) {
+      $localOk = Test-LocalBinary -Path $localPath
+      Write-Step "Local binary:     $localPath $(if ($localOk) { '(valid)' } else { '(present but --version failed)' })"
+    } else {
+      Write-Step "Local binary:     not found alongside script"
+    }
+
+    # Check for already-installed binary
+    $defaultDir = Get-DefaultInstallDir
+    $existingPath = Join-Path $defaultDir $binaryName
+    if (Test-Path $existingPath) {
+      Write-Step "Already installed: $existingPath"
+    } else {
+      Write-Step "Already installed: not found at $defaultDir"
+    }
+
+    # Show download URLs that would be tried
+    $urls = Get-DownloadUrls -BinaryName $binaryName -VersionTag $Version
+    Write-Summary ""
+    Write-Step "Download order:"
+    foreach ($entry in $urls) {
+      Write-Step "  $($entry.Label): $($entry.Url)"
+    }
+
+    Write-Summary ""
+    return
+  }
+
   Write-Step "Platform:  $platformKey"
   Write-Step "Binary:    $binaryName"
 
@@ -440,9 +566,33 @@ function Main {
 
   $binaryPath = Join-Path $installDir $binaryName
 
+  # ── Local binary discovery (bundled/sideload) ──
+  $useLocalBinary = $false
+  if (-not $SkipLocal) {
+    $localBinaryPath = Find-LocalBinary -BinaryName $binaryName
+    if ($localBinaryPath) {
+      Write-Step "Found local binary alongside script: $(Split-Path $localBinaryPath -Leaf)"
+      if (Test-LocalBinary -Path $localBinaryPath) {
+        Write-Check "Local binary verified (--version OK)"
+        $useLocalBinary = $true
+      } else {
+        Write-WarnMsg "Local binary found but --version check failed — will download instead"
+      }
+    }
+  } elseif ($SkipLocal) {
+    Write-Step "Skipping local binary check (-SkipLocal)"
+  }
+
   # If binary already exists and no version override, skip download
-  if ((Test-Path $binaryPath) -and (-not $Version)) {
+  if ((Test-Path $binaryPath) -and (-not $Version) -and (-not $useLocalBinary)) {
     Write-Check "Binary already installed: $binaryPath"
+  } elseif ($useLocalBinary) {
+    # Copy local binary to install dir
+    if (-not $DryRun) {
+      if (Test-Path $binaryPath) { Remove-Item $binaryPath -Force }
+      Copy-Item $localBinaryPath $binaryPath -Force
+    }
+    Write-Check "Installed (local): $binaryPath"
   } else {
     # Build download URLs
     $urls = Get-DownloadUrls -BinaryName $binaryName -VersionTag $Version
@@ -472,6 +622,7 @@ Please check:
   - Network connectivity
   - The version/tag exists: $Version
   - For GitHub rate limits, set GITHUB_TOKEN environment variable
+  - If you have a local copy, place it alongside this script and re-run
 "@
     }
 

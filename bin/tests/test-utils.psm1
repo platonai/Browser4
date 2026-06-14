@@ -14,7 +14,16 @@
 # lower-level Register-CliResult to log results from custom invocations.
 
 # Import shared AI agent utilities (Get-AiAnalyzer, Invoke-CopilotAnalysis, etc.)
-Import-Module "$PSScriptRoot\..\common\agent-utils.psm1" -Force -Prefix 'Agent'
+# The agent-utils module lives in bin/common/ alongside bin/tests/.  When the
+# bin/ directory structure is preserved, it is imported directly.  When this
+# module is used standalone (e.g. copied out of the repo), inline fallback
+# implementations are provided so the test scripts still work.
+$script:AgentUtilsAvailable = $false
+$agentUtilsPath = Join-Path $PSScriptRoot '..\common\agent-utils.psm1'
+if (Test-Path $agentUtilsPath) {
+    Import-Module $agentUtilsPath -Force -Prefix 'Agent'
+    $script:AgentUtilsAvailable = $true
+}
 
 # ============================================================================
 # Module-level state (script-scoped so it won't leak between tests)
@@ -45,18 +54,54 @@ function Get-CliBin {
     return 'browser4-cli'
 }
 
-# Thin wrappers that delegate to agent-utils.psm1 (imported with -Prefix 'Agent').
+# Thin wrappers that delegate to agent-utils.psm1 (imported with -Prefix 'Agent')
+# when available, otherwise use inline fallback implementations.
 # These preserve the original function names so existing callers don't break.
+
+# Cache for inline AI analyzer resolution (used when agent-utils is unavailable).
+$script:__AiAnalyzerCache = $null
+
 function Get-AiAnalyzer {
     [CmdletBinding()]
     param([switch]$ForceRefresh)
-    return Get-AgentAiAnalyzer @PSBoundParameters
+
+    if ($script:AgentUtilsAvailable) {
+        return Get-AgentAiAnalyzer @PSBoundParameters
+    }
+
+    # ── Inline fallback ──────────────────────────────────────────
+    if (-not $ForceRefresh -and $null -ne $script:__AiAnalyzerCache) {
+        if ($script:__AiAnalyzerCache -eq 'none') { return $null }
+        return $script:__AiAnalyzerCache
+    }
+
+    $knownAnalyzers = @(
+        @{ Bin = 'claude';  Name = 'Claude'   },
+        @{ Bin = 'copilot'; Name = 'Copilot'  }
+    )
+
+    foreach ($entry in $knownAnalyzers) {
+        $cmd = Get-Command $entry.Bin -CommandType Application -ErrorAction SilentlyContinue
+        if ($null -ne $cmd) {
+            $script:__AiAnalyzerCache = $entry.Bin
+            return $entry.Bin
+        }
+    }
+
+    $script:__AiAnalyzerCache = 'none'
+    return $null
 }
 
 function Test-CopilotAvailable {
     [CmdletBinding()]
     param()
-    return Test-AgentCopilotAvailable
+
+    if ($script:AgentUtilsAvailable) {
+        return Test-AgentCopilotAvailable
+    }
+
+    # ── Inline fallback ──────────────────────────────────────────
+    return $null -ne (Get-AiAnalyzer)
 }
 
 # Sanitise a string for use in a filename.
@@ -516,7 +561,27 @@ function Invoke-CopilotAnalysis {
     }
 
     $fullPrompt = "$logContent`n$prompt"
-    $analysisText = Invoke-AgentAiAnalysis -Prompt $fullPrompt -Quiet
+
+    # Invoke the best available AI CLI.  When agent-utils is available (repo
+    # layout preserved), delegate to it for full feature support.  Otherwise
+    # use the inline fallback that probes claude/copilot on PATH directly.
+    if ($script:AgentUtilsAvailable) {
+        $analysisText = Invoke-AgentAiAnalysis -Prompt $fullPrompt -Quiet
+    } else {
+        $analyzer = Get-AiAnalyzer
+        if (-not $analyzer) {
+            Write-Host '  ℹ No AI CLI found on PATH (checked: claude, copilot) — skipping analysis' -ForegroundColor DarkGray
+            return $null
+        }
+        Write-Host "`n🤖 Running AI analysis with $analyzer ..." -ForegroundColor Magenta
+        try {
+            $result = & $analyzer -p $fullPrompt 2>&1
+            $analysisText = ($result | Out-String).Trim()
+        } catch {
+            Write-Warning "Invoke-CopilotAnalysis: $analyzer invocation failed: $($_.Exception.Message)"
+            $analysisText = $null
+        }
+    }
 
     if ($analysisText) {
         # Save analysis to file
