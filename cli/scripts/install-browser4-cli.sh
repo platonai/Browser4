@@ -16,7 +16,10 @@
 #   --version, -v TAG   Release tag (e.g. "v4.11.0"). Default: latest.
 #   --install-dir, -d DIR  Install directory (default: ~/.local/bin).
 #   --source SRC        Force download source: "github" or "oss".
+#                       Default (auto): locale-aware — OSS first for China mainland.
 #   --no-path            Skip adding install dir to PATH.
+#   --skip-local         Skip checking for a locally-bundled binary.
+#   --locate             Print detection results and exit (no install).
 #   --silent, -s         Suppress non-error output.
 #   --dry-run            Print what would be done without doing it.
 #   --help, -h           Show this message.
@@ -36,7 +39,10 @@ SOURCE=""
 ADD_TO_PATH=true
 SILENT=false
 DRY_RUN=false
+SKIP_LOCAL=false
+LOCATE_MODE=false
 CHINA_DETECTED=false
+SCRIPT_DIR=""
 
 # ──────────────────────────────────────────────
 # Helpers
@@ -62,6 +68,49 @@ header() {
   fi
 }
 
+# ──────────────────────────────────────────────
+# Script location — find ourselves on disk
+# ──────────────────────────────────────────────
+
+detect_script_dir() {
+  # BASH_SOURCE works even when sourced; prefer it over $0.
+  if [[ -n "${BASH_SOURCE[0]:-}" ]] && [[ "${BASH_SOURCE[0]}" != "bash" ]] && [[ "${BASH_SOURCE[0]}" != *stdin* ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  elif [[ -n "${0:-}" ]] && [[ "$0" != "bash" ]] && [[ "$0" != "-bash" ]] && [[ -f "$0" ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+  fi
+  # If piped via curl | bash, SCRIPT_DIR stays empty — no local binaries available.
+}
+
+# Search for a pre-downloaded binary near the script (bundled/sideload install).
+# Echoes the full path on success; returns non-zero when not found.
+find_local_binary() {
+  local binary_name="$1"
+  if [[ -z "$SCRIPT_DIR" ]]; then
+    return 1
+  fi
+  local local_path="${SCRIPT_DIR}/${binary_name}"
+  if [[ -f "$local_path" ]]; then
+    local size
+    size=$(stat -c%s "$local_path" 2>/dev/null || stat -f%z "$local_path" 2>/dev/null || echo 0)
+    if [[ "$size" -gt 102400 ]]; then  # > 100 KB minimum
+      echo "$local_path"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+# Check whether a local binary is usable by querying its version.
+# Returns 0 if --version executes successfully, non-zero otherwise.
+test_local_binary() {
+  local path="$1"
+  if [[ -z "$path" ]] || [[ ! -f "$path" ]]; then
+    return 1
+  fi
+  "$path" --version >/dev/null 2>&1
+}
+
 usage() {
   cat <<EOF
 Usage: $(basename "$0") [OPTIONS]
@@ -71,8 +120,11 @@ Download and install the browser4-cli native binary.
 Options:
   --version, -v TAG   Release tag (e.g. "v4.11.0"). Default: latest.
   --install-dir, -d DIR  Install directory (default: ~/.local/bin).
-  --source SRC        Force source: "github" or "oss" (default: try both).
+  --source SRC        Force source: "github" or "oss".
+                      Default (auto): OSS first for China mainland, GitHub first elsewhere.
   --no-path           Skip adding install dir to shell rc file.
+  --skip-local        Skip checking for a locally-bundled binary alongside this script.
+  --locate            Print detection results and exit without installing.
   --silent, -s        Suppress non-error output.
   --dry-run           Print what would be done without doing it.
   --help, -h          Show this message.
@@ -82,6 +134,9 @@ Examples:
   $(basename "$0") --version v4.11.0        # Install specific version
   $(basename "$0") --source oss --silent    # Silent install from Aliyun OSS
   $(basename "$0") --install-dir /usr/local/bin  # System-wide install (needs sudo)
+  $(basename "$0") --locate                 # Run diagnostics (no install)
+  $(basename "$0") --skip-local             # Force download, ignore bundled binary
+  $(basename "$0") --source oss             # Force Aliyun OSS (China mainland)
 EOF
 }
 
@@ -104,6 +159,8 @@ while [[ $# -gt 0 ]]; do
       fi
       SOURCE="$1"; shift ;;
     --no-path) ADD_TO_PATH=false; shift ;;
+    --skip-local) SKIP_LOCAL=true; shift ;;
+    --locate) LOCATE_MODE=true; shift ;;
     --silent|-s) SILENT=true; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
     --help|-h) usage; exit 0 ;;
@@ -465,6 +522,9 @@ main() {
   check_commands
   header
 
+  # Locate ourselves on disk (only works when run as a file, not piped)
+  detect_script_dir
+
   # Auto-detect China mainland locale when no explicit source is given
   if [[ -z "$SOURCE" ]]; then
     if detect_china_locale; then
@@ -477,6 +537,54 @@ main() {
   local platform_key binary_name
   platform_key=$(get_platform_key)
   binary_name=$(get_binary_name "$platform_key")
+
+  # ── Locate mode: print diagnostics and exit ──
+  if [[ "$LOCATE_MODE" == true ]]; then
+    echo -e "${color_cyan}─── Locate / diagnostics ───${color_reset}"
+    echo ""
+    step "Script dir:       ${SCRIPT_DIR:-'(not available — piped via curl?)'}"
+    step "Platform key:     $platform_key"
+    step "Binary name:      $binary_name"
+    step "Default install:  $(get_default_install_dir)"
+    step "China locale:     $CHINA_DETECTED"
+    step "Source override:  ${SOURCE:-auto}"
+    step "OS:               $(uname -s)"
+
+    # Check for local binary
+    local locate_local
+    if locate_local=$(find_local_binary "$binary_name" 2>/dev/null); then
+      local local_status="(present but --version failed)"
+      if test_local_binary "$locate_local"; then
+        local_status="(valid)"
+      fi
+      step "Local binary:     ${locate_local} ${local_status}"
+    else
+      step "Local binary:     not found alongside script"
+    fi
+
+    # Check for already-installed binary
+    local default_dir existing_path
+    default_dir=$(get_default_install_dir)
+    existing_path="${default_dir}/${binary_name}"
+    if [[ -f "$existing_path" ]]; then
+      step "Already installed: $existing_path"
+    else
+      step "Already installed: not found at $default_dir"
+    fi
+
+    # Show download URLs that would be tried
+    local locate_urls
+    IFS=$'\n' read -r -d '' -a locate_urls < <(get_download_urls "$binary_name" "$VERSION" && printf '\0')
+    echo ""
+    step "Download order:"
+    for entry in "${locate_urls[@]}"; do
+      local l="${entry%%|*}" u="${entry#*|}"
+      step "  ${l}: ${u}"
+    done
+
+    echo ""
+    return
+  fi
 
   step "Platform:  $platform_key"
   step "Binary:    $binary_name"
@@ -498,9 +606,34 @@ main() {
 
   local binary_path="${INSTALL_DIR}/${binary_name}"
 
-  # Download if needed
-  if [[ -f "$binary_path" ]] && [[ -z "$VERSION" ]]; then
+  # ── Local binary discovery (bundled/sideload) ──
+  local use_local_binary=false
+  local local_binary_path=""
+  if [[ "$SKIP_LOCAL" != true ]]; then
+    if local_binary_path=$(find_local_binary "$binary_name" 2>/dev/null) && [[ -n "$local_binary_path" ]]; then
+      step "Found local binary alongside script: $(basename "$local_binary_path")"
+      if test_local_binary "$local_binary_path"; then
+        ok "Local binary verified (--version OK)"
+        use_local_binary=true
+      else
+        warn "Local binary found but --version check failed — will download instead"
+      fi
+    fi
+  else
+    step "Skipping local binary check (--skip-local)"
+  fi
+
+  # Install binary: local copy > already installed > download
+  if [[ -f "$binary_path" ]] && [[ -z "$VERSION" ]] && [[ "$use_local_binary" != true ]]; then
     ok "Binary already installed: $binary_path"
+  elif [[ "$use_local_binary" == true ]]; then
+    # Copy local binary to install dir
+    if [[ "$DRY_RUN" != true ]]; then
+      rm -f "$binary_path"
+      cp "$local_binary_path" "$binary_path"
+      chmod +x "$binary_path"
+    fi
+    ok "Installed (local): $binary_path"
   else
     local urls
     IFS=$'\n' read -r -d '' -a urls < <(get_download_urls "$binary_name" "$VERSION" && printf '\0')
@@ -537,7 +670,8 @@ main() {
       tried_msg+=$'\n'"Please check:"$'\n'
       tried_msg+="  - Network connectivity"$'\n'
       tried_msg+="  - The version/tag exists: ${VERSION:-latest}"$'\n'
-      tried_msg+="  - For GitHub rate limits, set GITHUB_TOKEN environment variable"
+      tried_msg+="  - For GitHub rate limits, set GITHUB_TOKEN environment variable"$'\n'
+      tried_msg+="  - If you have a local copy, place it alongside this script and re-run"
       die "$tried_msg"
     fi
 

@@ -280,8 +280,83 @@ if [[ $ASSETS_FAILED -gt 0 ]]; then
   # Don't exit yet — continue with remaining steps so we get a full picture
 fi
 
-# ── Step 6: Create symlinks ───────────────────────────────────────────
-banner "Step 6/7: Creating Latest Symlinks"
+# ── Step 6: Upload CLI installer scripts ──────────────────────────────
+banner "Step 6/7: Uploading CLI Installer Scripts"
+
+OSS_BASE=$(compute_oss_path)
+OSS_SCRIPTS_PREFIX="${OSS_BASE}/scripts"
+OSS_VERSIONED_PREFIX="${OSS_BASE}/releases/download/${TAG_NAME}"
+
+echo "Scripts convenience prefix: ${OSS_SCRIPTS_PREFIX}"
+echo "Scripts versioned prefix:   ${OSS_VERSIONED_PREFIX}"
+
+# Determine project root — try git root, fall back to script-relative
+SCRIPTS_ROOT="${GITHUB_WORKSPACE:-$(git rev-parse --show-toplevel 2>/dev/null || dirname "$(dirname "$(dirname "$(readlink -f "$0")")")")}"
+SCRIPTS_FULL_DIR="${SCRIPTS_ROOT}/${SCRIPTS_DIR}"
+
+if [[ ! -d "$SCRIPTS_FULL_DIR" ]]; then
+  yellow "⚠  Scripts directory not found: ${SCRIPTS_FULL_DIR}"
+  yellow "   Skipping CLI script uploads. Check SCRIPTS_DIR or run from repo root."
+else
+  for script in install-browser4-cli.ps1 install-browser4-cli.sh; do
+    src="${SCRIPTS_FULL_DIR}/${script}"
+
+    if [[ ! -f "$src" ]]; then
+      red "  ✗ Script not found: $src"
+      ((SCRIPTS_FAILED++)) || true
+      continue
+    fi
+
+    # 1) Upload to convenience URL (unversioned — always latest)
+    dest_latest="${OSS_SCRIPTS_PREFIX}/${script}"
+    echo ""
+    echo "Uploading: ${script} → ${dest_latest}"
+    if oss_cp "$src" "$dest_latest"; then
+      green "  ✓ ${script} → scripts/"
+      if [[ "$DRY_RUN" == false ]]; then
+        echo "  URL: https://${OSS_BUCKET}.${OSS_ENDPOINT}/${TEST_PREFIX:+${TEST_PREFIX}/}scripts/${script}"
+      fi
+    else
+      red "  ✗ Failed to upload ${script} to scripts/"
+      ((SCRIPTS_FAILED++)) || true
+      continue
+    fi
+
+    # 2) Upload to versioned release path
+    dest_versioned="${OSS_VERSIONED_PREFIX}/${script}"
+    echo "Uploading: ${script} → ${dest_versioned}"
+    if oss_cp "$src" "$dest_versioned"; then
+      green "  ✓ ${script} → releases/download/${TAG_NAME}/"
+      if [[ "$DRY_RUN" == false ]]; then
+        echo "  URL: https://${OSS_BUCKET}.${OSS_ENDPOINT}/${TEST_PREFIX:+${TEST_PREFIX}/}releases/download/${TAG_NAME}/${script}"
+      fi
+    else
+      red "  ✗ Failed to upload ${script} to versioned path"
+      ((SCRIPTS_FAILED++)) || true
+      continue
+    fi
+
+    # 3) Copy into assets dir so Step 7 symlink loop picks it up
+    if [[ "$DRY_RUN" == true ]]; then
+      echo "  [DRY-RUN] Would stage ${script} in assets dir for latest symlink"
+    else
+      cp "$src" "${ASSETS_DIR}/${script}"
+      echo "Staged ${script} in assets dir for latest symlink"
+    fi
+
+    ((SCRIPTS_UPLOADED++)) || true
+  done
+fi
+
+echo ""
+bold "CLI scripts: ${SCRIPTS_UPLOADED} uploaded, ${SCRIPTS_FAILED} failed"
+
+if [[ $SCRIPTS_FAILED -gt 0 ]]; then
+  red "❌ ${SCRIPTS_FAILED} CLI installer script(s) failed"
+fi
+
+# ── Step 7: Create symlinks ───────────────────────────────────────────
+banner "Step 7/7: Creating Latest Symlinks"
 
 OSS_SYMLINK_PREFIX="${OSS_BASE}/releases/latest/download"
 
@@ -291,7 +366,7 @@ for asset in "$ASSETS_DIR"/*; do
   [[ -f "$asset" ]] || continue
   asset_name=$(basename "$asset")
 
-  target="${OSS_ASSETS_PREFIX}/${asset_name}"
+  target="${OSS_BASE}/releases/download/${TAG_NAME}/${asset_name}"
   symlink="${OSS_SYMLINK_PREFIX}/${asset_name}"
 
   echo ""
@@ -310,53 +385,6 @@ bold "Symlinks: ${SYMLINKS_CREATED} created, ${SYMLINKS_FAILED} failed"
 
 if [[ $SYMLINKS_FAILED -gt 0 ]]; then
   red "❌ ${SYMLINKS_FAILED} symlink(s) failed"
-fi
-
-# ── Step 7: Upload CLI installer scripts ──────────────────────────────
-banner "Step 7/7: Uploading CLI Installer Scripts"
-
-OSS_SCRIPTS_PREFIX="${OSS_BASE}/scripts"
-
-echo "Scripts prefix: ${OSS_SCRIPTS_PREFIX}"
-
-# Determine project root — try git root, fall back to script-relative
-SCRIPTS_ROOT="${GITHUB_WORKSPACE:-$(git rev-parse --show-toplevel 2>/dev/null || dirname "$(dirname "$(dirname "$(readlink -f "$0")")")")}"
-SCRIPTS_FULL_DIR="${SCRIPTS_ROOT}/${SCRIPTS_DIR}"
-
-if [[ ! -d "$SCRIPTS_FULL_DIR" ]]; then
-  yellow "⚠  Scripts directory not found: ${SCRIPTS_FULL_DIR}"
-  yellow "   Skipping CLI script uploads. Check SCRIPTS_DIR or run from repo root."
-else
-  for script in install-browser4-cli.ps1 install-browser4-cli.sh; do
-    src="${SCRIPTS_FULL_DIR}/${script}"
-    dest="${OSS_SCRIPTS_PREFIX}/${script}"
-
-    if [[ ! -f "$src" ]]; then
-      red "  ✗ Script not found: $src"
-      ((SCRIPTS_FAILED++)) || true
-      continue
-    fi
-
-    echo ""
-    echo "Uploading: ${script} → ${dest}"
-    if oss_cp "$src" "$dest"; then
-      ((SCRIPTS_UPLOADED++)) || true
-      green "  ✓ ${script}"
-      if [[ "$DRY_RUN" == false ]]; then
-        echo "  URL: https://${OSS_BUCKET}.${OSS_ENDPOINT}/${TEST_PREFIX:+${TEST_PREFIX}/}scripts/${script}"
-      fi
-    else
-      ((SCRIPTS_FAILED++)) || true
-      red "  ✗ Failed: ${script}"
-    fi
-  done
-fi
-
-echo ""
-bold "CLI scripts: ${SCRIPTS_UPLOADED} uploaded, ${SCRIPTS_FAILED} failed"
-
-if [[ $SCRIPTS_FAILED -gt 0 ]]; then
-  red "❌ ${SCRIPTS_FAILED} CLI installer script(s) failed"
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────
@@ -383,7 +411,8 @@ cat <<EOF
   OSS paths:
     Assets:   ${OSS_ASSETS_PREFIX}/
     Latest:   ${OSS_SYMLINK_PREFIX}/
-    Scripts:  ${OSS_SCRIPTS_PREFIX}/
+    Scripts (convenience):  ${OSS_SCRIPTS_PREFIX}/
+    Scripts (versioned):   ${OSS_VERSIONED_PREFIX}/
 
 EOF
 
