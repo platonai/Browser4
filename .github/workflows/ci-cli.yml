@@ -78,7 +78,7 @@ jobs:
         id: flags
         shell: bash
         run: |
-          FLAGS="--nocapture"
+          FLAGS="--nocapture --force-remote-bundle"
 
           LEVEL="${{ inputs.level || 'All' }}"
           FLAGS="$FLAGS --level=$LEVEL"
