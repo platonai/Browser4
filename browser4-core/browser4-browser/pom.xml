@@ -43,13 +43,6 @@
                                         <exclude>META-INF/native-image/org.springframework*/**</exclude>
                                     </excludes>
                                 </filter>
-                                <!-- Keep reflection-heavy libraries in full:
-                                     Log4j uses extensive runtime reflection that
-                                     bytecode analysis cannot trace. -->
-                                <filter>
-                                    <artifact>org.apache.logging.log4j:*</artifact>
-                                    <includes><include>**</include></includes>
-                                </filter>
                                 <filter>
                                     <artifact>ch.qos.logback:*</artifact>
                                     <includes><include>**</include></includes>
@@ -110,6 +103,10 @@
                     <groupId>com.fasterxml.jackson.datatype</groupId>
                     <artifactId>*</artifactId>
                 </exclusion>
+                <exclusion>
+                    <groupId>org.apache.logging.log4j</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
             </exclusions>
         </dependency>
         <dependency>
@@ -141,6 +138,14 @@
         <dependency>
             <groupId>org.yaml</groupId>
             <artifactId>snakeyaml</artifactId>
+        </dependency>
+
+        <!-- Exclude kotlin-reflect: inherited from root POM but not needed
+             since CDTReflectiveMapper uses java.lang.reflect instead. -->
+        <dependency>
+            <groupId>org.jetbrains.kotlin</groupId>
+            <artifactId>kotlin-reflect</artifactId>
+            <scope>provided</scope>
         </dependency>
 
         <dependency>

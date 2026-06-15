@@ -396,6 +396,11 @@
 
     <dependencyManagement>
         <dependencies>
+            <dependency>
+                <groupId>org.jetbrains.kotlin</groupId>
+                <artifactId>kotlin-bom</artifactId>
+                <version>${kotlin.version}</version>
+            </dependency>
 
             <dependency>
                 <groupId>ai.platon.pulsar</groupId>

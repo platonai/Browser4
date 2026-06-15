@@ -15,11 +15,15 @@ private fun JsonElement.asText(): String = (this as? JsonPrimitive)?.contentOrNu
 private fun JsonElement.asBoolean(): Boolean = (this as? JsonPrimitive)?.booleanOrNull ?: false
 private fun JsonElement.asLong(): Long = (this as? JsonPrimitive)?.longOrNull ?: 0L
 private fun JsonElement.asInt(): Int = (this as? JsonPrimitive)?.intOrNull ?: 0
-private fun JsonElement.size(): Int = (this as? JsonArray)?.size ?: 0
+private fun JsonElement.size(): Int = when (this) {
+    is JsonArray -> this.size
+    is JsonObject -> this.size
+    else -> 0
+}
 private fun JsonElement.has(key: String): Boolean = (this as? JsonObject)?.containsKey(key) ?: false
-private fun JsonElement.first(): JsonElement = (this as? JsonArray)?.first() ?: JsonNull
+private fun JsonElement.first(): JsonElement = (this as? JsonArray)?.getOrNull(0) ?: JsonNull
 private fun JsonElement.first(predicate: (JsonElement) -> Boolean): JsonElement =
-    (this as? JsonArray)?.first(predicate) ?: JsonNull
+    (this as? JsonArray)?.find(predicate) ?: JsonNull
 
 class DOMStateBuilderTest {
     private fun readTree(json: String): JsonElement = CDTReflectiveMapper.parseJson(json)
