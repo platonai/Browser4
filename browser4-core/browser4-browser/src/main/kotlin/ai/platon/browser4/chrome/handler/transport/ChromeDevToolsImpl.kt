@@ -12,7 +12,7 @@ import ai.platon.pulsar.common.readable
 import ai.platon.pulsar.common.warnForClose
 import com.codahale.metrics.Gauge
 import com.codahale.metrics.SharedMetricRegistries
-import com.fasterxml.jackson.databind.JsonNode
+import kotlinx.serialization.json.JsonElement
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
@@ -214,7 +214,7 @@ internal class ChromeDevToolsImpl(
     }
 
     @Throws(ChromeRPCException::class, IOException::class)
-    private fun handleFailedFurther(error: JsonNode?): CDPReturnError {
+    private fun handleFailedFurther(error: JsonElement?): CDPReturnError {
         // Received an error
         val error = dispatcher.deserialize(ErrorObject::class.java, error)
         val sb = StringBuilder(error.message)

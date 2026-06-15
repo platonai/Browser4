@@ -22,6 +22,8 @@ package ai.platon.browser4.driver.chrome.impl
 import ai.platon.browser4.chrome.handler.transport.EventDispatcher
 import ai.platon.browser4.common.B4ResourceLoader
 import ai.platon.cdt.kt.protocol.types.accessibility.AXNode
+import ai.platon.pulsar.browser.common.CDTReflectiveMapper
+import kotlinx.serialization.json.*
 import org.junit.jupiter.api.Assertions
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
@@ -31,11 +33,12 @@ class ProtocolAXTreeTest {
     @Test
     @DisplayName("Given AXTree json then deserialize correctly by OBJECT_MAPPER")
     fun givenAxtreeJsonThenDeserializeCorrectlyByObjectMapper() {
-        val mapper = EventDispatcher.OBJECT_MAPPER
+        val mapper = CDTReflectiveMapper
         val json = B4ResourceLoader.readString("dom/AXTree.json")
-        val jsonNode = mapper.readTree(json)
-        val jsonNodes = jsonNode.get("result").get("nodes")
-        val nodes: List<AXNode> = mapper.readerFor(List::class.java).readValue(jsonNodes)
+        val jsonNode = mapper.parseJson(json)
+        val jsonNodes = (jsonNode as? JsonObject)?.get("result")?.jsonObject?.get("nodes") ?: JsonNull
+        @Suppress("UNCHECKED_CAST")
+        val nodes = mapper.deserialize(arrayOf(AXNode::class.java), List::class.java, jsonNodes) as List<AXNode>
 
         Assertions.assertTrue { nodes.isNotEmpty() }
     }
@@ -43,14 +46,14 @@ class ProtocolAXTreeTest {
     @Test
     @DisplayName("Given AXTree json then deserialize correctly by EventDispatcher")
     fun givenAxtreeJsonThenDeserializeCorrectlyByEventDispatcher() {
-        val mapper = EventDispatcher.OBJECT_MAPPER
+        val mapper = CDTReflectiveMapper
         val dispatcher = EventDispatcher()
         val str = B4ResourceLoader.readString("dom/AXTree.json")
         val json = dispatcher.patchMessageForProtocolChange(str)
         // printlnPro(this, json)
 
-        val jsonNode = mapper.readTree(json)
-        val jsonNodes = jsonNode.get("result").get("nodes")
+        val jsonNode = mapper.parseJson(json)
+        val jsonNodes = (jsonNode as? JsonObject)?.get("result")?.jsonObject?.get("nodes") ?: JsonNull
         // Deserialize a List<AXNode> using the generic-aware overload
         @Suppress("UNCHECKED_CAST")
         val nodes = dispatcher.deserialize(arrayOf(AXNode::class.java), List::class.java, jsonNodes) as List<AXNode>
@@ -61,12 +64,12 @@ class ProtocolAXTreeTest {
     @Test
     @DisplayName("Given AXTree json WITH BAD FIELDS then deserialize correctly by EventDispatcher")
     fun givenAxtreeJsonWithBadFieldsThenDeserializeCorrectlyByEventDispatcher() {
-        val mapper = EventDispatcher.OBJECT_MAPPER
+        val mapper = CDTReflectiveMapper
         val json = B4ResourceLoader.readString("dom/AXTree.json")
             .replace("uninteresting", "UNINTERESTINGREPLACEDFORTEST")
 
-        val jsonNode = mapper.readTree(json)
-        val jsonNodes = jsonNode.get("result").get("nodes")
+        val jsonNode = mapper.parseJson(json)
+        val jsonNodes = (jsonNode as? JsonObject)?.get("result")?.jsonObject?.get("nodes") ?: JsonNull
         val dispatcher = EventDispatcher()
         // Deserialize a List<AXNode> using the generic-aware overload
         @Suppress("UNCHECKED_CAST")

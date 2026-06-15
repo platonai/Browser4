@@ -3,7 +3,8 @@ package ai.platon.pulsar.browser.mcp
 import ai.platon.pulsar.browser.Browser
 import ai.platon.pulsar.browser.WebDriver
 import ai.platon.pulsar.browser.mcp.MCPSessionManager.SessionEntry
-import com.fasterxml.jackson.databind.ObjectMapper
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import kotlinx.coroutines.runBlocking
 
 /**
@@ -85,7 +86,7 @@ class MCPToolDispatcher(
         )
     }
 
-    private val mapper = ObjectMapper()
+    private val json = Json { ignoreUnknownKeys = true }
 
     // =========================================================================
     // Public entry point — synchronous bridge for HttpServer threads
@@ -292,7 +293,7 @@ class MCPToolDispatcher(
                 }
 
                 // Cookies
-                "get_cookies" -> mapper.writeValueAsString(driver.getCookies())
+                "get_cookies" -> json.encodeToString(driver.getCookies())
                 "delete_cookies" -> {
                     driver.deleteCookies(
                         name = args.requireString("name"),

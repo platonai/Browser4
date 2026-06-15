@@ -2,13 +2,27 @@ package ai.platon.pulsar.chrome.dom.model
 
 import ai.platon.browser4.chrome.dom.DOMSerializer
 import ai.platon.browser4.chrome.dom.DOMStateBuilder
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import ai.platon.pulsar.browser.common.CDTReflectiveMapper
+import kotlinx.serialization.json.*
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 
+// Adapter extensions to ease migration from Jackson JsonNode to kotlinx.serialization JsonElement
+private fun JsonElement.get(key: String): JsonElement = (this as? JsonObject)?.get(key) ?: JsonNull
+private fun JsonElement.get(index: Int): JsonElement = (this as? JsonArray)?.getOrNull(index) ?: JsonNull
+private fun JsonElement.asText(): String = (this as? JsonPrimitive)?.contentOrNull ?: ""
+private fun JsonElement.asBoolean(): Boolean = (this as? JsonPrimitive)?.booleanOrNull ?: false
+private fun JsonElement.asLong(): Long = (this as? JsonPrimitive)?.longOrNull ?: 0L
+private fun JsonElement.asInt(): Int = (this as? JsonPrimitive)?.intOrNull ?: 0
+private fun JsonElement.size(): Int = (this as? JsonArray)?.size ?: 0
+private fun JsonElement.has(key: String): Boolean = (this as? JsonObject)?.containsKey(key) ?: false
+private fun JsonElement.first(): JsonElement = (this as? JsonArray)?.first() ?: JsonNull
+private fun JsonElement.first(predicate: (JsonElement) -> Boolean): JsonElement =
+    (this as? JsonArray)?.first(predicate) ?: JsonNull
+
 class DOMStateBuilderTest {
-    private val mapper = jacksonObjectMapper()
+    private fun readTree(json: String): JsonElement = CDTReflectiveMapper.parseJson(json)
 
     @Test
     @DisplayName("serialize filters attributes and populates selector map")
@@ -33,7 +47,7 @@ class DOMStateBuilderTest {
 
         val result = DOMStateBuilder.build(root, listOf("data-id", "aria-label"))
         val json = DOMSerializer.toJson(result.serializableTree)
-        val tree = mapper.readTree(json)
+        val tree = readTree(json)
 
         val rootAttrs = tree.get("originalNode").get("attributes")
         assertEquals(1, rootAttrs.size(), "Only whitelisted root attribute should be present")
@@ -76,7 +90,7 @@ class DOMStateBuilderTest {
 
         val result = DOMStateBuilder.build(simplified)
         val json = DOMSerializer.toJson(result.serializableTree)
-        val tree = mapper.readTree(json)
+        val tree = readTree(json)
         val child = tree.get("children").first()
 
         assertNotNull(child.get("shouldShowScrollInfo"), "Scroll flag should be present when helper returns true")
@@ -122,7 +136,7 @@ class DOMStateBuilderTest {
         )
         val result = DOMStateBuilder.build(simplified, emptyList(), options)
         val json = DOMSerializer.toJson(result.serializableTree)
-        val tree = mapper.readTree(json)
+        val tree = readTree(json)
 
         val children = tree.get("children")
         assertEquals(2, children.size()) // Both children should be present but high paint order should be pruned
@@ -174,7 +188,7 @@ class DOMStateBuilderTest {
         )
         val result = DOMStateBuilder.build(simplified, emptyList(), options)
         val json = DOMSerializer.toJson(result.serializableTree)
-        val tree = mapper.readTree(json)
+        val tree = readTree(json)
 
         val ulNode = tree.get("children").first()
         assertEquals(
@@ -207,7 +221,7 @@ class DOMStateBuilderTest {
         )
         val result = DOMStateBuilder.build(simplified, listOf("class", "for", "readonly", "customattr"), options)
         val json = DOMSerializer.toJson(result.serializableTree)
-        val tree = mapper.readTree(json)
+        val tree = readTree(json)
 
         val attrs = tree.get("originalNode").get("attributes")
         assertEquals("my-input", attrs.get("class").asText(), "className should be normalized to class")
@@ -261,7 +275,7 @@ class DOMStateBuilderTest {
         )
         val result = DOMStateBuilder.build(simplified, emptyList(), options)
         val json = DOMSerializer.toJson(result.serializableTree)
-        val tree = mapper.readTree(json)
+        val tree = readTree(json)
 
         assertEquals(
             "CustomElement", tree.get("originalNode").get("nodeName").asText(),
@@ -296,7 +310,7 @@ class DOMStateBuilderTest {
 
         val result = DOMStateBuilder.build(leaf)
         val json = DOMSerializer.toJson(result.serializableTree)
-        val tree = mapper.readTree(json)
+        val tree = readTree(json)
 
         // Traverse down the first-child chain and count levels
         var cursor = tree
@@ -842,7 +856,7 @@ class DOMStateBuilderTest {
         // Convert to NanoDOMTree
         val nanoTree = result.serializableTree.toNanoTreeUnfiltered()
         val json = DOMSerializer.toJson(nanoTree)
-        val tree = mapper.readTree(json)
+        val tree = readTree(json)
 
         // Verify anchor node has href attribute
         val anchorChild = tree.get("children").get(0)

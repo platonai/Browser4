@@ -4,8 +4,7 @@ import ai.platon.pulsar.common.Systems
 import ai.platon.pulsar.common.browser.InteractLevel
 import ai.platon.pulsar.common.config.CapabilityTypes
 import ai.platon.pulsar.common.config.MutableConfig
-import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
-import com.fasterxml.jackson.core.JacksonException
+import ai.platon.pulsar.browser.common.CDTReflectiveMapper
 import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.random.Random
@@ -255,9 +254,9 @@ data class InteractSettings constructor(
      *
      * @return a json string
      * */
-    @Throws(JacksonException::class)
+    @Throws(IllegalArgumentException::class)
     fun toJson(): String {
-        return pulsarObjectMapper().writeValueAsString(this)
+        return buildJsonString(this)
     }
 
     object Builder {
@@ -346,6 +345,22 @@ data class InteractSettings constructor(
 
     companion object {
         private val OBJECT_CACHE = ConcurrentHashMap<String, InteractSettings>()
+
+        private fun buildJsonString(settings: InteractSettings): String {
+            return kotlinx.serialization.json.buildJsonObject {
+                put("initScrollPositions", kotlinx.serialization.json.JsonPrimitive(settings.initScrollPositions))
+                put("autoScrollCount", kotlinx.serialization.json.JsonPrimitive(settings.autoScrollCount))
+                put("scrollInterval", kotlinx.serialization.json.JsonPrimitive(settings.scrollInterval.toMillis() / 1000.0))
+                put("scriptTimeout", kotlinx.serialization.json.JsonPrimitive(settings.scriptTimeout.toMillis() / 1000.0))
+                put("pageLoadTimeout", kotlinx.serialization.json.JsonPrimitive(settings.pageLoadTimeout.toMillis() / 1000.0))
+                put("bringToFront", kotlinx.serialization.json.JsonPrimitive(settings.bringToFront))
+                put("domSettlePolicy", kotlinx.serialization.json.JsonPrimitive(settings.domSettlePolicy.name))
+                put("minDelayMillis", kotlinx.serialization.json.JsonPrimitive(settings.minDelayMillis))
+                put("maxDelayMillis", kotlinx.serialization.json.JsonPrimitive(settings.maxDelayMillis))
+                put("minTimeout", kotlinx.serialization.json.JsonPrimitive(settings.minTimeout.toMillis() / 1000.0))
+                put("maxTimeout", kotlinx.serialization.json.JsonPrimitive(settings.maxTimeout.toMillis() / 1000.0))
+            }.toString()
+        }
 
         /**
          * Delay buckets used by interaction actions.
@@ -494,10 +509,10 @@ data class InteractSettings constructor(
          * @param json the json string
          * @return an InteractSettings object
          * */
-        @Throws(JacksonException::class)
+        @Throws(IllegalArgumentException::class)
         fun fromJson(json: String): InteractSettings {
             return OBJECT_CACHE.computeIfAbsent(json) {
-                pulsarObjectMapper().readValue(json, InteractSettings::class.java)
+                CDTReflectiveMapper.deserializeFromString(json, InteractSettings::class.java)
             }
         }
 

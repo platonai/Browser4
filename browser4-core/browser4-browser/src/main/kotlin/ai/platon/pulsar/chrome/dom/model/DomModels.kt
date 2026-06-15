@@ -13,8 +13,8 @@ import ai.platon.pulsar.browser.common.FBNLocator
 import ai.platon.pulsar.browser.common.LocatorMap
 import ai.platon.pulsar.common.math.geometric.DimI
 import ai.platon.pulsar.common.math.roundTo
-import ai.platon.pulsar.common.serialize.json.Pson
-import com.fasterxml.jackson.annotation.JsonIgnore
+import ai.platon.pulsar.browser.common.CDTReflectiveMapper
+import kotlinx.serialization.Transient
 import java.math.RoundingMode
 import java.time.OffsetDateTime
 import java.time.ZoneId
@@ -301,9 +301,9 @@ data class MergedDOMTreeNode constructor(
      */
     fun cssSelector(): String = CSSSelectorUtils.generateCSSSelector(this)
 
-    fun toJson() = Pson.toJson(this)
+    fun toJson() = CDTReflectiveMapper.serialize(this)
 
-    fun toYaml() = Pson.toYaml(this)
+    fun toYaml() = CDTReflectiveMapper.serializeToYaml(this)
 }
 
 typealias MergedDOMTree = MergedDOMTreeNode
@@ -386,7 +386,7 @@ data class CleanedDOMTreeNode constructor(
     val contentDocument: CleanedDOMTreeNode?
     // Note: children_nodes and shadow_roots are intentionally omitted
 ) {
-    fun toJson() = Pson.toJson(this)
+    fun toJson() = CDTReflectiveMapper.serialize(this)
 
     override fun hashCode(): Int {
         return toJson().hashCode()
@@ -413,17 +413,17 @@ data class InteractiveDOMTreeNode(
     val invisible: Boolean? = null,    // null means false
     val viewportIndex: Int? = null,
     val clientRects: CompactRect? = null,
-    @JsonIgnore
+    @Transient
     val bounds: CompactRect? = null,
-    @JsonIgnore
+    @Transient
     val scrollRects: CompactRect? = null,
-    @JsonIgnore
+    @Transient
     val absoluteBounds: CompactRect? = null,
-    @JsonIgnore
+    @Transient
     val interactiveIndex: Int = 0,
-    @JsonIgnore
+    @Transient
     val prevInteractiveIndex: Int? = null,
-    @JsonIgnore
+    @Transient
     val nextInteractiveIndex: Int? = null,
 ) {
     fun isAnchor(): Boolean {
@@ -461,10 +461,10 @@ data class InteractiveDOMTreeNode(
 class InteractiveDOMTreeNodeList(
     val nodes: List<InteractiveDOMTreeNode> = emptyList(),
 ) {
-    @get:JsonIgnore
+    @Transient
     val lazyJson by lazy { DOMSerializer.toJson(this) }
 
-    @get:JsonIgnore
+    @Transient
     val lazyString by lazy { toString() }
 
     fun estimatedSize() = nodes.sumOf { estimatedSize(it) }
@@ -529,23 +529,23 @@ data class NanoDOMTreeNode(
     val scrollRects: CompactRect? = null,
     val children: List<NanoDOMTreeNode>? = null,
 
-    @JsonIgnore
+    @Transient
     val viewportIndex: Int? = null,    // The position of this DOM node falls within the nth viewport, 1-based
-    @JsonIgnore
+    @Transient
     val interactiveIndex: Int? = null,
-    @JsonIgnore
+    @Transient
     val clientRects: CompactRect? = null,
-    @JsonIgnore
+    @Transient
     val bounds: CompactRect? = null,
-    @JsonIgnore
+    @Transient
     val absoluteBounds: CompactRect? = null,
-    @JsonIgnore
+    @Transient
     val serializableTreeNode: SerializableDOMTree? = null,
 ) {
-    @get:JsonIgnore
+    @Transient
     val ariaSnapshot: String by lazy { NanoAriaSnapshotRenderer.render(this) }
 
-    @get:JsonIgnore
+    @Transient
     val ref: Int get() = FBNLocator.parseRelaxed(locator)?.backendNodeId ?: 0
 }
 
@@ -557,10 +557,10 @@ data class DOMState constructor(
     val frameIds: List<String> = listOf(),
     val selectorMap: Map<String, MergedDOMTreeNode> = mapOf(),
     val locatorMap: LocatorMap = LocatorMap(),
-    @get:JsonIgnore
+    @Transient
     val optimizedDOMTree: OptimizedDOMTree? = null
 ) {
-    @get:JsonIgnore
+    @Transient
     val ariaSnapshot: String get() = optimizedDOMTree?.let(AriaSnapshotRenderer::render)
         ?: serializableTree.toNanoTreeUnfiltered().ariaSnapshot
 
@@ -661,7 +661,7 @@ data class BrowserState constructor(
     val activeTabId: String? = null,
     val clientInfo: ClientInfo = ClientInfo(),
 ) {
-    @get:JsonIgnore
+    @Transient
     val lazyJson: String by lazy { DOMSerializer.toJson(this) }
 }
 

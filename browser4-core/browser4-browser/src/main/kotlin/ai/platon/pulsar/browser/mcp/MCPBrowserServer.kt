@@ -1,6 +1,8 @@
 package ai.platon.pulsar.browser.mcp
 
-import com.fasterxml.jackson.databind.ObjectMapper
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
@@ -67,7 +69,7 @@ class MCPBrowserServer(
         ).sorted()
     }
 
-    private val mapper = ObjectMapper()
+    private val json = Json { ignoreUnknownKeys = true }
     private var httpServer: HttpServer? = null
 
     fun start() {
@@ -82,15 +84,15 @@ class MCPBrowserServer(
                     return@createContext
                 }
                 val body = exchange.requestBody.readBytes().decodeToString()
-                val request = mapper.readValue(body, MCPToolCallRequest::class.java)
+                val request = json.decodeFromString<MCPToolCallRequest>(body)
                 val response = dispatcher.dispatchSync(request.tool, request.arguments ?: emptyMap())
-                sendJson(exchange, 200, mapper.writeValueAsString(response))
+                sendJson(exchange, 200, json.encodeToString(response))
             } catch (e: Exception) {
                 val error = MCPToolCallResponse(
                     content = listOf(MCPContent(text = "ERROR: ${e.message}")),
                     isError = true
                 )
-                sendJson(exchange, 200, mapper.writeValueAsString(error))
+                sendJson(exchange, 200, json.encodeToString(error))
             }
         }
 
@@ -102,8 +104,8 @@ class MCPBrowserServer(
                     sendJson(exchange, 405, """{"error":"Method not allowed"}""")
                     return@createContext
                 }
-                val json = mapper.writeValueAsString(mapOf("tools" to ALL_TOOLS))
-                sendJson(exchange, 200, json)
+                val toolsJson = json.encodeToString(mapOf("tools" to ALL_TOOLS))
+                sendJson(exchange, 200, toolsJson)
             } catch (e: Exception) {
                 sendJson(exchange, 500, """{"error":"${e.message}"}""")
             }

@@ -44,13 +44,8 @@
                                     </excludes>
                                 </filter>
                                 <!-- Keep reflection-heavy libraries in full:
-                                     Jackson, Log4j, and Kotlin reflect use
-                                     extensive runtime reflection that bytecode
-                                     analysis cannot trace. -->
-                                <filter>
-                                    <artifact>com.fasterxml.jackson.*:*</artifact>
-                                    <includes><include>**</include></includes>
-                                </filter>
+                                     Log4j uses extensive runtime reflection that
+                                     bytecode analysis cannot trace. -->
                                 <filter>
                                     <artifact>org.apache.logging.log4j:*</artifact>
                                     <includes><include>**</include></includes>
@@ -99,6 +94,22 @@
                     <groupId>com.google.guava</groupId>
                     <artifactId>*</artifactId>
                 </exclusion>
+                <exclusion>
+                    <groupId>com.fasterxml.jackson.core</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.fasterxml.jackson.module</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.fasterxml.jackson.dataformat</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>com.fasterxml.jackson.datatype</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
             </exclusions>
         </dependency>
         <dependency>
@@ -123,12 +134,13 @@
         </dependency>
 
         <dependency>
-            <groupId>com.fasterxml.jackson.dataformat</groupId>
-            <artifactId>jackson-dataformat-yaml</artifactId>
+            <groupId>org.jetbrains.kotlinx</groupId>
+            <artifactId>kotlinx-serialization-json</artifactId>
         </dependency>
+
         <dependency>
-            <groupId>com.fasterxml.jackson.module</groupId>
-            <artifactId>jackson-module-kotlin</artifactId>
+            <groupId>org.yaml</groupId>
+            <artifactId>snakeyaml</artifactId>
         </dependency>
 
         <dependency>

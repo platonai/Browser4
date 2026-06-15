@@ -7,13 +7,14 @@ import ai.platon.browser4.chrome.util.ChromeIOException
 import ai.platon.browser4.chrome.util.ChromeServiceException
 import ai.platon.cdt.kt.protocol.support.types.EventHandler
 import ai.platon.cdt.kt.protocol.support.types.EventListener
+import ai.platon.pulsar.browser.common.CDTReflectiveMapper
 import ai.platon.pulsar.browser.impl.BrowserTab
 import ai.platon.pulsar.browser.impl.ChromeVersion
 import ai.platon.pulsar.browser.impl.DevToolsConfig
 import ai.platon.pulsar.common.NetUtil
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.warnForClose
-import com.fasterxml.jackson.databind.ObjectMapper
+import kotlinx.serialization.json.Json
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
@@ -62,7 +63,7 @@ internal class ChromeImpl(
     }
 
     private val logger = getLogger(this)
-    private val objectMapper = ObjectMapper()
+    private val json = Json { ignoreUnknownKeys = true }
 
     /**
      * DevTools map, the key is the Chrome tab id.
@@ -203,7 +204,8 @@ internal class ChromeImpl(
                     return null
                 }
                 inputStream = connection.inputStream
-                return objectMapper.readerFor(responseType).readValue(inputStream)
+                val body = readString(inputStream)
+                return deserializeResponse(body, responseType)
             } else {
                 inputStream = connection.errorStream
                 val responseBody = readString(inputStream)
@@ -237,5 +239,26 @@ internal class ChromeImpl(
             result.write(buffer, 0, length)
         }
         return result.toString("UTF-8")
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun <T> deserializeResponse(body: String, responseType: Class<T>): T? {
+        // ChromeVersion uses @Serializable + @SerialName for kebab-case keys
+        if (responseType == ChromeVersion::class.java) {
+            return json.decodeFromString(ChromeVersion.serializer(), body) as T
+        }
+        // Array types: parse as JsonArray, convert each element
+        if (responseType.isArray) {
+            val elementType = responseType.componentType ?: return null
+            val jsonArray = CDTReflectiveMapper.parseJson(body) as? kotlinx.serialization.json.JsonArray
+                ?: return null
+            val result = java.lang.reflect.Array.newInstance(elementType, jsonArray.size) as T
+            for ((i, item) in jsonArray.withIndex()) {
+                java.lang.reflect.Array.set(result, i, CDTReflectiveMapper.deserialize(item, elementType as Class<Any>))
+            }
+            return result
+        }
+        // Default: use CDTReflectiveMapper
+        return CDTReflectiveMapper.deserializeFromString(body, responseType)
     }
 }

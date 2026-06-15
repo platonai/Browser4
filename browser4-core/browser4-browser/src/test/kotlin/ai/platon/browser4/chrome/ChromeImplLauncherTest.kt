@@ -5,8 +5,7 @@ import ai.platon.browser4.chrome.util.ChromeOptions
 import ai.platon.browser4.chrome.util.LauncherOptions
 import ai.platon.pulsar.common.browser.BrowserFiles
 import ai.platon.pulsar.common.browser.BrowserFiles.CDP_URL_FILE_NAME
-import ai.platon.pulsar.common.serialize.json.Pson
-import ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper
+import ai.platon.pulsar.browser.common.CDTReflectiveMapper
 import ai.platon.pulsar.common.sleepSeconds
 import kotlinx.coroutines.runBlocking
 import java.nio.file.Files
@@ -51,7 +50,7 @@ class ChromeImplLauncherTest {
 
             val version = chrome.version
             val tab = chrome.createTab("https://www.example.com/")
-            val versionString = Pson.toJson(chrome.version)
+            val versionString = CDTReflectiveMapper.serialize(chrome.version)
             assertTrue(!chrome.version.browser.isNullOrBlank())
             assertTrue(versionString.contains("Mozilla"))
 
@@ -59,8 +58,8 @@ class ChromeImplLauncherTest {
             println("Protocol version: " + version.protocolVersion)
             println("Browser version" + version.browser)
 
-            println(prettyPulsarObjectMapper().writeValueAsString(tab))
-            println(prettyPulsarObjectMapper().writeValueAsString(chrome.version))
+            println(CDTReflectiveMapper.serialize(tab))
+            println(CDTReflectiveMapper.serialize(chrome.version))
             println(versionString)
 
             val devTools = chrome.createDevTools(tab)

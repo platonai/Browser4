@@ -1,7 +1,8 @@
 package ai.platon.pulsar.browser.impl
 
 import ai.platon.cdt.kt.protocol.types.network.LoadNetworkResourcePageResult
-import com.fasterxml.jackson.annotation.JsonProperty
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
 import java.time.Duration
 import java.time.Instant
 
@@ -45,23 +46,24 @@ data class NodeRef constructor(
     }
 }
 
+@Serializable
 class ChromeVersion {
-    @JsonProperty("Browser")
+    @SerialName("Browser")
     val browser: String? = null
 
-    @JsonProperty("Protocol-Version")
+    @SerialName("Protocol-Version")
     val protocolVersion: String? = null
 
-    @JsonProperty("User-Agent")
+    @SerialName("User-Agent")
     val userAgent: String? = null
 
-    @JsonProperty("V8-Version")
+    @SerialName("V8-Version")
     val v8Version: String? = null
 
-    @JsonProperty("WebKit-Version")
+    @SerialName("WebKit-Version")
     val webKitVersion: String? = null
 
-    @JsonProperty("webSocketDebuggerUrl")
+    @SerialName("webSocketDebuggerUrl")
     val webSocketDebuggerUrl: String? = null
 }
 

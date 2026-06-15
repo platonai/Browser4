@@ -5,15 +5,10 @@ import ai.platon.pulsar.browser.common.Utils
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.getTracerOrNull
 import ai.platon.pulsar.common.stringify
-import com.fasterxml.jackson.annotation.JsonInclude
-import com.fasterxml.jackson.core.JsonProcessingException
-import com.fasterxml.jackson.databind.DeserializationFeature
-import com.fasterxml.jackson.databind.JavaType
-import com.fasterxml.jackson.databind.JsonNode
-import com.fasterxml.jackson.databind.ObjectMapper
-import com.fasterxml.jackson.databind.exc.MismatchedInputException
-import com.fasterxml.jackson.databind.type.TypeFactory
+import ai.platon.pulsar.browser.common.CDTReflectiveMapper
 import kotlinx.coroutines.*
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.json.*
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentSkipListSet
@@ -25,7 +20,7 @@ import java.util.function.Consumer
  */
 data class RpcResult(
     val isSuccess: Boolean,
-    val result: JsonNode?,
+    val result: JsonElement?,
     val message: String? = null
 )
 
@@ -51,10 +46,10 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
         const val METHOD_PROPERTY = "method"
         const val PARAMS_PROPERTY = "params"
 
-        val OBJECT_MAPPER = ObjectMapper()
-            .setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
-            .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
-            .configure(DeserializationFeature.READ_UNKNOWN_ENUM_VALUES_USING_DEFAULT_VALUE, true)
+        val JSON = Json {
+            ignoreUnknownKeys = true
+            encodeDefaults = false
+        }
     }
 
     private val logger = getLogger(this)
@@ -73,10 +68,6 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
 
     fun patchMessageForProtocolChange(message: String, force: Boolean = false): String {
         // Patch protocol changes if needed, e.g., some events might change their params structure across Chrome versions
-
-        // normalization
-//        val tree = OBJECT_MAPPER.readTree(message)
-//        var patched = OBJECT_MAPPER.writeValueAsString(tree)
         var patched = message
 
         if (force || patched.contains("clientSecurityState")) {
@@ -86,63 +77,47 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
         return patched
     }
 
-    @Throws(JsonProcessingException::class)
-    fun serialize(message: Any): String = OBJECT_MAPPER.writeValueAsString(message)
+    @Throws(SerializationException::class)
+    fun serialize(message: Any): String = JSON.encodeToString(JsonElement.serializer(), buildJsonElement(message))
 
-    @Throws(JsonProcessingException::class)
+    @Throws(SerializationException::class)
     fun serialize(id: Long, method: String, params: Map<String, Any>?, sessionId: String?): String {
-        return OBJECT_MAPPER.writeValueAsString(
-            mapOf(
-                ID_PROPERTY to id,
-                METHOD_PROPERTY to method,
-                PARAMS_PROPERTY to params,
-                "sessionId" to sessionId
-            )
-        )
+        return buildJsonObject {
+            put(ID_PROPERTY, id)
+            put(METHOD_PROPERTY, method)
+            if (params != null) put(PARAMS_PROPERTY, buildJsonElement(params))
+            if (sessionId != null) put("sessionId", sessionId)
+        }.toString()
+    }
+
+    /** Convert a map/collection into a JsonElement tree. */
+    @Suppress("UNCHECKED_CAST")
+    private fun buildJsonElement(value: Any): JsonElement {
+        return when (value) {
+            is Map<*, *> -> buildJsonObject {
+                for ((k, v) in value) {
+                    put(k.toString(), buildJsonElement(v ?: JsonNull))
+                }
+            }
+            is List<*> -> buildJsonArray {
+                for (v in value) {
+                    add(buildJsonElement(v ?: JsonNull))
+                }
+            }
+            is String -> JsonPrimitive(value)
+            is Number -> JsonPrimitive(value)
+            is Boolean -> JsonPrimitive(value)
+            is Enum<*> -> JsonPrimitive(value.name)
+            else -> JsonPrimitive(value.toString())
+        }
     }
 
     @Throws(IOException::class)
-    fun <T> deserialize(classParameters: Array<Class<*>>, parameterizedClazz: Class<T>, jsonNode: JsonNode): T {
-        val typeFactory: TypeFactory = OBJECT_MAPPER.typeFactory
-
-        val typeParamCount = parameterizedClazz.typeParameters.size
-        val javaType: JavaType = when {
-            // No parameters -> plain type
-            classParameters.isEmpty() -> typeFactory.constructType(parameterizedClazz)
-
-            // Single-parameter generics (List-like). Support nesting via right fold, e.g.,
-            // classParameters [List, Double] with parameterizedClazz List -> List<List<Double>>
-            typeParamCount <= 1 -> {
-                var inner: JavaType = typeFactory.constructType(classParameters.last())
-                for (i in classParameters.size - 2 downTo 0) {
-                    inner = typeFactory.constructParametricType(classParameters[i], inner)
-                }
-                typeFactory.constructParametricType(parameterizedClazz, inner)
-            }
-
-            // Two-parameter generics (Map-like). Common case: K, V
-            typeParamCount == 2 -> {
-                if (classParameters.size == 2) {
-                    typeFactory.constructParametricType(parameterizedClazz, classParameters[0], classParameters[1])
-                } else {
-                    // Interpret first as key, the rest as nested value: Map<K, VNested>
-                    var valueType: JavaType = typeFactory.constructType(classParameters.last())
-                    for (i in classParameters.size - 2 downTo 1) {
-                        valueType = typeFactory.constructParametricType(classParameters[i], valueType)
-                    }
-                    val keyType: JavaType = typeFactory.constructType(classParameters[0])
-                    typeFactory.constructParametricType(parameterizedClazz, keyType, valueType)
-                }
-            }
-
-            // 3+ parameters: best-effort (no nesting). If nesting is needed, pass nested via classParameters accordingly.
-            else -> typeFactory.constructParametricType(parameterizedClazz, *classParameters)
-        }
-
+    fun <T> deserialize(classParameters: Array<Class<*>>, parameterizedClazz: Class<T>, jsonNode: JsonElement): T {
         try {
-            return OBJECT_MAPPER.readerFor(javaType).readValue(jsonNode)
+            return CDTReflectiveMapper.deserialize(classParameters, parameterizedClazz, jsonNode)
         } catch (e: Exception) {
-            logger.warn("Failed to deserialize class $javaType\n", e)
+            logger.warn("Failed to deserialize class ${parameterizedClazz.name}\n", e)
             throw e
         }
     }
@@ -154,25 +129,19 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
      * ```
      * */
     @Throws(IOException::class, ChromeRPCException::class)
-    fun <T> deserialize(clazz: Class<T>, jsonNode: JsonNode?): T {
+    fun <T> deserialize(clazz: Class<T>, jsonNode: JsonElement?): T {
         if (jsonNode == null) {
             throw ChromeRPCException("Failed converting null response to clazz " + clazz.name)
         }
 
         try {
-            // Here is a typical response sequence:
-            // println(clazz)
-            // RequestWillBeSent, RequestWillBeSentExtraInfo, ResponseReceivedExtra, ResponseReceived, LoadingFinished,
-            return OBJECT_MAPPER.readerFor(clazz).readValue(jsonNode)
-        } catch (e: MismatchedInputException) {
+            return CDTReflectiveMapper.deserialize(jsonNode, clazz)
+        } catch (e: Exception) {
             val message = """
                 Failed converting response to clazz ${clazz.name}
                 $jsonNode
                 """.trimIndent()
             logger.warn(message, e)
-            throw e
-        } catch (e: IOException) {
-            // logger.warn("Failed converting response to clazz {}", clazz.name, e)
             throw e
         }
     }
@@ -217,33 +186,34 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
 
         ChromeDevToolsImpl.numAccepts.inc()
         try {
-            val jsonNode = OBJECT_MAPPER.readTree(message)
-            val idNode = jsonNode.get(ID_PROPERTY)
-            if (idNode != null) {
-                val id = idNode.asLong()
+            val jsonElement = CDTReflectiveMapper.parseJson(message)
+            val jsonObj = jsonElement as? JsonObject ?: return
+            val idElement = jsonObj[ID_PROPERTY]
+            if (idElement != null && idElement !is JsonNull) {
+                val id = idElement.jsonPrimitive.long
                 val future = invocationFutures.remove(id)
 
                 if (future != null) {
-                    var resultNode = jsonNode.get(RESULT_PROPERTY)
-                    val errorNode = jsonNode.get(ERROR_PROPERTY)
-                    if (errorNode != null) {
+                    var resultElement = jsonObj[RESULT_PROPERTY]
+                    val errorElement = jsonObj[ERROR_PROPERTY]
+                    if (errorElement != null && errorElement !is JsonNull) {
                         logger.debug("Error node: {}", Utils.abbreviateMiddle(message, "...", 20000))
-                        future.deferred.complete(RpcResult(false, errorNode, message))
+                        future.deferred.complete(RpcResult(false, errorElement, message))
                     } else {
                         if (future.returnProperty != null) {
-                            resultNode = resultNode?.get(future.returnProperty)
+                            resultElement = (resultElement as? JsonObject)?.get(future.returnProperty!!)
                         }
 
-                        future.deferred.complete(RpcResult(true, resultNode, message))
+                        future.deferred.complete(RpcResult(true, resultElement, message))
                     }
                 } else {
-                    logger.warn("Received response with unknown invocation #{} - {}", id, jsonNode.asText())
+                    logger.warn("Received response with unknown invocation #{} - {}", id, jsonObj.toString())
                 }
             } else {
-                val methodNode = jsonNode.get(METHOD_PROPERTY)
-                val paramsNode = jsonNode.get(PARAMS_PROPERTY)
-                if (methodNode != null) {
-                    handleEventAsync(methodNode.asText(), paramsNode)
+                val methodElement = jsonObj[METHOD_PROPERTY]
+                val paramsElement = jsonObj[PARAMS_PROPERTY]
+                if (methodElement != null && methodElement !is JsonNull) {
+                    handleEventAsync(methodElement.jsonPrimitive.content, paramsElement)
                 }
             }
         } catch (e: Exception) {
@@ -263,7 +233,7 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
         }
     }
 
-    private fun handleEventAsync(name: String, params: JsonNode) {
+    private fun handleEventAsync(name: String, params: JsonElement?) {
         val listeners = eventListeners[name] ?: return
 
         // make a copy
@@ -293,10 +263,11 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
      * @param unmodifiedListeners the listeners
      * @throws ChromeRPCException if the event could not be handled
      * */
-    private suspend fun handleEvent0(params: JsonNode, unmodifiedListeners: Iterable<DevToolsEventListener>) {
+    private suspend fun handleEvent0(params: JsonElement?, unmodifiedListeners: Iterable<DevToolsEventListener>) {
         try {
             handleEvent1(params, unmodifiedListeners)
-        } catch (e: MismatchedInputException) {
+        } catch (e: IllegalArgumentException) {
+            // Mismatched input — Chrome might have upgraded the protocol
             logger.warn("Mismatched input, Chrome might have upgraded the protocol | {}", e.message)
         } catch (t: Throwable) {
             logger.warn("Failed to handle event", t)
@@ -310,10 +281,11 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
      * ```
      * */
     @Throws(ChromeRPCException::class, IOException::class)
-    private suspend fun handleEvent1(params: JsonNode, unmodifiedListeners: Iterable<DevToolsEventListener>) {
+    private suspend fun handleEvent1(params: JsonElement?, unmodifiedListeners: Iterable<DevToolsEventListener>) {
         var event: Any? = null
         for (listener in unmodifiedListeners) {
             if (event == null) {
+                if (params == null) continue
                 event = deserialize(listener.paramType, params)
             }
 

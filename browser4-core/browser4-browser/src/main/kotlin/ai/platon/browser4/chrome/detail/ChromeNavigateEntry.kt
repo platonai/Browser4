@@ -8,9 +8,7 @@ import ai.platon.cdt.kt.protocol.types.network.Cookie
 import ai.platon.cdt.kt.protocol.types.network.ResourceType
 import ai.platon.pulsar.browser.common.NavigateEntry
 import ai.platon.pulsar.common.getLogger
-import com.fasterxml.jackson.annotation.JsonInclude
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
-import com.fasterxml.jackson.module.kotlin.readValue
+import ai.platon.pulsar.browser.common.CDTReflectiveMapper
 
 class ChromeNavigateEntry(
     private val navigateEntry: NavigateEntry
@@ -20,8 +18,6 @@ class ChromeNavigateEntry(
     private val tracer = logger.takeIf { it.isTraceEnabled }
 
     companion object {
-        private val cookieMapper = jacksonObjectMapper()
-            .setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
     }
 
     fun updateStateBeforeRequestSent(event: RequestWillBeSent, extraInfo: RequestWillBeSentExtraInfo? = null) {
@@ -100,7 +96,10 @@ class ChromeNavigateEntry(
     }
 
     private fun serializeCookie(cookie: Cookie): Map<String, String> {
-        return cookieMapper.readValue(cookieMapper.writeValueAsString(cookie))
+        val json = CDTReflectiveMapper.serialize(cookie)
+        val element = CDTReflectiveMapper.parseJson(json) as? kotlinx.serialization.json.JsonObject
+            ?: return emptyMap()
+        return element.entries.associate { (k, v) -> k to ((v as? kotlinx.serialization.json.JsonPrimitive)?.content ?: v.toString()) }
     }
 
     private fun updateStateAfterResponseReceived0(event: ResponseReceived) {

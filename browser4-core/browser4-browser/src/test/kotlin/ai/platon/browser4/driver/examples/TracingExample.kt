@@ -2,7 +2,7 @@ package ai.platon.browser4.driver.examples
 
 import ai.platon.cdt.kt.protocol.events.tracing.DataCollected
 import ai.platon.cdt.kt.protocol.support.types.EventHandler
-import com.fasterxml.jackson.databind.ObjectMapper
+import ai.platon.pulsar.browser.common.CDTReflectiveMapper
 import java.io.IOException
 import java.nio.file.Path
 import java.nio.file.Paths
@@ -41,9 +41,8 @@ class TracingExample: BrowserExampleBase() {
     }
 
     private fun dump(path: Path, data: List<Any>) {
-        val om = ObjectMapper()
         try {
-            om.writeValue(path.toFile(), data)
+            path.toFile().writeText(CDTReflectiveMapper.serialize(data))
         } catch (e: IOException) {
             e.printStackTrace()
         }

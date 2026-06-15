@@ -15,8 +15,8 @@ import ai.platon.pulsar.common.ai.llm.MCP
 import ai.platon.pulsar.common.browser.BrowserType
 import ai.platon.pulsar.common.math.geometric.PointD
 import ai.platon.pulsar.common.math.geometric.RectD
-import ai.platon.pulsar.common.serialize.json.Pson
-import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
+import ai.platon.pulsar.browser.common.CDTReflectiveMapper
+import kotlinx.serialization.json.*
 import ai.platon.pulsar.common.urls.Hyperlink
 import org.jsoup.Connection
 import java.io.Closeable
@@ -1398,8 +1398,8 @@ interface WebDriver : Closeable {
      */
     @MCP
     suspend fun drag(sourceSelector: String, targetSelector: String) {
-        val encodedSource = Pson.toJson(sourceSelector)
-        val encodedTarget = Pson.toJson(targetSelector)
+        val encodedSource = CDTReflectiveMapper.serialize(sourceSelector)
+        val encodedTarget = CDTReflectiveMapper.serialize(targetSelector)
         val script = """
             (() => {
                 const source = document.querySelector($encodedSource);
@@ -1452,9 +1452,10 @@ interface WebDriver : Closeable {
         """.trimIndent()
         val result = evaluate(script) as? String
             ?: """{"ok":false,"error":"Failed to execute drag script"}"""
-        val parsed = pulsarObjectMapper().readTree(result)
-        if (!parsed.path("ok").asBoolean(false)) {
-            val error = parsed.path("error").asText("Unknown drag failure")
+        val parsed = CDTReflectiveMapper.parseJson(result)
+        val parsedObj = parsed as? kotlinx.serialization.json.JsonObject
+        if (parsedObj?.get("ok")?.jsonPrimitive?.booleanOrNull != true) {
+            val error = parsedObj?.get("error")?.jsonPrimitive?.contentOrNull ?: "Unknown drag failure"
             throw WebDriverException(
                 "Failed to drag '$sourceSelector' to '$targetSelector': $error",
                 driver = this

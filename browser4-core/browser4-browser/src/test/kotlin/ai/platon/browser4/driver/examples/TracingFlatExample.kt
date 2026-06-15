@@ -6,7 +6,7 @@ import ai.platon.browser4.chrome.handler.DirectChromeProtocol
 import ai.platon.cdt.kt.protocol.events.tracing.DataCollected
 import ai.platon.cdt.kt.protocol.support.types.EventHandler
 import ai.platon.pulsar.browser.impl.BrowserProtocol
-import com.fasterxml.jackson.databind.ObjectMapper
+import ai.platon.pulsar.browser.common.CDTReflectiveMapper
 import java.nio.file.Paths
 
 private data class EmptyResult(val ignored: String? = null)
@@ -30,8 +30,7 @@ suspend fun main() {
             val path = Paths.get("/tmp/tracing.json")
             println("Tracing completed! Dumping to $path")
 
-            val om = ObjectMapper()
-            om.writeValue(path.toFile(), dataCollectedList)
+            path.toFile().writeText(CDTReflectiveMapper.serialize(dataCollectedList))
             devTools.close()
         }, Any::class.java)
 
