@@ -13,7 +13,7 @@
 
     <groupId>ai.platon.pulsar</groupId>
     <artifactId>browser4-dependencies</artifactId>
-    <version>4.11.4-SNAPSHOT</version>
+    <version>4.12.0-mini</version>
     <name>Browser4 Dependencies</name>
 
     <packaging>pom</packaging>

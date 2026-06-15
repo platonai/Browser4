@@ -3,7 +3,7 @@
     <parent>
         <groupId>ai.platon.pulsar</groupId>
         <artifactId>browser4</artifactId>
-        <version>4.11.4-SNAPSHOT</version>
+        <version>4.12.0-mini</version>
         <relativePath>../../pom.xml</relativePath>
     </parent>
 
