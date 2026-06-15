@@ -273,10 +273,27 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 driver.waitForNavigation(urlBefore, NAVIGATION_POLL_TIMEOUT_MS)
                 driver.waitForSelector("body", NAVIGATION_POLL_TIMEOUT_MS)
                 delay(NAVIGATION_DOM_SETTLE_DELAY_MS.milliseconds)
+
+                // Verify the navigation actually landed on a different URL.
+                // If the URL is unchanged after waiting, the navigation silently failed.
+                val finalUrl = driver.currentUrl()
+                if (finalUrl == urlBefore) {
+                    logger.warning(
+                        "waitForPotentialNavigation: navigation appeared to start (readyState=loading) " +
+                                "but URL did not change from '$urlBefore'. Navigation may have failed silently."
+                    )
+                }
+            } else {
+                // No navigation detected. The action may have been a no-op (e.g. retry
+                // computed a wrong targetIndex). Log at FINE for diagnostics.
+                logger.fine(
+                    "waitForPotentialNavigation: no navigation detected. " +
+                            "urlBefore='$urlBefore', urlAfter='$urlAfter', readyState='$readyState'"
+                )
             }
-            // else: no navigation detected, return immediately
-        } catch (_: Exception) {
+        } catch (e: Exception) {
             // Best-effort: navigation detection failures should not break the command
+            logger.fine("waitForPotentialNavigation: exception while checking navigation: ${e.message}")
         }
     }
 

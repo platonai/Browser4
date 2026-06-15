@@ -171,28 +171,46 @@ open class PulsarWebDriver constructor(
     }
 
     override suspend fun goBack() {
+        // Fetch navigation history once before the retry-able invokeOnPage block.
+        // This prevents a race condition where a retry re-fetches history after
+        // the first navigateToHistoryEntry call has already shifted currentIndex.
+        val history = browserProtocol.getNavigationHistory()
+        val currentIndex = history.currentIndex
+        val entries = history.entries
+        val targetIndex = currentIndex - 1
+        if (targetIndex < 0 || targetIndex >= entries.size) {
+            logger.warn(
+                "goBack: cannot navigate backward, no previous entry exists. " +
+                        "currentIndex={}, entries.size={}", currentIndex, entries.size
+            )
+            return
+        }
+        val entryId = entries[targetIndex].id
+
         rpc.invokeOnPage("goBack") {
-            val history = browserProtocol.getNavigationHistory()
-            val currentIndex = history.currentIndex
-            val entries = history.entries
-            val targetIndex = currentIndex - 1
-            if (targetIndex >= 0 && targetIndex < entries.size) {
-                val entryId = entries[targetIndex].id
-                browserProtocol.navigateToHistoryEntry(entryId)
-            }
+            browserProtocol.navigateToHistoryEntry(entryId)
         }
     }
 
     override suspend fun goForward() {
+        // Fetch navigation history once before the retry-able invokeOnPage block.
+        // This prevents a race condition where a retry re-fetches history after
+        // the first navigateToHistoryEntry call has already shifted currentIndex.
+        val history = browserProtocol.getNavigationHistory()
+        val currentIndex = history.currentIndex
+        val entries = history.entries
+        val targetIndex = currentIndex + 1
+        if (targetIndex < 0 || targetIndex >= entries.size) {
+            logger.warn(
+                "goForward: cannot navigate forward, no next entry exists. " +
+                        "currentIndex={}, entries.size={}", currentIndex, entries.size
+            )
+            return
+        }
+        val entryId = entries[targetIndex].id
+
         rpc.invokeOnPage("goForward") {
-            val history = browserProtocol.getNavigationHistory()
-            val currentIndex = history.currentIndex
-            val entries = history.entries
-            val targetIndex = currentIndex + 1
-            if (targetIndex >= 0 && targetIndex < entries.size) {
-                val entryId = entries[targetIndex].id
-                browserProtocol.navigateToHistoryEntry(entryId)
-            }
+            browserProtocol.navigateToHistoryEntry(entryId)
         }
     }
 

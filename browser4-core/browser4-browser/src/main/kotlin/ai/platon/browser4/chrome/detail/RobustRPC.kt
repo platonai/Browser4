@@ -50,6 +50,14 @@ class RobustRPC(
         return invokeWithRetry(action, block = block)
     }
 
+    /**
+     * Invoke an executable block on the page with retry on transient CDP failures (max 2 retries).
+     *
+     * **Important:** The [block] should be idempotent or safe to re-execute, as it may be retried
+     * on transient CDP failures. Avoid placing stateful lookups (e.g., fetching navigation history
+     * to compute a target index) inside the block — capture the target state before calling this
+     * method and use the captured value inside the block instead.
+     */
     @Throws(ChromeDriverException::class)
     suspend fun <T> invokeOnPage(
         action: String,
