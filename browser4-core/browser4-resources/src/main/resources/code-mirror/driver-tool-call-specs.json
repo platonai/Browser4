@@ -847,7 +847,7 @@
   } ],
   "returnType" : "Double",
   "description" : "The current page frame scrolls down for [count] times.",
-  "help" : "The current page frame scrolls down for [count] times.\n\n```kotlin driver.scrollDown(3) ```\n\nTODO: use mouseWheel instead",
+  "help" : "The current page frame scrolls down for [count] times.\n\n```kotlin driver.scrollDown(3) ```\n\nNOTE: This uses JS scrollBy for fast, direct scroll control. For realistic user-like scrolling that triggers all event handlers, use [mouseWheelDown].",
   "expression" : "tab.scrollDown(Arg(name=count, type=Int, defaultValue=1))",
   "cli" : "browser4-cli tab scrollDown --count=<Int>, default=1"
 }, {
@@ -862,7 +862,7 @@
   } ],
   "returnType" : "Double",
   "description" : "The current page frame scrolls up for [count] times.",
-  "help" : "The current page frame scrolls up for [count] times.\n\n```kotlin driver.scrollUp(3) ```\n\nTODO: use mouseWheel instead",
+  "help" : "The current page frame scrolls up for [count] times.\n\n```kotlin driver.scrollUp(3) ```\n\nNOTE: This uses JS scrollBy for fast, direct scroll control. For realistic user-like scrolling that triggers all event handlers, use [mouseWheelUp].",
   "expression" : "tab.scrollUp(Arg(name=count, type=Int, defaultValue=1))",
   "cli" : "browser4-cli tab scrollUp --count=<Int>, default=1"
 }, {
@@ -960,15 +960,15 @@
   }, {
     "name" : "delayMillis",
     "type" : "Long",
-    "defaultValue" : "0",
-    "expression" : "delayMillis: Long = 0",
-    "cliOptions" : "--delayMillis=<Long>, default=0"
+    "defaultValue" : "-1",
+    "expression" : "delayMillis: Long = -1",
+    "cliOptions" : "--delayMillis=<Long>, default=-1"
   } ],
   "returnType" : "Unit",
   "description" : "The mouse wheels down for [count] times.",
-  "help" : "The mouse wheels down for [count] times.\n\n```kotlin driver.mouseWheelDown(3) ```",
-  "expression" : "tab.mouseWheelDown(Arg(name=count, type=Int, defaultValue=1), Arg(name=deltaX, type=Double, defaultValue=0.0), Arg(name=deltaY, type=Double, defaultValue=150.0), Arg(name=delayMillis, type=Long, defaultValue=0))",
-  "cli" : "browser4-cli tab mouseWheelDown --count=<Int>, default=1 --deltaX=<Double>, default=0.0 --deltaY=<Double>, default=150.0 --delayMillis=<Long>, default=0"
+  "help" : "The mouse wheels down for [count] times.\n\n```kotlin driver.mouseWheelDown(3) ```\n\nUse 0 for no delay, -1 (default) for the policy-based random delay, or a positive value for a fixed delay.",
+  "expression" : "tab.mouseWheelDown(Arg(name=count, type=Int, defaultValue=1), Arg(name=deltaX, type=Double, defaultValue=0.0), Arg(name=deltaY, type=Double, defaultValue=150.0), Arg(name=delayMillis, type=Long, defaultValue=-1))",
+  "cli" : "browser4-cli tab mouseWheelDown --count=<Int>, default=1 --deltaX=<Double>, default=0.0 --deltaY=<Double>, default=150.0 --delayMillis=<Long>, default=-1"
 }, {
   "domain" : "tab",
   "method" : "mouseWheelUp",
@@ -993,15 +993,15 @@
   }, {
     "name" : "delayMillis",
     "type" : "Long",
-    "defaultValue" : "0",
-    "expression" : "delayMillis: Long = 0",
-    "cliOptions" : "--delayMillis=<Long>, default=0"
+    "defaultValue" : "-1",
+    "expression" : "delayMillis: Long = -1",
+    "cliOptions" : "--delayMillis=<Long>, default=-1"
   } ],
   "returnType" : "Unit",
   "description" : "The mouse wheels up for [count] times.",
-  "help" : "The mouse wheels up for [count] times.\n\n```kotlin driver.mouseWheelUp(3) ```",
-  "expression" : "tab.mouseWheelUp(Arg(name=count, type=Int, defaultValue=1), Arg(name=deltaX, type=Double, defaultValue=0.0), Arg(name=deltaY, type=Double, defaultValue=-150.0), Arg(name=delayMillis, type=Long, defaultValue=0))",
-  "cli" : "browser4-cli tab mouseWheelUp --count=<Int>, default=1 --deltaX=<Double>, default=0.0 --deltaY=<Double>, default=-150.0 --delayMillis=<Long>, default=0"
+  "help" : "The mouse wheels up for [count] times.\n\n```kotlin driver.mouseWheelUp(3) ```\n\nUse 0 for no delay, -1 (default) for the policy-based random delay, or a positive value for a fixed delay.",
+  "expression" : "tab.mouseWheelUp(Arg(name=count, type=Int, defaultValue=1), Arg(name=deltaX, type=Double, defaultValue=0.0), Arg(name=deltaY, type=Double, defaultValue=-150.0), Arg(name=delayMillis, type=Long, defaultValue=-1))",
+  "cli" : "browser4-cli tab mouseWheelUp --count=<Int>, default=1 --deltaX=<Double>, default=0.0 --deltaY=<Double>, default=-150.0 --delayMillis=<Long>, default=-1"
 }, {
   "domain" : "tab",
   "method" : "mouseWheel",
@@ -1023,6 +1023,32 @@
   "help" : "Scrolls the mouse wheel by the provided deltas.\n\nPositive [deltaY] scrolls down and negative [deltaY] scrolls up.\n\n```kotlin driver.mouseWheel(0.0, 150.0) driver.mouseWheel(0.0, -150.0) ```",
   "expression" : "tab.mouseWheel(Arg(name=deltaX, type=Double, defaultValue=0.0), Arg(name=deltaY, type=Double, defaultValue=150.0))",
   "cli" : "browser4-cli tab mouseWheel --deltaX=<Double>, default=0.0 --deltaY=<Double>, default=150.0"
+}, {
+  "domain" : "tab",
+  "method" : "mouseWheel",
+  "arguments" : [ {
+    "name" : "selector",
+    "type" : "String",
+    "expression" : "selector: String = ",
+    "cliOptions" : "--selector=<String>, default="
+  }, {
+    "name" : "deltaX",
+    "type" : "Double",
+    "defaultValue" : "0.0",
+    "expression" : "deltaX: Double = 0.0",
+    "cliOptions" : "--deltaX=<Double>, default=0.0"
+  }, {
+    "name" : "deltaY",
+    "type" : "Double",
+    "defaultValue" : "150.0",
+    "expression" : "deltaY: Double = 150.0",
+    "cliOptions" : "--deltaY=<Double>, default=150.0"
+  } ],
+  "returnType" : "Unit",
+  "description" : "Scrolls the mouse wheel on a specific element identified by [selector].",
+  "help" : "Scrolls the mouse wheel on a specific element identified by [selector].\n\nThe element is scrolled into view if needed, the mouse is moved to a random position near the element's center, and then the wheel event is dispatched.\n\n```kotlin driver.mouseWheel(\".scrollable-panel\", 0.0, 200.0) ```",
+  "expression" : "tab.mouseWheel(Arg(name=selector, type=String, defaultValue=), Arg(name=deltaX, type=Double, defaultValue=0.0), Arg(name=deltaY, type=Double, defaultValue=150.0))",
+  "cli" : "browser4-cli tab mouseWheel --selector=<String>, default= --deltaX=<Double>, default=0.0 --deltaY=<Double>, default=150.0"
 }, {
   "domain" : "tab",
   "method" : "mouseMove",
