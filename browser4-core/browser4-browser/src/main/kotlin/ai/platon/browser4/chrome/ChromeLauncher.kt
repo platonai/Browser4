@@ -10,7 +10,7 @@ import ai.platon.pulsar.common.browser.Browsers
 import ai.platon.pulsar.common.concurrent.RuntimeShutdownHookRegistry
 import ai.platon.pulsar.common.concurrent.ShutdownHookRegistry
 import ai.platon.pulsar.common.serialize.json.prettyPulsarObjectMapper
-import org.apache.commons.lang.SystemUtils
+import org.apache.commons.lang3.SystemUtils
 import org.slf4j.LoggerFactory
 import java.io.BufferedReader
 import java.io.IOException

@@ -2,7 +2,7 @@ package ai.platon.browser4.chrome
 
 import ai.platon.pulsar.common.Runtimes
 import ai.platon.pulsar.common.warnInterruptible
-import org.apache.commons.lang.SystemUtils
+import org.apache.commons.lang3.SystemUtils
 import org.slf4j.LoggerFactory
 import java.io.BufferedReader
 import java.io.IOException

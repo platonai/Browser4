@@ -96,7 +96,7 @@
             <artifactId>pulsar-common</artifactId>
             <exclusions>
                 <exclusion>
-                    <groupId>*</groupId>
+                    <groupId>com.google.guava</groupId>
                     <artifactId>*</artifactId>
                 </exclusion>
             </exclusions>
@@ -195,16 +195,6 @@
             <groupId>org.mockito</groupId>
             <artifactId>mockito-junit-jupiter</artifactId>
             <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>commons-lang</groupId>
-            <artifactId>commons-lang</artifactId>
-            <version>2.6</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>commons-io</groupId>
-            <artifactId>commons-io</artifactId>
         </dependency>
     </dependencies>
 </project>

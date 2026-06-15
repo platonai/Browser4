@@ -2,7 +2,6 @@ package ai.platon.browser4.chrome
 
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.browser.BrowserFiles
-import org.apache.commons.io.FileUtils
 import org.slf4j.LoggerFactory
 import java.io.FileFilter
 import java.io.IOException
@@ -78,7 +77,8 @@ class BrowserFileSystem(val userDataDir: Path) {
             removeDeadSymbolicLinks(prototypeUserDataDir)
 
             val fileFilter = FileFilter { !Files.isSymbolicLink(it.toPath()) }
-            FileUtils.copyDirectory(prototypeUserDataDir.toFile(), userDataDir.toFile(), fileFilter)
+            // FileUtils.copyDirectory(prototypeUserDataDir.toFile(), userDataDir.toFile(), fileFilter)
+            prototypeUserDataDir.toFile().copyRecursively(userDataDir.toFile(), true)
         }
     }
 

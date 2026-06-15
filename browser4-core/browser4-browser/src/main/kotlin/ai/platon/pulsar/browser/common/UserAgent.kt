@@ -1,7 +1,7 @@
 package ai.platon.pulsar.browser.common
 
 import ai.platon.pulsar.common.ResourceLoader
-import org.apache.commons.lang.SystemUtils
+import org.apache.commons.lang3.SystemUtils
 import kotlin.random.Random
 
 class UserAgent {
