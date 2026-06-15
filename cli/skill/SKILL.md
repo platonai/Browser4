@@ -360,6 +360,11 @@ Use `swarm query` to run an X-SQL query that extracts structured data from the
 loaded webpage. The `--sql` flag is **required**. The query uses `@url` as a
 placeholder for the target URL.
 
+**SQL constraints:** Only simple `SELECT ... FROM DOM_LOAD_AND_SELECT(url, cssQuery)`
+queries are supported. No CTEs (`WITH`), no subqueries, no `EXPLODE`, no joins.
+The only valid table source is `DOM_LOAD_AND_SELECT`. `DOM_LOAD` and `DOM_FETCH`
+can be used as expression arguments but not in the `FROM` clause.
+
 ```bash
 # Inline X-SQL query:
 browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql "
