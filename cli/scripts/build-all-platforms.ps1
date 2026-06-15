@@ -45,7 +45,7 @@ function Build-Target {
 
     Write-Host "Building for $Target..." -ForegroundColor Yellow
 
-    $containerCmd = "cargo zigbuild --release --target $Target && cp /build/target/$Target/release/browser4-cli* /output/$OutputName && chmod +x /output/$OutputName 2>/dev/null || true"
+    $containerCmd = "cargo zigbuild --release --target $Target && cp /build/target/$Target/release/browser4-cli* /output/$OutputName && chmod +x /output/$OutputName 2>/dev/null || true && upx --best /output/$OutputName 2>/dev/null || echo 'UPX skipped (not available or unsupported format)'"
 
     Invoke-DockerCommand -Args @(
         "run", "--rm",
@@ -65,7 +65,7 @@ function Build-Target {
         throw "Built artifact is empty: $OutputName"
     }
 
-    Write-Host "Built $OutputName" -ForegroundColor Green
+    Write-Host "Built $OutputName ($([math]::Round($artifactSize / 1KB, 1)) KB)" -ForegroundColor Green
 }
 
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {

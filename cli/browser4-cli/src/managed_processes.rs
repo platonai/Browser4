@@ -3,6 +3,7 @@
 //! Tracks Browser4 server processes started by this CLI so they can be shut down
 //! later via `close-all` or `kill-all`.
 
+use crate::http::read_body;
 use crate::state::{read_state, resolve_default_state_dir};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -368,18 +369,18 @@ fn close_all_base_urls_for_force_stop(
 
 #[allow(dead_code)]
 fn call_close_all_sessions(
-    client: &reqwest::blocking::Client,
+    agent: &ureq::Agent,
     base_url: &str,
 ) -> Result<String, String> {
-    let response = client
-        .post(format!("{}/mcp/call-tool", base_url.trim_end_matches('/')))
-        .header("Content-Type", "application/json")
-        .json(&json!({ "tool": "close_all_sessions", "arguments": {} }))
-        .send()
+    let response = agent
+        .post(&format!("{}/mcp/call-tool", base_url.trim_end_matches('/')))
+        .content_type("application/json")
+        .send_json(&json!({ "tool": "close_all_sessions", "arguments": {} }))
         .map_err(|error| format!("HTTP request failed: {error}"))?;
 
-    let data: Value = response
-        .json()
+    let body_text = read_body(response.into_body())
+        .map_err(|error| format!("Failed to read response body: {error}"))?;
+    let data: Value = serde_json::from_str(&body_text)
         .map_err(|error| format!("Failed to parse response JSON: {error}"))?;
 
     if data

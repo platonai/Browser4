@@ -32,7 +32,8 @@ use std::io::Read;
 use std::path::PathBuf;
 
 use base64::Engine;
-use reqwest::Client;
+use ureq::Agent;
+use crate::http::read_body;
 use serde::{de::DeserializeOwned, Deserialize};
 use serde_json::{json, Value};
 
@@ -336,8 +337,8 @@ fn persist_active_selector(
     write_state(&state, None, session_name).map_err(|e| e.to_string())
 }
 
-async fn restore_active_selector(
-    client: &Client,
+fn restore_active_selector(
+    client: &Agent,
     base_url: &str,
     session_name: Option<&str>,
 ) -> Result<(), String> {
@@ -372,7 +373,7 @@ async fn restore_active_selector(
         let base_url = base_url.to_string();
         let focus_expression = focus_expression.clone();
 
-        async move {
+        {
             call_tool(
                 &client,
                 &base_url,
@@ -382,10 +383,10 @@ async fn restore_active_selector(
                     "expression": focus_expression,
                 }),
             )
-            .await
+            
         }
     })
-    .await?;
+    ?;
 
     match focus_result.trim() {
         "focused" => Ok(()),
@@ -404,15 +405,15 @@ async fn restore_active_selector(
     }
 }
 
-async fn create_session(
-    client: &Client,
+fn create_session(
+    client: &Agent,
     base_url: &str,
     state: &CliState,
     session_name: Option<&str>,
     capabilities: Option<Value>,
 ) -> Result<String, String> {
     let params = build_open_session_request(capabilities, session_name);
-    let result = call_tool(client, base_url, "open_session", params).await?;
+    let result = call_tool(client, base_url, "open_session", params)?;
     // The server response may be a JSON object `{"sessionId":"..."}` or a plain
     // string. Try JSON first; fall back to using the raw string as the session ID.
     let session_id = if let Ok(parsed) = serde_json::from_str::<Value>(&result) {
@@ -576,21 +577,20 @@ fn invalidate_session(state: &CliState, base_url: &str, session_name: Option<&st
 }
 
 /// Execute an action with the current session, recovering stale sessions if requested.
-async fn with_session<F, Fut>(
-    client: &Client,
+fn with_session<F>(
+    client: &Agent,
     base_url: &str,
     session_name: Option<&str>,
     recover_stale: bool,
     action: F,
 ) -> Result<String, String>
 where
-    F: Fn(String) -> Fut + Send,
-    Fut: std::future::Future<Output = Result<String, String>> + Send,
+    F: Fn(String) -> Result<String, String>,
 {
     let state = require_session(session_name)?;
     let session_id = get_session_id(&state)?.to_string();
 
-    match action(session_id.clone()).await {
+    match action(session_id.clone()) {
         Ok(result) => Ok(result),
         Err(err) => {
             if !is_stale_session_error(&err) {
@@ -601,8 +601,8 @@ where
                 return Err(saved_session_expired_message());
             }
             let new_session_id =
-                create_session(client, base_url, &state, session_name, None).await?;
-            action(new_session_id).await
+                create_session(client, base_url, &state, session_name, None)?;
+            action(new_session_id)
         }
     }
 }
@@ -611,26 +611,24 @@ where
 // Post-command snapshot
 // ---------------------------------------------------------------------------
 
-async fn post_command_snapshot(client: &Client, base_url: &str, session_id: &str) {
-    let (page_url, page_title, snapshot_content) = tokio::join!(
-        call_tool(
-            client,
-            base_url,
-            "page_url",
-            json!({ "sessionId": session_id })
-        ),
-        call_tool(
-            client,
-            base_url,
-            "page_title",
-            json!({ "sessionId": session_id })
-        ),
-        call_tool(
-            client,
-            base_url,
-            "browser_snapshot",
-            json!({ "sessionId": session_id })
-        ),
+fn post_command_snapshot(client: &Agent, base_url: &str, session_id: &str) {
+    let page_url = call_tool(
+        client,
+        base_url,
+        "page_url",
+        json!({ "sessionId": session_id })
+    );
+    let page_title = call_tool(
+        client,
+        base_url,
+        "page_title",
+        json!({ "sessionId": session_id })
+    );
+    let snapshot_content = call_tool(
+        client,
+        base_url,
+        "browser_snapshot",
+        json!({ "sessionId": session_id })
     );
 
     let (url_result, title_result, snap_result) = match (page_url, page_title, snapshot_content) {
@@ -659,8 +657,8 @@ async fn post_command_snapshot(client: &Client, base_url: &str, session_id: &str
 // Command handlers
 // ---------------------------------------------------------------------------
 
-async fn get_or_create_navigation_session(
-    client: &Client,
+fn get_or_create_navigation_session(
+    client: &Agent,
     base_url: &str,
     tool_params: &Value,
     session_name: Option<&str>,
@@ -669,14 +667,14 @@ async fn get_or_create_navigation_session(
     state.session_name = session_name.map(|s| s.to_string());
 
     let reusable_session_id =
-        find_reusable_persisted_session_id(client, base_url, &state, session_name).await?;
+        find_reusable_persisted_session_id(client, base_url, &state, session_name)?;
     let reused_existing_session = reusable_session_id.is_some();
     let session_id = if let Some(existing_id) = reusable_session_id {
         existing_id
     } else {
         let capabilities = build_open_session_capabilities(tool_params);
         let new_id =
-            create_session(client, base_url, &state, session_name, Some(capabilities)).await?;
+            create_session(client, base_url, &state, session_name, Some(capabilities))?;
         cli_println!("Session opened: {}", new_id);
         new_id
     };
@@ -684,15 +682,15 @@ async fn get_or_create_navigation_session(
     Ok((state, session_id, reused_existing_session))
 }
 
-async fn handle_open(
-    client: &Client,
+fn handle_open(
+    client: &Agent,
     base_url: &str,
     tool_name: &str,
     tool_params: &Value,
     session_name: Option<&str>,
 ) -> Result<(), String> {
     let (state, session_id, reused_existing_session) =
-        get_or_create_navigation_session(client, base_url, tool_params, session_name).await?;
+        get_or_create_navigation_session(client, base_url, tool_params, session_name)?;
 
     json_field("session_id", json!(&session_id));
     json_field("reused", json!(reused_existing_session));
@@ -704,7 +702,7 @@ async fn handle_open(
     if should_navigate_after_open(url) {
         let mut params = json!({ "url": url });
         params["sessionId"] = json!(session_id.clone());
-        let navigate_result = call_tool(client, base_url, tool_name, params.clone()).await;
+        let navigate_result = call_tool(client, base_url, tool_name, params.clone());
         match navigate_result {
             Ok(result) => {
                 if reused_existing_session {
@@ -713,7 +711,7 @@ async fn handle_open(
                 if !result.is_empty() {
                     cli_println!("{}", result);
                 }
-                post_command_snapshot(client, base_url, &session_id).await;
+                post_command_snapshot(client, base_url, &session_id);
             }
             Err(err) => {
                 if !should_retry_open_after_navigation_error(&err, reused_existing_session) {
@@ -733,16 +731,16 @@ async fn handle_open(
                     "close_session",
                     json!({ "sessionId": session_id }),
                 )
-                .await;
+                ;
                 invalidate_session(&state, base_url, session_name);
                 let capabilities = build_open_session_capabilities(tool_params);
                 let retry_id =
                     create_session(client, base_url, &state, session_name, Some(capabilities))
-                        .await?;
+                        ?;
                 cli_println!("Session opened: {}", retry_id);
                 params["sessionId"] = json!(retry_id);
                 let retry_result = call_tool(client, base_url, tool_name, params)
-                    .await
+                    
                     .map_err(|err| {
                         format_navigation_failure_message(
                             url,
@@ -754,7 +752,7 @@ async fn handle_open(
                 if !retry_result.is_empty() {
                     cli_println!("{}", retry_result);
                 }
-                post_command_snapshot(client, base_url, &retry_id).await;
+                post_command_snapshot(client, base_url, &retry_id);
             }
         }
     } else if reused_existing_session {
@@ -763,28 +761,28 @@ async fn handle_open(
     Ok(())
 }
 
-async fn handle_goto(
-    client: &Client,
+fn handle_goto(
+    client: &Agent,
     base_url: &str,
     tool_name: &str,
     tool_params: &Value,
     session_name: Option<&str>,
 ) -> Result<(), String> {
     let (state, session_id, reused_existing_session) =
-        get_or_create_navigation_session(client, base_url, tool_params, session_name).await?;
+        get_or_create_navigation_session(client, base_url, tool_params, session_name)?;
     let target_url = tool_params
         .get("url")
         .and_then(|value| value.as_str())
         .unwrap_or("<unknown>");
     let mut params = tool_params.clone();
     params["sessionId"] = json!(session_id.clone());
-    let navigate_result = call_tool(client, base_url, tool_name, params.clone()).await;
+    let navigate_result = call_tool(client, base_url, tool_name, params.clone());
     match navigate_result {
         Ok(result) => {
             if !result.is_empty() {
                 cli_println!("{}", result);
             }
-            post_command_snapshot(client, base_url, &session_id).await;
+            post_command_snapshot(client, base_url, &session_id);
         }
         Err(err) => {
             if !should_retry_open_after_navigation_error(&err, reused_existing_session) {
@@ -803,20 +801,20 @@ async fn handle_goto(
                 "close_session",
                 json!({ "sessionId": session_id }),
             )
-            .await;
+            ;
             invalidate_session(&state, base_url, session_name);
             let capabilities = build_open_session_capabilities(tool_params);
             let retry_id =
-                create_session(client, base_url, &state, session_name, Some(capabilities)).await?;
+                create_session(client, base_url, &state, session_name, Some(capabilities))?;
             cli_println!("Session opened: {}", retry_id);
             params["sessionId"] = json!(retry_id.clone());
 
-            match call_tool(client, base_url, tool_name, params).await {
+            match call_tool(client, base_url, tool_name, params) {
                 Ok(result) => {
                     if !result.is_empty() {
                         cli_println!("{}", result);
                     }
-                    post_command_snapshot(client, base_url, &retry_id).await;
+                    post_command_snapshot(client, base_url, &retry_id);
                 }
                 Err(retry_err) => {
                     let should_suggest_refresh =
@@ -878,8 +876,8 @@ fn format_navigation_failure_message(
     message.join("\n")
 }
 
-async fn handle_close(
-    client: &Client,
+fn handle_close(
+    client: &Agent,
     base_url: &str,
     session_name: Option<&str>,
 ) -> Result<(), String> {
@@ -901,15 +899,15 @@ async fn handle_close(
         "close_session",
         json!({ "sessionId": session_id }),
     )
-    .await;
+    ;
     clear_state(None, session_name);
     cli_println!("Session closed.");
     json_field("closed", json!(true));
     Ok(())
 }
 
-async fn handle_close_all(client: &Client, base_url: &str) -> Result<(), String> {
-    let close_summary = close_all_sessions_across_servers(client, base_url).await;
+fn handle_close_all(client: &Agent, base_url: &str) -> Result<(), String> {
+    let close_summary = close_all_sessions_across_servers(client, base_url);
 
     // `close-all` is intentionally session-scoped. Keep any tracked Browser4
     // backend process alive so callers can continue using the same service and
@@ -923,7 +921,7 @@ async fn handle_close_all(client: &Client, base_url: &str) -> Result<(), String>
     Ok(())
 }
 
-async fn handle_kill_all() -> Result<(), String> {
+fn handle_kill_all() -> Result<(), String> {
     eprintln!("🔪 Stopping Browser4 backend and cleaning up browser processes ...");
     eprintln!();
 
@@ -1044,8 +1042,8 @@ fn parse_json_output<T: DeserializeOwned>(value: &str, context: &str) -> Result<
     serde_json::from_str(value).map_err(|e| format!("Failed to parse {context}: {e}"))
 }
 
-async fn call_session_tool(
-    client: &Client,
+fn call_session_tool(
+    client: &Agent,
     base_url: &str,
     session_name: Option<&str>,
     tool_name: &str,
@@ -1056,17 +1054,17 @@ async fn call_session_tool(
         let base_url = base_url.to_string();
         let tool_name = tool_name.to_string();
         let tool_params = tool_params.clone();
-        async move {
+        {
             let mut payload = tool_params;
             payload["sessionId"] = json!(session_id);
-            call_tool(&client, &base_url, &tool_name, payload).await
+            call_tool(&client, &base_url, &tool_name, payload)
         }
     })
-    .await
+    
 }
 
-async fn current_session_storage_state(
-    client: &Client,
+fn current_session_storage_state(
+    client: &Agent,
     base_url: &str,
     session_name: Option<&str>,
 ) -> Result<Value, String> {
@@ -1077,16 +1075,16 @@ async fn current_session_storage_state(
         "browser_save_storage_state",
         json!({}),
     )
-    .await?;
+    ?;
     parse_json_output(&response, "storage state JSON")
 }
 
-async fn current_session_url(
-    client: &Client,
+fn current_session_url(
+    client: &Agent,
     base_url: &str,
     session_name: Option<&str>,
 ) -> Result<String, String> {
-    call_session_tool(client, base_url, session_name, "current_url", json!({})).await
+    call_session_tool(client, base_url, session_name, "current_url", json!({}))
 }
 
 fn storage_area_label(storage_area: &str) -> &'static str {
@@ -1167,8 +1165,8 @@ fn build_storage_clear_expression(storage_area: &str) -> String {
     )
 }
 
-async fn evaluate_storage_expression(
-    client: &Client,
+fn evaluate_storage_expression(
+    client: &Agent,
     base_url: &str,
     session_name: Option<&str>,
     expression: String,
@@ -1180,7 +1178,7 @@ async fn evaluate_storage_expression(
         "browser_evaluate",
         json!({ "expression": expression }),
     )
-    .await
+    
 }
 
 fn known_server_base_urls(
@@ -1198,12 +1196,12 @@ fn known_server_base_urls(
     base_urls
 }
 
-async fn close_all_sessions_across_servers(client: &Client, base_url: &str) -> CloseAllSummary {
+fn close_all_sessions_across_servers(client: &Agent, base_url: &str) -> CloseAllSummary {
     let normalized_base_url = base_url.trim_end_matches('/').to_string();
     let mut summary = CloseAllSummary::default();
 
     for url in known_server_base_urls(base_url, &read_managed_server_processes(None)) {
-        match call_tool(client, &url, "close_all_sessions", json!({})).await {
+        match call_tool(client, &url, "close_all_sessions", json!({})) {
             Ok(result) => {
                 if url == normalized_base_url {
                     summary.results.push(result);
@@ -1275,9 +1273,9 @@ fn log_shutdown_result(action: &str, result: &ShutdownResult) {
     }
 }
 
-async fn handle_list(client: &Client, base_url: &str) -> Result<(), String> {
+fn handle_list(client: &Agent, base_url: &str) -> Result<(), String> {
     let (backend_sessions, backend_note): (Option<Vec<BackendSessionRecord>>, Option<String>) =
-        match call_tool(client, base_url, "list_sessions", json!({})).await {
+        match call_tool(client, base_url, "list_sessions", json!({})) {
             Ok(result) => (Some(parse_backend_session_records(&result)), None),
             Err(error) if is_backend_unreachable_error(&error) => (
                 None,
@@ -1408,8 +1406,8 @@ fn list_session_next_open_action(
     }
 }
 
-async fn find_reusable_persisted_session_id(
-    client: &Client,
+fn find_reusable_persisted_session_id(
+    client: &Agent,
     base_url: &str,
     state: &CliState,
     session_name: Option<&str>,
@@ -1422,7 +1420,7 @@ async fn find_reusable_persisted_session_id(
         return Ok(None);
     }
 
-    let list_result = match call_tool(client, base_url, "list_sessions", json!({})).await {
+    let list_result = match call_tool(client, base_url, "list_sessions", json!({})) {
         Ok(result) => result,
         Err(error) if is_backend_unreachable_error(&error) => {
             invalidate_session(state, base_url, session_name);
@@ -1518,25 +1516,25 @@ fn should_retry_open_after_navigation_error(error: &str, reused_existing_session
         || (reused_existing_session && is_backend_unreachable_error(error))
 }
 
-async fn handle_delete_data(
-    client: &Client,
+fn handle_delete_data(
+    client: &Agent,
     base_url: &str,
     session_name: Option<&str>,
 ) -> Result<(), String> {
     let result = with_session(client, base_url, session_name, false, |session_id| {
         let client = client.clone();
         let base_url = base_url.to_string();
-        async move {
+        {
             call_tool(
                 &client,
                 &base_url,
                 "delete_session_data",
                 json!({ "sessionId": session_id }),
             )
-            .await
+            
         }
     })
-    .await?;
+    ?;
     if result.is_empty() {
         cli_println!("Session data deleted.");
     } else {
@@ -1558,8 +1556,8 @@ fn resolve_storage_state_path(filename: Option<&str>) -> Result<PathBuf, String>
     Ok(cwd.join(file_name))
 }
 
-async fn handle_state_save(
-    client: &Client,
+fn handle_state_save(
+    client: &Agent,
     base_url: &str,
     tool_name: &str,
     tool_params: &Value,
@@ -1571,17 +1569,17 @@ async fn handle_state_save(
         let client = client.clone();
         let base_url = base_url.to_string();
         let tool_name = tool_name.to_string();
-        async move {
+        {
             call_tool(
                 &client,
                 &base_url,
                 &tool_name,
                 json!({ "sessionId": session_id }),
             )
-            .await
+            
         }
     })
-    .await?;
+    ?;
 
     let state_json = serde_json::from_str::<Value>(&result)
         .map_err(|e| format!("Browser4 returned invalid storage state JSON: {e}"))?;
@@ -1592,8 +1590,8 @@ async fn handle_state_save(
     Ok(())
 }
 
-async fn handle_state_load(
-    client: &Client,
+fn handle_state_load(
+    client: &Agent,
     base_url: &str,
     tool_name: &str,
     tool_params: &Value,
@@ -1620,7 +1618,7 @@ async fn handle_state_load(
     })?;
 
     let (_, session_id, _) =
-        get_or_create_navigation_session(client, base_url, &json!({}), session_name).await?;
+        get_or_create_navigation_session(client, base_url, &json!({}), session_name)?;
     let result = call_tool(
         client,
         base_url,
@@ -1630,7 +1628,7 @@ async fn handle_state_load(
             "state": state_json,
         }),
     )
-    .await?;
+    ?;
     let summary: StorageStateLoadSummary = serde_json::from_str(&result)
         .map_err(|e| format!("Browser4 returned an invalid storage-state load summary: {e}"))?;
     cli_println!(
@@ -1643,13 +1641,13 @@ async fn handle_state_load(
     Ok(())
 }
 
-async fn handle_cookie_list(
-    client: &Client,
+fn handle_cookie_list(
+    client: &Agent,
     base_url: &str,
     tool_params: &Value,
     session_name: Option<&str>,
 ) -> Result<(), String> {
-    let state = current_session_storage_state(client, base_url, session_name).await?;
+    let state = current_session_storage_state(client, base_url, session_name)?;
     let domain_filter = tool_params.get("domain").and_then(|value| value.as_str());
     let path_filter = tool_params.get("path").and_then(|value| value.as_str());
     let cookies = state["cookies"]
@@ -1674,8 +1672,8 @@ async fn handle_cookie_list(
     Ok(())
 }
 
-async fn handle_cookie_get(
-    client: &Client,
+fn handle_cookie_get(
+    client: &Agent,
     base_url: &str,
     tool_params: &Value,
     session_name: Option<&str>,
@@ -1684,7 +1682,7 @@ async fn handle_cookie_get(
         .get("name")
         .and_then(|value| value.as_str())
         .ok_or_else(|| "cookie-get requires a cookie name".to_string())?;
-    let state = current_session_storage_state(client, base_url, session_name).await?;
+    let state = current_session_storage_state(client, base_url, session_name)?;
     let cookie = state["cookies"]
         .as_array()
         .and_then(|cookies| {
@@ -1702,8 +1700,8 @@ async fn handle_cookie_get(
     Ok(())
 }
 
-async fn handle_cookie_set(
-    client: &Client,
+fn handle_cookie_set(
+    client: &Agent,
     base_url: &str,
     tool_params: &Value,
     session_name: Option<&str>,
@@ -1724,7 +1722,7 @@ async fn handle_cookie_set(
     if let Some(domain) = tool_params.get("domain").and_then(|value| value.as_str()) {
         cookie.insert("domain".to_string(), json!(domain));
     } else {
-        let current_url = current_session_url(client, base_url, session_name).await?;
+        let current_url = current_session_url(client, base_url, session_name)?;
         if !(current_url.starts_with("http://") || current_url.starts_with("https://")) {
             return Err(
                 "cookie-set requires an HTTP(S) page in the current session or an explicit --domain option."
@@ -1769,14 +1767,14 @@ async fn handle_cookie_set(
         "browser_load_storage_state",
         json!({ "state": payload }),
     )
-    .await?;
+    ?;
     let _: StorageStateLoadSummary = parse_json_output(&result, "cookie-set summary")?;
     cli_println!("Cookie set: {}", name);
     Ok(())
 }
 
-async fn handle_cookie_delete(
-    client: &Client,
+fn handle_cookie_delete(
+    client: &Agent,
     base_url: &str,
     tool_name: &str,
     tool_params: &Value,
@@ -1790,7 +1788,7 @@ async fn handle_cookie_delete(
     if let Some(domain) = tool_params.get("domain").and_then(|value| value.as_str()) {
         payload["domain"] = json!(domain);
     } else {
-        let current_url = current_session_url(client, base_url, session_name).await?;
+        let current_url = current_session_url(client, base_url, session_name)?;
         if !(current_url.starts_with("http://") || current_url.starts_with("https://")) {
             return Err(
                 "cookie-delete requires an HTTP(S) page in the current session or an explicit --domain option."
@@ -1802,24 +1800,24 @@ async fn handle_cookie_delete(
     if let Some(path) = tool_params.get("path").and_then(|value| value.as_str()) {
         payload["path"] = json!(path);
     }
-    let _ = call_session_tool(client, base_url, session_name, tool_name, payload).await?;
+    let _ = call_session_tool(client, base_url, session_name, tool_name, payload)?;
     cli_println!("Cookie deleted: {}", name);
     Ok(())
 }
 
-async fn handle_cookie_clear(
-    client: &Client,
+fn handle_cookie_clear(
+    client: &Agent,
     base_url: &str,
     tool_name: &str,
     session_name: Option<&str>,
 ) -> Result<(), String> {
-    let _ = call_session_tool(client, base_url, session_name, tool_name, json!({})).await?;
+    let _ = call_session_tool(client, base_url, session_name, tool_name, json!({}))?;
     cli_println!("Cookies cleared.");
     Ok(())
 }
 
-async fn handle_storage_list(
-    client: &Client,
+fn handle_storage_list(
+    client: &Agent,
     base_url: &str,
     session_name: Option<&str>,
     storage_area: &str,
@@ -1830,7 +1828,7 @@ async fn handle_storage_list(
         session_name,
         build_storage_list_expression(storage_area),
     )
-    .await?;
+    ?;
     let parsed: Value = parse_json_output(
         &raw,
         &format!("{} list JSON", storage_area_label(storage_area)),
@@ -1845,8 +1843,8 @@ async fn handle_storage_list(
     Ok(())
 }
 
-async fn handle_storage_get(
-    client: &Client,
+fn handle_storage_get(
+    client: &Agent,
     base_url: &str,
     tool_params: &Value,
     session_name: Option<&str>,
@@ -1862,7 +1860,7 @@ async fn handle_storage_get(
         session_name,
         build_storage_get_expression(storage_area, key)?,
     )
-    .await?;
+    ?;
     let result: StorageLookupResult = parse_json_output(
         &raw,
         &format!("{} get result", storage_area_label(storage_area)),
@@ -1878,8 +1876,8 @@ async fn handle_storage_get(
     Ok(())
 }
 
-async fn handle_storage_set(
-    client: &Client,
+fn handle_storage_set(
+    client: &Agent,
     base_url: &str,
     tool_params: &Value,
     session_name: Option<&str>,
@@ -1899,7 +1897,7 @@ async fn handle_storage_set(
         session_name,
         build_storage_set_expression(storage_area, key, value)?,
     )
-    .await?;
+    ?;
     let result: StorageLookupResult = parse_json_output(
         &raw,
         &format!("{} set result", storage_area_label(storage_area)),
@@ -1915,8 +1913,8 @@ async fn handle_storage_set(
     Ok(())
 }
 
-async fn handle_storage_delete(
-    client: &Client,
+fn handle_storage_delete(
+    client: &Agent,
     base_url: &str,
     tool_params: &Value,
     session_name: Option<&str>,
@@ -1937,7 +1935,7 @@ async fn handle_storage_delete(
         session_name,
         build_storage_delete_expression(storage_area, key)?,
     )
-    .await?;
+    ?;
     let result: StorageDeleteResult = parse_json_output(
         &raw,
         &format!("{} delete result", storage_area_label(storage_area)),
@@ -1954,8 +1952,8 @@ async fn handle_storage_delete(
     Ok(())
 }
 
-async fn handle_storage_clear(
-    client: &Client,
+fn handle_storage_clear(
+    client: &Agent,
     base_url: &str,
     session_name: Option<&str>,
     storage_area: &str,
@@ -1966,7 +1964,7 @@ async fn handle_storage_clear(
         session_name,
         build_storage_clear_expression(storage_area),
     )
-    .await?;
+    ?;
     let result: StorageClearResult = parse_json_output(
         &raw,
         &format!("{} clear result", storage_area_label(storage_area)),
@@ -1979,8 +1977,8 @@ async fn handle_storage_clear(
     Ok(())
 }
 
-async fn handle_snapshot(
-    client: &Client,
+fn handle_snapshot(
+    client: &Agent,
     base_url: &str,
     tool_name: &str,
     tool_params: &Value,
@@ -2005,29 +2003,27 @@ async fn handle_snapshot(
         let mut snap_args = snapshot_args.clone();
         snap_args["sessionId"] = json!(session_id.clone());
 
-        async move {
-            let (url_res, title_res, snap_res) = tokio::join!(
-                call_tool(
-                    &client,
-                    &base_url,
-                    "page_url",
-                    json!({ "sessionId": session_id })
-                ),
-                call_tool(
-                    &client,
-                    &base_url,
-                    "page_title",
-                    json!({ "sessionId": session_id })
-                ),
-                call_tool(&client, &base_url, &tool_name, snap_args),
+        {
+            let url_res = call_tool(
+                &client,
+                &base_url,
+                "page_url",
+                json!({ "sessionId": session_id })
             );
+            let title_res = call_tool(
+                &client,
+                &base_url,
+                "page_title",
+                json!({ "sessionId": session_id })
+            );
+            let snap_res = call_tool(&client, &base_url, &tool_name, snap_args);
             let url = url_res?;
             let title = title_res?;
             let snap = snap_res?;
             Ok(format!("{}\n{}\n{}", url, title, snap))
         }
     })
-    .await?;
+    ?;
 
     // The combined result has url, title, and snapshot separated by newlines
     let parts: Vec<&str> = combined.splitn(3, '\n').collect();
@@ -2051,8 +2047,8 @@ async fn handle_snapshot(
     Ok(())
 }
 
-async fn handle_screenshot(
-    client: &Client,
+fn handle_screenshot(
+    client: &Agent,
     base_url: &str,
     tool_name: &str,
     tool_params: &Value,
@@ -2076,9 +2072,9 @@ async fn handle_screenshot(
         let tool_name = tool_name.to_string();
         let mut args = capture_args.clone();
         args["sessionId"] = json!(session_id);
-        async move { call_tool(&client, &base_url, &tool_name, args).await }
+        { call_tool(&client, &base_url, &tool_name, args) }
     })
-    .await?;
+    ?;
 
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(base64_data.trim())
@@ -2090,8 +2086,8 @@ async fn handle_screenshot(
     Ok(())
 }
 
-async fn handle_tool_command(
-    client: &Client,
+fn handle_tool_command(
+    client: &Agent,
     base_url: &str,
     tool_name: &str,
     tool_params: &Value,
@@ -2109,10 +2105,10 @@ async fn handle_tool_command(
             let tool_name = tool_name.to_string();
             let mut params = tool_params.clone();
             params["sessionId"] = json!(session_id);
-            async move { call_tool(&client, &base_url, &tool_name, params).await }
+            { call_tool(&client, &base_url, &tool_name, params) }
         },
     )
-    .await?;
+    ?;
 
     if !result.is_empty() {
         cli_println!("{}", result);
@@ -2149,8 +2145,8 @@ fn persist_mouse_position(
     write_state(&state, None, session_name).map_err(|e| e.to_string())
 }
 
-async fn restore_mouse_position(
-    client: &Client,
+fn restore_mouse_position(
+    client: &Agent,
     base_url: &str,
     session_name: Option<&str>,
 ) -> Result<(), String> {
@@ -2163,7 +2159,7 @@ async fn restore_mouse_position(
         let client = client.clone();
         let base_url = base_url.to_string();
 
-        async move {
+        {
             call_tool(
                 &client,
                 &base_url,
@@ -2174,16 +2170,16 @@ async fn restore_mouse_position(
                     "y": position.y,
                 }),
             )
-            .await
+            
         }
     })
-    .await?;
+    ?;
 
     Ok(())
 }
 
-async fn handle_mouse_move(
-    client: &Client,
+fn handle_mouse_move(
+    client: &Agent,
     base_url: &str,
     tool_name: &str,
     tool_params: &Value,
@@ -2197,21 +2193,21 @@ async fn handle_mouse_move(
         false,
         session_name,
     )
-    .await?;
+    ?;
     let x = parse_number_arg(tool_params, "x")?;
     let y = parse_number_arg(tool_params, "y")?;
     persist_mouse_position(base_url, session_name, MousePosition { x, y })?;
     Ok(())
 }
 
-async fn handle_mouse_positioned_command(
-    client: &Client,
+fn handle_mouse_positioned_command(
+    client: &Agent,
     base_url: &str,
     tool_name: &str,
     tool_params: &Value,
     session_name: Option<&str>,
 ) -> Result<(), String> {
-    restore_mouse_position(client, base_url, session_name).await?;
+    restore_mouse_position(client, base_url, session_name)?;
     handle_tool_command(
         client,
         base_url,
@@ -2220,17 +2216,17 @@ async fn handle_mouse_positioned_command(
         false,
         session_name,
     )
-    .await
+    
 }
 
-async fn handle_key_command(
-    client: &Client,
+fn handle_key_command(
+    client: &Agent,
     base_url: &str,
     tool_name: &str,
     tool_params: &Value,
     session_name: Option<&str>,
 ) -> Result<(), String> {
-    restore_active_selector(client, base_url, session_name).await?;
+    restore_active_selector(client, base_url, session_name)?;
     handle_tool_command(
         client,
         base_url,
@@ -2239,7 +2235,7 @@ async fn handle_key_command(
         false,
         session_name,
     )
-    .await?;
+    ?;
     Ok(())
 }
 
@@ -2247,8 +2243,8 @@ async fn handle_key_command(
 // Agent command handlers
 // ---------------------------------------------------------------------------
 
-async fn handle_agent_run(
-    client: &Client,
+fn handle_agent_run(
+    client: &Agent,
     base_url: &str,
     tool_params: &Value,
     _session_name: Option<&str>,
@@ -2262,12 +2258,12 @@ async fn handle_agent_run(
         return Err("Task description is required.".to_string());
     }
 
-    let result = submit_plain_command(client, base_url, task, true).await?;
+    let result = submit_plain_command(client, base_url, task, true)?;
 
-    // The async response is a task ID (possibly JSON-quoted)
+    // The response is a task ID (possibly JSON-quoted)
     let task_id = result.trim().trim_matches('"').to_string();
     if let Some(message) =
-        detect_missing_llm_error_for_submitted_agent_task(client, base_url, &task_id).await?
+        detect_missing_llm_error_for_submitted_agent_task(client, base_url, &task_id)?
     {
         return Err(format!(
             "Agent task requires an LLM key and cannot execute: {}",
@@ -2283,18 +2279,18 @@ async fn handle_agent_run(
     Ok(())
 }
 
-async fn detect_missing_llm_error_for_submitted_agent_task(
-    client: &Client,
+fn detect_missing_llm_error_for_submitted_agent_task(
+    client: &Agent,
     base_url: &str,
     task_id: &str,
 ) -> Result<Option<String>, String> {
     for _ in 0..AGENT_RUN_FAILURE_POLL_ATTEMPTS {
-        tokio::time::sleep(std::time::Duration::from_millis(
+        std::thread::sleep(std::time::Duration::from_millis(
             AGENT_RUN_FAILURE_POLL_INTERVAL_MS,
         ))
-        .await;
+        ;
 
-        let status = get_command_status(client, base_url, task_id).await?;
+        let status = get_command_status(client, base_url, task_id)?;
         if let Some(message) = extract_missing_llm_configuration_message(&status) {
             return Ok(Some(message));
         }
@@ -2343,8 +2339,8 @@ fn is_missing_llm_configuration_message(message: &str) -> bool {
         || (lower.contains("llm") && lower.contains("api key") && lower.contains("not set"))
 }
 
-async fn handle_agent_status(
-    client: &Client,
+fn handle_agent_status(
+    client: &Agent,
     base_url: &str,
     tool_params: &Value,
 ) -> Result<(), String> {
@@ -2357,7 +2353,7 @@ async fn handle_agent_status(
         return Err("Task ID is required.".to_string());
     }
 
-    let result = get_command_status(client, base_url, id).await?;
+    let result = get_command_status(client, base_url, id)?;
     cli_println!("{}", result);
     json_field("task_id", json!(id));
     json_field(
@@ -2367,8 +2363,8 @@ async fn handle_agent_status(
     Ok(())
 }
 
-async fn handle_agent_result(
-    client: &Client,
+fn handle_agent_result(
+    client: &Agent,
     base_url: &str,
     tool_params: &Value,
 ) -> Result<(), String> {
@@ -2381,7 +2377,7 @@ async fn handle_agent_result(
         return Err("Task ID is required.".to_string());
     }
 
-    let result = get_command_result(client, base_url, id).await?;
+    let result = get_command_result(client, base_url, id)?;
     cli_println!("{}", result);
     json_field("task_id", json!(id));
     json_field("raw", json!(&result));
@@ -2392,8 +2388,8 @@ async fn handle_agent_result(
 // Swarm command handlers
 // ---------------------------------------------------------------------------
 
-async fn handle_swarm_create(
-    client: &Client,
+fn handle_swarm_create(
+    client: &Agent,
     base_url: &str,
     tool_params: &Value,
     session_name: Option<&str>,
@@ -2401,7 +2397,7 @@ async fn handle_swarm_create(
     let capabilities = build_swarm_create_capabilities(tool_params)?;
     let open_args = build_open_session_request(Some(capabilities), Some(SWARM_SESSION_ID));
 
-    let result = call_tool(client, base_url, "open_session", open_args).await?;
+    let result = call_tool(client, base_url, "open_session", open_args)?;
 
     // Parse session ID from response
     let session_id = if let Ok(parsed) = serde_json::from_str::<Value>(&result) {
@@ -2436,8 +2432,8 @@ async fn handle_swarm_create(
     Ok(())
 }
 
-async fn handle_swarm_submit(
-    client: &Client,
+fn handle_swarm_submit(
+    client: &Agent,
     base_url: &str,
     tool_params: &Value,
 ) -> Result<(), String> {
@@ -2527,7 +2523,7 @@ async fn handle_swarm_submit(
                 "query": q,
             });
             (
-                submit_swarm_query(client, base_url, payload).await?,
+                submit_swarm_query(client, base_url, payload)?,
                 "query",
             )
         } else {
@@ -2538,7 +2534,7 @@ async fn handle_swarm_submit(
                 format!("{} {}", u, opts_str)
             };
             (
-                submit_swarm_payload(client, base_url, &command).await?,
+                submit_swarm_payload(client, base_url, &command)?,
                 "submit",
             )
         };
@@ -2563,8 +2559,8 @@ async fn handle_swarm_submit(
     Ok(())
 }
 
-async fn handle_swarm_query(
-    client: &Client,
+fn handle_swarm_query(
+    client: &Agent,
     base_url: &str,
     tool_params: &Value,
 ) -> Result<(), String> {
@@ -2641,7 +2637,7 @@ async fn handle_swarm_query(
             "args": opts_str,
             "query": q,
         });
-        let result = submit_swarm_query(client, base_url, payload).await?;
+        let result = submit_swarm_query(client, base_url, payload)?;
         let task_id = result.trim().trim_matches('"').to_string();
         cli_println!("Query Submitted: {} -> Task ID: {}", u, task_id);
         json_submissions.push(json!({
@@ -2657,8 +2653,8 @@ async fn handle_swarm_query(
     Ok(())
 }
 
-async fn handle_swarm_status(
-    client: &Client,
+fn handle_swarm_status(
+    client: &Agent,
     base_url: &str,
     tool_params: &Value,
 ) -> Result<(), String> {
@@ -2671,7 +2667,7 @@ async fn handle_swarm_status(
         return Err("Task ID is required.".to_string());
     }
 
-    let result = get_swarm_status(client, base_url, id).await?;
+    let result = get_swarm_status(client, base_url, id)?;
     cli_println!("{}", result);
     json_field("task_id", json!(id));
     json_field(
@@ -2681,8 +2677,8 @@ async fn handle_swarm_status(
     Ok(())
 }
 
-async fn handle_swarm_result(
-    client: &Client,
+fn handle_swarm_result(
+    client: &Agent,
     base_url: &str,
     tool_params: &Value,
 ) -> Result<(), String> {
@@ -2695,7 +2691,7 @@ async fn handle_swarm_result(
         return Err("Task ID is required.".to_string());
     }
 
-    let result = get_swarm_result(client, base_url, id).await?;
+    let result = get_swarm_result(client, base_url, id)?;
     cli_println!("{}", result);
     json_field("task_id", json!(id));
     json_field(
@@ -2723,13 +2719,13 @@ fn format_install_output(runtime: &InstalledBrowser4Runtime) -> Vec<String> {
     lines
 }
 
-async fn handle_install(tool_params: &Value) -> Result<(), String> {
+fn handle_install(tool_params: &Value) -> Result<(), String> {
     let tag = tool_params.get("tag").and_then(|value| value.as_str());
     let force = tool_params
         .get("force")
         .and_then(|value| value.as_bool())
         .unwrap_or(false);
-    let runtime = install_browser4_runtime(tag, force).await?;
+    let runtime = install_browser4_runtime(tag, force)?;
     for line in format_install_output(&runtime) {
         cli_println!("{}", line);
     }
@@ -2826,7 +2822,7 @@ fn format_uninstall_output(
     lines
 }
 
-async fn handle_uninstall(tool_params: &Value) -> Result<(), String> {
+fn handle_uninstall(tool_params: &Value) -> Result<(), String> {
     use std::process::Command;
 
     eprintln!("🧹 Uninstalling browser4-cli ...");
@@ -2997,7 +2993,7 @@ fn format_upgrade_output(runtime: &InstalledBrowser4Runtime, force: bool) -> Vec
     ]
 }
 
-async fn handle_upgrade(tool_params: &Value) -> Result<(), String> {
+fn handle_upgrade(tool_params: &Value) -> Result<(), String> {
     let tag = tool_params.get("tag").and_then(|value| value.as_str());
     let force = tool_params
         .get("force")
@@ -3005,7 +3001,7 @@ async fn handle_upgrade(tool_params: &Value) -> Result<(), String> {
         .unwrap_or(false);
 
     eprintln!("Upgrading Browser4 runtime...");
-    let runtime = install_browser4_runtime(tag, force).await?;
+    let runtime = install_browser4_runtime(tag, force)?;
     for line in format_upgrade_output(&runtime, force) {
         cli_println!("{}", line);
     }
@@ -3020,7 +3016,7 @@ async fn handle_upgrade(tool_params: &Value) -> Result<(), String> {
     Ok(())
 }
 
-async fn handle_stop() -> Result<(), String> {
+fn handle_stop() -> Result<(), String> {
     eprintln!("🛑 Stopping Browser4 server ...");
     eprintln!();
 
@@ -3061,7 +3057,7 @@ async fn handle_stop() -> Result<(), String> {
     Ok(())
 }
 
-async fn handle_status(client: &Client, base_url: &str) -> Result<(), String> {
+fn handle_status(client: &Agent, base_url: &str) -> Result<(), String> {
     cli_println!("Browser4 Status");
     cli_println!("===============");
     cli_println!("CLI version: {}", VERSION);
@@ -3085,27 +3081,24 @@ async fn handle_status(client: &Client, base_url: &str) -> Result<(), String> {
     // Check server health
     let health_url = format!("{base_url}/actuator/health");
     let health;
-    match client.get(&health_url).send().await {
+    match client.get(&health_url).call() {
         Ok(response) => {
-            if response.status().is_success() {
-                match response.text().await {
-                    Ok(body) if body.contains("\"status\":\"UP\"") => {
-                        cli_println!("Server health: UP");
-                        health = "UP";
-                    }
-                    Ok(body) => {
-                        cli_println!("Server health: NOT READY ({})", body);
-                        health = "NOT_READY";
-                    }
-                    Err(e) => {
-                        cli_println!("Server health: ERROR ({})", e);
-                        health = "ERROR";
-                    }
-                }
+            let status = response.status();
+            let body = read_body(response.into_body()).unwrap_or_default();
+            if status.is_success() && body.contains("\"status\":\"UP\"") {
+                cli_println!("Server health: UP");
+                health = "UP";
+            } else if status.is_success() {
+                cli_println!("Server health: NOT READY ({})", body);
+                health = "NOT_READY";
             } else {
-                cli_println!("Server health: DOWN (HTTP {})", response.status());
+                cli_println!("Server health: DOWN (HTTP {})", status);
                 health = "DOWN";
             }
+        }
+        Err(ureq::Error::StatusCode(status)) => {
+            cli_println!("Server health: DOWN (HTTP {})", status);
+            health = "DOWN";
         }
         Err(_) => {
             cli_println!("Server health: UNREACHABLE (no response from {})", base_url);
@@ -3685,7 +3678,7 @@ fn resolve_batch_commands(
     Ok((batch_args.bail, commands))
 }
 
-async fn handle_batch(global: &args::GlobalFlags) -> Result<(), CliError> {
+fn handle_batch(global: &args::GlobalFlags) -> Result<(), CliError> {
     let (bail, commands) = resolve_batch_commands(global)?;
     let base_url = resolve_base_url(global.server_url.as_deref(), global.session_name.as_deref());
 
@@ -3699,7 +3692,7 @@ async fn handle_batch(global: &args::GlobalFlags) -> Result<(), CliError> {
         }
     }
 
-    ensure_server_running(&base_url).await?;
+    ensure_server_running(&base_url)?;
     let client = make_client();
     let compiled =
         compile_batch_request(&commands, bail, &base_url, global.session_name.as_deref())?;
@@ -3714,7 +3707,7 @@ async fn handle_batch(global: &args::GlobalFlags) -> Result<(), CliError> {
             "sessionId": initial_session_id,
             "steps": compiled.steps,
         });
-        let raw = submit_batch_commands(&client, &base_url, payload).await?;
+        let raw = submit_batch_commands(&client, &base_url, payload)?;
         let raw_trimmed = raw.trim();
         if raw_trimmed.is_empty() {
             return Err(CliError(
@@ -3847,8 +3840,8 @@ async fn handle_batch(global: &args::GlobalFlags) -> Result<(), CliError> {
     }
 }
 
-#[tokio::main]
-async fn main() {
+
+fn main() {
     init_root_search_start_dir_from_startup();
 
     let raw_args: Vec<String> = std::env::args().skip(1).collect();
@@ -3856,7 +3849,7 @@ async fn main() {
     let json_mode = global.json;
     let (command, effective_global, from_spaced_prefix) = normalize_command_invocation(&global);
 
-    if let Err(err) = run(&command, &effective_global, from_spaced_prefix).await {
+    if let Err(err) = run(&command, &effective_global, from_spaced_prefix) {
         if json_mode {
             // Use println! directly -- cli_println! checks json_active()
             // which is true here (json_init was called inside run()),
@@ -3902,7 +3895,7 @@ fn json_envelope(
     serde_json::Value::Object(envelope).to_string()
 }
 
-async fn run(
+fn run(
     command: &str,
     global: &args::GlobalFlags,
     from_spaced_prefix: bool,
@@ -3946,7 +3939,7 @@ async fn run(
     }
 
     if command == "batch" {
-        return handle_batch(global).await;
+        return handle_batch(global);
     }
 
     if !from_spaced_prefix {
@@ -3997,7 +3990,7 @@ async fn run(
 
     // Ensure the Browser4 server is running (for relevant commands)
     if should_ensure_server_running(command) {
-        ensure_server_running(&base_url).await?;
+        ensure_server_running(&base_url)?;
     }
 
     let client = make_client();
@@ -4032,7 +4025,7 @@ async fn run(
                 &tool_params,
                 global.session_name.as_deref(),
             )
-            .await?;
+            ?;
         }
         "goto" => {
             handle_goto(
@@ -4042,37 +4035,37 @@ async fn run(
                 &tool_params,
                 global.session_name.as_deref(),
             )
-            .await?;
+            ?;
         }
         "close" => {
-            handle_close(&client, &base_url, global.session_name.as_deref()).await?;
+            handle_close(&client, &base_url, global.session_name.as_deref())?;
         }
         "close-all" => {
-            handle_close_all(&client, &base_url).await?;
+            handle_close_all(&client, &base_url)?;
         }
         "kill-all" => {
-            handle_kill_all().await?;
+            handle_kill_all()?;
         }
         "list" => {
-            handle_list(&client, &base_url).await?;
+            handle_list(&client, &base_url)?;
         }
         "install" => {
-            handle_install(&tool_params).await?;
+            handle_install(&tool_params)?;
         }
         "uninstall" => {
-            handle_uninstall(&tool_params).await?;
+            handle_uninstall(&tool_params)?;
         }
         "upgrade" => {
-            handle_upgrade(&tool_params).await?;
+            handle_upgrade(&tool_params)?;
         }
         "stop" => {
-            handle_stop().await?;
+            handle_stop()?;
         }
         "status" => {
-            handle_status(&client, &base_url).await?;
+            handle_status(&client, &base_url)?;
         }
         "delete-data" => {
-            handle_delete_data(&client, &base_url, global.session_name.as_deref()).await?;
+            handle_delete_data(&client, &base_url, global.session_name.as_deref())?;
         }
         "state-save" => {
             handle_state_save(
@@ -4082,7 +4075,7 @@ async fn run(
                 &tool_params,
                 global.session_name.as_deref(),
             )
-            .await?;
+            ?;
         }
         "state-load" => {
             handle_state_load(
@@ -4092,7 +4085,7 @@ async fn run(
                 &tool_params,
                 global.session_name.as_deref(),
             )
-            .await?;
+            ?;
         }
         "cookie-list" => {
             handle_cookie_list(
@@ -4101,7 +4094,7 @@ async fn run(
                 &tool_params,
                 global.session_name.as_deref(),
             )
-            .await?;
+            ?;
         }
         "cookie-get" => {
             handle_cookie_get(
@@ -4110,7 +4103,7 @@ async fn run(
                 &tool_params,
                 global.session_name.as_deref(),
             )
-            .await?;
+            ?;
         }
         "cookie-set" => {
             handle_cookie_set(
@@ -4119,7 +4112,7 @@ async fn run(
                 &tool_params,
                 global.session_name.as_deref(),
             )
-            .await?;
+            ?;
         }
         "cookie-delete" => {
             handle_cookie_delete(
@@ -4129,7 +4122,7 @@ async fn run(
                 &tool_params,
                 global.session_name.as_deref(),
             )
-            .await?;
+            ?;
         }
         "cookie-clear" => {
             handle_cookie_clear(
@@ -4138,7 +4131,7 @@ async fn run(
                 &tool_name,
                 global.session_name.as_deref(),
             )
-            .await?;
+            ?;
         }
         "localstorage-list" => {
             handle_storage_list(
@@ -4147,7 +4140,7 @@ async fn run(
                 global.session_name.as_deref(),
                 "localStorage",
             )
-            .await?;
+            ?;
         }
         "localstorage-get" => {
             handle_storage_get(
@@ -4157,7 +4150,7 @@ async fn run(
                 global.session_name.as_deref(),
                 "localStorage",
             )
-            .await?;
+            ?;
         }
         "localstorage-set" => {
             handle_storage_set(
@@ -4167,7 +4160,7 @@ async fn run(
                 global.session_name.as_deref(),
                 "localStorage",
             )
-            .await?;
+            ?;
         }
         "localstorage-delete" => {
             handle_storage_delete(
@@ -4177,7 +4170,7 @@ async fn run(
                 global.session_name.as_deref(),
                 "localStorage",
             )
-            .await?;
+            ?;
         }
         "localstorage-clear" => {
             handle_storage_clear(
@@ -4186,7 +4179,7 @@ async fn run(
                 global.session_name.as_deref(),
                 "localStorage",
             )
-            .await?;
+            ?;
         }
         "sessionstorage-list" => {
             handle_storage_list(
@@ -4195,7 +4188,7 @@ async fn run(
                 global.session_name.as_deref(),
                 "sessionStorage",
             )
-            .await?;
+            ?;
         }
         "sessionstorage-get" => {
             handle_storage_get(
@@ -4205,7 +4198,7 @@ async fn run(
                 global.session_name.as_deref(),
                 "sessionStorage",
             )
-            .await?;
+            ?;
         }
         "sessionstorage-set" => {
             handle_storage_set(
@@ -4215,7 +4208,7 @@ async fn run(
                 global.session_name.as_deref(),
                 "sessionStorage",
             )
-            .await?;
+            ?;
         }
         "sessionstorage-delete" => {
             handle_storage_delete(
@@ -4225,7 +4218,7 @@ async fn run(
                 global.session_name.as_deref(),
                 "sessionStorage",
             )
-            .await?;
+            ?;
         }
         "sessionstorage-clear" => {
             handle_storage_clear(
@@ -4234,7 +4227,7 @@ async fn run(
                 global.session_name.as_deref(),
                 "sessionStorage",
             )
-            .await?;
+            ?;
         }
         "snapshot" => {
             handle_snapshot(
@@ -4244,7 +4237,7 @@ async fn run(
                 &tool_params,
                 global.session_name.as_deref(),
             )
-            .await?;
+            ?;
         }
         "screenshot" => {
             handle_screenshot(
@@ -4254,7 +4247,7 @@ async fn run(
                 &tool_params,
                 global.session_name.as_deref(),
             )
-            .await?;
+            ?;
         }
         "press" => {
             handle_tool_command(
@@ -4265,7 +4258,7 @@ async fn run(
                 false,
                 global.session_name.as_deref(),
             )
-            .await?;
+            ?;
         }
         "keydown" | "keyup" => {
             handle_key_command(
@@ -4275,7 +4268,7 @@ async fn run(
                 &tool_params,
                 global.session_name.as_deref(),
             )
-            .await?;
+            ?;
         }
         "mousemove" => {
             handle_mouse_move(
@@ -4285,7 +4278,7 @@ async fn run(
                 &tool_params,
                 global.session_name.as_deref(),
             )
-            .await?;
+            ?;
         }
         "mousedown" | "mouseup" | "mousewheel" => {
             handle_mouse_positioned_command(
@@ -4295,7 +4288,7 @@ async fn run(
                 &tool_params,
                 global.session_name.as_deref(),
             )
-            .await?;
+            ?;
         }
         // Agent commands
         "agent-run" => {
@@ -4305,13 +4298,13 @@ async fn run(
                 &tool_params,
                 global.session_name.as_deref(),
             )
-            .await?;
+            ?;
         }
         "agent-status" => {
-            handle_agent_status(&client, &base_url, &tool_params).await?;
+            handle_agent_status(&client, &base_url, &tool_params)?;
         }
         "agent-result" => {
-            handle_agent_result(&client, &base_url, &tool_params).await?;
+            handle_agent_result(&client, &base_url, &tool_params)?;
         }
         // Swarm commands
         "swarm-create" => {
@@ -4321,19 +4314,19 @@ async fn run(
                 &tool_params,
                 global.session_name.as_deref(),
             )
-            .await?;
+            ?;
         }
         "swarm-submit" => {
-            handle_swarm_submit(&client, &base_url, &tool_params).await?;
+            handle_swarm_submit(&client, &base_url, &tool_params)?;
         }
         "swarm-query" => {
-            handle_swarm_query(&client, &base_url, &tool_params).await?;
+            handle_swarm_query(&client, &base_url, &tool_params)?;
         }
         "swarm-status" => {
-            handle_swarm_status(&client, &base_url, &tool_params).await?;
+            handle_swarm_status(&client, &base_url, &tool_params)?;
         }
         "swarm-result" => {
-            handle_swarm_result(&client, &base_url, &tool_params).await?;
+            handle_swarm_result(&client, &base_url, &tool_params)?;
         }
         _ => {
             if tool_name.is_empty() {
@@ -4348,7 +4341,7 @@ async fn run(
                 matches!(command, "goto"),
                 global.session_name.as_deref(),
             )
-            .await?;
+            ?;
         }
     }
 
@@ -4357,7 +4350,7 @@ async fn run(
     if !no_snap.contains(command) {
         let state = read_state(None, global.session_name.as_deref());
         if let Some(session_id) = state.session_id {
-            post_command_snapshot(&client, &base_url, &session_id).await;
+            post_command_snapshot(&client, &base_url, &session_id);
         }
     }
 

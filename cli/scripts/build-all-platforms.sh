@@ -68,7 +68,7 @@ build_target() {
         -v "$PROJECT_ROOT/cli:/build" \
         -v "$OUTPUT_DIR:/output" \
         browser4-builder \
-        -c "cargo zigbuild --release --target ${target} && cp /build/target/${target}/release/browser4-cli* /output/${output_name} && chmod +x /output/${output_name} 2>/dev/null || true"
+        -c "cargo zigbuild --release --target ${target} && cp /build/target/${target}/release/browser4-cli* /output/${output_name} && chmod +x /output/${output_name} 2>/dev/null || true && upx --best /output/${output_name} 2>/dev/null || echo 'UPX skipped'"
 
     if [ "$DRY_RUN" = true ]; then
         echo -e "${YELLOW}[DRY-RUN] Skipping artifact verification for ${output_name}${NC}"
@@ -76,7 +76,8 @@ build_target() {
     fi
 
     if [ -f "$OUTPUT_DIR/$output_name" ]; then
-        echo -e "${GREEN}✓ Built ${output_name}${NC}"
+        local size_kb=$(du -k "$OUTPUT_DIR/$output_name" | cut -f1)
+        echo -e "${GREEN}✓ Built ${output_name} (${size_kb} KB)${NC}"
     else
         echo -e "${RED}✗ Failed to build ${output_name}${NC}"
         return 1

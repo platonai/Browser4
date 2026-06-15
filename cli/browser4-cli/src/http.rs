@@ -1,15 +1,13 @@
 //! HTTP helpers for calling Browser4 MCP tools and scrape REST endpoints.
 
-use reqwest::Client;
 use serde_json::{json, Value};
+use ureq::Agent;
 
 use crate::state::resolve_ref;
 
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
-const NAVIGATION_REQUEST_TIMEOUT_SECS: u64 = 120;
 const BATCH_REQUEST_TIMEOUT_SECS: u64 = 120;
 const DEFAULT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_HTTP_TIMEOUT_SECS";
-const NAVIGATION_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS";
 
 fn timeout_secs_from_env(env_key: &str, default_secs: u64) -> u64 {
     std::env::var(env_key)
@@ -26,37 +24,29 @@ fn default_request_timeout() -> std::time::Duration {
     ))
 }
 
-fn navigation_request_timeout() -> std::time::Duration {
-    std::time::Duration::from_secs(timeout_secs_from_env(
-        NAVIGATION_REQUEST_TIMEOUT_ENV,
-        NAVIGATION_REQUEST_TIMEOUT_SECS,
-    ))
+fn batch_request_timeout() -> std::time::Duration {
+    std::time::Duration::from_secs(BATCH_REQUEST_TIMEOUT_SECS)
 }
 
-fn is_navigation_tool(tool: &str) -> bool {
-    matches!(
-        tool,
-        "browser_navigate"
-            | "browser_reload"
-            | "browser_navigate_back"
-            | "browser_navigate_forward"
-    )
+/// Read the full body of a ureq response into a String.
+pub fn read_body(mut body: ureq::Body) -> Result<String, String> {
+    body.read_to_string().map_err(|e| format!("Failed to read response body: {e}"))
 }
 
-fn timeout_for_tool(tool: &str) -> std::time::Duration {
-    if is_navigation_tool(tool) {
-        navigation_request_timeout()
-    } else {
-        default_request_timeout()
-    }
+/// Build a `ureq::Agent` configured for Browser4 MCP calls.
+pub fn make_client() -> Agent {
+    let config = Agent::config_builder()
+        .timeout_global(Some(default_request_timeout()))
+        .build();
+    Agent::new_with_config(config)
 }
 
-/// Build a `reqwest::Client` configured for Browser4 MCP calls.
-pub fn make_client() -> Client {
-    Client::builder()
-        .timeout(default_request_timeout())
-        .build()
-        .expect("HTTP client construction should not fail")
+/// Build a `ureq::Agent` with an extended timeout for batch operations.
+pub fn make_batch_client() -> Agent {
+    let config = Agent::config_builder()
+        .timeout_global(Some(batch_request_timeout()))
+        .build();
+    Agent::new_with_config(config)
 }
 
 /// Resolve element ref fields inside the tool arguments.
@@ -122,155 +112,127 @@ fn build_endpoint_url(base_url: &str, path: &str) -> String {
     )
 }
 
-fn format_http_error(status: reqwest::StatusCode, response_text: &str) -> String {
+fn format_http_error(status: u16, response_text: &str) -> String {
     let message = response_text.trim();
     if message.is_empty() {
         format!(
-            "HTTP request failed with status {} and an empty response body.",
-            status
+            "HTTP request failed with status {status} and an empty response body."
         )
     } else {
-        format!("HTTP request failed with status {}: {}", status, message)
+        format!("HTTP request failed with status {status}: {message}")
     }
 }
 
-fn summarize_mcp_request(
-    tool: &str,
-    endpoint: &str,
-    args: &Value,
-    timeout: Option<std::time::Duration>,
-) -> String {
-    let mut parts = vec![format!("tool={tool}"), format!("endpoint={endpoint}")];
+/// Perform a REST request using the given agent.
+fn send_rest_request(
+    agent: &Agent,
+    method: &str,
+    url: &str,
+    content_type: Option<&str>,
+    body: Option<&str>,
+) -> Result<String, String> {
+    let response = match method {
+        "GET" => agent.get(url).call(),
+        "POST" => {
+            let req = agent.post(url);
+            let req = match content_type {
+                Some(ct) => req.header("Content-Type", ct),
+                None => req,
+            };
+            match body {
+                Some(b) => req.send(b),
+                None => req.send_empty(),
+            }
+        }
+        _ => return Err(format!("Unsupported HTTP method: {method}")),
+    };
 
-    if let Some(timeout) = timeout {
-        parts.push(format!("timeout={}s", timeout.as_secs()));
+    match response {
+        Ok(resp) => {
+            let response_text = read_body(resp.into_body())?;
+            Ok(extract_http_text_payload(&response_text))
+        }
+        Err(ureq::Error::StatusCode(status)) => {
+            Err(format_http_error(status, ""))
+        }
+        Err(err) => {
+            Err(format!("HTTP request failed: {err}"))
+        }
     }
-
-    if let Some(session_id) = args.get("sessionId").and_then(|value| value.as_str()) {
-        parts.push(format!("sessionId={session_id}"));
-    }
-
-    if let Some(url) = args.get("url").and_then(|value| value.as_str()) {
-        parts.push(format!("url={url}"));
-    }
-
-    format!("[{}]", parts.join(", "))
-}
-
-fn format_mcp_transport_error(
-    tool: &str,
-    endpoint: &str,
-    args: &Value,
-    timeout: Option<std::time::Duration>,
-    error: &reqwest::Error,
-) -> String {
-    let context = summarize_mcp_request(tool, endpoint, args, timeout);
-    if error.is_timeout() {
-        format!("HTTP request timed out {context}: {error}")
-    } else {
-        format!("HTTP request failed {context}: {error}")
-    }
-}
-
-async fn send_rest_request(request: reqwest::RequestBuilder) -> Result<String, String> {
-    let response = request
-        .send()
-        .await
-        .map_err(|e| format!("HTTP request failed: {e}"))?;
-
-    let status = response.status();
-    let response_text = response
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read response body: {e}"))?;
-
-    if !status.is_success() {
-        return Err(format_http_error(status, &response_text));
-    }
-
-    Ok(extract_http_text_payload(&response_text))
 }
 
 /// Call an MCP tool on the Browser4 server.
 ///
 /// Makes a `POST /mcp/call-tool` request and returns the text of the first
 /// content block, or an error message from the server.
-pub async fn call_tool(
-    client: &Client,
-    base_url: &str,
-    tool: &str,
-    args: Value,
-) -> Result<String, String> {
-    call_tool_with_timeout(client, base_url, tool, args, Some(timeout_for_tool(tool))).await
-}
-
-async fn call_tool_with_timeout(
-    client: &Client,
+pub fn call_tool(
+    agent: &Agent,
     base_url: &str,
     tool: &str,
     mut args: Value,
-    timeout: Option<std::time::Duration>,
 ) -> Result<String, String> {
     normalize_refs(&mut args);
 
     let url = format!("{}/mcp/call-tool", base_url.trim_end_matches('/'));
     let body = json!({ "tool": tool, "arguments": args });
 
-    let request = client
+    let response = agent
         .post(&url)
-        .header("Content-Type", "application/json")
-        .json(&body);
-    let request = if let Some(timeout) = timeout {
-        request.timeout(timeout)
-    } else {
-        request
-    };
+        .content_type("application/json")
+        .send_json(&body);
 
-    let response = request
-        .send()
-        .await
-        .map_err(|e| format_mcp_transport_error(tool, &url, &args, timeout, &e))?;
+    match response {
+        Ok(resp) => {
+            let response_text = read_body(resp.into_body())?;
 
-    let status = response.status();
-    let response_text = response
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read response body: {e}"))?;
+            let data: Value = serde_json::from_str(&response_text)
+                .map_err(|e| format!("Failed to parse response JSON: {e}"))?;
 
-    if !status.is_success() {
-        let message = response_text.trim();
-        if message.is_empty() {
-            return Err(format!(
-                "HTTP request failed with status {} and an empty response body.",
-                status
-            ));
+            if data
+                .get("isError")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                let msg = data
+                    .get("content")
+                    .and_then(|c| c.as_array())
+                    .and_then(|arr| arr.first())
+                    .and_then(|item| item.get("text"))
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("Unknown MCP error");
+                return Err(msg.to_string());
+            }
+
+            extract_mcp_text_payload(&data)
+                .ok_or_else(|| "MCP response did not contain a readable payload.".to_string())
         }
-        return Err(format!(
-            "HTTP request failed with status {}: {}",
-            status, message
-        ));
+        Err(ureq::Error::StatusCode(status)) => {
+            Err(format!(
+                "HTTP request failed with status {status} [tool={tool}, endpoint={url}]"
+            ))
+        }
+        Err(err) => {
+            if err.to_string().to_ascii_lowercase().contains("timed out") {
+                Err(format!(
+                    "HTTP request timed out [tool={tool}, endpoint={url}]: {err}"
+                ))
+            } else {
+                Err(format!(
+                    "HTTP request failed [tool={tool}, endpoint={url}]: {err}"
+                ))
+            }
+        }
     }
+}
 
-    let data: Value = serde_json::from_str(&response_text)
-        .map_err(|e| format!("Failed to parse response JSON: {e}"))?;
-
-    if data
-        .get("isError")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-    {
-        let msg = data
-            .get("content")
-            .and_then(|c| c.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|item| item.get("text"))
-            .and_then(|t| t.as_str())
-            .unwrap_or("Unknown MCP error");
-        return Err(msg.to_string());
-    }
-
-    extract_mcp_text_payload(&data)
-        .ok_or_else(|| "MCP response did not contain a readable payload.".to_string())
+/// Call an MCP tool with a batch-specific agent (extended timeout).
+pub fn call_tool_batch(
+    agent: &Agent,
+    base_url: &str,
+    tool: &str,
+    args: Value,
+) -> Result<String, String> {
+    call_tool(agent, base_url, tool, args)
 }
 
 /// Check whether a server error message indicates a stale/expired session.
@@ -288,117 +250,112 @@ pub fn is_stale_session_error(message: &str) -> bool {
 ///
 /// When `async_mode` is true, the server returns a task ID immediately.
 /// When false, the server blocks until execution completes and returns the CommandStatus JSON.
-pub async fn submit_plain_command(
-    client: &Client,
+pub fn submit_plain_command(
+    agent: &Agent,
     base_url: &str,
     command: &str,
     async_mode: bool,
 ) -> Result<String, String> {
     call_tool(
-        client,
+        agent,
         base_url,
         "command_run",
         serde_json::json!({ "command": command, "async": async_mode }),
     )
-    .await
 }
 
 /// Submit a swarm payload through `SwarmController.submit(payload)`.
-pub async fn submit_swarm_payload(
-    client: &Client,
+pub fn submit_swarm_payload(
+    agent: &Agent,
     base_url: &str,
     payload: &str,
 ) -> Result<String, String> {
     let url = build_endpoint_url(base_url, "/api/swarm/submit");
     send_rest_request(
-        client
-            .post(url)
-            .header("Content-Type", "text/plain; charset=utf-8")
-            .body(payload.to_string()),
+        agent,
+        "POST",
+        &url,
+        Some("text/plain; charset=utf-8"),
+        Some(payload),
     )
-    .await
 }
 
 /// Submit a swarm X-SQL query through `SwarmController.query(query)`.
-pub async fn submit_swarm_query(
-    client: &Client,
+pub fn submit_swarm_query(
+    agent: &Agent,
     base_url: &str,
     query: serde_json::Value,
 ) -> Result<String, String> {
     let url = build_endpoint_url(base_url, "/api/swarm/query");
     send_rest_request(
-        client
-            .post(url)
-            .header("Content-Type", "application/json; charset=utf-8")
-            .body(query.to_string()),
+        agent,
+        "POST",
+        &url,
+        Some("application/json; charset=utf-8"),
+        Some(&query.to_string()),
     )
-    .await
 }
 
 /// Read swarm task status through `SwarmController.getStatus(id)`.
-pub async fn get_swarm_status(
-    client: &Client,
+pub fn get_swarm_status(
+    agent: &Agent,
     base_url: &str,
     task_id: &str,
 ) -> Result<String, String> {
     let url = build_endpoint_url(base_url, &format!("/api/swarm/{task_id}/status"));
-    send_rest_request(client.get(url)).await
+    send_rest_request(agent, "GET", &url, None, None)
 }
 
 /// Read swarm task result through `SwarmController.getResult(id)`.
-pub async fn get_swarm_result(
-    client: &Client,
+pub fn get_swarm_result(
+    agent: &Agent,
     base_url: &str,
     task_id: &str,
 ) -> Result<String, String> {
     let url = build_endpoint_url(base_url, &format!("/api/swarm/{task_id}/result"));
-    send_rest_request(client.get(url)).await
+    send_rest_request(agent, "GET", &url, None, None)
 }
 
 /// Get the status of a command by its task ID via the MCP endpoint.
-pub async fn get_command_status(
-    client: &Client,
+pub fn get_command_status(
+    agent: &Agent,
     base_url: &str,
     task_id: &str,
 ) -> Result<String, String> {
     call_tool(
-        client,
+        agent,
         base_url,
         "command_status",
         serde_json::json!({ "id": task_id }),
     )
-    .await
 }
 
 /// Get the result of a completed command by its task ID via the MCP endpoint.
-pub async fn get_command_result(
-    client: &Client,
+pub fn get_command_result(
+    agent: &Agent,
     base_url: &str,
     task_id: &str,
 ) -> Result<String, String> {
     call_tool(
-        client,
+        agent,
         base_url,
         "command_result",
         serde_json::json!({ "id": task_id }),
     )
-    .await
 }
 
 /// Execute a batch of CLI-derived operations in a single backend request.
-pub async fn submit_batch_commands(
-    client: &Client,
+pub fn submit_batch_commands(
+    agent: &Agent,
     base_url: &str,
     args: Value,
 ) -> Result<String, String> {
-    call_tool_with_timeout(
-        client,
+    call_tool_batch(
+        agent,
         base_url,
         "command_batch",
         args,
-        Some(std::time::Duration::from_secs(BATCH_REQUEST_TIMEOUT_SECS)),
     )
-    .await
 }
 
 #[cfg(test)]
@@ -413,17 +370,14 @@ mod tests {
 
     struct TimeoutEnvGuard {
         default_timeout: Option<String>,
-        navigation_timeout: Option<String>,
     }
 
     impl TimeoutEnvGuard {
-        fn set(default_timeout_secs: &str, navigation_timeout_secs: &str) -> Self {
+        fn set(default_timeout_secs: &str) -> Self {
             let guard = Self {
                 default_timeout: std::env::var(DEFAULT_REQUEST_TIMEOUT_ENV).ok(),
-                navigation_timeout: std::env::var(NAVIGATION_REQUEST_TIMEOUT_ENV).ok(),
             };
             std::env::set_var(DEFAULT_REQUEST_TIMEOUT_ENV, default_timeout_secs);
-            std::env::set_var(NAVIGATION_REQUEST_TIMEOUT_ENV, navigation_timeout_secs);
             guard
         }
     }
@@ -434,12 +388,6 @@ mod tests {
                 std::env::set_var(DEFAULT_REQUEST_TIMEOUT_ENV, value);
             } else {
                 std::env::remove_var(DEFAULT_REQUEST_TIMEOUT_ENV);
-            }
-
-            if let Some(value) = &self.navigation_timeout {
-                std::env::set_var(NAVIGATION_REQUEST_TIMEOUT_ENV, value);
-            } else {
-                std::env::remove_var(NAVIGATION_REQUEST_TIMEOUT_ENV);
             }
         }
     }
@@ -481,6 +429,7 @@ mod tests {
         lower.contains("timed out")
             || lower.contains("deadline has elapsed")
             || lower.contains("error sending request for url")
+            || lower.contains("timed out")
     }
 
     #[test]
@@ -568,141 +517,12 @@ mod tests {
     #[test]
     fn test_format_http_error_handles_empty_and_non_empty_bodies() {
         assert_eq!(
-            format_http_error(reqwest::StatusCode::NOT_FOUND, ""),
-            "HTTP request failed with status 404 Not Found and an empty response body."
+            format_http_error(404, ""),
+            "HTTP request failed with status 404 and an empty response body."
         );
         assert_eq!(
-            format_http_error(reqwest::StatusCode::BAD_REQUEST, "bad request"),
-            "HTTP request failed with status 400 Bad Request: bad request"
-        );
-    }
-
-    #[test]
-    fn test_summarize_mcp_request_includes_timeout_and_common_navigation_fields() {
-        let summary = summarize_mcp_request(
-            "browser_navigate",
-            "http://localhost:8182/mcp/call-tool",
-            &json!({
-                "sessionId": "default",
-                "url": "https://www.amazon.com/"
-            }),
-            Some(std::time::Duration::from_secs(120)),
-        );
-
-        assert_eq!(
-            summary,
-            "[tool=browser_navigate, endpoint=http://localhost:8182/mcp/call-tool, timeout=120s, sessionId=default, url=https://www.amazon.com/]"
-        );
-    }
-
-    #[test]
-    fn test_timeout_for_tool_uses_navigation_budget_for_navigation_commands() {
-        let _env_lock = TIMEOUT_ENV_MUTEX
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let _env_guard = TimeoutEnvGuard::set("3", "7");
-
-        assert_eq!(timeout_for_tool("browser_navigate").as_secs(), 7);
-        assert_eq!(timeout_for_tool("browser_reload").as_secs(), 7);
-        assert_eq!(timeout_for_tool("browser_navigate_back").as_secs(), 7);
-        assert_eq!(timeout_for_tool("browser_navigate_forward").as_secs(), 7);
-        assert_eq!(timeout_for_tool("page_title").as_secs(), 3);
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn test_call_tool_applies_navigation_timeout_override() {
-        let _env_lock = TIMEOUT_ENV_MUTEX
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let _env_guard = TimeoutEnvGuard::set("1", "2");
-
-        let client = make_client();
-        let base_url = spawn_delayed_mcp_server(std::time::Duration::from_millis(1_500));
-
-        let result = call_tool(
-            &client,
-            &base_url,
-            "browser_navigate",
-            json!({ "url": "https://example.com/slow" }),
-        )
-        .await;
-
-        assert_eq!(result.as_deref(), Ok("ok"));
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn test_call_tool_keeps_default_timeout_for_non_navigation_commands() {
-        let _env_lock = TIMEOUT_ENV_MUTEX
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let _env_guard = TimeoutEnvGuard::set("1", "2");
-
-        let client = make_client();
-        let base_url = spawn_delayed_mcp_server(std::time::Duration::from_millis(1_500));
-
-        let result = call_tool(&client, &base_url, "page_title", json!({})).await;
-
-        let error = result.expect_err("non-navigation tool should still time out");
-        assert!(
-            is_timeout_error(&error),
-            "Expected timeout-related error, got: {error}"
-        );
-        assert!(
-            error.contains("tool=page_title"),
-            "Expected tool diagnostics, got: {error}"
-        );
-        assert!(
-            error.contains("timeout=1s"),
-            "Expected timeout diagnostics, got: {error}"
-        );
-        assert!(
-            error.contains("endpoint=http://"),
-            "Expected endpoint diagnostics, got: {error}"
-        );
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn test_call_tool_timeout_diagnostics_include_navigation_context() {
-        let _env_lock = TIMEOUT_ENV_MUTEX
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let _env_guard = TimeoutEnvGuard::set("1", "1");
-
-        let client = make_client();
-        let base_url = spawn_delayed_mcp_server(std::time::Duration::from_millis(1_500));
-
-        let result = call_tool(
-            &client,
-            &base_url,
-            "browser_navigate",
-            json!({
-                "sessionId": "default",
-                "url": "https://www.amazon.com/"
-            }),
-        )
-        .await;
-
-        let error =
-            result.expect_err("navigation request should time out with the forced 1s budget");
-        assert!(
-            is_timeout_error(&error),
-            "Expected timeout-related error, got: {error}"
-        );
-        assert!(
-            error.contains("tool=browser_navigate"),
-            "Expected tool diagnostics, got: {error}"
-        );
-        assert!(
-            error.contains("timeout=1s"),
-            "Expected timeout diagnostics, got: {error}"
-        );
-        assert!(
-            error.contains("sessionId=default"),
-            "Expected session diagnostics, got: {error}"
-        );
-        assert!(
-            error.contains("url=https://www.amazon.com/"),
-            "Expected URL diagnostics, got: {error}"
+            format_http_error(400, "bad request"),
+            "HTTP request failed with status 400: bad request"
         );
     }
 }

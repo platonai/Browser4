@@ -17,10 +17,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
-use reqwest::Client;
+use ureq::Agent;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::http::read_body;
 use crate::managed_processes::{register_managed_server_process, ManagedServerProcess};
 use crate::state::{
     read_state, resolve_default_state_dir, resolve_runtime_cache_dir, resolve_runtime_data_dir,
@@ -312,7 +313,7 @@ fn mirror_is_reachable(mirror: &DownloadMirror) -> bool {
 
     // Parse the host from the base URL.  reqwest::Url handles the scheme and
     // port extraction for us.
-    let (host, port) = match reqwest::Url::parse(&mirror.base_url) {
+    let (host, port) = match url::Url::parse(&mirror.base_url) {
         Ok(parsed) => {
             let host = parsed.host_str().unwrap_or("").to_string();
             if host.is_empty() {
@@ -481,7 +482,7 @@ fn delete_mirror_preference_cache() {
 ///
 /// Returns an empty `Vec` when every mirror fails or speed testing is disabled
 /// via `BROWSER4_CLI_DISABLE_MIRROR_SPEED_TEST`.
-async fn run_speed_tests(mirrors: &[DownloadMirror]) -> Vec<SpeedTestResult> {
+fn run_speed_tests(mirrors: &[DownloadMirror]) -> Vec<SpeedTestResult> {
     // Honour the disable flag.
     if env::var(DISABLE_MIRROR_SPEED_TEST_ENV).ok().as_deref() == Some("1") {
         return vec![];
@@ -501,15 +502,11 @@ async fn run_speed_tests(mirrors: &[DownloadMirror]) -> Vec<SpeedTestResult> {
     };
     let asset_name = platform.asset_name();
 
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(timeout_secs))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Failed to create HTTP client for speed tests: {e}");
-            return vec![];
-        }
+    let client = {
+        let config = Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(timeout_secs)))
+            .build();
+        Agent::new_with_config(config)
     };
 
     // Fire all speed tests concurrently — serial fallback would make the total
@@ -523,19 +520,17 @@ async fn run_speed_tests(mirrors: &[DownloadMirror]) -> Vec<SpeedTestResult> {
         let client = client.clone();
         let mirror = mirror.clone();
 
-        handles.push(tokio::spawn(async move {
+        handles.push(std::thread::spawn(move || {
             eprintln!("  Speed-testing mirror '{}'...", mirror.name);
             let start = Instant::now();
 
             let range_header = format!("bytes=0-{}", SPEED_TEST_PROBE_BYTES - 1);
-            match client.get(&url).header("Range", &range_header).send().await {
+            match client.get(&url).header("Range", &range_header).call() {
                 Ok(response) => {
-                    let status = response.status();
+                    let status = response.status().as_u16();
                     // Accept 206 (Partial Content — Range honoured) and 200
                     // (server ignored Range header and sent the full asset).
-                    if !status.is_success()
-                        && status != reqwest::StatusCode::PARTIAL_CONTENT
-                        && status != reqwest::StatusCode::OK
+                    if status < 200 || status >= 300
                     {
                         eprintln!(
                             "  Mirror '{}' speed test failed: HTTP {}",
@@ -543,8 +538,9 @@ async fn run_speed_tests(mirrors: &[DownloadMirror]) -> Vec<SpeedTestResult> {
                         );
                         return None;
                     }
-                    match response.bytes().await {
-                        Ok(bytes) => {
+                    match response.into_body().read_to_string() {
+                        Ok(body_text) => {
+                            let bytes = body_text.as_bytes();
                             let elapsed = start.elapsed();
                             let speed_bps = if elapsed.as_secs_f64() > 0.0 {
                                 bytes.len() as f64 / elapsed.as_secs_f64()
@@ -575,14 +571,7 @@ async fn run_speed_tests(mirrors: &[DownloadMirror]) -> Vec<SpeedTestResult> {
                     }
                 }
                 Err(e) => {
-                    if e.is_timeout() {
-                        eprintln!(
-                            "  Mirror '{}' speed test timed out after {}s",
-                            mirror.name, timeout_secs
-                        );
-                    } else {
-                        eprintln!("  Mirror '{}' speed test failed: {e}", mirror.name);
-                    }
+                    eprintln!("  Mirror '{}' speed test failed: {e}", mirror.name);
                     None
                 }
             }
@@ -591,11 +580,11 @@ async fn run_speed_tests(mirrors: &[DownloadMirror]) -> Vec<SpeedTestResult> {
 
     let mut results: Vec<SpeedTestResult> = Vec::new();
     for handle in handles {
-        match handle.await {
+        match handle.join() {
             Ok(Some(result)) => results.push(result),
             Ok(None) => {} // This mirror failed — skip it.
-            Err(join_err) => {
-                eprintln!("  Speed test task panicked: {join_err}");
+            Err(_join_err) => {
+                eprintln!("  Speed test task panicked");
             }
         }
     }
@@ -619,7 +608,7 @@ async fn run_speed_tests(mirrors: &[DownloadMirror]) -> Vec<SpeedTestResult> {
 /// Returns `(selected_mirror, was_speed_tested)` — the caller uses
 /// `was_speed_tested` to decide whether to invalidate the cache and retry on
 /// download failure.
-async fn select_best_mirror(mirrors: &[DownloadMirror]) -> (&DownloadMirror, bool) {
+fn select_best_mirror(mirrors: &[DownloadMirror]) -> (&DownloadMirror, bool) {
     // --- cached preference ---
     if let Some(pref) = load_mirror_preference(mirrors) {
         if is_mirror_preference_valid(&pref) {
@@ -639,7 +628,7 @@ async fn select_best_mirror(mirrors: &[DownloadMirror]) -> (&DownloadMirror, boo
     }
 
     // --- speed tests ---
-    let results = run_speed_tests(mirrors).await;
+    let results = run_speed_tests(mirrors);
 
     if results.is_empty() {
         eprintln!("All speed tests failed; falling back to TCP reachability check.");
@@ -682,7 +671,7 @@ pub fn init_root_search_start_dir_from_startup() {
 /// Ensure the Browser4 server is running, starting it if necessary.
 ///
 /// Only acts on `localhost` / `127.0.0.1` URLs.
-pub async fn ensure_server_running(base_url: &str) -> Result<(), String> {
+pub fn ensure_server_running(base_url: &str) -> Result<(), String> {
     // Skip remote servers
     if !base_url.contains("localhost") && !base_url.contains("127.0.0.1") {
         return Ok(());
@@ -691,21 +680,23 @@ pub async fn ensure_server_running(base_url: &str) -> Result<(), String> {
     let port = extract_port(base_url);
     if !is_local_port_open(base_url) {
         eprintln!("Browser4 server not running. Starting...");
-        let launch_spec = resolve_server_launch_spec(port).await?;
+        let launch_spec = resolve_server_launch_spec(port)?;
         eprintln!("{}", launch_spec.description);
-        return start_server(&launch_spec, base_url, port).await;
+        return start_server(&launch_spec, base_url, port);
     }
 
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = {
+        let config = Agent::config_builder()
+            .timeout_global(Some(std::time::Duration::from_secs(5)))
+            .build();
+        Agent::new_with_config(config)
+    };
 
-    match probe_server_state(&client, base_url).await {
+    match probe_server_state(&client, base_url) {
         ServerState::Ready => return Ok(()),
         ServerState::Starting(_) => {
             return wait_for_server_ready(&client, base_url, EXISTING_SERVER_READY_TIMEOUT, None)
-                .await;
+                ;
         }
         ServerState::Unreachable(error) => {
             // Port is open but the health endpoint didn't answer.  The
@@ -717,8 +708,8 @@ pub async fn ensure_server_running(base_url: &str) -> Result<(), String> {
                 port,
                 truncate_status_for_log(&error),
             );
-            tokio::time::sleep(Duration::from_secs(3)).await;
-            match probe_server_state(&client, base_url).await {
+            std::thread::sleep(Duration::from_secs(3));
+            match probe_server_state(&client, base_url) {
                 ServerState::Ready => return Ok(()),
                 ServerState::Starting(_) => {
                     return wait_for_server_ready(
@@ -727,7 +718,7 @@ pub async fn ensure_server_running(base_url: &str) -> Result<(), String> {
                         EXISTING_SERVER_READY_TIMEOUT,
                         None,
                     )
-                    .await;
+                    ;
                 }
                 ServerState::Unreachable(_) => {
                     eprintln!(
@@ -741,14 +732,14 @@ pub async fn ensure_server_running(base_url: &str) -> Result<(), String> {
 
     eprintln!("Browser4 server not running. Starting...");
 
-    let launch_spec = resolve_server_launch_spec(port).await?;
+    let launch_spec = resolve_server_launch_spec(port)?;
     eprintln!("{}", launch_spec.description);
 
-    start_server(&launch_spec, base_url, port).await
+    start_server(&launch_spec, base_url, port)
 }
 
 fn extract_port(base_url: &str) -> u16 {
-    if let Ok(url) = reqwest::Url::parse(base_url) {
+    if let Ok(url) = url::Url::parse(base_url) {
         url.port().unwrap_or(8182)
     } else {
         8182
@@ -756,7 +747,7 @@ fn extract_port(base_url: &str) -> u16 {
 }
 
 fn is_local_port_open(base_url: &str) -> bool {
-    let Ok(url) = reqwest::Url::parse(base_url) else {
+    let Ok(url) = url::Url::parse(base_url) else {
         return false;
     };
 
@@ -1118,7 +1109,7 @@ fn should_force_remote_bundle() -> bool {
 }
 
 fn parse_release_tag_from_url(url: &str) -> Option<String> {
-    let parsed = reqwest::Url::parse(url).ok()?;
+    let parsed = url::Url::parse(url).ok()?;
     let segments = parsed.path_segments()?.collect::<Vec<_>>();
     let download_index = segments.iter().position(|segment| *segment == "download")?;
     segments
@@ -1126,14 +1117,14 @@ fn parse_release_tag_from_url(url: &str) -> Option<String> {
         .map(|segment| (*segment).to_string())
 }
 
-/// Build a `reqwest::Proxy` from the given URL string.
+/// Build a `ureq::Proxy` from the given URL string.
 /// The URL must include a scheme (http://, https://, or socks5://).
-fn proxy_from_url(raw: &str) -> Option<reqwest::Proxy> {
+fn proxy_from_url(raw: &str) -> Option<ureq::Proxy> {
     let trimmed = raw.trim().to_string();
     if trimmed.is_empty() {
         return None;
     }
-    match reqwest::Proxy::all(&trimmed) {
+    match ureq::Proxy::new(&trimmed) {
         Ok(proxy) => Some(proxy),
         Err(error) => {
             eprintln!("Warning: failed to configure download proxy from ({trimmed}): {error}");
@@ -1142,7 +1133,7 @@ fn proxy_from_url(raw: &str) -> Option<reqwest::Proxy> {
     }
 }
 
-/// Resolve a download proxy for the reqwest HTTP client.
+/// Resolve a download proxy for the ureq HTTP client.
 ///
 /// # Search order (first match wins)
 /// 1. `BROWSER4_CLI_PROXY` env var — set by `--proxy=<url>` on the CLI,
@@ -1154,7 +1145,7 @@ fn proxy_from_url(raw: &str) -> Option<reqwest::Proxy> {
 ///
 /// Returns `None` when no proxy is configured, so the download uses a
 /// direct connection.
-fn resolve_download_proxy() -> Option<reqwest::Proxy> {
+fn resolve_download_proxy() -> Option<ureq::Proxy> {
     // 1 — Explicit CLI override (--proxy flag).
     let cli_proxy = std::env::var("BROWSER4_CLI_PROXY")
         .ok()
@@ -1201,7 +1192,7 @@ fn resolve_download_proxy() -> Option<reqwest::Proxy> {
 /// Returns the proxy URL with a scheme added when necessary
 /// (the registry stores `host:port` without a scheme by default).
 #[cfg(windows)]
-fn resolve_windows_system_proxy() -> Option<reqwest::Proxy> {
+fn resolve_windows_system_proxy() -> Option<ureq::Proxy> {
     // 2a — WinHTTP proxy (netsh).
     if let Some(url) = read_winhttp_proxy() {
         return proxy_from_url(&url);
@@ -1321,12 +1312,8 @@ fn create_runtime_install_temp_dir() -> Result<PathBuf, String> {
     Ok(path)
 }
 
-async fn download_file(url: &str, target_path: &Path) -> Result<DownloadedFile, String> {
-    let url = url.to_string();
-    let target_path = target_path.to_path_buf();
-    tokio::task::spawn_blocking(move || download_file_blocking(&url, &target_path))
-        .await
-        .map_err(|e| format!("Download task join failed: {e}"))?
+fn download_file(url: &str, target_path: &Path) -> Result<DownloadedFile, String> {
+    download_file_blocking(url, target_path)
 }
 
 fn download_file_blocking(url: &str, target_path: &Path) -> Result<DownloadedFile, String> {
@@ -1334,25 +1321,25 @@ fn download_file_blocking(url: &str, target_path: &Path) -> Result<DownloadedFil
         fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
 
-    let mut client_builder =
-        reqwest::blocking::Client::builder().timeout(Duration::from_secs(1800));
+    let mut config_builder = Agent::config_builder().timeout_global(Some(Duration::from_secs(1800)));
 
     // Honour proxy environment variables and system proxy settings.
     // Reqwest processes NO_PROXY / no_proxy automatically when a proxy
     // is configured via the env-var form.
     if let Some(proxy) = resolve_download_proxy() {
-        client_builder = client_builder.proxy(proxy);
+        config_builder = config_builder.proxy(Some(proxy));
     }
 
-    let client = client_builder.build().map_err(|e| e.to_string())?;
+    let client = Agent::new_with_config(config_builder.build());
 
-    let response = client.get(url).send();
+    let response = client.get(url).call();
     match response {
-        Ok(mut response) => {
-            if !response.status().is_success() {
-                let status = response.status();
-                let mut msg = format!("Download failed with status: {status}\n  URL: {url}");
-                if status == reqwest::StatusCode::NOT_FOUND {
+        Ok(response) => {
+            let status = response.status();
+            if !status.is_success() {
+                let status_code = status.as_u16();
+                let mut msg = format!("Download failed with status: {status_code}\n  URL: {url}");
+                if status_code == 404 {
                     msg.push_str("\n\n  The runtime bundle asset was not found on the release.");
                     msg.push_str("\n  This may happen when the release does not include pre-built runtime bundles.");
                     msg.push_str("\n  Try one of the following:");
@@ -1363,18 +1350,19 @@ fn download_file_blocking(url: &str, target_path: &Path) -> Result<DownloadedFil
                 return Err(msg);
             }
 
-            let final_url = response.url().to_string();
-            let mut file = fs::File::create(target_path).map_err(|e| e.to_string())?;
+            let final_url = url.to_string();
+            let mut body = response.into_body();
+            let total_size = body.content_length();
 
-            // Copy with progress reporting every 30 s so long-running downloads
-            // don't appear hung.
-            let total_size = response.content_length();
+            // Use into_reader for streaming download with progress.
+            let mut reader = body.into_reader();
+            let mut file = fs::File::create(target_path).map_err(|e| e.to_string())?;
             let mut downloaded: u64 = 0;
             let mut last_report = std::time::Instant::now();
             let report_interval = std::time::Duration::from_secs(30);
             let mut buf = [0u8; 8192];
             loop {
-                let n = response.read(&mut buf).map_err(|e| e.to_string())?;
+                let n = reader.read(&mut buf).map_err(|e| e.to_string())?;
                 if n == 0 {
                     break;
                 }
@@ -1397,30 +1385,29 @@ fn download_file_blocking(url: &str, target_path: &Path) -> Result<DownloadedFil
                     last_report = std::time::Instant::now();
                 }
             }
-            let bytes_written = downloaded;
             file.flush().map_err(|e| e.to_string())?;
 
             Ok(DownloadedFile {
                 final_url,
-                bytes_written,
+                bytes_written: downloaded,
             })
         }
-        Err(reqwest_error) => {
+        Err(download_error) => {
             // On Windows, fall back to PowerShell's Invoke-WebRequest which
             // uses the system WinINET proxy stack natively — no manual
             // proxy configuration needed.
             #[cfg(windows)]
             {
                 eprintln!(
-                    "Download via reqwest failed ({}); falling back to PowerShell.",
-                    reqwest_error
+                    "Download via HTTP failed ({}); falling back to PowerShell.",
+                    download_error
                 );
                 return download_file_via_powershell(url, target_path);
             }
 
             #[cfg(not(windows))]
             {
-                Err(format!("Download failed: {reqwest_error}"))
+                Err(format!("Download failed: {download_error}"))
             }
         }
     }
@@ -1969,7 +1956,7 @@ fn evict_old_download_cache_entries() {
     }
 }
 
-pub async fn install_browser4_runtime(
+pub fn install_browser4_runtime(
     tag: Option<&str>,
     force: bool,
 ) -> Result<InstalledBrowser4Runtime, String> {
@@ -2019,7 +2006,7 @@ pub async fn install_browser4_runtime(
         }
     };
 
-    let install_result = async {
+    let install_result = {
         if cache_hit {
             // Already staged in archive_path — skip download.
             eprintln!(
@@ -2054,7 +2041,7 @@ pub async fn install_browser4_runtime(
             let (selected_mirror, was_speed_tested) = if is_single_mirror_override {
                 (&mirrors[0], false)
             } else {
-                select_best_mirror(&mirrors).await
+                select_best_mirror(&mirrors)
             };
             let download_url = mirror_download_url(selected_mirror, tag, &asset_name);
 
@@ -2070,7 +2057,7 @@ pub async fn install_browser4_runtime(
                 "Downloading Browser4 runtime bundle from {}...",
                 download_url
             );
-            let download_result = download_file(&download_url, &archive_path).await;
+            let download_result = download_file(&download_url, &archive_path);
 
             let downloaded = match download_result {
                 Ok(d) => d,
@@ -2084,14 +2071,14 @@ pub async fn install_browser4_runtime(
                     eprintln!("Invalidating mirror preference and re-testing mirrors...");
                     delete_mirror_preference_cache();
 
-                    let (retry_mirror, _) = select_best_mirror(&mirrors).await;
+                    let (retry_mirror, _) = select_best_mirror(&mirrors);
                     let retry_url = mirror_download_url(retry_mirror, tag, &asset_name);
                     eprintln!(
                         "Retrying download from '{}'...",
                         retry_mirror.name
                     );
 
-                    download_file(&retry_url, &archive_path).await.map_err(|retry_err| {
+                    download_file(&retry_url, &archive_path).map_err(|retry_err| {
                         if requested_tag.is_none() {
                             format!(
                                 "Failed to download from any mirror after retry: {retry_err}\n\
@@ -2144,7 +2131,7 @@ pub async fn install_browser4_runtime(
             commit_installed_browser4_runtime(&extracted_root, metadata)
         }
     }
-    .await;
+    ;
 
     // Best-effort eviction of old cached versions to prevent unbounded
     // disk growth on CI machines and long-lived developer workstations.
@@ -2449,8 +2436,8 @@ fn install_chrome_rhel() -> Result<(), String> {
     }
 }
 
-async fn resolve_server_launch_spec(port: u16) -> Result<ServerLaunchSpec, String> {
-    let runtime = find_or_install_runtime().await?;
+fn resolve_server_launch_spec(port: u16) -> Result<ServerLaunchSpec, String> {
+    let runtime = find_or_install_runtime()?;
     Ok(build_jar_launch_spec(&runtime, port))
 }
 
@@ -2647,7 +2634,7 @@ fn maven_jar_exists(bundle_module_dir: &Path) -> bool {
 /// 1. Maven `package` is skipped when `target/Browser4Bundle.jar` is valid.
 /// 2. The platform build script is skipped when the runtime bundle already
 ///    contains `lib/*.jar` and `runtime/bin/java`.
-async fn try_build_local_runtime_bundle(
+fn try_build_local_runtime_bundle(
     root: &Path,
 ) -> Result<Option<InstalledBrowser4Runtime>, String> {
     let bundle_module_dir = root.join("browser4-apps").join("browser4-bundle");
@@ -2703,44 +2690,28 @@ async fn try_build_local_runtime_bundle(
             bundle_module_dir.display()
         );
         let mvn_program = resolve_maven_program(root);
-        let mvn_status = tokio::task::spawn_blocking({
-            let mvn_program = mvn_program.clone();
-            let root = root.to_path_buf();
-            move || {
-                std::process::Command::new(&mvn_program)
-                    .args([
-                        "install",
-                        "-Pall-main-modules,asset-bundle",
-                        "-DskipTests",
-                        "-q",
-                    ])
-                    .current_dir(&root)
-                    .stdin(std::process::Stdio::null())
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::piped())
-                    .status()
-            }
-        })
-        .await
-        .map_err(|e| format!("Maven package task panicked: {e}"))?;
+        let mvn_status = std::process::Command::new(&mvn_program)
+            .args([
+                "install",
+                "-Pall-main-modules,asset-bundle",
+                "-DskipTests",
+                "-q",
+            ])
+            .current_dir(root)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .status()
+            .map_err(|e| format!("Maven package command failed: {e}"))?;
 
-        match mvn_status {
-            Ok(status) if status.success() => {}
-            Ok(status) => {
-                eprintln!(
-                    "Maven package for browser4-bundle exited with {}; falling back to download.",
-                    status
-                        .code()
-                        .map_or_else(|| "signal".to_string(), |c| c.to_string())
-                );
-                return Ok(None);
-            }
-            Err(error) => {
-                eprintln!(
-                    "Failed to run Maven for browser4-bundle ({error}); falling back to download."
-                );
-                return Ok(None);
-            }
+        if !mvn_status.success() {
+            eprintln!(
+                "Maven package for browser4-bundle exited with {}; falling back to download.",
+                mvn_status
+                    .code()
+                    .map_or_else(|| "signal".to_string(), |c| c.to_string())
+            );
+            return Ok(None);
         }
     }
 
@@ -2750,10 +2721,10 @@ async fn try_build_local_runtime_bundle(
         bundle_module_dir.display()
     );
     let build_result = if cfg!(windows) {
-        run_bundle_build_script("powershell.exe", &build_script, &bundle_module_dir).await
+        run_bundle_build_script("powershell.exe", &build_script, &bundle_module_dir)
     } else {
         // PowerShell Core may be installed as `pwsh` on Linux / macOS.
-        run_bundle_build_script("pwsh", &build_script, &bundle_module_dir).await
+        run_bundle_build_script("pwsh", &build_script, &bundle_module_dir)
     };
 
     match build_result {
@@ -2801,7 +2772,7 @@ fn resolve_maven_program(root: &Path) -> PathBuf {
 /// before the script runs.  Without this, PowerShell writes stderr in the
 /// system's OEM code page (e.g. GBK on Chinese Windows) and Rust's
 /// `String::from_utf8_lossy` produces garbled diagnostics.
-async fn run_bundle_build_script(
+fn run_bundle_build_script(
     shell: &str,
     script: &Path,
     working_dir: &Path,
@@ -2821,56 +2792,49 @@ async fn run_bundle_build_script(
         script_path_escaped
     );
 
-    let output = tokio::task::spawn_blocking(move || {
-        std::process::Command::new(&shell_owned)
-            .args([
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                &command,
-            ])
-            .current_dir(&working_dir)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .output()
-    })
-    .await
-    .map_err(|e| format!("build script task panicked: {e}"))?;
+    let output = std::process::Command::new(&shell_owned)
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &command,
+        ])
+        .current_dir(&working_dir)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .map_err(|e| format!("build script failed: {e}"))?;
 
-    match output {
-        Ok(output) if output.status.success() => Ok(()),
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let mut message = format!(
-                "build script exited with {}",
-                output
-                    .status
-                    .code()
-                    .map_or_else(|| "signal".to_string(), |c| c.to_string()),
-            );
-            if !stdout.trim().is_empty() {
-                message.push_str("\n--- stdout ---\n");
-                message.push_str(stdout.trim());
-            }
-            if !stderr.trim().is_empty() {
-                message.push_str("\n--- stderr ---\n");
-                message.push_str(stderr.trim());
-            }
-            if stdout.trim().is_empty() && stderr.trim().is_empty() {
-                message.push_str(" (no output)");
-            }
-            Err(message)
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let mut message = format!(
+            "build script ({0}) exited with {1}",
+            shell_for_error,
+            output
+                .status
+                .code()
+                .map_or_else(|| "signal".to_string(), |c| c.to_string()),
+        );
+        if !stdout.trim().is_empty() {
+            message.push_str("\n--- stdout ---\n");
+            message.push_str(stdout.trim());
         }
-        Err(error) => Err(format!(
-            "failed to spawn build script ({shell_for_error}): {error}"
-        )),
+        if !stderr.trim().is_empty() {
+            message.push_str("\n--- stderr ---\n");
+            message.push_str(stderr.trim());
+        }
+        if stdout.trim().is_empty() && stderr.trim().is_empty() {
+            message.push_str(" (no output)");
+        }
+        return Err(message);
     }
+    Ok(())
 }
 
-async fn find_or_install_runtime() -> Result<InstalledBrowser4Runtime, String> {
+fn find_or_install_runtime() -> Result<InstalledBrowser4Runtime, String> {
     // Check for an already-installed runtime (from prior `install` command)
     if install_dir_contains_runtime(&browser4_install_dir()) {
         if let Some(metadata) = read_installed_browser4_runtime_metadata() {
@@ -2892,7 +2856,7 @@ async fn find_or_install_runtime() -> Result<InstalledBrowser4Runtime, String> {
         // Check for a local project build (or auto-build it).
         let project_root = find_browser4_root();
         if let Some(root) = &project_root {
-            match try_build_local_runtime_bundle(root).await {
+            match try_build_local_runtime_bundle(root) {
                 Ok(Some(runtime)) => return Ok(runtime),
                 Ok(None) => {
                     eprintln!("Local Browser4 bundle is not available; falling back to download.");
@@ -2907,10 +2871,10 @@ async fn find_or_install_runtime() -> Result<InstalledBrowser4Runtime, String> {
     }
 
     // Download and install the runtime bundle
-    install_browser4_runtime(None, false).await
+    install_browser4_runtime(None, false)
 }
 
-async fn start_server(
+fn start_server(
     launch_spec: &ServerLaunchSpec,
     base_url: &str,
     port: u16,
@@ -2963,10 +2927,12 @@ async fn start_server(
         format!("Spawned launcher process with pid {}", child.id()),
     );
 
-    let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = {
+        let config = Agent::config_builder()
+            .timeout_global(Some(std::time::Duration::from_secs(5)))
+            .build();
+        Agent::new_with_config(config)
+    };
 
     let ready_timeout = launch_ready_timeout(launch_spec);
     append_startup_log_message(
@@ -2983,7 +2949,7 @@ async fn start_server(
         ready_timeout,
         Some(startup_log.path.as_path()),
     )
-    .await
+    
     {
         let (preserve_cleanup_dir, exit_context, cleanup_context) =
             readiness_failure_context(child.try_wait(), cleanup_dir.as_deref());
@@ -3291,16 +3257,16 @@ enum ServerState {
     Unreachable(String),
 }
 
-async fn probe_server_state(client: &Client, base_url: &str) -> ServerState {
+fn probe_server_state(client: &Agent, base_url: &str) -> ServerState {
     let trimmed = base_url.trim_end_matches('/');
     let health_url = format!("{trimmed}/actuator/health");
     let tools_url = format!("{trimmed}/mcp/tools");
 
-    let health_response = match client.get(&health_url).send().await {
+    let health_response = match client.get(&health_url).call() {
         Ok(response) => response,
         Err(error) => return ServerState::Unreachable(error.to_string()),
     };
-    let health_body = match health_response.text().await {
+    let health_body = match read_body(health_response.into_body()) {
         Ok(body) => body,
         Err(error) => return ServerState::Starting(error.to_string()),
     };
@@ -3308,11 +3274,11 @@ async fn probe_server_state(client: &Client, base_url: &str) -> ServerState {
         return ServerState::Starting(health_body);
     }
 
-    let tools_response = match client.get(&tools_url).send().await {
+    let tools_response = match client.get(&tools_url).call() {
         Ok(response) => response,
         Err(error) => return ServerState::Starting(error.to_string()),
     };
-    let tools_body = match tools_response.text().await {
+    let tools_body = match read_body(tools_response.into_body()) {
         Ok(body) => body,
         Err(error) => return ServerState::Starting(error.to_string()),
     };
@@ -3323,8 +3289,8 @@ async fn probe_server_state(client: &Client, base_url: &str) -> ServerState {
     }
 }
 
-async fn wait_for_server_ready(
-    client: &Client,
+fn wait_for_server_ready(
+    agent: &Agent,
     base_url: &str,
     timeout: Duration,
     startup_log_path: Option<&Path>,
@@ -3335,7 +3301,7 @@ async fn wait_for_server_ready(
     let initial_quiet_wait = initial_server_ready_quiet_wait(timeout);
 
     if !initial_quiet_wait.is_zero() {
-        tokio::time::sleep(initial_quiet_wait).await;
+        std::thread::sleep(initial_quiet_wait);
         if start.elapsed() >= timeout {
             last_error = format!(
                 "readiness checks were deferred during the initial {}s startup grace period",
@@ -3345,7 +3311,7 @@ async fn wait_for_server_ready(
     }
 
     while start.elapsed() <= timeout {
-        let progress_status = match probe_server_state(client, base_url).await {
+        let progress_status = match probe_server_state(agent, base_url) {
             ServerState::Ready => return Ok(()),
             ServerState::Starting(error) => {
                 last_error = error;
@@ -3368,7 +3334,7 @@ async fn wait_for_server_ready(
             last_progress_log_at = Instant::now();
         }
 
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        std::thread::sleep(Duration::from_secs(1));
     }
 
     Err(format_server_startup_failure_message(
