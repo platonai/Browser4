@@ -159,6 +159,19 @@
         </profile>
 
         <profile>
+            <id>cli-modules</id>
+            <activation>
+                <property>
+                    <name>cliModules</name>
+                    <value>true</value>
+                </property>
+            </activation>
+            <modules>
+                <module>cli/browser4-cli-kotlin</module>
+            </modules>
+        </profile>
+
+        <profile>
             <id>tests-core</id>
             <activation>
                 <property>
