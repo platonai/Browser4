@@ -218,6 +218,81 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
     }
 
     @Test
+    @DisplayName("multiple back and forward navigations survive retry race conditions (Phase C scenario)")
+    fun testMultipleBackAndForwardNavigation() {
+        val sessionId = openAndNavigate(fixtureServer.interactiveUrl())
+        waitForEvalText(
+            sessionId,
+            "window.location.pathname",
+            "/interactive",
+            "Expected to be on the interactive fixture"
+        )
+
+        // Navigate to second page
+        navigate(sessionId, fixtureServer.otherUrl())
+        waitForEvalText(
+            sessionId,
+            "document.title",
+            FixtureServer.OTHER_TITLE,
+            "Expected the other fixture title after navigate"
+        )
+
+        // Navigate to third page (form)
+        navigate(sessionId, fixtureServer.formUrl())
+        waitForEvalText(
+            sessionId,
+            "window.location.pathname",
+            "/form",
+            "Expected to be on the form fixture"
+        )
+
+        // First go-back: form → other
+        assertNotError(callTool("browser_navigate_back", mapOf("sessionId" to sessionId)))
+        waitForEvalText(
+            sessionId,
+            "document.title",
+            FixtureServer.OTHER_TITLE,
+            "Expected go-back #1 to return to the other fixture"
+        )
+
+        // Second go-back: other → interactive
+        assertNotError(callTool("browser_navigate_back", mapOf("sessionId" to sessionId)))
+        waitForEvalText(
+            sessionId,
+            "window.location.pathname",
+            "/interactive",
+            "Expected go-back #2 to return to the interactive fixture"
+        )
+
+        // go-forward: interactive → other (the step that fails in stress-session.ps1 Phase C)
+        assertNotError(callTool("browser_navigate_forward", mapOf("sessionId" to sessionId)))
+        waitForEvalText(
+            sessionId,
+            "document.title",
+            FixtureServer.OTHER_TITLE,
+            "Expected go-forward to return to the other fixture after two go-backs"
+        )
+
+        // go-forward again: other → form
+        assertNotError(callTool("browser_navigate_forward", mapOf("sessionId" to sessionId)))
+        waitForEvalText(
+            sessionId,
+            "window.location.pathname",
+            "/form",
+            "Expected go-forward #2 to return to the form fixture"
+        )
+
+        // reload on the form page
+        assertNotError(callTool("browser_reload", mapOf("sessionId" to sessionId)))
+        waitForEvalText(
+            sessionId,
+            "window.location.pathname",
+            "/form",
+            "Expected reload to keep the form fixture loaded"
+        )
+    }
+
+    @Test
     @DisplayName("storage state tools save and restore cookies plus localStorage")
     fun testStorageStateTools() {
         val sessionId = openAndNavigate(fixtureServer.interactiveUrl())
