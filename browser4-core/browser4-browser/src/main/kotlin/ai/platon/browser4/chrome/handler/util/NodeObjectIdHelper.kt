@@ -84,7 +84,7 @@ suspend inline fun <T> withNodeObjectId(
     node: NodeRef,
     block: suspend (String) -> T,
 ): T? {
-    val devTools = (bp as DirectChromeProtocol).remoteDevToolsOrNull ?: return null
+    val devTools = (bp as DirectChromeProtocol).remoteDevToolsOrNull
     return withNodeObjectId(devTools, node, block)
 }
 
