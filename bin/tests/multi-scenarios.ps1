@@ -365,25 +365,25 @@ for ($iteration = 1; $iteration -le $Iterations; $iteration++) {
         } else {
             'powershell.exe'
         }
-        # Launch via .NET Process class: stdin pipe is closed immediately so
-        # child reads return EOF.  stdout/stderr are captured for the log file.
+        # Use Start-Process with file redirection instead of .NET Process
+        # with redirected pipes.  On Windows, ReadToEndAsync().Result blocks
+        # when a grandchild process (Java server spawned by the scenario)
+        # inherits the write end of the anonymous pipe via CreateProcess.
+        # File redirection avoids this entirely: temp-file reads never block,
+        # and WaitForExit is alertable (Ctrl+C works).
         $logName = "iter{0:D3}_{1}" -f $iteration, [IO.Path]::GetFileNameWithoutExtension($scenario)
         $logFile = Join-Path $LogDir "$logName.log"
-        $psi = [Diagnostics.ProcessStartInfo]@{
-            FileName               = $pwshPath
-            Arguments              = "-NoProfile -NonInteractive -File `"$scenarioPath`""
-            UseShellExecute        = $false
-            CreateNoWindow         = $true
-            RedirectStandardInput  = $true
-            RedirectStandardOutput = $true
-            RedirectStandardError  = $true
-        }
-        $proc = [Diagnostics.Process]::Start($psi)
-        $proc.StandardInput.Close()
+        $tmpOut = Join-Path $env:TEMP "b4_multi_stdout_${pid}_$(Get-Random).txt"
+        $tmpErr = Join-Path $env:TEMP "b4_multi_stderr_${pid}_$(Get-Random).txt"
+        Remove-Item $tmpOut, $tmpErr -Force -ErrorAction SilentlyContinue
 
-        # Read streams asynchronously while the process runs.
-        $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
-        $stderrTask = $proc.StandardError.ReadToEndAsync()
+        $proc = Start-Process `
+            -FilePath $pwshPath `
+            -ArgumentList "-NoProfile -NonInteractive -File `"$scenarioPath`"" `
+            -NoNewWindow `
+            -PassThru `
+            -RedirectStandardOutput $tmpOut `
+            -RedirectStandardError $tmpErr
 
         # Wait with timeout, printing progress periodically.
         $pollIntervalMs = 10000   # log "still waiting" every 10 s
@@ -403,8 +403,9 @@ for ($iteration = 1; $iteration -le $Iterations; $iteration++) {
             $proc.Kill($true)
             $proc.WaitForExit(5000) | Out-Null
             $sw.Stop()
-            try { $stdout = $stdoutTask.Result } catch { $stdout = '<timeout — no output captured>' }
-            try { $stderr = $stderrTask.Result } catch { $stderr = '' }
+            $stdout = if (Test-Path $tmpOut) { Get-Content -Path $tmpOut -Raw -ErrorAction SilentlyContinue } else { '<timeout — no output captured>' }
+            $stderr = if (Test-Path $tmpErr) { Get-Content -Path $tmpErr -Raw -ErrorAction SilentlyContinue } else { '' }
+            Remove-Item $tmpOut, $tmpErr -Force -ErrorAction SilentlyContinue
             $serverLog = Get-ServerLogTail -BundleHome $RuntimeBundleHome -TailLines $ServerLogTailLines
             @"
 === Scenario : $scenario
@@ -429,8 +430,9 @@ $serverLog
             continue
         }
         $sw.Stop()
-        $stdout = $stdoutTask.Result
-        $stderr = $stderrTask.Result
+        $stdout = if (Test-Path $tmpOut) { Get-Content -Path $tmpOut -Raw -ErrorAction SilentlyContinue } else { '' }
+        $stderr = if (Test-Path $tmpErr) { Get-Content -Path $tmpErr -Raw -ErrorAction SilentlyContinue } else { '' }
+        Remove-Item $tmpOut, $tmpErr -Force -ErrorAction SilentlyContinue
 
         # Echo captured output to console (non-real-time, but captured in full).
         if ($stdout) { Write-Host $stdout }

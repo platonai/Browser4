@@ -49,7 +49,7 @@ Write-TestHeader -Name 'stress-session'
 
 # -------------------------------------------------------------------
 # CLI helper — invokes browser4-cli with real-time output streaming
-# and a watchdog timeout that prevents indefinite hangs.
+# and a per-command timeout that prevents indefinite hangs.
 # -------------------------------------------------------------------
 
 # Resolve the CLI binary once (honours $env:BROWSER4_CLI_BIN).
@@ -58,18 +58,6 @@ $script:__SessionCliBin = if ($env:BROWSER4_CLI_BIN) {
 } else {
     $cmds = @(Get-Command 'browser4-cli' -CommandType Application -ErrorAction SilentlyContinue)
     if ($cmds.Count -gt 0) { $cmds[0].Source } else { 'browser4-cli' }
-}
-
-# Producer scriptblock — streams stdout+stderr line-by-line and
-# captures $LASTEXITCODE before the pipeline ends (PS 5.1 clears it
-# after piping to ForEach-Object).
-#
-# IMPORTANT: do NOT capture output with $raw = & ... — that buffers
-# *all* lines until the CLI exits, making long-running commands like
-# `open` appear hung because no progress is displayed.
-$script:__SessionCliProducer = {
-    & $script:__SessionCliBin @args 2>&1
-    $global:__SessionCliExitCode = $LASTEXITCODE
 }
 
 function Invoke-Cli {
@@ -84,45 +72,159 @@ function Invoke-Cli {
                    elseif ($cmdName -in @('install', 'upgrade')) { 900 }
                    else { 120 }
 
-    # Watchdog job: kills the CLI process if it exceeds the timeout.
-    $watchdogJob = Start-Job -ScriptBlock {
-        param($TimeoutSecs)
-        Start-Sleep -Seconds $TimeoutSecs
-        Get-Process -Name 'browser4-cli' -ErrorAction SilentlyContinue |
-            Where-Object { $_.StartTime -gt (Get-Date).AddSeconds(-$TimeoutSecs) } |
-            Stop-Process -Force -ErrorAction SilentlyContinue
-    } -ArgumentList $timeoutSecs
+    # Resolve the actual executable — on Windows the CLI may be a .cmd
+    # shim; we want the native .exe so we can launch it via Start-Process.
+    $cliExe = $script:__SessionCliBin
+    if ($IsWin -and $cliExe -match '\.cmd$') {
+        $cmdContent = Get-Content -LiteralPath $cliExe -TotalCount 3 -ErrorAction SilentlyContinue
+        $found = $cmdContent | ForEach-Object {
+            if ($_ -match '"([^"]+\.exe)"') { $matches[1]; break }
+        }
+        if ($found -and (Test-Path $found)) {
+            $cliExe = $found
+        }
+    }
 
-    # Stream output line-by-line in real time.  Every line is added to
-    # $out (via Add() — O(1) amortized) and echoed to the console.
+    # Use Start-Process with file redirection instead of PowerShell
+    # pipeline (`& cmd | ForEach-Object`).  On Windows the pipeline
+    # approach hangs indefinitely because the Java server child inherits
+    # the stdout pipe handle via CreateProcess.  File redirection avoids
+    # this entirely: our read handles are never shared, WaitForExit is
+    # alertable (Ctrl+C works), and we can still display output in
+    # real-time by tailing the temp files.
     $out = [System.Collections.Generic.List[string]]::new()
-    $global:__SessionCliExitCode = 0
-    & $script:__SessionCliProducer @args | ForEach-Object {
-        $out.Add($_)
-        Write-Host $_
-    }
-    $exitCode = $global:__SessionCliExitCode
-    $sw.Stop()
+    $timeoutOccurred = $false
+    $procExitCode = 0
 
-    # Check watchdog — if it already completed, the process was killed.
-    $timedOut = ($watchdogJob.State -ne 'Running')
-    if (-not $timedOut) {
-        Stop-Job $watchdogJob -ErrorAction SilentlyContinue
-    }
-    Remove-Job $watchdogJob -Force -ErrorAction SilentlyContinue
+    try {
+        $tmpOut = Join-Path $env:TEMP "b4_session_stdout_${pid}_$(Get-Random).txt"
+        $tmpErr = Join-Path $env:TEMP "b4_session_stderr_${pid}_$(Get-Random).txt"
+        Remove-Item $tmpOut, $tmpErr -Force -ErrorAction SilentlyContinue
 
-    if ($timedOut) {
-        Write-Host "       TIMEOUT after ${timeoutSecs}s — killed" -ForegroundColor Red
-        $exitCode = -99
+        $proc = Start-Process `
+            -FilePath $cliExe `
+            -ArgumentList ($args -join ' ') `
+            -NoNewWindow `
+            -PassThru `
+            -RedirectStandardOutput $tmpOut `
+            -RedirectStandardError $tmpErr
+
+        $stdoutLinesRead = 0
+        $stderrLinesRead = 0
+        $pollIntervalMs = 500
+        $timeoutMs = $timeoutSecs * 1000
+
+        # Poll for process exit, displaying new output lines as they
+        # appear in the temp files.  Reading files avoids the anonymous-
+        # pipe inheritance deadlock; WaitForExit with a short timeout
+        # keeps the thread alertable so Ctrl+C is processed promptly.
+        while (-not $proc.HasExited) {
+            # Read new stdout lines from temp file
+            if (Test-Path $tmpOut) {
+                try {
+                    $allOut = Get-Content -Path $tmpOut -ErrorAction SilentlyContinue
+                    $newOut = if ($allOut) {
+                        $allOut | Select-Object -Skip $stdoutLinesRead
+                    } else { @() }
+                    foreach ($line in $newOut) {
+                        if ($line -ne $null) {
+                            $out.Add($line)
+                            Write-Host $line
+                        }
+                    }
+                    $stdoutLinesRead += @($newOut).Count
+                } catch {}
+            }
+            # Read new stderr lines from temp file
+            if (Test-Path $tmpErr) {
+                try {
+                    $allErr = Get-Content -Path $tmpErr -ErrorAction SilentlyContinue
+                    $newErr = if ($allErr) {
+                        $allErr | Select-Object -Skip $stderrLinesRead
+                    } else { @() }
+                    foreach ($line in $newErr) {
+                        if ($line -ne $null) {
+                            $tagged = "[stderr] $line"
+                            $out.Add($tagged)
+                            Write-Host $tagged -ForegroundColor DarkYellow
+                        }
+                    }
+                    $stderrLinesRead += @($newErr).Count
+                } catch {}
+            }
+
+            # Check timeout
+            if ($sw.Elapsed.TotalMilliseconds -gt $timeoutMs) {
+                $timeoutOccurred = $true
+                Write-Host "       TIMEOUT after ${timeoutSecs}s — killing process tree" -ForegroundColor Red
+                try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch {}
+                try {
+                    $children = Get-CimInstance Win32_Process |
+                        Where-Object { $_.ParentProcessId -eq $proc.Id } |
+                        ForEach-Object { $_.ProcessId }
+                    foreach ($cp in $children) {
+                        Stop-Process -Id $cp -Force -ErrorAction SilentlyContinue
+                    }
+                } catch {}
+                if (-not $proc.HasExited) { $proc.Kill() }
+                break
+            }
+
+            $null = $proc.WaitForExit($pollIntervalMs)
+        }
+
+        # Drain any final lines that arrived after the last poll and
+        # before process exit.  File reads never block.
+        try {
+            if (Test-Path $tmpOut) {
+                $allOut = Get-Content -Path $tmpOut -ErrorAction SilentlyContinue
+                $newOut = if ($allOut) {
+                    $allOut | Select-Object -Skip $stdoutLinesRead
+                } else { @() }
+                foreach ($line in $newOut) {
+                    if ($line -ne $null) { $out.Add($line); Write-Host $line }
+                }
+            }
+        } catch {}
+        try {
+            if (Test-Path $tmpErr) {
+                $allErr = Get-Content -Path $tmpErr -ErrorAction SilentlyContinue
+                $newErr = if ($allErr) {
+                    $allErr | Select-Object -Skip $stderrLinesRead
+                } else { @() }
+                foreach ($line in $newErr) {
+                    if ($line -ne $null) {
+                        $tagged = "[stderr] $line"
+                        $out.Add($tagged)
+                        Write-Host $tagged -ForegroundColor DarkYellow
+                    }
+                }
+            }
+        } catch {}
+
+        $procExitCode = $proc.ExitCode
+        if ($timeoutOccurred) { $procExitCode = -99 }
+    } catch {
+        $msg = "CLI invocation failed: $($_.Exception.Message)"
+        Write-Host "       $msg" -ForegroundColor Red
+        $out.Add($msg)
+        $procExitCode = -99
+    } finally {
+        # Clean up temp files regardless of outcome
+        if (Test-Path variable:tmpOut) { Remove-Item $tmpOut -Force -ErrorAction SilentlyContinue }
+        if (Test-Path variable:tmpErr) { Remove-Item $tmpErr -Force -ErrorAction SilentlyContinue }
+        $sw.Stop()
+    }
+
+    $exitCode = $procExitCode
+    if ($timeoutOccurred) {
+        throw "CLI command timed out after ${timeoutSecs}s: $desc"
     }
 
     $label = "cli $desc"
     $null = Register-CliResult -Label $label -ExitCode $exitCode -OutputLines ($out.ToArray()) `
-        -Elapsed $sw.Elapsed -ExpectedExitCode $(if ($timedOut) { -1 } else { 0 })
+        -Elapsed $sw.Elapsed -ExpectedExitCode $(if ($timeoutOccurred) { -1 } else { 0 })
 
-    if ($timedOut) {
-        throw "CLI command timed out after ${timeoutSecs}s: $desc"
-    }
     if ($exitCode -ne 0) {
         throw "CLI command failed (exit=$exitCode): $desc`nOutput:`n$($out -join "`n")"
     }
