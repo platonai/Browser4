@@ -1,4 +1,12 @@
 #!/usr/bin/env pwsh
+
+# ═══════════════════════════════════════════════════════════════════
+# CROSS-PLATFORM: This script must run on Linux, macOS, and Windows.
+# - Use $IsWindows / $IsLinux / $IsMacOS for platform detection.
+# - Use "($IsWindows -or $env:OS -eq 'Windows_NT')" for PS 5.1 compat.
+# - Windows-only env vars ($env:TEMP) need $env:TMPDIR fallback.
+# - Guard "chcp" and other Windows-only commands behind platform checks.
+# ═══════════════════════════════════════════════════════════════════
 <#
 .SYNOPSIS
     Multi-scenario stress-test orchestrator for browser4-cli.
@@ -373,8 +381,9 @@ for ($iteration = 1; $iteration -le $Iterations; $iteration++) {
         # and WaitForExit is alertable (Ctrl+C works).
         $logName = "iter{0:D3}_{1}" -f $iteration, [IO.Path]::GetFileNameWithoutExtension($scenario)
         $logFile = Join-Path $LogDir "$logName.log"
-        $tmpOut = Join-Path $env:TEMP "b4_multi_stdout_${pid}_$(Get-Random).txt"
-        $tmpErr = Join-Path $env:TEMP "b4_multi_stderr_${pid}_$(Get-Random).txt"
+        $tempDir = if ($env:TEMP) { $env:TEMP } elseif ($env:TMPDIR) { $env:TMPDIR } else { [System.IO.Path]::GetTempPath() }
+        $tmpOut = Join-Path $tempDir "b4_multi_stdout_${pid}_$(Get-Random).txt"
+        $tmpErr = Join-Path $tempDir "b4_multi_stderr_${pid}_$(Get-Random).txt"
         Remove-Item $tmpOut, $tmpErr -Force -ErrorAction SilentlyContinue
 
         $proc = Start-Process `

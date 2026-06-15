@@ -1,5 +1,13 @@
 #!/usr/bin/env pwsh
 
+# ═══════════════════════════════════════════════════════════════════
+# CROSS-PLATFORM: This script must run on Linux, macOS, and Windows.
+# - Use $IsWindows / $IsLinux / $IsMacOS for platform detection.
+# - Use "($IsWindows -or $env:OS -eq 'Windows_NT')" for PS 5.1 compat.
+# - Windows-only env vars ($env:TEMP) need $env:TMPDIR fallback.
+# - Guard "chcp" and other Windows-only commands behind platform checks.
+# ═══════════════════════════════════════════════════════════════════
+
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path,
@@ -11,6 +19,12 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+# This script is Windows-only (uses WMI, LOCALAPPDATA, TEMP).
+if (-not ($IsWindows -or $env:OS -eq 'Windows_NT')) {
+    Write-Host "[fix-kotlin-daemon] This script is Windows-only. Exiting."
+    exit 0
+}
 
 function Write-Step {
     param([string]$Message)

@@ -1,4 +1,12 @@
 #!/usr/bin/env pwsh
+
+# ═══════════════════════════════════════════════════════════════════
+# CROSS-PLATFORM: This script must run on Linux, macOS, and Windows.
+# - Use $IsWindows / $IsLinux / $IsMacOS for platform detection.
+# - Use "($IsWindows -or $env:OS -eq 'Windows_NT')" for PS 5.1 compat.
+# - Windows-only env vars ($env:TEMP) need $env:TMPDIR fallback.
+# - Guard "chcp" and other Windows-only commands behind platform checks.
+# ═══════════════════════════════════════════════════════════════════
 <#
 .SYNOPSIS
     Stress-test the Browser4 install, server-start, and shutdown lifecycle.
@@ -52,7 +60,7 @@ $ErrorActionPreference = 'Continue'
 # into CJK gibberish.  `chcp` changes the *console's interpretation* of
 # output bytes; OutputEncoding / InputEncoding alone only affect .NET
 # stream encoding, not how the host renders them.
-if ($IsWin) {
+if ($IsWindows -or $env:OS -eq 'Windows_NT') {
     $null = & chcp 65001
 }
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
@@ -104,7 +112,7 @@ function Invoke-Cli {
     # shim; we want the native .exe so we can launch it via Start-Process
     # (which avoids PowerShell pipeline handle-inheritance hangs).
     $cliExe = $script:__CliBin
-    if ($IsWin -and $cliExe -match '\.cmd$') {
+    if (($IsWindows -or $env:OS -eq 'Windows_NT') -and $cliExe -match '\.cmd$') {
         # Read the .cmd shim to find the real .exe path.  npm-generated
         # .cmd shims have the form: @"<path>\<binary>.exe" %*
         $cmdContent = Get-Content -LiteralPath $cliExe -TotalCount 3 -ErrorAction SilentlyContinue
@@ -128,8 +136,9 @@ function Invoke-Cli {
     $procExitCode = 0
 
     try {
-        $tmpOut = Join-Path $env:TEMP "b4_stress_stdout_${pid}_$(Get-Random).txt"
-        $tmpErr = Join-Path $env:TEMP "b4_stress_stderr_${pid}_$(Get-Random).txt"
+        $tempDir = if ($env:TEMP) { $env:TEMP } elseif ($env:TMPDIR) { $env:TMPDIR } else { [System.IO.Path]::GetTempPath() }
+        $tmpOut = Join-Path $tempDir "b4_stress_stdout_${pid}_$(Get-Random).txt"
+        $tmpErr = Join-Path $tempDir "b4_stress_stderr_${pid}_$(Get-Random).txt"
         Remove-Item $tmpOut, $tmpErr -Force -ErrorAction SilentlyContinue
 
         $proc = Start-Process `

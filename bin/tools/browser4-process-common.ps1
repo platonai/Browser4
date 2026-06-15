@@ -1,5 +1,13 @@
 #!/usr/bin/env pwsh
 
+# ═══════════════════════════════════════════════════════════════════
+# CROSS-PLATFORM: This script must run on Linux, macOS, and Windows.
+# - Use $IsWindows / $IsLinux / $IsMacOS for platform detection.
+# - Use "($IsWindows -or $env:OS -eq 'Windows_NT')" for PS 5.1 compat.
+# - Windows-only env vars ($env:TEMP) need $env:TMPDIR fallback.
+# - Guard "chcp" and other Windows-only commands behind platform checks.
+# ═══════════════════════════════════════════════════════════════════
+
 # Match Browser4 started either from fat-jar or Spring Boot launcher main class.
 $script:Browser4CmdPattern = '(?i)(Browser4\.jar|\bBrowser4LauncherKt\b)'
 $script:Browser4MarkerPidFileName = 'launcher.pid'

@@ -1,4 +1,12 @@
 #!/usr/bin/env pwsh
+
+# ═══════════════════════════════════════════════════════════════════
+# CROSS-PLATFORM: This script must run on Linux, macOS, and Windows.
+# - Use $IsWindows / $IsLinux / $IsMacOS for platform detection.
+# - Use "($IsWindows -or $env:OS -eq 'Windows_NT')" for PS 5.1 compat.
+# - Windows-only env vars ($env:TEMP) need $env:TMPDIR fallback.
+# - Guard "chcp" and other Windows-only commands behind platform checks.
+# ═══════════════════════════════════════════════════════════════════
 <#
 .SYNOPSIS
     Comprehensive session lifecycle stress test.
@@ -41,8 +49,10 @@ $ErrorActionPreference = 'Continue'
 Import-Module "$PSScriptRoot\test-utils.psm1" -Force
 Start-TestSession -Name 'stress-session'
 
-# Switch the console code page to UTF-8 (65001)
-$null = & chcp 65001
+# Switch the console code page to UTF-8 (65001) — Windows only
+if ($IsWindows -or $env:OS -eq 'Windows_NT') {
+    $null = & chcp 65001
+}
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 [Console]::InputEncoding  = [Text.Encoding]::UTF8
 
@@ -87,7 +97,7 @@ function Invoke-Cli {
     # Resolve the actual executable — on Windows the CLI may be a .cmd
     # shim; we want the native .exe so we can launch it via Start-Process.
     $cliExe = $script:__SessionCliBin
-    if ($IsWin -and $cliExe -match '\.cmd$') {
+    if (($IsWindows -or $env:OS -eq 'Windows_NT') -and $cliExe -match '\.cmd$') {
         $cmdContent = Get-Content -LiteralPath $cliExe -TotalCount 3 -ErrorAction SilentlyContinue
         $found = $cmdContent | ForEach-Object {
             if ($_ -match '"([^"]+\.exe)"') { $matches[1]; break }
@@ -109,8 +119,9 @@ function Invoke-Cli {
     $procExitCode = 0
 
     try {
-        $tmpOut = Join-Path $env:TEMP "b4_session_stdout_${pid}_$(Get-Random).txt"
-        $tmpErr = Join-Path $env:TEMP "b4_session_stderr_${pid}_$(Get-Random).txt"
+        $tempDir = if ($env:TEMP) { $env:TEMP } elseif ($env:TMPDIR) { $env:TMPDIR } else { [System.IO.Path]::GetTempPath() }
+        $tmpOut = Join-Path $tempDir "b4_session_stdout_${pid}_$(Get-Random).txt"
+        $tmpErr = Join-Path $tempDir "b4_session_stderr_${pid}_$(Get-Random).txt"
         Remove-Item $tmpOut, $tmpErr -Force -ErrorAction SilentlyContinue
 
         $proc = Start-Process `

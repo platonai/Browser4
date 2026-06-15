@@ -1,6 +1,20 @@
 #!/usr/bin/env pwsh
 
+# ═══════════════════════════════════════════════════════════════════
+# CROSS-PLATFORM: This script must run on Linux, macOS, and Windows.
+# - Use $IsWindows / $IsLinux / $IsMacOS for platform detection.
+# - Use "($IsWindows -or $env:OS -eq 'Windows_NT')" for PS 5.1 compat.
+# - Windows-only env vars ($env:TEMP) need $env:TMPDIR fallback.
+# - Guard "chcp" and other Windows-only commands behind platform checks.
+# ═══════════════════════════════════════════════════════════════════
+
 $ErrorActionPreference = "Stop"
+
+# This script installs Google Chrome on Windows only.
+if (-not ($IsWindows -or $env:OS -eq 'Windows_NT')) {
+    Write-Host "This script is Windows-only (installs Google Chrome). Use your package manager instead."
+    exit 0
+}
 
 $chromeExe = "$Env:ProgramFiles\Google\Chrome\Application\chrome.exe"
 
