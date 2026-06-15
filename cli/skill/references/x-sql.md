@@ -14,6 +14,8 @@ FROM DOM_LOAD_AND_SELECT(url, cssQuery [, offset, limit])
 
 No other SQL syntax is supported — no CTEs (`WITH`), no subqueries in `FROM`, no `EXPLODE`, no joins. The only valid table source is `DOM_LOAD_AND_SELECT`.
 
+X-SQL uses the **H2 database** SQL dialect.
+
 ---
 
 ## Files

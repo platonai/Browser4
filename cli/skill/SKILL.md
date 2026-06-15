@@ -365,6 +365,8 @@ queries are supported. No CTEs (`WITH`), no subqueries, no `EXPLODE`, no joins.
 The only valid table source is `DOM_LOAD_AND_SELECT`. `DOM_LOAD` and `DOM_FETCH`
 can be used as expression arguments but not in the `FROM` clause.
 
+X-SQL uses the **H2 database** SQL dialect.
+
 ```bash
 # Inline X-SQL query:
 browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql "
