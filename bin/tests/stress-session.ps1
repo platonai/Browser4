@@ -49,8 +49,19 @@ $null = & chcp 65001
 Write-TestHeader -Name 'stress-session'
 
 # -------------------------------------------------------------------
+# Soft-failure tracking globals.
+# Test failures are recorded rather than thrown, so the suite continues
+# through all cases and reports a full summary at the end.
+# -------------------------------------------------------------------
+$global:TestPassed       = 0
+$global:TestFailed       = 0
+$global:FailureMessages  = [System.Collections.ArrayList]::new()
+$global:LastCliSucceeded = $true    # set by Invoke-Cli; assertions may skip on $false
+
+# -------------------------------------------------------------------
 # CLI helper — invokes browser4-cli with real-time output streaming
 # and a per-command timeout that prevents indefinite hangs.
+# Failures are recorded (soft) rather than thrown.
 # -------------------------------------------------------------------
 
 # Resolve the CLI binary once (honours $env:BROWSER4_CLI_BIN).
@@ -218,16 +229,33 @@ function Invoke-Cli {
     }
 
     $exitCode = $procExitCode
+    $label = "cli $desc"
+
     if ($timeoutOccurred) {
-        throw "CLI command timed out after ${timeoutSecs}s: $desc"
+        $msg = "CLI command timed out after ${timeoutSecs}s: $desc"
+        Write-Host "       FAIL: $msg" -ForegroundColor Red
+        $null = $global:FailureMessages.Add("       FAIL: $msg")
+        $global:TestFailed++
+        $global:LastCliSucceeded = $false
+        $null = Register-CliResult -Label $label -ExitCode $exitCode -OutputLines ($out.ToArray()) `
+            -Elapsed $sw.Elapsed -ExpectedExitCode -1
+        if ($sw.Elapsed.TotalSeconds -ge 5) {
+            Write-Host "       took $([math]::Round($sw.Elapsed.TotalSeconds, 1))s" -ForegroundColor DarkGray
+        }
+        return $out
     }
 
-    $label = "cli $desc"
     $null = Register-CliResult -Label $label -ExitCode $exitCode -OutputLines ($out.ToArray()) `
         -Elapsed $sw.Elapsed -ExpectedExitCode $(if ($timeoutOccurred) { -1 } else { 0 })
 
     if ($exitCode -ne 0) {
-        throw "CLI command failed (exit=$exitCode): $desc`nOutput:`n$($out -join "`n")"
+        $msg = "CLI command failed (exit=$exitCode): $desc"
+        Write-Host "       FAIL: $msg" -ForegroundColor Red
+        $null = $global:FailureMessages.Add("       FAIL: $msg`nOutput:`n$($out -join "`n")")
+        $global:TestFailed++
+        $global:LastCliSucceeded = $false
+    } else {
+        $global:LastCliSucceeded = $true
     }
     if ($sw.Elapsed.TotalSeconds -ge 5) {
         Write-Host "       took $([math]::Round($sw.Elapsed.TotalSeconds, 1))s" -ForegroundColor DarkGray
@@ -250,19 +278,32 @@ filter session-data-rows {
     }
 }
 
-# Assert that a condition holds; print context on failure.
+# Assert that a condition holds; record failure on mismatch (soft — never throws).
 function assert-ok {
     param(
         [string] $Label,
         [scriptblock] $Condition,
         [string] $Detail = ''
     )
-    if (-not (& $Condition)) {
-        $msg = "FAIL: $Label"
-        if ($Detail) { $msg += "`n      $Detail" }
-        throw $msg
+    try {
+        if (-not (& $Condition)) {
+            $msg = "FAIL: $Label"
+            if ($Detail) { $msg += "`n      $Detail" }
+            Write-Host "    ❌ $Label" -ForegroundColor Red
+            $null = $global:FailureMessages.Add("    $msg")
+            $global:TestFailed++
+            return $false
+        }
+    } catch {
+        $msg = "FAIL: $Label`n      Exception: $($_.Exception.Message)"
+        Write-Host "    ❌ $Label" -ForegroundColor Red
+        $null = $global:FailureMessages.Add("    $msg")
+        $global:TestFailed++
+        return $false
     }
     Write-Host "    ✓ $Label" -ForegroundColor Green
+    $global:TestPassed++
+    return $true
 }
 
 # -------------------------------------------------------------------
@@ -320,24 +361,62 @@ function Get-SessionDataRows {
 
 function Assert-SessionCount {
     param([int]$Expected, [string]$Context)
-    $rows = Get-SessionDataRows
-    $label = "session count == $Expected  ($Context)"
-    if ($rows.Count -ne $Expected) {
-        $all = Invoke-Cli list
-        throw "FAIL: $label`n      found $($rows.Count) row(s):`n$($all -join "`n")"
+    # When the last CLI command failed, dependent list/snapshot checks are
+    # skipped so we don't flood the report with cascading failures.
+    if (-not $global:LastCliSucceeded) {
+        Write-Host "    ⏭ session count check SKIPPED (previous CLI failure)  ($Context)" -ForegroundColor DarkYellow
+        return $false
     }
-    Write-Host "    ✓ $label" -ForegroundColor Green
+    try {
+        $rows = Get-SessionDataRows
+        $label = "session count == $Expected  ($Context)"
+        if ($rows.Count -ne $Expected) {
+            $all = Invoke-Cli list
+            $msg = "FAIL: $label`n      found $($rows.Count) row(s):`n$($all -join "`n")"
+            Write-Host "    ❌ $label" -ForegroundColor Red
+            $null = $global:FailureMessages.Add("    $msg")
+            $global:TestFailed++
+            return $false
+        }
+        Write-Host "    ✓ $label" -ForegroundColor Green
+        $global:TestPassed++
+        return $true
+    } catch {
+        $msg = "FAIL: session count check ($Context)`n      Exception: $($_.Exception.Message)"
+        Write-Host "    ❌ $msg" -ForegroundColor Red
+        $null = $global:FailureMessages.Add("    $msg")
+        $global:TestFailed++
+        return $false
+    }
 }
 
 function Assert-SnapshotContains {
     param([string]$Keyword, [string]$Context)
-    $snap = Invoke-Cli snapshot
-    # Join lines into a single string so -like works as a boolean test.
-    $text = $snap -join ' '
-    if ($text -notlike "*$Keyword*") {
-        throw "FAIL: snapshot contains '$Keyword'  ($Context)`n      snapshot output:`n$($snap -join "`n")"
+    if (-not $global:LastCliSucceeded) {
+        Write-Host "    ⏭ snapshot check SKIPPED (previous CLI failure)  ($Context)" -ForegroundColor DarkYellow
+        return $false
     }
-    Write-Host "    ✓ snapshot contains '$Keyword'  ($Context)" -ForegroundColor Green
+    try {
+        $snap = Invoke-Cli snapshot
+        # Join lines into a single string so -like works as a boolean test.
+        $text = $snap -join ' '
+        if ($text -notlike "*$Keyword*") {
+            $msg = "FAIL: snapshot contains '$Keyword'  ($Context)`n      snapshot output:`n$($snap -join "`n")"
+            Write-Host "    ❌ $msg" -ForegroundColor Red
+            $null = $global:FailureMessages.Add("    $msg")
+            $global:TestFailed++
+            return $false
+        }
+        Write-Host "    ✓ snapshot contains '$Keyword'  ($Context)" -ForegroundColor Green
+        $global:TestPassed++
+        return $true
+    } catch {
+        $msg = "FAIL: snapshot check ($Context)`n      Exception: $($_.Exception.Message)"
+        Write-Host "    ❌ $msg" -ForegroundColor Red
+        $null = $global:FailureMessages.Add("    $msg")
+        $global:TestFailed++
+        return $false
+    }
 }
 
 # -------------------------------------------------------------------
@@ -352,15 +431,14 @@ Write-Host "  Log dir    : $(Get-LogDir)" -ForegroundColor Cyan
 Write-Host ""
 
 Write-Host "── Ensuring clean slate (close any lingering sessions) ──" -ForegroundColor DarkYellow
-try { $null = Invoke-Cli close } catch { Write-Host "       (no session to close, ok)" -ForegroundColor DarkGray }
-try { $null = Invoke-Cli close-all } catch { Write-Host "       (close-all skipped)" -ForegroundColor DarkGray }
+$null = Invoke-Cli close
+$null = Invoke-Cli close-all
 # Let the server finish async session teardown before we create new sessions.
 Start-Sleep -Seconds 3
 
 # -------------------------------------------------------------------
 # Main test loop
 # -------------------------------------------------------------------
-$totalPasses = 0
 $suiteTimer = [Diagnostics.Stopwatch]::StartNew()
 
 for ($iter = 1; $iter -le $Iterations; $iter++) {
@@ -368,7 +446,8 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
     Write-Host "  ITERATION $iter / $Iterations  (seed=$Seed)" -ForegroundColor Cyan
     Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
 
-    $iterPasses = 0
+    $prevPassed = $global:TestPassed
+    $prevFailed = $global:TestFailed
 
     # Shuffle page order each iteration for varied coverage.
     $shuffled = $pages | Sort-Object { $rng.Next() }
@@ -430,7 +509,6 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
     Invoke-Cli close
     Assert-SessionCount -Expected 0 -Context "after close (cleanup A5)"
 
-    $iterPasses += 5
     }
 
     # ──────────────────────────────────────────────────────────────
@@ -454,7 +532,7 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
         Assert-SessionCount -Expected 0 -Context "after close $($p.name)"
     }
 
-    $iterPasses += ($shuffled.Count * 2)
+    ($shuffled.Count * 2)
     }
 
     # ──────────────────────────────────────────────────────────────
@@ -513,7 +591,6 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
     Invoke-Cli close
     Assert-SessionCount -Expected 0 -Context "after close (Phase C)"
 
-    $iterPasses += 8
     }
 
     # ──────────────────────────────────────────────────────────────
@@ -542,7 +619,6 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
     Invoke-Cli close
     Assert-SessionCount -Expected 0 -Context "after close (Phase D)"
 
-    $iterPasses += 3
     }
 
     # ──────────────────────────────────────────────────────────────
@@ -579,17 +655,20 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
     Invoke-RandomInteractions -Count 1
     Assert-SnapshotContains -Keyword $e2Page.keyword -Context "$($e2Page.name) after reload"
     Invoke-Cli close
-
-    $iterPasses += 3
     }
 
     # ──────────────────────────────────────────────────────────────
     # Iteration summary
     # ──────────────────────────────────────────────────────────────
-    Write-Host "`n  ── Iteration $iter summary ──" -ForegroundColor Cyan
-    Write-Host "  Passes: $iterPasses" -ForegroundColor Green
+    $iterPasses  = $global:TestPassed - $prevPassed
+    $iterFailed  = $global:TestFailed - $prevFailed
+    $iterTotal   = $iterPasses + $iterFailed
 
-    $totalPasses += $iterPasses
+    Write-Host "`n  ── Iteration $iter summary ──" -ForegroundColor Cyan
+    Write-Host "  Checks: $iterTotal  Passed: $iterPasses  Failed: $iterFailed" -ForegroundColor $(if ($iterFailed -eq 0) { 'Green' } else { 'Red' })
+
+    # Print per-iteration failure summary
+    Write-PerTestSummary -Label "Iteration $iter" -PhasePasses $iterPasses -PhaseFailures $iterFailed
 }
 
 # -------------------------------------------------------------------
@@ -597,25 +676,40 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
 # -------------------------------------------------------------------
 $suiteTimer.Stop()
 
+$totalPassed  = $global:TestPassed
+$totalFailed  = $global:TestFailed
+$totalChecks  = $totalPassed + $totalFailed
+
 Write-Host "`n============================================================" -ForegroundColor Cyan
 Write-Host "  SESSION STRESS TEST RESULTS" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host "  Seed        : $Seed"
 Write-Host "  Iterations  : $Iterations"
-Write-Host "  Total checks: $totalPasses"
-Write-Host "  Passed      : $totalPasses" -ForegroundColor Green
+Write-Host "  Total checks: $totalChecks"
+Write-Host "  Passed      : $totalPassed" -ForegroundColor $(if ($totalPassed -gt 0) { 'Green' } else { 'DarkGray' })
+if ($totalFailed -gt 0) {
+    Write-Host "  Failed      : $totalFailed" -ForegroundColor Red
+}
 Write-Host ("  Elapsed     : {0:mm\:ss}" -f $suiteTimer.Elapsed)
 Write-Host "  Log dir     : $(Get-LogDir)" -ForegroundColor DarkGray
 Write-Host "============================================================" -ForegroundColor Cyan
 
+# Print all failure messages collected during the run
+if ($totalFailed -gt 0) {
+    Write-Host "`n  ── FAILURE DETAILS ──" -ForegroundColor Red
+    foreach ($f in $global:FailureMessages) {
+        Write-Host $f -ForegroundColor Red
+    }
+}
+
 # Check if any CLI commands failed (tracked by test-utils)
 $cliFailures = Get-FailureCount
-if ($cliFailures -gt 0) {
-    Write-Host "`n⚠ $cliFailures CLI command(s) failed — see logs above" -ForegroundColor Red
-    $code = Finish-TestSession -ExtraCopilotPrompt "Browser4 CLI stress-session test. Iterations: $Iterations. Seed: $Seed. Total checks passed: $totalPasses."
+if ($totalFailed -gt 0 -or $cliFailures -gt 0) {
+    Write-Host "`n⚠ $totalFailed assertion(s) failed, $cliFailures CLI command(s) failed — see logs above" -ForegroundColor Red
+    $code = Finish-TestSession -ExtraCopilotPrompt "Browser4 CLI stress-session test. Iterations: $Iterations. Seed: $Seed. Total checks: $totalChecks."
     exit $(if ($code -eq 0) { 1 } else { $code })
 } else {
-    Write-Host "`n✅ ALL $totalPasses CHECKS PASSED" -ForegroundColor Green
+    Write-Host "`n✅ ALL $totalChecks CHECKS PASSED" -ForegroundColor Green
     $code = Finish-TestSession
     exit $code
 }

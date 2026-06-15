@@ -22,7 +22,7 @@ param(
     [string]$Locale = ''
 )
 
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'
 
 # -------------------------------------------------------------------
 # Load shared test utilities
@@ -67,20 +67,21 @@ $agentRunText = ($output | Out-String).Trim()
 Write-Host "Agent run output: $agentRunText" -ForegroundColor DarkGray
 
 $taskIdMatch = [regex]::Match($agentRunText, 'Task submitted:\s*(\S+)')
-if (-not $taskIdMatch.Success) {
+$taskId = $null
+if ($taskIdMatch.Success) {
+    $taskId = $taskIdMatch.Groups[1].Value
+    Write-Host "Task ID: $taskId" -ForegroundColor Green
+} else {
     Write-Host "❌ Could not parse Task ID from agent run output" -ForegroundColor Red
-    $exitCode = Finish-TestSession -ExtraCopilotPrompt "Could not parse Task ID from agent run output. Output was: $agentRunText"
-    exit $(if ($exitCode -eq 0) { 1 } else { $exitCode })
+    Register-CliResult -Label 'agent run (parse Task ID)' -ExitCode 1 -ExpectedExitCode 0 `
+        -OutputLines @($agentRunText) -Elapsed ([TimeSpan]::Zero)
+    # Fall through — remaining steps will be skipped.
 }
-$taskId = $taskIdMatch.Groups[1].Value
-Write-Host "Task ID: $taskId" -ForegroundColor Green
 Write-Host ''
 
 # -------------------------------------------------------------------
-# 3. Poll for completion
+# 3. Poll for completion (only if we have a task ID)
 # -------------------------------------------------------------------
-Write-Host "━━━ Polling agent status (task: $taskId) ━━━" -ForegroundColor Cyan
-
 $done = $false
 $success = $false
 $lastStatusText = ''
@@ -96,6 +97,8 @@ $MaxPollAttempts = 60
 #   output.raw.statusCode   : int    — 102 (Processing), 200 (OK), etc.
 #   output.raw.commandResult: object — present when done; contains pageSummary & fields
 #   output.raw.instructResults: array — per-instruction results with statusCode
+#
+# Defined at script level so the parser doesn't get confused by nested braces.
 # ---------------------------------------------------------------------------
 function Get-JsonFromOutput {
     param([string]$Text)
@@ -107,6 +110,10 @@ function Get-JsonFromOutput {
         return $null
     }
 }
+
+if ($taskId) {
+
+Write-Host "━━━ Polling agent status (task: $taskId) ━━━" -ForegroundColor Cyan
 
 for ($attempt = 1; $attempt -le $MaxPollAttempts; $attempt++) {
     $statusOutput = Invoke-TrackedCli -Arguments @('--json', 'agent', 'status', $taskId) `
@@ -184,68 +191,78 @@ if (-not $done) {
         -OutputLines @($lastStatusText) -Elapsed ([TimeSpan]::Zero)
 }
 
+} # end if ($taskId)
+
 # -------------------------------------------------------------------
-# 4. Extract and display results from the final status poll
+# 4. Extract and display results from the final status poll (only if we polled)
 # -------------------------------------------------------------------
-$finalStatus = Get-JsonFromOutput $lastStatusText
-if ($finalStatus -and $finalStatus.output.raw) {
-    $raw = $finalStatus.output.raw
+if ($taskId) {
+    $finalStatus = Get-JsonFromOutput $lastStatusText
+    if ($finalStatus -and $finalStatus.output.raw) {
+        $raw = $finalStatus.output.raw
 
-    # Display finish time
-    if ($raw.finishTime) {
-        Write-Host "`nFinished at: $($raw.finishTime)"
-    }
-
-    # Display command results (pageSummary + fields)
-    if ($raw.commandResult) {
-        Write-Host "`n=== COMMAND RESULTS ==="
-        if ($raw.commandResult.pageSummary) {
-            Write-Host "--- Page Summary ---"
-            Write-Host $raw.commandResult.pageSummary
+        # Display finish time
+        if ($raw.finishTime) {
+            Write-Host "`nFinished at: $($raw.finishTime)"
         }
-        if ($raw.commandResult.fields) {
-            Write-Host "--- Extracted Fields ---"
-            $raw.commandResult.fields | ConvertTo-Json -Depth 5
-        }
-    }
 
-    # Display per-instruction results
-    if ($raw.instructResults) {
-        Write-Host "`n=== INSTRUCTION RESULTS ==="
-        foreach ($ir in $raw.instructResults) {
-            $icon = if ($ir.statusCode -eq 200) { '[OK]' } else { '[FAIL]' }
-            Write-Host "${icon} $($ir.name) (statusCode=$($ir.statusCode), resultType=$($ir.resultType))"
+        # Display command results (pageSummary + fields)
+        if ($raw.commandResult) {
+            Write-Host "`n=== COMMAND RESULTS ==="
+            if ($raw.commandResult.pageSummary) {
+                Write-Host "--- Page Summary ---"
+                Write-Host $raw.commandResult.pageSummary
+            }
+            if ($raw.commandResult.fields) {
+                Write-Host "--- Extracted Fields ---"
+                $raw.commandResult.fields | ConvertTo-Json -Depth 5
+            }
         }
-    }
 
-    # Display page metadata
-    Write-Host "`n=== PAGE METADATA ==="
-    Write-Host "pageStatusCode : $($raw.pageStatusCode)"
-    Write-Host "pageContentBytes: $($raw.pageContentBytes)"
-    Write-Host "event          : $($raw.event)"
+        # Display per-instruction results
+        if ($raw.instructResults) {
+            Write-Host "`n=== INSTRUCTION RESULTS ==="
+            foreach ($ir in $raw.instructResults) {
+                $icon = if ($ir.statusCode -eq 200) { '[OK]' } else { '[FAIL]' }
+                Write-Host "${icon} $($ir.name) (statusCode=$($ir.statusCode), resultType=$($ir.resultType))"
+            }
+        }
+
+        # Display page metadata
+        Write-Host "`n=== PAGE METADATA ==="
+        Write-Host "pageStatusCode : $($raw.pageStatusCode)"
+        Write-Host "pageContentBytes: $($raw.pageContentBytes)"
+        Write-Host "event          : $($raw.event)"
+    }
 }
 
 # -------------------------------------------------------------------
-# 5. Retrieve full agent result
+# 5. Retrieve full agent result (only if we have a task ID)
 # -------------------------------------------------------------------
-Write-Host "`n━━━ Retrieving agent result ━━━" -ForegroundColor Cyan
-$resultOutput = Invoke-TrackedCli -Arguments @('agent', 'result', $taskId) `
-    -Label 'agent result' -PassThruOnly
-Write-Host "`n=== RAW AGENT RESULT ==="
-$resultOutput | ForEach-Object { Write-Host $_ }
-Write-Host ''
+if ($taskId) {
+    Write-Host "`n━━━ Retrieving agent result ━━━" -ForegroundColor Cyan
+    $resultOutput = Invoke-TrackedCli -Arguments @('agent', 'result', $taskId) `
+        -Label 'agent result' -PassThruOnly
+    Write-Host "`n=== RAW AGENT RESULT ==="
+    $resultOutput | ForEach-Object { Write-Host $_ }
+    Write-Host ''
+}
 
 # -------------------------------------------------------------------
 # 6. Report
 # -------------------------------------------------------------------
-if ($success) {
+Invoke-TrackedCli -Arguments @('close') -Label 'final close' -PassThruOnly
+
+if ($taskId -and $success) {
     Write-Host "✅ Agent task $taskId completed successfully." -ForegroundColor Green
-    Invoke-TrackedCli -Arguments @('close') -Label 'final close' -PassThruOnly
     $code = Finish-TestSession
     exit $code
-} else {
+} elseif ($taskId) {
     Write-Host "❌ Agent task $taskId failed." -ForegroundColor Red
-    Invoke-TrackedCli -Arguments @('close') -Label 'final close' -PassThruOnly
     $code = Finish-TestSession -ExtraCopilotPrompt "Browser4 CLI agent page-visit-interact task failed. Task ID: $taskId"
+    exit $(if ($code -eq 0) { 1 } else { $code })
+} else {
+    Write-Host "❌ Agent task failed — could not parse Task ID." -ForegroundColor Red
+    $code = Finish-TestSession -ExtraCopilotPrompt "Browser4 CLI agent page-visit-interact task failed. Could not parse Task ID from output: $agentRunText"
     exit $(if ($code -eq 0) { 1 } else { $code })
 }

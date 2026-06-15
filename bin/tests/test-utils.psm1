@@ -503,6 +503,85 @@ function Get-AllLogPaths {
 }
 
 # ============================================================================
+# Public: structured failure report (JSON file)
+# ============================================================================
+<#
+.SYNOPSIS
+    Write all tracked failures to a structured JSON file in the log directory.
+    Called automatically by Finish-TestSession; also callable mid-script to
+    persist failure state incrementally.
+#>
+function Write-FailureReport {
+    [CmdletBinding()]
+    param(
+        [string]$OutputPath = ''
+    )
+
+    if (-not $OutputPath) {
+        $OutputPath = Join-Path $script:LogDir 'failures.json'
+    }
+
+    $report = [PSCustomObject]@{
+        testName    = $script:TestName
+        logDir      = $script:LogDir
+        startedAt   = $script:TestStartTime.ToString('yyyy-MM-dd HH:mm:ss')
+        generatedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+        totalCommands = $script:CommandLogs.Count
+        passed       = (Get-PassCount)
+        failed       = $script:Failures.Count
+        failures     = @($script:Failures | ForEach-Object {
+            [PSCustomObject]@{
+                index    = $_.Index
+                command  = $_.Command
+                exitCode = $_.ExitCode
+                expected = $_.Expected
+                elapsed  = [math]::Round($_.Elapsed, 1)
+                logFile  = $_.LogFile
+            }
+        })
+    }
+
+    try {
+        $report | ConvertTo-Json -Depth 4 | Set-Content -Path $OutputPath -Encoding UTF8
+        Write-Host "  📄 Failure report: $OutputPath" -ForegroundColor DarkGray
+    } catch {
+        Write-Warning "Write-FailureReport: Could not write report: $($_.Exception.Message)"
+    }
+
+    return $OutputPath
+}
+
+# ============================================================================
+# Public: per-test / per-phase summary (mid-script progress)
+# ============================================================================
+<#
+.SYNOPSIS
+    Print a running summary of test progress so far.
+    Call after each test case or phase to give incremental feedback.
+#>
+function Write-PerTestSummary {
+    [CmdletBinding()]
+    param(
+        [string]$Label = '',
+        [int]$PhasePasses = 0,
+        [int]$PhaseFailures = 0
+    )
+
+    $totalPassed = (Get-PassCount)
+    $totalFailed = (Get-FailureCount)
+
+    $header = if ($Label) { "  ── $Label ──" } else { '  ── Summary so far ──' }
+    Write-Host "`n$header" -ForegroundColor DarkGray
+    Write-Host "  Phase:   $PhasePasses passed, $PhaseFailures failed" -ForegroundColor $(if ($PhaseFailures -eq 0) { 'Green' } else { 'Red' })
+    Write-Host "  Running: $totalPassed passed, $totalFailed failed (total)" -ForegroundColor $(if ($totalFailed -eq 0) { 'Green' } else { 'Red' })
+
+    # Write incremental failure report to disk
+    if ($totalFailed -gt 0) {
+        Write-FailureReport
+    }
+}
+
+# ============================================================================
 # Public: AI failure analysis (prefers claude, falls back to copilot)
 # ============================================================================
 <#
@@ -660,6 +739,9 @@ function Finish-TestSession {
             Write-Host "     Log file  : $($f.LogFile)" -ForegroundColor DarkGray
             Write-Host ''
         }
+
+        # Write structured failure report to disk
+        Write-FailureReport
 
         # Copilot analysis
         Invoke-CopilotAnalysis -ExtraPrompt $ExtraCopilotPrompt
@@ -923,6 +1005,8 @@ Export-ModuleMember -Function @(
     'Get-PassCount',
     'Get-FailureLogPaths',
     'Get-AllLogPaths',
+    'Write-FailureReport',
+    'Write-PerTestSummary',
     'Test-CopilotAvailable',
     'Get-AiAnalyzer',
     'Get-CliBin',

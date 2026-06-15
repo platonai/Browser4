@@ -22,7 +22,7 @@ param(
     [string]$Locale = ''
 )
 
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'
 
 # -------------------------------------------------------------------
 # Load shared test utilities
@@ -64,26 +64,28 @@ $outputText = ($output | Out-String).Trim()
 Write-Host $outputText
 
 $taskIdMatch = [regex]::Match($outputText, 'Task ID:\s*(\S+)')
-if (-not $taskIdMatch.Success) {
+$taskId = $null
+if ($taskIdMatch.Success) {
+    $taskId = $taskIdMatch.Groups[1].Value
+    Write-Host "Task ID: $taskId" -ForegroundColor Green
+} else {
     Write-Host "❌ Unable to parse Task ID from swarm submit output" -ForegroundColor Red
     Register-CliResult -Label 'swarm submit (parse Task ID)' -ExitCode 1 -ExpectedExitCode 0 `
         -OutputLines @($outputText) -Elapsed ([TimeSpan]::Zero)
-    Invoke-TrackedCli -Arguments @('close') -Label 'final close' -PassThruOnly
-    $code = Finish-TestSession -ExtraCopilotPrompt "Could not parse Task ID from swarm submit output. Output was: $outputText"
-    exit $(if ($code -eq 0) { 1 } else { $code })
+    # Fall through — remaining steps will be skipped.
 }
-$taskId = $taskIdMatch.Groups[1].Value
-Write-Host "Task ID: $taskId" -ForegroundColor Green
 Write-Host ''
 
 # -------------------------------------------------------------------
-# 4. Poll for completion
+# 4. Poll for completion (only if we have a task ID)
 # -------------------------------------------------------------------
+$done = $false
+$lastStatus = ''
+
+if ($taskId) {
 Write-Host "━━━ Polling swarm status (task: $taskId, timeout: ${TimeoutSeconds}s) ━━━" -ForegroundColor Cyan
 
-$done = $false
 $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-$lastStatus = ''
 
 while ((Get-Date) -lt $deadline) {
     $status = Invoke-TrackedCli -Arguments @('swarm', 'status', $taskId) `
@@ -105,15 +107,18 @@ if (-not $done) {
     Register-CliResult -Label "swarm task $taskId (timeout after ${TimeoutSeconds}s)" -ExitCode 1 -ExpectedExitCode 0 `
         -OutputLines @($lastStatus) -Elapsed ([TimeSpan]::FromSeconds($TimeoutSeconds))
 }
+}
 
 # -------------------------------------------------------------------
-# 5. Retrieve results
+# 5. Retrieve results (only if we have a task ID)
 # -------------------------------------------------------------------
-Write-Host "`n━━━ Retrieving results ━━━" -ForegroundColor Cyan
-$result = Invoke-TrackedCli -Arguments @('swarm', 'result', $taskId) -Label 'swarm result' -PassThruOnly
-$resultText = ($result | Out-String).Trim()
-Write-Host $resultText
-Write-Host ''
+if ($taskId) {
+    Write-Host "`n━━━ Retrieving results ━━━" -ForegroundColor Cyan
+    $result = Invoke-TrackedCli -Arguments @('swarm', 'result', $taskId) -Label 'swarm result' -PassThruOnly
+    $resultText = ($result | Out-String).Trim()
+    Write-Host $resultText
+    Write-Host ''
+}
 
 # -------------------------------------------------------------------
 # 6. Cleanup
@@ -125,10 +130,12 @@ Write-Host ''
 # -------------------------------------------------------------------
 # 7. Report
 # -------------------------------------------------------------------
-if ($done) {
+if ($taskId -and $done) {
     Write-Host "✅ Stress-swarm test completed successfully." -ForegroundColor Green
-} else {
+} elseif ($taskId) {
     Write-Host "⚠ Stress-swarm test completed with timeout." -ForegroundColor Yellow
+} else {
+    Write-Host "❌ Stress-swarm test failed — could not parse Task ID." -ForegroundColor Red
 }
 $code = Finish-TestSession -ExtraCopilotPrompt "Browser4 CLI stress-swarm-agents test. Task ID: $taskId. SeedFile: $SeedFile"
 exit $code

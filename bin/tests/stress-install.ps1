@@ -987,8 +987,12 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
     # ==============================================================
     $iterChecks = ($global:TestPassed + $global:TestFailed) - $prevTotal
     $iterOk     = $global:TestPassed - $prevPassed
+    $iterFailed = $iterChecks - $iterOk
     Write-Host "`n  -- Iteration $iter summary  [$(Get-Date -Format 'HH:mm:ss')] --" -ForegroundColor Cyan
-    Write-Host "  Checks this iter: $iterChecks (passed: $iterOk, failed: $($iterChecks - $iterOk))" -ForegroundColor Cyan
+    Write-Host "  Checks this iter: $iterChecks (passed: $iterOk, failed: $iterFailed)" -ForegroundColor $(if ($iterFailed -eq 0) { 'Green' } else { 'Red' })
+
+    # Write per-iteration failure summary to disk and console
+    Write-PerTestSummary -Label "Iteration $iter" -PhasePasses $iterOk -PhaseFailures $iterFailed
 }
 
 # -------------------------------------------------------------------

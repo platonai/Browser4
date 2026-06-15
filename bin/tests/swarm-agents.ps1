@@ -21,7 +21,7 @@ param(
     [string]$Locale = ''
 )
 
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'
 
 # -------------------------------------------------------------------
 # Load shared test utilities
@@ -63,24 +63,26 @@ if (-not $submittedLine) {
 Write-Host "Submitted swarm task: $submittedLine" -ForegroundColor DarkGray
 
 $taskIdMatch = [regex]::Match($outputText, 'Task ID:\s*(\S+)')
-if (-not $taskIdMatch.Success) {
+$taskId = $null
+if ($taskIdMatch.Success) {
+    $taskId = $taskIdMatch.Groups[1].Value
+    Write-Host "Task ID: $taskId" -ForegroundColor Green
+} else {
     Write-Host "❌ Unable to parse Task ID from swarm submit output" -ForegroundColor Red
     Register-CliResult -Label 'swarm submit (parse Task ID)' -ExitCode 1 -ExpectedExitCode 0 `
         -OutputLines @($outputText) -Elapsed ([TimeSpan]::Zero)
-    $code = Finish-TestSession -ExtraCopilotPrompt "Could not parse Task ID from swarm submit output. Output was: $outputText"
-    exit $(if ($code -eq 0) { 1 } else { $code })
+    # Fall through — remaining steps will be skipped.
 }
-
-$taskId = $taskIdMatch.Groups[1].Value
-Write-Host "Task ID: $taskId" -ForegroundColor Green
 Write-Host ''
 
 # -------------------------------------------------------------------
-# 3. Poll for completion
+# 3. Poll for completion (only if we have a task ID)
 # -------------------------------------------------------------------
+$done = $false
+
+if ($taskId) {
 Write-Host "━━━ Polling swarm status (task: $taskId) ━━━" -ForegroundColor Cyan
 
-$done = $false
 for ($i = 1; $i -le 20; $i++) {
     $status = Invoke-TrackedCli -Arguments @('swarm', 'status', $taskId) `
         -Label "swarm status poll ${i}/20" -PassThruOnly
@@ -100,6 +102,7 @@ if (-not $done) {
     Register-CliResult -Label "swarm task $taskId (not done after 20 polls)" -ExitCode 1 -ExpectedExitCode 0 `
         -OutputLines @($statusText) -Elapsed ([TimeSpan]::Zero)
 }
+}
 
 # -------------------------------------------------------------------
 # 4. Cleanup
@@ -110,10 +113,12 @@ Invoke-TrackedCli -Arguments @('close') -Label 'final close' -PassThruOnly
 # -------------------------------------------------------------------
 # 5. Report
 # -------------------------------------------------------------------
-if ($done) {
+if ($taskId -and $done) {
     Write-Host "✅ Swarm test completed successfully." -ForegroundColor Green
-} else {
+} elseif ($taskId) {
     Write-Host "⚠ Swarm test completed with warnings." -ForegroundColor Yellow
+} else {
+    Write-Host "❌ Swarm test failed — could not parse Task ID." -ForegroundColor Red
 }
 $code = Finish-TestSession -ExtraCopilotPrompt "Browser4 CLI swarm-agents test. Task ID: $taskId"
 exit $code

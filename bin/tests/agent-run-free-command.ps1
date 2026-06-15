@@ -21,7 +21,7 @@ param(
     [string]$Locale = ''
 )
 
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'
 
 # -------------------------------------------------------------------
 # Load shared test utilities
@@ -61,26 +61,28 @@ $agentRunText = ($output | Out-String).Trim()
 Write-Host "Agent run output: $agentRunText" -ForegroundColor DarkGray
 
 $taskIdMatch = [regex]::Match($agentRunText, 'Task submitted:\s*(\S+)')
-if (-not $taskIdMatch.Success) {
+$taskId = $null
+if ($taskIdMatch.Success) {
+    $taskId = $taskIdMatch.Groups[1].Value
+    Write-Host "Task ID: $taskId" -ForegroundColor Green
+} else {
     Write-Host "❌ Could not parse Task ID from agent run output" -ForegroundColor Red
-    $exitCode = Finish-TestSession -ExtraCopilotPrompt "Could not parse Task ID from agent run output. Output was: $agentRunText"
-    exit $(if ($exitCode -eq 0) { 1 } else { $exitCode })
+    Register-CliResult -Label 'agent run (parse Task ID)' -ExitCode 1 -ExpectedExitCode 0 `
+        -OutputLines @($agentRunText) -Elapsed ([TimeSpan]::Zero)
+    # Fall through — remaining steps will be skipped.
 }
-$taskId = $taskIdMatch.Groups[1].Value
-Write-Host "Task ID: $taskId" -ForegroundColor Green
 Write-Host ''
 
 # -------------------------------------------------------------------
-# 3. Poll for completion
+# 3. Poll for completion (only if we have a task ID)
 # -------------------------------------------------------------------
-Write-Host "━━━ Polling agent status (task: $taskId) ━━━" -ForegroundColor Cyan
-
 $done = $false
 $success = $false
 $lastStatusText = ''
 $MaxPollAttempts = 60
 
 # Extract the first complete JSON object from CLI output.
+# (Defined at script level so the parser doesn't get confused by nested braces.)
 function Get-JsonFromOutput {
     param([string]$Text)
     $jsonMatch = [regex]::Match($Text, '\{.*\}', [System.Text.RegularExpressions.RegexOptions]::Singleline)
@@ -91,6 +93,10 @@ function Get-JsonFromOutput {
         return $null
     }
 }
+
+if ($taskId) {
+
+Write-Host "━━━ Polling agent status (task: $taskId) ━━━" -ForegroundColor Cyan
 
 for ($attempt = 1; $attempt -le $MaxPollAttempts; $attempt++) {
     $statusOutput = Invoke-TrackedCli -Arguments @('--json', 'agent', 'status', $taskId) `
@@ -164,29 +170,36 @@ if (-not $done) {
         -OutputLines @($lastStatusText) -Elapsed ([TimeSpan]::Zero)
 }
 
+} # end if ($taskId)
+
 # -------------------------------------------------------------------
-# 4. Retrieve final result
+# 4. Retrieve final result (only if polling succeeded)
 # -------------------------------------------------------------------
-Write-Host "`n━━━ Retrieving agent result ━━━" -ForegroundColor Cyan
-$resultOutput = Invoke-TrackedCli -Arguments @('--json', 'agent', 'result', $taskId) `
-    -Label 'agent result' -PassThruOnly
-Write-Host "Final agent result:"
-$resultOutput | ForEach-Object { Write-Host $_ }
-Write-Host ''
+if ($taskId) {
+    Write-Host "`n━━━ Retrieving agent result ━━━" -ForegroundColor Cyan
+    $resultOutput = Invoke-TrackedCli -Arguments @('--json', 'agent', 'result', $taskId) `
+        -Label 'agent result' -PassThruOnly
+    Write-Host "Final agent result:"
+    $resultOutput | ForEach-Object { Write-Host $_ }
+    Write-Host ''
+}
 
 # -------------------------------------------------------------------
 # 5. Report
 # -------------------------------------------------------------------
-if ($success) {
+# Close session (best effort)
+Invoke-TrackedCli -Arguments @('close') -Label 'final close' -PassThruOnly
+
+if ($taskId -and $success) {
     Write-Host "✅ Agent task $taskId completed successfully." -ForegroundColor Green
-    # Close session (best effort)
-    Invoke-TrackedCli -Arguments @('close') -Label 'final close' -PassThruOnly
     $code = Finish-TestSession
     exit $code
-} else {
+} elseif ($taskId) {
     Write-Host "❌ Agent task $taskId failed." -ForegroundColor Red
-    # Close session (best effort)
-    Invoke-TrackedCli -Arguments @('close') -Label 'final close' -PassThruOnly
     $code = Finish-TestSession -ExtraCopilotPrompt "Browser4 CLI agent free-command task failed. Task ID: $taskId"
+    exit $(if ($code -eq 0) { 1 } else { $code })
+} else {
+    Write-Host "❌ Agent task failed — could not parse Task ID." -ForegroundColor Red
+    $code = Finish-TestSession -ExtraCopilotPrompt "Browser4 CLI agent free-command task failed. Could not parse Task ID from output: $agentRunText"
     exit $(if ($code -eq 0) { 1 } else { $code })
 }
