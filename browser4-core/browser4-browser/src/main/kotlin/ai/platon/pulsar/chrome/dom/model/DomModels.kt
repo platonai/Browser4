@@ -15,7 +15,6 @@ import ai.platon.pulsar.common.math.geometric.DimI
 import ai.platon.pulsar.common.math.roundTo
 import ai.platon.pulsar.common.serialize.json.Pson
 import com.fasterxml.jackson.annotation.JsonIgnore
-import org.apache.commons.lang3.StringUtils
 import java.math.RoundingMode
 import java.time.OffsetDateTime
 import java.time.ZoneId
@@ -575,7 +574,7 @@ data class DOMState constructor(
             return fbnLocator
         }
 
-        require(StringUtils.isNumeric(fbnLocator.frameId))
+        require(fbnLocator.frameId.all { it.isDigit() }) { "Relative FBNLocator must have a numeric frameId representing the index in frameIds list." }
         val index = fbnLocator.frameId.toIntOrNull() ?: return null
         val absoluteFrameId = frameIds.getOrNull(index) ?: return null
 

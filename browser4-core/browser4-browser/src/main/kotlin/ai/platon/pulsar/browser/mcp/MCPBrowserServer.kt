@@ -1,10 +1,10 @@
 package ai.platon.pulsar.browser.mcp
 
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.fasterxml.jackson.databind.ObjectMapper
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress
-import java.util.UUID
+import java.util.*
 import java.util.concurrent.Executors
 
 /**
@@ -67,7 +67,7 @@ class MCPBrowserServer(
         ).sorted()
     }
 
-    private val mapper = jacksonObjectMapper()
+    private val mapper = ObjectMapper()
     private var httpServer: HttpServer? = null
 
     fun start() {

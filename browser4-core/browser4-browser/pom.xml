@@ -83,6 +83,12 @@
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-common</artifactId>
+            <exclusions>
+                <exclusion>
+                    <groupId>*</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <dependency>
@@ -90,30 +96,28 @@
             <artifactId>pulsar-common</artifactId>
             <exclusions>
                 <exclusion>
-                    <!-- kotlin-serialization (compiler plugin) depends on
-                         kotlin-gradle-plugin-api; neither belongs at runtime -->
-                    <groupId>org.jetbrains.kotlin</groupId>
-                    <artifactId>kotlin-serialization</artifactId>
-                </exclusion>
-                <exclusion>
-                    <groupId>org.jetbrains.kotlin</groupId>
-                    <artifactId>kotlin-gradle-plugin-api</artifactId>
+                    <groupId>*</groupId>
+                    <artifactId>*</artifactId>
                 </exclusion>
             </exclusions>
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-jsoup</artifactId>
+            <exclusions>
+                <exclusion>
+                    <groupId>*</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>ai.platon.cdt</groupId>
             <artifactId>cdt-kotlin-client</artifactId>
             <exclusions>
                 <exclusion>
-                    <!-- cdt-kotlin-client transitively pulls kotlin-gradle-plugin-api
-                         which is a build-tool artifact that does not belong at runtime -->
-                    <groupId>org.jetbrains.kotlin</groupId>
-                    <artifactId>kotlin-gradle-plugin-api</artifactId>
+                    <groupId>*</groupId>
+                    <artifactId>*</artifactId>
                 </exclusion>
             </exclusions>
         </dependency>
@@ -122,10 +126,20 @@
             <groupId>com.fasterxml.jackson.dataformat</groupId>
             <artifactId>jackson-dataformat-yaml</artifactId>
         </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.module</groupId>
+            <artifactId>jackson-module-kotlin</artifactId>
+        </dependency>
 
         <dependency>
             <groupId>io.dropwizard.metrics</groupId>
             <artifactId>metrics-core</artifactId>
+            <exclusions>
+                <exclusion>
+                    <groupId>*</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <!-- Ktor client for coroutine-friendly WebSocket transport -->
@@ -150,7 +164,6 @@
             <groupId>io.ktor</groupId>
             <artifactId>ktor-client-websockets</artifactId>
         </dependency>
-
 
         <!-- Test dependencies: JUnit 5 and Mockito (including Kotlin bindings) -->
         <dependency>
@@ -182,6 +195,16 @@
             <groupId>org.mockito</groupId>
             <artifactId>mockito-junit-jupiter</artifactId>
             <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>commons-lang</groupId>
+            <artifactId>commons-lang</artifactId>
+            <version>2.6</version>
+            <scope>compile</scope>
+        </dependency>
+        <dependency>
+            <groupId>commons-io</groupId>
+            <artifactId>commons-io</artifactId>
         </dependency>
     </dependencies>
 </project>

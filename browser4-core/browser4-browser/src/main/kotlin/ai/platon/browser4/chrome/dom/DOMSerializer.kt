@@ -6,18 +6,15 @@ import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory
 import com.fasterxml.jackson.dataformat.yaml.YAMLGenerator
-import com.fasterxml.jackson.module.kotlin.KotlinModule
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 
 object DOMSerializer {
-    val MAPPER: ObjectMapper = jacksonObjectMapper().apply {
+    val MAPPER: ObjectMapper = ObjectMapper().apply {
         setDefaultPropertyInclusion(JsonInclude.Include.NON_EMPTY)
         registerModule(doubleBindModule())
     }
 
     val YAML_MAPPER: ObjectMapper =
         ObjectMapper(YAMLFactory().disable(YAMLGenerator.Feature.WRITE_DOC_START_MARKER)).apply {
-            registerModule(KotlinModule.Builder().build())
             setDefaultPropertyInclusion(JsonInclude.Include.NON_EMPTY)
             registerModule(doubleBindModule())
         }

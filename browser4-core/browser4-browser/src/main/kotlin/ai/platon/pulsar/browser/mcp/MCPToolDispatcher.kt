@@ -3,7 +3,7 @@ package ai.platon.pulsar.browser.mcp
 import ai.platon.pulsar.browser.Browser
 import ai.platon.pulsar.browser.WebDriver
 import ai.platon.pulsar.browser.mcp.MCPSessionManager.SessionEntry
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.fasterxml.jackson.databind.ObjectMapper
 import kotlinx.coroutines.runBlocking
 
 /**
@@ -85,7 +85,7 @@ class MCPToolDispatcher(
         )
     }
 
-    private val mapper = jacksonObjectMapper()
+    private val mapper = ObjectMapper()
 
     // =========================================================================
     // Public entry point — synchronous bridge for HttpServer threads

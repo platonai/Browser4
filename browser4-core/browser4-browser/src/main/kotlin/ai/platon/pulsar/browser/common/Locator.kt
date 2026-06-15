@@ -1,7 +1,6 @@
 package ai.platon.pulsar.browser.common
 
 import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
-import org.apache.commons.lang3.StringUtils
 
 open class Locator(
     val type: Type,
@@ -58,7 +57,7 @@ open class Locator(
             var trimmed = selector.trim()
 
             // support playwright format: `e15`, where `e` stands for element and `15` is the backend node id. This is equivalent to `backend:15`
-            if (trimmed.startsWith("e") && trimmed.length > 1 && StringUtils.isNumeric(trimmed.substring(1))) {
+            if (trimmed.startsWith("e") && trimmed.length > 1 && trimmed.substring(1).all { it.isDigit() }) {
                 trimmed = "backend:${trimmed.substring(1)}"
             }
 
@@ -84,7 +83,7 @@ class FBNLocator(
 
     val ref get() = "e$backendNodeId"
 
-    val isRelative: Boolean get() = StringUtils.isNumeric(frameId)
+    val isRelative: Boolean get() = frameId.all { it.isDigit() }
 
     val isAbsolute: Boolean get() = !isRelative
 
@@ -96,9 +95,10 @@ class FBNLocator(
         const val PATTERN = "$PREFIX$SIMPLIFIED_PATTERN"
         val REGEX = PATTERN.toRegex()
 
+
         fun parse(str: String): FBNLocator? {
             val trimmed = str.trim()
-            val frameId = StringUtils.substringBetween(trimmed, ":", SEPARATOR)?.toIntOrNull() ?: 0
+            val frameId = trimmed.substringAfter(":").substringBefore(SEPARATOR).toIntOrNull() ?: 0
             val backendNodeId = trimmed.substringAfterLast(SEPARATOR).toIntOrNull() ?: return null
             return FBNLocator(frameId, backendNodeId)
         }

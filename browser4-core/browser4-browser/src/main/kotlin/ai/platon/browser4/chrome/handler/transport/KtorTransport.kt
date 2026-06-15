@@ -3,6 +3,7 @@ package ai.platon.browser4.chrome.handler.transport
 import ai.platon.browser4.chrome.Transport
 import ai.platon.browser4.chrome.util.ChromeDriverException
 import ai.platon.browser4.chrome.util.ChromeIOException
+import ai.platon.pulsar.browser.common.Utils
 import ai.platon.pulsar.common.brief
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.getLogger
@@ -15,7 +16,6 @@ import io.ktor.client.plugins.*
 import io.ktor.client.plugins.websocket.*
 import io.ktor.websocket.*
 import kotlinx.coroutines.*
-import org.apache.commons.lang3.StringUtils
 import java.io.IOException
 import java.net.URI
 import java.util.concurrent.atomic.AtomicBoolean
@@ -157,7 +157,7 @@ internal class KtorTransport : Transport {
     }
 
     private fun shortenMessage(message: String, length: Int = 500): String {
-        return StringUtils.abbreviateMiddle(message, "...", length)
+        return Utils.abbreviateMiddle(message, "...", length)
     }
 
     /**

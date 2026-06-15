@@ -1,9 +1,9 @@
 package ai.platon.browser4.chrome
 
 import ai.platon.pulsar.browser.common.BrowserSettings
+import ai.platon.pulsar.browser.common.Utils
 import ai.platon.pulsar.browser.impl.BrowserProtocol
 import ai.platon.pulsar.common.getLogger
-import org.apache.commons.lang3.StringUtils
 
 /**
  * Manages isolated worlds for Browser4 runtime injection.
@@ -128,7 +128,7 @@ class IsolatedWorldManager constructor(
 
         val exception = result.exceptionDetails
         if (exception != null) {
-            val abbreviation = StringUtils.abbreviateMiddle(script, "...", 200)
+            val abbreviation = Utils.abbreviateMiddle(script, "...", 200)
             logger.warn("Exception during isolated world evaluation: {} \n>>>$abbreviation<<<", exception)
         }
 

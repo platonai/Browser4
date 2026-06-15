@@ -18,7 +18,6 @@ import ai.platon.pulsar.common.math.geometric.RectD
 import ai.platon.pulsar.common.serialize.json.Pson
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.common.urls.Hyperlink
-import com.google.common.annotations.Beta
 import org.jsoup.Connection
 import java.io.Closeable
 import java.time.Duration
@@ -1532,7 +1531,6 @@ interface WebDriver : Closeable {
      * used by default.
      * @return a list of NodeRefs for the matched elements, or an empty list if no elements are matched or an error occurs.
      * */
-    @Beta
     @Throws(WebDriverException::class)
     suspend fun querySelectorAll(selector: String): List<NodeRef>
 

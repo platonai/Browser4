@@ -17,8 +17,7 @@ import ai.platon.pulsar.common.alwaysFalse
 import ai.platon.pulsar.common.urls.URLUtils
 import ai.platon.pulsar.common.warnInterruptible
 import com.fasterxml.jackson.annotation.JsonInclude
-import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
-import com.fasterxml.jackson.module.kotlin.readValue
+import com.fasterxml.jackson.databind.ObjectMapper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.nio.file.Files
@@ -29,6 +28,8 @@ internal class WebDriverHelper(
     val page: PageHandler,
     val browserProtocol: BrowserProtocol
 ) {
+    private val mapper = ObjectMapper().setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
+
     private val messageWriter = MultiSinkMessageWriter()
 
     suspend fun reportInterestingResources(entry: NavigateEntry, event: ResponseReceived) {
@@ -96,8 +97,7 @@ internal class WebDriverHelper(
     }
 
     fun serialize(cookie: Cookie): Map<String, String> {
-        val mapper = jacksonObjectMapper().setDefaultPropertyInclusion(JsonInclude.Include.NON_NULL)
-        return mapper.readValue(mapper.writeValueAsString(cookie))
+        return mapper.readValue(mapper.writeValueAsString(cookie), Map::class.java) as Map<String, String>
     }
 
     fun createJsEvaluate(evaluate: Evaluate?): JsEvaluation? {

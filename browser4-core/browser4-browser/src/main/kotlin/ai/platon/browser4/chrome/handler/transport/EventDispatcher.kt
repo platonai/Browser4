@@ -1,6 +1,7 @@
 package ai.platon.browser4.chrome.handler.transport
 
 import ai.platon.browser4.chrome.util.ChromeRPCException
+import ai.platon.pulsar.browser.common.Utils
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.getTracerOrNull
 import ai.platon.pulsar.common.stringify
@@ -13,7 +14,6 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.exc.MismatchedInputException
 import com.fasterxml.jackson.databind.type.TypeFactory
 import kotlinx.coroutines.*
-import org.apache.commons.lang3.StringUtils
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentSkipListSet
@@ -209,7 +209,7 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
 
     @Throws(ChromeRPCException::class, IOException::class)
     override fun accept(message: String) {
-        tracer?.trace("◀ Accept {}", StringUtils.abbreviateMiddle(message, "...", 20000))
+        tracer?.trace("◀ Accept {}", Utils.abbreviateMiddle(message, "...", 20000))
 
         // TODO: add event handler before parsing, so that we can handle events even if the message is not fully compliant with the protocol, e.g., some fields are added/removed/renamed across Chrome versions. This is especially important for events, as they are not correlated by id and can be easily missed if the parsing fails.
 
@@ -227,7 +227,7 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
                     var resultNode = jsonNode.get(RESULT_PROPERTY)
                     val errorNode = jsonNode.get(ERROR_PROPERTY)
                     if (errorNode != null) {
-                        logger.debug("Error node: {}", StringUtils.abbreviateMiddle(message, "...", 20000))
+                        logger.debug("Error node: {}", Utils.abbreviateMiddle(message, "...", 20000))
                         future.deferred.complete(RpcResult(false, errorNode, message))
                     } else {
                         if (future.returnProperty != null) {
@@ -247,7 +247,7 @@ class EventDispatcher : Consumer<String>, AutoCloseable {
                 }
             }
         } catch (e: Exception) {
-            val msg = StringUtils.abbreviateMiddle(message, "...", 500)
+            val msg = Utils.abbreviateMiddle(message, "...", 500)
             logger.error("Failed to parse message | {} | {}", msg, e.stringify())
         }
     }

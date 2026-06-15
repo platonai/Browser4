@@ -1,8 +1,8 @@
 package ai.platon.browser4.chrome.dom.util
 
+import ai.platon.pulsar.browser.common.Utils
 import ai.platon.pulsar.chrome.dom.model.*
 import ai.platon.pulsar.common.Strings
-import org.apache.commons.lang3.StringUtils
 
 class InteractiveNodeListBuilder(
     private val root: SerializableDOMTreeNode,
@@ -141,7 +141,7 @@ class InteractiveNodeListBuilder(
             val next = if (i < sorted.lastIndex) sorted[i + 1].interactiveIndex else null
             var textBefore = textBeforeByInteractiveIndex.getOrDefault(it.interactiveIndex - 1, null)
             textBefore = textBefore?.takeIf { it.isNotBlank() }
-                ?.let { StringUtils.abbreviateMiddle(textBefore, "...", maxNonInteractiveTextLength) }
+                ?.let { Utils.abbreviateMiddle(textBefore, "...", maxNonInteractiveTextLength) }
             it.copy(
                 prevInteractiveIndex = prev,
                 nextInteractiveIndex = next,
@@ -159,7 +159,7 @@ class InteractiveNodeListBuilder(
         if (goodSize()) return InteractiveDOMTreeNodeList(shorterNodeList)
 
         shorterNodeList = shorterNodeList.map {
-            it.copy(textBefore = StringUtils.abbreviateMiddle(it.textBefore ?: "", "...", 50))
+            it.copy(textBefore = Utils.abbreviateMiddle(it.textBefore ?: "", "...", 50))
         }
         if (goodSize()) return InteractiveDOMTreeNodeList(shorterNodeList)
 

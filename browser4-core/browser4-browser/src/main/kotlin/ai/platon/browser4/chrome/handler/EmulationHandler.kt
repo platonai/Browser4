@@ -17,8 +17,7 @@ import ai.platon.pulsar.common.math.geometric.OffsetD
 import ai.platon.pulsar.common.math.geometric.PointD
 import ai.platon.pulsar.common.math.geometric.RectD
 import kotlinx.coroutines.delay
-import org.apache.commons.lang3.SystemUtils
-import org.apache.commons.math3.util.Precision
+import org.apache.commons.lang.SystemUtils
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -131,7 +130,7 @@ class ClickableDOM(
                 }
             }
 
-            if (!Precision.equals(minX, MAX_SAFE_POSITION) && !Precision.equals(minY, MAX_SAFE_POSITION)) {
+            if (abs(minX - MAX_SAFE_POSITION) > 1e-3 && abs(minY - MAX_SAFE_POSITION) > 1e-3) {
                 return DescriptiveResult(PointD(x = minX + offset.x, y = minY + offset.y))
             }
         }

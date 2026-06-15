@@ -44,12 +44,10 @@ import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
-import com.google.common.annotations.Beta
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.withContext
-import org.apache.commons.lang3.StringUtils
-import org.apache.commons.lang3.SystemUtils
+import org.apache.commons.lang.SystemUtils
 import java.nio.file.Files
 import java.time.Duration
 import java.time.Instant
@@ -907,7 +905,6 @@ open class PulsarWebDriver constructor(
         return rpc.invokeDeferredSilently("ariaSnapshot") { page.ariaSnapshot(viewportIndices) } ?: ""
     }
 
-    @Beta
     @Throws(WebDriverException::class)
     override suspend fun querySelectorAll(selector: String): List<NodeRef> {
         return rpc.invokeOnPage("select") { page.dom.queryLocatorAll(selector) } ?: listOf()
@@ -1520,7 +1517,7 @@ function() {
                 logger.debug(
                     "Injected Browser4 runtime into Isolated World (context: {}) | {}",
                     contextId,
-                    StringUtils.abbreviateMiddle(userTypedUrl, "...", 200)
+                    Utils.abbreviateMiddle(userTypedUrl ?: "", "...", 200)
                 )
                 val evaluate = browserProtocol.evaluate("typeof(__pulsar_utils__)", contextId = contextId)
                 if (evaluate.result.value != "function") {
