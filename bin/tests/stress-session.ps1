@@ -29,7 +29,8 @@
 param(
     [int] $Iterations = 3,
     [int] $Seed = (Get-Random),
-    [string] $Locale = ''
+    [string] $Locale = '',
+    [string] $Phase = ''             # e.g. "C" or "A,C,E" — empty = run all
 )
 
 $ErrorActionPreference = 'Continue'
@@ -376,6 +377,7 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
     # Phase A: Open each of 3 pages (different sites), interact,
     #          verify session carries over via goto, then close.
     # ──────────────────────────────────────────────────────────────
+    if (-not $Phase -or $Phase -match 'A') {
     Write-Host "`n  ── Phase A: open → interact → snapshot → goto → close ──" -ForegroundColor DarkYellow
 
     # Pick one page from each of the first 3 distinct sites (locale-independent).
@@ -429,10 +431,12 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
     Assert-SessionCount -Expected 0 -Context "after close (cleanup A5)"
 
     $iterPasses += 5
+    }
 
     # ──────────────────────────────────────────────────────────────
     # Phase B: Rapid open/close cycles across all 10 pages.
     # ──────────────────────────────────────────────────────────────
+    if (-not $Phase -or $Phase -match 'B') {
     Write-Host "`n  ── Phase B: rapid open/close across all 10 pages ──" -ForegroundColor DarkYellow
 
     $cycle = 0
@@ -451,10 +455,12 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
     }
 
     $iterPasses += ($shuffled.Count * 2)
+    }
 
     # ──────────────────────────────────────────────────────────────
     # Phase C: Mixed navigation — go-back, go-forward, reload
     # ──────────────────────────────────────────────────────────────
+    if (-not $Phase -or $Phase -match 'C') {
     Write-Host "`n  ── Phase C: go-back / go-forward / reload ──" -ForegroundColor DarkYellow
 
     # Pick one page from each of the first 3 distinct sites (locale-independent).
@@ -508,10 +514,12 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
     Assert-SessionCount -Expected 0 -Context "after close (Phase C)"
 
     $iterPasses += 8
+    }
 
     # ──────────────────────────────────────────────────────────────
     # Phase D: kill-all → verify total reset → open fresh
     # ──────────────────────────────────────────────────────────────
+    if (-not $Phase -or $Phase -match 'D') {
     Write-Host "`n  ── Phase D: kill-all → fresh start ──" -ForegroundColor DarkYellow
 
     Write-Host "  D1. kill-all" -ForegroundColor White
@@ -535,10 +543,12 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
     Assert-SessionCount -Expected 0 -Context "after close (Phase D)"
 
     $iterPasses += 3
+    }
 
     # ──────────────────────────────────────────────────────────────
     # Phase E: go-back on a single-page session (edge case).
     # ──────────────────────────────────────────────────────────────
+    if (-not $Phase -or $Phase -match 'E') {
     Write-Host "`n  ── Phase E: edge cases ──" -ForegroundColor DarkYellow
 
     # E1: close with no active session (should be a no-op or helpful message).
@@ -571,6 +581,7 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
     Invoke-Cli close
 
     $iterPasses += 3
+    }
 
     # ──────────────────────────────────────────────────────────────
     # Iteration summary
