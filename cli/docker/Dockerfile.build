@@ -1,13 +1,14 @@
 # Multi-platform Rust cross-compilation image
 FROM rust:1.94-bookworm
 
-# Install cross-compilation toolchains
+# Install cross-compilation toolchains and UPX for binary compression
 RUN apt-get update && apt-get install -y \
     gcc-aarch64-linux-gnu \
     gcc-x86-64-linux-gnu \
     libc6-dev-arm64-cross \
     libc6-dev-amd64-cross \
     mingw-w64 \
+    upx-ucl \
     && rm -rf /var/lib/apt/lists/*
 
 # Add Rust targets for all platforms

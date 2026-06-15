@@ -21,10 +21,9 @@ path = "tests/e2e.rs"
 harness = false
 
 [dependencies]
-reqwest = { version = "0.13.2", default-features = false, features = ["blocking", "json", "rustls"] }
+ureq = { version = "3", features = ["json", "_tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1.13.1", features = ["macros", "rt", "rt-multi-thread", "time"] }
 dirs = "6.0.0"
 base64 = "0.22"
 chrono = "0.4"
@@ -32,7 +31,14 @@ regex = { version = "1.5.5" }
 sha2 = "0.10"
 flate2 = "1"
 tar = "0.4"
+url = "2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tempfile = "3"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
