@@ -316,10 +316,6 @@ class Mouse(private val bp: BrowserProtocol) {
         bp.dispatchMouseReleased(x, y, clickCount, modifiers, buttonsState)
     }
 
-    suspend fun scroll(deltaX: Double = 0.0, deltaY: Double = 10.0) {
-        bp.dispatchMouseWheel(currentX, currentY, deltaX, deltaY)
-    }
-
     /**
      * Dispatches a `mousewheel` event.
      *
@@ -380,6 +376,16 @@ class Mouse(private val bp: BrowserProtocol) {
      * @param y Y coordinate
      */
     suspend fun wheel(x: Double, y: Double, deltaX: Double, deltaY: Double) {
+        // If the mouse has never been explicitly positioned (still at origin),
+        // move it to the viewport center so the wheel event is dispatched to a
+        // reasonable target element rather than (0,0) where it may be misrouted.
+        if (currentX == 0.0 && currentY == 0.0) {
+            val metrics = bp.getLayoutMetrics()
+            val vp = metrics.cssLayoutViewport
+            currentX = vp.clientWidth / 2.0
+            currentY = vp.clientHeight / 2.0
+            cdpMoveTo(currentX, currentY)
+        }
         bp.dispatchMouseWheel(x, y, deltaX, deltaY)
     }
 

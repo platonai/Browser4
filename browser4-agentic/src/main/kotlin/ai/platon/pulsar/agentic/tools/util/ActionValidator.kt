@@ -55,9 +55,10 @@ class ActionValidator(
                 // New no-selector actions
                 "scrollDown", "scrollUp" -> true
                 "scrollBy" -> validateScrollBy(toolCall.arguments)
+                "mouseWheel", "mouseWheelDown", "mouseWheelUp" -> validateMouseWheel(toolCall.arguments)
                 "reload", "goBack", "goForward", "delay", "scrollToTop", "scrollToBottom", "scrollToMiddle", "scrollToViewport",
                 "currentUrl", "url", "documentURI", "baseURI", "referrer", "pageSource", "getCookies",
-                "textContent", "mouseWheelDown", "mouseWheelUp", "mouseMove", "dragAndDrop", "switchTab" -> true // These don't need validation
+                "textContent", "mouseMove", "dragAndDrop", "switchTab" -> true // These don't need validation
                 "writeString", "readString", "replaceContent" -> true
                 else -> {
                     if (denyUnknownActions) {
@@ -151,6 +152,29 @@ class ActionValidator(
             else -> false
         }
         return smoothOk
+    }
+
+    /**
+     * Validate mouseWheel arguments: deltaX/deltaY within reasonable pixel ranges.
+     */
+    private fun validateMouseWheel(args: Map<String, Any?>?): Boolean {
+        args ?: return true
+        val deltaX = when (val v = args["deltaX"]) {
+            is Number -> v.toDouble()
+            is String -> v.toDoubleOrNull()
+            null -> 0.0
+            else -> return false
+        } ?: return false
+        val deltaY = when (val v = args["deltaY"]) {
+            is Number -> v.toDouble()
+            is String -> v.toDoubleOrNull()
+            null -> 150.0
+            else -> return false
+        } ?: return false
+        // Wheel deltas beyond these bounds are unreasonable and likely input errors
+        if (deltaX !in -5000.0..5000.0) return false
+        if (deltaY !in -5000.0..5000.0) return false
+        return true
     }
 
     /**

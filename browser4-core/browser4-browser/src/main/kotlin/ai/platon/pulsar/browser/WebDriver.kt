@@ -1147,7 +1147,8 @@ interface WebDriver : Closeable {
      * driver.scrollDown(3)
      * ```
      *
-     * TODO: use mouseWheel instead
+     * NOTE: This uses JS scrollBy for fast, direct scroll control. For realistic
+     * user-like scrolling that triggers all event handlers, use [mouseWheelDown].
      *
      * @param count The times to scroll down.
      */
@@ -1162,7 +1163,8 @@ interface WebDriver : Closeable {
      * driver.scrollUp(3)
      * ```
      *
-     * TODO: use mouseWheel instead
+     * NOTE: This uses JS scrollBy for fast, direct scroll control. For realistic
+     * user-like scrolling that triggers all event handlers, use [mouseWheelUp].
      *
      * @param count The times to scroll up.
      */
@@ -1266,11 +1268,13 @@ interface WebDriver : Closeable {
      * @param count The times to wheel down.
      * @param deltaX The distance to wheel horizontally.
      * @param deltaY The distance to wheel vertically.
-     * @param delayMillis The delay time in milliseconds.
+     * @param delayMillis The delay time in milliseconds between ticks.
+     *        Use 0 for no delay, -1 (default) for the policy-based random delay,
+     *        or a positive value for a fixed delay.
      */
     @Throws(WebDriverException::class)
     @MCP
-    suspend fun mouseWheelDown(count: Int = 1, deltaX: Double = 0.0, deltaY: Double = 150.0, delayMillis: Long = 0)
+    suspend fun mouseWheelDown(count: Int = 1, deltaX: Double = 0.0, deltaY: Double = 150.0, delayMillis: Long = -1)
 
     /**
      * The mouse wheels up for [count] times. @mcp
@@ -1282,11 +1286,13 @@ interface WebDriver : Closeable {
      * @param count The times to wheel up.
      * @param deltaX The distance to wheel horizontally.
      * @param deltaY The distance to wheel vertically.
-     * @param delayMillis The delay time in milliseconds.
+     * @param delayMillis The delay time in milliseconds between ticks.
+     *        Use 0 for no delay, -1 (default) for the policy-based random delay,
+     *        or a positive value for a fixed delay.
      */
     @Throws(WebDriverException::class)
     @MCP
-    suspend fun mouseWheelUp(count: Int = 1, deltaX: Double = 0.0, deltaY: Double = -150.0, delayMillis: Long = 0)
+    suspend fun mouseWheelUp(count: Int = 1, deltaX: Double = 0.0, deltaY: Double = -150.0, delayMillis: Long = -1)
 
     /**
      * Scrolls the mouse wheel by the provided deltas. @mcp
@@ -1304,6 +1310,24 @@ interface WebDriver : Closeable {
     @Throws(WebDriverException::class)
     @MCP
     suspend fun mouseWheel(deltaX: Double = 0.0, deltaY: Double = 150.0)
+
+    /**
+     * Scrolls the mouse wheel on a specific element identified by [selector]. @mcp
+     *
+     * The element is scrolled into view if needed, the mouse is moved to a random
+     * position near the element's center, and then the wheel event is dispatched.
+     *
+     * ```kotlin
+     * driver.mouseWheel(".scrollable-panel", 0.0, 200.0)
+     * ```
+     *
+     * @param selector The selector of the element to wheel on.
+     * @param deltaX The distance to wheel horizontally.
+     * @param deltaY The distance to wheel vertically.
+     */
+    @Throws(WebDriverException::class)
+    @MCP
+    suspend fun mouseWheel(selector: String, deltaX: Double = 0.0, deltaY: Double = 150.0)
 
     /**
      * Moves the mouse to the position specified by [x] and [y]. @mcp

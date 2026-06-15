@@ -344,15 +344,31 @@ abstract class AbstractWebDriver(
     // --------------------------- Attribute helpers ---------------------------
     // The following group relies on injected __pulsar_utils__ helper functions inside the page context.
 
+    /**
+     * Scrolls the page down by injecting `window.scrollBy` in JavaScript.
+     *
+     * NOTE: This uses JS scrollBy (direct scrollTop manipulation), NOT CDP mouse wheel events.
+     * JS scrollBy is faster and more reliable for fixed-distance scrolling, but may not trigger
+     * framework scroll event handlers. For realistic user-like scrolling that fires all event
+     * listeners, use [mouseWheelDown] instead.
+     */
     @Throws(WebDriverException::class)
     override suspend fun scrollDown(count: Int): Double {
         repeat(count) { evaluate("window.scrollBy(0, 500);") }
         return (evaluate("window.scrollY") as? Number)?.toDouble() ?: 0.0
     }
 
+    /**
+     * Scrolls the page up by injecting `window.scrollBy` in JavaScript.
+     *
+     * NOTE: This uses JS scrollBy (direct scrollTop manipulation), NOT CDP mouse wheel events.
+     * JS scrollBy is faster and more reliable for fixed-distance scrolling, but may not trigger
+     * framework scroll event handlers. For realistic user-like scrolling that fires all event
+     * listeners, use [mouseWheelUp] instead.
+     */
     @Throws(WebDriverException::class)
     override suspend fun scrollUp(count: Int): Double {
-        evaluate("window.scrollBy(0, -500);")
+        repeat(count) { evaluate("window.scrollBy(0, -500);") }
         return (evaluate("window.scrollY") as? Number)?.toDouble() ?: 0.0
     }
 

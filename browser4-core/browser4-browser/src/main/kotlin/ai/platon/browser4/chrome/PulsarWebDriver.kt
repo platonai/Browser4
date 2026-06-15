@@ -428,41 +428,90 @@ open class PulsarWebDriver constructor(
 
     @Throws(WebDriverException::class)
     override suspend fun mouseWheelDown(count: Int, deltaX: Double, deltaY: Double, delayMillis: Long) {
+        val m = mouse ?: throw IllegalWebDriverStateException("Mouse not available", driver = this)
         try {
+            // Pace before the first wheel tick (consistent with click/hover/type)
+            gap("mouseWheel")
             repeat(count) { i ->
                 if (i > 0) {
-                    if (delayMillis > 0) gap(delayMillis) else gap("mouseWheel")
+                    // delayMillis: > 0 = explicit delay, == 0 = no delay, < 0 = use policy default
+                    when {
+                        delayMillis > 0 -> gap(delayMillis)
+                        delayMillis < 0 -> gap("mouseWheel")
+                    }
                 }
 
                 rpc.invokeOnPage("mouseWheelDown") {
-                    mouse?.wheel(deltaX, deltaY)
+                    m.wheel(deltaX, deltaY)
                 }
             }
         } catch (e: ChromeDriverException) {
             rpc.interceptChromeException(e, "mouseWheelDown")
+        } catch (e: ChromeIOException) {
+            if (!e.isOpen || !browserProtocol.isOpen) {
+                // Tab closed — normal operational state, no need to propagate
+            } else {
+                throw e
+            }
         }
     }
 
     @Throws(WebDriverException::class)
     override suspend fun mouseWheelUp(count: Int, deltaX: Double, deltaY: Double, delayMillis: Long) {
+        val m = mouse ?: throw IllegalWebDriverStateException("Mouse not available", driver = this)
         try {
+            // Pace before the first wheel tick (consistent with click/hover/type)
+            gap("mouseWheel")
             repeat(count) { i ->
                 if (i > 0) {
-                    if (delayMillis > 0) gap(delayMillis) else gap("mouseWheel")
+                    // delayMillis: > 0 = explicit delay, == 0 = no delay, < 0 = use policy default
+                    when {
+                        delayMillis > 0 -> gap(delayMillis)
+                        delayMillis < 0 -> gap("mouseWheel")
+                    }
                 }
 
                 rpc.invokeOnPage("mouseWheelUp") {
-                    mouse?.wheel(deltaX, deltaY)
+                    m.wheel(deltaX, deltaY)
                 }
             }
         } catch (e: ChromeDriverException) {
             rpc.interceptChromeException(e, "mouseWheelUp")
+        } catch (e: ChromeIOException) {
+            if (!e.isOpen || !browserProtocol.isOpen) {
+                // Tab closed — normal operational state, no need to propagate
+            } else {
+                throw e
+            }
         }
     }
 
     @Throws(WebDriverException::class)
     override suspend fun mouseWheel(deltaX: Double, deltaY: Double) {
-        rpc.invokeOnPage("mouseWheel") { mouse?.wheel(deltaX, deltaY) }
+        val m = mouse ?: throw IllegalWebDriverStateException("Mouse not available", driver = this)
+        rpc.invokeOnPage("mouseWheel") { m.wheel(deltaX, deltaY) }
+    }
+
+    @Throws(WebDriverException::class)
+    override suspend fun mouseWheel(selector: String, deltaX: Double, deltaY: Double) {
+        try {
+            rpc.invokeOnElement(selector, "mouseWheel", scrollIntoView = true) { node ->
+                gap("mouseWheel")
+                val point = emulator.getInteractPoint(node, "center", useRandomOffset = true)
+                    ?: return@invokeOnElement
+                val m = mouse ?: return@invokeOnElement
+                m.moveTo(point, steps = 1)
+                m.wheel(deltaX, deltaY)
+            }
+        } catch (e: ChromeDriverException) {
+            rpc.interceptChromeException(e, "mouseWheel")
+        } catch (e: ChromeIOException) {
+            if (!e.isOpen || !browserProtocol.isOpen) {
+                // Tab closed — normal operational state
+            } else {
+                throw e
+            }
+        }
     }
 
     @Throws(WebDriverException::class)
