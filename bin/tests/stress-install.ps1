@@ -101,7 +101,7 @@ function Invoke-Cli {
                    else { 120 }
 
     # Resolve the actual executable — on Windows the CLI may be a .cmd
-    # shim; we want the native .exe so we can launch it via .NET Process
+    # shim; we want the native .exe so we can launch it via Start-Process
     # (which avoids PowerShell pipeline handle-inheritance hangs).
     $cliExe = $script:__CliBin
     if ($IsWin -and $cliExe -match '\.cmd$') {
@@ -116,61 +116,73 @@ function Invoke-Cli {
         }
     }
 
-    # Use .NET System.Diagnostics.Process instead of PowerShell pipeline
-    # (`& ... | ForEach-Object`).  On Windows the pipeline-based approach
-    # can hang indefinitely because the Java server child inherits the
-    # stdout pipe handle via bInheritHandles=TRUE in CreateProcess.
-    # .NET Process with redirected streams isolates our read handles from
-    # the server's handle table — the server can keep its own stdout open
-    # without affecting our ability to detect process exit.
+    # Use Start-Process with file redirection instead of .NET Process
+    # with redirected pipes.  On Windows, .NET Process.StandardOutput.Peek()
+    # blocks indefinitely when a grandchild process (Java server) inherits
+    # the write end of the anonymous pipe via CreateProcess.  File redirection
+    # avoids this entirely: our read handles are never shared, WaitForExit is
+    # alertable (Ctrl+C works), and we can still display output in real-time
+    # by tailing the temp files.
     $out = [System.Collections.Generic.List[string]]::new()
     $timeoutOccurred = $false
     $procExitCode = 0
 
     try {
-        $psi = [System.Diagnostics.ProcessStartInfo]::new()
-        $psi.FileName = $cliExe
-        $psi.Arguments = ($args -join ' ')
-        $psi.UseShellExecute = $false
-        $psi.RedirectStandardOutput = $true
-        $psi.RedirectStandardError = $true
-        $psi.CreateNoWindow = $true
-        $psi.StandardOutputEncoding = [Text.Encoding]::UTF8
-        $psi.StandardErrorEncoding  = [Text.Encoding]::UTF8
+        $tmpOut = Join-Path $env:TEMP "b4_stress_stdout_${pid}_$(Get-Random).txt"
+        $tmpErr = Join-Path $env:TEMP "b4_stress_stderr_${pid}_$(Get-Random).txt"
+        Remove-Item $tmpOut, $tmpErr -Force -ErrorAction SilentlyContinue
 
-        $proc = [System.Diagnostics.Process]::new()
-        $proc.StartInfo = $psi
-        $proc.Start() | Out-Null
+        $proc = Start-Process `
+            -FilePath $cliExe `
+            -ArgumentList ($args -join ' ') `
+            -NoNewWindow `
+            -PassThru `
+            -RedirectStandardOutput $tmpOut `
+            -RedirectStandardError $tmpErr
 
-        # Poll stdout/stderr synchronously in a loop.  `Peek()` returns
-        # -1 when no data is available (non-blocking on Windows anonymous
-        # pipes), so we can interleave reads with the timeout check and a
-        # short sleep.
-        $pollIntervalMs = 100
+        $stdoutLinesRead = 0
+        $stderrLinesRead = 0
+        $pollIntervalMs = 500
         $timeoutMs = $timeoutSecs * 1000
 
+        # Poll for process exit, displaying new output lines as they
+        # appear in the temp files.  Reading files avoids the anonymous-
+        # pipe inheritance deadlock; WaitForExit with a short timeout
+        # keeps the thread alertable so Ctrl+C is processed promptly.
         while (-not $proc.HasExited) {
-            # Drain stdout
-            try {
-                while ($proc.StandardOutput.Peek() -ge 0) {
-                    $line = $proc.StandardOutput.ReadLine()
-                    if ($line -ne $null) {
-                        $out.Add($line)
-                        Write-Host $line
+            # Read new stdout lines from temp file
+            if (Test-Path $tmpOut) {
+                try {
+                    $allOut = Get-Content -Path $tmpOut -ErrorAction SilentlyContinue
+                    $newOut = if ($allOut) {
+                        $allOut | Select-Object -Skip $stdoutLinesRead
+                    } else { @() }
+                    foreach ($line in $newOut) {
+                        if ($line -ne $null) {
+                            $out.Add($line)
+                            Write-Host $line
+                        }
                     }
-                }
-            } catch {}
-            # Drain stderr
-            try {
-                while ($proc.StandardError.Peek() -ge 0) {
-                    $line = $proc.StandardError.ReadLine()
-                    if ($line -ne $null) {
-                        $tagged = "[stderr] $line"
-                        $out.Add($tagged)
-                        Write-Host $tagged -ForegroundColor DarkYellow
+                    $stdoutLinesRead += @($newOut).Count
+                } catch {}
+            }
+            # Read new stderr lines from temp file
+            if (Test-Path $tmpErr) {
+                try {
+                    $allErr = Get-Content -Path $tmpErr -ErrorAction SilentlyContinue
+                    $newErr = if ($allErr) {
+                        $allErr | Select-Object -Skip $stderrLinesRead
+                    } else { @() }
+                    foreach ($line in $newErr) {
+                        if ($line -ne $null) {
+                            $tagged = "[stderr] $line"
+                            $out.Add($tagged)
+                            Write-Host $tagged -ForegroundColor DarkYellow
+                        }
                     }
-                }
-            } catch {}
+                    $stderrLinesRead += @($newErr).Count
+                } catch {}
+            }
 
             # Check timeout
             if ($sw.Elapsed.TotalMilliseconds -gt $timeoutMs) {
@@ -189,24 +201,35 @@ function Invoke-Cli {
                 break
             }
 
-            Start-Sleep -Milliseconds $pollIntervalMs
+            $null = $proc.WaitForExit($pollIntervalMs)
         }
 
-        # Drain any final lines that arrived between the last poll and
-        # process exit.
+        # Drain any final lines that arrived after the last poll and
+        # before process exit.  Because we use file redirection, reads
+        # never block — the file is either there or it isn't.
         try {
-            while ($proc.StandardOutput.Peek() -ge 0) {
-                $line = $proc.StandardOutput.ReadLine()
-                if ($line -ne $null) { $out.Add($line); Write-Host $line }
+            if (Test-Path $tmpOut) {
+                $allOut = Get-Content -Path $tmpOut -ErrorAction SilentlyContinue
+                $newOut = if ($allOut) {
+                    $allOut | Select-Object -Skip $stdoutLinesRead
+                } else { @() }
+                foreach ($line in $newOut) {
+                    if ($line -ne $null) { $out.Add($line); Write-Host $line }
+                }
             }
         } catch {}
         try {
-            while ($proc.StandardError.Peek() -ge 0) {
-                $line = $proc.StandardError.ReadLine()
-                if ($line -ne $null) {
-                    $tagged = "[stderr] $line"
-                    $out.Add($tagged)
-                    Write-Host $tagged -ForegroundColor DarkYellow
+            if (Test-Path $tmpErr) {
+                $allErr = Get-Content -Path $tmpErr -ErrorAction SilentlyContinue
+                $newErr = if ($allErr) {
+                    $allErr | Select-Object -Skip $stderrLinesRead
+                } else { @() }
+                foreach ($line in $newErr) {
+                    if ($line -ne $null) {
+                        $tagged = "[stderr] $line"
+                        $out.Add($tagged)
+                        Write-Host $tagged -ForegroundColor DarkYellow
+                    }
                 }
             }
         } catch {}
@@ -219,6 +242,9 @@ function Invoke-Cli {
         $out.Add($msg)
         $procExitCode = -99
     } finally {
+        # Clean up temp files regardless of outcome
+        if (Test-Path variable:tmpOut) { Remove-Item $tmpOut -Force -ErrorAction SilentlyContinue }
+        if (Test-Path variable:tmpErr) { Remove-Item $tmpErr -Force -ErrorAction SilentlyContinue }
         $sw.Stop()
     }
 
