@@ -1477,22 +1477,22 @@ fn verify_internal_http_helpers() {
 fn wait_for_health(base_url: &str, timeout_ms: u64) -> Result<(), String> {
     let health_url = format!("{}/actuator/health", base_url.trim_end_matches('/'));
     let tools_url = format!("{}/mcp/tools", base_url.trim_end_matches('/'));
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .expect("reqwest blocking client build failed");
+    let config = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(5)))
+        .build();
+    let agent = ureq::Agent::new_with_config(config);
 
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
     let mut last_error = String::from("unknown");
 
     while Instant::now() < deadline {
-        match client.get(&health_url).send() {
+        match agent.get(&health_url).call() {
             Ok(resp) => {
-                let body = resp.text().unwrap_or_default();
+                let body = resp.into_body().read_to_string().unwrap_or_default();
                 if body.contains("\"status\":\"UP\"") {
-                    match client.get(&tools_url).send() {
+                    match agent.get(&tools_url).call() {
                         Ok(tools_resp) => {
-                            let tools_body = tools_resp.text().unwrap_or_default();
+                            let tools_body = tools_resp.into_body().read_to_string().unwrap_or_default();
                             if tools_body.contains("open_session")
                                 && tools_body.contains("browser_navigate")
                             {
@@ -1521,17 +1521,15 @@ fn wait_for_health(base_url: &str, timeout_ms: u64) -> Result<(), String> {
 
 fn is_browser4_healthy_now(base_url: &str) -> bool {
     let health_url = format!("{}/actuator/health", base_url.trim_end_matches('/'));
-    let client = match reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(2))
-        .build()
-    {
-        Ok(client) => client,
-        Err(_) => return false,
-    };
+    let config = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(2)))
+        .build();
+    let agent = ureq::Agent::new_with_config(config);
 
-    match client.get(&health_url).send() {
+    match agent.get(&health_url).call() {
         Ok(resp) => resp
-            .text()
+            .into_body()
+            .read_to_string()
             .map(|body| body.contains("\"status\":\"UP\""))
             .unwrap_or(false),
         Err(_) => false,
