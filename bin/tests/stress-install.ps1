@@ -322,16 +322,30 @@ $rng = [Random]::new($Seed)
 $StateDir = if ($env:BROWSER4_CLI_STATE_DIR) { $env:BROWSER4_CLI_STATE_DIR }
             else { Join-Path $HOME '.browser4' }
 
+# ──────────────────────────────────────────────
+# OS detection — use PS7 automatic variables where
+# available, fall back to manual detection on PS 5.1.
+# Avoid assigning to $IsLinux / $IsWindows / $IsMacOS
+# directly because they are read-only in PS 7+.
+# ──────────────────────────────────────────────
+if ($PSVersionTable.PSVersion.Major -ge 6) {
+    $script:OSWin   = $IsWindows
+    $script:OSLinux = $IsLinux
+    $script:OSMac   = $IsMacOS
+} else {
+    $script:OSWin   = [System.Environment]::OSVersion.Platform -eq 'Win32NT'
+    $script:OSMac   = $false
+    $script:OSLinux = $false
+}
+
 # Resolve the Browser4 runtime data directory (mirrors Rust's resolve_runtime_data_dir()).
 # On Linux:   $XDG_DATA_HOME/browser4 (typically ~/.local/share/browser4/)
 # On macOS:   ~/Library/Application Support/browser4/
 # On Windows: %APPDATA%/browser4/
 # Honours BROWSER4_RUNTIME_DIR as an override.
-if (-not (Get-Variable -Name 'IsLinux' -ErrorAction SilentlyContinue)) { $IsLinux = $false }
-if (-not (Get-Variable -Name 'IsMacOS' -ErrorAction SilentlyContinue)) { $IsMacOS = $false }
 $RuntimeDataDir = if ($env:BROWSER4_RUNTIME_DIR) { $env:BROWSER4_RUNTIME_DIR }
-                  elseif ($IsLinux) { Join-Path $HOME '.local/share/browser4' }
-                  elseif ($IsMacOS) { Join-Path $HOME 'Library/Application Support/browser4' }
+                  elseif ($script:OSLinux) { Join-Path $HOME '.local/share/browser4' }
+                  elseif ($script:OSMac) { Join-Path $HOME 'Library/Application Support/browser4' }
                   else { Join-Path $env:APPDATA 'browser4' }
 
 # Ensure the CLI binary uses the same runtime directory we are checking.

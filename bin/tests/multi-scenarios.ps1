@@ -55,7 +55,7 @@
 param(
     [int] $Iterations = 60,
     [string[]] $Scenarios = @(
-        'session-stress.ps1',
+        'stress-session.ps1',
         'agent-run-page-visit.ps1',
         'agent-run-page-visit-interact.ps1',
         'swarm-agents.ps1'
@@ -133,7 +133,7 @@ if ($BuildCli) {
     Write-Host "Using browser4-cli: $BinaryPath" -ForegroundColor DarkGray
 }
 
-$ScenarioTimeoutSeconds = 300   # per-scenario timeout (5 min)
+$ScenarioTimeoutSeconds = 600   # per-scenario timeout (10 min — agent polling can take 5+ min)
 $ServerLogTailLines = 1000      # lines to tail from pulsar.log on failure
 
 # Auto-detect RuntimeBundleHome when not explicitly provided.
@@ -385,8 +385,20 @@ for ($iteration = 1; $iteration -le $Iterations; $iteration++) {
         $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
         $stderrTask = $proc.StandardError.ReadToEndAsync()
 
-        # Wait with timeout.
-        if (-not $proc.WaitForExit($ScenarioTimeoutSeconds * 1000)) {
+        # Wait with timeout, printing progress periodically.
+        $pollIntervalMs = 10000   # log "still waiting" every 10 s
+        $deadline = [DateTime]::UtcNow.AddSeconds($ScenarioTimeoutSeconds)
+        $completed = $false
+        while (-not $completed -and ([DateTime]::UtcNow -lt $deadline)) {
+            $completed = $proc.WaitForExit($pollIntervalMs)
+            if (-not $completed -and ([DateTime]::UtcNow -lt $deadline)) {
+                $elapsed = [Math]::Floor($sw.Elapsed.TotalSeconds)
+                Write-Host ("`r  ⏳ {0} — {1}s / {2}s … " -f $scenario, $elapsed, $ScenarioTimeoutSeconds) -NoNewline -ForegroundColor DarkGray
+            }
+        }
+        # Clear the progress tick line so the next output starts fresh.
+        Write-Host ''
+        if (-not $completed) {
             Write-Host ("⏱  TIMEOUT ({0}s) — killing process tree" -f $ScenarioTimeoutSeconds) -ForegroundColor Red
             $proc.Kill($true)
             $proc.WaitForExit(5000) | Out-Null

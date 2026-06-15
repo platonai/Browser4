@@ -217,10 +217,22 @@ foreach ($testName in $toRun) {
             -NoNewWindow `
             -PassThru
 
-        # Wait with timeout — if the child script hangs, kill it and
-        # report a failure instead of hanging the orchestrator.  The
-        # $TimeoutSeconds parameter was previously declared but unused.
-        $completed = $proc.WaitForExit($TimeoutSeconds * 1000)
+        # Wait with timeout, printing progress every 10 s for runs
+        # that exceed 30 s so the user can tell it hasn't hung.
+        if ($TimeoutSeconds -gt 30) {
+            $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+            $completed = $false
+            while (-not $completed -and ([DateTime]::UtcNow -lt $deadline)) {
+                $completed = $proc.WaitForExit(10000)
+                if (-not $completed -and ([DateTime]::UtcNow -lt $deadline)) {
+                    $elapsed = [Math]::Floor($sw.Elapsed.TotalSeconds)
+                    Write-Host ("`r  ⏳ {0} — {1}s / {2}s … " -f $testName, $elapsed, $TimeoutSeconds) -NoNewline -ForegroundColor DarkGray
+                }
+            }
+            Write-Host ''
+        } else {
+            $completed = $proc.WaitForExit($TimeoutSeconds * 1000)
+        }
         if (-not $completed) {
             Write-Host "  ⚠ TIMEOUT after ${TimeoutSeconds}s — killing" -ForegroundColor Red
             $proc.Kill()

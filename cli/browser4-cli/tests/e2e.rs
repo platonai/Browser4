@@ -3072,6 +3072,12 @@ fn create_e2e_test_resources() -> E2ETestResources {
     if force_remote_bundle_for_local_server() {
         extra_env.push((FORCE_REMOTE_BUNDLE_CLI_ENV.to_string(), "1".to_string()));
     }
+    // Tag the backend JVM so process-management tooling can distinguish
+    // test-server instances from production ones.
+    extra_env.push((
+        "BROWSER4_SERVER_OPTS".to_string(),
+        "-Dapp.name=browser4-test".to_string(),
+    ));
 
     E2ETestResources {
         _temp_dir: temp_dir,

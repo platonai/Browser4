@@ -42,6 +42,10 @@ const BROWSER4_RUNTIME_DIR_NAME: &str = "runtime";
 const DOWNLOADS_DIR_NAME: &str = "downloads";
 const BROWSER4_MAIN_CLASS: &str = "ai.platon.pulsar.apps.Browser4BundleApplicationKt";
 const BROWSER4_INSTALL_METADATA_FILE_NAME: &str = "browser4-installation.json";
+/// Env var with space-separated JVM options injected into the server launch
+/// command (e.g. `-Dapp.name=test -Xmx512m`).  Only consulted when the CLI
+/// itself starts the backend; ignored for externally-managed servers.
+const BROWSER4_SERVER_OPTS_ENV: &str = "BROWSER4_SERVER_OPTS";
 const BROWSER4_RELEASES_BASE_URL_ENV: &str = "BROWSER4_RELEASES_BASE_URL";
 /// Path to the mirror configuration file, relative to the runtime data dir.
 const MIRRORS_CONFIG_FILE_NAME: &str = "mirrors.json";
@@ -3010,6 +3014,12 @@ async fn resolve_server_launch_spec(port: u16) -> Result<ServerLaunchSpec, Strin
     Ok(build_jar_launch_spec(&runtime, port))
 }
 
+/// Returns `true` when `token` is a JVM-level flag that must appear before
+/// the main class on the `java` command line.
+fn is_jvm_option(token: &str) -> bool {
+    token.starts_with("-D") || token.starts_with("-X") || token.starts_with("--add-")
+}
+
 fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> ServerLaunchSpec {
     let program = runtime.java_path.clone();
     let program_display = program.display().to_string();
@@ -3018,15 +3028,36 @@ fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> Serve
     } else {
         format!("{}/*", runtime.lib_dir.display())
     };
+
+    // Collect extra options from BROWSER4_SERVER_OPTS (space-separated).
+    // Tokens starting with -D, -X, -XX:, or --add- are JVM flags and go
+    // before -cp.  Everything else (e.g. --spring.profiles.active=test)
+    // is placed after the main class as a program argument.
+    let mut jvm_opts: Vec<String> = Vec::new();
+    let mut program_args: Vec<String> = Vec::new();
+    if let Ok(raw) = std::env::var(BROWSER4_SERVER_OPTS_ENV) {
+        for token in raw.split_whitespace().map(str::trim).filter(|t| !t.is_empty()) {
+            if is_jvm_option(token) {
+                jvm_opts.push(token.to_string());
+            } else {
+                program_args.push(token.to_string());
+            }
+        }
+    }
+
+    let mut args: Vec<String> =
+        Vec::with_capacity(4 + jvm_opts.len() + program_args.len());
+    args.extend(jvm_opts);
+    args.push("-cp".to_string());
+    args.push(classpath_arg);
+    args.push(BROWSER4_MAIN_CLASS.to_string());
+    args.extend(program_args);
+    args.push(format!("--server.port={port}"));
+
     ServerLaunchSpec {
         kind: ServerLaunchKind::Jar,
         program,
-        args: vec![
-            "-cp".to_string(),
-            classpath_arg,
-            BROWSER4_MAIN_CLASS.to_string(),
-            format!("--server.port={port}"),
-        ],
+        args,
         working_dir: runtime.install_dir.clone(),
         registry_target: runtime.lib_dir.clone(),
         description: format!(

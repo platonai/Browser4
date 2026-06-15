@@ -233,24 +233,42 @@ function Invoke-CliCommand {
     )
     $sw = [Diagnostics.Stopwatch]::StartNew()
     try {
+        # Resolve the executable path.  Start-Process handles .cmd wrappers
+        # and .exe files equally well when given the full path.
+        $exe = (Get-Command 'browser4-cli' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+        if (-not $exe) { $exe = 'browser4-cli' }
+
         $tmpOut = Join-Path $TempDir 'b4cli-stdout.txt'
         $tmpErr = Join-Path $TempDir 'b4cli-stderr.txt'
         Remove-Item $tmpOut, $tmpErr -Force -ErrorAction SilentlyContinue
 
-        # Use direct invocation rather than Start-Process so that
-        # .cmd wrappers and PATHEXT resolution work correctly.
-        $prevEAP = $ErrorActionPreference
-        $ErrorActionPreference = 'Continue'
-        $output = & browser4-cli @Arguments 2>&1 | Out-String
-        $exitCode = $LASTEXITCODE
-        $ErrorActionPreference = $prevEAP
+        $proc = Start-Process `
+            -FilePath $exe `
+            -ArgumentList $Arguments `
+            -NoNewWindow `
+            -PassThru `
+            -RedirectStandardOutput $tmpOut `
+            -RedirectStandardError $tmpErr
+
+        $completed = $proc.WaitForExit($TimeoutSeconds * 1000)
+        if (-not $completed) {
+            Write-WarningMsg "Command timed out after ${TimeoutSeconds}s — killing process (PID $($proc.Id))"
+            $proc.Kill($true) | Out-Null
+            $proc.WaitForExit(5000) | Out-Null
+        }
+
+        $stdout = Get-Content -Path $tmpOut -Raw -ErrorAction SilentlyContinue
+        $stderr = Get-Content -Path $tmpErr -Raw -ErrorAction SilentlyContinue
+        Remove-Item $tmpOut, $tmpErr -Force -ErrorAction SilentlyContinue
+
+        $combined = (@($stdout, $stderr) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join "`n"
 
         $sw.Stop()
         return [PSCustomObject]@{
-            ExitCode = [int]$exitCode
-            Output   = $output.Trim()
-            Stdout   = $output.Trim()
-            Stderr   = ''
+            ExitCode = if ($completed) { [int]$proc.ExitCode } else { -1 }
+            Output   = $combined.Trim()
+            Stdout   = if ($stdout) { $stdout.Trim() } else { '' }
+            Stderr   = if ($stderr) { $stderr.Trim() } else { '' }
             Elapsed  = $sw.Elapsed
         }
     } catch {
@@ -348,22 +366,35 @@ function Wait-ServerHealthy {
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     $sleep = 1
     $sw = [Diagnostics.Stopwatch]::StartNew()
+    $lastStatus = ''
 
     while (([DateTime]::UtcNow) -lt $deadline) {
         try {
-            $resp = Invoke-WebRequest -Uri $healthUrl -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop
-            if ($resp.StatusCode -eq 200 -and $resp.Content -match '"UP"') {
+            # Invoke-RestMethod parses the JSON response directly into a
+            # PSCustomObject — avoids the byte[]-vs-string inconsistency
+            # that Invoke-WebRequest + ConvertFrom-Json can hit when the
+            # server returns a compressed or chunked response on Windows.
+            $healthData = Invoke-RestMethod -Uri $healthUrl -TimeoutSec 5 -ErrorAction Stop
+
+            if ($healthData.status -eq 'UP') {
                 $sw.Stop()
                 return [PSCustomObject]@{
                     Healthy  = $true
                     Elapsed  = $sw.Elapsed
-                    Content  = $resp.Content
+                    Content  = ($healthData | ConvertTo-Json -Compress)
                 }
-            } else {
-                Write-Info "Health endpoint returned status=$($resp.StatusCode) (not UP yet)"
             }
+
+            # Status field present but not UP (e.g. DOWN, OUT_OF_SERVICE)
+            $lastStatus = $healthData.status
+            Write-Info "Health status=$lastStatus (waiting for UP)"
         } catch {
-            # Server not reachable yet — expected during startup
+            # Server not reachable, non-2xx, or invalid JSON —
+            # all expected during startup.  Log the first few times
+            # so the operator can see progress, then go quiet.
+            if ($sleep -le 4) {
+                Write-Info "Health endpoint not ready: $_"
+            }
         }
 
         $remaining = ($deadline - [DateTime]::UtcNow).TotalSeconds
@@ -373,6 +404,9 @@ function Wait-ServerHealthy {
     }
 
     $sw.Stop()
+    if ($lastStatus) {
+        Write-WarningMsg "Health check timed out. Last status: $lastStatus"
+    }
     return [PSCustomObject]@{
         Healthy  = $false
         Elapsed  = $sw.Elapsed
