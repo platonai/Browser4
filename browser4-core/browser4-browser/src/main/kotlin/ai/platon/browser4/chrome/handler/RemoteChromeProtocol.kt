@@ -332,7 +332,7 @@ class RemoteChromeProtocol(
             twist = null,
             deltaX = deltaX,
             deltaY = deltaY,
-            pointerType = "mouse",
+            pointerType = DispatchMouseEventPointerType.MOUSE,
         )
     }
 
