@@ -735,7 +735,7 @@ $script:TestUrlStore = @{
     )
     'zh' = @(
         [PSCustomObject]@{ url = 'https://www.baidu.com/';                        purpose = 'portal';          site = 'baidu';         name = 'Baidu';               keyword = '百度' }
-        [PSCustomObject]@{ url = 'https://www.oschina.net/';                     purpose = 'tech-community';  site = 'oschina';       name = 'OSChina';             keyword = '开源中国' }
+        [PSCustomObject]@{ url = 'https://www.oschina.net/';                     purpose = 'tech-community';  site = 'oschina';       name = 'OSChina';             keyword = 'OSCHINA' }
         [PSCustomObject]@{ url = 'https://www.bilibili.com/';                     purpose = 'video';           site = 'bilibili';      name = 'Bilibili';            keyword = '哔哩哔哩' }
         [PSCustomObject]@{ url = 'https://www.163.com/';                          purpose = 'portal';          site = '163';           name = 'NetEase';             keyword = '网易' }
         [PSCustomObject]@{ url = 'https://www.jd.com/';                           purpose = 'ecommerce';       site = 'jd';            name = 'JD.com';              keyword = '京东' }
