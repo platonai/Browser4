@@ -600,7 +600,8 @@ Follow these rules exactly:
             "hiddenBottomHeight" to hiddenBottomHeight
         )
 
-        val extractedJson = DOMSerializer.MAPPER.writeValueAsString(extractionResponse)
+        // val extractedJson = DOMSerializer.toJson(extractionResponse)
+        val extractedJson = Pson.toJson(extractionResponse)
 
         val content =
             """
