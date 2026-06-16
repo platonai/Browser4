@@ -28,7 +28,7 @@ mod snapshot;
 mod state;
 
 use std::collections::{HashMap, HashSet};
-use std::io::Read;
+use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
 
 use base64::Engine;
@@ -2954,21 +2954,57 @@ async fn handle_uninstall(tool_params: &Value) -> Result<(), String> {
 
     // Helper: run a subprocess with a wall-clock timeout.  Returns the
     // process output or a timeout/spawn error.
+    //
+    // stdout and stderr are drained on background threads to prevent
+    // pipe-buffer deadlock: if the child process writes more than the
+    // OS pipe buffer (~64 KB on Windows) and no one is reading, the
+    // child blocks on write → wait_with_output never returns.
     fn run_with_timeout(
         mut cmd: Command,
         timeout_secs: u64,
     ) -> Result<std::process::Output, String> {
         let mut child = cmd.spawn().map_err(|e| e.to_string())?;
+
+        // Take the pipe handles and drain them on background threads.
+        let stdout_reader = child.stdout.take().map(|mut out| {
+            std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                let _ = std::io::Read::read_to_end(&mut out, &mut buf);
+                buf
+            })
+        });
+        let stderr_reader = child.stderr.take().map(|mut err| {
+            std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                let _ = std::io::Read::read_to_end(&mut err, &mut buf);
+                buf
+            })
+        });
+
         let deadline = std::time::Instant::now()
             + std::time::Duration::from_secs(timeout_secs);
         loop {
             match child.try_wait() {
-                Ok(Some(_)) => {
-                    return child.wait_with_output().map_err(|e| e.to_string());
+                Ok(Some(status)) => {
+                    let stdout = stdout_reader
+                        .and_then(|h| h.join().ok())
+                        .unwrap_or_default();
+                    let stderr = stderr_reader
+                        .and_then(|h| h.join().ok())
+                        .unwrap_or_default();
+                    return Ok(std::process::Output {
+                        status,
+                        stdout,
+                        stderr,
+                    });
                 }
                 Ok(None) => {
                     if std::time::Instant::now() >= deadline {
                         let _ = child.kill();
+                        // Drain the pipe readers after killing so the
+                        // threads don't linger.
+                        let _stdout = stdout_reader.and_then(|h| h.join().ok());
+                        let _stderr = stderr_reader.and_then(|h| h.join().ok());
                         return Err(format!(
                             "process did not complete within {timeout_secs}s"
                         ));
@@ -3079,6 +3115,23 @@ async fn handle_uninstall(tool_params: &Value) -> Result<(), String> {
         // previewing what would happen.
         let confirmed = if dry_run || skip_confirm {
             true
+        } else if !std::io::stdin().is_terminal() {
+            // Stdin is not a terminal (piped or redirected, e.g. from
+            // a CI runner or a non-interactive PowerShell session).
+            // Blocking on read_line would hang indefinitely, so auto-deny
+            // the removal and tell the caller to pass --yes explicitly.
+            eprintln!();
+            eprintln!("The following directories would be removed:");
+            if has_data {
+                eprintln!("  Runtime data:  {runtime_dir_str}");
+            }
+            if has_cache {
+                eprintln!("  Runtime cache: {cache_dir_str}");
+            }
+            eprintln!();
+            eprintln!("Non-interactive session — confirmation skipped (directories preserved).");
+            eprintln!("Re-run with  browser4-cli uninstall --yes  to remove them.");
+            false
         } else {
             eprintln!();
             eprintln!("The following directories will be removed:");
