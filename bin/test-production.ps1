@@ -255,7 +255,7 @@ function Invoke-CliCommand {
             -ArgumentList $Arguments `
             -NoNewWindow `
             -PassThru `
-            -RedirectStandardInput $(if ($script:OSWin) { 'NUL' } else { '/dev/null' }) `
+            -RedirectStandardInput $(if ($script:OSWin) { '\\.\NUL' } else { '/dev/null' }) `
             -RedirectStandardOutput $tmpOut `
             -RedirectStandardError $tmpErr
 
@@ -307,7 +307,7 @@ function Invoke-CliCommandAsync {
         -ArgumentList $Arguments `
         -NoNewWindow `
         -PassThru `
-        -RedirectStandardInput $(if ($script:OSWin) { 'NUL' } else { '/dev/null' }) `
+        -RedirectStandardInput $(if ($script:OSWin) { '\\.\NUL' } else { '/dev/null' }) `
         -RedirectStandardOutput (Join-Path $TempDir 'b4cli-async-stdout.txt') `
         -RedirectStandardError (Join-Path $TempDir 'b4cli-async-stderr.txt')
 
@@ -1288,7 +1288,7 @@ if ($SkipMultiScenarios) {
                     -NoNewWindow `
                     -Wait `
                     -PassThru `
-                    -RedirectStandardInput $(if ($script:OSWin) { 'NUL' } else { '/dev/null' }) `
+                    -RedirectStandardInput $(if ($script:OSWin) { '\\.\NUL' } else { '/dev/null' }) `
                     -RedirectStandardOutput $multiStdout `
                     -RedirectStandardError $multiStderr
 

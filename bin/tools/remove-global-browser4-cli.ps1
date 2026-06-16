@@ -170,7 +170,7 @@ function Invoke-ExternalCommand
             -NoNewWindow `
             -Wait `
             -PassThru `
-            -RedirectStandardInput $(if ($IsWindows -or $env:OS -eq 'Windows_NT') { 'NUL' } else { '/dev/null' }) `
+            -RedirectStandardInput $(if ($IsWindows -or $env:OS -eq 'Windows_NT') { '\\.\NUL' } else { '/dev/null' }) `
             -RedirectStandardOutput $stdoutFile `
             -RedirectStandardError $stderrFile
 
