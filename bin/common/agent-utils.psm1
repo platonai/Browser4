@@ -235,7 +235,8 @@ function Invoke-AiAnalysis {
         # Pass only a short instruction asking the AI to read the file.
         # This keeps the command-line argument tiny regardless of prompt size.
         $shortPrompt = "Please read the instructions in the file '$promptFile' and follow them exactly. Do not summarise the file — execute every instruction it contains."
-        $result = & $analyzer -p $shortPrompt 2>&1
+        $tempDir = Split-Path $promptFile -Parent
+        $result = & $analyzer -p $shortPrompt --add-dir $tempDir 2>&1
         $sw.Stop()
         $text = ($result | Out-String).Trim()
 
