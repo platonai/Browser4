@@ -1274,20 +1274,98 @@ if ($SkipMultiScenarios) {
 
             try {
                 $multiArgs = @(
+                    '-NoProfile',
+                    '-NonInteractive',
                     '-File', $multiScenariosScript,
                     '-Iterations', $MultiScenariosIterations,
                     '-UseGlobalCli',
                     '-SkipServerBuild'
                 )
 
+                # Launch without -Wait so we can stream progress to the
+                # console.  Each scenario can run up to 600 s (10 min);
+                # total timeout is iterations × scenarios × 600 s plus
+                # a generous margin for sequential execution.
                 $multiProc = Start-Process `
                     -FilePath 'pwsh' `
                     -ArgumentList $multiArgs `
                     -NoNewWindow `
-                    -Wait `
                     -PassThru `
                     -RedirectStandardOutput $multiStdout `
                     -RedirectStandardError $multiStderr
+
+                $multiScenarioCount = 4
+                $perScenarioTimeout = 600
+                $multiTimeout = [Math]::Max(
+                    $MultiScenariosIterations * $multiScenarioCount * $perScenarioTimeout + 300,
+                    3600
+                )
+                Write-Info "Multi-scenarios timeout: ${multiTimeout}s (${MultiScenariosIterations} iter × ${multiScenarioCount} scenarios × ${perScenarioTimeout}s + margin)"
+
+                $multiDeadline = [DateTime]::UtcNow.AddSeconds($multiTimeout)
+                $multiStartTime = [DateTime]::UtcNow
+                $stdoutOffset = 0
+                $stderrOffset = 0
+                $multiCompleted = $false
+                $lastHeartbeat = [DateTime]::UtcNow
+                $heartbeatInterval = [TimeSpan]::FromSeconds(30)
+
+                while (-not $multiCompleted -and ([DateTime]::UtcNow -lt $multiDeadline)) {
+                    $multiCompleted = $multiProc.WaitForExit(10000)
+
+                    # Stream new stdout lines to the console so the user sees
+                    # real-time progress from multi-scenarios.ps1.
+                    $hadOutput = $false
+                    if (Test-Path $multiStdout) {
+                        try {
+                            $outLines = Get-Content -Path $multiStdout -ErrorAction SilentlyContinue
+                            $newOut = if ($outLines) {
+                                $outLines | Select-Object -Skip $stdoutOffset
+                            } else { @() }
+                            foreach ($line in $newOut) {
+                                if ($line -ne $null -and $line -ne '') {
+                                    Write-Host "    $line" -ForegroundColor DarkGray
+                                    $hadOutput = $true
+                                }
+                            }
+                            $stdoutOffset += @($newOut).Count
+                        } catch {}
+                    }
+                    if (Test-Path $multiStderr) {
+                        try {
+                            $errLines = Get-Content -Path $multiStderr -ErrorAction SilentlyContinue
+                            $newErr = if ($errLines) {
+                                $errLines | Select-Object -Skip $stderrOffset
+                            } else { @() }
+                            foreach ($line in $newErr) {
+                                if ($line -ne $null -and $line -ne '') {
+                                    Write-Host "    [stderr] $line" -ForegroundColor DarkYellow
+                                    $hadOutput = $true
+                                }
+                            }
+                            $stderrOffset += @($newErr).Count
+                        } catch {}
+                    }
+
+                    # Emit a heartbeat every 30 s so the user knows the
+                    # orchestrator hasn't hung — even when the spawned
+                    # scripts only write to the console via Write-Host
+                    # (which bypasses the redirected stdout file).
+                    if (-not $multiCompleted) {
+                        $elapsed = [DateTime]::UtcNow - $lastHeartbeat
+                        if ($elapsed -ge $heartbeatInterval) {
+                            $totalElapsed = [Math]::Floor(([DateTime]::UtcNow - $multiStartTime).TotalSeconds)
+                            Write-Info "Multi-scenarios still running … (${totalElapsed}s elapsed, timeout=${multiTimeout}s)"
+                            $lastHeartbeat = [DateTime]::UtcNow
+                        }
+                    }
+                }
+
+                if (-not $multiCompleted) {
+                    Write-WarningMsg "Multi-scenarios timed out after ${multiTimeout}s — killing process tree"
+                    $multiProc.Kill($true) | Out-Null
+                    $multiProc.WaitForExit(5000) | Out-Null
+                }
 
                 $multiOk = ($multiProc.ExitCode -eq 0)
 
@@ -1303,8 +1381,9 @@ if ($SkipMultiScenarios) {
                     }
                 }
 
+                $detailExtra = if (-not $multiCompleted) { ' TIMEOUT' } else { '' }
                 Write-StepResult -Step 'multi-scenarios' -Passed $multiOk `
-                    -Detail "exit=$($multiProc.ExitCode) iterations=$MultiScenariosIterations"
+                    -Detail "exit=$($multiProc.ExitCode) iterations=$MultiScenariosIterations${detailExtra}"
             } catch {
                 Write-StepResult -Step 'multi-scenarios' -Passed $false -Detail "Exception: $_"
             } finally {
