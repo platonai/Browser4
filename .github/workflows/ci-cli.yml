@@ -49,7 +49,7 @@ jobs:
   e2e:
     name: 'CLI E2E (${{ matrix.name }})'
     runs-on: ${{ matrix.os }}
-    if: ${{ inputs.platform == 'all' || inputs.platform == '' || matrix.platform == inputs.platform }}
+    if: ${{ !inputs.platform || inputs.platform == 'all' || inputs.platform == '' || matrix.platform == inputs.platform }}
     permissions:
       contents: read
     strategy:
