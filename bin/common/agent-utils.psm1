@@ -221,10 +221,21 @@ function Invoke-AiAnalysis {
         Write-Verbose "   Prompt length: $($fullPrompt.Length) chars"
     }
 
-    # Invoke
+    # Invoke — write prompt to a temp file to avoid "Argument list too long"
+    # when large file contents make $fullPrompt exceed the OS arg-length limit.
+    $promptFile = $null
     try {
         $sw = [Diagnostics.Stopwatch]::StartNew()
-        $result = & $analyzer -p $fullPrompt 2>&1
+
+        # Write the full prompt to a temp file
+        $promptFile = New-TemporaryFile
+        $fullPrompt | Set-Content -LiteralPath $promptFile -Encoding UTF8
+        Write-Verbose "   Prompt written to temp file: $promptFile"
+
+        # Pass only a short instruction asking the AI to read the file.
+        # This keeps the command-line argument tiny regardless of prompt size.
+        $shortPrompt = "Please read the instructions in the file '$promptFile' and follow them exactly. Do not summarise the file — execute every instruction it contains."
+        $result = & $analyzer -p $shortPrompt 2>&1
         $sw.Stop()
         $text = ($result | Out-String).Trim()
 
@@ -244,6 +255,15 @@ function Invoke-AiAnalysis {
     } catch {
         Write-Warning "Invoke-AiAnalysis: $analyzer invocation failed: $($_.Exception.Message)"
         return $null
+    } finally {
+        # Clean up the temp prompt file
+        if ($promptFile -and (Test-Path -LiteralPath $promptFile)) {
+            try {
+                Remove-Item -LiteralPath $promptFile -Force -ErrorAction Stop
+            } catch {
+                Write-Verbose "   Could not remove temp prompt file: $promptFile"
+            }
+        }
     }
 }
 
