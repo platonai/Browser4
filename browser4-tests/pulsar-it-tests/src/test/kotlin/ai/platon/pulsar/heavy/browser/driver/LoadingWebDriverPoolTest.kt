@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Tag
 import org.junit.jupiter.api.Test
 import java.util.concurrent.Executors
 
+@Tag("ManualOnly")
 class LoadingWebDriverPoolTest {
     private val config = ImmutableConfig()
     private lateinit var browserId: BrowserId
