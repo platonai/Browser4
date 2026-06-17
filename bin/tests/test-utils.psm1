@@ -137,7 +137,11 @@ function Start-TestSession {
         [Parameter(Mandatory=$true)]
         [string]$Name,
 
-        [string]$LogBaseDir
+        [string]$LogBaseDir,
+
+        # Skip pre-test port cleanup when the caller manages the server lifecycle
+        # externally (e.g. orchestrator that pre-starts the server).
+        [switch]$SkipPortCleanup
     )
 
     if (-not $LogBaseDir) {
@@ -159,6 +163,11 @@ function Start-TestSession {
     $PSDefaultParameterValues['*:Encoding'] = 'utf8'
 
     $null = New-Item -Path $script:LogDir -ItemType Directory -Force -ErrorAction SilentlyContinue
+
+    # --- Pre-test port cleanup (prevents "Port 8182 already in use" failures) ---
+    if (-not $SkipPortCleanup) {
+        Clear-Browser4Port -Port 8182 -WaitSeconds 2
+    }
 
     Write-Host "`n📁 Log directory: $script:LogDir" -ForegroundColor DarkGray
 }
@@ -236,6 +245,108 @@ function ConvertTo-WindowsCmdArg {
 }
 
 # ============================================================================
+# Public: kill any process holding the Browser4 port (8182) and stale servers
+# ============================================================================
+<#
+.SYNOPSIS
+    Kill processes holding the Browser4 server port or matching known
+    Browser4 Java process patterns, then wait for the port to be released.
+
+.DESCRIPTION
+    Cross-platform cleanup that helps prevent "Port 8182 was already in use"
+    failures caused by a stale server process from a prior test run.
+
+    On Windows, uses netstat + taskkill; on Linux/macOS, uses lsof/fuser + kill.
+    Also scans for Java processes whose command-line includes 'browser4'.
+
+.PARAMETER Port
+    TCP port to clear (default: 8182).
+
+.PARAMETER WaitSeconds
+    Seconds to wait after killing processes for the port to be released
+    (default: 3).
+
+.EXAMPLE
+    Clear-Browser4Port
+    Clear-Browser4Port -Port 8182 -WaitSeconds 5
+#>
+function Clear-Browser4Port {
+    [CmdletBinding()]
+    param(
+        [int]$Port = 8182,
+        [int]$WaitSeconds = 3
+    )
+
+    $isWin = (Get-Variable -Name 'IsWindows' -ErrorAction SilentlyContinue) -and $IsWindows
+    if (-not $isWin) { $isWin = ($env:OS -eq 'Windows_NT') }
+
+    Write-Host "  🧹 Clearing port ${Port} and stale Browser4 processes..." -ForegroundColor DarkGray
+
+    # ── Platform-specific port cleanup ──────────────────────────────
+    if ($isWin) {
+        # Windows: use netstat to find the PID holding the port
+        try {
+            $netstatLines = & netstat -ano 2>$null | Select-String ":$Port.*LISTENING"
+            foreach ($line in $netstatLines) {
+                $parts = $line.Line -split '\s+' | Where-Object { $_ }
+                $pidStr = $parts[-1]
+                if ($pidStr -match '^\d+$' -and [int]$pidStr -ne 0) {
+                    Write-Host "    Killing PID $pidStr (port $Port)" -ForegroundColor DarkYellow
+                    & taskkill /F /PID $pidStr 2>$null | Out-Null
+                }
+            }
+        } catch { }
+
+        # Kill any Java process whose command-line mentions browser4
+        try {
+            $javaProcs = Get-CimInstance Win32_Process -Filter "Name='java.exe'" -ErrorAction SilentlyContinue |
+                Where-Object { $_.CommandLine -match 'browser4' }
+            foreach ($jp in $javaProcs) {
+                Write-Host "    Killing Java PID $($jp.ProcessId) (browser4)" -ForegroundColor DarkYellow
+                & taskkill /F /PID $jp.ProcessId 2>$null | Out-Null
+            }
+        } catch { }
+    } else {
+        # Linux / macOS: use lsof (preferred) or fuser
+        $lsof = Get-Command 'lsof' -CommandType Application -ErrorAction SilentlyContinue
+        $fuser = Get-Command 'fuser' -CommandType Application -ErrorAction SilentlyContinue
+
+        if ($lsof) {
+            try {
+                $pids = & lsof -ti tcp:${Port} 2>$null
+                if ($pids) {
+                    foreach ($p in ($pids -split '\n' | Where-Object { $_ -match '^\d+$' })) {
+                        Write-Host "    Killing PID $p (port $Port)" -ForegroundColor DarkYellow
+                        & kill -9 $p 2>$null
+                    }
+                }
+            } catch { }
+        } elseif ($fuser) {
+            try {
+                & fuser -k ${Port}/tcp 2>$null | Out-Null
+            } catch { }
+        }
+
+        # Kill stale Java browser4 processes
+        try {
+            $javaB4Pids = & pgrep -f 'browser4.*\.jar' 2>$null
+            if ($javaB4Pids) {
+                foreach ($p in ($javaB4Pids -split '\n' | Where-Object { $_ -match '^\d+$' })) {
+                    Write-Host "    Killing Java PID $p (browser4)" -ForegroundColor DarkYellow
+                    & kill -9 $p 2>$null
+                }
+            }
+        } catch { }
+    }
+
+    # ── Wait for port to be released ────────────────────────────────
+    if ($WaitSeconds -gt 0) {
+        Write-Host "    Waiting ${WaitSeconds}s for port release..." -ForegroundColor DarkGray
+        Start-Sleep -Seconds $WaitSeconds
+    }
+}
+
+# ============================================================================
 # Public: run a CLI command and capture everything
 # ============================================================================
 <#
@@ -281,6 +392,17 @@ function Invoke-TrackedCli {
         # install/upgrade → 900 s, everything else → 120 s.
         [int]$TimeoutSecs = 0
     )
+
+    # ── Defensive: collapse multi-line arguments to single lines ─────
+    # PowerShell here-strings pass newlines literally into the argument
+    # array.  Some CLI argument parsers split on embedded CR/LF, causing
+    # "too many arguments" rejections.  Joining lines with " ; " keeps
+    # the argument as one token regardless of platform.
+    $Arguments = @($Arguments | ForEach-Object {
+        if ($_ -match "[\r\n]") {
+            ($_ -split "[\r\n]+" | ForEach-Object { $_.Trim() } | Where-Object { $_ }) -join ' ; '
+        } else { $_ }
+    })
 
     $script:CommandIndex++
     $idx = $script:CommandIndex
@@ -401,6 +523,26 @@ function Invoke-TrackedCli {
 
     if ($timedOut) {
         $output.Add("TIMEOUT after ${effectiveTimeout}s — killed")
+    }
+
+    # --- Server-startup failure diagnostics ---
+    # Scan all collected output for known server-failure patterns and
+    # emit clear diagnostic lines so the user sees the root cause at a
+    # glance instead of only a generic exit-code mismatch.
+    $allOutput = $output -join "`n"
+    if ($allOutput -match 'Port\s+(\d+)\s+was already in use') {
+        $portNum = $Matches[1]
+        $output.Add("[DIAGNOSTIC] Port $portNum was already in use — stale Browser4 server from a prior run.")
+        $output.Add("[DIAGNOSTIC] Run 'Clear-Browser4Port' before starting tests, or kill the process holding port $portNum.")
+    }
+    if ($allOutput -match 'Browser4 server startup failed') {
+        $output.Add("[DIAGNOSTIC] Browser4 server failed to start. Check if another process is holding the required port (default: 8182).")
+    }
+    if ($allOutput -match 'APPLICATION FAILED TO START') {
+        $output.Add("[DIAGNOSTIC] Spring application context failed to start. See server logs for details.")
+    }
+    if ($allOutput -match '404 Not Found' -and $allOutput -match 'startup') {
+        $output.Add("[DIAGNOSTIC] Server started HTTP listener but application context may not be ready — 404 responses indicate incomplete startup.")
     }
 
     # --- Determine status ---
@@ -1079,6 +1221,7 @@ function Get-TestUrl {
 # Export functions
 Export-ModuleMember -Function @(
     'Start-TestSession',
+    'Clear-Browser4Port',
     'Invoke-TrackedCli',
     'Register-CliResult',
     'Invoke-CopilotAnalysis',

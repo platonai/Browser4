@@ -62,10 +62,10 @@ Write-Host ''
 # 2. Submit agent task
 # -------------------------------------------------------------------
 Write-Host "━━━ Submitting agent task ━━━" -ForegroundColor Cyan
-$taskDescription = @"
-Visit $TestUrl
-Summarize the product.
-"@
+# Collapse to a single line to avoid multi-line argument splitting across
+# platforms.  PowerShell here-strings pass newlines literally, and some
+# CLI argument parsers (especially on Windows) split on embedded CR/LF.
+$taskDescription = "Visit $TestUrl ; Summarize the product."
 $output = Invoke-TrackedCli -Arguments @('agent', 'run', $taskDescription) -Label 'agent run (page-visit)' -PassThruOnly
 $agentRunText = ($output | Out-String).Trim()
 Write-Host "Agent run output: $agentRunText" -ForegroundColor DarkGray

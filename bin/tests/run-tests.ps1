@@ -73,6 +73,22 @@ Import-Module "$ScriptDir\test-utils.psm1" -Force
 $RunnerLogDir = Join-Path $ScriptDir 'logs'
 $null = New-Item -Path $RunnerLogDir -ItemType Directory -Force -ErrorAction SilentlyContinue
 
+# Per-category timeout overrides (seconds).  Stress tests involve server
+# cold-starts and many page loads; they need more time than the default.
+$CategoryTimeoutOverrides = @{
+    stress  = 900   # 15 min — accounts for cold-start overhead
+    swarm   = 900   # 15 min — swarm tests may also cold-start
+    agent   = 900   # 15 min — agent tasks can be slow
+}
+
+# Server pre-start: run a warm-up open+close so the Browser4 runtime is
+# downloaded and started once before any test runs.  Saves 60–120s of
+# cold-start overhead per test.
+$ShouldPreStartServer = $true
+if ($env:BROWSER4_SKIP_PRESTART -eq '1') {
+    $ShouldPreStartServer = $false
+}
+
 # -------------------------------------------------------------------
 # Test registry
 # -------------------------------------------------------------------
@@ -184,6 +200,29 @@ Write-Host '══════════════════════�
 Write-Host ''
 
 # -------------------------------------------------------------------
+# Pre-start the Browser4 server (download + warm start)
+# -------------------------------------------------------------------
+if ($ShouldPreStartServer -and $cliBin) {
+    Write-Host '── Pre-starting Browser4 server (warm-up) ──' -ForegroundColor DarkYellow
+    try {
+        # Kill any stale port holders first.
+        Clear-Browser4Port -Port 8182 -WaitSeconds 2
+
+        # Open a trivial session to trigger server download/start, then close.
+        $preOut = & $cliBin open https://example.com 2>&1
+        Write-Host "  open: $($preOut -join '; ')" -ForegroundColor DarkGray
+        Start-Sleep -Seconds 5
+        $preOut = & $cliBin close 2>&1
+        Write-Host "  close: $($preOut -join '; ')" -ForegroundColor DarkGray
+        Start-Sleep -Seconds 2
+        Write-Host '  ✅ Server pre-start complete.' -ForegroundColor Green
+    } catch {
+        Write-Host "  ⚠ Server pre-start failed (non-fatal): $($_.Exception.Message)" -ForegroundColor DarkYellow
+    }
+    Write-Host ''
+}
+
+# -------------------------------------------------------------------
 # Run
 # -------------------------------------------------------------------
 $startedAt = Get-Date
@@ -194,11 +233,16 @@ $failures = 0
 $index = 0
 
 foreach ($testName in $toRun) {
+    # Resolve per-test timeout: category override → explicit parameter → default
+    $entry = $Tests | Where-Object { $_.Name -eq $testName } | Select-Object -First 1
+    $testTimeout = $TimeoutSeconds
+    if ($entry -and $CategoryTimeoutOverrides.ContainsKey($entry.Category)) {
+        $testTimeout = $CategoryTimeoutOverrides[$entry.Category]
+    }
     $index++
     $scriptPath = Join-Path $ScriptDir "$testName.ps1"
 
     # Look up description
-    $entry = $Tests | Where-Object { $_.Name -eq $testName } | Select-Object -First 1
     $desc = if ($entry) { $entry.Description } else { $testName }
 
     if (-not (Test-Path $scriptPath)) {
@@ -215,7 +259,7 @@ foreach ($testName in $toRun) {
     }
 
     if ($CI) {
-        Write-Host "::group::[$index/$($toRun.Count)] $testName — $desc"
+        Write-Host "::group::[$index/$($toRun.Count)] $testName — $desc (timeout=${testTimeout}s)"
     } else {
         Write-Host "[$index/$($toRun.Count)] $testName — $desc" -ForegroundColor White
     }
@@ -231,22 +275,22 @@ foreach ($testName in $toRun) {
 
         # Wait with timeout, printing progress every 10 s for runs
         # that exceed 30 s so the user can tell it hasn't hung.
-        if ($TimeoutSeconds -gt 30) {
-            $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+        if ($testTimeout -gt 30) {
+            $deadline = [DateTime]::UtcNow.AddSeconds($testTimeout)
             $completed = $false
             while (-not $completed -and ([DateTime]::UtcNow -lt $deadline)) {
                 $completed = $proc.WaitForExit(10000)
                 if (-not $completed -and ([DateTime]::UtcNow -lt $deadline)) {
                     $elapsed = [Math]::Floor($sw.Elapsed.TotalSeconds)
-                    Write-Host ("`r  ⏳ {0} — {1}s / {2}s … " -f $testName, $elapsed, $TimeoutSeconds) -NoNewline -ForegroundColor DarkGray
+                    Write-Host ("`r  ⏳ {0} — {1}s / {2}s … " -f $testName, $elapsed, $testTimeout) -NoNewline -ForegroundColor DarkGray
                 }
             }
             Write-Host ''
         } else {
-            $completed = $proc.WaitForExit($TimeoutSeconds * 1000)
+            $completed = $proc.WaitForExit($testTimeout * 1000)
         }
         if (-not $completed) {
-            Write-Host "  ⚠ TIMEOUT after ${TimeoutSeconds}s — killing" -ForegroundColor Red
+            Write-Host "  ⚠ TIMEOUT after ${testTimeout}s — killing" -ForegroundColor Red
             $proc.Kill()
             $proc.WaitForExit(5000) | Out-Null
         }
@@ -259,7 +303,7 @@ foreach ($testName in $toRun) {
             Passed   = ($exitCode -eq 0)
             Elapsed  = $sw.Elapsed
             ExitCode = $exitCode
-            Error    = $(if (-not $completed) { "Timeout after ${TimeoutSeconds}s" } else { '' })
+            Error    = $(if (-not $completed) { "Timeout after ${testTimeout}s" } else { '' })
         })
 
         if ($exitCode -eq 0) {
