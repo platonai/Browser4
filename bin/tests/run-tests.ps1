@@ -208,12 +208,40 @@ if ($ShouldPreStartServer -and $cliBin) {
         # Kill any stale port holders first.
         Clear-Browser4Port -Port 8182 -WaitSeconds 2
 
-        # Open a trivial session to trigger server download/start, then close.
-        $preOut = & $cliBin open https://example.com 2>&1
-        Write-Host "  open: $($preOut -join '; ')" -ForegroundColor DarkGray
+        # Open a trivial session to trigger server download/start.
+        # Use Start-Process with a 120 s timeout so we don't hang if
+        # the page load stalls (the server will still be running and
+        # warm even if the open doesn't complete).
+        $preTimeout = 120
+        $tmpOut = Join-Path $env:TEMP "b4_prestart_stdout_${pid}.txt"
+        $tmpErr = Join-Path $env:TEMP "b4_prestart_stderr_${pid}.txt"
+        Remove-Item $tmpOut, $tmpErr -Force -ErrorAction SilentlyContinue
+
+        $preProc = Start-Process -FilePath $cliBin `
+            -ArgumentList 'open', 'https://example.com' `
+            -NoNewWindow -PassThru `
+            -RedirectStandardOutput $tmpOut `
+            -RedirectStandardError $tmpErr
+
+        $preCompleted = $preProc.WaitForExit($preTimeout * 1000)
+        $preExitCode = if ($preCompleted) { $preProc.ExitCode } else { $preProc.Kill($true); -99 }
+
+        $preOut = @()
+        if (Test-Path $tmpOut) { $preOut += Get-Content $tmpOut -Encoding UTF8 -ErrorAction SilentlyContinue }
+        if (Test-Path $tmpErr) { $preOut += Get-Content $tmpErr -Encoding UTF8 -ErrorAction SilentlyContinue |
+            ForEach-Object { "[stderr] $_" } }
+        Remove-Item $tmpOut, $tmpErr -Force -ErrorAction SilentlyContinue
+
+        if ($preCompleted) {
+            Write-Host "  open (exit=$preExitCode): $($preOut -join '; ')" -ForegroundColor DarkGray
+        } else {
+            Write-Host "  ⚠ open timed out after ${preTimeout}s — server may still be starting in background" -ForegroundColor DarkYellow
+        }
+
+        # Give the server a moment to finish initialising, then close.
         Start-Sleep -Seconds 5
-        $preOut = & $cliBin close 2>&1
-        Write-Host "  close: $($preOut -join '; ')" -ForegroundColor DarkGray
+        $preCloseOut = & $cliBin close 2>&1
+        Write-Host "  close: $($preCloseOut -join '; ')" -ForegroundColor DarkGray
         Start-Sleep -Seconds 2
         Write-Host '  ✅ Server pre-start complete.' -ForegroundColor Green
     } catch {
