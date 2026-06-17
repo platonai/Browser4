@@ -153,9 +153,86 @@ function Start-TestSession {
     $script:TestStartTime = Get-Date
     $script:CommandIndex  = 0
 
+    # Force UTF-8 output so Unicode box-drawing characters (e.g. ═, ✅, ❌)
+    # render correctly in both console and redirected output.
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    $PSDefaultParameterValues['*:Encoding'] = 'utf8'
+
     $null = New-Item -Path $script:LogDir -ItemType Directory -Force -ErrorAction SilentlyContinue
 
     Write-Host "`n📁 Log directory: $script:LogDir" -ForegroundColor DarkGray
+}
+
+# ============================================================================
+# Public: escape a single argument for Windows command-line parsing
+# ============================================================================
+<#
+.SYNOPSIS
+    Escape a single argument for Windows' CommandLineToArgvW parsing so that
+    it is received as exactly one argument by the child process.
+
+.DESCRIPTION
+    Implements the MSDN algorithm for quoting command-line arguments.
+    - Empty string → ""
+    - No whitespace / tab / double quotes → returned as-is
+    - Otherwise → wrapped in double quotes with internal double quotes and
+      backslashes properly escaped
+
+    Used internally by Invoke-TrackedCli on Windows.  Exported so unit tests
+    can validate the escaping rules independently.
+
+.EXAMPLE
+    ConvertTo-WindowsCmdArg 'hello world'
+    # "hello world"
+
+.EXAMPLE
+    ConvertTo-WindowsCmdArg 'say "hi"'
+    # "say \"hi\""
+
+.EXAMPLE
+    ConvertTo-WindowsCmdArg 'C:\path\to\'
+    # "C:\path\to\\"
+#>
+function ConvertTo-WindowsCmdArg {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory=$true)]
+        [AllowEmptyString()]
+        [string]$Argument
+    )
+
+    if ($Argument.Length -eq 0) { return '""' }
+
+    # If the argument contains no characters that would be interpreted by
+    # CommandLineToArgvW, return it as-is (no quoting needed).
+    if ($Argument -notmatch '[\s\t\"]') { return $Argument }
+
+    $sb = [System.Text.StringBuilder]::new()
+    [void]$sb.Append('"')
+
+    $backslashCount = 0
+    foreach ($c in $Argument.ToCharArray()) {
+        if ($c -eq '\') {
+            $backslashCount++
+        } elseif ($c -eq '"') {
+            # A run of N backslashes followed by a double quote:
+            # produce 2*N backslashes (every pair becomes one literal backslash)
+            # plus one more backslash to escape the quote itself.
+            [void]$sb.Append('\', $backslashCount * 2)
+            [void]$sb.Append('\"')
+            $backslashCount = 0
+        } else {
+            [void]$sb.Append('\', $backslashCount)
+            [void]$sb.Append($c)
+            $backslashCount = 0
+        }
+    }
+
+    # Trailing backslashes: double them so they don't escape the closing quote.
+    [void]$sb.Append('\', $backslashCount * 2)
+    [void]$sb.Append('"')
+
+    return $sb.ToString()
 }
 
 # ============================================================================
@@ -268,7 +345,7 @@ function Invoke-TrackedCli {
         # problem that plagues .NET Process + Peek() on Windows.
         $proc = Start-Process `
             -FilePath $cliExe `
-            -ArgumentList ($Arguments -join ' ') `
+            -ArgumentList (($Arguments | ForEach-Object { ConvertTo-WindowsCmdArg $_ }) -join ' ') `
             -NoNewWindow `
             -PassThru `
             -RedirectStandardOutput $tmpOut `
@@ -301,11 +378,11 @@ function Invoke-TrackedCli {
 
         # Read captured output from temp files.
         if (Test-Path $tmpOut) {
-            $stdoutLines = Get-Content -Path $tmpOut -ErrorAction SilentlyContinue
+            $stdoutLines = Get-Content -Path $tmpOut -Encoding UTF8 -ErrorAction SilentlyContinue
             if ($stdoutLines) { $stdoutLines | ForEach-Object { $output.Add($_) } }
         }
         if (Test-Path $tmpErr) {
-            $stderrLines = Get-Content -Path $tmpErr -ErrorAction SilentlyContinue
+            $stderrLines = Get-Content -Path $tmpErr -Encoding UTF8 -ErrorAction SilentlyContinue
             if ($stderrLines) { $stderrLines | ForEach-Object { $output.Add("[stderr] $_") } }
         }
 
@@ -1021,5 +1098,6 @@ Export-ModuleMember -Function @(
     'Write-TestHeader',
     'Get-TestLocale',
     'Get-TestUrlSet',
-    'Get-TestUrl'
+    'Get-TestUrl',
+    'ConvertTo-WindowsCmdArg'
 )

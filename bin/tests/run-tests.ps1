@@ -86,7 +86,8 @@ $Tests = @(
     [PSCustomObject]@{ Name = 'stress-swarm-agents';            Category = 'stress'; Description = 'Swarm stress test with seed URLs' },
     [PSCustomObject]@{ Name = 'stress-session';                 Category = 'stress'; Description = 'Session lifecycle stress test' },
     [PSCustomObject]@{ Name = 'stress-install';                 Category = 'stress'; Description = 'Install / server lifecycle stress test' },
-    [PSCustomObject]@{ Name = 'test-production-helpers';       Category = 'helpers'; Description = 'Unit tests for test-production.ps1 helper functions' }
+    [PSCustomObject]@{ Name = 'test-production-helpers';       Category = 'helpers'; Description = 'Unit tests for test-production.ps1 helper functions' },
+    [PSCustomObject]@{ Name = 'test-utils-helpers';            Category = 'helpers'; Description = 'Unit tests for test-utils.psm1 helper functions' }
 )
 
 # Map category name → list of test names
@@ -95,7 +96,7 @@ $Categories = @{
     agent  = @('agent-run-free-command', 'agent-run-page-visit', 'agent-run-page-visit-interact')
     swarm  = @('swarm-agents', 'stress-swarm-agents')
     stress  = @('stress-swarm-agents', 'stress-session', 'stress-install')
-    helpers = @('test-production-helpers')
+    helpers = @('test-production-helpers', 'test-utils-helpers')
 }
 
 # -------------------------------------------------------------------

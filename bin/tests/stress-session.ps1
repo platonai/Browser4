@@ -126,7 +126,7 @@ function Invoke-Cli {
 
         $proc = Start-Process `
             -FilePath $cliExe `
-            -ArgumentList ($args -join ' ') `
+            -ArgumentList (($args | ForEach-Object { ConvertTo-WindowsCmdArg $_ }) -join ' ') `
             -NoNewWindow `
             -PassThru `
             -RedirectStandardOutput $tmpOut `

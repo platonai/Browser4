@@ -412,8 +412,8 @@ for ($iteration = 1; $iteration -le $Iterations; $iteration++) {
             $proc.Kill($true)
             $proc.WaitForExit(5000) | Out-Null
             $sw.Stop()
-            $stdout = if (Test-Path $tmpOut) { Get-Content -Path $tmpOut -Raw -ErrorAction SilentlyContinue } else { '<timeout — no output captured>' }
-            $stderr = if (Test-Path $tmpErr) { Get-Content -Path $tmpErr -Raw -ErrorAction SilentlyContinue } else { '' }
+            $stdout = if (Test-Path $tmpOut) { Get-Content -Path $tmpOut -Raw -Encoding UTF8 -ErrorAction SilentlyContinue } else { '<timeout — no output captured>' }
+            $stderr = if (Test-Path $tmpErr) { Get-Content -Path $tmpErr -Raw -Encoding UTF8 -ErrorAction SilentlyContinue } else { '' }
             Remove-Item $tmpOut, $tmpErr -Force -ErrorAction SilentlyContinue
             $serverLog = Get-ServerLogTail -BundleHome $RuntimeBundleHome -TailLines $ServerLogTailLines
             @"

@@ -48,8 +48,8 @@
 .PARAMETER MultiScenariosIterations
     Number of iterations for the multi-scenario suite (default: 1).
 
-.PARAMETER KeepWorkingDir
-    Do not delete the working directory on exit.
+.PARAMETER RemoveWorkingDir
+    Delete the working directory on exit (default: keep it for review).
 
 .PARAMETER Help
     Show this help message.
@@ -61,7 +61,7 @@
     .\test-production.ps1 -SkipMultiScenarios
 
 .EXAMPLE
-    .\test-production.ps1 -MultiScenariosIterations 3 -KeepWorkingDir
+    .\test-production.ps1 -MultiScenariosIterations 3 -RemoveWorkingDir
 #>
 
 [CmdletBinding()]
@@ -69,7 +69,7 @@ param(
     [string] $WorkingDir = '',
     [switch] $SkipMultiScenarios,
     [int] $MultiScenariosIterations = 1,
-    [switch] $KeepWorkingDir,
+    [switch] $RemoveWorkingDir,
     [switch] $Help
 )
 
@@ -265,8 +265,8 @@ function Invoke-CliCommand {
             $proc.WaitForExit(5000) | Out-Null
         }
 
-        $stdout = Get-Content -Path $tmpOut -Raw -ErrorAction SilentlyContinue
-        $stderr = Get-Content -Path $tmpErr -Raw -ErrorAction SilentlyContinue
+        $stdout = Get-Content -Path $tmpOut -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+        $stderr = Get-Content -Path $tmpErr -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
         Remove-Item $tmpOut, $tmpErr -Force -ErrorAction SilentlyContinue
 
         $combined = (@($stdout, $stderr) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join "`n"
@@ -321,8 +321,8 @@ function Wait-ProcessAndCollect {
         $Process.Kill($true) | Out-Null
         $Process.WaitForExit(5000) | Out-Null
     }
-    $stdout = Get-Content -Path (Join-Path $TempDir 'b4cli-async-stdout.txt') -Raw -ErrorAction SilentlyContinue
-    $stderr = Get-Content -Path (Join-Path $TempDir 'b4cli-async-stderr.txt') -Raw -ErrorAction SilentlyContinue
+    $stdout = Get-Content -Path (Join-Path $TempDir 'b4cli-async-stdout.txt') -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+    $stderr = Get-Content -Path (Join-Path $TempDir 'b4cli-async-stderr.txt') -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
     Remove-Item (Join-Path $TempDir 'b4cli-async-stdout.txt'), (Join-Path $TempDir 'b4cli-async-stderr.txt') -Force -ErrorAction SilentlyContinue
 
     $combined = (@($stdout, $stderr) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join "`n"
@@ -1318,7 +1318,7 @@ if ($SkipMultiScenarios) {
                     $hadOutput = $false
                     if (Test-Path $multiStdout) {
                         try {
-                            $outLines = Get-Content -Path $multiStdout -ErrorAction SilentlyContinue
+                            $outLines = Get-Content -Path $multiStdout -Encoding UTF8 -ErrorAction SilentlyContinue
                             $newOut = if ($outLines) {
                                 $outLines | Select-Object -Skip $stdoutOffset
                             } else { @() }
@@ -1333,7 +1333,7 @@ if ($SkipMultiScenarios) {
                     }
                     if (Test-Path $multiStderr) {
                         try {
-                            $errLines = Get-Content -Path $multiStderr -ErrorAction SilentlyContinue
+                            $errLines = Get-Content -Path $multiStderr -Encoding UTF8 -ErrorAction SilentlyContinue
                             $newErr = if ($errLines) {
                                 $errLines | Select-Object -Skip $stderrOffset
                             } else { @() }
@@ -1431,8 +1431,9 @@ if ($SkipMultiScenarios) {
     # Return to original directory
     Pop-Location
 
-    # Clean up working directory
-    if (-not $KeepWorkingDir) {
+    # Clean up working directory (kept by default for review;
+    # pass -RemoveWorkingDir to delete it).
+    if ($RemoveWorkingDir) {
         Write-Info "Removing working directory: $WorkingDir"
         try {
             Remove-Item $WorkingDir -Recurse -Force -ErrorAction SilentlyContinue
@@ -1440,7 +1441,7 @@ if ($SkipMultiScenarios) {
             Write-WarningMsg "Could not fully remove $WorkingDir : $_"
         }
     } else {
-        Write-Info "-KeepWorkingDir set — preserving $WorkingDir"
+        Write-Info "Preserving working directory for review: $WorkingDir"
     }
 
     # Clean up temp install scripts
