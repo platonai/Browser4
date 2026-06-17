@@ -567,6 +567,274 @@ if ($cliAvailable) {
 }
 
 # ═══════════════════════════════════════════════════════════════════
+# TESTS: Invoke-CliCommand (via fake CLI script)
+# ═══════════════════════════════════════════════════════════════════
+# NOTE: Get-Command on Linux only scans PATH at pwsh startup.  Setting
+# $env:Path at runtime won't make newly-added executables visible.
+# We work around this by writing the test body to a temp script and
+# re-launching pwsh with the fake CLI directory already on PATH.
+Write-Host "━━━ Invoke-CliCommand: re-launching with fake CLI on PATH ━━━" -ForegroundColor Cyan
+
+# Ensure PATH is populated before we check anything
+if (-not $env:Path) {
+    if ($script:OSWin) {
+        $env:Path = "$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\Wbem"
+    } else {
+        $env:Path = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+    }
+}
+
+# Decide whether we can test Invoke-CliCommand inline or need a subprocess.
+$canTestIccInline = $false
+if ($script:OSWin) {
+    # On Windows Get-Command re-scans PATH; create .cmd and test inline.
+    $FakeCliDir = Join-Path ([System.IO.Path]::GetTempPath()) "b4-fake-cli-$([System.IO.Path]::GetRandomFileName())"
+    $null = New-Item -Path $FakeCliDir -ItemType Directory -Force
+    $fakeCmd = Join-Path $FakeCliDir 'browser4-cli.cmd'
+    @'
+@echo off
+set MODE=%1
+if "%MODE%"=="normal" (echo hello stdout&& echo hello stderr >&2&& exit /b 0)
+if "%MODE%"=="empty" (exit /b 0)
+if "%MODE%"=="stderr-only" (echo error message >&2&& exit /b 1)
+if "%MODE%"=="slow" (ping -n 30 127.0.0.1 > nul&& exit /b 0)
+if "%MODE%"=="exit-42" (echo some output&& exit /b 42)
+exit /b 0
+'@ | Set-Content -Path $fakeCmd
+    $env:Path = "$FakeCliDir;$env:Path"
+    $canTestIccInline = $true
+} else {
+    # On Linux / macOS, check whether a fake browser4-cli is already on PATH
+    # (e.g. the test runner set it up before invoking pwsh).
+    $existing = Get-Command 'browser4-cli' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($existing) {
+        Write-Host "    browser4-cli found on PATH: $($existing.Source)" -ForegroundColor DarkGray
+        $canTestIccInline = $true
+        $FakeCliDir = $null
+    }
+}
+
+if ($canTestIccInline) {
+    # ── Run tests inline (PATH already set correctly) ──
+    try {
+        Write-Host "━━━ Invoke-CliCommand: normal execution ━━━" -ForegroundColor Cyan
+
+        $result = Invoke-CliCommand -Arguments @('normal')
+        Assert-Returns -Label 'ICC normal: ExitCode=0' -Actual $result.ExitCode -Expected 0
+        Assert-Returns -Label 'ICC normal: Stdout contains hello' -Actual ($result.Stdout -match 'hello stdout') -Expected $true
+        Assert-Returns -Label 'ICC normal: Stderr contains hello' -Actual ($result.Stderr -match 'hello stderr') -Expected $true
+        Assert-Returns -Label 'ICC normal: Elapsed is a TimeSpan' -Actual ($result.Elapsed -is [TimeSpan]) -Expected $true
+
+        Write-Host "━━━ Invoke-CliCommand: empty output ━━━" -ForegroundColor Cyan
+        $result = Invoke-CliCommand -Arguments @('empty')
+        Assert-Returns -Label 'ICC empty: ExitCode=0' -Actual $result.ExitCode -Expected 0
+        Assert-Returns -Label 'ICC empty: Output is empty' -Actual $result.Output -Expected ''
+
+        Write-Host "━━━ Invoke-CliCommand: stderr only ━━━" -ForegroundColor Cyan
+        $result = Invoke-CliCommand -Arguments @('stderr-only') -IgnoreExitCode
+        Assert-Returns -Label 'ICC stderr-only: ExitCode=1' -Actual $result.ExitCode -Expected 1
+        Assert-Returns -Label 'ICC stderr-only: Output has error' -Actual ($result.Output -match 'error message') -Expected $true
+
+        Write-Host "━━━ Invoke-CliCommand: non-zero exit ━━━" -ForegroundColor Cyan
+        $result = Invoke-CliCommand -Arguments @('exit-42') -IgnoreExitCode
+        Assert-Returns -Label 'ICC exit-42: ExitCode=42' -Actual $result.ExitCode -Expected 42
+
+        Write-Host "━━━ Invoke-CliCommand: timeout ━━━" -ForegroundColor Cyan
+        $result = Invoke-CliCommand -Arguments @('slow') -TimeoutSeconds 2
+        Assert-Returns -Label 'ICC timeout: ExitCode=-1' -Actual $result.ExitCode -Expected -1
+
+        Write-Host "━━━ Invoke-CliCommand: no arguments ━━━" -ForegroundColor Cyan
+        $result = Invoke-CliCommand -Arguments @()
+        Assert-Returns -Label 'ICC no-args: ExitCode=0' -Actual $result.ExitCode -Expected 0
+        Assert-Returns -Label 'ICC no-args: Result is PSCustomObject' -Actual ($result -is [PSCustomObject]) -Expected $true
+
+    } finally {
+        if ($FakeCliDir) {
+            Remove-Item $FakeCliDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+} else {
+    Write-Host "    ℹ️  Skipping Invoke-CliCommand tests (fake CLI not on PATH at startup)." -ForegroundColor DarkGray
+    Write-Host "    Run with: FAKE_DIR=`$(mktemp -d) && `<fake-cli> && PATH=`"`$FAKE_DIR:`$PATH`" pwsh ..." -ForegroundColor DarkGray
+}
+
+# ═══════════════════════════════════════════════════════════════════
+# TESTS: Wait-ServerHealthy (via HttpListener)
+# ═══════════════════════════════════════════════════════════════════
+Write-Host "━━━ Wait-ServerHealthy ━━━" -ForegroundColor Cyan
+
+# Helper: start a listener on $Port that handles ONE request with the
+# given handler scriptblock, then stops.  Uses a PowerShell runspace
+# so the main thread can make HTTP requests without blocking.
+function Start-OneShotListener {
+    param([int]$Port, [scriptblock]$Handler)
+    $listener = New-Object System.Net.HttpListener
+    try {
+        $listener.Prefixes.Add("http://+:$Port/")
+        $listener.Start()
+    } catch {
+        $listener = New-Object System.Net.HttpListener
+        $listener.Prefixes.Add("http://localhost:$Port/")
+        $listener.Start()
+    }
+
+    # Single-request handler in a background runspace
+    $ps = [PowerShell]::Create()
+    $null = $ps.AddScript({
+        param($L, $H)
+        $ctx = $L.GetContext()
+        & $H $ctx
+    }).AddParameter('L', $listener).AddParameter('H', $Handler)
+
+    $rs = [RunspaceFactory]::CreateRunspace()
+    $rs.Open()
+    $ps.Runspace = $rs
+    $async = $ps.BeginInvoke()
+
+    return @{ L = $listener; RS = $rs; PS = $ps; Async = $async }
+}
+
+function Stop-OneShotListener {
+    param($S)
+    try { $S.PS.EndInvoke($S.Async) | Out-Null } catch {}
+    try { $S.PS.Dispose() } catch {}
+    try { $S.RS.Dispose() } catch {}
+    try { $S.L.Stop() } catch {}
+    try { $S.L.Close() } catch {}
+}
+
+# ── Case 1: Server returns UP immediately ──
+Write-Host "━━━ WSH: immediate UP ━━━" -ForegroundColor Cyan
+$wshPort = 19800 + (Get-Random -Minimum 0 -Maximum 500)
+$wshUrl  = "http://localhost:$wshPort"
+
+$callCount = 0
+$srv = Start-OneShotListener -Port $wshPort -Handler {
+    param($ctx)
+    $script:callCount++
+    $json = '{"status":"UP"}'
+    $buf = [Text.Encoding]::UTF8.GetBytes($json)
+    $ctx.Response.ContentType = 'application/json'
+    $ctx.Response.OutputStream.Write($buf, 0, $buf.Length)
+    $ctx.Response.Close()
+}
+Start-Sleep -Milliseconds 200
+
+try {
+    $health = Wait-ServerHealthy -BaseUrl $wshUrl -TimeoutSeconds 4
+    Assert-Returns -Label 'WSH immediate: Healthy=true' -Actual $health.Healthy -Expected $true
+    Assert-Returns -Label 'WSH immediate: Content present' -Actual ($health.Content.Length -gt 0) -Expected $true
+    Assert-Returns -Label 'WSH immediate: Elapsed is TimeSpan' -Actual ($health.Elapsed -is [TimeSpan]) -Expected $true
+} finally {
+    Stop-OneShotListener $srv
+}
+
+# ── Case 2: Server returns DOWN then UP (multi-request loop) ──
+Write-Host "━━━ WSH: delayed UP ━━━" -ForegroundColor Cyan
+$wshPort2 = 19800 + (Get-Random -Minimum 0 -Maximum 500)
+$wshUrl2  = "http://localhost:$wshPort2"
+
+# Multi-request listener: returns DOWN for the first 2 requests, then UP.
+# Uses a temp file as a poll counter since runspaces don't share variables.
+$pollCounterFile = Join-Path ([System.IO.Path]::GetTempPath()) "b4-wsh-poll-$([System.IO.Path]::GetRandomFileName())"
+Set-Content -Path $pollCounterFile -Value '0'
+
+$ps2 = [PowerShell]::Create()
+$listener2 = New-Object System.Net.HttpListener
+try { $listener2.Prefixes.Add("http://+:$wshPort2/"); $listener2.Start() }
+catch { $listener2 = New-Object System.Net.HttpListener; $listener2.Prefixes.Add("http://localhost:$wshPort2/"); $listener2.Start() }
+
+$null = $ps2.AddScript({
+    param($L, $CounterFile)
+    while ($L.IsListening) {
+        try {
+            $ctx = $L.GetContext()
+            $count = [int](Get-Content $CounterFile -Raw) + 1
+            Set-Content -Path $CounterFile -Value $count
+            if ($count -le 2) {
+                $json = '{"status":"DOWN"}'
+            } else {
+                $json = '{"status":"UP"}'
+            }
+            $buf = [Text.Encoding]::UTF8.GetBytes($json)
+            $ctx.Response.ContentType = 'application/json'
+            $ctx.Response.OutputStream.Write($buf, 0, $buf.Length)
+            $ctx.Response.Close()
+            if ($count -gt 2) { break }
+        } catch { break }
+    }
+}).AddParameter('L', $listener2).AddParameter('CounterFile', $pollCounterFile)
+$rs2 = [RunspaceFactory]::CreateRunspace(); $rs2.Open()
+$ps2.Runspace = $rs2
+$async2 = $ps2.BeginInvoke()
+Start-Sleep -Milliseconds 200
+
+try {
+    $health = Wait-ServerHealthy -BaseUrl $wshUrl2 -TimeoutSeconds 8
+    $finalPollCount = [int](Get-Content $pollCounterFile -Raw -ErrorAction SilentlyContinue)
+    Assert-Returns -Label 'WSH delayed: Healthy=true' -Actual $health.Healthy -Expected $true
+    Assert-Returns -Label 'WSH delayed: polled multiple times' -Actual ($finalPollCount -ge 3) -Expected $true
+} finally {
+    try { $ps2.EndInvoke($async2) | Out-Null } catch {}
+    try { $ps2.Dispose(); $rs2.Dispose(); $listener2.Stop(); $listener2.Close() } catch {}
+    Remove-Item $pollCounterFile -Force -ErrorAction SilentlyContinue
+}
+
+# ── Case 3: Server never becomes UP (timeout) ──
+Write-Host "━━━ WSH: timeout ━━━" -ForegroundColor Cyan
+$wshPort3 = 19800 + (Get-Random -Minimum 0 -Maximum 500)
+$wshUrl3  = "http://localhost:$wshPort3"
+
+$srv3 = Start-OneShotListener -Port $wshPort3 -Handler {
+    param($ctx)
+    $json = '{"status":"DOWN"}'
+    $buf = [Text.Encoding]::UTF8.GetBytes($json)
+    $ctx.Response.ContentType = 'application/json'
+    $ctx.Response.OutputStream.Write($buf, 0, $buf.Length)
+    $ctx.Response.Close()
+}
+Start-Sleep -Milliseconds 200
+
+try {
+    $health = Wait-ServerHealthy -BaseUrl $wshUrl3 -TimeoutSeconds 3
+    Assert-Returns -Label 'WSH timeout: Healthy=false' -Actual $health.Healthy -Expected $false
+    Assert-Returns -Label 'WSH timeout: Content is empty' -Actual $health.Content -Expected ''
+} finally {
+    Stop-OneShotListener $srv3
+}
+
+# ── Case 4: Server returns non-JSON (treated as not ready) ──
+Write-Host "━━━ WSH: non-JSON response ━━━" -ForegroundColor Cyan
+$wshPort4 = 19800 + (Get-Random -Minimum 0 -Maximum 500)
+$wshUrl4  = "http://localhost:$wshPort4"
+
+$srv4 = Start-OneShotListener -Port $wshPort4 -Handler {
+    param($ctx)
+    $body = '<html>Gateway Timeout</html>'
+    $buf = [Text.Encoding]::UTF8.GetBytes($body)
+    $ctx.Response.ContentType = 'text/html'
+    $ctx.Response.StatusCode = 504
+    $ctx.Response.OutputStream.Write($buf, 0, $buf.Length)
+    $ctx.Response.Close()
+}
+Start-Sleep -Milliseconds 200
+
+try {
+    $health = Wait-ServerHealthy -BaseUrl $wshUrl4 -TimeoutSeconds 3
+    Assert-Returns -Label 'WSH non-JSON: Healthy=false' -Actual $health.Healthy -Expected $false
+} finally {
+    Stop-OneShotListener $srv4
+}
+
+# ── Case 5: Connection refused (no server listening) ──
+Write-Host "━━━ WSH: connection refused ━━━" -ForegroundColor Cyan
+$deadPort = 19800 + (Get-Random -Minimum 500 -Maximum 999)
+$deadUrl = "http://localhost:$deadPort"
+$health = Wait-ServerHealthy -BaseUrl $deadUrl -TimeoutSeconds 2
+Assert-Returns -Label 'WSH refused: Healthy=false' -Actual $health.Healthy -Expected $false
+Assert-Returns -Label 'WSH refused: Content is empty' -Actual $health.Content -Expected ''
+
+# ═══════════════════════════════════════════════════════════════════
 # Summary
 # ═══════════════════════════════════════════════════════════════════
 Write-Host ''
