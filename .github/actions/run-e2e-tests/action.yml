@@ -5,7 +5,7 @@ inputs:
   script_path:
     description: 'Path to the e2e test script'
     required: false
-    default: './bin/tests-production/run-e2e-test.sh'
+    default: './bin/tests/run-e2e-test.sh'
   application_url:
     description: 'Application URL to test against'
     required: false
