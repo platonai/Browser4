@@ -241,70 +241,20 @@ Query them explicitly when needed:
 
 ```bash
 browser4-cli help batch
-browser4-cli help console
 browser4-cli help extract
-browser4-cli help summarize
-browser4-cli help agent run
 browser4-cli help swarm create
 ```
 
-## Agent and Swarm CLI
+## Swarm CLI
 
-Browser4 CLI offers two high-level interfaces for complex, multi-step browser tasks beyond the standard single-action commands:
-
-**Agent CLI** (`agent <subcommand>`) — Submit a natural-language task and let Browser4's backend AI agent plan and execute it autonomously. The agent reasons about the page, decides which actions to take, and completes the task asynchronously. Best for exploratory tasks, multi-step workflows where you don't know the exact page structure ahead of time, or delegating an entire goal to the backend.
+Browser4 CLI offers a high-level interface for complex, multi-step browser tasks beyond the standard single-action commands:
 
 **Swarm CLI** (`swarm <subcommand>`) — Orchestrate parallel scraping and structured data extraction across multiple browser contexts. Designed for high-throughput jobs like refreshing a curated URL list, supervised fan-out browsing, or repeatable selector-based scraping with explicit output artifacts. Supports X-SQL for structured queries against loaded webpages.
 
 | Interface | Model | Use when |
 |---|---|---|
 | Standard commands | Single action per invocation | You know the exact refs/selectors and want precise control |
-| Agent CLI | Natural-language task → autonomous execution | You have a goal but don't know the page structure; multi-step exploration |
 | Swarm CLI | Parallel contexts + X-SQL queries | High-throughput scraping, structured extraction across many pages |
-
-See the sections below for detailed usage of each.
-
-## Agent task commands
-
-Use the `agent` subcommands when you want Browser4's backend agent to execute a
-natural-language task asynchronously.
-
-Use the spaced `agent <subcommand>` form:
-
-```bash
-browser4-cli agent run "Open browser4.io and summarize the hero section"
-browser4-cli agent status agent-task-1
-browser4-cli agent result agent-task-1
-```
-
-Recommended lifecycle:
-
-```bash
-# 1) submit an autonomous task
-browser4-cli agent run "Open browser4.io and summarize the hero section"
-
-# 2) poll progress with the returned task id
-browser4-cli agent status agent-task-1
-
-# 3) read the final result
-browser4-cli agent result agent-task-1
-```
-
-Notes:
-
-- `agent run` returns immediately after the backend accepts the task and prints
-  the generated task ID plus a ready-to-copy `agent status` follow-up command.
-- `agent status` prints the backend status payload as-is. This is typically JSON
-  and may include fields like `id`, `status`, `statusCode`, `processState`,
-  `message`, `agentState`, `agentHistory`, and `commandResult`.
-- `agent result` prints the backend result payload as-is. Depending on the
-  task, that payload may be plain text or structured JSON.
-- The commands are task-ID based, so they do not depend on the current saved
-  CLI browser session slot.
-- `agent` subcommands are advanced commands and are not supported in `batch`
-  mode.
-- `agent run` performs a short status probe after submission so missing LLM/API
-  key configuration errors can fail fast with a clearer message.
 
 ## Swarm workflows
 
@@ -454,7 +404,6 @@ After installation, use `browser4-cli`.
 - Commands that require a connection to the Browser4 backend (such as `open`, `goto`, `snapshot`, `click`) will fail with a non-zero exit code if the backend is unreachable. Check that the backend is running with `browser4-cli list`.
 - `eval` returns a non-zero exit code when the JavaScript expression throws or cannot be evaluated.
 - `snapshot` returns a non-zero exit code when the page is not ready or the accessibility tree cannot be captured.
-- `agent run` performs a short status probe after submission — missing LLM/API key configuration errors fail fast with a clear message rather than silently queuing a doomed task.
 - When a session goes stale (browser closed externally or backend restarted), `open` and `goto` automatically refresh it. Running commands against a stale session before refreshing will fail — prefer letting `goto` auto-open rather than manually managing session state.
 
 ## Example: Form submission
@@ -483,7 +432,6 @@ browser4-cli close
 
 ## Specific tasks
 
-* **Agent command** [references/agent.md](references/agent.md)
 * **Smarm command** [references/swarm.md](references/swarm.md)
 * **Storage state (cookies, localStorage)** [references/storage-state.md](references/storage-state.md)
 * **X-SQL** [references/x-sql.md](references/x-sql.md)
