@@ -30,7 +30,7 @@ class BrowserToolExecutor : AbstractToolExecutor() {
             method = "newTab",
             arguments = listOf(ToolSpec.Arg("url", "String", "about:blank")),
             returnType = "Map<String, String>",
-            description = "Create a new tab. Returns guid (string), id (int), and url"
+            description = "Create a new tab. Returns guid and url"
         )
         toolSpec["closeTab"] = ToolSpec(
             domain = domain,
@@ -68,14 +68,14 @@ class BrowserToolExecutor : AbstractToolExecutor() {
             "switchTab" -> {
                 val driver = resolveTabDriver(browser, args, functionName, allowCurrentTab = false)
                 driver.bringToFront()
-                logger.info("""👀 Switched to tab {} (guid={}, id={})""", args["index"] ?: args["tabId"] ?: driver.guid, driver.guid, driver.id)
+                logger.info("""👀 Switched to tab {}""", driver.guid)
                 driver
             }
 
             "newTab" -> {
                 val url = paramString(args, "url", functionName) ?: "about:blank"
                 val driver = browser.newDriver(url)
-                mapOf("guid" to driver.guid, "id" to driver.id.toString(), "url" to driver.currentUrl())
+                mapOf("guid" to driver.guid, "url" to driver.currentUrl())
             }
 
             "closeTab" -> {
@@ -115,8 +115,7 @@ class BrowserToolExecutor : AbstractToolExecutor() {
 
         val tabId = args["tabId"]?.toString()?.trim()?.takeIf { it.isNotEmpty() }
         if (tabId != null) {
-            return (browser.findDriverByGUID(tabId)
-                ?: tabId.toIntOrNull()?.let { browser.findDriverById(it) })
+            return browser.findDriverByGUID(tabId)
                 ?: throw IllegalArgumentException("Tab '$tabId' not found")
         }
 

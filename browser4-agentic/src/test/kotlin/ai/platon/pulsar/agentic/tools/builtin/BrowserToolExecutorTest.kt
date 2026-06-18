@@ -53,13 +53,11 @@ class BrowserToolExecutorTest {
     @DisplayName("switchTab with invalid tab returns exception")
     fun switchtabWithInvalidTabReturnsException() = runBlocking {
         every { browser.findDriverByGUID(any()) } returns null
-        every { browser.findDriverById(any()) } returns null
-        every { browser.drivers } returns mutableMapOf()
 
         val tc = ToolCall(
             domain = "browser",
             method = "switchTab",
-            arguments = mutableMapOf("tabId" to "999")
+            arguments = mutableMapOf("tabId" to "DEADBEEF000000000000000000000000")
         )
 
         val result = executor.callFunctionOn(tc, browser)
