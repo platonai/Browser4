@@ -445,6 +445,23 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
                 }
             }
 
+            "waitForFunction" -> {
+                when {
+                    args.containsKey("pageFunction") && args.containsKey("timeoutMillis") -> {
+                        validateArgs(args, allowed("pageFunction", "timeoutMillis"), setOf("pageFunction", "timeoutMillis"), functionName)
+                        driver.waitForFunction(
+                            paramString(args, "pageFunction", functionName)!!,
+                            Duration.ofMillis(paramLong(args, "timeoutMillis", functionName)!!)
+                        )
+                    }
+                    args.containsKey("pageFunction") -> {
+                        validateArgs(args, allowed("pageFunction"), setOf("pageFunction"), functionName)
+                        driver.waitForFunction(paramString(args, "pageFunction", functionName)!!, Duration.ofMillis(30000))
+                    }
+                    else -> throw IllegalArgumentException("waitForFunction requires 'pageFunction' (optional 'timeoutMillis')")
+                }
+            }
+
             // Status checking
             "exists" -> {
                 validateArgs(

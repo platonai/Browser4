@@ -231,6 +231,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "sessionstorage-delete",
         "sessionstorage-clear",
         "pdf",
+        "wait",
         "agent-run",
         "agent-status",
         "agent-result",
@@ -4900,6 +4901,11 @@ mod tests {
     #[test]
     fn no_snapshot_commands_include_sessionstorage_clear() {
         assert!(no_snapshot_commands().contains("sessionstorage-clear"));
+    }
+
+    #[test]
+    fn no_snapshot_commands_include_wait() {
+        assert!(no_snapshot_commands().contains("wait"));
     }
 
     #[test]

@@ -522,6 +522,38 @@ pub fn all_commands() -> Vec<CommandDef> {
                 })
             },
         },
+        CommandDef {
+            name: "scroll",
+            description: "Scroll the page in a given direction by the specified number of pixels",
+            category: Category::Mouse,
+            hidden: false,
+            batch_supported: true,
+            args: &[
+                ArgDef { name: "direction", description: "Scroll direction: up, down, left, or right", optional: false },
+                ArgDef { name: "pixels", description: "Number of pixels to scroll", optional: false },
+            ],
+            options: &[],
+            tool_name_fn: |args| {
+                let direction = get_str(args, "direction").unwrap_or_default().to_ascii_lowercase();
+                match direction.as_str() {
+                    "left" | "right" => "browser_mouse_wheel".to_string(),
+                    _ => "scroll_by".to_string(),
+                }
+            },
+            tool_params_fn: |args| {
+                let direction = get_str(args, "direction").unwrap_or_default().to_ascii_lowercase();
+                let pixels = get_number_value(args, "pixels")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(0.0);
+                match direction.as_str() {
+                    "down" => json!({ "pixels": pixels }),
+                    "up" => json!({ "pixels": -pixels }),
+                    "right" => json!({ "deltaX": pixels, "deltaY": 0.0 }),
+                    "left" => json!({ "deltaX": -pixels, "deltaY": 0.0 }),
+                    _ => json!({ "pixels": pixels }),
+                }
+            },
+        },
         // ---- Core interactions ----
         CommandDef {
             name: "click",
@@ -678,6 +710,54 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[],
             tool_name_fn: |_| "browser_uncheck".to_string(),
             tool_params_fn: |args| json!({ "ref": get_str(args, "ref").unwrap_or_default() }),
+        },
+        CommandDef {
+            name: "wait",
+            description: "Wait for a condition: element, time, text, URL pattern, page load, or JS expression",
+            category: Category::Core,
+            hidden: false,
+            batch_supported: true,
+            args: &[
+                ArgDef { name: "target", description: "Element selector (e.g. e1) or wait duration in milliseconds", optional: true },
+            ],
+            options: &[
+                OptionDef { name: "text", description: "Wait until this text appears on the page", is_bool: false, short: None },
+                OptionDef { name: "url", description: "Wait until the URL matches this glob pattern", is_bool: false, short: None },
+                OptionDef { name: "load", description: "Wait for page load state: networkidle or domcontentloaded", is_bool: false, short: None },
+                OptionDef { name: "fn", description: "Wait until this JavaScript expression returns true", is_bool: false, short: None },
+            ],
+            tool_name_fn: |args| {
+                if get_opt_str(args, "text").is_some() || get_opt_str(args, "fn").is_some() || get_opt_str(args, "load").is_some() {
+                    "wait_for_function".to_string()
+                } else if get_opt_str(args, "url").is_some() {
+                    "wait_for_page".to_string()
+                } else if get_number_value(args, "target").is_some() {
+                    "delay".to_string()
+                } else {
+                    "wait_for_selector".to_string()
+                }
+            },
+            tool_params_fn: |args| {
+                if let Some(text) = get_opt_str(args, "text") {
+                    let escaped = text.replace('\\', "\\\\").replace('\'', "\\'");
+                    let expr = format!("document.body.innerText.includes('{}')", escaped);
+                    json!({ "pageFunction": expr, "timeoutMillis": 30000 })
+                } else if let Some(fn_expr) = get_opt_str(args, "fn") {
+                    json!({ "pageFunction": fn_expr, "timeoutMillis": 30000 })
+                } else if let Some(load) = get_opt_str(args, "load") {
+                    let expr = match load.to_ascii_lowercase().as_str() {
+                        "domcontentloaded" => "document.readyState !== 'loading'",
+                        _ => "document.readyState === 'complete'",
+                    };
+                    json!({ "pageFunction": expr, "timeoutMillis": 30000 })
+                } else if let Some(url) = get_opt_str(args, "url") {
+                    json!({ "url": url, "timeoutMillis": 30000 })
+                } else if let Some(millis) = get_number_value(args, "target") {
+                    json!({ "millis": millis })
+                } else {
+                    json!({ "selector": get_str(args, "target").unwrap_or_default() })
+                }
+            },
         },
         CommandDef {
             name: "snapshot",
@@ -2273,5 +2353,214 @@ mod tests {
         assert_eq!(cmd.options.len(), 1);
         assert_eq!(cmd.options[0].name, "all");
         assert!(cmd.options[0].is_bool);
+    }
+
+    // -----------------------------------------------------------------------
+    // Scroll command tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_scroll_down_uses_scroll_by_tool() {
+        let map = commands_map();
+        let cmd = map.get("scroll").expect("scroll command must exist");
+        let mut args = HashMap::new();
+        args.insert("direction".to_string(), json!("down"));
+        args.insert("pixels".to_string(), json!(500));
+        assert_eq!((cmd.tool_name_fn)(&args), "scroll_by");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["pixels"], json!(500.0));
+    }
+
+    #[test]
+    fn test_scroll_up_uses_negative_pixels() {
+        let map = commands_map();
+        let cmd = map.get("scroll").expect("scroll command must exist");
+        let mut args = HashMap::new();
+        args.insert("direction".to_string(), json!("up"));
+        args.insert("pixels".to_string(), json!(300));
+        assert_eq!((cmd.tool_name_fn)(&args), "scroll_by");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["pixels"], json!(-300.0));
+    }
+
+    #[test]
+    fn test_scroll_right_uses_mouse_wheel_tool() {
+        let map = commands_map();
+        let cmd = map.get("scroll").expect("scroll command must exist");
+        let mut args = HashMap::new();
+        args.insert("direction".to_string(), json!("right"));
+        args.insert("pixels".to_string(), json!(200));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_mouse_wheel");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["deltaX"], json!(200.0));
+        assert_eq!(params["deltaY"], json!(0.0));
+    }
+
+    #[test]
+    fn test_scroll_left_uses_negative_delta_x() {
+        let map = commands_map();
+        let cmd = map.get("scroll").expect("scroll command must exist");
+        let mut args = HashMap::new();
+        args.insert("direction".to_string(), json!("left"));
+        args.insert("pixels".to_string(), json!(150));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_mouse_wheel");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["deltaX"], json!(-150.0));
+        assert_eq!(params["deltaY"], json!(0.0));
+    }
+
+    #[test]
+    fn test_scroll_defaults_down_for_unknown_direction() {
+        let map = commands_map();
+        let cmd = map.get("scroll").expect("scroll command must exist");
+        let mut args = HashMap::new();
+        args.insert("direction".to_string(), json!("diagonal"));
+        args.insert("pixels".to_string(), json!(100));
+        assert_eq!((cmd.tool_name_fn)(&args), "scroll_by");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["pixels"], json!(100.0));
+    }
+
+    #[test]
+    fn test_scroll_handles_case_insensitive_direction() {
+        let map = commands_map();
+        let cmd = map.get("scroll").expect("scroll command must exist");
+        let mut args = HashMap::new();
+        args.insert("direction".to_string(), json!("DOWN"));
+        args.insert("pixels".to_string(), json!(500));
+        assert_eq!((cmd.tool_name_fn)(&args), "scroll_by");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["pixels"], json!(500.0));
+    }
+
+    // -----------------------------------------------------------------------
+    // Wait command tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_wait_selector_uses_wait_for_selector_tool() {
+        let map = commands_map();
+        let cmd = map.get("wait").expect("wait command must exist");
+        let mut args = HashMap::new();
+        args.insert("target".to_string(), json!("e1"));
+        assert_eq!((cmd.tool_name_fn)(&args), "wait_for_selector");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["selector"], "e1");
+    }
+
+    #[test]
+    fn test_wait_milliseconds_uses_delay_tool() {
+        let map = commands_map();
+        let cmd = map.get("wait").expect("wait command must exist");
+        let mut args = HashMap::new();
+        args.insert("target".to_string(), json!(2000));
+        assert_eq!((cmd.tool_name_fn)(&args), "delay");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["millis"], json!(2000));
+    }
+
+    #[test]
+    fn test_wait_text_uses_wait_for_function_tool() {
+        let map = commands_map();
+        let cmd = map.get("wait").expect("wait command must exist");
+        let mut args = HashMap::new();
+        args.insert("text".to_string(), json!("Success"));
+        assert_eq!((cmd.tool_name_fn)(&args), "wait_for_function");
+        let params = (cmd.tool_params_fn)(&args);
+        let func = params["pageFunction"].as_str().unwrap();
+        assert!(func.contains("Success"));
+        assert!(func.contains("document.body.innerText.includes"));
+        assert!(!func.starts_with("() =>"));
+        assert_eq!(params["timeoutMillis"], json!(30000));
+    }
+
+    #[test]
+    fn test_wait_text_escapes_single_quotes() {
+        let map = commands_map();
+        let cmd = map.get("wait").expect("wait command must exist");
+        let mut args = HashMap::new();
+        args.insert("text".to_string(), json!("it's done"));
+        assert_eq!((cmd.tool_name_fn)(&args), "wait_for_function");
+        let params = (cmd.tool_params_fn)(&args);
+        let func = params["pageFunction"].as_str().unwrap();
+        assert!(func.contains("it\\'s done"));
+        assert!(!func.starts_with("() =>"));
+    }
+
+    #[test]
+    fn test_wait_url_uses_wait_for_page_tool() {
+        let map = commands_map();
+        let cmd = map.get("wait").expect("wait command must exist");
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("**/dashboard"));
+        assert_eq!((cmd.tool_name_fn)(&args), "wait_for_page");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["url"], "**/dashboard");
+        assert_eq!(params["timeoutMillis"], json!(30000));
+    }
+
+    #[test]
+    fn test_wait_load_networkidle_uses_wait_for_function_tool() {
+        let map = commands_map();
+        let cmd = map.get("wait").expect("wait command must exist");
+        let mut args = HashMap::new();
+        args.insert("load".to_string(), json!("networkidle"));
+        assert_eq!((cmd.tool_name_fn)(&args), "wait_for_function");
+        let params = (cmd.tool_params_fn)(&args);
+        let func = params["pageFunction"].as_str().unwrap();
+        assert_eq!(func, "document.readyState === 'complete'");
+        assert_eq!(params["timeoutMillis"], json!(30000));
+    }
+
+    #[test]
+    fn test_wait_load_domcontentloaded_uses_wait_for_function_tool() {
+        let map = commands_map();
+        let cmd = map.get("wait").expect("wait command must exist");
+        let mut args = HashMap::new();
+        args.insert("load".to_string(), json!("domcontentloaded"));
+        assert_eq!((cmd.tool_name_fn)(&args), "wait_for_function");
+        let params = (cmd.tool_params_fn)(&args);
+        let func = params["pageFunction"].as_str().unwrap();
+        assert_eq!(func, "document.readyState !== 'loading'");
+        assert_eq!(params["timeoutMillis"], json!(30000));
+    }
+
+    #[test]
+    fn test_wait_fn_uses_wait_for_function_tool() {
+        let map = commands_map();
+        let cmd = map.get("wait").expect("wait command must exist");
+        let mut args = HashMap::new();
+        args.insert("fn".to_string(), json!("window.myApp.ready === true"));
+        assert_eq!((cmd.tool_name_fn)(&args), "wait_for_function");
+        let params = (cmd.tool_params_fn)(&args);
+        let func = params["pageFunction"].as_str().unwrap();
+        assert_eq!(func, "window.myApp.ready === true");
+        assert_eq!(params["timeoutMillis"], json!(30000));
+    }
+
+    #[test]
+    fn test_wait_command_is_not_hidden() {
+        let map = commands_map();
+        let cmd = map.get("wait").expect("wait command must exist");
+        assert!(!cmd.hidden);
+    }
+
+    #[test]
+    fn test_wait_command_has_all_options() {
+        let map = commands_map();
+        let cmd = map.get("wait").expect("wait command must exist");
+        let option_names: Vec<&str> = cmd.options.iter().map(|o| o.name).collect();
+        assert!(option_names.contains(&"text"));
+        assert!(option_names.contains(&"url"));
+        assert!(option_names.contains(&"load"));
+        assert!(option_names.contains(&"fn"));
+    }
+
+    #[test]
+    fn test_scroll_command_is_not_hidden() {
+        let map = commands_map();
+        let cmd = map.get("scroll").expect("scroll command must exist");
+        assert!(!cmd.hidden);
+        assert_eq!(cmd.category, Category::Mouse);
     }
 }
