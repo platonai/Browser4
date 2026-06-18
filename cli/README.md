@@ -193,12 +193,12 @@ The tables below mirror the commands surfaced by the global `browser4-cli help` 
 
 | Command | Description |
 |---|---|
-| `tab-list` | List all tabs |
+| `tab-list` | List all tabs with their zero-based index |
 | `tab-new [url]` | Create a new tab |
-| `tab-close [index]` | Close a browser tab by zero-based index |
-| `tab-select <index>` | Select a browser tab by zero-based index |
+| `tab-close [index]` | Close a tab by its zero-based index |
+| `tab-select <index>` | Select a tab by its zero-based index |
 
-Use `tab-list` first to find the zero-based tab index you want to select or close.
+Run `tab-list` first to find each tab's zero-based index. Pass that index to `tab-select` or `tab-close`.
 
 #### Browser storage
 

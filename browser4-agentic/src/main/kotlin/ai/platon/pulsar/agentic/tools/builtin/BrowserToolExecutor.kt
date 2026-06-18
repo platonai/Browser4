@@ -85,9 +85,9 @@ class BrowserToolExecutor : AbstractToolExecutor() {
             }
 
             "listTabs" -> {
-                browser.listDrivers().map { driver ->
+                browser.listDrivers().mapIndexed { i, driver ->
                     mapOf(
-                        "id" to driver.id.toString(),
+                        "index" to i.toString(),
                         "guid" to driver.guid,
                         "title" to driver.title(),
                         "url" to driver.currentUrl()

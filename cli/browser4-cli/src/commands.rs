@@ -1196,7 +1196,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             category: Category::Tabs,
             hidden: false,
             batch_supported: true,
-            args: &[ArgDef { name: "index", description: "Zero-based tab index. If omitted, current tab is closed.", optional: true }],
+            args: &[ArgDef { name: "index", description: "Zero-based tab index from tab-list output. If omitted, current tab is closed.", optional: true }],
             options: &[],
             tool_name_fn: |_| "browser_tabs".to_string(),
             tool_params_fn: |args| {

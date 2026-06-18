@@ -786,9 +786,9 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         assertTrue(updatedOutput.contains(fixtureServer.interactiveUrl()))
         assertTrue(updatedOutput.contains(fixtureServer.otherUrl()))
 
-        val otherTabId = extractTabId(updatedOutput, fixtureServer.otherUrl())
-        assertNotError(callTool("browser_tabs", mapOf("sessionId" to sessionId, "action" to "select", "tabId" to otherTabId)))
-        assertNotError(callTool("browser_tabs", mapOf("sessionId" to sessionId, "action" to "close", "tabId" to otherTabId)))
+        val otherTabGuid = extractTabGuid(updatedOutput, fixtureServer.otherUrl())
+        assertNotError(callTool("browser_tabs", mapOf("sessionId" to sessionId, "action" to "select", "tabId" to otherTabGuid)))
+        assertNotError(callTool("browser_tabs", mapOf("sessionId" to sessionId, "action" to "close", "tabId" to otherTabGuid)))
     }
 
     @Test
@@ -1180,15 +1180,15 @@ class MCPToolControllerE2ETest : RestAPITestBase() {
         throw AssertionError("Timed out waiting for command $taskId to finish. Last status: $lastStatus")
     }
 
-    private fun extractTabId(output: String, url: String): String {
-        val regex = Regex("""id[:=]"?([^",}\s]+)"?""")
-        val ids = regex.findAll(output)
+    private fun extractTabGuid(output: String, url: String): String {
+        val regex = Regex("""guid[:=]"?([^",}\s]+)"?""")
+        val guids = regex.findAll(output)
             .map { it.groupValues[1] to it.range.first }
             .toList()
         val urlPos = output.indexOf(url)
         check(urlPos >= 0) { "URL '$url' not found in tab output:\n$output" }
-        return ids.lastOrNull { it.second < urlPos }?.first
-            ?: error("Could not find tab id for '$url' in:\n$output")
+        return guids.lastOrNull { it.second < urlPos }?.first
+            ?: error("Could not find tab guid for '$url' in:\n$output")
     }
 
     private data class BatchExecutionResponse(

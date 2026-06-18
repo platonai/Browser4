@@ -134,6 +134,9 @@ browser4-cli screenshot --filename=page.png
 
 ### Tabs
 
+Tab commands use **zero-based indices** (position in the tab list, starting at 0).
+Run `tab-list` first — each tab shows its `index` (e.g., `index=0` for the first tab).
+
 ```bash
 browser4-cli tab-list
 browser4-cli tab-new
@@ -142,8 +145,6 @@ browser4-cli tab-close
 browser4-cli tab-close 2
 browser4-cli tab-select 0
 ```
-
-Use `browser4-cli tab-list` to obtain the current zero-based tab index before calling `tab-select` or `tab-close` with a specific target.
 
 ### Storage
 
