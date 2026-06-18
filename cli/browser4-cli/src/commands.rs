@@ -739,8 +739,9 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
             tool_params_fn: |args| {
                 if let Some(text) = get_opt_str(args, "text") {
-                    let escaped = text.replace('\\', "\\\\").replace('\'', "\\'");
-                    let expr = format!("document.body.innerText.includes('{}')", escaped);
+                    let escaped = serde_json::to_string(text)
+                        .unwrap_or_else(|_| format!("{:?}", text));
+                    let expr = format!("document.body.innerText.includes({})", escaped);
                     json!({ "pageFunction": expr, "timeoutMillis": 30000 })
                 } else if let Some(fn_expr) = get_opt_str(args, "fn") {
                     json!({ "pageFunction": fn_expr, "timeoutMillis": 30000 })
@@ -2514,15 +2515,19 @@ mod tests {
     }
 
     #[test]
-    fn test_wait_text_escapes_single_quotes() {
+    fn test_wait_text_properly_json_escapes() {
         let map = commands_map();
         let cmd = map.get("wait").expect("wait command must exist");
         let mut args = HashMap::new();
-        args.insert("text".to_string(), json!("it's done"));
+        args.insert("text".to_string(), json!("it's \"done\""));
         assert_eq!((cmd.tool_name_fn)(&args), "wait_for_function");
         let params = (cmd.tool_params_fn)(&args);
         let func = params["pageFunction"].as_str().unwrap();
-        assert!(func.contains("it\\'s done"));
+        // JSON escaping produces double-quoted string literals that are
+        // valid JS.  The text should appear inside a JSON double-quoted
+        // string inside the JS expression.
+        assert!(func.contains(r#""it's \"done\"""#));
+        assert!(func.contains("document.body.innerText.includes"));
         assert!(!func.starts_with("() =>"));
     }
 

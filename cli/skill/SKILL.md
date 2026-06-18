@@ -89,6 +89,22 @@ browser4-cli uncheck e12
 browser4-cli snapshot
 browser4-cli snapshot --filename=after-click.yaml
 browser4-cli eval "document.title"
+browser4-cli eval --file=script.js
+browser4-cli eval --file=script.js e5
+browser4-cli get text e5
+browser4-cli get html "#main"
+browser4-cli get box e5
+browser4-cli get styles e5
+browser4-cli get property e5 value
+browser4-cli get attr e5 href
+browser4-cli scroll down 300
+browser4-cli scroll up 200
+browser4-cli wait 1000
+browser4-cli wait e5
+browser4-cli wait --text="Success"
+browser4-cli wait --url="**/dashboard"
+browser4-cli wait --load=networkidle
+browser4-cli wait --fn="document.readyState === 'complete'"
 browser4-cli resize 1920 1080
 browser4-cli close
 ```
@@ -130,6 +146,46 @@ browser4-cli mousewheel 0 100
 browser4-cli screenshot
 browser4-cli screenshot e5
 browser4-cli screenshot --filename=page.png
+```
+
+### Element Data Extraction (get)
+
+Extract data from a page element. The first argument is the mode, the second is a CSS selector or snapshot ref (`e5`).
+
+```bash
+browser4-cli get text e5            # visible text content
+browser4-cli get html "#main"       # innerHTML of the element
+browser4-cli get box e5             # bounding box (x, y, width, height)
+browser4-cli get styles e5          # all computed CSS styles as JSON
+browser4-cli get property e5 value  # JavaScript property value
+browser4-cli get attr e5 href       # HTML attribute value
+```
+
+- Output distinguishes `null` (element/attribute missing), `""` (exists but empty), and normal values.
+- `property` and `attr` modes require a third positional argument (the property/attribute name).
+
+### Scroll
+
+Scroll the page in a given direction by the specified number of pixels.
+
+```bash
+browser4-cli scroll down 300   # scroll down 300px
+browser4-cli scroll up 200     # scroll up 200px
+browser4-cli scroll right 150  # scroll right 150px (horizontal)
+browser4-cli scroll left 100   # scroll left 100px (horizontal)
+```
+
+### Wait
+
+Wait for a condition before proceeding. Without options, the positional argument is interpreted as a CSS selector to wait for, or as milliseconds if numeric.
+
+```bash
+browser4-cli wait 1000                   # wait 1 second (fixed delay)
+browser4-cli wait e5                     # wait for element to appear
+browser4-cli wait --text="Success"       # wait for text to appear on page
+browser4-cli wait --url="**/dashboard"   # wait for URL to match glob
+browser4-cli wait --load=networkidle     # wait for page load (networkidle or domcontentloaded)
+browser4-cli wait --fn="document.querySelector('.loaded') !== null"  # wait for JS expression
 ```
 
 ### Tabs

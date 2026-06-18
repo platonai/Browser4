@@ -152,7 +152,10 @@ The tables below mirror the commands surfaced by the global `browser4-cli help` 
 | `uncheck <ref>` | Uncheck a checkbox or radio button |
 | `drag <startRef> <endRef>` | Drag and drop between two elements |
 | `snapshot` | Capture accessibility snapshot |
-| `eval <expression> [ref]` | Evaluate JavaScript on the page or a target element |
+| `eval <expression> [ref]` | Evaluate JavaScript on the page or a target element. Use `--file=<path>` to read the expression from a file. |
+| `get <mode> <selector> [name]` | Extract data from a page element. Modes: `text`, `html`, `box`, `styles`, `property`, `attr`. `name` is required for `property` and `attr`. |
+| `scroll <direction> <pixels>` | Scroll the page. Direction: `up`, `down`, `left`, or `right`. |
+| `wait [target]` | Wait for a condition. Positional: selector or milliseconds. Options: `--text=<text>`, `--url=<glob>`, `--load=<state>` (networkidle/domcontentloaded), `--fn=<JS expr>`. |
 | `dialog-accept [prompt]` | Accept a dialog |
 | `dialog-dismiss` | Dismiss a dialog |
 | `resize <w> <h>` | Resize the browser window |
