@@ -231,6 +231,7 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "sessionstorage-delete",
         "sessionstorage-clear",
         "pdf",
+        "get",
         "wait",
         "agent-run",
         "agent-status",
@@ -2129,6 +2130,56 @@ async fn handle_tool_command(
         }
     }
     persist_active_selector(base_url, session_name, tracked_selector(tool_params))?;
+    Ok(())
+}
+
+/// Handle the `get` command with null-aware output formatting.
+///
+/// Distinguishes three cases in the response:
+/// - JSON `null` — the element, attribute, or property does not exist
+/// - Empty string `""` — the element exists but the requested value is empty
+/// - Any other value — printed as-is
+async fn handle_get(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let result = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let tool_name = tool_name.to_string();
+        let mut params = tool_params.clone();
+        params["sessionId"] = json!(session_id);
+        async move { call_tool(&client, &base_url, &tool_name, params).await }
+    })
+    .await?;
+
+    // The MCP response serialises the tool result to a string.
+    // A JSON `null` result arrives as the literal string "null".
+    // An empty-string result arrives as "".
+    if result == "null" {
+        cli_println!("null");
+    } else if result.is_empty() {
+        cli_println!("\"\"");
+    } else {
+        cli_println!("{}", result);
+    }
+
+    json_field("result", json!(&result));
+    if let Some(mode) = tool_params.get("mode").and_then(|v| v.as_str()) {
+        json_field("mode", json!(mode));
+    }
+    if let Some(sel) = tool_params.get("selector").and_then(|v| v.as_str()) {
+        json_field("selector", json!(sel));
+    } else if let Some(r) = tool_params.get("ref").and_then(|v| v.as_str()) {
+        json_field("selector", json!(r));
+    }
+    if let Some(name) = tool_params.get("name").and_then(|v| v.as_str()) {
+        json_field("name", json!(name));
+    }
+
     Ok(())
 }
 
@@ -4693,6 +4744,16 @@ async fn run(
             )
             .await?;
         }
+        "get" => {
+            handle_get(
+                &client,
+                &base_url,
+                &tool_name,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
         "press" => {
             handle_tool_command(
                 &client,
@@ -4901,6 +4962,11 @@ mod tests {
     #[test]
     fn no_snapshot_commands_include_sessionstorage_clear() {
         assert!(no_snapshot_commands().contains("sessionstorage-clear"));
+    }
+
+    #[test]
+    fn no_snapshot_commands_include_get() {
+        assert!(no_snapshot_commands().contains("get"));
     }
 
     #[test]

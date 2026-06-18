@@ -760,6 +760,45 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
+            name: "get",
+            description: "Extract data from a page element: text, html, box, styles, property, or attr",
+            category: Category::Core,
+            hidden: false,
+            batch_supported: true,
+            args: &[
+                ArgDef { name: "mode", description: "What to extract: text, html, box, styles, property, or attr", optional: false },
+                ArgDef { name: "selector", description: "CSS selector or element reference (e.g. e5, .price, #main)", optional: false },
+                ArgDef { name: "name", description: "Property or attribute name (required for property and attr modes)", optional: true },
+            ],
+            options: &[],
+            tool_name_fn: |args| {
+                let mode = get_str(args, "mode").unwrap_or_default().to_ascii_lowercase();
+                match mode.as_str() {
+                    "html" | "styles" => "browser_evaluate".to_string(),
+                    "box" => "bounding_box".to_string(),
+                    "property" => "select_first_property_value_or_null".to_string(),
+                    "attr" => "select_first_attribute_or_null".to_string(),
+                    _ => "select_first_text_or_null".to_string(),
+                }
+            },
+            tool_params_fn: |args| {
+                let mode = get_str(args, "mode").unwrap_or_default().to_ascii_lowercase();
+                let selector = get_str(args, "selector").unwrap_or_default();
+                let name = get_str(args, "name").unwrap_or_default();
+                match mode.as_str() {
+                    "html" => json!({ "expression": "element => element.innerHTML", "ref": selector }),
+                    "styles" => {
+                        let expr = "element => { const s = getComputedStyle(element); const o = {}; for (let i = 0; i < s.length; i++) { const k = s[i]; o[k] = s.getPropertyValue(k); } return o; }";
+                        json!({ "expression": expr, "ref": selector })
+                    },
+                    "box" => json!({ "selector": selector }),
+                    "property" => json!({ "selector": selector, "propName": name }),
+                    "attr" => json!({ "selector": selector, "attrName": name }),
+                    _ => json!({ "selector": selector }),
+                }
+            },
+        },
+        CommandDef {
             name: "snapshot",
             description: "Capture page snapshot to obtain element ref",
             category: Category::Core,
@@ -2554,6 +2593,185 @@ mod tests {
         assert!(option_names.contains(&"url"));
         assert!(option_names.contains(&"load"));
         assert!(option_names.contains(&"fn"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Get command tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_get_text_uses_select_first_text_or_null_tool() {
+        let map = commands_map();
+        let cmd = map.get("get").expect("get command must exist");
+        let mut args = HashMap::new();
+        args.insert("mode".to_string(), json!("text"));
+        args.insert("selector".to_string(), json!("e5"));
+        assert_eq!((cmd.tool_name_fn)(&args), "select_first_text_or_null");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["selector"], "e5");
+    }
+
+    #[test]
+    fn test_get_html_uses_browser_evaluate_tool() {
+        let map = commands_map();
+        let cmd = map.get("get").expect("get command must exist");
+        let mut args = HashMap::new();
+        args.insert("mode".to_string(), json!("html"));
+        args.insert("selector".to_string(), json!("e3"));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_evaluate");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["expression"], "element => element.innerHTML");
+        assert_eq!(params["ref"], "e3");
+    }
+
+    #[test]
+    fn test_get_box_uses_bounding_box_tool() {
+        let map = commands_map();
+        let cmd = map.get("get").expect("get command must exist");
+        let mut args = HashMap::new();
+        args.insert("mode".to_string(), json!("box"));
+        args.insert("selector".to_string(), json!("e2"));
+        assert_eq!((cmd.tool_name_fn)(&args), "bounding_box");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["selector"], "e2");
+    }
+
+    #[test]
+    fn test_get_styles_uses_browser_evaluate_tool() {
+        let map = commands_map();
+        let cmd = map.get("get").expect("get command must exist");
+        let mut args = HashMap::new();
+        args.insert("mode".to_string(), json!("styles"));
+        args.insert("selector".to_string(), json!("e9"));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_evaluate");
+        let params = (cmd.tool_params_fn)(&args);
+        let expr = params["expression"].as_str().unwrap();
+        assert!(expr.contains("getComputedStyle"));
+        assert!(expr.contains("getPropertyValue"));
+        assert!(!expr.contains("`"));
+        assert_eq!(params["ref"], "e9");
+    }
+
+    #[test]
+    fn test_get_property_uses_select_first_property_value_or_null_tool() {
+        let map = commands_map();
+        let cmd = map.get("get").expect("get command must exist");
+        let mut args = HashMap::new();
+        args.insert("mode".to_string(), json!("property"));
+        args.insert("selector".to_string(), json!("e10"));
+        args.insert("name".to_string(), json!("value"));
+        assert_eq!(
+            (cmd.tool_name_fn)(&args),
+            "select_first_property_value_or_null"
+        );
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["selector"], "e10");
+        assert_eq!(params["propName"], "value");
+    }
+
+    #[test]
+    fn test_get_attr_uses_select_first_attribute_or_null_tool() {
+        let map = commands_map();
+        let cmd = map.get("get").expect("get command must exist");
+        let mut args = HashMap::new();
+        args.insert("mode".to_string(), json!("attr"));
+        args.insert("selector".to_string(), json!("e10"));
+        args.insert("name".to_string(), json!("href"));
+        assert_eq!(
+            (cmd.tool_name_fn)(&args),
+            "select_first_attribute_or_null"
+        );
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["selector"], "e10");
+        assert_eq!(params["attrName"], "href");
+    }
+
+    #[test]
+    fn test_get_defaults_to_text_for_unknown_mode() {
+        let map = commands_map();
+        let cmd = map.get("get").expect("get command must exist");
+        let mut args = HashMap::new();
+        args.insert("mode".to_string(), json!("unknown"));
+        args.insert("selector".to_string(), json!("e1"));
+        assert_eq!((cmd.tool_name_fn)(&args), "select_first_text_or_null");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["selector"], "e1");
+    }
+
+    #[test]
+    fn test_get_handles_case_insensitive_mode() {
+        let map = commands_map();
+        let cmd = map.get("get").expect("get command must exist");
+        let mut args = HashMap::new();
+        args.insert("mode".to_string(), json!("TEXT"));
+        args.insert("selector".to_string(), json!("e5"));
+        assert_eq!((cmd.tool_name_fn)(&args), "select_first_text_or_null");
+    }
+
+    #[test]
+    fn test_get_text_with_css_selector() {
+        let map = commands_map();
+        let cmd = map.get("get").expect("get command must exist");
+        let mut args = HashMap::new();
+        args.insert("mode".to_string(), json!("text"));
+        args.insert("selector".to_string(), json!(".price"));
+        assert_eq!((cmd.tool_name_fn)(&args), "select_first_text_or_null");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["selector"], ".price");
+    }
+
+    #[test]
+    fn test_get_html_with_id_selector() {
+        let map = commands_map();
+        let cmd = map.get("get").expect("get command must exist");
+        let mut args = HashMap::new();
+        args.insert("mode".to_string(), json!("html"));
+        args.insert("selector".to_string(), json!("#main"));
+        assert_eq!((cmd.tool_name_fn)(&args), "browser_evaluate");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["ref"], "#main");
+    }
+
+    #[test]
+    fn test_get_command_is_not_hidden() {
+        let map = commands_map();
+        let cmd = map.get("get").expect("get command must exist");
+        assert!(!cmd.hidden);
+        assert_eq!(cmd.category, Category::Core);
+        assert!(cmd.batch_supported);
+    }
+
+    #[test]
+    fn test_get_command_has_three_args() {
+        let map = commands_map();
+        let cmd = map.get("get").expect("get command must exist");
+        assert_eq!(cmd.args.len(), 3);
+        assert_eq!(cmd.args[0].name, "mode");
+        assert!(!cmd.args[0].optional);
+        assert_eq!(cmd.args[1].name, "selector");
+        assert!(!cmd.args[1].optional);
+        assert_eq!(cmd.args[2].name, "name");
+        assert!(cmd.args[2].optional);
+    }
+
+    #[test]
+    fn test_get_command_has_no_options() {
+        let map = commands_map();
+        let cmd = map.get("get").expect("get command must exist");
+        assert_eq!(cmd.options.len(), 0);
+    }
+
+    #[test]
+    fn test_get_styles_expr_does_not_contain_template_literals() {
+        let map = commands_map();
+        let cmd = map.get("get").expect("get command must exist");
+        let mut args = HashMap::new();
+        args.insert("mode".to_string(), json!("styles"));
+        args.insert("selector".to_string(), json!("e1"));
+        let params = (cmd.tool_params_fn)(&args);
+        let expr = params["expression"].as_str().unwrap();
+        assert!(!expr.contains('`'), "JS expression must not use template literals");
+        assert!(!expr.contains("${"), "JS expression must not use template interpolation");
     }
 
     #[test]
