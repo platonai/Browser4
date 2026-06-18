@@ -136,6 +136,43 @@ jobs:
 
           echo "::endgroup::"
 
+      - name: Validate PowerShell test scripts
+        id: validate-ps1
+        shell: pwsh
+        run: |
+          $scripts = @(
+            'cli/browser4-cli/tests/scripts/common.ps1',
+            'cli/browser4-cli/tests/scripts/search-summary.ps1',
+            'cli/browser4-cli/tests/scripts/amazon.ps1',
+            'cli/browser4-cli/tests/scripts/hacker-news.ps1',
+            'cli/browser4-cli/tests/scripts/form-filling.ps1',
+            'browser4-tests/agent-scenarios/search-summary.ps1',
+            'browser4-tests/agent-scenarios/amazon.ps1',
+            'browser4-tests/agent-scenarios/hacker-news.ps1',
+            'browser4-tests/agent-scenarios/form-filling.ps1'
+          )
+          $failed = 0
+          foreach ($s in $scripts) {
+            $tokens = $null; $parseErrors = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile(
+              $s, [ref]$tokens, [ref]$parseErrors
+            )
+            if ($parseErrors.Count -eq 0) {
+              Write-Host "  OK  $s" -ForegroundColor Green
+            } else {
+              Write-Host "  FAIL  $s" -ForegroundColor Red
+              foreach ($e in $parseErrors) {
+                Write-Host "    $($e.Message)" -ForegroundColor Red
+              }
+              $failed++
+            }
+          }
+          if ($failed -gt 0) {
+            Write-Host "`n$failed script(s) failed to parse." -ForegroundColor Red
+            exit 1
+          }
+          Write-Host "`nAll $($scripts.Count) scripts parsed successfully." -ForegroundColor Green
+
       - name: Run Tests
         id: run-tests
         if: inputs.skip_tests != true
