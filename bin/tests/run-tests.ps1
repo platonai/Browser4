@@ -76,7 +76,7 @@ $null = New-Item -Path $RunnerLogDir -ItemType Directory -Force -ErrorAction Sil
 # Per-category timeout overrides (seconds).  Stress tests involve server
 # cold-starts and many page loads; they need more time than the default.
 $CategoryTimeoutOverrides = @{
-    stress  = 900   # 15 min — accounts for cold-start overhead
+    stress  = 1800  # 30 min — stress tests include multiple internal iterations + cold-start
     swarm   = 900   # 15 min — swarm tests may also cold-start
     agent   = 900   # 15 min — agent tasks can be slow
 }

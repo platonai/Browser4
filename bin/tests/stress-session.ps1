@@ -38,7 +38,8 @@ param(
     [int] $Iterations = 3,
     [int] $Seed = (Get-Random),
     [string] $Locale = '',
-    [string] $Phase = ''             # e.g. "C" or "A,C,E" — empty = run all
+    [string] $Phase = '',            # e.g. "C" or "A,C,E" — empty = run all
+    [int] $TimeoutSeconds = 0        # 0 = unlimited; >0 skips final iterations when budget exhausted
 )
 
 $ErrorActionPreference = 'Continue'
@@ -460,6 +461,21 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
     $prevPassed = $global:TestPassed
     $prevFailed = $global:TestFailed
 
+    # ── Per-iteration time budget ─────────────────────────────────
+    # When a global timeout is set, estimate the remaining budget and
+    # skip the final iteration(s) if there isn't enough time.  Uses
+    # the first iteration's elapsed time as a predictor for subsequent
+    # ones, plus a 15 % safety margin for variance.
+    if ($TimeoutSeconds -gt 0 -and $iter -gt 1 -and $iterElapsedPrev) {
+        $remaining = $TimeoutSeconds - $suiteTimer.Elapsed.TotalSeconds
+        $needed = $iterElapsedPrev * 1.15
+        if ($remaining -lt $needed) {
+            Write-Host "`n  ⏭ Skipping remaining $($Iterations - $iter + 1) iteration(s) — not enough time budget" -ForegroundColor DarkYellow
+            Write-Host "     Remaining: $([math]::Round($remaining, 0))s  Needed (est): $([math]::Round($needed, 0))s  Budget: ${TimeoutSeconds}s" -ForegroundColor DarkGray
+            break
+        }
+    }
+
     # Shuffle page order each iteration for varied coverage.
     $shuffled = $pages | Sort-Object { $rng.Next() }
 
@@ -606,29 +622,57 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
 
     # ──────────────────────────────────────────────────────────────
     # Phase D: kill-all → verify total reset → open fresh
+    #
+    # kill-all stops every server process, which forces a full
+    # restart on the next open (~26 s).  That overhead is useful
+    # to test once (iteration 1), but in later iterations we use
+    # close-all instead — it preserves the running server and
+    # saves 20–30 s per iteration.
     # ──────────────────────────────────────────────────────────────
     if (-not $Phase -or $Phase -match 'D') {
-    Write-Host "`n  ── Phase D: kill-all → fresh start ──" -ForegroundColor DarkYellow
+    if ($iter -eq 1) {
+        Write-Host "`n  ── Phase D: kill-all → fresh start (full restart) ──" -ForegroundColor DarkYellow
+        Write-Host "  D1. kill-all" -ForegroundColor White
+        $null = Invoke-Cli kill-all
+        Start-Sleep -Seconds 5
 
-    Write-Host "  D1. kill-all" -ForegroundColor White
-    $null = Invoke-Cli kill-all
-    Start-Sleep -Seconds 5
+        # After kill-all, the backend is gone — list should show zero sessions.
+        Assert-SessionCount -Expected 0 -Context "after kill-all"
 
-    # After kill-all, the backend is gone — list should show zero sessions.
-    Assert-SessionCount -Expected 0 -Context "after kill-all"
+        # D2: open fresh after kill-all.
+        $dPage = $shuffled | Select-Object -First 1
+        Write-Host "  D2. open fresh after kill-all → $($dPage.name)  (server will auto-start)" -ForegroundColor White
+        Invoke-Cli open $dPage.url
+        Start-Sleep -Seconds 3
+        Invoke-RandomInteractions -Count ($rng.Next(1, 3))
+        Assert-SnapshotContains -Keyword $dPage.keyword -Context "$($dPage.name) (after kill-all)"
+        Assert-SessionCount -Expected 1 -Context "after kill-all + open"
 
-    # D2: open fresh after kill-all.
-    $dPage = $shuffled | Select-Object -First 1
-    Write-Host "  D2. open fresh after kill-all → $($dPage.name)  (server will auto-start)" -ForegroundColor White
-    Invoke-Cli open $dPage.url
-    Start-Sleep -Seconds 3
-    Invoke-RandomInteractions -Count ($rng.Next(1, 3))
-    Assert-SnapshotContains -Keyword $dPage.keyword -Context "$($dPage.name) (after kill-all)"
-    Assert-SessionCount -Expected 1 -Context "after kill-all + open"
+        Write-Host "  D3. close" -ForegroundColor DarkGray
+        Invoke-Cli close
+        Assert-SessionCount -Expected 0 -Context "after close (Phase D)"
+    } else {
+        Write-Host "`n  ── Phase D: close-all → fresh start (keep server, iter $iter) ──" -ForegroundColor DarkYellow
+        Write-Host "  D1. close-all (preserve running server)" -ForegroundColor White
+        $null = Invoke-Cli close-all
+        Start-Sleep -Seconds 2
 
-    Write-Host "  D3. close" -ForegroundColor DarkGray
-    Invoke-Cli close
-    Assert-SessionCount -Expected 0 -Context "after close (Phase D)"
+        # After close-all, all sessions are closed but the server is still up.
+        Assert-SessionCount -Expected 0 -Context "after close-all"
+
+        # D2: open a fresh session (server already running — no cold-start).
+        $dPage = $shuffled | Select-Object -First 1
+        Write-Host "  D2. open fresh → $($dPage.name)  (server already running)" -ForegroundColor White
+        Invoke-Cli open $dPage.url
+        Start-Sleep -Seconds 3
+        Invoke-RandomInteractions -Count ($rng.Next(1, 3))
+        Assert-SnapshotContains -Keyword $dPage.keyword -Context "$($dPage.name) (after close-all)"
+        Assert-SessionCount -Expected 1 -Context "after close-all + open"
+
+        Write-Host "  D3. close" -ForegroundColor DarkGray
+        Invoke-Cli close
+        Assert-SessionCount -Expected 0 -Context "after close (Phase D)"
+    }
 
     }
 
@@ -680,6 +724,9 @@ for ($iter = 1; $iter -le $Iterations; $iter++) {
 
     # Print per-iteration failure summary
     Write-PerTestSummary -Label "Iteration $iter" -PhasePasses $iterPasses -PhaseFailures $iterFailed
+
+    # Record elapsed for time-budget prediction (see per-iteration budget check above).
+    $iterElapsedPrev = $suiteTimer.Elapsed.TotalSeconds
 }
 
 # -------------------------------------------------------------------

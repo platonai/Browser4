@@ -141,7 +141,15 @@ if ($BuildCli) {
     Write-Host "Using browser4-cli: $BinaryPath" -ForegroundColor DarkGray
 }
 
-$ScenarioTimeoutSeconds = 600   # per-scenario timeout (10 min — agent polling can take 5+ min)
+# Per-scenario timeout overrides (seconds).  Stress tests involve server cold-starts,
+# many page loads, and multiple internal iterations — they need far more time.
+# Default for unlisted scenarios: 600 s (10 min).
+$ScenarioTimeoutDefault    = 600    # 10 min — sufficient for agent / swarm scenarios
+$ScenarioTimeoutOverrides  = @{
+    'stress-session.ps1'      = 1800   # 30 min — 3 iterations × ~8 min each + overhead
+    'stress-swarm-agents.ps1' = 1800   # 30 min — swarm stress with cold-start
+    'stress-install.ps1'      = 1800   # 30 min — install lifecycle exercises cold-start
+}
 $ServerLogTailLines = 1000      # lines to tail from pulsar.log on failure
 
 # Auto-detect RuntimeBundleHome when not explicitly provided.
@@ -334,6 +342,63 @@ Write-Host "Version: $(& $BinaryPath --version)" -ForegroundColor DarkGray
 $env:BROWSER4_CLI_BIN = $BinaryPath
 
 # -------------------------------------------------------------------
+# Pre-start the Browser4 server (download + warm start)
+# -------------------------------------------------------------------
+# The first CLI `open` on a cold system downloads the runtime bundle
+# (~140 MB from GitHub) and starts the server.  This can take 60–120 s.
+# By doing a warm-up open+close now, we keep that cost out of the
+# per-scenario timeout budget.  Controlled by BROWSER4_SKIP_PRESTART.
+$ShouldPreStartServer = $true
+if ($env:BROWSER4_SKIP_PRESTART -eq '1') {
+    $ShouldPreStartServer = $false
+}
+
+if ($ShouldPreStartServer) {
+    Write-Host '── Pre-starting Browser4 server (warm-up) ──' -ForegroundColor DarkYellow
+    try {
+        # Kill any stale port holders first.
+        Clear-Browser4Port -Port 8182 -WaitSeconds 2
+
+        # Open a trivial session to trigger server download/start.
+        $preTimeout = 120
+        $tmpOut = Join-Path $env:TEMP "b4_multi_prestart_stdout_${pid}.txt"
+        $tmpErr = Join-Path $env:TEMP "b4_multi_prestart_stderr_${pid}.txt"
+        Remove-Item $tmpOut, $tmpErr -Force -ErrorAction SilentlyContinue
+
+        $preProc = Start-Process -FilePath $BinaryPath `
+            -ArgumentList 'open', 'https://example.com' `
+            -NoNewWindow -PassThru `
+            -RedirectStandardOutput $tmpOut `
+            -RedirectStandardError $tmpErr
+
+        $preCompleted = $preProc.WaitForExit($preTimeout * 1000)
+        $preExitCode = if ($preCompleted) { $preProc.ExitCode } else { $preProc.Kill($true); -99 }
+
+        $preOut = @()
+        if (Test-Path $tmpOut) { $preOut += Get-Content $tmpOut -Encoding UTF8 -ErrorAction SilentlyContinue }
+        if (Test-Path $tmpErr) { $preOut += Get-Content $tmpErr -Encoding UTF8 -ErrorAction SilentlyContinue |
+            ForEach-Object { "[stderr] $_" } }
+        Remove-Item $tmpOut, $tmpErr -Force -ErrorAction SilentlyContinue
+
+        if ($preCompleted) {
+            Write-Host "  open (exit=$preExitCode): $($preOut -join '; ')" -ForegroundColor DarkGray
+        } else {
+            Write-Host "  ⚠ open timed out after ${preTimeout}s — server may still be starting in background" -ForegroundColor DarkYellow
+        }
+
+        # Give the server a moment to finish initialising, then close.
+        Start-Sleep -Seconds 5
+        $preCloseOut = & $BinaryPath close 2>&1
+        Write-Host "  close: $($preCloseOut -join '; ')" -ForegroundColor DarkGray
+        Start-Sleep -Seconds 2
+        Write-Host '  ✅ Server pre-start complete.' -ForegroundColor Green
+    } catch {
+        Write-Host "  ⚠ Server pre-start failed (non-fatal): $($_.Exception.Message)" -ForegroundColor DarkYellow
+    }
+    Write-Host ''
+}
+
+# -------------------------------------------------------------------
 # Run
 # -------------------------------------------------------------------
 $SuiteStartedAt = Get-Date
@@ -394,21 +459,28 @@ for ($iteration = 1; $iteration -le $Iterations; $iteration++) {
             -RedirectStandardOutput $tmpOut `
             -RedirectStandardError $tmpErr
 
+        # Resolve per-scenario timeout: override table → default
+        $effectiveTimeout = if ($ScenarioTimeoutOverrides.ContainsKey($scenario)) {
+            $ScenarioTimeoutOverrides[$scenario]
+        } else {
+            $ScenarioTimeoutDefault
+        }
+
         # Wait with timeout, printing progress periodically.
         $pollIntervalMs = 10000   # log "still waiting" every 10 s
-        $deadline = [DateTime]::UtcNow.AddSeconds($ScenarioTimeoutSeconds)
+        $deadline = [DateTime]::UtcNow.AddSeconds($effectiveTimeout)
         $completed = $false
         while (-not $completed -and ([DateTime]::UtcNow -lt $deadline)) {
             $completed = $proc.WaitForExit($pollIntervalMs)
             if (-not $completed -and ([DateTime]::UtcNow -lt $deadline)) {
                 $elapsed = [Math]::Floor($sw.Elapsed.TotalSeconds)
-                Write-Host ("`r  ⏳ {0} — {1}s / {2}s … " -f $scenario, $elapsed, $ScenarioTimeoutSeconds) -NoNewline -ForegroundColor DarkGray
+                Write-Host ("`r  ⏳ {0} — {1}s / {2}s … " -f $scenario, $elapsed, $effectiveTimeout) -NoNewline -ForegroundColor DarkGray
             }
         }
         # Clear the progress tick line so the next output starts fresh.
         Write-Host ''
         if (-not $completed) {
-            Write-Host ("⏱  TIMEOUT ({0}s) — killing process tree" -f $ScenarioTimeoutSeconds) -ForegroundColor Red
+            Write-Host ("⏱  TIMEOUT ({0}s) — killing process tree" -f $effectiveTimeout) -ForegroundColor Red
             $proc.Kill($true)
             $proc.WaitForExit(5000) | Out-Null
             $sw.Stop()
@@ -420,7 +492,7 @@ for ($iteration = 1; $iteration -le $Iterations; $iteration++) {
 === Scenario : $scenario
 === Iteration: $iteration
 === Started  : $($iterStarted.ToString('yyyy-MM-dd HH:mm:ss'))
-=== Status   : TIMEOUT ($ScenarioTimeoutSeconds s)
+=== Status   : TIMEOUT ($effectiveTimeout s)
 === Elapsed  : $('{0:F1}' -f $sw.Elapsed.TotalSeconds)s
 === ExitCode : (killed)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
