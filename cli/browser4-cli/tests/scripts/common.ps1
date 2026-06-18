@@ -7,8 +7,8 @@ Shared helpers for browser4-cli agent-scenario test scripts.
 Dot-source this module to reuse the shared usability-evaluation prompt and the
 standard agent invocation.  The prompt adapts to the environment automatically:
 
-  - Dev (default):  `cargo run -- help` — tests the local Rust source.
-  - Production:      `browser4-cli help` — tests the globally installed binary.
+  - Dev (default):  `cargo run -- help`  + local `cli/skill/SKILL.md`.
+  - Production:      `browser4-cli help` + `https://browser4.io/SKILL.md`.
 
 Set `$browser4cliMode = 'production'` BEFORE dot-sourcing this module to switch
 to production mode.
@@ -32,9 +32,11 @@ $ErrorActionPreference = "Stop"
 # PowerShell here-strings expand variables, so $helpCmd is resolved when
 # $generalPrompt is defined below.
 if ($browser4cliMode -eq 'production') {
-    $helpCmd = '`browser4-cli help`'
+    $helpCmd   = '`browser4-cli help`'
+    $skillPath = 'https://browser4.io/SKILL.md'
 } else {
-    $helpCmd = '`cargo run -- help`'
+    $helpCmd   = '`cargo run -- help`'
+    $skillPath = '`cli/skill/SKILL.md`'
 }
 
 # ── Shared evaluation prompt ────────────────────────────────────────────────
@@ -48,7 +50,7 @@ You are evaluating the usability, discoverability, and reliability of browser4-c
 Before performing any browser interaction:
 
 1. Run $helpCmd.
-2. Read `cli/skill/SKILL.md` completely.
+2. Read $skillPath completely.
 3. Learn the available commands, workflows, and conventions directly from the documentation.
 4. Do not assume any prior knowledge of browser4-cli.
 
