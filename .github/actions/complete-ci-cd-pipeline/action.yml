@@ -95,7 +95,7 @@ inputs:
   integration_test_script:
     description: 'Path to integration test script'
     required: false
-    default: './bin/tests/run-integration-test.sh'
+    default: './bin/tests-production/run-integration-test.sh'
   integration_test_timeout:
     description: 'Integration test timeout in seconds'
     required: false

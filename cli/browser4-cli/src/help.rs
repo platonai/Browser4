@@ -140,15 +140,18 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("  - Quote each subcommand so it is parsed as one batch item.".to_string());
         lines.push("  - Use --bail to stop execution on the first failed subcommand.".to_string());
         lines.push("  - Use --json to read command arrays from stdin JSON payload.".to_string());
+        lines.push("  - Batch mode only supports DOM operations (navigation, keyboard, mouse,".to_string());
+        lines.push("    core interactions, export, and tabs). Session lifecycle commands".to_string());
+        lines.push("    (open, close) must be executed separately.".to_string());
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli batch \"open https://playwright.dev\" \"snapshot\"".to_string());
+        lines.push("  browser4-cli batch \"goto https://playwright.dev\" \"snapshot\"".to_string());
         lines.push(
-            "  browser4-cli batch --bail \"open https://playwright.dev\" \"click e1\" \"screenshot\""
+            "  browser4-cli batch --bail \"goto https://playwright.dev\" \"click e1\" \"screenshot\""
                 .to_string(),
         );
         lines.push(
-            "  echo '[ [\"open\", \"https://playwright.dev\"], [\"snapshot\"] ]' | browser4-cli batch --json"
+            "  echo '[ [\"goto\", \"https://playwright.dev\"], [\"snapshot\"] ]' | browser4-cli batch --json"
                 .to_string(),
         );
     }
@@ -586,7 +589,12 @@ mod tests {
         assert!(help.contains("--bail"));
         assert!(help.contains("--json"));
         assert!(help.contains("Quote each subcommand"));
-        assert!(help.contains("browser4-cli batch \"open https://playwright.dev\" \"snapshot\""));
+        assert!(help.contains("DOM operations"));
+        assert!(help.contains("Session lifecycle commands"));
+        assert!(help.contains("executed separately"));
+        assert!(help.contains(
+            "browser4-cli batch \"goto https://playwright.dev\" \"snapshot\""
+        ));
         assert!(help.contains("batch --json"));
     }
 
