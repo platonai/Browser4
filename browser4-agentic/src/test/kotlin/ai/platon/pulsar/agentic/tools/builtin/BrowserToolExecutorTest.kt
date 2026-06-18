@@ -52,6 +52,7 @@ class BrowserToolExecutorTest {
     @Test
     @DisplayName("switchTab with invalid tab returns exception")
     fun switchtabWithInvalidTabReturnsException() = runBlocking {
+        every { browser.findDriverByGUID(any()) } returns null
         every { browser.findDriverById(any()) } returns null
         every { browser.drivers } returns mutableMapOf()
 
