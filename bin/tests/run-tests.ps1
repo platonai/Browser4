@@ -94,25 +94,27 @@ if ($env:BROWSER4_SKIP_PRESTART -eq '1') {
 # -------------------------------------------------------------------
 # Each entry:  Name (script basename without .ps1), Category, Description
 $Tests = @(
-    [PSCustomObject]@{ Name = 'cli-basics';                     Category = 'smoke';  Description = 'Basic CLI functionality (version, help, open, close)' },
-    [PSCustomObject]@{ Name = 'agent-run-free-command';         Category = 'agent';  Description = 'Agent free-command task lifecycle' },
-    [PSCustomObject]@{ Name = 'agent-run-page-visit';           Category = 'agent';  Description = 'Agent page-visit task lifecycle' },
-    [PSCustomObject]@{ Name = 'agent-run-page-visit-interact';  Category = 'agent';  Description = 'Agent page-visit + interaction task lifecycle' },
-    [PSCustomObject]@{ Name = 'swarm-agents';                   Category = 'swarm';  Description = 'Swarm create / submit / status lifecycle' },
-    [PSCustomObject]@{ Name = 'stress-swarm-agents';            Category = 'stress'; Description = 'Swarm stress test with seed URLs' },
-    [PSCustomObject]@{ Name = 'stress-session';                 Category = 'stress'; Description = 'Session lifecycle stress test' },
-    [PSCustomObject]@{ Name = 'stress-install';                 Category = 'stress'; Description = 'Install / server lifecycle stress test' },
-    [PSCustomObject]@{ Name = 'test-production-helpers';       Category = 'helpers'; Description = 'Unit tests for test-production.ps1 helper functions' },
-    [PSCustomObject]@{ Name = 'test-utils-helpers';            Category = 'helpers'; Description = 'Unit tests for test-utils.psm1 helper functions' }
+    [PSCustomObject]@{ Name = 'cli-basics';                     Category = 'smoke';   Description = 'Basic CLI functionality (version, help, open, close)' },
+    [PSCustomObject]@{ Name = 'agent-run-free-command';         Category = 'agent';   Description = 'Agent free-command task lifecycle' },
+    [PSCustomObject]@{ Name = 'agent-run-page-visit';           Category = 'agent';   Description = 'Agent page-visit task lifecycle' },
+    [PSCustomObject]@{ Name = 'agent-run-page-visit-interact';  Category = 'agent';   Description = 'Agent page-visit + interaction task lifecycle' },
+    [PSCustomObject]@{ Name = 'swarm-agents';                   Category = 'swarm';   Description = 'Swarm create / submit / status lifecycle' },
+    [PSCustomObject]@{ Name = 'stress-swarm-agents';            Category = 'stress';  Description = 'Swarm stress test with seed URLs' },
+    [PSCustomObject]@{ Name = 'stress-session';                 Category = 'stress';  Description = 'Session lifecycle stress test' },
+    [PSCustomObject]@{ Name = 'stress-install';                 Category = 'stress';  Description = 'Install / server lifecycle stress test' },
+    [PSCustomObject]@{ Name = 'test-production-helpers';       Category = 'helpers';  Description = 'Unit tests for test-production.ps1 helper functions' },
+    [PSCustomObject]@{ Name = 'test-utils-helpers';            Category = 'helpers';  Description = 'Unit tests for test-utils.psm1 helper functions' },
+    [PSCustomObject]@{ Name = 'coworker-scripts';              Category = 'coworker'; Description = 'Unit tests for coworker/scripts helper functions' }
 )
 
 # Map category name → list of test names
 $Categories = @{
-    smoke  = @('cli-basics')
-    agent  = @('agent-run-free-command', 'agent-run-page-visit', 'agent-run-page-visit-interact')
-    swarm  = @('swarm-agents', 'stress-swarm-agents')
-    stress  = @('stress-swarm-agents', 'stress-session', 'stress-install')
-    helpers = @('test-production-helpers', 'test-utils-helpers')
+    smoke    = @('cli-basics')
+    agent    = @('agent-run-free-command', 'agent-run-page-visit', 'agent-run-page-visit-interact')
+    swarm    = @('swarm-agents', 'stress-swarm-agents')
+    stress   = @('stress-swarm-agents', 'stress-session', 'stress-install')
+    helpers  = @('test-production-helpers', 'test-utils-helpers')
+    coworker = @('coworker-scripts')
 }
 
 # -------------------------------------------------------------------
