@@ -27,7 +27,6 @@ const CATEGORIES: &[(&str, &str)] = &[
     ("storage", "Storage"),
     ("network", "Network"),
     ("devtools", "DevTools"),
-    ("agent", "Agent"),
     ("swarm", "Swarm"),
     ("install", "Install"),
     ("config", "Configuration"),
@@ -510,7 +509,7 @@ mod tests {
         assert!(help.contains("batch"));
         assert!(!help.contains("  console "));
         assert!(help.contains("extract"));
-        assert!(help.contains("agent run"));
+        assert!(!help.contains("agent run"));
         assert!(help.contains("swarm create"));
         assert!(help.contains("--json"));
         assert!(help.contains("machine-parseable JSON"));

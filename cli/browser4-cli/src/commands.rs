@@ -1348,7 +1348,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "summarize",
             description: "Summarize page content using AI",
             category: Category::Agent,
-            hidden: false,
+            hidden: true,
             batch_supported: false,
             args: &[ArgDef { name: "instruction", description: "Summarization instruction, e.g. 'summarize the product reviews'", optional: true }],
             options: &[
@@ -1366,7 +1366,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "agent-run",
             description: "Run an autonomous agent task (async, returns task ID)",
             category: Category::Agent,
-            hidden: false,
+            hidden: true,
             batch_supported: false,
             args: &[ArgDef { name: "task", description: "Natural language task for the agent to execute", optional: false }],
             options: &[],
@@ -1379,7 +1379,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "agent-status",
             description: "Check the status of a running agent task",
             category: Category::Agent,
-            hidden: false,
+            hidden: true,
             batch_supported: false,
             args: &[ArgDef { name: "id", description: "Task ID returned by agent run", optional: false }],
             options: &[],
@@ -1392,7 +1392,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "agent-result",
             description: "Get the result of a completed agent task",
             category: Category::Agent,
-            hidden: false,
+            hidden: true,
             batch_supported: false,
             args: &[ArgDef { name: "id", description: "Task ID returned by agent run", optional: false }],
             options: &[],
@@ -2150,7 +2150,7 @@ mod tests {
     #[test]
     fn test_advanced_commands_are_hidden_from_global_help() {
         let map = commands_map();
-        for name in ["console"] {
+        for name in ["console", "agent-run", "agent-status", "agent-result", "summarize"] {
             assert!(map.get(name).unwrap().hidden, "{name} should stay hidden");
         }
     }
