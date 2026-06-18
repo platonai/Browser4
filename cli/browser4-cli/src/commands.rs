@@ -703,10 +703,12 @@ pub fn all_commands() -> Vec<CommandDef> {
             hidden: false,
             batch_supported: true,
             args: &[
-                ArgDef { name: "expression", description: "JavaScript expression or function to evaluate", optional: false },
+                ArgDef { name: "expression", description: "JavaScript expression or function to evaluate", optional: true },
                 ArgDef { name: "ref", description: "Optional CSS selector or snapshot ref (for example e5)", optional: true },
             ],
-            options: &[],
+            options: &[
+                OptionDef { name: "file", description: "Read JavaScript expression from a file instead of the command line", is_bool: false, short: None },
+            ],
             tool_name_fn: |_| "browser_evaluate".to_string(),
             tool_params_fn: |args| {
                 let mut p = json!({ "expression": get_str(args, "expression").unwrap_or_default() });
@@ -2094,6 +2096,34 @@ mod tests {
         let map = commands_map();
         let cmd = map.get("eval").unwrap();
         assert_eq!(cmd.category, Category::Core);
+    }
+
+    #[test]
+    fn test_eval_has_file_option() {
+        let map = commands_map();
+        let cmd = map.get("eval").unwrap();
+        let file_opt = cmd
+            .options
+            .iter()
+            .find(|o| o.name == "file")
+            .expect("eval should have a --file option");
+        assert!(!file_opt.is_bool, "--file should not be a boolean flag");
+        assert!(
+            file_opt.description.contains("Read JavaScript expression from a file"),
+            "--file description should mention reading from a file"
+        );
+    }
+
+    #[test]
+    fn test_eval_expression_arg_is_optional() {
+        let map = commands_map();
+        let cmd = map.get("eval").unwrap();
+        let expr_arg = cmd
+            .args
+            .iter()
+            .find(|a| a.name == "expression")
+            .expect("eval should have an expression argument");
+        assert!(expr_arg.optional, "expression argument should be optional");
     }
 
     #[test]

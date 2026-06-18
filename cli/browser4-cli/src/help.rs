@@ -156,12 +156,24 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
     }
 
     if cmd.name == "eval" {
+        lines.push("Notes:".to_string());
+        lines.push(
+            "  - Use --file to read the JavaScript expression from a file, avoiding shell quoting issues."
+                .to_string(),
+        );
+        lines.push(
+            "  - When --file is used, the expression positional argument is optional."
+                .to_string(),
+        );
+        lines.push(String::new());
         lines.push("Examples:".to_string());
         lines.push("  browser4-cli eval \"document.title\"".to_string());
         lines.push(
             "  browser4-cli eval \"element => element.textContent\" \"#click-target\"".to_string(),
         );
         lines.push("  browser4-cli eval \"element => element.textContent\" e5".to_string());
+        lines.push("  browser4-cli eval --file script.js".to_string());
+        lines.push("  browser4-cli eval --file script.js e5".to_string());
     }
 
     if cmd.name == "agent-run" {
@@ -622,10 +634,13 @@ mod tests {
         let cmds = all_commands();
         let cmd = cmds.iter().find(|c| c.name == "eval").unwrap();
         let help = generate_command_help(cmd);
-        assert!(help.contains("browser4-cli eval <expression> [ref]"));
+        assert!(help.contains("browser4-cli eval [expression] [ref]"));
         assert!(help.contains("Evaluate JavaScript expression on page or element"));
         assert!(help.contains("browser4-cli eval \"document.title\""));
         assert!(help.contains("browser4-cli eval \"element => element.textContent\" e5"));
+        assert!(help.contains("--file"));
+        assert!(help.contains("Read JavaScript expression from a file"));
+        assert!(help.contains("browser4-cli eval --file script.js"));
     }
 
     #[test]

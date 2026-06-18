@@ -3723,7 +3723,7 @@ fn compile_batch_request(
         };
 
         let tool_name = (cmd_def.tool_name_fn)(&parsed);
-        let tool_params = (cmd_def.tool_params_fn)(&parsed);
+        let mut tool_params = (cmd_def.tool_params_fn)(&parsed);
 
         match nested_command.as_str() {
             "open" | "close" => {
@@ -3739,6 +3739,86 @@ fn compile_batch_request(
                     break;
                 }
                 continue;
+            }
+            "eval" => {
+                // When --file is provided, read the expression from the file.
+                if let Some(file_path) = tool_params
+                    .get("file")
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+                {
+                    match std::fs::read_to_string(file_path) {
+                        Ok(content) => {
+                            let expression = content.trim().to_string();
+                            if expression.is_empty() {
+                                if push_batch_local_failure(
+                                    &mut entries,
+                                    spec,
+                                    format!(
+                                        "Eval file '{}' is empty. Provide a non-empty JavaScript expression.",
+                                        file_path
+                                    ),
+                                    bail,
+                                ) {
+                                    break;
+                                }
+                                continue;
+                            }
+                            if let Value::Object(ref mut m) = tool_params {
+                                m.insert("expression".to_string(), json!(expression));
+                            }
+                        }
+                        Err(e) => {
+                            if push_batch_local_failure(
+                                &mut entries,
+                                spec,
+                                format!("Failed to read eval file '{}': {}", file_path, e),
+                                bail,
+                            ) {
+                                break;
+                            }
+                            continue;
+                        }
+                    }
+                }
+
+                // Validate that an expression is provided.
+                let expression_empty = tool_params
+                    .get("expression")
+                    .and_then(|v| v.as_str())
+                    .map(str::is_empty)
+                    .unwrap_or(true);
+                if expression_empty {
+                    if push_batch_local_failure(
+                        &mut entries,
+                        spec,
+                        "A JavaScript expression is required. Provide it as a positional argument or via --file.".to_string(),
+                        bail,
+                    ) {
+                        break;
+                    }
+                    continue;
+                }
+
+                let request_index = steps.len();
+                steps.push(json!({
+                    "op": "tool",
+                    "command": spec.display,
+                    "tool": tool_name,
+                    "arguments": normalize_batch_step_args(&tool_params),
+                }));
+                entries.push(PlannedBatchEntry::Backend {
+                    display: spec.display.clone(),
+                    request_indices: vec![request_index],
+                    outputs: vec![PlannedBatchOutput::Text],
+                });
+
+                let selector = tracked_selector(&tool_params);
+                if let Some(selector) = selector {
+                    active_selector = Some(selector.to_string());
+                    final_state.active_selector = active_selector.clone();
+                }
             }
             "snapshot" => {
                 let filename = tool_params.get("filename").and_then(|value| value.as_str());
@@ -4327,7 +4407,7 @@ async fn run(
 
     // Resolve tool name and parameters
     let tool_name = (cmd_def.tool_name_fn)(&parsed);
-    let tool_params = (cmd_def.tool_params_fn)(&parsed);
+    let mut tool_params = (cmd_def.tool_params_fn)(&parsed);
 
     // Dispatch the command
     match command {
@@ -4559,6 +4639,55 @@ async fn run(
                 &base_url,
                 &tool_name,
                 &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
+        "eval" => {
+            // When --file is provided, read the expression from the file.
+            if let Some(file_path) = tool_params
+                .get("file")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+            {
+                let expression = std::fs::read_to_string(file_path)
+                    .map_err(|e| format!("Failed to read eval file '{}': {}", file_path, e))?;
+                let expression = expression.trim().to_string();
+                if expression.is_empty() {
+                    return Err(CliError(
+                        ExitCode::Usage,
+                        format!(
+                            "Eval file '{}' is empty. Provide a non-empty JavaScript expression.",
+                            file_path
+                        ),
+                    ));
+                }
+                if let Value::Object(ref mut m) = tool_params {
+                    m.insert("expression".to_string(), json!(expression));
+                }
+            }
+
+            // Validate that an expression is provided (either positional or via --file).
+            let expression_empty = tool_params
+                .get("expression")
+                .and_then(|v| v.as_str())
+                .map(str::is_empty)
+                .unwrap_or(true);
+            if expression_empty {
+                return Err(CliError(
+                    ExitCode::Usage,
+                    "A JavaScript expression is required. Provide it as a positional argument or via --file."
+                        .to_string(),
+                ));
+            }
+
+            handle_tool_command(
+                &client,
+                &base_url,
+                &tool_name,
+                &tool_params,
+                false,
                 global.session_name.as_deref(),
             )
             .await?;
