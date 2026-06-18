@@ -12,7 +12,7 @@
     Test runner for browser4-cli integration tests.
 
 .DESCRIPTION
-    Discovers and runs test scripts under bin/tests/.  Supports running
+    Discovers and runs test scripts under bin/tests-production/.  Supports running
     individual tests, named categories, or the full suite.  All tests use
     the globally-installed browser4-cli by default (override with
     $env:BROWSER4_CLI_BIN).

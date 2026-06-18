@@ -294,9 +294,9 @@ When creating or modifying a `.ps1` file, ensure the script is compatible with m
 - Test scripts on at least one non-Windows platform before finalizing
 - **When fixing a `.ps1` file**, also check other scripts in the same directory for the same issues and fix them proactively
 
-### Test Script Portability (bin/tests/ and bin/test-production.ps1)
+### Test Script Portability (bin/tests-production/ and bin/test-production.ps1)
 
-All `.ps1` and `.sh` scripts under `bin/tests/` and `bin/test-production.ps1` are **production test scripts** — they test a globally-installed `browser4-cli` binary, not the source tree.  They are designed to be run from **any location** (CI, a user's machine, a downloaded bundle) and must **never** depend on:
+All `.ps1` and `.sh` scripts under `bin/tests-production/` and `bin/test-production.ps1` are **production test scripts** — they test a globally-installed `browser4-cli` binary, not the source tree.  They are designed to be run from **any location** (CI, a user's machine, a downloaded bundle) and must **never** depend on:
 
 - `git` — no `git rev-parse`, `git show-toplevel`, or any git command
 - The repository root — no traversing up the tree looking for `pom.xml` or similar markers

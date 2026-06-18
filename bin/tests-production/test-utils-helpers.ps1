@@ -17,10 +17,10 @@
     caused the agent-run-page-visit test failure.
 
     Run standalone:
-        pwsh bin/tests/test-utils-helpers.ps1
+        pwsh bin/tests-production/test-utils-helpers.ps1
 
     Run via runner:
-        pwsh bin/tests/run-tests.ps1 test-utils-helpers
+        pwsh bin/tests-production/run-tests.ps1 test-utils-helpers
 #>
 
 [CmdletBinding()]

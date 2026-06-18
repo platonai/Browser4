@@ -5,7 +5,7 @@ set -euo pipefail
 # Swarm agents lifecycle test (bash version).
 #
 # All CLI invocations log output to a timestamped directory under
-# bin/tests/logs/.  On failure, log paths are printed and an AI CLI
+# bin/tests-production/logs/.  On failure, log paths are printed and an AI CLI
 # is invoked for analysis (priority: claude > copilot).
 # -------------------------------------------------------------------
 

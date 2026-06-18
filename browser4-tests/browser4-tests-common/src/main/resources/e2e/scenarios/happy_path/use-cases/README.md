@@ -38,16 +38,16 @@ Use `run-e2e-agents.sh` to execute these use cases:
 
 ```bash
 # Run all use cases
-bin/tests/test-cases/run-e2e-agents.sh
+bin/tests-production/test-cases/run-e2e-agents.sh
 
 # Run specific use cases by number
-bin/tests/test-cases/run-e2e-agents.sh -t "01,02,03"
+bin/tests-production/test-cases/run-e2e-agents.sh -t "01,02,03"
 
 # Run with verbose output
-bin/tests/test-cases/run-e2e-agents.sh --verbose
+bin/tests-production/test-cases/run-e2e-agents.sh --verbose
 
 # Show help
-bin/tests/test-cases/run-e2e-agents.sh --help
+bin/tests-production/test-cases/run-e2e-agents.sh --help
 ```
 
 ## Adding New Use Cases

@@ -43,16 +43,16 @@ runs:
       shell: bash
       run: |
         echo "::group::🧪 Integration Tests"
-        
+
         if [ -f "${{ inputs.script_path }}" ]; then
           echo "✅ Found integration test script"
           chmod +x ${{ inputs.script_path }}
-        
+
           echo "🚀 Running integration tests..."
           echo "Application URL: ${{ inputs.application_url }}"
           echo "Network: ${{ inputs.network_name }}"
           echo "Container: ${{ inputs.container_name }}"
-        
+
           start_time=$(date +%s)
           if timeout ${{ inputs.timeout_seconds }} ${{ inputs.script_path }}; then
             end_time=$(date +%s)
@@ -77,5 +77,5 @@ runs:
           echo "Skipping integration tests..."
           echo "integration_status=skipped" >> $GITHUB_OUTPUT
         fi
-        
+
         echo "::endgroup::"

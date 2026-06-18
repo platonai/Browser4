@@ -24,7 +24,7 @@
       - Rapid stop->open->close and kill-all->open->close cycles
       - State file integrity (installation.json, cli-state.json, managed-processes.json)
 
-    All CLI invocations are logged to a per-run directory under bin/tests/logs/.
+    All CLI invocations are logged to a per-run directory under bin/tests-production/logs/.
     Failures are reported with log paths.  If `copilot` is on PATH, it is
     invoked automatically to analyse any failures.
 

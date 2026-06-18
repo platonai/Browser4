@@ -21,7 +21,7 @@
     This test is self-contained and requires no external services — the CLI
     manages its own server lifecycle.
 
-    All CLI invocations are logged to a per-run directory under bin/tests/logs/.
+    All CLI invocations are logged to a per-run directory under bin/tests-production/logs/.
     Failures are reported with log paths.  If `copilot` is on PATH, it is
     invoked automatically to analyse any failures.
 

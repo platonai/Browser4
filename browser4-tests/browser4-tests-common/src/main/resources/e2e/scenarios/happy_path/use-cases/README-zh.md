@@ -51,9 +51,9 @@
 
 这些用例通常由仓库脚本执行（脚本路径以仓库为准）：
 
-- 运行全部用例：`bin/tests/test-cases/run-e2e-agents.sh`
-- 按编号选择用例：`bin/tests/test-cases/run-e2e-agents.sh -t "01,02,03"`
-- 输出更详细日志：`bin/tests/test-cases/run-e2e-agents.sh --verbose`
+- 运行全部用例：`bin/tests-production/test-cases/run-e2e-agents.sh`
+- 按编号选择用例：`bin/tests-production/test-cases/run-e2e-agents.sh -t "01,02,03"`
+- 输出更详细日志：`bin/tests-production/test-cases/run-e2e-agents.sh --verbose`
 
 > Windows 上如果你在 PowerShell 里运行 `.sh` 脚本，请确保已安装可用的 bash 环境（如 Git Bash/WSL）。
 

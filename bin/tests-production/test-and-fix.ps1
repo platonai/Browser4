@@ -30,7 +30,7 @@
     Additional instructions appended to the AI fix prompt.
 
 .PARAMETER OutputDir
-    Directory for the consolidated fix report (default: repo bin/tests/logs).
+    Directory for the consolidated fix report (default: repo bin/tests-production/logs).
 
 .PARAMETER DryRun
     Show what would happen without actually running the tests or AI.
