@@ -736,7 +736,7 @@ class MCPToolController(
         if (isElementReference(selector)) {
             return ResponseEntity.ok(
                 errorResponse(
-                    "Element references ('$selector') are not supported in domSnapshot get. Use a CSS selector instead."
+                    "Element references ('$selector') are not supported in domsnapshot get. Use a CSS selector instead."
                 )
             )
         }

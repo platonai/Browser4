@@ -276,31 +276,31 @@ If `--filename` is not provided, a new snapshot file is created with a timestamp
 
 ## DOM Snapshot
 
-The `domSnapshot` family of commands operates on a **static DOM snapshot** — the raw HTML of the current page parsed into a queryable document object model. Unlike the interactive `snapshot` command (which captures accessibility-tree refs for click/type/fill), `domSnapshot` extracts structured data from the DOM using CSS selectors and X-SQL queries without requiring an interactive browser session.
+The `domsnapshot` family of commands operates on a **static DOM snapshot** — the raw HTML of the current page parsed into a queryable document object model. Unlike the interactive `snapshot` command (which captures accessibility-tree refs for click/type/fill), `domsnapshot` extracts structured data from the DOM using CSS selectors and X-SQL queries without requiring an interactive browser session.
 
-Use the spaced `domSnapshot <subcommand>` form:
+Use the spaced `domsnapshot <subcommand>` form:
 
 ```bash
-browser4-cli domSnapshot             # capture a fresh static DOM snapshot
-browser4-cli domSnapshot get <field> [selector] [name]  # extract data from the snapshot
-browser4-cli domSnapshot query [url] --sql <query>       # run X-SQL against a snapshot (url defaults to current page)
-browser4-cli domSnapshot export [--file <path>]         # save snapshot HTML to a file
+browser4-cli domsnapshot             # capture a fresh static DOM snapshot
+browser4-cli domsnapshot get <field> [selector] [name]  # extract data from the snapshot
+browser4-cli domsnapshot query [url] --sql <query>       # run X-SQL against a snapshot (url defaults to current page)
+browser4-cli domsnapshot export [--file <path>]         # save snapshot HTML to a file
 ```
 
 ### Command overview
 
 | Command | Purpose |
 |---|---|
-| `domSnapshot` | Capture a static DOM snapshot of the current page |
-| `domSnapshot get <field>` | Extract elements from the snapshot (text, html, attr) |
-| `domSnapshot query [url]` | Run X-SQL against the DOM snapshot via the scrape API. URL defaults to the current session's page |
-| `domSnapshot export` | Save full snapshot HTML content to a local file |
+| `domsnapshot` | Capture a static DOM snapshot of the current page |
+| `domsnapshot get <field>` | Extract elements from the snapshot (text, html, attr) |
+| `domsnapshot query [url]` | Run X-SQL against the DOM snapshot via the scrape API. URL defaults to the current session's page |
+| `domsnapshot export` | Save full snapshot HTML content to a local file |
 
 ### Capture
 
 ```bash
 # Capture a fresh static DOM snapshot of the current page
-browser4-cli domSnapshot
+browser4-cli domsnapshot
 ```
 
 Returns a JSON metadata object with the page URL, href, content size, capture time, content type, and title. The snapshot is always captured fresh (no caching).
@@ -311,16 +311,16 @@ Extract text, HTML, or attribute values from the static DOM using CSS selectors.
 
 ```bash
 # Extract visible text from an element
-browser4-cli domSnapshot get text ".product-title"
+browser4-cli domsnapshot get text ".product-title"
 
 # Extract the inner HTML of the entire page (default selector is :root)
-browser4-cli domSnapshot get html
+browser4-cli domsnapshot get html
 
 # Extract a specific attribute
-browser4-cli domSnapshot get attr ".product-image" data-src
+browser4-cli domsnapshot get attr ".product-image" data-src
 
 # Extract text from a specific element
-browser4-cli domSnapshot get text "#description"
+browser4-cli domsnapshot get text "#description"
 ```
 
 | Field | Description | Requires `name`? |
@@ -345,7 +345,7 @@ To control caching or rendering, append load options to the URL string (e.g. `ht
 
 ```bash
 # Query the current page (no URL needed):
-browser4-cli domSnapshot query --sql "
+browser4-cli domsnapshot query --sql "
   SELECT
     dom_base_uri(dom) AS url,
     dom_first_text(dom, '#productTitle') AS title,
@@ -354,7 +354,7 @@ browser4-cli domSnapshot query --sql "
 "
 
 # Query any URL explicitly:
-browser4-cli domSnapshot query "https://www.amazon.com/dp/B08PP5MSVB" --sql "
+browser4-cli domsnapshot query "https://www.amazon.com/dp/B08PP5MSVB" --sql "
   SELECT
     dom_base_uri(dom) AS url,
     dom_first_text(dom, '#productTitle') AS title
@@ -362,7 +362,7 @@ browser4-cli domSnapshot query "https://www.amazon.com/dp/B08PP5MSVB" --sql "
 "
 
 # Read query from a file:
-browser4-cli domSnapshot query "https://www.example.com" --sql @query.sql
+browser4-cli domsnapshot query "https://www.example.com" --sql @query.sql
 ```
 
 ### Export
@@ -371,17 +371,17 @@ Save the full snapshot HTML content to a local file. If `--file` is not provided
 
 ```bash
 # Export with auto-generated filename:
-browser4-cli domSnapshot export
+browser4-cli domsnapshot export
 
 # Export to a specific file:
-browser4-cli domSnapshot export --file=page-snapshot.html
+browser4-cli domsnapshot export --file=page-snapshot.html
 ```
 
 > **Note:** The exported HTML is pretty-formatted, so tools like `grep` work directly on the output file.
 
 ### Snapshot vs DOM Snapshot
 
-| Feature | `snapshot` | `domSnapshot` |
+| Feature | `snapshot` | `domsnapshot` |
 |---|---|---|
 | Data source | Accessibility tree | Raw HTML DOM |
 | Element addressing | Refs (`e5`, `e15`) | CSS selectors only |

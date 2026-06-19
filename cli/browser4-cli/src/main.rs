@@ -241,10 +241,10 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "swarm-query",
         "swarm-status",
         "swarm-result",
-        "domSnapshot",
-        "domSnapshot-get",
-        "domSnapshot-query",
-        "domSnapshot-export",
+        "domsnapshot",
+        "domsnapshot-get",
+        "domsnapshot-query",
+        "domsnapshot-export",
     ]
     .into()
 }
@@ -2188,7 +2188,7 @@ async fn handle_get(
 }
 
 // ---------------------------------------------------------------------------
-// domSnapshot handlers
+// domsnapshot handlers
 // ---------------------------------------------------------------------------
 
 async fn handle_dom_snapshot_capture(
@@ -2250,7 +2250,7 @@ async fn handle_dom_snapshot_get(
         .unwrap_or("");
     if is_element_reference(selector) {
         return Err(format!(
-            "Element references ('{selector}') are not supported in domSnapshot get. Use a CSS selector instead."
+            "Element references ('{selector}') are not supported in domsnapshot get. Use a CSS selector instead."
         ));
     }
 
@@ -2369,7 +2369,7 @@ async fn handle_dom_snapshot_export(
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| {
-            let name = snapshot::timestamped_filename("domSnapshot", "html");
+            let name = snapshot::timestamped_filename("domsnapshot", "html");
             snapshot::snapshot_dir().join(name)
         });
 
@@ -3712,7 +3712,7 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
     let rewritten_command = match prefix {
         "swarm" => format!("swarm-{}", sub),
         "agent" => format!("agent-{}", sub),
-        "domSnapshot" => format!("domSnapshot-{}", sub),
+        "domsnapshot" => format!("domsnapshot-{}", sub),
         _ => return None,
     };
     let mut rewritten = vec![rewritten_command];
@@ -3735,9 +3735,9 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "co-query" => Some("swarm query"),
         "co-status" => Some("swarm status"),
         "co-result" => Some("swarm result"),
-        "domSnapshot-get" => Some("domSnapshot get"),
-        "domSnapshot-query" => Some("domSnapshot query"),
-        "domSnapshot-export" => Some("domSnapshot export"),
+        "domsnapshot-get" => Some("domsnapshot get"),
+        "domsnapshot-query" => Some("domsnapshot query"),
+        "domsnapshot-export" => Some("domsnapshot export"),
         _ => None,
     }
 }
@@ -3747,7 +3747,7 @@ fn preferred_prefixed_group_form(command: &str) -> Option<&'static str> {
         "agent" => Some("agent <subcommand>"),
         "swarm" => Some("swarm <subcommand>"),
         "co" => Some("swarm <subcommand>"),
-        "domSnapshot" => Some("domSnapshot <subcommand>"),
+        "domsnapshot" => Some("domsnapshot <subcommand>"),
         _ => None,
     }
 }
@@ -5050,7 +5050,7 @@ async fn run(
         "swarm-result" => {
             handle_swarm_result(&client, &base_url, &tool_params).await?;
         }
-        "domSnapshot" => {
+        "domsnapshot" => {
             handle_dom_snapshot_capture(
                 &client,
                 &base_url,
@@ -5060,7 +5060,7 @@ async fn run(
             )
             .await?;
         }
-        "domSnapshot-get" => {
+        "domsnapshot-get" => {
             handle_dom_snapshot_get(
                 &client,
                 &base_url,
@@ -5070,7 +5070,7 @@ async fn run(
             )
             .await?;
         }
-        "domSnapshot-query" => {
+        "domsnapshot-query" => {
             handle_dom_snapshot_query(
                 &client,
                 &base_url,
@@ -5080,7 +5080,7 @@ async fn run(
             )
             .await?;
         }
-        "domSnapshot-export" => {
+        "domsnapshot-export" => {
             handle_dom_snapshot_export(
                 &client,
                 &base_url,
@@ -5233,10 +5233,10 @@ mod tests {
 
     #[test]
     fn no_snapshot_commands_include_dom_snapshot_variants() {
-        assert!(no_snapshot_commands().contains("domSnapshot"));
-        assert!(no_snapshot_commands().contains("domSnapshot-get"));
-        assert!(no_snapshot_commands().contains("domSnapshot-query"));
-        assert!(no_snapshot_commands().contains("domSnapshot-export"));
+        assert!(no_snapshot_commands().contains("domsnapshot"));
+        assert!(no_snapshot_commands().contains("domsnapshot-get"));
+        assert!(no_snapshot_commands().contains("domsnapshot-query"));
+        assert!(no_snapshot_commands().contains("domsnapshot-export"));
     }
 
     #[test]

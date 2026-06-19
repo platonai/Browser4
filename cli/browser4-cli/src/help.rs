@@ -12,9 +12,9 @@ pub fn public_command_name(name: &str) -> &str {
         "swarm-query" => "swarm query",
         "swarm-status" => "swarm status",
         "swarm-result" => "swarm result",
-        "domSnapshot-get" => "domSnapshot get",
-        "domSnapshot-query" => "domSnapshot query",
-        "domSnapshot-export" => "domSnapshot export",
+        "domsnapshot-get" => "domsnapshot get",
+        "domsnapshot-query" => "domsnapshot query",
+        "domsnapshot-export" => "domsnapshot export",
         _ => name,
     }
 }

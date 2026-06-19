@@ -1645,7 +1645,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         // ---- Snapshot ----
         CommandDef {
-            name: "domSnapshot",
+            name: "domsnapshot",
             description: "Capture a static DOM snapshot of the current page",
             category: Category::Snapshot,
             hidden: false,
@@ -1656,7 +1656,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             tool_params_fn: |_| json!({}),
         },
         CommandDef {
-            name: "domSnapshot-get",
+            name: "domsnapshot-get",
             description: "Extract elements from the static DOM snapshot (text, html, attr)",
             category: Category::Snapshot,
             hidden: false,
@@ -1677,7 +1677,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
-            name: "domSnapshot-query",
+            name: "domsnapshot-query",
             description: "Run X-SQL against the DOM snapshot via the scrape API",
             category: Category::Snapshot,
             hidden: false,
@@ -1701,7 +1701,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             },
         },
         CommandDef {
-            name: "domSnapshot-export",
+            name: "domsnapshot-export",
             description: "Save full snapshot HTML content to a local file",
             category: Category::Snapshot,
             hidden: false,
@@ -2887,16 +2887,16 @@ mod tests {
         assert_eq!(cmd.category, Category::Mouse);
     }
 
-    // ---- domSnapshot tests ----
+    // ---- domsnapshot tests ----
 
     #[test]
     fn test_commands_map_contains_dom_snapshot_variants() {
         let map = commands_map();
         for expected in &[
-            "domSnapshot",
-            "domSnapshot-get",
-            "domSnapshot-query",
-            "domSnapshot-export",
+            "domsnapshot",
+            "domsnapshot-get",
+            "domsnapshot-query",
+            "domsnapshot-export",
         ] {
             assert!(map.contains_key(*expected), "Missing command: {}", expected);
         }
@@ -2905,7 +2905,7 @@ mod tests {
     #[test]
     fn test_dom_snapshot_capture_params() {
         let map = commands_map();
-        let cmd = map.get("domSnapshot").unwrap();
+        let cmd = map.get("domsnapshot").unwrap();
         let args = HashMap::new();
         assert_eq!((cmd.tool_name_fn)(&args), "dom_snapshot_capture");
         let params = (cmd.tool_params_fn)(&args);
@@ -2915,7 +2915,7 @@ mod tests {
     #[test]
     fn test_dom_snapshot_capture_empty_params() {
         let map = commands_map();
-        let cmd = map.get("domSnapshot").unwrap();
+        let cmd = map.get("domsnapshot").unwrap();
         let args = HashMap::new();
         assert_eq!((cmd.tool_name_fn)(&args), "dom_snapshot_capture");
     }
@@ -2923,7 +2923,7 @@ mod tests {
     #[test]
     fn test_dom_snapshot_get_text_params() {
         let map = commands_map();
-        let cmd = map.get("domSnapshot-get").unwrap();
+        let cmd = map.get("domsnapshot-get").unwrap();
         let mut args = HashMap::new();
         args.insert("field".to_string(), json!("text"));
         args.insert("selector".to_string(), json!(".product"));
@@ -2936,7 +2936,7 @@ mod tests {
     #[test]
     fn test_dom_snapshot_get_html_defaults_selector_to_root() {
         let map = commands_map();
-        let cmd = map.get("domSnapshot-get").unwrap();
+        let cmd = map.get("domsnapshot-get").unwrap();
         let mut args = HashMap::new();
         args.insert("field".to_string(), json!("html"));
         let params = (cmd.tool_params_fn)(&args);
@@ -2947,7 +2947,7 @@ mod tests {
     #[test]
     fn test_dom_snapshot_get_attr_params() {
         let map = commands_map();
-        let cmd = map.get("domSnapshot-get").unwrap();
+        let cmd = map.get("domsnapshot-get").unwrap();
         let mut args = HashMap::new();
         args.insert("field".to_string(), json!("attr"));
         args.insert("selector".to_string(), json!(".product"));
@@ -2961,7 +2961,7 @@ mod tests {
     #[test]
     fn test_dom_snapshot_query_params() {
         let map = commands_map();
-        let cmd = map.get("domSnapshot-query").unwrap();
+        let cmd = map.get("domsnapshot-query").unwrap();
         let mut args = HashMap::new();
         args.insert("url".to_string(), json!("https://example.com"));
         args.insert(
@@ -2977,7 +2977,7 @@ mod tests {
     #[test]
     fn test_dom_snapshot_export_params() {
         let map = commands_map();
-        let cmd = map.get("domSnapshot-export").unwrap();
+        let cmd = map.get("domsnapshot-export").unwrap();
         let mut args = HashMap::new();
         args.insert("file".to_string(), json!("snapshot.html"));
         let params = (cmd.tool_params_fn)(&args);
@@ -3001,10 +3001,10 @@ mod tests {
     fn test_dom_snapshot_commands_are_snapshot_category() {
         let map = commands_map();
         for name in &[
-            "domSnapshot",
-            "domSnapshot-get",
-            "domSnapshot-query",
-            "domSnapshot-export",
+            "domsnapshot",
+            "domsnapshot-get",
+            "domsnapshot-query",
+            "domsnapshot-export",
         ] {
             let cmd = map.get(*name).unwrap();
             assert_eq!(cmd.category, Category::Snapshot);
