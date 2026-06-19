@@ -269,6 +269,62 @@ function Test-NextVersion {
 }
 
 # ---------------------------------------------------------------
+# Helper: Count commits since a tag, grouped by backend vs cli changes
+# ---------------------------------------------------------------
+function Get-CommitChangesSince {
+    param(
+        [string]$SinceTag
+    )
+
+    $result = @{
+        TotalCommits    = 0
+        BackendCommits  = 0
+        CliCommits      = 0
+        BothCommits     = 0  # commits that touch both backend and CLI
+    }
+
+    try {
+        $rawCommits = git rev-list "${SinceTag}..HEAD" 2>$null
+        if ($null -eq $rawCommits -or $rawCommits.Trim() -eq "") {
+            return $result
+        }
+
+        $commitList = @($rawCommits -split '\s+')
+        $result.TotalCommits = $commitList.Count
+
+        foreach ($commit in $commitList) {
+            $allChanged = git diff-tree --no-commit-id --name-only -r $commit 2>$null
+            if ($null -eq $allChanged -or $allChanged.Trim() -eq "") { continue }
+
+            $hasBackend = $false
+            $hasCli     = $false
+
+            foreach ($file in ($allChanged -split '\s+')) {
+                if ($file -match '^cli/') {
+                    $hasCli = $true
+                } else {
+                    $hasBackend = $true
+                }
+            }
+
+            if ($hasCli -and $hasBackend) {
+                $result.BothCommits++
+                $result.CliCommits++
+                $result.BackendCommits++
+            } elseif ($hasCli) {
+                $result.CliCommits++
+            } elseif ($hasBackend) {
+                $result.BackendCommits++
+            }
+        }
+    } catch {
+        # Non-critical: just return zero counts
+    }
+
+    return $result
+}
+
+# ---------------------------------------------------------------
 # Check 1: Main project release status
 # ---------------------------------------------------------------
 Write-Host "────────────────────────────────────────────────" -ForegroundColor Yellow
@@ -419,6 +475,73 @@ if ($null -ne $latestReleaseInfo.Tag) {
 } else {
     Write-Host "  [XX] No GitHub releases found for $githubRepo." -ForegroundColor Red
     Write-Host "  This may indicate no releases have been created yet."
+}
+
+# ---------------------------------------------------------------
+# Pending changes: commits since the latest release
+# ---------------------------------------------------------------
+if ($null -ne $latestReleaseInfo.Tag) {
+    Write-Host ""
+    Write-Host "────────────────────────────────────────────────" -ForegroundColor Yellow
+    Write-Host "  Pending changes since latest release"          -ForegroundColor Yellow
+    Write-Host "────────────────────────────────────────────────" -ForegroundColor Yellow
+    Write-Host ""
+
+    Write-Host "  Latest release   : $($latestReleaseInfo.Tag)"
+    Write-Host "  Current HEAD     : $(git rev-parse --short HEAD)"
+    Write-Host ""
+
+    $changeCounts = Get-CommitChangesSince -SinceTag $latestReleaseInfo.Tag
+
+    if ($changeCounts.TotalCommits -eq 0) {
+        Write-Host "  No commits since the latest release." -ForegroundColor Green
+    } else {
+        Write-Host "  Commits since latest release : $($changeCounts.TotalCommits)" -ForegroundColor White
+        Write-Host ""
+        Write-Host "  +-----------------------------------------------+"
+        Write-Host "  |  Backend   : $($changeCounts.BackendCommits.ToString().PadLeft(3)) commits  (files outside cli/)  |"
+        Write-Host "  |  CLI       : $($changeCounts.CliCommits.ToString().PadLeft(3)) commits  (files under  cli/)      |"
+        Write-Host "  |  Both      : $($changeCounts.BothCommits.ToString().PadLeft(3)) commits  (touched both areas)    |"
+        Write-Host "  +-----------------------------------------------+"
+
+        # Visual bar chart
+        Write-Host ""
+        $maxCount = [Math]::Max(1, [Math]::Max($changeCounts.BackendCommits, $changeCounts.CliCommits))
+        $barWidth = 30
+
+        $backendBar = [int](($changeCounts.BackendCommits / $maxCount) * $barWidth)
+        $cliBar     = [int](($changeCounts.CliCommits / $maxCount) * $barWidth)
+
+        $backendBarStr = if ($backendBar -gt 0) { "#" * $backendBar } else { "" }
+        $cliBarStr     = if ($cliBar -gt 0)     { "#" * $cliBar } else { "" }
+
+        Write-Host "  Backend   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~" -ForegroundColor DarkGray
+        Write-Host "  Backend   $backendBarStr $($changeCounts.BackendCommits)" -ForegroundColor Cyan
+        Write-Host "  CLI       $cliBarStr $($changeCounts.CliCommits)" -ForegroundColor Magenta
+
+        # Show recent commit subjects (last 5)
+        Write-Host ""
+        Write-Host "  Recent commits:" -ForegroundColor DarkGray
+        $recentCommits = git log --oneline "${latestReleaseInfo.Tag}..HEAD" --format="%h  %s" -5 2>$null
+        if ($recentCommits) {
+            foreach ($line in ($recentCommits -split "`n")) {
+                $trimmed = $line.Trim()
+                if ($trimmed) {
+                    # Color-code: cyan for commits touching cli/, default for others
+                    $hash = ($trimmed -split '\s+')[0]
+                    $hasCli = $false
+                    $changedInCommit = git diff-tree --no-commit-id --name-only -r $hash 2>$null
+                    if ($changedInCommit -match '^cli/') { $hasCli = $true }
+
+                    if ($hasCli) {
+                        Write-Host "    $trimmed" -ForegroundColor Magenta
+                    } else {
+                        Write-Host "    $trimmed"
+                    }
+                }
+            }
+        }
+    }
 }
 
 # ---------------------------------------------------------------
