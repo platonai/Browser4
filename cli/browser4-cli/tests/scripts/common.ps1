@@ -217,7 +217,23 @@ function Invoke-Agent {
 
         [switch]$Silent
     )
-    $args = @('--dangerously-skip-permissions', '-p', $Prompt)
-    if ($Silent) { $args += '--silent' }
-    claude @args
+
+    if (-not $Silent) {
+        $promptLen = $Prompt.Length
+        $promptLines = ($Prompt -split "`n").Count
+        Write-Host "Invoking Claude Code agent..." -ForegroundColor Cyan
+        Write-Host "  Prompt: $promptLen chars, $promptLines lines" -ForegroundColor DarkGray
+        Write-Host "  This may take several minutes — the agent runs browser4-cli commands" -ForegroundColor DarkGray
+        Write-Host "  and evaluates usability. Output appears as the agent works." -ForegroundColor DarkGray
+        Write-Host ""
+    }
+
+    $claudeArgs = @('--dangerously-skip-permissions', '-p', $Prompt)
+    if ($Silent) { $claudeArgs += '--silent' }
+    claude @claudeArgs
+
+    if (-not $Silent) {
+        Write-Host ""
+        Write-Host "Agent finished (exit code: $LASTEXITCODE)." -ForegroundColor $(if ($LASTEXITCODE -eq 0) { 'Green' } else { 'Red' })
+    }
 }

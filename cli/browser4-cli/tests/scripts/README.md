@@ -5,7 +5,7 @@ agent. Each script defines a real-world task and asks the agent to complete it
 while simultaneously evaluating the CLI's discoverability, documentation, and
 reliability from a first-time user's perspective.
 
-## Quick start
+## Quick start (standalone)
 
 ```powershell
 # From the repo root:
@@ -38,11 +38,36 @@ Invoke-Agent -Prompt $prompt            # 4. invoke the agent
 | `$generalPrompt` | The shared usability-evaluation template (prepended to every task) |
 | `Invoke-Agent` | Centralized agent invocation (`claude --dangerously-skip-permissions`) |
 
+## Running every scenario at once
+
+`test-runner.ps1` auto-discovers every `.ps1` in this directory (excluding
+`common.ps1` and itself) and runs them sequentially:
+
+```powershell
+# Run everything:
+./cli/browser4-cli/tests/scripts/test-runner.ps1
+
+# List discovered scripts:
+./cli/browser4-cli/tests/scripts/test-runner.ps1 -List
+
+# Run a subset:
+./cli/browser4-cli/tests/scripts/test-runner.ps1 search-summary.ps1 amazon.ps1
+
+# Stop on first failure:
+./cli/browser4-cli/tests/scripts/test-runner.ps1 -FailFast
+
+# Launch each scenario in its own window:
+./cli/browser4-cli/tests/scripts/test-runner.ps1 -NewWindow
+```
+
+New scripts placed in this directory are picked up automatically — no
+registration step is needed.
+
 ## Adding a new scenario
 
 1. Copy an existing script, e.g. `cp hacker-news.ps1 my-scenario.ps1`
 2. Replace the `$taskPrompt` content with your task instructions
-3. Save and run
+3. Save and run — `test-runner.ps1` discovers it automatically
 
 ## Available scenarios
 
