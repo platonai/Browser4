@@ -103,7 +103,7 @@ foreach ($file in $files) {
         }
 
         # ── Build body (everything after metadata lines) ────────────────────
-        if ($PSBoundParameters.ContainsKey('remaining') -and $remaining) {
+        if ($remaining) {
             $bodyLines = @($remaining -split '\r?\n')
         }
 
@@ -149,7 +149,7 @@ foreach ($file in $files) {
         $exitCode = $LASTEXITCODE
 
         if ($exitCode -ne 0) {
-            throw "gh exited with code $exitCode: $ghOutput"
+            throw "gh exited with code ${exitCode}: $ghOutput"
         }
 
         Write-CoworkerLog -Message "Issue created: $ghOutput" -Level 'INFO' -Component 'commit-github-issues'
