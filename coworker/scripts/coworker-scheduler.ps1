@@ -321,6 +321,13 @@ function Test-ScheduledTaskCanStart {
         return $false
     }
 
+    # File-based mutex: prevent the same script from running concurrently
+    # across scheduler restarts or manual invocations.
+    if (Test-CoworkerScriptLockHeld -ScriptPath $TaskState.ScriptPath) {
+        Write-CoworkerLog -Component 'scheduler' -Level 'DEBUG' -Message ("Skipping {0}: script lock is held" -f $TaskState.Name)
+        return $false
+    }
+
     if ($OnceMode -and $TaskState.RunCount -gt 0) {
         return $false
     }

@@ -8,6 +8,13 @@ $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot 'agent.ps1')
 
+# ── Script-level mutex: only one refine-drafts.ps1 instance at a time ────
+$script:__CoworkerLock = New-CoworkerScriptLock -ScriptPath $MyInvocation.MyCommand.Path -SkipIfHeld
+if ($null -eq $script:__CoworkerLock) {
+    Write-CoworkerLog -Component 'refine-drafts' -Level 'WARN' -Message 'Another refine-drafts.ps1 instance is already running. Exiting.'
+    exit 0
+}
+
 $repoRoot = Get-WorkspaceRoot
 $agentCommand = Get-AgentCommand -RepoRoot $repoRoot
 
@@ -132,6 +139,8 @@ foreach ($target in $targets) {
         Write-Host "Failed to refine $($workingFile.Name): $_" -ForegroundColor Red
     }
 }
+
+Remove-CoworkerScriptLock -Lock $script:__CoworkerLock
 
 if ($failureCount -gt 0) {
     exit 1

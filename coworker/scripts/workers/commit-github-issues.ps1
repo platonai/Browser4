@@ -29,6 +29,13 @@ $workerDir = $PSScriptRoot
 $configPath = Join-Path (Split-Path -Parent $workerDir) 'config.ps1'
 . $configPath
 
+# ── Script-level mutex: only one commit-github-issues.ps1 instance at a time
+$script:__CoworkerLock = New-CoworkerScriptLock -ScriptPath $MyInvocation.MyCommand.Path -SkipIfHeld
+if ($null -eq $script:__CoworkerLock) {
+    Write-CoworkerLog -Component 'commit-github-issues' -Level 'WARN' -Message 'Another commit-github-issues.ps1 instance is already running. Exiting.'
+    exit 0
+}
+
 $repoRoot = Get-WorkspaceRoot
 
 $issuesRoot = Resolve-TasksPath '200issues\github'
@@ -76,6 +83,7 @@ $remainingCommits = $maxDailyCommits - $dailyState.Count
 
 if ($remainingCommits -le 0) {
     Write-CoworkerLog -Message "Daily commit limit reached ($maxDailyCommits/$maxDailyCommits). Deferring remaining issues to next run." -Level 'WARN' -Component 'commit-github-issues'
+    Remove-CoworkerScriptLock -Lock $script:__CoworkerLock
     exit 0
 }
 
@@ -85,6 +93,7 @@ $files = @(Get-ChildItem -Path $openDir -File |
 
 if ($files.Count -eq 0) {
     Write-CoworkerLog -Message "No GitHub issue files found in $openDir" -Level 'INFO' -Component 'commit-github-issues'
+    Remove-CoworkerScriptLock -Lock $script:__CoworkerLock
     exit 0
 }
 
@@ -228,9 +237,11 @@ foreach ($file in $files) {
 if ($failureCount -gt 0) {
     Write-CoworkerLog -Message "$failureCount issue(s) failed to create. $committedToday/$maxDailyCommits daily commits used. Check the failed directory: $failedDir" -Level 'WARN' -Component 'commit-github-issues'
     Set-DailyCommitState -StateFilePath $dailyStateFile -Count $committedToday
+    Remove-CoworkerScriptLock -Lock $script:__CoworkerLock
     exit 1
 }
 
 Write-CoworkerLog -Message "All issues committed successfully ($committedToday/$maxDailyCommits daily commits used)." -Level 'INFO' -Component 'commit-github-issues'
 Set-DailyCommitState -StateFilePath $dailyStateFile -Count $committedToday
+Remove-CoworkerScriptLock -Lock $script:__CoworkerLock
 exit 0

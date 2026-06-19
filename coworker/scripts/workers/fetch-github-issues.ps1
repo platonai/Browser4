@@ -28,6 +28,13 @@ $workerDir = $PSScriptRoot
 $configPath = Join-Path (Split-Path -Parent $workerDir) 'config.ps1'
 . $configPath
 
+# ── Script-level mutex: only one fetch-github-issues.ps1 instance at a time
+$script:__CoworkerLock = New-CoworkerScriptLock -ScriptPath $MyInvocation.MyCommand.Path -SkipIfHeld
+if ($null -eq $script:__CoworkerLock) {
+    Write-CoworkerLog -Component 'fetch-github-issues' -Level 'WARN' -Message 'Another fetch-github-issues.ps1 instance is already running. Exiting.'
+    exit 0
+}
+
 $repoRoot = Get-WorkspaceRoot
 
 # ── Configuration ──────────────────────────────────────────────────────────
@@ -65,10 +72,12 @@ $exitCode = $LASTEXITCODE
 
 if ($exitCode -ne 0) {
     Write-CoworkerLog -Message ("gh exited with code ${exitCode}: ${ghOutput}") -Level 'ERROR' -Component 'fetch-github-issues'
+    Remove-CoworkerScriptLock -Lock $script:__CoworkerLock
     exit 1
 }
 
 if ([string]::IsNullOrWhiteSpace($ghOutput)) {
+    Remove-CoworkerScriptLock -Lock $script:__CoworkerLock
     exit 0
 }
 
@@ -77,10 +86,12 @@ try {
 }
 catch {
     Write-CoworkerLog -Message "Failed to parse gh JSON output: $_" -Level 'ERROR' -Component 'fetch-github-issues'
+    Remove-CoworkerScriptLock -Lock $script:__CoworkerLock
     exit 1
 }
 
 if ($null -eq $issues -or $issues.Count -eq 0) {
+    Remove-CoworkerScriptLock -Lock $script:__CoworkerLock
     exit 0
 }
 
@@ -194,4 +205,5 @@ foreach ($issue in $issues) {
 if ($savedCount -gt 0) {
     Write-CoworkerLog -Message "Done: $savedCount saved, $assignedCount assigned, $skippedCount skipped, $excludedByDateCount excluded (before $cutoffFormatted)." -Level 'INFO' -Component 'fetch-github-issues'
 }
+Remove-CoworkerScriptLock -Lock $script:__CoworkerLock
 exit 0

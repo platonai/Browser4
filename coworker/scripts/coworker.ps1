@@ -73,6 +73,13 @@ Write-ConsoleLine -Message "Starting Coworker Task Runner..." -ForegroundColor C
 $configScriptPath = Join-Path $PSScriptRoot 'config.ps1'
 . $configScriptPath
 
+# ── Script-level mutex: only one coworker.ps1 instance at a time ─────────
+$script:__CoworkerLock = New-CoworkerScriptLock -ScriptPath $MyInvocation.MyCommand.Path -SkipIfHeld
+if ($null -eq $script:__CoworkerLock) {
+    Write-ConsoleLine -Message "Another coworker.ps1 instance is already running. Exiting." -ForegroundColor Yellow
+    exit 0
+}
+
 # Handle specified TaskFile
 if (-not [string]::IsNullOrWhiteSpace($TaskFile)) {
     # Resolve full path before changing location
@@ -787,4 +794,7 @@ Write-LogMessage "All tasks completed" INFO
 Write-LogMessage "Ended at: $scriptEndTime" INFO
 Write-LogMessage "Script Log: $scriptLogPath" INFO
 Write-LogMessage "==========================================================================" INFO
+
+# Release script-level mutex
+Remove-CoworkerScriptLock -Lock $script:__CoworkerLock
 

@@ -2,6 +2,14 @@
 
 $agentHelper = Join-Path $PSScriptRoot "agent.ps1"
 . $agentHelper
+
+# ── Script-level mutex: only one git-sync.ps1 instance at a time
+$script:__CoworkerLock = New-CoworkerScriptLock -ScriptPath $MyInvocation.MyCommand.Path -SkipIfHeld
+if ($null -eq $script:__CoworkerLock) {
+    Write-Host "Another git-sync.ps1 instance is already running. Exiting."
+    exit 0
+}
+
 $repoRoot = Get-WorkspaceRoot
 $agentCommand = Get-AgentCommand -RepoRoot $repoRoot
 

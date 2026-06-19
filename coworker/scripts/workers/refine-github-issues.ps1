@@ -63,6 +63,13 @@ $workerDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path (Split-Path -Parent $workerDir) 'config.ps1')
 . (Join-Path $workerDir 'agent-reliability.ps1')
 
+# ── Script-level mutex: only one refine-github-issues.ps1 instance at a time
+$script:__CoworkerLock = New-CoworkerScriptLock -ScriptPath $MyInvocation.MyCommand.Path -SkipIfHeld
+if ($null -eq $script:__CoworkerLock) {
+    Write-CoworkerLog -Component 'refine-github-issues' -Level 'WARN' -Message 'Another refine-github-issues.ps1 instance is already running. Exiting.'
+    exit 0
+}
+
 $repoRoot = Get-WorkspaceRoot
 
 # ── Directories ──────────────────────────────────────────────────────────────
