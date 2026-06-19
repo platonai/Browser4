@@ -71,7 +71,6 @@ if ($exitCode -ne 0) {
 }
 
 if ([string]::IsNullOrWhiteSpace($ghOutput)) {
-    Write-CoworkerLog -Message 'No issues returned from GitHub.' -Level 'INFO' -Component 'fetch-github-issues'
     exit 0
 }
 
@@ -84,7 +83,6 @@ catch {
 }
 
 if ($null -eq $issues -or $issues.Count -eq 0) {
-    Write-CoworkerLog -Message 'No issues found.' -Level 'INFO' -Component 'fetch-github-issues'
     exit 0
 }
 
