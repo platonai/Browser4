@@ -146,59 +146,103 @@ function Invoke-AgentWithStructuredOutput {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Main retry loop
+# Main retry loop — only execute when invoked directly (not dot-sourced)
 # ══════════════════════════════════════════════════════════════════════════════
 
-$attempt = 0
-$lastError = $null
+if ($MyInvocation.InvocationName -ne '.') {
+    if ([string]::IsNullOrWhiteSpace($Prompt)) {
+        throw 'Prompt is required when executing agent-reliability.ps1 directly.'
+    }
 
-while ($attempt -lt $MaxRetries) {
-    $attempt++
-    $backoffIndex = [Math]::Min($attempt - 1, $RetryBackoffSeconds.Count - 1)
-    $backoff = if ($RetryBackoffSeconds.Count -gt 0) { $RetryBackoffSeconds[$backoffIndex] } else { 0 }
+    $attempt = 0
+    $lastError = $null
 
-    try {
-        if ($attempt -gt 1) {
-            Write-CoworkerLog -Message "Retry attempt $attempt of $MaxRetries (${backoff}s backoff)" -Level WARN -Component $LogComponent
-            Start-Sleep -Seconds $backoff
-        }
+    while ($attempt -lt $MaxRetries) {
+        $attempt++
+        $backoffIndex = [Math]::Min($attempt - 1, $RetryBackoffSeconds.Count - 1)
+        $backoff = if ($RetryBackoffSeconds.Count -gt 0) { $RetryBackoffSeconds[$backoffIndex] } else { 0 }
 
-        # Build agent params for the NoRetry code path (delegates to Invoke-Agent
-        # which now supports -TimeoutSeconds, so timeout is enforced in both paths).
-        $agentParams = @{
-            Prompt               = $Prompt
-            AdditionalArguments  = $AdditionalArguments
-            CaptureOutput        = $CaptureOutput
-            UseTargetRepository  = $UseTargetRepository
-            TimeoutSeconds       = $TimeoutSeconds
-        }
-        if ($PSBoundParameters.ContainsKey('RepoRoot'))        { $agentParams.RepoRoot = $RepoRoot }
-        if ($PSBoundParameters.ContainsKey('WorkingDirectory')) { $agentParams.WorkingDirectory = $WorkingDirectory }
+        try {
+            if ($attempt -gt 1) {
+                Write-CoworkerLog -Message "Retry attempt $attempt of $MaxRetries (${backoff}s backoff)" -Level WARN -Component $LogComponent
+                Start-Sleep -Seconds $backoff
+            }
 
-        if ($NoRetry) {
-            return Invoke-AgentWithStructuredOutput -Prompt $Prompt -Delimiter $OutputDelimiter -AgentParams $agentParams
-        }
+            # Build agent params for the NoRetry code path (delegates to Invoke-Agent
+            # which now supports -TimeoutSeconds, so timeout is enforced in both paths).
+            $agentParams = @{
+                Prompt               = $Prompt
+                AdditionalArguments  = $AdditionalArguments
+                CaptureOutput        = $CaptureOutput
+                UseTargetRepository  = $UseTargetRepository
+                TimeoutSeconds       = $TimeoutSeconds
+            }
+            if ($PSBoundParameters.ContainsKey('RepoRoot'))        { $agentParams.RepoRoot = $RepoRoot }
+            if ($PSBoundParameters.ContainsKey('WorkingDirectory')) { $agentParams.WorkingDirectory = $WorkingDirectory }
 
-        # Retry path: manage the process directly so we can distinguish timeout
-        # failures from other errors and retry accordingly.
-        $commandArgs = @{
-            UseTargetRepository = $UseTargetRepository
-        }
-        if ($PSBoundParameters.ContainsKey('RepoRoot'))        { $commandArgs.RepoRoot = $RepoRoot }
-        if ($PSBoundParameters.ContainsKey('WorkingDirectory')) { $commandArgs.WorkingDirectory = $WorkingDirectory }
+            if ($NoRetry) {
+                return Invoke-AgentWithStructuredOutput -Prompt $Prompt -Delimiter $OutputDelimiter -AgentParams $agentParams
+            }
 
-        $command = Get-AgentCommand @commandArgs
-        $wrappedPrompt = New-AgentPrompt -Prompt $Prompt -Delimiter $OutputDelimiter
+            # Retry path: manage the process directly so we can distinguish timeout
+            # failures from other errors and retry accordingly.
+            $commandArgs = @{
+                UseTargetRepository = $UseTargetRepository
+            }
+            if ($PSBoundParameters.ContainsKey('RepoRoot'))        { $commandArgs.RepoRoot = $RepoRoot }
+            if ($PSBoundParameters.ContainsKey('WorkingDirectory')) { $commandArgs.WorkingDirectory = $WorkingDirectory }
 
-        if ($CaptureOutput) {
-            $stdOutPath = [System.IO.Path]::GetTempFileName()
-            $stdErrPath = [System.IO.Path]::GetTempFileName()
+            $command = Get-AgentCommand @commandArgs
+            $wrappedPrompt = New-AgentPrompt -Prompt $Prompt -Delimiter $OutputDelimiter
 
-            try {
+            if ($CaptureOutput) {
+                $stdOutPath = [System.IO.Path]::GetTempFileName()
+                $stdErrPath = [System.IO.Path]::GetTempFileName()
+
+                try {
+                    $process = Start-AgentProcess -Executable $command.Executable -BaseArgs $command.BaseArgs `
+                        -Prompt $wrappedPrompt -AdditionalArguments $AdditionalArguments `
+                        -WorkingDirectory $command.WorkingDirectory `
+                        -StdOutPath $stdOutPath -StdErrPath $stdErrPath -NoNewWindow -Backend $command.Backend
+
+                    $completed = $process.WaitForExit($TimeoutSeconds * 1000)
+                    if (-not $completed) {
+                        $process.Kill($true)
+                        throw "Agent process timed out after ${TimeoutSeconds}s (attempt $attempt)"
+                    }
+
+                    $global:LASTEXITCODE = $process.ExitCode
+
+                    if (Test-Path $stdErrPath) {
+                        $errorOutput = Get-Content -Path $stdErrPath -Raw -Encoding UTF8
+                        if (-not [string]::IsNullOrWhiteSpace($errorOutput)) {
+                            [Console]::Error.Write($errorOutput)
+                        }
+                    }
+
+                    if ($process.ExitCode -ne 0) {
+                        throw "Agent exited with code $($process.ExitCode) (attempt $attempt)"
+                    }
+
+                    if (Test-Path $stdOutPath) {
+                        $rawOutput = Get-Content -Path $stdOutPath -Raw -Encoding UTF8
+                        # Parse the already-captured output directly — do NOT call
+                        # Invoke-AgentWithStructuredOutput again (it would re-invoke
+                        # the agent, doubling cost and losing timeout protection).
+                        return ConvertFrom-AgentOutput -RawOutput $rawOutput -Delimiter $OutputDelimiter
+                    }
+
+                    return ''
+                }
+                finally {
+                    Remove-Item $stdOutPath -ErrorAction SilentlyContinue
+                    Remove-Item $stdErrPath -ErrorAction SilentlyContinue
+                }
+            }
+            else {
                 $process = Start-AgentProcess -Executable $command.Executable -BaseArgs $command.BaseArgs `
                     -Prompt $wrappedPrompt -AdditionalArguments $AdditionalArguments `
-                    -WorkingDirectory $command.WorkingDirectory `
-                    -StdOutPath $stdOutPath -StdErrPath $stdErrPath -NoNewWindow -Backend $command.Backend
+                    -WorkingDirectory $command.WorkingDirectory -NoNewWindow -Backend $command.Backend
 
                 $completed = $process.WaitForExit($TimeoutSeconds * 1000)
                 if (-not $completed) {
@@ -208,61 +252,23 @@ while ($attempt -lt $MaxRetries) {
 
                 $global:LASTEXITCODE = $process.ExitCode
 
-                if (Test-Path $stdErrPath) {
-                    $errorOutput = Get-Content -Path $stdErrPath -Raw -Encoding UTF8
-                    if (-not [string]::IsNullOrWhiteSpace($errorOutput)) {
-                        [Console]::Error.Write($errorOutput)
-                    }
-                }
-
                 if ($process.ExitCode -ne 0) {
                     throw "Agent exited with code $($process.ExitCode) (attempt $attempt)"
                 }
 
-                if (Test-Path $stdOutPath) {
-                    $rawOutput = Get-Content -Path $stdOutPath -Raw -Encoding UTF8
-                    # Parse the already-captured output directly — do NOT call
-                    # Invoke-AgentWithStructuredOutput again (it would re-invoke
-                    # the agent, doubling cost and losing timeout protection).
-                    return ConvertFrom-AgentOutput -RawOutput $rawOutput -Delimiter $OutputDelimiter
-                }
-
-                return ''
-            }
-            finally {
-                Remove-Item $stdOutPath -ErrorAction SilentlyContinue
-                Remove-Item $stdErrPath -ErrorAction SilentlyContinue
+                return $null
             }
         }
-        else {
-            $process = Start-AgentProcess -Executable $command.Executable -BaseArgs $command.BaseArgs `
-                -Prompt $wrappedPrompt -AdditionalArguments $AdditionalArguments `
-                -WorkingDirectory $command.WorkingDirectory -NoNewWindow -Backend $command.Backend
+        catch {
+            $lastError = $_
+            Write-CoworkerLog -Message "Attempt $attempt failed: $_" -Level ERROR -Component $LogComponent
 
-            $completed = $process.WaitForExit($TimeoutSeconds * 1000)
-            if (-not $completed) {
-                $process.Kill($true)
-                throw "Agent process timed out after ${TimeoutSeconds}s (attempt $attempt)"
+            if ($attempt -ge $MaxRetries) {
+                Write-CoworkerLog -Message "All $MaxRetries attempts failed. Last error: $lastError" -Level ERROR -Component $LogComponent
+                throw "Invoke-AgentWithRetry: all $MaxRetries attempts failed. Final error: $lastError"
             }
-
-            $global:LASTEXITCODE = $process.ExitCode
-
-            if ($process.ExitCode -ne 0) {
-                throw "Agent exited with code $($process.ExitCode) (attempt $attempt)"
-            }
-
-            return $null
         }
     }
-    catch {
-        $lastError = $_
-        Write-CoworkerLog -Message "Attempt $attempt failed: $_" -Level ERROR -Component $LogComponent
 
-        if ($attempt -ge $MaxRetries) {
-            Write-CoworkerLog -Message "All $MaxRetries attempts failed. Last error: $lastError" -Level ERROR -Component $LogComponent
-            throw "Invoke-AgentWithRetry: all $MaxRetries attempts failed. Final error: $lastError"
-        }
-    }
+    throw 'Invoke-AgentWithRetry: unexpected end of retry loop'
 }
-
-throw 'Invoke-AgentWithRetry: unexpected end of retry loop'
