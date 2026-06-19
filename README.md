@@ -15,6 +15,7 @@ English | [简体中文](README.zh.md) | [中国镜像](https://gitee.com/platon
   - [💡 Usage Examples](#-usage-examples)
     - [Quick Start](#quick-start)
     - [CLI & SKILLS](#cli--skills)
+    - [DOM Snapshot](#dom-snapshot)
     - [Agent and Swarm CLI](#agent-and-swarm-cli)
   - [🚀 Build from Source](#-build-from-source)
   - [🧬 Auto Extraction](#-auto-extraction)
@@ -154,6 +155,46 @@ browser4-cli help swarm create
 Browser4 CLI is designed for use by AI agents through SKILLS + CLI.
 
 [SKILL.md](cli/skill/SKILL.md)
+
+### DOM Snapshot
+
+The `domsnapshot` family of commands provides **static DOM extraction** — capturing the raw HTML of the current page as a queryable document object model. Unlike the interactive `snapshot` command (which captures accessibility-tree refs for `click`/`type`/`fill`), `domsnapshot` extracts structured data from the DOM using CSS selectors and X-SQL queries without requiring an interactive browser session.
+
+| Feature | `snapshot` | `domsnapshot` |
+|---|---|---|
+| Data source | Accessibility tree | Raw HTML DOM |
+| Element addressing | Refs (`e5`, `e15`) | CSS selectors only |
+| Interactive commands | `click`, `type`, `fill` | Not supported |
+| Data extraction | Via `extract` | Via `get` and `query` |
+| X-SQL support | No | Yes (`query`) |
+| Export format | YAML (accessibility tree) | HTML (`export`) |
+
+```shell
+# Capture a static DOM snapshot of the current page
+browser4-cli domsnapshot
+
+# Extract visible text using CSS selectors
+browser4-cli domsnapshot get text ".product-title"
+browser4-cli domsnapshot get html "#main-content"
+browser4-cli domsnapshot get attr ".product-image" data-src
+
+# Run X-SQL queries against the DOM
+browser4-cli domsnapshot query --sql "
+  SELECT
+    dom_base_uri(dom) AS url,
+    dom_first_text(dom, '#productTitle') AS title,
+    dom_first_slim_html(dom, 'img:expr(width > 400)') AS img
+  FROM load_and_select(@url, 'body');
+"
+
+# Run X-SQL from a query file
+browser4-cli domsnapshot query --sql @query.sql
+
+# Export snapshot HTML to a file
+browser4-cli domsnapshot export --file=page-snapshot.html
+```
+
+For the full command reference, X-SQL query examples, and error handling, see the [DOM Snapshot reference](cli/skill/references/domsnapshot.md).
 
 ### Agent and Swarm CLI
 

@@ -15,6 +15,7 @@
   - [💡 使用示例](#-使用示例)
     - [快速入门](#快速入门)
     - [CLI 与技能 (SKILLS)](#cli-与技能-skills)
+    - [DOM 快照](#dom-快照)
     - [Agent 和 Swarm CLI](#agent-和-swarm-cli)
   - [🚀 从源码构建](#-从源码构建)
   - [🧬 自动提取](#-自动提取)
@@ -43,6 +44,7 @@
 
 ```shell
 npm install -g browser4-cli
+browser4-cli install
 ```
 
 或通过单条命令直接引导安装原生二进制文件：
@@ -50,11 +52,13 @@ npm install -g browser4-cli
 **Windows (PowerShell):**
 ```powershell
 irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex
+browser4-cli install
 ```
 
 **Linux / macOS (bash):**
 ```bash
 curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash
+browser4-cli install
 ```
 
 ## 💡 使用示例
@@ -148,6 +152,46 @@ Browser4 CLI 专为 AI 智能体通过技能 (SKILLS) + CLI 使用而设计。
 
 [SKILL.md](cli/skill/SKILL.md)
 
+### DOM 快照
+
+`domsnapshot` 系列命令提供**静态 DOM 提取** — 将当前页面的原始 HTML 捕获为可查询的文档对象模型。与交互式的 `snapshot` 命令（捕获无障碍树引用用于 `click`/`type`/`fill`）不同，`domsnapshot` 使用 CSS 选择器和 X-SQL 查询提取结构化数据，无需交互式浏览器会话。
+
+| 功能 | `snapshot` | `domsnapshot` |
+|---|---|---|
+| 数据来源 | 无障碍树 | 原始 HTML DOM |
+| 元素定位 | 引用 (`e5`, `e15`) | 仅 CSS 选择器 |
+| 交互命令 | `click`, `type`, `fill` | 不支持 |
+| 数据提取 | 通过 `extract` | 通过 `get` 和 `query` |
+| X-SQL 支持 | 否 | 是 (`query`) |
+| 导出格式 | YAML（无障碍树） | HTML (`export`) |
+
+```shell
+# 捕获当前页面的静态 DOM 快照
+browser4-cli domsnapshot
+
+# 使用 CSS 选择器提取可见文本
+browser4-cli domsnapshot get text ".product-title"
+browser4-cli domsnapshot get html "#main-content"
+browser4-cli domsnapshot get attr ".product-image" data-src
+
+# 对 DOM 运行 X-SQL 查询
+browser4-cli domsnapshot query --sql "
+  SELECT
+    dom_base_uri(dom) AS url,
+    dom_first_text(dom, '#productTitle') AS title,
+    dom_first_slim_html(dom, 'img:expr(width > 400)') AS img
+  FROM load_and_select(@url, 'body');
+"
+
+# 从查询文件运行 X-SQL
+browser4-cli domsnapshot query --sql @query.sql
+
+# 导出快照 HTML 到文件
+browser4-cli domsnapshot export --file=page-snapshot.html
+```
+
+完整命令参考、X-SQL 查询示例和错误处理，请参见 [DOM 快照参考](cli/skill/references/domsnapshot.md)。
+
 ### Agent 和 Swarm CLI
 
 Browser4 CLI 提供两种高级接口，用于超越标准单步操作的复杂多步骤浏览器任务：
@@ -232,7 +276,7 @@ browser4-cli swarm query --sql @query.sql --seed-file=./urls.txt --refresh
 
 关键说明：
 - 种子文件为纯文本格式，每行一个 URL；`#` 注释和空行将被忽略。
-- `swarm submit` 和 `swarm query` 都支持 `--seed-file`、`--deadline`、`--expires`、`--refresh`、`--parse`、`--store-content`。
+- `swarm submit` 和 `swarm query` 都支持 `--seed-file`、`--deadline`、`--expires`、`--refresh`、`--store-content`。
 - 所有 swarm 命令都会返回任务 ID；使用 `swarm status` / `swarm result` 跟踪进度。
 - 在 X-SQL 模板中使用 `@url` — 它会在服务器端替换为目标 URL。
 
@@ -240,7 +284,42 @@ browser4-cli swarm query --sql @query.sql --seed-file=./urls.txt --refresh
 
 ## 🚀 从源码构建
 
-**前置条件**：Java 17+
+### 前置条件
+
+| 工具 | 最低版本 | 用途 | 备注 |
+|------|---------|------|------|
+| **Git** | 任意 | 克隆、根目录发现 | |
+| **JDK** | 17+（推荐 21+） | 构建与运行时 | 推荐 Eclipse Temurin。JDK 21+ 可启用最佳 jlink 压缩（zip-9）。 |
+| **Maven** | 3.9+ | Java 构建 | 通过 `mvnw` 包装器内置 — 无需单独安装。 |
+| **PowerShell 7** (`pwsh`) | 7.0+ | 运行时打包（jlink） | **Linux** 和 **macOS** 必需。Windows 内置（`powershell.exe`）。安装：`curl -fsSL https://aka.ms/install-powershell.sh \| bash` |
+| **JDK 工具** (`jdeps`, `jlink`, `jpackage`) | 随 JDK 16+ 附带 | 运行时打包 | 包含在你的 JDK 安装中 — 无需单独安装。 |
+| **Chrome / Chromium** | 最新 | 运行时 | 见下方自动检测路径。Docker 镜像通过 `apk add chromium` 捆绑 Chromium。 |
+| **Rust** | stable（edition 2021） | 仅 CLI 构建 | 仅在从源码构建 `browser4-cli` 时需要（Java 后端不需要）。 |
+| **Node.js + pnpm** | Node 24 / pnpm 10 | CLI 分发 | 仅在打包 CLI 用于 npm 发布时需要。 |
+
+#### 运行时打包的平台特定工具
+
+| 平台 | 额外工具 |
+|------|---------|
+| **Linux** | `tar`、`wget` 或 `curl` |
+| **macOS** | `tar` |
+| **Windows** | `powershell.exe`（内置）— Windows PowerShell 5.1+ 即可 |
+
+#### Chrome 自动检测路径
+
+| 平台 | 搜索路径 |
+|------|---------|
+| **Windows** | `C:\Program Files\Google\Chrome\Application\chrome.exe`、`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe` |
+| **macOS** | `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`、`/Applications/Chromium.app/Contents/MacOS/Chromium` |
+| **Linux** | `/opt/google/chrome/chrome`、`/usr/bin/google-chrome`、`/usr/bin/chromium-browser`、`PATH: google-chrome`、`chromium-browser`、`chromium` |
+
+如果未找到 Chrome，CLI 会自动尝试安装：
+- **Windows**：通过 `winget` 或 PowerShell 下载独立安装程序
+- **Debian/Ubuntu**：通过 `wget`/`curl` + `sudo dpkg -i`
+- **RHEL/Fedora**：通过 `curl` + `sudo dnf install -y`
+- **macOS**：打印 `brew install --cask google-chrome` 指引
+
+---
 
 1. **克隆仓库**
    ```shell
