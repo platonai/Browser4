@@ -16,7 +16,6 @@
 #>
 
 param(
-    [Parameter(Mandatory = $true)]
     [string]$Prompt,
 
     [string[]]$AdditionalArguments = @(),

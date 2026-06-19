@@ -83,6 +83,7 @@ function Get-TaskSnapshot {
         'Description'         = $TaskState.Description
         'Enabled'             = $TaskState.Enabled
         'IntervalSeconds'     = $TaskState.IntervalSeconds
+        'WindowStyle'         = $TaskState.WindowStyle
         'DependsOn'           = @($TaskState.DependsOn)
         'PendingPaths'        = @($TaskState.PendingPaths)
         'ScriptPath'          = $TaskState.ScriptPath
@@ -209,6 +210,7 @@ finally {
     $process = Start-Process -FilePath $PowerShellExecutable `
         -ArgumentList $argumentList `
         -WorkingDirectory $WorkingDirectory `
+        -WindowStyle $TaskState.WindowStyle `
         -PassThru
 
     Register-ScheduledTaskProcessExitEvent -TaskState $TaskState -Process $process
@@ -521,11 +523,23 @@ foreach ($task in $config.Tasks) {
         )
     }
 
+    $windowStyle = [string](Get-CoworkerConfigValue -Map $task -Key 'WindowStyle' -DefaultValue 'Normal')
+    $validStyles = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    [void]$validStyles.Add('Normal')
+    [void]$validStyles.Add('Minimized')
+    [void]$validStyles.Add('Maximized')
+    [void]$validStyles.Add('Hidden')
+    if (-not $validStyles.Contains($windowStyle)) {
+        Write-CoworkerLog -Component 'scheduler' -Level 'WARN' -Message "Task '$taskName' has invalid WindowStyle '$windowStyle'. Falling back to 'Normal'."
+        $windowStyle = 'Normal'
+    }
+
     $taskStates[$taskName] = @{
         Name                        = $taskName
         Description                 = [string](Get-CoworkerConfigValue -Map $task -Key 'Description' -DefaultValue '')
         Enabled                     = $enabled
         IntervalSeconds             = $intervalSeconds
+        WindowStyle                 = $windowStyle
         DependsOn                   = $dependsOn
         PendingPaths                = $pendingPaths
         ScriptPath                  = $resolvedScriptPath
