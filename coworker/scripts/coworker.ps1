@@ -768,8 +768,12 @@ Agent Log: $agentLogPath
 
         $targetInfo = Resolve-UniquePath -Directory $targetSubDir -BaseName $workingBaseName -Extension $file.Extension
 
-        Move-Item -Path $workingPath -Destination $targetInfo.Path -Force
-        Write-LogMessage "$targetMessage : $($targetInfo.Path)" INFO
+        if (Test-Path $workingPath) {
+            Move-Item -Path $workingPath -Destination $targetInfo.Path -Force
+            Write-LogMessage "$targetMessage : $($targetInfo.Path)" INFO
+        } else {
+            Write-LogMessage "Task file not found at working path (may have been moved/deleted by agent): $workingPath" WARN
+        }
         Ensure-DraftPlaceholders -DraftDirectory $draftDir
 
         Write-LogMessage "---" INFO
