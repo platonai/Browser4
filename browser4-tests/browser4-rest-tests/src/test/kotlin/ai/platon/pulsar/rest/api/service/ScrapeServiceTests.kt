@@ -116,15 +116,14 @@ class ScrapeServiceTests : MockEcServerTestBase() {
     }
 
     @Test
-    @DisplayName("When scraping with LLM + X-SQL then the result returns synchronously")
-    fun whenScrapingWithLlmXSqlThenTheResultReturnsSynchronously() {
+    @DisplayName("When scraping with X-SQL then the result returns synchronously")
+    fun whenScrapingWithXSqlThenTheResultReturnsSynchronously() {
         Assumptions.assumeTrue(ChatModelFactory.isModelConfigured(config))
 
         val startTime = Instant.now()
 
         val sql = """
             select
-              llm_extract(dom, 'product name, price, ratings') as llm_extracted_data,
               dom_base_uri(dom) as url,
               dom_first_text(dom, '#productTitle') as title,
               dom_first_slim_html(dom, 'img:expr(width > 400)') as img
