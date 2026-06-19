@@ -250,22 +250,29 @@ class AgentToolManager constructor(
 
     /**
      * Handle switching to a new tab by binding the target driver to the session.
+     *
+     * Uses the driver returned by [BrowserToolExecutor.switchTab] (via [evaluate.value])
+     * as the primary source of truth — no need to re-derive it from [session.boundBrowser].
      */
-    @Suppress("UNUSED_PARAMETER")
     private fun onDidSwitchTab(evaluate: TcEvaluate) {
-        val frontDriver = session.boundBrowser?.frontDriver
-        if (frontDriver == null) {
-            logger.warn("⚠️ No driver is in front after switchTab")
+        val switchedDriver = evaluate.value as? WebDriver
+        if (switchedDriver == null) {
+            logger.warn("⚠️ switchTab did not return a WebDriver; falling back to boundBrowser")
+            val fallback = session.boundBrowser?.frontDriver
+            if (fallback == null) {
+                logger.warn("⚠️ No driver is in front after switchTab")
+                return
+            }
+            session.bindDriver(fallback)
             return
         }
 
         val oldBoundDriver = session.boundDriver
-        if (frontDriver == oldBoundDriver) {
+        if (switchedDriver == oldBoundDriver) {
             logger.warn("⚠️ The bound driver does not change after switchTab")
         }
 
-        // bind the driver which has been brought to front just now
-        session.bindDriver(frontDriver)
+        session.bindDriver(switchedDriver)
     }
 
     /**
