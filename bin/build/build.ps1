@@ -13,47 +13,6 @@ function printUsage {
 # Maven command and options
 $MvnCmd = Join-Path $repoRoot '.\mvnw'
 
-# Initialize flags and additional arguments
-$PerformClean = $false
-$SkipTests = $true
-
-$MvnOptions = @()
-$AdditionalMvnArgs = @()
-
-# Parse command-line arguments
-foreach ($Arg in $args)
-{
-  switch ($Arg)
-  {
-    '-clean' {
-      $PerformClean = $true;
-    }
-    { $_ -in '-t', '-test' } {
-      $SkipTests = $false;
-    }
-    { $_ -in "-h", "-help", "--help" } {
-      printUsage
-    }
-    { $_ -in "-*", "--*" } {
-      printUsage
-    }
-    Default {
-      $AdditionalMvnArgs += $Arg
-    }
-  }
-}
-
-# Conditionally add Maven options based on flags
-if ($PerformClean)
-{
-  $MvnOptions += 'clean'
-}
-
-if ($SkipTests)
-{
-  $AdditionalMvnArgs += '-DskipTests'
-}
-
 # Function to execute Maven command in a given directory
 Function Invoke-MavenBuild {
   param([string]$Directory, [Object[]]$BuildArgs)
@@ -99,6 +58,50 @@ Function Invoke-CargoBuild {
   finally {
     Pop-Location
   }
+}
+
+# Initialize flags and additional arguments
+$PerformClean = $false
+$SkipTests = $true
+
+$MvnOptions = @()
+$AdditionalMvnArgs = @()
+
+# Parse command-line arguments
+foreach ($Arg in $args)
+{
+  switch ($Arg)
+  {
+    '-clean' {
+      $PerformClean = $true;
+    }
+    { $_ -in '-t', '-test' } {
+      $SkipTests = $false;
+    }
+    { $_ -in "-h", "-help", "--help" } {
+      printUsage
+    }
+    { $_ -in "-*", "--*" } {
+      printUsage
+    }
+    Default {
+      $AdditionalMvnArgs += $Arg
+    }
+  }
+}
+
+# Conditionally add Maven options based on flags
+# When cleaning, first run clean with ALL profiles active so every
+# module's target/ is removed — not just the default reactor.
+if ($PerformClean)
+{
+  $AllProfiles = @('clean', '-P', 'all-modules,all-main-modules,all-test-modules')
+  Invoke-MavenBuild -Directory $repoRoot -BuildArgs $AllProfiles
+}
+
+if ($SkipTests)
+{
+  $AdditionalMvnArgs += '-DskipTests'
 }
 
 # Execute Maven package in the application home directory
