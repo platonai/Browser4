@@ -40,6 +40,12 @@ if (-not (Test-Path (Join-Path $repoRoot 'VERSION'))) {
 
 Set-Location $repoRoot
 
+$mvnwScript = if ($IsWindows) {
+    Join-Path $repoRoot 'mvnw.cmd'
+} else {
+    Join-Path $repoRoot 'mvnw'
+}
+
 function Print-Usage {
     param([int]$ExitCode = 1)
     Write-Host "Usage: test.ps1 [-DryRun] [-Show] [test-types...] [additional-args...]"
@@ -98,9 +104,8 @@ function Normalize-ArgumentTokens([string[]]$tokens) {
 }
 
 function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
-    $mvnCmd = Join-Path $repoRoot 'mvnw.cmd'
-    if (-not (Test-Path $mvnCmd)) {
-        Write-Error "Maven wrapper not found at $mvnCmd"
+    if (-not (Test-Path $mvnwScript)) {
+        Write-Error "Maven wrapper not found at $mvnwScript"
         exit 1
     }
 
@@ -154,7 +159,7 @@ function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
         Write-Host ""
         Write-Host "=========================================="
         Write-Host "[SHOW] Would execute:"
-        Write-Host "  $mvnCmd $($mvnTestArgs -join ' ')"
+        Write-Host "  $mvnwScript $($mvnTestArgs -join ' ')"
         Write-Host "=========================================="
         return
     }
@@ -163,12 +168,12 @@ function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
         Write-Host ""
         Write-Host "=========================================="
         Write-Host "[DRY RUN] Executing:"
-        Write-Host "  $mvnCmd $($mvnTestArgs -join ' ')"
+        Write-Host "  $mvnwScript $($mvnTestArgs -join ' ')"
         Write-Host "=========================================="
     }
 
     try {
-        & $mvnCmd @mvnTestArgs
+        & $mvnwScript @mvnTestArgs
         $exitCode = $LASTEXITCODE
         if ($exitCode -ne 0) {
             Write-Host ""
@@ -265,12 +270,11 @@ function Invoke-Browser4CliTests([string[]]$additionalArgs) {
 }
 
 function Invoke-MockSiteBoot([string[]]$additionalArgs) {
-    $mvnCmd = Join-Path $repoRoot 'mvnw.cmd'
     $mockSiteModuleDir = Join-Path $repoRoot 'browser4-tests\browser4-rest-tests'
     $passThroughArgs = @()
     $mockSiteJvmArgs = @()
-    if (-not (Test-Path $mvnCmd)) {
-        Write-Error "Maven wrapper not found at $mvnCmd"
+    if (-not (Test-Path $mvnwScript)) {
+        Write-Error "Maven wrapper not found at $mvnwScript"
         exit 1
     }
     if (-not (Test-Path $mockSiteModuleDir)) {
@@ -317,7 +321,7 @@ function Invoke-MockSiteBoot([string[]]$additionalArgs) {
             Write-Host ""
             Write-Host "=========================================="
             Write-Host "[SHOW] Would execute in ${mockSiteModuleDir}:"
-            Write-Host "  $mvnCmd $($mvnArgs -join ' ')"
+            Write-Host "  $mvnwScript $($mvnArgs -join ' ')"
             Write-Host "=========================================="
             Pop-Location
             return
@@ -327,11 +331,11 @@ function Invoke-MockSiteBoot([string[]]$additionalArgs) {
             Write-Host ""
             Write-Host "=========================================="
             Write-Host "[DRY RUN] Executing in ${mockSiteModuleDir}:"
-            Write-Host "  $mvnCmd $($mvnArgs -join ' ')"
+            Write-Host "  $mvnwScript $($mvnArgs -join ' ')"
             Write-Host "=========================================="
         }
 
-        & $mvnCmd @mvnArgs
+        & $mvnwScript @mvnArgs
         $exitCode = $LASTEXITCODE
         if ($exitCode -ne 0) {
             Write-Host ""
@@ -455,13 +459,11 @@ function Invoke-ResumeTests([string[]]$additionalArgs) {
     $goal = if ($script:DryRun -and -not $script:Show) { 'test-compile' } else { 'test' }
     $mvnTestArgs = @($goal, '-rf', ":$resumeFrom") + $additionalArgs
 
-    $mvnCmd = Join-Path $repoRoot 'mvnw.cmd'
-
     if ($script:Show) {
         Write-Host ""
         Write-Host "=========================================="
         Write-Host "[SHOW] Would execute:"
-        Write-Host "  $mvnCmd $($mvnTestArgs -join ' ')"
+        Write-Host "  $mvnwScript $($mvnTestArgs -join ' ')"
         Write-Host "=========================================="
         return
     }
@@ -470,12 +472,12 @@ function Invoke-ResumeTests([string[]]$additionalArgs) {
         Write-Host ""
         Write-Host "=========================================="
         Write-Host "[DRY RUN] Executing:"
-        Write-Host "  $mvnCmd $($mvnTestArgs -join ' ')"
+        Write-Host "  $mvnwScript $($mvnTestArgs -join ' ')"
         Write-Host "=========================================="
     }
 
     try {
-        & $mvnCmd @mvnTestArgs
+        & $mvnwScript @mvnTestArgs
         $exitCode = $LASTEXITCODE
         if ($exitCode -ne 0) {
             Write-Host ""
