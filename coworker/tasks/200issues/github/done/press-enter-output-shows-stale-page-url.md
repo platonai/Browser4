@@ -1,0 +1,27 @@
+# `press Enter` output shows stale page URL
+
+## Summary
+
+After typing a search query and pressing Enter, the `press Enter` command output shows the same page URL as before the action, even though the page did navigate. The output captures the pre-navigation state rather than the post-submission page.
+
+## Steps to reproduce
+
+1. Navigate to a page (e.g., `https://www.amazon.com/`).
+2. Type a search query into the search box.
+3. Run `browser4-cli press Enter`.
+4. Observe the output.
+
+## Expected behavior
+
+The command output should reflect the page after the Enter key action, i.e., the search results page URL, or at minimum wait for navigation to complete before capturing output.
+
+## Actual behavior
+
+The output shows `### Page - Page URL: https://www.amazon.com/` — the same URL as before pressing Enter. A subsequent `snapshot` confirms navigation did occur, but the `press Enter` output captured the pre-navigation state.
+
+## Suggested resolution
+
+- After `press Enter` (and similar navigation-triggering commands like `click` on links), wait for the page URL to change before capturing and returning output.
+- Use the existing `wait --url` mechanism internally to detect navigation completion.
+
+Labels: bug, UX

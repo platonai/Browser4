@@ -1,0 +1,41 @@
+# No documented workaround for `click` timeout
+
+## Summary
+
+When the `click` command times out on cross-domain navigation, the user is left without any documented recovery strategy. The error message does not suggest alternative approaches, and neither the help output nor SKILL.md provides guidance on how to handle click failures.
+
+## Steps to Reproduce
+
+1. Run `browser4-cli goto https://news.ycombinator.com/news`
+2. Click a story link via `browser4-cli click <ref>`
+3. Observe the timeout error
+4. Search for guidance: `browser4-cli help click`, SKILL.md, README.md
+
+## Expected Behavior
+
+The error message or documentation should suggest workarounds, such as:
+- Using `goto <url>` with the target URL directly
+- Waiting for the timeout and then verifying the page state with `snapshot`
+- Trying `press Enter` as an alternative submission method
+
+## Actual Behavior
+
+The timeout error provides no guidance on what to do next. The user must independently discover workarounds through trial and error. Common workarounds that are not documented include:
+- Using `goto <url>` with the target article URL (requires knowing the URL beforehand)
+- Accepting the timeout and running `snapshot` to verify if navigation occurred
+- Starting a new session for each external link
+
+## Impact
+
+- First-time users encountering this issue may become stuck with no clear recovery path
+- Reduces confidence in the tool's reliability for common browsing workflows
+- The Hacker News use case (navigating to external article links) is a basic, common pattern that should have documented support
+
+## Suggested Improvements
+
+- Add recovery suggestions to the timeout error message for `click`
+- Document known workarounds in `help click` and SKILL.md
+- Consider adding a warning when `click` is used on a link pointing to a different domain
+- Provide guidance on verifying post-click page state
+
+Labels: documentation, UX, reliability

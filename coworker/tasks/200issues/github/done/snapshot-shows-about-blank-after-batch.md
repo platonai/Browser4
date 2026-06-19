@@ -1,0 +1,20 @@
+# `snapshot` shows `about:blank` instead of current page after batch execution
+
+## Summary
+Running `snapshot` after a batch that includes `goto` (or after a failed batch) produces a snapshot of `about:blank` instead of the current page. This indicates that page state may be lost or that the browser context is not properly tracking navigation through the batch lifecycle.
+
+## Steps to Reproduce
+1. Run a batch that includes a `goto` command.
+2. After the batch completes (or fails), run `browser4-cli snapshot`.
+3. Inspect the snapshot output.
+
+## Expected Behavior
+The snapshot should show the current page's accessibility tree.
+
+## Actual Behavior
+The snapshot shows `about:blank` instead of the form page, indicating the page state was lost during or after batch execution.
+
+## Suggested Fix
+Investigate page lifecycle management during batch execution. The navigation state or browser context may not be properly persisted after batch commands finish, particularly when `goto` is involved.
+
+Labels: bug, low, reliability, CLI
