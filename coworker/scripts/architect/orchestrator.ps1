@@ -13,7 +13,7 @@ $repoRoot = Get-WorkspaceRoot
 
 # Configuration
 $templatesDir = Resolve-TasksPath '100templates'
-$logsBaseDir = Resolve-TasksPath '300logs'
+$logsBaseDir = Get-LogDirectory
 $createdDir = Resolve-TasksPath '1ready'
 $workingDir = Resolve-TasksPath '2working'
 $finishedDir = Resolve-TasksPath '3_1complete'

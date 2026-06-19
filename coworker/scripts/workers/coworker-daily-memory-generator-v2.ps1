@@ -55,7 +55,7 @@ $dateStr    = $parsedDate.ToString('yyyy-MM-dd')
 $compactDate = $parsedDate.ToString('yyyyMMdd')
 
 # ── Paths ────────────────────────────────────────────────────────────────────
-$logDir     = Join-Path (Resolve-TasksPath '300logs') "$year\$month\$day"
+$logDir     = Join-Path (Get-LogDirectory) "$year\$month\$day"
 $memoryDir  = $logDir
 $longFile   = Join-Path $memoryDir "MEMORY.$compactDate.long.md"
 $shortFile  = Join-Path $memoryDir "MEMORY.$compactDate.md"

@@ -83,6 +83,12 @@ function Get-TasksRoot {
     return Resolve-CoworkerConfiguredPath -Path $path
 }
 
+function Get-LogDirectory {
+    $pathsConfig = Get-CoworkerConfigValue -Map $script:configData -Key 'Paths' -DefaultValue @{}
+    $path = [string](Get-CoworkerConfigValue -Map $pathsConfig -Key 'LogDirectory' -DefaultValue 'coworker\tasks\300logs')
+    return Resolve-CoworkerConfiguredPath -Path $path -BaseDirectory (Get-WorkspaceRoot)
+}
+
 function Get-SchedulerWorkingDirectory {
     $schedulerConfig = Get-CoworkerConfigValue -Map $script:configData -Key 'Scheduler' -DefaultValue @{}
     $path = [string](Get-CoworkerConfigValue -Map $schedulerConfig -Key 'WorkingDirectory' -DefaultValue '..\..')

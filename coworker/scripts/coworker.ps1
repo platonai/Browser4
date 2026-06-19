@@ -99,6 +99,10 @@ $agentCommand = $null
 $agentExecutable = $null
 $agentBaseArgs = @()
 $agentWorkingDirectory = $repoRoot
+
+$logsDir = Get-LogDirectory
+$memoryDir = $logsDir
+
 $taskRoots = @(
     @{
         Prepare = (Join-Path $tasksRoot "0draft")
@@ -108,13 +112,10 @@ $taskRoots = @(
         Review = (Join-Path $tasksRoot "4review")
         Approved = (Join-Path $tasksRoot "5approved")
         Pushed = (Join-Path $tasksRoot "6git-pushed")
-        Logs = (Join-Path $tasksRoot "300logs")
+        Logs = $logsDir
         Label = "tasks"
     }
 )
-
-$logsDir = $taskRoots[0].Logs
-$memoryDir = $logsDir
 
 # Ensure all required directories exist
 # Create them if they don't already exist

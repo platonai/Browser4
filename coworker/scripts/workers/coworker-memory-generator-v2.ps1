@@ -57,7 +57,7 @@ $year  = $parsedDate.ToString('yyyy')
 $month = $parsedDate.ToString('MM')
 $day   = $parsedDate.ToString('dd')
 
-$logsBaseDir = Resolve-TasksPath '300logs'
+$logsBaseDir = Get-LogDirectory
 
 # ── Smart truncation ─────────────────────────────────────────────────────────
 
