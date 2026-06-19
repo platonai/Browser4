@@ -1,0 +1,14 @@
+Done. Here's a summary of what was processed:
+
+**Task:** README update for `browser4-tests/browser4-tests-common/src/main/resources/static/`
+
+**Changes made:**
+- Updated `static/README.md` from 5 lines to ~13 lines
+- Added documentation for the two previously undocumented subdirectories:
+  - **`b4/`** — Browser4-specific MCP tool controller HTML fixtures
+  - **`ec/`** — Electron/Chromium static assets (placeholder images)
+- Expanded existing entries with brief descriptions of contents
+- Added version reference (`4.11.x`)
+- Preserved the original bullet-point style and tone
+
+**Task lifecycle:** Moved `2working` → `5approved/2026/0620/` via the `#auto-approve` fast path.

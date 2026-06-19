@@ -43,14 +43,32 @@ Validate data against specified rules.
 - Extensible rule system
 - Comprehensive error reporting
 
-### [HTML to PDF](./html-to-pdf/SKILL.md)
-Convert live web pages into PDF documents.
+### [PDF Processing](./pdf/SKILL.md)
+Extract text and tables from PDF files, fill PDF forms, and create/merge/split PDF documents.
 
 **Key Features:**
-- URL-to-PDF conversion
-- Playwright-first rendering for dynamic pages
-- WeasyPrint fallback for static pages
-- Machine-readable JSON output with saved file path
+- Text and table extraction from PDFs
+- PDF form filling (fillable fields)
+- PDF creation, merging, and splitting
+- Form field inspection and annotation
+
+### [MCP Builder](./mcp-builder/SKILL.md)
+Guide for creating advanced MCP (Model Context Protocol) servers that enable LLMs to interact with external services through well-designed tools.
+
+**Key Features:**
+- Python (FastMCP) and Node/TypeScript (MCP SDK) support
+- Deep research and planning phase
+- API coverage vs. workflow tool design
+- Evaluation-driven quality assurance
+
+### [X-SQL Web Query](./x-sql/SKILL.md)
+Query the web with SQL — load pages, select DOM elements with CSS selectors, and extract structured data into tables and charts.
+
+**Key Features:**
+- Declarative SQL syntax for web scraping
+- CSS selector-based DOM traversal
+- Structured data extraction (text, HTML, attributes, links, images, numbers)
+- Table and chart output formats
 
 ### [Weather](./weather/SKILL.md)
 Fetch current weather conditions and a 7-day forecast for a named location.
@@ -82,7 +100,7 @@ Create `skills/my-skill/SKILL.md` with this template:
 
 - **Skill ID**: `my-skill`
 - **Name**: My Skill Name
-- **Version**: 1.0.0
+- **Version**: 4.11.x
 - **Author**: Your Name
 - **Tags**: `tag1`, `tag2`
 
@@ -258,6 +276,6 @@ fun testMySkill() = runBlocking {
 
 ## Resources
 
-- [Skills Framework Documentation](/docs/skills-framework.md)
-- [Example Skills](../examples/)
-- [API Documentation](/docs/api.md)
+- [Project Documentation](../../../../../../docs/)
+- Skill source implementations in `src/main/kotlin/ai/platon/pulsar/agentic/skills/`
+- Test resources in `browser4-tests/browser4-tests-common/src/main/resources/static/`
