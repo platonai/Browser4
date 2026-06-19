@@ -1,8 +1,6 @@
 @{
     Scheduler = @{
         TickSeconds          = 5
-        # Use 'pwsh' for PowerShell 7+ (cross-platform). On Windows, switch to 'powershell.exe'
-        # only if you explicitly need Windows PowerShell 5.1 behavior.
         PowerShellExecutable = 'pwsh'
         WorkingDirectory     = '..\..'
         LogDirectory         = '..\Browser4Team\coworker\tasks\300logs'
@@ -48,6 +46,15 @@
             IntervalSeconds = 15
             PendingPaths    = @('coworker\tasks\200issues\draft\refine\0ready')
             ScriptPath      = 'coworker\scripts\workers\refine-github-issues.ps1'
+            Arguments       = @()
+        }
+        @{
+            Name            = 'fetch-github-issues'
+            Description     = 'Fetch latest GitHub issues, save them locally, and self-assign unassigned ones.'
+            Enabled         = $true
+            IntervalSeconds = 120
+            PendingPaths    = @()
+            ScriptPath      = 'coworker\scripts\workers\fetch-github-issues.ps1'
             Arguments       = @()
         }
     )
