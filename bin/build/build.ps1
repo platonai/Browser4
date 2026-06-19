@@ -44,9 +44,12 @@ foreach ($Arg in $args)
 }
 
 # Conditionally add Maven options based on flags
+# When cleaning, first run clean with ALL profiles active so every
+# module's target/ is removed — not just the default reactor.
 if ($PerformClean)
 {
-  $MvnOptions += 'clean'
+  $AllProfiles = @('clean', '-P', 'all-modules,all-main-modules,all-test-modules')
+  Invoke-MavenBuild -Directory $repoRoot -BuildArgs $AllProfiles
 }
 
 if ($SkipTests)
