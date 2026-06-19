@@ -374,6 +374,18 @@ function Remove-CoworkerFileWatcher {
     }
 }
 
+# ── Ensure common tool directories are on PATH ───────────────────────────
+# Scheduled tasks run with -NoProfile, so user-profile tool shims (scoop, etc.)
+# are not automatically available. Prepend known tool directories to PATH.
+$knownToolPaths = @(
+    Join-Path $env:USERPROFILE 'scoop\shims'
+)
+foreach ($toolPath in $knownToolPaths) {
+    if ((Test-Path -LiteralPath $toolPath) -and ($env:PATH -notlike "*$toolPath*")) {
+        $env:PATH = "$toolPath;$env:PATH"
+    }
+}
+
 $COPILOT = @($script:configData['COPILOT'])
 if ($script:configData.ContainsKey('CLAUDE')) {
     $CLAUDE = @($script:configData['CLAUDE'])
