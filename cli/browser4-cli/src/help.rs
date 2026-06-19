@@ -152,13 +152,13 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         lines.push("    (open, close) must be executed separately.".to_string());
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli batch \"goto https://playwright.dev\" \"snapshot\"".to_string());
+        lines.push("  browser4-cli batch \"goto https://browser4.io\" \"snapshot\"".to_string());
         lines.push(
-            "  browser4-cli batch --bail \"goto https://playwright.dev\" \"click e1\" \"screenshot\""
+            "  browser4-cli batch --bail \"goto https://browser4.io\" \"click e1\" \"screenshot\""
                 .to_string(),
         );
         lines.push(
-            "  echo '[ [\"goto\", \"https://playwright.dev\"], [\"snapshot\"] ]' | browser4-cli batch --json"
+            "  echo '[ [\"goto\", \"https://browser4.io\"], [\"snapshot\"] ]' | browser4-cli batch --json"
                 .to_string(),
         );
     }
@@ -225,9 +225,9 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli open https://browser4.io/".to_string());
-        lines.push("  browser4-cli open --headed https://browser4.io/".to_string());
-        lines.push("  browser4-cli open --headless https://browser4.io/".to_string());
+        lines.push("  browser4-cli open https://browser4.io".to_string());
+        lines.push("  browser4-cli open --headed https://browser4.io".to_string());
+        lines.push("  browser4-cli open --headless https://browser4.io".to_string());
     }
 
     if cmd.name == "install" {
@@ -331,8 +331,8 @@ pub fn generate_command_help(cmd: &CommandDef) -> String {
         );
         lines.push(String::new());
         lines.push("Examples:".to_string());
-        lines.push("  browser4-cli goto https://browser4.io/".to_string());
-        lines.push("  browser4-cli -s mysession goto https://browser4.io/".to_string());
+        lines.push("  browser4-cli goto https://browser4.io".to_string());
+        lines.push("  browser4-cli -s mysession goto https://browser4.io".to_string());
     }
 
     if cmd.name == "swarm-create" {
@@ -610,7 +610,7 @@ mod tests {
         assert!(help.contains("DOM operations"));
         assert!(help.contains("Session lifecycle commands"));
         assert!(help.contains("executed separately"));
-        assert!(help.contains("browser4-cli batch \"goto https://playwright.dev\" \"snapshot\""));
+        assert!(help.contains("browser4-cli batch \"goto https://browser4.io\" \"snapshot\""));
         assert!(help.contains("batch --json"));
     }
 

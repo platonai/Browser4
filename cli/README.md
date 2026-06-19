@@ -518,7 +518,7 @@ browser4-cli open --headed https://browser4.io
 browser4-cli open --headless https://browser4.io
 
 # Navigate to a page — auto-opens a session if none is active
-browser4-cli goto https://playwright.dev
+browser4-cli goto https://browser4.io
 
 # Inspect the page — note the eN labels on interactive nodes
 browser4-cli snapshot
@@ -548,10 +548,10 @@ browser4-cli open --server http://localhost:9090
 # Advanced: execute multiple commands in one process (batch mode)
 # Batch mode only supports DOM operations. You must run `open` separately first.
 browser4-cli open
-browser4-cli batch "goto https://playwright.dev" "snapshot"
+browser4-cli batch "goto https://browser4.io" "snapshot"
 
 # Advanced: stop on the first batch failure
-browser4-cli batch --bail "goto https://playwright.dev" "click e1" "screenshot"
+browser4-cli batch --bail "goto https://browser4.io" "click e1" "screenshot"
 
 # Advanced: batch mode for form filling (recommended use case)
 browser4-cli batch "fill e1 'John Doe'" "fill e2 'john@example.com'" "click e3"

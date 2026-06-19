@@ -42,7 +42,7 @@ browser4-cli install
 # open new browser
 browser4-cli open
 # navigate to a page with the current active session
-browser4-cli goto https://browser4.io/
+browser4-cli goto https://browser4.io
 # take a snapshot
 browser4-cli snapshot
 # interact with the page using refs from the snapshot
@@ -74,9 +74,9 @@ The sections below cover the standard browser workflow commands that are surface
 ```bash
 browser4-cli open
 # open and navigate right away in one step
-browser4-cli open https://browser4.io/
+browser4-cli open https://browser4.io
 # navigate to a URL using the current active session
-browser4-cli goto https://playwright.dev
+browser4-cli goto https://browser4.io
 browser4-cli type "search query"
 browser4-cli click e3
 browser4-cli dblclick e7

@@ -65,7 +65,7 @@ curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4
 
 ```shell
 $prompt = @"
-Read https://browser4.io/SKILL.md and install browser4-cli for browser automation to perform the following task:
+Read https://browser4.ioSKILL.md and install browser4-cli for browser automation to perform the following task:
 
 1. go to amazon.com
 2. search for pens to draw on whiteboards
@@ -92,7 +92,7 @@ browser4-cli open --headed https://browser4.io
 browser4-cli open --headless https://browser4.io
 
 # 导航到页面——如果没有活动会话则自动打开一个
-browser4-cli goto https://playwright.dev
+browser4-cli goto https://browser4.io
 
 # 检查页面——注意可交互节点上的 eN 标签
 browser4-cli snapshot
@@ -113,10 +113,10 @@ browser4-cli screenshot
 browser4-cli open --server http://localhost:9090
 
 # 在一个进程中执行多个命令
-browser4-cli batch "goto https://playwright.dev" "snapshot"
+browser4-cli batch "goto https://browser4.io" "snapshot"
 
 # 在首个失败处停止批处理
-browser4-cli batch --bail "goto https://playwright.dev" "click e1" "screenshot"
+browser4-cli batch --bail "goto https://browser4.io" "click e1" "screenshot"
 
 # 高级：通过 stdin 以 JSON 格式传入批处理命令
 echo '[

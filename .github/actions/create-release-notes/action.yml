@@ -90,7 +90,7 @@ runs:
         browser4-cli open
 
         # Navigate to a page
-        browser4-cli goto https://playwright.dev
+        browser4-cli goto https://browser4.io
 
         # Inspect the page — note the eN labels on interactive nodes
         browser4-cli snapshot
@@ -111,10 +111,10 @@ runs:
         browser4-cli open --server http://localhost:9090
 
         # Execute multiple commands in one process
-        browser4-cli batch "open https://playwright.dev" "snapshot"
+        browser4-cli batch "open https://browser4.io" "snapshot"
 
         # Stop on the first batch failure
-        browser4-cli batch --bail "open https://playwright.dev" "click e1" "screenshot"
+        browser4-cli batch --bail "open https://browser4.io" "click e1" "screenshot"
 
         # Advanced: pipe batch commands as JSON via stdin
         echo '[

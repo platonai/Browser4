@@ -43,6 +43,7 @@ Install browser4-cli globally using npm (requires Node.js):
 
 ```shell
 npm install -g browser4-cli
+browser4-cli install
 ```
 
 Or bootstrap the native binary directly with a single command:
@@ -50,11 +51,13 @@ Or bootstrap the native binary directly with a single command:
 **Windows (PowerShell):**
 ```powershell
 irm https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1 | iex
+browser4-cli install
 ```
 
 **Linux / macOS (bash):**
 ```bash
 curl -fsSL https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh | bash
+browser4-cli install
 ```
 
 ## 💡 Usage Examples
@@ -65,7 +68,7 @@ Just ask any LLM agent to use browser4-cli for browser interactions, and it will
 
 ```shell
 $prompt = @"
-Read https://browser4.io/SKILL.md and install browser4-cli for browser automation to perform the following task:
+Read https://browser4.ioSKILL.md and install browser4-cli for browser automation to perform the following task:
 
 1. go to amazon.com
 2. search for pens to draw on whiteboards
@@ -96,7 +99,7 @@ browser4-cli open --headed https://browser4.io
 browser4-cli open --headless https://browser4.io
 
 # Navigate to a page — auto-opens a session if none is active
-browser4-cli goto https://playwright.dev
+browser4-cli goto https://browser4.io
 
 # Inspect the page — note the eN labels on interactive nodes
 browser4-cli snapshot
@@ -117,10 +120,10 @@ browser4-cli screenshot
 browser4-cli open --server http://localhost:9090
 
 # Execute multiple commands in one process
-browser4-cli batch "goto https://playwright.dev" "snapshot"
+browser4-cli batch "goto https://browser4.io" "snapshot"
 
 # Stop on the first batch failure
-browser4-cli batch --bail "goto https://playwright.dev" "click e1" "screenshot"
+browser4-cli batch --bail "goto https://browser4.io" "click e1" "screenshot"
 
 # Advanced: pipe batch commands as JSON via stdin, useful for form filling and complex workflows
 echo '[
