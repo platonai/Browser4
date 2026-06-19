@@ -361,13 +361,12 @@ Write-Host '━━━ Invoke-Agent: Error Handling ━━━' -ForegroundColor Y
     . "$PSScriptRoot/common.ps1"
 
     Write-TestGroup 'omitting -Prompt is a parameter binding error'
-    $errorCaught = $false
-    try {
-        Invoke-Agent
-    } catch {
-        $errorCaught = $true
-    }
-    Assert-True 'throws when -Prompt is omitted' $errorCaught
+    # Check via reflection rather than actually invoking without -Prompt,
+    # because PowerShell would prompt interactively for the missing mandatory
+    # parameter instead of throwing a catchable terminating error.
+    $promptParam = (Get-Command Invoke-Agent).Parameters['Prompt']
+    $isMandatory = $promptParam.ParameterSets['__AllParameterSets'].IsMandatory
+    Assert-True '-Prompt is mandatory (omitting it is a parameter binding error)' $isMandatory
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
