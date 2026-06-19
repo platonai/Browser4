@@ -9,6 +9,11 @@
     After a successful creation the file moves to the "done" directory; on
     failure it moves to "failed" so the operator can inspect and retry.
 
+    A daily commit guard caps creations at 20 per UTC day to avoid tripping
+    GitHub's spam detection.  Overflow files stay in "open" and are picked up
+    on the next scheduled run after the UTC date rolls over.  The daily counter
+    persists in .daily-commit-state.json alongside the task directories.
+
     File format (markdown):
         # <Title>
         <Body>
@@ -35,6 +40,45 @@ foreach ($directory in @($openDir, $doneDir, $failedDir)) {
     Ensure-CoworkerDirectory -Path $directory
 }
 
+# ── Daily commit guard ─────────────────────────────────────────────────────
+# GitHub may flag repos that create issues too aggressively as spam.  We cap
+# the number of issues this worker creates per UTC day and defer any overflow
+# to the next scheduled run so the pace stays organic.
+$maxDailyCommits = 20
+$dailyStateFile = Join-Path $issuesRoot '.daily-commit-state.json'
+
+function Get-DailyCommitState {
+    param([string]$StateFilePath)
+    $todayUtc = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
+    if (Test-Path -LiteralPath $StateFilePath) {
+        try {
+            $state = Get-Content -LiteralPath $StateFilePath -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($state.Date -eq $todayUtc) {
+                return @{ Date = $state.Date; Count = [int]$state.Count }
+            }
+        }
+        catch {
+            # Corrupt state file — reset
+        }
+    }
+    return @{ Date = $todayUtc; Count = 0 }
+}
+
+function Set-DailyCommitState {
+    param([string]$StateFilePath, [int]$Count)
+    $todayUtc = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
+    $state = @{ Date = $todayUtc; Count = $Count } | ConvertTo-Json -Compress
+    Set-Content -LiteralPath $StateFilePath -Value $state -Encoding UTF8 -NoNewline
+}
+
+$dailyState = Get-DailyCommitState -StateFilePath $dailyStateFile
+$remainingCommits = $maxDailyCommits - $dailyState.Count
+
+if ($remainingCommits -le 0) {
+    Write-CoworkerLog -Message "Daily commit limit reached ($maxDailyCommits/$maxDailyCommits). Deferring remaining issues to next run." -Level 'WARN' -Component 'commit-github-issues'
+    exit 0
+}
+
 $files = @(Get-ChildItem -Path $openDir -File |
     Where-Object { -not (Test-CoworkerIgnoredFile -Item $_) } |
     Sort-Object Name)
@@ -44,11 +88,19 @@ if ($files.Count -eq 0) {
     exit 0
 }
 
-Write-CoworkerLog -Message "Found $($files.Count) issue file(s) to commit" -Level 'INFO' -Component 'commit-github-issues'
+Write-CoworkerLog -Message "Found $($files.Count) issue file(s) to commit ($remainingCommits remaining of $maxDailyCommits daily limit)" -Level 'INFO' -Component 'commit-github-issues'
 
 $failureCount = 0
+$committedToday = $dailyState.Count
 
 foreach ($file in $files) {
+    # ── Enforce daily commit limit ───────────────────────────────────────
+    if ($committedToday -ge $maxDailyCommits) {
+        $deferred = $files.Count - $files.IndexOf($file)
+        Write-CoworkerLog -Message "Daily commit limit reached ($maxDailyCommits). Deferring $deferred remaining issue(s) to next run." -Level 'WARN' -Component 'commit-github-issues'
+        break
+    }
+
     Write-CoworkerLog -Message "Processing: $($file.Name)" -Level 'INFO' -Component 'commit-github-issues'
 
     try {
@@ -158,6 +210,10 @@ foreach ($file in $files) {
         $donePath = Join-Path $doneDir $file.Name
         Move-Item -Path $file.FullName -Destination $donePath -Force
         Write-CoworkerLog -Message "Moved to done: $donePath" -Level 'INFO' -Component 'commit-github-issues'
+
+        # ── Update daily commit count ────────────────────────────────────
+        $committedToday++
+        Set-DailyCommitState -StateFilePath $dailyStateFile -Count $committedToday
     }
     catch {
         $failureCount++
@@ -170,9 +226,11 @@ foreach ($file in $files) {
 }
 
 if ($failureCount -gt 0) {
-    Write-CoworkerLog -Message "$failureCount issue(s) failed to create. Check the failed directory: $failedDir" -Level 'WARN' -Component 'commit-github-issues'
+    Write-CoworkerLog -Message "$failureCount issue(s) failed to create. $committedToday/$maxDailyCommits daily commits used. Check the failed directory: $failedDir" -Level 'WARN' -Component 'commit-github-issues'
+    Set-DailyCommitState -StateFilePath $dailyStateFile -Count $committedToday
     exit 1
 }
 
-Write-CoworkerLog -Message 'All issues committed successfully.' -Level 'INFO' -Component 'commit-github-issues'
+Write-CoworkerLog -Message "All issues committed successfully ($committedToday/$maxDailyCommits daily commits used)." -Level 'INFO' -Component 'commit-github-issues'
+Set-DailyCommitState -StateFilePath $dailyStateFile -Count $committedToday
 exit 0
