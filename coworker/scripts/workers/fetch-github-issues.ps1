@@ -35,6 +35,7 @@ $githubRepo = 'platonai/Browser4'
 $issuesLimit = 20
 $outputDir = Resolve-TasksPath '0draft\issues\github'
 $includeClosed = $false  # set $true to also pull closed issues
+$cutoffDate = [datetime]'2026-06-06T06:06:06Z'  # ignore issues created before this UTC time
 
 Ensure-CoworkerDirectory -Path $outputDir
 
@@ -48,15 +49,17 @@ $ghArgs = [System.Collections.ArrayList]::new()
 [void]$ghArgs.Add($issuesLimit)
 [void]$ghArgs.Add('--json')
 [void]$ghArgs.Add('number,title,state,body,createdAt,updatedAt,author,assignees,labels,url')
+$searchQuery = 'sort:created-desc created:>={0:yyyy-MM-ddTHH:mm:ss}Z' -f $cutoffDate
+$cutoffFormatted = $cutoffDate.ToString('yyyy-MM-dd HH:mm:ss UTC')
 [void]$ghArgs.Add('--search')
-[void]$ghArgs.Add('sort:created-desc')
+[void]$ghArgs.Add($searchQuery)
 
 if (-not $includeClosed) {
     [void]$ghArgs.Add('--state')
     [void]$ghArgs.Add('open')
 }
 
-Write-CoworkerLog -Message "Fetching latest $issuesLimit issues from $githubRepo ..." -Level 'INFO' -Component 'fetch-github-issues'
+Write-CoworkerLog -Message "Fetching latest $issuesLimit issues from $githubRepo (since $cutoffFormatted) ..." -Level 'INFO' -Component 'fetch-github-issues'
 
 # ── Fetch issues ────────────────────────────────────────────────────────────
 $ghOutput = & gh $ghArgs 2>&1
@@ -99,9 +102,21 @@ if ([string]::IsNullOrWhiteSpace($currentUser)) {
 $savedCount = 0
 $assignedCount = 0
 $skippedCount = 0
+$excludedByDateCount = 0
 
 foreach ($issue in $issues) {
     $issueNumber = $issue.number
+
+    # ── Guard: skip issues created before the cutoff ──────────────────────
+    $created = $null
+    if ($issue.createdAt) {
+        $created = $issue.createdAt -as [datetime]
+    }
+    if ($created -and $created -lt $cutoffDate) {
+        $excludedByDateCount++
+        Write-CoworkerLog -Message ("Skipping issue #${issueNumber}: created at $($created.ToString('o')) (before cutoff $cutoffFormatted)") -Level 'DEBUG' -Component 'fetch-github-issues'
+        continue
+    }
     $fileName = "$issueNumber.md"
     $filePath = Join-Path $outputDir $fileName
 
@@ -184,5 +199,5 @@ foreach ($issue in $issues) {
     }
 }
 
-Write-CoworkerLog -Message "Done: $savedCount saved, $assignedCount assigned, $skippedCount skipped." -Level 'INFO' -Component 'fetch-github-issues'
+Write-CoworkerLog -Message "Done: $savedCount saved, $assignedCount assigned, $skippedCount skipped, $excludedByDateCount excluded (before $cutoffFormatted)." -Level 'INFO' -Component 'fetch-github-issues'
 exit 0
