@@ -109,16 +109,20 @@ browser4-cli -s=<session> <command> [args] [options]
 
 | Flag               | Description                                    |
 |--------------------|------------------------------------------------|
-| `--help [command]` | Print help (optionally for a specific command) |
-| `--version`        | Print version                                  |
+| `-h`, `--help [command]` | Print help (optionally for a specific command) |
+| `-v`, `--version`  | Print version                                  |
 | `-s=<name>`        | Named session label                            |
 | `--server=<url>`   | Override Browser4 server URL                   |
+| `--proxy=<url>`    | Manual HTTP proxy override for downloads       |
 | `--json`           | Emit machine-parseable JSON to stdout          |
 | `-q`, `--quiet`    | Suppress normal output, only show errors       |
 
 `--json` switches every command's stdout from human-readable text to a
 single-line JSON envelope (`{"status":"ok","command":"<name>","output":{...}}`).
 Omit `--json` for the default human-readable output.
+
+`--proxy=<url>` sets a manual HTTP proxy used only for downloading the
+Browser4 runtime bundle. It does not affect browser traffic.
 
 `-q` / `--quiet` suppresses all normal stdout output.  Errors and
 progress messages still go to stderr.  Combine with `--json` for
@@ -138,20 +142,20 @@ The tables below mirror the commands surfaced by the global `browser4-cli help` 
 
 | Command | Description |
 |---|---|
-| `open [url]` | Open or switch to a browser session. Supports `--headed` (force visible window) and `--headless` (force headless). |
+| `open [url]` | Open or switch to a browser session. Supports `--headed` (force visible window), `--headless` (force headless), `--profile=<path>`, `--profile-mode=<mode>` (temporary / sequential / default), and `--interact-level=<level>` (FASTEST / FAST / DEFAULT). |
 | `close` | Close the active session |
 | `goto <url>` | Navigate to a URL, auto-opening or refreshing the session if needed |
-| `click <ref> [button]` | Click an element |
-| `dblclick <ref> [button]` | Double-click an element |
-| `type <text> [ref]` | Type text into the focused element or an optional target element |
-| `fill <ref> <text>` | Fill text into an editable element |
+| `click <ref> [button]` | Click an element. Supports `--modifiers` (modifier keys to press). |
+| `dblclick <ref> [button]` | Double-click an element. Supports `--modifiers` (modifier keys to press). |
+| `type <text> [ref]` | Type text into the focused element or an optional target element. Supports `--submit` (press Enter after typing). |
+| `fill <ref> <text>` | Fill text into an editable element. Supports `--submit` (press Enter after filling). |
 | `hover <ref>` | Hover over an element |
 | `select <ref> <val>` | Select an option in a dropdown |
 | `upload <ref> <file>` | Upload a file |
 | `check <ref>` | Check a checkbox or radio button |
 | `uncheck <ref>` | Uncheck a checkbox or radio button |
 | `drag <startRef> <endRef>` | Drag and drop between two elements |
-| `snapshot` | Capture accessibility snapshot |
+| `snapshot` | Capture accessibility snapshot. Supports `--filename=<path>` to save snapshot to file. |
 | `eval <expression> [ref]` | Evaluate JavaScript on the page or a target element. Use `--file=<path>` to read the expression from a file. |
 | `get <mode> <selector> [name]` | Extract data from a page element. Modes: `text`, `html`, `box`, `styles`, `property`, `attr`. `name` is required for `property` and `attr`. |
 | `scroll <direction> <pixels>` | Scroll the page. Direction: `up`, `down`, `left`, or `right`. |
@@ -190,7 +194,8 @@ The tables below mirror the commands surfaced by the global `browser4-cli help` 
 
 | Command | Description |
 |---|---|
-| `screenshot [ref]` | Take a screenshot (optionally of a specific element) |
+| `screenshot [ref]` | Take a screenshot (optionally of a specific element). Supports `--filename=<path>` and `--full-page` (full scrollable page). |
+| `pdf` | Save the current page as a PDF. Supports `--filename=<path>`. |
 
 #### Tabs
 
@@ -211,7 +216,7 @@ Run `tab-list` first to find each tab's zero-based index. Pass that index to `ta
 | `state-load <path>` | Restore cookies and localStorage from a saved state file |
 | `cookie-list` | List all cookies (optionally filtered by `--domain` / `--path`) |
 | `cookie-get <name>` | Get a cookie by name |
-| `cookie-set <name> <value>` | Set a cookie (optional `--path`, `--domain`) |
+| `cookie-set <name> <value>` | Set a cookie. Supports `--path`, `--domain`, `--expires`, `--httpOnly`, `--secure`, `--sameSite` (Strict / Lax / None). |
 | `cookie-delete <name>` | Delete a cookie by name |
 | `cookie-clear` | Clear all cookies for the current page |
 | `localstorage-list` | List all localStorage entries |
@@ -229,7 +234,7 @@ Run `tab-list` first to find each tab's zero-based index. Pass that index to `ta
 
 | Command | Description |
 |---|---|
-| `list` | List browser sessions |
+| `list` | List browser sessions. Supports `--all` (list sessions across all workspaces). |
 | `close-all` | Close all browser sessions without stopping `Browser4.jar` / the Browser4 backend |
 | `kill-all` | Forcefully stop `Browser4.jar` / the Browser4 backend and kill Browser4 browser processes |
 
@@ -241,6 +246,7 @@ Use `close-all` for session cleanup when you want to keep the current Browser4 s
 |---|---|
 | `install` | Download the Browser4 runtime bundle. Supports `--tag=<version>` to pin a release and `--force` to reinstall even when already present. |
 | `upgrade` | Upgrade the Browser4 runtime bundle to the latest version or a specified `--tag` |
+| `uninstall` | Remove globally installed browser4-cli (npm, cargo) and its runtime data. Supports `-y` / `--yes` (skip confirmation) and `--dry-run` (preview). |
 | `stop` | Kill the Browser4 backend after closing all sessions |
 | `status` | Check whether the Browser4 backend is reachable and healthy |
 
@@ -256,6 +262,17 @@ When a local Browser4 checkout is detected with the `browser4-bundle` module pre
 `install` and `upgrade` auto-build the runtime bundle from source (via Maven) instead
 of downloading.
 
+`uninstall` attempts to remove browser4-cli from npm global packages and cargo
+installs, and deletes the Browser4 runtime data and cache directories. It prompts
+for confirmation unless `-y` / `--yes` is passed. Use `--dry-run` to preview what
+would be removed without making changes. Does not require a running server.
+
+```shell
+browser4-cli uninstall
+browser4-cli uninstall -y
+browser4-cli uninstall --dry-run
+```
+
 ### Advanced commands
 
 These commands are intentionally omitted from the global `browser4-cli help` overview.
@@ -265,7 +282,7 @@ Query `browser4-cli help <command>` for the exact syntax when you need them.
 |---|---|
 | `batch [command...]` | Execute multiple commands in one invocation. Only DOM operations are supported (Core, Navigation, Keyboard, Mouse, Export, Tabs categories). Commands like `open`, `close`, `list`, `agent run`, etc. are not allowed in batch mode. |
 | `console [min-level]` | List console messages |
-| `extract <instruction>` | Extract structured data from the current page |
+| `extract <instruction>` | Extract structured data from the current page. Supports `--schema` (JSON Schema for typed output). |
 | `summarize [instruction]` | Summarize page content using AI |
 | `agent run <task>` | Run an autonomous agent task |
 | `agent status <id>` | Check the status of a running agent task |
@@ -433,6 +450,69 @@ browser4-cli swarm query --sql @query.sql --seed-file=./urls.txt --refresh
 - Prefix the `--sql` value with `@` to read from a file (e.g. `--sql @query.sql`).
 - All commands return a task ID; use `swarm status` / `swarm result` to track progress.
 
+## DOM Snapshot commands (`domsnapshot <subcommand>`)
+
+The `domsnapshot` commands capture and query a **static DOM snapshot** of the
+current page. Unlike the real-time accessibility `snapshot`, a DOM snapshot is
+a full HTML capture that can be queried repeatedly with CSS selectors and X-SQL
+without re-fetching the page.
+
+Use the spaced `domsnapshot <subcommand>` form:
+
+```shell
+browser4-cli domsnapshot
+browser4-cli domsnapshot get text "#productTitle"
+browser4-cli domsnapshot query --sql "SELECT dom_first_text(dom, '#title') AS title FROM dom(dom)"
+browser4-cli domsnapshot export --file=page.html
+```
+
+### Command overview
+
+| Command | Description |
+|---|---|
+| `domsnapshot` | Capture a static DOM snapshot of the current page |
+| `domsnapshot get <field> [selector] [name]` | Extract elements from the static DOM snapshot |
+| `domsnapshot query [url] --sql=<query>` | Run X-SQL against the DOM snapshot via the scrape API |
+| `domsnapshot export [--file=<path>]` | Save full snapshot HTML content to a local file |
+
+### `domsnapshot get` fields
+
+| Field | Description |
+|---|---|
+| `text` | Extract text content from the matched element |
+| `html` | Extract inner HTML from the matched element |
+| `attr` | Extract an attribute value (requires `name`, e.g. `attr "#link" "href"`) |
+
+`selector` defaults to `:root` when omitted. `name` (attribute name) is
+required for the `attr` field.
+
+### `domsnapshot query` with X-SQL
+
+```shell
+# Inline X-SQL:
+browser4-cli domsnapshot query "https://example.com" --sql "
+  SELECT
+    dom_base_uri(dom) AS url,
+    dom_first_text(dom, 'h1') AS title
+  FROM dom(dom);
+"
+
+# From a file:
+browser4-cli domsnapshot query --sql @query.sql
+```
+
+- `--sql` is **required**. Prefix with `@` to read from a file (e.g. `--sql @query.sql`).
+- `url` is optional and defaults to the current session's page URL.
+- These commands do not require an active swarm session.
+
+### Notes
+
+- `domsnapshot` commands are not supported inside `batch` mode.
+- Use `domsnapshot get` for quick element extraction; use `domsnapshot query`
+  with X-SQL for structured multi-element extraction.
+- The DOM snapshot is cached in the backend until the next `domsnapshot`
+  capture or session navigation.
+
 ## Element References
 
 The `snapshot` command returns an accessibility tree where every interactive
@@ -517,11 +597,26 @@ browser4-cli open
 browser4-cli open --headed https://browser4.io
 browser4-cli open --headless https://browser4.io
 
+# Open with a persistent profile
+browser4-cli open --profile=~/.browser4/profiles/work
+
+# Open with a temporary (single-use) profile
+browser4-cli open --profile-mode=temporary https://browser4.io
+
+# Open with interact-level control (FASTEST / FAST / DEFAULT)
+browser4-cli open --interact-level=FAST https://browser4.io
+
 # Navigate to a page — auto-opens a session if none is active
 browser4-cli goto https://browser4.io
 
 # Inspect the page — note the eN labels on interactive nodes
 browser4-cli snapshot
+
+# Capture a static DOM snapshot and extract data
+browser4-cli domsnapshot
+browser4-cli domsnapshot get text "#productTitle"
+browser4-cli domsnapshot get attr "#productTitle" "href"
+browser4-cli domsnapshot export --file=page.html
 
 # Interact using refs from the snapshot
 browser4-cli click e15
@@ -536,6 +631,12 @@ browser4-cli keyup Shift
 
 # Take a screenshot and save it to disk
 browser4-cli screenshot
+
+# Take a full-page screenshot
+browser4-cli screenshot --full-page
+
+# Save the current page as a PDF
+browser4-cli pdf --filename=page.pdf
 
 # Inspect tab indices before switching tabs
 browser4-cli tab-list
