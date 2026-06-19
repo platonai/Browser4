@@ -95,27 +95,27 @@ $agentWorkingDirectory = $repoRoot
 $taskRoots = @(
     @{
         Prepare = (Join-Path $tasksRoot "0draft")
-        Created = (Join-Path $tasksRoot "1created")
+        Created = (Join-Path $tasksRoot "1ready")
         Working = (Join-Path $tasksRoot "2working")
         Finished = (Join-Path $tasksRoot "3_1complete")
         Review = (Join-Path $tasksRoot "4review")
         Approved = (Join-Path $tasksRoot "5approved")
         Pushed = (Join-Path $tasksRoot "6git-pushed")
+        Logs = (Join-Path $tasksRoot "300logs")
         Label = "tasks"
     }
 )
 
-$logsDir = Join-Path "$HOME\.browser4\development" "logs"
+$logsDir = $taskRoots[0].Logs
 $memoryDir = $logsDir
 
-# Ensure all required task directories exist
+# Ensure all required directories exist
+# Create them if they don't already exist
 foreach ($root in $taskRoots) {
-    foreach ($dir in @($root.Prepare, $root.Created, $root.Working, $root.Finished, $root.Review, $root.Approved, $root.Pushed)) {
+    foreach ($dir in @($root.Prepare, $root.Created, $root.Working, $root.Finished, $root.Review, $root.Approved, $root.Pushed, $root.Logs)) {
         if (!(Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
     }
 }
-# Ensure logs directory exists
-if (!(Test-Path $logsDir)) { New-Item -ItemType Directory -Path $logsDir | Out-Null }
 
 # Handle specified TaskFile
 if (-not [string]::IsNullOrWhiteSpace($TaskFile)) {

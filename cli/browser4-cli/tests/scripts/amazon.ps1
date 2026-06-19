@@ -12,4 +12,4 @@ Since this scenario tests interactive (non-batch) commands, do not use batch mod
 "@
 
 $prompt = $generalPrompt + $taskPrompt
-Invoke-Agent -Prompt $prompt
+Invoke-Agent -Prompt $prompt -ScenarioName 'amazon'

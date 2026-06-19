@@ -73,8 +73,6 @@ try {
     }
 
     while ($true) {
-        Ensure-CoworkerDraftRefinementPlaceholders -DraftDirectory $defaultReadyDir
-
         $pendingFiles = @(Get-PendingDraftFiles -ScanPath $scanPath)
         if ($pendingFiles.Count -eq 0) {
             if ($Once) {

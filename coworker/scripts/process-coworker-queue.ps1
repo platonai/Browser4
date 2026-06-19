@@ -17,7 +17,7 @@ function Test-HasPendingCoworkerTasks {
         [string]$RepoRoot
     )
 
-    $createdTasks = Get-ChildItem -Path (Join-Path $RepoRoot 'coworker\tasks\1created') -File -ErrorAction SilentlyContinue
+    $createdTasks = Get-ChildItem -Path (Join-Path $RepoRoot 'coworker\tasks\1ready') -File -ErrorAction SilentlyContinue
     $approvedTasks = Get-ChildItem -Path (Join-Path $RepoRoot 'coworker\tasks\5approved') -File -Recurse -ErrorAction SilentlyContinue
     return [bool]($createdTasks -or $approvedTasks)
 }
@@ -72,7 +72,7 @@ function Invoke-CoworkerPeriodicCheck {
     )
 
     if (-not (Test-HasPendingCoworkerTasks -RepoRoot $RepoRoot)) {
-        Write-CoworkerLog -Component 'process-coworker-queue' -Level 'DEBUG' -Message 'No tasks found in 1created or 5approved.'
+        Write-CoworkerLog -Component 'process-coworker-queue' -Level 'DEBUG' -Message 'No tasks found in 1ready or 5approved.'
         return [pscustomobject]@{ ExitCode = 0; Action = 'Idle' }
     }
 
@@ -115,7 +115,7 @@ $scriptPath = Join-Path $PSScriptRoot 'coworker.ps1'
 $scriptName = 'coworker.ps1'
 $wrapperName = 'process-coworker-queue.ps1'
 $watchPaths = @(
-    (Join-Path $repoRoot 'coworker\tasks\1created')
+    (Join-Path $repoRoot 'coworker\tasks\1ready')
     (Join-Path $repoRoot 'coworker\tasks\5approved')
 )
 $watchRegistrations = @()

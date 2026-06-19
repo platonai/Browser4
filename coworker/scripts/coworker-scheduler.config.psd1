@@ -5,7 +5,7 @@
         # only if you explicitly need Windows PowerShell 5.1 behavior.
         PowerShellExecutable = 'pwsh'
         WorkingDirectory     = '..\..'
-        LogDirectory         = '~\.browser4\development\logs\scheduler'
+        LogDirectory         = '..\Browser4Team\coworker\tasks\300logs'
         StatusFile           = 'logs\scheduled-tasks.status.json'
     }
 
@@ -17,7 +17,7 @@
             IntervalSeconds = 15
             DependsOn       = @('process-task-source')
             PendingPaths    = @(
-                'coworker\tasks\1created'
+                'coworker\tasks\1ready'
                 'coworker\tasks\5approved'
             )
             ScriptPath      = 'coworker\scripts\coworker.ps1'
@@ -33,12 +33,22 @@
             Arguments       = @('-Path', 'coworker\tasks\0draft\refine\1ready')
         }
         @{
-            Name            = 'process-task-source'
-            Description     = 'Poll configured task sources and dispatch new tasks.'
-            Enabled         = $false
-            IntervalSeconds = 60
-            ScriptPath      = 'coworker\scripts\process-task-source.ps1'
-            Arguments       = @('-Once')
+            Name            = 'commit-github-issues'
+            Description     = 'Scan for pending GitHub issue files and create them via gh CLI.'
+            Enabled         = $true
+            IntervalSeconds = 15
+            PendingPaths    = @('coworker\tasks\200issues\github\open')
+            ScriptPath      = 'coworker\scripts\workers\commit-github-issues.ps1'
+            Arguments       = @()
+        }
+        @{
+            Name            = 'refine-github-issues'
+            Description     = 'Extract issues from draft files, split into individual issues, refine as GitHub issues, and stage for creation.'
+            Enabled         = $true
+            IntervalSeconds = 15
+            PendingPaths    = @('coworker\tasks\200issues\draft\refine\0ready')
+            ScriptPath      = 'coworker\scripts\workers\refine-github-issues.ps1'
+            Arguments       = @()
         }
     )
 }

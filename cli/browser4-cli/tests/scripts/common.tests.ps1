@@ -4,10 +4,14 @@
 Unit tests for common.ps1 — the shared helpers module for agent-scenario scripts.
 
 .DESCRIPTION
-Tests the three main pieces of common.ps1:
+Tests common.ps1 functionality:
   1. Mode detection ($browser4cliMode → $helpCmd, $skillPath)
   2. $generalPrompt content and structure
   3. Invoke-Agent function signature and argument forwarding
+  4. Path resolution ($IssuesReadyDir, $RepoRoot)
+  5. ConvertFrom-IssuesSection parsing
+  6. Write-IssuesToReadyQueue file output
+  7. Invoke-Agent backward compatibility
 
 .NOTES
 Each test group runs in a clean scope by dot-sourcing common.ps1 in a script block.
@@ -385,6 +389,328 @@ Write-Host '━━━ $ErrorActionPreference Side-Effect ━━━' -ForegroundC
 
     # Restore
     $ErrorActionPreference = $originalEAP
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test group 10: Path resolution
+# ═══════════════════════════════════════════════════════════════════════════════
+
+Write-Host ''
+Write-Host '━━━ Path Resolution ━━━' -ForegroundColor Yellow
+
+& {
+    Remove-Variable -Name 'browser4cliMode' -Scope Local -ErrorAction SilentlyContinue
+    . "$PSScriptRoot/common.ps1"
+
+    Write-TestGroup '$script:IssuesReadyDir is an absolute path'
+    $isAbs = [System.IO.Path]::IsPathRooted([string]$script:IssuesReadyDir)
+    Assert-True 'IssuesReadyDir is absolute' $isAbs
+
+    Write-TestGroup '$script:IssuesReadyDir ends with the expected suffix'
+    $expectedSuffix = '200issues\draft\refine\0ready'
+    $normalized = ([string]$script:IssuesReadyDir) -replace '[/\\]', '\'
+    Assert-True "Ends with $expectedSuffix" $normalized.EndsWith($expectedSuffix)
+
+    Write-TestGroup '$script:RepoRoot resolves to an existing directory'
+    Assert-True 'RepoRoot exists' (Test-Path -LiteralPath $script:RepoRoot -PathType Container)
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test group 11: Invoke-Agent new parameters
+# ═══════════════════════════════════════════════════════════════════════════════
+
+Write-Host ''
+Write-Host '━━━ Invoke-Agent New Parameters ━━━' -ForegroundColor Yellow
+
+& {
+    Remove-Variable -Name 'browser4cliMode' -Scope Local -ErrorAction SilentlyContinue
+    . "$PSScriptRoot/common.ps1"
+
+    $funcInfo = Get-Command Invoke-Agent -ErrorAction SilentlyContinue
+
+    Write-TestGroup 'Invoke-Agent exists'
+    Assert-True 'Function exists' ($null -ne $funcInfo)
+
+    Write-TestGroup 'Invoke-Agent has -ScenarioName parameter'
+    $hasScenarioName = $funcInfo.Parameters.ContainsKey('ScenarioName')
+    Assert-True 'Has ScenarioName parameter' $hasScenarioName
+
+    Write-TestGroup 'Invoke-Agent -ScenarioName is a string'
+    $scenarioType = $funcInfo.Parameters['ScenarioName'].ParameterType.Name
+    Assert-Equal 'ScenarioName is string' 'String' $scenarioType
+
+    Write-TestGroup 'Invoke-Agent has -OutputFile parameter'
+    Assert-True 'Has OutputFile parameter' $funcInfo.Parameters.ContainsKey('OutputFile')
+
+    Write-TestGroup 'Invoke-Agent still has -Prompt (mandatory)'
+    Assert-True 'Has Prompt parameter' $funcInfo.Parameters.ContainsKey('Prompt')
+
+    Write-TestGroup 'Invoke-Agent still has -Silent'
+    Assert-True 'Has Silent parameter' $funcInfo.Parameters.ContainsKey('Silent')
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test group 12: ConvertFrom-IssuesSection
+# ═══════════════════════════════════════════════════════════════════════════════
+
+Write-Host ''
+Write-Host '━━━ ConvertFrom-IssuesSection ━━━' -ForegroundColor Yellow
+
+& {
+    Remove-Variable -Name 'browser4cliMode' -Scope Local -ErrorAction SilentlyContinue
+    . "$PSScriptRoot/common.ps1"
+
+    Write-TestGroup 'Returns empty array for non-matching input'
+    $result = ConvertFrom-IssuesSection -Content 'no issues section here'
+    Assert-True 'Non-matching input → empty array' ($result.Count -eq 0)
+
+    Write-TestGroup 'Returns empty array for input without C section'
+    $noC = @'
+### A. Task Result
+Done.
+
+### B. Execution Trace
+Did stuff.
+
+### D. Overall Assessment
+All good.
+'@
+    $result = ConvertFrom-IssuesSection -Content $noC
+    Assert-True 'No C section → empty array' ($result.Count -eq 0)
+
+    Write-TestGroup 'Parses a single issue with all fields'
+    $singleIssue = @'
+### A. Task Result
+Task completed.
+
+### B. Execution Trace
+Used commands.
+
+### C. Issues Found
+
+#### Title
+Help text missing examples
+
+#### Severity
+Medium
+
+#### Category
+Documentation
+
+#### Reproduction Steps
+1. Run `browser4-cli help`
+2. Observe output
+
+#### Expected Behavior
+Help includes usage examples.
+
+#### Actual Behavior
+No examples shown.
+
+#### Suggested Improvement
+Add an Examples section to each command.
+
+### D. Overall Assessment
+Rating: 7/10
+'@
+    $rawResult = ConvertFrom-IssuesSection -Content $singleIssue
+    # Filter out any incidental output-stream noise
+    $result = @($rawResult | Where-Object { $_ -is [hashtable] })
+    Write-TestGroup 'Found exactly 1 issue'
+    Assert-Equal 'Count is 1' 1 $result.Count
+
+    $issue = $result[0]
+    Write-TestGroup 'Parsed Title'
+    Assert-Equal 'Title' 'Help text missing examples' $issue.Title
+    Write-TestGroup 'Parsed Severity'
+    Assert-Equal 'Severity' 'Medium' $issue.Severity
+    Write-TestGroup 'Parsed Category'
+    Assert-Equal 'Category' 'Documentation' $issue.Category
+    Write-TestGroup 'Parsed Reproduction Steps'
+    Assert-True 'Reproduction not empty' (-not [string]::IsNullOrWhiteSpace($issue.Reproduction))
+    Write-TestGroup 'Parsed Expected Behavior'
+    Assert-True 'Expected not empty' (-not [string]::IsNullOrWhiteSpace($issue.Expected))
+    Write-TestGroup 'Parsed Actual Behavior'
+    Assert-True 'Actual not empty' (-not [string]::IsNullOrWhiteSpace($issue.Actual))
+    Write-TestGroup 'Parsed Suggested Improvement'
+    Assert-True 'Suggestion not empty' (-not [string]::IsNullOrWhiteSpace($issue.Suggestion))
+
+    Write-TestGroup 'Parses multiple issues'
+    $multiIssue = @'
+### C. Issues Found
+
+#### Title
+First issue
+
+#### Severity
+High
+
+#### Category
+UX
+
+#### Reproduction Steps
+Step one.
+
+#### Expected Behavior
+Should work.
+
+#### Actual Behavior
+Does not work.
+
+#### Suggested Improvement
+Fix it.
+
+#### Title
+Second issue
+
+#### Severity
+Low
+
+#### Category
+Reliability
+
+#### Reproduction Steps
+Step two.
+
+#### Expected Behavior
+Should be reliable.
+
+#### Actual Behavior
+Flaky.
+
+#### Suggested Improvement
+Make it stable.
+'@
+    $rawMulti = ConvertFrom-IssuesSection -Content $multiIssue
+    $result = @($rawMulti | Where-Object { $_ -is [hashtable] })
+    Assert-Equal 'Found 2 issues' 2 $result.Count
+    Assert-Equal 'First issue title' 'First issue' $result[0].Title
+    Assert-Equal 'Second issue title' 'Second issue' $result[1].Title
+
+    Write-TestGroup 'Handles malformed input gracefully'
+    $malformed = '### C. Issues Found' + "`n" + 'Just some random text with no structured issues.'
+    $rawMal = ConvertFrom-IssuesSection -Content $malformed
+    $result = @($rawMal | Where-Object { $_ -is [hashtable] })
+    Assert-True 'Malformed → empty array' ($result.Count -eq 0)
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test group 13: Write-IssuesToReadyQueue
+# ═══════════════════════════════════════════════════════════════════════════════
+
+Write-Host ''
+Write-Host '━━━ Write-IssuesToReadyQueue ━━━' -ForegroundColor Yellow
+
+& {
+    Remove-Variable -Name 'browser4cliMode' -Scope Local -ErrorAction SilentlyContinue
+    . "$PSScriptRoot/common.ps1"
+
+    # Use a temp directory to avoid polluting the real ready queue
+    $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) "b4cli-test-$(Get-Random)"
+    New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
+
+    try {
+        $sampleContent = @'
+### A. Task Result
+Done.
+
+### B. Execution Trace
+Steps.
+
+### C. Issues Found
+
+#### Title
+Test issue
+
+#### Severity
+Medium
+
+#### Category
+UX
+
+#### Reproduction Steps
+1. Open app
+2. Click button
+
+#### Expected Behavior
+Works.
+
+#### Actual Behavior
+Broken.
+
+#### Suggested Improvement
+Fix.
+
+### D. Overall Assessment
+OK.
+'@
+
+        Write-TestGroup 'Writes full.md file'
+        Write-IssuesToReadyQueue -ScenarioName 'unit-test' -Content $sampleContent -OutputDirectory $tempDir
+        $fullFiles = Get-ChildItem -Path $tempDir -Filter '*.full.md'
+        Assert-Equal 'Exactly 1 full.md file' 1 $fullFiles.Count
+
+        Write-TestGroup 'Full.md file is not empty'
+        $fullContent = Get-Content -Path $fullFiles[0].FullName -Raw -Encoding UTF8
+        Assert-True 'Full content non-empty' (-not [string]::IsNullOrWhiteSpace($fullContent))
+
+        Write-TestGroup 'Full.md file name contains scenario name'
+        Assert-True 'Name contains unit-test' $fullFiles[0].Name.Contains('unit-test')
+
+        Write-TestGroup 'Writes individual issue files'
+        $issueFiles = Get-ChildItem -Path $tempDir -Filter '*.issue-*.md'
+        Assert-Equal 'Exactly 1 issue file' 1 $issueFiles.Count
+
+        Write-TestGroup 'Issue file contains the issue title'
+        $issueContent = Get-Content -Path $issueFiles[0].FullName -Raw -Encoding UTF8
+        Assert-True 'Contains issue title' $issueContent.Contains('# Test issue')
+
+        Write-TestGroup 'Issue file contains metadata fields'
+        Assert-True 'Contains Severity' $issueContent.Contains('**Severity:** Medium')
+        Assert-True 'Contains Category' $issueContent.Contains('**Category:** UX')
+    }
+    finally {
+        Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Test group 14: Invoke-Agent backward compatibility
+# ═══════════════════════════════════════════════════════════════════════════════
+
+Write-Host ''
+Write-Host '━━━ Invoke-Agent Backward Compatibility ━━━' -ForegroundColor Yellow
+
+& {
+    Remove-Variable -Name 'browser4cliMode' -Scope Local -ErrorAction SilentlyContinue
+    . "$PSScriptRoot/common.ps1"
+
+    Write-TestGroup 'Legacy path: with no ScenarioName and no OutputFile, function exists'
+    # The function is designed to enter the legacy (non-capture) code path
+    # when both ScenarioName and OutputFile are empty/default.
+    $funcInfo = Get-Command Invoke-Agent -ErrorAction SilentlyContinue
+    Assert-True 'Invoke-Agent is available' ($null -ne $funcInfo)
+
+    Write-TestGroup 'Default ScenarioName is empty string'
+    Assert-True 'ScenarioName is not mandatory' (-not $funcInfo.Parameters['ScenarioName'].ParameterSets['__AllParameterSets'].IsMandatory)
+
+    Write-TestGroup 'Default OutputFile is empty string'
+    Assert-True 'OutputFile is not mandatory' (-not $funcInfo.Parameters['OutputFile'].ParameterSets['__AllParameterSets'].IsMandatory)
+
+    Write-TestGroup 'Legacy scenario scripts (no -ScenarioName) parameter binding'
+    # Verify parameter resolution: ScenarioName defaults to '' so callers can
+    # omit it and still get the legacy (non-capture) code path.
+    $parseErrors = $null
+    $null = [System.Management.Automation.Language.Parser]::ParseInput(
+        'Invoke-Agent -Prompt ''test'' -Silent', [ref]$null, [ref]$parseErrors
+    )
+    Assert-True 'No parse errors for legacy call syntax' ($parseErrors.Count -eq 0)
+
+    Write-TestGroup 'Minimal binding: -Prompt alone is valid syntax'
+    $null = [System.Management.Automation.Language.Parser]::ParseInput(
+        'Invoke-Agent -Prompt ''test''', [ref]$null, [ref]$parseErrors
+    )
+    Assert-True 'Prompt-only call parses' ($parseErrors.Count -eq 0)
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════

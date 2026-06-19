@@ -845,7 +845,7 @@ $repoRoot = if (Get-Command Get-WorkspaceRoot -ErrorAction SilentlyContinue) {
 
 function Test-HasPendingCoworkerTasks {
     param([string]$RepoRoot)
-    $createdTasks = Get-ChildItem -Path (Join-Path $RepoRoot 'coworker\tasks\1created') -File -ErrorAction SilentlyContinue
+    $createdTasks = Get-ChildItem -Path (Join-Path $RepoRoot 'coworker\tasks\1ready') -File -ErrorAction SilentlyContinue
     $approvedTasks = Get-ChildItem -Path (Join-Path $RepoRoot 'coworker\tasks\5approved') -File -Recurse -ErrorAction SilentlyContinue
     return [bool]($createdTasks -or $approvedTasks)
 }

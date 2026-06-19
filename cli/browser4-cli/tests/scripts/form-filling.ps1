@@ -10,4 +10,4 @@ $taskPrompt = @"
 "@
 
 $prompt = $generalPrompt + $taskPrompt
-Invoke-Agent -Prompt $prompt
+Invoke-Agent -Prompt $prompt -ScenarioName 'form-filling'

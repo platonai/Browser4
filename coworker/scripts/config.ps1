@@ -10,9 +10,6 @@ if (-not (Test-Path $configDataPath)) {
 }
 
 $script:configData = Import-PowerShellDataFile -Path $configDataPath
-if (-not $script:configData.ContainsKey('COPILOT')) {
-    throw "COPILOT is not defined in $configDataPath"
-}
 
 function Get-CoworkerConfigValue {
     param(
@@ -186,26 +183,6 @@ function Test-CoworkerActionableDraftRefinementFile {
 
     $content = Get-Content -LiteralPath $Item.FullName -Raw -Encoding UTF8 -ErrorAction Stop
     return -not [string]::IsNullOrWhiteSpace($content)
-}
-
-function Ensure-CoworkerDraftRefinementPlaceholders {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$DraftDirectory,
-        [ValidateRange(1, 100)]
-        [int]$MaxCount = 5
-    )
-
-    if (-not (Test-Path -LiteralPath $DraftDirectory)) {
-        New-Item -ItemType Directory -Path $DraftDirectory -Force | Out-Null
-    }
-
-    foreach ($draftNumber in 1..$MaxCount) {
-        $draftPath = Join-Path $DraftDirectory "$draftNumber.md"
-        if (-not (Test-Path -LiteralPath $draftPath)) {
-            [System.IO.File]::WriteAllBytes($draftPath, @())
-        }
-    }
 }
 
 function Ensure-CoworkerDirectory {

@@ -112,20 +112,12 @@ def analyze_logs(log_dir):
                 files_found += 1
                 filepath = os.path.join(root, file)
                 
-                # Extract date from path: .../logs/2026/02/28/...
+                # Extract date from path: .../300logs/2026/02/28/...
                 path_parts = os.path.normpath(filepath).split(os.sep)
                 try:
-                    # Find 'logs' index (under .browser4/development/) and take next 3 parts
-                    # Look for '.browser4' to anchor the search
-                    if '.browser4' in path_parts:
-                        idx = path_parts.index('.browser4')
-                        # Path structure: .browser4/development/logs/YYYY/MM/DD/...
-                        if idx + 4 < len(path_parts):
-                             date_str = f"{path_parts[idx+3]}-{path_parts[idx+4]}-{path_parts[idx+5]}"
-                        else:
-                             date_str = "Unknown"
-                    elif 'logs' in path_parts:
-                        idx = path_parts.index('logs')
+                    # Find '300logs' index and take next 3 parts
+                    if '300logs' in path_parts:
+                        idx = path_parts.index('300logs')
                         # Check if we have enough parts
                         if idx + 3 < len(path_parts):
                              date_str = f"{path_parts[idx+1]}-{path_parts[idx+2]}-{path_parts[idx+3]}"
@@ -305,7 +297,7 @@ def print_report(data, detail=False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Count total token usage from copilot logs")
-    parser.add_argument("log_dir", help="Directory containing logs (e.g., ~/.browser4/development/logs)")
+    parser.add_argument("log_dir", help="Directory containing logs (e.g., coworker/tasks/300logs)")
     parser.add_argument("--detail", "-d", action="store_true", help="Show detailed per-file breakdown")
     args = parser.parse_args()
     

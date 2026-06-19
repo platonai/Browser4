@@ -13,8 +13,8 @@ $repoRoot = Get-WorkspaceRoot
 
 # Configuration
 $templatesDir = Resolve-TasksPath '100templates'
-$logsBaseDir = Join-Path "$HOME\.browser4\development" "logs"
-$createdDir = Resolve-TasksPath '1created'
+$logsBaseDir = Resolve-TasksPath '300logs'
+$createdDir = Resolve-TasksPath '1ready'
 $workingDir = Resolve-TasksPath '2working'
 $finishedDir = Resolve-TasksPath '3_1complete'
 $abortedDir = Resolve-TasksPath '3_5aborted'

@@ -242,6 +242,9 @@ function Start-AgentProcess {
     }
 
     $isWindowsPlatform = $false
+    # Platform detection: under pwsh (shebang line 1), PSEdition is always 'Core'.
+    # The 'Desktop' branch exists for compatibility if the script is ever run under
+    # Windows PowerShell 5.1 without the shebang.
     if ($null -ne $PSVersionTable -and $PSVersionTable.PSEdition -eq 'Desktop') {
         $isWindowsPlatform = $true
     }
@@ -254,6 +257,8 @@ function Start-AgentProcess {
         $escapedArguments = foreach ($argument in $arguments) {
             ConvertTo-WindowsCommandLineArgument -Argument $argument
         }
+        # Join into a single string so Windows CreateProcess receives it as lpCommandLine
+        # and re-parses via CommandLineToArgvW, preserving escaped quotes/backslashes.
         $startProcessArgs.ArgumentList = ($escapedArguments -join ' ')
     }
     else {
@@ -273,6 +278,8 @@ function Start-AgentProcess {
         $startProcessArgs.RedirectStandardError = $StdErrPath
     }
 
+    Write-Debug "Starting agent process with command: $(Format-AgentCommand -Executable $Executable -Arguments $arguments)"
+
     return Start-Process @startProcessArgs
 }
 
@@ -284,7 +291,8 @@ function Invoke-Agent {
         [string]$RepoRoot,
         [string]$WorkingDirectory,
         [switch]$CaptureOutput,
-        [switch]$UseTargetRepository
+        [switch]$UseTargetRepository,
+        [int]$TimeoutSeconds = 0
     )
 
     $commandArgs = @{
@@ -304,7 +312,16 @@ function Invoke-Agent {
 
         try {
             $process = Start-AgentProcess -Executable $command.Executable -BaseArgs $command.BaseArgs -Prompt $Prompt -AdditionalArguments $AdditionalArguments -WorkingDirectory $command.WorkingDirectory -StdOutPath $stdOutPath -StdErrPath $stdErrPath -NoNewWindow -Backend $command.Backend
-            $process.WaitForExit()
+            if ($TimeoutSeconds -gt 0) {
+                $completed = $process.WaitForExit($TimeoutSeconds * 1000)
+                if (-not $completed) {
+                    $process.Kill($true)
+                    throw "Agent process timed out after ${TimeoutSeconds}s"
+                }
+            }
+            else {
+                $process.WaitForExit()
+            }
             $global:LASTEXITCODE = $process.ExitCode
 
             if (Test-Path $stdErrPath) {
@@ -327,7 +344,16 @@ function Invoke-Agent {
     }
 
     $process = Start-AgentProcess -Executable $command.Executable -BaseArgs $command.BaseArgs -Prompt $Prompt -AdditionalArguments $AdditionalArguments -WorkingDirectory $command.WorkingDirectory -NoNewWindow -Backend $command.Backend
-    $process.WaitForExit()
+    if ($TimeoutSeconds -gt 0) {
+        $completed = $process.WaitForExit($TimeoutSeconds * 1000)
+        if (-not $completed) {
+            $process.Kill($true)
+            throw "Agent process timed out after ${TimeoutSeconds}s"
+        }
+    }
+    else {
+        $process.WaitForExit()
+    }
     $global:LASTEXITCODE = $process.ExitCode
     return $null
 }
