@@ -13,7 +13,6 @@
             Description     = 'Process queued coworker tasks.'
             Enabled         = $true
             IntervalSeconds = 15
-            DependsOn       = @('process-task-source')
             PendingPaths    = @(
                 'coworker\tasks\1ready'
                 'coworker\tasks\5approved'
