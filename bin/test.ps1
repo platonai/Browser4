@@ -78,7 +78,7 @@ function Print-Usage {
 }
 
 function Exit-UnknownTestType([string]$testType) {
-    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, main, server, rest, skills, mcp, resume."
+    Write-Error "Unknown test type '$testType'. Valid test types: fast, it, e2e, cli, browser4-cli, main, server, rest, skills, mcp, resume."
     exit 1
 }
 
@@ -109,7 +109,7 @@ function Invoke-MavenTests([string[]]$testTypes, [string[]]$additionalMvnArgs) {
     Write-Host "=========================================="
 
     $goal = if ($script:DryRun -and -not $script:Show) { 'test-compile' } else { 'test' }
-    $mvnTestArgs = @($goal, '-P=-examples')
+    $mvnTestArgs = @($goal)
 
     $hasFast = $testTypes -contains 'fast'
     $hasIT = $testTypes -contains 'it'
@@ -292,8 +292,7 @@ function Invoke-MockSiteBoot([string[]]$additionalArgs) {
     }
 
     $mvnArgs = @(
-        '-DskipTests',
-        '-P=-examples'
+        '-DskipTests'
     ) + $passThroughArgs
 
     if ($mockSiteJvmArgs.Count -gt 0 -and -not ($passThroughArgs | Where-Object { $_ -like '-Dspring-boot.run.jvmArguments=*' })) {
@@ -454,7 +453,7 @@ function Invoke-ResumeTests([string[]]$additionalArgs) {
     Write-Host ""
 
     $goal = if ($script:DryRun -and -not $script:Show) { 'test-compile' } else { 'test' }
-    $mvnTestArgs = @($goal, '-P=-examples', '-rf', ":$resumeFrom") + $additionalArgs
+    $mvnTestArgs = @($goal, '-rf', ":$resumeFrom") + $additionalArgs
 
     $mvnCmd = Join-Path $repoRoot 'mvnw.cmd'
 
