@@ -260,6 +260,21 @@ function Start-AgentProcess {
         # Join into a single string so Windows CreateProcess receives it as lpCommandLine
         # and re-parses via CommandLineToArgvW, preserving escaped quotes/backslashes.
         $startProcessArgs.ArgumentList = ($escapedArguments -join ' ')
+
+        # When UseShellExecute=$false (forced by output redirection), .NET's
+        # Process.Start() does NOT apply PATHEXT resolution. An extensionless
+        # executable like "claude" would match the npm-installed POSIX shell
+        # script (#!/bin/sh) rather than claude.cmd, producing:
+        #   "%1 不是有效的 Win32 应用程序"
+        # Resolve to the .cmd wrapper explicitly on Windows.
+        if (-not [System.IO.Path]::HasExtension($startProcessArgs.FilePath) -and
+            -not $startProcessArgs.FilePath.Contains([System.IO.Path]::DirectorySeparatorChar)) {
+            $cmdCandidate = "$($startProcessArgs.FilePath).cmd"
+            $resolvedCmd = Get-Command $cmdCandidate -ErrorAction SilentlyContinue
+            if ($resolvedCmd) {
+                $startProcessArgs.FilePath = $resolvedCmd.Source
+            }
+        }
     }
     else {
         $startProcessArgs.ArgumentList = $arguments

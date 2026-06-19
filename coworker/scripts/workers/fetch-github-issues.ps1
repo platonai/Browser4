@@ -59,8 +59,6 @@ if (-not $includeClosed) {
     [void]$ghArgs.Add('open')
 }
 
-Write-CoworkerLog -Message "Fetching latest $issuesLimit issues from $githubRepo (since $cutoffFormatted) ..." -Level 'INFO' -Component 'fetch-github-issues'
-
 # ── Fetch issues ────────────────────────────────────────────────────────────
 $ghOutput = & gh $ghArgs 2>&1
 $exitCode = $LASTEXITCODE
@@ -86,8 +84,6 @@ if ($null -eq $issues -or $issues.Count -eq 0) {
     exit 0
 }
 
-Write-CoworkerLog -Message "Found $($issues.Count) issue(s)." -Level 'INFO' -Component 'fetch-github-issues'
-
 # ── Resolve current user ────────────────────────────────────────────────────
 $meOutput = & gh api user --jq '.login' 2>&1
 $currentUser = if ($LASTEXITCODE -eq 0 -and $meOutput) { $meOutput.Trim() } else { $null }
@@ -112,7 +108,6 @@ foreach ($issue in $issues) {
     }
     if ($created -and $created -lt $cutoffDate) {
         $excludedByDateCount++
-        Write-CoworkerLog -Message ("Skipping issue #${issueNumber}: created at $($created.ToString('o')) (before cutoff $cutoffFormatted)") -Level 'DEBUG' -Component 'fetch-github-issues'
         continue
     }
     $fileName = "$issueNumber.md"
@@ -166,7 +161,6 @@ foreach ($issue in $issues) {
 
     if ($existingContent -eq $fileContent) {
         $skippedCount++
-        Write-CoworkerLog -Message ("Issue #${issueNumber} unchanged, skipped.") -Level 'DEBUG' -Component 'fetch-github-issues'
     }
     else {
         Set-Content -Path $filePath -Value $fileContent -Encoding UTF8 -NoNewline
@@ -197,5 +191,7 @@ foreach ($issue in $issues) {
     }
 }
 
-Write-CoworkerLog -Message "Done: $savedCount saved, $assignedCount assigned, $skippedCount skipped, $excludedByDateCount excluded (before $cutoffFormatted)." -Level 'INFO' -Component 'fetch-github-issues'
+if ($savedCount -gt 0) {
+    Write-CoworkerLog -Message "Done: $savedCount saved, $assignedCount assigned, $skippedCount skipped, $excludedByDateCount excluded (before $cutoffFormatted)." -Level 'INFO' -Component 'fetch-github-issues'
+}
 exit 0

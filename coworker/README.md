@@ -115,6 +115,8 @@ Default scheduled tasks:
 | `draft-refinement` | `workers/refine-drafts.ps1` | `0draft/refine/1ready` |
 | `commit-github-issues` | `workers/commit-github-issues.ps1` | `200issues/github/open` |
 | `refine-github-issues` | `workers/refine-github-issues.ps1` | `200issues/draft/refine/0ready` |
+| `fetch-github-issues` | `workers/fetch-github-issues.ps1` | _(always runs)_ |
+| `update-readmes` | `workers/update-readmes.ps1` | _(always runs, every 1h)_ |
 | `process-task-source` | `process-task-source.ps1` | _(disabled by default)_ |
 
 ## Queue Processors

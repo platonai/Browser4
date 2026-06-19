@@ -61,5 +61,15 @@
             ScriptPath      = 'coworker\scripts\workers\fetch-github-issues.ps1'
             Arguments       = @()
         }
+        @{
+            Name            = 'update-readmes'
+            Description     = 'Scan all README.md files for staleness every hour and queue stale ones for AI-driven update.'
+            Enabled         = $true
+            IntervalSeconds = 3600
+            WindowStyle     = 'Minimized'
+            PendingPaths    = @()
+            ScriptPath      = 'coworker\scripts\workers\update-readmes.ps1'
+            Arguments       = @('-Update', '-MaxTasks', '2')
+        }
     )
 }

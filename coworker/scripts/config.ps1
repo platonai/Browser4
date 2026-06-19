@@ -379,6 +379,7 @@ function Remove-CoworkerFileWatcher {
 # are not automatically available. Prepend known tool directories to PATH.
 $knownToolPaths = @(
     Join-Path $env:USERPROFILE 'scoop\shims'
+    Join-Path $env:USERPROFILE 'AppData\Roaming\npm'
 )
 foreach ($toolPath in $knownToolPaths) {
     if ((Test-Path -LiteralPath $toolPath) -and ($env:PATH -notlike "*$toolPath*")) {
