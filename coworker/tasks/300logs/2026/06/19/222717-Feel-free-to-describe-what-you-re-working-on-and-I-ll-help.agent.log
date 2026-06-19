@@ -1,6 +1,0 @@
-The `-p` isn't something I can resolve on its own — I don't have enough context to know what command or action it's meant to be part of. 
-
-What are you trying to do? For example:
-- Queue a task? (`-p` could be a path to a task file)
-- Run a script with a flag? (like `.\coworker\scripts\coworker.ps1 -Path ...`)
-- Something else entirely?

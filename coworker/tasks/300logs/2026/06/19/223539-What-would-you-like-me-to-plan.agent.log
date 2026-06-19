@@ -1,8 +1,0 @@
-I'm not sure what `-p` refers to here — there's no project-level CLAUDE.md or memory to disambiguate it.
-
-A few common meanings:
-- **`git add -p`** — interactively stage hunks from the working tree
-- **`git diff -p`** — show the patch/diff output
-- Or something project-specific you had in mind
-
-What would you like me to do?

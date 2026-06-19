@@ -1,6 +1,0 @@
-I'm not sure what `-p` refers to — it doesn't match any coworker script parameter or git alias I can see. Could you clarify what you'd like me to do? A few possibilities:
-
-- **`git add -p`** — interactively stage the modified files
-- **Plan mode** — plan an implementation before coding
-- **Process tasks** — run the coworker task runner
-- Something else entirely?
