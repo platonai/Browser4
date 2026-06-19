@@ -446,6 +446,7 @@ open class InteractiveBrowserEmulator(
             activeDOMUrls = interactResult.activeDOMMessage?.urls
             activeDomMetadata = interactResult.activeDOMMessage?.metadata
         }
+        // TODO: if the page is HTML, use driver.outerHTML(), otherwise, use driver.pageSource() and modify driver.pageSource() to return the actual content for non-HTML resources
         val content = driver.pageSource()
         // Note: originalContentLength is already set before willComputeFeature event, (if not removed by someone)
         navigateTask.originalContentLength = content?.length ?: 0
