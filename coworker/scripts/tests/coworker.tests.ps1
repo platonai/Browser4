@@ -18,22 +18,24 @@ $ErrorActionPreference = 'Continue'
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Test fixture management
+# Global scope: Pester 5 isolates BeforeEach/AfterEach from script-scoped
+# functions, so we use global: scope to make fixtures visible everywhere.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 $script:TestRoot = $null
 
-function Initialize-TestFixture {
+function global:Initialize-TestFixture {
     $script:TestRoot = Join-Path ([System.IO.Path]::GetTempPath()) "CoworkerTests_$(Get-Random -Minimum 1000 -Maximum 9999)"
     New-Item -ItemType Directory -Path $script:TestRoot -Force | Out-Null
 }
 
-function Remove-TestFixture {
+function global:Remove-TestFixture {
     if ($script:TestRoot -and (Test-Path $script:TestRoot)) {
         Remove-Item -Path $script:TestRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
-function New-TempFile {
+function global:New-TempFile {
     param([string]$Path, [string]$Content = '')
     $Content | Set-Content -Path $Path -Encoding UTF8
 }
@@ -1155,18 +1157,6 @@ Describe 'Rename fallback logic' {
 
 Describe 'Task log content recording' {
 
-    BeforeAll {
-        function Initialize-TestFixture {
-            $script:TestRoot = Join-Path ([System.IO.Path]::GetTempPath()) "CoworkerTests_$(Get-Random -Minimum 1000 -Maximum 9999)"
-            New-Item -ItemType Directory -Path $script:TestRoot -Force | Out-Null
-        }
-        function Remove-TestFixture {
-            if ($script:TestRoot -and (Test-Path $script:TestRoot)) {
-                Remove-Item -Path $script:TestRoot -Recurse -Force -ErrorAction SilentlyContinue
-            }
-        }
-    }
-
     BeforeEach {
         Initialize-TestFixture
     }
@@ -1228,18 +1218,6 @@ Agent Log: $agentLogPath
 # ═══════════════════════════════════════════════════════════════════════════════
 
 Describe 'Agent log combination' {
-
-    BeforeAll {
-        function Initialize-TestFixture {
-            $script:TestRoot = Join-Path ([System.IO.Path]::GetTempPath()) "CoworkerTests_$(Get-Random -Minimum 1000 -Maximum 9999)"
-            New-Item -ItemType Directory -Path $script:TestRoot -Force | Out-Null
-        }
-        function Remove-TestFixture {
-            if ($script:TestRoot -and (Test-Path $script:TestRoot)) {
-                Remove-Item -Path $script:TestRoot -Recurse -Force -ErrorAction SilentlyContinue
-            }
-        }
-    }
 
     BeforeEach {
         Initialize-TestFixture
@@ -1316,6 +1294,18 @@ Describe 'Agent log combination' {
 # ═══════════════════════════════════════════════════════════════════════════════
 
 Describe 'Temp file cleanup' {
+
+    BeforeAll {
+        function Initialize-TestFixture {
+            $script:TestRoot = Join-Path ([System.IO.Path]::GetTempPath()) "CoworkerTests_$(Get-Random -Minimum 1000 -Maximum 9999)"
+            New-Item -ItemType Directory -Path $script:TestRoot -Force | Out-Null
+        }
+        function Remove-TestFixture {
+            if ($script:TestRoot -and (Test-Path $script:TestRoot)) {
+                Remove-Item -Path $script:TestRoot -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
 
     BeforeEach {
         Initialize-TestFixture

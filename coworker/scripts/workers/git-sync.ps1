@@ -26,4 +26,6 @@ Write-Host "Running:"
 Write-Host (Format-AgentCommand -Executable $agentCommand.Executable -Arguments $agentArguments)
 
 Invoke-Agent -Prompt $prompt -AdditionalArguments @('--allow-all-tools') -RepoRoot $repoRoot -WorkingDirectory $repoRoot
-exit $LASTEXITCODE
+$exitCode = $LASTEXITCODE
+Remove-CoworkerScriptLock -Lock $script:__CoworkerLock
+exit $exitCode

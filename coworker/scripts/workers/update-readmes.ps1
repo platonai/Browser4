@@ -73,6 +73,13 @@ $ErrorActionPreference = 'Stop'
 $workerDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path (Split-Path -Parent $workerDir) 'config.ps1')
 
+# ── Script-level mutex: only one update-readmes.ps1 instance at a time
+$script:__CoworkerLock = New-CoworkerScriptLock -ScriptPath $MyInvocation.MyCommand.Path -SkipIfHeld
+if ($null -eq $script:__CoworkerLock) {
+    Write-CoworkerLog -Component 'update-readmes' -Level 'WARN' -Message 'Another update-readmes.ps1 instance is already running. Exiting.'
+    exit 0
+}
+
 $repoRoot = Get-WorkspaceRoot
 $today = (Get-Date).ToUniversalTime()
 
@@ -547,4 +554,5 @@ $jsonSummary = @{
 
 Write-Host $jsonSummary
 
+Remove-CoworkerScriptLock -Lock $script:__CoworkerLock
 exit 0

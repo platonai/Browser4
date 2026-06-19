@@ -1,0 +1,10 @@
+You've signaled plan mode with `-p`, but I don't know what you'd like me to plan. 
+
+Based on your git status, I can see you have modified files in `scripts/` (coworker tests, git-sync, refine-github-issues, update-readmes workers) and some deleted/untracked task files under `tasks/`.
+
+What would you like me to plan? For example:
+
+- **Review the modified scripts** and plan any needed fixes or improvements?
+- **Plan a new feature** for the coworker system?
+- **Plan cleanup** of the untracked task/log directories?
+- Something else entirely?

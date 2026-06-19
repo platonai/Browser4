@@ -522,6 +522,7 @@ Restore-OrphanedWorkingFiles -MaxAgeMinutes 30
 $targets = Get-IssueDraftTargets -InputPath $Path
 if ($targets.Count -eq 0) {
     Write-CoworkerLog -Message "No actionable issue draft files found in $Path" -Level INFO -Component 'refine-github-issues'
+    Remove-CoworkerScriptLock -Lock $script:__CoworkerLock
     exit 0
 }
 
@@ -595,8 +596,10 @@ foreach ($target in $targets) {
 
 if ($failureCount -gt 0) {
     Write-CoworkerLog -Message "Issue extraction complete with $failureCount failure(s) out of $($targets.Count)" -Level WARN -Component 'refine-github-issues'
+    Remove-CoworkerScriptLock -Lock $script:__CoworkerLock
     exit 1
 }
 
 Write-CoworkerLog -Message "All $($targets.Count) issue draft(s) processed successfully." -Level INFO -Component 'refine-github-issues'
+Remove-CoworkerScriptLock -Lock $script:__CoworkerLock
 exit 0
