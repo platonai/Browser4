@@ -145,13 +145,34 @@ function Invoke-AgentWithStructuredOutput {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Main retry loop — only execute when invoked directly (not dot-sourced)
+# Invoke-AgentWithRetry — the reusable function that worker scripts call
 # ══════════════════════════════════════════════════════════════════════════════
 
-if ($MyInvocation.InvocationName -ne '.') {
-    if ([string]::IsNullOrWhiteSpace($Prompt)) {
-        throw 'Prompt is required when executing agent-reliability.ps1 directly.'
-    }
+function Invoke-AgentWithRetry {
+    [CmdletBinding()]
+    param(
+        [string]$Prompt,
+
+        [string[]]$AdditionalArguments = @(),
+
+        [string]$RepoRoot,
+        [string]$WorkingDirectory,
+
+        [switch]$CaptureOutput,
+
+        [int]$TimeoutSeconds = 300,
+
+        [int]$MaxRetries = 3,
+        [int[]]$RetryBackoffSeconds = @(10, 30, 90),
+
+        [string]$OutputDelimiter = 'OUTPUT',
+
+        [switch]$UseTargetRepository,
+
+        [string]$LogComponent = 'agent-reliability',
+
+        [switch]$NoRetry
+    )
 
     $attempt = 0
     $lastError = $null
@@ -270,4 +291,16 @@ if ($MyInvocation.InvocationName -ne '.') {
     }
 
     throw 'Invoke-AgentWithRetry: unexpected end of retry loop'
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Direct execution entry point — only when invoked directly (not dot-sourced)
+# ══════════════════════════════════════════════════════════════════════════════
+
+if ($MyInvocation.InvocationName -ne '.') {
+    if ([string]::IsNullOrWhiteSpace($Prompt)) {
+        throw 'Prompt is required when executing agent-reliability.ps1 directly.'
+    }
+
+    Invoke-AgentWithRetry @PSBoundParameters
 }
