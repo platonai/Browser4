@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # 🔍 Find the first parent directory containing the VERSION file
-repoRoot=$(cd "$(dirname "$0")">/dev/null || exit; pwd)
+repoRoot=$(cd "$(dirname "$0")" 2>/dev/null || exit; pwd)
 while [[ ! -f "$repoRoot/VERSION" && "$repoRoot" != "/" ]]; do
   repoRoot=$(dirname "$repoRoot")
 done

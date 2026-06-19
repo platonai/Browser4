@@ -145,9 +145,9 @@ jobs:
 
           VERSION="${TAG#v}"
 
-          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc|dry_run)\.[0-9]+(\+.+)?)?$ ]]; then
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta|rc|dry_run)\.[0-9]+)?$ ]]; then
             echo "❌ Invalid version format: $VERSION"
-            echo "Expected: X.Y.Z, X.Y.Z-alpha.N, X.Y.Z-beta.N, X.Y.Z-rc.N, X.Y.Z-dry_run.N, or prerelease variants with +build.info"
+            echo "Expected: X.Y.Z, X.Y.Z-alpha.N, X.Y.Z-beta.N, X.Y.Z-rc.N, or X.Y.Z-dry_run.N"
             exit 1
           fi
 
@@ -161,7 +161,7 @@ jobs:
           IS_DRY_RUN_TAG="false"
           IS_FORCED_DRY_RUN_TAG="false"
           FORCED_DRY_RUN_TAG_KIND=""
-          if [[ "$VERSION" =~ -(alpha|dry_run)\.[0-9]+(\+.+)?$ ]]; then
+          if [[ "$VERSION" =~ -(alpha|dry_run)\.[0-9]+$ ]]; then
             IS_FORCED_DRY_RUN_TAG="true"
             FORCED_DRY_RUN_TAG_KIND="${BASH_REMATCH[1]}"
             EFFECTIVE_DRY_RUN="true"
@@ -426,6 +426,10 @@ jobs:
         run: |
           echo "🧪 Starting Docker container for testing..."
 
+          if [ -z "${OPENROUTER_API_KEY}" ]; then
+            echo "::warning::OPENROUTER_API_KEY secret is empty or not set — the container may start but E2E tests that require an LLM backend will likely fail."
+          fi
+
           docker network create ${{ env.NETWORK_NAME }} || true
 
           # Override JAVA_OPTS for CI — the Dockerfile default (-Xmx10G)
@@ -573,7 +577,6 @@ jobs:
           Supported release assets:
           - \`browser4-bundle-runtime-windows-x64.zip\`
           - \`browser4-bundle-runtime-linux-x64.tar.gz\`
-          - \`browser4-bundle-runtime-darwin-x64.tar.gz\`
           - \`browser4-bundle-runtime-darwin-arm64.tar.gz\`
 
           Recommended install flow:
@@ -714,6 +717,8 @@ jobs:
             target: aarch64-unknown-linux-musl
             binary: browser4-cli-linux-musl-arm64
             use_zigbuild: true
+          # Cross-compiled on Linux for Windows x64 (mingw-w64 toolchain).
+          # Avoids the slower and costlier windows-latest runner.
           - name: Windows x64
             os: ubuntu-latest
             target: x86_64-pc-windows-gnu
@@ -838,6 +843,8 @@ jobs:
             os: ubuntu-latest
             asset_name: browser4-bundle-runtime-linux-x64.tar.gz
             artifact_name: browser4-bundle-runtime-linux-x64
+          # macOS x64 (disabled — macos-13 runner deprecated; re-enable when
+          # cross-compilation from macos-14 or macos-latest is available):
           # - name: macOS x64
           #   os: macos-13
           #   asset_name: browser4-bundle-runtime-darwin-x64.tar.gz
@@ -1004,7 +1011,7 @@ jobs:
               echo "ERROR: Missing cli/bin/$binary"
               ERRORS=$((ERRORS + 1))
             else
-              SIZE=$(stat -c%s "cli/bin/$binary" 2>/dev/null || stat -f%z "cli/bin/$binary")
+              SIZE=$(stat -c%s "cli/bin/$binary" 2>/dev/null)
               if [ "$SIZE" -lt "$MIN_SIZE" ]; then
                 echo "ERROR: cli/bin/$binary is too small ($SIZE bytes, expected >= $MIN_SIZE)"
                 ERRORS=$((ERRORS + 1))
@@ -1182,7 +1189,7 @@ jobs:
           make_latest: ${{ needs.prepare.outputs.is_prerelease == 'true' && 'false' || 'true' }}
           overwrite_files: true
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Generate Artifact Attestation
         if: success()
@@ -1230,7 +1237,7 @@ jobs:
             echo ""
             echo "### 📦 Artifacts"
             echo "- **JAR**: ${{ env.PRODUCTION_JAR_NAME }}"
-            echo "- **Runtime Bundles**: browser4-bundle-runtime-windows-x64.zip, browser4-bundle-runtime-linux-x64.tar.gz, browser4-bundle-runtime-darwin-x64.tar.gz, browser4-bundle-runtime-darwin-arm64.tar.gz"
+            echo "- **Runtime Bundles**: browser4-bundle-runtime-windows-x64.zip, browser4-bundle-runtime-linux-x64.tar.gz, browser4-bundle-runtime-darwin-arm64.tar.gz"
             echo "- **CLI Version**: ${{ needs.prepare.outputs.cli_version }}"
             echo "- **npm Version**: ${{ needs.prepare.outputs.npm_version }}"
             echo "- **npm Lookup Status**: ${{ needs.prepare.outputs.cli_npm_lookup_status }}"
@@ -1254,13 +1261,18 @@ jobs:
 
       - name: Trigger OSS Sync
         if: success()
+        continue-on-error: true
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh workflow run sync-to-oss.yml \
+          if gh workflow run sync-to-oss.yml \
             --repo "${{ github.repository }}" \
-            -f tag_name="${{ needs.prepare.outputs.tag }}"
+            -f tag_name="${{ needs.prepare.outputs.tag }}"; then
+            echo "✅ OSS sync workflow triggered"
+          else
+            echo "::warning::Failed to trigger OSS sync workflow — it may need to be triggered manually."
+          fi
 
   cleanup-on-failure:
     name: Report failed release
