@@ -46,7 +46,7 @@ class ExecutorsNamedArgsTest {
     fun browser_switchTab_with_tabId_string() {
         val browser = mockk<AbstractBrowser>(relaxed = true)
         val driver = mockk<AbstractWebDriver>(relaxed = true)
-        every { browser.drivers } returns linkedMapOf("abc" to driver)
+        every { browser.findDriverByGUID("abc") } returns driver
         val executor = BrowserToolExecutor()
         val tc = ToolCall(domain = "browser", method = "switchTab", arguments = mutableMapOf("tabId" to "abc"))
 
