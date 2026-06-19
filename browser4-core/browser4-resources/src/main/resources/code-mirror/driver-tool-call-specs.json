@@ -16,16 +16,16 @@
   "domain" : "tab",
   "method" : "navigate",
   "arguments" : [ {
-    "name" : "url",
+    "name" : "userTypedUrl",
     "type" : "String",
-    "expression" : "url: String = ",
-    "cliOptions" : "--url=<String>, default="
+    "expression" : "userTypedUrl: String = ",
+    "cliOptions" : "--userTypedUrl=<String>, default="
   } ],
   "returnType" : "Unit",
   "description" : "Navigates current page to the given URL.",
   "help" : "Navigates current page to the given URL.\n\n```kotlin driver.navigate(\"https://www.example.com\") driver.waitForNavigation() ```",
-  "expression" : "tab.navigate(Arg(name=url, type=String, defaultValue=))",
-  "cli" : "browser4-cli tab navigate --url=<String>, default="
+  "expression" : "tab.navigate(Arg(name=userTypedUrl, type=String, defaultValue=))",
+  "cli" : "browser4-cli tab navigate --userTypedUrl=<String>, default="
 }, {
   "domain" : "tab",
   "method" : "navigate",
@@ -123,7 +123,7 @@
 }, {
   "domain" : "tab",
   "method" : "nanoDOMTree",
-  "returnType" : "ai.platon.pulsar.chrome.dom.model.NanoDOMTree?",
+  "returnType" : "NanoDOMTree?",
   "description" : "Retrieves a lightweight version of the DOM tree (NanoDOMTree).",
   "help" : "Retrieves a lightweight version of the DOM tree (NanoDOMTree).\n\nThe NanoDOMTree is based on the accessibility tree and enhanced with DOM and document snapshot information. It is designed to be a compact representation suitable for AI processing and analysis.",
   "expression" : "tab.nanoDOMTree()",

@@ -7,6 +7,9 @@ import ai.platon.pulsar.browser.common.WebDriverException
 import ai.platon.pulsar.browser.impl.NetworkResourceResponse
 import ai.platon.pulsar.browser.impl.NodeRef
 import ai.platon.pulsar.chrome.dom.model.BrowserUseState
+import ai.platon.pulsar.chrome.dom.model.NanoDOMTree
+import ai.platon.pulsar.chrome.dom.model.PageTarget
+import ai.platon.pulsar.chrome.dom.model.SnapshotOptions
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.ai.llm.MCP
 import ai.platon.pulsar.common.browser.BrowserType
@@ -281,13 +284,13 @@ interface WebDriver : Closeable {
      * driver.waitForNavigation()
      * ```
      *
-     * @param url URL to navigate page to.
+     * @param userTypedUrl URL to navigate page to.
      */
     @Throws(WebDriverException::class)
     @MCP
-    suspend fun navigate(url: String)
+    suspend fun navigate(userTypedUrl: String)
 
-    @Deprecated("Use navigate(url: String) instead", ReplaceWith("navigate(url)"))
+    @Deprecated("Use navigate(userTypedUrl: String) instead", ReplaceWith("navigate(url)"))
     @Throws(WebDriverException::class)
     suspend fun navigateTo(url: String) = navigate(url)
 
@@ -338,6 +341,13 @@ interface WebDriver : Closeable {
     @Throws(WebDriverException::class)
     @MCP
     suspend fun goForward()
+
+    /**
+     * Returns the user typed url in the address bar. @mcp
+     *
+     * @return The user typed url in the address bar.
+     * */
+    fun userTypedUrl(): String
 
     /**
      * Returns a string representing the current URL that the browser is looking at. @mcp
@@ -457,29 +467,17 @@ interface WebDriver : Closeable {
      * The NanoDOMTree is based on the accessibility tree and enhanced with DOM and document snapshot information.
      * It is designed to be a compact representation suitable for AI processing and analysis.
      *
-     * @return A [ai.platon.pulsar.driver.chrome.dom.model.NanoDOMTree] representing the current page state, or null if retrieval fails.
+     * @return A [NanoDOMTree] representing the current page state, or null if retrieval fails.
      * */
     @MCP
     @Throws(WebDriverException::class)
-    suspend fun nanoDOMTree(): ai.platon.pulsar.chrome.dom.model.NanoDOMTree?
+    suspend fun nanoDOMTree(): NanoDOMTree?
 
     @Throws(WebDriverException::class)
     suspend fun browserUseState(
-        target: ai.platon.pulsar.chrome.dom.model.PageTarget = _root_ide_package_.ai.platon.pulsar.chrome.dom.model.PageTarget(),
-        snapshotOptions: ai.platon.pulsar.chrome.dom.model.SnapshotOptions = _root_ide_package_.ai.platon.pulsar.chrome.dom.model.SnapshotOptions()
+        target: PageTarget = PageTarget(),
+        snapshotOptions: SnapshotOptions = SnapshotOptions()
     ): BrowserUseState
-
-    /**
-     * Interact with an AI model using the context of the element selected by [selector]. @mcp
-     *
-     * The AI model receives the element's content and structure as context along with the provided prompt.
-     *
-     * @param prompt The question or instruction for the AI model.
-     * @param selector The selector of the element, multiple formats supported. Used as the context element.
-     * @return A [ModelResponse] containing the model's answer.
-     */
-//    @MCP
-//    suspend fun chat(prompt: String, selector: String): ModelResponse
 
     /**
      * Returns the cookies of the current page. @mcp
@@ -1670,7 +1668,6 @@ interface WebDriver : Closeable {
     @Throws(WebDriverException::class)
     @MCP
     suspend fun setAttributeAll(selector: String, attrName: String, attrValue: String)
-
 
     /**
      * Returns the node's property value, the node is located by [selector], the property is [propName]. @mcp
