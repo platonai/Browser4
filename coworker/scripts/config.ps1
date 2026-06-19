@@ -380,6 +380,7 @@ function Remove-CoworkerFileWatcher {
 $knownToolPaths = @(
     Join-Path $env:USERPROFILE 'scoop\shims'
     Join-Path $env:USERPROFILE 'AppData\Roaming\npm'
+    'C:\Program Files\Git\cmd'
 )
 foreach ($toolPath in $knownToolPaths) {
     if ((Test-Path -LiteralPath $toolPath) -and ($env:PATH -notlike "*$toolPath*")) {
