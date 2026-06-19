@@ -99,13 +99,12 @@ fn cli_binary() -> PathBuf {
     // (e.g. when reusing a build cache across worktrees or directory
     // renames).  Fall back to a path derived from the running test
     // binary's location.
-    let exe =
-        std::env::current_exe().expect("failed to determine current executable path");
+    let exe = std::env::current_exe().expect("failed to determine current executable path");
     // Test binary is at:  target/{profile}/deps/e2e-<hash>
     // Main binary is at:   target/{profile}/browser4-cli
     let target_dir = exe
-        .parent()                    // deps/
-        .and_then(|p| p.parent())   // debug/ or release/
+        .parent() // deps/
+        .and_then(|p| p.parent()) // debug/ or release/
         .expect("failed to find target directory from test binary path");
     target_dir.join("browser4-cli")
 }
@@ -3325,6 +3324,10 @@ fn excluded_commands(include_batch_command: bool) -> HashSet<&'static str> {
         "scroll",
         "wait",
         "get",
+        "domSnapshot",
+        "domSnapshot-get",
+        "domSnapshot-query",
+        "domSnapshot-export",
         // Uninstall requires npm/cargo on $PATH; not exercised in e2e.
         "uninstall",
     ]

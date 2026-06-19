@@ -293,7 +293,7 @@ abstract class AbstractWebDriver(
     }
 
     @Throws(WebDriverException::class)
-    override suspend fun navigate(url: String) = navigate(NavigateEntry(url))
+    override suspend fun navigate(userTypedUrl: String) = navigate(NavigateEntry(userTypedUrl))
 
     @Throws(WebDriverException::class)
     override suspend fun reload() {
@@ -705,7 +705,7 @@ abstract class AbstractWebDriver(
     fun quickCheckHealthy(action: String = ""): CheckState {
         if (action.isNotBlank()) {
             lastActiveTime = Instant.now()
-            navigateEntry.refresh(action)
+            navigateEntry.updateState(action)
         }
 
         if (!isActive) {

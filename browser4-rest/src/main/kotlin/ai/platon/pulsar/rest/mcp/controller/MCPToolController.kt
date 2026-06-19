@@ -8,8 +8,11 @@ import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.model.ToolCall
 import ai.platon.pulsar.agentic.model.ToolSpec
 import ai.platon.pulsar.agentic.tools.AgentToolManager
+import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.common.PulsarSessionManager
 import ai.platon.pulsar.common.brief
+import ai.platon.pulsar.common.sql.SQLTemplate
+import ai.platon.pulsar.rest.api.service.ScrapeService
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.fasterxml.jackson.annotation.JsonSetter
@@ -78,6 +81,7 @@ data class MCPContent(
 class MCPToolController(
     private val sessionManager: PulsarSessionManager,
     private val commandExecutor: UserCommandExecutor,
+    private val scrapeService: ScrapeService? = null,
 ) {
     companion object {
         private val FRONTEND_TOOL_NAME_ALIASES: Map<String, String> = mapOf(
@@ -130,6 +134,18 @@ class MCPToolController(
                 return JSON.stringify(result);
             })()
         """
+
+        /**
+         * Returns true if the given value is an element reference pattern
+         * (e.g. "e5", "backend:15") that should be rejected for static
+         * DOM snapshot queries.
+         */
+        private fun isElementReference(value: String): Boolean {
+            val trimmed = value.trim()
+            return (trimmed.startsWith('e') && trimmed.length > 1
+                    && trimmed.substring(1).all { it.isDigit() })
+                    || trimmed.startsWith("backend:")
+        }
     }
 
     private val logger = LoggerFactory.getLogger(MCPToolController::class.java)
@@ -216,6 +232,11 @@ class MCPToolController(
                 "command_batch" -> handleCommandBatch(request)
                 "command_status" -> handleCommandStatus(request)
                 "command_result" -> handleCommandResult(request)
+                // DOM snapshot tools
+                "dom_snapshot_capture" -> handleDomSnapshotCapture(request)
+                "dom_snapshot_scrape" -> handleDomSnapshotScrape(request)
+                "dom_snapshot_query" -> handleDomSnapshotQuery(request)
+                "dom_snapshot_export" -> handleDomSnapshotExport(request)
                 // All other tools are dispatched to the session's agent
                 else -> dispatchToAgentToolExecutor(request)
             }
@@ -271,6 +292,10 @@ class MCPToolController(
                     "browser_click",
                     "browser_handle_dialog",
                     "browser_tabs",
+                    "dom_snapshot_capture",
+                    "dom_snapshot_scrape",
+                    "dom_snapshot_query",
+                    "dom_snapshot_export",
                 )
             )
 
@@ -651,6 +676,156 @@ class MCPToolController(
         val x = (map["x"] as? Number)?.toDouble() ?: return null
         val y = (map["y"] as? Number)?.toDouble() ?: return null
         return BatchMousePosition(x, y)
+    }
+
+    // =========================================================================
+    // DOM snapshot handlers
+    // =========================================================================
+
+    private suspend fun handleDomSnapshotCapture(
+        request: MCPToolCallRequest
+    ): ResponseEntity<MCPToolCallResponse> {
+        val sessionId = requireSessionId(request)
+        val managed = sessionManager.getSession(sessionId)
+            ?: return ResponseEntity.ok(errorResponse("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId"))
+
+        return try {
+            val metadata = managed.withLock {
+                val pulsarSession = managed.agenticSession
+                val page = pulsarSession.capture(managed.driver)
+                val document = pulsarSession.parse(page, noCache = true)
+                val title = document.title
+
+                val json = jacksonObjectMapper().createObjectNode().apply {
+                    put("url", page.url) // normalized url and can be served as the key to retrieve the page from database
+                    put("href", page.href) // the href from an anchor, or the user-typed url
+                    put("sizeBytes", page.contentLength.toString())
+                    put("capturedAt", page.prevFetchTime.toString())
+                    put("contentType", page.contentType) // should be html/text
+                    put("title", title)
+                }
+                json.toString()
+            }
+            ResponseEntity.ok(textResponse(metadata))
+        } catch (e: Exception) {
+            logger.error("dom_snapshot_capture failed | {}", e.message, e)
+            ResponseEntity.ok(errorResponse("dom_snapshot_capture failed: ${e.message}"))
+        }
+    }
+
+    private suspend fun handleDomSnapshotScrape(
+        request: MCPToolCallRequest
+    ): ResponseEntity<MCPToolCallResponse> {
+        val sessionId = requireSessionId(request)
+        val args = request.arguments ?: emptyMap()
+        val field = args["field"]?.toString() ?: ""
+        val selector = args["selector"]?.toString()?.ifEmpty { ":root" } ?: ":root"
+        val attrName = args["attrName"]?.toString()
+
+        // Validate field
+        if (field !in setOf("text", "html", "attr")) {
+            return ResponseEntity.ok(errorResponse("Unknown field '$field'. Use text, html, or attr."))
+        }
+
+        // Validate attr field requires an attribute name
+        if (field == "attr" && attrName.isNullOrBlank()) {
+            return ResponseEntity.ok(errorResponse("The 'attr' field requires an attribute name."))
+        }
+
+        // Reject element references
+        if (isElementReference(selector)) {
+            return ResponseEntity.ok(
+                errorResponse(
+                    "Element references ('$selector') are not supported in domSnapshot get. Use a CSS selector instead."
+                )
+            )
+        }
+
+        val managed = sessionManager.getSession(sessionId)
+            ?: return ResponseEntity.ok(errorResponse("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId"))
+
+        return try {
+            val result = managed.withLock {
+                val pulsarSession = managed.agenticSession
+                // The user typed is the normalized url of the page that can be used to retrieve the page from database
+                val url = pulsarSession.normalize(driver.userTypedUrl())
+                // Retrieve from database if exists, otherwise, capture a new dom snapshot
+                val page = pulsarSession.getOrNull(url.urlString) ?: pulsarSession.capture(managed.driver)
+                // Parse the HTML to a DOM, the document can be cached
+                val document = pulsarSession.parse(page)
+
+                when (field) {
+                    "text" -> document.selectFirstOrNull(selector)?.text() ?: ""
+                    "html" -> document.selectFirstOrNull(selector)?.html() ?: ""
+                    "attr" -> document.selectFirstOrNull(selector)?.attr(attrName!!) ?: ""
+                    else -> ""
+                }
+            }
+
+            ResponseEntity.ok(textResponse(result))
+        } catch (e: Exception) {
+            logger.error("dom_snapshot_scrape failed | {}", e.message, e)
+            ResponseEntity.ok(errorResponse("dom_snapshot_scrape failed: ${e.message}"))
+        }
+    }
+
+    private suspend fun handleDomSnapshotQuery(
+        request: MCPToolCallRequest
+    ): ResponseEntity<MCPToolCallResponse> {
+        val scrapeService = this.scrapeService
+            ?: return ResponseEntity.ok(errorResponse("ScrapeService is not available"))
+
+        val args = request.arguments ?: emptyMap()
+        val sql = args["sql"]?.toString() ?: return ResponseEntity.ok(errorResponse("Missing 'sql'"))
+
+        // Resolve URL: use explicit URL if provided, otherwise fall back to the current session's page URL
+        val url = args["url"]?.toString()?.takeIf { it.isNotBlank() }
+            ?: run {
+                val sessionId = requireSessionId(request)
+                val managed = sessionManager.getSession(sessionId)
+                    ?: return ResponseEntity.ok(errorResponse("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId"))
+                val pulsarSession = managed.agenticSession
+                pulsarSession.normalize(managed.driver.userTypedUrl()).urlString
+            }
+
+        // SQLTemplate.createSQL(url) replaces the @url placeholder with a properly
+        // escaped URL value. @url must appear UNQUOTED in the SQL — the template
+        // engine handles quoting internally. The correct form is:
+        //   FROM load_and_select(@url, ':root')
+        // NOT:
+        //   FROM load_and_select('@url', ':root')
+        val processedSql = SQLTemplate(sql).createSQL(url)
+
+        return try {
+            val response = scrapeService.executeQuery(ScrapeRequest(processedSql))
+            val json = jacksonObjectMapper().writeValueAsString(response)
+            ResponseEntity.ok(textResponse(json))
+        } catch (e: Exception) {
+            logger.error("dom_snapshot_query failed | {}", e.message, e)
+            ResponseEntity.ok(errorResponse("dom_snapshot_query failed: ${e.message}"))
+        }
+    }
+
+    private suspend fun handleDomSnapshotExport(
+        request: MCPToolCallRequest
+    ): ResponseEntity<MCPToolCallResponse> {
+        val sessionId = requireSessionId(request)
+        val managed = sessionManager.getSession(sessionId)
+            ?: return ResponseEntity.ok(errorResponse("${MCPConstants.ERROR_SESSION_NOT_FOUND}$sessionId"))
+
+        return try {
+            val html = managed.withLock {
+                val pulsarSession = managed.agenticSession
+                val url = pulsarSession.normalize(managed.driver.userTypedUrl())
+                val document = pulsarSession.loadDocument(url.urlString)
+                // good, the exported HTML is pretty formatted, so grep works on it
+                document.outerHtml
+            }
+            ResponseEntity.ok(textResponse(html))
+        } catch (e: Exception) {
+            logger.error("dom_snapshot_export failed | {}", e.message, e)
+            ResponseEntity.ok(errorResponse("dom_snapshot_export failed: ${e.message}"))
+        }
     }
 
     // =========================================================================

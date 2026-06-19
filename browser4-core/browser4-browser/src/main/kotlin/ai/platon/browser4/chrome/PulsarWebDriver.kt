@@ -192,6 +192,8 @@ open class PulsarWebDriver constructor(
         }
     }
 
+    override fun userTypedUrl(): String = navigateEntry.userTypedUrl
+
     override suspend fun goForward() {
         // Fetch navigation history once before the retry-able invokeOnPage block.
         // This prevents a race condition where a retry re-fetches history after

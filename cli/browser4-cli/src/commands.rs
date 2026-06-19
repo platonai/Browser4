@@ -21,6 +21,7 @@ pub enum Category {
     Install,
     Agent,
     Swarm,
+    Snapshot,
 }
 
 impl Category {
@@ -40,6 +41,7 @@ impl Category {
             Category::Install => "install",
             Category::Agent => "agent",
             Category::Swarm => "swarm",
+            Category::Snapshot => "snapshot",
         }
     }
 }
@@ -138,6 +140,14 @@ fn looks_like_selector_or_ref(value: &str) -> bool {
         || trimmed.starts_with("backend:")
         || trimmed.starts_with("text=")
         || (trimmed.starts_with('e') && trimmed[1..].chars().all(|ch| ch.is_ascii_digit()))
+}
+
+/// Returns true if the value is an element reference pattern (e.g. "e5", "backend:15")
+/// that should be rejected by commands requiring CSS selectors only.
+pub fn is_element_reference(value: &str) -> bool {
+    let trimmed = value.trim();
+    (trimmed.starts_with('e') && trimmed[1..].chars().all(|ch| ch.is_ascii_digit()))
+        || trimmed.starts_with("backend:")
 }
 
 fn resolve_key_and_ref(map: &HashMap<String, Value>) -> (String, Option<String>) {
@@ -1633,6 +1643,85 @@ pub fn all_commands() -> Vec<CommandDef> {
                 json!({ "id": get_str(args, "id").unwrap_or_default() })
             },
         },
+        // ---- Snapshot ----
+        CommandDef {
+            name: "domSnapshot",
+            description: "Capture a static DOM snapshot of the current page",
+            category: Category::Snapshot,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[],
+            tool_name_fn: |_| "dom_snapshot_capture".to_string(),
+            tool_params_fn: |_| json!({}),
+        },
+        CommandDef {
+            name: "domSnapshot-get",
+            description: "Extract elements from the static DOM snapshot (text, html, attr)",
+            category: Category::Snapshot,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "field", description: "What to extract: text, html, or attr", optional: false },
+                ArgDef { name: "selector", description: "CSS selector (defaults to :root; required for attr)", optional: true },
+                ArgDef { name: "name", description: "Attribute name (required for attr field)", optional: true },
+            ],
+            options: &[],
+            tool_name_fn: |_| "dom_snapshot_scrape".to_string(),
+            tool_params_fn: |args| {
+                let field = get_str(args, "field").unwrap_or_default();
+                let selector = get_opt_str(args, "selector").unwrap_or(":root");
+                let mut p = json!({ "field": field, "selector": selector });
+                if let Some(name) = get_opt_str(args, "name") { p["attrName"] = json!(name); }
+                p
+            },
+        },
+        CommandDef {
+            name: "domSnapshot-query",
+            description: "Run X-SQL against the DOM snapshot via the scrape API",
+            category: Category::Snapshot,
+            hidden: false,
+            batch_supported: false,
+            args: &[
+                ArgDef { name: "url", description: "URL to run the query against. Defaults to the current session's page URL", optional: true },
+            ],
+            options: &[
+                OptionDef {
+                    name: "sql",
+                    description: "X-SQL query. Use @url as placeholder (unquoted — SQLTemplate handles escaping). Prefix with @ to read from file",
+                    is_bool: false,
+                    short: None,
+                },
+            ],
+            tool_name_fn: |_| "dom_snapshot_query".to_string(),
+            tool_params_fn: |args| {
+                let sql = get_opt_str(args, "sql").unwrap_or_default();
+                let url = get_opt_str(args, "url").unwrap_or("");
+                json!({ "sql": sql, "url": url })
+            },
+        },
+        CommandDef {
+            name: "domSnapshot-export",
+            description: "Save full snapshot HTML content to a local file",
+            category: Category::Snapshot,
+            hidden: false,
+            batch_supported: false,
+            args: &[],
+            options: &[
+                OptionDef {
+                    name: "file",
+                    description: "Path to save the HTML file",
+                    is_bool: false,
+                    short: None,
+                },
+            ],
+            tool_name_fn: |_| "dom_snapshot_export".to_string(),
+            tool_params_fn: |args| {
+                let mut p = json!({});
+                if let Some(f) = get_opt_str(args, "file") { p["file"] = json!(f); }
+                p
+            },
+        },
     ]
 }
 
@@ -2229,7 +2318,9 @@ mod tests {
             .expect("eval should have a --file option");
         assert!(!file_opt.is_bool, "--file should not be a boolean flag");
         assert!(
-            file_opt.description.contains("Read JavaScript expression from a file"),
+            file_opt
+                .description
+                .contains("Read JavaScript expression from a file"),
             "--file description should mention reading from a file"
         );
     }
@@ -2300,7 +2391,13 @@ mod tests {
     #[test]
     fn test_advanced_commands_are_hidden_from_global_help() {
         let map = commands_map();
-        for name in ["console", "agent-run", "agent-status", "agent-result", "summarize"] {
+        for name in [
+            "console",
+            "agent-run",
+            "agent-status",
+            "agent-result",
+            "summarize",
+        ] {
             assert!(map.get(name).unwrap().hidden, "{name} should stay hidden");
         }
     }
@@ -2682,10 +2779,7 @@ mod tests {
         args.insert("mode".to_string(), json!("attr"));
         args.insert("selector".to_string(), json!("e10"));
         args.insert("name".to_string(), json!("href"));
-        assert_eq!(
-            (cmd.tool_name_fn)(&args),
-            "select_first_attribute_or_null"
-        );
+        assert_eq!((cmd.tool_name_fn)(&args), "select_first_attribute_or_null");
         let params = (cmd.tool_params_fn)(&args);
         assert_eq!(params["selector"], "e10");
         assert_eq!(params["attrName"], "href");
@@ -2775,8 +2869,14 @@ mod tests {
         args.insert("selector".to_string(), json!("e1"));
         let params = (cmd.tool_params_fn)(&args);
         let expr = params["expression"].as_str().unwrap();
-        assert!(!expr.contains('`'), "JS expression must not use template literals");
-        assert!(!expr.contains("${"), "JS expression must not use template interpolation");
+        assert!(
+            !expr.contains('`'),
+            "JS expression must not use template literals"
+        );
+        assert!(
+            !expr.contains("${"),
+            "JS expression must not use template interpolation"
+        );
     }
 
     #[test]
@@ -2785,5 +2885,129 @@ mod tests {
         let cmd = map.get("scroll").expect("scroll command must exist");
         assert!(!cmd.hidden);
         assert_eq!(cmd.category, Category::Mouse);
+    }
+
+    // ---- domSnapshot tests ----
+
+    #[test]
+    fn test_commands_map_contains_dom_snapshot_variants() {
+        let map = commands_map();
+        for expected in &[
+            "domSnapshot",
+            "domSnapshot-get",
+            "domSnapshot-query",
+            "domSnapshot-export",
+        ] {
+            assert!(map.contains_key(*expected), "Missing command: {}", expected);
+        }
+    }
+
+    #[test]
+    fn test_dom_snapshot_capture_params() {
+        let map = commands_map();
+        let cmd = map.get("domSnapshot").unwrap();
+        let args = HashMap::new();
+        assert_eq!((cmd.tool_name_fn)(&args), "dom_snapshot_capture");
+        let params = (cmd.tool_params_fn)(&args);
+        assert!(params.as_object().unwrap().is_empty(), "capture params should be empty");
+    }
+
+    #[test]
+    fn test_dom_snapshot_capture_empty_params() {
+        let map = commands_map();
+        let cmd = map.get("domSnapshot").unwrap();
+        let args = HashMap::new();
+        assert_eq!((cmd.tool_name_fn)(&args), "dom_snapshot_capture");
+    }
+
+    #[test]
+    fn test_dom_snapshot_get_text_params() {
+        let map = commands_map();
+        let cmd = map.get("domSnapshot-get").unwrap();
+        let mut args = HashMap::new();
+        args.insert("field".to_string(), json!("text"));
+        args.insert("selector".to_string(), json!(".product"));
+        assert_eq!((cmd.tool_name_fn)(&args), "dom_snapshot_scrape");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["field"], "text");
+        assert_eq!(params["selector"], ".product");
+    }
+
+    #[test]
+    fn test_dom_snapshot_get_html_defaults_selector_to_root() {
+        let map = commands_map();
+        let cmd = map.get("domSnapshot-get").unwrap();
+        let mut args = HashMap::new();
+        args.insert("field".to_string(), json!("html"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["field"], "html");
+        assert_eq!(params["selector"], ":root");
+    }
+
+    #[test]
+    fn test_dom_snapshot_get_attr_params() {
+        let map = commands_map();
+        let cmd = map.get("domSnapshot-get").unwrap();
+        let mut args = HashMap::new();
+        args.insert("field".to_string(), json!("attr"));
+        args.insert("selector".to_string(), json!(".product"));
+        args.insert("name".to_string(), json!("data-id"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["field"], "attr");
+        assert_eq!(params["selector"], ".product");
+        assert_eq!(params["attrName"], "data-id");
+    }
+
+    #[test]
+    fn test_dom_snapshot_query_params() {
+        let map = commands_map();
+        let cmd = map.get("domSnapshot-query").unwrap();
+        let mut args = HashMap::new();
+        args.insert("url".to_string(), json!("https://example.com"));
+        args.insert(
+            "sql".to_string(),
+            json!("SELECT dom_base_uri(dom) AS url FROM load_and_select('@url', ':root')"),
+        );
+        assert_eq!((cmd.tool_name_fn)(&args), "dom_snapshot_query");
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["url"], "https://example.com");
+        assert!(params["sql"].as_str().unwrap().contains("@url"));
+    }
+
+    #[test]
+    fn test_dom_snapshot_export_params() {
+        let map = commands_map();
+        let cmd = map.get("domSnapshot-export").unwrap();
+        let mut args = HashMap::new();
+        args.insert("file".to_string(), json!("snapshot.html"));
+        let params = (cmd.tool_params_fn)(&args);
+        assert_eq!(params["file"], "snapshot.html");
+    }
+
+    #[test]
+    fn test_is_element_reference_matches_e_notation() {
+        assert!(is_element_reference("e5"));
+        assert!(is_element_reference("e15"));
+        assert!(is_element_reference("backend:15"));
+        assert!(is_element_reference("backend:7"));
+        assert!(!is_element_reference(".my-class"));
+        assert!(!is_element_reference("#my-id"));
+        assert!(!is_element_reference("div.content"));
+        assert!(!is_element_reference(":root"));
+        assert!(!is_element_reference(""));
+    }
+
+    #[test]
+    fn test_dom_snapshot_commands_are_snapshot_category() {
+        let map = commands_map();
+        for name in &[
+            "domSnapshot",
+            "domSnapshot-get",
+            "domSnapshot-query",
+            "domSnapshot-export",
+        ] {
+            let cmd = map.get(*name).unwrap();
+            assert_eq!(cmd.category, Category::Snapshot);
+        }
     }
 }

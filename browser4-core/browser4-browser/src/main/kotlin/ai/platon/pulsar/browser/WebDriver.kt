@@ -284,13 +284,13 @@ interface WebDriver : Closeable {
      * driver.waitForNavigation()
      * ```
      *
-     * @param url URL to navigate page to.
+     * @param userTypedUrl URL to navigate page to.
      */
     @Throws(WebDriverException::class)
     @MCP
-    suspend fun navigate(url: String)
+    suspend fun navigate(userTypedUrl: String)
 
-    @Deprecated("Use navigate(url: String) instead", ReplaceWith("navigate(url)"))
+    @Deprecated("Use navigate(userTypedUrl: String) instead", ReplaceWith("navigate(url)"))
     @Throws(WebDriverException::class)
     suspend fun navigateTo(url: String) = navigate(url)
 
@@ -341,6 +341,13 @@ interface WebDriver : Closeable {
     @Throws(WebDriverException::class)
     @MCP
     suspend fun goForward()
+
+    /**
+     * Returns the user typed url in the address bar. @mcp
+     *
+     * @return The user typed url in the address bar.
+     * */
+    fun userTypedUrl(): String
 
     /**
      * Returns a string representing the current URL that the browser is looking at. @mcp

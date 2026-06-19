@@ -478,10 +478,15 @@ open class InteractiveBrowserEmulator(
 
         checkState(fetchTask, driver)
 
-        // href has the higher priority to locate a resource
+        // FetchTask.url is a normalized url that might be different from the FetchTask.href.
+        // FetchTask.href has the higher priority to locate a resource, since it is not normalized,
+        // A human being type navigate to a url in the following methods:
+        // 1. type a url in the browser's address bar
+        // 2. click an anchor on a web page with href attribute
+        // 3. other ways
         require(task.url == page.url)
-        val finalUrl = fetchTask.href ?: fetchTask.url
-        val navigateEntry = NavigateEntry(finalUrl, page.id, task.url, pageReferrer = page.referrer)
+        val userTypedUrl = fetchTask.href ?: fetchTask.url
+        val navigateEntry = NavigateEntry(userTypedUrl, page.id, task.url, pageReferrer = page.referrer)
 
         emit1(EmulateEvents.willNavigate, page, driver)
 

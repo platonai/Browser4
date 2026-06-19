@@ -40,7 +40,7 @@ use args::{
     build_command_args, build_short_option_map, parse_batch_args, parse_batch_json_commands,
     parse_command_string, parse_global_flags, parse_raw_args,
 };
-use commands::commands_map;
+use commands::{commands_map, is_element_reference};
 use daemon::{
     ensure_chrome_available, ensure_server_running, init_root_search_start_dir_from_startup,
     install_browser4_runtime, read_current_tag, resolve_base_url, InstalledBrowser4Runtime,
@@ -241,6 +241,10 @@ fn no_snapshot_commands() -> HashSet<&'static str> {
         "swarm-query",
         "swarm-status",
         "swarm-result",
+        "domSnapshot",
+        "domSnapshot-get",
+        "domSnapshot-query",
+        "domSnapshot-export",
     ]
     .into()
 }
@@ -2183,6 +2187,215 @@ async fn handle_get(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// domSnapshot handlers
+// ---------------------------------------------------------------------------
+
+async fn handle_dom_snapshot_capture(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let result = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let tool_name = tool_name.to_string();
+        let mut params = tool_params.clone();
+        params["sessionId"] = json!(session_id);
+        async move { call_tool(&client, &base_url, &tool_name, params).await }
+    })
+    .await?;
+
+    // Parse and display metadata JSON
+    let metadata: Value = serde_json::from_str(&result)
+        .map_err(|e| format!("Failed to parse snapshot metadata: {e}"))?;
+
+    json_field("snapshot_metadata", json!(&metadata));
+    cli_println!(
+        "{}",
+        serde_json::to_string_pretty(&metadata)
+            .map_err(|e| format!("Failed to format metadata: {e}"))?
+    );
+    Ok(())
+}
+
+async fn handle_dom_snapshot_get(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    // Validate field
+    let field = tool_params
+        .get("field")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if field.is_empty() {
+        return Err("Field is required: text, html, or attr.".to_string());
+    }
+    if !["text", "html", "attr"].contains(&field) {
+        return Err(format!(
+            "Unknown field '{}'. Use text, html, or attr.",
+            field
+        ));
+    }
+
+    // Validate selector - reject element references
+    let selector = tool_params
+        .get("selector")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if is_element_reference(selector) {
+        return Err(format!(
+            "Element references ('{selector}') are not supported in domSnapshot get. Use a CSS selector instead."
+        ));
+    }
+
+    // Validate attr field requires a name
+    if field == "attr" {
+        let attr_name = tool_params
+            .get("attrName")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if attr_name.is_empty() {
+            return Err(
+                "The 'attr' field requires an attribute name as the third argument.".to_string(),
+            );
+        }
+    }
+
+    let result = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let tool_name = tool_name.to_string();
+        let mut params = tool_params.clone();
+        params["sessionId"] = json!(session_id);
+        async move { call_tool(&client, &base_url, &tool_name, params).await }
+    })
+    .await?;
+
+    // Output the result
+    if result == "null" {
+        cli_println!("null");
+    } else if result.is_empty() {
+        cli_println!("\"\"");
+    } else {
+        cli_println!("{}", result);
+    }
+
+    json_field("result", json!(&result));
+    json_field("mode", json!(field));
+    if !selector.is_empty() {
+        json_field("selector", json!(selector));
+    }
+
+    Ok(())
+}
+
+async fn handle_dom_snapshot_query(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let url = tool_params
+        .get("url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let sql_raw = tool_params
+        .get("sql")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if sql_raw.is_empty() {
+        return Err("--sql is required. Provide an inline X-SQL query or @file.sql.".to_string());
+    }
+
+    // Handle --sql @file.sql pattern
+    let sql = if sql_raw.starts_with('@') {
+        let file_path = &sql_raw[1..];
+        std::fs::read_to_string(file_path)
+            .map_err(|e| format!("Failed to read SQL file '{}': {}", file_path, e))?
+    } else {
+        sql_raw.to_string()
+    };
+
+    // @url replacement is handled server-side by SQLTemplate.createSQL(url),
+    // which properly escapes the URL value. Do NOT eagerly replace @url here —
+    // naive string substitution would break on URLs containing quotes or other
+    // special characters. Note: @url must appear UNQUOTED in the SQL
+    // (e.g. `load_and_select(@url, ':root')` not `load_and_select('@url', ':root')`).
+    let processed_sql = sql;
+
+    let mut params = json!({ "sql": processed_sql });
+    if !url.is_empty() {
+        params["url"] = json!(url);
+    }
+
+    let result = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let tool_name = tool_name.to_string();
+        let mut p = params.clone();
+        p["sessionId"] = json!(session_id);
+        async move { call_tool(&client, &base_url, &tool_name, p).await }
+    })
+    .await?;
+
+    if !result.is_empty() {
+        cli_println!("{}", result);
+    }
+    json_field("result", json!(&result));
+
+    Ok(())
+}
+
+async fn handle_dom_snapshot_export(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+) -> Result<(), String> {
+    let file_path = tool_params
+        .get("file")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let name = snapshot::timestamped_filename("domSnapshot", "html");
+            snapshot::snapshot_dir().join(name)
+        });
+
+    let result = with_session(client, base_url, session_name, false, |session_id| {
+        let client = client.clone();
+        let base_url = base_url.to_string();
+        let tool_name = tool_name.to_string();
+        async move {
+            call_tool(
+                &client,
+                &base_url,
+                &tool_name,
+                json!({ "sessionId": session_id }),
+            )
+            .await
+        }
+    })
+    .await?;
+
+    snapshot::save_binary(&file_path, result.as_bytes()).map_err(|e| e.to_string())?;
+    cli_println!("Snapshot saved to: {}", file_path.display());
+    json_field("path", json!(file_path.display().to_string()));
+
+    Ok(())
+}
+
 fn parse_number_arg(tool_params: &Value, name: &str) -> Result<f64, String> {
     tool_params
         .get(name)
@@ -2882,7 +3095,9 @@ fn format_uninstall_output(
     // runtime data dir
     if dry_run {
         if runtime_dir_removed {
-            lines.push(format!("🔍 Would remove runtime data directory: {runtime_dir}"));
+            lines.push(format!(
+                "🔍 Would remove runtime data directory: {runtime_dir}"
+            ));
         } else {
             lines.push(format!(
                 "ℹ  Runtime data directory not present: {runtime_dir}"
@@ -2899,7 +3114,9 @@ fn format_uninstall_output(
     // cache dir
     if dry_run {
         if cache_dir_removed {
-            lines.push(format!("🔍 Would remove runtime cache directory: {cache_dir}"));
+            lines.push(format!(
+                "🔍 Would remove runtime cache directory: {cache_dir}"
+            ));
         } else {
             lines.push(format!(
                 "ℹ  Runtime cache directory not present: {cache_dir}"
@@ -2939,10 +3156,8 @@ fn attempt_self_removal(exe_path: &std::path::Path) -> bool {
         );
 
         let tmp_dir = std::env::temp_dir();
-        let script_path = tmp_dir.join(format!(
-            "browser4-cli-uninstall-{}.ps1",
-            std::process::id()
-        ));
+        let script_path =
+            tmp_dir.join(format!("browser4-cli-uninstall-{}.ps1", std::process::id()));
 
         if let Err(e) = std::fs::write(&script_path, &ps_script) {
             cli_println!("  Warning: Could not write cleanup script: {e}");
@@ -3033,8 +3248,7 @@ async fn handle_uninstall(tool_params: &Value) -> Result<(), String> {
             })
         });
 
-        let deadline = std::time::Instant::now()
-            + std::time::Duration::from_secs(timeout_secs);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
         loop {
             match child.try_wait() {
                 Ok(Some(status)) => {
@@ -3057,9 +3271,7 @@ async fn handle_uninstall(tool_params: &Value) -> Result<(), String> {
                         // threads don't linger.
                         let _stdout = stdout_reader.and_then(|h| h.join().ok());
                         let _stderr = stderr_reader.and_then(|h| h.join().ok());
-                        return Err(format!(
-                            "process did not complete within {timeout_secs}s"
-                        ));
+                        return Err(format!("process did not complete within {timeout_secs}s"));
                     }
                     std::thread::sleep(std::time::Duration::from_millis(200));
                 }
@@ -3500,6 +3712,7 @@ fn rewrite_prefixed_command(args: &[String]) -> Option<Vec<String>> {
     let rewritten_command = match prefix {
         "swarm" => format!("swarm-{}", sub),
         "agent" => format!("agent-{}", sub),
+        "domSnapshot" => format!("domSnapshot-{}", sub),
         _ => return None,
     };
     let mut rewritten = vec![rewritten_command];
@@ -3522,6 +3735,9 @@ fn preferred_spaced_command_form(command: &str) -> Option<&'static str> {
         "co-query" => Some("swarm query"),
         "co-status" => Some("swarm status"),
         "co-result" => Some("swarm result"),
+        "domSnapshot-get" => Some("domSnapshot get"),
+        "domSnapshot-query" => Some("domSnapshot query"),
+        "domSnapshot-export" => Some("domSnapshot export"),
         _ => None,
     }
 }
@@ -3531,6 +3747,7 @@ fn preferred_prefixed_group_form(command: &str) -> Option<&'static str> {
         "agent" => Some("agent <subcommand>"),
         "swarm" => Some("swarm <subcommand>"),
         "co" => Some("swarm <subcommand>"),
+        "domSnapshot" => Some("domSnapshot <subcommand>"),
         _ => None,
     }
 }
@@ -4833,6 +5050,46 @@ async fn run(
         "swarm-result" => {
             handle_swarm_result(&client, &base_url, &tool_params).await?;
         }
+        "domSnapshot" => {
+            handle_dom_snapshot_capture(
+                &client,
+                &base_url,
+                &tool_name,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
+        "domSnapshot-get" => {
+            handle_dom_snapshot_get(
+                &client,
+                &base_url,
+                &tool_name,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
+        "domSnapshot-query" => {
+            handle_dom_snapshot_query(
+                &client,
+                &base_url,
+                &tool_name,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
+        "domSnapshot-export" => {
+            handle_dom_snapshot_export(
+                &client,
+                &base_url,
+                &tool_name,
+                &tool_params,
+                global.session_name.as_deref(),
+            )
+            .await?;
+        }
         _ => {
             if tool_name.is_empty() {
                 cli_println!("Command '{}' is not yet implemented.", command);
@@ -4972,6 +5229,14 @@ mod tests {
     #[test]
     fn no_snapshot_commands_include_wait() {
         assert!(no_snapshot_commands().contains("wait"));
+    }
+
+    #[test]
+    fn no_snapshot_commands_include_dom_snapshot_variants() {
+        assert!(no_snapshot_commands().contains("domSnapshot"));
+        assert!(no_snapshot_commands().contains("domSnapshot-get"));
+        assert!(no_snapshot_commands().contains("domSnapshot-query"));
+        assert!(no_snapshot_commands().contains("domSnapshot-export"));
     }
 
     #[test]

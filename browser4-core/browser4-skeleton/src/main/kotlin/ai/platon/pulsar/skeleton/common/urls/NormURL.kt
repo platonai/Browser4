@@ -52,11 +52,6 @@ open class NormURL constructor(
     /**
      * The url specification in string format.
      */
-    @Deprecated("Use urlString instead", ReplaceWith("urlString"))
-    val spec get() = url.toString()
-    /**
-     * The url specification in string format.
-     */
     val urlString get() = url.toString()
     /**
      * The href specification in string format.
