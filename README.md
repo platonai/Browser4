@@ -284,6 +284,26 @@ Key notes:
 - All swarm commands return a task ID; track progress with `swarm status` / `swarm result`.
 - Use `@url` in X-SQL templates — it is replaced with the target URL server-side.
 
+### CLI Timeout Configuration
+
+Some commands may take longer than the default HTTP timeout, especially text input (`type`/`fill`) and page navigation (`goto`). Use these environment variables to adjust timeouts per command category:
+
+| Variable | Default | Applies to |
+|----------|---------|------------|
+| `BROWSER4_CLI_HTTP_TIMEOUT_SECS` | `30` | Most commands (`click`, `snapshot`, `screenshot`, etc.) |
+| `BROWSER4_CLI_INPUT_TIMEOUT_SECS` | `90` | Text input commands (`type`, `fill`, `fill-form`) |
+| `BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS` | `120` | Navigation commands (`goto`, `reload`, `go-back`, `go-forward`) |
+
+Text input commands use a longer default timeout because typing into form fields — especially on complex pages — can be slower than simple interactions. If a text input command times out, the operation **may have partially executed**. After a timeout, verify the field content with `snapshot` or `get-text` before retrying.
+
+```shell
+# Increase input timeout for heavy pages
+export BROWSER4_CLI_INPUT_TIMEOUT_SECS=180
+
+# Increase navigation timeout for slow sites
+export BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS=300
+```
+
 ---
 
 ## 🚀 Build from Source
@@ -398,6 +418,54 @@ curl -L -o PulsarRPAPro.jar https://github.com/platonai/PulsarRPAPro/releases/do
 | `browser4-standalone`  | Agent & crawler orchestration with product packaging    |
 | `examples`         | Runnable examples and demos                             |
 | `browser4-tests`   | E2E & heavy integration & scenario tests                |
+
+---
+
+## 🧪 Test Fixture Server (MockSite)
+
+Browser4 includes a lightweight **MockSite** server that serves static HTML pages for testing and demos — search boxes, forms, link lists, interactive pages, and more. When you see references to `http://localhost:18080/...` in task instructions, test scripts, or examples, they expect MockSite to be running.
+
+### Starting MockSite
+
+From the repository root (`submodules/Browser4`), start MockSite with its default port (18080):
+
+**Windows (PowerShell):**
+```powershell
+./bin/test.ps1 mock-site -Dmock.site.port=18080
+```
+
+**Linux / macOS (bash):**
+```bash
+./bin/test.sh mock-site -Dmock.site.port=18080
+```
+
+### Key demo pages
+
+| Page | URL |
+|------|-----|
+| Interactive fixture | `http://localhost:18080/generated/interactive-1.html` |
+| Form filling fixture | `http://localhost:18080/generated/form-filling.html` |
+| Other fixture | `http://localhost:18080/generated/other-1.html` |
+
+### Environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MOCK_SITE_PORT` | `18080` | Port the mock server listens on |
+| `MOCK_SITE_WAIT_SEC` | — | Seconds to wait for server readiness |
+
+### Alternative: serve fixture files with Python
+
+If you only need the static HTML fixtures without the full MockSite, serve the fixture directory directly:
+
+```bash
+cd browser4-tests/browser4-tests-common/src/main/resources/static
+python3 -m http.server 18080
+```
+
+The fixture HTML files (e.g., `b4/mcp-tool-controller-form-fixture.html`) will be available under `http://localhost:18080/b4/`.
+
+For more details, see the [MockSite README](browser4-tests/browser4-rest-tests/README.md).
 
 ---
 

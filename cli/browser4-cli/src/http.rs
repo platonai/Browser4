@@ -7,9 +7,11 @@ use crate::state::resolve_ref;
 
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 const NAVIGATION_REQUEST_TIMEOUT_SECS: u64 = 120;
+const TEXT_INPUT_REQUEST_TIMEOUT_SECS: u64 = 90;
 const BATCH_REQUEST_TIMEOUT_SECS: u64 = 120;
 const DEFAULT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_HTTP_TIMEOUT_SECS";
 const NAVIGATION_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_NAVIGATION_TIMEOUT_SECS";
+const TEXT_INPUT_REQUEST_TIMEOUT_ENV: &str = "BROWSER4_CLI_INPUT_TIMEOUT_SECS";
 
 fn timeout_secs_from_env(env_key: &str, default_secs: u64) -> u64 {
     std::env::var(env_key)
@@ -33,6 +35,13 @@ fn navigation_request_timeout() -> std::time::Duration {
     ))
 }
 
+fn text_input_request_timeout() -> std::time::Duration {
+    std::time::Duration::from_secs(timeout_secs_from_env(
+        TEXT_INPUT_REQUEST_TIMEOUT_ENV,
+        TEXT_INPUT_REQUEST_TIMEOUT_SECS,
+    ))
+}
+
 fn is_navigation_tool(tool: &str) -> bool {
     matches!(
         tool,
@@ -43,9 +52,18 @@ fn is_navigation_tool(tool: &str) -> bool {
     )
 }
 
+fn is_text_input_tool(tool: &str) -> bool {
+    matches!(
+        tool,
+        "browser_press_sequentially" | "browser_type" | "browser_fill_form"
+    )
+}
+
 fn timeout_for_tool(tool: &str) -> std::time::Duration {
     if is_navigation_tool(tool) {
         navigation_request_timeout()
+    } else if is_text_input_tool(tool) {
+        text_input_request_timeout()
     } else {
         default_request_timeout()
     }
@@ -166,7 +184,14 @@ fn format_mcp_transport_error(
 ) -> String {
     let context = summarize_mcp_request(tool, endpoint, args, timeout);
     if error.is_timeout() {
-        format!("HTTP request timed out {context}: {error}")
+        let mut msg = format!("HTTP request timed out {context}: {error}");
+        if is_text_input_tool(tool) {
+            msg.push_str(
+                "\nNote: Text input operations may partially execute despite timeout. \
+                 Verify the field content with `snapshot` or `get-text` after a timeout.",
+            );
+        }
+        msg
     } else {
         format!("HTTP request failed {context}: {error}")
     }
@@ -414,6 +439,7 @@ mod tests {
     struct TimeoutEnvGuard {
         default_timeout: Option<String>,
         navigation_timeout: Option<String>,
+        text_input_timeout: Option<String>,
     }
 
     impl TimeoutEnvGuard {
@@ -421,9 +447,22 @@ mod tests {
             let guard = Self {
                 default_timeout: std::env::var(DEFAULT_REQUEST_TIMEOUT_ENV).ok(),
                 navigation_timeout: std::env::var(NAVIGATION_REQUEST_TIMEOUT_ENV).ok(),
+                text_input_timeout: std::env::var(TEXT_INPUT_REQUEST_TIMEOUT_ENV).ok(),
             };
             std::env::set_var(DEFAULT_REQUEST_TIMEOUT_ENV, default_timeout_secs);
             std::env::set_var(NAVIGATION_REQUEST_TIMEOUT_ENV, navigation_timeout_secs);
+            guard
+        }
+
+        fn set_all(default_timeout_secs: &str, navigation_timeout_secs: &str, text_input_timeout_secs: &str) -> Self {
+            let guard = Self {
+                default_timeout: std::env::var(DEFAULT_REQUEST_TIMEOUT_ENV).ok(),
+                navigation_timeout: std::env::var(NAVIGATION_REQUEST_TIMEOUT_ENV).ok(),
+                text_input_timeout: std::env::var(TEXT_INPUT_REQUEST_TIMEOUT_ENV).ok(),
+            };
+            std::env::set_var(DEFAULT_REQUEST_TIMEOUT_ENV, default_timeout_secs);
+            std::env::set_var(NAVIGATION_REQUEST_TIMEOUT_ENV, navigation_timeout_secs);
+            std::env::set_var(TEXT_INPUT_REQUEST_TIMEOUT_ENV, text_input_timeout_secs);
             guard
         }
     }
@@ -440,6 +479,12 @@ mod tests {
                 std::env::set_var(NAVIGATION_REQUEST_TIMEOUT_ENV, value);
             } else {
                 std::env::remove_var(NAVIGATION_REQUEST_TIMEOUT_ENV);
+            }
+
+            if let Some(value) = &self.text_input_timeout {
+                std::env::set_var(TEXT_INPUT_REQUEST_TIMEOUT_ENV, value);
+            } else {
+                std::env::remove_var(TEXT_INPUT_REQUEST_TIMEOUT_ENV);
             }
         }
     }
@@ -600,13 +645,86 @@ mod tests {
         let _env_lock = TIMEOUT_ENV_MUTEX
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let _env_guard = TimeoutEnvGuard::set("3", "7");
+        let _env_guard = TimeoutEnvGuard::set_all("3", "7", "11");
 
         assert_eq!(timeout_for_tool("browser_navigate").as_secs(), 7);
         assert_eq!(timeout_for_tool("browser_reload").as_secs(), 7);
         assert_eq!(timeout_for_tool("browser_navigate_back").as_secs(), 7);
         assert_eq!(timeout_for_tool("browser_navigate_forward").as_secs(), 7);
+        assert_eq!(timeout_for_tool("browser_press_sequentially").as_secs(), 11);
+        assert_eq!(timeout_for_tool("browser_type").as_secs(), 11);
+        assert_eq!(timeout_for_tool("browser_fill_form").as_secs(), 11);
         assert_eq!(timeout_for_tool("page_title").as_secs(), 3);
+    }
+
+    #[test]
+    fn test_text_input_tool_timeout_uses_custom_env() {
+        let _env_lock = TIMEOUT_ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _env_guard = TimeoutEnvGuard::set_all("30", "120", "60");
+
+        assert_eq!(timeout_for_tool("browser_press_sequentially").as_secs(), 60);
+        assert_eq!(timeout_for_tool("browser_type").as_secs(), 60);
+        assert_eq!(timeout_for_tool("browser_fill_form").as_secs(), 60);
+        // Default for non-navigation, non-input tools
+        assert_eq!(timeout_for_tool("browser_click").as_secs(), 30);
+    }
+
+    #[test]
+    fn test_is_text_input_tool_detection() {
+        assert!(is_text_input_tool("browser_press_sequentially"));
+        assert!(is_text_input_tool("browser_type"));
+        assert!(is_text_input_tool("browser_fill_form"));
+        assert!(!is_text_input_tool("browser_click"));
+        assert!(!is_text_input_tool("browser_navigate"));
+        assert!(!is_text_input_tool("page_title"));
+    }
+
+    #[test]
+    fn test_text_input_timeout_error_includes_partial_execution_note() {
+        let error = format_mcp_transport_error(
+            "browser_type",
+            "http://localhost:8182/mcp/call-tool",
+            &json!({ "text": "hello" }),
+            Some(std::time::Duration::from_secs(90)),
+            &reqwest::blocking::Client::new()
+                .post("http://127.0.0.1:1")
+                .timeout(std::time::Duration::from_millis(1))
+                .send()
+                .expect_err("should time out"),
+        );
+        assert!(
+            error.contains("HTTP request timed out"),
+            "Expected timeout prefix, got: {error}"
+        );
+        assert!(
+            error.contains("may partially execute despite timeout"),
+            "Expected partial execution note, got: {error}"
+        );
+    }
+
+    #[test]
+    fn test_non_input_timeout_error_has_no_partial_execution_note() {
+        let error = format_mcp_transport_error(
+            "browser_click",
+            "http://localhost:8182/mcp/call-tool",
+            &json!({ "ref": "e15" }),
+            Some(std::time::Duration::from_secs(30)),
+            &reqwest::blocking::Client::new()
+                .post("http://127.0.0.1:1")
+                .timeout(std::time::Duration::from_millis(1))
+                .send()
+                .expect_err("should time out"),
+        );
+        assert!(
+            error.contains("HTTP request timed out"),
+            "Expected timeout prefix, got: {error}"
+        );
+        assert!(
+            !error.contains("may partially execute despite timeout"),
+            "Should NOT contain partial execution note for non-input tool, got: {error}"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
