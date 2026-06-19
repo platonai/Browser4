@@ -918,7 +918,7 @@ jobs:
 
   publish-cli-npm:
     name: Publish browser4-cli to npm
-    needs: [prepare, build-cli-binaries]
+    needs: [prepare, build-core-and-docker, build-cli-binaries]
     if: needs.prepare.outputs.cli_should_publish_npm == 'true' && needs.prepare.outputs.dry_run != 'true' && needs.prepare.outputs.bundle_only != 'true'
     runs-on: ubuntu-latest
     permissions:
