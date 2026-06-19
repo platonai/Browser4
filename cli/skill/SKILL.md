@@ -276,119 +276,16 @@ If `--filename` is not provided, a new snapshot file is created with a timestamp
 
 ## DOM Snapshot
 
-The `domsnapshot` family of commands operates on a **static DOM snapshot** — the raw HTML of the current page parsed into a queryable document object model. Unlike the interactive `snapshot` command (which captures accessibility-tree refs for click/type/fill), `domsnapshot` extracts structured data from the DOM using CSS selectors and X-SQL queries without requiring an interactive browser session.
-
-Use the spaced `domsnapshot <subcommand>` form:
+The `domsnapshot` family of commands operates on a **static DOM snapshot** — the raw HTML of the current page parsed into a queryable document object model. Unlike the interactive `snapshot` command (which captures accessibility-tree refs for `click`/`type`/`fill`), `domsnapshot` extracts structured data from the DOM using CSS selectors and X-SQL queries.
 
 ```bash
-browser4-cli domsnapshot             # capture a fresh static DOM snapshot
-browser4-cli domsnapshot get <field> [selector] [name]  # extract data from the snapshot
-browser4-cli domsnapshot query [url] --sql <query>       # run X-SQL against a snapshot (url defaults to current page)
+browser4-cli domsnapshot                           # capture a fresh static DOM snapshot
+browser4-cli domsnapshot get <field> [selector] [name]  # extract text/html/attr via CSS selectors
+browser4-cli domsnapshot query [url] --sql <query>       # run X-SQL against the DOM
 browser4-cli domsnapshot export [--file <path>]         # save snapshot HTML to a file
 ```
 
-### Command overview
-
-| Command | Purpose |
-|---|---|
-| `domsnapshot` | Capture a static DOM snapshot of the current page |
-| `domsnapshot get <field>` | Extract elements from the snapshot (text, html, attr) |
-| `domsnapshot query [url]` | Run X-SQL against the DOM snapshot via the scrape API. URL defaults to the current session's page |
-| `domsnapshot export` | Save full snapshot HTML content to a local file |
-
-### Capture
-
-```bash
-# Capture a fresh static DOM snapshot of the current page
-browser4-cli domsnapshot
-```
-
-Returns a JSON metadata object with the page URL, href, content size, capture time, content type, and title. The snapshot is always captured fresh (no caching).
-
-### Get — Extract data from the snapshot
-
-Extract text, HTML, or attribute values from the static DOM using CSS selectors. **Only CSS selectors** are supported — element references (`e5`, `backend:15`) are rejected.
-
-```bash
-# Extract visible text from an element
-browser4-cli domsnapshot get text ".product-title"
-
-# Extract the inner HTML of the entire page (default selector is :root)
-browser4-cli domsnapshot get html
-
-# Extract a specific attribute
-browser4-cli domsnapshot get attr ".product-image" data-src
-
-# Extract text from a specific element
-browser4-cli domsnapshot get text "#description"
-```
-
-| Field | Description | Requires `name`? |
-|---|---|---|
-| `text` | Visible text of the matched element | No |
-| `html` | Inner HTML of the matched element | No |
-| `attr` | Value of a named attribute | **Yes** (3rd argument) |
-
-### Query — X-SQL against DOM snapshot
-
-Run X-SQL queries against a loaded page. The `--sql` flag is **required**. Use `@url` as a placeholder for the target URL. Prefix `--sql` value with `@` to read the query from a file.
-
-The `url` argument is **optional** — when omitted, the query runs against the current active session's page URL. When provided explicitly, the query is stateless and can target any URL directly via the scrape backend.
-
-X-SQL uses the **H2 database** SQL dialect with DOM UDFs. Only simple `SELECT ... FROM load_and_select(url, cssQuery)` queries are supported — no CTEs, subqueries, `EXPLODE`, or joins.
-
-> **Important:** The `@url` placeholder must appear **unquoted** in the SQL. `SQLTemplate.createSQL(url)` handles escaping and quoting internally.
-> - ✅ `FROM load_and_select(@url, ':root')`
-> - ❌ `FROM load_and_select('@url', ':root')`
-
-To control caching or rendering, append load options to the URL string (e.g. `https://example.com/page -i 1d -njr 3`).
-
-```bash
-# Query the current page (no URL needed):
-browser4-cli domsnapshot query --sql "
-  SELECT
-    dom_base_uri(dom) AS url,
-    dom_first_text(dom, '#productTitle') AS title,
-    dom_first_slim_html(dom, 'img:expr(width > 400)') AS img
-  FROM load_and_select(@url, 'body');
-"
-
-# Query any URL explicitly:
-browser4-cli domsnapshot query "https://www.amazon.com/dp/B08PP5MSVB" --sql "
-  SELECT
-    dom_base_uri(dom) AS url,
-    dom_first_text(dom, '#productTitle') AS title
-  FROM load_and_select(@url, 'body');
-"
-
-# Read query from a file:
-browser4-cli domsnapshot query "https://www.example.com" --sql @query.sql
-```
-
-### Export
-
-Save the full snapshot HTML content to a local file. If `--file` is not provided, a timestamped file is created in the snapshot directory.
-
-```bash
-# Export with auto-generated filename:
-browser4-cli domsnapshot export
-
-# Export to a specific file:
-browser4-cli domsnapshot export --file=page-snapshot.html
-```
-
-> **Note:** The exported HTML is pretty-formatted, so tools like `grep` work directly on the output file.
-
-### Snapshot vs DOM Snapshot
-
-| Feature | `snapshot` | `domsnapshot` |
-|---|---|---|
-| Data source | Accessibility tree | Raw HTML DOM |
-| Element addressing | Refs (`e5`, `e15`) | CSS selectors only |
-| Interactive commands | `click`, `type`, `fill` | Not supported |
-| Data extraction | Via `extract` | Via `get` and `query` |
-| X-SQL support | No | Yes (`query`) |
-| Export format | YAML (accessibility tree) | HTML (`export`) |
+See **[references/domsnapshot.md](references/domsnapshot.md)** for the full command reference, field tables, X-SQL query examples, and the comparison with interactive `snapshot`.
 
 ## Browser Sessions
 
@@ -479,77 +376,9 @@ browser4-cli swarm result scrape-task-4
 
 ### X-SQL query submissions
 
-Use `swarm query` to run an X-SQL query that extracts structured data from the
-loaded webpage. The `--sql` flag is **required**. The query uses `@url` as a
-placeholder for the target URL.
+Use `swarm query` to run X-SQL queries that extract structured data from loaded webpages. The `--sql` flag is **required**, and `@url` serves as a placeholder for the target URL. Only simple `SELECT ... FROM load_and_select(@url, cssQuery)` queries are supported (no CTEs, subqueries, `EXPLODE`, or joins).
 
-**SQL constraints:** Only simple `SELECT ... FROM DOM_LOAD_AND_SELECT(url, cssQuery)`
-queries are supported. No CTEs (`WITH`), no subqueries, no `EXPLODE`, no joins.
-The only valid table source is `DOM_LOAD_AND_SELECT`. `DOM_LOAD` and `DOM_FETCH`
-can be used as expression arguments but not in the `FROM` clause.
-
-X-SQL uses the **H2 database** SQL dialect.
-
-```bash
-# Inline X-SQL query:
-browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql "
-  SELECT
-    dom_base_uri(dom) AS url,
-    dom_first_text(dom, '#productTitle') AS title,
-    dom_first_slim_html(dom, 'img:expr(width > 400)') AS img
-  FROM load_and_select(@url, 'body');
-"
-
-# Read query from a file:
-browser4-cli swarm query "https://www.amazon.com/dp/B08PP5MSVB" --sql @query.sql
-
-# With load options and a seed file:
-browser4-cli swarm query --sql @query.sql --seed-file=./urls.txt --refresh
-```
-
-Example `query.sql`:
-
-```sql
-SELECT
-  dom_base_uri(dom) AS url,
-  dom_first_text(dom, '#productTitle') AS title,
-  dom_first_slim_html(dom, 'img:expr(width > 400)') AS img
-FROM load_and_select(@url, 'body');
-```
-
-`swarm query` sends a structured JSON body to `SwarmController.query(query)`.
-The `@url` placeholder is substituted with the target URL (and any load options)
-server-side.
-
-> **Tip:** `swarm submit --sql` also works as a convenience alias, but
-> `swarm query` is the preferred command for X-SQL queries.
-
-Notes:
-
-- `swarm submit` accepts a positional URL, `--seed-file`, or both.
-- `swarm query` accepts `--sql` (required), plus a URL, `--seed-file`, or both.
-- Seed files are plain text, one URL per line. Empty lines and lines beginning
-  with `#` are ignored.
-- Load-option style flags (`--deadline`, `--expires`, `--refresh`, `--parse`,
-  `--store-content`) work with both `swarm submit` and `swarm query`.
-- Capture the job ID printed by `swarm submit` or `swarm query`, then use
-  `swarm status` and `swarm result` to follow the async job via
-  `SwarmController.getStatus(id)` and `SwarmController.getResult(id)`.
-
-Example seed file:
-
-```text
-# urls for the swarm crawler
-https://example.com/seed-1
-https://example.com/seed-2
-```
-
-Typical use cases:
-
-- parallel refresh of a curated URL list
-- supervised fan-out browsing across multiple contexts
-- repeatable selector-based scraping jobs with explicit output artifacts
-- structured data extraction from web pages using X-SQL queries
+See **[references/swarm.md](references/swarm.md#swarm-query)** for inline/file-based query examples, the arguments table, extraction functions reference, and seed file usage.
 
 ## Installation
 
@@ -605,6 +434,7 @@ browser4-cli close
 
 ## Specific tasks
 
+* **DOM Snapshot** [references/domsnapshot.md](references/domsnapshot.md)
 * **Smarm command** [references/swarm.md](references/swarm.md)
 * **Storage state (cookies, localStorage)** [references/storage-state.md](references/storage-state.md)
 * **X-SQL** [references/x-sql.md](references/x-sql.md)

@@ -194,6 +194,12 @@ SELECT
 FROM load_and_select(@url, 'body');
 ```
 
+### Routing
+
+`swarm query` sends a structured JSON body to `SwarmController.query(query)`. The `@url` placeholder is substituted with the target URL (and any load options) server-side.
+
+> **Tip:** `swarm submit --sql` also works as a convenience alias, but `swarm query` is the preferred command for X-SQL queries.
+
 ## swarm status
 
 Poll the progress of an asynchronous scrape job.
