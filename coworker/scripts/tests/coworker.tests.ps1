@@ -477,7 +477,7 @@ Describe 'ConvertFrom-StructuredTaskContent' {
         function ConvertFrom-StructuredTaskContent {
             param([Parameter(Mandatory=$true)][string]$Content)
             $result = @{ Title = ''; Description = ''; Prompt = ''; IsStructured = $false }
-            if ($Content -match "(?ms)^Title:\s*(?<title>.*?)(\r\n|\n)Description:\s*(?<desc>.*?)(\r\n|\n)Prompt:\s*(?<prompt>.*)$") {
+            if ($Content -match "(?s)\A\s*Title:\s*(?<title>.*?)(\r\n|\n)Description:\s*(?<desc>.*?)(\r\n|\n)Prompt:\s*(?<prompt>.*)$") {
                 $result.Title       = $Matches['title'].Trim()
                 $result.Description = $Matches['desc'].Trim()
                 $result.Prompt      = $Matches['prompt'].Trim()

@@ -31,7 +31,7 @@ function Get-GeneratedTaskName {
     $prompt = ""
 
     # Parse structured content
-    if ($Content -match "(?ms)^Title:\s*(?<title>.*?)(\r\n|\n)Description:\s*(?<desc>.*?)(\r\n|\n)Prompt:\s*(?<prompt>.*)$") {
+    if ($Content -match "(?s)\A\s*Title:\s*(?<title>.*?)(\r\n|\n)Description:\s*(?<desc>.*?)(\r\n|\n)Prompt:\s*(?<prompt>.*)$") {
         $title = $Matches['title'].Trim()
         $description = $Matches['desc'].Trim()
         $prompt = $Matches['prompt'].Trim()

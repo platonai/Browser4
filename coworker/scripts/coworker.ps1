@@ -108,7 +108,7 @@ $taskRoots = @(
         Prepare = (Join-Path $tasksRoot "0draft")
         Created = (Join-Path $tasksRoot "1ready")
         Working = (Join-Path $tasksRoot "2working")
-        Finished = (Join-Path $tasksRoot "3_1complete")
+        Finished = (Join-Path $tasksRoot "3done")
         Review = (Join-Path $tasksRoot "4review")
         Approved = (Join-Path $tasksRoot "5approved")
         Pushed = (Join-Path $tasksRoot "6git-pushed")
@@ -409,7 +409,7 @@ foreach ($taskRoot in $taskRoots) {
         Write-LogMessage "[PREPARE] Task: $($file.Name)" INFO
     }
 
-    # 2. Process 3_1complete (newly added to show pending reviews)
+    # 2. Process 3done (newly added to show pending reviews)
     if (Test-Path $finishedDir) {
         $finishedFiles = Get-ChildItem -Path $finishedDir -Recurse -File |
             Where-Object { -not (Test-CoworkerIgnoredFile -Item $_) }
@@ -465,7 +465,7 @@ foreach ($taskRoot in $taskRoots) {
         }
     }
 
-    # 4. Process 6git-pushed (last 2 days)
+    # 5. Process 6git-pushed (last 2 days)
     # Recursively find files in 6git-pushed
     if (Test-Path $pushedDir) {
         $pushedFiles = Get-ChildItem -Path $pushedDir -Recurse -File |
@@ -497,8 +497,6 @@ foreach ($taskRoot in $taskRoots) {
         # The current implementation attempts to rename ALL files using the agent via rename.ps1.
         # This seems to cover the requirement "improve-coworker-daily-memory-generator.md, 2.md... are treated as random... rename these".
 
-        Write-LogVerbose "renameScript path: $renameScript"
-        Write-LogVerbose "Test-Path renameScript: $(Test-Path $renameScript)"
 
         if (Test-Path $renameScript) {
             # Execute rename.ps1 script with retry
@@ -578,39 +576,39 @@ foreach ($taskRoot in $taskRoots) {
         $memoryContext = ""
         $memoryInstructions = ""
 
-        # Call coworker-memory-generator to initialize memory context
-        $memoryGeneratorScript = Join-Path $PSScriptRoot "workers\coworker-memory-generator.ps1"
+        # Call standalone memory-context script (handles generator + robust JSON parsing)
+        $memoryContextScript = Join-Path $PSScriptRoot "workers\coworker-memory-context.ps1"
         try {
-            $memoryResultJson = & $memoryGeneratorScript -Type init -Date "$currentYear-$currentMonth-$currentDay" | Out-String
-
-            if (-not [string]::IsNullOrWhiteSpace($memoryResultJson)) {
-                $memoryResult = $memoryResultJson | ConvertFrom-Json
+            $memoryResultJson = & $memoryContextScript -Type init -Date "$currentYear-$currentMonth-$currentDay" 2>$null
+            if ($memoryResultJson) {
+                $memoryResult = ($memoryResultJson -join "`n") | ConvertFrom-Json
                 $memoryContext = $memoryResult.context
                 $memoryInstructions = $memoryResult.instructions
-                Write-LogMessage "Memory context initialized via generator." INFO
-            } else {
-                 Write-LogMessage "Memory generator returned empty result." WARN
+                if ($memoryContext -or $memoryInstructions) {
+                    Write-LogMessage "Memory context initialized." INFO
+                } else {
+                    Write-LogVerbose "Memory context empty (no relevant memories found)."
+                }
             }
         } catch {
-            Write-LogMessage "Failed to initialize memory context: $_" ERROR
-            $memoryContext = ""
-            $memoryInstructions = ""
+            Write-LogMessage "Failed to initialize memory context: $_" WARN
         }
 
-        $prompt = @"
-Finish the task described in file: $workingPath.
-Do not move **this** task file, just execute the task based on its content, the system will move it after you finished the task.
-"@
-
-        # Try to parse structured content
-        if ($content -match "(?ms)^Title:\s*(?<title>.*?)(\r\n|\n)Description:\s*(?<desc>.*?)(\r\n|\n)Prompt:\s*(?<prompt>.*)$") {
+        # Parse task content: if structured (Title:/Description:/Prompt:), extract the Prompt field.
+        # Otherwise use the full file content as the prompt (fixes bug where unstructured
+        # task content was never passed to the agent).
+        if ($content -match "(?s)\A\s*Title:\s*(?<title>.*?)(\r\n|\n)Description:\s*(?<desc>.*?)(\r\n|\n)Prompt:\s*(?<prompt>.*)$") {
             $title = $Matches['title'].Trim()
             $description = $Matches['desc'].Trim()
             $prompt = $Matches['prompt'].Trim()
+        } else {
+            $prompt = $content
         }
 
-        # Append Memory Instructions and Context
-        $prompt += "`n`n$memoryInstructions`n`n$memoryContext"
+        # Append Memory Instructions and Context (if any)
+        if ($memoryInstructions -or $memoryContext) {
+            $prompt += "`n`n$memoryInstructions`n`n$memoryContext"
+        }
 
         # Define log file paths
 
@@ -642,9 +640,7 @@ Agent Execution Output:
 "@ | Out-File -FilePath $taskLogPath -Encoding UTF8
 
         try {
-            $agentArguments = New-AgentPromptArguments -Prompt $prompt -AdditionalArguments @('--allow-all-tools', '--allow-all-paths')
-
-            # Define paths for temporary output and error logs (for agent external tool)
+            # Define paths for temporary output and error logs
             $stdOutLog = $agentLogPath + ".stdout"
             $stdErrLog = $agentLogPath + ".stderr"
 
@@ -663,16 +659,20 @@ Agent Execution Output:
 
                 # Check and display new stdout lines
                 if (Test-Path $stdOutLog) {
-                    $currentLines = @(Get-Content $stdOutLog -Encoding UTF8 -ErrorAction SilentlyContinue)
-                    $currentLineCount = $currentLines.Count
-                    if ($currentLineCount -gt $lastOutputLineCount) {
-                        $newLines = $currentLines[$lastOutputLineCount..($currentLineCount - 1)]
-                        foreach ($line in $newLines) {
-                            if (-not [string]::IsNullOrWhiteSpace($line)) {
-                                Write-ConsoleLine -Message $line
+                    try {
+                        $currentLines = @(Get-Content $stdOutLog -Encoding UTF8 -ErrorAction Stop)
+                        $currentLineCount = $currentLines.Count
+                        if ($currentLineCount -gt $lastOutputLineCount) {
+                            $newLines = $currentLines[$lastOutputLineCount..($currentLineCount - 1)]
+                            foreach ($line in $newLines) {
+                                if ($line -and $line.Trim()) {
+                                    Write-ConsoleLine -Message $line
+                                }
                             }
+                            $lastOutputLineCount = $currentLineCount
                         }
-                        $lastOutputLineCount = $currentLineCount
+                    } catch {
+                        # File may be temporarily locked by the writer; retry next iteration
                     }
                 }
 
