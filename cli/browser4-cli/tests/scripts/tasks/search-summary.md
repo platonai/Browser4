@@ -1,7 +1,4 @@
-#!/usr/bin/env pwsh
-. "$PSScriptRoot/common.ps1"
-
-$taskPrompt = @"
+# search-summary
 
 1. Open https://www.baidu.com
 2. Search for: 武汉龙虾节
@@ -13,7 +10,3 @@ $taskPrompt = @"
    * Major activities
    * Typical schedule and venue
    * Its significance to local tourism, food culture, and economy
-"@
-
-$prompt = $generalPrompt + $taskPrompt
-Invoke-Agent -Prompt $prompt -ScenarioName 'search-summary'

@@ -1,52 +1,52 @@
-﻿#!/usr/bin/env pwsh
+#!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-Runs every agent-scenario test script in this directory.
+Runs every agent-scenario task defined in tasks/*.md.
 
 .DESCRIPTION
-Auto-discovers and executes the PS1 scenario scripts (excluding common.ps1 and
-itself).  Each script invokes claude with a usability-evaluation prompt, so a
-working Claude Code installation is required.
+Auto-discovers and executes task markdown files in the tasks/ directory.
+Each task is run via run-task.ps1, which combines the task description with
+the shared usability-evaluation prompt and invokes the Claude Code agent.
 
-Without arguments the script runs every discovered scenario.  Pass -List to see
-what would run, or name one or more scripts to run a subset.
+Without arguments the script runs every discovered task.  Pass -List to see
+what would run, or name one or more tasks to run a subset.
 
 .EXAMPLE
 ./cli/browser4-cli/tests/scripts/run-tests.ps1
 
-    Run every scenario in this directory.
+    Run every task in tasks/.
 
 .EXAMPLE
 ./cli/browser4-cli/tests/scripts/run-tests.ps1 -List
 
-    List discovered scenarios without running them.
+    List discovered tasks without running them.
 
 .EXAMPLE
-./cli/browser4-cli/tests/scripts/run-tests.ps1 search-summary.ps1 amazon.ps1
+./cli/browser4-cli/tests/scripts/run-tests.ps1 search-summary amazon
 
-    Run only the two named scenarios.
+    Run only the two named tasks (with or without .md extension).
 
 .EXAMPLE
-./cli/browser4-cli/tests/scripts/test-runner.ps1 -FailFast
+./cli/browser4-cli/tests/scripts/run-tests.ps1 -FailFast
 
-    Stop after the first failing scenario.
+    Stop after the first failing task.
 
 .NOTES
-Each scenario invokes claude (Claude Code), requires an active LLM subscription,
+Each task invokes claude (Claude Code), requires an active LLM subscription,
 and may take several minutes.  Run them selectively during development.
 #>
 
 [CmdletBinding()]
 param(
-    # One or more scenario script names to run (e.g. "search-summary.ps1").
-    # When omitted every discovered script runs.
+    # One or more task names to run (e.g. "search-summary", "amazon.md").
+    # When omitted every discovered task runs.
     [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
-    [string[]] $Scenarios,
+    [string[]] $Tasks,
 
     # Stop after the first failure instead of continuing.
     [switch] $FailFast,
 
-    # List discovered scenarios and exit.
+    # List discovered tasks and exit.
     [switch] $List
 )
 
@@ -54,41 +54,41 @@ $ErrorActionPreference = 'Stop'
 $script:StartTime = Get-Date
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Discovery — every .ps1 in this directory except common.ps1 and this script
+# Discovery — every .md in tasks/
 # ═══════════════════════════════════════════════════════════════════════════════
 
 $script:ScriptsDir = $PSScriptRoot
-$script:OwnName    = [System.IO.Path]::GetFileName($PSCommandPath)
+$script:TasksDir   = Join-Path $ScriptsDir 'tasks'
+$script:RunnerPath = Join-Path $ScriptsDir 'run-task.ps1'
 # Repo root is 3 levels up from scripts/ (scripts -> tests -> browser4-cli -> repo root)
-$script:RepoRoot   = Resolve-Path "$ScriptsDir/../../.."
+$script:RepoRoot   = (Resolve-Path "$ScriptsDir/../../..").Path
 
-$script:Discovered = Get-ChildItem -Path $ScriptsDir -Filter '*.ps1' `
-    | Where-Object {
-        $_.Name -ne 'common.ps1' -and
-        $_.Name -ne $script:OwnName
-    } `
+$script:Discovered = Get-ChildItem -Path $TasksDir -Filter '*.md' `
     | Sort-Object Name `
     | ForEach-Object { $_.Name }
 
 if ($Discovered.Count -eq 0) {
-    Write-Host 'No scenario scripts found.' -ForegroundColor Yellow
+    Write-Host 'No task files found in tasks/.' -ForegroundColor Yellow
     exit 0
 }
 
-# Resolve which scripts to run
-if ($Scenarios -and $Scenarios.Count -gt 0) {
-    $script:Selected = foreach ($name in $Scenarios) {
-        $base = [System.IO.Path]::GetFileName($name)
-        if ($base -in $Discovered) {
-            $base
+# Resolve which tasks to run — accept names with or without .md extension
+if ($Tasks -and $Tasks.Count -gt 0) {
+    $script:Selected = foreach ($name in $Tasks) {
+        $base = [System.IO.Path]::GetFileNameWithoutExtension($name)
+        $mdName = "$base.md"
+        if ($mdName -in $Discovered) {
+            $mdName
+        } elseif ($name -in $Discovered) {
+            $name
         } else {
-            Write-Host "WARNING: '$base' not found among discovered scripts, skipping." -ForegroundColor Yellow
+            Write-Host "WARNING: '$name' not found among discovered tasks, skipping." -ForegroundColor Yellow
         }
     }
 
     if ($Selected.Count -eq 0) {
-        Write-Host 'No matching scenario scripts to run.' -ForegroundColor Yellow
-        Write-Host "Discovered scripts: $($Discovered -join ', ')"
+        Write-Host 'No matching tasks to run.' -ForegroundColor Yellow
+        Write-Host "Discovered tasks: $($Discovered -join ', ')"
         exit 0
     }
 } else {
@@ -100,25 +100,32 @@ if ($Scenarios -and $Scenarios.Count -gt 0) {
 # ═══════════════════════════════════════════════════════════════════════════════
 
 if ($List) {
-    Write-Host 'Agent scenario scripts:' -ForegroundColor Cyan
+    Write-Host 'Agent scenario tasks:' -ForegroundColor Cyan
     Write-Host ''
     foreach ($name in $Discovered) {
         $marker = if ($name -in $Selected) { ' [selected]' } else { '' }
-        $scriptPath = Join-Path $ScriptsDir $name
+        $taskPath = Join-Path $TasksDir $name
 
-        # Extract the first line of the task prompt as a quick description.
+        # Extract the heading and first content line as a quick description.
         $desc = ''
-        $content = Get-Content $scriptPath -Raw -ErrorAction SilentlyContinue
-        if ($content -match '\$taskPrompt\s*=\s*@"\s*\r?\n\s*(.+?)\.?\s*\r?\n') {
-            $desc = " -- $($Matches[1].Trim())"
-        } elseif ($content -match '\$taskPrompt\s*=\s*@"\r?\n\s*\d+\.\s+(.+)"@') {
-            $desc = " -- $($Matches[1].Trim())"
+        $content = Get-Content $taskPath -Raw -ErrorAction SilentlyContinue
+        if ($content -match '(?m)^\s*#\s+(.+?)\s*$') {
+            $heading = $Matches[1].Trim()
+            # Get the first non-blank, non-heading line after the heading
+            $afterHeading = $content -replace '^\s*#\s+.+?\s*\r?\n', ''
+            if ($afterHeading -match '(?m)^\s*\r?\n?\s*(.+?)\s*$' -or
+                $afterHeading -match '(?m)^(.+?)\s*$') {
+                $firstLine = $Matches[1].Trim()
+                if ($firstLine -and -not $firstLine.StartsWith('#')) {
+                    $desc = " -- $firstLine"
+                }
+            }
         }
 
         Write-Host "  $name$marker$desc"
     }
     Write-Host ''
-    Write-Host "$($Selected.Count) script(s) selected out of $($Discovered.Count) discovered."
+    Write-Host "$($Selected.Count) task(s) selected out of $($Discovered.Count) discovered."
     exit 0
 }
 
@@ -154,14 +161,19 @@ function Format-Duration {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Pre-flight: check that claude is available
+# Pre-flight: check that claude and run-task.ps1 are available
 # ═══════════════════════════════════════════════════════════════════════════════
 
 $claudeAvailable = $null -ne (Get-Command claude -ErrorAction SilentlyContinue)
 if (-not $claudeAvailable) {
     Write-Host 'WARNING: claude CLI not found on PATH.' -ForegroundColor Yellow
-    Write-Host 'Each scenario script invokes claude.  Without it, every script will fail.'
+    Write-Host 'Each task invokes claude.  Without it, every task will fail.'
     Write-Host ''
+}
+
+if (-not (Test-Path -LiteralPath $RunnerPath -PathType Leaf)) {
+    Write-Host "ERROR: Task runner not found: $RunnerPath" -ForegroundColor Red
+    exit 1
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -172,21 +184,21 @@ $Results = [System.Collections.ArrayList]::new()
 $Passed  = 0
 $Failed  = 0
 
-Write-Banner "Agent Scenarios ($($Selected.Count) script(s))"
+Write-Banner "Agent Scenarios ($($Selected.Count) task(s))"
 
 foreach ($name in $Selected) {
-    $scriptPath = Join-Path $ScriptsDir $name
+    $taskPath = Join-Path $TasksDir $name
 
     Write-Section $name
     $start = Get-Date
     $exitCode = 0
 
     try {
-        # Run directly so stdout/stderr stream to this console in real time.
+        # Run the task via run-task.ps1.
         # Working directory is the repo root so claude finds the project.
         Push-Location $RepoRoot
         try {
-            & pwsh -NoProfile -ExecutionPolicy Bypass -File $scriptPath
+            & pwsh -NoProfile -ExecutionPolicy Bypass -File $RunnerPath -TaskFile $taskPath
             $exitCode = $LASTEXITCODE
         } finally {
             Pop-Location
@@ -250,10 +262,10 @@ Write-Host " in $(Format-Duration $totalDuration)" -ForegroundColor Cyan
 
 if ($Failed -gt 0) {
     Write-Host ''
-    Write-Host 'Some scenarios failed.' -ForegroundColor Red
+    Write-Host 'Some tasks failed.' -ForegroundColor Red
     exit 1
 }
 
 Write-Host ''
-Write-Host 'All scenarios passed.' -ForegroundColor Green
+Write-Host 'All tasks passed.' -ForegroundColor Green
 exit 0

@@ -138,10 +138,8 @@ jobs:
         run: |
           $scripts = @(
             'cli/browser4-cli/tests/scripts/common.ps1',
-            'cli/browser4-cli/tests/scripts/search-summary.ps1',
-            'cli/browser4-cli/tests/scripts/amazon.ps1',
-            'cli/browser4-cli/tests/scripts/hacker-news.ps1',
-            'cli/browser4-cli/tests/scripts/form-filling.ps1',
+            'cli/browser4-cli/tests/scripts/run-task.ps1',
+            'cli/browser4-cli/tests/scripts/run-tests.ps1',
             'browser4-tests/agent-scenarios/search-summary.ps1',
             'browser4-tests/agent-scenarios/amazon.ps1',
             'browser4-tests/agent-scenarios/hacker-news.ps1',

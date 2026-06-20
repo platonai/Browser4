@@ -1,85 +1,84 @@
 # Agent Scenario Tests
 
-PowerShell scripts that run browser4-cli usability evaluations through an LLM
-agent. Each script defines a real-world task and asks the agent to complete it
-while simultaneously evaluating the CLI's discoverability, documentation, and
-reliability from a first-time user's perspective.
+Markdown task files and PowerShell runners that evaluate browser4-cli usability
+through an LLM agent. Each task defines a real-world scenario and asks the agent
+to complete it while simultaneously evaluating the CLI's discoverability,
+documentation, and reliability from a first-time user's perspective.
 
 ## Quick start (standalone)
 
 ```powershell
 # From the repo root:
-./cli/browser4-cli/tests/scripts/search-summary.ps1
+./cli/browser4-cli/tests/scripts/run-task.ps1 -TaskFile tasks/search-summary.md
 ```
 
-Each script builds a prompt by combining the shared evaluation template
-(`common.ps1`) with a task-specific prompt, then invokes `claude`.
+Each task file describes the scenario in plain markdown. `run-task.ps1` reads the
+file, combines it with the shared evaluation template (`common.ps1`), and invokes
+`claude`.
 
-## Anatomy of a scenario script
+## Anatomy of a task file
 
-```powershell
-#!/usr/bin/env pwsh
-. "$PSScriptRoot/common.ps1"           # 1. dot-source shared helpers
+Task files live in `tasks/` and follow this format:
 
-$taskPrompt = @"                        # 2. define the task
+```markdown
+# scenario-name
+
 1. Go to https://example.com
 2. Search for: something
 3. Summarize the results.
-"@
-
-$prompt = $generalPrompt + $taskPrompt  # 3. concatenate
-Invoke-Agent -Prompt $prompt            # 4. invoke the agent
 ```
 
-`common.ps1` provides two things:
+The first `# Heading` becomes the scenario name; the body is the task prompt.
 
-| Symbol | Purpose |
-|--------|---------|
-| `$generalPrompt` | The shared usability-evaluation template (prepended to every task) |
-| `Invoke-Agent` | Centralized agent invocation (`claude --dangerously-skip-permissions`) |
+## Running every task at once
 
-## Running every scenario at once
-
-`test-runner.ps1` auto-discovers every `.ps1` in this directory (excluding
-`common.ps1` and itself) and runs them sequentially:
+`run-tests.ps1` auto-discovers every `.md` in `tasks/` and runs them
+sequentially:
 
 ```powershell
 # Run everything:
-./cli/browser4-cli/tests/scripts/test-runner.ps1
+./cli/browser4-cli/tests/scripts/run-tests.ps1
 
-# List discovered scripts:
-./cli/browser4-cli/tests/scripts/test-runner.ps1 -List
+# List discovered tasks:
+./cli/browser4-cli/tests/scripts/run-tests.ps1 -List
 
 # Run a subset:
-./cli/browser4-cli/tests/scripts/test-runner.ps1 search-summary.ps1 amazon.ps1
+./cli/browser4-cli/tests/scripts/run-tests.ps1 search-summary amazon
 
 # Stop on first failure:
-./cli/browser4-cli/tests/scripts/test-runner.ps1 -FailFast
-
-# Launch each scenario in its own window:
-./cli/browser4-cli/tests/scripts/test-runner.ps1 -NewWindow
+./cli/browser4-cli/tests/scripts/run-tests.ps1 -FailFast
 ```
 
-New scripts placed in this directory are picked up automatically — no
+New task files placed in `tasks/` are picked up automatically — no
 registration step is needed.
 
-## Adding a new scenario
+## Adding a new task
 
-1. Copy an existing script, e.g. `cp hacker-news.ps1 my-scenario.ps1`
-2. Replace the `$taskPrompt` content with your task instructions
-3. Save and run — `test-runner.ps1` discovers it automatically
+1. Create a new `.md` file in `tasks/`, e.g. `tasks/my-scenario.md`
+2. Add a `# scenario-name` heading and the task instructions
+3. Save and run — `run-tests.ps1` discovers it automatically
 
-## Available scenarios
+## Available tasks
 
-| Script | Task |
-|--------|------|
-| `search-summary.ps1` | Search Baidu for 武汉龙虾节, summarize findings |
-| `amazon.ps1` | Search Amazon for whiteboard pens, compare top 4 |
-| `hacker-news.ps1` | Navigate HN, open and summarize top 3 posts |
-| `form-filling.ps1` | Fill a local HTML form using batch mode with CSS selectors |
+| Task file | Scenario |
+|-----------|----------|
+| `tasks/search-summary.md` | Search Baidu for 武汉龙虾节, summarize findings |
+| `tasks/amazon.md` | Search Amazon for whiteboard pens, compare top 4 |
+| `tasks/hacker-news.md` | Navigate HN, open and summarize top 3 posts |
+| `tasks/form-filling.md` | Fill a local HTML form using batch mode with CSS selectors |
+
+## Script reference
+
+| Script | Purpose |
+|--------|---------|
+| `common.ps1` | Shared evaluation prompt (`$generalPrompt`) and agent invocation (`Invoke-Agent`) |
+| `run-task.ps1` | Single-task runner — reads a `.md` task file and invokes the agent |
+| `run-tests.ps1` | Batch runner — discovers and runs all tasks in `tasks/` |
+| `common.tests.ps1` | Unit tests for `common.ps1` |
 
 ## Production copies
 
 The scripts in `browser4-tests/agent-scenarios/` are thin wrappers that
-dot-source the corresponding scripts here. Keep the canonical versions in this
+set `$browser4cliMode = 'production'` and call `run-task.ps1` with the
+corresponding task file. Keep the canonical task files and runners in this
 directory; update the production wrappers only if they need different behavior.
