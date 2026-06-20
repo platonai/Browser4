@@ -61,6 +61,7 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
         )
 
         private const val NAVIGATION_POLL_TIMEOUT_MS = 30_000L
+        private const val NAVIGATION_DOM_READY_TIMEOUT_MS = 10_000L
         private const val NAVIGATION_DOM_SETTLE_DELAY_MS = 1_000L
 
         private fun resolveReadPageStateActions(): Set<String> {
@@ -260,8 +261,10 @@ class BrowserTabToolExecutor : AbstractToolExecutor() {
         try {
             val urlAfter = driver.currentUrl()
             if (urlAfter != urlBefore) {
-                // URL already changed — navigation completed, wait for DOM to be ready
-                driver.waitForSelector("body", NAVIGATION_POLL_TIMEOUT_MS)
+                // URL already changed — navigation completed, wait for DOM to be ready.
+                // Use a shorter timeout here since the navigation itself has already finished;
+                // we only need the new page's body element to appear.
+                driver.waitForSelector("body", NAVIGATION_DOM_READY_TIMEOUT_MS)
                 delay(NAVIGATION_DOM_SETTLE_DELAY_MS.milliseconds)
                 return
             }

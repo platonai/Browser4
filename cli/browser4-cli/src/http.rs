@@ -52,6 +52,13 @@ fn is_navigation_tool(tool: &str) -> bool {
     )
 }
 
+/// Tools that can trigger navigation as a side effect (clicking links, submitting forms,
+/// pressing Enter on focused inputs). The backend runs post-action navigation detection
+/// that can take up to ~31s, so these need the same timeout budget as explicit navigation.
+fn is_navigation_triggering_tool(tool: &str) -> bool {
+    matches!(tool, "browser_click" | "browser_press_key")
+}
+
 fn is_text_input_tool(tool: &str) -> bool {
     matches!(
         tool,
@@ -60,7 +67,7 @@ fn is_text_input_tool(tool: &str) -> bool {
 }
 
 fn timeout_for_tool(tool: &str) -> std::time::Duration {
-    if is_navigation_tool(tool) {
+    if is_navigation_tool(tool) || is_navigation_triggering_tool(tool) {
         navigation_request_timeout()
     } else if is_text_input_tool(tool) {
         text_input_request_timeout()
@@ -189,6 +196,13 @@ fn format_mcp_transport_error(
             msg.push_str(
                 "\nNote: Text input operations may partially execute despite timeout. \
                  Verify the field content with `snapshot` or `get-text` after a timeout.",
+            );
+        }
+        if is_navigation_triggering_tool(tool) {
+            msg.push_str(
+                "\nNote: Click/press actions may trigger page navigation that succeeds \
+                 despite the timeout. Check the current page with `snapshot` to verify \
+                 whether the action completed.",
             );
         }
         msg
@@ -651,6 +665,9 @@ mod tests {
         assert_eq!(timeout_for_tool("browser_reload").as_secs(), 7);
         assert_eq!(timeout_for_tool("browser_navigate_back").as_secs(), 7);
         assert_eq!(timeout_for_tool("browser_navigate_forward").as_secs(), 7);
+        // Navigation-triggering tools should also get the navigation budget
+        assert_eq!(timeout_for_tool("browser_click").as_secs(), 7);
+        assert_eq!(timeout_for_tool("browser_press_key").as_secs(), 7);
         assert_eq!(timeout_for_tool("browser_press_sequentially").as_secs(), 11);
         assert_eq!(timeout_for_tool("browser_type").as_secs(), 11);
         assert_eq!(timeout_for_tool("browser_fill_form").as_secs(), 11);
@@ -667,8 +684,11 @@ mod tests {
         assert_eq!(timeout_for_tool("browser_press_sequentially").as_secs(), 60);
         assert_eq!(timeout_for_tool("browser_type").as_secs(), 60);
         assert_eq!(timeout_for_tool("browser_fill_form").as_secs(), 60);
-        // Default for non-navigation, non-input tools
-        assert_eq!(timeout_for_tool("browser_click").as_secs(), 30);
+        // Navigation-triggering tools get the navigation timeout, not the default
+        assert_eq!(timeout_for_tool("browser_click").as_secs(), 120);
+        assert_eq!(timeout_for_tool("browser_press_key").as_secs(), 120);
+        // Non-navigation, non-input, non-navigation-triggering tools get default
+        assert_eq!(timeout_for_tool("page_title").as_secs(), 30);
     }
 
     #[test]
@@ -679,6 +699,15 @@ mod tests {
         assert!(!is_text_input_tool("browser_click"));
         assert!(!is_text_input_tool("browser_navigate"));
         assert!(!is_text_input_tool("page_title"));
+    }
+
+    #[test]
+    fn test_is_navigation_triggering_tool_detection() {
+        assert!(is_navigation_triggering_tool("browser_click"));
+        assert!(is_navigation_triggering_tool("browser_press_key"));
+        assert!(!is_navigation_triggering_tool("browser_navigate"));
+        assert!(!is_navigation_triggering_tool("browser_type"));
+        assert!(!is_navigation_triggering_tool("page_title"));
     }
 
     #[test]
@@ -705,7 +734,7 @@ mod tests {
     }
 
     #[test]
-    fn test_non_input_timeout_error_has_no_partial_execution_note() {
+    fn test_navigation_triggering_tool_timeout_error_includes_snapshot_note() {
         let error = format_mcp_transport_error(
             "browser_click",
             "http://localhost:8182/mcp/call-tool",
@@ -722,8 +751,39 @@ mod tests {
             "Expected timeout prefix, got: {error}"
         );
         assert!(
+            error.contains("Check the current page with `snapshot`"),
+            "Expected snapshot suggestion for navigation-triggering tool, got: {error}"
+        );
+        assert!(
             !error.contains("may partially execute despite timeout"),
-            "Should NOT contain partial execution note for non-input tool, got: {error}"
+            "Should NOT contain text input partial execution note for click tool, got: {error}"
+        );
+    }
+
+    #[test]
+    fn test_non_navigation_non_input_tool_timeout_error_has_no_notes() {
+        let error = format_mcp_transport_error(
+            "page_title",
+            "http://localhost:8182/mcp/call-tool",
+            &json!({}),
+            Some(std::time::Duration::from_secs(30)),
+            &reqwest::blocking::Client::new()
+                .post("http://127.0.0.1:1")
+                .timeout(std::time::Duration::from_millis(1))
+                .send()
+                .expect_err("should time out"),
+        );
+        assert!(
+            error.contains("HTTP request timed out"),
+            "Expected timeout prefix, got: {error}"
+        );
+        assert!(
+            !error.contains("may partially execute despite timeout"),
+            "Should NOT contain partial execution note for page_title, got: {error}"
+        );
+        assert!(
+            !error.contains("Check the current page with `snapshot`"),
+            "Should NOT contain snapshot suggestion for page_title, got: {error}"
         );
     }
 
