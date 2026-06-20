@@ -1419,8 +1419,7 @@ $expectedScripts = @(
     'workers\count-total-token-usage.ps1',
     'workers\count-total-token-usage.py',
     'workers\coworker-memory-generator.ps1',
-    'workers\coworker-daily-memory-generator.ps1',
-    'architect\orchestrator.ps1'
+    'workers\coworker-daily-memory-generator.ps1'
 )
 
 foreach ($scriptRelPath in $expectedScripts) {
