@@ -404,7 +404,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "key", description: "Name of the key to press or a character to generate, such as `ArrowLeft` or `a`", optional: false },
                 ArgDef { name: "ref", description: "Optional CSS selector or element reference to receive the key press", optional: true },
             ],
-            options: &[],
+            options: &[
+                OptionDef { name: "verify", description: "Verify the key press was applied by reading the element value", is_bool: true, short: None },
+            ],
             tool_name_fn: |_| "browser_press_key".to_string(),
             tool_params_fn: |args| {
                 let (key, reference) = resolve_key_and_ref(args);
@@ -677,7 +679,9 @@ pub fn all_commands() -> Vec<CommandDef> {
                 ArgDef { name: "ref", description: "Exact target element reference from the page snapshot", optional: false },
                 ArgDef { name: "val", description: "Value to select in the dropdown", optional: false },
             ],
-            options: &[],
+            options: &[
+                OptionDef { name: "verify", description: "Verify the correct option was selected by reading the element value", is_bool: true, short: None },
+            ],
             tool_name_fn: |_| "browser_select_option".to_string(),
             tool_params_fn: |args| {
                 let value = get_str(args, "val").unwrap_or_default();

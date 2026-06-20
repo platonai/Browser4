@@ -2677,6 +2677,303 @@ async fn handle_text_input_command(
     }
 }
 
+/// Handle `press` command with optional verification and automatic
+/// post-timeout verification.
+///
+/// For verification, reads the element's current value. If the key is a
+/// single printable character the verification checks whether it was
+/// appended; for modifier / navigation keys it simply reports the current
+/// value so the user can decide.
+async fn handle_press_command(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+    verify: bool,
+) -> Result<(), String> {
+    let key_pressed = tool_params
+        .get("key")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let element_ref = tool_params
+        .get("ref")
+        .and_then(|v| v.as_str());
+
+    // Build the expected check for printable single-character keys.
+    let is_printable = key_pressed.chars().count() == 1
+        && !key_pressed.chars().all(|c| c.is_control());
+
+    // Step 1: Call the press tool.
+    let tool_result = with_session(
+        client,
+        base_url,
+        session_name,
+        false,
+        |session_id| {
+            let client = client.clone();
+            let base_url = base_url.to_string();
+            let tool_name = tool_name.to_string();
+            let mut params = tool_params.clone();
+            params["sessionId"] = json!(session_id);
+            async move { call_tool(&client, &base_url, &tool_name, params).await }
+        },
+    )
+    .await;
+
+    match tool_result {
+        Ok(text) => {
+            if !text.is_empty() {
+                cli_println!("{}", text);
+            }
+
+            if verify {
+                let state = require_session(session_name)?;
+                let session_id = get_session_id(&state)?.to_string();
+                match verify_press_result(
+                    client,
+                    base_url,
+                    &session_id,
+                    element_ref,
+                    key_pressed,
+                    is_printable,
+                )
+                .await
+                {
+                    Ok(report) => {
+                        cli_println!("{}", report);
+                        json_field("verification", json!(&report));
+                    }
+                    Err(verify_err) => {
+                        cli_println!(
+                            "Verification could not be completed: {}",
+                            verify_err
+                        );
+                        json_field("verification_error", json!(&verify_err));
+                    }
+                }
+            }
+
+            persist_active_selector(base_url, session_name, tracked_selector(tool_params))?;
+            Ok(())
+        }
+        Err(err) => {
+            if is_timeout_error_message(&err) {
+                let state = require_session(session_name)?;
+                let session_id = get_session_id(&state)?.to_string();
+                let verify_msg = match verify_press_result(
+                    client,
+                    base_url,
+                    &session_id,
+                    element_ref,
+                    key_pressed,
+                    is_printable,
+                )
+                .await
+                {
+                    Ok(report) => report,
+                    Err(verify_err) => {
+                        format!("Verification could not be completed: {}", verify_err)
+                    }
+                };
+                let enriched = format!("{}\n{}", err, verify_msg);
+                Err(enriched)
+            } else {
+                Err(err)
+            }
+        }
+    }
+}
+
+/// Verify the result of a `press` command by reading the element value.
+async fn verify_press_result(
+    client: &Client,
+    base_url: &str,
+    session_id: &str,
+    element_ref: Option<&str>,
+    key_pressed: &str,
+    is_printable: bool,
+) -> Result<String, String> {
+    let expression = if element_ref.is_some() {
+        "element => (element.value !== undefined ? (element.value || '') : (element.textContent || ''))".to_string()
+    } else {
+        "(() => { \
+            const el = document.activeElement; \
+            return el \
+                ? (el.value !== undefined ? (el.value || '') : (el.textContent || '')) \
+                : ''; \
+        })()".to_string()
+    };
+
+    let mut params = json!({
+        "sessionId": session_id,
+        "expression": expression,
+    });
+    if let Some(ref_sel) = element_ref {
+        params["ref"] = json!(ref_sel);
+    }
+
+    let result = call_tool(client, base_url, "browser_evaluate", params).await?;
+    let actual = result.trim().trim_matches('"').to_string();
+
+    if is_printable {
+        if actual.ends_with(key_pressed) {
+            Ok(format!(
+                "Verification: key '{}' was pressed — value ends with expected character. Current value: '{}'",
+                key_pressed, actual
+            ))
+        } else if actual.is_empty() {
+            Ok("Verification: key was NOT applied — element is empty.".to_string())
+        } else {
+            Ok(format!(
+                "Verification: key '{}' may not have been applied. Current value: '{}'",
+                key_pressed, actual
+            ))
+        }
+    } else {
+        Ok(format!(
+            "Verification: element value after '{}' press: '{}'",
+            key_pressed, actual
+        ))
+    }
+}
+
+/// Handle `select` command with optional verification and automatic
+/// post-timeout verification.
+async fn handle_select_command(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+    verify: bool,
+) -> Result<(), String> {
+    let expected_value = tool_params
+        .get("val")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let element_ref = tool_params
+        .get("ref")
+        .and_then(|v| v.as_str());
+
+    let tool_result = with_session(
+        client,
+        base_url,
+        session_name,
+        false,
+        |session_id| {
+            let client = client.clone();
+            let base_url = base_url.to_string();
+            let tool_name = tool_name.to_string();
+            let mut params = tool_params.clone();
+            params["sessionId"] = json!(session_id);
+            async move { call_tool(&client, &base_url, &tool_name, params).await }
+        },
+    )
+    .await;
+
+    match tool_result {
+        Ok(text) => {
+            if !text.is_empty() {
+                cli_println!("{}", text);
+            }
+
+            if verify {
+                let state = require_session(session_name)?;
+                let session_id = get_session_id(&state)?.to_string();
+                match verify_select_result(
+                    client,
+                    base_url,
+                    &session_id,
+                    element_ref,
+                    expected_value,
+                )
+                .await
+                {
+                    Ok(report) => {
+                        cli_println!("{}", report);
+                        json_field("verification", json!(&report));
+                    }
+                    Err(verify_err) => {
+                        cli_println!(
+                            "Verification could not be completed: {}",
+                            verify_err
+                        );
+                        json_field("verification_error", json!(&verify_err));
+                    }
+                }
+            }
+
+            persist_active_selector(base_url, session_name, tracked_selector(tool_params))?;
+            Ok(())
+        }
+        Err(err) => {
+            if is_timeout_error_message(&err) {
+                let state = require_session(session_name)?;
+                let session_id = get_session_id(&state)?.to_string();
+                let verify_msg = match verify_select_result(
+                    client,
+                    base_url,
+                    &session_id,
+                    element_ref,
+                    expected_value,
+                )
+                .await
+                {
+                    Ok(report) => report,
+                    Err(verify_err) => {
+                        format!("Verification could not be completed: {}", verify_err)
+                    }
+                };
+                let enriched = format!("{}\n{}", err, verify_msg);
+                Err(enriched)
+            } else {
+                Err(err)
+            }
+        }
+    }
+}
+
+/// Verify the result of a `select` command by reading the element's value.
+async fn verify_select_result(
+    client: &Client,
+    base_url: &str,
+    session_id: &str,
+    element_ref: Option<&str>,
+    expected_value: &str,
+) -> Result<String, String> {
+    let expression = if element_ref.is_some() {
+        "element => (element.value !== undefined ? (element.value || '') : (element.textContent || ''))".to_string()
+    } else {
+        return Err("Verification requires an element ref for select.".to_string());
+    };
+
+    let mut params = json!({
+        "sessionId": session_id,
+        "expression": expression,
+    });
+    if let Some(ref_sel) = element_ref {
+        params["ref"] = json!(ref_sel);
+    }
+
+    let result = call_tool(client, base_url, "browser_evaluate", params).await?;
+    let actual = result.trim().trim_matches('"').to_string();
+
+    if actual == expected_value {
+        Ok(format!(
+            "Verification: option '{}' is selected.",
+            expected_value
+        ))
+    } else if actual.is_empty() {
+        Ok("Verification: no option appears to be selected — value is empty.".to_string())
+    } else {
+        Ok(format!(
+            "Verification: expected '{}' to be selected, but current value is '{}'.",
+            expected_value, actual
+        ))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Agent command handlers
 // ---------------------------------------------------------------------------
@@ -5156,13 +5453,32 @@ async fn run(
             .await?;
         }
         "press" => {
-            handle_tool_command(
+            let verify = parsed
+                .get("verify")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            handle_press_command(
                 &client,
                 &base_url,
                 &tool_name,
                 &tool_params,
-                false,
                 global.session_name.as_deref(),
+                verify,
+            )
+            .await?;
+        }
+        "select" => {
+            let verify = parsed
+                .get("verify")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            handle_select_command(
+                &client,
+                &base_url,
+                &tool_name,
+                &tool_params,
+                global.session_name.as_deref(),
+                verify,
             )
             .await?;
         }
