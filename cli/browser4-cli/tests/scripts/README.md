@@ -78,7 +78,7 @@ registration step is needed.
 
 ## Production copies
 
-The scripts in `browser4-tests/agent-scenarios/` are thin wrappers that
+The scripts in `browser4-tests/real-world-scenarios/` are thin wrappers that
 set `$browser4cliMode = 'production'` and call `run-task.ps1` with the
 corresponding task file. Keep the canonical task files and runners in this
 directory; update the production wrappers only if they need different behavior.
