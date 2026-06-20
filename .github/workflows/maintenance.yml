@@ -1,0 +1,166 @@
+name: Daily Maintenance Checks
+
+on:
+  schedule:
+    # Runs at 06:00 UTC daily (after the 00:00 nightly build completes).
+    # Runs all enabled maintenance checks via the orchestrator, reports
+    # results as a GitHub job summary, and commits the updated shared
+    # state file so the team benefits from skip-if-recently-run.
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Force-run all checks (bypass state-based scheduling)'
+        required: false
+        default: false
+        type: boolean
+      commit_state:
+        description: 'Commit updated state file back to the repo'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  MAINTENANCE_MODE: nightly
+
+# Grant GITHUB_TOKEN write access so the state-file commit can be pushed.
+permissions:
+  contents: write
+
+jobs:
+  maintenance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run maintenance orchestrator
+        id: orchestrator
+        shell: pwsh
+        run: |
+          $forceFlag = if ($env:FORCE_RUN -eq 'true') { '-Force' } else { '' }
+          $args = @('-NoProfile', '-File', 'bin/maintenance/orchestrator.ps1', '-Once')
+          if ($forceFlag) { $args += $forceFlag }
+
+          Write-Host "::group::🔧 Running maintenance checks (mode: $env:MAINTENANCE_MODE, force: $env:FORCE_RUN)"
+          & pwsh @args
+          $exitCode = $LASTEXITCODE
+          Write-Host "::endgroup::"
+
+          if ($exitCode -ne 0) {
+            Write-Host "::warning::Orchestrator exited with code $exitCode"
+          }
+
+          # Log current state
+          $statePath = 'bin/maintenance/state/maintenance-state.json'
+          if (Test-Path $statePath) {
+            $state = Get-Content $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
+            $taskCount = @($state.Tasks.PSObject.Properties).Count
+            Write-Host "State file has $taskCount task(s) with run history"
+          }
+
+          exit $exitCode
+        env:
+          FORCE_RUN: ${{ inputs.force }}
+
+      - name: Generate Markdown summary
+        if: always()
+        shell: pwsh
+        run: |
+          $summaryDir = 'bin/maintenance/logs'
+          $newestSummary = Get-ChildItem $summaryDir -Filter 'summary-*.json' -File -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+
+          if ($newestSummary) {
+            $data = Get-Content $newestSummary.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+
+            $overallStatus = if ($data.failed -gt 0 -or $data.errors -gt 0) { '❌' }
+                             elseif ($data.skipped -gt 0) { '⚠️' }
+                             else { '✅' }
+
+            "## ${overallStatus} Maintenance Check Results" >> $env:GITHUB_STEP_SUMMARY
+            "" >> $env:GITHUB_STEP_SUMMARY
+            "| Status | Count |" >> $env:GITHUB_STEP_SUMMARY
+            "|--------|-------|" >> $env:GITHUB_STEP_SUMMARY
+            "| ✅ Passed  | $($data.passed)  |" >> $env:GITHUB_STEP_SUMMARY
+            "| ❌ Failed  | $($data.failed)  |" >> $env:GITHUB_STEP_SUMMARY
+            "| ⚠️ Skipped | $($data.skipped) |" >> $env:GITHUB_STEP_SUMMARY
+            "| ⚡ Errors  | $($data.errors)  |" >> $env:GITHUB_STEP_SUMMARY
+            "| **Total**  | **$($data.total)**  |" >> $env:GITHUB_STEP_SUMMARY
+            "" >> $env:GITHUB_STEP_SUMMARY
+            "**$($data.passed)/$($data.total) checks passed** — $($data.timestamp)" >> $env:GITHUB_STEP_SUMMARY
+
+            if ($data.checks) {
+              "" >> $env:GITHUB_STEP_SUMMARY
+              "### Details" >> $env:GITHUB_STEP_SUMMARY
+              "" >> $env:GITHUB_STEP_SUMMARY
+              "| Check | Status | Duration | Details |" >> $env:GITHUB_STEP_SUMMARY
+              "|-------|--------|----------|---------|" >> $env:GITHUB_STEP_SUMMARY
+              foreach ($c in $data.checks) {
+                $icon = switch ($c.status) {
+                  'passed'  { '✅' }
+                  'failed'  { '❌' }
+                  'skipped' { '⚠️' }
+                  'error'   { '⚡' }
+                  default   { '❓' }
+                }
+                $dur = if ($c.durationMs) { "$([math]::Round($c.durationMs / 1000, 1))s" } else { '-' }
+                $det = if ($c.details) { $c.details } else { '-' }
+                "| $icon $($c.name) | $($c.status) | $dur | $det |" >> $env:GITHUB_STEP_SUMMARY
+              }
+            }
+          }
+          else {
+            "No maintenance results found." >> $env:GITHUB_STEP_SUMMARY
+          }
+
+      - name: Commit updated state file
+        id: commit-state
+        if: inputs.commit_state != false
+        shell: bash
+        run: |
+          STATE_PATH="bin/maintenance/state/maintenance-state.json"
+
+          if ! git diff --quiet -- "$STATE_PATH"; then
+            echo "State file has changes, committing..."
+
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+
+            git add "$STATE_PATH"
+            git commit -m "chore(maintenance): update shared state after daily check run
+
+          Automated commit from Daily Maintenance Checks workflow.
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          Co-Authored-By: github-actions[bot] <github-actions[bot]@users.noreply.github.com>"
+
+            git push origin HEAD:${{ github.ref_name }}
+
+            echo "✅ State file committed and pushed"
+            echo "committed=true" >> $GITHUB_OUTPUT
+          else
+            echo "State file unchanged (no new checks ran or results unchanged)"
+            echo "committed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Final status
+        if: always()
+        shell: bash
+        run: |
+          if [ "${{ steps.orchestrator.outcome }}" != "success" ]; then
+            echo ""
+            echo "::warning::⚠️ Some maintenance checks failed. Review the report above."
+          else
+            echo ""
+            echo "✅ All maintenance checks passed."
+          fi
+
+          if [ "${{ steps.commit-state.outputs.committed }}" = "true" ]; then
+            echo "📤 Updated state file has been pushed to the repository."
+          fi
