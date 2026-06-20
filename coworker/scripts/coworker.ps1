@@ -27,45 +27,10 @@ param(
 # $env:GH_DEBUG = 'api'      # 打印 API 请求
 # $env:GH_DEBUG = '1'        # 打印调试信息
 
-function Write-ConsoleLine {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Message,
-        [System.ConsoleColor]$ForegroundColor,
-        [switch]$ErrorStream
-    )
-
-    $canUseHost = $false
-    try {
-        $canUseHost = [Environment]::UserInteractive -and $null -ne $Host -and $null -ne $Host.UI -and $null -ne $Host.UI.RawUI
-    }
-    catch {
-        $canUseHost = $false
-    }
-
-    if ($canUseHost) {
-        if ($PSBoundParameters.ContainsKey('ForegroundColor')) {
-            Write-Host $Message -ForegroundColor $ForegroundColor
-        } else {
-            Write-Host $Message
-        }
-        return
-    }
-
-    $isRedirected = if ($ErrorStream) { [Console]::IsErrorRedirected } else { [Console]::IsOutputRedirected }
-    if ($isRedirected) {
-        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Message + [Environment]::NewLine)
-        $stream = if ($ErrorStream) { [Console]::OpenStandardError() } else { [Console]::OpenStandardOutput() }
-        $stream.Write($bytes, 0, $bytes.Length)
-        $stream.Flush()
-        return
-    }
-
-    if ($PSBoundParameters.ContainsKey('ForegroundColor')) {
-        Write-Host $Message -ForegroundColor $ForegroundColor
-    } else {
-        Write-Host $Message
-    }
+# Load task logger early for startup message
+$taskLoggerHelper = Join-Path $PSScriptRoot 'workers\task-logger.ps1'
+if (Test-Path -LiteralPath $taskLoggerHelper) {
+    . $taskLoggerHelper
 }
 
 Write-ConsoleLine -Message "Starting Coworker Task Runner..." -ForegroundColor Cyan
@@ -94,6 +59,8 @@ $tasksRoot = Join-Path $repoRoot "coworker\tasks"
 $scriptsDir = $PSScriptRoot
 $agentHelper = Join-Path $scriptsDir "workers\agent.ps1"
 . $agentHelper
+$workflowHelper = Join-Path $scriptsDir "workers\workflow.ps1"
+. $workflowHelper
 $targetRepoRoot = $repoRoot
 $agentCommand = $null
 $agentExecutable = $null
@@ -150,70 +117,11 @@ $logsSubDir = Join-Path $logsDir "$currentYear\$currentMonth\$currentDay"
 if (!(Test-Path $logsSubDir)) { New-Item -ItemType Directory -Path $logsSubDir | Out-Null }
 
 $scriptLogPath = Join-Path $logsSubDir "${currentTime}-coworker.log"
+$script:__ScriptLogPath = $scriptLogPath
 $scriptStartTime = (Get-Date).ToUniversalTime()
 
 $agentNameTimeoutSeconds = 60
 $agentRunTimeoutSeconds = 6000
-
-function New-AgentPromptArguments {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Prompt,
-        [string[]]$AdditionalArguments = @()
-    )
-
-    return @(New-AgentArguments -BaseArgs $script:agentBaseArgs -Prompt $Prompt -AdditionalArguments $AdditionalArguments)
-}
-
-function Format-AgentPromptCommand {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string[]]$Arguments
-    )
-
-    return Format-AgentCommand -Executable $script:agentExecutable -Arguments $Arguments
-}
-
-# ============================================================================
-# Logging Functions
-# ============================================================================
-
-# Function: Write message to console and main script log file
-function Write-LogMessage {
-    param(
-        [Parameter(Mandatory=$true)]
-        [string]$Message,
-        [ValidateSet('INFO', 'WARN', 'ERROR')]
-        [string]$Level = 'INFO'
-    )
-
-    $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')
-    $logEntry = "[$timestamp] [$Level] $Message"
-
-    # Write to console (or redirected stdout when launched by scheduler)
-    switch ($Level) {
-        'INFO' { Write-ConsoleLine -Message $logEntry }
-        'WARN' { Write-ConsoleLine -Message $logEntry -ForegroundColor Yellow }
-        'ERROR' { Write-ConsoleLine -Message $logEntry -ForegroundColor Red }
-    }
-
-    # Append to script log file
-    $logEntry | Out-File -FilePath $scriptLogPath -Append -Encoding UTF8
-}
-
-# Function: Write message only to log file (for verbose output)
-function Write-LogVerbose {
-    param(
-        [Parameter(Mandatory=$true)]
-        [string]$Message
-    )
-
-    $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')
-    $logEntry = "[$timestamp] [DEBUG] $Message"
-
-    # Append to script log file only (not console)
-    $logEntry | Out-File -FilePath $scriptLogPath -Append -Encoding UTF8
-}
 
 try {
     $targetRepoRoot = Get-TargetRepositoryRoot
@@ -230,152 +138,6 @@ catch {
 Write-LogMessage "Control repository root: $repoRoot" INFO
 Write-LogMessage "Target repository root: $targetRepoRoot" INFO
 Write-LogMessage "Agent working directory: $agentWorkingDirectory" INFO
-
-function Ensure-DraftPlaceholders {
-    param(
-        [Parameter(Mandatory=$true)]
-        [string]$DraftDirectory
-    )
-
-    foreach ($draftNumber in 1..5) {
-        $draftPath = Join-Path $DraftDirectory "$draftNumber.md"
-        if (!(Test-Path $draftPath)) {
-            Set-Content -Path $draftPath -Value '' -Encoding UTF8
-            Write-LogMessage "Created missing draft placeholder: $draftPath" INFO
-        }
-    }
-}
-
-function Get-TaskBaseName {
-    param(
-        [Parameter(Mandatory=$true)]
-        [string]$Title,
-        [Parameter(Mandatory=$true)]
-        [string]$Description,
-        [Parameter(Mandatory=$true)]
-        [string]$Prompt,
-        [Parameter(Mandatory=$true)]
-        [string]$Fallback
-    )
-
-    $promptSample = $Prompt
-    if ($promptSample.Length -gt 600) {
-        $promptSample = $promptSample.Substring(0, 600)
-    }
-
-    $namingPrompt = @"
-Create a short, descriptive task name in kebab-case (3-6 words max). Output only the name.
-Title: $Title
-Description: $Description
-Prompt: $promptSample
-"@
-
-    try {
-        $nameArguments = New-AgentPromptArguments -Prompt $namingPrompt
-
-        Write-LogVerbose ("Executing Agent for naming: {0}" -f (Format-AgentPromptCommand -Arguments $nameArguments))
-        Write-LogVerbose "Naming agent working directory: $agentWorkingDirectory"
-
-        $nameStdOut = [System.IO.Path]::GetTempFileName()
-        $nameStdErr = [System.IO.Path]::GetTempFileName()
-        $nameProcess = Start-AgentProcess -Executable $agentExecutable -BaseArgs $agentBaseArgs -Prompt $namingPrompt -WorkingDirectory $agentWorkingDirectory -StdOutPath $nameStdOut -StdErrPath $nameStdErr -NoNewWindow
-
-        $waited = $false
-        try {
-            $null = Wait-Process -Id $nameProcess.Id -Timeout $agentNameTimeoutSeconds -ErrorAction Stop
-            $waited = $true
-        } catch {
-            $waited = $false
-            Write-LogMessage "Agent naming timed out after ${agentNameTimeoutSeconds}s" WARN
-        }
-
-        if (-not $waited -or -not $nameProcess.HasExited) {
-            Stop-Process -Id $nameProcess.Id -Force -ErrorAction SilentlyContinue
-
-            if (Test-Path $nameStdErr) {
-                $errContent = Get-Content -Path $nameStdErr -Encoding UTF8
-                Write-LogVerbose "Naming agent STDERR (Timeout): $errContent"
-            }
-
-            Remove-Item $nameStdOut -ErrorAction SilentlyContinue
-            Remove-Item $nameStdErr -ErrorAction SilentlyContinue
-            return $Fallback
-        }
-
-        $rawName = ""
-        if (Test-Path $nameStdOut) {
-            $rawName = (Get-Content -Path $nameStdOut -Encoding UTF8 | Where-Object { $_ -and $_.Trim() } | Select-Object -First 1)
-            Write-LogVerbose "Naming agent STDOUT: $rawName"
-        } else {
-            Write-LogVerbose "Naming agent STDOUT file not found"
-        }
-
-        if (Test-Path $nameStdErr) {
-            $errContent = Get-Content $nameStdErr -Encoding UTF8
-            if ($errContent) {
-                Write-LogVerbose "Naming agent STDERR: $errContent"
-            }
-        }
-
-        Remove-Item $nameStdOut -ErrorAction SilentlyContinue
-        Remove-Item $nameStdErr -ErrorAction SilentlyContinue
-
-        if ($nameProcess.ExitCode -ne 0) {
-            Write-LogVerbose "Naming agent exited with code $($nameProcess.ExitCode)"
-            return $Fallback
-        }
-
-        if ([string]::IsNullOrWhiteSpace($rawName)) {
-            Write-LogVerbose "Naming agent returned empty name"
-            return $Fallback
-        }
-
-        $normalized = $rawName.Trim()
-        $normalized = $normalized -replace '\s+', '-'
-        $normalized = $normalized -replace '[^A-Za-z0-9._-]', '-'
-        $normalized = $normalized -replace '-+', '-'
-        $normalized = $normalized.Trim(' ', '.', '-', '_')
-        if ($normalized.Length -gt 60) {
-            $normalized = $normalized.Substring(0, 60).Trim(' ', '.', '-', '_')
-        }
-
-        if ([string]::IsNullOrWhiteSpace($normalized)) {
-            return $Fallback
-        }
-
-        return $normalized
-    }
-    catch {
-        return $Fallback
-    }
-}
-
-function Resolve-UniquePath {
-    param(
-        [Parameter(Mandatory=$true)]
-        [string]$Directory,
-        [Parameter(Mandatory=$true)]
-        [string]$BaseName,
-        [Parameter(Mandatory=$true)]
-        [string]$Extension
-    )
-
-    $candidateName = "$BaseName$Extension"
-    $candidatePath = Join-Path $Directory $candidateName
-    if (!(Test-Path $candidatePath)) {
-        return @{ Path = $candidatePath; FileName = $candidateName }
-    }
-
-    $counter = 2
-    while ($true) {
-        $nextName = "$BaseName.$counter$Extension"
-        $nextPath = Join-Path $Directory $nextName
-        if (!(Test-Path $nextPath)) {
-            return @{ Path = $nextPath; FileName = $nextName }
-        }
-        $counter++
-    }
-}
 
 # Log script startup
 Write-LogMessage "===========================================================================" INFO

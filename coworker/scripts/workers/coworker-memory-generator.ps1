@@ -1,282 +1,328 @@
 #!/usr/bin/env pwsh
-
 <#
 .SYNOPSIS
-    Coworker Memory Generator
+    Coworker Memory Generator — improved version.
+
 .DESCRIPTION
-    Generates memory summaries (daily, monthly, yearly, global) based on logs or previous summaries.
+    Generates memory summaries (daily, monthly, yearly, global) based on logs or
+    previous summaries. Also provides the "init" mode for injecting memory context
+    into task prompts.
+
+    Key improvements over the original:
+    - CRITICAL FIX: global type now has its own prompt (was undefined — feature was dead)
+    - Uses prompt-utils.ps1 for consistent, de-duplicated prompt construction
+    - Uses Invoke-AgentWithRetry for timeout+retry safety
+    - Smart truncation for large $combinedContent with logging
+    - Validates output files exist after generation
+    - Structured logging via Write-CoworkerLog
+    - Proper exit code propagation from daily script
+
 .PARAMETER Type
-    The type of memory to generate: "daily", "monthly", "yearly", "global". Defaults to "daily".
+    The type of memory to generate: "daily", "monthly", "yearly", "global", "init".
 .PARAMETER Date
     The date to generate memory for (format: YYYY-MM-DD). Defaults to today.
 .PARAMETER Force
-    Force generation even if file exists (overwrites).
+    Force generation even if file exists.
+.PARAMETER DryRun
+    Show what would be done without invoking the agent or writing files.
 #>
+
+[CmdletBinding(SupportsShouldProcess)]
 param(
-    [ValidateSet("daily", "monthly", "yearly", "global", "init")]
-    [string]$Type = "daily",
+    [ValidateSet('daily', 'monthly', 'yearly', 'global', 'init')]
+    [string]$Type = 'daily',
 
-    [string]$Date = ((Get-Date).ToUniversalTime().ToString("yyyy-MM-dd")),
+    [string]$Date = ((Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')),
 
-    [switch]$Force
+    [switch]$Force,
+
+    [int]$TimeoutSeconds = 600,
+
+    [switch]$DryRun
 )
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = 'Stop'
 
-$configPath = Join-Path (Split-Path -Parent $PSScriptRoot) "config.ps1"
-. $configPath
+# ── Dot-source dependencies ──────────────────────────────────────────────────
+$workerDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path (Split-Path -Parent $workerDir) 'config.ps1')
+. (Join-Path $workerDir 'agent-reliability.ps1')
+. (Join-Path $workerDir 'prompt-utils.ps1')
+
 $repoRoot = Get-WorkspaceRoot
-$agentHelper = Join-Path $PSScriptRoot 'agent.ps1'
-. $agentHelper
 
+# ── Parse date ───────────────────────────────────────────────────────────────
 $parsedDate = Get-Date $Date
-$year = $parsedDate.ToString("yyyy")
-$month = $parsedDate.ToString("MM")
-$day = $parsedDate.ToString("dd")
+$year  = $parsedDate.ToString('yyyy')
+$month = $parsedDate.ToString('MM')
+$day   = $parsedDate.ToString('dd')
 
 $logsBaseDir = Get-LogDirectory
 
-# Function to invoke the agent
-function Invoke-CoworkerMemoryAgent {
+# ── Smart truncation ─────────────────────────────────────────────────────────
+
+function Get-SmartContentTruncation {
     param(
-        [string]$Prompt,
-        [switch]$CaptureOutput
+        [string]$Content,
+        [int]$MaxChars = 25000
     )
 
-    # Truncate if too long (approx check, limit depends on OS/shell but 20k is safeish)
-    if ($Prompt.Length -gt 25000) {
-        Write-Warning "Prompt is too long ($($Prompt.Length) chars). Truncating..."
-        $Prompt = $Prompt.Substring(0, 25000) + " ... [Truncated]"
+    if ($Content.Length -le $MaxChars) {
+        return @{ Content = $Content; Truncated = $false; DroppedChars = 0 }
     }
 
-    return Invoke-Agent -Prompt $Prompt -AdditionalArguments @('--allow-all-tools') -RepoRoot $repoRoot -WorkingDirectory $repoRoot -CaptureOutput:$CaptureOutput
-}
+    Write-CoworkerLog -Message "Content is $($Content.Length) chars, truncating to $MaxChars" -Level WARN -Component 'memory-gen'
 
-if ($Type -eq "daily") {
-    # Reuse existing logic or call the existing script?
-    # Better to keep logic self-contained if we want this to be the main entry point.
-    # For now, let's call the existing script to avoid duplication if it exists, or reimplement.
-    # The existing script is specific to daily. Let's call it.
+    # Split by "=== " delimiters (memory/file boundaries)
+    $chunks = $Content -split '(?m)^=== ' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    $result = ''
+    $included = 0
+    $excluded = 0
 
-    $dailyScript = Join-Path $repoRoot "coworker\scripts\workers\coworker-daily-memory-generator.ps1"
-    if (Test-Path $dailyScript) {
-        & $dailyScript -Date $Date
-    } else {
-        Write-Error "Daily memory generator script not found at $dailyScript"
-    }
-}
-elseif ($Type -eq "monthly") {
-    $targetDir = "$logsBaseDir\$year\$month"
-    $targetFile = "$targetDir\MEMORY.$year$month.md"
+    # Include from the END (most recent first) to preserve latest info
+    [Array]::Reverse($chunks)
 
-    if (-not (Test-Path $targetDir)) {
-        Write-Error "Directory $targetDir does not exist. No daily memories to summarize."
-        exit 1
-    }
-
-    # Gather all daily memories for the month
-    $dailyMemories = Get-ChildItem -Path "$targetDir\*\MEMORY.*.md" -Recurse
-
-    if ($dailyMemories.Count -eq 0) {
-        Write-Warning "No daily memories found for $year-$month."
-        exit 0
-    }
-
-    $combinedContent = ""
-    foreach ($file in $dailyMemories) {
-        $content = Get-Content $file.FullName -Raw
-        $combinedContent += "`n`n=== DAILY MEMORY: $($file.Name) ===`n$content"
-    }
-
-    $prompt = @"
-You are an AI assistant helping to generate a MONTHLY memory summary for a developer coworker.
-Based on the following DAILY memories, generate the content for the MONTHLY memory file and save it to the ABSOLUTE path: $targetFile
-
-SPECIFICATION:
-# MEMORY.$year$month.md
-## Monthly Memory - $year-$month
-
-### Work Themes
-- Major areas of focus this month
-
-### Recurring Issues
-- Problems that happened multiple times
-
-### Structural Bottlenecks
-- Process or technical limitations slowing progress
-
-### Efficiency Trend
-- Qualitative assessment of speed/quality over the month
-
-### System Adjustments Proposed
-- Changes to tools/workflow based on this month's experience
-
-CONSTRAINTS:
-- Use English only.
-- Synthesize, don't just list.
-- Use the `create` tool to write the file directly using the ABSOLUTE path: $targetFile
-- Overwrite if exists.
-
-DAILY MEMORIES:
-$combinedContent
-"@
-
-    Invoke-CoworkerMemoryAgent -Prompt $prompt
-}
-elseif ($Type -eq "yearly") {
-    $targetDir = "$logsBaseDir\$year"
-    $targetFile = "$targetDir\MEMORY.$year.md"
-
-    # Gather all monthly memories for the year
-    # Monthly memories are at logs/YYYY/MM/MEMORY.YYYYMM.md
-    $monthlyMemories = Get-ChildItem -Path "$logsBaseDir\$year\*\MEMORY.$year*.md"
-
-    if ($monthlyMemories.Count -eq 0) {
-        Write-Warning "No monthly memories found for $year."
-        exit 0
-    }
-
-    $combinedContent = ""
-    foreach ($file in $monthlyMemories) {
-        $content = Get-Content $file.FullName -Raw
-        $combinedContent += "`n`n=== MONTHLY MEMORY: $($file.Name) ===`n$content"
-    }
-
-    $prompt = @"
-You are an AI assistant helping to generate a YEARLY memory summary for a developer coworker.
-Based on the following MONTHLY memories, generate the content for the YEARLY memory file and save it to the ABSOLUTE path: $targetFile
-
-SPECIFICATION:
-# MEMORY.$year.md
-## Annual Strategic Review - $year
-
-### Project State Evolution
-- High-level changes in project scope/maturity
-
-### Major Achievements
-- Key milestones reached
-
-### Major Failures
-- Significant setbacks and lessons
-
-### Structural Problems (Solved / Unsolved)
-- Persistent issues
-
-### Capability Upgrades
-- New skills/tools acquired
-
-### Strategic Risks
-- Potential future threats
-
-### Project Trajectory Forecast
-- Where the project is heading
-
-### Three Immediate Strategic Actions
-- High-level next steps for next year
-
-CONSTRAINTS:
-- Use English only.
-- Synthesize, don't just list.
-- Use the `create` tool to write the file directly using the ABSOLUTE path: $targetFile
-- Overwrite if exists.
-
-MONTHLY MEMORIES:
-$combinedContent
-"@
-
-    Invoke-CoworkerMemoryAgent -Prompt $prompt
-}
-elseif ($Type -eq "global") {
-    $targetFile = "$logsBaseDir\MEMORY.md"
-
-    # Gather all yearly memories
-    # Yearly memories are at logs/YYYY/MEMORY.YYYY.md
-    $yearlyMemories = Get-ChildItem -Path "$logsBaseDir\*\MEMORY.*.md" | Where-Object { $_.Name -match "MEMORY\.\d{4}\.md" }
-
-    if ($yearlyMemories.Count -eq 0) {
-        # Fallback to monthly if no yearly? Or just warn?
-        Write-Warning "No yearly memories found. Trying monthly..."
-        $yearlyMemories = Get-ChildItem -Path "$logsBaseDir\*\*\MEMORY.*.md" | Where-Object { $_.Name -match "MEMORY\.\d{6}\.md" }
-    }
-
-    if ($yearlyMemories.Count -eq 0) {
-        Write-Warning "No memories found to summarize."
-        exit 0
-    }
-
-    $combinedContent = ""
-    foreach ($file in $yearlyMemories) {
-        $content = Get-Content $file.FullName -Raw
-        $combinedContent += "`n`n=== MEMORY: $($file.Name) ===`n$content"
-    }
-
-    Invoke-CoworkerMemoryAgent -Prompt $prompt
-}
-elseif ($Type -eq "init") {
-    $year = $parsedDate.ToString("yyyy")
-    $month = $parsedDate.ToString("MM")
-    $day = $parsedDate.ToString("dd")
-
-    # 1. Define paths
-    $memoryDir = $logsBaseDir
-    $memoryYearDir = Join-Path $memoryDir $year
-    $memoryMonthDir = Join-Path $memoryYearDir $month
-    $memoryDayDir = Join-Path $memoryMonthDir $day
-
-    # 2. Ensure directories exist
-    if (-not (Test-Path $memoryYearDir)) { New-Item -ItemType Directory -Path $memoryYearDir -Force | Out-Null }
-    if (-not (Test-Path $memoryMonthDir)) { New-Item -ItemType Directory -Path $memoryMonthDir -Force | Out-Null }
-    if (-not (Test-Path $memoryDayDir)) { New-Item -ItemType Directory -Path $memoryDayDir -Force | Out-Null }
-
-    $memoryYearPath = Join-Path $memoryYearDir "MEMORY.$year.md"
-    $memoryMonthPath = Join-Path $memoryMonthDir "MEMORY.$year$month.md"
-    $memoryDayPath = Join-Path $memoryDayDir "MEMORY.$year$month$day.md"
-    $memoryDayLongPath = Join-Path $memoryDayDir "MEMORY.$year$month$day.long.md"
-
-    # 3. Check Daily Memory Size and Compress if needed
-    if (Test-Path $memoryDayPath) {
-        $dailyContent = Get-Content $memoryDayPath -Raw -Encoding UTF8
-        if ($dailyContent.Length -gt 3000) {
-            Write-Warning "Daily memory exceeds 3000 chars ($($dailyContent.Length)). Initiating compression..."
-
-            # Backup
-            Copy-Item -Path $memoryDayPath -Destination $memoryDayLongPath -Force
-            Write-Warning "Original memory backed up to: $memoryDayLongPath"
-
-            # Compress
-            $compressPrompt = "Compress the following daily memory content to under 3000 characters. Preserve key insights and structural learnings. content:`n$dailyContent"
-
-            # Compress using the agent and capture the replacement markdown for the memory file.
-            $compressedContent = Invoke-CoworkerMemoryAgent -Prompt $compressPrompt -CaptureOutput
-
-            if (-not [string]::IsNullOrWhiteSpace($compressedContent)) {
-                 # The output might contain explanation text. The agent usually just answers if prompted correctly.
-                 # But sometimes it chats.
-                 # Assuming it returns markdown.
-                 $compressedContent | Out-File -FilePath $memoryDayPath -Encoding UTF8 -Force
-                 Write-Warning "Daily memory compressed to $($compressedContent.Length) chars."
-            }
+    foreach ($chunk in $chunks) {
+        $candidate = "=== $chunk"
+        if (($result.Length + $candidate.Length) -le $MaxChars) {
+            $result = $candidate + $result
+            $included++
+        } else {
+            $excluded++
         }
-    } else {
-        # Create empty daily memory if not exists?
-        # Maybe unnecessary, Agent will create it.
-        # But for context string, it's good to know.
     }
 
-    # 4. Construct Context String
-    $memoryContext = ""
-    if (Test-Path $memoryMonthPath) {
-        $monthContent = Get-Content $memoryMonthPath -Raw -Encoding UTF8
-        $memoryContext += "`n[Monthly Memory ($year-$month)]:`n$monthContent`n"
+    if ($excluded -gt 0) {
+        Write-CoworkerLog -Message "Smart truncation: included $included chunk(s), dropped $excluded chunk(s) ($($Content.Length - $result.Length) chars dropped)" -Level WARN -Component 'memory-gen'
     }
 
-    if (Test-Path $memoryDayPath) {
-        $dayContent = Get-Content $memoryDayPath -Raw -Encoding UTF8
-        $memoryContext += "`n[Daily Memory ($year-$month-$day)]:`n$dayContent`n"
+    return @{
+        Content      = $result
+        Truncated    = $true
+        DroppedChars = $Content.Length - $result.Length
+    }
+}
+
+# ── Memory generation ────────────────────────────────────────────────────────
+
+function Invoke-MemoryGeneration {
+    param(
+        [string]$Level,
+        [string]$TargetFile,
+        [string]$SourceContent,
+        [string]$DateLabel,
+        [string]$Mode = 'Create'
+    )
+
+    $levelMap = @{
+        daily   = 'Daily'
+        monthly = 'Monthly'
+        yearly  = 'Yearly'
+        global  = 'Global'
     }
 
-    # 5. Construct Instructions String
-    $memoryInstructions = @"
+    $promptLevel = $levelMap[$Level]
+    if (-not $promptLevel) {
+        throw "Unknown memory level: $Level"
+    }
+
+    $truncation = Get-SmartContentTruncation -Content $SourceContent -MaxChars 25000
+    $prompt = New-MemoryGenerationPrompt `
+        -Level $promptLevel `
+        -TargetFile $TargetFile `
+        -SourceContent $truncation.Content `
+        -DateLabel $DateLabel `
+        -Mode $Mode `
+        -ExtraConstraints @(
+            '- Do NOT include any explanation or commentary in the output file.',
+            '- Write only the memory content.'
+        )
+
+    if ($DryRun -or -not $PSCmdlet.ShouldProcess($TargetFile, "Generate $Level memory")) {
+        Write-Host "DRY RUN — would generate $Level memory at: $TargetFile"
+        Write-Host "  Source content: $($SourceContent.Length) chars"
+        if ($truncation.Truncated) {
+            Write-Host "  WARNING: Content truncated ($($truncation.DroppedChars) chars dropped)"
+        }
+        return $null
+    }
+
+    Write-CoworkerLog -Message "Generating $Level memory at: $TargetFile" -Level INFO -Component 'memory-gen'
+
+    try {
+        Invoke-AgentWithRetry `
+            -Prompt $prompt `
+            -CaptureOutput `
+            -TimeoutSeconds $TimeoutSeconds `
+            -MaxRetries 2 `
+            -LogComponent 'memory-gen' `
+            -RepoRoot $repoRoot
+
+        if (Test-Path $TargetFile) {
+            Write-CoworkerLog -Message "$Level memory file created: $TargetFile ($((Get-Item $TargetFile).Length) bytes)" -Level INFO -Component 'memory-gen'
+        } else {
+            Write-CoworkerLog -Message "WARNING: $Level memory file was NOT created: $TargetFile" -Level WARN -Component 'memory-gen'
+        }
+    } catch {
+        Write-CoworkerLog -Message "Failed to generate $Level memory: $_" -Level ERROR -Component 'memory-gen'
+        throw
+    }
+}
+
+# ── Routing ──────────────────────────────────────────────────────────────────
+
+switch ($Type) {
+    'daily' {
+        $dailyScript = Join-Path $repoRoot 'coworker\scripts\workers\coworker-daily-memory-generator.ps1'
+        if (-not (Test-Path $dailyScript)) {
+            Write-Error "Daily memory generator not found at: $dailyScript"
+            exit 1
+        }
+        if ($DryRun) {
+            Write-Host "DRY RUN — would execute: $dailyScript -Date $Date"
+            exit 0
+        }
+        & $dailyScript -Date $Date
+        if ($LASTEXITCODE -ne 0) {
+            Write-CoworkerLog -Message "Daily memory generator exited with code $LASTEXITCODE" -Level ERROR -Component 'memory-gen'
+            exit $LASTEXITCODE
+        }
+
+        # Verify output
+        $dailyCompact = $parsedDate.ToString('yyyyMMdd')
+        $dailyFile = Join-Path $logsBaseDir "$year\$month\$day" "MEMORY.$dailyCompact.md"
+        if (-not (Test-Path $dailyFile)) {
+            Write-CoworkerLog -Message "Daily memory file was not created: $dailyFile" -Level WARN -Component 'memory-gen'
+        }
+    }
+
+    'monthly' {
+        $targetFile = "$logsBaseDir\$year\$month\MEMORY.$year$month.md"
+        $targetDir  = Split-Path $targetFile -Parent
+
+        if (-not (Test-Path $targetDir)) {
+            Write-Error "Directory $targetDir does not exist. No daily memories to summarize."
+            exit 1
+        }
+
+        if (Test-Path $targetFile -and -not $Force) {
+            Write-CoworkerLog -Message "Monthly memory already exists: $targetFile (use -Force to overwrite)" -Level INFO -Component 'memory-gen'
+            exit 0
+        }
+
+        # Gather daily memories for the month (exclude .long.md files for the summary input)
+        $dailyMemories = Get-ChildItem -Path "$targetDir\*\MEMORY.$year$month*.md" `
+            | Where-Object { $_.Name -match 'MEMORY\.\d{8}\.md$' } `
+            | Sort-Object Name
+
+        if ($dailyMemories.Count -eq 0) {
+            Write-CoworkerLog -Message "No daily memories found for $year-$month." -Level WARN -Component 'memory-gen'
+            exit 0
+        }
+
+        $combinedContent = ''
+        foreach ($file in $dailyMemories) {
+            $content = Get-Content $file.FullName -Raw -Encoding UTF8
+            $combinedContent += "`n`n=== DAILY MEMORY: $($file.Name) ===`n$content"
+        }
+
+        Write-CoworkerLog -Message "Gathered $($dailyMemories.Count) daily memories ($($combinedContent.Length) chars)" -Level INFO -Component 'memory-gen'
+        Invoke-MemoryGeneration -Level monthly -TargetFile $targetFile -SourceContent $combinedContent -DateLabel "$year-$month"
+    }
+
+    'yearly' {
+        $targetFile = "$logsBaseDir\$year\MEMORY.$year.md"
+
+        if (Test-Path $targetFile -and -not $Force) {
+            Write-CoworkerLog -Message "Yearly memory already exists: $targetFile (use -Force to overwrite)" -Level INFO -Component 'memory-gen'
+            exit 0
+        }
+
+        # Gather monthly memories — use exact 6-digit pattern to avoid matching daily files
+        $monthlyMemories = Get-ChildItem -Path "$logsBaseDir\$year\*\MEMORY.$year*.md" `
+            | Where-Object { $_.Name -match 'MEMORY\.\d{6}\.md$' } `
+            | Sort-Object Name
+
+        if ($monthlyMemories.Count -eq 0) {
+            Write-CoworkerLog -Message "No monthly memories found for $year." -Level WARN -Component 'memory-gen'
+            exit 0
+        }
+
+        $combinedContent = ''
+        foreach ($file in $monthlyMemories) {
+            $content = Get-Content $file.FullName -Raw -Encoding UTF8
+            $combinedContent += "`n`n=== MONTHLY MEMORY: $($file.Name) ===`n$content"
+        }
+
+        Write-CoworkerLog -Message "Gathered $($monthlyMemories.Count) monthly memories ($($combinedContent.Length) chars)" -Level INFO -Component 'memory-gen'
+        Invoke-MemoryGeneration -Level yearly -TargetFile $targetFile -SourceContent $combinedContent -DateLabel $year
+    }
+
+    'global' {
+        $targetFile = "$logsBaseDir\MEMORY.md"
+
+        if (Test-Path $targetFile -and -not $Force) {
+            Write-CoworkerLog -Message "Global memory already exists: $targetFile (use -Force to overwrite)" -Level INFO -Component 'memory-gen'
+            exit 0
+        }
+
+        # Gather yearly memories — exact 4-digit pattern
+        $yearlyMemories = Get-ChildItem -Path "$logsBaseDir\*\MEMORY.*.md" `
+            | Where-Object { $_.Name -match 'MEMORY\.\d{4}\.md$' } `
+            | Sort-Object Name
+
+        if ($yearlyMemories.Count -eq 0) {
+            Write-CoworkerLog -Message 'No yearly memories found. Trying monthly fallback...' -Level WARN -Component 'memory-gen'
+            $yearlyMemories = Get-ChildItem -Path "$logsBaseDir\*\*\MEMORY.*.md" `
+                | Where-Object { $_.Name -match 'MEMORY\.\d{6}\.md$' } `
+                | Sort-Object Name
+        }
+
+        if ($yearlyMemories.Count -eq 0) {
+            Write-CoworkerLog -Message 'No memories found to summarize for global memory.' -Level WARN -Component 'memory-gen'
+            exit 0
+        }
+
+        $combinedContent = ''
+        foreach ($file in $yearlyMemories) {
+            $content = Get-Content $file.FullName -Raw -Encoding UTF8
+            $combinedContent += "`n`n=== MEMORY: $($file.Name) ===`n$content"
+        }
+
+        Write-CoworkerLog -Message "Gathered $($yearlyMemories.Count) memories for global summary ($($combinedContent.Length) chars)" -Level INFO -Component 'memory-gen'
+        Invoke-MemoryGeneration -Level global -TargetFile $targetFile -SourceContent $combinedContent -DateLabel 'Global'
+    }
+
+    'init' {
+        # Build memory context for injection into task prompts.
+        # This is a READ-ONLY operation — no agent calls, no file writes.
+        # Compression (if needed) is handled by the daily memory generator.
+
+        $memoryDir      = $logsBaseDir
+        $memoryYearDir  = Join-Path $memoryDir $year
+        $memoryMonthDir = Join-Path $memoryYearDir $month
+        $memoryDayDir   = Join-Path $memoryMonthDir $day
+
+        # Ensure directories exist
+        foreach ($d in @($memoryYearDir, $memoryMonthDir, $memoryDayDir)) {
+            if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
+        }
+
+        $memoryDayPath     = Join-Path $memoryDayDir "MEMORY.$year$month$day.md"
+        $memoryMonthPath   = Join-Path $memoryMonthDir "MEMORY.$year$month.md"
+
+        # Build context
+        $memoryContext = ''
+        if (Test-Path $memoryMonthPath) {
+            $monthContent = Get-Content $memoryMonthPath -Raw -Encoding UTF8
+            $memoryContext += "`n[Monthly Memory ($year-$month)]:`n$monthContent`n"
+        }
+        if (Test-Path $memoryDayPath) {
+            $dayContent = Get-Content $memoryDayPath -Raw -Encoding UTF8
+            $memoryContext += "`n[Daily Memory ($year-$month-$day)]:`n$dayContent`n"
+        }
+
+        $memoryInstructions = @"
 *** MEMORY UPDATE INSTRUCTIONS ***
 You have a memory system to help you learn and improve.
 Your memory files are located in: $logsBaseDir
@@ -287,12 +333,15 @@ After completing the task, you MUST update your daily memory file: $memoryDayPat
 3. Ensure you do not overwrite existing content, always append.
 "@
 
-    # 6. Output JSON
-    $result = @{
-        context = $memoryContext
-        instructions = $memoryInstructions
-    }
+        $result = @{
+            context      = $memoryContext
+            instructions = $memoryInstructions
+        }
 
-    $json = $result | ConvertTo-Json -Depth 2
-    Write-Output $json
+        $json = $result | ConvertTo-Json -Depth 2
+        Write-Output $json
+    }
 }
+
+Write-CoworkerLog -Message "$Type memory generation complete." -Level INFO -Component 'memory-gen'
+exit 0

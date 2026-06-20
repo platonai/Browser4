@@ -1,7 +1,7 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-    Pester tests for coworker-daily-memory-generator.ps1 and v2.
+    Pester tests for coworker-daily-memory-generator.ps1.
 .DESCRIPTION
     Comprehensive unit and integration tests covering:
     - Get-CleanPrompt (v1 prompt extraction)
@@ -89,7 +89,7 @@ function New-AgentLogFile {
 # Functions under test (extracted from source scripts for isolated testing)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# From v1: coworker-daily-memory-generator.ps1 lines 47-56
+# From original daily memory generator lines 47-56
 function Get-CleanPrompt {
     param($TaskLogPath)
     $content = Get-Content $TaskLogPath -Raw
@@ -101,7 +101,7 @@ function Get-CleanPrompt {
     return ""
 }
 
-# From v2: coworker-daily-memory-generator-v2.ps1 lines 71-151
+# From daily memory generator lines 71-151
 function Get-DailyTaskLogs {
     param(
         [string]$LogDirectory,
@@ -182,7 +182,7 @@ function Get-DailyTaskLogs {
     return $logContent
 }
 
-# From v2: coworker-daily-memory-generator-v2.ps1 lines 155-181
+# From daily memory generator lines 155-181
 function Split-LogsIntoBatches {
     param(
         [string]$LogContent,
@@ -726,7 +726,7 @@ Describe 'Date parsing and path construction' {
         $compactDate | Should Be '20260616'
     }
 
-    It 'correctly distinguishes MM (month) from mm (minutes) - catches v1 line 28 bug' {
+    It 'correctly distinguishes MM (month) from mm (minutes) - regression test for month formatting bug' {
         $date = Get-Date '2026-01-02'
         $monthMM = $date.ToString('MM')
 
