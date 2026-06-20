@@ -2509,6 +2509,175 @@ async fn handle_key_command(
 }
 
 // ---------------------------------------------------------------------------
+// Text input verification
+// ---------------------------------------------------------------------------
+
+/// Read the current value of an element and compare it with the expected text.
+///
+/// Returns `Ok(report)` with a human-readable comparison: fully typed,
+/// partially typed (with character counts), or not typed. Returns `Err(msg)`
+/// when the verification itself fails (e.g. element not found, session lost).
+async fn verify_element_text(
+    client: &Client,
+    base_url: &str,
+    session_id: &str,
+    element_ref: Option<&str>,
+    expected_text: &str,
+) -> Result<String, String> {
+    // Build a JavaScript expression that reads the element's value.
+    // When a ref is provided, the expression runs as an arrow function over
+    // that element (browser_evaluate passes the element as the argument).
+    // Without a ref, read from document.activeElement.
+    let expression = if element_ref.is_some() {
+        "element => (element.value !== undefined ? (element.value || '') : (element.textContent || ''))".to_string()
+    } else {
+        "(() => { \
+            const el = document.activeElement; \
+            return el \
+                ? (el.value !== undefined ? (el.value || '') : (el.textContent || '')) \
+                : ''; \
+        })()".to_string()
+    };
+
+    let mut params = json!({
+        "sessionId": session_id,
+        "expression": expression,
+    });
+    if let Some(ref_sel) = element_ref {
+        params["ref"] = json!(ref_sel);
+    }
+
+    let result = call_tool(client, base_url, "browser_evaluate", params).await?;
+
+    // The MCP response may wrap the value in JSON quotes or be a plain string.
+    let actual = result.trim().trim_matches('"').to_string();
+    let expected_chars = expected_text.chars().count();
+    let actual_chars = actual.chars().count();
+
+    if actual == expected_text {
+        Ok(format!(
+            "Verification: text fully typed ({} chars).",
+            expected_chars
+        ))
+    } else if actual.is_empty() {
+        Ok("Verification: text was NOT typed — element is empty.".to_string())
+    } else if expected_text.starts_with(&actual) {
+        Ok(format!(
+            "Verification: text PARTIALLY typed ({}/{} chars). Current value: '{}'",
+            actual_chars, expected_chars, actual
+        ))
+    } else {
+        Ok(format!(
+            "Verification: text mismatch. Expected '{}', got '{}'.",
+            expected_text, actual
+        ))
+    }
+}
+
+/// Handle `type` and `fill` commands with optional verification and automatic
+/// post-timeout verification.
+async fn handle_text_input_command(
+    client: &Client,
+    base_url: &str,
+    tool_name: &str,
+    tool_params: &Value,
+    session_name: Option<&str>,
+    verify: bool,
+) -> Result<(), String> {
+    // Extract the text and optional ref from tool_params (already resolved by
+    // tool_params_fn). These are the values sent to the server.
+    let expected_text = tool_params
+        .get("text")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let element_ref = tool_params
+        .get("ref")
+        .and_then(|v| v.as_str());
+
+    // Step 1: Call the text input tool.
+    let tool_result = with_session(
+        client,
+        base_url,
+        session_name,
+        false,
+        |session_id| {
+            let client = client.clone();
+            let base_url = base_url.to_string();
+            let tool_name = tool_name.to_string();
+            let mut params = tool_params.clone();
+            params["sessionId"] = json!(session_id);
+            async move { call_tool(&client, &base_url, &tool_name, params).await }
+        },
+    )
+    .await;
+
+    match tool_result {
+        Ok(text) => {
+            // Tool succeeded. Print result if non-empty.
+            if !text.is_empty() {
+                cli_println!("{}", text);
+            }
+
+            // Optional --verify: confirm the text was applied.
+            if verify {
+                let state = require_session(session_name)?;
+                let session_id = get_session_id(&state)?.to_string();
+                match verify_element_text(
+                    client,
+                    base_url,
+                    &session_id,
+                    element_ref,
+                    expected_text,
+                )
+                .await
+                {
+                    Ok(report) => {
+                        cli_println!("{}", report);
+                        json_field("verification", json!(&report));
+                    }
+                    Err(verify_err) => {
+                        cli_println!(
+                            "Verification could not be completed: {}",
+                            verify_err
+                        );
+                        json_field("verification_error", json!(&verify_err));
+                    }
+                }
+            }
+
+            persist_active_selector(base_url, session_name, tracked_selector(tool_params))?;
+            Ok(())
+        }
+        Err(err) => {
+            if is_timeout_error_message(&err) {
+                // Automatic verification after timeout — always attempted.
+                let state = require_session(session_name)?;
+                let session_id = get_session_id(&state)?.to_string();
+                let verify_msg = match verify_element_text(
+                    client,
+                    base_url,
+                    &session_id,
+                    element_ref,
+                    expected_text,
+                )
+                .await
+                {
+                    Ok(report) => report,
+                    Err(verify_err) => {
+                        format!("Verification could not be completed: {}", verify_err)
+                    }
+                };
+                let enriched = format!("{}\n{}", err, verify_msg);
+                Err(enriched)
+            } else {
+                // Not a timeout — propagate as-is.
+                Err(err)
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Agent command handlers
 // ---------------------------------------------------------------------------
 
@@ -4968,6 +5137,21 @@ async fn run(
                 &tool_name,
                 &tool_params,
                 global.session_name.as_deref(),
+            )
+            .await?;
+        }
+        "type" | "fill" => {
+            let verify = parsed
+                .get("verify")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            handle_text_input_command(
+                &client,
+                &base_url,
+                &tool_name,
+                &tool_params,
+                global.session_name.as_deref(),
+                verify,
             )
             .await?;
         }

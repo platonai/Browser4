@@ -427,6 +427,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             options: &[
                 OptionDef { name: "submit", description: "Whether to submit entered text (press Enter after)", is_bool: true, short: None },
+                OptionDef { name: "verify", description: "Verify text was correctly typed after completion", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "browser_press_sequentially".to_string(),
             tool_params_fn: |args| {
@@ -641,6 +642,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             ],
             options: &[
                 OptionDef { name: "submit", description: "Whether to submit entered text (press Enter after)", is_bool: true, short: None },
+                OptionDef { name: "verify", description: "Verify text was correctly typed after completion", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "browser_type".to_string(),
             tool_params_fn: |args| {
