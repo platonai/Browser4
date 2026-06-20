@@ -27,6 +27,11 @@ function Resolve-CoworkerConfiguredPath {
         throw 'Configured path cannot be empty.'
     }
 
+    # Expand ~ to the user's home directory ($HOME on all platforms)
+    if ($Path.StartsWith('~')) {
+        $Path = $HOME + $Path.Substring(1)
+    }
+
     if ([System.IO.Path]::IsPathRooted($Path)) {
         return [System.IO.Path]::GetFullPath($Path)
     }
@@ -74,8 +79,15 @@ function Get-TasksRoot {
 
 function Get-LogDirectory {
     $pathsConfig = Get-CoworkerConfigValue -Map $script:configData -Key 'Paths' -DefaultValue @{}
-    $path = [string](Get-CoworkerConfigValue -Map $pathsConfig -Key 'LogDirectory' -DefaultValue 'coworker\tasks\300logs')
-    return Resolve-CoworkerConfiguredPath -Path $path -BaseDirectory (Get-WorkspaceRoot)
+    $path = [string](Get-CoworkerConfigValue -Map $pathsConfig -Key 'LogDirectory' -DefaultValue '~\.browser4-coworker\tasks\300logs')
+    $resolved = Resolve-CoworkerConfiguredPath -Path $path -BaseDirectory (Get-WorkspaceRoot)
+
+    # Ensure the log directory exists
+    if (-not (Test-Path -LiteralPath $resolved)) {
+        New-Item -ItemType Directory -Path $resolved -Force | Out-Null
+    }
+
+    return $resolved
 }
 
 function Get-SchedulerWorkingDirectory {

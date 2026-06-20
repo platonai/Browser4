@@ -4,7 +4,7 @@
         CoworkerRoot         = '..'
         TasksRoot            = '..\tasks'
         TargetRepositoryRoot = '..\'
-        LogDirectory         = '..\..\coworker\tasks\300logs'
+        LogDirectory         = '~\.browser4-coworker\tasks\300logs'
     }
 
     Scheduler = @{
