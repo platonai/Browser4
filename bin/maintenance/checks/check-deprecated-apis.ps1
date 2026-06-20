@@ -42,7 +42,7 @@ $rgAvailable = $null -ne (Get-Command rg -ErrorAction SilentlyContinue)
 $totalDeprecated = 0
 
 foreach ($pattern in $IncludePatterns) {
-    $files = Get-ChildItem $repoRoot -Recurse -File -Filter "*.$($pattern.TrimStart('*.'))" `
+    $files = Get-ChildItem $repoRoot -Recurse -File -Filter "*.$($pattern.TrimStart('*.'))" -ErrorAction SilentlyContinue `
         | Where-Object { $_.FullName -notmatch "target[\\/]" }
 
     foreach ($file in $files) {

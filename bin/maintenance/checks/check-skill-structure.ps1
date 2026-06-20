@@ -41,7 +41,7 @@ $ScriptDir = $PSScriptRoot
 $result = New-MaintenanceResult -CheckId "D2" -Name "SKILL Structure Compliance"
 $repoRoot = Get-RepositoryRoot
 
-$skillFiles = Get-ChildItem -Path $repoRoot -Filter "SKILL.md" -Recurse -File `
+$skillFiles = Get-ChildItem -Path $repoRoot -Filter "SKILL.md" -Recurse -File -ErrorAction SilentlyContinue `
     | Where-Object {
         $full = $_.FullName
         foreach ($pat in $ExcludePatterns) {

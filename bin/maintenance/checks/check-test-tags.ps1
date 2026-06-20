@@ -43,7 +43,7 @@ $validCosts   = @("Fast", "Slow", "Heavy")
 $bannedTags   = @("IntegrationTest", "E2ETest", "HeavyTest", "SlowTest",
                    "FastTest", "UnitTest", "SkippableLowerLevelTest")
 
-$testFiles = Get-ChildItem -Path $repoRoot -Recurse -File `
+$testFiles = Get-ChildItem -Path $repoRoot -Recurse -File -ErrorAction SilentlyContinue `
     | Where-Object {
         $_.Extension -in @(".kt", ".java") -and
         $_.FullName -match "src[\\/]test" -and

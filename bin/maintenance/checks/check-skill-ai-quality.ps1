@@ -43,7 +43,7 @@ $repoRoot = Get-RepositoryRoot
 $maxAmbiguity = Get-MaintenanceThreshold -Section "AIQuality" -Key "MaxAmbiguityWords" -Default 3
 $ambiguityWords = @("maybe", "could", "might", "probably", "sometimes", "possibly", "perhaps", "occasionally", "try to", "attempt to")
 
-$skillFiles = Get-ChildItem -Path $repoRoot -Filter "SKILL.md" -Recurse -File `
+$skillFiles = Get-ChildItem -Path $repoRoot -Filter "SKILL.md" -Recurse -File -ErrorAction SilentlyContinue `
     | Where-Object { $_.FullName -notmatch "target[\\/]" }
 
 if ($skillFiles.Count -eq 0) {
@@ -120,7 +120,7 @@ foreach ($file in $skillFiles) {
     $status = if ($pct -ge 60) { "passed" } else { "failed" }
     $message = "Score ${score}/${maxScore} (${pct}%)"
     if ($issues.Count -gt 0) {
-        $message += " — issues: $($issues -join '; ')"
+        $message += " - issues: $($issues -join '; ')"
     }
 
     Add-MaintenanceResult -Result $result -Item $relPath -Status $status -Message $message

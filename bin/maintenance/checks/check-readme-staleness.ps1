@@ -44,7 +44,7 @@ if ($Threshold -le 0) {
     $Threshold = Get-MaintenanceThreshold -Section "Documentation" -Key "ReadmeStalenessThreshold" -Default 40
 }
 
-$readmeFiles = Get-ChildItem -Path $repoRoot -Filter "README*.md" -Recurse -File `
+$readmeFiles = Get-ChildItem -Path $repoRoot -Filter "README*.md" -Recurse -File -ErrorAction SilentlyContinue `
     | Where-Object { $_.FullName -notmatch "target[\\/]" -and $_.FullName -notmatch "node_modules[\\/]" }
 
 if ($readmeFiles.Count -eq 0) {
@@ -110,7 +110,7 @@ foreach ($file in $readmeFiles) {
     $status = if ($stalenessScore -lt $Threshold) { "passed" } else { "failed" }
     $message = "Score ${stalenessScore}/${Threshold}"
     if ($signals.Count -gt 0) {
-        $message += " — $($signals -join '; ')"
+        $message += " - $($signals -join '; ')"
     }
 
     Add-MaintenanceResult -Result $result -Item $relPath -Status $status -Message $message

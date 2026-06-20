@@ -438,7 +438,7 @@ function Set-MaintenanceResultSummary {
     if ($skipped -gt 0) { $parts += "${skipped} skipped" }
     if ($errors  -gt 0) { $parts += "${errors} errors" }
 
-    $Result.Details = "$($parts -join ', ') — ${total} total"
+    $Result.Details = "$($parts -join ', ') - ${total} total"
 }
 
 # ═══════════════════════════════════════════════════════════════════

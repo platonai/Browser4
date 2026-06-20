@@ -57,7 +57,7 @@ if (-not $hasFixLinks) {
         }
 
         $mdFiles = if (Test-Path $fullPath -PathType Container) {
-            Get-ChildItem -Path $fullPath -Filter "*.md" -Recurse -File
+            Get-ChildItem -Path $fullPath -Filter "*.md" -Recurse -File -ErrorAction SilentlyContinue
         } else {
             @(Get-Item $fullPath)
         }

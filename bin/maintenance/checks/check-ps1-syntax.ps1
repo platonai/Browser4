@@ -35,7 +35,7 @@ $ScriptDir = $PSScriptRoot
 $result = New-MaintenanceResult -CheckId "G2" -Name "PS1 Syntax Validation"
 $repoRoot = Get-RepositoryRoot
 
-$psFiles = Get-ChildItem -Path $repoRoot -Filter "*.ps1" -Recurse -File `
+$psFiles = Get-ChildItem -Path $repoRoot -Filter "*.ps1" -Recurse -File -ErrorAction SilentlyContinue `
     | Where-Object {
         $full = $_.FullName
         foreach ($pat in $ExcludePatterns) {
@@ -73,6 +73,6 @@ Set-MaintenanceResultSummary -Result $result
 # ── Summary line ──
 $passed  = ($result.Results | Where-Object { $_.Status -eq "passed" }).Count
 $failed  = ($result.Results | Where-Object { $_.Status -eq "failed" }).Count
-Write-Host "PS1 Syntax: $passed passed, $failed failed — $($result.Results.Count) total scripts"
+Write-Host "PS1 Syntax: $passed passed, $failed failed - $($result.Results.Count) total scripts"
 
 $result

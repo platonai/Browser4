@@ -92,7 +92,7 @@ if ($JarPath -and (Test-Path $JarPath)) {
     }
 }
 else {
-    Add-MaintenanceResult -Result $result -Item "Browser4.jar" -Status "skipped" -Message "JAR not found — run mvn package first"
+    Add-MaintenanceResult -Result $result -Item "Browser4.jar" -Status "skipped" -Message "JAR not found - run mvn package first"
 }
 
 # ── CLI binary check ──
@@ -109,7 +109,7 @@ foreach ($cp in $cliPaths) {
             Add-MaintenanceResult -Result $result -Item $cp -Status "passed" -Message "${cliSizeMB} MB"
         }
         else {
-            Add-MaintenanceResult -Result $result -Item $cp -Status "failed" -Message "${cliSizeMB} MB — unexpectedly small"
+            Add-MaintenanceResult -Result $result -Item $cp -Status "failed" -Message "${cliSizeMB} MB - unexpectedly small"
         }
         break
     }

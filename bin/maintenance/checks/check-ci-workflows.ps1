@@ -87,7 +87,7 @@ foreach ($wf in $wfFiles) {
 
 # ── Validate each action ──
 if (Test-Path $actDir) {
-    $actFiles = Get-ChildItem $actDir -Recurse -Filter "action.yml" -File
+    $actFiles = Get-ChildItem $actDir -Recurse -Filter "action.yml" -File -ErrorAction SilentlyContinue
     foreach ($act in $actFiles) {
         $relAct = $act.FullName.Replace($repoRoot, "").TrimStart("\", "/")
         $content = Get-Content $act.FullName -Raw

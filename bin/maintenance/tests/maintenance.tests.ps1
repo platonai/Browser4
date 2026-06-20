@@ -169,7 +169,7 @@ function Invoke-MaintenanceStep {
         if (-not $completed) {
             Stop-Job $job; $stdout = "TIMEOUT"; $stderr = "TIMEOUT"; $exitCode = 124
         } else {
-            $o = Receive-Job $job; $stdout = $o -join "`n"
+            $o = Receive-Job $job 2>$null; $stdout = $o -join "`n"
             $errs = $job.ChildJobs[0].Error
             $stderr = if ($errs) { ($errs | ForEach-Object { "$_" }) -join "`n" } else { "" }
             $exitCode = $job.ChildJobs[0].ExitCode
