@@ -44,7 +44,7 @@ $kotlinResult = Invoke-MaintenanceStep `
     -WorkingDirectory $repoRoot `
     -TimeoutSeconds 600 `
     -ScriptBlock {
-        & $using:mvnCmd compile -P all-main-modules -DskipTests -q 2>&1 | Select-String -Pattern "unused|UNUSED|never used|is never used"
+        & $mvnCmd compile -P all-main-modules -DskipTests -q 2>&1 | Select-String -Pattern "unused|UNUSED|never used|is never used"
         $LASTEXITCODE
     }
 

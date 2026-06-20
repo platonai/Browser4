@@ -40,7 +40,7 @@ $owaspResult = Invoke-MaintenanceStep `
     -WorkingDirectory $repoRoot `
     -TimeoutSeconds 1800 `
     -ScriptBlock {
-        & $using:mvnCmd org.owasp:dependency-check-maven:check -P "$using:MavenProfiles" -DfailBuildOnCVSS=0 -q 2>&1
+        & $mvnCmd org.owasp:dependency-check-maven:check -P "$MavenProfiles" -DfailBuildOnCVSS=0 -q 2>&1
         $LASTEXITCODE
     }
 

@@ -36,7 +36,7 @@ $treeResult = Invoke-MaintenanceStep `
     -WorkingDirectory $repoRoot `
     -TimeoutSeconds 300 `
     -ScriptBlock {
-        & $using:mvnCmd dependency:tree -Dverbose -P "$using:MavenProfiles" 2>&1
+        & $mvnCmd dependency:tree -Dverbose -P "$MavenProfiles" 2>&1
         $LASTEXITCODE
     }
 

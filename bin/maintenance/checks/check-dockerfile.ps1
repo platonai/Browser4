@@ -62,7 +62,7 @@ foreach ($df in $Dockerfiles) {
             -WorkingDirectory $repoRoot `
             -TimeoutSeconds 30 `
             -ScriptBlock {
-                docker build --check -f "$using:dockerfilePath" . 2>&1
+                docker build --check -f $dockerfilePath . 2>&1
                 $LASTEXITCODE
             }
         if ($valResult.ExitCode -eq 0) {
@@ -80,10 +80,10 @@ foreach ($df in $Dockerfiles) {
             -WorkingDirectory $repoRoot `
             -TimeoutSeconds $timeoutSecs `
             -ScriptBlock {
-                docker build -t "$using:tag" -f "$using:dockerfilePath" --no-cache . 2>&1
+                docker build -t $tag -f $dockerfilePath --no-cache . 2>&1
                 $exit = $LASTEXITCODE
                 # Clean up image
-                docker rmi "$using:tag" 2>&1 | Out-Null
+                docker rmi $tag 2>&1 | Out-Null
                 $exit
             }
 

@@ -1,6 +1,6 @@
-# ═══════════════════════════════════════════════════════════════════
+# ===================================================================
 # CROSS-PLATFORM: This script must run on Linux, macOS, and Windows.
-# ═══════════════════════════════════════════════════════════════════
+# ===================================================================
 
 <#
 .SYNOPSIS
@@ -9,7 +9,7 @@ Nightly entry point: runs the full maintenance check suite.
 .DESCRIPTION
 Invokes all level-1 (CI) checks plus level-2 (nightly) checks.
 Designed to be called from nightly.yml as a single step.
-Uses relaxed mode — collects all failures and reports at the end.
+Uses relaxed mode - collects all failures and reports at the end.
 
 .PARAMETER ReportToAnnotations
 Output GitHub Actions annotations. Default: $true
@@ -53,24 +53,24 @@ function Invoke-Check {
 
     $scriptPath = Join-Path $ChecksDir $ScriptName
     if (-not (Test-Path $scriptPath)) {
-        Write-Host "  [SKIP] $Label — script not found" -ForegroundColor Yellow
+        Write-Host "  [SKIP] $Label - script not found" -ForegroundColor Yellow
         return $null
     }
 
     Write-Host ""
-    Write-Host "━━━ $Label ━━━" -ForegroundColor Cyan
+    Write-Host "--- $Label ---" -ForegroundColor Cyan
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     try {
         $checkResult = & $scriptPath @Arguments
         $sw.Stop()
         $checkResult.DurationMs = $sw.ElapsedMilliseconds
-        $icon = if ($checkResult.Status -eq "passed") { "✅" } elseif ($checkResult.Status -eq "skipped") { "⚠️" } else { "❌" }
-        Write-Host "$icon $Label — $($checkResult.Status) ($($checkResult.DurationMs)ms)"
+        $icon = if ($checkResult.Status -eq "passed") { "✅" } elseif ($checkResult.Status -eq "skipped") { "!️" } else { "X" }
+        Write-Host "$icon $Label - $($checkResult.Status) ($($checkResult.DurationMs)ms)"
         return $checkResult
     }
     catch {
         $sw.Stop()
-        Write-Host "❌ $Label — ERROR: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "X $Label - ERROR: $($_.Exception.Message)" -ForegroundColor Red
         return [PSCustomObject]@{
             CheckId = "??"; Name = $Label; Status = "error"
             DurationMs = $sw.ElapsedMilliseconds; ExitCode = 1
@@ -81,9 +81,9 @@ function Invoke-Check {
 }
 
 Write-Host ""
-Write-Host "╔══════════════════════════════════════════════════════════════════════╗"
-Write-Host "║  Nightly Maintenance Checks                                          ║"
-Write-Host "╚══════════════════════════════════════════════════════════════════════╝"
+Write-Host "========================================================================"
+Write-Host "|  Nightly Maintenance Checks                                          |"
+Write-Host "========================================================================"
 
 # ── Level 1: CI checks (fast baseline) ──
 $r = Invoke-Check -ScriptName "check-compilation.ps1" -Label "A1 Compilation"
@@ -157,7 +157,7 @@ if (-not $SkipHeavyTests) {
 
 # ── Report ──
 Write-Host ""
-Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+Write-Host "------------------------------------------------------------" -ForegroundColor Cyan
 
 if ($ReportToAnnotations) {
     $annotationsPath = Join-Path $ReportersDir "report-github-annotations.ps1"
@@ -187,7 +187,7 @@ if (Test-Path $summaryPath) {
 
 # ── Exit ──
 if ($failedCount -gt 0) {
-    Write-Host "❌ Nightly checks: ${failedCount} FAILURE(S)" -ForegroundColor Red
+    Write-Host "X Nightly checks: ${failedCount} FAILURE(S)" -ForegroundColor Red
     exit 1
 }
 else {

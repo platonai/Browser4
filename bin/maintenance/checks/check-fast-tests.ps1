@@ -61,8 +61,8 @@ $testResult = Invoke-MaintenanceStep `
     -WorkingDirectory $repoRoot `
     -TimeoutSeconds $timeoutSecs `
     -ScriptBlock {
-        $groups = "-Dgroups=""!$using:ExcludedGroups"""
-        $cmd = "& '$using:mvnCmd' test -P '$using:MavenProfiles' $groups -Dsurefire.failIfNoSpecifiedTests=false"
+        $groups = "-Dgroups=""!$ExcludedGroups"""
+        $cmd = "& 'mvnCmd' test -P 'MavenProfiles' $groups -Dsurefire.failIfNoSpecifiedTests=false"
         Invoke-Expression $cmd 2>&1
         $LASTEXITCODE
     }

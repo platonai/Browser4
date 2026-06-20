@@ -65,7 +65,7 @@ $clippyResult = Invoke-MaintenanceStep `
     -WorkingDirectory $cliDir `
     -TimeoutSeconds 300 `
     -ScriptBlock {
-        cargo clippy --all-targets $using:ClippyArgs 2>&1
+        cargo clippy --all-targets $ClippyArgs 2>&1
         $LASTEXITCODE
     }
 

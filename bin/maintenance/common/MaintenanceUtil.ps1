@@ -236,6 +236,10 @@ function Invoke-MaintenanceStep {
     .SYNOPSIS
     Wraps a maintenance check execution with timing, logging, and exit-code
     handling. Returns a hashtable with stdout, stderr, ExitCode, and DurationMs.
+    .DESCRIPTION
+    Executes the scriptblock directly in the current session to properly
+    capture $LASTEXITCODE from external commands (mvnw, cargo, python, etc.).
+    Stdout/stderr are captured via redirection.
     #>
     param(
         [Parameter(Mandatory = $true)]
@@ -252,8 +256,8 @@ function Invoke-MaintenanceStep {
     Write-MaintenanceLog -Level "INFO" -Component $StepName -Message "Starting..."
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    $stdout = $null
-    $stderr = $null
+    $stdout = ""
+    $stderr = ""
     $exitCode = 0
 
     try {
@@ -261,36 +265,16 @@ function Invoke-MaintenanceStep {
             Push-Location $WorkingDirectory
         }
 
-        $job = Start-Job -ScriptBlock $ScriptBlock
-        $completed = Wait-Job $job -Timeout $TimeoutSeconds
+        # Execute directly to capture $LASTEXITCODE from external commands
+        $stdout = & $ScriptBlock 2>&1 | Out-String
+        $exitCode = $LASTEXITCODE
 
-        if (-not $completed) {
-            Stop-Job $job
-            $stdout = "TIMEOUT: Step exceeded $TimeoutSeconds seconds"
-            $stderr = "TIMEOUT"
-            $exitCode = 124
-            Write-MaintenanceLog -Level "ERROR" -Component $StepName -Message "TIMEOUT after ${TimeoutSeconds}s"
+        if ($exitCode -eq 0) {
+            Write-MaintenanceLog -Level "INFO" -Component $StepName -Message "Completed successfully"
         }
         else {
-            $output = Receive-Job $job
-            $stdout = $output -join "`n"
-            $jobErrors = $job.ChildJobs[0].Error
-            if ($jobErrors) {
-                $stderr = ($jobErrors | ForEach-Object { "$_" }) -join "`n"
-            }
-            else {
-                $stderr = ""
-            }
-            $exitCode = $job.ChildJobs[0].ExitCode
-            if ($exitCode -eq 0) {
-                Write-MaintenanceLog -Level "INFO" -Component $StepName -Message "Completed successfully"
-            }
-            else {
-                Write-MaintenanceLog -Level "ERROR" -Component $StepName -Message "Failed with exit code $exitCode"
-            }
+            Write-MaintenanceLog -Level "ERROR" -Component $StepName -Message "Failed with exit code $exitCode"
         }
-
-        Remove-Job $job -Force -ErrorAction SilentlyContinue
     }
     catch {
         $stdout = ""

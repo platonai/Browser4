@@ -43,7 +43,7 @@ $licenseResult = Invoke-MaintenanceStep `
     -WorkingDirectory $repoRoot `
     -TimeoutSeconds 300 `
     -ScriptBlock {
-        & $using:mvnCmd org.codehaus.mojo:license-maven-plugin:aggregate-add-third-party -P "$using:MavenProfiles" -q 2>&1
+        & $mvnCmd org.codehaus.mojo:license-maven-plugin:aggregate-add-third-party -P "$MavenProfiles" -q 2>&1
         $LASTEXITCODE
     }
 

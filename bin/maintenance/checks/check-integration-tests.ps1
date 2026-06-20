@@ -48,7 +48,7 @@ $testResult = Invoke-MaintenanceStep `
     -WorkingDirectory $repoRoot `
     -TimeoutSeconds $timeoutSecs `
     -ScriptBlock {
-        & $using:mvnCmd test -P "$using:MavenProfiles" -DrunITs=true `
+        & $mvnCmd test -P "$MavenProfiles" -DrunITs=true `
             "-Dgroups=!E2E&!E2ETest&!ManualOnly&!RequiresAI&!RequiresBrowser&!TestInfraCheck&!OptionalTest&!SkippableLowerLevel" `
             -Dsurefire.failIfNoSpecifiedTests=false 2>&1
         $LASTEXITCODE

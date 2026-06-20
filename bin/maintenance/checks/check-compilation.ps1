@@ -48,7 +48,7 @@ $mavenResult = Invoke-MaintenanceStep `
     -WorkingDirectory $repoRoot `
     -TimeoutSeconds 900 `
     -ScriptBlock {
-        & $using:mvnCmd compile -pl !browser4-tests -P "$using:MavenProfiles" -DskipTests -q 2>&1
+        & $mvnCmd compile -pl !browser4-tests -P "$MavenProfiles" -DskipTests -q 2>&1
         $LASTEXITCODE
     }
 

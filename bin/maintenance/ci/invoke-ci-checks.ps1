@@ -1,6 +1,6 @@
-# ═══════════════════════════════════════════════════════════════════
+# ===================================================================
 # CROSS-PLATFORM: This script must run on Linux, macOS, and Windows.
-# ═══════════════════════════════════════════════════════════════════
+# ===================================================================
 
 <#
 .SYNOPSIS
@@ -57,12 +57,12 @@ function Invoke-Check {
 
     $scriptPath = Join-Path $ChecksDir $ScriptName
     if (-not (Test-Path $scriptPath)) {
-        Write-Host "  [SKIP] $Label — script not found: $scriptPath" -ForegroundColor Yellow
+        Write-Host "  [SKIP] $Label - script not found: $scriptPath" -ForegroundColor Yellow
         return $null
     }
 
     Write-Host ""
-    Write-Host "━━━ $Label ━━━" -ForegroundColor Cyan
+    Write-Host "--- $Label ---" -ForegroundColor Cyan
 
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     try {
@@ -77,13 +77,13 @@ function Invoke-Check {
         $sw.Stop()
         $checkResult.DurationMs = $sw.ElapsedMilliseconds
 
-        $icon = if ($checkResult.Status -eq "passed") { "✅" } elseif ($checkResult.Status -eq "skipped") { "⚠️" } else { "❌" }
-        Write-Host "$icon $Label — $($checkResult.Status) ($($checkResult.DurationMs)ms)" -ForegroundColor $(if ($checkResult.Status -eq "passed") { "Green" } else { "Red" })
+        $icon = if ($checkResult.Status -eq "passed") { "✅" } elseif ($checkResult.Status -eq "skipped") { "!️" } else { "X" }
+        Write-Host "$icon $Label - $($checkResult.Status) ($($checkResult.DurationMs)ms)" -ForegroundColor $(if ($checkResult.Status -eq "passed") { "Green" } else { "Red" })
         return $checkResult
     }
     catch {
         $sw.Stop()
-        Write-Host "❌ $Label — ERROR: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "X $Label - ERROR: $($_.Exception.Message)" -ForegroundColor Red
         $errResult = [PSCustomObject]@{
             CheckId    = "??"
             Name       = $Label
@@ -100,9 +100,9 @@ function Invoke-Check {
 }
 
 Write-Host ""
-Write-Host "╔════════════════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "║  CI Maintenance Checks                        ║" -ForegroundColor Cyan
-Write-Host "╚════════════════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host "==================================================" -ForegroundColor Cyan
+Write-Host "|  CI Maintenance Checks                        |" -ForegroundColor Cyan
+Write-Host "==================================================" -ForegroundColor Cyan
 
 # ── A1: Compilation ──
 $r = Invoke-Check -ScriptName "check-compilation.ps1" -Label "A1 Compilation"
@@ -120,7 +120,7 @@ if ($r -and $r.Status -ne "failed" -and $r.Status -ne "error") {
     }
 }
 else {
-    Write-Host "  [SKIP] A2 Fast Tests — compilation failed" -ForegroundColor Yellow
+    Write-Host "  [SKIP] A2 Fast Tests - compilation failed" -ForegroundColor Yellow
 }
 
 # ── B4: Rust CLI ──
@@ -154,7 +154,7 @@ else {
 
 # ── Report ──
 Write-Host ""
-Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Cyan
+Write-Host "------------------------------------------------" -ForegroundColor Cyan
 
 if ($ReportToAnnotations) {
     $annotationsPath = Join-Path $ReportersDir "report-github-annotations.ps1"
@@ -172,7 +172,7 @@ if ($ReportToConsole) {
 
 # ── Exit ──
 if ($overallFailed) {
-    Write-Host "❌ CI checks: FAILED" -ForegroundColor Red
+    Write-Host "X CI checks: FAILED" -ForegroundColor Red
     exit 1
 }
 else {
