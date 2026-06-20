@@ -9,7 +9,7 @@ documentation, and reliability from a first-time user's perspective.
 
 ```powershell
 # From the repo root:
-./cli/browser4-cli/tests/scripts/run-task.ps1 -TaskFile tasks/search-summary.md
+./browser4-tests/real-world-scenarios/scripts/run-task.ps1 -TaskFile tasks/search-summary.md
 ```
 
 Each task file describes the scenario in plain markdown. `run-task.ps1` reads the
@@ -37,16 +37,16 @@ sequentially:
 
 ```powershell
 # Run everything:
-./cli/browser4-cli/tests/scripts/run-tests.ps1
+./browser4-tests/real-world-scenarios/scripts/run-tests.ps1
 
 # List discovered tasks:
-./cli/browser4-cli/tests/scripts/run-tests.ps1 -List
+./browser4-tests/real-world-scenarios/scripts/run-tests.ps1 -List
 
 # Run a subset:
-./cli/browser4-cli/tests/scripts/run-tests.ps1 search-summary amazon
+./browser4-tests/real-world-scenarios/scripts/run-tests.ps1 search-summary amazon
 
 # Stop on first failure:
-./cli/browser4-cli/tests/scripts/run-tests.ps1 -FailFast
+./browser4-tests/real-world-scenarios/scripts/run-tests.ps1 -FailFast
 ```
 
 New task files placed in `tasks/` are picked up automatically — no
@@ -67,18 +67,31 @@ registration step is needed.
 | `tasks/hacker-news.md` | Navigate HN, open and summarize top 3 posts |
 | `tasks/form-filling.md` | Fill a local HTML form using batch mode with CSS selectors |
 
+## Running in production mode
+
+To test against the globally installed `browser4-cli` (not `cargo run`), use
+`run-task-production.ps1`:
+
+```powershell
+# Single task in production mode:
+./browser4-tests/real-world-scenarios/scripts/run-task-production.ps1 -TaskFile tasks/amazon.md
+
+# With silent output:
+./browser4-tests/real-world-scenarios/scripts/run-task-production.ps1 -TaskFile tasks/search-summary.md -Silent
+```
+
+This replaces the per-task wrapper scripts previously in
+`browser4-tests/real-world-scenarios/`. The production wrapper sets
+`$browser4cliMode = 'production'` so `common.ps1` resolves the CLI as
+`browser4-cli help` and loads the skill reference from
+`https://browser4.ioSKILL.md`.
+
 ## Script reference
 
 | Script | Purpose |
 |--------|---------|
 | `common.ps1` | Shared evaluation prompt (`$generalPrompt`) and agent invocation (`Invoke-Agent`) |
 | `run-task.ps1` | Single-task runner — reads a `.md` task file and invokes the agent |
+| `run-task-production.ps1` | Production wrapper — sets `$browser4cliMode = 'production'` and delegates to `run-task.ps1` |
 | `run-tests.ps1` | Batch runner — discovers and runs all tasks in `tasks/` |
 | `common.tests.ps1` | Unit tests for `common.ps1` |
-
-## Production copies
-
-The scripts in `browser4-tests/real-world-scenarios/` are thin wrappers that
-set `$browser4cliMode = 'production'` and call `run-task.ps1` with the
-corresponding task file. Keep the canonical task files and runners in this
-directory; update the production wrappers only if they need different behavior.

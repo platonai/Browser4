@@ -12,22 +12,22 @@ Without arguments the script runs every discovered task.  Pass -List to see
 what would run, or name one or more tasks to run a subset.
 
 .EXAMPLE
-./cli/browser4-cli/tests/scripts/run-tests.ps1
+./browser4-tests/real-world-scenarios/scripts/run-tests.ps1
 
     Run every task in tasks/.
 
 .EXAMPLE
-./cli/browser4-cli/tests/scripts/run-tests.ps1 -List
+./browser4-tests/real-world-scenarios/scripts/run-tests.ps1 -List
 
     List discovered tasks without running them.
 
 .EXAMPLE
-./cli/browser4-cli/tests/scripts/run-tests.ps1 search-summary amazon
+./browser4-tests/real-world-scenarios/scripts/run-tests.ps1 search-summary amazon
 
     Run only the two named tasks (with or without .md extension).
 
 .EXAMPLE
-./cli/browser4-cli/tests/scripts/run-tests.ps1 -FailFast
+./browser4-tests/real-world-scenarios/scripts/run-tests.ps1 -FailFast
 
     Stop after the first failing task.
 

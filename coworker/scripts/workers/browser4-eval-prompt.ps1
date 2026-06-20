@@ -5,7 +5,7 @@
 
 .DESCRIPTION
     Provides the standard evaluation prompt extracted from
-    cli/browser4-cli/tests/scripts/common.ps1 so that any coworker task can
+    browser4-tests/real-world-scenarios/scripts/common.ps1 so that any coworker task can
     invoke a browser4-cli usability evaluation without depending on the test
     scripts directory.
 
