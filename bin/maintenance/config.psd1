@@ -28,7 +28,7 @@
         PowerShellExecutable = 'pwsh'
         WorkingDirectory     = '..\..'
         LogDirectory         = 'bin\maintenance\logs'
-        StatusFile           = 'bin\maintenance\logs\scheduler-status.json'
+        StatusFile           = 'bin\maintenance\state\maintenance-state.json'
     }
 
     Tasks = @(

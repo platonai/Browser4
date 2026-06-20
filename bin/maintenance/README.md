@@ -21,6 +21,9 @@ pwsh bin/maintenance/orchestrator.ps1 -Once
 # Run the orchestrator continuously (dev mode)
 pwsh bin/maintenance/orchestrator.ps1
 
+# Run the orchestrator, forcing all tasks regardless of last-run state
+pwsh bin/maintenance/orchestrator.ps1 -Force -Once
+
 # Run in CI mode (strict, fails on any issue)
 $env:MAINTENANCE_MODE = "ci"
 pwsh bin/maintenance/orchestrator.ps1 -Once
@@ -35,7 +38,8 @@ bin/maintenance/
 ├── orchestrator.ps1                   # Master scheduler/orchestrator
 │
 ├── common/
-│   └── MaintenanceUtil.ps1            # Shared utilities
+│   ├── MaintenanceUtil.ps1            # Shared utilities (logging, results, thresholds)
+│   └── MaintenanceState.ps1           # Persistent state I/O with file locking
 │
 ├── checks/                            # 28 individual check scripts
 │   ├── check-*.ps1                    # Read-only checks
@@ -50,6 +54,9 @@ bin/maintenance/
 ├── ci/                                # CI entry points
 │   ├── invoke-ci-checks.ps1           # Per-commit checks
 │   └── invoke-nightly-checks.ps1      # Nightly full suite
+│
+├── state/
+│   └── maintenance-state.json         # Shared run history (git-tracked, team-wide)
 │
 └── thresholds/
     └── thresholds.psd1                # All numeric thresholds
@@ -76,6 +83,52 @@ bin/maintenance/
 | `ci` | Strict: any failure exits 1 immediately | `$env:MAINTENANCE_MODE=ci` |
 | `nightly` | Relaxed: collects all failures, reports at end | `$env:MAINTENANCE_MODE=nightly` |
 | `dev` | Warn only: never fails; all issues are warnings | Default |
+
+## Shared State
+
+The orchestrator persists run history to `state/maintenance-state.json`, which is
+tracked in git so the entire team shares one view of what has run.
+
+**How it prevents redundant runs:** When the orchestrator starts, it reads each
+task's last-run time from the state file. A task is skipped if it ran within its
+configured `IntervalSeconds`. This means:
+
+- If CI nightly already ran `check-coverage` today, a developer's orchestrator
+  will skip it (the 24-hour interval is still active).
+- If a colleague just ran `check-compilation` and committed the updated state,
+  your next pull brings that state and skips the re-run.
+- In dev mode, the continuous loop won't re-execute a check that completed
+  seconds ago.
+
+**Force mode** bypasses the state entirely — every task runs:
+
+```powershell
+pwsh bin/maintenance/orchestrator.ps1 -Force -Once
+```
+
+CI mode (`$env:MAINTENANCE_MODE = "ci"`) implies `-Force` automatically.
+
+**State file format** (`state/maintenance-state.json`):
+```json
+{
+  "version": 1,
+  "updatedAt": "2026-06-20T14:30:00+08:00",
+  "Tasks": {
+    "check-compilation": {
+      "lastRun": "2026-06-20T14:25:00+08:00",
+      "lastResult": "passed",
+      "runCount": 42,
+      "lastMachine": "dev-workstation",
+      "lastDurationMs": 12345,
+      "lastExitCode": 0
+    }
+  }
+}
+```
+
+**File locking** prevents corruption when two processes write simultaneously.
+Stale locks (older than 60 seconds) are automatically broken.
+Lock files (`*.lock`) are gitignored; only the state JSON is committed.
 
 ## Thresholds
 

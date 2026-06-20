@@ -25,6 +25,10 @@ Path to a custom config.psd1 file. Defaults to config.psd1 in the same directory
 .PARAMETER Mode
 Override the execution mode (ci|nightly|dev). Falls back to $env:MAINTENANCE_MODE.
 
+.PARAMETER Force
+Bypass state-based scheduling: run every task regardless of when it last ran.
+In CI mode, Force is implied automatically.
+
 .EXAMPLE
 # One-shot run with default config
 .\orchestrator.ps1 -Once
@@ -39,6 +43,7 @@ $env:MAINTENANCE_MODE = "ci"
 
 param(
     [switch]$Once,
+    [switch]$Force,
     [string]$ConfigPath,
     [ValidateSet("ci", "nightly", "dev")]
     [string]$Mode
@@ -50,12 +55,17 @@ $ErrorActionPreference = "Continue"
 # ── Resolve paths ──
 $ScriptDir = $PSScriptRoot
 . (Join-Path $ScriptDir "common\MaintenanceUtil.ps1")
+. (Join-Path $ScriptDir "common\MaintenanceState.ps1")
 
 # ── Determine mode ──
 if ($Mode) {
     $env:MAINTENANCE_MODE = $Mode
 }
 $runMode = Test-IsMaintenanceMode
+if ($runMode -eq "ci") {
+    $Force = $true
+    Write-MaintenanceLog -Level "INFO" -Component "Orchestrator" -Message "CI mode: Force-run enabled (state bypassed)"
+}
 Write-MaintenanceLog -Level "INFO" -Component "Orchestrator" -Message "Starting in mode: $runMode"
 
 # ── Load config ──
@@ -66,22 +76,67 @@ if (-not (Test-Path $ConfigPath)) {
     Write-MaintenanceLog -Level "ERROR" -Component "Orchestrator" -Message "Config file not found: $ConfigPath"
     exit 1
 }
-$config = & $ConfigPath
+$config = Import-PowerShellDataFile -Path $ConfigPath
 $Scheduler = $config.Scheduler
 $Tasks = $config.Tasks | Where-Object { $_.Enabled -eq $true }
 
 Write-MaintenanceLog -Level "INFO" -Component "Orchestrator" -Message "Loaded $($Tasks.Count) enabled tasks"
 
-# ── State tracking ──
+# ── Persistent state ──
+$persistedState = Read-MaintenanceState
+if ($null -eq $persistedState) {
+    Initialize-MaintenanceState | Out-Null
+    $persistedState = Read-MaintenanceState
+}
+Write-MaintenanceLog -Level "INFO" -Component "Orchestrator" `
+    -Message "State loaded: $(@($persistedState.Tasks.PSObject.Properties).Count) task(s) have run history"
+
+# ── Runtime state tracking (hydrated from persistent state) ──
 $taskStates = @{}
 foreach ($task in $Tasks) {
+    $lastRun = [DateTime]::MinValue
+    $runCount = 0
+    $lastResult = $null
+
+    $stateTaskNames = @($persistedState.Tasks.PSObject.Properties | ForEach-Object { $_.Name })
+    if ($stateTaskNames -contains $task.Name) {
+        $entry = $persistedState.Tasks.($task.Name)
+        if ($entry.lastRun) {
+            try { $lastRun = [DateTime]::Parse($entry.lastRun) } catch { }
+        }
+        if ($entry.runCount) {
+            $runCount = $entry.runCount
+        }
+        if ($entry.lastResult) {
+            $lastResult = $entry.lastResult
+        }
+    }
+
+    # In Force mode, always run immediately; otherwise respect last-run interval
+    if ($Force) {
+        $nextRun = [DateTime]::Now
+    }
+    elseif ($lastRun -ne [DateTime]::MinValue) {
+        $nextRun = $lastRun.AddSeconds($task.IntervalSeconds)
+        if ($nextRun -lt [DateTime]::Now) {
+            $nextRun = [DateTime]::Now  # Interval elapsed — due now
+        }
+        else {
+            Write-MaintenanceLog -Level "INFO" -Component "Orchestrator" `
+                -Message "$($task.Name): last ran $lastRun, next run at $nextRun (skipping for now)"
+        }
+    }
+    else {
+        $nextRun = [DateTime]::Now  # Never run before — run immediately
+    }
+
     $taskStates[$task.Name] = @{
         Name           = $task.Name
-        LastRun        = [DateTime]::MinValue
-        NextRun        = [DateTime]::Now   # Run immediately on first tick
+        LastRun        = $lastRun
+        NextRun        = $nextRun
         IsRunning      = $false
-        RunCount       = 0
-        LastResult     = $null
+        RunCount       = $runCount
+        LastResult     = $lastResult
     }
 }
 
@@ -106,11 +161,11 @@ function Invoke-MaintenanceTask {
     }
 
     $argsList = if ($Task.Arguments) { $Task.Arguments } else { @() }
-    $argString = $argsList -join " "
 
     try {
+        $pwshArgs = @("-NoProfile", "-File", $scriptPath) + $argsList
         $proc = Start-Process -FilePath "pwsh" `
-            -ArgumentList @("-NoProfile", "-File", $scriptPath) + $argsList `
+            -ArgumentList $pwshArgs `
             -WorkingDirectory $repoRoot `
             -NoNewWindow `
             -PassThru `
@@ -144,7 +199,8 @@ function Invoke-MaintenanceTask {
 function Test-TaskDependenciesSatisfied {
     param($Task)
 
-    if (-not $Task.DependsOn) { return $true }
+    $hasDepends = $null -ne ($Task.PSObject.Properties | Where-Object { $_.Name -eq 'DependsOn' })
+    if (-not $hasDepends -or -not $Task.DependsOn) { return $true }
 
     foreach ($dep in $Task.DependsOn) {
         if (-not $taskStates.ContainsKey($dep)) {
@@ -191,6 +247,11 @@ do {
 
         $result = Invoke-MaintenanceTask -Task $task -State $state
         $allResults += $result
+
+        # Persist updated state so other team members / processes see this run
+        Update-MaintenanceTaskState -TaskName $task.Name -Result $result -State $persistedState
+        # Refresh the in-memory persisted state after write
+        $persistedState = Read-MaintenanceState
 
         # Schedule next run
         $state.NextRun = $now.AddSeconds($task.IntervalSeconds)

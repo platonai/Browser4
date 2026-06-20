@@ -136,3 +136,6 @@ browser4-cli-win32-x64.exe
 /cli/browser4-cli/coverage-html/
 /cli/cli/.intentionally-empty-file.o
 */**/.locks
+
+# Maintenance state lock files (state JSON is tracked for team sharing)
+bin/maintenance/state/*.lock
