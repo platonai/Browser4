@@ -150,23 +150,28 @@ $script:AppData = if ($env:APPDATA) {
 # ─────────────────────────────────────────────────────
 $InstallPs1Url = 'https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.ps1'
 $InstallShUrl  = 'https://browser4.oss-cn-beijing.aliyuncs.com/scripts/install-browser4-cli.sh'
-$Browser4Home  = if ($OSWin) { Join-Path $env:USERPROFILE '.browser4' } else { Join-Path $env:HOME '.browser4' }
 $ServerBaseUrl = 'http://localhost:8182'
 $ServerHealthUrl = "$ServerBaseUrl/actuator/health"
 
-# Runtime data directory (what uninstall should remove)
-$RuntimeDataDir = if ($OSWin) {
-    Join-Path $AppData 'browser4'
-} elseif ($OSMac) {
-    Join-Path $env:HOME 'Library/Application Support/browser4'
-} else {
-    # $XDG_DATA_HOME/browser4 or ~/.local/share/browser4
-    if ($env:XDG_DATA_HOME) {
-        Join-Path $env:XDG_DATA_HOME 'browser4'
-    } else {
-        Join-Path $env:HOME '.local/share/browser4'
-    }
-}
+# The user's real ~/.browser4 (read-only — never modified by this test).
+# Used only as a source for copying config into the test sandbox.
+$UserBrowser4Home = if ($OSWin) { Join-Path $env:USERPROFILE '.browser4' } else { Join-Path $env:HOME '.browser4' }
+
+# Test-specific data directories — isolated from the user's real ~/.browser4.
+# These are set both as script variables AND exported as environment variables
+# so the Rust CLI (state.rs) picks them up and routes all state/runtime data
+# into the working directory instead of the user's home.
+$Browser4Home  = Join-Path $WorkingDir 'state'       # BROWSER4_CLI_STATE_DIR
+$RuntimeDataDir = Join-Path $WorkingDir 'runtime'    # BROWSER4_RUNTIME_DIR
+
+# Export environment variables so the CLI binary uses the test sandbox.
+# - BROWSER4_CLI_STATE_DIR  → state directory (cli-state.json, sessions/)
+# - BROWSER4_RUNTIME_DIR    → runtime bundle & download cache
+# - BROWSER4_SERVER_OPTS    → JVM options for the backend server
+#   (app.name tag distinguishes test-server instances from production ones)
+$env:BROWSER4_CLI_STATE_DIR = $Browser4Home
+$env:BROWSER4_RUNTIME_DIR   = $RuntimeDataDir
+$env:BROWSER4_SERVER_OPTS   = '-Dapp.name=browser4-acceptance-test'
 
 # ─────────────────────────────────────────────────────
 # State tracking
@@ -335,8 +340,10 @@ function Wait-ProcessAndCollect {
 }
 
 function Get-RuntimeBundleDir {
-    # The runtime bundle may live under ~/.browser4 or %APPDATA%/browser4.
-    $searchRoots = @($Browser4Home)
+    # The runtime bundle lives under the test sandbox (BROWSER4_RUNTIME_DIR
+    # or BROWSER4_CLI_STATE_DIR).  Search both roots so we find the bundle
+    # regardless of which env var the current CLI version honours.
+    $searchRoots = @($RuntimeDataDir, $Browser4Home)
     if ($OSWin) {
         $searchRoots += Join-Path $AppData 'browser4'
         $searchRoots += Join-Path $LocalAppData 'browser4'
@@ -538,10 +545,12 @@ function Resolve-CliPath {
 # ═══════════════════════════════════════════════════════════════
 Write-StepHeader 'STEP 0 — Setup'
 
-Write-Info "WorkingDir    : $WorkingDir"
-Write-Info "Browser4Home  : $Browser4Home"
-Write-Info "ServerHealth  : $ServerHealthUrl"
-Write-Info "RuntimeData   : $RuntimeDataDir"
+Write-Info "WorkingDir      : $WorkingDir"
+Write-Info "Test state dir  : $Browser4Home  (BROWSER4_CLI_STATE_DIR)"
+Write-Info "Test runtime dir: $RuntimeDataDir  (BROWSER4_RUNTIME_DIR)"
+Write-Info "User home (RO)  : $UserBrowser4Home"
+Write-Info "ServerHealth    : $ServerHealthUrl"
+Write-Info "Server opts     : $env:BROWSER4_SERVER_OPTS"
 
 if (-not (Test-Path $WorkingDir)) {
     New-Item -ItemType Directory -Path $WorkingDir -Force | Out-Null
@@ -553,34 +562,23 @@ Push-Location $WorkingDir
 Write-Info "Pushed to $WorkingDir"
 
 # ─────────────────────────────────────────────────────
-# Helper: restore ~/.browser4 from backup
+# Helper: copy config from the user's real ~/.browser4
+# into the test sandbox so the backend server can read
+# config files (e.g. LLM keys).  The real home is only
+# READ — never modified by this test.
+#
+# For clean-room (new user) testing this function is
+# intentionally NOT called.
 # ─────────────────────────────────────────────────────
-function Restore-Browser4Home {
-    if ($browser4HomeBackup -and (Test-Path $browser4HomeBackup)) {
-        Write-Info "Restoring original ~/.browser4 from $browser4HomeBackup"
-        if (Test-Path $Browser4Home) {
-            Remove-Item $Browser4Home -Recurse -Force -ErrorAction SilentlyContinue
-        }
-        Move-Item $browser4HomeBackup $Browser4Home -Force
-        Write-Info 'Original ~/.browser4 restored'
-    }
-}
-
-# ─────────────────────────────────────────────────────
-# Helper: copy config from backup into the current
-# ~/.browser4 so the backend server can read config
-# files (e.g. LLM keys).  This is needed when testing
-# with a configured setup.  For clean-room (new user)
-# testing, this function is intentionally NOT called.
-# ─────────────────────────────────────────────────────
-function Copy-ConfigFromBackup {
-    if (-not $browser4HomeBackup -or -not (Test-Path $browser4HomeBackup)) {
+function Copy-ConfigFromUserHome {
+    if (-not (Test-Path $UserBrowser4Home)) {
+        Write-Info 'No real ~/.browser4 — nothing to copy config from'
         return
     }
 
-    $backupConfig = Join-Path $browser4HomeBackup 'config'
-    if (-not (Test-Path $backupConfig)) {
-        Write-Info 'No config directory in backup — nothing to copy'
+    $userConfig = Join-Path $UserBrowser4Home 'config'
+    if (-not (Test-Path $userConfig)) {
+        Write-Info 'No config directory in real ~/.browser4 — nothing to copy'
         return
     }
 
@@ -590,46 +588,22 @@ function Copy-ConfigFromBackup {
 
     $targetConfig = Join-Path $Browser4Home 'config'
     if (Test-Path $targetConfig) {
-        Write-Info "Config already exists at $targetConfig — replacing with backup config"
+        Write-Info "Config already exists at $targetConfig — replacing with user config"
         Remove-Item $targetConfig -Recurse -Force -ErrorAction SilentlyContinue
     }
 
-    Copy-Item -Path $backupConfig -Destination $targetConfig -Recurse -Force
-    Write-Info "Copied config from backup ($backupConfig) to $targetConfig"
+    Copy-Item -Path $userConfig -Destination $targetConfig -Recurse -Force
+    Write-Info "Copied config from user home ($userConfig) to test sandbox ($targetConfig)"
 }
 
 try {
 
 # ─────────────────────────────────────────────────────
-# Rename ~/.browser4 out of the way (if it exists) so
-# testing starts from a clean slate.  Restore it after
-# the test run completes (see Restore-Browser4Home).
+# Test sandbox is isolated via BROWSER4_CLI_STATE_DIR
+# and BROWSER4_RUNTIME_DIR env vars (set above).
+# The user's real ~/.browser4 is never touched.
 # ─────────────────────────────────────────────────────
-$browser4HomeBackup = $null
-if (Test-Path $Browser4Home) {
-    $browser4HomeBackup = "$Browser4Home.backup.$(Get-Date -Format 'yyyyMMdd-HHmmss')"
-    Write-Info "Renaming ~/.browser4 → $browser4HomeBackup"
-    # On Windows, Move-Item can fail with "being used by another process"
-    # when files inside the directory are locked (e.g. by a running server,
-    # antivirus, or search indexer).  Fall back to copy+remove, and if even
-    # that fails, warn but continue with a clean slate by removing what we can.
-    try {
-        Move-Item -Path $Browser4Home -Destination $browser4HomeBackup -Force -ErrorAction Stop
-    } catch {
-        Write-Info "Move-Item failed ($_), falling back to copy+remove"
-        Copy-Item -Path $Browser4Home -Destination $browser4HomeBackup -Recurse -Force -ErrorAction SilentlyContinue
-        Remove-Item -Path $Browser4Home -Recurse -Force -ErrorAction SilentlyContinue
-        if (Test-Path $Browser4Home) {
-            Write-WarningMsg "Could not fully remove original ~/.browser4 — some files may be locked. Proceeding anyway."
-            # Rename the remnant so the test still starts from a clean slate
-            $remnant = "$Browser4Home.remnant.$(Get-Date -Format 'yyyyMMdd-HHmmss')"
-            Rename-Item -Path $Browser4Home -NewName (Split-Path $remnant -Leaf) -ErrorAction SilentlyContinue
-        }
-    }
-    Write-Info 'Clean slate: no ~/.browser4 present'
-} else {
-    Write-Info 'No existing ~/.browser4 — already clean'
-}
+Write-Info "Test sandbox: state=$Browser4Home runtime=$RuntimeDataDir (user home untouched at $UserBrowser4Home)"
 
 # ═══════════════════════════════════════════════════════════════
 # STEP 1 — Check for existing global browser4-cli and uninstall
@@ -687,7 +661,10 @@ $NpmPackage     = 'browser4-cli'
 $NpmRegistry    = "https://registry.npmjs.org/$NpmPackage/latest"
 $OssBaseUrl     = 'https://browser4.oss-cn-beijing.aliyuncs.com'
 $OssReleases    = "$OssBaseUrl/releases"
-$MirrorsConfig  = Join-Path $Browser4Home 'runtime\mirrors.json'
+# mirrors.json lives under the runtime data dir.  For the release status
+# report we read from the user's real home (read-only); the test sandbox
+# won't have this file yet.
+$MirrorsConfig  = Join-Path $UserBrowser4Home 'runtime\mirrors.json'
 
 # ── Build the report table ──────────────────────────
 $reportRows = @()
@@ -862,9 +839,9 @@ Write-StepResult -Step 'Release status report' -Passed $allChannelsOk `
       7. Shuts down the server and verifies it is no longer reachable.
       8. Uninstalls and verifies runtime data is removed.
 
-    When -CopyConfig is passed, pre-existing config (LLM keys, etc.) is
-    copied into ~/.browser4 before starting the server.  When omitted,
-    the cycle tests the clean-room first-run experience.
+    When -CopyConfig is passed, config (LLM keys, etc.) from the user's
+    real ~/.browser4 is copied into the test sandbox before starting the
+    server.  When omitted, the cycle tests the clean-room first-run experience.
 
     When -MeasureStartupTime is passed, the cycle runs a second `open`
     with the cached bundle and compares startup latencies.
@@ -994,7 +971,7 @@ function Invoke-InstallationCycle {
     Write-StepHeader "CYCLE $CycleNumber — STEP H: browser4-cli open — $startupLabel"
 
     if ($CopyConfig) {
-        Copy-ConfigFromBackup
+        Copy-ConfigFromUserHome
     } else {
         Write-Info 'No config copied — testing what a brand-new user experiences on first run'
     }
@@ -1207,12 +1184,12 @@ function Invoke-InstallationCycle {
             "uninstall exit=$($uninstallResult.ExitCode)"
         })
 
-    # Verify ~/.browser4 (state dir) survived uninstall.
-    # The state directory is intentionally preserved so user settings
+    # Verify the CLI state directory survived uninstall.
+    # The state directory is intentionally preserved so settings
     # survive an uninstall/reinstall cycle.
     $homeSurvived = Test-Path $Browser4Home
-    Write-StepResult -Step '~/.browser4 preserved' -Passed $homeSurvived `
-        -Detail $(if ($homeSurvived) { 'state directory intact' } else { 'STATE DIRECTORY MISSING — user settings lost!' })
+    Write-StepResult -Step 'state directory preserved' -Passed $homeSurvived `
+        -Detail $(if ($homeSurvived) { 'state directory intact' } else { 'STATE DIRECTORY MISSING — settings lost!' })
 
     return $uninstallOk
 }
@@ -1253,7 +1230,7 @@ if ($SkipMultiScenarios) {
 
     if ($cliCheck) {
         # Ensure config is available before running multi-scenarios
-        Copy-ConfigFromBackup
+        Copy-ConfigFromUserHome
 
         $multiScenariosScript = Join-Path $ScriptDir 'tests-production\multi-scenarios.ps1'
         if (-not (Test-Path $multiScenariosScript) -and $RepoRoot) {
@@ -1425,8 +1402,9 @@ if ($SkipMultiScenarios) {
         Write-Info 'Process check skipped (non-fatal)'
     }
 
-    # Restore original ~/.browser4
-    try { Restore-Browser4Home } catch { Write-WarningMsg "Restore-Browser4Home failed: $_" }
+    # Test sandbox directories are under $WorkingDir and will be
+    # cleaned up with the working directory.  No restore needed
+    # because the user's real ~/.browser4 was never touched.
 
     # Return to original directory
     Pop-Location

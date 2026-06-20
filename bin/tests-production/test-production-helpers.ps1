@@ -373,23 +373,26 @@ function New-TestHome {
     try {
         & $Setup $testRoot
         $originalHome = $Browser4Home
+        $originalRuntimeDir = $RuntimeDataDir
         $originalAppData = $script:AppData
         $originalLocalAppData = $script:LocalAppData
         $originalOSWin = $script:OSWin
         # Override paths so Get-RuntimeBundleDir searches the test tree.
         # Force Windows search path to exercise both roots on all platforms.
-        Set-Variable -Scope script -Name Browser4Home -Value $testRoot
-        Set-Variable -Scope script -Name AppData     -Value $testRoot
-        Set-Variable -Scope script -Name LocalAppData -Value $testRoot
-        Set-Variable -Scope script -Name OSWin       -Value $true  # enable multi-root search
+        Set-Variable -Scope script -Name Browser4Home  -Value $testRoot
+        Set-Variable -Scope script -Name RuntimeDataDir -Value $testRoot
+        Set-Variable -Scope script -Name AppData       -Value $testRoot
+        Set-Variable -Scope script -Name LocalAppData  -Value $testRoot
+        Set-Variable -Scope script -Name OSWin         -Value $true  # enable multi-root search
         try {
             $result = Get-RuntimeBundleDir
             return @{ Root = $testRoot; Result = $result }
         } finally {
-            Set-Variable -Scope script -Name Browser4Home -Value $originalHome
-            Set-Variable -Scope script -Name AppData      -Value $originalAppData
-            Set-Variable -Scope script -Name LocalAppData -Value $originalLocalAppData
-            Set-Variable -Scope script -Name OSWin        -Value $originalOSWin
+            Set-Variable -Scope script -Name Browser4Home  -Value $originalHome
+            Set-Variable -Scope script -Name RuntimeDataDir -Value $originalRuntimeDir
+            Set-Variable -Scope script -Name AppData        -Value $originalAppData
+            Set-Variable -Scope script -Name LocalAppData   -Value $originalLocalAppData
+            Set-Variable -Scope script -Name OSWin          -Value $originalOSWin
         }
     } catch {
         # Best-effort cleanup on failure
