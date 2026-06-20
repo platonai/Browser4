@@ -7,7 +7,7 @@ Shared helpers for browser4-cli agent-scenario test scripts.
 Dot-source this module to reuse the shared usability-evaluation prompt and the
 standard agent invocation.  The prompt adapts to the environment automatically:
 
-  - Dev (default):  `cargo run -- help`  + local `cli/skill/SKILL.md`.
+  - Dev (default):  `cargo run -- help`  + local `skill/SKILL.md`.
   - Production:      `browser4-cli help` + `https://browser4.ioSKILL.md`.
 
 Set `$browser4cliMode = 'production'` BEFORE dot-sourcing this module to switch
@@ -41,7 +41,7 @@ if ($browser4cliMode -eq 'production') {
     $skillPath = 'https://browser4.ioSKILL.md'
 } else {
     $helpCmd   = '`cargo run -- help`'
-    $skillPath = '`cli/skill/SKILL.md`'
+    $skillPath = '`skill/SKILL.md`'
 }
 
 # ── Path resolution ──────────────────────────────────────────────────────────

@@ -129,10 +129,10 @@ Write-Host '━━━ Mode Detection: Dev (default) ━━━' -ForegroundColor 
     Assert-Contains 'contains help subcommand' $helpCmd 'help'
 
     Write-TestGroup '$skillPath in dev mode'
-    Assert-Equal 'is exactly "`cli/skill/SKILL.md`" (with backticks)' `
-        '`cli/skill/SKILL.md`' $skillPath
+    Assert-Equal 'is exactly "`skill/SKILL.md`" (with backticks)' `
+        '`skill/SKILL.md`' $skillPath
     Assert-Contains 'contains SKILL.md' $skillPath 'SKILL.md'
-    Assert-Contains 'contains cli/skill' $skillPath 'cli/skill'
+    Assert-Contains 'contains skill/' $skillPath 'skill/'
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -175,7 +175,7 @@ Write-Host '━━━ Mode Detection: Edge Cases ━━━' -ForegroundColor Yel
     Assert-Equal '$helpCmd falls back to dev value' `
         '`cargo run -- help`' $helpCmd
     Assert-Equal '$skillPath falls back to dev value' `
-        '`cli/skill/SKILL.md`' $skillPath
+        '`skill/SKILL.md`' $skillPath
 }
 
 & {
@@ -254,7 +254,7 @@ Write-Host '━━━ $generalPrompt (Dev Mode) ━━━' -ForegroundColor Yell
 
     Write-TestGroup 'mode-specific values (dev)'
     Assert-Contains 'contains cargo run -- help' $generalPrompt 'cargo run -- help'
-    Assert-Contains 'contains cli/skill/SKILL.md' $generalPrompt 'cli/skill/SKILL.md'
+    Assert-Contains 'contains skill/SKILL.md' $generalPrompt 'skill/SKILL.md'
     Assert-NotContains 'should NOT contain browser4-cli help' $generalPrompt 'browser4-cli help'
     Assert-NotContains 'should NOT contain browser4.io' $generalPrompt 'browser4.io'
 
@@ -279,7 +279,7 @@ Write-Host '━━━ $generalPrompt (Production Mode) ━━━' -ForegroundCol
     Assert-Contains 'contains browser4-cli help' $generalPrompt 'browser4-cli help'
     Assert-Contains 'contains browser4.io' $generalPrompt 'browser4.io'
     Assert-NotContains 'should NOT contain cargo run -- help' $generalPrompt 'cargo run -- help'
-    Assert-NotContains 'should NOT contain cli/skill/SKILL.md' $generalPrompt 'cli/skill/SKILL.md'
+    Assert-NotContains 'should NOT contain skill/SKILL.md' $generalPrompt 'skill/SKILL.md'
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════

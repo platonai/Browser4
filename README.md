@@ -154,7 +154,7 @@ browser4-cli help swarm create
 
 Browser4 CLI is designed for use by AI agents through SKILLS + CLI.
 
-[SKILL.md](cli/skill/SKILL.md)
+[SKILL.md](skill/SKILL.md)
 
 ### DOM Snapshot
 

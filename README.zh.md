@@ -150,7 +150,7 @@ browser4-cli help swarm create
 
 Browser4 CLI 专为 AI 智能体通过技能 (SKILLS) + CLI 使用而设计。
 
-[SKILL.md](cli/skill/SKILL.md)
+[SKILL.md](skill/SKILL.md)
 
 ### DOM 快照
 
