@@ -12,17 +12,17 @@ Without arguments the script runs every discovered scenario.  Pass -List to see
 what would run, or name one or more scripts to run a subset.
 
 .EXAMPLE
-./cli/browser4-cli/tests/scripts/run-all.ps1
+./cli/browser4-cli/tests/scripts/run-tests.ps1
 
     Run every scenario in this directory.
 
 .EXAMPLE
-./cli/browser4-cli/tests/scripts/run-all.ps1 -List
+./cli/browser4-cli/tests/scripts/run-tests.ps1 -List
 
     List discovered scenarios without running them.
 
 .EXAMPLE
-./cli/browser4-cli/tests/scripts/run-all.ps1 search-summary.ps1 amazon.ps1
+./cli/browser4-cli/tests/scripts/run-tests.ps1 search-summary.ps1 amazon.ps1
 
     Run only the two named scenarios.
 
