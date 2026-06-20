@@ -41,12 +41,6 @@ Learn how to extract data from web pages using CSS selectors, including handling
 #### [form-filling.md](./form-filling.md)
 Learn how to automatically fill and submit web forms, including handling different field types and multi-step forms.
 
-#### [data-validation.md](./data-validation.md)
-Learn how to validate extracted or input data against rules, including email validation and custom patterns.
-
-#### [browser-automation.md](./browser-automation.md)
-Learn fundamental browser automation tasks including navigation, waiting for elements, clicking, and error handling.
-
 ## How to Use Claude Skills
 
 Claude Skills are provided as context when making API calls to guide the AI agent's behavior. See individual skill files for detailed instructions and examples.

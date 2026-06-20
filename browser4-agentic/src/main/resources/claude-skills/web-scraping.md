@@ -256,8 +256,6 @@ For JSON-LD or microdata:
 
 ## Related Skills
 
-- **browser-automation.md**: For fundamental browser control (navigation, clicking, waiting)
-- **data-validation.md**: For validating extracted data against patterns and rules
 - **form-filling.md**: Often used together when interacting with search forms before scraping results
 
 ## Tool Reference

@@ -409,8 +409,6 @@ Some dropdowns load options dynamically:
 
 ## Related Skills
 
-- **browser-automation.md**: For fundamental browser control (navigation, clicking, waiting)
-- **data-validation.md**: For validating data before filling forms and after submission
 - **web-scraping.md**: Often used together to extract data and then fill forms with it
 
 ## Tool Reference
