@@ -28,7 +28,12 @@ Every scenario script follows the same pattern:
 $ErrorActionPreference = "Stop"
 
 # ── Mode detection ──────────────────────────────────────────────────────────
-# The caller may set $browser4cliMode = 'production' before dot-sourcing.
+# The caller may set $browser4cliMode = 'production' before dot-sourcing, or
+# set $env:BROWSER4CLI_MODE = 'production' (useful when run-tests.ps1 spawns a
+# child pwsh process — env vars cross process boundaries, PS vars don't).
+if (-not $browser4cliMode -and $env:BROWSER4CLI_MODE) {
+    $browser4cliMode = $env:BROWSER4CLI_MODE
+}
 # PowerShell here-strings expand variables, so $helpCmd is resolved when
 # $generalPrompt is defined below.
 if ($browser4cliMode -eq 'production') {

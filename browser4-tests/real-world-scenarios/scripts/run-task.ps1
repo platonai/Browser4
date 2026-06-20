@@ -43,13 +43,24 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # ── Resolve task file path ────────────────────────────────────────────────────
-# Resolve relative to the caller's current directory, not the script directory.
-$resolvedPath = [System.IO.Path]::GetFullPath(
+# Try the caller's CWD first (backward-compatible), then fall back to the
+# real-world-scenarios/ directory next to this script.
+$cwdPath = [System.IO.Path]::GetFullPath(
     [System.IO.Path]::Combine((Get-Location).Path, $TaskFile)
 )
+if (Test-Path -LiteralPath $cwdPath -PathType Leaf) {
+    $resolvedPath = $cwdPath
+} else {
+    $scenariosDir = Join-Path $PSScriptRoot '..'
+    $resolvedPath = [System.IO.Path]::GetFullPath(
+        [System.IO.Path]::Combine($scenariosDir, $TaskFile)
+    )
+}
 
 if (-not (Test-Path -LiteralPath $resolvedPath -PathType Leaf)) {
     Write-Host "ERROR: Task file not found: $resolvedPath" -ForegroundColor Red
+    Write-Host "  Tried CWD:  $cwdPath" -ForegroundColor DarkGray
+    Write-Host "  Tried scenarios/: $resolvedPath" -ForegroundColor DarkGray
     exit 1
 }
 

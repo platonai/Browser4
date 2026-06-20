@@ -47,7 +47,10 @@ param(
     [switch] $FailFast,
 
     # List discovered tasks and exit.
-    [switch] $List
+    [switch] $List,
+
+    # Run in production mode (browser4-cli instead of cargo run).
+    [switch] $Production
 )
 
 $ErrorActionPreference = 'Stop'
@@ -58,7 +61,7 @@ $script:StartTime = Get-Date
 # ═══════════════════════════════════════════════════════════════════════════════
 
 $script:ScriptsDir = $PSScriptRoot
-$script:TasksDir   = Join-Path $ScriptsDir 'tasks'
+$script:TasksDir   = Join-Path $ScriptsDir '..\tasks'
 $script:RunnerPath = Join-Path $ScriptsDir 'run-task.ps1'
 # Repo root is 3 levels up from scripts/ (scripts -> tests -> browser4-cli -> repo root)
 $script:RepoRoot   = (Resolve-Path "$ScriptsDir/../../..").Path
@@ -198,6 +201,9 @@ foreach ($name in $Selected) {
         # Working directory is the repo root so claude finds the project.
         Push-Location $RepoRoot
         try {
+            if ($Production) {
+                $env:BROWSER4CLI_MODE = 'production'
+            }
             & pwsh -NoProfile -ExecutionPolicy Bypass -File $RunnerPath -TaskFile $taskPath
             $exitCode = $LASTEXITCODE
         } finally {
