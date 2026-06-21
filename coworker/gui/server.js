@@ -62,6 +62,36 @@ const STAGES = [
 const stageById = Object.fromEntries(STAGES.map(s => [s.id, s]));
 const visibleStages = STAGES.filter(s => !s.hidden);
 
+// ── Valid move transitions ───────────────────────────────────────────────
+// Each key is a source stage ID; its value is an array of valid target stage IDs.
+// Moving to any stage NOT in the list is rejected by the server.
+const VALID_TRANSITIONS = {
+  // Main pipeline
+  '0draft':       ['1ready', '0draft/refine/0draft', '200issues/draft/refine/0ready'],
+  '1ready':       ['2working', '0draft'],
+  '2working':     ['3done', '5approved', '1ready', '0draft'],
+  '3done':        ['4review', '5approved', '6git-pushed'],
+  '4review':      ['3done', '5approved', '0draft'],
+  '5approved':    ['6git-pushed', '4review'],
+  '6git-pushed':  ['0draft'],  // rework
+
+  // Refinement sub-pipeline
+  '0draft/refine/0draft':   ['0draft/refine/1ready', '1ready'],
+  '0draft/refine/1ready':   ['0draft/refine/2working', '0draft/refine/0draft'],
+  '0draft/refine/2working': ['0draft/refine/3done', '0draft/refine/0error', '0draft/refine/1ready'],
+  '0draft/refine/3done':    ['0draft', '1ready', '0draft/refine/0draft'],
+  '0draft/refine/0error':   ['0draft/refine/0draft', '0draft'],
+
+  // GitHub issues pipeline
+  '200issues/draft/refine/0ready':  ['200issues/draft/refine/1working', '0draft'],
+  '200issues/draft/refine/1working': ['200issues/draft/refine/2done', '200issues/github/commit/ready', '200issues/draft/refine/0error'],
+  '200issues/draft/refine/2done':   ['200issues/github/commit/ready', '0draft'],
+  '200issues/draft/refine/0error':  ['200issues/draft/refine/0ready', '0draft'],
+  '200issues/github/commit/ready':  ['200issues/github/commit/done', '200issues/github/commit/failed', '200issues/draft/refine/2done'],
+  '200issues/github/commit/done':   [],
+  '200issues/github/commit/failed': ['200issues/github/commit/ready', '0draft'],
+};
+
 function resolveStageDir(stage, date) {
   const base = path.join(TASKS_ROOT, stage.path_suffix);
   if (stage.date_stamped) {
@@ -266,7 +296,7 @@ app.delete('/api/task', (req, res) => {
 
 // POST /api/move
 app.post('/api/move', (req, res) => {
-  const { path: srcPath, target_stage, new_name } = req.body;
+  const { path: srcPath, target_stage, new_name, source_stage } = req.body;
   if (!srcPath || !target_stage) {
     return res.status(400).json({ error: 'path and target_stage are required' });
   }
@@ -276,6 +306,16 @@ app.post('/api/move', (req, res) => {
 
   const stage = stageById[target_stage];
   if (!stage) return res.status(400).json({ error: `Unknown stage: ${target_stage}` });
+
+  // Validate transition (use client-provided source_stage if available)
+  const detectedSrcStage = source_stage || null;
+  if (detectedSrcStage && VALID_TRANSITIONS[detectedSrcStage] !== undefined) {
+    if (!VALID_TRANSITIONS[detectedSrcStage].includes(target_stage)) {
+      return res.status(400).json({
+        error: `Invalid transition: cannot move from "${detectedSrcStage}" to "${target_stage}". Allowed targets: ${VALID_TRANSITIONS[detectedSrcStage].join(', ') || '(none)'}`,
+      });
+    }
+  }
 
   const today = new Date();
   const targetDir = resolveStageDir(stage, today);

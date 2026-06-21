@@ -1011,17 +1011,46 @@ async function doDeleteTask() {
   } catch (e) { showToast('Delete failed: ' + e.message, 'error'); }
 }
 
+// ── Valid move transitions ──
+var VALID_TRANSITIONS = {
+  '0draft':       ['1ready', '0draft/refine/0draft', '200issues/draft/refine/0ready'],
+  '1ready':       ['2working', '0draft'],
+  '2working':     ['3done', '5approved', '1ready', '0draft'],
+  '3done':        ['4review', '5approved', '6git-pushed'],
+  '4review':      ['3done', '5approved', '0draft'],
+  '5approved':    ['6git-pushed', '4review'],
+  '6git-pushed':  ['0draft'],
+  '0draft/refine/0draft':   ['0draft/refine/1ready', '1ready'],
+  '0draft/refine/1ready':   ['0draft/refine/2working', '0draft/refine/0draft'],
+  '0draft/refine/2working': ['0draft/refine/3done', '0draft/refine/0error', '0draft/refine/1ready'],
+  '0draft/refine/3done':    ['0draft', '1ready', '0draft/refine/0draft'],
+  '0draft/refine/0error':   ['0draft/refine/0draft', '0draft'],
+  '200issues/draft/refine/0ready':  ['200issues/draft/refine/1working', '0draft'],
+  '200issues/draft/refine/1working': ['200issues/draft/refine/2done', '200issues/github/commit/ready', '200issues/draft/refine/0error'],
+  '200issues/draft/refine/2done':   ['200issues/github/commit/ready', '0draft'],
+  '200issues/draft/refine/0error':  ['200issues/draft/refine/0ready', '0draft'],
+  '200issues/github/commit/ready':  ['200issues/github/commit/done', '200issues/github/commit/failed', '200issues/draft/refine/2done'],
+  '200issues/github/commit/done':   [],
+  '200issues/github/commit/failed': ['200issues/github/commit/ready', '0draft'],
+};
+
 // ── Move task ──
 function openMoveModal() {
   if (!state.selectedTaskPath) return;
   document.getElementById('move-source-path').textContent = state.selectedTaskPath;
   document.getElementById('move-new-name').value = '';
   var select = document.getElementById('move-target-stage');
+  var allowedTargets = VALID_TRANSITIONS[state.selectedStage] || [];
   var o = '';
-  for (var i = 0; i < state.stages.length; i++) {
-    var s = state.stages[i];
-    if (s.id === state.selectedStage) continue;
-    o += '<option value="' + escHtml(s.id) + '">' + escHtml(s.info.display_name) + ' (' + s.id + ')</option>';
+  if (allowedTargets.length === 0) {
+    o = '<option value="" disabled>No valid move targets for this stage</option>';
+  } else {
+    for (var i = 0; i < allowedTargets.length; i++) {
+      var targetId = allowedTargets[i];
+      var info = state.stageMap[targetId];
+      var label = info ? info.display_name + ' (' + targetId + ')' : targetId;
+      o += '<option value="' + escHtml(targetId) + '">' + escHtml(label) + '</option>';
+    }
   }
   select.innerHTML = o;
   document.getElementById('move-modal').showModal();
@@ -1032,7 +1061,7 @@ async function doMoveTask() {
   var targetStage = document.getElementById('move-target-stage').value;
   var newName = document.getElementById('move-new-name').value.trim() || null;
   try {
-    var result = await apiPost('/api/move', { path: state.selectedTaskPath, target_stage: targetStage, new_name: newName });
+    var result = await apiPost('/api/move', { path: state.selectedTaskPath, target_stage: targetStage, new_name: newName, source_stage: state.selectedStage });
     closeMoveModal();
     showToast('Moved → ' + result.new_path, 'success');
     var cs = state.selectedStage; clearDetailPanel();
