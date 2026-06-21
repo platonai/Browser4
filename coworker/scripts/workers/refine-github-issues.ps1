@@ -17,7 +17,7 @@
     4. Moves the original draft file to:
        - 200issues/github/open if #auto-approve is found in the last 5 lines
          (so the original also gets committed as a GitHub issue)
-       - 2done otherwise (archived)
+       - 200issues/github/draft otherwise (for manual review/approval)
 
     Issue format written to github/open:
         # <Title>
@@ -79,9 +79,10 @@ $readyDir       = Join-Path $refineRoot '0ready'
 $workingDir     = Join-Path $refineRoot '1working'
 $doneDir        = Join-Path $refineRoot '2done'
 $errorDir       = Join-Path $refineRoot '0error'
-$githubOpenDir  = Join-Path $issuesRoot 'github\open'
+$githubOpenDir   = Join-Path $issuesRoot 'github\open'
+$githubDraftDir  = Join-Path $issuesRoot 'github\draft'
 
-foreach ($directory in @($readyDir, $workingDir, $doneDir, $errorDir, $githubOpenDir)) {
+foreach ($directory in @($readyDir, $workingDir, $doneDir, $errorDir, $githubOpenDir, $githubDraftDir)) {
     Ensure-CoworkerDirectory -Path $directory
 }
 
@@ -547,7 +548,7 @@ foreach ($target in $targets) {
 
         if ($issues.Count -eq 0) {
             if ($DryRun) {
-                Write-CoworkerLog -Message "[DRY RUN] Would move original to $($(if (Test-AutoApprove -File $workingFile) { 'github/open (#auto-approve)' } else { 'done' })) (no issues extracted yet): $($workingFile.Name)" -Level INFO -Component 'refine-github-issues'
+                Write-CoworkerLog -Message "[DRY RUN] Would move original to $($(if (Test-AutoApprove -File $workingFile) { 'github/open (#auto-approve)' } else { 'github/draft' })) (no issues extracted yet): $($workingFile.Name)" -Level INFO -Component 'refine-github-issues'
                 continue
             }
             throw "No issues extracted from $($workingFile.Name)"
@@ -563,7 +564,7 @@ foreach ($target in $targets) {
         Write-CoworkerLog -Message "Wrote $($writtenPaths.Count) issue file(s) to github/open from $($workingFile.Name)" -Level INFO -Component 'refine-github-issues'
 
         # Route original: if #auto-approve is in the last 5 lines, send to
-        # github/open so it gets committed as an issue too; otherwise archive to done.
+        # github/open so it gets committed as an issue too; otherwise send to github/draft for manual review.
         if (Test-AutoApprove -File $workingFile) {
             $autoApprovePath = Resolve-UniquePath -Directory $githubOpenDir -BaseName $workingFile.BaseName -Extension $workingFile.Extension
             if ($PSCmdlet.ShouldProcess($workingFile.Name, 'Move to github/open (#auto-approve)')) {
@@ -572,11 +573,11 @@ foreach ($target in $targets) {
             Write-CoworkerLog -Message "#auto-approve: moved original draft to github/open: $autoApprovePath" -Level INFO -Component 'refine-github-issues'
         }
         else {
-            $donePath = Resolve-UniquePath -Directory $doneDir -BaseName $workingFile.BaseName -Extension $workingFile.Extension
-            if ($PSCmdlet.ShouldProcess($workingFile.Name, 'Move to done')) {
-                Move-Item -Path $workingFile.FullName -Destination $donePath -Force
+            $draftPath = Resolve-UniquePath -Directory $githubDraftDir -BaseName $workingFile.BaseName -Extension $workingFile.Extension
+            if ($PSCmdlet.ShouldProcess($workingFile.Name, 'Move to github/draft')) {
+                Move-Item -Path $workingFile.FullName -Destination $draftPath -Force
             }
-            Write-CoworkerLog -Message "Moved original draft to done: $donePath" -Level INFO -Component 'refine-github-issues'
+            Write-CoworkerLog -Message "Moved original draft to github/draft: $draftPath" -Level INFO -Component 'refine-github-issues'
         }
     }
     catch {
