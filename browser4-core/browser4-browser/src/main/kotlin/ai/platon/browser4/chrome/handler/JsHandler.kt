@@ -6,7 +6,7 @@ import ai.platon.browser4.chrome.handler.util.resolveNodeObjectId
 import ai.platon.browser4.chrome.util.ChromeDriverException
 import ai.platon.cdt.kt.protocol.types.runtime.CallFunctionOn
 import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
-import ai.platon.pulsar.browser.impl.BrowserProtocol
+import ai.platon.pulsar.browser.protocol.BrowserProtocol
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.js.JsUtils
 

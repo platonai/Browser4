@@ -1,4 +1,4 @@
-package ai.platon.browser4.chrome.detail
+package ai.platon.browser4.chrome.network
 
 import ai.platon.cdt.kt.protocol.events.network.LoadingFailed
 import ai.platon.cdt.kt.protocol.events.network.LoadingFinished

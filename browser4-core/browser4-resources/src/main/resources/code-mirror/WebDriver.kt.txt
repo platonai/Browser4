@@ -4,8 +4,8 @@ import ai.platon.pulsar.browser.common.JsEvaluation
 import ai.platon.pulsar.browser.common.NavigateEntry
 import ai.platon.pulsar.browser.common.NavigateHistory
 import ai.platon.pulsar.browser.common.WebDriverException
-import ai.platon.pulsar.browser.impl.NetworkResourceResponse
-import ai.platon.pulsar.browser.impl.NodeRef
+import ai.platon.pulsar.browser.protocol.NetworkResourceResponse
+import ai.platon.pulsar.browser.protocol.NodeRef
 import ai.platon.pulsar.chrome.dom.model.BrowserUseState
 import ai.platon.pulsar.chrome.dom.model.NanoDOMTree
 import ai.platon.pulsar.chrome.dom.model.PageTarget

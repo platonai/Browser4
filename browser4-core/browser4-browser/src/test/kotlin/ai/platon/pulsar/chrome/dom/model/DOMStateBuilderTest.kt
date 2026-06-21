@@ -1,6 +1,6 @@
 package ai.platon.pulsar.chrome.dom.model
 
-import ai.platon.browser4.chrome.dom.DOMSerializer
+import ai.platon.pulsar.chrome.dom.DOMSerializer
 import ai.platon.browser4.chrome.dom.DOMStateBuilder
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import org.junit.jupiter.api.Assertions.*

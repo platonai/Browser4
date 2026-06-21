@@ -12,7 +12,7 @@ import kotlin.concurrent.withLock
  * A [NavigateEntry] is created when the user initiates navigation — by typing a URL, clicking a link,
  * or through programmatic action — and is progressively updated as the browser emits network and frame
  * events. It serves as the shared mutable context between the CDP event layer
- * ([ChromeNavigateEntry][ai.platon.browser4.chrome.detail.ChromeNavigateEntry]) and the high-level
+ * ([ChromeNavigateEntry][ai.platon.browser4.chrome.network.ChromeNavigateEntry]) and the high-level
  * driver API ([AbstractWebDriver][ai.platon.pulsar.browser.AbstractWebDriver]).
  *
  * ## Identity

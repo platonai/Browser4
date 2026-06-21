@@ -4,7 +4,7 @@ import ai.platon.pulsar.browser.common.NavigateEntry
 import ai.platon.pulsar.browser.common.NavigateHistory
 import ai.platon.pulsar.browser.common.NetworkResourceHelper
 import ai.platon.pulsar.browser.common.WebDriverException
-import ai.platon.pulsar.browser.impl.NetworkResourceResponse
+import ai.platon.pulsar.browser.protocol.NetworkResourceResponse
 import ai.platon.pulsar.common.*
 import ai.platon.pulsar.common.urls.Hyperlink
 import ai.platon.pulsar.common.urls.URLUtils

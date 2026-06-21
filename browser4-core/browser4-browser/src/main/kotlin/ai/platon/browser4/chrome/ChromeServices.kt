@@ -5,10 +5,10 @@ import ai.platon.browser4.chrome.util.ChromeServiceException
 import ai.platon.cdt.kt.protocol.ChromeDevTools
 import ai.platon.cdt.kt.protocol.support.types.EventHandler
 import ai.platon.cdt.kt.protocol.support.types.EventListener
-import ai.platon.pulsar.browser.impl.BrowserTab
-import ai.platon.pulsar.browser.impl.ChromeVersion
-import ai.platon.pulsar.browser.impl.DevToolsConfig
-import ai.platon.pulsar.browser.impl.MethodInvocation
+import ai.platon.pulsar.browser.protocol.BrowserTab
+import ai.platon.pulsar.browser.protocol.ChromeVersion
+import ai.platon.pulsar.browser.protocol.DevToolsConfig
+import ai.platon.pulsar.browser.protocol.MethodInvocation
 import java.net.URI
 import java.util.function.Consumer
 import kotlin.reflect.KClass

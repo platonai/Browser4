@@ -5,7 +5,7 @@ import ai.platon.browser4.chrome.RemoteDevTools
 import ai.platon.browser4.chrome.handler.RemoteChromeProtocol
 import ai.platon.cdt.kt.protocol.events.tracing.DataCollected
 import ai.platon.cdt.kt.protocol.support.types.EventHandler
-import ai.platon.pulsar.browser.impl.BrowserProtocol
+import ai.platon.pulsar.browser.protocol.BrowserProtocol
 import com.fasterxml.jackson.databind.ObjectMapper
 import java.nio.file.Paths
 

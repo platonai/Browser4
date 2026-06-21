@@ -2,6 +2,7 @@ package ai.platon.browser4.chrome.dom.util
 
 import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
 import ai.platon.pulsar.chrome.dom.model.NodeType
+import ai.platon.pulsar.chrome.dom.util.CSSSelectorUtils
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test

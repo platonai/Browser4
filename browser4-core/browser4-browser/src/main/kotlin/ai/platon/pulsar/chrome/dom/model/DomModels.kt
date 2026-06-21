@@ -1,13 +1,13 @@
 package ai.platon.pulsar.chrome.dom.model
 
-import ai.platon.browser4.chrome.dom.DOMSerializer
-import ai.platon.browser4.chrome.dom.model.AriaSnapshotRenderer
-import ai.platon.browser4.chrome.dom.model.NanoAriaSnapshotRenderer
-import ai.platon.browser4.chrome.dom.util.CSSSelectorUtils
-import ai.platon.browser4.chrome.dom.util.DOMUtils
-import ai.platon.browser4.chrome.dom.util.InteractiveNodeListBuilder
-import ai.platon.browser4.chrome.dom.util.InteractiveNodeListBuilder.Companion.estimatedSize
-import ai.platon.browser4.chrome.dom.util.NanoDOMTreeBuilder
+import ai.platon.pulsar.chrome.dom.DOMSerializer
+import ai.platon.pulsar.chrome.dom.model.AriaSnapshotRenderer
+import ai.platon.pulsar.chrome.dom.model.NanoAriaSnapshotRenderer
+import ai.platon.pulsar.chrome.dom.util.CSSSelectorUtils
+import ai.platon.pulsar.chrome.dom.util.DOMUtils
+import ai.platon.pulsar.chrome.dom.util.InteractiveNodeListBuilder
+import ai.platon.pulsar.chrome.dom.util.InteractiveNodeListBuilder.Companion.estimatedSize
+import ai.platon.pulsar.chrome.dom.util.NanoDOMTreeBuilder
 import ai.platon.pulsar.browser.common.BrowserSettings.Companion.VIEWPORT
 import ai.platon.pulsar.browser.common.FBNLocator
 import ai.platon.pulsar.browser.common.LocatorMap

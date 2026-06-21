@@ -1,4 +1,4 @@
-package ai.platon.browser4.chrome.dom.model
+package ai.platon.pulsar.chrome.dom.model
 
 import java.util.*
 
@@ -170,7 +170,7 @@ internal object AriaSnapshotFormatting {
                     '\\' -> append("\\\\")
                     '"' -> append("\\\"")
                     '\b' -> append("\\b")
-                    '\u000C' -> append("\\f")
+                    '' -> append("\\f")
                     '\n' -> append("\\n")
                     '\r' -> append("\\r")
                     '\t' -> append("\\t")

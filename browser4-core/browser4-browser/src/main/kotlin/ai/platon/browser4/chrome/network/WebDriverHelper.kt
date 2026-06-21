@@ -1,4 +1,4 @@
-package ai.platon.browser4.chrome.detail
+package ai.platon.browser4.chrome.network
 
 import ai.platon.browser4.chrome.handler.PageHandler
 import ai.platon.cdt.kt.protocol.events.network.ResponseReceived
@@ -10,7 +10,7 @@ import ai.platon.pulsar.browser.WebDriver
 import ai.platon.pulsar.browser.common.JsEvaluation
 import ai.platon.pulsar.browser.common.JsException
 import ai.platon.pulsar.browser.common.NavigateEntry
-import ai.platon.pulsar.browser.impl.BrowserProtocol
+import ai.platon.pulsar.browser.protocol.BrowserProtocol
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.MultiSinkMessageWriter
 import ai.platon.pulsar.common.alwaysFalse

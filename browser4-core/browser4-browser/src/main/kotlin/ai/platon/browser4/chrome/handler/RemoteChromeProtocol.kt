@@ -22,7 +22,7 @@ import ai.platon.cdt.kt.protocol.types.page.*
 import ai.platon.cdt.kt.protocol.types.runtime.CallArgument
 import ai.platon.cdt.kt.protocol.types.runtime.CallFunctionOn
 import ai.platon.cdt.kt.protocol.types.runtime.Evaluate
-import ai.platon.pulsar.browser.impl.BrowserProtocol
+import ai.platon.pulsar.browser.protocol.BrowserProtocol
 
 /**
  * CDP is the single access point for all Chrome DevTools Protocol (CDP) domain APIs.

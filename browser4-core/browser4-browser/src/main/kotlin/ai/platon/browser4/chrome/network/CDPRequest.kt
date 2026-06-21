@@ -1,4 +1,4 @@
-package ai.platon.browser4.chrome.detail
+package ai.platon.browser4.chrome.network
 
 import ai.platon.browser4.chrome.util.ChromeRPCException
 import ai.platon.cdt.kt.protocol.types.fetch.HeaderEntry
@@ -7,7 +7,7 @@ import ai.platon.cdt.kt.protocol.types.network.Initiator
 import ai.platon.cdt.kt.protocol.types.network.Request
 import ai.platon.cdt.kt.protocol.types.network.ResourceType
 import ai.platon.pulsar.browser.WebDriver
-import ai.platon.pulsar.browser.impl.BrowserProtocol
+import ai.platon.pulsar.browser.protocol.BrowserProtocol
 import ai.platon.pulsar.common.http.HttpStatus
 import java.lang.ref.WeakReference
 import java.util.*

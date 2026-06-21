@@ -5,8 +5,8 @@ import ai.platon.browser4.chrome.Transport
 import ai.platon.browser4.chrome.util.*
 import ai.platon.cdt.kt.protocol.support.types.EventHandler
 import ai.platon.cdt.kt.protocol.support.types.EventListener
-import ai.platon.pulsar.browser.impl.DevToolsConfig
-import ai.platon.pulsar.browser.impl.MethodInvocation
+import ai.platon.pulsar.browser.protocol.DevToolsConfig
+import ai.platon.pulsar.browser.protocol.MethodInvocation
 import ai.platon.pulsar.common.config.AppConstants
 import ai.platon.pulsar.common.readable
 import ai.platon.pulsar.common.warnForClose
