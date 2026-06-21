@@ -73,13 +73,13 @@ $memoryDir = $logsDir
 
 $taskRoots = @(
     @{
-        Prepare = (Join-Path $tasksRoot "0draft")
-        Created = (Join-Path $tasksRoot "1ready")
-        Working = (Join-Path $tasksRoot "2working")
-        Finished = (Join-Path $tasksRoot "3done")
-        Review = (Join-Path $tasksRoot "4review")
-        Approved = (Join-Path $tasksRoot "5approved")
-        Pushed = (Join-Path $tasksRoot "6git-pushed")
+        Prepare = (Join-Path $tasksRoot "main\0draft")
+        Created = (Join-Path $tasksRoot "main\1ready")
+        Working = (Join-Path $tasksRoot "main\2working")
+        Finished = (Join-Path $tasksRoot "main\3done")
+        Review = (Join-Path $tasksRoot "main\4review")
+        Approved = (Join-Path $tasksRoot "main\5approved")
+        Pushed = (Join-Path $tasksRoot "main\6git-pushed")
         Logs = $logsDir
         Label = "tasks"
     }

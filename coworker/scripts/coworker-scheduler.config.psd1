@@ -15,8 +15,8 @@
             IntervalSeconds = 15
             WindowStyle     = 'Minimized'
             PendingPaths    = @(
-                'coworker\tasks\1ready'
-                'coworker\tasks\5approved'
+                'coworker\tasks\main\1ready'
+                'coworker\tasks\main\5approved'
             )
             ScriptPath      = 'coworker\scripts\coworker.ps1'
             Arguments       = @()
@@ -27,9 +27,9 @@
             Enabled         = $true
             IntervalSeconds = 15
             WindowStyle     = 'Minimized'
-            PendingPaths    = @('coworker\tasks\0draft\refine\1ready')
+            PendingPaths    = @('coworker\tasks\main\0draft\refine\1ready')
             ScriptPath      = 'coworker\scripts\workers\refine-drafts.ps1'
-            Arguments       = @('-Path', 'coworker\tasks\0draft\refine\1ready')
+            Arguments       = @('-Path', 'coworker\tasks\main\0draft\refine\1ready')
         }
         @{
             Name            = 'commit-github-issues'

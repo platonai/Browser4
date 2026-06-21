@@ -52,7 +52,7 @@ function Test-PathHasPendingFiles {
 
     $fullPath = [System.IO.Path]::GetFullPath($item.FullName)
     $contentAwarePaths = @(
-        [System.IO.Path]::GetFullPath((Resolve-TasksPath '0draft\refine\1ready'))
+        [System.IO.Path]::GetFullPath((Resolve-TasksPath 'main\0draft\refine\1ready'))
         [System.IO.Path]::GetFullPath((Resolve-TasksPath '200issues\draft\refine\0ready'))
     )
     $pendingFilePredicate = if ($fullPath -in $contentAwarePaths) {

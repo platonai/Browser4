@@ -445,9 +445,9 @@ Do not move **this** task file, just execute the task based on its content, the 
     }
 
     It 'generates a prompt referencing the working file path' {
-        $prompt = New-TaskFinishPrompt -WorkingPath 'D:\workspace\repo\coworker\tasks\2working\fix-bug.md'
+        $prompt = New-TaskFinishPrompt -WorkingPath 'D:\workspace\repo\coworker\tasks\main\2working\fix-bug.md'
         $prompt | Should -Match 'Finish the task described in file:'
-        $prompt | Should -Match ([regex]::Escape('D:\workspace\repo\coworker\tasks\2working\fix-bug.md'))
+        $prompt | Should -Match ([regex]::Escape('D:\workspace\repo\coworker\tasks\main\2working\fix-bug.md'))
     }
 
     It 'includes instructions to not move the task file' {
@@ -462,8 +462,8 @@ Do not move **this** task file, just execute the task based on its content, the 
     }
 
     It 'handles Unix-style paths' {
-        $prompt = New-TaskFinishPrompt -WorkingPath '/home/user/repo/coworker/tasks/2working/fix-bug.md'
-        $prompt | Should -Match '/home/user/repo/coworker/tasks/2working/fix-bug\.md'
+        $prompt = New-TaskFinishPrompt -WorkingPath '/home/user/repo/coworker/tasks/main/2working/fix-bug.md'
+        $prompt | Should -Match '/home/user/repo/coworker/tasks/main/2working/fix-bug\.md'
     }
 }
 
@@ -584,8 +584,8 @@ Describe 'Get-TaskTargetDirectory' {
             return @{ Path = $FinishedDir; Message = "Task moved to finished" }
         }
 
-        $script:finishedDir = 'D:\repo\coworker\tasks\3_1complete'
-        $script:approvedDir = 'D:\repo\coworker\tasks\5approved'
+        $script:finishedDir = 'D:\repo\coworker\tasks\main\3complete'
+        $script:approvedDir = 'D:\repo\coworker\tasks\main\5approved'
     }
 
     It 'routes to finished directory when #auto-approve is not present' {
@@ -892,8 +892,8 @@ Describe 'Date-based directory construction' {
     }
 
     It 'constructs a valid date subdirectory path' {
-        $subDir = Join-Path 'D:\repo\coworker\tasks\3_1complete' '2026\0619'
-        $subDir | Should -BeExactly 'D:\repo\coworker\tasks\3_1complete\2026\0619'
+        $subDir = Join-Path 'D:\repo\coworker\tasks\main\3complete' '2026\0619'
+        $subDir | Should -BeExactly 'D:\repo\coworker\tasks\main\3complete\2026\0619'
     }
 }
 
@@ -1037,7 +1037,7 @@ Describe 'Task workflow state transitions' {
             Prepare  = '0draft'
             Created  = '1ready'
             Working  = '2working'
-            Finished = '3_1complete'
+            Finished = 'main/3complete'
             Review   = '4review'
             Approved = '5approved'
             Pushed   = '6git-pushed'
@@ -1047,7 +1047,7 @@ Describe 'Task workflow state transitions' {
         $dirs.Prepare  | Should -BeExactly '0draft'
         $dirs.Created  | Should -BeExactly '1ready'
         $dirs.Working  | Should -BeExactly '2working'
-        $dirs.Finished | Should -BeExactly '3_1complete'
+        $dirs.Finished | Should -BeExactly 'main/3complete'
         $dirs.Review   | Should -BeExactly '4review'
         $dirs.Approved | Should -BeExactly '5approved'
         $dirs.Pushed   | Should -BeExactly '6git-pushed'
@@ -1055,7 +1055,7 @@ Describe 'Task workflow state transitions' {
     }
 
     It 'workflow flows left-to-right: 0 -> 1 -> 2 -> 3 -> 5 -> 6' {
-        $pipeline = @('0draft', '1ready', '2working', '3_1complete', '5approved', '6git-pushed')
+        $pipeline = @('0draft', '1ready', '2working', 'main/3complete', '5approved', '6git-pushed')
         $pipeline.Count | Should -Be 6
         $pipeline[0] | Should -BeExactly '0draft'
         $pipeline[5] | Should -BeExactly '6git-pushed'

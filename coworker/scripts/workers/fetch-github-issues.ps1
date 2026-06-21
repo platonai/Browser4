@@ -6,7 +6,7 @@
 
 .DESCRIPTION
     Pulls the most recent open issues from the configured GitHub repository,
-    writes each one as a markdown file in coworker/tasks/0draft/issues/github,
+    writes each one as a markdown file in coworker/tasks/main/0draft/issues/github,
     and self-assigns any issue that currently has no assignee.
 
     Saved file format (markdown):
@@ -40,7 +40,7 @@ $repoRoot = Get-WorkspaceRoot
 # ── Configuration ──────────────────────────────────────────────────────────
 $githubRepo = 'platonai/Browser4'
 $issuesLimit = 20
-$outputDir = Resolve-TasksPath '0draft\issues\github'
+$outputDir = Resolve-TasksPath 'main\0draft\issues\github'
 $includeClosed = $false  # set $true to also pull closed issues
 $cutoffDate = [datetime]'2026-06-06T06:06:06Z'  # ignore issues created before this UTC time
 

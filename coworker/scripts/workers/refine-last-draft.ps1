@@ -7,7 +7,7 @@ $agentHelper = Join-Path $PSScriptRoot "agent.ps1"
 $repoRoot = Get-WorkspaceRoot
 $agentCommand = Get-AgentCommand -RepoRoot $repoRoot
 
-$draftDir = Resolve-TasksPath '0draft'
+$draftDir = Resolve-TasksPath 'main\0draft'
 
 if (-not (Test-Path $draftDir)) {
     Write-Host "Draft directory not found: $draftDir"
