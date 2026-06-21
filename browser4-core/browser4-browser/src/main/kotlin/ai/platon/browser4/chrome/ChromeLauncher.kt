@@ -78,24 +78,69 @@ class ChromeLauncher constructor(
             return pid to commandLine
         }
 
+        /**
+         * Platform-specific Microsoft Edge binary paths, used as a fallback
+         * when no Chrome/Chromium binary is found.
+         */
+        private val EDGE_BINARY_SEARCH_PATHS = listOf(
+            // Windows
+            "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+            "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+            // macOS
+            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+            // Linux
+            "/usr/bin/microsoft-edge",
+            "/usr/bin/microsoft-edge-stable",
+            "/opt/microsoft/msedge/msedge",
+        )
+
+        /**
+         * Searches for a browser binary, preferring Chrome/Chromium over Edge.
+         *
+         * Resolution order:
+         * 1. System property `chrome.path` (explicit override)
+         * 2. Built-in Chrome/Chromium paths
+         * 3. Microsoft Edge paths (fallback)
+         *
+         * @throws RuntimeException if no executable browser binary is found.
+         */
+        fun searchChromeBinary(): Path {
+            // 1. Explicit system property override
+            val chromePath = System.getProperty("chrome.path")
+            if (chromePath != null) {
+                val path = Path.of(chromePath)
+                if (java.nio.file.Files.isExecutable(path)) {
+                    return path.toAbsolutePath()
+                }
+                throw RuntimeException("Chrome binary not executable: $chromePath")
+            }
+
+            // 2. Built-in Chrome/Chromium paths (preferred)
+            for (raw in Browsers.CHROME_BINARY_SEARCH_PATHS) {
+                val path = Path.of(raw)
+                if (java.nio.file.Files.isExecutable(path)) {
+                    return path.toAbsolutePath()
+                }
+            }
+
+            // 3. Microsoft Edge paths (fallback)
+            for (raw in EDGE_BINARY_SEARCH_PATHS) {
+                val path = Path.of(raw)
+                if (java.nio.file.Files.isExecutable(path)) {
+                    return path.toAbsolutePath()
+                }
+            }
+
+            throw RuntimeException(
+                "Could not find browser binary in search paths. " +
+                    "Set the 'chrome.path' system property to the browser executable."
+            )
+        }
+
         init {
             // Populate additional browser search paths so Microsoft Edge is
-            // discoverable even when -Dchrome.path is not provided by the CLI.
-            // Paths are platform-specific but harmless on other platforms —
-            // Files.isExecutable() returns false for nonexistent files.
-            Browsers.ADDITIONAL_CHROME_BINARY_SEARCH_PATHS.addAll(
-                listOf(
-                    // Windows
-                    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-                    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
-                    // macOS
-                    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-                    // Linux
-                    "/usr/bin/microsoft-edge",
-                    "/usr/bin/microsoft-edge-stable",
-                    "/opt/microsoft/msedge/msedge",
-                )
-            )
+            // discoverable by Browsers.searchChromeBinary() for non-ChromeLauncher callers.
+            Browsers.ADDITIONAL_CHROME_BINARY_SEARCH_PATHS.addAll(EDGE_BINARY_SEARCH_PATHS)
         }
     }
 
@@ -198,7 +243,7 @@ class ChromeLauncher constructor(
      * */
     @Throws(ChromeLaunchException::class)
     @Synchronized
-    fun launch(options: ChromeOptions) = launch(Browsers.searchChromeBinary(), options)
+    fun launch(options: ChromeOptions) = launch(Companion.searchChromeBinary(), options)
 
     /**
      * Launch chrome
@@ -207,7 +252,7 @@ class ChromeLauncher constructor(
     @Synchronized
     fun launch(headless: Boolean) =
         launch(
-            Browsers.searchChromeBinary(), ChromeOptions()
+            Companion.searchChromeBinary(), ChromeOptions()
                 .also { it.headless = headless })
 
     /**
