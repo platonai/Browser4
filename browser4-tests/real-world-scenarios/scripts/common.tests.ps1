@@ -98,7 +98,7 @@ function Assert-NotNullOrEmpty {
         Write-Host "    PASS: $Name" -ForegroundColor Green
         $script:TestsPassed++
     } else {
-        Write-Host "    FAIL: $Name — value is null or empty" -ForegroundColor Red
+        Write-Host "    FAIL: $Name -- value is null or empty" -ForegroundColor Red
         $script:TestsFailed++
     }
 }

@@ -412,7 +412,7 @@ $($issue.Suggestion)
     }
 
     if ($issueIndex -eq 1) {
-        Write-Host "  (No individual issues parsed — full output saved)" -ForegroundColor DarkGray
+        Write-Host "  (No individual issues parsed -- full output saved)" -ForegroundColor DarkGray
     } else {
         Write-Host "  Parsed $($issueIndex - 1) individual issue(s)" -ForegroundColor DarkGray
     }
@@ -506,12 +506,16 @@ function Start-NativeCommand {
 
         try {
             & $FilePath @ArgumentList 2>&1 | ForEach-Object {
+                # Fix 2: "$_" safely coerces ErrorRecord / string / etc.
+                $line = "$_"
                 if ($writer) {
-                    # Fix 2: "$_" safely coerces ErrorRecord / string / etc.
-                    $writer.WriteLine("$_")
+                    $writer.WriteLine($line)
                     $writer.Flush()
                 }
-                $_   # pass original object through to console / downstream
+                # Write directly to the console host so the user sees real-time
+                # output without polluting the function's output stream.
+                # The function returns only the integer exit code (line 536).
+                [Console]::WriteLine($line)
             }
             $exitCode = $LASTEXITCODE
         } finally {
@@ -582,7 +586,7 @@ function Invoke-Agent {
         if ($ScenarioName) {
             Write-Host "  Scenario: $ScenarioName (output will be captured)" -ForegroundColor DarkGray
         }
-        Write-Host "  This may take several minutes — the agent runs browser4-cli commands" -ForegroundColor DarkGray
+        Write-Host "  This may take several minutes -- the agent runs browser4-cli commands" -ForegroundColor DarkGray
         Write-Host "  and evaluates usability. Output appears as the agent works." -ForegroundColor DarkGray
         Write-Host ""
     }
