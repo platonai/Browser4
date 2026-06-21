@@ -40,7 +40,7 @@ use args::{
     build_command_args, build_short_option_map, parse_batch_args, parse_batch_json_commands,
     parse_command_string, parse_global_flags, parse_raw_args,
 };
-use commands::{commands_map, is_element_reference};
+use commands::{commands_map, is_bare_css_selector, is_element_reference};
 use daemon::{
     ensure_chrome_available, ensure_server_running, init_root_search_start_dir_from_startup,
     install_browser4_runtime, read_current_tag, resolve_base_url, InstalledBrowser4Runtime,
@@ -356,7 +356,13 @@ async fn restore_active_selector(
         return Ok(());
     }
 
-    let selector_literal = serde_json::to_string(selector)
+    // Strip `css:` prefix added by the `fill` command so that the selector can
+    // be used directly with `document.querySelector` in the browser.
+    let browser_selector = selector
+        .strip_prefix("css:")
+        .unwrap_or(selector);
+
+    let selector_literal = serde_json::to_string(browser_selector)
         .map_err(|e| format!("Failed to encode active selector: {e}"))?;
     let focus_expression = format!(
         "(() => {{ \
@@ -5442,6 +5448,23 @@ async fn run(
                 .get("verify")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
+            // The `fill` command dispatches to `browser_type` which does not
+            // recognise bare CSS selectors in its `ref` parameter — it expects
+            // backend element references (`backend:<N>`).  Add the `css:` prefix
+            // so the backend can distinguish CSS selectors from node ids.
+            // Batch mode does this resolution server-side in `command_batch`.
+            if command == "fill" {
+                if let Some(ref_val) = tool_params
+                    .get("ref")
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+                {
+                    if is_bare_css_selector(ref_val) {
+                        tool_params["ref"] = json!(format!("css:{}", ref_val));
+                    }
+                }
+            }
             handle_text_input_command(
                 &client,
                 &base_url,

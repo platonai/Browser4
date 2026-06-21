@@ -150,6 +150,19 @@ pub fn is_element_reference(value: &str) -> bool {
         || trimmed.starts_with("backend:")
 }
 
+/// Returns true if the value is a bare CSS selector (e.g. "#id", ".class", "[attr]")
+/// that does not already have a known prefix (`css:`, `backend:`, `xpath:`, `text=`).
+/// These selectors need a `css:` prefix so the backend can distinguish them from
+/// backend node references.
+pub fn is_bare_css_selector(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    (trimmed.starts_with('#') || trimmed.starts_with('.') || trimmed.starts_with('[') || trimmed.starts_with("//"))
+        && !is_element_reference(trimmed)
+}
+
 fn resolve_key_and_ref(map: &HashMap<String, Value>) -> (String, Option<String>) {
     let positionals = raw_positionals(map);
     match positionals.as_slice() {
@@ -856,7 +869,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "console",
             description: "List console messages",
             category: Category::DevTools,
-            hidden: true,
+            hidden: false,
             batch_supported: false,
             args: &[
                 ArgDef { name: "min-level", description: "Level of the console messages to return. Defaults to \"info\"", optional: true },
@@ -1288,7 +1301,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "pdf",
             description: "Save page as PDF",
             category: Category::Export,
-            hidden: true,
+            hidden: false,
             batch_supported: true,
             args: &[],
             options: &[
@@ -1486,7 +1499,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "summarize",
             description: "Summarize page content using AI",
             category: Category::Agent,
-            hidden: true,
+            hidden: false,
             batch_supported: false,
             args: &[ArgDef { name: "instruction", description: "Summarization instruction, e.g. 'summarize the product reviews'", optional: true }],
             options: &[
@@ -1504,7 +1517,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "agent-run",
             description: "Run an autonomous agent task (async, returns task ID)",
             category: Category::Agent,
-            hidden: true,
+            hidden: false,
             batch_supported: false,
             args: &[ArgDef { name: "task", description: "Natural language task for the agent to execute", optional: false }],
             options: &[],
@@ -1517,7 +1530,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "agent-status",
             description: "Check the status of a running agent task",
             category: Category::Agent,
-            hidden: true,
+            hidden: false,
             batch_supported: false,
             args: &[ArgDef { name: "id", description: "Task ID returned by agent run", optional: false }],
             options: &[],
@@ -1530,7 +1543,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             name: "agent-result",
             description: "Get the result of a completed agent task",
             category: Category::Agent,
-            hidden: true,
+            hidden: false,
             batch_supported: false,
             args: &[ArgDef { name: "id", description: "Task ID returned by agent run", optional: false }],
             options: &[],
@@ -2395,7 +2408,7 @@ mod tests {
     }
 
     #[test]
-    fn test_advanced_commands_are_hidden_from_global_help() {
+    fn test_advanced_commands_are_visible_in_global_help() {
         let map = commands_map();
         for name in [
             "console",
@@ -2403,8 +2416,9 @@ mod tests {
             "agent-status",
             "agent-result",
             "summarize",
+            "pdf",
         ] {
-            assert!(map.get(name).unwrap().hidden, "{name} should stay hidden");
+            assert!(!map.get(name).unwrap().hidden, "{name} should be visible in global help");
         }
     }
 
