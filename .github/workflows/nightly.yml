@@ -71,20 +71,106 @@ jobs:
           timeout_minutes: '60'
 
       - name: Check Test Status
+        id: test-check
         if: always()
+        shell: bash
         run: |
-          if [ "${{ steps.run-tests.outputs.test_status }}" != "success" ]; then
-            echo "❌ Tests failed with status: ${{ steps.run-tests.outputs.test_status }}"
-            echo "📊 Test Results:"
-            echo "  - Total Tests: ${{ steps.run-tests.outputs.test_count }}"
-            echo "  - Failed Tests: ${{ steps.run-tests.outputs.failed_count }}"
-            echo "  - Passed Tests: ${{ steps.run-tests.outputs.passed_count }}"
-            echo "  - Skipped Tests: ${{ steps.run-tests.outputs.skipped_count }}"
-            exit 1
-          else
+          echo "::group::🧪 Test Status Report"
+
+          # ── Gather outputs with fallbacks ──
+          TEST_STATUS="${{ steps.run-tests.outputs.test_status }}"
+          TEST_COUNT="${{ steps.run-tests.outputs.test_count }}"
+          FAILED_COUNT="${{ steps.run-tests.outputs.failed_count }}"
+          PASSED_COUNT="${{ steps.run-tests.outputs.passed_count }}"
+          SKIPPED_COUNT="${{ steps.run-tests.outputs.skipped_count }}"
+          FAILED_LIST="${{ steps.run-tests.outputs.failed_test_list }}"
+
+          # Default empty values
+          TEST_STATUS="${TEST_STATUS:-skipped}"
+          TEST_COUNT="${TEST_COUNT:-0}"
+          FAILED_COUNT="${FAILED_COUNT:-0}"
+          PASSED_COUNT="${PASSED_COUNT:-0}"
+          SKIPPED_COUNT="${SKIPPED_COUNT:-0}"
+
+          # ── Determine outcome ──
+          if [ "$TEST_STATUS" = "success" ]; then
             echo "✅ All tests passed successfully"
-            echo "📊 Test Results: ${{ steps.run-tests.outputs.passed_count }} tests passed"
+            echo ""
+            echo "📊 Test Summary:"
+            echo "  • Total:   ${TEST_COUNT}"
+            echo "  • Passed:  ${PASSED_COUNT}"
+            echo "  • Skipped: ${SKIPPED_COUNT}"
+            echo ""
+            echo "📦 Test Reports: test-reports-${{ github.run_id }} (artifact)"
+            echo "::endgroup::"
+            exit 0
           fi
+
+          # ── Failure / skipped path ──
+          echo "❌ Tests completed with failures"
+          echo ""
+          echo "┌─────────────────────────────────────────────┐"
+          echo "│           TEST FAILURE REPORT               │"
+          echo "├─────────────────────────────────────────────┤"
+          echo "│ Status:  ${TEST_STATUS}                              │"
+          echo "│ Total:   ${TEST_COUNT}                              │"
+          echo "│ Passed:  ${PASSED_COUNT}                              │"
+          echo "│ Failed:  ${FAILED_COUNT}                              │"
+          echo "│ Skipped: ${SKIPPED_COUNT}                              │"
+          echo "└─────────────────────────────────────────────┘"
+          echo ""
+
+          # ── List failed test classes ──
+          if [ -n "${FAILED_LIST}" ] && [ "${FAILED_LIST}" != " " ]; then
+            echo "🔴 Failed Test Classes:"
+            echo "───────────────────────────────────────────────"
+            # FAILED_LIST is space-separated; print one per line
+            for test_class in ${FAILED_LIST}; do
+              # Trim whitespace
+              test_class=$(echo "$test_class" | xargs)
+              if [ -n "$test_class" ]; then
+                echo "  ✗ ${test_class}"
+              fi
+            done
+            echo "───────────────────────────────────────────────"
+          else
+            echo "⚠️  No individual failed test names captured."
+            echo "   Check the 'Run Comprehensive Tests' step logs for details."
+          fi
+
+          echo ""
+          echo "📦 Full test reports available in artifact:"
+          echo "   Name: test-reports-${{ github.run_id }}"
+          echo "   URL:  ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo ""
+
+          # ── Diagnostics: show a sample of failures from Surefire XML ──
+          echo "::group::🔍 Failure Details (first 3)"
+
+          FAILURE_COUNT=0
+          while IFS= read -r -d '' xml_file; do
+            if [ $FAILURE_COUNT -ge 3 ]; then break; fi
+            test_class=$(basename "$xml_file" .xml | sed 's/TEST-//')
+
+            # Extract failure/error messages (if any)
+            HAS_FAILURE=$(grep -c '<failure ' "$xml_file" 2>/dev/null || echo 0)
+            HAS_ERROR=$(grep -c '<error ' "$xml_file" 2>/dev/null || echo 0)
+
+            if [ "$HAS_FAILURE" -gt 0 ] || [ "$HAS_ERROR" -gt 0 ]; then
+              FAILURE_COUNT=$((FAILURE_COUNT + 1))
+              echo ""
+              echo "── ${test_class} ──"
+
+              # Print first failure message (trimmed)
+              grep -m1 '<failure ' "$xml_file" 2>/dev/null | head -1 | sed 's/<[^>]*>//g' | cut -c1-300 || true
+              grep -m1 '<error ' "$xml_file" 2>/dev/null | head -1 | sed 's/<[^>]*>//g' | cut -c1-300 || true
+            fi
+          done < <(find . -name "TEST-*.xml" -type f -print0 2>/dev/null)
+
+          echo "::endgroup::"
+
+          echo "::endgroup::"  # closes Test Status Report group
+          exit 1
 
       - name: Cleanup Docker system to free space
         run: |
@@ -160,29 +246,74 @@ jobs:
         run: |
           echo "::group::📊 Pipeline Summary"
 
-          echo "🎯 Pipeline Results:"
-          echo "  - Setup: ${{ steps.setup.outcome }}"
-          echo "  - Dependencies: ${{ steps.deps.outcome }}"
-          echo "  - Maven Build: ${{ steps.build-maven.outcome }}"
-          echo "  - Unit Tests: ${{ steps.run-tests.outcome || 'skipped' }}"
-          echo "  - Docker Build: ${{ steps.build.outcome }}"
-          echo "  - Application: ${{ steps.app.outcome }}"
-          echo "  - Health Check: ${{ steps.health.outcome }}"
-          echo "  - CLI E2E Tests: ${{ steps.e2e-cli.outcome }}"
-          echo "  - Python SDK Tests: ${{ steps.python-sdk-tests.outcome || 'skipped' }}"
+          # Helper to map outcome to icon
+          icon() {
+            case "$1" in
+              success)   echo "✅" ;;
+              failure)   echo "❌" ;;
+              cancelled) echo "⚠️" ;;
+              skipped)   echo "⏭️" ;;
+              *)         echo "❓" ;;
+            esac
+          }
+
+          echo "╔══════════════════════════════════════════════╗"
+          echo "║         NIGHTLY BUILD RESULTS               ║"
+          echo "╠══════════════════════════════════════════════╣"
+
+          echo "║                                              ║"
+          printf "║  %s %-40s ║\n" "$(icon '${{ steps.setup.outcome }}')" "Setup Environment"
+          printf "║  %s %-40s ║\n" "$(icon '${{ steps.deps.outcome }}')" "Verify Dependencies"
+          printf "║  %s %-40s ║\n" "$(icon '${{ steps.build-maven.outcome }}')" "Maven Build"
+          printf "║  %s %-40s ║\n" "$(icon '${{ steps.run-tests.outcome }}')" "Unit Tests"
+          printf "║  %s %-40s ║\n" "$(icon '${{ steps.build.outcome }}')" "Docker Build"
+          printf "║  %s %-40s ║\n" "$(icon '${{ steps.app.outcome }}')" "Start Application"
+          printf "║  %s %-40s ║\n" "$(icon '${{ steps.health.outcome }}')" "Health Check"
+
+          # Only show CLI E2E if it ran (it has success() condition)
+          E2E_OUTCOME="${{ steps.e2e-cli.outcome }}"
+          if [ -n "${E2E_OUTCOME}" ]; then
+            printf "║  %s %-40s ║\n" "$(icon "${E2E_OUTCOME}")" "CLI E2E Tests"
+          fi
+
+          echo "║                                              ║"
+          echo "╠══════════════════════════════════════════════╣"
+          echo "║  Test Details:                               ║"
+
+          TC="${{ steps.run-tests.outputs.test_count }}"
+          FC="${{ steps.run-tests.outputs.failed_count }}"
+          PC="${{ steps.run-tests.outputs.passed_count }}"
+          SC="${{ steps.run-tests.outputs.skipped_count }}"
+          printf "║  Tests: %-4s | Passed: %-4s | Failed: %-4s | Skip: %-4s ║\n" \
+            "${TC:-?}" "${PC:-?}" "${FC:-?}" "${SC:-?}"
+
+          # Show failed test classes if any
+          FAILED_LIST="${{ steps.run-tests.outputs.failed_test_list }}"
+          if [ -n "${FAILED_LIST}" ] && [ "${FAILED_LIST}" != " " ]; then
+            echo "║                                              ║"
+            echo "║  Failed Classes:                             ║"
+            for test_class in ${FAILED_LIST}; do
+              test_class=$(echo "$test_class" | xargs)
+              if [ -n "$test_class" ]; then
+                printf "║    ✗ %-38s ║\n" "${test_class:0:38}"
+              fi
+            done
+          fi
+
+          echo "╚══════════════════════════════════════════════╝"
 
           echo ""
           echo "🌐 Infrastructure:"
-          echo "  - Network: ${{ env.NETWORK_NAME }}"
-          echo "  - Container: ${{ env.CONTAINER_NAME }}"
-          echo "  - Image: ${{ env.IMAGE_NAME }}:${{ github.sha }}"
-          echo "  - MongoDB: ${{ steps.deps.outputs.mongodb_status }}"
-          echo "  - Redis: ${{ steps.deps.outputs.redis_status }}"
+          echo "  - Network:    ${{ env.NETWORK_NAME }}"
+          echo "  - Container:  ${{ env.CONTAINER_NAME }}"
+          echo "  - Image:      ${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          echo "  - MongoDB:    ${{ steps.deps.outputs.mongodb_status || 'unknown' }}"
+          echo "  - Redis:      ${{ steps.deps.outputs.redis_status || 'unknown' }}"
 
           echo ""
           echo "📅 Completed at: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
           echo "👤 Triggered by: ${{ github.actor }}"
-          echo "🌟 Commit: ${{ github.sha }}"
+          echo "🔗 Run URL:      ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
           echo "::endgroup::"
       - name: Cleanup Resources

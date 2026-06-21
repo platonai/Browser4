@@ -63,6 +63,9 @@ outputs:
   skipped_count:
     description: 'Number of skipped tests'
     value: ${{ steps.test-summary.outputs.skipped_count }}
+  failed_test_list:
+    description: 'Newline-separated list of failed test class names'
+    value: ${{ steps.test-summary.outputs.failed_test_list }}
 
 runs:
   using: "composite"
@@ -213,28 +216,36 @@ runs:
           echo "  - Failed: $failed_tests"
           echo "  - Skipped: $skipped_tests"
 
-          # Show failed tests
+          # Show failed tests and capture list for output
+          FAILED_TEST_LIST=""
           if [ $failed_tests -gt 0 ]; then
             echo ""
             echo "❌ Failed Tests:"
 
-            # Store files in a temporary file to avoid pipe issues
+            # Temp files for capturing failed test names
             tmp_failed_files=$(mktemp)
+            tmp_failed_list=$(mktemp)
 
             # Find files with failures or errors
             find . -name "TEST-*.xml" -type f -exec grep -l 'failures="[1-9]' {} \; 2>/dev/null > "$tmp_failed_files" || true
             find . -name "TEST-*.xml" -type f -exec grep -l 'errors="[1-9]' {} \; 2>/dev/null >> "$tmp_failed_files" || true
 
-            # Process each file
+            # Process each file and collect names
             if [ -s "$tmp_failed_files" ]; then
               sort "$tmp_failed_files" | uniq | while read -r xml_file; do
                 test_class=$(basename "$xml_file" .xml | sed 's/TEST-//')
                 echo "  - $test_class"
+                echo "$test_class" >> "$tmp_failed_list"
               done
             fi
 
+            # Read captured list (newline-separated for GitHub output)
+            if [ -f "$tmp_failed_list" ] && [ -s "$tmp_failed_list" ]; then
+              FAILED_TEST_LIST=$(tr '\n' ' ' < "$tmp_failed_list" | sed 's/ $//')
+            fi
+
             # Clean up
-            rm -f "$tmp_failed_files"
+            rm -f "$tmp_failed_files" "$tmp_failed_list"
           fi
 
         else
@@ -253,6 +264,7 @@ runs:
         echo "failed_count=$failed_tests" >> $GITHUB_OUTPUT
         echo "passed_count=$passed_tests" >> $GITHUB_OUTPUT
         echo "skipped_count=$skipped_tests" >> $GITHUB_OUTPUT
+        echo "failed_test_list=${FAILED_TEST_LIST}" >> $GITHUB_OUTPUT
 
         # Generate test report summary
         if [ "${{ inputs.test_reports }}" == "true" ]; then
