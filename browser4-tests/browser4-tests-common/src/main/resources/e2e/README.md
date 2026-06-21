@@ -194,23 +194,34 @@ Agent 推理是否可接受？
 ## 推荐分层结构：
 
 ```
-agent-e2e/
+e2e/
 ├── tasks/            # 任务定义（Goal-driven）
-│   ├── login.task
-│   ├── purchase.task
+│   ├── login.task    ✅ 已实现
+│   ├── purchase.task ✅ 已实现
 │
 ├── scenarios/        # 场景组合
 │   ├── happy_path/
-│   ├── adversarial/
-│   ├── chaos/
+│   │   └── use-cases/        # 具体用例（已实现 14 个英文 + 5 个中文用例）
+│   │       ├── 01-ecommerce-product-comparison.txt
+│   │       ├── 02-job-listing-extraction.txt
+│   │       ├── 03-saas-pricing-analysis.txt
+│   │       ├── ...（04-14）
+│   │       ├── 20-zh-baidu-baike-company-compare.txt
+│   │       ├── ...（21-24 中文站点用例）
+│   │       ├── README.md      # 用例说明（英文）
+│   │       └── README-zh.md   # 用例说明（中文）
+│   ├── adversarial/   # 对抗性场景（待填充）
+│   ├── chaos/         # 混沌场景（待填充）
 │
-├── constraints/      # 约束规则
-├── policies/         # Agent policy
-├── tools/            # 工具抽象
-├── assertions/       # 智能断言
-├── traces/           # Agent 思维轨迹
-└── metrics/          # Agent KPI
+├── constraints/      # 约束规则（待填充）
+├── policies/         # Agent policy（待填充）
+├── tools/            # 工具抽象（待填充）
+├── assertions/       # 智能断言（待填充）
+├── traces/           # Agent 思维轨迹（待填充）
+└── metrics/          # Agent KPI（待填充）
 ```
+
+> **当前状态 (2026-06)**：`tasks/` 和 `scenarios/happy_path/use-cases/` 目录已填充了具体的任务定义和可执行用例。其余目录为占位状态（`.gitkeep`），等待后续实现。测试运行脚本为 `bin/tests-production/test-cases/run-e2e-agents.sh`，支持按编号选择用例执行。关于用例格式、运行方式、新增用例的详细说明，请参见 `scenarios/happy_path/use-cases/README.md`。
 
 ---
 
