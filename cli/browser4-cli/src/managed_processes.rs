@@ -692,7 +692,7 @@ fn find_pulsar_browser_processes() -> Vec<u32> {
     {
         use std::process::Command;
         let ps_command = r#"
-            Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe'" -ErrorAction SilentlyContinue |
+            Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe' -or Name = 'msedge.exe'" -ErrorAction SilentlyContinue |
                 Where-Object {
                     -not [string]::IsNullOrWhiteSpace($_.CommandLine) -and
                     $_.CommandLine -match 'PULSAR_CHROME'

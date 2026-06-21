@@ -77,6 +77,26 @@ class ChromeLauncher constructor(
 
             return pid to commandLine
         }
+
+        init {
+            // Populate additional browser search paths so Microsoft Edge is
+            // discoverable even when -Dchrome.path is not provided by the CLI.
+            // Paths are platform-specific but harmless on other platforms —
+            // Files.isExecutable() returns false for nonexistent files.
+            Browsers.ADDITIONAL_CHROME_BINARY_SEARCH_PATHS.addAll(
+                listOf(
+                    // Windows
+                    "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+                    "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+                    // macOS
+                    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+                    // Linux
+                    "/usr/bin/microsoft-edge",
+                    "/usr/bin/microsoft-edge-stable",
+                    "/opt/microsoft/msedge/msedge",
+                )
+            )
+        }
     }
 
     private val closed = AtomicBoolean()
@@ -539,9 +559,11 @@ class ChromeLauncher constructor(
     }
 
     private fun logChromeFailedToStart() {
-        val count = Runtimes.countSystemProcess("chrome")
-        if (count == 0) {
-            logger.error("Failed to start Chrome, no chrome process running in the system")
+        val chromeCount = Runtimes.countSystemProcess("chrome")
+        val edgeCount = Runtimes.countSystemProcess("msedge")
+        val totalCount = chromeCount + edgeCount
+        if (totalCount == 0) {
+            logger.error("Failed to start browser, no browser process running in the system")
             logLastLaunchDetails()
             return
         }
@@ -569,9 +591,10 @@ class ChromeLauncher constructor(
         val message = """
 
 ===============================================================================
-!!!   FAILED TO START CHROME   !!!
+!!!   FAILED TO START BROWSER   !!!
+      Chrome processes: $chromeCount  |  Edge processes: $edgeCount
 
-Run the script to kill Chrome processes and run the program again:
+Run the script to kill browser processes and run the program again:
 
 ${scriptPath.toUri()}
 
@@ -742,7 +765,11 @@ ${scriptPath.toUri()}
         performanceInfo["startupWaitTime"] = this.options.startupWaitTime.toString()
         performanceInfo["shutdownWaitTime"] = this.options.shutdownWaitTime.toString()
         performanceInfo["threadWaitTime"] = this.options.threadWaitTime.toString()
-        performanceInfo["systemChromeProcessCount"] = Runtimes.countSystemProcess("chrome")
+        val chromeCount = Runtimes.countSystemProcess("chrome")
+        val edgeCount = Runtimes.countSystemProcess("msedge")
+        performanceInfo["systemChromeProcessCount"] = chromeCount
+        performanceInfo["systemEdgeProcessCount"] = edgeCount
+        performanceInfo["systemBrowserProcessCount"] = chromeCount + edgeCount
         reportData["performance"] = performanceInfo
 
         return reportData

@@ -19,13 +19,16 @@ class ChromeDestroyer(
 ) {
     companion object {
         private val logger = LoggerFactory.getLogger(ChromeDestroyer::class.java)
-        private val BROWSER_PROCESS_KEYWORDS = listOf("chrome", "chromium", "google-chrome", "chromium-browser")
+        private val BROWSER_PROCESS_KEYWORDS = listOf(
+            "chrome", "chromium", "google-chrome", "chromium-browser",
+            "msedge", "microsoft-edge", "microsoft-edge-stable"
+        )
 
         private val POSIX_PROCESS_LISTING_COMMAND = """
             if command -v pgrep >/dev/null 2>&1; then
-                pgrep -af 'chrome|chromium|google-chrome|chromium-browser'
+                pgrep -af 'chrome|chromium|google-chrome|chromium-browser|msedge|microsoft-edge|microsoft-edge-stable'
             else
-                ps -eo pid=,args= | grep -E -i 'chrome|chromium|google-chrome|chromium-browser' | grep -v grep
+                ps -eo pid=,args= | grep -E -i 'chrome|chromium|google-chrome|chromium-browser|msedge|microsoft-edge|microsoft-edge-stable' | grep -v grep
             fi
         """.trimIndent()
     }
@@ -260,8 +263,8 @@ class ChromeDestroyer(
                 Where-Object {
                     $_.CommandLine -and
                     (
-                        $_.Name -match '^(chrome|chromium)\.exe$' -or
-                        $_.CommandLine -match '(?i)(chrome|chromium|google-chrome|chromium-browser)'
+                        $_.Name -match '^(chrome|chromium|msedge)\.exe$' -or
+                        $_.CommandLine -match '(?i)(chrome|chromium|google-chrome|chromium-browser|msedge|microsoft-edge|microsoft-edge-stable)'
                     ) -and
                     $_.CommandLine.Replace('\\', '/') -like "*$path*"
                 } |
