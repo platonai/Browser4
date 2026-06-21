@@ -1,12 +1,12 @@
 #!/usr/bin/env pwsh
 
-# ═══════════════════════════════════════════════════════════════════
+# ======================================================================
 # CROSS-PLATFORM: This script must run on Linux, macOS, and Windows.
 # - Use $IsWindows / $IsLinux / $IsMacOS for platform detection.
 # - Use "($IsWindows -or $env:OS -eq 'Windows_NT')" for PS 5.1 compat.
 # - Windows-only env vars ($env:TEMP) need $env:TMPDIR fallback.
 # - Guard "chcp" and other Windows-only commands behind platform checks.
-# ═══════════════════════════════════════════════════════════════════
+# ======================================================================
 <#
 .SYNOPSIS
     Checks if the current project version and browser4-cli version have been fully published.
@@ -96,9 +96,9 @@ if ($Version -notmatch "^\d+\.\d+\.\d+") {
 }
 
 Write-Host ""
-Write-Host "══════════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host "==============================================" -ForegroundColor Cyan
 Write-Host "  Browser4 Release Status Check"              -ForegroundColor Cyan
-Write-Host "══════════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host "==============================================" -ForegroundColor Cyan
 
 # Derive GitHub repository from the git remote
 $remoteUrl = git config --get remote.origin.url
@@ -327,9 +327,9 @@ function Get-CommitChangesSince {
 # ---------------------------------------------------------------
 # Check 1: Main project release status
 # ---------------------------------------------------------------
-Write-Host "────────────────────────────────────────────────" -ForegroundColor Yellow
+Write-Host "------------------------------------------------" -ForegroundColor Yellow
 Write-Host "  Check 1: Browser4 (main project) release"    -ForegroundColor Yellow
-Write-Host "────────────────────────────────────────────────" -ForegroundColor Yellow
+Write-Host "------------------------------------------------" -ForegroundColor Yellow
 Write-Host ""
 
 $isLatestRelease = $false
@@ -340,7 +340,7 @@ $latestReleaseInfo = Get-GitHubLatestRelease -GitHubRepo $githubRepo
 
 if ($null -ne $latestReleaseInfo.Tag) {
     Write-Host ""
-    Write-Host "  ── Latest GitHub Release ──"
+    Write-Host "  -- Latest GitHub Release --"
     Write-Host "  Tag          : $($latestReleaseInfo.Tag)"
 
     if ($latestReleaseInfo.Name) {
@@ -482,9 +482,9 @@ if ($null -ne $latestReleaseInfo.Tag) {
 # ---------------------------------------------------------------
 if ($null -ne $latestReleaseInfo.Tag) {
     Write-Host ""
-    Write-Host "────────────────────────────────────────────────" -ForegroundColor Yellow
+    Write-Host "------------------------------------------------" -ForegroundColor Yellow
     Write-Host "  Pending changes since latest release"          -ForegroundColor Yellow
-    Write-Host "────────────────────────────────────────────────" -ForegroundColor Yellow
+    Write-Host "------------------------------------------------" -ForegroundColor Yellow
     Write-Host ""
 
     Write-Host "  Latest release   : $($latestReleaseInfo.Tag)"
@@ -549,9 +549,9 @@ if ($null -ne $latestReleaseInfo.Tag) {
 # ---------------------------------------------------------------
 if (-not $SkipCli) {
     Write-Host ""
-    Write-Host "────────────────────────────────────────────────" -ForegroundColor Yellow
+    Write-Host "------------------------------------------------" -ForegroundColor Yellow
     Write-Host "  Check 2: browser4-cli release"                -ForegroundColor Yellow
-    Write-Host "────────────────────────────────────────────────" -ForegroundColor Yellow
+    Write-Host "------------------------------------------------" -ForegroundColor Yellow
     Write-Host ""
 
     # Resolve CLI version
@@ -577,14 +577,14 @@ if (-not $SkipCli) {
         $cliLatestRemoteTag = $null
         $npmPublishedVersion = $null
 
-        # ── 2a: Fetch latest remote *-cli tag (informational only) ──
+        # -- 2a: Fetch latest remote *-cli tag (informational only) --
         $cliReleaseInfo = Get-GitHubLatestRelease -GitHubRepo $githubRepo -ReleaseTagPattern "*-cli"
 
         if ($null -ne $cliReleaseInfo.Tag) {
             $cliLatestRemoteTag = $cliReleaseInfo.Tag
         }
 
-        # ── 2b: Fetch npm registry version (informational only) ──
+        # -- 2b: Fetch npm registry version (informational only) --
         try {
             $npmRaw = npm view "browser4-cli" version 2>$null
             if ($npmRaw) {
@@ -594,8 +594,8 @@ if (-not $SkipCli) {
             # npm view failed — non-critical
         }
 
-        # ── 2c: GitHub *-cli tag (temporary — for reference only) ──
-        Write-Host "  ── GitHub *-cli tag (temporary / reference only) ──"
+        # -- 2c: GitHub *-cli tag (temporary — for reference only) --
+        Write-Host "  -- GitHub *-cli tag (temporary / reference only) --"
         Write-Host ""
         Write-Host "  Local            : v${CliVersion}-cli"
 
@@ -620,9 +620,9 @@ if (-not $SkipCli) {
         Write-Host ""
         Write-Host "  (GitHub *-cli tags are temporary — shown for reference only.)" -ForegroundColor DarkGray
 
-        # ── 2d: npm registry (real release — compare properly) ──
+        # -- 2d: npm registry (real release — compare properly) --
         Write-Host ""
-        Write-Host "  ── npm Registry (browser4-cli) ──"
+        Write-Host "  -- npm Registry (browser4-cli) --"
 
         if ($npmPublishedVersion) {
             Write-Host ""
@@ -664,12 +664,12 @@ if (-not $SkipCli) {
 # Summary
 # ---------------------------------------------------------------
 Write-Host ""
-Write-Host "══════════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host "==============================================" -ForegroundColor Cyan
 Write-Host "  Summary"                                    -ForegroundColor Cyan
-Write-Host "══════════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host "==============================================" -ForegroundColor Cyan
 Write-Host ""
 
-Write-Host "  ── Browser4 (main) ──"
+Write-Host "  -- Browser4 (main) --"
 Write-Host "  Local version    : v$Version"
 Write-Host "  Latest release   : $($latestReleaseInfo.Tag)"
 Write-Host "  Status           : $(
@@ -686,7 +686,7 @@ Write-Host "  Status           : $(
 Write-Host ""
 
 if (-not $SkipCli -and $CliVersion) {
-    Write-Host "  ── browser4-cli ──"
+    Write-Host "  -- browser4-cli --"
     Write-Host "  Local             : v${CliVersion}-cli"
     Write-Host "  GitHub *-cli tag  : $(if ($cliLatestRemoteTag) { "$cliLatestRemoteTag (temporary)" } else { '(none)' })"
     Write-Host "  npm registry      : $(if ($npmPublishedVersion) { $npmPublishedVersion } else { '(not found)' })"
