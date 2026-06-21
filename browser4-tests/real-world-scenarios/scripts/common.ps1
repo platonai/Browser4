@@ -488,7 +488,11 @@ function Invoke-Agent {
     $claudeArgs = @('--dangerously-skip-permissions', '-p', $Prompt)
     if ($Silent) { $claudeArgs += '--silent' }
 
-    $tempFile = [System.IO.Path]::GetTempFileName()
+    $targetDir = Join-Path $script:RepoRoot 'target'
+    if (-not (Test-Path -LiteralPath $targetDir)) {
+        New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+    }
+    $tempFile = Join-Path $targetDir ([System.IO.Path]::GetRandomFileName())
     $writer = $null
     $exitCode = 0
 
