@@ -1,16 +1,16 @@
 #!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-    Scan coworker/tasks/200issues/github/open for issue files and create them
+    Scan coworker/tasks/200issues/github/commit/ready for issue files and create them
     on GitHub via the gh CLI.
 
 .DESCRIPTION
-    Each file in the open directory represents a GitHub issue to be created.
+    Each file in the ready directory represents a GitHub issue to be created.
     After a successful creation the file moves to the "done" directory; on
     failure it moves to "failed" so the operator can inspect and retry.
 
     A daily commit guard caps creations at 20 per UTC day to avoid tripping
-    GitHub's spam detection.  Overflow files stay in "open" and are picked up
+    GitHub's spam detection.  Overflow files stay in "ready" and are picked up
     on the next scheduled run after the UTC date rolls over.  The daily counter
     persists in .daily-commit-state.json alongside the task directories.
 
@@ -38,12 +38,12 @@ if ($null -eq $script:__CoworkerLock) {
 
 $repoRoot = Get-WorkspaceRoot
 
-$issuesRoot = Resolve-TasksPath '200issues\github'
-$openDir = Join-Path $issuesRoot 'open'
+$issuesRoot = Resolve-TasksPath '200issues\github\commit'
+$readyDir = Join-Path $issuesRoot 'ready'
 $doneDir = Join-Path $issuesRoot 'done'
 $failedDir = Join-Path $issuesRoot 'failed'
 
-foreach ($directory in @($openDir, $doneDir, $failedDir)) {
+foreach ($directory in @($readyDir, $doneDir, $failedDir)) {
     Ensure-CoworkerDirectory -Path $directory
 }
 
@@ -87,12 +87,12 @@ if ($remainingCommits -le 0) {
     exit 0
 }
 
-$files = @(Get-ChildItem -Path $openDir -File |
+$files = @(Get-ChildItem -Path $readyDir -File |
     Where-Object { -not (Test-CoworkerIgnoredFile -Item $_) } |
     Sort-Object Name)
 
 if ($files.Count -eq 0) {
-    Write-CoworkerLog -Message "No GitHub issue files found in $openDir" -Level 'INFO' -Component 'commit-github-issues'
+    Write-CoworkerLog -Message "No GitHub issue files found in $readyDir" -Level 'INFO' -Component 'commit-github-issues'
     Remove-CoworkerScriptLock -Lock $script:__CoworkerLock
     exit 0
 }

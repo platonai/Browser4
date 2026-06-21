@@ -15,12 +15,12 @@
     3. Writes each extracted issue based on #auto-approve:
        - If #auto-approve is NOT found: writes to 200issues/draft/refine/2done
          (manual review required before committing)
-       - If #auto-approve IS found: writes to 200issues/github/open (where
+       - If #auto-approve IS found: writes to 200issues/github/commit/ready (where
          commit-github-issues.ps1 will pick them up directly)
     4. Moves the original draft file to the same destination as the extracted
-       issues (2done or github/open)
+       issues (2done or github/commit/ready)
 
-    Issue format written to github/open:
+    Issue format written to github/commit/ready:
         # <Title>
         <Body>
 
@@ -31,7 +31,7 @@
     #auto-approve behavior:
         When #auto-approve appears in the last 5 lines of a draft file, the
         extracted issues AND the original draft are written directly to
-        github/open (ready for commit-github-issues.ps1 to pick up).
+        github/commit/ready (ready for commit-github-issues.ps1 to pick up).
         Without #auto-approve, everything goes to draft/refine/2done for
         manual review before being committed.
 
@@ -80,10 +80,10 @@ $readyDir       = Join-Path $refineRoot '0ready'
 $workingDir     = Join-Path $refineRoot '1working'
 $doneDir        = Join-Path $refineRoot '2done'
 $errorDir       = Join-Path $refineRoot '0error'
-$githubOpenDir   = Join-Path $issuesRoot 'github\open'
+$githubReadyDir   = Join-Path $issuesRoot 'github\commit\ready'
 $githubDraftDir  = Join-Path $issuesRoot 'github\draft'
 
-foreach ($directory in @($readyDir, $workingDir, $doneDir, $errorDir, $githubOpenDir, $githubDraftDir)) {
+foreach ($directory in @($readyDir, $workingDir, $doneDir, $errorDir, $githubReadyDir, $githubDraftDir)) {
     Ensure-CoworkerDirectory -Path $directory
 }
 
@@ -550,7 +550,7 @@ foreach ($target in $targets) {
 
         if ($issues.Count -eq 0) {
             if ($DryRun) {
-                Write-CoworkerLog -Message "[DRY RUN] Would move original to $($(if (Test-AutoApprove -File $workingFile) { 'github/open (#auto-approve)' } else { '2done' })) (no issues extracted yet): $($workingFile.Name)" -Level INFO -Component 'refine-github-issues'
+                Write-CoworkerLog -Message "[DRY RUN] Would move original to $($(if (Test-AutoApprove -File $workingFile) { 'github/commit/ready (#auto-approve)' } else { '2done' })) (no issues extracted yet): $($workingFile.Name)" -Level INFO -Component 'refine-github-issues'
                 continue
             }
             throw "No issues extracted from $($workingFile.Name)"
@@ -558,7 +558,7 @@ foreach ($target in $targets) {
 
         # Determine output directory based on #auto-approve
         $isAutoApproved = Test-AutoApprove -File $workingFile
-        $issueOutputDir = if ($isAutoApproved) { $githubOpenDir } else { $doneDir }
+        $issueOutputDir = if ($isAutoApproved) { $githubReadyDir } else { $doneDir }
 
         # Write each extracted issue
         $writtenPaths = @()
@@ -567,11 +567,11 @@ foreach ($target in $targets) {
             $writtenPaths += $outputPath
         }
 
-        $outputDirLabel = if ($isAutoApproved) { 'github/open' } else { '2done' }
+        $outputDirLabel = if ($isAutoApproved) { 'github/commit/ready' } else { '2done' }
         Write-CoworkerLog -Message "Wrote $($writtenPaths.Count) issue file(s) to $outputDirLabel from $($workingFile.Name)" -Level INFO -Component 'refine-github-issues'
 
         # Route original draft to the same destination as extracted issues
-        $originalDestLabel = if ($isAutoApproved) { 'github/open (#auto-approve)' } else { '2done' }
+        $originalDestLabel = if ($isAutoApproved) { 'github/commit/ready (#auto-approve)' } else { '2done' }
         $originalDestPath = Resolve-UniquePath -Directory $issueOutputDir -BaseName $workingFile.BaseName -Extension $workingFile.Extension
         if ($PSCmdlet.ShouldProcess($workingFile.Name, "Move to $originalDestLabel")) {
             Move-Item -Path $workingFile.FullName -Destination $originalDestPath -Force

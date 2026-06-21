@@ -95,7 +95,7 @@ $builtinExcludeGlobs = @(
     '**/coworker/tasks/5approved/**'
     '**/coworker/tasks/6git-pushed/**'
     '**/coworker/tasks/700archive/**'
-    '**/coworker/tasks/200issues/github/open/**'
+    '**/coworker/tasks/200issues/github/commit/ready/**'
     '**/coworker/tasks/200issues/draft/refine/2done/**'
     '**/coworker/tasks/200issues/draft/refine/0error/**'
     '**/coworker/tasks/300logs/**'

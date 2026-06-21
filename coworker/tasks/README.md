@@ -133,16 +133,16 @@ Extracts, refines, and creates GitHub issues from natural-language drafts.
    │                              │
    ▼ No                           ▼ Yes
 ┌──────────────┐          ┌──────────────────┐
-│   2done      │          │ github/open      │  ← commit-github-issues.ps1
-│ (Manual      │          │ (Auto-committed) │     picks up from here
-│  review)     │          └──────────────────┘
+│   2done      │          │ github/commit/ready │  ← commit-github-issues.ps1
+│ (Manual      │          │ (Auto-committed)    │     picks up from here
+│  review)     │          └─────────────────────┘
 └──────────────┘
        │
-       │  (after manual review: move to github/open)
+       │  (after manual review: move to github/commit/ready)
        ▼
-┌──────────────────┐
-│  github/open     │
-└──────────────────┘
+┌─────────────────────────┐
+│  github/commit/ready    │
+└─────────────────────────┘
 
 ┌──────────────────────────────────┐
 │  200issues/draft/refine/0error   │  ← Dead Letter (after max retries)
@@ -152,35 +152,35 @@ Extracts, refines, and creates GitHub issues from natural-language drafts.
 ### Stage B — GitHub Creation (`coworker/scripts/workers/commit-github-issues.ps1`)
 
 ```
-┌──────────────────────────────────┐
-│  200issues/github/open           │  ← Formatted issue .md files
-│            (Open)                │     (written by refine-github-issues)
-└────────────┬─────────────────────┘
+┌───────────────────────────────────────┐
+│  200issues/github/commit/ready        │  ← Formatted issue .md files
+│            (Ready)                    │     (written by refine-github-issues)
+└────────────┬──────────────────────────┘
              │  commit-github-issues.ps1: gh issue create
              ▼
-     ┌───────────────┐
-     │  github/done  │  ← Successfully created on GitHub
-     │    (Done)     │
-     └───────────────┘
+     ┌────────────────────┐
+     │  github/commit/done│  ← Successfully created on GitHub
+     │    (Done)          │
+     └────────────────────┘
 
-     ┌───────────────┐
-     │ github/failed │  ← gh CLI returned non-zero (manual inspection needed)
-     │   (Failed)    │
-     └───────────────┘
+     ┌──────────────────────┐
+     │ github/commit/failed │  ← gh CLI returned non-zero (manual inspection needed)
+     │   (Failed)           │
+     └──────────────────────┘
 ```
 
 **Daily commit guard:** `commit-github-issues.ps1` caps issue creation at **20 per UTC day**
 to avoid tripping GitHub spam detection. Overflow stays in `open` for the next run.
-Daily state is tracked in `200issues/github/.daily-commit-state.json`.
+Daily state is tracked in `200issues/github/commit/.daily-commit-state.json`.
 
 ### `#auto-approve` in GitHub issues
 
 When `#auto-approve` appears in the last 5 lines of a draft being processed:
 
-- Extracted issues AND the original draft are written directly to `200issues/github/open`,
+- Extracted issues AND the original draft are written directly to `200issues/github/commit/ready`,
   where `commit-github-issues.ps1` will pick them up automatically.
 - **Without** `#auto-approve`, everything goes to `200issues/draft/refine/2done` for
-  manual review. After review, approved issues should be moved to `github/open`.
+  manual review. After review, approved issues should be moved to `github/commit/ready`.
 
 ---
 
@@ -328,11 +328,12 @@ coworker/tasks/
     │   ├── 2done/                    # Extraction complete
     │   └── 0error/                   # Failed (dead letter)
     └── github/
-        ├── .daily-commit-state.json  # Daily commit guard state (max 20/day)
-        ├── open/                     # Formatted issues ready for gh CLI
-        ├── draft/                    # Original drafts awaiting manual approval
-        ├── done/                     # Successfully created on GitHub
-        └── failed/                   # gh CLI returned error
+        └── commit/                   # GitHub issue commit pipeline
+            ├── .daily-commit-state.json  # Daily commit guard state (max 20/day)
+            ├── ready/                # Formatted issues ready for gh CLI
+            ├── draft/                # Original drafts awaiting manual approval
+            ├── done/                 # Successfully created on GitHub
+            └── failed/               # gh CLI returned error
 ```
 
 **Log directory** (configured in `config.psd1`):
@@ -352,8 +353,8 @@ coworker/tasks/
 | `process-coworker-queue.ps1` | Main (watcher) | `1ready`, `5approved` | _(triggers `coworker.ps1`)_ |
 | `process-draft-refinement-queue.ps1` | Draft Refinement (watcher) | `0draft/refine/1ready` | _(triggers `refine-drafts.ps1`)_ |
 | `refine-drafts.ps1` | Draft Refinement | `0draft/refine/1ready` | `0draft/refine/3done` |
-| `refine-github-issues.ps1` | Issues: Refine | `200issues/draft/refine/0ready` | `200issues/draft/refine/2done` or `200issues/github/open` (see `#auto-approve`) |
-| `commit-github-issues.ps1` | Issues: Commit | `200issues/github/open` | `200issues/github/done` |
+| `refine-github-issues.ps1` | Issues: Refine | `200issues/draft/refine/0ready` | `200issues/draft/refine/2done` or `200issues/github/commit/ready` (see `#auto-approve`) |
+| `commit-github-issues.ps1` | Issues: Commit | `200issues/github/commit/ready` | `200issues/github/commit/done` |
 | `git-sync.ps1` | Git Push | `5approved` | `6git-pushed` |
 | `fetch-github-issues.ps1` | Ingestion | GitHub (external) | `0draft/issues/github` |
 | `coworker-scheduler.ps1` | All (orchestrator) | _(all above)_ | _(all above)_ |

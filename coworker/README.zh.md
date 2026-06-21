@@ -39,7 +39,7 @@ AI 协作助手是一个代理（agent），可协助你在指定仓库中完成
 | 处理中 | `200issues/draft/refine/1working` | 代理正在提取和润色 issue |
 | 完成   | `200issues/draft/refine/2done` | 提取完成，已暂存 |
 | 错误   | `200issues/draft/refine/0error` | 达到最大重试次数后提取失败 |
-| 待创建 | `200issues/github/open` | 已润色的 issue 文件等待通过 `gh` CLI 创建 |
+| 待创建 | `200issues/github/commit/ready` | 已润色的 issue 文件等待通过 `gh` CLI 创建 |
 
 ### 草稿润色管道（`0draft` 的子管道）
 
@@ -107,7 +107,7 @@ AI 协作助手是一个代理（agent），可协助你在指定仓库中完成
 |------|---------|---------|
 | `coworker` | `coworker.ps1` | `1ready` 或 `5approved` |
 | `draft-refinement` | `workers/refine-drafts.ps1` | `0draft/refine/1ready` |
-| `commit-github-issues` | `workers/commit-github-issues.ps1` | `200issues/github/open` |
+| `commit-github-issues` | `workers/commit-github-issues.ps1` | `200issues/github/commit/ready` |
 | `refine-github-issues` | `workers/refine-github-issues.ps1` | `200issues/draft/refine/0ready` |
 | `process-task-source` | `process-task-source.ps1` | （默认禁用） |
 
@@ -142,9 +142,9 @@ AI 协作助手是一个代理（agent），可协助你在指定仓库中完成
 
 Coworker 可以从自然语言的草稿文件中提取、润色并创建 GitHub issues。这是一个两阶段管道：
 
-1. **润色** (`refine-github-issues.ps1`)：扫描 `200issues/draft/refine/0ready` 中的草稿文件，调用代理提取各个独立的 issue，将每个 issue 格式化为结构化的 Markdown 文件，写入 `200issues/github/open`。
+1. **润色** (`refine-github-issues.ps1`)：扫描 `200issues/draft/refine/0ready` 中的草稿文件，调用代理提取各个独立的 issue，将每个 issue 格式化为结构化的 Markdown 文件，写入 `200issues/github/commit/ready`。
 
-2. **创建** (`commit-github-issues.ps1`)：扫描 `200issues/github/open` 中已格式化的 issue 文件，通过 `gh issue create` 在 GitHub 上创建它们。
+2. **创建** (`commit-github-issues.ps1`)：扫描 `200issues/github/commit/ready` 中已格式化的 issue 文件，通过 `gh issue create` 在 GitHub 上创建它们。
 
 Issue 文件格式：
 ```markdown

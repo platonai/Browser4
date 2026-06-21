@@ -29,7 +29,7 @@ This repository contains a **file-queue automation system** called **Coworker**.
 - Current defaults:
   - `coworker` every 15s, dependent on task-source processing, only when `1ready` or `5approved` has files.
   - `draft-refinement` every 15s, only when `0draft/refine/1ready` has files.
-  - `commit-github-issues` every 15s, only when `200issues/github/open` has files.
+  - `commit-github-issues` every 15s, only when `200issues/github/commit/ready` has files.
   - `refine-github-issues` every 15s, only when `200issues/draft/refine/0ready` has files.
   - `process-task-source` exists but is **disabled by default**. (`coworker/scripts/coworker-scheduler.config.psd1:1-62`)
 - The scheduler launches child PowerShell processes, keeps live worker output in each child terminal, records a console transcript log under `coworker/tasks/300logs/`, and writes a JSON status snapshot. (`coworker/scripts/coworker-scheduler.ps1`)
@@ -49,9 +49,9 @@ This repository contains a **file-queue automation system** called **Coworker**.
 ### 5. GitHub Issues pipeline
 
 - Two-stage pipeline for extracting, refining, and creating GitHub issues from natural-language drafts:
-  1. **Refine** (`coworker/scripts/workers/refine-github-issues.ps1`): Scans `200issues/draft/refine/0ready`, invokes the agent to extract individual issues from each draft, formats each as structured markdown, and writes them to `200issues/github/open`.
-  2. **Commit** (`coworker/scripts/workers/commit-github-issues.ps1`): Scans `200issues/github/open` and creates each file as a GitHub issue via `gh issue create`.
-- Directories: `200issues/draft/refine/0ready` → `1working` → `2done` (or `0error` on failure); staged files land in `200issues/github/open`.
+  1. **Refine** (`coworker/scripts/workers/refine-github-issues.ps1`): Scans `200issues/draft/refine/0ready`, invokes the agent to extract individual issues from each draft, formats each as structured markdown, and writes them to `200issues/github/commit/ready`.
+  2. **Commit** (`coworker/scripts/workers/commit-github-issues.ps1`): Scans `200issues/github/commit/ready` and creates each file as a GitHub issue via `gh issue create`.
+- Directories: `200issues/draft/refine/0ready` → `1working` → `2done` (or `0error` on failure); staged files land in `200issues/github/commit/ready`.
 - Supports optional `Labels:`, `Assignees:`, and `Repo:` metadata fields in each issue block. (`coworker/scripts/workers/refine-github-issues.ps1:1-29`, `coworker/scripts/workers/commit-github-issues.ps1:1-19`)
 - Both tasks are **enabled by default** in the scheduler config. (`coworker/scripts/coworker-scheduler.config.psd1:35-60`)
 
@@ -96,8 +96,8 @@ This repository contains a **file-queue automation system** called **Coworker**.
 ### Separate GitHub issues lifecycle
 
 - **Refine**: `200issues/draft/refine/0ready` -> `1working` -> `2done` (or `0error` on failure).
-- **Commit**: `200issues/github/open` -> created via `gh issue create`.
-- `#auto-approve` in a draft's last 5 lines also routes the original draft to `github/open` as an issue. (`coworker/scripts/workers/refine-github-issues.ps1:31-36`, `coworker/scripts/workers/refine-github-issues.ps1:447-465`, `coworker/scripts/workers/commit-github-issues.ps1:1-19`)
+- **Commit**: `200issues/github/commit/ready` -> created via `gh issue create`.
+- `#auto-approve` in a draft's last 5 lines also routes the original draft to `github/commit/ready` as an issue. (`coworker/scripts/workers/refine-github-issues.ps1:31-36`, `coworker/scripts/workers/refine-github-issues.ps1:447-465`, `coworker/scripts/workers/commit-github-issues.ps1:1-19`)
 
 ## Key PowerShell commands / entrypoints
 

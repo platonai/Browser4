@@ -38,7 +38,7 @@ Task files flow through a pipeline of numbered folders inside `coworker/tasks/`:
 | In Process | `200issues/draft/refine/1working` | Agent is extracting and refining issues |
 | Done | `200issues/draft/refine/2done` | Extraction complete, issues staged |
 | Error | `200issues/draft/refine/0error` | Extraction failed after max retries |
-| Open | `200issues/github/open` | Refined issue files ready for creation via `gh` CLI |
+| Open | `200issues/github/commit/ready` | Refined issue files ready for creation via `gh` CLI |
 
 ### Draft refinement pipeline (sub-pipeline of `0draft`)
 
@@ -113,7 +113,7 @@ Default scheduled tasks:
 |------|--------------|--------------|
 | `coworker` | `coworker.ps1` | `1ready` or `5approved` |
 | `draft-refinement` | `workers/refine-drafts.ps1` | `0draft/refine/1ready` |
-| `commit-github-issues` | `workers/commit-github-issues.ps1` | `200issues/github/open` |
+| `commit-github-issues` | `workers/commit-github-issues.ps1` | `200issues/github/commit/ready` |
 | `refine-github-issues` | `workers/refine-github-issues.ps1` | `200issues/draft/refine/0ready` |
 | `fetch-github-issues` | `workers/fetch-github-issues.ps1` | _(always runs)_ |
 | `update-readmes` | `workers/update-readmes.ps1` | _(always runs, every 1h)_ |
@@ -150,9 +150,9 @@ You can refine a single file or every file in a folder. When a folder is provide
 
 Coworker can extract, refine, and create GitHub issues from natural-language draft files. This is a two-stage pipeline:
 
-1. **Refine** (`refine-github-issues.ps1`): Scans `200issues/draft/refine/0ready` for draft files describing one or more issues, invokes the agent to extract individual issues, formats each as a structured markdown file, and writes them to `200issues/github/open`.
+1. **Refine** (`refine-github-issues.ps1`): Scans `200issues/draft/refine/0ready` for draft files describing one or more issues, invokes the agent to extract individual issues, formats each as a structured markdown file, and writes them to `200issues/github/commit/ready`.
 
-2. **Commit** (`commit-github-issues.ps1`): Scans `200issues/github/open` for formatted issue files and creates them on GitHub via `gh issue create`.
+2. **Commit** (`commit-github-issues.ps1`): Scans `200issues/github/commit/ready` for formatted issue files and creates them on GitHub via `gh issue create`.
 
 Issue file format:
 ```markdown
