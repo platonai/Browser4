@@ -6,10 +6,10 @@ the Rust version, but runs on Node.js with only `express` and `cors` as dependen
 ## Quick Start
 
 ```bash
-cd cli/coworker-gui-node
+cd coworker/gui
 npm install
-npm start -- --tasks-root ../../coworker/tasks/
-# Or: node server.js --tasks-root ../../coworker/tasks/
+npm start -- --tasks-root ../tasks/
+# Or: node server.js --tasks-root ../tasks/
 ```
 
 Then open **http://127.0.0.1:8090**.

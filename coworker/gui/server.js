@@ -36,19 +36,19 @@ const OPEN_BROWSER = argBool('open-browser');
 
 const STAGES = [
   // Main pipeline
-  { id: '0draft',                    display_name: 'Draft',           path_suffix: '0draft',                    date_stamped: false, group: 'main',   hidden: false },
-  { id: '1ready',                    display_name: 'Ready',           path_suffix: '1ready',                    date_stamped: false, group: 'main',   hidden: false },
-  { id: '2working',                  display_name: 'Working',         path_suffix: '2working',                  date_stamped: false, group: 'main',   hidden: false },
-  { id: '3done',                     display_name: 'Done',            path_suffix: '3done',                     date_stamped: true,  group: 'main',   hidden: false },
-  { id: '4review',                   display_name: 'Review',          path_suffix: '4review',                   date_stamped: false, group: 'main',   hidden: false },
-  { id: '5approved',                 display_name: 'Approved',        path_suffix: '5approved',                 date_stamped: true,  group: 'main',   hidden: false },
-  { id: '6git-pushed',               display_name: 'Git Pushed',      path_suffix: '6git-pushed',               date_stamped: true,  group: 'main',   hidden: false },
+  { id: '0draft',                    display_name: 'Draft',           path_suffix: 'main/0draft',                    date_stamped: false, group: 'main',   hidden: false },
+  { id: '1ready',                    display_name: 'Ready',           path_suffix: 'main/1ready',                    date_stamped: false, group: 'main',   hidden: false },
+  { id: '2working',                  display_name: 'Working',         path_suffix: 'main/2working',                  date_stamped: false, group: 'main',   hidden: false },
+  { id: '3done',                     display_name: 'Done',            path_suffix: 'main/3done',                     date_stamped: true,  group: 'main',   hidden: false },
+  { id: '4review',                   display_name: 'Review',          path_suffix: 'main/4review',                   date_stamped: false, group: 'main',   hidden: false },
+  { id: '5approved',                 display_name: 'Approved',        path_suffix: 'main/5approved',                 date_stamped: true,  group: 'main',   hidden: false },
+  { id: '6git-pushed',               display_name: 'Git Pushed',      path_suffix: 'main/6git-pushed',               date_stamped: true,  group: 'main',   hidden: false },
   // Refinement sub-pipeline
-  { id: '0draft/refine/0draft',      display_name: 'Refine Source',   path_suffix: '0draft/refine/0draft',      date_stamped: false, group: 'refine', hidden: false },
-  { id: '0draft/refine/1ready',      display_name: 'Refine Ready',    path_suffix: '0draft/refine/1ready',      date_stamped: false, group: 'refine', hidden: false },
-  { id: '0draft/refine/2working',    display_name: 'Refine Working',  path_suffix: '0draft/refine/2working',    date_stamped: false, group: 'refine', hidden: false },
-  { id: '0draft/refine/3done',       display_name: 'Refine Done',     path_suffix: '0draft/refine/3done',       date_stamped: false, group: 'refine', hidden: false },
-  { id: '0draft/refine/0error',      display_name: 'Refine Errors',   path_suffix: '0draft/refine/0error',      date_stamped: false, group: 'refine', hidden: false },
+  { id: '0draft/refine/0draft',      display_name: 'Refine Source',   path_suffix: 'main/0draft/refine/0draft',      date_stamped: false, group: 'refine', hidden: false },
+  { id: '0draft/refine/1ready',      display_name: 'Refine Ready',    path_suffix: 'main/0draft/refine/1ready',      date_stamped: false, group: 'refine', hidden: false },
+  { id: '0draft/refine/2working',    display_name: 'Refine Working',  path_suffix: 'main/0draft/refine/2working',    date_stamped: false, group: 'refine', hidden: false },
+  { id: '0draft/refine/3done',       display_name: 'Refine Done',     path_suffix: 'main/0draft/refine/3done',       date_stamped: false, group: 'refine', hidden: false },
+  { id: '0draft/refine/0error',      display_name: 'Refine Errors',   path_suffix: 'main/0draft/refine/0error',      date_stamped: false, group: 'refine', hidden: false },
   // GitHub issues pipeline
   { id: '200issues/draft/refine/0ready',  display_name: 'Issues Ready',    path_suffix: '200issues/draft/refine/0ready',  date_stamped: false, group: 'issues', hidden: false },
   { id: '200issues/draft/refine/1working', display_name: 'Issues Working', path_suffix: '200issues/draft/refine/1working', date_stamped: false, group: 'issues', hidden: false },
