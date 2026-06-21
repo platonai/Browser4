@@ -118,7 +118,7 @@ function New-AgentArguments {
     )
 
     $arguments = @($BaseArgs)
-    if ($PSBoundParameters.ContainsKey('Prompt')) {
+    if ($PSBoundParameters.ContainsKey('Prompt') -and $Prompt) {
         if ($Backend -eq 'claude') {
             $arguments += '-p'
             $arguments += $Prompt
@@ -252,6 +252,22 @@ function Start-AgentProcess {
         $isWindowsPlatform = [bool]$IsWindows
     }
 
+    # ── Stdin redirection for large prompts ─────────────────────────────────
+    # Windows CreateProcess has a command-line length limit (~8191 chars legacy,
+    # ~32767 modern). When the prompt is large enough that the total command line
+    # would exceed a safe margin, write the prompt to a temp file and redirect
+    # it as stdin instead of passing it via -p.
+    $stdinTempPath = $null
+    if ($isWindowsPlatform -and $Prompt) {
+        $estimatedLen = $Executable.Length + 1
+        foreach ($a in $arguments) { $estimatedLen += $a.Length + 1 }
+        if ($estimatedLen -gt 7000) {
+            $stdinTempPath = [System.IO.Path]::GetTempFileName()
+            Set-Content -Path $stdinTempPath -Value $Prompt -Encoding UTF8 -NoNewline
+            $arguments = New-AgentArguments -BaseArgs $BaseArgs -Prompt $null -AdditionalArguments $AdditionalArguments -Backend $Backend
+        }
+    }
+
     if ($isWindowsPlatform) {
         # Use one escaped command line on Windows to preserve multiline/quoted prompt text.
         $escapedArguments = foreach ($argument in $arguments) {
@@ -292,10 +308,17 @@ function Start-AgentProcess {
     if ($PSBoundParameters.ContainsKey('StdErrPath')) {
         $startProcessArgs.RedirectStandardError = $StdErrPath
     }
+    if ($stdinTempPath) {
+        $startProcessArgs.RedirectStandardInput = $stdinTempPath
+    }
 
     Write-Debug "Starting agent process with command: $(Format-AgentCommand -Executable $Executable -Arguments $arguments)"
 
-    return Start-Process @startProcessArgs
+    $process = Start-Process @startProcessArgs
+    if ($stdinTempPath) {
+        Remove-Item $stdinTempPath -ErrorAction SilentlyContinue
+    }
+    return $process
 }
 
 function Invoke-Agent {
