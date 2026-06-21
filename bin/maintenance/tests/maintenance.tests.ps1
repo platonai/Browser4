@@ -449,21 +449,21 @@ Assert-Equal "E1 CheckId" $r.CheckId "E1"
 Assert-True "E1 valid status" (("passed","failed","skipped","error") -contains $r.Status)
 
 # SNAPSHOT detection
-Assert-True "SNAPSHOT detected" ("4.12.0-SNAPSHOT" -match "-SNAPSHOT$")
+Assert-True "SNAPSHOT detected" ("4.12.0-rc1" -match "-SNAPSHOT$")
 Assert-True "RELEASE no SNAPSHOT" (-not ("4.11.7" -match "-SNAPSHOT$"))
 
 # Version comparison
-Assert-True "Version match" ("4.12.0-SNAPSHOT" -eq "4.12.0-SNAPSHOT")
-Assert-True "Version mismatch" ("4.12.0-SNAPSHOT" -ne "4.11.6-SNAPSHOT")
+Assert-True "Version match" ("4.12.0-rc1" -eq "4.12.0-rc1")
+Assert-True "Version mismatch" ("4.12.0-rc1" -ne "4.11.6-SNAPSHOT")
 
 # Stripping SNAPSHOT
-Assert-Equal "Strip SNAPSHOT" ("4.12.0-SNAPSHOT" -replace "-SNAPSHOT$", "") "4.11.7"
+Assert-Equal "Strip SNAPSHOT" ("4.12.0-rc1" -replace "-SNAPSHOT$", "") "4.11.7"
 
 # pom.xml version extraction
-$pomContent = "<project><version>4.12.0-SNAPSHOT</version></project>"
+$pomContent = "<project><version>4.12.0-rc1</version></project>"
 $hasMatch = $pomContent -match "<version>([^<]+)</version>"
 Assert-True "pom version matched" $hasMatch
-Assert-Equal "pom extracted version" $matches[1] "4.12.0-SNAPSHOT"
+Assert-Equal "pom extracted version" $matches[1] "4.12.0-rc1"
 
 # ═══════════════════════════════════════════════════════════════════
 # PART 12: G2 - check-ps1-syntax.ps1
