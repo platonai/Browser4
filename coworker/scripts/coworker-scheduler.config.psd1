@@ -62,6 +62,16 @@
             Arguments       = @()
         }
         @{
+            Name            = 'organize-task-files'
+            Description     = 'Reorganize task directories with more than 10 files into YYYY/MMDD subdirectories.'
+            Enabled         = $true
+            IntervalSeconds = 300
+            WindowStyle     = 'Minimized'
+            PendingPaths    = @()
+            ScriptPath      = 'coworker\scripts\workers\organize-task-files.ps1'
+            Arguments       = @()
+        }
+        @{
             Name            = 'update-readmes'
             Description     = 'Scan all README.md files for staleness every hour and queue stale ones for AI-driven update.'
             Enabled         = $true
