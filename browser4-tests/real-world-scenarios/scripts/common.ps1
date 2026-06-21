@@ -418,6 +418,124 @@ $($issue.Suggestion)
     }
 }
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Safe native-command invocation
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# When PowerShell pipes a native (non-PowerShell) command and writes the output
+# to a file, three things reliably produce garbled text.  Every ps1 script that
+# captures native-command output must handle ALL THREE:
+#
+# 1. ENCODING MISMATCH
+#    PowerShell decodes native-command stdout through [Console]::OutputEncoding,
+#    which defaults to the system ANSI code page (cp1252 / cp936 / …).
+#    Modern CLI tools (Node.js, Rust, Go) emit UTF-8.
+#    Mismatch → every non-ASCII byte is reinterpreted as a code-page glyph.
+#    FIX: set [Console]::OutputEncoding = UTF-8 before invocation; restore after.
+#
+# 2. ERROR-OBJECT LEAKAGE
+#    The "2>&1" redirect merges stderr into the pipeline as ErrorRecord *objects*,
+#    not strings.  Writing them raw to a StreamWriter calls .ToString(), which
+#    emits the FQ type name ("System.Management.Automation.ErrorRecord …") instead
+#    of the error message.
+#    FIX: coerce every pipeline object to string with "$_" before writing.
+#
+# 3. BOM INCONSISTENCY
+#    [System.Text.Encoding]::UTF8 includes a 3-byte BOM in .NET Framework / .NET.
+#    Mixing BOM and non-BOM sources in a single pipeline writes garbage bytes at
+#    file boundaries.
+#    FIX: use [System.Text.UTF8Encoding]::new($false) for all file I/O.
+#
+# Use the Start-NativeCommand helper below; it applies all three fixes.
+
+function Start-NativeCommand {
+    <#
+    .SYNOPSIS
+        Invoke a native command safely, capturing combined stdout+stderr to a file.
+
+    .DESCRIPTION
+        Wraps a native command invocation with the three fixes described above:
+        UTF-8 output decoding, safe string coercion of ErrorRecord objects, and
+        BOM-free file I/O.  Output is streamed to the console in real time while
+        simultaneously written to the capture file.
+
+    .PARAMETER FilePath
+        Path to the native executable.
+
+    .PARAMETER ArgumentList
+        Array of arguments to pass to the command.
+
+    .PARAMETER CaptureFile
+        File path to capture combined stdout+stderr (UTF-8 without BOM).  When
+        omitted, output goes to the console only.
+
+    .PARAMETER PassThru
+        When set, also returns the captured output as a single string.
+
+    .EXAMPLE
+        Start-NativeCommand -FilePath 'claude' -ArgumentList @('-p', $prompt) `
+            -CaptureFile $tempFile
+
+    .EXAMPLE
+        $out = Start-NativeCommand -FilePath 'node' -ArgumentList @('script.js') `
+            -CaptureFile $log -PassThru
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $FilePath,
+
+        [string[]] $ArgumentList = @(),
+
+        [string] $CaptureFile,
+
+        [switch] $PassThru
+    )
+
+    $writer = $null
+    $exitCode = 0
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+
+    try {
+        if ($CaptureFile) {
+            $writer = [System.IO.StreamWriter]::new($CaptureFile, $false, $utf8NoBom)
+        }
+
+        # Fix 1: decode native-command stdout as UTF-8
+        $prevEncoding = [Console]::OutputEncoding
+        [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+
+        try {
+            & $FilePath @ArgumentList 2>&1 | ForEach-Object {
+                if ($writer) {
+                    # Fix 2: "$_" safely coerces ErrorRecord / string / etc.
+                    $writer.WriteLine("$_")
+                    $writer.Flush()
+                }
+                $_   # pass original object through to console / downstream
+            }
+            $exitCode = $LASTEXITCODE
+        } finally {
+            [Console]::OutputEncoding = $prevEncoding
+        }
+    } finally {
+        if ($writer) { $writer.Dispose() }
+    }
+
+    # Let the caller decide what to do with the exit code; also set it in the
+    # script scope so $LASTEXITCODE is visible to callers that check it directly.
+    $script:LastNativeExitCode = $exitCode
+
+    if ($PassThru -and $CaptureFile -and (Test-Path -LiteralPath $CaptureFile)) {
+        $content = [System.IO.File]::ReadAllText(
+            [System.IO.Path]::GetFullPath($CaptureFile), $utf8NoBom
+        )
+        Remove-Item -LiteralPath $CaptureFile -ErrorAction SilentlyContinue
+        return $content
+    }
+
+    return $exitCode
+}
+
 # ── Agent invocation ────────────────────────────────────────────────────────
 
 function Invoke-Agent {
@@ -493,29 +611,14 @@ function Invoke-Agent {
         New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
     }
     $tempFile = Join-Path $targetDir ([System.IO.Path]::GetRandomFileName())
-    $writer = $null
-    $exitCode = 0
 
-    try {
-        $writer = [System.IO.StreamWriter]::new($tempFile, $false, [System.Text.Encoding]::UTF8)
-
-        # Run claude, tee output to both console and temp file in real time.
-        # ForEach-Object passes each line through to the host while also
-        # writing to the capture file.  This preserves the real-time UX.
-        & claude @claudeArgs 2>&1 | ForEach-Object {
-            $line = $_
-            $writer.WriteLine($line)
-            $writer.Flush()
-            $line  # pass through to console
-        }
-        $exitCode = $LASTEXITCODE
-    }
-    catch {
-        $exitCode = 1
-    }
-    finally {
-        if ($writer) { $writer.Dispose() }
-    }
+    # Start-NativeCommand applies all three anti-garbling fixes:
+    #   [Console]::OutputEncoding = UTF-8
+    #   ErrorRecord → string coercion
+    #   UTF-8 without BOM file I/O
+    $exitCode = Start-NativeCommand -FilePath 'claude' `
+        -ArgumentList $claudeArgs `
+        -CaptureFile $tempFile
 
     if (-not $Silent) {
         Write-Host ""
@@ -523,11 +626,14 @@ function Invoke-Agent {
             -ForegroundColor $(if ($exitCode -eq 0) { 'Green' } else { 'Red' })
     }
 
-    # Read back the captured output
+    # Read back the captured output (Start-NativeCommand uses UTF-8 no-BOM)
     $capturedOutput = ''
-    if (Test-Path $tempFile) {
-        $capturedOutput = Get-Content -Path $tempFile -Raw -Encoding UTF8
-        Remove-Item $tempFile -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $tempFile) {
+        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+        $capturedOutput = [System.IO.File]::ReadAllText(
+            [System.IO.Path]::GetFullPath($tempFile), $utf8NoBom
+        )
+        Remove-Item -LiteralPath $tempFile -ErrorAction SilentlyContinue
     }
 
     if ([string]::IsNullOrWhiteSpace($capturedOutput)) {
