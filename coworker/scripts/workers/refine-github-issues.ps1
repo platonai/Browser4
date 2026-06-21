@@ -12,12 +12,13 @@
     1. Moves it to 1working
     2. Calls the AI agent to extract individual issues, split them, and format
        each as a properly structured GitHub issue markdown file
-    3. Writes each extracted issue to 200issues/github/open (where
-       commit-github-issues.ps1 will pick them up)
-    4. Moves the original draft file to:
-       - 200issues/github/open if #auto-approve is found in the last 5 lines
-         (so the original also gets committed as a GitHub issue)
-       - 200issues/github/draft otherwise (for manual review/approval)
+    3. Writes each extracted issue based on #auto-approve:
+       - If #auto-approve is NOT found: writes to 200issues/draft/refine/2done
+         (manual review required before committing)
+       - If #auto-approve IS found: writes to 200issues/github/open (where
+         commit-github-issues.ps1 will pick them up directly)
+    4. Moves the original draft file to the same destination as the extracted
+       issues (2done or github/open)
 
     Issue format written to github/open:
         # <Title>
@@ -29,10 +30,10 @@
 
     #auto-approve behavior:
         When #auto-approve appears in the last 5 lines of a draft file, the
-        original file is moved to github/open alongside the extracted issues.
-        This means both the extracted individual issues AND the original draft
-        will be committed as GitHub issues. Use this when the original draft
-        itself should also become an issue (e.g., as a parent/epic issue).
+        extracted issues AND the original draft are written directly to
+        github/open (ready for commit-github-issues.ps1 to pick up).
+        Without #auto-approve, everything goes to draft/refine/2done for
+        manual review before being committed.
 
 .PARAMETER Path
     File or directory of draft issue files to process. Defaults to the
@@ -359,7 +360,8 @@ function Write-IssueFile {
         Set-Content -Path $outputPath -Value $content -Encoding UTF8
     }
 
-    Write-CoworkerLog -Message "Wrote issue to github/open: $([System.IO.Path]::GetFileName($outputPath)) — `"$($Issue.Title)`"" -Level INFO -Component 'refine-github-issues'
+    $dirName = Split-Path -Parent $outputPath | Split-Path -Leaf
+    Write-CoworkerLog -Message "Wrote issue to $dirName`: $([System.IO.Path]::GetFileName($outputPath)) — `"$($Issue.Title)`"" -Level INFO -Component 'refine-github-issues'
 
     return $outputPath
 }
@@ -548,37 +550,33 @@ foreach ($target in $targets) {
 
         if ($issues.Count -eq 0) {
             if ($DryRun) {
-                Write-CoworkerLog -Message "[DRY RUN] Would move original to $($(if (Test-AutoApprove -File $workingFile) { 'github/open (#auto-approve)' } else { 'github/draft' })) (no issues extracted yet): $($workingFile.Name)" -Level INFO -Component 'refine-github-issues'
+                Write-CoworkerLog -Message "[DRY RUN] Would move original to $($(if (Test-AutoApprove -File $workingFile) { 'github/open (#auto-approve)' } else { '2done' })) (no issues extracted yet): $($workingFile.Name)" -Level INFO -Component 'refine-github-issues'
                 continue
             }
             throw "No issues extracted from $($workingFile.Name)"
         }
 
-        # Write each extracted issue to github/open
+        # Determine output directory based on #auto-approve
+        $isAutoApproved = Test-AutoApprove -File $workingFile
+        $issueOutputDir = if ($isAutoApproved) { $githubOpenDir } else { $doneDir }
+
+        # Write each extracted issue
         $writtenPaths = @()
         foreach ($issue in $issues) {
-            $outputPath = Write-IssueFile -Issue $issue -OutputDirectory $githubOpenDir -SourceFileName $workingFile.Name
+            $outputPath = Write-IssueFile -Issue $issue -OutputDirectory $issueOutputDir -SourceFileName $workingFile.Name
             $writtenPaths += $outputPath
         }
 
-        Write-CoworkerLog -Message "Wrote $($writtenPaths.Count) issue file(s) to github/open from $($workingFile.Name)" -Level INFO -Component 'refine-github-issues'
+        $outputDirLabel = if ($isAutoApproved) { 'github/open' } else { '2done' }
+        Write-CoworkerLog -Message "Wrote $($writtenPaths.Count) issue file(s) to $outputDirLabel from $($workingFile.Name)" -Level INFO -Component 'refine-github-issues'
 
-        # Route original: if #auto-approve is in the last 5 lines, send to
-        # github/open so it gets committed as an issue too; otherwise send to github/draft for manual review.
-        if (Test-AutoApprove -File $workingFile) {
-            $autoApprovePath = Resolve-UniquePath -Directory $githubOpenDir -BaseName $workingFile.BaseName -Extension $workingFile.Extension
-            if ($PSCmdlet.ShouldProcess($workingFile.Name, 'Move to github/open (#auto-approve)')) {
-                Move-Item -Path $workingFile.FullName -Destination $autoApprovePath -Force
-            }
-            Write-CoworkerLog -Message "#auto-approve: moved original draft to github/open: $autoApprovePath" -Level INFO -Component 'refine-github-issues'
+        # Route original draft to the same destination as extracted issues
+        $originalDestLabel = if ($isAutoApproved) { 'github/open (#auto-approve)' } else { '2done' }
+        $originalDestPath = Resolve-UniquePath -Directory $issueOutputDir -BaseName $workingFile.BaseName -Extension $workingFile.Extension
+        if ($PSCmdlet.ShouldProcess($workingFile.Name, "Move to $originalDestLabel")) {
+            Move-Item -Path $workingFile.FullName -Destination $originalDestPath -Force
         }
-        else {
-            $draftPath = Resolve-UniquePath -Directory $githubDraftDir -BaseName $workingFile.BaseName -Extension $workingFile.Extension
-            if ($PSCmdlet.ShouldProcess($workingFile.Name, 'Move to github/draft')) {
-                Move-Item -Path $workingFile.FullName -Destination $draftPath -Force
-            }
-            Write-CoworkerLog -Message "Moved original draft to github/draft: $draftPath" -Level INFO -Component 'refine-github-issues'
-        }
+        Write-CoworkerLog -Message "Moved original draft to $originalDestLabel`: $originalDestPath" -Level INFO -Component 'refine-github-issues'
     }
     catch {
         $failureCount++
