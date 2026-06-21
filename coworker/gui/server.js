@@ -218,6 +218,7 @@ app.get('/api/stats', (_req, res) => {
       display_name: s.display_name,
       date_stamped: s.date_stamped,
       group: s.group,
+      path_suffix: s.path_suffix,
     };
   }
   res.json({ stages, total });

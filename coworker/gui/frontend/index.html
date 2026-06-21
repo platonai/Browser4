@@ -983,13 +983,14 @@ async function doCreateTask() {
   var content = document.getElementById('create-content').value;
   if (!filename) { showToast('Please enter a filename.', 'error'); return; }
   if (!/\.(md|json)$/i.test(filename)) filename += '.md';
-  var stage = state.selectedStage || '0draft';
+  var stageId = state.selectedStage || '0draft';
+  var pathPrefix = (state.stageMap[stageId] && state.stageMap[stageId].path_suffix) || stageId;
   try {
-    await apiPost('/api/task?path=' + encodeURIComponent(stage + '/' + filename), { content: content });
+    await apiPost('/api/task?path=' + encodeURIComponent(pathPrefix + '/' + filename), { content: content });
     closeCreateModal();
     showToast('Created: ' + filename, 'success');
     await loadStats();
-    selectStage(stage);
+    selectStage(stageId);
   } catch (e) { showToast('Create failed: ' + e.message, 'error'); }
 }
 
