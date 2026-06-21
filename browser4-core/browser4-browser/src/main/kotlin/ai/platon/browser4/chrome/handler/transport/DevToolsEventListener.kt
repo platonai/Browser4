@@ -9,9 +9,9 @@ import ai.platon.pulsar.deprecated.util.ProxyClasses
 import ai.platon.pulsar.deprecated.util.SuspendAwareHandler
 import ai.platon.cdt.kt.protocol.support.types.EventHandler
 import ai.platon.cdt.kt.protocol.support.types.EventListener
-import ai.platon.pulsar.browser.impl.BrowserTab
-import ai.platon.pulsar.browser.impl.ChromeVersion
-import ai.platon.pulsar.browser.impl.DevToolsConfig
+import ai.platon.pulsar.browser.protocol.BrowserTab
+import ai.platon.pulsar.browser.protocol.ChromeVersion
+import ai.platon.pulsar.browser.protocol.DevToolsConfig
 import ai.platon.pulsar.common.NetUtil
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.warnForClose

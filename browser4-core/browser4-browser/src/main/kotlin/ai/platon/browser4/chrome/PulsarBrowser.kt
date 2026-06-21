@@ -13,8 +13,8 @@ import ai.platon.pulsar.browser.WebDriver
 import ai.platon.pulsar.browser.common.BrowserSettings
 import ai.platon.pulsar.browser.common.BrowserUnavailableException
 import ai.platon.pulsar.browser.common.WebDriverException
-import ai.platon.pulsar.browser.impl.BrowserTab
-import ai.platon.pulsar.browser.impl.DevToolsConfig
+import ai.platon.pulsar.browser.protocol.BrowserTab
+import ai.platon.pulsar.browser.protocol.DevToolsConfig
 import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_REUSE_RECOVERED_DRIVERS

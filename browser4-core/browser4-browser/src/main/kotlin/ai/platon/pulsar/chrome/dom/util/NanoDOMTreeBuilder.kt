@@ -1,4 +1,4 @@
-package ai.platon.browser4.chrome.dom.util
+package ai.platon.pulsar.chrome.dom.util
 
 import ai.platon.pulsar.chrome.dom.model.NanoDOMTree
 import ai.platon.pulsar.chrome.dom.model.SerializableDOMTreeNode
@@ -169,4 +169,3 @@ class NanoDOMTreeBuilder constructor(
         return merged
     }
 }
-

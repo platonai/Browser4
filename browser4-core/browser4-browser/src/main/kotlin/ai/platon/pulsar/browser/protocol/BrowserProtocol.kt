@@ -1,4 +1,4 @@
-package ai.platon.pulsar.browser.impl
+package ai.platon.pulsar.browser.protocol
 
 import ai.platon.cdt.kt.protocol.events.console.MessageAdded
 import ai.platon.cdt.kt.protocol.events.fetch.AuthRequired

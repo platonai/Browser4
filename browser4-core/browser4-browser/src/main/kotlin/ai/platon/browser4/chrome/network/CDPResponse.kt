@@ -1,7 +1,7 @@
-package ai.platon.browser4.chrome.detail
+package ai.platon.browser4.chrome.network
 
 import ai.platon.cdt.kt.protocol.types.network.Response
-import ai.platon.pulsar.browser.impl.BrowserProtocol
+import ai.platon.pulsar.browser.protocol.BrowserProtocol
 
 class CDPResponse(
     val browserProtocol: BrowserProtocol,

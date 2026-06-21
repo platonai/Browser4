@@ -2,7 +2,7 @@ package ai.platon.browser4.chrome.dom
 
 import ai.platon.browser4.chrome.PulsarWebDriver
 import ai.platon.pulsar.WebDriverTestBase
-import ai.platon.pulsar.browser.impl.BrowserProtocol
+import ai.platon.pulsar.browser.protocol.BrowserProtocol
 import ai.platon.pulsar.chrome.dom.model.PageTarget
 import ai.platon.pulsar.chrome.dom.model.SnapshotOptions
 import org.junit.jupiter.api.Assertions.assertTrue

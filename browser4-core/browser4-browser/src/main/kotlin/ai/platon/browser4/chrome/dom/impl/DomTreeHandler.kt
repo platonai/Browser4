@@ -1,7 +1,7 @@
 package ai.platon.browser4.chrome.dom.impl
 
 import ai.platon.cdt.kt.protocol.types.dom.Node
-import ai.platon.pulsar.browser.impl.BrowserProtocol
+import ai.platon.pulsar.browser.protocol.BrowserProtocol
 import ai.platon.pulsar.chrome.dom.model.MergedDOMTreeNode
 import ai.platon.pulsar.chrome.dom.model.NodeType
 import ai.platon.pulsar.chrome.dom.model.PageTarget

@@ -3,8 +3,8 @@ package ai.platon.browser4.chrome.handler
 import ai.platon.cdt.kt.protocol.types.page.CaptureScreenshotFormat
 import ai.platon.cdt.kt.protocol.types.page.Viewport
 import ai.platon.pulsar.browser.common.BrowserSettings
-import ai.platon.pulsar.browser.impl.BrowserProtocol
-import ai.platon.pulsar.browser.impl.NodeRef
+import ai.platon.pulsar.browser.protocol.BrowserProtocol
+import ai.platon.pulsar.browser.protocol.NodeRef
 import ai.platon.pulsar.common.AppContext
 import ai.platon.pulsar.common.getLogger
 import ai.platon.pulsar.common.math.geometric.RectD

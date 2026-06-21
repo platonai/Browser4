@@ -1,4 +1,4 @@
-package ai.platon.browser4.chrome.detail
+package ai.platon.browser4.chrome.network
 
 import ai.platon.browser4.chrome.util.ChromeRPCException
 import ai.platon.browser4.chrome.util.Credentials
@@ -9,7 +9,7 @@ import ai.platon.cdt.kt.protocol.types.fetch.AuthChallengeResponse
 import ai.platon.cdt.kt.protocol.types.fetch.AuthChallengeResponseResponse
 import ai.platon.cdt.kt.protocol.types.fetch.RequestPattern
 import ai.platon.cdt.kt.protocol.types.network.Response
-import ai.platon.pulsar.browser.impl.BrowserProtocol
+import ai.platon.pulsar.browser.protocol.BrowserProtocol
 import ai.platon.pulsar.common.DateTimes
 import ai.platon.pulsar.common.event.AbstractEventEmitter
 import ai.platon.pulsar.common.getLogger

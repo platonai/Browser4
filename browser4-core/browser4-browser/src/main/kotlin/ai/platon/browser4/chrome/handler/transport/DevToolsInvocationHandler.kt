@@ -11,7 +11,7 @@ import ai.platon.cdt.kt.protocol.support.annotations.ReturnTypeParameter
 import ai.platon.cdt.kt.protocol.support.annotations.Returns
 import ai.platon.cdt.kt.protocol.support.types.EventHandler
 import ai.platon.cdt.kt.protocol.support.types.EventListener
-import ai.platon.pulsar.browser.impl.MethodInvocation
+import ai.platon.pulsar.browser.protocol.MethodInvocation
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob

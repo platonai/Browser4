@@ -1,6 +1,6 @@
 package ai.platon.pulsar.browser.common
 
-import ai.platon.pulsar.browser.impl.NetworkResourceResponse
+import ai.platon.pulsar.browser.protocol.NetworkResourceResponse
 import org.jsoup.Connection
 import java.util.*
 

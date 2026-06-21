@@ -4,8 +4,8 @@ import ai.platon.browser4.chrome.dom.CDPSnapshotService
 import ai.platon.browser4.chrome.util.CDPReturnError
 import ai.platon.browser4.chrome.util.ChromeDriverException
 import ai.platon.pulsar.browser.common.Locator
-import ai.platon.pulsar.browser.impl.BrowserProtocol
-import ai.platon.pulsar.browser.impl.NodeRef
+import ai.platon.pulsar.browser.protocol.BrowserProtocol
+import ai.platon.pulsar.browser.protocol.NodeRef
 import ai.platon.pulsar.chrome.dom.SnapshotService
 import ai.platon.pulsar.chrome.dom.model.ElementRefCriteria
 import ai.platon.pulsar.common.Strings

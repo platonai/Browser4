@@ -1,6 +1,6 @@
 package ai.platon.browser4.chrome
 
-import ai.platon.browser4.chrome.detail.*
+import ai.platon.browser4.chrome.network.*
 import ai.platon.browser4.chrome.dom.model.ViewportSpec
 import ai.platon.browser4.chrome.handler.ClickableDOM
 import ai.platon.browser4.chrome.handler.EmulationHandler
@@ -25,10 +25,10 @@ import ai.platon.cdt.kt.protocol.types.runtime.CallArgument
 import ai.platon.pulsar.browser.AbstractWebDriver
 import ai.platon.pulsar.browser.WebDriver
 import ai.platon.pulsar.browser.common.*
-import ai.platon.pulsar.browser.impl.BrowserProtocol
-import ai.platon.pulsar.browser.impl.BrowserTab
-import ai.platon.pulsar.browser.impl.NetworkResourceResponse
-import ai.platon.pulsar.browser.impl.NodeRef
+import ai.platon.pulsar.browser.protocol.BrowserProtocol
+import ai.platon.pulsar.browser.protocol.BrowserTab
+import ai.platon.pulsar.browser.protocol.NetworkResourceResponse
+import ai.platon.pulsar.browser.protocol.NodeRef
 import ai.platon.pulsar.chrome.dom.SnapshotService
 import ai.platon.pulsar.chrome.dom.model.BrowserUseState
 import ai.platon.pulsar.chrome.dom.model.NanoDOMTree

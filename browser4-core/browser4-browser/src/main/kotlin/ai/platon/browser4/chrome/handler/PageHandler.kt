@@ -11,8 +11,8 @@ import ai.platon.cdt.kt.protocol.types.page.Navigate
 import ai.platon.cdt.kt.protocol.types.page.ReferrerPolicy
 import ai.platon.cdt.kt.protocol.types.page.TransitionType
 import ai.platon.pulsar.browser.common.BrowserSettings
-import ai.platon.pulsar.browser.impl.BrowserProtocol
-import ai.platon.pulsar.browser.impl.NodeRef
+import ai.platon.pulsar.browser.protocol.BrowserProtocol
+import ai.platon.pulsar.browser.protocol.NodeRef
 import ai.platon.pulsar.chrome.dom.SnapshotService
 import ai.platon.pulsar.chrome.dom.model.BrowserUseState
 import ai.platon.pulsar.chrome.dom.model.PageTarget

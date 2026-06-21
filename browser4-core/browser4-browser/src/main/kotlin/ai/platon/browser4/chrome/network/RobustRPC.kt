@@ -1,4 +1,4 @@
-package ai.platon.browser4.chrome.detail
+package ai.platon.browser4.chrome.network
 
 import ai.platon.browser4.chrome.PulsarWebDriver
 import ai.platon.browser4.chrome.util.CDPReturnError
@@ -11,7 +11,7 @@ import ai.platon.pulsar.browser.common.BrowserUnavailableException
 import ai.platon.pulsar.browser.common.IllegalWebDriverStateException
 import ai.platon.pulsar.browser.common.WebDriverException
 import ai.platon.pulsar.browser.common.WebDriverUnavailableException
-import ai.platon.pulsar.browser.impl.NodeRef
+import ai.platon.pulsar.browser.protocol.NodeRef
 import ai.platon.pulsar.common.*
 import kotlinx.coroutines.delay
 import java.util.concurrent.ConcurrentHashMap

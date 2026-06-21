@@ -1,6 +1,6 @@
 package ai.platon.pulsar.browser.common
 
-import ai.platon.browser4.chrome.util.ChromeOptions
+import ai.platon.pulsar.browser.ChromeOptions
 import ai.platon.pulsar.browser.InteractSettings
 import ai.platon.pulsar.browser.detail.DualWorldScriptLoader
 import ai.platon.pulsar.browser.detail.ScriptLoader

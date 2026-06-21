@@ -1,4 +1,4 @@
-package ai.platon.browser4.chrome.util
+package ai.platon.pulsar.browser
 
 import ai.platon.pulsar.browser.common.BrowserSettings
 import java.time.Duration
