@@ -106,6 +106,13 @@ open class PulsarWebDriver constructor(
 
     private val closed = AtomicBoolean()
 
+    /**
+     * The last ChromeDriverException that was caught and swallowed (returning null to the caller).
+     * Callers can check this field to distinguish "no result" from "error occurred".
+     * */
+    @Volatile
+    var lastError: ChromeDriverException? = null
+
     var userTypedUrl: String? = null
     var navigateUrl: String? = chromeTab.url
     private var credentials: Credentials? = null
@@ -1114,6 +1121,8 @@ function() {
                 ClickableDOM.create(browserProtocol, node)?.clickablePoint()?.value
             }
         } catch (e: ChromeDriverException) {
+            lastError = e
+            logger.warn("Failed to get clickablePoint for [{}] | {}", selector, e.message)
             rpc.interceptChromeException(e, "clickablePoint")
         }
 
@@ -1128,6 +1137,8 @@ function() {
                 ClickableDOM.create(browserProtocol, node)?.boundingBox()
             }
         } catch (e: ChromeDriverException) {
+            lastError = e
+            logger.warn("Failed to get boundingBox for [{}] | {}", selector, e.message)
             rpc.interceptChromeException(e, "boundingBox")
         }
 
@@ -1146,6 +1157,8 @@ function() {
                 screenshot.screenshot(fullPage)
             }
         } catch (e: ChromeDriverException) {
+            lastError = e
+            logger.warn("Failed to take screenshot (fullPage=$fullPage) | {}", e.message)
             rpc.interceptChromeException(e, "screenshot")
             null
         }
@@ -1163,6 +1176,8 @@ function() {
             // Force the page stop all navigations and pending resource fetches.
             rpc.invokeOnPage("screenshot") { screenshot.screenshot(selector) }
         } catch (e: ChromeDriverException) {
+            lastError = e
+            logger.warn("Failed to take screenshot for [{}] | {}", selector, e.message)
             rpc.interceptChromeException(e, "screenshot")
             null
         }
@@ -1174,6 +1189,8 @@ function() {
             // Force the page stop all navigations and pending resource fetches.
             rpc.invokeOnPage("screenshot") { screenshot.screenshot(rect) }
         } catch (e: ChromeDriverException) {
+            lastError = e
+            logger.warn("Failed to take screenshot for rect {} | {}", rect, e.message)
             rpc.interceptChromeException(e, "screenshot")
             null
         }

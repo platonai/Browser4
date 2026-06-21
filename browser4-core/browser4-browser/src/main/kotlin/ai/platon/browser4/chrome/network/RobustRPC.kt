@@ -35,6 +35,13 @@ class RobustRPC(
     var maxRPCFailures = MAX_RPC_FAILURES
 
     /**
+     * The last ChromeDriverException handled by this instance.
+     * Per-driver error tracking, separate from the global [exceptionCounts] in the companion object.
+     * */
+    @Volatile
+    var lastError: ChromeDriverException? = null
+
+    /**
      * Invoke an executable block without return value.
      * */
     @Throws(ChromeDriverException::class)
@@ -167,7 +174,12 @@ class RobustRPC(
         }
 
         return if (driver.quickCheckHealthy(action).isOK) {
-            result.getOrElse { throw it }
+            result.getOrElse {
+                when (it) {
+                    is ChromeDriverException -> throw it
+                    else -> throw WebDriverException("Unexpected error in [$action]", it, driver = driver)
+                }
+            }
         } else {
             // If quick check fails, the driver is likely dead, return null to avoid further exceptions
             null
@@ -250,6 +262,7 @@ class RobustRPC(
 
     @Throws(IllegalWebDriverStateException::class, ChromeDriverException::class)
     suspend fun interceptChromeException(e: ChromeDriverException, action: String? = null, message: String? = null) {
+        lastError = e
         when (e) {
             is ChromeIOException -> {
                 handleChromeIOException(e, action, message)
