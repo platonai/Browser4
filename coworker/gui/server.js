@@ -49,6 +49,8 @@ const STAGES = [
   { id: '0draft/refine/2working',    display_name: 'Refine Working',  path_suffix: 'main/0draft/refine/2working',    date_stamped: false, group: 'refine', hidden: false },
   { id: '0draft/refine/3done',       display_name: 'Refine Done',     path_suffix: 'main/0draft/refine/3done',       date_stamped: false, group: 'refine', hidden: false },
   { id: '0draft/refine/0error',      display_name: 'Refine Errors',   path_suffix: 'main/0draft/refine/0error',      date_stamped: false, group: 'refine', hidden: false },
+  // Source directories (input feeders)
+  { id: '0draft/issues/github',         display_name: 'GitHub Issues',   path_suffix: 'main/0draft/issues/github',       date_stamped: true,  group: 'sources', hidden: false },
   // GitHub issues pipeline
   { id: '200issues/draft/refine/0ready',  display_name: 'Issues Ready',    path_suffix: '200issues/draft/refine/0ready',  date_stamped: false, group: 'issues', hidden: false },
   { id: '200issues/draft/refine/1working', display_name: 'Issues Working', path_suffix: '200issues/draft/refine/1working', date_stamped: false, group: 'issues', hidden: false },
@@ -67,7 +69,7 @@ const visibleStages = STAGES.filter(s => !s.hidden);
 // Moving to any stage NOT in the list is rejected by the server.
 const VALID_TRANSITIONS = {
   // Main pipeline
-  '0draft':       ['1ready', '0draft/refine/0draft', '200issues/draft/refine/0ready'],
+  '0draft':       ['1ready', '0draft/refine/0draft', '0draft/issues/github', '200issues/draft/refine/0ready'],
   '1ready':       ['2working', '0draft'],
   '2working':     ['3done', '5approved', '1ready', '0draft'],
   '3done':        ['4review', '5approved', '6git-pushed'],
@@ -83,6 +85,7 @@ const VALID_TRANSITIONS = {
   '0draft/refine/0error':   ['0draft/refine/0draft', '0draft'],
 
   // GitHub issues pipeline
+  '0draft/issues/github':   ['1ready', '0draft'],
   '200issues/draft/refine/0ready':  ['200issues/draft/refine/1working', '0draft'],
   '200issues/draft/refine/1working': ['200issues/draft/refine/2done', '200issues/github/commit/ready', '200issues/draft/refine/0error'],
   '200issues/draft/refine/2done':   ['200issues/github/commit/ready', '0draft'],

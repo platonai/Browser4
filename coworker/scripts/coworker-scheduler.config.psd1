@@ -72,6 +72,16 @@
             Arguments       = @()
         }
         @{
+            Name            = 'triage-github-issues'
+            Description     = 'Scan fetched GitHub issues and auto-queue low-risk, high-relevance ones for AI execution.'
+            Enabled         = $true
+            IntervalSeconds = 1800
+            WindowStyle     = 'Minimized'
+            PendingPaths    = @('coworker\tasks\main\0draft\issues\github')
+            ScriptPath      = 'coworker\scripts\workers\triage-github-issues.ps1'
+            Arguments       = @()
+        }
+        @{
             Name            = 'update-readmes'
             Description     = 'Scan all README.md files for staleness every hour and queue stale ones for AI-driven update.'
             Enabled         = $true

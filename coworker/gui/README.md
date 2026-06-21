@@ -25,7 +25,18 @@ Then open **http://127.0.0.1:8090**.
 
 ## API
 
-Identical to the Rust version:
+### Stage Groups
+
+The pipeline is organized into stage groups shown as tabs:
+
+| Group | Stages |
+|-------|--------|
+| `main` | 0draft → 1ready → 2working → 3done → 4review → 5approved → 6git-pushed |
+| `refine` | Draft refinement sub-pipeline (0draft/refine/*) |
+| `sources` | Input feeders: `0draft/issues/github` (fetched GitHub issues) |
+| `issues` | GitHub issues pipeline (200issues/*) |
+
+### Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
