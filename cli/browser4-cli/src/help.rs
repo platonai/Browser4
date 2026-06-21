@@ -31,6 +31,7 @@ const CATEGORIES: &[(&str, &str)] = &[
     ("network", "Network"),
     ("devtools", "DevTools"),
     ("snapshot", "Snapshot"),
+    ("agent", "Agent"),
     ("swarm", "Swarm"),
     ("install", "Install"),
     ("config", "Configuration"),
