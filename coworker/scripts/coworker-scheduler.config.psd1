@@ -55,7 +55,7 @@
             Name            = 'fetch-github-issues'
             Description     = 'Fetch latest GitHub issues, save them locally, and self-assign unassigned ones.'
             Enabled         = $true
-            IntervalSeconds = 3600
+            IntervalSeconds = 600
             WindowStyle     = 'Minimized'
             PendingPaths    = @()
             ScriptPath      = 'coworker\scripts\workers\fetch-github-issues.ps1'

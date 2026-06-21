@@ -29,6 +29,6 @@ $prompt = "Refine the content of the draft file: $draftPath. Improve the writing
 
 Write-Host "Starting agent to refine the draft..."
 
-$process = Start-AgentProcess -Executable $agentCommand.Executable -BaseArgs $agentCommand.BaseArgs -Prompt $prompt -AdditionalArguments @('--allow-all-tools', '--allow-all-paths') -WorkingDirectory $repoRoot -NoNewWindow
+$process = Start-AgentProcess -Executable $agentCommand.Executable -BaseArgs $agentCommand.BaseArgs -Prompt $prompt -AdditionalArguments @('--allow-all-tools', '--allow-all-paths') -WorkingDirectory $repoRoot -NoNewWindow -Backend $agentCommand.Backend
 $process.WaitForExit()
 exit $process.ExitCode

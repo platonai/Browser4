@@ -65,6 +65,7 @@ $targetRepoRoot = $repoRoot
 $agentCommand = $null
 $agentExecutable = $null
 $agentBaseArgs = @()
+$agentBackend = 'copilot'
 $agentWorkingDirectory = $repoRoot
 
 $logsDir = Get-LogDirectory
@@ -128,6 +129,7 @@ try {
     $agentCommand = Get-AgentCommand -RepoRoot $targetRepoRoot
     $agentExecutable = $agentCommand.Executable
     $agentBaseArgs = $agentCommand.BaseArgs
+    $agentBackend = $agentCommand.Backend
     $agentWorkingDirectory = $agentCommand.WorkingDirectory
 }
 catch {
@@ -411,7 +413,7 @@ Agent Execution Output:
 
             # Execute agent tool with the task prompt
             # Capture both standard output and error output to separate files
-            $process = Start-AgentProcess -Executable $agentExecutable -BaseArgs $agentBaseArgs -Prompt $prompt -AdditionalArguments @('--allow-all-tools', '--allow-all-paths') -WorkingDirectory $agentWorkingDirectory -StdOutPath $stdOutLog -StdErrPath $stdErrLog -NoNewWindow
+            $process = Start-AgentProcess -Executable $agentExecutable -BaseArgs $agentBaseArgs -Prompt $prompt -AdditionalArguments @('--allow-all-tools', '--allow-all-paths') -WorkingDirectory $agentWorkingDirectory -StdOutPath $stdOutLog -StdErrPath $stdErrLog -NoNewWindow -Backend $agentCommand.Backend
 
             $lastOutputLineCount = 0
 
