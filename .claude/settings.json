@@ -29,11 +29,6 @@
       "Bash(ls -d \"coworker/tasks/5approved\")",
       "Bash(ls -d coworker/tasks/*/)",
       "Bash(ls -d coworker/logs)",
-      "Bash(cp keep-me-at-the-end-to-fix-claude-settings)",
-      "Bash(cp keep-me-at-the-end-to-fix-claude-settings)",
-      "Bash(cp keep-me-at-the-end-to-fix-claude-settings)",
-      "Bash(cp keep-me-at-the-end-to-fix-claude-settings)",
-      "Bash(cp keep-me-at-the-end-to-fix-claude-settings)",
       "Bash(rustup toolchain *)",
       "Bash(chmod +x bin/release/download-release-assets.sh)",
       "Bash(bash -n bin/release/download-release-assets.sh)"
