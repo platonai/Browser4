@@ -1,6 +1,7 @@
 package ai.platon.browser4.chrome
 
 import ai.platon.browser4.chrome.handler.RemoteChromeProtocol
+import ai.platon.browser4.chrome.util.ChromeOptions
 import ai.platon.browser4.chrome.util.LauncherOptions
 import ai.platon.pulsar.browser.impl.BrowserProtocol
 import ai.platon.pulsar.common.browser.BrowserFiles
@@ -25,7 +26,8 @@ class ChromeDevToolsTest {
         val userDataDir = BrowserFiles.computeTestContextDir()
 
         launcher = ChromeLauncher(userDataDir, options = LauncherOptions())
-        chrome = launcher.launch()
+        val options = ChromeOptions().also { it.noSandbox = true }
+        chrome = launcher.launch(options)
 
         val tab = chrome.createTab()
         val versionString = Pson.toJson(chrome.version)
