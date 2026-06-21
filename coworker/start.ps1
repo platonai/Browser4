@@ -87,10 +87,20 @@ function Start-GuiServer {
 
     $script:guiProcess = Start-Process -FilePath 'node' `
         -ArgumentList $guiArgs `
-        -WindowStyle Normal `
+        -NoNewWindow `
         -PassThru
 
-    Write-Host "[coworker] GUI server started (PID $($script:guiProcess.Id)) → http://${GuiHost}:${GuiPort}"
+    # Ensure cleanup even if the terminal window is closed directly.
+    # Capture PID for the event action (runs in a separate runspace).
+    $guiPid = $script:guiProcess.Id
+    Register-EngineEvent -SourceIdentifier PowerShell.Exiting -SupportEvent -Action {
+        $proc = Get-Process -Id $guiPid -ErrorAction SilentlyContinue
+        if ($proc -and -not $proc.HasExited) {
+            $proc.Kill()
+        }
+    } | Out-Null
+
+    Write-Host "[coworker] GUI server started (PID $guiPid) → http://${GuiHost}:${GuiPort}"
 }
 
 function Stop-GuiServer {
