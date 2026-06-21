@@ -535,6 +535,33 @@ mod tests {
         format!("http://{}", addr)
     }
 
+    /// Spawn a TCP server that accepts connections but never sends a response.
+    ///
+    /// This reliably triggers a client-side timeout on all platforms (Linux,
+    /// macOS, Windows). Connecting to a closed port (`127.0.0.1:1`) is not
+    /// portable: Linux silently drops the SYN producing a timeout, while
+    /// Windows sends an immediate RST producing "connection refused".
+    fn spawn_hanging_server() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind hanging test server");
+        let addr = listener
+            .local_addr()
+            .expect("read hanging test server addr");
+
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept hanging test connection");
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                .ok();
+            // Read the HTTP request so the client can finish sending it.
+            let mut buffer = [0_u8; 8192];
+            let _ = stream.read(&mut buffer);
+            // Never respond — the client will time out.
+            thread::sleep(std::time::Duration::from_secs(300));
+        });
+
+        format!("http://{}", addr)
+    }
+
     fn is_timeout_error(error: &str) -> bool {
         let lower = error.to_ascii_lowercase();
         lower.contains("timed out")
@@ -712,13 +739,14 @@ mod tests {
 
     #[test]
     fn test_text_input_timeout_error_includes_partial_execution_note() {
+        let server_url = spawn_hanging_server();
         let error = format_mcp_transport_error(
             "browser_type",
             "http://localhost:8182/mcp/call-tool",
             &json!({ "text": "hello" }),
             Some(std::time::Duration::from_secs(90)),
             &reqwest::blocking::Client::new()
-                .post("http://127.0.0.1:1")
+                .post(server_url)
                 .timeout(std::time::Duration::from_millis(1))
                 .send()
                 .expect_err("should time out"),
@@ -735,13 +763,14 @@ mod tests {
 
     #[test]
     fn test_navigation_triggering_tool_timeout_error_includes_snapshot_note() {
+        let server_url = spawn_hanging_server();
         let error = format_mcp_transport_error(
             "browser_click",
             "http://localhost:8182/mcp/call-tool",
             &json!({ "ref": "e15" }),
             Some(std::time::Duration::from_secs(30)),
             &reqwest::blocking::Client::new()
-                .post("http://127.0.0.1:1")
+                .post(server_url)
                 .timeout(std::time::Duration::from_millis(1))
                 .send()
                 .expect_err("should time out"),
@@ -762,13 +791,14 @@ mod tests {
 
     #[test]
     fn test_non_navigation_non_input_tool_timeout_error_has_no_notes() {
+        let server_url = spawn_hanging_server();
         let error = format_mcp_transport_error(
             "page_title",
             "http://localhost:8182/mcp/call-tool",
             &json!({}),
             Some(std::time::Duration::from_secs(30)),
             &reqwest::blocking::Client::new()
-                .post("http://127.0.0.1:1")
+                .post(server_url)
                 .timeout(std::time::Duration::from_millis(1))
                 .send()
                 .expect_err("should time out"),
