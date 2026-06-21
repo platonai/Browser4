@@ -355,7 +355,7 @@ if ($fetchState.IssuesOnDisk.Count -gt 0) {
             }
         }
         catch {
-            Write-CoworkerLog -Message "Error checking state of issue #$diskNumber: $_" -Level 'WARN' -Component 'fetch-github-issues'
+            Write-CoworkerLog -Message "Error checking state of issue #${diskNumber}: $_" -Level 'WARN' -Component 'fetch-github-issues'
         }
     }
 }
