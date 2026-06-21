@@ -104,9 +104,20 @@ if (-not $Silent) {
 # ── Build the full prompt and invoke ──────────────────────────────────────────
 $prompt = $generalPrompt + $taskBody
 
+# ── Compute raw output file path in ./target ─────────────────────────────────
+$repoRoot = (Resolve-Path "$PSScriptRoot/../../..").Path
+$targetDir = Join-Path $repoRoot 'target'
+if (-not (Test-Path -LiteralPath $targetDir)) {
+    New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+}
+$timestamp = (Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss')
+$safeName = if ($scenarioName) { $scenarioName -replace '[\\/:*?"<>|]', '_' } else { 'unknown' }
+$rawOutputFile = Join-Path $targetDir "$timestamp-$safeName.raw.md"
+
 $invokeParams = @{
     Prompt       = $prompt
     ScenarioName = $scenarioName
+    OutputFile   = $rawOutputFile
 }
 if ($Silent) {
     $invokeParams['Silent'] = $true
