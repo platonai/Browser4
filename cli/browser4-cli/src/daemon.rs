@@ -42,6 +42,10 @@ const BROWSER4_RUNTIME_DIR_NAME: &str = "runtime";
 const DOWNLOADS_DIR_NAME: &str = "downloads";
 const BROWSER4_MAIN_CLASS: &str = "ai.platon.pulsar.apps.Browser4BundleApplicationKt";
 const BROWSER4_INSTALL_METADATA_FILE_NAME: &str = "browser4-installation.json";
+/// Env var override for the browser binary path.  When set to an existing
+/// executable file it is used regardless of other browser search heuristics.
+/// The value is also forwarded to the server via `-Dchrome.path`.
+const BROWSER4_BROWSER_PATH_ENV: &str = "BROWSER4_BROWSER_PATH";
 /// Env var with space-separated JVM options injected into the server launch
 /// command (e.g. `-Dapp.name=test -Xmx512m`).  Only consulted when the CLI
 /// itself starts the backend; ignored for externally-managed servers.
@@ -2720,6 +2724,76 @@ pub fn find_chrome_executable() -> Option<std::path::PathBuf> {
     None
 }
 
+/// Try to locate an installed Microsoft Edge executable.
+/// Searched after Chrome/Chromium — Edge is a fallback.
+fn find_edge_executable() -> Option<PathBuf> {
+    let candidates: &[&str] = if cfg!(target_os = "windows") {
+        &[
+            r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+            r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        ]
+    } else if cfg!(target_os = "macos") {
+        &["/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"]
+    } else {
+        // Linux
+        &[
+            "/opt/microsoft/msedge/msedge",
+            "/usr/bin/microsoft-edge",
+            "/usr/bin/microsoft-edge-stable",
+        ]
+    };
+
+    for path in candidates {
+        if Path::new(path).exists() {
+            return Some(PathBuf::from(path));
+        }
+    }
+
+    // Linux / fallback: check PATH
+    for name in &["microsoft-edge", "microsoft-edge-stable", "msedge"] {
+        if let Some(path) = find_in_path(name) {
+            return Some(path);
+        }
+    }
+
+    None
+}
+
+/// Locate a usable browser binary by checking, in order:
+///   1. The `BROWSER4_BROWSER_PATH` env var
+///   2. `find_chrome_executable()` (Chrome / Chromium)
+///   3. `find_edge_executable()` (Microsoft Edge fallback)
+///
+/// Returns `None` when every strategy fails.
+pub fn find_browser_executable() -> Option<PathBuf> {
+    // 1. Env var override (highest priority)
+    if let Ok(path) = env::var(BROWSER4_BROWSER_PATH_ENV) {
+        let trimmed = path.trim().to_string();
+        if !trimmed.is_empty() {
+            let p = PathBuf::from(&trimmed);
+            if p.exists() {
+                eprintln!(
+                    "Using browser from {}: {}",
+                    BROWSER4_BROWSER_PATH_ENV, trimmed
+                );
+                return Some(p);
+            }
+            eprintln!(
+                "Warning: {} is set to {:?} but that path does not exist; falling back.",
+                BROWSER4_BROWSER_PATH_ENV, trimmed
+            );
+        }
+    }
+
+    // 2. Chrome / Chromium (existing logic)
+    if let Some(chrome) = find_chrome_executable() {
+        return Some(chrome);
+    }
+
+    // 3. Microsoft Edge (fallback)
+    find_edge_executable()
+}
+
 /// Search for an executable in the system PATH.
 fn find_in_path(name: &str) -> Option<std::path::PathBuf> {
     let path_var = env::var_os("PATH")?;
@@ -2768,16 +2842,16 @@ fn run_sudo_command(program: &str, args: &[&str], description: &str) -> Result<(
     Ok(())
 }
 
-/// Check whether Chrome or Chromium is available.  If not, attempt to install
-/// Google Chrome automatically (Debian/Ubuntu only).  Other platforms receive
-/// a warning with manual instructions.
+/// Check whether a supported browser (Chrome, Chromium, or Edge) is available.
+/// If not, attempt to install Google Chrome automatically (Debian/Ubuntu only).
+/// Other platforms receive a warning with manual instructions.
 pub fn ensure_chrome_available() -> Result<(), String> {
-    if find_chrome_executable().is_some() {
-        eprintln!("✅ Google Chrome / Chromium is available.");
+    if find_browser_executable().is_some() {
+        eprintln!("✅ A supported browser (Chrome / Chromium / Edge) is available.");
         return Ok(());
     }
 
-    eprintln!("⚠  Google Chrome not found.");
+    eprintln!("⚠  No supported browser found (Chrome, Chromium, or Edge).");
 
     if cfg!(target_os = "linux") {
         // Detect Debian-based / RHEL-based
@@ -2794,19 +2868,21 @@ pub fn ensure_chrome_available() -> Result<(), String> {
         }
 
         eprintln!("   Unsupported Linux distribution.");
-        eprintln!("   Install Chrome manually: https://www.google.com/chrome/");
+        eprintln!("   Install Chrome: https://www.google.com/chrome/");
+        eprintln!("   Or Edge:        https://www.microsoft.com/edge");
         return Err("Cannot auto-install Chrome on this Linux distribution. \
              Install it manually from https://www.google.com/chrome/"
             .to_string());
     }
 
     if cfg!(target_os = "macos") {
-        eprintln!("   Install Chrome manually:");
+        eprintln!("   Install a browser manually:");
         eprintln!("     brew install --cask google-chrome");
+        eprintln!("     brew install --cask microsoft-edge");
         eprintln!("   Or download from: https://www.google.com/chrome/");
         return Err(
-            "Chrome is not installed. Install it with: brew install --cask google-chrome, \
-             or download from https://www.google.com/chrome/"
+            "No supported browser found. Install Chrome: brew install --cask google-chrome, \
+             or Edge: brew install --cask microsoft-edge"
                 .to_string(),
         );
     }
@@ -3021,6 +3097,17 @@ fn build_jar_launch_spec(runtime: &InstalledBrowser4Runtime, port: u16) -> Serve
     // is placed after the main class as a program argument.
     let mut jvm_opts: Vec<String> = Vec::new();
     let mut program_args: Vec<String> = Vec::new();
+
+    // Inject the detected browser path as -Dchrome.path so the server's
+    // Browsers.searchChromeBinary() picks it up via System.getProperty as
+    // its first-priority check.  Placed before BROWSER4_SERVER_OPTS so a
+    // user-supplied -Dchrome.path=... in that env var overrides (Java uses
+    // the last -D value for a given key).
+    if let Some(browser_path) = find_browser_executable() {
+        let path_str = browser_path.to_string_lossy().to_string();
+        jvm_opts.push(format!("-Dchrome.path={}", path_str));
+    }
+
     if let Ok(raw) = std::env::var(BROWSER4_SERVER_OPTS_ENV) {
         for token in raw
             .split_whitespace()
