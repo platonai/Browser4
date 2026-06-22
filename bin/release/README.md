@@ -1,42 +1,67 @@
 # Release Browser4
 
-Scripts for managing the Browser4 release lifecycle — bumping versions,
+Scripts for managing the Browser4 release lifecycle — version maintenance,
 checking publish status, triggering CI workflows, and downloading release assets.
 
-All scripts are cross-platform PowerShell (`pwsh`) unless noted otherwise.
+PowerShell scripts require `pwsh` unless noted otherwise.
 
 ## Prerequisites
 
+- **Node.js 18+** — required for `version.mjs` (the unified version tool).
 - **PowerShell 7+** (`pwsh`) — required for all `.ps1` scripts.
 - **GitHub CLI** (`gh`) — required for `check-publish-status.ps1`, `trigger-release-action.ps1`, `trigger-cli-release-action.ps1`, and `download-release-assets.ps1`.
 - **Git** — all scripts operate from the repository root.
-- **Bash** — for `update-versions.sh` (Linux/macOS; also works in Git Bash on Windows).
 
 ## Scripts
 
-### `bump-version.ps1`
+### `version.mjs`
+
+**Unified version maintenance tool** (located at `bin/version.mjs`). Single entry
+point for all version operations — replaces the previous mix of bash, PowerShell,
+and Node.js scripts.
+
+Browser4 has two independent version tracks:
+
+```
+# Backend version (VERSION file → pom.xml, READMEs)
+node bin/version.mjs show              # Print backend version
+node bin/version.mjs show -v           # Print version + git hash, branch, date
+node bin/version.mjs release           # Strip -SNAPSHOT for release deployment
+node bin/version.mjs bump <part>       # Bump major/minor/patch
+node bin/version.mjs bump <part> --dry-run    # Show what would change
+node bin/version.mjs bump <part> --skip-precheck  # Skip publish-status check
+
+# CLI version (cli/VERSION-CLI → package.json, Cargo.toml)
+node bin/version.mjs cli show          # Print CLI version
+node bin/version.mjs cli sync          # Sync to dependent files
+node bin/version.mjs cli sync --check  # Check-only mode (CI lint)
+
+# Cross-cutting
+node bin/version.mjs check             # Full version consistency check
+```
+
+### `bump-version.ps1` → `version.mjs bump`
+
+**Deprecated.** Use `node bin/version.mjs bump <part>` instead.
 
 Bumps the project version by the specified part (major, minor, or patch).
 
 - Reads the current version from the `VERSION` file at the repo root.
 - Increments the specified part.
-- Updates the version number in `pom.xml`, `README.md`, `README.zh.md`, and the `VERSION` file itself.
 - Runs `check-publish-status.ps1` as a precheck (verifies the current version is
   the latest GitHub release and that the `pulsar-bom` artifact is on Maven Central).
-- Commits the changes to Git.
+- Updates `pom.xml`, `VERSION`, and commits the changes to Git.
 
 ```
-.\bump-version.ps1 -Part minor
-.\bump-version.ps1 -Part major
+node bin/version.mjs bump patch         # patch bump
+node bin/version.mjs bump minor         # minor bump
+node bin/version.mjs bump major         # major bump
+node bin/version.mjs bump patch --dry-run   # dry-run
 ```
 
-### `bump-version-patch.ps1`
+### `bump-version-patch.ps1` → `version.mjs bump patch`
 
-Convenience wrapper that calls `bump-version.ps1 -Part patch`.
-
-```
-.\bump-version-patch.ps1
-```
+**Deprecated.** Use `node bin/version.mjs bump patch` instead.
 
 ### `check-publish-status.ps1`
 
@@ -94,23 +119,23 @@ Downloads all assets from a GitHub release for `platonai/Browser4`.
 .\download-release-assets.ps1 -Tag v4.11.0 -OutputDir ./downloads
 ```
 
-### `update-versions.sh`
+### `update-versions.sh` → `version.mjs release`
 
-Bash script that replaces `-SNAPSHOT` versions with the release version across
-the repository. Used during the release process to strip the SNAPSHOT qualifier
-from `pom.xml`, `README.md`, `README.zh.md`, and `llm-config.md` files.
+**Deprecated.** Use `node bin/version.mjs release` instead.
 
-Also syncs the CLI version metadata via `cli/scripts/sync-version.js` if available.
+Strips the `-SNAPSHOT` qualifier from the version for release deployment.
+Replaces `X.Y.Z-SNAPSHOT` with `X.Y.Z` in `pom.xml`, `README.md`,
+`README.zh.md`, and `llm-config.md` files, then syncs CLI version metadata.
 
 ```bash
-./bin/release/update-versions.sh
+node bin/version.mjs release
 ```
 
 ## Typical Release Workflow
 
 1. Ensure all tests pass.
 2. Run `check-publish-status.ps1` to verify the current version is published.
-3. Run `bump-version.ps1 -Part <major|minor|patch>` to bump the version and commit.
+3. Run `node bin/version.mjs bump <major|minor|patch>` to bump the version and commit.
 4. Run `trigger-release-action.ps1` to push the tag and start the CI release build.
 5. Wait for CI to build and publish to GitHub Releases.
-6. Run `bump-version-patch.ps1` to bump the version for the next bug-fix cycle.
+6. Run `node bin/version.mjs bump patch` to bump the version for the next bug-fix cycle.

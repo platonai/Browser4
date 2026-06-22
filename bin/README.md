@@ -60,11 +60,27 @@ Tests the full lifecycle: install → smoke-test → uninstall → re-install �
 | `-KeepWorkingDir` | Do not delete the working directory on exit |
 | `-WorkingDir <path>` | Override the working directory |
 
-### `version.ps1`, `version.sh`
+### `version.mjs`
 
-Print the version of Browser4.
-- `version.sh`: Prints version from `VERSION` file.
-- `version.sh -v`: Prints version plus git hash, branch, and date.
+Unified version maintenance tool — single entry point for all version operations.
+Browser4 has two independent version tracks.
+
+**Backend version** (source: `VERSION` file → pom.xml, READMEs):
+- `node bin/version.mjs show`: Print backend version.
+- `node bin/version.mjs show -v`: Print version + git hash, branch, date.
+- `node bin/version.mjs release`: Strip `-SNAPSHOT` for release deployment.
+- `node bin/version.mjs bump <part>`: Bump version (major/minor/patch) with precheck.
+
+**CLI version** (source: `cli/VERSION-CLI` → package.json, Cargo.toml):
+- `node bin/version.mjs cli show`: Print CLI version.
+- `node bin/version.mjs cli sync`: Sync to dependent files.
+- `node bin/version.mjs cli sync --check`: Check-only mode (CI lint).
+
+**Cross-cutting:**
+- `node bin/version.mjs check`: Full consistency check across all version files.
+
+Replaces the previous `version.sh`, `version.ps1`, `bump-version.ps1`,
+`bump-version-patch.ps1`, `update-versions.sh`, and `sync-version.js` scripts.
 
 ### `seeds.txt`
 
@@ -118,9 +134,7 @@ Release management scripts. See also [release/README.md](release/README.md) for 
 - **`trigger-cli-release-action.ps1`**: Trigger the `browser4-cli` release workflow. Supports tag mode (creates `v{version}-cli` tag) and dispatch mode (`gh workflow run`), plus dry-run tagging.
 - **`check-publish-status.ps1`**: Check whether the current project version and CLI version have been fully published to GitHub and npm.
 - **`download-release-assets.ps1`**: Download all assets from a GitHub release (defaults to latest, supports specific tags via `-Tag`).
-- **`bump-version.ps1`**: Bump project version (minor/major).
-- **`bump-version-patch.ps1`**: Bump project version (patch).
-- **`update-versions.sh`**: Replace `-SNAPSHOT` version strings across `pom.xml`, `llm-config.md`, `README.md`, etc. Used by the CI release pipeline.
+- **`version.mjs`**: Unified version maintenance (bump, release, sync, check, show). See above.
 
 ### `test/`
 

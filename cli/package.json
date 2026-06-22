@@ -14,7 +14,7 @@
     "browser4": "./bin/browser4-cli.js"
   },
   "scripts": {
-    "version:sync": "node scripts/sync-version.js",
+    "version:sync": "node ../bin/version.mjs cli sync",
     "version": "npm run version:sync && git add browser4-cli/Cargo.toml browser4-cli/Cargo.lock",
     "build:native": "npm run version:sync && cargo build --release --manifest-path browser4-cli/Cargo.toml && node scripts/copy-native.js",
     "build:linux": "npm run version:sync && docker compose -f docker/docker-compose.yml run --rm build-linux",
