@@ -30,11 +30,16 @@ node bin/version.mjs release           # Strip -SNAPSHOT for release deployment
 node bin/version.mjs bump <part>       # Bump major/minor/patch
 node bin/version.mjs bump <part> --dry-run    # Show what would change
 node bin/version.mjs bump <part> --skip-precheck  # Skip publish-status check
+node bin/version.mjs auto              # Auto-bump backend + CLI if changed
+node bin/version.mjs auto --dry-run    # Preview bump plan with release info
+node bin/version.mjs auto --commit     # Apply bump and commit+push
 
 # CLI version (cli/VERSION-CLI → package.json, Cargo.toml)
 node bin/version.mjs cli show          # Print CLI version
 node bin/version.mjs cli sync          # Sync to dependent files
 node bin/version.mjs cli sync --check  # Check-only mode (CI lint)
+node bin/version.mjs cli auto          # Auto-bump CLI if cli/ changed
+node bin/version.mjs cli auto --dry-run  # Preview CLI bump
 
 # Cross-cutting
 node bin/version.mjs check             # Full version consistency check

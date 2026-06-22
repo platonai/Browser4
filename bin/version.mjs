@@ -15,11 +15,16 @@
  *   node bin/version.mjs bump <part>       Bump major/minor/patch, update pom.xml, commit
  *   node bin/version.mjs bump <part> --dry-run     Show what would change
  *   node bin/version.mjs bump <part> --skip-precheck  Skip publish-status check
+ *   node bin/version.mjs auto              Bump backend to next patch; bump CLI if changes detected
+ *   node bin/version.mjs auto --dry-run    Show what would change without applying
+ *   node bin/version.mjs auto --commit     Apply and commit+push
  *
  *   # CLI version (cli/VERSION-CLI file)
  *   node bin/version.mjs cli show          Print CLI version
  *   node bin/version.mjs cli sync          Sync VERSION-CLI → package.json, Cargo.toml
  *   node bin/version.mjs cli sync --check  Check-only mode (CI, exit 1 if mismatch)
+ *   node bin/version.mjs cli auto          Bump CLI to next patch if changes detected in cli/
+ *   node bin/version.mjs cli auto --dry-run  Show what would change
  *
  *   # Cross-cutting
  *   node bin/version.mjs check             Full version consistency check (both systems)
@@ -135,6 +140,70 @@ function checkVersionBump(published, local) {
   };
 }
 
+/** Bump a semver version string by the given part. */
+function bumpSemverPart(version, part) {
+  const parsed = parseSemver(version);
+  if (!parsed) return null;
+  let { major, minor, patch } = parsed;
+  switch (part) {
+    case "major": major++; minor = 0; patch = 0; break;
+    case "minor": minor++; patch = 0; break;
+    case "patch": patch++; break;
+    default: return null;
+  }
+  return `${major}.${minor}.${patch}`;
+}
+
+/**
+ * Check if there are any changes under cli/ since the last release.
+ *
+ * "Since last release" means: all changes on the current branch vs the base
+ * branch (origin/main or origin/master), PLUS any uncommitted work (staged
+ * or unstaged).  VERSION-CLI itself is excluded to avoid circular bumps.
+ */
+function hasCliChanges() {
+  try {
+    const baseBranch = getBaseBranch();
+    const parts = [];
+
+    // Committed changes on this branch vs base
+    if (baseBranch) {
+      try {
+        const branchDiff = execSync(
+          `git diff --name-only ${baseBranch}..HEAD -- cli/`,
+          { cwd: REPO_ROOT, stdio: ["ignore", "pipe", "ignore"] }
+        ).toString().trim();
+        if (branchDiff) parts.push(branchDiff);
+      } catch { /* ignore */ }
+    }
+
+    // Unstaged changes
+    try {
+      const unstaged = execSync("git diff --name-only -- cli/", {
+        cwd: REPO_ROOT, stdio: ["ignore", "pipe", "ignore"],
+      }).toString().trim();
+      if (unstaged) parts.push(unstaged);
+    } catch { /* ignore */ }
+
+    // Staged changes
+    try {
+      const staged = execSync("git diff --cached --name-only -- cli/", {
+        cwd: REPO_ROOT, stdio: ["ignore", "pipe", "ignore"],
+      }).toString().trim();
+      if (staged) parts.push(staged);
+    } catch { /* ignore */ }
+
+    const allChanges = parts
+      .flatMap((s) => s.split("\n"))
+      .filter(Boolean)
+      .filter((f) => f !== "cli/VERSION-CLI");
+
+    return allChanges.length > 0;
+  } catch {
+    return false;
+  }
+}
+
 /** Walk dir up to maxDepth finding files named `targetName`. */
 function findFiles(dir, targetName, maxDepth) {
   const results = [];
@@ -209,6 +278,8 @@ function cmdCli(args) {
     console.log("  cli show          Print CLI version");
     console.log("  cli sync          Sync VERSION-CLI → package.json, Cargo.toml, Cargo.lock");
     console.log("  cli sync --check  Check-only mode (exit 1 if anything is out of sync)");
+    console.log("  cli auto          Bump CLI to next patch if changes detected in cli/");
+    console.log("  cli auto --dry-run  Show what would change without applying");
     process.exit(0);
   }
 
@@ -222,11 +293,63 @@ function cmdCli(args) {
     case "sync":
       cmdCliSync(rest);
       break;
+    case "auto":
+      cmdCliAuto(rest);
+      break;
     default:
       console.error(`Unknown CLI command: cli ${sub}`);
-      console.error("Available: cli show, cli sync");
+      console.error("Available: cli show, cli sync, cli auto");
       process.exit(1);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Subcommand: cli auto
+// ---------------------------------------------------------------------------
+
+function cmdCliAuto(args) {
+  const dryRun = args.includes("--dry-run");
+
+  // Read local version
+  const localCli = stripSnapshot(readCliVersion());
+  if (!parseSemver(localCli)) {
+    console.error(`ERROR: CLI version '${localCli}' does not match X.Y.Z format.`);
+    process.exit(1);
+  }
+
+  // Determine the base version from the last npm release
+  const publishedNpm = getLatestNpmVersion("browser4-cli");
+  const baseCli = publishedNpm || localCli;
+
+  if (!hasCliChanges()) {
+    console.log("CLI: no changes detected in cli/, nothing to bump.");
+    return;
+  }
+
+  const nextCli = bumpSemverPart(baseCli, "patch");
+  if (nextCli === localCli) {
+    console.log(`CLI: already at next patch after ${baseCli} (${localCli}), nothing to bump.`);
+    return;
+  }
+
+  console.log(`CLI auto-bump: ${localCli} -> ${nextCli} (changes detected in cli/)`);
+
+  if (dryRun) {
+    console.log("");
+    console.log("========== DRY-RUN MODE ==========");
+    console.log("No changes will be made.");
+    console.log("");
+    console.log("Would perform:");
+    console.log(`  1. Update cli/VERSION-CLI: '${localCli}' -> '${nextCli}'`);
+    console.log("  2. Sync cli/package.json and cli/browser4-cli/Cargo.toml");
+    console.log("==================================");
+    return;
+  }
+
+  // Apply
+  writeFileSync(join(REPO_ROOT, "cli", "VERSION-CLI"), nextCli + "\n");
+  cmdCliSync([]);
+  console.log(`\nCLI auto-bump complete: ${localCli} -> ${nextCli}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -451,24 +574,7 @@ async function cmdBump(args) {
     process.exit(1);
   }
 
-  let { major, minor, patch } = parsed;
-
-  // Calculate next version
-  switch (part) {
-    case "major":
-      major++;
-      minor = 0;
-      patch = 0;
-      break;
-    case "minor":
-      minor++;
-      patch = 0;
-      break;
-    case "patch":
-      patch++;
-      break;
-  }
-  const nextVersion = `${major}.${minor}.${patch}`;
+  const nextVersion = bumpSemverPart(version, part);
   const nextSnapshot = `${nextVersion}-SNAPSHOT`;
 
   // Precheck: verify current version is published (unless skipped)
@@ -590,6 +696,315 @@ async function cmdBump(args) {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers: release info & change summary (used by auto)
+// ---------------------------------------------------------------------------
+
+/** Get the latest GitHub release tag, falling back to git tags. */
+function getLatestReleaseTag() {
+  try {
+    // Try gh CLI first (gives us actual GitHub Releases)
+    const raw = execSync("gh release list --limit 1 --json tagName,name --jq '.[0].tagName'", {
+      cwd: REPO_ROOT, stdio: ["ignore", "pipe", "ignore"],
+      timeout: 10_000,
+    }).toString().trim();
+    if (raw) return raw;
+  } catch { /* fall through */ }
+
+  // Fallback: latest semver-sorted tag
+  try {
+    const tag = execSync("git tag --sort=-v:refname | grep -E '^v?[0-9]+\\.[0-9]+\\.[0-9]+' | head -1", {
+      cwd: REPO_ROOT, stdio: ["ignore", "pipe", "ignore"],
+    }).toString().trim();
+    if (tag) return tag;
+  } catch { /* fall through */ }
+
+  // Last resort: git describe
+  try {
+    const desc = execSync("git describe --tags --abbrev=0", {
+      cwd: REPO_ROOT, stdio: ["ignore", "pipe", "ignore"],
+    }).toString().trim();
+    if (desc) return desc;
+  } catch { /* ignore */ }
+  return null;
+}
+
+/**
+ * Print a section of git log / diff stat lines, indented and capped.
+ * @param {string} title
+ * @param {string} lines  — raw multi-line output from git
+ * @param {number} max    — max lines to show
+ */
+function printGitSummary(title, lines, max) {
+  const entries = lines.trim().split("\n").filter(Boolean);
+  if (!entries.length) {
+    console.log(`  ${title}: (none)`);
+    return;
+  }
+  console.log(`  ${title} (${entries.length}):`);
+  for (const line of entries.slice(0, max)) {
+    // Strip leading whitespace from diff-stat lines
+    console.log(`    ${line.trim()}`);
+  }
+  if (entries.length > max) {
+    console.log(`    ... and ${entries.length - max} more`);
+  }
+}
+
+/** Get the upstream base branch (origin/main or origin/master). */
+function getBaseBranch() {
+  for (const name of ["origin/main", "origin/master"]) {
+    try {
+      execSync(`git rev-parse --verify ${name}`, { cwd: REPO_ROOT, stdio: "ignore" });
+      return name;
+    } catch { /* try next */ }
+  }
+  // Fall back to local
+  for (const name of ["main", "master"]) {
+    try {
+      execSync(`git rev-parse --verify ${name}`, { cwd: REPO_ROOT, stdio: "ignore" });
+      return name;
+    } catch { /* try next */ }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Subcommand: auto (bump backend patch + conditionally bump CLI patch)
+// ---------------------------------------------------------------------------
+
+async function cmdAuto(args) {
+  const dryRun = args.includes("--dry-run");
+  const commit = args.includes("--commit");
+
+  // ---- Verify we're not on main/master ----
+  let currentBranch;
+  try {
+    currentBranch = execSync("git rev-parse --abbrev-ref HEAD", {
+      stdio: ["ignore", "pipe", "ignore"],
+    }).toString().trim();
+  } catch {
+    console.error("ERROR: Cannot determine current git branch.");
+    process.exit(1);
+  }
+  if (currentBranch === "master" || currentBranch === "main") {
+    console.error(
+      `You are on the '${currentBranch}' branch. Auto-bump is disabled on protected branches.`
+    );
+    process.exit(1);
+  }
+
+  // ================================================================
+  // PHASE 1 — Gather information
+  // ================================================================
+
+  // Local versions
+  const snapshotVersion = readBackendVersion();
+  const localBackend = stripSnapshot(snapshotVersion);
+  if (!parseSemver(localBackend)) {
+    console.error(`ERROR: Backend version '${localBackend}' does not match X.Y.Z format.`);
+    process.exit(1);
+  }
+
+  const cliVersionPath = join(REPO_ROOT, "cli", "VERSION-CLI");
+  const localCli = existsSync(cliVersionPath) ? stripSnapshot(readCliVersion()) : "";
+
+  // Release info (query BEFORE computing next versions)
+  const lastReleaseTag = getLatestReleaseTag();
+  const publishedNpm = getLatestNpmVersion("browser4-cli");
+
+  // Parse last-release versions (strip leading "v" from git tag if present)
+  const lastReleaseBackend = lastReleaseTag
+    ? lastReleaseTag.replace(/^v/, "")
+    : localBackend;
+  const lastReleaseCli = publishedNpm || localCli;
+
+  // ---- Compute next versions from last RELEASE (not local) ----
+  const nextBackend = bumpSemverPart(lastReleaseBackend, "patch");
+  const nextSnapshot = `${nextBackend}-SNAPSHOT`;
+  const backendChanged = nextBackend !== localBackend;
+
+  // CLI: only bump if cli/ has changes AND next > local
+  let cliBumped = false;
+  let cliOldVersion = localCli;
+  let cliNewVersion = localCli;
+  if (localCli && hasCliChanges()) {
+    const parsedCli = parseSemver(localCli);
+    if (parsedCli) {
+      const nextCli = bumpSemverPart(lastReleaseCli, "patch");
+      if (nextCli !== localCli) {
+        cliNewVersion = nextCli;
+        cliBumped = true;
+      }
+    }
+  }
+
+  // Changes summary (commits + files since last tag, or vs base branch)
+  const sinceRef = lastReleaseTag || getBaseBranch() || "HEAD~10";
+  let commitLog = "", fileStat = "";
+  try {
+    commitLog = execSync(`git log --oneline ${sinceRef}..HEAD`, {
+      cwd: REPO_ROOT, stdio: ["ignore", "pipe", "ignore"],
+    }).toString().trim();
+  } catch { /* ignore */ }
+  try {
+    fileStat = execSync(`git diff --stat ${sinceRef}..HEAD`, {
+      cwd: REPO_ROOT, stdio: ["ignore", "pipe", "ignore"],
+    }).toString().trim();
+  } catch { /* ignore */ }
+
+  // ================================================================
+  // PHASE 2 — Display
+  // ================================================================
+
+  console.log("");
+  console.log("══════════════════════════════════════════════");
+  console.log("           AUTO-BUMP — Plan");
+  console.log("══════════════════════════════════════════════");
+  console.log("");
+
+  // --- Last Release ---
+  console.log("┌─ Last Release");
+  if (lastReleaseTag) {
+    console.log(`│  GitHub:  ${lastReleaseTag}  (backend=${lastReleaseBackend})`);
+  } else {
+    console.log(`│  GitHub:  (no release found)`);
+  }
+  console.log(`│  npm:     ${publishedNpm ? `browser4-cli@${publishedNpm}` : "(not published yet)"}`);
+  console.log(`│  Local:   backend=${snapshotVersion}  cli=${localCli || "N/A"}`);
+  console.log("");
+
+  // --- Proposed Bumps ---
+  console.log("┌─ Proposed Version Bumps (next patch after last release)");
+  if (backendChanged) {
+    console.log(`│  Backend: ${snapshotVersion}  →  ${nextSnapshot}`);
+  } else {
+    console.log(`│  Backend: ${snapshotVersion}  (already at next after ${lastReleaseTag || "last release"})`);
+  }
+  if (cliBumped) {
+    console.log(`│  CLI:     ${cliOldVersion}  →  ${cliNewVersion}`);
+  } else if (localCli) {
+    console.log(`│  CLI:     ${localCli}  (no changes or already at next)`);
+  } else {
+    console.log(`│  CLI:     (VERSION-CLI not found)`);
+  }
+  console.log("");
+
+  // --- Changes Since Last Release ---
+  console.log("┌─ Changes Since Last Release");
+  if (sinceRef && (commitLog || fileStat)) {
+    printGitSummary("Commits", commitLog, 15);
+    if (fileStat) {
+      console.log("");
+      printGitSummary("Files", fileStat, 12);
+    }
+  } else {
+    console.log("  (could not determine change set)");
+  }
+  console.log("");
+
+  // ================================================================
+  // PHASE 3 — Act
+  // ================================================================
+
+  if (dryRun) {
+    console.log("══════════════════════════════════════════════");
+    console.log("  DRY-RUN — No changes have been made.");
+    console.log("══════════════════════════════════════════════");
+    console.log("");
+    return;
+  }
+
+  // If nothing to bump, exit cleanly
+  if (!backendChanged && !cliBumped) {
+    console.log("Nothing to bump — versions are already up to date.");
+    return;
+  }
+
+  // Confirm
+  const ok = await confirm("Proceed with auto-bump? [Y/n] ");
+  if (!ok) {
+    console.log("Auto-bump cancelled.");
+    process.exit(0);
+  }
+  console.log("");
+
+  // ---- Apply backend bump ----
+  if (backendChanged) {
+    writeFileSync(join(REPO_ROOT, "VERSION"), nextSnapshot + "\n");
+
+    // Run Maven versions:set
+    const isWindows = process.platform === "win32";
+    const mvnCmd = isWindows ? join(REPO_ROOT, "mvnw.cmd") : join(REPO_ROOT, "mvnw");
+    const mvnArgs = [
+      "versions:set",
+      `-DnewVersion=${nextSnapshot}`,
+      "-DprocessAllModules",
+      "-DgenerateBackupPoms=false",
+    ];
+    try {
+      if (isWindows) {
+        execSync(`cmd /c "${mvnCmd}" ${mvnArgs.join(" ")}`, {
+          cwd: REPO_ROOT,
+          stdio: "inherit",
+        });
+      } else {
+        execSync(`"${mvnCmd}" ${mvnArgs.join(" ")}`, {
+          cwd: REPO_ROOT,
+          stdio: "inherit",
+        });
+      }
+    } catch {
+      console.error("Maven versions:set failed. Reverting VERSION file.");
+      writeFileSync(join(REPO_ROOT, "VERSION"), snapshotVersion + "\n");
+      process.exit(1);
+    }
+
+    // Update root pom.xml <tag>
+    const pomXmlPath = join(REPO_ROOT, "pom.xml");
+    if (existsSync(pomXmlPath)) {
+      let pomContent = readFileSync(pomXmlPath, "utf-8");
+      pomContent = pomContent.replace(
+        new RegExp(`<tag>v${localBackend.replace(/\./g, "\\.")}</tag>`),
+        `<tag>v${nextBackend}</tag>`
+      );
+      writeFileSync(pomXmlPath, pomContent);
+    }
+  }
+
+  // ---- Apply CLI bump ----
+  if (cliBumped) {
+    writeFileSync(join(REPO_ROOT, "cli", "VERSION-CLI"), cliNewVersion + "\n");
+    // Sync VERSION-CLI changes into package.json, Cargo.toml, Cargo.lock
+    cmdCliSync([]);
+  }
+
+  // ---- Summary ----
+  const bumped = [];
+  if (backendChanged) bumped.push(`Backend: ${snapshotVersion} -> ${nextSnapshot}`);
+  if (cliBumped) bumped.push(`CLI: ${cliOldVersion} -> ${cliNewVersion}`);
+  if (bumped.length) {
+    console.log(`\nAuto-bump complete: ${bumped.join(", ")}`);
+  }
+
+  // ---- Commit (optional) ----
+  if (commit && bumped.length) {
+    const parts = [];
+    if (backendChanged) parts.push(`Backend: ${nextSnapshot}`);
+    if (cliBumped) parts.push(`CLI: ${cliNewVersion}`);
+    const msg = `Auto-bump versions\n\n${parts.join("\n")}`;
+    try {
+      execSync("git add .", { cwd: REPO_ROOT, stdio: "inherit" });
+      execSync(`git commit -m "${msg}"`, { cwd: REPO_ROOT, stdio: "inherit" });
+      execSync("git push", { cwd: REPO_ROOT, stdio: "inherit" });
+      console.log("Changes committed and pushed to remote.");
+    } catch (e) {
+      console.error("Git operation failed:", e.message);
+      process.exit(1);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Subcommand: check
 // ---------------------------------------------------------------------------
 
@@ -703,11 +1118,16 @@ function printUsage() {
   console.log("    bump <part>       Bump major/minor/patch, update pom.xml, commit");
   console.log("    bump <part> --dry-run    Show what would change without applying");
   console.log("    bump <part> --skip-precheck  Skip publish-status verification");
+  console.log("    auto              Bump backend to next patch; bump CLI if cli/ changed");
+  console.log("    auto --dry-run    Show what would change without applying");
+  console.log("    auto --commit     Apply changes and commit+push");
   console.log("");
   console.log("  CLI version (source: cli/VERSION-CLI → package.json, Cargo.toml)");
   console.log("    cli show          Print CLI version");
   console.log("    cli sync          Sync VERSION-CLI to dependent files");
   console.log("    cli sync --check  Check-only mode (exit 1 if out of sync)");
+  console.log("    cli auto          Bump CLI to next patch if changes detected in cli/");
+  console.log("    cli auto --dry-run  Show what would change");
   console.log("");
   console.log("  Cross-cutting");
   console.log("    check             Check version consistency across all files");
@@ -737,6 +1157,9 @@ switch (command) {
     break;
   case "bump":
     await cmdBump(rest);
+    break;
+  case "auto":
+    await cmdAuto(rest);
     break;
   case "check":
     cmdCheck();

@@ -70,11 +70,16 @@ Browser4 has two independent version tracks.
 - `node bin/version.mjs show -v`: Print version + git hash, branch, date.
 - `node bin/version.mjs release`: Strip `-SNAPSHOT` for release deployment.
 - `node bin/version.mjs bump <part>`: Bump version (major/minor/patch) with precheck.
+- `node bin/version.mjs auto`: Bump backend to next patch; bump CLI if cli/ changed. Shows release info, change summary, and asks for confirmation.
+- `node bin/version.mjs auto --dry-run`: Preview the bump plan without applying.
+- `node bin/version.mjs auto --commit`: Apply the bump and commit+push.
 
 **CLI version** (source: `cli/VERSION-CLI` → package.json, Cargo.toml):
 - `node bin/version.mjs cli show`: Print CLI version.
 - `node bin/version.mjs cli sync`: Sync to dependent files.
 - `node bin/version.mjs cli sync --check`: Check-only mode (CI lint).
+- `node bin/version.mjs cli auto`: Bump CLI to next patch if changes detected in cli/.
+- `node bin/version.mjs cli auto --dry-run`: Preview the CLI bump plan.
 
 **Cross-cutting:**
 - `node bin/version.mjs check`: Full consistency check across all version files.
