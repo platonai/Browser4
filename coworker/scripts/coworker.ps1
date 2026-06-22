@@ -546,6 +546,39 @@ Agent Log: $agentLogPath
         } else {
             Write-LogMessage "Task file not found at working path (may have been moved/deleted by agent): $workingPath" WARN
         }
+
+        # Auto-commit changes for finished tasks (3done) without pushing.
+        # Tasks with #auto-approve go to 5approved and are committed+ pushed
+        # later by git-sync.ps1 — skip those here to avoid a double commit.
+        if ($targetDir -eq $finishedDir) {
+            try {
+                $gitAvailable = Get-Command git -ErrorAction Stop
+                Push-Location $targetRepoRoot
+                try {
+                    # Stage all changes the agent made while working on this task
+                    & git add -A 2>&1 | Out-Null
+
+                    # Check whether there is anything staged to commit
+                    & git diff --cached --quiet 2>&1 | Out-Null
+                    if ($LASTEXITCODE -ne 0) {
+                        $commitMsg = "fix(done): $workingBaseName"
+                        & git commit -m $commitMsg 2>&1 | Out-Null
+                        if ($LASTEXITCODE -eq 0) {
+                            Write-LogMessage "Auto-committed changes for finished task: $workingBaseName" INFO
+                        } else {
+                            Write-LogMessage "Git commit failed for task: $workingBaseName" WARN
+                        }
+                    } else {
+                        Write-LogVerbose "No changes to commit for task: $workingBaseName"
+                    }
+                } finally {
+                    Pop-Location
+                }
+            } catch {
+                Write-LogMessage "Git unavailable, skipping auto-commit for task: $workingBaseName" WARN
+            }
+        }
+
         Ensure-DraftPlaceholders -DraftDirectory $draftDir
 
         Write-LogMessage "---" INFO
