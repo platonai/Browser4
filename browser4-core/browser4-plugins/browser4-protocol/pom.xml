@@ -32,11 +32,6 @@
         </dependency>
 
         <dependency>
-            <groupId>org.apache.httpcomponents</groupId>
-            <artifactId>httpclient</artifactId>
-        </dependency>
-
-        <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>browser4-resources</artifactId>
             <type>test-jar</type>

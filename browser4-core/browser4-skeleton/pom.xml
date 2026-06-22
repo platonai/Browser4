@@ -51,6 +51,15 @@
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-persist</artifactId>
+            <exclusions>
+                <!-- gora-core pulls in spark-core_2.13 which pulls the entire Hadoop+Scala+ZooKeeper
+                     ecosystem (approx 100 MB). Browser4 uses only the Gora persistency API (PersistentBase)
+                     for GWebPage and Avro serialization; it does not need Spark's RDD/DataFrame engine. -->
+                <exclusion>
+                    <groupId>org.apache.spark</groupId>
+                    <artifactId>spark-core_2.13</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
@@ -67,11 +76,19 @@
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-llm</artifactId>
+            <exclusions>
+                <!-- langchain4j-open-ai is optional in browser4; users who need LLM can add it explicitly -->
+                <exclusion>
+                    <groupId>dev.langchain4j</groupId>
+                    <artifactId>langchain4j-open-ai</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <dependency>
             <groupId>dev.langchain4j</groupId>
             <artifactId>langchain4j-open-ai</artifactId>
+            <optional>true</optional>
         </dependency>
 
         <!-- Requires org.springframework.context.support.AbstractApplicationContext -->
@@ -95,6 +112,13 @@
             <groupId>com.google.code.crawler-commons</groupId>
             <artifactId>crawler-commons</artifactId>
             <version>0.5</version>
+            <exclusions>
+                <!-- browser4 uses httpclient5; exclude the old httpclient 4.x -->
+                <exclusion>
+                    <groupId>org.apache.httpcomponents</groupId>
+                    <artifactId>httpclient</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>com.google.guava</groupId>

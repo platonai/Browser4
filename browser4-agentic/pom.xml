@@ -88,32 +88,38 @@
             <version>0.8.1</version>
             <scope>test</scope>
         </dependency>
-        <!-- Observability: OpenTelemetry for distributed tracing -->
+        <!-- Observability: OpenTelemetry for distributed tracing (optional) -->
         <dependency>
             <groupId>io.opentelemetry</groupId>
             <artifactId>opentelemetry-api</artifactId>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>io.opentelemetry</groupId>
             <artifactId>opentelemetry-sdk</artifactId>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>io.opentelemetry</groupId>
             <artifactId>opentelemetry-exporter-otlp</artifactId>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>io.opentelemetry.semconv</groupId>
             <artifactId>opentelemetry-semconv</artifactId>
+            <optional>true</optional>
         </dependency>
 
-        <!-- Observability: Micrometer for metrics with Prometheus support -->
+        <!-- Observability: Micrometer for metrics with Prometheus support (optional) -->
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-core</artifactId>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-registry-prometheus</artifactId>
+            <optional>true</optional>
         </dependency>
 
         <dependency>

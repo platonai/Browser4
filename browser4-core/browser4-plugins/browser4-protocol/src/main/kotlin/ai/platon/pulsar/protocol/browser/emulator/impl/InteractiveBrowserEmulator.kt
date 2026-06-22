@@ -310,7 +310,7 @@ open class InteractiveBrowserEmulator(
             exception = e
             response = ForwardingResponse.privacyRetry(task.page, "Illegal web driver")
         } catch (e: WebDriverException) {
-            if (e.cause is org.apache.http.conn.HttpHostConnectException) {
+            if (e.cause is java.net.ConnectException) {
                 logger.warn("Web driver is disconnected - {}", e.brief())
             } else {
                 logger.warn("[Unexpected] WebDriverException", e)
