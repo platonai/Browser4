@@ -585,7 +585,7 @@
         <kotlin.compiler.jvmTarget>${javaVersion}</kotlin.compiler.jvmTarget>
 
         <spring-boot.version>4.0.6</spring-boot.version>
-        <browser4-base.version>4.8.5</browser4-base.version>
+        <browser4-base.version>4.9.2</browser4-base.version>
     </properties>
 
 </project>
