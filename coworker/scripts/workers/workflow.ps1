@@ -5,10 +5,11 @@ function New-AgentPromptArguments {
     param(
         [Parameter(Mandatory = $true)]
         [string]$Prompt,
-        [string[]]$AdditionalArguments = @()
+        [string[]]$AdditionalArguments = @(),
+        [string]$Backend = 'copilot'
     )
 
-    return @(New-AgentArguments -BaseArgs $script:agentBaseArgs -Prompt $Prompt -AdditionalArguments $AdditionalArguments)
+    return @(New-AgentArguments -BaseArgs $script:agentBaseArgs -Prompt $Prompt -AdditionalArguments $AdditionalArguments -Backend $Backend)
 }
 
 function Format-AgentPromptCommand {
@@ -87,14 +88,14 @@ Prompt: $promptSample
 "@
 
     try {
-        $nameArguments = New-AgentPromptArguments -Prompt $namingPrompt
+        $nameArguments = New-AgentPromptArguments -Prompt $namingPrompt -Backend $script:agentBackend
 
         Write-LogVerbose ("Executing Agent for naming: {0}" -f (Format-AgentPromptCommand -Arguments $nameArguments))
         Write-LogVerbose "Naming agent working directory: $($script:agentWorkingDirectory)"
 
         $nameStdOut = [System.IO.Path]::GetTempFileName()
         $nameStdErr = [System.IO.Path]::GetTempFileName()
-        $nameProcess = Start-AgentProcess -Executable $script:agentExecutable -BaseArgs $script:agentBaseArgs -Prompt $namingPrompt -WorkingDirectory $script:agentWorkingDirectory -StdOutPath $nameStdOut -StdErrPath $nameStdErr -NoNewWindow
+        $nameProcess = Start-AgentProcess -Executable $script:agentExecutable -BaseArgs $script:agentBaseArgs -Prompt $namingPrompt -WorkingDirectory $script:agentWorkingDirectory -StdOutPath $nameStdOut -StdErrPath $nameStdErr -NoNewWindow -Backend $script:agentBackend
 
         $waited = $false
         try {

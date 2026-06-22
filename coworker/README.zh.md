@@ -9,9 +9,9 @@ AI 协作助手是一个代理（agent），可协助你在指定仓库中完成
 1. 运行 `coworker-scheduler.ps1` 以启动定时自动化
 2. 在 `0draft` 下起草任务（或者任何地方）
 3. 将已完成草稿的任务复制到 `1ready` 目录以执行
-4. 执行后，您可以在 `3_1complete` 中找到结果，在 `coworker/tasks/300logs` 中找到详细日志
+4. 执行后，您可以在 `main/3complete` 中找到结果，在 `coworker/tasks/300logs` 中找到详细日志
 5. 如有需要，复核结果
-6. 将任务文件从 `3_1complete` 移动到 `5approved` 以便触发 git 推送
+6. 将任务文件从 `main/3complete` 移动到 `5approved` 以便触发 git 推送
 
 ## 工作流程
 
@@ -25,7 +25,7 @@ AI 协作助手是一个代理（agent），可协助你在指定仓库中完成
 | 队列   | `1ready`     | 准备执行时移入此文件夹   |
 | 规划   | `200plan`      | 代理规划阶段（自动管理） |
 | 执行   | `2working`     | 代理正在执行任务         |
-| 完成   | `3_1complete`  | 执行结束，可审查更改     |
+| 完成   | `main/3complete`  | 执行结束，可审查更改     |
 | 审查   | `4review`      | 可选的人工审查阶段       |
 | 已批准 | `5approved`    | 已批准任务，等待提交推送 |
 | 已推送 | `6git-pushed`  | 已成功提交并推送         |
@@ -51,15 +51,15 @@ AI 协作助手是一个代理（agent），可协助你在指定仓库中完成
 
 ## 快速开始
 
-1. **草稿** — 在 `coworker/tasks/0draft/` 创建任务文件。
-2. **队列** — 准备好后将其移至 `coworker/tasks/1ready/`。
+1. **草稿** — 在 `coworker/tasks/main/0draft/` 创建任务文件。
+2. **队列** — 准备好后将其移至 `coworker/tasks/main/1ready/`。
 3. **执行** — 运行调度器或直接运行工作脚本：
    ```powershell
    .\coworker\scripts\coworker-scheduler.ps1
    # 或单次执行：
    .\coworker\scripts\coworker.ps1
    ```
-4. **审查** — 任务执行后会进入 `3_1complete`，可审查更改。
+4. **审查** — 任务执行后会进入 `main/3complete`，可审查更改。
 5. **批准** — 将任务移至 `5approved`，定时任务会自动提交并推送。
 
 ## 前置条件
@@ -126,7 +126,7 @@ AI 协作助手是一个代理（agent），可协助你在指定仓库中完成
 
 ## 草稿润色
 
-草稿润色使用 `coworker/tasks/0draft/refine/` 下的专用流程：
+草稿润色使用 `coworker/tasks/main/0draft/refine/` 下的专用流程：
 
 - `1ready` — 等待润色的草稿
 - `2working` — 正在润色的草稿
@@ -135,7 +135,7 @@ AI 协作助手是一个代理（agent），可协助你在指定仓库中完成
 你可以润色单个文件，也可以传入一个文件夹批量处理；传入文件夹时会逐个文件执行。
 
 ```powershell
-.\coworker\scripts\workers\refine-drafts.ps1 -Path .\coworker\tasks\0draft\refine\1ready
+.\coworker\scripts\workers\refine-drafts.ps1 -Path .\coworker\tasks\main\0draft\refine\1ready
 ```
 
 ## GitHub Issues 管道

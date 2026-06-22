@@ -1,0 +1,27 @@
+# Snapshot file naming creates clutter
+
+## Summary
+
+Each `snapshot` command creates a new timestamped file. Over the course of a session, the output directory accumulates many snapshot files with no built-in mechanism to view the latest, clean up old files, or limit the number of retained snapshots.
+
+## Steps to reproduce
+
+1. Run multiple `snapshot` commands during a single session.
+2. Observe the snapshot output directory.
+
+## Expected behavior
+
+There should be a way to view the most recent snapshot inline, auto-cleanup old snapshots, or limit the number of retained files.
+
+## Actual behavior
+
+Each snapshot creates a new timestamped file. There is no `snapshot --latest` command to view the most recent snapshot inline, and no `snapshot --clean` option to remove old snapshots. The user must manually manage snapshot files.
+
+## Suggested resolution
+
+- Add `snapshot --latest` to display the most recent snapshot content inline in the terminal.
+- Add `snapshot --clean` (or `snapshot --prune`) to remove old snapshot files.
+- Implement auto-rotation: keep only the N most recent snapshots (e.g., 5 or 10).
+- Consider a configurable retention policy via environment variable or config file.
+
+Labels: UX, enhancement

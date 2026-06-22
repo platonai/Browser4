@@ -1,0 +1,38 @@
+# Element reference discovery requires multiple manual steps
+
+## Summary
+
+Finding an element reference (ref) to use with commands like `click`, `fill`, or `type` requires a multi-step manual process: run `snapshot`, note the file path, open the YAML file in a separate application, locate the desired element in the tree, and copy its ref back to the CLI. This workflow friction adds significant overhead to every interaction.
+
+## Steps to Reproduce
+
+1. Run `browser4-cli goto https://news.ycombinator.com/news`
+2. Run `browser4-cli snapshot` — output shows only a file path
+3. Manually locate and open the generated YAML file (`snapshot-20260619-*.yml`)
+4. Scan the accessibility tree to find the desired element (e.g., a story link)
+5. Note the ref (e.g., `e42`) from the YAML content
+6. Return to the CLI to use the ref: `browser4-cli click e42`
+7. After any page interaction, repeat steps 2-6 (refs become stale)
+
+## Expected Behavior
+
+Element references should be discoverable with minimal friction, ideally directly from the terminal output without leaving the CLI.
+
+## Actual Behavior
+
+Each interaction requires: CLI command -> read file path -> open external file -> scan tree -> copy ref -> return to CLI. This disrupts the flow and multiplies the time per interaction.
+
+## Impact
+
+- Significant friction for multi-step workflows such as opening multiple Hacker News stories
+- New users may not understand the workflow or may give up when they only see a file path
+- The problem compounds because refs become stale after any page interaction, requiring a fresh snapshot and another round of manual file reading for each command
+- Contrasts with the otherwise smooth CLI experience of commands like `goto` and `summarize`
+
+## Suggested Improvements
+
+- Display element refs inline in snapshot output (see related issue about snapshot inline display)
+- Add a `--find <text>` flag to snapshot to search for elements matching text
+- Show recent element refs as part of command output after navigation
+
+Labels: UX, enhancement, workflow
