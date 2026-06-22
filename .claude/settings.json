@@ -1,6 +1,18 @@
 {
   "permissions": {
     "allow": [
+      "Bash(browser4-cli *)",
+      "Bash(npm *)",
+      "Bash(pwsh *)",
+      "Bash(powershell *)",
+      "Bash(wsl *)",
+      "Bash(node *)",
+      "Bash(rust *)",
+      "Bash(rustc *)",
+      "Bash(cargo *)",
+      "Bash(java *)",
+      "Bash(jar *)",
+      "Bash(bash *)",
       "Bash(cargo test *)",
       "Bash(./mvnw compile *)",
       "Skill(code-review)",
@@ -17,7 +29,6 @@
       "Bash(cargo --version)",
       "Bash(rustup update *)",
       "Bash(cargo metadata *)",
-      "Bash(npm run *)",
       "Bash(rustup target *)",
       "Bash(cargo build *)",
       "Bash(wait)",
