@@ -419,7 +419,7 @@ pub fn all_commands() -> Vec<CommandDef> {
         },
         CommandDef {
             name: "type",
-            description: "Type text into the focused element or an optional target ref",
+            description: "Type text into the focused element or an optional target ref. Passing a ref is recommended for reliable targeting; without a ref, text may go nowhere if no element is currently focused.",
             category: Category::Keyboard,
             hidden: false,
             batch_supported: true,
@@ -430,6 +430,7 @@ pub fn all_commands() -> Vec<CommandDef> {
             options: &[
                 OptionDef { name: "submit", description: "Whether to submit entered text (press Enter after)", is_bool: true, short: None },
                 OptionDef { name: "verify", description: "Verify text was correctly typed after completion", is_bool: true, short: None },
+                OptionDef { name: "focus", description: "Click the target element to focus it before typing, ensuring the element is in an interactive state", is_bool: true, short: None },
             ],
             tool_name_fn: |_| "browser_press_sequentially".to_string(),
             tool_params_fn: |args| {
@@ -2915,7 +2916,10 @@ mod tests {
         let args = HashMap::new();
         assert_eq!((cmd.tool_name_fn)(&args), "dom_snapshot_capture");
         let params = (cmd.tool_params_fn)(&args);
-        assert!(params.as_object().unwrap().is_empty(), "capture params should be empty");
+        assert!(
+            params.as_object().unwrap().is_empty(),
+            "capture params should be empty"
+        );
     }
 
     #[test]

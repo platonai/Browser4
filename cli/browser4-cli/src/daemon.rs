@@ -4038,10 +4038,7 @@ async fn wait_for_server_ready(
             let remaining = timeout.as_secs().saturating_sub(elapsed);
             eprintln!(
                 "Waiting for Browser4 server at {} ({}s elapsed, ~{}s remaining): {}",
-                base_url,
-                elapsed,
-                remaining,
-                progress_status
+                base_url, elapsed, remaining, progress_status
             );
             last_progress_log_at = Instant::now();
         }
@@ -4066,10 +4063,14 @@ fn format_server_wait_progress(state: &ServerState) -> String {
     match state {
         ServerState::Ready => "ready".to_string(),
         ServerState::Starting(status) => match truncate_status_for_log(status) {
-            message if message.is_empty() => "JVM is starting, waiting for Spring Boot...".to_string(),
+            message if message.is_empty() => {
+                "JVM is starting, waiting for Spring Boot...".to_string()
+            }
             message => format!("Spring Boot is UP, waiting for MCP tools ({message})"),
         },
-        ServerState::Unreachable(_) => "TCP port not open yet, JVM may still be loading...".to_string(),
+        ServerState::Unreachable(_) => {
+            "TCP port not open yet, JVM may still be loading...".to_string()
+        }
     }
 }
 

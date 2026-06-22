@@ -468,7 +468,11 @@ mod tests {
             guard
         }
 
-        fn set_all(default_timeout_secs: &str, navigation_timeout_secs: &str, text_input_timeout_secs: &str) -> Self {
+        fn set_all(
+            default_timeout_secs: &str,
+            navigation_timeout_secs: &str,
+            text_input_timeout_secs: &str,
+        ) -> Self {
             let guard = Self {
                 default_timeout: std::env::var(DEFAULT_REQUEST_TIMEOUT_ENV).ok(),
                 navigation_timeout: std::env::var(NAVIGATION_REQUEST_TIMEOUT_ENV).ok(),
