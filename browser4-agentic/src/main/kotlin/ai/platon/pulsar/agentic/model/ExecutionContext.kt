@@ -5,7 +5,7 @@ import ai.platon.pulsar.agentic.agents.AgentConfig
 import ai.platon.pulsar.agentic.inference.ExtractParams
 import ai.platon.pulsar.agentic.inference.ObserveParams
 import ai.platon.pulsar.common.serialize.json.Pson
-import org.codehaus.jackson.annotate.JsonIgnore
+import com.fasterxml.jackson.annotation.JsonIgnore
 import java.time.Instant
 import java.util.UUID
 

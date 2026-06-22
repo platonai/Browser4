@@ -31,6 +31,12 @@
                     <groupId>org.jetbrains.kotlin</groupId>
                     <artifactId>kotlin-gradle-plugin-api</artifactId>
                 </exclusion>
+                <!-- log4j-core (~2.5 MB) is redundant: log4j-to-slf4j (also on
+                     classpath) already routes log4j API calls to SLF4J → logback. -->
+                <exclusion>
+                    <groupId>org.apache.logging.log4j</groupId>
+                    <artifactId>log4j-core</artifactId>
+                </exclusion>
             </exclusions>
         </dependency>
         <dependency>

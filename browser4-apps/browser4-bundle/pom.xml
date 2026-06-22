@@ -250,6 +250,13 @@
                     <groupId>org.springframework.boot</groupId>
                     <artifactId>spring-boot-starter-tomcat</artifactId>
                 </exclusion>
+                <!-- Exclude Jackson 3.x (tools.jackson) — browser4 uses Jackson 2.x
+                     (com.fasterxml.jackson) which is provided by browser4-browser and
+                     browser4-rest modules. -->
+                <exclusion>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-starter-jackson</artifactId>
+                </exclusion>
             </exclusions>
         </dependency>
         <dependency>

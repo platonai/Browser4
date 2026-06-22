@@ -46,6 +46,10 @@
                     <groupId>org.jetbrains.kotlin</groupId>
                     <artifactId>kotlin-gradle-plugin-api</artifactId>
                 </exclusion>
+                <exclusion>
+                    <groupId>org.apache.logging.log4j</groupId>
+                    <artifactId>log4j-core</artifactId>
+                </exclusion>
             </exclusions>
         </dependency>
         <dependency>
@@ -58,6 +62,16 @@
                 <exclusion>
                     <groupId>org.apache.spark</groupId>
                     <artifactId>spark-core_2.13</artifactId>
+                </exclusion>
+                <!-- Avro 1.8 pulls in Jackson 1.x (org.codehaus.jackson) which is redundant
+                     with Jackson 2.x and Jackson 3.x already on the classpath. -->
+                <exclusion>
+                    <groupId>org.codehaus.jackson</groupId>
+                    <artifactId>jackson-core-asl</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.codehaus.jackson</groupId>
+                    <artifactId>jackson-mapper-asl</artifactId>
                 </exclusion>
             </exclusions>
         </dependency>
@@ -72,6 +86,14 @@
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
             <artifactId>pulsar-h2</artifactId>
+            <exclusions>
+                <!-- lucene-core (~3.2 MB) is pulled by pulsar-h2 for full-text search.
+                     Browser4 does not use H2's FTS features; no code imports Lucene. -->
+                <exclusion>
+                    <groupId>org.apache.lucene</groupId>
+                    <artifactId>lucene-core</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>ai.platon.pulsar</groupId>
