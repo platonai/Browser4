@@ -67,7 +67,7 @@ class MCPToolControllerTest {
     @BeforeEach
     fun setUp() {
         MockitoAnnotations.openMocks(this)
-        controller = MCPToolController(sessionManager, commandExecutor)
+        controller = MCPToolController(sessionManager, commandExecutor, objectMapper = objectMapper)
 
         // Setup session structure
         `when`(sessionManager.getSession(sessionId)).thenReturn(managedSession)
