@@ -6,8 +6,8 @@ import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
 import ai.platon.pulsar.agentic.AgenticSession
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeRequest
 import ai.platon.pulsar.agentic.tools.advanced.crawl.ScrapeResponse
-import ai.platon.pulsar.common.ManagedSession
-import ai.platon.pulsar.common.PulsarSessionManager
+import ai.platon.pulsar.rest.session.ManagedSession
+import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.common.ResourceStatus
 import ai.platon.pulsar.persist.metadata.ProtocolStatusCodes
 import ai.platon.pulsar.rest.api.service.SwarmService

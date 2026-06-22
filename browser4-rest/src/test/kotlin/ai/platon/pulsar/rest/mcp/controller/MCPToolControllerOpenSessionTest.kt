@@ -1,8 +1,9 @@
 package ai.platon.pulsar.rest.mcp.controller
 
-import ai.platon.pulsar.common.PulsarSessionManager
-import ai.platon.pulsar.common.ManagedSession
+import ai.platon.pulsar.rest.session.PulsarSessionManager
+import ai.platon.pulsar.rest.session.ManagedSession
 import ai.platon.pulsar.agent.tool.UserCommandExecutor
+import ai.platon.pulsar.rest.mcp.controller.dto.MCPToolCallRequest
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import jakarta.servlet.http.HttpServletResponse
 import kotlinx.coroutines.runBlocking

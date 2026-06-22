@@ -6,11 +6,14 @@ import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
 import ai.platon.pulsar.agentic.model.*
 import ai.platon.pulsar.agentic.tools.AgentToolManager
 import ai.platon.pulsar.agentic.tools.advanced.agent.StatefulAgentRunner
-import ai.platon.pulsar.common.ManagedSession
-import ai.platon.pulsar.common.PulsarSessionManager
+import ai.platon.pulsar.rest.session.ManagedSession
+import ai.platon.pulsar.rest.session.PulsarSessionManager
 import ai.platon.pulsar.core.api.WebDriver
 import ai.platon.pulsar.rest.api.entities.CommandResult
 import ai.platon.pulsar.rest.api.entities.CommandStatus
+import ai.platon.pulsar.rest.mcp.controller.dto.MCPContent
+import ai.platon.pulsar.rest.mcp.controller.dto.MCPToolCallRequest
+import ai.platon.pulsar.rest.mcp.controller.dto.MCPToolCallResponse
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import jakarta.servlet.http.HttpServletResponse
 import kotlinx.coroutines.runBlocking

@@ -1,21 +1,18 @@
-package ai.platon.pulsar.common
+package ai.platon.pulsar.rest.session
 
 import ai.platon.browser4.common.B4Constants.BROWSER_PROFILE_MODE
 import ai.platon.browser4.common.B4Constants.DEFAULT_SESSION_ID
 import ai.platon.browser4.common.B4Constants.PROFILE_MODE_CAPABILITY
 import ai.platon.browser4.common.B4Constants.SESSION_ID_CAPABILITY
 import ai.platon.browser4.common.B4Constants.SWARM_SESSION_ID
-import ai.platon.pulsar.agentic.AgenticSession
-import ai.platon.pulsar.agentic.PerceptiveAgent
 import ai.platon.pulsar.agentic.context.AbstractAgenticContext
 import ai.platon.pulsar.agentic.context.AgenticContext
 import ai.platon.pulsar.agentic.context.AgenticContexts
+import ai.platon.pulsar.common.CheckState
 import ai.platon.pulsar.common.browser.BrowserProfileMode
 import ai.platon.pulsar.common.config.CapabilityTypes.BROWSER_CONTEXT_MODE
 import ai.platon.pulsar.core.api.PulsarSettings
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import org.slf4j.LoggerFactory
 import java.io.Closeable
 import java.util.concurrent.ConcurrentHashMap
@@ -377,36 +374,5 @@ class PulsarSessionManager(
 
     override fun close() {
         shutdown()
-    }
-}
-
-/**
- * Container for session-related objects.
- *
- * The driverMutex ensures that WebDriver operations are executed serially, not in parallel.
- * This is critical because WebDriver methods must not be called concurrently.
- *
- * @property sessionId The REST-level session id, which is distinct with [AgenticSession.uuid]
- * @property agenticSession The managed [AgenticSession]
- * @property capabilities The capabilities used to create the [AgenticSession]
- */
-data class ManagedSession(
-    val sessionId: String,
-    val agenticSession: AgenticSession,
-    val capabilities: Map<String, String?>?,
-    var url: String? = null,
-    var status: String = "active", // active, paused, stopped
-    val createdAt: Long = System.currentTimeMillis(),
-    var lastAccessedAt: Long = System.currentTimeMillis(),
-) {
-    val mutex: Mutex = Mutex()
-
-    val driver get() = agenticSession.getOrCreateBoundDriver()
-    val agent: PerceptiveAgent get() = agenticSession.companionAgent
-
-    suspend inline fun <R> withLock(block: ManagedSession.() -> R): R {
-        return mutex.withLock(null) {
-            this.block()
-        }
     }
 }

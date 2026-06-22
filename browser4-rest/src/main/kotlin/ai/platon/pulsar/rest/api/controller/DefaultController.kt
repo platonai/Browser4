@@ -6,6 +6,9 @@ import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RestController
 
+/**
+ * Root-level endpoints, including the health check probe.
+ */
 @RestController
 @CrossOrigin
 @RequestMapping("/")
@@ -15,13 +18,9 @@ class DefaultController(
     @GetMapping("health")
     fun health(): Map<String, String> {
         return if (session.context.isActive) {
-            mapOf(
-                "status" to "healthy"
-            )
+            mapOf("status" to "healthy")
         } else {
-            mapOf(
-                "status" to "unhealthy"
-            )
+            mapOf("status" to "unhealthy")
         }
     }
 }
