@@ -1,70 +1,26 @@
 package ai.platon.pulsar.agentic.inference
 
 import ai.platon.pulsar.agentic.agents.BasicBrowserAgent
-import ai.platon.pulsar.agentic.event.AgentEventBus
-import ai.platon.pulsar.agentic.event.AgenticEvents
 import ai.platon.pulsar.agentic.inference.action.ContextToAction
 import ai.platon.pulsar.agentic.model.ActionDescription
-import ai.platon.pulsar.agentic.model.AgentState
 import ai.platon.pulsar.agentic.model.ExecutionContext
-import ai.platon.pulsar.agentic.model.ExtractionSchema
 import ai.platon.pulsar.browser.AbstractWebDriver
 import ai.platon.pulsar.chrome.dom.SnapshotService
 import ai.platon.pulsar.common.AppPaths
 import ai.platon.pulsar.common.DateTimes
-import ai.platon.pulsar.common.MultiSinkMessageWriter
-import ai.platon.pulsar.common.event.EventBus
 import ai.platon.pulsar.common.serialize.json.pulsarObjectMapper
 import ai.platon.pulsar.external.ModelResponse
 import com.fasterxml.jackson.databind.node.JsonNodeFactory
 import com.fasterxml.jackson.databind.node.ObjectNode
 import java.nio.file.Path
 import java.time.Instant
-import java.util.*
-
-data class ExtractParams(
-    val instruction: String,
-    val agentState: AgentState,
-    val schema: ExtractionSchema,
-    val requestId: String = UUID.randomUUID().toString(),
-    val userProvidedInstructions: String? = null,
-)
-
-data class ObserveParams(
-    val context: ExecutionContext,
-    /**
-     * User provided additional system instructions
-     * */
-    val userProvidedInstructions: String? = null,
-    val returnAction: Boolean = false,
-    val multistep: Boolean = false,
-    val logInferenceToFile: Boolean = false,
-    val fromAct: Boolean = false,
-)
-
-/**
- * Data class to encapsulate the results of an extraction inference operation.
- * Used internally for event handling to avoid passing too many parameters.
- */
-private data class ExtractInferenceResult(
-    val result: ObjectNode,
-    val extractedNode: ObjectNode,
-    val metaNode: ObjectNode,
-    val completed: Boolean,
-    val progress: String,
-    val totalInferenceTimeMillis: Long,
-    val inputTokenCount: Int,
-    val outputTokenCount: Int,
-    val totalTokenCount: Int
-)
 
 class InferenceEngine(
     private val agent: BasicBrowserAgent
 ) {
     private val session = agent.session
     private val cta = ContextToAction(session.sessionConfig)
-    private val auxRunLogDir: Path by lazy { getRunLogDir0() }
-    private val auxLogger by lazy { MultiSinkMessageWriter(auxRunLogDir) }
+    private val inferenceLogger = InferenceLogger(agent.uuid, agent.startTime)
 
     val snapshotService: SnapshotService
         get() = (session.getOrCreateBoundDriver() as? AbstractWebDriver)?.snapshotService
@@ -77,7 +33,7 @@ class InferenceEngine(
         val actionType = if (params.fromAct) "act" else "observe"
         val timestamp = AppPaths.fromNow()
 
-        val llmInputFile = log(
+        val llmInputFile = inferenceLogger.log(
             subdirectory = actionType,
             filename = "$timestamp.request.json",
             requestId = context.uuid,
@@ -94,7 +50,7 @@ class InferenceEngine(
 
         val inferenceTimeMillis = DateTimes.elapsedTime(startTime).toMillis()
 
-        val llmOutputFile = log(
+        val llmOutputFile = inferenceLogger.log(
             subdirectory = actionType,
             filename = "$timestamp.response.json",
             payload = mapOf(
@@ -103,7 +59,7 @@ class InferenceEngine(
             )
         )
 
-        logSummary(
+        inferenceLogger.logSummary(
             filename = "$actionType.jsonl",
             payload = mapOf(
                 "${actionType}InferenceType" to actionType,
@@ -126,14 +82,14 @@ class InferenceEngine(
      *   - inputTokenCount, outputTokenCount, totalTokenCount, inferenceTimeMillis
      */
     suspend fun extract(params: ExtractParams): ObjectNode {
-        onWillExtractInfer(params)
+        InferenceEventEmitter.onWillExtract(params)
 
         val messages = InferencePromptBuilder.buildExtractionPrompt(params)
 
         // 1) Extraction call -----------------------------------------------------------------
         val timestamp = AppPaths.fromNow()
         val filename = "extract.jsonl"
-        val llmInputFile: Path? = log(
+        val llmInputFile: Path? = inferenceLogger.log(
             subdirectory = "extract",
             filename = filename,
             requestId = params.requestId,
@@ -148,7 +104,7 @@ class InferenceEngine(
                 ?: JsonNodeFactory.instance.objectNode()
         }.getOrElse { JsonNodeFactory.instance.objectNode() }
 
-        val extractOutputFile: Path = log(
+        val extractOutputFile: Path = inferenceLogger.log(
             subdirectory = "extract",
             filename = filename,
             payload = mapOf(
@@ -157,7 +113,7 @@ class InferenceEngine(
             )
         )
 
-        logSummary(
+        inferenceLogger.logSummary(
             filename = filename,
             payload = mapOf(
                 "extractInferenceType" to "extract",
@@ -184,7 +140,7 @@ class InferenceEngine(
         val progress = metaNode.path("progress").asText("")
         val completed = metaNode.path("completed").asBoolean(false)
 
-        logSummary(
+        inferenceLogger.logSummary(
             filename = "extract.jsonl",
             payload = mapOf(
                 "extractInferenceType" to "metadata",
@@ -226,7 +182,7 @@ class InferenceEngine(
             outputTokenCount = outputTokenCount,
             totalTokenCount = totalTokenCount
         )
-        onDidExtractInfer(params, inferenceResult)
+        InferenceEventEmitter.onDidExtract(params, inferenceResult)
 
         return result
     }
@@ -236,141 +192,16 @@ class InferenceEngine(
 
         val startTime = Instant.now()
 
-        onWillSummarizeInfer(instruction, messages, textContent)
+        InferenceEventEmitter.onWillSummarize(instruction, messages, textContent)
 
         val response = cta.generateResponseRaw(messages)
 
         val inferenceTimeMillis = DateTimes.elapsedTime(startTime).toMillis()
 
-        onDidSummarizeInfer(instruction, textContent, response, inferenceTimeMillis)
+        InferenceEventEmitter.onDidSummarize(instruction, textContent, response, inferenceTimeMillis)
 
         // TODO: count token usage
 
         return response.content
-    }
-
-    private fun onWillExtractInfer(params: ExtractParams) {
-        // Emit AgentEventBus inference event
-        AgentEventBus.emitInferenceEvent(
-            eventType = AgenticEvents.InferenceEngine.ON_WILL_EXTRACT,
-            agentId = params.requestId,
-            message = "Starting extraction inference",
-            metadata = mapOf(
-                "instruction" to params.instruction.take(100),
-                "requestId" to params.requestId
-            )
-        )
-
-        EventBus.emit(
-            AgenticEvents.InferenceEngine.ON_WILL_EXTRACT, mapOf(
-                "params" to params
-            )
-        )
-    }
-
-    private fun onDidExtractInfer(params: ExtractParams, inferenceResult: ExtractInferenceResult) {
-        // Emit AgentEventBus inference event
-        AgentEventBus.emitInferenceEvent(
-            eventType = AgenticEvents.InferenceEngine.ON_DID_EXTRACT,
-            agentId = params.requestId,
-            message = "Extraction inference completed",
-            metadata = mapOf(
-                "requestId" to params.requestId,
-                "completed" to inferenceResult.completed,
-                "progress" to inferenceResult.progress,
-                "duration" to inferenceResult.totalInferenceTimeMillis,
-                "inputToken" to inferenceResult.inputTokenCount,
-                "outputToken" to inferenceResult.outputTokenCount,
-                "totalToken" to inferenceResult.totalTokenCount
-            )
-        )
-
-        EventBus.emit(
-            AgenticEvents.InferenceEngine.ON_DID_EXTRACT, mapOf(
-                "params" to params,
-                "result" to inferenceResult.result,
-                "extractedNode" to inferenceResult.extractedNode,
-                "metaNode" to inferenceResult.metaNode
-            )
-        )
-    }
-
-    private fun onWillSummarizeInfer(instruction: String?, messages: AgentMessageList, textContent: String) {
-        // Emit AgentEventBus inference event
-        AgentEventBus.emitInferenceEvent(
-            eventType = AgenticEvents.InferenceEngine.ON_WILL_SUMMARIZE,
-            agentId = null,
-            message = "Starting summarization inference",
-            metadata = mapOf(
-                "instruction" to instruction,
-                "textContentLength" to textContent.length
-            )
-        )
-
-        EventBus.emit(
-            AgenticEvents.InferenceEngine.ON_WILL_SUMMARIZE, mapOf(
-                "instruction" to instruction,
-                "messages" to messages,
-                "textContent" to textContent,
-            )
-        )
-    }
-
-    private fun onDidSummarizeInfer(
-        instruction: String?,
-        textContent: String,
-        response: ModelResponse,
-        inferenceTimeMillis: Long
-    ) {
-        // Emit AgentEventBus inference event
-        AgentEventBus.emitInferenceEvent(
-            eventType = AgenticEvents.InferenceEngine.ON_DID_SUMMARIZE,
-            agentId = null,
-            message = "Summarization inference completed",
-            metadata = mapOf(
-                "instruction" to instruction,
-                "resultLength" to response.content.length,
-                "duration" to inferenceTimeMillis,
-                "inputToken" to response.tokenUsage.inputTokenCount,
-                "outputToken" to response.tokenUsage.outputTokenCount,
-                "totalToken" to response.tokenUsage.totalTokenCount
-            )
-        )
-
-        EventBus.emit(
-            AgenticEvents.InferenceEngine.ON_DID_SUMMARIZE, mapOf(
-                "instruction" to instruction,
-                "textContentLength" to textContent.length,
-                "result" to response.content,
-                "tokenUsage" to response.tokenUsage
-            )
-        )
-    }
-
-    private fun logSummary(filename: String, payload: Map<String, Any?>): Path {
-        val path = auxRunLogDir.resolve("summary").resolve(filename)
-        return auxLogger.writeTo(payload, path)
-    }
-
-    private fun log(subdirectory: String, filename: String, payload: Map<String, Any?>): Path {
-        val path = auxRunLogDir.resolve(subdirectory).resolve(filename)
-        return auxLogger.writeTo(payload, path)
-    }
-
-    private fun log(
-        subdirectory: String, requestId: String, filename: String,
-        messages: List<Any>, enabled: Boolean = true
-    ): Path? {
-        if (!enabled) return null
-
-        val payload = mapOf("requestId" to requestId, "messages" to messages)
-        val path = auxRunLogDir.resolve(subdirectory).resolve(filename)
-        return auxLogger.writeTo(payload, path)
-    }
-
-    private fun getRunLogDir0(): Path {
-        val auxLogDir = AppPaths.detectAuxiliaryLogDir().resolve("agent")
-        val agentId = agent.uuid.toString()
-        return auxLogDir.resolve(AppPaths.fromTime(agent.startTime)).resolve(agentId)
     }
 }
