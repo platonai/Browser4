@@ -63,10 +63,10 @@ end {
     $summary = @{
         timestamp = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssK")
         total     = $allResults.Count
-        passed    = ($allResults | Where-Object { $_.Status -eq "passed" }).Count
-        failed    = ($allResults | Where-Object { $_.Status -eq "failed" }).Count
-        skipped   = ($allResults | Where-Object { $_.Status -eq "skipped" }).Count
-        errors    = ($allResults | Where-Object { $_.Status -eq "error" }).Count
+        passed    = @($allResults | Where-Object { $_.Status -eq "passed" }).Count
+        failed    = @($allResults | Where-Object { $_.Status -eq "failed" }).Count
+        skipped   = @($allResults | Where-Object { $_.Status -eq "skipped" }).Count
+        errors    = @($allResults | Where-Object { $_.Status -eq "error" }).Count
         checks    = $allResults | ForEach-Object {
             @{
                 checkId    = $_.CheckId
