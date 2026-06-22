@@ -87,13 +87,14 @@ fully published.
 
 Triggers the main Browser4 release workflow (`release.yml`) on GitHub Actions.
 
+- **Version guard**: Before triggering, checks that the current version is exactly
+  the next patch after the last GitHub release. If it is, proceeds automatically.
+  If not (e.g. minor/major bump, or version skip), warns and asks for confirmation.
 - Creates and pushes a `v{version}` tag (e.g. `v4.11.0`), which triggers
   the release workflow via the `on.push.tags` trigger.
-- Supports `-DryRun` for testing (creates a `v{version}_dry_run.N` tag).
 
 ```
 .\trigger-release-action.ps1
-.\trigger-release-action.ps1 -DryRun
 ```
 
 ### `trigger-cli-release-action.ps1`
